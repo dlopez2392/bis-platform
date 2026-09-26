@@ -212,10 +212,17 @@ export function meterEventFailureKind(e: unknown, sentIdentifier: string): "dupl
 }
 
 /** JSON with every object's keys sorted, recursively: equal params → equal
- *  text, whatever order they were built in. */
+ *  text, whatever order they were built in. Only arrays and PLAIN objects
+ *  are walked; any other object (a Date, Map, Set, class instance) has no
+ *  own enumerable keys worth hashing and would read as `{}`, so two different
+ *  requests could share a key. It throws instead. */
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === "object") {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      throw new Error(`idempotencyKey: params must be plain objects and arrays, got a ${String(proto?.constructor?.name ?? "non-plain object")}`);
+    }
     return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort()
       .map((k) => [k, canonical((value as Record<string, unknown>)[k])]));
   }
@@ -447,6 +454,13 @@ export function stripeGateway(stripe: Stripe): BillingGateway {
       return subscriptionSnapshot(await stripe.subscriptions.retrieve(subscriptionId));
     },
     async updateSubscriptionPrices(change, idempotencyKey) {
+      // Change plan NOW, with proration (DECISION 2, danlo 2026-09-25).
+      // Assumption B4, UNVERIFIED: swapping each item's price in place
+      // mid-period prorates the base price, and prices the WHOLE period's
+      // meter usage at the NEW metered prices at period end (a meter
+      // aggregates per customer per meter, not per price). Nothing here or in
+      // the e2e settles it; a Stripe test clock must, before the first live
+      // mid-month Change plan.
       await stripe.subscriptions.update(change.subscriptionId, {
         items: change.items.map((i) => ({ id: i.id, price: i.price })),
         proration_behavior: "create_prorations",

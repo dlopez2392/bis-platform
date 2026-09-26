@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import type Stripe from "stripe";
+import type { SubscriptionSnapshot } from "@bis/db";
 import {
   billingGatewayFromEnv, priceCreateParams, PRODUCTION_SUPABASE_REF, stripeGateway, stripeKeyVerdict,
   STRIPE_API_VERSION, meterEventParams, meterEventFailureKind, METER_EVENT_TIMEOUT_MS,
@@ -34,8 +35,48 @@ vi.mock("stripe", () => ({
   },
 }));
 
-function stubStripe(overrides: { hasMore?: boolean } = {}) {
+type StubOverrides = {
+  hasMore?: boolean;
+  /** checkout.sessions.create's `url` (Stripe types it string | null). */
+  sessionUrl?: string | null;
+  /** checkout.sessions.retrieve's `status`. */
+  sessionStatus?: string | null;
+  portalHasMore?: boolean;
+};
+
+function stubStripe(overrides: StubOverrides = {}) {
   return {
+    customers: {
+      create: vi.fn(async () => ({ id: "cus_new", object: "customer", email: "owner@example.com" })),
+    },
+    checkout: {
+      sessions: {
+        create: vi.fn(async () => ({
+          id: "cs_1", object: "checkout.session", status: "open", expires_at: 1_790_086_400,
+          url: overrides.sessionUrl === undefined ? "https://checkout.stripe.com/c/pay/cs_1" : overrides.sessionUrl,
+        })),
+        retrieve: vi.fn(async () => ({
+          id: "cs_1", object: "checkout.session", status: overrides.sessionStatus === undefined ? "open" : overrides.sessionStatus,
+        })),
+        expire: vi.fn(async () => ({ id: "cs_1", object: "checkout.session", status: "expired" })),
+      },
+    },
+    subscriptions: {
+      retrieve: vi.fn(async () => RAW_SUBSCRIPTION),
+      update: vi.fn(async () => ({ id: "sub_1", object: "subscription" })),
+    },
+    billingPortal: {
+      configurations: {
+        list: vi.fn(async () => ({
+          data: [{ id: "bpc_1", metadata: { bis_portal: "v1" } }, { id: "bpc_2", metadata: null }],
+          has_more: overrides.portalHasMore ?? false,
+        })),
+        create: vi.fn(async () => ({ id: "bpc_new", object: "billing_portal.configuration", active: true })),
+      },
+      sessions: {
+        create: vi.fn(async () => ({ id: "bps_1", object: "billing_portal.session", url: "https://billing.stripe.com/p/session/x" })),
+      },
+    },
     billing: {
       meters: {
         list: vi.fn(async () => ({
@@ -480,37 +521,57 @@ describe("idempotencyKey", () => {
     expect(idempotencyKey("bis-checkout", "req_1", { ...CHECKOUT, priceIds: Object.fromEntries(Object.entries(PRICES).reverse()) })).toBe(k);
     expect(k).toMatch(/^bis-checkout-req_1-[0-9a-f]{24}$/);
   });
+
+  it("refuses a value it cannot hash faithfully (a Date, Map or Set would each hash as {}, so two different requests would share one key) (mutation: drop the plain-object check → a Date hashes as {}, FAILS)", () => {
+    expect(() => idempotencyKey("bis-x", "id_1", { at: new Date(0) })).toThrow(/plain/);
+    expect(() => idempotencyKey("bis-x", "id_1", { m: new Map([["a", 1]]) })).toThrow(/plain/);
+    expect(() => idempotencyKey("bis-x", "id_1", { s: new Set([1]) })).toThrow(/plain/);
+    expect(idempotencyKey("bis-x", "id_1", { a: [1, { b: null }], c: Object.assign(Object.create(null), { d: "e" }) }))
+      .toMatch(/^bis-x-id_1-[0-9a-f]{24}$/);
+  });
 });
 
-describe("subscriptionSnapshot", () => {
-  const sub = (over: Record<string, unknown> = {}) => ({
-    id: "sub_1", customer: "cus_1", status: "past_due", start_date: 1_790_000_000,
-    metadata: { bis_account_id: CHECKOUT.accountId, bis_plan_id: "stale-in-metadata" },
-    items: {
-      has_more: false,
-      data: [
-        { id: "si_b", current_period_start: 1_790_000_000, current_period_end: 1_792_592_000,
-          price: { id: "price_b", metadata: { bis_plan_id: CHECKOUT.planId, bis_price: "base" } } },
-        { id: "si_s", current_period_start: 1_790_000_060, current_period_end: 1_792_592_060,
-          price: { id: "price_s", metadata: { bis_plan_id: CHECKOUT.planId, bis_price: "sms" } } },
-      ],
-    },
-    ...over,
-  }) as unknown as Stripe.Subscription;
+/**
+ * A subscription as `subscriptions.retrieve(id)` returns it WITHOUT `expand`:
+ * `customer` is the id STRING (retrieveSubscription does not expand it). The
+ * LATER item is listed first, so "the earliest period" cannot be satisfied by
+ * reading items[0].
+ */
+const rawSubscription = (over: Record<string, unknown> = {}) => ({
+  id: "sub_1", customer: "cus_1", status: "past_due", start_date: 1_790_000_000,
+  metadata: { bis_account_id: CHECKOUT.accountId, bis_plan_id: "stale-in-metadata" },
+  items: {
+    has_more: false,
+    data: [
+      { id: "si_s", current_period_start: 1_790_000_060, current_period_end: 1_792_592_060,
+        price: { id: "price_s", metadata: { bis_plan_id: CHECKOUT.planId, bis_price: "sms" } } },
+      { id: "si_b", current_period_start: 1_790_000_000, current_period_end: 1_792_592_000,
+        price: { id: "price_b", metadata: { bis_plan_id: CHECKOUT.planId, bis_price: "base" } } },
+    ],
+  },
+  ...over,
+}) as unknown as Stripe.Subscription;
+const RAW_SUBSCRIPTION = rawSubscription();
+const SNAPSHOT: SubscriptionSnapshot = {
+  id: "sub_1", customerId: "cus_1", status: "past_due", accountId: CHECKOUT.accountId, planId: CHECKOUT.planId,
+  currentPeriodStart: 1_790_000_000, currentPeriodEnd: 1_792_592_000, startedAt: 1_790_000_000,
+  items: [
+    { id: "si_s", priceId: "price_s", priceKey: "sms", planId: CHECKOUT.planId },
+    { id: "si_b", priceId: "price_b", priceKey: "base", planId: CHECKOUT.planId },
+  ],
+};
 
-  it("reads the plan from the BASE PRICE's metadata (not the subscription's), the period from the items (earliest), the customer id from an expanded customer too (G6) (mutation: plan from subscription metadata → 'stale-in-metadata', FAILS; period from the last item → FAILS)", () => {
-    expect(subscriptionSnapshot(sub({ customer: { id: "cus_1" } }))).toEqual({
-      id: "sub_1", customerId: "cus_1", status: "past_due", accountId: CHECKOUT.accountId, planId: CHECKOUT.planId,
-      currentPeriodStart: 1_790_000_000, currentPeriodEnd: 1_792_592_000, startedAt: 1_790_000_000,
-      items: [
-        { id: "si_b", priceId: "price_b", priceKey: "base", planId: CHECKOUT.planId },
-        { id: "si_s", priceId: "price_s", priceKey: "sms", planId: CHECKOUT.planId },
-      ],
-    });
+describe("subscriptionSnapshot", () => {
+  it("reads the plan from the BASE PRICE's metadata (not the subscription's), the period from the items (the EARLIEST, listed second here), and the customer id as the unexpanded STRING retrieve returns (G6) (mutation: plan from subscription metadata → 'stale-in-metadata', FAILS; period from items[0] or the last item → FAILS; read customer.id only → undefined, FAILS)", () => {
+    expect(subscriptionSnapshot(rawSubscription())).toEqual(SNAPSHOT);
+  });
+
+  it("an EXPANDED customer object gives the same customer id (mutation: read the customer only as a string → the object leaks through, FAILS)", () => {
+    expect(subscriptionSnapshot(rawSubscription({ customer: { id: "cus_1", object: "customer" } })).customerId).toBe("cus_1");
   });
 
   it("refuses a subscription whose items do not fit one page rather than guess (B8) (mutation: ignore has_more → FAILS)", () => {
-    expect(() => subscriptionSnapshot(sub({ items: { has_more: true, data: [] } }))).toThrow(/items/);
+    expect(() => subscriptionSnapshot(rawSubscription({ items: { has_more: true, data: [] } }))).toThrow(/items/);
   });
 });
 
@@ -542,5 +603,118 @@ describe("the new gateway surface", () => {
     await fake.expireCheckoutSession(a.id);
     expect(await fake.getCheckoutSessionStatus(a.id)).toBe("expired");
     await expect(fake.expireCheckoutSession(a.id)).rejects.toThrow(/open/);
+  });
+
+  it("FakeGateway.updateSubscriptionPrices is all-or-nothing, as a Stripe request is: a change naming a missing item (or subscription) throws, changes NOTHING, records nothing, and the same key retried throws again; a valid change applies whole (mutation: record the replay before validating → the retry resolves, FAILS; apply items one by one → si_s already swapped, FAILS)", async () => {
+    const fake = new FakeGateway();
+    fake.subscriptions.set("sub_1", structuredClone(SNAPSHOT));
+    const broken = { subscriptionId: "sub_1", planId: "plan_new", items: [{ id: "si_s", price: "price_s2" }, { id: "si_missing", price: "price_b2" }] };
+    await expect(fake.updateSubscriptionPrices(broken, "k1")).rejects.toThrow(/si_missing/);
+    expect(fake.subscriptions.get("sub_1")).toEqual(SNAPSHOT);
+    expect(fake.subscriptionChanges).toEqual([]);
+    await expect(fake.updateSubscriptionPrices(broken, "k1")).rejects.toThrow(/si_missing/);
+
+    const noSub = { subscriptionId: "sub_gone", planId: "plan_new", items: [{ id: "si_s", price: "price_s2" }] };
+    await expect(fake.updateSubscriptionPrices(noSub, "k2")).rejects.toThrow(/sub_gone/);
+    await expect(fake.updateSubscriptionPrices(noSub, "k2")).rejects.toThrow(/sub_gone/);
+    expect(fake.subscriptionChanges).toEqual([]);
+
+    const ok = { subscriptionId: "sub_1", planId: "plan_new", items: [{ id: "si_s", price: "price_s2" }, { id: "si_b", price: "price_b2" }] };
+    await fake.updateSubscriptionPrices(ok, "k3");
+    expect(fake.subscriptions.get("sub_1")).toEqual({
+      ...SNAPSHOT, planId: "plan_new",
+      items: [
+        { id: "si_s", priceId: "price_s2", priceKey: "sms", planId: "plan_new" },
+        { id: "si_b", priceId: "price_b2", priceKey: "base", planId: "plan_new" },
+      ],
+    });
+    expect(fake.subscriptionChanges).toEqual([{ change: ok, key: "k3" }]);
+  });
+});
+
+describe("stripeGateway: the PR-3 calls (exact params AND options, on a stub client)", () => {
+  const gw = (o: StubOverrides = {}) => {
+    const s = stubStripe(o);
+    return { s, g: stripeGateway(s as unknown as Stripe) };
+  };
+
+  it("createCustomer sends the email, the account tag and the name under the idempotency key, omits a null name, and returns exactly { id } (mutation: drop the options argument → FAILS; send name: null → FAILS)", async () => {
+    const { s, g } = gw();
+    expect(await g.createCustomer({ accountId: CHECKOUT.accountId, name: "Rio Roofing", email: "owner@example.com" }, "k-cus"))
+      .toEqual({ id: "cus_new" });
+    expect(s.customers.create).toHaveBeenCalledWith(
+      { email: "owner@example.com", metadata: { bis_account_id: CHECKOUT.accountId }, name: "Rio Roofing" }, { idempotencyKey: "k-cus" });
+    await g.createCustomer({ accountId: CHECKOUT.accountId, name: null, email: "owner@example.com" }, "k-cus2");
+    expect(s.customers.create).toHaveBeenLastCalledWith(
+      { email: "owner@example.com", metadata: { bis_account_id: CHECKOUT.accountId } }, { idempotencyKey: "k-cus2" });
+  });
+
+  it("createCheckoutSession sends checkoutSessionParams under the idempotency key and returns Stripe's id, url and expires_at (mutation: drop { idempotencyKey } → a retried Send opens a SECOND payable session, FAILS)", async () => {
+    const { s, g } = gw();
+    expect(await g.createCheckoutSession(CHECKOUT, "k-cs"))
+      .toEqual({ id: "cs_1", url: "https://checkout.stripe.com/c/pay/cs_1", expiresAt: 1_790_086_400 });
+    expect(s.checkout.sessions.create).toHaveBeenCalledWith(checkoutSessionParams(CHECKOUT), { idempotencyKey: "k-cs" });
+  });
+
+  it("createCheckoutSession refuses a session Stripe returned with no url rather than save a link nobody can open (mutation: drop the url check → resolves with url null, FAILS)", async () => {
+    await expect(gw({ sessionUrl: null }).g.createCheckoutSession(CHECKOUT, "k-cs")).rejects.toThrow(/no url/);
+  });
+
+  it("getCheckoutSessionStatus retrieves the session by id and returns open, complete and expired as they are (mutation: always 'open' → FAILS)", async () => {
+    for (const status of ["open", "complete", "expired"] as const) {
+      const { s, g } = gw({ sessionStatus: status });
+      expect(await g.getCheckoutSessionStatus("cs_1")).toBe(status);
+      expect(s.checkout.sessions.retrieve).toHaveBeenCalledWith("cs_1");
+    }
+  });
+
+  it("getCheckoutSessionStatus throws on a status BIS does not know, and on null, instead of casting it (mutation: return status as CheckoutStatus → resolves 'draft', FAILS)", async () => {
+    await expect(gw({ sessionStatus: "draft" }).g.getCheckoutSessionStatus("cs_1")).rejects.toThrow(/draft/);
+    await expect(gw({ sessionStatus: null }).g.getCheckoutSessionStatus("cs_1")).rejects.toThrow(/null/);
+  });
+
+  it("expireCheckoutSession expires exactly that session, once, and returns nothing Stripe sent back (mutation: return the session → FAILS; expire another id → FAILS)", async () => {
+    const { s, g } = gw();
+    await expect(g.expireCheckoutSession("cs_1")).resolves.toBeUndefined();
+    expect(s.checkout.sessions.expire).toHaveBeenCalledTimes(1);
+    expect(s.checkout.sessions.expire).toHaveBeenCalledWith("cs_1");
+  });
+
+  it("retrieveSubscription reads the subscription by id, unexpanded, and returns its snapshot with the customer id string (mutation: return the raw subscription → FAILS; add an expand option → the call changes, FAILS)", async () => {
+    const { s, g } = gw();
+    expect(await g.retrieveSubscription("sub_1")).toEqual(SNAPSHOT);
+    expect(s.subscriptions.retrieve).toHaveBeenCalledWith("sub_1");
+  });
+
+  it("updateSubscriptionPrices swaps each item's price in place with create_prorations and tags the plan, under the idempotency key (DECISION 2) (mutation: proration_behavior 'always_invoice' → FAILS; drop { idempotencyKey } → a double click changes the plan twice, FAILS)", async () => {
+    const { s, g } = gw();
+    const change = { subscriptionId: "sub_1", planId: "plan_new", items: [{ id: "si_b", price: "price_b2" }, { id: "si_s", price: "price_s2" }] };
+    await expect(g.updateSubscriptionPrices(change, "k-chg")).resolves.toBeUndefined();
+    expect(s.subscriptions.update).toHaveBeenCalledWith("sub_1", {
+      items: [{ id: "si_b", price: "price_b2" }, { id: "si_s", price: "price_s2" }],
+      proration_behavior: "create_prorations",
+      metadata: { bis_plan_id: "plan_new" },
+    }, { idempotencyKey: "k-chg" });
+  });
+
+  it("listPortalConfigurations asks for ACTIVE ones, maps id and metadata (a null metadata to {}), and refuses to guess past one page (mutation: drop active → FAILS; ignore has_more → resolves, FAILS)", async () => {
+    const { s, g } = gw();
+    expect(await g.listPortalConfigurations()).toEqual([{ id: "bpc_1", metadata: { bis_portal: "v1" } }, { id: "bpc_2", metadata: {} }]);
+    expect(s.billingPortal.configurations.list).toHaveBeenCalledWith({ active: true, limit: 100 });
+    await expect(gw({ portalHasMore: true }).g.listPortalConfigurations()).rejects.toThrow(/more than 100/);
+  });
+
+  it("createPortalConfiguration sends portalConfigurationParams under the idempotency key and returns exactly { id } (mutation: drop the options argument → FAILS)", async () => {
+    const { s, g } = gw();
+    expect(await g.createPortalConfiguration("k-bpc")).toEqual({ id: "bpc_new" });
+    expect(s.billingPortal.configurations.create).toHaveBeenCalledWith(portalConfigurationParams(), { idempotencyKey: "k-bpc" });
+  });
+
+  it("createPortalSession opens the portal for that customer with the return URL and BIS's OWN configuration (card + invoices, no self-cancel, DECISION 3), and returns exactly { url } (mutation: drop configuration → Stripe falls back to the account's default portal configuration, not BIS's, FAILS)", async () => {
+    const { s, g } = gw();
+    expect(await g.createPortalSession({ customerId: "cus_1", returnUrl: "https://app.example/a/billing", configurationId: "bpc_1" }))
+      .toEqual({ url: "https://billing.stripe.com/p/session/x" });
+    expect(s.billingPortal.sessions.create)
+      .toHaveBeenCalledWith({ customer: "cus_1", return_url: "https://app.example/a/billing", configuration: "bpc_1" });
   });
 });

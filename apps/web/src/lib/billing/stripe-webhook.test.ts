@@ -22,6 +22,21 @@ describe("verifyWebhookEvent (the real SDK, signed fixtures)", () => {
     });
   });
 
+  it("passes livemode through as the event says: a LIVE event reads true (mutation: hard-code livemode false → a live endpoint refuses every event, FAILS)", () => {
+    const live = JSON.stringify({
+      id: "evt_live", object: "event", type: "invoice.paid", livemode: true,
+      data: { object: { id: "in_2", object: "invoice", parent: { subscription_details: { subscription: "sub_7" } } } },
+    });
+    expect(verifyWebhookEvent(live, Stripe.webhooks.generateTestHeaderString({ payload: live, secret: SECRET }), SECRET))
+      .toStrictEqual({ id: "evt_live", type: "invoice.paid", livemode: true, subscriptionId: "sub_7" });
+  });
+
+  it("isSignatureError is false for anything that is not a signature failure: null, a plain Error, and the SDK's own non-signature error (mutation: drop the .type comparison → FAILS)", () => {
+    expect(isSignatureError(null)).toBe(false);
+    expect(isSignatureError(new Error("boom"))).toBe(false);
+    expect(isSignatureError(new Stripe.errors.StripeInvalidRequestError({ message: "No such customer" }))).toBe(false);
+  });
+
   it("throws on a tampered body, the wrong secret, a stale timestamp and a missing header, each as a signature error (mutation: JSON.parse first and verify re-serialised → the one-space tamper still verifies, FAILS)", () => {
     const header = Stripe.webhooks.generateTestHeaderString({ payload, secret: SECRET });
     const stale = Stripe.webhooks.generateTestHeaderString({ payload, secret: SECRET, timestamp: Math.floor(Date.now() / 1000) - 600 });

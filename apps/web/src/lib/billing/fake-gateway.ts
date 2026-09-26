@@ -209,7 +209,11 @@ export class FakeGateway implements BillingGateway {
   }
 
   /** Same replay strictness as the creates (A4); applies the swap to the
-   *  held subscription so a re-read after it sees the new plan. */
+   *  held subscription so a re-read after it sees the new plan. ALL OR
+   *  NOTHING, like one Stripe request: the subscription and every item are
+   *  checked before anything changes, and the key is recorded only once the
+   *  whole change has applied, so a refused change leaves no trace and its
+   *  same-key retry is refused again. */
   async updateSubscriptionPrices(change: SubscriptionPriceChange, key: string): Promise<void> {
     this.step("updateSubscriptionPrices", change, key);
     const seen = this.replay.get(key);
@@ -219,17 +223,20 @@ export class FakeGateway implements BillingGateway {
       }
       return;
     }
-    this.replay.set(key, { op: "updateSubscriptionPrices", input: change, value: undefined });
-    this.subscriptionChanges.push({ change, key });
     const sub = this.subscriptions.get(change.subscriptionId);
     if (!sub) throw new Error(`fake Stripe: no such subscription ${change.subscriptionId}`);
-    for (const { id, price } of change.items) {
+    const swaps = change.items.map(({ id, price }) => {
       const item = sub.items.find((i) => i.id === id);
       if (!item) throw new Error(`fake Stripe: no item ${id} on ${change.subscriptionId}`);
+      return { item, price };
+    });
+    for (const { item, price } of swaps) {
       item.priceId = price;
       item.planId = change.planId;
     }
     sub.planId = change.planId;
+    this.replay.set(key, { op: "updateSubscriptionPrices", input: change, value: undefined });
+    this.subscriptionChanges.push({ change, key });
   }
 
   async listPortalConfigurations(): Promise<PortalConfiguration[]> {
