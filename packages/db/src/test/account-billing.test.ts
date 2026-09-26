@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { serviceDb } from "../service";
 import { withTestAccount } from "./fixtures";
 import {
-  mirrorSubscription, markComplimentary, unmarkComplimentary, claimWebhookEvent, markWebhookEventProcessed,
+  mirrorSubscription, markComplimentary, unmarkComplimentary, changeComplimentaryPlan, claimWebhookEvent, markWebhookEventProcessed,
   getAccountBilling, saveBillingLink, getBillingLink,
 } from "../account-billing";
 import { sumUsageSince } from "../usage";
@@ -45,11 +45,13 @@ describe("billing writers, live", () => {
   it("mirrorSubscription stores the subscription, writes the plan's features to accounts.permissions and consumes the link; a replay changes nothing but updated_at, through the compare-and-set on PostgREST's own updated_at text (mutation: skip the permissions write → FAILS; skip the link delete → FAILS; move billing_started_at on replay → FAILS; a version filter that never matches the stored text → the replay THROWS after MIRROR_ATTEMPTS, FAILS)", () =>
     withPlan((planId) => withTestAccount(async (db, accountId) => {
       const customer = `cus_t_${randomUUID()}`;
+      // Sent an hour BEFORE the subscription below starts (1_790_000_000): a
+      // link is consumed only by a subscription started after it was sent.
       expect(await saveBillingLink(db, {
         accountId, planId, stripeCustomerId: customer, checkoutSessionId: `cs_test_${RUN}`,
         checkoutUrl: "https://checkout.stripe.com/c/pay/x", sentTo: "owner@example.com",
         expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-      }, null, new Date())).toBe(true);
+      }, null, new Date((1_790_000_000 - 3600) * 1000))).toBe(true);
       const snapshot = {
         id: `sub_t_${randomUUID()}`, customerId: customer, status: "active", accountId, planId,
         currentPeriodStart: 1_790_000_000, currentPeriodEnd: 1_792_592_000, startedAt: 1_790_000_000, items: [],
@@ -71,7 +73,7 @@ describe("billing writers, live", () => {
       expect(Date.parse(second!.updatedAt)).toBeGreaterThan(Date.parse(first!.updatedAt));
     })));
 
-  it("markComplimentary stores a complimentary row with the plan's features; a second mark is already_billed; unmark deletes it and resets permissions to {} (mutation: unmark leaves permissions → FAILS; drop the complimentary filter on the delete → FAILS on the paid-row case)", () =>
+  it("markComplimentary stores a complimentary row with the plan's features; a second mark is already_billed (the real PostgREST 23505 text naming account_billing_pkey); unmark deletes it and resets permissions to {} (mutation: unmark leaves permissions → FAILS; read the constraint from anything but the message → the second mark THROWS, FAILS)", () =>
     withPlan((planId) => withTestAccount(async (db, accountId) => {
       expect(await markComplimentary(db, { accountId, planId, now: new Date() })).toEqual({ ok: true });
       expect(await markComplimentary(db, { accountId, planId, now: new Date() })).toEqual({ ok: false, reason: "already_billed" });
@@ -83,16 +85,41 @@ describe("billing writers, live", () => {
       expect(await unmarkComplimentary(db, accountId)).toBe(false);
     })));
 
+  it("a PAID row is untouched by the complimentary writers: unmark is false and changeComplimentaryPlan is stale, with the row and accounts.permissions unchanged (review item 2) (mutation: drop .eq('complimentary', true) from unmarkComplimentary → the paid row is deleted and permissions reset, FAILS; drop the complimentary and plan_id filters from changeComplimentaryPlan → the paid row's plan is rewritten, FAILS)", () =>
+    withPlan((planId) => withPlan((otherPlanId) => withTestAccount(async (db, accountId) => {
+      const paid = {
+        account_id: accountId, plan_id: planId, stripe_customer_id: `cus_t_${randomUUID()}`,
+        stripe_subscription_id: `sub_t_${randomUUID()}`, subscription_status: "active",
+      };
+      expect((await db.from("account_billing").insert(paid)).error).toBeNull();
+      expect((await db.from("accounts").update({ permissions: FEATURES }).eq("id", accountId)).error).toBeNull();
+      const before = await getAccountBilling(db, accountId);
+      expect(await unmarkComplimentary(db, accountId)).toBe(false);
+      expect(await changeComplimentaryPlan(db, { accountId, planId: otherPlanId, expectedPlanId: planId, now: new Date() }))
+        .toEqual({ ok: false, reason: "stale" });
+      expect(await getAccountBilling(db, accountId)).toEqual(before);
+      const { data: acct } = await db.from("accounts").select("permissions").eq("id", accountId).single();
+      expect((acct as { permissions: unknown }).permissions).toEqual(FEATURES);
+    }))));
+
   it("claimWebhookEvent: new, then retry while unprocessed, then done once stamped (mutation: claim via plain insert → the second claim THROWS 23505, FAILS; treat every stored row as done → the second claim reads 'done', FAILS)", async () => {
     const db = serviceDb();
     const id = `evt_t_${randomUUID()}`;
+    let bodyOk = false;
     try {
       expect(await claimWebhookEvent(db, id, "invoice.paid")).toBe("new");
       expect(await claimWebhookEvent(db, id, "invoice.paid")).toBe("retry");
       await markWebhookEventProcessed(db, id, new Date());
       expect(await claimWebhookEvent(db, id, "invoice.paid")).toBe("done");
+      bodyOk = true;
     } finally {
-      await db.from("stripe_webhook_events").delete().eq("event_id", id);
+      // A failed cleanup leaves an evt_t_ row behind: say so, never swallow it.
+      const { error } = await db.from("stripe_webhook_events").delete().eq("event_id", id);
+      if (error) {
+        const msg = `account-billing.test cleanup failed on stripe_webhook_events (${id}): ${error.message}`;
+        if (bodyOk) throw new Error(msg);
+        console.error(msg);
+      }
     }
   });
 

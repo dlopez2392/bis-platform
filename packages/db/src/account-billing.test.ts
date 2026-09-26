@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  decideMirror, mirrorSubscription, markComplimentary, claimWebhookEvent, saveBillingLink,
+  decideMirror, mirrorSubscription, markComplimentary, unmarkComplimentary, changeComplimentaryPlan,
+  claimWebhookEvent, saveBillingLink,
   type AccountBilling, type SubscriptionSnapshot,
 } from "./account-billing";
 
@@ -109,6 +110,17 @@ describe("decideMirror: named refusals (G7, G10)", () => {
       .toBe("write");
   });
 
+  it("refuses an ENDED subscription that is not the stored one, so a late event for an old canceled subscription never replaces a newer ended one (id rewritten, billing start moved backwards); a live replacement and the stored subscription's own end are still written (review minor d) (mutation: drop the ended-other guard → the old subscription is written, FAILS)", () => {
+    const newerEnded = stored({ stripeSubscriptionId: "sub_new", subscriptionStatus: "canceled", billingStartedAt: iso(START + 500) });
+    expect(decideMirror({ ...base, existing: newerEnded, snapshot: snap({ id: "sub_old", status: "canceled" }) }))
+      .toEqual({ kind: "refused", reason: "ended_other_subscription" });
+    expect(decideMirror({ ...base, existing: newerEnded, snapshot: snap({ id: "sub_old", status: "incomplete_expired" }) }))
+      .toEqual({ kind: "refused", reason: "ended_other_subscription" });
+    expect(decideMirror({ ...base, existing: newerEnded, snapshot: snap({ id: "sub_3", status: "active" }) }).kind).toBe("write");
+    expect(decideMirror({ ...base, existing: stored({ subscriptionStatus: "active" }), snapshot: snap({ status: "canceled" }) }).kind)
+      .toBe("write");
+  });
+
   it("refuses an unknown account, an unknown plan, a plan of another agency, and a status BIS does not know (mutation: drop the agency check → FAILS; cast the status → FAILS)", () => {
     expect(decideMirror({ ...base, account: null, snapshot: snap() })).toEqual({ kind: "refused", reason: "unknown_account" });
     expect(decideMirror({ ...base, plan: null, snapshot: snap() })).toEqual({ kind: "refused", reason: "unknown_plan" });
@@ -149,14 +161,16 @@ describe("mirrorSubscription: the writes", () => {
     expect(calls).toEqual([]);
   });
 
-  it("with no stored row it INSERTS (never an upsert: B5), then writes EXACTLY the plan's two features into accounts.permissions, then consumes the link keyed by account AND customer (mutation: write the whole features object unfiltered → FAILS; delete the link by account alone → FAILS)", async () => {
+  it("with no stored row it INSERTS (never an upsert: B5), then writes EXACTLY the plan's two features into accounts.permissions, then consumes the link it led to, keyed by account, customer AND session (mutation: drop writePermissions' filter, the ONLY one since decideMirror passes the plan's features through → FAILS; delete the link by account alone → FAILS; drop the session filter → FAILS)", async () => {
     const { db, calls } = recorder({
       accounts: { id: ACCOUNT, agency_id: AGENCY },
       plans: { id: PLAN, agency_id: AGENCY, features: { voice_receptionist: true, web_concierge: false, extra: true }, archived_at: null },
+      // Sent BEFORE the subscription started (START, 2026-09-21T14:13:20Z):
+      // this is the subscription the link led to.
       billing_links: {
         account_id: ACCOUNT, plan_id: PLAN, stripe_customer_id: "cus_1", checkout_session_id: "cs_1",
         checkout_url: "https://x", sent_to: "a@b.co", expires_at: "2026-10-02T00:00:00+00:00",
-        sent_at: "2026-10-01T00:00:00+00:00", updated_at: "2026-10-01T00:00:00+00:00",
+        sent_at: "2026-09-20T00:00:00+00:00", updated_at: "2026-09-20T00:00:00+00:00",
       },
     });
     expect(await mirrorSubscription(db, async () => snap(), () => NOW)).toEqual({ kind: "written", accountId: ACCOUNT, planId: PLAN, status: "active" });
@@ -171,8 +185,9 @@ describe("mirrorSubscription: the writes", () => {
     expect(insert).toBeGreaterThan(-1);
     expect(perms).toBeGreaterThan(insert);
     expect(del).toBeGreaterThan(perms);
-    expect(calls.slice(del + 1, del + 3)).toEqual([
+    expect(calls.slice(del + 1, del + 4)).toEqual([
       ["billing_links", "eq", "account_id", ACCOUNT], ["billing_links", "eq", "stripe_customer_id", "cus_1"],
+      ["billing_links", "eq", "checkout_session_id", "cs_1"],
     ]);
   });
 
@@ -247,16 +262,23 @@ describe("mirrorSubscription: the writes", () => {
  * delivery writes; the tests call it from inside the Stripe reader, i.e.
  * between this delivery's row read and its write.
  */
-function world(opts: { row?: Record<string, unknown> | null; updatesNeverMatch?: boolean; insertRefusedOn?: string } = {}) {
+function world(opts: {
+  row?: Record<string, unknown> | null; updatesNeverMatch?: boolean; insertRefusedOn?: string;
+  link?: Record<string, unknown>;
+} = {}) {
   const state: { row: Record<string, unknown> | null; link: Record<string, unknown> | null } = {
     row: opts.row ?? null,
+    // By default the first checkout's link: sent BEFORE START, the subscription's start.
     link: {
       account_id: ACCOUNT, plan_id: PLAN, stripe_customer_id: "cus_1", checkout_session_id: "cs_1",
       checkout_url: "https://checkout.stripe.com/x", sent_to: "a@b.co", expires_at: "2026-10-02T00:00:00+00:00",
-      sent_at: "2026-10-01T00:00:00+00:00", updated_at: "2026-10-01T00:00:00+00:00",
+      sent_at: "2026-09-20T00:00:00+00:00", updated_at: "2026-09-20T00:00:00+00:00",
+      ...opts.link,
     },
   };
   const log: string[] = [];
+  /** The filters of every billing_links delete, in order. */
+  const linkDeletes: [string, unknown][][] = [];
   const db = {
     from: (table: string) => {
       const filters: [string, unknown][] = [];
@@ -293,7 +315,10 @@ function world(opts: { row?: Record<string, unknown> | null; updatesNeverMatch?:
               result = { data: [{ account_id: ACCOUNT }], error: null };
             }
           }
-          if (table === "billing_links" && del) state.link = null;
+          if (table === "billing_links" && del) {
+            linkDeletes.push([...filters]);
+            if (state.link && filters.every(([c, v]) => state.link?.[c] === v)) state.link = null;
+          }
           return Promise.resolve(result).then(ok);
         },
       };
@@ -310,8 +335,44 @@ function world(opts: { row?: Record<string, unknown> | null; updatesNeverMatch?:
     };
     if (consumeLink) state.link = null;
   };
-  return { db, state, log, concurrent };
+  return { db, state, log, concurrent, linkDeletes };
 }
+
+/** A stored paid row on `subId`, as PostgREST returns it. */
+const paidRow = (subId: string, status: string, over: Record<string, unknown> = {}) => ({
+  account_id: ACCOUNT, plan_id: PLAN, complimentary: false, stripe_customer_id: "cus_1", stripe_subscription_id: subId,
+  subscription_status: status, current_period_start: null, current_period_end: null, past_due_since: null,
+  billing_paused_at: null, billing_started_at: iso(START), created_at: iso(START), updated_at: "2026-09-30T00:00:00.123456+00:00",
+  ...over,
+});
+/** A new link on the SAME customer (Send reuses it, G3), sent 2026-10-01, after START. */
+const NEW_LINK = { checkout_session_id: "cs_NEW", sent_at: "2026-10-01T00:00:00+00:00", updated_at: "2026-10-01T00:00:00+00:00" };
+const AFTER_NEW_LINK = Date.parse("2026-10-01T06:00:00Z") / 1000;
+
+describe("mirrorSubscription: a link is consumed only by the subscription it led to (review item 1, G2)", () => {
+  it("an OLD subscription's event on the reused customer writes its row but leaves the NEW open link alone, so the next Send can still find and expire it (mutation: consume whenever the customer matches → the new link is deleted and a second open session becomes possible, FAILS)", async () => {
+    const w = world({ row: paidRow("sub_old", "canceled"), link: NEW_LINK });
+    expect(await mirrorSubscription(w.db, async () => snap({ id: "sub_old", status: "canceled" }), () => NOW))
+      .toEqual({ kind: "written", accountId: ACCOUNT, planId: PLAN, status: "canceled" });
+    expect(w.linkDeletes).toEqual([]);
+    expect(w.state.link?.checkout_session_id).toBe("cs_NEW");
+  });
+
+  it("the NEW subscription (started after the link was sent) consumes exactly that link: by account, customer and session (mutation: drop the session filter → FAILS)", async () => {
+    const w = world({ row: paidRow("sub_old", "canceled"), link: NEW_LINK });
+    expect(await mirrorSubscription(w.db, async () => snap({ id: "sub_new", startedAt: AFTER_NEW_LINK }), () => NOW))
+      .toEqual({ kind: "written", accountId: ACCOUNT, planId: PLAN, status: "active" });
+    expect(w.linkDeletes).toEqual([[["account_id", ACCOUNT], ["stripe_customer_id", "cus_1"], ["checkout_session_id", "cs_NEW"]]]);
+    expect(w.state.link).toBeNull();
+  });
+
+  it("a replay AFTER the row already holds the new subscription still consumes its link (a first delivery whose delete failed, or lost to a concurrent writer): the rule is the subscription's start vs the link's send, NOT 'this write changed the subscription id' (mutation: also require existing.stripeSubscriptionId !== snapshot.id → the link is never consumed, FAILS)", async () => {
+    const w = world({ row: paidRow("sub_new", "active", { billing_started_at: iso(AFTER_NEW_LINK) }), link: NEW_LINK });
+    expect((await mirrorSubscription(w.db, async () => snap({ id: "sub_new", startedAt: AFTER_NEW_LINK }), () => NOW)).kind)
+      .toBe("written");
+    expect(w.state.link).toBeNull();
+  });
+});
 
 describe("mirrorSubscription: the first checkout's event burst (B5)", () => {
   it("a REFUSAL decided on a row that changed meanwhile is a conflict, not final: another delivery inserted the row AND consumed the link after this one's row read, so this attempt sees no customer anywhere; it re-reads and writes Stripe's newer state (mutation: return the refusal without re-reading the row → customer_mismatch is stamped and the row stays 'incomplete', FAILS)", async () => {
@@ -346,6 +407,40 @@ describe("markComplimentary: the agency check comes first (G10)", () => {
     const archived = recorder({ accounts: { id: ACCOUNT, agency_id: AGENCY }, plans: { id: PLAN, agency_id: AGENCY, features: {}, archived_at: "2026-09-01T00:00:00Z" } });
     expect(await markComplimentary(archived.db, { accountId: ACCOUNT, planId: PLAN, now: NOW })).toEqual({ ok: false, reason: "plan_archived" });
     expect([...other.calls, ...archived.calls].filter((c) => c[1] === "insert" || c[1] === "upsert")).toEqual([]);
+  });
+
+  it("writes EXACTLY the two feature flags even when the plan read carries another key: writePermissions' filter is the only one on the complimentary paths (review minor a) (mutation: drop writePermissions' filter → the extra key is written, FAILS)", async () => {
+    const { db, calls } = recorder({
+      accounts: { id: ACCOUNT, agency_id: AGENCY },
+      plans: { id: PLAN, agency_id: AGENCY, features: { voice_receptionist: false, web_concierge: true, extra: true }, archived_at: null },
+    });
+    expect(await markComplimentary(db, { accountId: ACCOUNT, planId: PLAN, now: NOW })).toEqual({ ok: true });
+    expect(calls).toContainEqual(["accounts", "update", { permissions: { voice_receptionist: false, web_concierge: true } }]);
+  });
+});
+
+describe("unmarkComplimentary and changeComplimentaryPlan never touch a PAID row (review item 2)", () => {
+  it("unmark deletes only where complimentary is true, and with no row matched it writes NO permissions (mutation: drop .eq('complimentary', true) → FAILS; reset permissions before checking the match → FAILS)", async () => {
+    const { db, calls } = recorder({});
+    expect(await unmarkComplimentary(db, ACCOUNT)).toBe(false);
+    expect(calls).toContainEqual(["account_billing", "delete"]);
+    expect(calls).toContainEqual(["account_billing", "eq", "account_id", ACCOUNT]);
+    expect(calls).toContainEqual(["account_billing", "eq", "complimentary", true]);
+    expect(calls.filter((c) => c[0] === "accounts")).toEqual([]);
+  });
+
+  it("change plan updates only a complimentary row still on the plan the caller saw; with no row matched it is stale and writes NO permissions (mutation: drop the complimentary filter → FAILS; drop the expected-plan filter → FAILS; write permissions before checking the match → FAILS)", async () => {
+    const OTHER_PLAN = "55555555-5555-4555-8555-555555555555";
+    const { db, calls } = recorder({
+      accounts: { id: ACCOUNT, agency_id: AGENCY },
+      plans: { id: OTHER_PLAN, agency_id: AGENCY, features: { voice_receptionist: true, web_concierge: true }, archived_at: null },
+    });
+    expect(await changeComplimentaryPlan(db, { accountId: ACCOUNT, planId: OTHER_PLAN, expectedPlanId: PLAN, now: NOW }))
+      .toEqual({ ok: false, reason: "stale" });
+    expect(calls).toContainEqual(["account_billing", "update", { plan_id: OTHER_PLAN, updated_at: NOW.toISOString() }]);
+    expect(calls).toContainEqual(["account_billing", "eq", "complimentary", true]);
+    expect(calls).toContainEqual(["account_billing", "eq", "plan_id", PLAN]);
+    expect(calls.filter((c) => c[0] === "accounts" && c[1] === "update")).toEqual([]);
   });
 });
 
@@ -407,7 +502,7 @@ describe("23505: only the primary key is a race; another unique key throws, nami
       .rejects.toThrow(/billing_links_stripe_customer_id_key/);
   });
 
-  it("the constraint is read from PostgREST's MESSAGE (PostgrestError has code, details, hint, message and no `constraint` field), and its quoted name must equal the primary key's EXACTLY: a look-alike name that merely contains it is another key, so it throws (mutation: match with message.includes('billing_links_pkey') → the look-alike returns false, FAILS; read error.constraint → undefined, the real pkey text throws, FAILS)", async () => {
+  it("the constraint is read from PostgREST's MESSAGE (PostgrestError has code, details, hint, message and no `constraint` field), and its quoted name must equal the primary key's EXACTLY: a look-alike name that merely contains it is another key, so it throws (mutation: match with message.includes('billing_links_pkey') → the look-alike returns false, FAILS; read error.constraint → undefined, the real pkey text throws, FAILS; an unparseable message counts as the pkey → the unquoted one returns false, FAILS)", async () => {
     const refusedWith = (error: Record<string, unknown>) => ({
       from: () => ({ insert: async () => ({ error }) }),
     } as unknown as SupabaseClient);
@@ -424,6 +519,11 @@ describe("23505: only the primary key is a race; another unique key throws, nami
     await expect(saveBillingLink(refusedWith({
       ...real, message: 'duplicate key value violates unique constraint "billing_links_pkey_v2"',
     }), link, null, NOW)).rejects.toThrow(/billing_links_pkey_v2/);
+    // Fail closed: a 23505 whose message names no QUOTED constraint is never
+    // taken for the primary key (review minor b).
+    await expect(saveBillingLink(refusedWith({
+      ...real, message: "duplicate key value violates unique constraint billing_links_pkey",
+    }), link, null, NOW)).rejects.toThrow(/refused by unique key \(unnamed\)/);
   });
 
   it("markComplimentary insert: account_billing_pkey is already_billed; any other unique key THROWS naming it (mutation: every 23505 is already_billed → FAILS)", async () => {

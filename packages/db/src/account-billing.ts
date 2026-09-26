@@ -199,7 +199,7 @@ export type SubscriptionSnapshot = {
 
 export type MirrorRefusal =
   | "no_account" | "unknown_account" | "customer_changed" | "customer_mismatch" | "unknown_plan" | "plan_other_agency"
-  | "another_live_subscription" | "unknown_status";
+  | "another_live_subscription" | "ended_other_subscription" | "unknown_status";
 
 type MirrorRow = {
   account_id: string; plan_id: string; complimentary: false; stripe_customer_id: string;
@@ -251,14 +251,22 @@ export function decideMirror(input: {
   if (!plan) return refuse("unknown_plan");
   if (plan.agencyId !== account.agencyId) return refuse("plan_other_agency");
   const sameSubscription = existing !== null && existing.stripeSubscriptionId === s.id;
-  if (existing?.stripeSubscriptionId && !sameSubscription && existing.subscriptionStatus
-    && !ENDED_STATUSES.includes(existing.subscriptionStatus)) {
-    return refuse("another_live_subscription");
+  if (existing?.stripeSubscriptionId && !sameSubscription) {
+    if (existing.subscriptionStatus && !ENDED_STATUSES.includes(existing.subscriptionStatus)) {
+      return refuse("another_live_subscription");
+    }
+    // Only a LIVE subscription may replace an ended one. An ended subscription
+    // that is not the stored one is history: a late event for an old canceled
+    // subscription must not rewrite the id of a newer ended one and move
+    // billing_started_at backwards.
+    if (ENDED_STATUSES.includes(s.status)) return refuse("ended_other_subscription");
   }
   const unpaid = PAST_DUE_STATUSES.includes(s.status);
   return {
     kind: "write",
-    permissions: { voice_receptionist: plan.features.voice_receptionist, web_concierge: plan.features.web_concierge },
+    // Passed through: writePermissions keeps exactly the two flags, the one
+    // filter every permissions write (mirror and complimentary) goes through.
+    permissions: plan.features,
     row: {
       account_id: account.id, plan_id: plan.id, complimentary: false,
       stripe_customer_id: s.customerId, stripe_subscription_id: s.id, subscription_status: s.status,
@@ -309,13 +317,14 @@ export const MIRROR_ATTEMPTS = 3;
 /**
  * Stores what Stripe says NOW about one subscription as the account's billed
  * row (spec flow 4): the row (billing_paused_at is never touched here), the
- * permissions, and the link that led to it consumed. `read` asks Stripe (the
+ * permissions, and the link that led to it consumed (linkLedTo). `read` asks Stripe (the
  * gateway's retrieveSubscription); nothing from a webhook payload reaches
  * here. Idempotent: the same Stripe state twice writes the same row.
  *
  * COMPARE-AND-SET (B5). The stored row is read BEFORE Stripe is asked, and
  * written only while it is still that row: an update filtered on its
- * updated_at, or an insert when there was none (a 23505 is the same signal).
+ * updated_at, or an insert when there was none (a 23505 on account_billing_pkey
+ * is the same signal; a 23505 on any other unique key throws).
  * A delivery that read Stripe earlier but reaches the database later
  * therefore loses, reads the row and Stripe again, and writes the NEWER
  * state instead of overwriting it with an older one. A REFUSAL is returned
@@ -382,12 +391,46 @@ async function writeMirror(
     if ((data ?? []).length === 0) return "conflict";
   }
   await writePermissions(db, accountId, decision.permissions);
-  if (link && link.stripeCustomerId === snapshot.customerId) {
+  if (link && linkLedTo(link, snapshot)) {
+    // Keyed by the session judged above too: a link replaced meanwhile is a
+    // different link, and is not this subscription's to consume.
     const { error: delErr } = await db.from("billing_links").delete()
-      .eq("account_id", accountId).eq("stripe_customer_id", snapshot.customerId);
+      .eq("account_id", accountId).eq("stripe_customer_id", snapshot.customerId)
+      .eq("checkout_session_id", link.checkoutSessionId);
     if (delErr) throw new Error(`mirrorSubscription link cleanup failed: ${delErr.message}`);
   }
   return { kind: "written", accountId, planId: decision.row.plan_id, status: decision.row.subscription_status };
+}
+
+/**
+ * Whether `link` is the one that led to this subscription, so the mirror may
+ * consume it (review item 1). A matching customer is NOT enough: after a
+ * cancel, Send reuses the stored customer (G3), so an old subscription and a
+ * newly sent link share it. Consuming the new link on an old subscription's
+ * late event (a retry, its final metered invoice, a Smart Retries failure)
+ * would hide an OPEN Checkout session from the next Send, which could then
+ * open a second one: the client could pay twice (G2).
+ *
+ * The rule: same customer, and the subscription STARTED at or after the link
+ * was SENT. A Checkout subscription is created when the client pays, which is
+ * after the link was saved (saveBillingLink stamps sent_at after Stripe made
+ * the session). It is deliberately NOT "this write changed the stored
+ * subscription id": a delivery whose row write landed but whose delete
+ * failed (500, Stripe retries), or one that lost the row to a concurrent
+ * delivery that then crashed, replays with the row already on this
+ * subscription, and must still consume the link. The start-vs-send rule
+ * gives the same answer on every replay.
+ *
+ * Clocks: start_date is Stripe's, in whole seconds; sent_at is BIS's own
+ * timestamp (Date.parse keeps its milliseconds; the opaque-microseconds rule
+ * is for updated_at in the compare-and-set filter, not this). A skew only
+ * matters if the client pays within the skew of the send; the cost of a miss
+ * is a link left behind on an account that now has a live subscription,
+ * which Send refuses to replace anyway (G2 step 1). Assumes no backdated
+ * start_date: BIS's Checkout never backdates.
+ */
+function linkLedTo(link: Pick<BillingLink, "stripeCustomerId" | "sentAt">, snapshot: SubscriptionSnapshot): boolean {
+  return link.stripeCustomerId === snapshot.customerId && snapshot.startedAt * 1000 >= Date.parse(link.sentAt);
 }
 
 type PlanRefusal = "unknown_account" | "unknown_plan" | "plan_other_agency" | "plan_archived";
