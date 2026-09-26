@@ -35,6 +35,7 @@ vi.mock("@/lib/meetings/provider", () => ({ getMeetingProvider: (...a: unknown[]
 import type { serviceDb, CalendarRow, VoiceProfileRow } from "@bis/db";
 import { runTool, type ToolContext, type ToolName } from "./registry";
 import { emptyCallState } from "../call-state";
+import { formatWhen } from "@/lib/booking/time";
 
 const ctx: ToolContext = {
   db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1",
@@ -744,6 +745,20 @@ describe("reschedule / cancel", () => {
       expect(dbMocks.incrementUnreadCount).not.toHaveBeenCalled();
     }
 
+    // The refusal is read to a caller who is NOT the booking's owner: it may
+    // carry nothing of that booking or its person — name, number in any
+    // shape, email, or the appointment time as ISO or as spoken.
+    function expectNoDetailsOfTheBooking(error: string) {
+      const spoken = formatWhen(new Date(ROW.starts_at), ctx.timezone);
+      for (const detail of [
+        SOMEONE_ELSE.first_name, SOMEONE_ELSE.last_name, SOMEONE_ELSE.email,
+        "+19565550100", "9565550100", "(956) 555-0100", "555-0100", "555",
+        ROW.starts_at, new Date(ROW.starts_at).toISOString(), spoken, "Jun 1", "9:00",
+      ]) {
+        expect(error).not.toContain(detail);
+      }
+    }
+
     it("refuses to reschedule a booking under a different number — no slot lookup, room, booking, cancel or mail", async () => {
       dbMocks.getContact.mockResolvedValue(SOMEONE_ELSE);
       const pre = emptyCallState();
@@ -751,6 +766,7 @@ describe("reschedule / cancel", () => {
         { bookingId: "b1", startsAt: NEW_ISO });
       expect(result).toEqual({ ok: false, error: expect.stringMatching(/isn't under the number they're calling from/) });
       expect(String((result as { error: string }).error)).toMatch(/do not share/i);
+      expectNoDetailsOfTheBooking(String((result as { error: string }).error));
       expect(state).toBe(pre);
       expectNothingWritten();
     });
@@ -760,6 +776,7 @@ describe("reschedule / cancel", () => {
       const pre = emptyCallState();
       const { state, result } = await runTool(pre, watchedCtx, "cancel_appointment", { bookingId: "b1" });
       expect(result).toEqual({ ok: false, error: expect.stringMatching(/isn't under the number they're calling from/) });
+      expectNoDetailsOfTheBooking(String((result as { error: string }).error));
       expect(state).toBe(pre);
       expect(state.served).toEqual([]);
       expectNothingWritten();
@@ -941,6 +958,16 @@ describe("reschedule / cancel", () => {
       expect(customer).toHaveLength(1);
       expect(customer[0]!.subject).toBe("Tu cita fue cancelada");
       expect(customer[0]!.body).toContain("Si no pediste esta cancelación");
+      // The appointment time is written the way a Spanish reader reads it,
+      // not the English rendering dropped into Spanish copy. The two
+      // renderings are asserted different first, so this cannot pass
+      // vacuously on a zone or locale where they happen to coincide.
+      const whenEs = formatWhen(new Date(ROW.starts_at), notifyCtx.timezone, "es");
+      const whenEn = formatWhen(new Date(ROW.starts_at), notifyCtx.timezone, "en");
+      expect(whenEs).not.toBe(whenEn);
+      expect(customer[0]!.body).toContain(whenEs);
+      expect(customer[0]!.html).toContain(whenEs);
+      expect(customer[0]!.body).not.toContain(whenEn);
       expect(sentTo(STAFF[0]!)[0]!.subject).toMatch(/^Booking cancelled by phone/);
     });
 
