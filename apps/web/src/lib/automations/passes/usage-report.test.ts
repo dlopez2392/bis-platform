@@ -36,7 +36,7 @@ const ctx = (): PassContext => ({
   quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
 });
 const EMPTY = {
-  reported: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
+  reported: 0, alreadyAtStripe: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
   skippedNoStripe: 0, stoppedOnCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
 };
 const stripeError = (type: string) => Object.assign(new Error(type), { type });
@@ -194,6 +194,59 @@ describe("usageReportPass", () => {
     expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 1 });
     expect(fake.meterEvents).toHaveLength(1);
     expect(fake.calls.filter((c) => c.op === "reportMeterEvent").map((c) => c.key)).toEqual(["bis-usage-u1-cus_a", "bis-usage-u1-cus_a"]);
+  });
+
+  // A11 as observed in Stripe test mode: the same identifier for the SAME
+  // customer under a FRESH idempotency key, seconds after the first send, is
+  // refused "An event already exists with identifier <id>.". The event IS at
+  // Stripe, so the row is stamped. The resends production would actually
+  // make (a key expired after 24 hours, a changed customer id) are assumed,
+  // not observed, to refuse the same way; the fake models that assumption.
+  const seedAtStripe = (row: UsageRow, key: string) => fake.reportMeterEvent({
+    eventName: "bis_sms_segments", customerId: "cus_a", value: row.quantity, identifier: row.id,
+    timestampSeconds: SECS,
+  }, key);
+
+  it("a row Stripe already holds (its identifier refused under a new key) is stamped reported and counted alreadyAtStripe, and the account's next row still goes this tick (mutation: treat the duplicate as a row refusal → u1 unstamped, u2 never sent, failed 1, FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    queue = [usage("u1"), usage("u2")];
+    await seedAtStripe(queue[0]!, "a key that expired");
+    const heldBefore = fake.meterEvents.length;
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, reported: 1, alreadyAtStripe: 1 });
+    expect(dbMocks.markUsageReported.mock.calls.map((c) => [c[1], c[2]])).toEqual([["u1", TICK], ["u2", TICK]]);
+    expect(fake.meterEvents.slice(heldBefore).map((e) => e.identifier)).toEqual(["u2"]);
+    expect(fake.meterEvents.filter((e) => e.identifier === "u1")).toHaveLength(1);
+    expect(queue).toEqual([]);
+    // The log names the customer this tick SENT for. After a customer-id
+    // change (PR-3) the usage sits at Stripe under the OLD customer, so the
+    // line says "sent for", never that Stripe holds it for this one.
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("Stripe already held usage row u1 (sent for customer cus_a;"));
+  });
+
+  it("the same refusal for a row a concurrent tick already stamped is alreadyStamped, not alreadyAtStripe (mutation: count every duplicate as alreadyAtStripe → FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    queue = [usage("u1")];
+    await seedAtStripe(queue[0]!, "a key that expired");
+    dbMocks.markUsageReported.mockResolvedValueOnce(false);
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, alreadyStamped: 1 });
+  });
+
+  it("a duplicate whose stamp throws is unstamped, and the next tick's identical refusal stamps it (mutation: count a failed duplicate stamp as alreadyAtStripe → FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    queue = [usage("u1")];
+    await seedAtStripe(queue[0]!, "a key that expired");
+    dbMocks.markUsageReported.mockRejectedValueOnce(new Error("db down"));
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, unstamped: 1 });
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, alreadyAtStripe: 1 });
+  });
+
+  it("a refusal naming a DIFFERENT identifier is still a row refusal: the row stays unstamped and its account waits (mutation: stamp on any 'already exists' message → u1 stamped, FAILS)", async () => {
+    dbMocks.listBilledUsageAccounts.mockResolvedValue([A]);
+    queue = [usage("u1"), usage("u2")];
+    const other = Object.assign(new Error("An event already exists with identifier someone-else."), { type: "StripeInvalidRequestError" });
+    vi.spyOn(fake, "reportMeterEvent").mockRejectedValueOnce(other);
+    expect(await usageReportPass.run(ctx())).toEqual({ ...EMPTY, failed: 1 });
+    expect(dbMocks.markUsageReported).not.toHaveBeenCalled();
   });
 
   it("a stamp that finds the row already stamped (a concurrent tick) is alreadyStamped, never reported (mutation: count every resolved stamp as reported → FAILS)", async () => {
