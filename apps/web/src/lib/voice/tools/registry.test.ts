@@ -12,6 +12,7 @@ const dbMocks = vi.hoisted(() => ({
   setBookingStatus: vi.fn(), getBookingById: vi.fn(),
   fillContactBlanks: vi.fn(), getContact: vi.fn(),
   markHandoffRequested: vi.fn(),
+  ensureConversation: vi.fn(), createMessage: vi.fn(), incrementUnreadCount: vi.fn(),
 }));
 const sendMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", async (importOriginal) => {
@@ -89,21 +90,85 @@ describe("check_availability", () => {
   });
 });
 
+// Booking tools are bound to the verified caller: caller ID is the only
+// identity, and a number the caller recites never finds, reveals, moves or
+// cancels anything.
 describe("find_my_booking", () => {
-  it("uses caller ID when no phone arg, E.164-normalizes an explicit one", async () => {
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
+  const HIT = { bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" };
+  const TARGET = { available: true as const, to: "+19565550199" };
+
+  it("looks up the caller ID and hands back the spoken local time", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
     const r1 = await runTool(emptyCallState(), ctx, "find_my_booking", {});
     expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenCalledWith({}, "a1", "+19562921696", expect.any(String));
     expect(r1.result).toMatchObject({ found: true, bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
     // Spoken rendering rides along so the model never converts the ISO itself.
     expect((r1.result as { startsAtLocal: string }).startsAtLocal).toContain("9:00 AM");
-    await runTool(emptyCallState(), ctx, "find_my_booking", { phone: "(956) 555-0100" });
-    expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenLastCalledWith({}, "a1", "+19565550100", expect.any(String));
   });
-  it("no caller ID and no arg â†’ found:false, no query", async () => {
-    const r = await runTool(emptyCallState(), { ...ctx, callerNumber: null }, "find_my_booking", {});
-    expect(r.result).toEqual({ found: false });
+
+  it("a recited number that is not the caller ID is refused with no lookup, nothing revealed, nobody served", async () => {
+    // The mock WOULD find a booking — a lookup by the recited number would
+    // hand its details straight back.
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    const pre = emptyCallState();
+    const { state, result } = await runTool(pre, ctx, "find_my_booking", { phone: "(956) 555-0100" });
     expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ found: false, verified: false });
+    expect(result).not.toHaveProperty("bookingId");
+    expect(result).not.toHaveProperty("startsAt");
+    expect(result).not.toHaveProperty("startsAtLocal");
+    expect(String((result as { error?: string }).error)).toMatch(/number they are calling from/);
+    expect(state).toBe(pre);
+    expect(state.served).toEqual([]);
+  });
+
+  it("a garbled recited number is refused the same way — never quietly swapped for caller ID", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    const pre = emptyCallState();
+    const { state, result } = await runTool(pre, ctx, "find_my_booking", { phone: "55 01" });
+    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ found: false, verified: false });
+    expect(result).not.toHaveProperty("bookingId");
+    expect(state).toBe(pre);
+  });
+
+  it("a recited number that IS the caller ID, in another shape, looks up the caller ID and finds it", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    const { state, result } = await runTool(emptyCallState(), ctx, "find_my_booking", { phone: "(956) 292-1696" });
+    expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenCalledWith({}, "a1", "+19562921696", expect.any(String));
+    expect(result).toMatchObject({ found: true, bookingId: "b9" });
+    expect(state.served).toEqual(["booking_found"]);
+  });
+
+  it("no caller ID and no arg → no query, verified:false, and an instruction instead of a bare found:false", async () => {
+    const pre = emptyCallState();
+    const r = await runTool(pre, { ...ctx, callerNumber: null }, "find_my_booking", {});
+    expect(r.result).toMatchObject({ found: false, verified: false, error: expect.any(String) });
+    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(r.state).toBe(pre);
+  });
+
+  it("no caller ID and a recited number → still no query: a withheld call can look nothing up", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    const pre = emptyCallState();
+    const { state, result } = await runTool(pre, { ...ctx, callerNumber: null }, "find_my_booking",
+      { phone: "(956) 292-1696" });
+    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ found: false, verified: false });
+    expect(result).not.toHaveProperty("bookingId");
+    expect(state).toBe(pre);
+  });
+
+  it("a refusal offers the transfer only when there is somewhere to transfer to, else a message", async () => {
+    const withTarget = await runTool(emptyCallState(),
+      { ...ctx, callerNumber: null, handoffTarget: TARGET }, "find_my_booking", {});
+    const errWith = String((withTarget.result as { error?: string }).error);
+    expect(errWith).toMatch(/transfer_to_human/);
+    expect(errWith).not.toMatch(/take_message/);
+    const without = await runTool(emptyCallState(), { ...ctx, callerNumber: null }, "find_my_booking", {});
+    const errWithout = String((without.result as { error?: string }).error);
+    expect(errWithout).toMatch(/take_message/);
+    expect(errWithout).not.toMatch(/transfer_to_human/);
   });
   // A caller who rings in only to check their own appointment time changes
   // nothing in the database, so the call classifies `abandoned` -- and was

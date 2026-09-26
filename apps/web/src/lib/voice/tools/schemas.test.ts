@@ -66,6 +66,28 @@ describe("toolSchemas", () => {
     expect(names).not.toContain("book_appointment");
   });
 
+  // Booking tools are bound to the verified caller. A declared `phone`
+  // parameter is an invitation to pass whatever number the caller recites;
+  // the tool takes none, and says it only looks up the number they are
+  // calling from.
+  it("find_my_booking takes no phone — no parameters at all — and says it only looks up the calling number", () => {
+    for (const mt of ["in_person", "phone", "video"] as const) {
+      const find = tool(toolSchemas(true, mt, false), "find_my_booking");
+      expect(find.parameters.properties).not.toHaveProperty("phone");
+      expect(find.parameters.properties).toEqual({});
+      expect(find.description).toMatch(/calling from/);
+      expect(find.description).toMatch(/cannot look up any other number/);
+    }
+  });
+
+  it("reschedule and cancel are only for a booking found or booked on this call", () => {
+    for (const name of ["reschedule_appointment", "cancel_appointment"]) {
+      const t = tool(toolSchemas(true, "in_person", false), name);
+      expect(t.description).toMatch(/find_my_booking returned on this call/);
+      expect(t.description).toMatch(/booked on this call/);
+    }
+  });
+
   it("check_availability's contract explains the slot shape: ISO for tools, local for speech", () => {
     const check = tool(toolSchemas(true, "in_person", false), "check_availability");
     expect(check.description).toMatch(/startsAt/);

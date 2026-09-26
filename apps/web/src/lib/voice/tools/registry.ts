@@ -57,6 +57,19 @@ export interface ToolContext {
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const REQUIRED_LEAD_FIELDS = ["fullName", "need"] as const;
 
+/**
+ * What a refused booking lookup or change offers the caller instead: a person
+ * when this call has somewhere to send them, otherwise a message. The same
+ * `handoffTarget.available` decides whether `transfer_to_human` is on the
+ * session at all (`toolSchemas`), so a refusal never names a tool the model
+ * was not given.
+ */
+function nextStep(ctx: ToolContext): string {
+  return ctx.handoffTarget.available
+    ? "offer to put them through to someone on the team with transfer_to_human"
+    : "offer to take a message with take_message so the team can call them back";
+}
+
 export async function runTool(
   state: CallState, ctx: ToolContext, name: ToolName, args: Record<string, unknown>,
 ): Promise<{ state: CallState; result: unknown }> {
@@ -86,10 +99,25 @@ export async function runTool(
       return { state, result: { slots } };
     }
 
+    // Booking tools are bound to the verified caller: caller ID is the only
+    // identity. A number the caller recites is never looked up — the schema
+    // no longer declares one, and a stray `phone` arg (models do send
+    // undeclared args) that is not the caller ID is refused, not queried.
+    // Every refusal leaves `state` untouched: nothing was found for anyone.
     case "find_my_booking": {
-      const phone = toE164(String(args?.phone ?? "")) ?? ctx.callerNumber;
-      if (!phone) return { state, result: { found: false } };
-      const hit = await findUpcomingBookingForPhone(ctx.db, ctx.accountId, phone, now.toISOString());
+      if (!ctx.callerNumber) {
+        return { state, result: { found: false, verified: false, error:
+          "This call has no visible caller number, so appointments can't be looked up on it — not by a number the caller says, either. "
+          + `Apologize, then ${nextStep(ctx)}.` } };
+      }
+      const recited = String(args?.phone ?? "").trim();
+      if (recited && toE164(recited) !== ctx.callerNumber) {
+        return { state, result: { found: false, verified: false, error:
+          "Appointments can only be looked up for the number they are calling from, and that is not the number they gave. "
+          + "Do not confirm, read out, change or cancel anything for another number. "
+          + `Tell them they can call back from the phone the appointment is under, or ${nextStep(ctx)}.` } };
+      }
+      const hit = await findUpcomingBookingForPhone(ctx.db, ctx.accountId, ctx.callerNumber, now.toISOString());
       // `found: false` is NOT served: we looked and told the caller we had
       // nothing for them, which is the same empty-handed ending the text-back
       // exists for. Only a lookup that actually produced their appointment
