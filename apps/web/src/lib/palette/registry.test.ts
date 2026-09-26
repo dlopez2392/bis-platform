@@ -46,6 +46,12 @@ describe("buildPaletteEntries", () => {
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#alert-phone`);
   });
 
+  it("registers the billing settings section, agency only (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+    const entry = buildPaletteEntries(BASE, true).find((e) => e.id === "settings:billing");
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#billing`);
+    expect(buildPaletteEntries(BASE, false).some((e) => e.id === "settings:billing")).toBe(false);
+  });
+
   it("finds the website assistant by the words an operator would type", () => {
     const entries = buildPaletteEntries(BASE, true);
     const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;
@@ -80,6 +86,13 @@ describe("buildPaletteEntries", () => {
     const entries = buildPaletteEntries(null, true);
     for (const word of ["billing", "pricing", "stripe"]) {
       expect(filterEntries(entries, word).map((e) => e.id)).toContain("nav:/dashboard/plans");
+    }
+  });
+
+  it("finds a client's Billing page by the words a business owner types for it (mutation: drop its NAV_KEYWORDS entry → FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, false);
+    for (const word of ["invoice", "card", "receipt"]) {
+      expect(filterEntries(entries, word).map((e) => e.id)).toContain(`nav:${BASE}/billing`);
     }
   });
 

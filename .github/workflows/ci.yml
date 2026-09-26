@@ -209,6 +209,11 @@ jobs:
       # refuses a live key before any other step runs.
       # Scoped to this job for the same reason as OPENAI_API_KEY above.
       STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}
+      # NOT a secret: a fixed literal the e2e billing spec signs its own
+      # fixture webhook events with, so the e2e server accepts them. It
+      # verifies nothing anywhere else: production's signing secret is set
+      # on Vercel Production only (M7a PR-3 plan, Task 13).
+      STRIPE_WEBHOOK_SECRET: whsec_bis_ci_e2e_fixture_only
     concurrency:
       # Serialized repo-wide and never cancelled; see the header. A new name
       # for the reason verify's has one: branches still on the old ci.yml run
