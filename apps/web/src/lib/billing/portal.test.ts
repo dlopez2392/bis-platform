@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { FakeGateway } from "./fake-gateway";
 import { ensurePortalConfiguration, openPortal } from "./portal";
-import { PORTAL_VERSION, type PortalConfiguration } from "./stripe-gateway";
+import { PORTAL_FEATURES, PORTAL_VERSION, type PortalConfiguration } from "./stripe-gateway";
 
 /** A configuration as listPortalConfigurations returns it: BIS's own
  *  features (card + invoices only, DECISION 3) unless overridden. */
@@ -28,18 +28,19 @@ describe("the Customer Portal (G19)", () => {
     expect(fake.portalConfigurations).toHaveLength(1);
   });
 
-  it("never uses a tagged configuration someone changed in the Stripe dashboard (self-cancel turned on breaks DECISION 3): it makes a fresh card-and-invoices one, says which it passed over, and uses that from then on (review correction 3) (mutation: match on the tag alone → the client's portal offers cancel, FAILS; key the replacement like the first create → Stripe replays the drifted one, FAILS)", async () => {
+  it.each(PORTAL_FEATURES)("never uses a tagged configuration whose %s was flipped in the Stripe dashboard (self-cancel on breaks DECISION 3, card updates off leave Manage billing useless): it makes a fresh card-and-invoices one, says which it passed over, and uses that from then on (review correction 3) (mutation: match on the tag alone → the client's portal offers cancel, FAILS; leave this feature out of the drift check → FAILS; key the replacement like the first create → Stripe replays the drifted one, FAILS)", async (feature) => {
     const fake = new FakeGateway();
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     // The first-ever create happened (same key the missing case uses), then
-    // someone enabled self-cancel on it in the dashboard.
+    // someone flipped one feature on it in the dashboard.
     const first = await ensurePortalConfiguration(fake);
-    fake.portalConfigurations[0]!.features.subscription_cancel = true;
+    const drifted = fake.portalConfigurations[0]!.features;
+    drifted[feature] = !drifted[feature];
 
     const replaced = await ensurePortalConfiguration(fake);
     expect(replaced).not.toBe(first);
     expect(fake.portalConfigurations.find((c) => c.id === replaced)!.features).toEqual(config("x", {}).features);
-    expect(log.mock.calls.map((c) => c.join(" ")).join("\n")).toMatch(new RegExp(`${first}.*subscription_cancel`));
+    expect(log.mock.calls.map((c) => c.join(" ")).join("\n")).toMatch(new RegExp(`${first}.*${feature}`));
 
     fake.calls.length = 0;
     expect(await ensurePortalConfiguration(fake)).toBe(replaced);

@@ -9,7 +9,7 @@ const db = vi.hoisted(() => ({
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 
-const { sendBillingLink } = await import("./billing-link");
+const { sendBillingLink, loggableError } = await import("./billing-link");
 const { FakeGateway } = await import("./fake-gateway");
 const { idempotencyKey } = await import("./stripe-gateway");
 
@@ -30,18 +30,23 @@ const stored = (over: Partial<AccountBilling>): AccountBilling => ({
 });
 const prevLink = (sessionId: string): BillingLink => ({
   accountId: ACCOUNT, planId: PLAN.id, stripeCustomerId: "cus_linked", checkoutSessionId: sessionId,
-  checkoutUrl: `https://checkout.stripe.test/c/pay/${sessionId}`, sentTo: "old@example.com",
+  checkoutUrl: `https://checkout.stripe.test/c/pay/${sessionId}`, sentTo: "owner@example.com",
   expiresAt: "2026-10-16T00:00:00+00:00", sentAt: "2026-10-15T00:00:00+00:00", updatedAt: "2026-10-15T00:00:00+00:00",
 });
 
 let gateway: InstanceType<typeof FakeGateway>;
 let sent: Array<{ to: string; subject: string; body: string; html?: string; replyTo?: string; fromName: string }>;
 let emailError: Error | null = null;
-const deps = (over: { newRequestId?: () => string } = {}) => ({
+const deps = (over: { newRequestId?: () => string; replyTo?: string } = {}) => ({
   db: {} as never, gateway, now: NOW, origin: "https://app.example", replyTo: "help@bis.example",
   email: { isFake: true, send: async (i: (typeof sent)[number]) => { if (emailError) throw emailError; sent.push(i); return { providerMessageId: "e1" }; } },
   ...over,
 });
+
+/** The billed row's customer, as Stripe holds it (the fake refuses an
+ *  update to a customer it does not know, as Stripe does). */
+const seedStoredCustomer = (email = "old-owner@example.com") =>
+  gateway.customers.push({ id: "cus_stored", accountId: ACCOUNT, name: "Rio Roofing", email });
 
 beforeEach(() => {
   gateway = new FakeGateway();
@@ -60,7 +65,7 @@ afterEach(() => {
 });
 
 describe("sendBillingLink", () => {
-  it("first link: makes the customer and a subscription Checkout on the plan's four prices returning to /billing-done, each keyed on EVERY parameter it sends plus this Send's own request id, saves it as the first link, and emails it from BIS (mutation: key the customer by account alone → a corrected email replays the old customer, FAILS; drop the request id from either key → FAILS)", async () => {
+  it("first link: makes the customer and a subscription Checkout on the plan's four prices returning to /billing-done, each keyed on EVERY parameter it sends plus this Send's own request id, saves it as the first link, and emails it from BIS in BIS's own header, never the business's (DECISION 1) (mutation: key the customer by account alone → a corrected email replays the old customer, FAILS; drop the request id from either key → FAILS; brand the header with the business name → FAILS)", async () => {
     const r = await sendBillingLink(deps({ newRequestId: () => "req-1" }), INPUT);
     expect(r.ok).toBe(true);
     const customer = { accountId: ACCOUNT, name: "Rio Roofing", email: "owner@example.com" };
@@ -81,6 +86,8 @@ describe("sendBillingLink", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ to: "owner@example.com", fromName: "BIS", replyTo: "help@bis.example" });
     expect(sent[0]!.body).toContain(session.url);
+    expect(sent[0]!.html).toContain(">BIS</td>");
+    expect(sent[0]!.html).not.toContain(">Rio Roofing</td>");
   });
 
   it("reuses the account's customer and never makes another: the billed row's customer WINS over a pending link that names a different one (G3's invariant; the mirror would refuse the other as customer_changed) (mutation: always create → a second Stripe customer per resend, FAILS; prefer the link's customer → FAILS)", async () => {
@@ -88,11 +95,53 @@ describe("sendBillingLink", () => {
       accountId: ACCOUNT, planId: PLAN.id, customerId: "cus_linked", priceIds: PLAN.stripePriceIds, successUrl: "https://x", cancelUrl: "https://y",
     }, "old-key");
     gateway.checkoutSessions.get(old.id)!.status = "expired";
+    seedStoredCustomer();
     db.getAccountBilling.mockResolvedValue(stored({ subscriptionStatus: "canceled" }));
     db.getBillingLink.mockResolvedValue(prevLink(old.id));
-    await sendBillingLink(deps(), INPUT);
-    expect(gateway.customers).toEqual([]);
+    expect((await sendBillingLink(deps(), INPUT)).ok).toBe(true);
+    expect(gateway.calls.filter((c) => c.op === "createCustomer")).toEqual([]);
     expect([...gateway.checkoutSessions.values()].at(-1)!.input.customerId).toBe("cus_stored");
+  });
+
+  it("a resend to a CORRECTED address on an unbilled account makes a new customer on the new address and saves the link on it: the link's customer keeps the old address, and Stripe's receipts and payment emails follow the customer (review finding 1) (mutation: reuse the link's customer whatever the address → receipts go to the old address for good, FAILS)", async () => {
+    const old = await gateway.createCheckoutSession({
+      accountId: ACCOUNT, planId: PLAN.id, customerId: "cus_linked", priceIds: PLAN.stripePriceIds, successUrl: "https://x", cancelUrl: "https://y",
+    }, "old-key");
+    db.getBillingLink.mockResolvedValue({ ...prevLink(old.id), sentTo: "typo@exmaple.com" });
+    expect((await sendBillingLink(deps(), INPUT)).ok).toBe(true);
+    expect(gateway.customers.map((c) => c.email)).toEqual(["owner@example.com"]);
+    const fresh = gateway.customers[0]!.id;
+    expect([...gateway.checkoutSessions.values()].at(-1)!.input.customerId).toBe(fresh);
+    expect((db.saveBillingLink.mock.calls[0]![1] as { stripeCustomerId: string }).stripeCustomerId).toBe(fresh);
+    expect(gateway.checkoutSessions.get(old.id)!.status).toBe("expired");
+  });
+
+  it("a resend to the SAME address, however it is capitalised or padded, reuses the link's customer: no second customer (mutation: compare the addresses exactly → a needless customer per resend, FAILS)", async () => {
+    const old = await gateway.createCheckoutSession({
+      accountId: ACCOUNT, planId: PLAN.id, customerId: "cus_linked", priceIds: PLAN.stripePriceIds, successUrl: "https://x", cancelUrl: "https://y",
+    }, "old-key");
+    db.getBillingLink.mockResolvedValue({ ...prevLink(old.id), sentTo: " Owner@Example.COM " });
+    expect((await sendBillingLink(deps(), INPUT)).ok).toBe(true);
+    expect(gateway.calls.filter((c) => c.op === "createCustomer")).toEqual([]);
+    expect([...gateway.checkoutSessions.values()].at(-1)!.input.customerId).toBe("cus_linked");
+  });
+
+  it("a billed account (paid, then canceled) keeps its ONE customer (G3), and that customer's email moves to the new recipient before the session is made, under a key over the customer, the address and this Send (review finding 1) (mutation: skip the email update → a new owner's receipts go to the old one, FAILS; update after creating the session → FAILS)", async () => {
+    seedStoredCustomer("old-owner@example.com");
+    db.getAccountBilling.mockResolvedValue(stored({ subscriptionStatus: "canceled" }));
+    expect((await sendBillingLink(deps({ newRequestId: () => "req-1" }), INPUT)).ok).toBe(true);
+    expect(gateway.calls.map((c) => c.op)).toEqual(["updateCustomerEmail", "createCheckoutSession"]);
+    expect(gateway.calls[0]).toEqual({
+      op: "updateCustomerEmail", input: { customerId: "cus_stored", email: "owner@example.com" },
+      key: idempotencyKey("bis-customer-email", ACCOUNT, { customerId: "cus_stored", email: "owner@example.com", requestId: "req-1" }),
+    });
+    expect(gateway.customers).toEqual([{ id: "cus_stored", accountId: ACCOUNT, name: "Rio Roofing", email: "owner@example.com" }]);
+    expect([...gateway.checkoutSessions.values()].at(-1)!.input.customerId).toBe("cus_stored");
+  });
+
+  it("a blank reply-to is no header at all, through the house helper (mutation: pass it on truthiness → a header of spaces, FAILS)", async () => {
+    expect((await sendBillingLink(deps({ replyTo: "   " }), INPUT)).ok).toBe(true);
+    expect(sent[0]).not.toHaveProperty("replyTo");
   });
 
   it("refuses an account whose subscription is not ended, before ANY Stripe call (mutation: drop the guard → a second subscription can be bought, FAILS)", async () => {
@@ -167,6 +216,21 @@ describe("sendBillingLink", () => {
     expect(keysOf("createCheckoutSession")).toHaveLength(2);
     expect(new Set(keysOf("createCheckoutSession")).size).toBe(2);
     expect(new Set(keysOf("createCustomer")).size).toBe(2);
+
+    // The same with the customer REUSED (the billed one): nothing else in
+    // the checkout's params changes between the two Sends.
+    gateway = new FakeGateway();
+    seedStoredCustomer();
+    db.getAccountBilling.mockResolvedValue(stored({ subscriptionStatus: "canceled" }));
+    gateway.failOn = {
+      op: "createCheckoutSession",
+      error: Object.assign(new Error("An unknown error occurred"), { type: "StripeAPIError", statusCode: 500 }),
+    };
+    expect(await sendBillingLink(deps(), INPUT)).toEqual({ ok: false, reason: "stripe_failed" });
+    gateway.failOn = null;
+    expect((await sendBillingLink(deps(), INPUT)).ok).toBe(true);
+    expect(keysOf("createCheckoutSession")).toHaveLength(2);
+    expect(new Set(keysOf("createCheckoutSession")).size).toBe(2);
     log.mockRestore();
   });
 
@@ -247,5 +311,18 @@ describe("sendBillingLink", () => {
     expect(logged).toContain("recipient address rejected");
     expect(logged.match(/\[email\]/g)).toHaveLength(2);
     log.mockRestore();
+  });
+
+  it("loggableError cuts the message at 300 characters, AFTER redacting, so an address astride the cut never leaves a piece behind (mutation: drop the cut → FAILS; cut before redacting → 'owne' is logged, FAILS)", () => {
+    const line = loggableError(Object.assign(new Error(`${"x".repeat(295)} owner@example.com and more`), { type: "StripeAPIError" }));
+    expect(line.startsWith("StripeAPIError: ")).toBe(true);
+    const message = line.slice("StripeAPIError: ".length);
+    expect(message).toHaveLength(300);
+    expect(message).toBe(`${"x".repeat(295)} [ema`);
+  });
+
+  it("loggableError redacts plus-addressed, dotted and hyphenated addresses whole (mutation: narrow the pattern to [\\w.-]+@ → 'owner+' is logged, FAILS)", () => {
+    const line = loggableError(new Error("No such customer email: owner+billing@rio-roofing.example, cc first.last@x.co"));
+    expect(line).toBe("Error: No such customer email: [email], cc [email]");
   });
 });

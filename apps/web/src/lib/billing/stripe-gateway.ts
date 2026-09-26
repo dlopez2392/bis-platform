@@ -72,6 +72,7 @@ export interface BillingGateway {
   createPrice(spec: PriceSpec, idempotencyKey: string): Promise<{ id: string }>;
   reportMeterEvent(input: MeterEventInput, idempotencyKey: string): Promise<void>;
   createCustomer(input: { accountId: string; name: string | null; email: string }, idempotencyKey: string): Promise<{ id: string }>;
+  updateCustomerEmail(customerId: string, email: string, idempotencyKey: string): Promise<void>;
   createCheckoutSession(input: CheckoutInput, idempotencyKey: string): Promise<CheckoutSession>;
   getCheckoutSessionStatus(sessionId: string): Promise<CheckoutStatus>;
   expireCheckoutSession(sessionId: string): Promise<void>;
@@ -449,6 +450,10 @@ export function stripeGateway(stripe: Stripe): BillingGateway {
         { idempotencyKey },
       );
       return { id: c.id };
+    },
+    async updateCustomerEmail(customerId, email, idempotencyKey) {
+      // The address Stripe's receipts and payment emails go to (billing-link.ts).
+      await stripe.customers.update(customerId, { email }, { idempotencyKey });
     },
     async createCheckoutSession(input, idempotencyKey) {
       const s = await stripe.checkout.sessions.create(checkoutSessionParams(input), { idempotencyKey });

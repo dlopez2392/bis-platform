@@ -8,7 +8,7 @@ import {
 
 export type GatewayOp =
   | "listActiveMeters" | "createMeter" | "createProduct" | "renameProduct" | "createPrice" | "reportMeterEvent"
-  | "createCustomer" | "createCheckoutSession" | "getCheckoutSessionStatus" | "expireCheckoutSession"
+  | "createCustomer" | "updateCustomerEmail" | "createCheckoutSession" | "getCheckoutSessionStatus" | "expireCheckoutSession"
   | "retrieveSubscription" | "updateSubscriptionPrices" | "listPortalConfigurations" | "createPortalConfiguration"
   | "createPortalSession";
 
@@ -24,6 +24,12 @@ function sameInput(a: unknown, b: unknown): boolean {
   const bKeys = Object.keys(b as Record<string, unknown>);
   if (aKeys.length !== bKeys.length) return false;
   return aKeys.every((k) => sameInput((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
+/** What Stripe throws for a request it refuses (the SDK sets `.type` to the
+ *  class name), so a flow's Stripe-error handling is what a test exercises. */
+function invalidRequest(message: string): Error {
+  return Object.assign(new Error(message), { type: "StripeInvalidRequestError", rawType: "invalid_request_error", statusCode: 400 });
 }
 
 /**
@@ -177,6 +183,24 @@ export class FakeGateway implements BillingGateway {
     });
   }
 
+  /** Same replay strictness as the creates (A4). A customer the fake does
+   *  not hold is refused as Stripe refuses it ("No such customer"). */
+  async updateCustomerEmail(customerId: string, email: string, key: string): Promise<void> {
+    const input = { customerId, email };
+    this.step("updateCustomerEmail", input, key);
+    const seen = this.replay.get(key);
+    if (seen) {
+      if (seen.op !== "updateCustomerEmail" || !sameInput(seen.input, input)) {
+        throw new Error(`fake Stripe: idempotency key "${key}" was already used with different parameters (A4)`);
+      }
+      return;
+    }
+    const customer = this.customers.find((c) => c.id === customerId);
+    if (!customer) throw invalidRequest(`No such customer: '${customerId}'`);
+    customer.email = email;
+    this.replay.set(key, { op: "updateCustomerEmail", input, value: undefined });
+  }
+
   async createCheckoutSession(input: CheckoutInput, key: string): Promise<CheckoutSession> {
     checkoutSessionParams(input);
     this.step("createCheckoutSession", input, key);
@@ -197,7 +221,10 @@ export class FakeGateway implements BillingGateway {
   async expireCheckoutSession(sessionId: string): Promise<void> {
     this.step("expireCheckoutSession", { sessionId });
     const s = this.checkoutSessions.get(sessionId);
-    if (!s || s.status !== "open") throw new Error(`fake Stripe: only an open session can be expired (${sessionId})`);
+    // Stripe answers a non-open session with an invalid request (assumption:
+    // its API reference says only an open session can be expired; the error
+    // class for it was not observed here).
+    if (!s || s.status !== "open") throw invalidRequest(`fake Stripe: only an open session can be expired (${sessionId})`);
     s.status = "expired";
   }
 

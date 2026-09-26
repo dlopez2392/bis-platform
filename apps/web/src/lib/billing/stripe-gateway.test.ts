@@ -58,6 +58,7 @@ function stubStripe(overrides: StubOverrides = {}) {
   return {
     customers: {
       create: vi.fn(async () => ({ id: "cus_new", object: "customer", email: "owner@example.com" })),
+      update: vi.fn(async () => ({ id: "cus_1", object: "customer", email: "new@example.com" })),
     },
     checkout: {
       sessions: {
@@ -80,7 +81,10 @@ function stubStripe(overrides: StubOverrides = {}) {
         list: vi.fn(async () => ({
           data: [
             { id: "bpc_1", metadata: { bis_portal: "v1" }, features: STRIPE_FEATURES({}) },
-            { id: "bpc_2", metadata: null, features: STRIPE_FEATURES({ subscription_cancel: true, invoice_history: false }) },
+            // Across the three, no two features share an ON/OFF pattern, so
+            // reading any feature's flag for another's changes the result.
+            { id: "bpc_2", metadata: null, features: STRIPE_FEATURES({ invoice_history: false, customer_update: true, subscription_cancel: true }) },
+            { id: "bpc_3", metadata: {}, features: STRIPE_FEATURES({ invoice_history: false, payment_method_update: false, customer_update: true, subscription_update: true }) },
           ],
           has_more: overrides.portalHasMore ?? false,
         })),
@@ -618,6 +622,24 @@ describe("the new gateway surface", () => {
     await expect(fake.expireCheckoutSession(a.id)).rejects.toThrow(/open/);
   });
 
+  it("FakeGateway refuses what Stripe refuses as a Stripe invalid request, not a plain Error: expiring a session that is not open, and updating an unknown customer (so the flows' Stripe-error handling is what a test sees) (mutation: throw a plain Error → the type is lost, FAILS)", async () => {
+    const fake = new FakeGateway();
+    const a = await fake.createCheckoutSession(CHECKOUT, "k1");
+    await fake.expireCheckoutSession(a.id);
+    await expect(fake.expireCheckoutSession(a.id)).rejects.toMatchObject({ type: "StripeInvalidRequestError", statusCode: 400 });
+    await expect(fake.updateCustomerEmail("cus_nobody", "a@b.co", "k-u")).rejects.toMatchObject({ type: "StripeInvalidRequestError" });
+  });
+
+  it("FakeGateway.updateCustomerEmail moves the held customer's email, replays the same key, and refuses the same key with another address, as Stripe's key-reuse 400 does (mutation: bare return on any seen key → the second address silently 'succeeds', FAILS; update without the replay check → FAILS)", async () => {
+    const fake = new FakeGateway();
+    const { id } = await fake.createCustomer({ accountId: "a", name: null, email: "old@example.com" }, "k-c");
+    await fake.updateCustomerEmail(id, "new@example.com", "k-u");
+    await fake.updateCustomerEmail(id, "new@example.com", "k-u");
+    expect(fake.customers[0]!.email).toBe("new@example.com");
+    await expect(fake.updateCustomerEmail(id, "other@example.com", "k-u")).rejects.toThrow(/idempotency/);
+    expect(fake.customers[0]!.email).toBe("new@example.com");
+  });
+
   it("FakeGateway.updateSubscriptionPrices is all-or-nothing, as a Stripe request is: a change naming a missing item (or subscription) throws, changes NOTHING, records nothing, and the same key retried throws again; a valid change applies whole (mutation: record the replay before validating → the retry resolves, FAILS; apply items one by one → si_s already swapped, FAILS)", async () => {
     const fake = new FakeGateway();
     fake.subscriptions.set("sub_1", structuredClone(SNAPSHOT));
@@ -677,6 +699,13 @@ describe("stripeGateway: the PR-3 calls (exact params AND options, on a stub cli
       { email: "owner@example.com", metadata: { bis_account_id: CHECKOUT.accountId } }, { idempotencyKey: "k-cus2" });
   });
 
+  it("updateCustomerEmail changes that customer's email and nothing else, under the idempotency key, and returns nothing Stripe sent back (mutation: drop the options argument → FAILS; send the name or metadata too → FAILS; return the customer → FAILS)", async () => {
+    const { s, g } = gw();
+    await expect(g.updateCustomerEmail("cus_1", "new@example.com", "k-email")).resolves.toBeUndefined();
+    expect(s.customers.update).toHaveBeenCalledTimes(1);
+    expect(s.customers.update).toHaveBeenCalledWith("cus_1", { email: "new@example.com" }, { idempotencyKey: "k-email" });
+  });
+
   it("createCheckoutSession sends checkoutSessionParams under the idempotency key and returns Stripe's id, url and expires_at (mutation: drop { idempotencyKey } → a retried Send opens a SECOND payable session, FAILS)", async () => {
     const { s, g } = gw();
     expect(await g.createCheckoutSession(CHECKOUT, "k-cs"))
@@ -730,7 +759,10 @@ describe("stripeGateway: the PR-3 calls (exact params AND options, on a stub cli
     const bis = { invoice_history: true, payment_method_update: true, customer_update: false, subscription_cancel: false, subscription_update: false };
     expect(await g.listPortalConfigurations()).toEqual([
       { id: "bpc_1", metadata: { bis_portal: "v1" }, features: bis },
-      { id: "bpc_2", metadata: {}, features: { ...bis, subscription_cancel: true, invoice_history: false } },
+      { id: "bpc_2", metadata: {}, features: { ...bis, invoice_history: false, customer_update: true, subscription_cancel: true } },
+      { id: "bpc_3", metadata: {}, features: {
+        invoice_history: false, payment_method_update: false, customer_update: true, subscription_cancel: false, subscription_update: true,
+      } },
     ]);
     expect(s.billingPortal.configurations.list).toHaveBeenCalledWith({ active: true, limit: 100 });
     await expect(gw({ portalHasMore: true }).g.listPortalConfigurations()).rejects.toThrow(/more than 100/);

@@ -4,6 +4,7 @@ import {
   type Branding, type Plan, type SupabaseClient,
 } from "@bis/db";
 import type { EmailProvider } from "@/lib/email";
+import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { billingLinkEmail } from "@/lib/email/templates/billing-link";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { formatMoment, includedLine, priceLine } from "./billing-view";
@@ -51,6 +52,11 @@ export type SendBillingLinkResult =
 function isStripeError(e: unknown): boolean {
   const type = typeof e === "object" && e !== null ? (e as { type?: unknown }).type : undefined;
   return typeof type === "string" && type.startsWith("Stripe");
+}
+
+/** One mailbox, however it was typed: trimmed, case-insensitive. */
+function sameAddress(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
 /** Anything shaped like an email address. Generous on purpose: a false
@@ -103,10 +109,10 @@ export function loggableError(e: unknown): string {
  * link (G2), so two Sends at once still leave one link, the loser expiring
  * its own session ("stale"). A session whose creation response never arrived
  * was never saved or emailed, so its URL reached nobody, and Stripe expires
- * it. A customer is created only while the account has none on its billed
- * row or its link (G3), so the invariant "once billed, the customer never
- * changes" is untouched; a Send that fails after creating one leaves an
- * unused customer, which G3 already calls harmless.
+ * it. A customer is created only while the billed row holds none and there
+ * is no link to this address (G3), so the invariant "once billed, the
+ * customer never changes" is untouched; a Send that fails after creating one
+ * leaves an unused customer, which G3 already calls harmless.
  */
 export async function sendBillingLink(deps: SendBillingLinkDeps, input: SendBillingLinkInput): Promise<SendBillingLinkResult> {
   const { db, gateway, now } = deps;
@@ -127,9 +133,29 @@ export async function sendBillingLink(deps: SendBillingLinkDeps, input: SendBill
         await gateway.expireCheckoutSession(link.checkoutSessionId);
       }
     }
-    const customer = { accountId: input.accountId, name: input.businessName, email: input.email };
-    customerId = billing?.stripeCustomerId ?? link?.stripeCustomerId
-      ?? (await gateway.createCustomer(customer, idempotencyKey("bis-customer", input.accountId, { customer, requestId }))).id;
+    // WHICH customer (G3), and so which address Stripe's receipts and
+    // failed-payment emails go to: Checkout shows an existing customer's own
+    // email and does not write a typed one back (assumption, Stripe's docs),
+    // and the portal cannot edit it (DECISION 3), so the customer must carry
+    // the address this link is sent to.
+    if (billing?.stripeCustomerId) {
+      // Billed once: the customer never changes (the mirror refuses any
+      // other as customer_changed). Its email follows the recipient. BIS does
+      // not hold the customer's current email (the link that recorded it was
+      // consumed at payment), so it is set every time; the same address again
+      // changes nothing.
+      customerId = billing.stripeCustomerId;
+      await gateway.updateCustomerEmail(customerId, input.email, idempotencyKey("bis-customer-email", input.accountId, {
+        customerId, email: input.email, requestId,
+      }));
+    } else if (link && sameAddress(link.sentTo, input.email)) {
+      customerId = link.stripeCustomerId;
+    } else {
+      // Unbilled, and no link to this address: a new customer. The link's
+      // old one was never billed, and its open session was expired above.
+      const customer = { accountId: input.accountId, name: input.businessName, email: input.email };
+      customerId = (await gateway.createCustomer(customer, idempotencyKey("bis-customer", input.accountId, { customer, requestId }))).id;
+    }
     const checkout: CheckoutInput = {
       accountId: input.accountId, planId: input.plan.id, customerId, priceIds: input.plan.stripePriceIds,
       successUrl: `${deps.origin}/billing-done?result=success`, cancelUrl: `${deps.origin}/billing-done?result=cancelled`,
@@ -147,9 +173,10 @@ export async function sendBillingLink(deps: SendBillingLinkDeps, input: SendBill
   }, link?.checkoutSessionId ?? null, now);
   if (!saved) {
     const current = await getBillingLink(db, input.accountId);
-    // The stored link already names this very session (only a replay of it
-    // can get here): it is the LIVE link, already emailed. Expiring it would
-    // kill the link the card shows; success, and no second email.
+    // The stored link already names this very session: it is the LIVE link,
+    // already emailed, so success and no second email. Unreachable with
+    // per-Send keys (only this Send can have made this session); kept so an
+    // input-derived key can never expire the live link.
     if (current?.checkoutSessionId === session.id) return { ok: true, url: session.url };
     try {
       await gateway.expireCheckoutSession(session.id);
@@ -165,8 +192,9 @@ export async function sendBillingLink(deps: SendBillingLinkDeps, input: SendBill
     expires: formatMoment(new Date(session.expiresAt * 1000), input.zone),
   });
   try {
+    const replyTo = normalizeReplyTo(deps.replyTo);
     await deps.email.send({
-      to: input.email, fromName: "BIS", ...(deps.replyTo ? { replyTo: deps.replyTo } : {}),
+      to: input.email, fromName: "BIS", ...(replyTo ? { replyTo } : {}),
       subject: mail.subject, body: mail.text, html: mail.html,
     });
   } catch (e) {
