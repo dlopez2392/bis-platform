@@ -1,6 +1,6 @@
 import { serviceDb } from "@bis/db";
 import {
-  billingGatewayFromEnv, verifyWebhookEvent, type StripeEnv, type VerifiedWebhookEvent,
+  billingGatewayFromEnv, isSignatureError, verifyWebhookEvent, type StripeEnv, type VerifiedWebhookEvent,
 } from "@/lib/billing/stripe-gateway";
 import { processStripeEvent } from "@/lib/billing/webhook";
 
@@ -17,6 +17,14 @@ import { processStripeEvent } from "@/lib/billing/webhook";
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/**
+ * A bound set by the PLATFORM, not a promise the run fits in it: the worst
+ * case is about four Stripe reads (the mirror's first read plus one per
+ * MIRROR_ATTEMPTS), each up to ~61 s under the client's 2 retries × 20 s
+ * timeout. A run cut off here is safe: every step before the stamp is
+ * idempotent, the event stays unstamped, Stripe sees a failure and retries,
+ * and the retry redoes it.
+ */
 export const maxDuration = 30;
 
 export async function POST(request: Request): Promise<Response> {
@@ -33,9 +41,23 @@ export async function POST(request: Request): Promise<Response> {
   let event: VerifiedWebhookEvent;
   try {
     event = verifyWebhookEvent(payload, request.headers.get("stripe-signature") ?? "", secret);
-  } catch {
-    // Unverified payloads are never read. This is the security boundary.
-    return new Response("invalid signature", { status: 400 });
+  } catch (e) {
+    if (isSignatureError(e)) {
+      // Unverified payloads are never read. This is the security boundary.
+      // One fixed line, never the header or the body: a wrong or rotated
+      // secret 400s EVERY event (Stripe retries each for days), and without
+      // this line nothing would say so.
+      console.error("stripe webhook: signature did not verify (a wrong STRIPE_WEBHOOK_SECRET, or a forgery); answering 400");
+      return new Response("invalid signature", { status: 400 });
+    }
+    // Signed by Stripe, but BIS could not read it (not JSON, or a shape the
+    // reduction does not expect). A 500, so Stripe retries and the fault
+    // stays visible. A SyntaxError's message quotes the body, which can hold
+    // a customer's details, so it is named by its type only.
+    const why = e instanceof SyntaxError ? "SyntaxError (the body is not JSON)"
+      : e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    console.error(`stripe webhook: verified but unreadable: ${why}`);
+    return new Response("unreadable event", { status: 500 });
   }
 
   const gateway = billingGatewayFromEnv(process.env as StripeEnv);
