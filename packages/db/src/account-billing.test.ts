@@ -407,6 +407,25 @@ describe("23505: only the primary key is a race; another unique key throws, nami
       .rejects.toThrow(/billing_links_stripe_customer_id_key/);
   });
 
+  it("the constraint is read from PostgREST's MESSAGE (PostgrestError has code, details, hint, message and no `constraint` field), and its quoted name must equal the primary key's EXACTLY: a look-alike name that merely contains it is another key, so it throws (mutation: match with message.includes('billing_links_pkey') → the look-alike returns false, FAILS; read error.constraint → undefined, the real pkey text throws, FAILS)", async () => {
+    const refusedWith = (error: Record<string, unknown>) => ({
+      from: () => ({ insert: async () => ({ error }) }),
+    } as unknown as SupabaseClient);
+    const link = {
+      accountId: ACCOUNT, planId: PLAN, stripeCustomerId: "cus_1", checkoutSessionId: "cs_new",
+      checkoutUrl: "https://checkout.stripe.com/x", sentTo: "a@b.co", expiresAt: "2026-10-02T12:00:00.000Z",
+    };
+    // Verbatim the body PostgREST returns (postgrest-js JSON.parses it into `error`).
+    const real = {
+      code: "23505", details: `Key (account_id)=(${ACCOUNT}) already exists.`, hint: null,
+      message: 'duplicate key value violates unique constraint "billing_links_pkey"',
+    };
+    expect(await saveBillingLink(refusedWith(real), link, null, NOW)).toBe(false);
+    await expect(saveBillingLink(refusedWith({
+      ...real, message: 'duplicate key value violates unique constraint "billing_links_pkey_v2"',
+    }), link, null, NOW)).rejects.toThrow(/billing_links_pkey_v2/);
+  });
+
   it("markComplimentary insert: account_billing_pkey is already_billed; any other unique key THROWS naming it (mutation: every 23505 is already_billed → FAILS)", async () => {
     const insertRefusedOn = (constraint: string) => ({
       from: (table: string) => {
