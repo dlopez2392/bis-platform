@@ -243,7 +243,11 @@ export async function changePlanAction(accountId: string, formData: FormData): P
     subscriptionId = snapshot.id;
   } catch (e) {
     console.error(`change plan: Stripe refused for account ${accountId}: ${loggableError(e)}`);
-    return fail("billing.error.stripeFailed");
+    // Not billing.error.stripeFailed: after a timeout the swap may HAVE
+    // landed, so "Nothing was charged" could be false. This copy says to
+    // check the plan shown before trying again (the card re-mints the
+    // request id on this answer, so a retry is a new Stripe request).
+    return fail("billing.error.changePlanUnconfirmed");
   }
   // Outside the try: Stripe has the change, so a database failure here must
   // NOT say "nothing was charged". It throws (the card shows the generic

@@ -357,13 +357,13 @@ describe("the agency's billing actions", () => {
     expect(dbm.mirrorSubscription).not.toHaveBeenCalled();
   });
 
-  it("change plan, paid, Stripe refuses the update → 'Stripe didn't accept that', never ok, nothing changed, nothing mirrored (mutation: answer ok from the catch → the agency is told the plan changed, FAILS)", async () => {
+  it("change plan, paid, Stripe refuses the update → 'Stripe didn't confirm the change' (never 'Nothing was charged': after a timeout the swap may have landed), never ok, nothing mirrored (mutation: answer ok from the catch → the agency is told the plan changed, FAILS; answer billing.error.stripeFailed from the catch → FAILS)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     dbm.getAccountBilling.mockResolvedValue(billing());
     seedPaidSub();
     dbm.mirrorSubscription.mockResolvedValue({ kind: "written", accountId: ACCOUNT, planId: P2, status: "active" });
     fake.failOn = { op: "updateSubscriptionPrices", error: stripeRefusal("This subscription cannot be updated") };
-    expect(await actions.changePlanAction(ACCOUNT, changeForm())).toEqual({ ok: false, error: m["billing.error.stripeFailed"] });
+    expect(await actions.changePlanAction(ACCOUNT, changeForm())).toEqual({ ok: false, error: m["billing.error.changePlanUnconfirmed"] });
     expect(fake.subscriptionChanges).toEqual([]);
     expect(fake.subscriptions.get("sub_1")!.planId).toBe(P1);
     expect(dbm.mirrorSubscription).not.toHaveBeenCalled();

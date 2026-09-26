@@ -41,6 +41,7 @@ import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
+import { BillingCardStates } from "./billing-card-states";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
 import { EmbedSnippet } from "@/components/embed-snippet";
@@ -574,6 +575,14 @@ export default async function StyleguidePage() {
             <DotPill {...PAYMENT_PROCESSING} data-status="payment_processing" />
             <ManageBillingButton open={styleguidePortalFailed} help={m["billing.page.manageHelp"]} />
           </div>
+        </Section>
+
+        <Section title="Billing card (agency, on account Settings)" file="accounts/[accountId]/settings/billing-card.tsx">
+          {/* Every status word, the no-plans and no-Stripe lines, and the
+              loading and error states. One primary per card (rule 8): Send
+              billing link, where it applies. Built by the real
+              billingCardView from fixture rows (billing-card-states.tsx). */}
+          <BillingCardStates />
         </Section>
 
         <Section title="Empty state" file="components/empty-state.tsx">
