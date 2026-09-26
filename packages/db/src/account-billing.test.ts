@@ -110,7 +110,7 @@ describe("decideMirror: named refusals (G7, G10)", () => {
       .toBe("write");
   });
 
-  it("refuses an ENDED subscription that is not the stored one, so a late event for an old canceled subscription never replaces a newer ended one (id rewritten, billing start moved backwards); a live replacement and the stored subscription's own end are still written (review minor d) (mutation: drop the ended-other guard → the old subscription is written, FAILS)", () => {
+  it("refuses an ENDED subscription that is not the stored one and started BEFORE it, so a late event for an old canceled subscription never replaces a newer ended one (id rewritten, billing start moved backwards); a live replacement and the stored subscription's own end are still written (review minor d) (mutation: drop the ended-other guard → the old subscription is written, FAILS; compare the wrong way → FAILS)", () => {
     const newerEnded = stored({ stripeSubscriptionId: "sub_new", subscriptionStatus: "canceled", billingStartedAt: iso(START + 500) });
     expect(decideMirror({ ...base, existing: newerEnded, snapshot: snap({ id: "sub_old", status: "canceled" }) }))
       .toEqual({ kind: "refused", reason: "ended_other_subscription" });
@@ -363,6 +363,22 @@ describe("mirrorSubscription: a link is consumed only by the subscription it led
     expect(await mirrorSubscription(w.db, async () => snap({ id: "sub_new", startedAt: AFTER_NEW_LINK }), () => NOW))
       .toEqual({ kind: "written", accountId: ACCOUNT, planId: PLAN, status: "active" });
     expect(w.linkDeletes).toEqual([[["account_id", ACCOUNT], ["stripe_customer_id", "cus_1"], ["checkout_session_id", "cs_NEW"]]]);
+    expect(w.state.link).toBeNull();
+  });
+
+  it("the link is consumed when the subscription started EXACTLY at the send instant: the rule is 'started at or after', and start_date is whole seconds (mutation: '>' instead of '>=' → the link is left, FAILS)", async () => {
+    const SENT = "2026-10-01T00:00:00+00:00";
+    const w = world({ link: { sent_at: SENT } });
+    expect((await mirrorSubscription(w.db, async () => snap({ startedAt: Date.parse(SENT) / 1000 }), () => NOW)).kind)
+      .toBe("written");
+    expect(w.state.link).toBeNull();
+  });
+
+  it("a NEWER subscription that has already ended (paid, then incomplete_expired before its first event was processed) replaces an OLDER ended one and consumes its link, so a completed session never blocks Send for good (review re-check 1) (mutation: refuse every ended other subscription → the link stays and Send answers checkout_finished forever, FAILS)", async () => {
+    const w = world({ row: paidRow("sub_old", "canceled"), link: NEW_LINK });
+    expect(await mirrorSubscription(w.db, async () => snap({ id: "sub_new", status: "incomplete_expired", startedAt: AFTER_NEW_LINK }), () => NOW))
+      .toEqual({ kind: "written", accountId: ACCOUNT, planId: PLAN, status: "incomplete_expired" });
+    expect(w.state.row).toMatchObject({ stripe_subscription_id: "sub_new", billing_started_at: iso(AFTER_NEW_LINK) });
     expect(w.state.link).toBeNull();
   });
 

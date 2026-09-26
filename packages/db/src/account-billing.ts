@@ -255,11 +255,17 @@ export function decideMirror(input: {
     if (existing.subscriptionStatus && !ENDED_STATUSES.includes(existing.subscriptionStatus)) {
       return refuse("another_live_subscription");
     }
-    // Only a LIVE subscription may replace an ended one. An ended subscription
-    // that is not the stored one is history: a late event for an old canceled
-    // subscription must not rewrite the id of a newer ended one and move
-    // billing_started_at backwards.
-    if (ENDED_STATUSES.includes(s.status)) return refuse("ended_other_subscription");
+    // An ended subscription OLDER than the stored one is history: a late event
+    // for an old canceled subscription must not rewrite the id of a newer
+    // ended one and move billing_started_at backwards. A NEWER one that has
+    // already ended (paid, then incomplete_expired before its first event was
+    // processed, say through a webhook outage) still replaces the older one,
+    // so it consumes its link: refused, that link's completed session would
+    // make every Send answer checkout_finished forever. billing_started_at is
+    // the stored subscription's own start_date (set whenever the id changes).
+    if (ENDED_STATUSES.includes(s.status) && s.startedAt * 1000 < Date.parse(existing.billingStartedAt)) {
+      return refuse("ended_other_subscription");
+    }
   }
   const unpaid = PAST_DUE_STATUSES.includes(s.status);
   return {
@@ -412,9 +418,10 @@ async function writeMirror(
  * open a second one: the client could pay twice (G2).
  *
  * The rule: same customer, and the subscription STARTED at or after the link
- * was SENT. A Checkout subscription is created when the client pays, which is
- * after the link was saved (saveBillingLink stamps sent_at after Stripe made
- * the session). It is deliberately NOT "this write changed the stored
+ * was SENT. sent_at is the `now` Send passes to saveBillingLink, taken when
+ * the action STARTS, before any Stripe call, so it precedes the session and
+ * therefore the payment; a Checkout subscription is created only when the
+ * client pays. It is deliberately NOT "this write changed the stored
  * subscription id": a delivery whose row write landed but whose delete
  * failed (500, Stripe retries), or one that lost the row to a concurrent
  * delivery that then crashed, replays with the row already on this
@@ -424,10 +431,12 @@ async function writeMirror(
  * Clocks: start_date is Stripe's, in whole seconds; sent_at is BIS's own
  * timestamp (Date.parse keeps its milliseconds; the opaque-microseconds rule
  * is for updated_at in the compare-and-set filter, not this). A skew only
- * matters if the client pays within the skew of the send; the cost of a miss
- * is a link left behind on an account that now has a live subscription,
- * which Send refuses to replace anyway (G2 step 1). Assumes no backdated
- * start_date: BIS's Checkout never backdates.
+ * matters if the client pays within the skew of the send. A miss is NOT
+ * harmless: while the subscription is live, Send refuses at G2 step 1 anyway,
+ * but once it ENDS, Send reaches step 2, reads the leftover session as
+ * complete and answers checkout_finished, blocking every new link for that
+ * account until the row is cleared by hand. Assumes no backdated start_date:
+ * BIS's Checkout never backdates.
  */
 function linkLedTo(link: Pick<BillingLink, "stripeCustomerId" | "sentAt">, snapshot: SubscriptionSnapshot): boolean {
   return link.stripeCustomerId === snapshot.customerId && snapshot.startedAt * 1000 >= Date.parse(link.sentAt);
