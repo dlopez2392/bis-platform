@@ -131,15 +131,16 @@ describe("0026 automations B", () => {
 
 /**
  * 0027, at the level that can see it. Watched failing BEFORE the migration:
- * the column read comes back empty and the catalogue insert is refused with
- * 23514 — the proof neither passes by accident.
+ * the column read comes back empty, the catalogue insert is refused with
+ * 23514, and the cross-tenant test dies on 42703 (no such column) — the
+ * proof none of them passes by accident.
  *
- * form_submissions is server-written (0053): the service role writes it (the
- * public form, intake, the concierge, and the instant-reply stamp), and
- * `authenticated` holds SELECT and nothing else, under ONE SELECT-only
- * policy. These tests pin THAT standing, so a later grant or a new policy
- * shows up here, not in production. Mutation: change the expected grant list
- * and watch it fail.
+ * The standing on form_submissions is NOT the bookings pattern (bookings
+ * revokes client UPDATE). It carries Supabase's default table-level grants
+ * for `authenticated`, and RLS's single member policy is the fence — read on
+ * the live project 2026-09-07 before 0027 was written. These tests pin THAT
+ * standing, so a later revoke or a new policy shows up here, not in
+ * production. Mutation: change the expected grant list and watch it fail.
  */
 describe("0027 instant reply", () => {
   it("form_submissions carries the stamp column", async () => {
@@ -163,39 +164,38 @@ describe("0027 instant reply", () => {
     });
   });
 
-  it("the client role's standing on form_submissions: SELECT only, one SELECT policy", async () => {
+  it("the client role's standing on form_submissions is the Supabase default — table-level grants, RLS as the fence", async () => {
     await withRollback(async (c) => {
       const { rows: grants } = await c.query<{ privilege_type: string }>(
         `select privilege_type from information_schema.role_table_grants
           where table_schema = 'public' and table_name = 'form_submissions' and grantee = 'authenticated'
           order by privilege_type`,
       );
-      expect(grants.map((g) => g.privilege_type)).toEqual(["SELECT"]);
+      expect(grants.map((g) => g.privilege_type)).toEqual(
+        ["DELETE", "INSERT", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]);
       const { rows: rls } = await c.query<{ relrowsecurity: boolean }>(
         "select relrowsecurity from pg_class where oid = 'public.form_submissions'::regclass");
       expect(rls).toEqual([{ relrowsecurity: true }]);
       const { rows: policies } = await c.query<{ policyname: string; cmd: string }>(
         "select policyname, cmd from pg_policies where schemaname = 'public' and tablename = 'form_submissions'");
-      expect(policies).toEqual([{ policyname: "form_submissions_member_read", cmd: "SELECT" }]);
+      expect(policies).toEqual([{ policyname: "form_submissions_member_all", cmd: "ALL" }]);
     });
   });
 
-  // The instant-reply stamp is the service role's to write (0053). The client
-  // role's UPDATE is refused at the GRANT, before RLS is consulted, even on
-  // its own account's row: 42501 AND the privilege message, because an RLS
-  // refusal is 42501 too. One refused statement per transaction (above); the
-  // other tables and the agency case are in server-only-writes-grants.test.ts.
-  it("a client cannot stamp even its own account's submission", async () => {
+  // RLS, not a grant, is what keeps a client off another account's stamp: the
+  // cross-tenant UPDATE is not refused, it matches NO row. Pinned as rowCount,
+  // never as "something failed".
+  it("a client stamps its own account's submission (1 row) and reaches zero rows of another account's", async () => {
     await withRollback(async (c) => {
       const { a, b } = await seedTwoAccounts(c);
-      const { subA } = await seedOneSubmissionEach(c, a, b);
+      const { subA, subB } = await seedOneSubmissionEach(c, a, b);
       await actAs(c, { org_id: "org_AUTO_A" });
-      await expect(
-        c.query("update form_submissions set instant_reply_sent_at = now() where id = $1", [subA]),
-      ).rejects.toMatchObject({
-        code: "42501",
-        message: expect.stringMatching(/permission denied for table form_submissions/),
-      });
+      const own = await c.query(
+        "update form_submissions set instant_reply_sent_at = now() where id = $1", [subA]);
+      expect(own.rowCount).toBe(1);
+      const other = await c.query(
+        "update form_submissions set instant_reply_sent_at = now() where id = $1", [subB]);
+      expect(other.rowCount).toBe(0);
     });
   });
 });

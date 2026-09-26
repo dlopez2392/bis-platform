@@ -113,24 +113,15 @@ describe("call_proposals grants", () => {
       expect(rows).toEqual([{ grantee: "authenticated", privilege_type: "SELECT" }]);
     }));
 
-  // Since 0053 every call_proposals write is server code's, so authenticated
-  // holds UPDATE on NO column. An empty set is also what a misspelled table
-  // name or privilege returns, so the SAME filter shape runs first against
-  // calendars, whose eleven settings columns the client role does update
-  // (0016, 0018, 0022): the filter resolves, and UPDATE is simply absent here.
-  it("authenticated holds UPDATE on no call_proposals column (mutation: grant update (status) to authenticated -> FAILS)", () =>
+  it("authenticated's UPDATE is column-scoped to the decision columns (mutation: grant update on the whole table -> FAILS)", () =>
     withRollback(async (c) => {
-      const updatable = async (table: string) => (await c.query<{ column_name: string }>(
+      const { rows } = await c.query<{ column_name: string }>(
         `select column_name from information_schema.column_privileges
-           where table_schema = 'public' and table_name = $1
+           where table_schema = 'public' and table_name = 'call_proposals'
              and grantee = 'authenticated' and privilege_type = 'UPDATE'`,
-        [table],
-      )).rows.map((r) => r.column_name).sort();
-      expect(await updatable("calendars"), "calendars (the control)").toEqual([
-        "buffer_minutes", "enabled", "followup_body", "followup_enabled", "max_advance_days", "meeting_type",
-        "min_notice_hours", "notify_emails", "open_hours", "slot_duration_minutes", "updated_at",
-      ]);
-      expect(await updatable("call_proposals")).toEqual([]);
+      );
+      const cols = rows.map((r) => r.column_name).sort();
+      expect(cols).toEqual(["decided_at", "decided_by", "status"]);
     }));
 
   // A superset, not an exact set, and deliberately so — same reasoning as
@@ -157,9 +148,7 @@ describe("call_proposals grants", () => {
 
   // Finding 4: every assertion above filters by `grantee`, on the table
   // whose grants block IS the security boundary — a grant to PUBLIC would be
-  // invisible to all three. (Since 0053 the boundary is server code: the
-  // client role holds SELECT only, and every write runs as the service role.)
-  // This one assertion covers the WHOLE
+  // invisible to all three. This one assertion covers the WHOLE
   // `(grantee, privilege_type)` set (`grantee <> 'postgres'`, which also
   // catches a literal `PUBLIC` row), subsuming the anon and authenticated
   // cases above. Live-read against tlbkbmlrfafquucsmsmm, 2026-09-18: exactly
@@ -169,9 +158,7 @@ describe("call_proposals grants", () => {
   // authenticated AND service_role (7 privileges apiece, live-verified
   // 2026-09-18), so the SAME `toEqual` against the SAME expected array fails
   // there by name; switching the literal back to `call_proposals` is what
-  // makes it pass. (0053 has since narrowed anon and authenticated on
-  // contact_duplicate_flags; the retargeted query still returns a different
-  // set, so the retarget still fails.)
+  // makes it pass.
   it("the table's full grant set, across every role including PUBLIC, is exactly this (mutation: retarget the query at contact_duplicate_flags -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ grantee: string; privilege_type: string }>(
@@ -240,17 +227,14 @@ describe("call_proposals grants", () => {
 
   // Falsifiability proved the same way as the kind check, in its own rolled-
   // back transaction: dropping `call_proposals_status_check` there lets the
-  // same out-of-list `status` insert succeed. The row names a decider and a
-  // time, so 0053's call_proposals_decision_complete (a non-pending row
-  // names both) is satisfied and the status list is the only CHECK that can
-  // refuse it.
+  // same out-of-list `status` insert succeed.
   it("refuses a status outside the three — proof the list is a list, not a hole (mutation: drop call_proposals_status_check -> FAILS)", () =>
     withRollback(async (c) => {
       const { accountId, callId } = await seedAccountWithCall(c, orgId("STATUS"));
       await expect(
         c.query(
-          `insert into public.call_proposals (account_id, call_id, kind, status, payload, evidence, decided_at, decided_by)
-             values ($1, $2, 'task', 'archived', '{}'::jsonb, 'the caller asked for a callback', now(), 'user_test')`,
+          `insert into public.call_proposals (account_id, call_id, kind, status, payload, evidence)
+             values ($1, $2, 'task', 'archived', '{}'::jsonb, 'the caller asked for a callback')`,
           [accountId, callId],
         ),
       ).rejects.toThrow(/call_proposals_status_check/);
@@ -309,31 +293,29 @@ describe("call_proposals grants", () => {
   // and the agency both see AND CAN ACT ON a proposal (RLS, live-proof)."
   // Every later task's tests run through `withTestAccount`, whose db handle
   // is `serviceDb()` — RLS AND grants bypassed — so nothing else in this
-  // repo will ever exercise the grants that 0040's own comment calls this
-  // table's actual security boundary. This block runs as the `authenticated`
-  // role via `withRollback` + `actAs`, the only way to reach that boundary at
-  // all. Since 0053 the boundary is server code: a reviewer's accept or
-  // dismiss runs in a server action with the service client, after the
-  // account check, and the client role holds no UPDATE here at all.
-  describe("acting on a proposal (the grants this table's RLS policy alone cannot enforce)", () => {
-    // Every decision is server code's (0053). 42501 AND the privilege
-    // message: an RLS refusal is 42501 too, and only the message says the
-    // GRANT refused it.
-    it("the owning client cannot decide a proposal directly — refused by privilege (mutation: grant update (status, decided_at, decided_by) to authenticated -> FAILS)", () =>
+  // repo will ever exercise the column-level UPDATE grant that 0040's own
+  // comment calls this table's actual security boundary. This block runs as
+  // the `authenticated` role via `withRollback` + `actAs`, the only way to
+  // reach that boundary at all.
+  describe("acting on a proposal (the grant this table's RLS policy alone cannot enforce)", () => {
+    // The one that matters most, per the brief: the only assertion that
+    // would catch a grant tightened into breaking the real accept path.
+    // Falsifiable WITHOUT touching the grant: swap `proposalId` for a
+    // freshly generated uuid and the same query returns 0 rows, failing
+    // `toBe(1)` — proved by literally making that edit, running this test
+    // by name, watching it fail on `expect(received).toBe(1)  Expected: 1
+    // Received: 0`, then reverting.
+    it("the owning client can accept a proposal — updating the decision columns reaches 1 row", () =>
       withRollback(async (c) => {
         const org = orgId("ACT_ACCEPT");
         const { proposalId } = await seedAccountWithProposal(c, org);
         await actAs(c, { org_id: org });
-        await expect(
-          c.query(
-            `update call_proposals set status = 'accepted', decided_at = now(), decided_by = 'user_test'
-               where id = $1`,
-            [proposalId],
-          ),
-        ).rejects.toMatchObject({
-          code: "42501",
-          message: expect.stringMatching(/permission denied for table call_proposals/i),
-        });
+        const res = await c.query(
+          `update call_proposals set status = 'accepted', decided_at = now(), decided_by = 'user_test'
+             where id = $1`,
+          [proposalId],
+        );
+        expect(res.rowCount).toBe(1);
       }));
 
     // The one that proves the column list is load-bearing, not decorative.
@@ -346,10 +328,8 @@ describe("call_proposals grants", () => {
     // call_proposals"; resetting role to owner, running `grant update on
     // public.call_proposals to authenticated`, then retrying the identical
     // statement as the SAME `authenticated`/org claim SUCCEEDS (1 row) —
-    // proof the column list, not something else, is the barrier. Since 0053
-    // the client role holds no UPDATE on this table at all; this case stays
-    // green on both sides of that change.
-    it("the owning client's UPDATE of payload is refused — the grant is the boundary, not RLS (mutation: grant update on the whole table -> FAILS)", () =>
+    // proof the column list, not something else, is the barrier.
+    it("the owning client's UPDATE of payload is refused — the column grant is the boundary, not RLS (mutation: grant update on the whole table -> FAILS)", () =>
       withRollback(async (c) => {
         const org = orgId("ACT_PAYLOAD");
         const { proposalId } = await seedAccountWithProposal(c, org);
@@ -362,43 +342,42 @@ describe("call_proposals grants", () => {
         });
       }));
 
-    // The agency half of the spec line: the agency decides through the same
-    // server action, and the same grant binds it.
-    it("the agency cannot decide a proposal directly either — refused by privilege (mutation: grant update (status, decided_at, decided_by) to authenticated -> FAILS)", () =>
+    // The agency half of the spec line. Falsifiable the same way as the
+    // client-accept test above: swap `proposalId` for a fresh uuid, watch
+    // `rowCount` come back 0 instead of 1.
+    it("the agency can act on any account's proposal — updating the decision columns reaches 1 row", () =>
       withRollback(async (c) => {
         const { proposalId } = await seedAccountWithProposal(c, orgId("ACT_AGENCY"));
         await actAs(c, { app_role: "agency_admin" });
-        await expect(
-          c.query(
-            `update call_proposals set status = 'dismissed', decided_at = now(), decided_by = 'agency_user'
-               where id = $1`,
-            [proposalId],
-          ),
-        ).rejects.toMatchObject({
-          code: "42501",
-          message: expect.stringMatching(/permission denied for table call_proposals/i),
-        });
+        const res = await c.query(
+          `update call_proposals set status = 'dismissed', decided_at = now(), decided_by = 'agency_user'
+             where id = $1`,
+          [proposalId],
+        );
+        expect(res.rowCount).toBe(1);
       }));
 
-    // A client of ANOTHER account is refused at the grant too, before RLS is
-    // consulted: the grant is table-wide, so it refuses every account alike.
-    it("a DIFFERENT client's UPDATE is refused by privilege too (mutation: grant update (status, decided_at, decided_by) to authenticated -> FAILS)", () =>
+    // RLS scoping on WRITE, not just read: a different client HAS the same
+    // column grant (it is table-wide, not per-account), so the only thing
+    // stopping it is the policy's `account_id = app.current_account_id()`.
+    // A zero-row UPDATE returns no error — asserted as a row count, not a
+    // rejection. Falsifiable: swap the `actAs` claim from the stranger's org
+    // to the owner's org and `rowCount` becomes 1, failing `toBe(0)` —
+    // proved by literally making that edit, running this test by name,
+    // watching it fail, then reverting.
+    it("a DIFFERENT client's UPDATE reaches zero rows, not an error — RLS scoping holds on write too", () =>
       withRollback(async (c) => {
         const ownerOrg = orgId("ACT_OTHER_OWNER");
         const strangerOrg = orgId("ACT_OTHER_STRANGER");
         const { proposalId } = await seedAccountWithProposal(c, ownerOrg);
         await seedAccountWithCall(c, strangerOrg);
         await actAs(c, { org_id: strangerOrg });
-        await expect(
-          c.query(
-            `update call_proposals set status = 'accepted', decided_at = now(), decided_by = 'user_test'
-               where id = $1`,
-            [proposalId],
-          ),
-        ).rejects.toMatchObject({
-          code: "42501",
-          message: expect.stringMatching(/permission denied for table call_proposals/i),
-        });
+        const res = await c.query(
+          `update call_proposals set status = 'accepted', decided_at = now(), decided_by = 'user_test'
+             where id = $1`,
+          [proposalId],
+        );
+        expect(res.rowCount).toBe(0);
       }));
 
     // No client holds DELETE at all — 0040 grants it only to service_role.
