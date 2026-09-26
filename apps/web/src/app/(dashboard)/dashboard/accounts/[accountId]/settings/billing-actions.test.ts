@@ -14,7 +14,10 @@ const guard = vi.hoisted(() => ({ agency: true, reads: 0, clients: 0, gateways: 
 vi.mock("@/lib/auth", () => ({
   requireAgency: async () => { if (!guard.agency) throw new Error("NEXT_REDIRECT"); return { userId: "u_agency" }; },
 }));
-vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "app.example", "x-forwarded-proto": "https" }) }));
+const hdr = vi.hoisted(() => ({ host: "app.example" as string | null }));
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers(hdr.host ? { host: hdr.host, "x-forwarded-proto": "https" } : {}),
+}));
 
 const dbm = vi.hoisted(() => ({
   account: null as { id: string; agency_id: string; timezone: string | null; name: string } | null,
@@ -85,6 +88,18 @@ let fake: InstanceType<typeof FakeGateway>;
 /** Seeds "Stripe" with a Checkout session the stored link names. */
 const seedSession = (id: string, status: "open" | "complete" | "expired") =>
   fake.checkoutSessions.set(id, { id, url: `https://checkout.stripe.test/c/pay/${id}`, expiresAt: 1, status, input: {} as CheckoutInput });
+/** Seeds "Stripe" with the account's paid subscription, BIS's four items
+ *  on P1 (or only the roles given: a hand-edited subscription). */
+const seedPaidSub = (roles: ReadonlyArray<"base" | "voice_minutes" | "sms" | "ai_chats"> = ["base", "voice_minutes", "sms", "ai_chats"]) => {
+  const sub: SubscriptionSnapshot = {
+    id: "sub_1", customerId: "cus_1", status: "active", accountId: ACCOUNT, planId: P1,
+    currentPeriodStart: 1, currentPeriodEnd: 2, startedAt: 1,
+    items: roles.map((k) => ({ id: `si_${k}`, priceId: `price_${k}_old`, priceKey: k, planId: P1 })),
+  };
+  fake.subscriptions.set("sub_1", sub);
+  return sub;
+};
+const changeForm = (over: Record<string, string> = {}) => form({ planId: P2, expectedPlanId: P1, requestId: REQ, ...over });
 
 beforeEach(() => {
   guard.agency = true;
@@ -97,6 +112,8 @@ beforeEach(() => {
   dbm.getPlan.mockImplementation(async (_db: unknown, id: string) => plan(id));
   dbm.getBranding.mockResolvedValue({ brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null, brandCorners: null, brandType: null, brandMode: null, replyToEmail: null });
   dbm.getBillingLink.mockResolvedValue(null);
+  dbm.getAccountBilling.mockResolvedValue(null);
+  hdr.host = "app.example";
   fake = new FakeGateway();
   gw.value = { ok: true, gateway: fake, live: false };
   vi.stubEnv("APP_ORIGIN", "https://app.example");
@@ -158,18 +175,59 @@ describe("the agency's billing actions", () => {
       .toEqual(["billing@bis.example", "hello@bis-rgv.com", "hello@bis-rgv.com"]);
   });
 
-  it("send: the recipient reaches sendBillingLink TRIMMED (it creates or updates the Stripe customer with the address exactly as passed), and an address that is not one valid address never reaches it (mutation: stop trimming the email → FAILS; drop the address check → FAILS; drop the length cap → FAILS)", async () => {
+  it("send: the recipient reaches sendBillingLink TRIMMED (it creates or updates the Stripe customer with the address exactly as passed), and an address that is not one valid address never reaches it, a display-name form or a quoted one included (mutation: stop trimming the email → FAILS; drop the address check → FAILS; drop the length cap → FAILS; let < > \" ' through the address pattern → FAILS)", async () => {
     sendMock.mockResolvedValue({ ok: true, url: "https://checkout.stripe.test/c/pay/cs_1" });
     expect(await actions.sendBillingLinkAction(ACCOUNT, form({ planId: P1, email: " \tOwner@Example.COM \n" }))).toEqual({ ok: true });
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect((sendMock.mock.calls[0]![1] as { email: string }).email).toBe("Owner@Example.COM");
     sendMock.mockClear();
     const invalid = ["", "   ", "owner", "owner@", "@example.com", "owner@example", "own er@example.com",
-      "a@b.co;c@d.co", "a@b.co c@d.co", `${"a".repeat(250)}@b.co`];
+      "a@b.co;c@d.co", "a@b.co c@d.co", `${"a".repeat(250)}@b.co`,
+      "Name<a@b.co>", "<a@b.co>", "\"Owner\"@example.com", "o'wner@example.com", "owner@example.com'"];
     const refused = [];
     for (const email of invalid) refused.push(await actions.sendBillingLinkAction(ACCOUNT, form({ planId: P1, email })));
     expect(refused).toEqual(invalid.map(() => ({ ok: false, error: m["billing.error.email"] })));
     expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("send: an address with an underscore or a plus is ONE valid address and is sent (the agency types real mailboxes; forms' isValidEmail refuses `_` for its ILIKE lookup, which this path does not have) (mutation: validate with isValidEmail → FAILS)", async () => {
+    sendMock.mockResolvedValue({ ok: true, url: "https://checkout.stripe.test/c/pay/cs_1" });
+    expect(await actions.sendBillingLinkAction(ACCOUNT, form({ planId: P1, email: "first_last+billing@rio-roofing.com" }))).toEqual({ ok: true });
+    expect((sendMock.mock.calls[0]![1] as { email: string }).email).toBe("first_last+billing@rio-roofing.com");
+  });
+
+  it("send: with APP_ORIGIN unset the origin is the request's own host; with neither, 'no web address' and sendBillingLink is never called (mutation: drop the noOrigin check → FAILS)", async () => {
+    sendMock.mockResolvedValue({ ok: true, url: "https://checkout.stripe.test/c/pay/cs_1" });
+    vi.stubEnv("APP_ORIGIN", "");
+    hdr.host = "preview.example";
+    expect(await actions.sendBillingLinkAction(ACCOUNT, form({ planId: P1, email: "a@b.co" }))).toEqual({ ok: true });
+    expect(sendMock.mock.calls[0]![0]).toMatchObject({ origin: "https://preview.example" });
+    sendMock.mockClear();
+    hdr.host = null;
+    expect(await actions.sendBillingLinkAction(ACCOUNT, form({ planId: P1, email: "a@b.co" }))).toEqual({ ok: false, error: m["billing.error.noOrigin"] });
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("every action refuses an account id that is not a UUID as 'something changed', before any database client or Stripe call, and change plan refuses a requestId or expectedPlanId that is not one (the request id keys Stripe's change) (mutation: drop the accountId check in any action → FAILS; drop the requestId check → FAILS; drop the expectedPlanId check → FAILS)", async () => {
+    // Everything past the checks would succeed, so a missing check shows as ok.
+    sendMock.mockResolvedValue({ ok: true, url: "https://checkout.stripe.test/c/pay/cs_1" });
+    dbm.markComplimentary.mockResolvedValue({ ok: true });
+    dbm.unmarkComplimentary.mockResolvedValue(true);
+    dbm.getAccountBilling.mockResolvedValue(billing());
+    dbm.mirrorSubscription.mockResolvedValue({ kind: "written", accountId: ACCOUNT, planId: P2, status: "active" });
+    seedPaidSub();
+    const stale = { ok: false, error: m["billing.error.stale"] };
+    const results = {
+      send: await actions.sendBillingLinkAction("not-a-uuid", form({ planId: P1, email: "a@b.co" })),
+      mark: await actions.markComplimentaryAction("not-a-uuid", form({ planId: P1 })),
+      remove: await actions.removeComplimentaryAction("not-a-uuid"),
+      change: await actions.changePlanAction("not-a-uuid", changeForm()),
+      changeRequestId: await actions.changePlanAction(ACCOUNT, changeForm({ requestId: "twice" })),
+      changeExpected: await actions.changePlanAction(ACCOUNT, changeForm({ expectedPlanId: "" })),
+    };
+    expect(results).toEqual({ send: stale, mark: stale, remove: stale, change: stale, changeRequestId: stale, changeExpected: stale });
+    expect({ clients: guard.clients, gateways: guard.gateways }).toEqual({ clients: 0, gateways: 0 });
+    expect(fake.calls).toEqual([]);
   });
 
   it("send: no usable Stripe key → the no-Stripe copy, and nothing is called (mutation: skip the verdict → FAILS)", async () => {
@@ -238,6 +296,97 @@ describe("the agency's billing actions", () => {
     dbm.markComplimentary.mockResolvedValue({ ok: true });
     expect(await actions.markComplimentaryAction(ACCOUNT, form({ planId: P1 }))).toEqual({ ok: true });
     expect(fake.calls.map((c) => c.op)).toEqual(["getCheckoutSessionStatus"]);
+  });
+
+  it("mark complimentary refuses an account that already has a billing row (a CANCELED paid one included: no Mark complimentary on canceled, DECISION 8) BEFORE it asks or tells Stripe anything about the old link (mutation: settle the link before the billed-row check → Stripe is written for a refusal, FAILS)", async () => {
+    dbm.getBillingLink.mockResolvedValue(deadLink("cs_old"));
+    seedSession("cs_old", "open");
+    dbm.markComplimentary.mockResolvedValue({ ok: true });
+    for (const row of [billing({ subscriptionStatus: "canceled" }), billing({ complimentary: true, stripeSubscriptionId: null, subscriptionStatus: null, stripeCustomerId: null })]) {
+      dbm.getAccountBilling.mockResolvedValueOnce(row);
+      expect(await actions.markComplimentaryAction(ACCOUNT, form({ planId: P1 }))).toEqual({ ok: false, error: m["billing.error.alreadyBilled"] });
+    }
+    expect(fake.calls).toEqual([]);
+    expect(fake.checkoutSessions.get("cs_old")!.status).toBe("open");
+    expect(dbm.markComplimentary).not.toHaveBeenCalled();
+  });
+
+  it("mark complimentary refuses a plan of ANOTHER agency, an archived plan or an unknown one BEFORE it asks or tells Stripe anything about the old link (G10) (mutation: settle the link before the plan check → FAILS; drop the agency check → FAILS)", async () => {
+    dbm.getBillingLink.mockResolvedValue(deadLink("cs_old"));
+    seedSession("cs_old", "open");
+    dbm.markComplimentary.mockResolvedValue({ ok: true });
+    dbm.getPlan.mockResolvedValueOnce(plan(P1, { agencyId: "other" }))
+      .mockResolvedValueOnce(plan(P1, { archivedAt: "2026-09-02T00:00:00Z" }))
+      .mockResolvedValueOnce(null);
+    const refused = [];
+    for (let i = 0; i < 3; i += 1) refused.push(await actions.markComplimentaryAction(ACCOUNT, form({ planId: P1 })));
+    expect(refused).toEqual(Array(3).fill({ ok: false, error: m["billing.error.plan"] }));
+    expect(fake.calls).toEqual([]);
+    expect(dbm.markComplimentary).not.toHaveBeenCalled();
+  });
+
+  it("mark complimentary on an account that no longer exists says 'something changed' and never reaches Stripe (mutation: drop the account check → FAILS)", async () => {
+    dbm.account = null;
+    dbm.getBillingLink.mockResolvedValue(deadLink("cs_old"));
+    seedSession("cs_old", "open");
+    dbm.markComplimentary.mockResolvedValue({ ok: true });
+    expect(await actions.markComplimentaryAction(ACCOUNT, form({ planId: P1 }))).toEqual({ ok: false, error: m["billing.error.stale"] });
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("change plan refuses a plan of ANOTHER agency, an archived plan or an unknown one before any Stripe call (G10) (mutation: take getPlan's answer as is → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(billing());
+    seedPaidSub();
+    dbm.mirrorSubscription.mockResolvedValue({ kind: "written", accountId: ACCOUNT, planId: P2, status: "active" });
+    dbm.getPlan.mockResolvedValueOnce(plan(P2, { agencyId: "other" }))
+      .mockResolvedValueOnce(plan(P2, { archivedAt: "2026-09-02T00:00:00Z" }))
+      .mockResolvedValueOnce(null);
+    const refused = [];
+    for (let i = 0; i < 3; i += 1) refused.push(await actions.changePlanAction(ACCOUNT, changeForm()));
+    expect(refused).toEqual(Array(3).fill({ ok: false, error: m["billing.error.plan"] }));
+    expect(fake.calls).toEqual([]);
+    expect(dbm.mirrorSubscription).not.toHaveBeenCalled();
+  });
+
+  it("change plan, paid, no usable Stripe key → the no-Stripe copy; Stripe is never asked, nothing is mirrored (mutation: drop the key verdict → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue(billing());
+    seedPaidSub();
+    gw.value = { ok: false, reason: "missing" };
+    expect(await actions.changePlanAction(ACCOUNT, changeForm())).toEqual({ ok: false, error: m["billing.error.noStripe"] });
+    expect(fake.calls).toEqual([]);
+    expect(dbm.mirrorSubscription).not.toHaveBeenCalled();
+  });
+
+  it("change plan, paid, Stripe refuses the update → 'Stripe didn't accept that', never ok, nothing changed, nothing mirrored (mutation: answer ok from the catch → the agency is told the plan changed, FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    dbm.getAccountBilling.mockResolvedValue(billing());
+    seedPaidSub();
+    dbm.mirrorSubscription.mockResolvedValue({ kind: "written", accountId: ACCOUNT, planId: P2, status: "active" });
+    fake.failOn = { op: "updateSubscriptionPrices", error: stripeRefusal("This subscription cannot be updated") };
+    expect(await actions.changePlanAction(ACCOUNT, changeForm())).toEqual({ ok: false, error: m["billing.error.stripeFailed"] });
+    expect(fake.subscriptionChanges).toEqual([]);
+    expect(fake.subscriptions.get("sub_1")!.planId).toBe(P1);
+    expect(dbm.mirrorSubscription).not.toHaveBeenCalled();
+  });
+
+  it("change plan, paid, a subscription that is not BIS's four items (hand-edited in Stripe) is refused, never half-moved: no update call, nothing mirrored (mutation: let a null item map fall through → FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    dbm.getAccountBilling.mockResolvedValue(billing());
+    seedPaidSub(["base", "voice_minutes", "sms"]);
+    dbm.mirrorSubscription.mockResolvedValue({ kind: "written", accountId: ACCOUNT, planId: P2, status: "active" });
+    expect(await actions.changePlanAction(ACCOUNT, changeForm())).toEqual({ ok: false, error: m["billing.error.stripeFailed"] });
+    expect(fake.calls.map((c) => c.op)).toEqual(["retrieveSubscription"]);
+    expect(dbm.mirrorSubscription).not.toHaveBeenCalled();
+  });
+
+  it("change plan, paid: a mirror that REFUSES the re-read subscription is logged with its reason and the account; the answer stays ok because Stripe has the change (mutation: drop the refusal log → FAILS)", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    dbm.getAccountBilling.mockResolvedValue(billing());
+    seedPaidSub();
+    dbm.mirrorSubscription.mockResolvedValue({ kind: "refused", reason: "customer_changed" });
+    expect(await actions.changePlanAction(ACCOUNT, changeForm())).toEqual({ ok: true });
+    expect(fake.subscriptionChanges).toHaveLength(1);
+    expect(logged.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("customer_changed") && l.includes(ACCOUNT))).toHaveLength(1);
   });
 
   it("change plan, complimentary: a database change only, never a Stripe call (mutation: route complimentary through Stripe → FAILS)", async () => {

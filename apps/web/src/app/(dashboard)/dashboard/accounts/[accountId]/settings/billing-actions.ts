@@ -6,7 +6,14 @@
  * agency-only, but a server action is a public POST endpoint, so each guards
  * itself. The account id is bound server-side by billing-section.tsx and
  * never travels as a form field. Writes go through serviceDb() (0051/0052
- * grant authenticated at most SELECT).
+ * grant authenticated at most SELECT), and only after the guard.
+ *
+ * ASSUMPTION: ONE agency. requireAgency() admits any agency_admin to any
+ * account; it does not check that the caller's agency owns this account.
+ * With exactly one agency (plan G10: insertPlan and createAccount both use
+ * agency row #1) that is the same thing. The plan checks below compare the
+ * plan's agency with the ACCOUNT's, never the caller's. M7 #3 (multi-agency)
+ * must scope the guard to the account's agency before a second one exists.
  */
 import { headers } from "next/headers";
 import {
@@ -28,8 +35,15 @@ export type BillingActionResult = { ok: true } | { ok: false; error: string; url
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const isUuid = (x: unknown): x is string => typeof x === "string" && UUID.test(x);
-/** ONE address: no spaces, commas or semicolons (a list is refused). */
-const EMAIL = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+/**
+ * ONE bare address, as the Stripe customer's email and the To header get it:
+ * no whitespace, `,` or `;` (a list is refused), and no `<` `>` `"` `'` (a
+ * display-name form like `Name <a@b.co>`, or a quoted local part, is refused
+ * rather than passed through as one odd "address"). Not forms' isValidEmail:
+ * that refuses `_` and `%` because its value meets an ILIKE lookup
+ * (lib/forms/guards.ts), and `first_last@…` is a real mailbox an agency types.
+ */
+const EMAIL = /^[^\s@,;<>"']+@[^\s@,;<>"']+\.[^\s@,;<>"']+$/;
 const fail = (key: MessageKey, url?: string): BillingActionResult =>
   (url ? { ok: false, error: m[key], url } : { ok: false, error: m[key] });
 const field = (f: FormData, name: string): string => String(f.get(name) ?? "").trim();
@@ -51,9 +65,11 @@ async function usablePlan(db: SupabaseClient, account: AccountRow, planId: strin
 
 /** Where a reply to the billing link lands (G18; DECISION 1). The email
  *  promises "If it runs out, reply and we'll send a new one", so it must name
- *  a mailbox BIS reads. AGENCY_SUPPORT_EMAIL is read exactly as the Website
- *  page's "ask us" link reads it (website/page.tsx), same fallback, so both
- *  point at one address; blank counts as unset (normalizeReplyTo). */
+ *  a mailbox BIS reads. The same variable and the same fallback as the
+ *  Website page's "ask us" link (website/page.tsx), so both point at one
+ *  address. One difference: that page's `??` keeps a blank value (a mailto
+ *  with no address); here it is trimmed, and blank counts as unset
+ *  (normalizeReplyTo), so a blank variable still gets the fallback. */
 const AGENCY_SUPPORT_FALLBACK = "hello@bis-rgv.com";
 function agencySupportReplyTo(): string {
   return normalizeReplyTo(process.env.AGENCY_SUPPORT_EMAIL) ?? AGENCY_SUPPORT_FALLBACK;
@@ -111,12 +127,27 @@ export async function sendBillingLinkAction(accountId: string, formData: FormDat
  *              agency cannot see, and would last until Stripe's own expiry
  *              (up to a day, B2). This session is one BIS already decided to
  *              kill; this finishes that. If the client completes it between
- *              the read and the expire, Stripe refuses to expire a session
- *              that is no longer open, and this refuses too;
+ *              the read and the expire, the expire is refused (assumption
+ *              X1 below) and this refuses too;
  *   complete → the client paid: "already finished checkout", nothing marked
  *              (a complimentary row over a paying subscription would hide it);
  *   any Stripe failure, or no usable key → refused, nothing marked. It fails
  *              closed: an unknown session state is never treated as dead.
+ *
+ * Two EXTERNAL assumptions carry the "open → expire → mark" branch. Neither
+ * is verified here. FakeGateway models X1 and cannot show X2:
+ *   X1. Stripe refuses to expire a session that is no longer `open` (its API
+ *       reference says only an open session can be expired; the error class
+ *       for it was never observed).
+ *   X2. Once Stripe answers the expire, the session can never be paid, even
+ *       with a payment already in flight (a card in a 3-D Secure challenge,
+ *       say). If Stripe can still complete such a payment, the client could
+ *       pay after this marks the account complimentary.
+ * What settles them: Task 12's e2e against test mode. Expire a COMPLETED
+ * session and read the error (X1); expire a session mid-3DS with a 3DS test
+ * card, then finish the challenge (X2). Until then, the webhook's
+ * customer_mismatch guard is NOT a backstop here: the stored link names the
+ * session's customer, so decideMirror would accept it.
  */
 async function settleDeadLink(sessionId: string, accountId: string): Promise<"dead" | MessageKey> {
   const gateway = billingGatewayFromEnv();
@@ -139,9 +170,21 @@ export async function markComplimentaryAction(accountId: string, formData: FormD
   if (!isUuid(planId)) return fail("billing.error.plan");
   const db = serviceDb();
   const now = new Date();
+  // Every refusal the database can decide comes BEFORE Stripe is asked or
+  // told anything about the old link below: a refused Mark complimentary
+  // never expires a session. markComplimentary re-checks the plan and the
+  // row itself (a row appearing meanwhile is its already_billed).
+  const account = await loadAccount(db, accountId);
+  if (!account) return fail("billing.error.stale");
+  const [plan, billing, link] = await Promise.all([
+    usablePlan(db, account, planId), getAccountBilling(db, accountId), getBillingLink(db, accountId),
+  ]);
+  if (!plan) return fail("billing.error.plan");
+  // Any row, a canceled paid one included: no complimentary over a canceled
+  // subscription (G16; DECISION 8).
+  if (billing) return fail("billing.error.alreadyBilled");
   // G16: never while a live link is out; the card hides the button then,
   // and this is the check a stale card cannot skip.
-  const link = await getBillingLink(db, accountId);
   if (link && Date.parse(link.expiresAt) > now.getTime()) return fail("billing.error.stale");
   if (link) {
     const settled = await settleDeadLink(link.checkoutSessionId, accountId);
@@ -208,6 +251,12 @@ export async function changePlanAction(accountId: string, formData: FormData): P
   // The mirror is handed the READER, not a snapshot: it reads the stored row
   // before it asks Stripe (compare-and-set, B5).
   const stripe = gateway.gateway;
-  await mirrorSubscription(db, () => stripe.retrieveSubscription(subscriptionId), () => new Date());
+  const mirrored = await mirrorSubscription(db, () => stripe.retrieveSubscription(subscriptionId), () => new Date());
+  // Stripe HAS the change, so the answer stays ok. But a refusal means the
+  // card will not show it, and the webhook's mirror will refuse it the same
+  // way: say so where someone can find it.
+  if (mirrored.kind === "refused") {
+    console.error(`change plan: Stripe changed ${subscriptionId} for account ${accountId}, but the mirror refused it (${mirrored.reason}); the card still shows the old plan`);
+  }
   return { ok: true };
 }
