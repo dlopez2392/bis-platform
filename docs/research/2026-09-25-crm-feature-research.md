@@ -1,6 +1,8 @@
 # BIS Platform — What to Build Next: a CRM for the Valley's Small Businesses
 
 **Date:** 2026-09-25 · **Branch:** `claude/fervent-lamport-74vudn` · **Audited against:** `main` @ `c9f8454`
+
+*Since the audit (noted 2026-09-26): `main` gained M7a step 2 in #144 — billable usage is now recorded and reported to Stripe meters. The study's "M7a steps 2–4 in flight" should read steps 3–4 (checkout with webhooks and the Billing page, then the non-payment pause); the effort figures are left as audited.*
 **Question:** how should BIS improve to serve plumbers, restaurants, child and adult day
 care centers and similar small businesses — with one place for everything about a
 client, AI throughout, and Google and Microsoft 365 built in?
