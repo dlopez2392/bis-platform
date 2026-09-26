@@ -630,6 +630,21 @@ describe("the new gateway surface", () => {
     });
     expect(fake.subscriptionChanges).toEqual([{ change: ok, key: "k3" }]);
   });
+
+  it("FakeGateway.updateSubscriptionPrices replays the SAME change under a reused key and refuses a DIFFERENT valid change under it, as Stripe's key-reuse 400 does, leaving the first change in place (mutation: bare `return` on any seen key → the second change silently 'succeeds', FAILS)", async () => {
+    const fake = new FakeGateway();
+    fake.subscriptions.set("sub_1", structuredClone(SNAPSHOT));
+    const ok = { subscriptionId: "sub_1", planId: "plan_new", items: [{ id: "si_s", price: "price_s2" }, { id: "si_b", price: "price_b2" }] };
+    await fake.updateSubscriptionPrices(ok, "k3");
+    const applied = structuredClone(fake.subscriptions.get("sub_1"));
+
+    await expect(fake.updateSubscriptionPrices(structuredClone(ok), "k3")).resolves.toBeUndefined();
+    const other = { subscriptionId: "sub_1", planId: "plan_other", items: [{ id: "si_s", price: "price_s3" }, { id: "si_b", price: "price_b3" }] };
+    await expect(fake.updateSubscriptionPrices(other, "k3")).rejects.toThrow(/idempotency|different parameters/i);
+
+    expect(fake.subscriptions.get("sub_1")).toEqual(applied);
+    expect(fake.subscriptionChanges).toEqual([{ change: ok, key: "k3" }]);
+  });
 });
 
 describe("stripeGateway: the PR-3 calls (exact params AND options, on a stub client)", () => {
