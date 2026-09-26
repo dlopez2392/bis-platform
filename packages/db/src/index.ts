@@ -161,3 +161,11 @@ export { TEST_ORG_ID_PREFIX, isTestOrgId } from "./org-id";
 export { METER_KEYS, listPlans, getPlan, insertPlan, updatePlan, setPlanArchived, countBilledAccountsByPlan,
          type MeterKey, type MeterAmounts, type PlanFeatures, type PlanPriceKey, type StripePriceIds,
          type PlanTerms, type Plan, type PlanWrite } from "./billing";
+
+// Client billing usage ledger (0051's usage_events): recorded where each
+// billable fact happens, reported to Stripe by the cron. See ./usage.ts.
+export { recordUsage, reportableFrom, usageRangeFilter, listBilledUsageAccounts, listReportableUsage,
+         markUsageReported, staleUsageAccountIds, countExpiredUsage, listAccountsWithStaleUsage,
+         USAGE_SOURCE_PREFIX, USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_ACCOUNTS_PER_READ,
+         USAGE_ACCOUNTS_PER_BOUNDED_READ, USAGE_FUTURE_GRACE_MS, STALE_PROBE_ROWS,
+         type UsageInput, type UsageRow, type UsageRange, type BilledUsageAccount } from "./usage";

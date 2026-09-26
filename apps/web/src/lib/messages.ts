@@ -2028,6 +2028,13 @@ export const m = {
   "work.linesDown.one": "1 number is turning callers away",
   "work.linesDown.many": "{n} numbers are turning callers away",
   "work.linesDown.action": "See which",
+  // The stale-usage banner (client billing), beside the one above on the
+  // agency work queue. Counts CLIENTS, not rows: one client's backlog is one
+  // problem to fix. Says what it costs (the usage is not on the bill yet)
+  // and that it heals itself once the cause is fixed.
+  "work.usageStale.one": "Usage for 1 client hasn't reached Stripe in over a day, so it isn't on their bill yet. We retry every 15 minutes.",
+  "work.usageStale.many": "Usage for {n} clients hasn't reached Stripe in over a day, so it isn't on their bills yet. We retry every 15 minutes.",
+  "work.usageStale.action": "Check the Stripe connection",
 
   // Call proposals — a finished call's machine-suggested next step. Nothing
   // in this namespace commits anything until a human accepts it (Task 6's

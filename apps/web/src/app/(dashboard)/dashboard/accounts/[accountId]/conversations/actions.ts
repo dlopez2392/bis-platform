@@ -5,7 +5,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import {
   getContact, ensureConversation, createMessage, updateMessageStatus,
-  clearUnreadCount,
+  clearUnreadCount, serviceDb,
 } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -13,6 +13,9 @@ import { emailBrand } from "@/lib/email/templates/shell";
 import { outboundEmail } from "@/lib/email/templates/outbound";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { getSmsProvider } from "@/lib/sms";
+import type { SmsProvider } from "@/lib/sms/types";
+import { segmentsFor } from "@/lib/sms/segments";
+import { recordUsageSafely, smsBillable } from "@/lib/billing/usage";
 import { toE164 } from "@/lib/voice/phone-number";
 import { m } from "@/lib/messages";
 // A prefix on `.message` rather than an Error subclass: thrown Errors are
@@ -165,8 +168,10 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
   // real phone, and drop the provider message id the delivery webhook needs
   // to correlate against. Same hazard, same fix, as sendEmailAction above.
   let providerMessageId: string;
+  let provider: SmsProvider;
   try {
-    ({ providerMessageId } = await getSmsProvider().send({ to, from: gate.from, body }));
+    provider = getSmsProvider();
+    ({ providerMessageId } = await provider.send({ to, from: gate.from, body }));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
     await updateMessageStatus(db, accountId, messageId, "failed", { error: message }, userId);
@@ -175,7 +180,31 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
     throw e;
   }
 
-  await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
+  // The `sent` write FIRST, straight after the send: it stores the provider
+  // id the delivery webhook correlates against, and a webhook that lands
+  // before it finds no row and is lost for good, so nothing may sit in that
+  // gap. It is allowed to throw (the action rejects), so the usage write
+  // sits in its `finally`, where a delivered text still bills.
+  //
+  // USAGE (client billing): the text is out the door to the customer, so its
+  // segments bill. On serviceDb(), not `db`: 0051 lets only service_role
+  // write usage_events (a client must not be able to write, or skip, its own
+  // bill), the same service-after-requireAccountAccess shape
+  // automations/actions.ts uses for its service-only table. The account is
+  // the one requireAccountAccess passed above and the message id is the row
+  // this action just wrote. Passed as a GETTER so a missing service key is
+  // caught inside recordUsageSafely too; it never throws, so it cannot
+  // replace the `sent` write's error.
+  try {
+    await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
+  } finally {
+    if (smsBillable(provider)) {
+      await recordUsageSafely(() => serviceDb(), {
+        accountId, meter: "sms", quantity: segmentsFor(body).segments,
+        occurredAt: new Date(), sourceRef: `message:${messageId}`,
+      }, `sendSmsAction ${messageId}`);
+    }
+  }
 
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
   revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);

@@ -101,3 +101,32 @@ export const INSTANT_REPLY_THREAD_HOLD_MS = 24 * 60 * 60 * 1000;
  * eleven with the legacy mobile "1" (+52 1 …) some people still type.
  */
 export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/, /^\+521?\d{10}$/];
+
+/**
+ * THE USAGE REPORT's per-tick limits (client billing, spec section 3 flow 3).
+ * Not a burst guard like the recipe caps: a backlog is simply sent over the
+ * next ticks, and nothing is lost by waiting (each row carries its own
+ * occurred_at, and Stripe takes events up to 35 days old).
+ *
+ *   USAGE_REPORT_TICK_CAP  meter events sent per tick. At an ASSUMED 0.2-0.3 s
+ *     a round trip (not measured; the budget below bounds the pass whatever
+ *     it costs), 200 rows take about 40-60 s. 200 every 15 minutes is 19,200
+ *     a day, about 128 clients at an estimated 150 billable facts a day each.
+ *     Past that, Stripe's v2 meter event stream is the next step.
+ *   USAGE_REPORT_BUDGET_MS the pass's wall clock for sending. It stops
+ *     STARTING sends at this minus METER_EVENT_WORST_CASE_MS below, so the
+ *     last send still ends inside it even in that worst case. The release
+ *     pass's own shape (RELEASE_BUDGET_MS): the two 60 s budgets leave the
+ *     route's 300 s maxDuration room for every other pass.
+ *   METER_EVENT_WORST_CASE_MS one send's worst case past its start, for the
+ *     installed stripe SDK (22.6.2; see stripe-gateway.ts's
+ *     METER_EVENT_TIMEOUT_MS/reportMeterEvent comments): its per-request
+ *     `timeout` is a SOCKET-IDLE timeout, not a hard deadline, and its
+ *     `RequestSender.js` retries a reset/broken-pipe connection ONCE even
+ *     with `maxNetworkRetries: 0`. Two idle timeouts plus one retry's
+ *     ~0.5 s backoff: 2 * 10_000 + 500 = 20,500 ms, rounded up to 21,000 for
+ *     margin — hence the 60 − 21 = 39 s last-start point above.
+ */
+export const USAGE_REPORT_TICK_CAP = 200;
+export const USAGE_REPORT_BUDGET_MS = 60_000;
+export const METER_EVENT_WORST_CASE_MS = 21_000;

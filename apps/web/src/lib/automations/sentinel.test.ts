@@ -39,6 +39,8 @@ const dbMocks = vi.hoisted(() => ({
   readQuietSettings: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
   // The release pass's own queue read — first in the registry, every tick.
   listReleasableHolds: vi.fn(),
+  // The usage report, last in the registry: no account is billed here.
+  listBilledUsageAccounts: vi.fn(), recordUsage: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
@@ -200,6 +202,8 @@ beforeEach(() => {
   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
   dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   dbMocks.listReleasableHolds.mockResolvedValue([]);
+  dbMocks.listBilledUsageAccounts.mockResolvedValue([]);
+  dbMocks.recordUsage.mockResolvedValue("recorded");
   // Same treatment for the weekly report: TICK is a Wednesday in every zone
   // (no IANA offset shifts a calendar day back two full days), so it can
   // never be in the Monday band here regardless of account timezone. Empty
@@ -243,6 +247,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.weeklyClientReport).not.toHaveProperty("errored");
     expect(results.weeklyAgencyReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
     expect(results.weeklyAgencyReport).not.toHaveProperty("errored");
+    expect(results.usageReport).toEqual(expect.objectContaining({ reported: 0, failed: 0 }));
+    expect(results.usageReport).not.toHaveProperty("errored");
     expect(results.releaseHeld).toEqual({ examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 });
 
     const everything = [...emailSend.mock.calls, ...smsSend.mock.calls, ...dbMocks.createMessage.mock.calls]
@@ -252,8 +258,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, then the two weekly reports — the first three's order is the collision's contract", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport"]);
+  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the two weekly reports, then the usage report LAST — the first three's order is the collision's contract (mutation: move usageReport ahead of an SMS pass → FAILS)", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport", "usageReport"]);
   });
 
   /**

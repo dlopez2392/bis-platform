@@ -4,7 +4,8 @@ import path from "node:path";
 import type Stripe from "stripe";
 import {
   billingGatewayFromEnv, priceCreateParams, PRODUCTION_SUPABASE_REF, stripeGateway, stripeKeyVerdict,
-  STRIPE_API_VERSION, type StripeEnv,
+  STRIPE_API_VERSION, meterEventParams, meterEventFailureKind, METER_EVENT_TIMEOUT_MS,
+  type StripeEnv, type MeterEventInput,
 } from "./stripe-gateway";
 import { FakeGateway } from "./fake-gateway";
 
@@ -40,6 +41,9 @@ function stubStripe(overrides: { hasMore?: boolean } = {}) {
           data: [{ id: "mtr_sms", event_name: "bis_sms_segments" }], has_more: overrides.hasMore ?? false,
         })),
         create: vi.fn(async (p: { event_name: string }) => ({ id: "mtr_new", event_name: p.event_name })),
+      },
+      meterEvents: {
+        create: vi.fn(async () => ({ object: "billing.meter_event", identifier: "u_1", livemode: false })),
       },
     },
     products: {
@@ -331,5 +335,96 @@ describe("FakeGateway idempotency (must be at least as strict as Stripe, assumpt
     const g = new FakeGateway();
     await expect(g.createPrice({ kind: "base", planId: "plan_1", productId: "prod_1", unitAmountCents: 49.5 }, "key-1"))
       .rejects.toThrow(/unitAmountCents/);
+  });
+});
+
+const EVENT: MeterEventInput = {
+  eventName: "bis_sms_segments", customerId: "cus_1", value: 2, identifier: "u_1", timestampSeconds: 1790344800,
+};
+
+describe("meterEventParams (the usage mapping)", () => {
+  it("sends the meter's event name, the row id as identifier, SECONDS, and a payload of strings under the meters' exact keys (mutation: value as a number → FAILS; payload key 'customer' → FAILS)", () => {
+    expect(meterEventParams(EVENT)).toEqual({
+      event_name: "bis_sms_segments", identifier: "u_1", timestamp: 1790344800,
+      payload: { stripe_customer_id: "cus_1", value: "2" },
+    });
+  });
+
+  it("refuses a value that is not a positive whole number before it can reach Stripe (mutation: drop the value guard → FAILS)", () => {
+    for (const value of [0, -1, 1.5, Number.NaN]) {
+      expect(() => meterEventParams({ ...EVENT, value })).toThrow(/value/);
+    }
+  });
+
+  it("refuses a timestamp that is not whole seconds: a fraction, zero, or MILLISECONDS (mutation: drop the upper bound → a millisecond timestamp reaches Stripe, FAILS)", () => {
+    expect(() => meterEventParams({ ...EVENT, timestampSeconds: 1790344800.5 })).toThrow(/timestampSeconds/);
+    expect(() => meterEventParams({ ...EVENT, timestampSeconds: 0 })).toThrow(/timestampSeconds/);
+    expect(() => meterEventParams({ ...EVENT, timestampSeconds: 1790344800000 })).toThrow(/timestampSeconds/);
+  });
+
+  it("refuses a customer id that is not a Stripe customer (mutation: drop the cus_ check → FAILS)", () => {
+    expect(() => meterEventParams({ ...EVENT, customerId: "acct_1" })).toThrow(/customerId/);
+  });
+});
+
+describe("stripeGateway.reportMeterEvent", () => {
+  it("creates ONE meter event with the mapped params under the idempotency key, passing maxNetworkRetries: 0 and a 10 s timeout of its own (which does not fully suppress the SDK's own single automatic retry of a reset connection — see stripe-gateway.ts's comments), and returns nothing Stripe sent back (mutation: drop the options argument → FAILS; drop the per-request transport → the client's 2 retries × 20 s apply, one send can run about 61.5 s, FAILS)", async () => {
+    const s = stubStripe();
+    await expect(stripeGateway(s as unknown as Stripe).reportMeterEvent(EVENT, "bis-usage-u_1-cus_1")).resolves.toBeUndefined();
+    expect(s.billing.meterEvents.create).toHaveBeenCalledTimes(1);
+    expect(s.billing.meterEvents.create).toHaveBeenCalledWith(meterEventParams(EVENT), {
+      idempotencyKey: "bis-usage-u_1-cus_1", maxNetworkRetries: 0, timeout: 10_000,
+    });
+    expect(METER_EVENT_TIMEOUT_MS).toBe(10_000);
+  });
+});
+
+describe("meterEventFailureKind (does one row's failure stop the tick?)", () => {
+  it("an invalid request or an idempotency mismatch is that row's problem; anything else stops the tick (mutation: 'row' for everything → FAILS; 'systemic' for everything → FAILS)", () => {
+    const typed = (type: string) => Object.assign(new Error(type), { type });
+    expect(meterEventFailureKind(typed("StripeInvalidRequestError"))).toBe("row");
+    expect(meterEventFailureKind(typed("StripeIdempotencyError"))).toBe("row");
+    for (const t of ["StripeRateLimitError", "StripeAuthenticationError", "StripePermissionError", "StripeConnectionError", "StripeAPIError"]) {
+      expect(meterEventFailureKind(typed(t))).toBe("systemic");
+    }
+    expect(meterEventFailureKind(new Error("socket hang up"))).toBe("systemic");
+    expect(meterEventFailureKind("not an error")).toBe("systemic");
+    expect(meterEventFailureKind(null)).toBe("systemic");
+  });
+});
+
+describe("FakeGateway meter events (at least as strict as Stripe: replay is A10; identifier dedupe, A11, is NOT assumed)", () => {
+  it("the same key with the same event replays: no second event (mutation: record on replay → FAILS)", async () => {
+    const g = new FakeGateway();
+    await g.reportMeterEvent(EVENT, "k1");
+    await g.reportMeterEvent(EVENT, "k1");
+    expect(g.meterEvents).toEqual([EVENT]);
+    expect(g.calls.filter((c) => c.op === "reportMeterEvent")).toHaveLength(2);
+  });
+
+  it("the same identifier under a NEW key records a SECOND event: A11 is unproven, so the fake assumes the costlier answer and a test can never lean on a dedupe Stripe may not do (mutation: dedupe by identifier → one event, FAILS)", async () => {
+    const g = new FakeGateway();
+    await g.reportMeterEvent(EVENT, "k1");
+    await g.reportMeterEvent(EVENT, "k2");
+    expect(g.meterEvents).toEqual([EVENT, EVENT]);
+  });
+
+  it("the same key with a different event throws, as Stripe's 400 does (mutation: replay without comparing → FAILS)", async () => {
+    const g = new FakeGateway();
+    await g.reportMeterEvent(EVENT, "k1");
+    await expect(g.reportMeterEvent({ ...EVENT, value: 3 }, "k1")).rejects.toThrow(/idempotency/i);
+  });
+
+  it("runs the same guard as the real adapter, so a fractional value reaches nobody (mutation: skip meterEventParams in the fake → FAILS)", async () => {
+    const g = new FakeGateway();
+    await expect(g.reportMeterEvent({ ...EVENT, value: 1.5 }, "k1")).rejects.toThrow(/value/);
+    expect(g.meterEvents).toEqual([]);
+  });
+
+  it("failOn throws the chosen error, which the usage report's tests use (mutation: ignore failOn.error → a generic Error, FAILS)", async () => {
+    const g = new FakeGateway();
+    const refused = Object.assign(new Error("No such customer"), { type: "StripeInvalidRequestError" });
+    g.failOn = { op: "reportMeterEvent", error: refused };
+    await expect(g.reportMeterEvent(EVENT, "k1")).rejects.toBe(refused);
   });
 });

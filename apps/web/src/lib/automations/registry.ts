@@ -12,6 +12,7 @@ import { quoteFollowupPass } from "./passes/quote-followup";
 import { siteTrafficPass } from "./passes/site-traffic";
 import { weeklyClientReportPass } from "./passes/weekly-report";
 import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
+import { usageReportPass } from "./passes/usage-report";
 
 /**
  * Every pass the cron tick runs, IN ORDER. Order is part of the contract:
@@ -40,6 +41,10 @@ import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
  * emails, so this order is a reading convenience, not a dependency), then
  * the agency roll-up, which reads every account's own numbers through the
  * same `weeklyMetrics` the client pass just used.
+ * The usage report (client billing) runs LAST: every SMS-sending pass above
+ * records its texts' usage as it sends, so running after all of them means
+ * a text sent this tick reaches Stripe this tick. Nothing reads what it
+ * writes (usage_events.reported_at).
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass];
+export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass];
