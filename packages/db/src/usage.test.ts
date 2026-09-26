@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  recordUsage, reportableFrom, listBilledUsageAccounts, listReportableUsage, staleUsageAccountIds, usageRangeFilter,
+  recordUsage, reportableFrom, listBilledUsageAccounts, listReportableUsage, staleUsageAccountIds, usageRangeFilter, sumUsageSince,
   USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_FUTURE_GRACE_MS,
   USAGE_ACCOUNTS_PER_READ, USAGE_ACCOUNTS_PER_BOUNDED_READ, STALE_PROBE_ROWS,
   type BilledUsageAccount, type UsageInput,
@@ -88,7 +88,7 @@ describe("listBilledUsageAccounts — paging", () => {
   it("pages until an EMPTY page, never stopping on one merely SHORTER than the request — a server max_rows below the page size would otherwise make a short-but-nonempty page look like the end and drop every account past it (mutation: stop once a page is shorter than BILLED_PAGE → the third, empty-confirming read never happens, FAILS)", async () => {
     const ranges: [number, number][] = [];
     const page = (n: number, offset: number) => Array.from({ length: n }, (_, i) => ({
-      account_id: `acct_${offset + i}`, stripe_customer_id: `cus_${offset + i}`, created_at: "2026-09-01T00:00:00+00:00",
+      account_id: `acct_${offset + i}`, stripe_customer_id: `cus_${offset + i}`, billing_started_at: "2026-09-01T00:00:00+00:00",
     }));
     // Page 2 is short (2 rows, not 1000) but NOT the end: exactly what a
     // server max_rows cap below the requested 1,000 would produce. Only
@@ -249,5 +249,28 @@ describe("the per-account reads: bounded, one request per group of accounts", ()
     const ids = await staleUsageAccountIds(db, accounts, NOW);
     expect(ids).toEqual([uuidFor(1), uuidFor(3)]);
     expect(served).toEqual([1, 1, 0]);
+  });
+});
+
+describe("sumUsageSince", () => {
+  it("sums each meter over EVERY page of the account's rows since the instant, paging until an empty page (mutation: stop after the first page → the second page's 2 texts are lost, FAILS; drop the account filter → FAILS)", async () => {
+    const eqs: unknown[][] = [];
+    const ranges: [number, number][] = [];
+    const pages = [
+      [{ meter: "voice_minutes", quantity: 3 }, { meter: "sms", quantity: 1 }],
+      [{ meter: "sms", quantity: 2 }, { meter: "ai_chats", quantity: 1 }],
+      [],
+    ];
+    const chain = {
+      select: () => chain, order: () => chain,
+      eq: (c: string, v: unknown) => { eqs.push([c, v]); return chain; },
+      gte: (c: string, v: unknown) => { eqs.push([c, v]); return chain; },
+      range: async (a: number, b: number) => { ranges.push([a, b]); return { data: pages[ranges.length - 1] ?? [], error: null }; },
+    };
+    const got = await sumUsageSince({ from: () => chain } as unknown as SupabaseClient, "acct_1", "2026-10-01T00:00:00.000Z");
+    expect(got).toEqual({ voice_minutes: 3, sms: 3, ai_chats: 1 });
+    expect(eqs).toContainEqual(["account_id", "acct_1"]);
+    expect(eqs).toContainEqual(["occurred_at", "2026-10-01T00:00:00.000Z"]);
+    expect(ranges).toEqual([[0, 999], [2, 1001], [4, 1003]]);
   });
 });

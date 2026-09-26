@@ -169,3 +169,14 @@ export { recordUsage, reportableFrom, usageRangeFilter, listBilledUsageAccounts,
          USAGE_SOURCE_PREFIX, USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_ACCOUNTS_PER_READ,
          USAGE_ACCOUNTS_PER_BOUNDED_READ, USAGE_FUTURE_GRACE_MS, STALE_PROBE_ROWS,
          type UsageInput, type UsageRow, type UsageRange, type BilledUsageAccount } from "./usage";
+
+// Client billing state (0051 account_billing + stripe_webhook_events, 0052
+// billing_links): the webhook mirror, complimentary, links, the event ledger.
+export { SUBSCRIPTION_STATUSES, ENDED_STATUSES, PAST_DUE_STATUSES, isSubscriptionStatus,
+         getAccountBilling, getBillingLink, saveBillingLink, markBillingLinkExpired,
+         decideMirror, mirrorSubscription, MIRROR_ATTEMPTS, markComplimentary, unmarkComplimentary, changeComplimentaryPlan,
+         claimWebhookEvent, markWebhookEventProcessed,
+         type SubscriptionStatus, type AccountBilling, type BillingLink, type BillingLinkWrite,
+         type SubscriptionItemSnapshot, type SubscriptionSnapshot, type MirrorRefusal, type MirrorDecision,
+         type MirrorOutcome, type MirrorPlan } from "./account-billing";
+export { sumUsageSince } from "./usage";
