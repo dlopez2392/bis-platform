@@ -186,6 +186,44 @@ describe("sendBillingLink", () => {
     expect(new Set(updates.map((c) => c.key)).size).toBe(3);
   });
 
+  it("a loser that stalls while a LATER Send wins restores the address of the link that is live NOW, re-read right before the write, not the winner it saw first (final re-review) (mutation: restore from the stale snapshot → the customer ends on a@ while the live link names d@, FAILS)", async () => {
+    seedStoredCustomer("old-owner@example.com");
+    db.getAccountBilling.mockResolvedValue(stored({ subscriptionStatus: "canceled" }));
+    // The conditional save, as the database does it: insert only when there
+    // is no row; update only while the row still names the expected session.
+    let savedLink: BillingLink | null = null;
+    db.getBillingLink.mockImplementation(async () => savedLink);
+    db.saveBillingLink.mockImplementation(async (_db: unknown, l: Omit<BillingLink, "sentAt" | "updatedAt">, expected: string | null) => {
+      if (expected === null ? savedLink !== null : savedLink?.checkoutSessionId !== expected) return false;
+      savedLink = { ...l, sentAt: NOW.toISOString(), updatedAt: NOW.toISOString() };
+      return true;
+    });
+    // The loser's own expire (the first expire of the test) waits for a gate.
+    const realExpire = gateway.expireCheckoutSession.bind(gateway);
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const atGate = new Promise<void>((r) => { reached = r; });
+    let gated = false;
+    vi.spyOn(gateway, "expireCheckoutSession").mockImplementation(async (id: string) => {
+      if (!gated) { gated = true; reached(); await gate; }
+      return realExpire(id);
+    });
+
+    const a = sendBillingLink(deps(), { ...INPUT, email: "a@example.com" });
+    const b = sendBillingLink(deps(), { ...INPUT, email: "b@example.com" });
+    expect((await a).ok).toBe(true);
+    await atGate;
+    const d = await sendBillingLink(deps(), { ...INPUT, email: "d@example.com" });
+    expect(d.ok).toBe(true);
+    release();
+    expect(await b).toEqual({ ok: false, reason: "stale" });
+
+    expect(savedLink!.sentTo).toBe("d@example.com");
+    expect(gateway.customers[0]!.email).toBe("d@example.com");
+    expect(sent.map((m) => m.to)).toEqual(["a@example.com", "d@example.com"]);
+  });
+
   it("a restore that fails is logged, never thrown: the winner's link is valid, so the loser still answers 'stale' (re-review finding 2) (mutation: let the restore's failure throw → the loser's action crashes, FAILS)", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     gateway.failOn = {

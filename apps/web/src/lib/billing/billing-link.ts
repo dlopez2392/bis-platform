@@ -97,8 +97,11 @@ export function loggableError(e: unknown): string {
  *   - unbilled: the link's customer only when the link went to this same
  *     address (trimmed, case-insensitive), else a new customer.
  * Two Sends at once on a billed account both move the shared customer's
- * email before either saves; the loser ("stale") puts it back to the
- * winner's saved address, and only logs if that fails.
+ * email before either saves. The loser ("stale") puts it back, best effort,
+ * to the address of the link that is live when it re-reads it (not the
+ * winner it first saw: a later Send may have won since), and only logs if
+ * that fails. A residual window between that re-read and Stripe's write
+ * remains under truly simultaneous Sends; the next Send heals it.
  *
  * THE KEYS. Each Stripe create is keyed on every parameter it sends PLUS this
  * Send's own request id, minted once per call. Within the call the SDK's own
@@ -194,17 +197,28 @@ export async function sendBillingLink(deps: SendBillingLinkDeps, input: SendBill
     } catch (e) {
       console.error(`billing link: could not expire the losing session ${session.id}: ${loggableError(e)}`);
     }
-    // A billed account's customer is shared by every Send, and this one
-    // already moved its email to OUR address before losing. Put it back to
-    // the address the winning (live) link went to, so receipts follow that
-    // link. A failure here is logged, not thrown: the winner's link stands,
-    // and its next Send sets the email again.
-    if (billing?.stripeCustomerId && current && current.stripeCustomerId === customerId
-      && !sameAddress(current.sentTo, input.email)) {
+    // BEST-EFFORT restore. A billed account's customer is shared by every
+    // Send, and this one moved its email to OUR address before losing. Put it
+    // back to the address of the link that is live NOW, RE-READ here, right
+    // before the write: `current` above is a snapshot, and a later Send can
+    // win while this one waits on Stripe (the expire above), so restoring
+    // from it would undo that later Send's address. A residual window stays
+    // between this read and Stripe's write when Sends are truly simultaneous;
+    // the next Send sets the email again, so it heals. No live link: nothing
+    // to restore. The customer check is a sanity check, not a staleness
+    // guard: for a billed account every link names the one customer (G3).
+    // The expire runs first on purpose: it closes a second open session,
+    // which matters more than this, and with the re-read the order does not
+    // change the window. A failure is logged, never thrown: the live link
+    // stands.
+    if (billing?.stripeCustomerId) {
       try {
-        await gateway.updateCustomerEmail(customerId, current.sentTo, idempotencyKey("bis-customer-email-restore", input.accountId, {
-          customerId, email: current.sentTo, requestId,
-        }));
+        const live = await getBillingLink(db, input.accountId);
+        if (live && live.stripeCustomerId === customerId) {
+          await gateway.updateCustomerEmail(customerId, live.sentTo, idempotencyKey("bis-customer-email-restore", input.accountId, {
+            customerId, email: live.sentTo, requestId,
+          }));
+        }
       } catch (e) {
         console.error(`billing link: could not put the customer's email back for account ${input.accountId} after losing a race: ${loggableError(e)}`);
       }
