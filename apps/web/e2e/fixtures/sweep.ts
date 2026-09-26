@@ -379,10 +379,14 @@ export async function sweepStaleFixtures({
   //
   // Deliberately NOT calling Stripe here: `plans.spec.ts`'s own `afterAll`
   // deactivates the Stripe product on a completed run, but a killed run
-  // leaves a stranded TEST-mode product too. That is harmless (no real
-  // customer, no live charge) and this sweep only ever touches Postgres/Clerk
-  // rows that are stranded in the SHARED environment — a leftover test-mode
-  // Stripe product is not.
+  // leaves a stranded TEST-mode product too. A killed `billing.spec.ts` run
+  // can also leave a TEST-mode customer (with an expired or still-open
+  // Checkout session) and an active TEST-mode subscription on it, tagged
+  // `bis_e2e: "billing.spec"` in its metadata. All of that is harmless (no
+  // real customer, no live charge; a test-mode subscription only renews
+  // against a test card) and this sweep only ever touches Postgres/Clerk
+  // rows that are stranded in the SHARED environment. Leftover test-mode
+  // Stripe objects are not those rows.
   const { data: plans, error: plansError } = await db
     .from("plans").select("id, name").like("name", FIXTURE_NAME_PREFILTER);
   if (plansError) {

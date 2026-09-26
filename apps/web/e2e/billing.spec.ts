@@ -110,6 +110,8 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
   let priceIds: StripePriceIds;
   let customerId = "";
   let sessionId = "";
+  /** The link's sent_at as stored (the mirror's consumption rule reads it). */
+  let sentAt = "";
   let subscriptionId = "";
   const eventId = `evt_e2e_${RUN}`;
   // Each test's LAST line bumps this, so afterAll can tell a cleanup failure
@@ -196,6 +198,7 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
   test("the agency sends a billing link: Stripe test mode takes the plan's four prices in ONE subscription Checkout (B1), and the card says Link sent", async ({ page }) => {
     test.setTimeout(120_000);
     let b1: string | null = null;
+    let b12: string | null = null;
     try {
       await page.goto(`/dashboard/accounts/${accountId}/settings#billing`);
       const card = page.locator("#billing");
@@ -207,15 +210,24 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
       await dialog.getByLabel(m["billing.send.email"], { exact: true }).fill(RECIPIENT);
       await dialog.getByRole("button", { name: m["billing.send"] }).click();
       // The Send makes a customer and a session at Stripe before it answers.
-      await expect(page.getByText(m["billing.send.done"])).toBeVisible({ timeout: STRIPE_STEP_MS });
+      // Raced against its refusals (an error toast, or the address error on
+      // the field), so a refused Send fails at once, naming its reason,
+      // instead of waiting out the success toast.
+      const done = page.getByText(m["billing.send.done"]);
+      const refused = page.locator('[data-sonner-toast][data-type="error"]').or(dialog.getByRole("alert"));
+      await expect(done.or(refused).first()).toBeVisible({ timeout: STRIPE_STEP_MS });
+      if (await refused.first().isVisible()) {
+        throw new Error(`the Send was refused: ${(await refused.first().innerText()).trim()}`);
+      }
       await expect(card.locator('[data-status="link_sent"]')).toBeVisible();
 
       const { data: link, error } = await serviceDb().from("billing_links")
-        .select("stripe_customer_id, checkout_session_id, sent_to").eq("account_id", accountId).single();
+        .select("stripe_customer_id, checkout_session_id, sent_to, sent_at").eq("account_id", accountId).single();
       expect(error).toBeNull();
-      const row = link as { stripe_customer_id: string; checkout_session_id: string; sent_to: string };
+      const row = link as { stripe_customer_id: string; checkout_session_id: string; sent_to: string; sent_at: string };
       customerId = row.stripe_customer_id;
       sessionId = row.checkout_session_id;
+      sentAt = row.sent_at;
       expect(row.sent_to).toBe(RECIPIENT);
 
       // B1: Stripe's own copy of the session, read back.
@@ -230,30 +242,52 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
       const metered = lines.filter((l) => l.price?.recurring?.usage_type === "metered").length;
       expect(metered, "the three prices Stripe measures").toBe(3);
       b1 = `held: session ${session.id} is subscription-mode and open, with ${lines.length} line items (1 licensed, quantity 1; ${metered} metered)`;
-      report("B12 localhost return URLs", `held for Checkout: session ${session.id} was created with success_url and cancel_url on http://localhost:3000`, "notice");
+      // Read from the session, not assumed: what Stripe accepted and holds.
+      b12 = `held for Checkout: Stripe accepted and holds success_url ${String(session.success_url)} and cancel_url ${String(session.cancel_url)}`;
       passed += 1;
     } finally {
       report("B1 one flat + three metered prices in one Checkout", b1 ?? "NOT shown: the test failed before Stripe's session was read back (the failure above says where)", b1 ? "notice" : "warning");
+      report("B12 Checkout accepts the server's own origin", b12 ?? "NOT shown: the test failed before Stripe's session was read back", b12 ? "notice" : "warning");
     }
   });
 
   test("a signed webhook makes the account billed — once — and both screens show it; Manage billing opens Stripe's portal (B3, B9)", async ({ page, browser, request, baseURL }) => {
     test.setTimeout(180_000);
-    expect(customerId, "the first test stored the link's customer").not.toBe("");
-    const s = stripe!;
+    // Every assumption's outcome starts as null ("NOT shown") and is reported
+    // from the finally below, so a run that fails part-way still says which
+    // were observed and which were not.
+    let b13: string | null = null;
+    let b14: string | null = null;
+    let x1: { text: string; level: "notice" | "warning" } | null = null;
+    let b12: string | null = null;
     let b3: string | null = null;
     let b3ReadBack: string | null = null;
     let b9: string | null = null;
     try {
+      expect(customerId, "the first test stored the link's customer").not.toBe("");
+      expect(sentAt, "the first test stored the link's sent_at").not.toBe("");
+      const s = stripe!;
+      const db = serviceDb();
+
       // ── The subscription Checkout would have made (B13) ──────────────────
+      // The mirror consumes the link only if the subscription STARTED at or
+      // after the link was SENT (linkLedTo): Stripe's whole-second start_date
+      // against this server's sent_at. Leave 2 s of margin for clock skew,
+      // waiting 3 s at most.
+      const wait = Math.min(Math.max(0, Date.parse(sentAt) + 2_000 - Date.now()), 3_000);
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
       const pm = await s.paymentMethods.attach("pm_card_visa", { customer: customerId });
       const sub = await s.subscriptions.create({
         customer: customerId, default_payment_method: pm.id,
         items: [{ price: priceIds.base, quantity: 1 }, { price: priceIds.voice_minutes }, { price: priceIds.sms }, { price: priceIds.ai_chats }],
-        metadata: { bis_account_id: accountId, bis_plan_id: planId },
+        // bis_e2e names this spec as the maker, for anyone reading a killed
+        // run's leftovers in the Stripe dashboard (sweep.ts, leg 6).
+        metadata: { bis_account_id: accountId, bis_plan_id: planId, bis_e2e: "billing.spec" },
       });
       subscriptionId = sub.id;
-      report("B13 an API subscription on pm_card_visa is active at once", `${sub.status === "active" ? "held" : "NOT held"}: subscription ${sub.id} was created ${sub.status}`, sub.status === "active" ? "notice" : "warning");
+      b13 = `${sub.status === "active" ? "held" : "NOT held"}: subscription ${sub.id} was created ${sub.status}`;
+      const margin = sub.start_date * 1000 - Date.parse(sentAt);
+      report("link consumption margin", `start_date - sent_at = ${margin} ms (the mirror consumes the link only when this is >= 0)`, "notice");
 
       // ── The webhook: forged, signed, replayed ────────────────────────────
       const body = JSON.stringify({
@@ -269,6 +303,12 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
       });
       const forged = await post("whsec_forged");
       expect(forged.status(), "a forged signature is refused").toBe(400);
+      // Counted BEFORE the signed post: afterwards the id exists either way
+      // (event_id is the key), so only this read can see a forgery recorded.
+      const { count: afterForgery, error: countError } = await db.from("stripe_webhook_events")
+        .select("event_id", { count: "exact", head: true }).eq("event_id", eventId);
+      expect(countError).toBeNull();
+      expect(afterForgery, "the forged event recorded nothing").toBe(0);
       const first = await post(WEBHOOK_SECRET);
       expect(first.status()).toBe(200);
       expect(await first.json()).toEqual({ received: true, outcome: "processed" });
@@ -277,50 +317,59 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
       expect(await replay.json(), "a replay of the same event id is recorded once").toEqual({ received: true, outcome: "duplicate" });
 
       // ── What the mirror wrote ────────────────────────────────────────────
-      const db = serviceDb();
-      const { data: billed } = await db.from("account_billing")
+      // Every read checks its error first: a PostgREST error returns null
+      // data, which would otherwise pass the "consumed" check below.
+      const { data: billed, error: billedError } = await db.from("account_billing")
         .select("subscription_status, stripe_subscription_id, stripe_customer_id, plan_id").eq("account_id", accountId).single();
+      expect(billedError).toBeNull();
       expect(billed, "Stripe's word (active), not the payload's (incomplete)").toEqual({
         subscription_status: "active", stripe_subscription_id: sub.id, stripe_customer_id: customerId, plan_id: planId,
       });
-      const { data: account } = await db.from("accounts").select("permissions").eq("id", accountId).single();
+      const { data: account, error: accountError } = await db.from("accounts").select("permissions").eq("id", accountId).single();
+      expect(accountError).toBeNull();
       expect((account as { permissions: unknown }).permissions, "the plan's features, written (G9)")
         .toEqual({ voice_receptionist: false, web_concierge: true });
-      const { data: link } = await db.from("billing_links").select("checkout_session_id").eq("account_id", accountId).maybeSingle();
-      expect(link, "the link that led to this subscription is consumed (linkLedTo: same customer, started after it was sent)").toBeNull();
-      const { data: events } = await db.from("stripe_webhook_events").select("event_id, processed_at").eq("event_id", eventId);
-      expect(events, "one event row, stamped; the forgery recorded nothing").toHaveLength(1);
-      expect((events as { processed_at: string | null }[])[0]?.processed_at).not.toBeNull();
+      const { data: link, error: linkError } = await db.from("billing_links")
+        .select("checkout_session_id").eq("account_id", accountId).maybeSingle();
+      expect(linkError).toBeNull();
+      expect(link, `the link that led to this subscription is consumed (linkLedTo: same customer, started at or after it was sent; start_date - sent_at = ${margin} ms)`).toBeNull();
+      const { data: events, error: eventsError } = await db.from("stripe_webhook_events")
+        .select("event_id, processed_at").eq("event_id", eventId);
+      expect(eventsError).toBeNull();
+      expect(events, "one event row").toHaveLength(1);
+      expect((events as { processed_at: string | null }[])[0]?.processed_at, "and it is stamped").not.toBeNull();
 
       // ── B14, then X1 on the session the subscription left behind ─────────
       const before = (await s.checkout.sessions.retrieve(sessionId)).status;
-      report("B14 the link's session stays open after an outside subscription", before === "open"
+      b14 = before === "open"
         ? `held: session ${sessionId} was still open after subscription ${sub.id} was made on its customer`
-        : `NOT held: session ${sessionId} was ${String(before)}`, before === "open" ? "notice" : "warning");
+        : `NOT held: session ${sessionId} was ${String(before)}`;
       if (before === "open") {
         const expired = await s.checkout.sessions.expire(sessionId);
         expect(expired.status, "an open session expires").toBe("expired");
       }
-      let x1: string;
-      let x1Level: "notice" | "warning";
+      // The state the probe meets: expired by the line above, or whatever
+      // Stripe reported when it was not open.
+      const probed = before === "open" ? "expired" : String(before);
       try {
         await s.checkout.sessions.expire(sessionId);
-        x1 = `NOT held on an expired session: Stripe accepted expiring ${sessionId} again`;
-        x1Level = "warning";
+        x1 = { text: `NOT held on a session that was ${probed}: Stripe accepted expiring ${sessionId} again`, level: "warning" };
       } catch (e) {
         const type = (e as { type?: unknown }).type;
-        x1 = `held on an EXPIRED session: ${errorLine(e)}`;
         // FakeGateway models this refusal as a StripeInvalidRequestError.
-        x1Level = type === "StripeInvalidRequestError" ? "notice" : "warning";
+        x1 = {
+          text: `held on a session that was ${probed}: ${errorLine(e)}`,
+          level: type === "StripeInvalidRequestError" ? "notice" : "warning",
+        };
       }
-      report("X1 Stripe refuses to expire a session that is not open", x1, x1Level);
-      report("X1 on a COMPLETED session", "NOT observed: no Stripe API completes a Checkout session (only its hosted page, which this spec does not drive), so the case settleDeadLink relies on is still an assumption", "warning");
-      report("X2 an expired session cannot be paid", "NOT observed: it needs a payment held in 3-D Secure on Stripe's hosted page, which this spec does not drive", "warning");
 
       // ── The agency's card ────────────────────────────────────────────────
+      const minutes = m["billing.usage.minutes"].replace("{used}", "0").replace("{included}", "100");
+      const invoicePrefix = m["billing.nextInvoice"].split("{date}")[0] ?? "";
+      const nextInvoice = new RegExp(`^${invoicePrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
       await page.goto(`/dashboard/accounts/${accountId}/settings#billing`);
       await expect(page.locator('#billing [data-status="active"]')).toBeVisible();
-      await expect(page.locator("#billing")).toContainText("0 of 100 minutes");
+      await expect(page.locator("#billing")).toContainText(minutes);
 
       // ── The client's page, and Manage billing (B3, B9) ───────────────────
       const tagged = await taggedPortalConfigurations(s);
@@ -330,8 +379,8 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
         await cp.goto(`/dashboard/accounts/${accountId}/billing`);
         await expect(cp.getByText(PLAN_NAME, { exact: true })).toBeVisible();
         await expect(cp.locator('[data-status="active"]')).toBeVisible();
-        await expect(cp.getByText("0 of 100 minutes", { exact: true })).toBeVisible();
-        await expect(cp.getByText(/^Next invoice /)).toBeVisible();
+        await expect(cp.getByText(minutes, { exact: true })).toBeVisible();
+        await expect(cp.getByText(nextInvoice)).toBeVisible();
 
         const refusal = cp.getByRole("alert").filter({ hasText: m["billing.page.portalFailed"] });
         await cp.getByRole("button", { name: m["billing.page.manage"] }).click();
@@ -354,7 +403,7 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
         expect(landed, "Manage billing lands on Stripe's portal").toBe("portal");
         b3 = `held: Manage billing made a portal session on BIS's configuration and landed on ${new URL(cp.url()).host}`;
         b9 = "held: the server action's redirect() reached an absolute external URL";
-        report("B12 localhost return URLs", "held for the portal: the session was made with return_url on http://localhost:3000", "notice");
+        b12 = `held for the portal: Stripe accepted the server's own origin (${String(baseURL)}) as the return_url`;
       } finally {
         await client.close();
       }
@@ -375,9 +424,18 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
       if (drifted.length > 0) report("B3 drifted portal configurations", `${drifted.join(", ")} tagged ${PORTAL_VERSION} no longer match portalFeatureFlags(); someone changed them in the Stripe dashboard`, "warning");
       passed += 1;
     } finally {
-      report("B3 the portal configuration BIS creates is usable", b3 ?? "NOT shown: the test failed before Manage billing was pressed", b3?.startsWith("held") ? "notice" : "warning");
-      report("B3 read-back equals portalFeatureFlags()", b3ReadBack ?? "NOT shown: the test failed before the configuration was read back", b3ReadBack ? "notice" : "warning");
-      report("B9 a server action redirects to an external URL", b9 ?? "NOT shown: the redirect was not observed (see B3 and the failure above)", b9?.startsWith("held") ? "notice" : "warning");
+      const notShown = "NOT shown: the test failed before this was observed (the failure above says where)";
+      const level = (outcome: string | null) => (outcome?.startsWith("held") ? "notice" : "warning");
+      report("B13 an API subscription on pm_card_visa is active at once", b13 ?? notShown, level(b13));
+      report("B14 the link's session stays open after an outside subscription", b14 ?? notShown, level(b14));
+      report("X1 Stripe refuses to expire a session that is not open", x1?.text ?? notShown, x1?.level ?? "warning");
+      // Unconditional: neither can be observed without Stripe's hosted page.
+      report("X1 on a COMPLETED session", "NOT observed: no Stripe API completes a Checkout session (only its hosted page, which this spec does not drive), so the case settleDeadLink relies on is still an assumption", "warning");
+      report("X2 an expired session cannot be paid", "NOT observed: it needs a payment held in 3-D Secure on Stripe's hosted page, which this spec does not drive", "warning");
+      report("B12 the portal accepts the server's own origin", b12 ?? notShown, level(b12));
+      report("B3 the portal configuration BIS creates is usable", b3 ?? notShown, level(b3));
+      report("B3 read-back equals portalFeatureFlags()", b3ReadBack ?? notShown, level(b3ReadBack));
+      report("B9 a server action redirects to an external URL", b9 ?? notShown, level(b9));
     }
   });
 });
