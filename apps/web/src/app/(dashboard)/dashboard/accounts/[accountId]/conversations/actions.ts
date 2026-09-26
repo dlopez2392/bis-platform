@@ -203,20 +203,19 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
   // sits in its `finally`, where a delivered text still bills.
   //
   // USAGE (client billing): the text is out the door to the customer, so its
-  // segments bill. On serviceDb(), not `db`: 0051 lets only service_role
-  // write usage_events (a client must not be able to write, or skip, its own
-  // bill), the same service-after-requireAccountAccess shape
+  // segments bill. On the service client, not `db`: 0051 lets only
+  // service_role write usage_events (a client must not be able to write, or
+  // skip, its own bill), the same service-after-requireAccountAccess shape
   // automations/actions.ts uses for its service-only table. The account is
   // the one requireAccountAccess passed above and the message id is the row
-  // this action just wrote. Passed as a GETTER still, though a missing
-  // service key can no longer surface here — `writer` above already refused
-  // the whole send before this point. The getter stays because
-  // recordUsageSafely's contract takes one, and it costs nothing to keep.
+  // this action just wrote. `writer` is passed directly, not as a getter:
+  // `writer` above already refused the whole send if the service key were
+  // missing, so there is nothing left here for a getter to guard against.
   try {
     await updateMessageStatus(writer, accountId, messageId, "sent", { providerMessageId }, userId);
   } finally {
     if (smsBillable(provider)) {
-      await recordUsageSafely(() => serviceDb(), {
+      await recordUsageSafely(writer, {
         accountId, meter: "sms", quantity: segmentsFor(body).segments,
         occurredAt: new Date(), sourceRef: `message:${messageId}`,
       }, `sendSmsAction ${messageId}`);

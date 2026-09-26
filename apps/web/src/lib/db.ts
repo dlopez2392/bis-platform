@@ -8,11 +8,14 @@ import { userDb, type SupabaseClient } from "@bis/db";
  * database backstop is what turns a missed account scope into zero rows
  * instead of another tenant's data.
  *
- * The one exception: tables 0053 made server-written (events, conversations,
- * messages, form_submissions, bookings, call_proposals decisions). A server
- * action READS through this client (that is its authorisation) and WRITES
- * those rows with serviceDb() for the account requireAccountAccess returned.
- * Events are the exception to the exception: emit() on this client goes
+ * Tables whose writes 0053 took from the client role (events,
+ * conversations, messages, form_submissions, bookings, calendars' identity,
+ * call_proposals decisions, the once-ever automation stamps) are written by
+ * server code: a server action checks access with
+ * requireAccountAccess(accountId), reads through this client where it needs
+ * RLS to vouch for a row, and writes with serviceDb() scoped to that same
+ * accountId - the shape usage_events and the bookings status write already
+ * use. emit() on this client is the one such write that stays here: it goes
  * through record_event, which stamps the actor from the token.
  */
 export async function dbForRequest(): Promise<SupabaseClient> {
