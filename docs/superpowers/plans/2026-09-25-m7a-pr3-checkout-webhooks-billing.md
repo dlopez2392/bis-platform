@@ -4,7 +4,7 @@
 
 **Goal:** Ship rollout step (3) of M7a client billing. The agency picks a plan on an account's Billing card and presses **Send billing link**: BIS reuses or creates the account's Stripe customer, opens a Checkout session in subscription mode with the plan's four prices, and emails the link. When the client pays, Stripe's signed webhook (`POST /api/webhooks/stripe`) is recorded once, the subscription is RE-READ from Stripe, and it is mirrored onto `account_billing`, the row that makes the account "billed" (and starts usage reporting). The plan's features are written into `accounts.permissions`. The agency's Billing card shows plan, dot+word status and usage against allowances. The client's Billing page shows its plan, "312 of 500 minutes", the next invoice date and **Manage billing** (Stripe's Customer Portal). A payment-failed banner appears on every page of a past-due account.
 
-**Architecture:** Three layers, as in PR-1 and PR-2. **Data** (`packages/db/src/account-billing.ts`) is the only code that writes `account_billing`, `billing_links` and `stripe_webhook_events`. Its core is a PURE `decideMirror` (snapshot + stored rows → the row to write, or a named refusal) and a thin `mirrorSubscription` that reads, decides and writes. **Stripe** (`apps/web/src/lib/billing/stripe-gateway.ts`) grows the Checkout, subscription, portal and webhook-verification calls behind the existing `BillingGateway` interface and `FakeGateway`. Nothing else imports the SDK. **Flows** (`lib/billing/webhook.ts`, `billing-link.ts`, `portal.ts`, `change-plan.ts`) compose those two, and thin routes and actions call them after their guard (`requireAgency`, `requireAccountAccess`, or the Stripe signature). One migration, **0052**, is additive only: `account_billing.billing_started_at` and `current_period_start`, plus a service-role-only `billing_links` table.
+**Architecture:** Three layers, as in PR-1 and PR-2. **Data** (`packages/db/src/account-billing.ts`) is the only code that writes `account_billing`, `billing_links` and `stripe_webhook_events`. Its core is a PURE `decideMirror` (snapshot + stored rows → the row to write, or a named refusal) and a compare-and-set `mirrorSubscription` that reads the stored row, THEN asks Stripe, decides, and writes only if the row is still the one it read (B5). **Stripe** (`apps/web/src/lib/billing/stripe-gateway.ts`) grows the Checkout, subscription, portal and webhook-verification calls behind the existing `BillingGateway` interface and `FakeGateway`. Nothing else imports the SDK. **Flows** (`lib/billing/webhook.ts`, `billing-link.ts`, `portal.ts`, `change-plan.ts`) compose those two, and thin routes and actions call them after their guard (`requireAgency`, `requireAccountAccess`, or the Stripe signature). One migration, **0052**, is additive only: `account_billing.billing_started_at` and `current_period_start`, plus a service-role-only `billing_links` table.
 
 **Tech Stack:** Next.js 16.3.6 (App Router, server actions, route handlers), Supabase Postgres 17 (RLS), `@supabase/supabase-js`, vitest 4, Playwright, `stripe@22.6.2` (API version `2026-08-26.dahlia`), Tailwind 4 with the repo's tokens.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Tier: **HIGH** (money, a public unauthenticated endpoint, and a client-facing page). Every new assertion names, in its title, the mutation that turns it red. The reviewer applies those probes.
-- **The webhook trusts only the signature and Stripe itself.** It never reads an unverified payload: it verifies `stripe-signature` on the RAW body (`request.text()`), and it never mirrors a field from the event payload. It takes one subscription id from the verified event and re-reads that subscription from Stripe (spec flow 4), so duplicate and out-of-order events converge on Stripe's current state.
+- **The webhook trusts only the signature and Stripe itself.** It never reads an unverified payload: it verifies `stripe-signature` on the RAW body (`request.text()`), and it never mirrors a field from the event payload. It takes one subscription id from the verified event and re-reads that subscription from Stripe (spec flow 4), so duplicate and out-of-order events converge on Stripe's current state. The write is conditional on the stored row being unchanged since BEFORE that re-read (B5), so an earlier read of Stripe can never overwrite a later one.
 - **An event is recorded once.** `stripe_webhook_events.processed_at` is stamped only after the mirror finishes or is refused for good. A failure leaves the event unstamped and answers 500, so Stripe's retry processes it again, and the re-read makes a repeat harmless.
 - **The account_billing row is created when the subscription EXISTS** (PR-2 G12, binding). A sent link writes only `billing_links`. Usage reporting starts at `account_billing.billing_started_at`, the subscription's own `start_date` (G1).
 - Writers set `updated_at` themselves (0051 has no trigger). All writes to the billing tables go through `serviceDb()`, after `requireAgency()` (agency actions), `requireAccountAccess()` (the client's portal action), or a verified signature (webhook).
@@ -28,6 +28,8 @@
 ## Prerequisites
 
 1. **The A11 fix is merged first** (branch `fix/usage-report-already-exists`, in flight; not re-planned here). PR-2's e2e observed that Stripe REFUSES a reused meter-event identifier under a new idempotency key ("An event already exists with identifier ..."). Until the reporter treats that refusal as already reported, such a row is never stamped and its whole account is skipped every tick. This PR creates the first billed accounts, so **PR-3 does not merge before that fix is on `main`**. The orchestrator checks this in Task 13.
+
+   The A11 fix does NOT cover a row resent MORE than 24 hours after a send Stripe accepted (say, the send landed but the stamp failed): Stripe documents identifier uniqueness only "within a rolling period of at least 24 hours" (assumption B10), so such a row can be counted twice. PR-2's stale-usage banner flags any row unreported for 24 hours; PR-4's reconciliation is the only automatic backstop. Whether to bill a live client before PR-4 exists is **QUESTION 6**, and the rule is carried into Next plans.
 2. `CI_STRIPE_SECRET_KEY` (a Stripe TEST key) is a repository secret already, exposed to the e2e job as `STRIPE_SECRET_KEY`. Nothing to add.
 3. `STRIPE_WEBHOOK_SECRET`:
    - **CI:** a fixed literal (`whsec_bis_ci_e2e_fixture_only`), added to the e2e job's env by Task 5. It is not a secret. It lets the e2e spec sign fixture events that the e2e server accepts, and it signs nothing anywhere else.
@@ -48,7 +50,7 @@ Verified on 2026-09-25:
   - A tampered body (one trailing space), a wrong secret, a timestamp 600 s old ("Timestamp outside the tolerance zone") and an empty header ("No stripe-signature header value was provided.") each throw an error whose `.type` is `StripeSignatureVerificationError`.
   - `Stripe.errors.StripeSignatureVerificationError` is a class.
 - A scratch file typechecked `tsc --strict --noUncheckedIndexedAccess` against the installed package (exit 0). It covered:
-  - `checkout.sessions.create` with `mode: "subscription"`, `customer`, `client_reference_id`, `line_items` (the base price with `quantity: 1`, the three metered prices with NO quantity), `subscription_data.metadata`, `metadata`, `success_url` and `cancel_url`. The session's `url: string | null`, `expires_at: number` and `status`. `checkout.sessions.retrieve` and `checkout.sessions.expire`.
+  - `checkout.sessions.create` with `mode: "subscription"`, `customer`, `client_reference_id`, `line_items` (the base price with `quantity: 1`, the three metered prices with NO quantity), `subscription_data.metadata`, `metadata`, `success_url` and `cancel_url`. The session's `url: string | null`, `expires_at: number` and `status`. The CALL shapes of `checkout.sessions.retrieve` and `checkout.sessions.expire`. **Correction (plan review):** that scratch did NOT cover `getCheckoutSessionStatus`'s body, which narrowed `s.status` by equality and failed to compile (`Type 'OtherString' is not assignable to type 'CheckoutStatus'`); the code now widens to `string | null` first, and the correction round's scratch typecheck covers it.
   - `subscriptions.retrieve`, `.update(id, { items: [{ id, price }], proration_behavior: "create_prorations", metadata }, { idempotencyKey })`, `.create` and `.cancel`.
   - Period fields: `SubscriptionItem.current_period_start`/`current_period_end` (`SubscriptionItems.d.ts:54,58`). **In this API version the period lives on the ITEMS, not on the Subscription.** `Subscription.start_date` (`Subscriptions.d.ts:249`), and `customer: string | Customer | DeletedCustomer`.
   - `Invoice.parent.subscription_details.subscription` (`Invoices.d.ts:651,856`). There is no top-level `invoice.subscription` in this version.
@@ -74,11 +76,13 @@ Assumptions (not verified; each names what settles it):
 - **B2.** A Checkout session lives 24 hours by default. The code never assumes this: it stores Stripe's own `expires_at`.
 - **B3.** A portal configuration created by API with only `features` + `metadata` is usable in test and live mode. **Task 12's e2e clicks Manage billing and lands on `billing.stripe.com`.**
 - **B4.** Swapping each subscription item's price in place mid-period (Change plan) prorates the base price and prices the WHOLE period's meter usage at the new metered prices at period end, because a meter aggregates per customer per meter, not per price. Unverified. It decides what QUESTION 2 means in money. The e2e does not settle it.
-- **B5.** Two deliveries processed at the same moment each re-read Stripe, and the one that reads EARLIER can write LATER (last writer wins, a window of milliseconds). The next event, or PR-4's nightly reconciliation, re-mirrors. Accepted, not engineered around.
+- **B5. Stripe's delivery order is not relied on, and neither is timing between two deliveries.** Two deliveries for one account processed at once each re-read Stripe, and the one that reads EARLIER can reach the database LATER. The first draft accepted that as "a window of milliseconds". The plan review showed it is not: the stale write STICKS until the next event for that subscription, possibly next month's invoice. Example: `customer.subscription.created` reads `incomplete`, `invoice.paid` reads `active` and writes, then the first writes `incomplete`; the card and the client then say Payment failed for a month, and PR-4 would pause a paying client on that state. The same shape lets a late delivery for an old subscription overwrite a just-stored new one. **Engineered around, not accepted:** the mirror is compare-and-set (G5, Task 2). It reads the stored row BEFORE asking Stripe and writes only while the row still carries that `updated_at`. With no row it inserts, and a 23505 is the same conflict. On a conflict it re-reads the row, then Stripe, and tries again, at most `MIRROR_ATTEMPTS` (3) times, then throws (500, Stripe retries). Task 2's unit test pins the order and the condition, and its live replay test proves the `updated_at` round trip through PostgREST. Still unverified (external): whether a Checkout-created subscription passes through `incomplete` at all. The `past_due`↔`active` race exists either way.
 - **B6.** Stripe retries a non-2xx delivery with backoff for up to three days in live mode (Stripe docs, not re-read today).
 - **B7.** The live endpoint is created pinned to `2026-08-26.dahlia` (Task 13, Step 5). The code ALSO reads a legacy top-level `invoice.subscription`, so an endpoint on an older version still maps invoices.
 - **B8.** A subscription's `items` list holds all four items in one page. The code throws on `has_more` rather than guess.
 - **B9.** `redirect()` to an absolute external URL from a server action works in Next 16 (documented behaviour). **Task 12's portal click proves it.**
+- **B10.** Stripe documents a meter event's `identifier` as unique only "within a rolling period of at least 24 hours" (Stripe docs, not re-read today). A usage row resent more than 24 hours after a send Stripe accepted may be counted twice. Nothing in PR-3 settles it. PR-4's reconciliation is the backstop, and QUESTION 6 decides whether a live client is billed before then.
+- **B11.** Stripe's failed-payment behaviour is a dashboard setting, not code. It covers the retry schedule ("Smart Retries" is Stripe's default), what happens after the last retry (cancel the subscription, mark it unpaid, or leave it past due), and whether Stripe emails the customer receipts and failed-payment notices. The menu names and the default schedule are from Stripe's docs, not re-read today. The chosen values decide which statuses the mirror sees (`past_due` → `unpaid` or `canceled`), so QUESTION 7 decides them before the first live client pays (Task 13, Step 5).
 
 ## Spec gaps resolved here (the reviewer should confirm or overrule)
 
@@ -103,20 +107,25 @@ Assumptions (not verified; each names what settles it):
   - Created with `name` = the client's customer-facing brand name (never `accounts.name`, the agency's private label), `email` = the recipient, and metadata `bis_account_id`.
   - The key is `idempotencyKey("bis-customer", accountId, params)`, so a retry with the same inputs within 24 hours replays the same customer.
   - A customer made just before a failed session creation, and retried more than 24 hours later, is an orphan in Stripe. It is harmless: no session, no subscription.
+  - **Invariant: once `account_billing` holds a customer, the account's customer never changes.** The first draft rested this on Send's lookup ORDER alone. `decideMirror` accepted a subscription on the stored OR the linked customer and then overwrote `stripe_customer_id`, and no test pinned the order. Now it is enforced twice:
+    - the mirror refuses a subscription on any other customer, the pending link's included, as `customer_changed` (G7);
+    - a `billing-link.test.ts` case pins that the stored customer wins over a link that names another.
+  - **A manual customer change** is SQL only, for example after a customer is deleted in Stripe. It must SETTLE FIRST. The usage reporter must have sent every usage row of the account (none left unstamped), because anything reported after the change is billed to the new customer. Rows Stripe already holds under the old customer stay there, including those stamped as duplicates by the A11 fix. Then change `account_billing.stripe_customer_id`, delete the account's `billing_links` row, and send a new link. The runbook (Task 13, Step 8) carries this rule.
 - **G4. The webhook pipeline** (`route.ts` → `processStripeEvent`):
   1. The secret is set, else 503.
   2. Verify the raw body, else 400; nothing is read before this.
   3. The Stripe key is usable (`billingGatewayFromEnv`), else 503.
-  4. `event.livemode` matches the key, else 400, not recorded.
+  4. `event.livemode` matches the key, else 400, not recorded. Stripe retries every non-2xx, this 400 included. Each retry is refused the same way, which is harmless: nothing is recorded.
   5. Claim the event (`insert ... on conflict do nothing`): `new`, `retry` (stored but never stamped) or `done`.
   6. `done` → 200 "duplicate", no Stripe read.
   7. No subscription in the event (an unhandled type, or a payment-mode checkout) → stamp → 200 "ignored".
-  8. Re-read the subscription → `mirrorSubscription` → stamp → 200 "processed" or "refused".
-  9. A throw anywhere in 5-8 → NOT stamped → 500, and Stripe retries.
-- **G5. Duplicates and out-of-order events** need no ordering logic: nothing from the payload is mirrored. An `updated` arriving after `deleted` re-reads the subscription, which is `canceled`, and writes `canceled`. Concurrency caveat: B5.
+  8. `mirrorSubscription` → stamp → 200 "processed" or "refused". The mirror reads Stripe once to learn the account. Then, per attempt, it reads the stored row, re-reads the subscription from Stripe, and writes only if the row is unchanged (G5, B5).
+  9. A throw anywhere in 5-8 → NOT stamped → 500, and Stripe retries. This includes a mirror that lost `MIRROR_ATTEMPTS` races in a row.
+- **G5. Duplicates and out-of-order events** need no ordering logic: nothing from the payload is mirrored. An `updated` arriving after `deleted` re-reads the subscription, which is `canceled`, and writes `canceled`. **Concurrent deliveries** are handled by compare-and-set (B5). The row's `updated_at` is the version: read before Stripe is asked, and required unchanged at the write. `decideMirror` moves `updated_at` at least 1 ms past the stored value, so two writes in one millisecond can never look like no write. A delivery that loses re-reads the row and Stripe and tries again. So the state stored last is always from the LATEST read of Stripe.
 - **G6. The plan comes from the subscription's BASE PRICE metadata** (`bis_plan_id`, set on every price by PR-1's `priceCreateParams`). It does not come from `plans.stripe_price_ids`, because a price change rewrites those ids while existing subscriptions keep their old prices (spec section 2), and a lookup by price id would lose them.
-- **G7. Two mirror guards, each a named refusal** (stamped, logged, 200, never retried, because retrying cannot fix it):
-  - `customer_mismatch`: the subscription's customer must be the account's stored or linked customer, so a subscription made by hand in the Stripe dashboard with a guessed `bis_account_id` never lands on an account.
+- **G7. Three mirror guards, each a named refusal** (stamped, logged, 200, never retried, because retrying cannot fix it):
+  - `customer_changed`: the account's billed row already holds a customer, and the subscription is on a DIFFERENT one, the pending link's included. The stored customer is the account's for good (G3).
+  - `customer_mismatch`: the account has no stored customer, and the subscription's customer is not the pending link's. So a subscription made by hand in the Stripe dashboard with a guessed `bis_account_id` never lands on an account.
   - `another_live_subscription`: a different subscription id arriving while the stored one is not ended.
 
   The other refusals are `no_account`, `unknown_account`, `unknown_plan`, `plan_other_agency` and `unknown_status`.
@@ -141,7 +150,7 @@ Assumptions (not verified; each names what settles it):
   | Word | Stored state |
   |---|---|
   | Active | `active`, `trialing` |
-  | Payment failed | `past_due`, `unpaid`, `incomplete` (first payment not through) |
+  | Payment failed | `past_due`, `unpaid`, `incomplete` (first payment not through; the card says it, the banner does not, G21) |
   | Paused | `billing_paused_at` set (PR-4), or Stripe's own `paused` |
   | Canceled | `canceled`, `incomplete_expired` |
   | Complimentary | `complimentary` |
@@ -153,6 +162,7 @@ Assumptions (not verified; each names what settles it):
 - **G15. Change plan:**
   - Complimentary: a database change, applied immediately with an undo toast.
   - Subscribed: each item's price is swapped in place (`planChangeItems` maps base→base and each meter→its meter, and refuses anything else) with `proration_behavior: "create_prorations"` (Stripe's default, stated explicitly). Then the fresh subscription is mirrored at once, so the card is right before the webhook arrives. The key is `idempotencyKey("bis-subchange", requestId, change)`, where `requestId` is minted when the dialog opens, so a double click replays and an A→B→A sequence does not. No undo toast here: undoing is another prorated change, so the dialog is the decision.
+  - Offered, and accepted by the action, only on a live subscription that is NOT `incomplete`: before the first payment is through, Stripe may refuse item updates.
   - **QUESTION 2** may change this (see the end).
 - **G16. Mark complimentary** appears only when the account is Unbilled (no row, no live link): 0051's CHECK forbids complimentary with a subscription, and an open link could otherwise convert it back to paid behind the agency's back. It is a dialog to pick the plan, then immediate + Undo (the undo is Stop complimentary). **Stop complimentary** deletes the row and resets permissions, with Undo re-marking the same plan.
 - **G17. Checkout's success and cancel pages** are one public page, `/billing-done?result=success|cancelled`. It uses `AuthShell` and the platform's mark: the payer is not signed in, so no tenant can be identified (DESIGN rule 9's sign-in exception, same reason).
@@ -162,7 +172,7 @@ Assumptions (not verified; each names what settles it):
   - If the email fails, the link is still saved and the card shows **Copy link**, so the agency can send it another way.
 - **G19. The Customer Portal configuration is created by code on first use** (`ensurePortalConfiguration`: find an active configuration with metadata `bis_portal = v1`, else create one under a params-hash key). No dashboard step is needed in either mode. Its features are **update card + invoice history only**; no self-cancel and no plan switching (**QUESTION 3**).
 - **G20. The client's Billing page** is a client-only nav item (like Branding: the agency reaches billing through Settings). Before the account is billed it shows an empty state, pending **QUESTION 4**. A complimentary account sees its plan and usage, with no Manage billing.
-- **G21. The payment-failed banner** is mounted in the account layout, so it is on every page of that account:
+- **G21. The payment-failed banner** is mounted in the account layout, so it is on every page of that account. It shows only for `past_due` and `unpaid` (`showsPaymentFailedBanner`). It never shows for `incomplete`: a first payment still in progress has not failed, and "Your payment didn't go through" would be false. Its two audiences:
   - the client copy is the spec's ("Your payment didn't go through. Update your card to keep automations running." + a link to the Billing page);
   - the agency, inside the same account, sees "This client's last payment didn't go through." + a link to the Billing card.
 
@@ -173,14 +183,14 @@ Assumptions (not verified; each names what settles it):
 
 ## File Structure
 
-38 files created, 21 modified (59 total). `...` below is `apps/web/src/app/(dashboard)/dashboard`.
+40 files created, 22 modified (62 total). `...` below is `apps/web/src/app/(dashboard)/dashboard`.
 
 **packages/db**
 
 Created:
 - `supabase/migrations/0052_billing_checkout.sql`: `billing_started_at`, `current_period_start`, and `billing_links`.
 - `src/account-billing.ts`: the only writer of `account_billing`, `billing_links` and `stripe_webhook_events`. Pure `decideMirror`.
-- `src/account-billing.test.ts` (12, no database).
+- `src/account-billing.test.ts` (14, no database).
 - `src/test/account-billing.test.ts` (4, live).
 - `src/test/billing-checkout-schema.test.ts` (7, live).
 - `src/billing.test.ts` (1, no database).
@@ -198,12 +208,13 @@ Modified:
 Modified:
 - `lib/billing/stripe-gateway.ts`: Checkout, subscription, portal and webhook-verification surface; `idempotencyKey`; `live` on the gateway verdict.
 - `lib/billing/fake-gateway.ts`.
-- `lib/billing/stripe-gateway.test.ts` (+11).
+- `lib/billing/stripe-gateway.test.ts` (+8).
 
 Created:
+- `lib/billing/stripe-webhook.test.ts` (3): webhook verification on the REAL SDK, in its own file because `stripe-gateway.test.ts` mocks the `stripe` module.
 - `lib/billing/webhook.ts` and `webhook.test.ts` (7).
 - `lib/billing/billing-view.ts` and `billing-view.test.ts` (9).
-- `lib/billing/billing-link.ts` and `billing-link.test.ts` (8).
+- `lib/billing/billing-link.ts` and `billing-link.test.ts` (9).
 - `lib/billing/change-plan.ts` and `change-plan.test.ts` (2).
 - `lib/billing/portal.ts` and `portal.test.ts` (3).
 - `lib/email/templates/billing-link.ts` and `billing-link.test.ts` (3).
@@ -237,11 +248,13 @@ Modified:
 - `.github/workflows/ci.yml`: the e2e job's `STRIPE_WEBHOOK_SECRET` literal.
 - `apps/web/ci/ci-workflow.test.ts` (+1).
 - `.env.example`.
+- `apps/web/e2e/fixtures/sweep.ts`: comment only (e2e now creates billing rows).
 
 Created:
 - `apps/web/e2e/billing.spec.ts` (2).
+- `docs/runbooks/stripe-billing.md`: the live setup, the failed-payment settings, the customer invariant and the >24 h resend rule (Task 13, Step 8).
 
-**New test count: 109** = db 11 live + 14 unit, web 82, e2e 2 (itemised in Task 13, Step 1). `it.each` is not used; each `it` is one test.
+**New test count: 112** = db 11 live + 16 unit, web 83, e2e 2 (itemised in Task 13, Step 1). `it.each` is not used; each `it` is one test.
 
 ## Task order and checkpoints
 
@@ -598,6 +611,7 @@ git commit -m "feat(db): 0052 billing start, period start and billing_links (ser
    - Use a throwaway branch `probe/m7a-pr3-db` in its own worktree, with one commit per probe group.
    - A migration probe is NOT a commit on the branch. It is an ALTER run on `bis-ci` through MCP `execute_sql` inside the probe window, then reverted with the inverse ALTER. The orchestrator records both statements in the ledger.
    - The probes are the mutations named in the 7 titles. The grant ones are `grant select on billing_links to authenticated` and `grant insert on billing_links to authenticated`.
+   - **Shared-project hazard: the "drop the default" probe.** `alter table public.account_billing alter column billing_started_at drop default` makes EVERY other branch's `insert into account_billing (account_id, plan_id)` fixture fail with 23502 while it stands. Run it LAST and ALONE. Start it only when `gh run list --status in_progress` shows no other branch's `verify` running. Revert it (`... set default now()`) the moment its one probe run finishes, and record both statements and both times in the ledger. The `billing_links` probes and the NOT NULL probe are safe: no other branch writes that table or a null there.
    - Confirm each named test goes red for its own reason, then revert, and re-run `verify` green.
 4. Production is NOT touched here (Task 13, Step 2).
 
@@ -623,7 +637,7 @@ git commit -m "feat(db): 0052 billing start, period start and billing_links (ser
   - `type AccountBilling`, `getAccountBilling(db, accountId): Promise<AccountBilling | null>`
   - `type BillingLink`, `getBillingLink(db, accountId)`, `saveBillingLink(db, link, expectedSessionId: string | null, now): Promise<boolean>`, `markBillingLinkExpired(db, accountId, sessionId, now): Promise<void>`
   - `type SubscriptionItemSnapshot`, `type SubscriptionSnapshot` (built by Task 3's gateway)
-  - `type MirrorRefusal`, `type MirrorDecision`, `decideMirror(input): MirrorDecision` (pure), `type MirrorOutcome`, `mirrorSubscription(db, snapshot, now): Promise<MirrorOutcome>`
+  - `type MirrorRefusal`, `type MirrorDecision`, `decideMirror(input): MirrorDecision` (pure), `type MirrorOutcome`, `MIRROR_ATTEMPTS`, `mirrorSubscription(db, read: () => Promise<SubscriptionSnapshot>, now: () => Date): Promise<MirrorOutcome>`. It takes a READER, not a snapshot. It must read the stored row BEFORE asking Stripe (B5), so the caller hands it the Stripe read (`() => gateway.retrieveSubscription(id)`) instead of a finished snapshot.
   - `markComplimentary(db, { accountId, planId, now })`, `unmarkComplimentary(db, accountId): Promise<boolean>`, `changeComplimentaryPlan(db, { accountId, planId, expectedPlanId, now })`
   - `claimWebhookEvent(db, eventId, type): Promise<"new" | "retry" | "done">`, `markWebhookEventProcessed(db, eventId, at): Promise<void>`
   - `sumUsageSince(db, accountId, sinceIso): Promise<MeterAmounts>` (in `usage.ts`)
@@ -686,9 +700,10 @@ describe("decideMirror: a subscription BIS made becomes the billed row", () => {
     });
   });
 
-  it("keeps the stored billing start, microseconds and all, for the SAME subscription; a NEW subscription after an ended one starts afresh (mutation: always use start_date → FAILS; always keep the stored start → FAILS)", () => {
-    const same = decideMirror({ ...base, existing: stored(), snapshot: snap() });
+  it("keeps the stored billing start, microseconds and all, for the SAME subscription; a NEW subscription after an ended one starts afresh; updated_at (the B5 version) always moves, even within the stored millisecond (mutation: always use start_date → FAILS; always keep the stored start → FAILS; write updated_at = now unconditionally → the same-millisecond write leaves the version unchanged, FAILS)", () => {
+    const same = decideMirror({ ...base, existing: stored({ updatedAt: "2026-10-01T12:00:00.000456+00:00" }), snapshot: snap() });
     expect(same.kind === "write" && same.row.billing_started_at).toBe("2026-09-01T00:00:00.123456+00:00");
+    expect(same.kind === "write" && same.row.updated_at).toBe("2026-10-01T12:00:00.001Z");
     const renewed = decideMirror({
       ...base, existing: stored({ stripeSubscriptionId: "sub_old", subscriptionStatus: "canceled" }),
       snapshot: snap({ startedAt: START + 99 }),
@@ -729,6 +744,13 @@ describe("decideMirror: named refusals (G7, G10)", () => {
       .toEqual({ kind: "refused", reason: "customer_mismatch" });
   });
 
+  it("once the billed row holds a customer, only THAT customer's subscription is accepted, even when a newer link names another (G3) (mutation: accept the stored OR the linked customer → the link's customer overwrites stripe_customer_id, FAILS)", () => {
+    expect(decideMirror({
+      ...base, existing: stored({ stripeCustomerId: "cus_A", subscriptionStatus: "canceled" }),
+      link: { stripeCustomerId: "cus_B" }, snapshot: snap({ id: "sub_2", customerId: "cus_B" }),
+    })).toEqual({ kind: "refused", reason: "customer_changed" });
+  });
+
   it("refuses a DIFFERENT subscription while the stored one is not ended, and accepts it once the stored one is canceled (mutation: drop the live-subscription guard → FAILS)", () => {
     expect(decideMirror({ ...base, existing: stored({ subscriptionStatus: "past_due" }), snapshot: snap({ id: "sub_2" }) }))
       .toEqual({ kind: "refused", reason: "another_live_subscription" });
@@ -764,13 +786,13 @@ function recorder(reads: Record<string, unknown>) {
 }
 
 describe("mirrorSubscription: the writes", () => {
-  it("refuses a subscription with no uuid bis_account_id BEFORE reading anything (mutation: drop the uuid check → the database is read, FAILS)", async () => {
+  it("refuses a subscription with no uuid bis_account_id BEFORE reading the database (mutation: drop the uuid check → the database is read, FAILS)", async () => {
     const { db, calls } = recorder({});
-    expect(await mirrorSubscription(db, snap({ accountId: "acct_x" }), NOW)).toEqual({ kind: "refused", reason: "no_account" });
+    expect(await mirrorSubscription(db, async () => snap({ accountId: "acct_x" }), () => NOW)).toEqual({ kind: "refused", reason: "no_account" });
     expect(calls).toEqual([]);
   });
 
-  it("upserts the row on account_id, then writes EXACTLY the plan's two features into accounts.permissions, then consumes the link keyed by account AND customer (mutation: write the whole features object unfiltered → FAILS; delete the link by account alone → FAILS)", async () => {
+  it("with no stored row it INSERTS (never an upsert: B5), then writes EXACTLY the plan's two features into accounts.permissions, then consumes the link keyed by account AND customer (mutation: write the whole features object unfiltered → FAILS; delete the link by account alone → FAILS)", async () => {
     const { db, calls } = recorder({
       accounts: { id: ACCOUNT, agency_id: AGENCY },
       plans: { id: PLAN, agency_id: AGENCY, features: { voice_receptionist: true, web_concierge: false, extra: true }, archived_at: null },
@@ -780,21 +802,84 @@ describe("mirrorSubscription: the writes", () => {
         sent_at: "2026-10-01T00:00:00+00:00", updated_at: "2026-10-01T00:00:00+00:00",
       },
     });
-    expect(await mirrorSubscription(db, snap(), NOW)).toEqual({ kind: "written", accountId: ACCOUNT, planId: PLAN, status: "active" });
+    expect(await mirrorSubscription(db, async () => snap(), () => NOW)).toEqual({ kind: "written", accountId: ACCOUNT, planId: PLAN, status: "active" });
     const at = (table: string, op: string) => calls.findIndex((c) => c[0] === table && c[1] === op);
-    const upsert = at("account_billing", "upsert");
+    const insert = at("account_billing", "insert");
     const perms = at("accounts", "update");
     const del = at("billing_links", "delete");
-    expect(calls[upsert]).toEqual(["account_billing", "upsert",
-      expect.objectContaining({ account_id: ACCOUNT, stripe_subscription_id: "sub_1", updated_at: NOW.toISOString() }),
-      { onConflict: "account_id" }]);
+    expect(calls[insert]).toEqual(["account_billing", "insert",
+      expect.objectContaining({ account_id: ACCOUNT, stripe_subscription_id: "sub_1", updated_at: NOW.toISOString() })]);
+    expect(calls.some((c) => c[1] === "upsert")).toBe(false);
     expect(calls[perms]).toEqual(["accounts", "update", { permissions: { voice_receptionist: true, web_concierge: false } }]);
-    expect(upsert).toBeGreaterThan(-1);
-    expect(perms).toBeGreaterThan(upsert);
+    expect(insert).toBeGreaterThan(-1);
+    expect(perms).toBeGreaterThan(insert);
     expect(del).toBeGreaterThan(perms);
     expect(calls.slice(del + 1, del + 3)).toEqual([
       ["billing_links", "eq", "account_id", ACCOUNT], ["billing_links", "eq", "stripe_customer_id", "cus_1"],
     ]);
+  });
+
+  it("B5: the stored row is read BEFORE Stripe and written only while unchanged; losing that race re-reads both, so an EARLIER read of Stripe never overwrites a LATER one (mutation: update without the updated_at condition → the stale 'incomplete' is written, FAILS; read the row after asking Stripe → the order FAILS)", async () => {
+    const V0 = "2026-10-01T11:00:00+00:00";
+    const V1 = "2026-10-01T11:59:59.5+00:00";
+    const dbRow = (updatedAt: string, status: string) => ({
+      account_id: ACCOUNT, plan_id: PLAN, complimentary: false, stripe_customer_id: "cus_1", stripe_subscription_id: "sub_1",
+      subscription_status: status, current_period_start: null, current_period_end: null, past_due_since: null,
+      billing_paused_at: null, billing_started_at: "2026-09-01T00:00:00+00:00", created_at: "2026-09-01T00:00:00+00:00",
+      updated_at: updatedAt,
+    });
+    let stored: Record<string, unknown> = dbRow(V0, "incomplete");
+    const log: string[] = [];
+    const writes: { status: unknown; version: unknown }[] = [];
+    const db = {
+      from: (table: string) => {
+        const filters: [string, unknown][] = [];
+        let patch: Record<string, unknown> | null = null;
+        const chain: Record<string, unknown> = {
+          select: () => chain, delete: () => chain,
+          eq: (c: string, v: unknown) => { filters.push([c, v]); return chain; },
+          update: (p: Record<string, unknown>) => { patch = p; return chain; },
+          insert: async () => ({ error: null }),
+          maybeSingle: async () => {
+            if (table === "account_billing") { log.push("row"); return { data: { ...stored }, error: null }; }
+            if (table === "accounts") return { data: { id: ACCOUNT, agency_id: AGENCY }, error: null };
+            if (table === "plans") {
+              return { data: { id: PLAN, agency_id: AGENCY, features: { voice_receptionist: true, web_concierge: false }, archived_at: null }, error: null };
+            }
+            return { data: null, error: null };
+          },
+          then: (ok: (v: unknown) => unknown) => {
+            let result: { data: unknown[]; error: null } = { data: [], error: null };
+            if (table === "account_billing" && patch) {
+              const version = filters.find(([c]) => c === "updated_at")?.[1];
+              writes.push({ status: patch.subscription_status, version });
+              if (version === undefined || version === stored.updated_at) {
+                stored = { ...stored, ...patch };
+                result = { data: [{ account_id: ACCOUNT }], error: null };
+              }
+            }
+            return Promise.resolve(result).then(ok);
+          },
+        };
+        return chain;
+      },
+    } as unknown as SupabaseClient;
+    // Stripe: the first read only names the account; the second is THIS
+    // delivery's (stale) read; right after it, another delivery that read
+    // Stripe LATER ("active") lands its write first; the third is the retry.
+    const answers = [snap({ status: "incomplete" }), snap({ status: "incomplete" }), snap({ status: "active" })];
+    let n = 0;
+    const read = async () => {
+      log.push("stripe");
+      const s = answers[Math.min(n, answers.length - 1)]!;
+      n += 1;
+      if (n === 2) stored = dbRow(V1, "active");
+      return s;
+    };
+    expect(await mirrorSubscription(db, read, () => NOW)).toEqual({ kind: "written", accountId: ACCOUNT, planId: PLAN, status: "active" });
+    expect(log).toEqual(["stripe", "row", "stripe", "row", "stripe"]);
+    expect(writes).toEqual([{ status: "incomplete", version: V0 }, { status: "active", version: V1 }]);
+    expect(stored.subscription_status).toBe("active");
   });
 });
 
@@ -957,7 +1042,7 @@ async function withPlan(fn: (planId: string) => Promise<void>): Promise<void> {
 }
 
 describe("billing writers, live", () => {
-  it("mirrorSubscription stores the subscription, writes the plan's features to accounts.permissions and consumes the link; a replay changes nothing but updated_at (mutation: skip the permissions write → FAILS; skip the link delete → FAILS; move billing_started_at on replay → FAILS)", () =>
+  it("mirrorSubscription stores the subscription, writes the plan's features to accounts.permissions and consumes the link; a replay changes nothing but updated_at, through the compare-and-set on PostgREST's own updated_at text (mutation: skip the permissions write → FAILS; skip the link delete → FAILS; move billing_started_at on replay → FAILS; a version filter that never matches the stored text → the replay THROWS after MIRROR_ATTEMPTS, FAILS)", () =>
     withPlan((planId) => withTestAccount(async (db, accountId) => {
       const customer = `cus_t_${randomUUID()}`;
       expect(await saveBillingLink(db, {
@@ -969,7 +1054,7 @@ describe("billing writers, live", () => {
         id: `sub_t_${randomUUID()}`, customerId: customer, status: "active", accountId, planId,
         currentPeriodStart: 1_790_000_000, currentPeriodEnd: 1_792_592_000, startedAt: 1_790_000_000, items: [],
       };
-      expect((await mirrorSubscription(db, snapshot, new Date())).kind).toBe("written");
+      expect((await mirrorSubscription(db, async () => snapshot, () => new Date())).kind).toBe("written");
       const first = await getAccountBilling(db, accountId);
       expect(first).toMatchObject({
         planId, complimentary: false, stripeCustomerId: customer, stripeSubscriptionId: snapshot.id,
@@ -980,7 +1065,7 @@ describe("billing writers, live", () => {
       const { data: acct } = await db.from("accounts").select("permissions").eq("id", accountId).single();
       expect((acct as { permissions: unknown }).permissions).toEqual(FEATURES);
       expect(await getBillingLink(db, accountId)).toBeNull();
-      await mirrorSubscription(db, snapshot, new Date(Date.now() + 1000));
+      expect((await mirrorSubscription(db, async () => snapshot, () => new Date(Date.now() + 1000))).kind).toBe("written");
       const second = await getAccountBilling(db, accountId);
       expect(second!.billingStartedAt).toBe(first!.billingStartedAt);
       expect(Date.parse(second!.updatedAt)).toBeGreaterThan(Date.parse(first!.updatedAt));
@@ -1202,7 +1287,7 @@ export type SubscriptionSnapshot = {
 };
 
 export type MirrorRefusal =
-  | "no_account" | "unknown_account" | "customer_mismatch" | "unknown_plan" | "plan_other_agency"
+  | "no_account" | "unknown_account" | "customer_changed" | "customer_mismatch" | "unknown_plan" | "plan_other_agency"
   | "another_live_subscription" | "unknown_status";
 
 type MirrorRow = {
@@ -1220,6 +1305,15 @@ export type MirrorPlan = { id: string; agencyId: string; features: PlanFeatures 
 
 const seconds = (s: number): string => new Date(s * 1000).toISOString();
 
+/** updated_at is the mirror's compare-and-set version (B5), so a write must
+ *  never leave it where it was: at least 1 ms past the stored value, even
+ *  when two writes share a millisecond or this instance's clock runs behind.
+ *  (Date.parse keeps the milliseconds of PostgREST's microsecond text.) */
+function nextVersion(now: Date, stored: string | undefined): string {
+  const floor = stored ? Date.parse(stored) + 1 : Number.NEGATIVE_INFINITY;
+  return new Date(Math.max(now.getTime(), floor)).toISOString();
+}
+
 /**
  * PURE. The billed row a subscription snapshot becomes, or why not (G7).
  * `account`, `plan`, `existing` and `link` are what the database holds for
@@ -1236,8 +1330,12 @@ export function decideMirror(input: {
   const { snapshot: s, account, plan, existing, link, now } = input;
   const refuse = (reason: MirrorRefusal): MirrorDecision => ({ kind: "refused", reason });
   if (!account) return refuse("unknown_account");
-  const known = [existing?.stripeCustomerId, link?.stripeCustomerId].filter((c): c is string => Boolean(c));
-  if (!known.includes(s.customerId)) return refuse("customer_mismatch");
+  // G3: once the billed row holds a customer, it is the account's customer
+  // for good (a pending link naming another does not change that). Only an
+  // account with no stored customer takes the link's.
+  const storedCustomer = existing?.stripeCustomerId ?? null;
+  if (storedCustomer !== null && s.customerId !== storedCustomer) return refuse("customer_changed");
+  if (storedCustomer === null && link?.stripeCustomerId !== s.customerId) return refuse("customer_mismatch");
   if (!isSubscriptionStatus(s.status)) return refuse("unknown_status");
   if (!plan) return refuse("unknown_plan");
   if (plan.agencyId !== account.agencyId) return refuse("plan_other_agency");
@@ -1257,7 +1355,7 @@ export function decideMirror(input: {
       current_period_end: s.currentPeriodEnd === null ? null : seconds(s.currentPeriodEnd),
       past_due_since: unpaid ? (sameSubscription && existing?.pastDueSince ? existing.pastDueSince : now.toISOString()) : null,
       billing_started_at: sameSubscription ? existing.billingStartedAt : seconds(s.startedAt),
-      updated_at: now.toISOString(),
+      updated_at: nextVersion(now, existing?.updatedAt),
     },
   };
 }
@@ -1293,26 +1391,65 @@ export type MirrorOutcome =
   | { kind: "written"; accountId: string; planId: string; status: SubscriptionStatus }
   | { kind: "refused"; reason: MirrorRefusal };
 
+/** How many times the mirror starts again after losing a race (B5) before
+ *  it throws: the webhook then answers 500, and Stripe retries later. */
+export const MIRROR_ATTEMPTS = 3;
+
 /**
- * Stores a subscription snapshot as the account's billed row (spec flow 4):
- * reads what the database holds, decides (decideMirror), then writes the row
- * (upsert on account_id; billing_paused_at is never touched here), the
- * permissions, and consumes the link that led to it. Idempotent: the same
- * snapshot twice writes the same row. Throws on any database error, so the
- * webhook answers 500 and Stripe retries.
+ * Stores what Stripe says NOW about one subscription as the account's billed
+ * row (spec flow 4): the row (billing_paused_at is never touched here), the
+ * permissions, and the link that led to it consumed. `read` asks Stripe (the
+ * gateway's retrieveSubscription); nothing from a webhook payload reaches
+ * here. Idempotent: the same Stripe state twice writes the same row.
+ *
+ * COMPARE-AND-SET (B5). The stored row is read BEFORE Stripe is asked, and
+ * written only while it is still that row: an update filtered on its
+ * updated_at, or an insert when there was none (a 23505 is the same signal).
+ * A delivery that read Stripe earlier but reaches the database later
+ * therefore loses, reads the row and Stripe again, and writes the NEWER
+ * state instead of overwriting it with an older one. The first read only
+ * names the account; its values are never written. Throws on any database
+ * error, and after MIRROR_ATTEMPTS lost races, so the webhook answers 500
+ * and Stripe retries.
  */
-export async function mirrorSubscription(db: SupabaseClient, snapshot: SubscriptionSnapshot, now: Date): Promise<MirrorOutcome> {
-  if (!snapshot.accountId || !UUID.test(snapshot.accountId)) return { kind: "refused", reason: "no_account" };
-  const accountId = snapshot.accountId;
+export async function mirrorSubscription(
+  db: SupabaseClient, read: () => Promise<SubscriptionSnapshot>, now: () => Date,
+): Promise<MirrorOutcome> {
+  let snapshot = await read();
+  for (let attempt = 1; attempt <= MIRROR_ATTEMPTS; attempt += 1) {
+    const accountId = snapshot.accountId;
+    if (!accountId || !UUID.test(accountId)) return { kind: "refused", reason: "no_account" };
+    const existing = await getAccountBilling(db, accountId);
+    snapshot = await read();
+    // Its bis_account_id changed between the two reads: start over on the new one.
+    if (snapshot.accountId !== accountId) continue;
+    const outcome = await writeMirror(db, accountId, snapshot, existing, now());
+    if (outcome !== "conflict") return outcome;
+  }
+  throw new Error(`mirrorSubscription: the billing row for ${snapshot.id} kept changing (${MIRROR_ATTEMPTS} attempts); Stripe will retry`);
+}
+
+/** One attempt: decide against `existing` (read before Stripe was asked),
+ *  then write only if the row is still `existing`. "conflict" = it is not. */
+async function writeMirror(
+  db: SupabaseClient, accountId: string, snapshot: SubscriptionSnapshot, existing: AccountBilling | null, now: Date,
+): Promise<MirrorOutcome | "conflict"> {
   const planId = snapshot.planId && UUID.test(snapshot.planId) ? snapshot.planId : null;
-  const [account, existing, link, plan] = await Promise.all([
-    readAccount(db, accountId), getAccountBilling(db, accountId), getBillingLink(db, accountId),
-    planId ? readPlan(db, planId) : Promise.resolve(null),
+  const [account, link, plan] = await Promise.all([
+    readAccount(db, accountId), getBillingLink(db, accountId), planId ? readPlan(db, planId) : Promise.resolve(null),
   ]);
   const decision = decideMirror({ snapshot, account, plan, existing, link, now });
   if (decision.kind === "refused") return decision;
-  const { error } = await db.from("account_billing").upsert(decision.row, { onConflict: "account_id" });
-  if (error) throw new Error(`mirrorSubscription write failed: ${error.message}`);
+  if (existing === null) {
+    const { error } = await db.from("account_billing").insert(decision.row);
+    if (error?.code === "23505") return "conflict";
+    if (error) throw new Error(`mirrorSubscription insert failed: ${error.message}`);
+  } else {
+    const { data, error } = await db.from("account_billing").update(decision.row)
+      .eq("account_id", accountId).eq("updated_at", existing.updatedAt).select("account_id");
+    if (error) throw new Error(`mirrorSubscription update failed: ${error.message}`);
+    if ((data ?? []).length === 0) return "conflict";
+  }
   await writePermissions(db, accountId, decision.permissions);
   if (link && link.stripeCustomerId === snapshot.customerId) {
     const { error: delErr } = await db.from("billing_links").delete()
@@ -1475,7 +1612,7 @@ Append to `packages/db/src/index.ts`:
 // billing_links): the webhook mirror, complimentary, links, the event ledger.
 export { SUBSCRIPTION_STATUSES, ENDED_STATUSES, PAST_DUE_STATUSES, isSubscriptionStatus,
          getAccountBilling, getBillingLink, saveBillingLink, markBillingLinkExpired,
-         decideMirror, mirrorSubscription, markComplimentary, unmarkComplimentary, changeComplimentaryPlan,
+         decideMirror, mirrorSubscription, MIRROR_ATTEMPTS, markComplimentary, unmarkComplimentary, changeComplimentaryPlan,
          claimWebhookEvent, markWebhookEventProcessed,
          type SubscriptionStatus, type AccountBilling, type BillingLink, type BillingLinkWrite,
          type SubscriptionItemSnapshot, type SubscriptionSnapshot, type MirrorRefusal, type MirrorDecision,
@@ -1503,7 +1640,8 @@ The db tests run at the next CI push. The orchestrator folds Task 2's probes int
 **Files:**
 - Modify: `apps/web/src/lib/billing/stripe-gateway.ts`
 - Modify: `apps/web/src/lib/billing/fake-gateway.ts`
-- Modify: `apps/web/src/lib/billing/stripe-gateway.test.ts` (+11)
+- Modify: `apps/web/src/lib/billing/stripe-gateway.test.ts` (+8)
+- Create: `apps/web/src/lib/billing/stripe-webhook.test.ts` (3: webhook verification on the REAL SDK)
 
 **Interfaces:**
 - Consumes: `SubscriptionSnapshot`, `SubscriptionItemSnapshot`, `StripePriceIds`, `PlanPriceKey`, `METER_KEYS` (`@bis/db`).
@@ -1518,7 +1656,7 @@ The db tests run at the next CI push. The orchestrator folds Task 2's probes int
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `apps/web/src/lib/billing/stripe-gateway.test.ts` (add a default `import Stripe from "stripe"`; add `checkoutSessionParams, idempotencyKey, subscriptionSnapshot, verifyWebhookEvent, isSignatureError, portalConfigurationParams, PORTAL_VERSION, STRIPE_API_VERSION, billingGatewayFromEnv` to the existing import from `"./stripe-gateway"` where missing; `FakeGateway` from `"./fake-gateway"` if not already imported):
+Append to `apps/web/src/lib/billing/stripe-gateway.test.ts`. Keep its existing `import type Stripe from "stripe"` as it is: the tests appended here use `Stripe` only as a TYPE. A second, default `import Stripe` would be a duplicate identifier (TS2300). Add `checkoutSessionParams, idempotencyKey, subscriptionSnapshot, portalConfigurationParams, PORTAL_VERSION` to the existing import from `"./stripe-gateway"`; it already has `billingGatewayFromEnv` and `STRIPE_API_VERSION`, and `FakeGateway` is already imported. The webhook-verification tests are NOT here. This file `vi.mock`s the `stripe` module with a stub class, under which `Stripe.webhooks` does not exist; the plan review ran them here and got `TypeError: Cannot read properties of undefined (reading 'generateTestHeaderString')` ×3. They live in their own file, below.
 
 ```ts
 const PRICES = { base: "price_b", voice_minutes: "price_v", sms: "price_s", ai_chats: "price_a" };
@@ -1588,6 +1726,50 @@ describe("subscriptionSnapshot", () => {
   });
 });
 
+describe("the new gateway surface", () => {
+  it("portalConfigurationParams: card updates and invoice history ON; self-cancel, plan switching and profile edits OFF; tagged with the version BIS looks for (G19) (mutation: enable subscription_cancel → FAILS)", () => {
+    expect(portalConfigurationParams()).toEqual({
+      features: {
+        invoice_history: { enabled: true }, payment_method_update: { enabled: true },
+        customer_update: { enabled: false }, subscription_cancel: { enabled: false }, subscription_update: { enabled: false },
+      },
+      metadata: { bis_portal: PORTAL_VERSION },
+    });
+  });
+
+  it("billingGatewayFromEnv says which MODE its key is, for the webhook's livemode check (mutation: always false → a live endpoint's every event is refused, FAILS)", () => {
+    const test = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_test_x", NEXT_PUBLIC_SUPABASE_URL: "https://ci.supabase.co" });
+    expect(test.ok && test.live).toBe(false);
+    const live = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_live_x", VERCEL_ENV: "production", NEXT_PUBLIC_SUPABASE_URL: "https://tlbkbmlrfafquucsmsmm.supabase.co" });
+    expect(live.ok && live.live).toBe(true);
+  });
+
+  it("FakeGateway.createCheckoutSession replays one key, refuses the same key with other params, and expire only works on an open session, as Stripe does (mutation: mint a new session on a replayed key → FAILS)", async () => {
+    const fake = new FakeGateway();
+    const a = await fake.createCheckoutSession(CHECKOUT, "k1");
+    expect(await fake.createCheckoutSession(CHECKOUT, "k1")).toEqual(a);
+    await expect(fake.createCheckoutSession({ ...CHECKOUT, customerId: "cus_2" }, "k1")).rejects.toThrow(/idempotency/);
+    expect(await fake.getCheckoutSessionStatus(a.id)).toBe("open");
+    await fake.expireCheckoutSession(a.id);
+    expect(await fake.getCheckoutSessionStatus(a.id)).toBe("expired");
+    await expect(fake.expireCheckoutSession(a.id)).rejects.toThrow(/open/);
+  });
+});
+```
+
+Create `apps/web/src/lib/billing/stripe-webhook.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import Stripe from "stripe";
+import { isSignatureError, STRIPE_API_VERSION, verifyWebhookEvent } from "./stripe-gateway";
+
+/**
+ * Webhook verification against the REAL Stripe SDK: signed with its own
+ * generateTestHeaderString, verified by its own constructEvent. Its own file
+ * on purpose: stripe-gateway.test.ts replaces the "stripe" module with a
+ * stub class (vi.mock), under which Stripe.webhooks does not exist.
+ */
 describe("verifyWebhookEvent (the real SDK, signed fixtures)", () => {
   const SECRET = "whsec_unit_fixture";
   const payload = JSON.stringify({
@@ -1626,41 +1808,11 @@ describe("verifyWebhookEvent (the real SDK, signed fixtures)", () => {
     expect(signed({ id: "cus_1", object: "customer" }, "customer.updated")).toBeNull();
   });
 });
-
-describe("the new gateway surface", () => {
-  it("portalConfigurationParams: card updates and invoice history ON; self-cancel, plan switching and profile edits OFF; tagged with the version BIS looks for (G19) (mutation: enable subscription_cancel → FAILS)", () => {
-    expect(portalConfigurationParams()).toEqual({
-      features: {
-        invoice_history: { enabled: true }, payment_method_update: { enabled: true },
-        customer_update: { enabled: false }, subscription_cancel: { enabled: false }, subscription_update: { enabled: false },
-      },
-      metadata: { bis_portal: PORTAL_VERSION },
-    });
-  });
-
-  it("billingGatewayFromEnv says which MODE its key is, for the webhook's livemode check (mutation: always false → a live endpoint's every event is refused, FAILS)", () => {
-    const test = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_test_x", NEXT_PUBLIC_SUPABASE_URL: "https://ci.supabase.co" });
-    expect(test.ok && test.live).toBe(false);
-    const live = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_live_x", VERCEL_ENV: "production", NEXT_PUBLIC_SUPABASE_URL: "https://tlbkbmlrfafquucsmsmm.supabase.co" });
-    expect(live.ok && live.live).toBe(true);
-  });
-
-  it("FakeGateway.createCheckoutSession replays one key, refuses the same key with other params, and expire only works on an open session, as Stripe does (mutation: mint a new session on a replayed key → FAILS)", async () => {
-    const fake = new FakeGateway();
-    const a = await fake.createCheckoutSession(CHECKOUT, "k1");
-    expect(await fake.createCheckoutSession(CHECKOUT, "k1")).toEqual(a);
-    await expect(fake.createCheckoutSession({ ...CHECKOUT, customerId: "cus_2" }, "k1")).rejects.toThrow(/idempotency/);
-    expect(await fake.getCheckoutSessionStatus(a.id)).toBe("open");
-    await fake.expireCheckoutSession(a.id);
-    expect(await fake.getCheckoutSessionStatus(a.id)).toBe("expired");
-    await expect(fake.expireCheckoutSession(a.id)).rejects.toThrow(/open/);
-  });
-});
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `pnpm --filter web exec vitest run src/lib/billing/stripe-gateway.test.ts`
+Run: `pnpm --filter web exec vitest run src/lib/billing/stripe-gateway.test.ts src/lib/billing/stripe-webhook.test.ts`
 Expected: FAIL (the new names are not exported).
 
 - [ ] **Step 3: The gateway**
@@ -1897,8 +2049,11 @@ Add to the object `stripeGateway(stripe)` returns (after `reportMeterEvent`):
     },
     async getCheckoutSessionStatus(sessionId) {
       const s = await stripe.checkout.sessions.retrieve(sessionId);
-      if (s.status === "open" || s.status === "complete" || s.status === "expired") return s.status;
-      throw new Error(`getCheckoutSessionStatus: ${sessionId} has status ${String(s.status)}`);
+      // Widened first: Stripe's type ends in `| OtherString`, which an
+      // equality check does not narrow away (TS2322 without this line).
+      const status: string | null = s.status;
+      if (status === "open" || status === "complete" || status === "expired") return status;
+      throw new Error(`getCheckoutSessionStatus: ${sessionId} has status ${String(status)}`);
     },
     async expireCheckoutSession(sessionId) {
       await stripe.checkout.sessions.expire(sessionId);
@@ -2061,7 +2216,7 @@ In `apps/web/src/lib/billing/fake-gateway.ts`:
 - [ ] **Step 5: Run them to verify they pass, and nothing else broke**
 
 Run: `pnpm --filter web exec vitest run src/lib/billing/`
-Expected: all pass. The PR-2 baseline was 56 in `stripe-gateway.test.ts`; it is now 67.
+Expected: all pass. The PR-2 baseline was 56 in `stripe-gateway.test.ts`; it is now 64. `stripe-webhook.test.ts` has 3.
 
 Run: `pnpm --filter web typecheck`
 Expected: exit 0. A typecheck error in any other `BillingGateway` literal (a test double that hand-builds the interface) is fixed by adding the new members as `vi.fn()` or by switching it to `FakeGateway`. Grep first: `grep -rn "BillingGateway = {\|as BillingGateway" apps/web/src`.
@@ -2069,7 +2224,7 @@ Expected: exit 0. A typecheck error in any other `BillingGateway` literal (a tes
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/src/lib/billing/stripe-gateway.ts apps/web/src/lib/billing/fake-gateway.ts apps/web/src/lib/billing/stripe-gateway.test.ts
+git add apps/web/src/lib/billing/stripe-gateway.ts apps/web/src/lib/billing/fake-gateway.ts apps/web/src/lib/billing/stripe-gateway.test.ts apps/web/src/lib/billing/stripe-webhook.test.ts
 git commit -m "feat(billing): gateway for customers, Checkout, subscriptions, the portal and webhook verification"
 ```
 
@@ -2115,21 +2270,30 @@ const event = (over: Partial<{ id: string; type: string; livemode: boolean; subs
 });
 
 let gateway: InstanceType<typeof FakeGateway>;
+/** What each mirror call's reader returned. The mocked mirror reads Stripe
+ *  once through the reader it was handed, like one attempt of the real one. */
+let mirrored: SubscriptionSnapshot[];
 const deps = () => ({ db: {} as never, gateway, live: false, now: () => NOW });
 
 beforeEach(() => {
   gateway = new FakeGateway();
   gateway.subscriptions.set("sub_1", structuredClone(SUB));
+  mirrored = [];
   db.claimWebhookEvent.mockReset().mockResolvedValue("new");
   db.markWebhookEventProcessed.mockReset().mockResolvedValue(undefined);
-  db.mirrorSubscription.mockReset().mockResolvedValue({ kind: "written", accountId: "acct", planId: "plan", status: "past_due" });
+  db.mirrorSubscription.mockReset().mockImplementation(async (_db: unknown, read: () => Promise<SubscriptionSnapshot>) => {
+    const s = await read();
+    mirrored.push(s);
+    return { kind: "written", accountId: s.accountId, planId: s.planId, status: s.status };
+  });
 });
 
 describe("processStripeEvent", () => {
-  it("mirrors what Stripe SAYS NOW, re-read by id, never the event: the snapshot handed to the mirror is the retrieved one, and the event is stamped after it (mutation: mirror a snapshot built from the event → retrieveSubscription is never called, FAILS; stamp before mirroring → FAILS)", async () => {
+  it("mirrors what Stripe SAYS NOW, re-read by id, never the event: the mirror's reader is the gateway's retrieveSubscription for the event's subscription, and the event is stamped after the mirror (mutation: hand the mirror a reader that returns the event's own data → retrieveSubscription is never called, FAILS; stamp before mirroring → FAILS)", async () => {
     expect(await processStripeEvent(deps(), event())).toEqual({ status: "processed", accountId: "acct" });
     expect(gateway.calls.map((c) => c.op)).toEqual(["retrieveSubscription"]);
-    expect(db.mirrorSubscription).toHaveBeenCalledWith({}, SUB, NOW);
+    expect(mirrored).toEqual([SUB]);
+    expect(db.mirrorSubscription.mock.calls[0]![0]).toEqual({});
     expect(db.mirrorSubscription.mock.invocationCallOrder[0]!)
       .toBeLessThan(db.markWebhookEventProcessed.mock.invocationCallOrder[0]!);
   });
@@ -2152,7 +2316,7 @@ describe("processStripeEvent", () => {
     gateway.subscriptions.set("sub_1", { ...SUB, status: "canceled" });
     await processStripeEvent(deps(), event({ id: "evt_del", type: "customer.subscription.deleted" }));
     await processStripeEvent(deps(), event({ id: "evt_old", type: "customer.subscription.updated" }));
-    expect(db.mirrorSubscription.mock.calls.map((c) => (c[1] as SubscriptionSnapshot).status)).toEqual(["canceled", "canceled"]);
+    expect(mirrored.map((s) => s.status)).toEqual(["canceled", "canceled"]);
   });
 
   it("an event with no subscription to follow (an unhandled type, a payment-mode checkout) is stamped and ignored, with no Stripe read (mutation: leave it unstamped → Stripe's retry reprocesses it forever, FAILS)", async () => {
@@ -2209,9 +2373,11 @@ export type WebhookDeps = { db: SupabaseClient; gateway: BillingGateway; live: b
  *   wrong mode (a test event at a live key, or the reverse) → not recorded;
  *   claim the id once → "done" means a duplicate, nothing else happens;
  *   no subscription to follow → stamp, ignore;
- *   otherwise RE-READ the subscription from Stripe and mirror THAT (never the
- *   event's payload, so duplicates and out-of-order events converge), then
- *   stamp. A refusal is stamped too (retrying cannot fix it) and logged.
+ *   otherwise the mirror RE-READS the subscription from Stripe (it is handed
+ *   the reader, never the event's payload, so duplicates and out-of-order
+ *   events converge; and it reads the stored row first and writes only if
+ *   it is unchanged, so concurrent deliveries do too: B5), then stamp. A
+ *   refusal is stamped too (retrying cannot fix it) and logged.
  * Anything that throws leaves the event unstamped: the route answers 500,
  * Stripe retries, and the next attempt claims it as "retry".
  */
@@ -2222,15 +2388,15 @@ export async function processStripeEvent(deps: WebhookDeps, event: VerifiedWebho
   }
   const claim = await claimWebhookEvent(deps.db, event.id, event.type);
   if (claim === "done") return { status: "duplicate" };
-  if (!event.subscriptionId) {
+  const subscriptionId = event.subscriptionId;
+  if (!subscriptionId) {
     await markWebhookEventProcessed(deps.db, event.id, deps.now());
     return { status: "ignored" };
   }
-  const snapshot = await deps.gateway.retrieveSubscription(event.subscriptionId);
-  const outcome = await mirrorSubscription(deps.db, snapshot, deps.now());
+  const outcome = await mirrorSubscription(deps.db, () => deps.gateway.retrieveSubscription(subscriptionId), deps.now);
   await markWebhookEventProcessed(deps.db, event.id, deps.now());
   if (outcome.kind === "refused") {
-    console.error(`stripe webhook: ${event.type} ${event.id} for subscription ${snapshot.id} refused: ${outcome.reason}`);
+    console.error(`stripe webhook: ${event.type} ${event.id} for subscription ${subscriptionId} refused: ${outcome.reason}`);
     return { status: "refused", reason: outcome.reason };
   }
   return { status: "processed", accountId: outcome.accountId };
@@ -2382,11 +2548,12 @@ import { processStripeEvent } from "@/lib/billing/webhook";
  * Stripe's webhook (spec flow 4). PUBLIC: proxy.ts protects /dashboard only,
  * and the signature is the whole of the authentication. The pipeline is
  * plan G4: secret → signature over the RAW body → a usable key → mode →
- * claim once → re-read → mirror → stamp. Status codes are for Stripe's
- * retry logic: 2xx = done (processed, duplicate, ignored, refused), 400 =
- * never retry this (forged, or the wrong mode), 5xx = retry later
- * (not configured, key refused, or a failure mid-way; the event stays
- * unstamped and the retry reprocesses it).
+ * claim once → re-read → mirror → stamp. Status codes, for Stripe's retry
+ * logic: 2xx = done (processed, duplicate, ignored, refused). 400 = refused
+ * (forged, or the wrong mode). Stripe retries EVERY non-2xx, a 400 too, and
+ * each retry is refused the same way and recorded nowhere, which is
+ * harmless. 5xx = retry later (not configured, key refused, or a failure
+ * mid-way; the event stays unstamped and the retry reprocesses it).
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -2478,9 +2645,9 @@ git commit -m "feat(billing): POST /api/webhooks/stripe (signature on the raw bo
 - Create: `apps/web/src/lib/billing/billing-view.test.ts` (9 tests)
 
 **Interfaces:**
-- Consumes: `AccountBilling`, `BillingLink`, `Plan`, `MeterAmounts`, `MeterKey`, `METER_KEYS`, `ENDED_STATUSES`, `isUsableZone` (`@bis/db`); `formatCents` (`./plan-form`); `localMidnightInstant` (`@/lib/reports/weekly-window`).
+- Consumes: `AccountBilling`, `BillingLink`, `Plan`, `MeterAmounts`, `MeterKey`, `METER_KEYS`, `ENDED_STATUSES`, `PAST_DUE_STATUSES`, `isUsableZone` (`@bis/db`); `formatCents` (`./plan-form`); `localMidnightInstant` (`@/lib/reports/weekly-window`).
 - Produces (used by Tasks 7-11):
-  - `type BillingStatus`, `billingStatusOf(billing, link, now)`, `BILLING_STATUS_TREATMENTS`
+  - `type BillingStatus`, `billingStatusOf(billing, link, now)`, `BILLING_STATUS_TREATMENTS`, `showsPaymentFailedBanner(billing)` (G21: `past_due`/`unpaid` only)
   - `FALLBACK_ZONE`, `safeZone(tz)`, `monthStartInZone(now, zone)`, `usagePeriodStart(billing, zone, now)`, `formatDay(d, zone)`, `formatMoment(d, zone)`
   - `priceLine(cents)`, `includedLine(allowances)`, `type UsageLine`, `usageLines(allowances, used)`
   - `type PlanOption`, `type BillingCardView`, `billingCardView(input)`
@@ -2510,7 +2677,11 @@ In `apps/web/src/lib/messages.ts`:
   "billing.status.link_sent": "Link sent",
   "billing.status.unbilled": "Unbilled",
   "billing.price": "{price}/month",
-  "billing.includes": "{voice} minutes of calls, {sms} texts and {chats} website chats each month",
+  "billing.includes": "It includes {list} each month.",
+  "billing.includes.minutes": "{n} minutes of calls",
+  "billing.includes.sms": "{n} texts",
+  "billing.includes.chats": "{n} website chats",
+  "billing.includes.none": "Calls, texts and website chats are charged as you use them.",
   "billing.usage.minutes": "{used} of {included} minutes",
   "billing.usage.sms": "{used} of {included} texts",
   "billing.usage.chats": "{used} of {included} website chats",
@@ -2563,7 +2734,7 @@ In `apps/web/src/lib/messages.ts`:
   "billing.banner.agency": "This client's last payment didn't go through.",
   "billing.banner.agencyAction": "See billing",
   "billing.done.success.title": "You're all set",
-  "billing.done.success.body": "Your plan is active. You can close this tab.",
+  "billing.done.success.body": "Your plan starts as soon as your payment is confirmed, usually within a minute. You can close this tab.",
   "billing.done.cancelled.title": "Checkout wasn't finished",
   "billing.done.cancelled.body": "Nothing was charged. Use the link in your email to try again.",
 ```
@@ -2577,7 +2748,7 @@ import { describe, it, expect } from "vitest";
 import type { AccountBilling, BillingLink, Plan } from "@bis/db";
 import { m } from "@/lib/messages";
 import {
-  billingStatusOf, BILLING_STATUS_TREATMENTS, usageLines, monthStartInZone, usagePeriodStart, billingCardView,
+  billingStatusOf, BILLING_STATUS_TREATMENTS, usageLines, includedLine, monthStartInZone, usagePeriodStart, billingCardView,
   type BillingStatus,
 } from "./billing-view";
 
@@ -2637,13 +2808,17 @@ describe("billingStatusOf (G13)", () => {
 });
 
 describe("usage", () => {
-  it("reads '312 of 500 minutes', flags use over the allowance, and says 'none included' instead of 'of 0' (mutation: swap used and included → FAILS)", () => {
+  it("reads '312 of 500 minutes', flags use over the allowance, and says 'none included' instead of 'of 0'; the plan's included line leaves a zero allowance OUT instead of saying '0 minutes of calls' (mutation: swap used and included → FAILS; list every meter in the included line → FAILS)", () => {
     const lines = usageLines({ voice_minutes: 500, sms: 1000, ai_chats: 0 }, { voice_minutes: 312, sms: 1200, ai_chats: 4 });
     expect(lines.map((l) => [l.meter, l.text, l.over])).toEqual([
       ["voice_minutes", "312 of 500 minutes", false],
       ["sms", "1,200 of 1,000 texts", true],
       ["ai_chats", "4 website chats (none included)", true],
     ]);
+    expect(includedLine({ voice_minutes: 500, sms: 1000, ai_chats: 200 }))
+      .toBe("It includes 500 minutes of calls, 1,000 texts and 200 website chats each month.");
+    expect(includedLine({ voice_minutes: 0, sms: 1000, ai_chats: 200 })).toBe("It includes 1,000 texts and 200 website chats each month.");
+    expect(includedLine({ voice_minutes: 0, sms: 0, ai_chats: 0 })).toBe(m["billing.includes.none"]);
   });
 
   it("monthStartInZone is local midnight on the 1st, in the account's zone: Chicago's October starts 05:00 UTC, and 03:00 UTC on Oct 1 is still September there (mutation: use the UTC month → FAILS)", () => {
@@ -2666,13 +2841,14 @@ describe("billingCardView", () => {
       stripeReady: true, ...over,
     });
 
-  it("offers exactly the actions each status allows (G16, G15): Send only when not subscribed, Mark complimentary only when unbilled, Stop only when complimentary, Change plan only on a plan with another plan to go to (mutation: offer Mark complimentary on a canceled row → 0051's CHECK would refuse it, FAILS)", () => {
+  it("offers exactly the actions each status allows (G16, G15): Send only when not subscribed, Mark complimentary only when unbilled, Stop only when complimentary, Change plan only on a plan with another plan to go to, and never on an incomplete first payment (mutation: offer Mark complimentary on a canceled row → 0051's CHECK would refuse it, FAILS; offer Change plan on incomplete → FAILS)", () => {
     const can = (b: AccountBilling | null, l: BillingLink | null = null) => view(b, l).can;
     expect(can(null)).toEqual({ send: true, changePlan: false, markComplimentary: true, stopComplimentary: false, copyLink: false });
     expect(can(null, link("2026-10-16T00:00:00Z"))).toEqual({ send: true, changePlan: false, markComplimentary: false, stopComplimentary: false, copyLink: true });
     expect(can(row())).toEqual({ send: false, changePlan: true, markComplimentary: false, stopComplimentary: false, copyLink: false });
     expect(can(row({ subscriptionStatus: "canceled" }))).toEqual({ send: true, changePlan: false, markComplimentary: false, stopComplimentary: false, copyLink: false });
     expect(can(row({ complimentary: true, subscriptionStatus: null, stripeSubscriptionId: null }))).toEqual({ send: true, changePlan: true, markComplimentary: false, stopComplimentary: true, copyLink: false });
+    expect(can(row({ subscriptionStatus: "incomplete" })).changePlan).toBe(false);
   });
 
   it("without a usable Stripe key nothing that calls Stripe is offered, but complimentary changes still are (mutation: ignore stripeReady → FAILS)", () => {
@@ -2703,7 +2879,7 @@ Create `apps/web/src/lib/billing/billing-view.ts`:
 
 ```ts
 import {
-  ENDED_STATUSES, METER_KEYS, isUsableZone,
+  ENDED_STATUSES, METER_KEYS, PAST_DUE_STATUSES, isUsableZone,
   type AccountBilling, type BillingLink, type MeterAmounts, type MeterKey, type Plan,
 } from "@bis/db";
 import { localMidnightInstant } from "@/lib/reports/weekly-window";
@@ -2737,6 +2913,14 @@ export function billingStatusOf(billing: AccountBilling | null, link: Pick<Billi
     default:
       return linkLive ? "link_sent" : "canceled";
   }
+}
+
+/** The payment-failed banner (G21): only a subscription whose payment
+ *  FAILED (past_due, unpaid). Not `incomplete`: a first payment still in
+ *  progress has not failed, and the card already shows that state. */
+export function showsPaymentFailedBanner(billing: AccountBilling | null): boolean {
+  return billing !== null && !billing.complimentary && !billing.billingPausedAt
+    && billing.subscriptionStatus !== null && PAST_DUE_STATUSES.includes(billing.subscriptionStatus);
 }
 
 /** DESIGN rule 3: a dot AND a word. Token classes only (pinned by a test). */
@@ -2800,8 +2984,18 @@ export function priceLine(cents: number): string {
   return m["billing.price"].replace("{price}", formatCents(cents));
 }
 
+const INCLUDED_COPY: Record<MeterKey, MessageKey> = {
+  voice_minutes: "billing.includes.minutes", sms: "billing.includes.sms", ai_chats: "billing.includes.chats",
+};
+
+/** "It includes 500 minutes of calls, 1,000 texts and 200 website chats each
+ *  month." Only what the plan includes: a zero allowance is left out (never
+ *  "0 minutes of calls"), and a plan that includes nothing says so plainly. */
 export function includedLine(a: MeterAmounts): string {
-  return m["billing.includes"].replace("{voice}", count(a.voice_minutes)).replace("{sms}", count(a.sms)).replace("{chats}", count(a.ai_chats));
+  const parts = METER_KEYS.filter((k) => a[k] > 0).map((k) => m[INCLUDED_COPY[k]].replace("{n}", count(a[k])));
+  if (parts.length === 0) return m["billing.includes.none"];
+  const list = parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]!}`;
+  return m["billing.includes"].replace("{list}", list);
 }
 
 export type UsageLine = { meter: MeterKey; used: number; included: number; over: boolean; text: string };
@@ -2873,7 +3067,9 @@ export function billingCardView(input: {
     defaultEmail: input.defaultEmail,
     can: {
       send: stripeReady && activePlans.length > 0 && ["unbilled", "link_sent", "canceled", "complimentary"].includes(status),
-      changePlan: otherPlan && (status === "complimentary" || (stripeReady && live)),
+      // Not on `incomplete`: before the first payment, Stripe may refuse item updates (G15).
+      changePlan: otherPlan && (status === "complimentary"
+        || (stripeReady && live && billing?.subscriptionStatus !== "incomplete")),
       markComplimentary: status === "unbilled" && activePlans.length > 0,
       stopComplimentary: status === "complimentary",
       copyLink: status === "link_sent",
@@ -2903,7 +3099,7 @@ git commit -m "feat(billing): billing copy and billing-view (seven statuses, usa
 
 **Files:**
 - Create: `apps/web/src/lib/email/templates/billing-link.ts`, `billing-link.test.ts` (3 tests)
-- Create: `apps/web/src/lib/billing/billing-link.ts`, `billing-link.test.ts` (8 tests)
+- Create: `apps/web/src/lib/billing/billing-link.ts`, `billing-link.test.ts` (9 tests)
 - Create: `apps/web/src/lib/billing/change-plan.ts`, `change-plan.test.ts` (2 tests)
 - Create: `apps/web/src/lib/billing/portal.ts`, `portal.test.ts` (3 tests)
 
@@ -2932,7 +3128,7 @@ const BIS: Branding = {
 const URL = "https://checkout.stripe.com/c/pay/cs_test_a1?x=1&y=2";
 const input = {
   brand: emailBrandNamed(BIS, "BIS"), businessName: "Rio Roofing" as string | null, planName: "Growth",
-  price: "$149.00/month", includes: "500 minutes of calls, 1,000 texts and 200 website chats each month",
+  price: "$149.00/month", includes: "It includes 500 minutes of calls, 1,000 texts and 200 website chats each month.",
   url: URL, expires: "Oct 16, 3:30 PM",
 };
 
@@ -3038,11 +3234,16 @@ describe("sendBillingLink", () => {
     expect(sent[0]!.body).toContain(session.url);
   });
 
-  it("reuses the account's customer (the billed row's first, else the link's) and never makes another (mutation: always create → a second Stripe customer per resend, FAILS)", async () => {
+  it("reuses the account's customer and never makes another: the billed row's customer WINS over a pending link that names a different one (G3's invariant; the mirror would refuse the other as customer_changed) (mutation: always create → a second Stripe customer per resend, FAILS; prefer the link's customer → FAILS)", async () => {
+    const old = await gateway.createCheckoutSession({
+      accountId: ACCOUNT, planId: PLAN.id, customerId: "cus_linked", priceIds: PLAN.stripePriceIds, successUrl: "https://x", cancelUrl: "https://y",
+    }, "old-key");
+    gateway.checkoutSessions.get(old.id)!.status = "expired";
     db.getAccountBilling.mockResolvedValue(stored({ subscriptionStatus: "canceled" }));
+    db.getBillingLink.mockResolvedValue(prevLink(old.id));
     await sendBillingLink(deps(), INPUT);
     expect(gateway.customers).toEqual([]);
-    expect([...gateway.checkoutSessions.values()][0]!.input.customerId).toBe("cus_stored");
+    expect([...gateway.checkoutSessions.values()].at(-1)!.input.customerId).toBe("cus_stored");
   });
 
   it("refuses an account whose subscription is not ended, before ANY Stripe call (mutation: drop the guard → a second subscription can be bought, FAILS)", async () => {
@@ -3071,6 +3272,20 @@ describe("sendBillingLink", () => {
     expect(order).toEqual(["db:markExpired", "stripe:expire"]);
     expect(await gateway.getCheckoutSessionStatus(old.id)).toBe("expired");
     expect(db.saveBillingLink.mock.calls[0]![2]).toBe(old.id);
+  });
+
+  it("a deliberate resend of the SAME plan to the SAME address makes a NEW, OPEN session: the checkout key covers the previous session, so Stripe cannot replay the one it just expired (mutation: drop `previous` from the key → the expired session is replayed and emailed, FAILS)", async () => {
+    await sendBillingLink(deps(), INPUT);
+    const [first] = [...gateway.checkoutSessions.values()];
+    // The first send's saved link is now the stored one, exactly as written.
+    db.getBillingLink.mockResolvedValue({
+      ...(db.saveBillingLink.mock.calls[0]![1] as object), sentAt: NOW.toISOString(), updatedAt: NOW.toISOString(),
+    });
+    const again = await sendBillingLink(deps(), INPUT);
+    const sessions = [...gateway.checkoutSessions.values()];
+    expect(sessions.map((s) => s.status)).toEqual(["expired", "open"]);
+    expect(sessions[1]!.id).not.toBe(first!.id);
+    expect(again).toEqual({ ok: true, url: sessions[1]!.url });
   });
 
   it("a previous link the client already COMPLETED stops the resend: the webhook is on its way (mutation: expire it anyway → the client paid a dead link and gets a second one, FAILS)", async () => {
@@ -3207,7 +3422,8 @@ export type BillingLinkEmailInput = {
   planName: string;
   /** "$149.00/month" (priceLine). */
   price: string;
-  /** "500 minutes of calls, 1,000 texts and 200 website chats each month". */
+  /** includedLine's whole sentence: "It includes 500 minutes of calls, 1,000
+   *  texts and 200 website chats each month." (zero allowances left out). */
   includes: string;
   /** Absolute Stripe Checkout URL. */
   url: string;
@@ -3220,7 +3436,7 @@ export function billingLinkEmail(input: BillingLinkEmailInput): { subject: strin
   const subject = input.businessName ? `Set up billing for ${input.businessName}` : "Set up your billing";
   const html = shell(input.brand, `
     <p style="margin:0 0 12px;font-size:17px;font-weight:600;">Set up your billing</p>
-    <p style="margin:0 0 12px;">Your ${escapeHtml(input.planName)} plan is ${escapeHtml(input.price)}. It includes ${escapeHtml(input.includes)}.</p>
+    <p style="margin:0 0 12px;">Your ${escapeHtml(input.planName)} plan is ${escapeHtml(input.price)}. ${escapeHtml(input.includes)}</p>
     <p style="margin:0 0 20px;">Add a card on Stripe&rsquo;s secure page. It takes about two minutes.</p>
     ${button(input.brand, input.url, "Set up billing")}
     <p style="margin:20px 0 0;color:#71717a;">This link works until ${escapeHtml(input.expires)}. If it runs out, reply and we&rsquo;ll send a new one.</p>
@@ -3228,7 +3444,7 @@ export function billingLinkEmail(input: BillingLinkEmailInput): { subject: strin
   const text = [
     "Set up your billing",
     "",
-    `Your ${input.planName} plan is ${input.price}. It includes ${input.includes}.`,
+    `Your ${input.planName} plan is ${input.price}. ${input.includes}`,
     "",
     "Add a card on Stripe's secure page. It takes about two minutes:",
     input.url,
@@ -3432,7 +3648,7 @@ export async function openPortal(gateway: BillingGateway, input: { customerId: s
 
 - [ ] **Step 6: Run to verify they pass**
 
-Run the Step 2 command. Expected: 3 + 8 + 2 + 3 = `Tests  16 passed (16)`.
+Run the Step 2 command. Expected: 3 + 9 + 2 + 3 = `Tests  17 passed (17)`.
 
 - [ ] **Step 7: Commit**
 
@@ -3554,7 +3770,8 @@ describe("the agency's billing actions", () => {
     ]);
     expect(settled.map((s) => s.status === "rejected" && String((s.reason as Error).message))).toEqual(Array(4).fill("NEXT_REDIRECT"));
     expect(guard.reads).toBe(0);
-    expect([dbm.getPlan, dbm.getAccountBilling, dbm.markComplimentary, dbm.unmarkComplimentary, sendMock].every((f) => f.mock.calls.length === 0)).toBe(true);
+    expect([dbm.getPlan, dbm.getAccountBilling, dbm.getBillingLink, dbm.getBranding, dbm.markComplimentary, dbm.unmarkComplimentary, sendMock]
+      .every((f) => f.mock.calls.length === 0)).toBe(true);
   });
 
   it("send: a bad plan id or email is refused before Stripe, and a plan of ANOTHER agency or an archived one is refused before sendBillingLink (G10) (mutation: skip the agency check → FAILS)", async () => {
@@ -3617,7 +3834,9 @@ describe("the agency's billing actions", () => {
       ],
     };
     expect(fake.subscriptionChanges).toEqual([{ change, key: idempotencyKey("bis-subchange", REQ, change) }]);
-    expect((dbm.mirrorSubscription.mock.calls[0]![1] as SubscriptionSnapshot).planId).toBe(P2);
+    // The mirror is handed a READER (B5); what it reads is Stripe after the change.
+    const read = dbm.mirrorSubscription.mock.calls[0]![1] as () => Promise<SubscriptionSnapshot>;
+    expect((await read()).planId).toBe(P2);
   });
 
   it("change plan refuses a stale screen (the plan it saw is no longer the account's) before any Stripe call (mutation: drop the expectedPlanId check → FAILS)", async () => {
@@ -3765,7 +3984,10 @@ export async function changePlanAction(accountId: string, formData: FormData): P
     return fail(r.reason === "stale" || r.reason === "unknown_account" ? "billing.error.stale" : "billing.error.plan");
   }
 
-  if (!billing.stripeSubscriptionId || !billing.subscriptionStatus || ENDED_STATUSES.includes(billing.subscriptionStatus)) {
+  // Not on an ended subscription, and not on `incomplete`: before the first
+  // payment, Stripe may refuse item updates (G15; the card hides it too).
+  if (!billing.stripeSubscriptionId || !billing.subscriptionStatus || ENDED_STATUSES.includes(billing.subscriptionStatus)
+    || billing.subscriptionStatus === "incomplete") {
     return fail("billing.error.stale");
   }
   const gateway = billingGatewayFromEnv();
@@ -3788,7 +4010,10 @@ export async function changePlanAction(accountId: string, formData: FormData): P
   // Outside the try: Stripe has the change, so a database failure here must
   // NOT say "nothing was charged". It throws (the card shows the generic
   // crash toast) and the webhook's own mirror lands the same row shortly.
-  await mirrorSubscription(db, await gateway.gateway.retrieveSubscription(subscriptionId), new Date());
+  // The mirror is handed the READER, not a snapshot: it reads the stored row
+  // before it asks Stripe (compare-and-set, B5).
+  const stripe = gateway.gateway;
+  await mirrorSubscription(db, () => stripe.retrieveSubscription(subscriptionId), () => new Date());
   return { ok: true };
 }
 ```
@@ -4855,13 +5080,21 @@ function find(node: ReactNode, type: unknown): ReactElement[] {
 }
 const render = () => Layout({ children: "page", params: Promise.resolve({ accountId: "a" }) });
 
-beforeEach(() => billing.read.mockReset());
+// A BLOCK body, not `() => billing.read.mockReset()`: vitest treats a
+// function returned from beforeEach as that test's teardown, and mockReset
+// returns the mock itself, which would then be CALLED after the test (the
+// plan review saw exactly that: `Error: getAccountBilling failed: timeout`).
+beforeEach(() => {
+  billing.read.mockReset();
+});
 
 describe("account layout: the payment-failed banner (G21)", () => {
-  it("shows the client banner on every page of a past-due account, and none on a paid one (mutation: never mount it → FAILS; mount it for active → FAILS)", async () => {
+  it("shows the client banner on every page of a past-due account, and none on a paid one or an incomplete first payment (mutation: never mount it → FAILS; mount it for active → FAILS; mount it for incomplete → FAILS)", async () => {
     billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "past_due", billingPausedAt: null });
     expect(find(await render(), BillingBanner).map((b) => (b.props as { audience: string }).audience)).toEqual(["client"]);
     billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "active", billingPausedAt: null });
+    expect(find(await render(), BillingBanner)).toHaveLength(0);
+    billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "incomplete", billingPausedAt: null });
     expect(find(await render(), BillingBanner)).toHaveLength(0);
   });
 
@@ -4891,10 +5124,11 @@ const { default: BillingDone } = await import("./page");
 const html = async (result?: string) => renderToStaticMarkup(await BillingDone({ searchParams: Promise.resolve({ result }) }));
 
 describe("/billing-done (G17)", () => {
-  it("after payment says the plan is active and the tab can close (mutation: show the cancelled copy on success → FAILS)", async () => {
+  it("after checkout says the plan starts once the payment is confirmed and the tab can close, never that it IS active: only the webhook knows that (mutation: show the cancelled copy on success → FAILS; say the plan is active → FAILS)", async () => {
     const text = renderedText(await html("success"));
     expect(text).toContain(m["billing.done.success.title"]);
     expect(text).toContain(m["billing.done.success.body"]);
+    expect(text).not.toMatch(/\bactive\b/i);
   });
 
   it("anything else (cancelled, or no result) says nothing was charged: the page never claims a payment it cannot know (mutation: default to the success copy → FAILS)", async () => {
@@ -4950,7 +5184,7 @@ import { notFound } from "next/navigation";
 import { getAccountBilling } from "@bis/db";
 import { BillingBanner } from "@/components/billing-banner";
 import { requireAccountAccess } from "@/lib/auth";
-import { billingStatusOf } from "@/lib/billing/billing-view";
+import { showsPaymentFailedBanner } from "@/lib/billing/billing-view";
 import { dbForRequest } from "@/lib/db";
 
 export default async function AccountWorkspaceLayout({
@@ -4983,10 +5217,11 @@ export default async function AccountWorkspaceLayout({
   // The payment-failed banner (M7a step 3, plan G21), on every page of this
   // account. One primary-key read on the RLS client (0051: the agency and
   // the account's own client may read it). Fails SOFT: a billing read must
-  // never take the account's pages down with it.
+  // never take the account's pages down with it. past_due/unpaid only, never
+  // incomplete (showsPaymentFailedBanner says why).
   let paymentFailed = false;
   try {
-    paymentFailed = billingStatusOf(await getAccountBilling(db, accountId), null, new Date()) === "payment_failed";
+    paymentFailed = showsPaymentFailedBanner(await getAccountBilling(db, accountId));
   } catch (e) {
     console.error(`account layout: billing read failed for ${accountId}: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -5091,6 +5326,7 @@ git commit -m "feat(billing): payment-failed banner on every account page, Check
 
 **Files:**
 - Create: `apps/web/e2e/billing.spec.ts` (2 tests, serial)
+- Modify: `apps/web/e2e/fixtures/sweep.ts` (the plans leg's comment only: "e2e never creates billing rows" stops being true)
 
 **What it proves** (spec section 6, "E2E"):
 - **B1:** a real test-mode Checkout session holds the plan's four prices.
@@ -5265,10 +5501,26 @@ Expected: exit 0. `E2E Plan ${RUN}` is admitted by `FIXTURE_PLAN_RE`, so a kille
 
 It runs only in CI's `e2e` job (Stripe test key + the fixture webhook secret). Locally it skips with the warning until D7. **Check the rest of the suite:** the client nav now always carries Billing. Grep the e2e suite for any spec that counts or lists the client's nav items (`grep -rn "nav\.\|getByRole(\"link\"" apps/web/e2e/shell.spec.ts apps/web/e2e/palette.spec.ts`) and update an exact list in the same commit, saying so in the report.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: The sweep's stale comment**
+
+In `apps/web/e2e/fixtures/sweep.ts`, leg 6 (plans), replace the four-line comment paragraph that begins `// A plan referenced by` and ends `never thrown.` (it says "e2e never creates billing rows") with:
+
+```ts
+  // A plan referenced by `account_billing` or `billing_links` (0051/0052,
+  // `on delete restrict`) cannot be deleted this way. `billing.spec.ts` DOES
+  // create both, on the per-run fixture account only, and its afterAll
+  // deletes them before the plan. A killed run's rows go with the fixture
+  // account in leg 1 above (both cascade with their account), before this
+  // leg runs, so this is not expected to fire; if it ever does, the delete
+  // error is reported like every other leg, never thrown.
+```
+
+Nothing else in the file changes.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/e2e/billing.spec.ts
+git add apps/web/e2e/billing.spec.ts apps/web/e2e/fixtures/sweep.ts
 git commit -m "test(e2e): a real test-mode Checkout holds four prices; a signed webhook bills the fixture account once; both screens and the portal"
 ```
 
@@ -5276,22 +5528,22 @@ git commit -m "test(e2e): a real test-mode Checkout holds four prices; a signed 
 
 ### Task 13: Gates, counts, production, Stripe, handoff
 
-**Files:** none new.
+**Files:** Create `docs/runbooks/stripe-billing.md` (Step 8, orchestrator). No code.
 
 - [ ] **Step 1: Confirm the new-test count** (the reviewer recounts from vitest's and Playwright's own output, never from this plan)
 
 | Scope | New tests |
 |---|---|
 | db, live: `billing-checkout-schema` / `account-billing` | 7 / 4 |
-| db, unit: `account-billing` / `billing` / `usage` | 12 / 1 / +1 |
-| `stripe-gateway` / `webhook` / webhook `route` / `ci-workflow` | +11 / 7 / 6 / +1 |
-| `billing-view` / `billing-link` email / `billing-link` / `change-plan` / `portal` | 9 / 3 / 8 / 2 / 3 |
+| db, unit: `account-billing` / `billing` / `usage` | 14 / 1 / +1 |
+| `stripe-gateway` / `stripe-webhook` / `webhook` / webhook `route` / `ci-workflow` | +8 / 3 / 7 / 6 / +1 |
+| `billing-view` / `billing-link` email / `billing-link` / `change-plan` / `portal` | 9 / 3 / 9 / 2 / 3 |
 | `billing-actions` / `billing-card` / `billing-section` / `registry` | 8 / 5 / 3 / +1 |
 | client billing `page` / `actions` / `nav-groups` | 4 / 3 / +1 |
 | `billing-banner` / account `layout` / `billing-done` | 3 / 2 / 2 |
 | e2e | 2 |
 
-**Total 109.** Edited, not new:
+**Total 112.** Edited, not new:
 - `usage.test.ts`: the paging fixture;
 - `test/usage.test.ts`: the `bill()` helper plus that test's title.
 
@@ -5304,7 +5556,7 @@ Merging deploys, and the new code reads `billing_started_at` and `billing_links`
 1. Apply it through MCP `apply_migration` (name `0052_billing_checkout`), exactly once. The file has no backslash and no non-ASCII, so no escaping applies. Ledger: `0052 APPLIED to prod — NEVER RE-APPLY`.
 2. **Parity** (runbook `ci-supabase-project.md`; PR-1 final review m5: full ACLs + policies), on both projects:
    - `select column_name, data_type, is_nullable, column_default from information_schema.columns where table_name in ('account_billing','billing_links') order by 1, 2`
-   - `select relname, relacl from pg_class where relname = 'billing_links'`
+   - `select relname, relacl, relrowsecurity from pg_class where relname = 'billing_links'` (`relrowsecurity` must be `t` on both)
    - `select * from pg_policies where tablename = 'billing_links'` (expect none)
    - `select conname, pg_get_constraintdef(oid) from pg_constraint where conrelid = 'public.billing_links'::regclass order by 1`
 
@@ -5333,6 +5585,12 @@ Push. Read the check runs for the HEAD SHA (`gh api repos/{owner}/{repo}/commits
    - A test event for one of the six carries a fake subscription id, so the re-read fails and the answer is 500. That is by design, not a fault.
    - Never point the TEST-mode endpoint at production: the key-mode check answers 400 to every test event there.
 5. The portal configuration needs no dashboard step (G19). Checkout needs none.
+6. **Failed payments (QUESTION 7), set BEFORE the first live client pays.** These settings decide which statuses the mirror sees and PR-4 pauses on (B11). Stripe dashboard (LIVE mode) → Billing settings (the retry and customer-email settings; the menu names are Stripe's, not re-read today). Use danlo's answer to QUESTION 7. The default below is the recommendation:
+   - **Retry schedule:** Smart Retries on Stripe's default schedule. Default: Smart Retries.
+   - **After the last retry:** mark the subscription UNPAID. Default: unpaid. Never "cancel the subscription": cancelling stays danlo's call, and PR-4's pause handles access. BIS mirrors `unpaid` as Payment failed and keeps the earlier `past_due_since` (G8). If danlo chooses "leave it past due", nothing in BIS changes. If danlo chooses "cancel", the card shows Canceled after the last retry, and PR-4's plan must know it.
+   - **Customer emails:** Stripe emails the client a receipt for each successful payment, and a notice for each failed one. Default: both ON.
+
+   Record the chosen values in the ledger and in the runbook (Step 8).
 
 - [ ] **Step 6: The A11 prerequisite, checked, not assumed**
 
@@ -5349,17 +5607,75 @@ Check each of these in dark AND light (`.dark`), at 375 px, and with the blur fa
 
 Confirm one primary per card and per dialog, and that no raw colour appears in the diff (`git diff origin/main -- apps/web/src | grep -nE "#[0-9a-fA-F]{3,8}\b|rgb\(|bg-(red|green|amber|yellow|blue)-"` shows only the email template's inline hex, which is the email-client dialect `lead-alert.ts` already uses).
 
-- [ ] **Step 8: Handoff (implementers stop at Step 4)**
+- [ ] **Step 8: The billing runbook (orchestrator; commit on the branch before the PR)**
+
+Create `docs/runbooks/stripe-billing.md`. Fill the bracketed values from Step 5 as actually set:
+
+```markdown
+# Stripe billing: live operations
+
+What BIS's client billing needs outside the code, and the rules for touching
+it by hand. Plan: docs/superpowers/plans/2026-09-25-m7a-pr3-checkout-webhooks-billing.md.
+
+## The webhook
+
+- LIVE endpoint: `https://<production domain>/api/webhooks/stripe`, API version
+  `2026-08-26.dahlia`, the six events in `HANDLED_WEBHOOK_EVENTS`
+  (`apps/web/src/lib/billing/stripe-gateway.ts`).
+- Its signing secret is `STRIPE_WEBHOOK_SECRET` on Vercel **Production only**.
+  An env change needs a redeploy.
+- Check it with the dashboard's "Send test event" for `customer.created`:
+  200 `{"received":true,"outcome":"ignored"}`. A test event for one of the six
+  answers 500 by design (its subscription id is fake).
+- CI signs fixture events with a public literal in ci.yml's e2e job. It
+  verifies nothing anywhere else.
+
+## Failed payments (set in the Stripe dashboard, LIVE)
+
+- Retries: [Smart Retries, Stripe's default schedule].
+- After the last retry: [mark the subscription unpaid]. Never auto-cancel:
+  cancelling is a person's decision.
+- Stripe's customer emails: receipts [on], failed-payment notices [on].
+
+## Rules for changing billing by hand
+
+1. **An account's Stripe customer never changes** once `account_billing`
+   holds one. The webhook refuses a subscription on any other customer
+   (`customer_changed`). If one MUST change (say, the customer was deleted in
+   Stripe), settle first:
+   - the usage reporter must have sent every usage row of the account (none
+     unstamped), because anything reported after the change is billed to the
+     new customer;
+   - rows Stripe already holds under the old customer stay there, including
+     those stamped as duplicates.
+
+   Then change `account_billing.stripe_customer_id` by SQL, delete the
+   account's `billing_links` row, and send a new billing link.
+2. **A usage row unreported for more than 24 hours** may be counted twice if
+   it is resent: Stripe dedupes a meter event's identifier only for at least
+   24 hours. While the Work page's stale-usage banner shows, check the
+   affected client's upcoming Stripe invoice by hand before it finalises,
+   until the nightly reconciliation (M7a PR-4) exists.
+3. **Never point a TEST-mode endpoint at production.** The key-mode check
+   answers 400 to every test event there.
+```
+
+```bash
+git add docs/runbooks/stripe-billing.md
+git commit -m "docs(runbook): Stripe billing live operations — webhook, failed payments, manual-change rules"
+```
+
+- [ ] **Step 9: Handoff (implementers stop at Step 4)**
 
 The PR body lists:
 - the spec gaps G1-G24;
-- the assumptions B1-B9, with B1/B3/B9 marked proven by `billing.spec.ts` and the job log cited;
+- the assumptions B1-B11, with B1/B3/B9 marked proven by `billing.spec.ts` and the job log cited, B5 marked "engineered around (compare-and-set mirror)", and B10/B11 marked as settled by QUESTIONS 6 and 7;
 - **"one migration, 0052, additive, applied to bis-ci (run id) and production (before merge)"**;
-- the Stripe live setup steps (Step 5) as a checklist for danlo;
+- the Stripe live setup steps (Step 5, the failed-payment settings included) as a checklist for danlo, and the runbook (Step 8);
 - the prerequisite (Step 6);
 - in its own paragraph: **permissions are written but not yet enforced (G9); PR-4 adds the gate with the pause.**
 
-Orchestrator: ledger lines for Checkpoint A, the production apply, and parity.
+Orchestrator: ledger lines for Checkpoint A, the production apply, parity, and the Step 5 settings as set.
 
 ---
 
@@ -5390,10 +5706,10 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, and parity.
 8. Usage after cancel is left to PR-4 (G23).
 9. DB tests run in CI only, and the migration path is CI project → production → parity (Checkpoint A, Task 13 Step 2). House rules: RLS on, revoke-all, no grant, ASCII only, no backslash (checked by grep in Task 1 Step 3).
 
-**Placeholders:** none. Every code step carries its code. Two decisions are delegated to danlo and marked where they bite: QUESTION 2 in `updateSubscriptionPrices` (proration), and QUESTION 3 in `portalConfigurationParams`.
+**Placeholders:** none. Every code step carries its code. Four decisions are delegated to danlo and marked where they bite: QUESTION 2 in `updateSubscriptionPrices` (proration), QUESTION 3 in `portalConfigurationParams`, QUESTION 6 at Task 13's live setup, and QUESTION 7 in Task 13 Step 5 item 6 (dashboard settings, parameterised on the answer).
 
 **Type consistency**
-- `SubscriptionSnapshot`/`SubscriptionItemSnapshot` are defined once, in `@bis/db`. They are built by `subscriptionSnapshot` (Task 3) and consumed by `decideMirror`, `mirrorSubscription`, `planChangeItems`, the fake and `processStripeEvent`.
+- `SubscriptionSnapshot`/`SubscriptionItemSnapshot` are defined once, in `@bis/db`. They are built by `subscriptionSnapshot` (Task 3) and consumed by `decideMirror`, `mirrorSubscription` (through its `read: () => Promise<SubscriptionSnapshot>`, never a finished snapshot), `planChangeItems`, the fake and `processStripeEvent`. Both callers of the mirror, the webhook and the paid Change plan, hand it `() => gateway.retrieveSubscription(id)`.
 - `AccountBilling` and `BillingLink` are used unchanged by `billing-view`, `billing-link`, the actions, the section and the page.
 - `VerifiedWebhookEvent` is the only shape the route and `processStripeEvent` share, so no module outside `stripe-gateway.ts` imports the SDK's `Event`.
 - `BillingActionResult` is one type for all four actions and the card.
@@ -5404,17 +5720,18 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, and parity.
 | File | Tests |
 |---|---|
 | `billing-checkout-schema` | 7 (grants 2, shape 3, account_billing 1, live cascade 1) |
-| `account-billing` unit | 12 (decide 3 + past-due 1 + refusals 3 + writes 2 + complimentary 1 + claim/save 2) |
+| `account-billing` unit | 14 (decide 3 + past-due 1 + refusals 4 + writes 3 + complimentary 1 + claim/save 2) |
 | `account-billing` live | 4 |
 | `billing` unit | 1 |
 | `usage` | +1 |
-| `stripe-gateway` | +11 (checkout 2, key 1, snapshot 2, verify 3, surface 3) |
+| `stripe-gateway` | +8 (checkout 2, key 1, snapshot 2, surface 3) |
+| `stripe-webhook` | 3 (verify: accept, reject ×4 in one test, type mapping) |
 | `webhook` | 7 |
 | `route` | 6 |
 | `ci-workflow` | +1 |
 | `billing-view` | 9 (status 3, usage 3, view 3) |
 | email | 3 |
-| `billing-link` | 8 |
+| `billing-link` | 9 |
 | `change-plan` | 2 |
 | `portal` | 3 |
 | `billing-actions` | 8 |
@@ -5429,7 +5746,7 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, and parity.
 | `billing-done` | 2 |
 | e2e | 2 |
 
-**Total 109.** Files: 38 created, 21 modified. Tasks: 13, plus Checkpoint A.
+**Total 112** (db 11 live + 16 unit, web 83, e2e 2). Files: 40 created, 22 modified. Tasks: 13, plus Checkpoint A.
 
 **Existing tests this plan must not break (each named in its task)**
 - The whole db suite's `account_billing` fixtures. 0052 is additive, and `billing_started_at` has a default, so none changes except the one that must: `usage.test`'s `bill()`.
@@ -5445,19 +5762,85 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, and parity.
 **Not verified here (CI, the e2e job, or the reviewer settles them)**
 - B1, B3 and B9 (the e2e proves them).
 - B4 (proration semantics; QUESTION 2).
-- B5 (the concurrent-delivery window).
+- B10 and B11 (Stripe's 24-hour identifier window and its failed-payment settings; QUESTIONS 6 and 7).
+- That `.eq("updated_at", existing.updatedAt)` matches PostgREST's own timestamp text exactly, which the compare-and-set mirror depends on (B5). Task 2's live replay test proves it: a filter that never matched would throw after `MIRROR_ATTEMPTS`.
 - That PostgREST's `upsert(..., { onConflict: "event_id", ignoreDuplicates: true }).select()` returns `[]` for a stored event (the PR-2 A15 idiom, proven again by Task 2's live claim test).
 - That Radix `Select` with `name` posts its value in a plain `FormData` (the Plans dialog's precedent uses Checkbox/Input; the e2e's first test is the proof).
+
+**Correction round 1 (2026-09-25): the opus plan review of 0a8fff9 said EXECUTE AFTER CORRECTIONS.** Each finding was checked against this plan and the repo before it was applied. None was rejected.
+1. B5 was not a millisecond window: a stale state could stick for a billing period. Fixed by the compare-and-set mirror (B5, G4 point 8, G5, Task 2). `mirrorSubscription` now takes a READER and reads the row before Stripe. Its callers changed (Task 4's webhook, Task 8's paid Change plan). New tests: the B5 compare-and-set unit test, and the same-millisecond version bump folded into the billing-start test. Separately, the banner no longer shows for `incomplete` (`showsPaymentFailedBanner`, G21, the layout test).
+2. The customer invariant is enforced, not implied. `decideMirror` refuses `customer_changed` (G3, G7, new unit test). `billing-link.test.ts`'s reuse test now pins that the stored customer beats a link that names another. The manual-change settle-first rule is in G3 and the runbook (Task 13, Step 8).
+3. The >24 h resend risk is carried: Prerequisites 1, assumption B10, QUESTION 6, Next plans (g), and runbook rule 2.
+4. `getCheckoutSessionStatus` widens `s.status` to `string | null` before narrowing. The External-facts claim is corrected. Task 3 no longer adds a second `Stripe` import to the gateway test file.
+5. The three verification tests moved to a new `stripe-webhook.test.ts`, which does not mock `stripe`. `stripe-gateway.test.ts` is +8.
+6. The layout test's `beforeEach` has a block body.
+7. The "requireAgency FIRST" test also checks `getBillingLink` and `getBranding`.
+8. A new `billing-link.test.ts` case pins the checkout key's `previous`: a deliberate resend gets a NEW, OPEN session.
+9. The failed-payment settings are Task 13, Step 5, item 6, parameterised on QUESTION 7 (B11).
+
+Minors applied:
+- the retry comments (G4 point 4, the route's doc comment);
+- the sweep's stale comment (Task 12, Step 4);
+- `relrowsecurity` in the parity SQL;
+- the Checkpoint A shared-project probe hazard;
+- `includedLine` leaves a zero allowance out (never "0 minutes of calls");
+- `/billing-done` no longer says "active" before the webhook confirms it;
+- Change plan is not offered, or accepted, on `incomplete`.
+
+The rest are listed under "Deferred to whole-branch review".
+
+Verification, in a scratch copy OUTSIDE the worktree (`git archive 0a8fff9`, every changed code block assembled from this edited plan by marker, `node_modules` junctioned from the main checkout, no install anywhere):
+- `tsc --noEmit`: exit 0 for `packages/db` and for `apps/web`. The web run covers every Task 3-12 block, `e2e/billing.spec.ts` included.
+- eslint on every new or changed web file: exit 0.
+- vitest, db unit: `account-billing` 14 passed, and the three db unit files 31 passed.
+- vitest, web: 23 files and 213 tests passed, `messages.test.ts` included. Per file: `stripe-gateway` 64 (56 + 8), `stripe-webhook` 3, `webhook` 7, `route` 6, `billing-view` 9, `billing-link` 9, email 3, `change-plan` 2, `portal` 3, `billing-actions` 8, `billing-card` 5, `billing-section` 3, client `page` 4, client `actions` 3, `banner` 3, `layout` 2, `billing-done` 2.
+- 14 mutation probes, each turning its own named test red and nothing else:
+  - the mirror's update without the `updated_at` filter;
+  - reading the row after Stripe;
+  - an upsert where there is no row;
+  - accepting the link's customer;
+  - `updated_at = now` unconditionally;
+  - the checkout key without `previous`;
+  - Send preferring the link's customer;
+  - `requireAgency` below `getBillingLink`;
+  - the banner on `incomplete`;
+  - `includedLine` listing a zero meter;
+  - Change plan offered on `incomplete`;
+  - `/billing-done` saying "active";
+  - the webhook's reader skipping Stripe (3 tests red);
+  - Change plan mirroring the pre-change snapshot.
+
+The live db tests (11) and the e2e (2) still run only in CI.
+
+## Deferred to whole-branch review
+
+Minor findings from the plan review of 0a8fff9, not applied in the correction round. The whole-branch reviewer decides each one:
+- `maxDuration = 30` against the SDK's 2 retries × 20 s per call. The mirror now makes up to 1 + `MIRROR_ATTEMPTS` Stripe reads. Everything is idempotent, so a timeout is safe, but it can cut a mirror between its writes; the retry heals it.
+- The portal action (`billing/actions.ts`) and most Billing-card section reads go through `serviceDb()`. The house rule is `dbForRequest()` wherever RLS allows it; `billing_links` genuinely needs the service role.
+- `sumUsageSince` pages by offset over a table that is being written, one round trip per 1,000 rows per page view. Consider a per-meter `SUM` SQL function (it would have to ride in 0052, before Checkpoint A).
+- The complimentary writes are not atomic. A `permissions` write that fails after the row write never heals, which matters once PR-4 reads permissions.
+- If the mirror REFUSES a completed checkout, `checkout_finished` blocks Send for that account permanently (`billing-link.ts`).
+- A mirror refusal decided on a row that changed during that attempt is still final and stamped. Example: `another_live_subscription` against a stored subscription canceled a moment earlier. The next event for that subscription decides again. Found while applying B5; not in the review.
+- `monthStartInZone` is tested only for Chicago. Add a zone whose DST change falls at midnight, or document the limit.
+- Nothing refuses the public CI webhook literal when a LIVE key is present.
+- The A11 prerequisite check (Task 13 Step 6) greps commit titles. Check by PR number or commit instead.
+- Stripe and SMTP error messages are logged whole and may contain the recipient's email (`billing-link.ts`).
+- The loading skeleton (`BillingCardSkeleton`) lacks `id="billing"`, so a ⌘K jump during streaming lands nowhere.
+- The Plans page's "N clients" now counts canceled rows too.
+- Weak tests: the webhook "out of order" test repeats the first test's shape, since the real ordering guard is now Task 2's compare-and-set test. `saveBillingLink`'s insert race (23505 → false) is untested.
 
 ## QUESTIONS FOR DANLO
 
 Recommendation first. Each has a default the plan already ships, so nothing blocks on an answer. An answer other than the default changes only the task named.
 
 1. **Who does the billing-link email come from?** Recommend: **from BIS, in BIS's look** (it is BIS billing the business; the weekly agency report is the precedent). Alternative: in the client's own logo and colour. (Task 7, one constant.)
-2. **Change plan in the middle of a month: now or next billing date?** Recommend: **now, with Stripe's proration** (the base price is credited or charged on the next invoice, and the whole month's usage counts against the new plan's allowances). Alternative: switch on the next billing date (needs Stripe subscription schedules, a follow-up; until then Change plan is complimentary-only). (Task 3's `updateSubscriptionPrices`, Task 8.)
+2. **Change plan in the middle of a month: now or next billing date?** Recommend: **now, with Stripe's proration** (the base price is credited or charged on the next invoice, and the whole month's usage counts against the new plan's allowances). **This recommendation rests on assumption B4, which is UNVERIFIED:** it is how Stripe is expected to price a meter after an in-place price swap. Nothing in PR-3 proves it, and if B4 is wrong, the money outcome of "now" differs from the one described. Alternative: switch on the next billing date (needs Stripe subscription schedules, a follow-up; until then Change plan is complimentary-only). (Task 3's `updateSubscriptionPrices`, Task 8.)
 3. **What may a client do on Stripe's billing page?** Recommend: **update their card and see or download invoices only**. No self-cancel and no self plan-switch; those go through you. Alternative: allow self-cancel at period end. (Task 3's `portalConfigurationParams`, one flag.)
 4. **Before a client is billed, do they see "Billing" in their menu?** Recommend: **yes**, with "Billing isn't set up yet. When your plan starts, your usage and next invoice show here." Alternative: hide it until they are on a plan. (Task 10, the nav item reads billing state.)
 5. **Free trials?** Recommend: **none**: the first month is charged at checkout. Alternative: an N-day trial on every plan. (Task 3's `checkoutSessionParams` gains `subscription_data.trial_period_days`.)
+6. **Bill a live client before PR-4's nightly reconciliation exists?** Recommend: **yes** (the only double-count path is a usage row left unstamped for more than 24 hours and then resent (B10), and PR-2's stale-usage banner already flags any row unreported for 24 hours; if it ever shows before PR-4 lands, you check that client's Stripe invoice by hand before it finalises). Alternative: hold the first live client until PR-4 merges. (No code: Task 13's live setup and the first live billing link wait, or not.)
+7. **What should Stripe do when a client's card keeps failing?** Recommend: **Stripe's Smart Retries, then MARK THE SUBSCRIPTION UNPAID, never auto-cancel; Stripe's receipts and failed-payment emails to the client ON** (cancelling stays your call, and BIS's own 7-day soft pause in PR-4 handles access). Smart Retries' schedule is Stripe's own default, an external assumption (B11), not re-read. Alternative: cancel after the last retry, or leave it past due; emails off. (Task 13 Step 5 item 6: dashboard settings only, no code.)
+8. **May a canceled client later be made complimentary?** Recommend: **no, not in PR-3; G16 stays** (a canceled client comes back through a new billing link, and a complimentary row over a canceled subscription is a new state nothing needs yet; revisit if a real case appears). Alternative: allow it (a row rewrite that drops the old subscription, in a follow-up plan). (Task 6's `billingCardView` and Task 8's `markComplimentaryAction`.)
 
 ## Next plans
 
@@ -5465,8 +5848,10 @@ Recommendation first. Each has a default the plan already ships, so nothing bloc
    - (a) `past_due_since` is already stamped by the mirror (G8), and the pause reads it.
    - (b) The permissions READER ships here with the voice route's three-way choice (G9): a plan without the receptionist, and a paused account, are one decision in one place.
    - (c) Lift pause goes on the Billing card, and the paused banner in the account layout beside the payment-failed one (G14, G21).
-   - (d) Reconciliation re-mirrors every subscription from Stripe nightly. That is the backstop for B5's concurrent-delivery window and for any missed webhook.
+   - (d) B5 is closed IN PR-3 (the compare-and-set mirror, G5), so the pause may trust the stored status. A nightly re-mirror of every subscription is NEW scope: the spec's reconciliation compares meter totals only. Add it only as the backstop for a MISSED webhook, and say so in PR-4's plan.
    - (e) Decide whether usage after cancellation reaches Stripe (binding 8, G23).
    - (f) The agency's non-payment alert (spec flow 5): a derived work-queue banner, `LineDownBanner` pattern.
+   - (g) **The >24 h resend rule (B10, QUESTION 6).** Stripe dedupes a meter event's identifier only for at least 24 hours. So a usage row still unstamped more than 24 hours after a send Stripe may have ACCEPTED must not be blindly resent. Reconciliation compares Stripe's meter totals with `usage_events` per account and billing period, and reports any gap BEFORE the invoice finalises. The reporter holds such a row for that comparison instead of resending it. Until PR-4 lands, the runbook's rule 2 (a manual invoice check while the stale-usage banner shows) stands in for it.
+   - (h) The failed-payment settings chosen for QUESTION 7 (Task 13 Step 5) decide which statuses the pause sees. With "mark unpaid", a paused account is `unpaid`, never auto-`canceled`.
 2. **M7 #3 (multi-agency):** the composite FK `account_billing (plan_id, agency_id)` with 0050's pattern (G10). The writers' agency checks stay as defence in depth.
 3. **If QUESTION 2 is answered "next billing date":** a small plan for Stripe subscription schedules. Change plan is complimentary-only until it lands.
