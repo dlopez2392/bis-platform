@@ -28,10 +28,24 @@ loadEnv({ path: ".env.local" });
  * deletes them in `finally`, in foreign-key order, scoped to that account.
  *
  * Every refusal is asserted by its REASON, not only its status: 42501 AND
- * "permission denied for table <name>". A bare `status >= 400` passes for any
- * refusal (a typo'd column is PGRST204), and 42501 alone is also what a
- * row-level-security refusal raises; the message is what says the GRANT
- * refused it.
+ * "permission denied for table <name>", which is what a missing GRANT raises
+ * for every verb. A bare `status >= 400` passes for any refusal (a typo'd
+ * column is PGRST204). What row-level security does instead depends on the
+ * verb:
+ *   - POST (INSERT): a row the policy refuses is 42501 too, with "new row
+ *     violates row-level security policy", so the message is what tells the
+ *     two apart.
+ *   - PATCH (UPDATE): rows the policy hides are simply not matched: 200 with
+ *     `[]`, which the `>= 400` check catches. (A visible row whose NEW values
+ *     fail the policy's WITH CHECK is 42501 with the row-level-security
+ *     message again.)
+ *   - DELETE: rows the policy hides are not matched either: 200 with `[]`,
+ *     caught the same way.
+ *
+ * Each refused write is READ BACK with the service client before its refusal
+ * is checked, and the read-back is a SOFT assertion. The status, code and
+ * message checks stay hard, so a failing run reports both what the API
+ * answered and what the row holds afterwards.
  *
  * Each case is its own test, so every one is reported by name on its own
  * rather than hidden behind the first failure in a shared test.
@@ -109,6 +123,11 @@ function errorOf(r: Rest): { code?: string; message?: string } {
   }
 }
 
+/**
+ * HARD: status, code and message. Every caller reads its row back, as a soft
+ * assertion, BEFORE calling this, so a run that fails here still reports what
+ * the row holds.
+ */
 function expectRefusedByPrivilege(r: Rest, table: string) {
   expect(r.status, r.body).toBeGreaterThanOrEqual(400);
   const e = errorOf(r);
@@ -143,15 +162,29 @@ function appRoleClaim(token: string): AppRoleClaim {
   return { shape: "other", isAgency: false };
 }
 
-/** This fixture account's probe events carrying `run`, read with the service client. */
+/**
+ * This fixture account's probe events carrying `run`, read with the service
+ * client and filtered in the database (`payload->>run`). The limit is 2, not
+ * 1, so "exactly one" can still see a second row.
+ */
 async function probeEvents(db: Db, accountId: string, run: string) {
   const { data, error } = await db.from("events")
     .select("actor_type, actor_id, payload")
-    .eq("account_id", accountId).eq("type", PROBE_TYPE);
+    .eq("account_id", accountId).eq("type", PROBE_TYPE).eq("payload->>run", run)
+    .limit(2);
   if (error) throw new Error(`could not read events: ${error.message}`);
-  return ((data ?? []) as { actor_type: string; actor_id: string | null; payload: { run?: string } }[])
-    .filter((row) => row.payload?.run === run);
+  return (data ?? []) as { actor_type: string; actor_id: string | null; payload: { run?: string } }[];
 }
+
+/** One row read back with the service client. A read that errors is not a result, so it throws. */
+async function readBack(db: Db, table: string, columns: string, column: string, value: string) {
+  const { data, error } = await db.from(table).select(columns).eq(column, value);
+  if (error) throw new Error(`could not read ${table} back: ${error.message}`);
+  return (data ?? []) as unknown[];
+}
+
+/** A timestamp as PostgREST returns it, as `toISOString()` gives it, so it compares to SEEDED_STAMP; null stays null. */
+const isoOf = (value: unknown) => (typeof value === "string" ? new Date(value).toISOString() : value);
 
 /** The fixture's ids, the service client, and a fresh client token (Clerk's live ~60 s). */
 async function asClient() {
@@ -275,9 +308,10 @@ test.describe("the client role at the data API: server code writes the record-ke
     const aiRun = newRun();
     const withActor = await rest(token, "POST", "/rest/v1/rpc/record_event",
       { p_account_id: accountId, p_type: PROBE_TYPE, p_payload: { run: aiRun }, p_actor_type: "ai" });
+    expect.soft(await probeEvents(db, accountId, aiRun), "events recorded by the call that named an actor")
+      .toEqual([]);
     expect(withActor.status, withActor.body).toBeGreaterThanOrEqual(400);
     expect(errorOf(withActor).code, withActor.body).toBe("PGRST202");
-    expect(await probeEvents(db, accountId, aiRun)).toEqual([]);
   });
 
   test("record_event refuses, for a client's token, an account it is not a member of", async () => {
@@ -326,8 +360,8 @@ test.describe("the client role at the data API: server code writes the record-ke
     const direct = await rest(token, "POST", "/rest/v1/events?select=id", {
       account_id: accountId, type: PROBE_TYPE, actor_type: "user", actor_id: clerkUserId, payload: { run },
     });
+    expect.soft(await probeEvents(db, accountId, run), "events recorded by the direct insert").toEqual([]);
     expectRefusedByPrivilege(direct, "events");
-    expect(await probeEvents(db, accountId, run)).toEqual([]);
   });
 
   test("the client role cannot insert a message", async () => {
@@ -336,10 +370,11 @@ test.describe("the client role at the data API: server code writes the record-ke
         account_id: accountId, conversation_id: seeded.conversationId, channel: "sms", direction: "inbound",
         body: "boundary probe",
       });
+      expect.soft(
+        await readBack(db, "messages", "id", "conversation_id", seeded.conversationId),
+        "the conversation's messages after the refused insert",
+      ).toEqual([{ id: seeded.messageId }]);
       expectRefusedByPrivilege(r, "messages");
-      const { data, error } = await db.from("messages").select("id").eq("conversation_id", seeded.conversationId);
-      expect(error).toBeNull();
-      expect(data).toEqual([{ id: seeded.messageId }]);
     });
   });
 
@@ -347,11 +382,11 @@ test.describe("the client role at the data API: server code writes the record-ke
     await withSeeded(async ({ db, token, seeded }) => {
       const r = await rest(token, "PATCH", `/rest/v1/conversations?id=eq.${seeded.conversationId}&select=id`,
         { unread_count: 0 });
+      expect.soft(
+        await readBack(db, "conversations", "unread_count", "id", seeded.conversationId),
+        "the unread count after the refused update",
+      ).toEqual([{ unread_count: SEEDED_UNREAD }]);
       expectRefusedByPrivilege(r, "conversations");
-      const { data, error } = await db.from("conversations").select("unread_count")
-        .eq("id", seeded.conversationId).single();
-      expect(error).toBeNull();
-      expect(data).toEqual({ unread_count: SEEDED_UNREAD });
     });
   });
 
@@ -359,22 +394,23 @@ test.describe("the client role at the data API: server code writes the record-ke
     await withSeeded(async ({ db, token, seeded }) => {
       const r = await rest(token, "PATCH", `/rest/v1/form_submissions?id=eq.${seeded.submissionId}&select=id`,
         { instant_reply_sent_at: null });
+      const rows = await readBack(db, "form_submissions", "instant_reply_sent_at", "id", seeded.submissionId);
+      expect.soft(
+        rows.map((row) => isoOf((row as { instant_reply_sent_at: unknown }).instant_reply_sent_at)),
+        "the instant-reply stamp after the refused update",
+      ).toEqual([SEEDED_STAMP]);
       expectRefusedByPrivilege(r, "form_submissions");
-      const { data, error } = await db.from("form_submissions").select("instant_reply_sent_at")
-        .eq("id", seeded.submissionId).single();
-      expect(error).toBeNull();
-      const stamp = (data as { instant_reply_sent_at: string | null } | null)?.instant_reply_sent_at;
-      expect(stamp && new Date(stamp).toISOString()).toBe(SEEDED_STAMP);
     });
   });
 
   test("the client role cannot delete a message", async () => {
     await withSeeded(async ({ db, token, seeded }) => {
       const r = await rest(token, "DELETE", `/rest/v1/messages?id=eq.${seeded.messageId}&select=id`);
+      expect.soft(
+        await readBack(db, "messages", "id", "id", seeded.messageId),
+        "the message after the refused delete",
+      ).toEqual([{ id: seeded.messageId }]);
       expectRefusedByPrivilege(r, "messages");
-      const { data, error } = await db.from("messages").select("id").eq("id", seeded.messageId);
-      expect(error).toBeNull();
-      expect(data).toEqual([{ id: seeded.messageId }]);
     });
   });
 
@@ -382,12 +418,12 @@ test.describe("the client role at the data API: server code writes the record-ke
     await withSeeded(async ({ db, token, seeded }) => {
       const r = await rest(token, "PATCH", `/rest/v1/contacts?id=eq.${seeded.contactId}&select=id`,
         { reactivation_sent_at: null });
+      const rows = await readBack(db, "contacts", "reactivation_sent_at", "id", seeded.contactId);
+      expect.soft(
+        rows.map((row) => isoOf((row as { reactivation_sent_at: unknown }).reactivation_sent_at)),
+        "the reactivation stamp after the refused update",
+      ).toEqual([SEEDED_STAMP]);
       expectRefusedByPrivilege(r, "contacts");
-      const { data, error } = await db.from("contacts").select("reactivation_sent_at")
-        .eq("id", seeded.contactId).single();
-      expect(error).toBeNull();
-      const stamp = (data as { reactivation_sent_at: string | null } | null)?.reactivation_sent_at;
-      expect(stamp && new Date(stamp).toISOString()).toBe(SEEDED_STAMP);
     });
   });
 
