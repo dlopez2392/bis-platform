@@ -19,7 +19,16 @@ vi.mock("@bis/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@bis/db")>();
   return { ...real, ...dbMocks, SlotTakenError: real.SlotTakenError };
 });
-vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }) }));
+// `getEmailProvider()` throws synchronously when mail config is missing in
+// production (see finish-call.ts's staff-alert catch); `providerSetup.fails`
+// reproduces that. Reset per test below.
+const providerSetup = vi.hoisted(() => ({ fails: false }));
+vi.mock("@/lib/email", () => ({
+  getEmailProvider: () => {
+    if (providerSetup.fails) throw new Error("EMAIL_FROM is not set");
+    return { send: (...a: unknown[]) => sendMock(...a) };
+  },
+}));
 const meetingProviderMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/meetings/provider", () => ({ getMeetingProvider: (...a: unknown[]) => meetingProviderMock(...a) }));
 
@@ -49,6 +58,7 @@ beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
   computeAllSlotsMock.mockReset();
   meetingProviderMock.mockReset().mockReturnValue(null);
+  providerSetup.fails = false;
 });
 
 describe("check_availability", () => {
@@ -782,6 +792,220 @@ describe("reschedule / cancel", () => {
       expect(result).toMatchObject({ ok: false });
       expect(state).toBe(pre);
       expectNothingWritten();
+    });
+  });
+
+  // A change made by phone used to reach nobody: a cancel-only call
+  // classifies `abandoned`, so finishCall sent no alert, and the customer got
+  // no email. Every successful phone cancel and reschedule now tells the
+  // business (staff alert + a line in the contact's thread) and the customer
+  // — after the commit, best-effort, never turning ok:true into a failure.
+  describe("telling the business about a phone change", () => {
+    const newSlot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") };
+    const NEW_ISO = "2027-06-02T14:00:00.000Z";
+    const ROW = { id: "b1", contact_id: "ct1", calendar_id: "cal1",
+      starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" };
+    const STAFF = ["owner@biz.example", "desk@biz.example"];
+    // A real sending address on the context, so "the staff alert carries NO
+    // fromAddress" is a claim the customer email (which does) can contrast.
+    const notifyCtx: ToolContext = {
+      ...ctx, fromEmail: "hello@rioroofing.example",
+      calendar: { ...ctx.calendar, notify_emails: STAFF } as unknown as CalendarRow,
+    };
+    const CONTACT_URL = "https://x.example/dashboard/accounts/a1/contacts/ct1";
+    type Sent = { to: string; subject: string; body: string; html?: string; fromAddress?: string; replyTo?: string };
+    const sentTo = (to: string) => sendMock.mock.calls.map((c) => c[0] as Sent).filter((m) => m.to === to);
+
+    beforeEach(() => {
+      computeAllSlotsMock.mockResolvedValue([newSlot]);
+      dbMocks.getBookingById.mockResolvedValue(ROW);
+      dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok" });
+      dbMocks.setBookingStatus.mockResolvedValue(undefined);
+      dbMocks.getContact.mockResolvedValue({ ...OWNER, email: "ana@example.com" });
+    });
+
+    it("cancel: one staff alert per recipient with no fromAddress, one customer email, and the conversation trail", async () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const errors = errSpy.mock.calls.length;
+      errSpy.mockRestore();
+      expect(result).toEqual({ ok: true });
+      expect(errors).toBe(0);
+
+      for (const to of STAFF) {
+        const mails = sentTo(to);
+        expect(mails).toHaveLength(1);
+        expect(mails[0]!.fromAddress).toBeUndefined();
+        expect(mails[0]!.subject).toMatch(/^Booking cancelled by phone: .*Jun 1.* — Ana Ruiz$/);
+        expect(mails[0]!.body).toContain("+19562921696");
+        expect(mails[0]!.html).toContain(CONTACT_URL);
+      }
+
+      const customer = sentTo("ana@example.com");
+      expect(customer).toHaveLength(1);
+      expect(customer[0]!.subject).toBe("Your booking has been cancelled");
+      expect(customer[0]!.body).toContain("If you didn't ask for this, please contact us right away.");
+      // The OLD time, in the business's zone (14:00Z is 9:00 AM in Chicago).
+      expect(customer[0]!.body).toContain("9:00 AM");
+      expect(customer[0]!.fromAddress).toBe("hello@rioroofing.example");
+      expect(sendMock).toHaveBeenCalledTimes(3);
+
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+        conversationId: "cv1", channel: "voice", direction: "inbound", subject: "Booking cancelled by phone",
+      }), "voice", "ai");
+      const message = dbMocks.createMessage.mock.calls[0]![2] as { body: string };
+      expect(message.body).toContain("9:00 AM");
+      expect(dbMocks.incrementUnreadCount).toHaveBeenCalledWith({}, "a1", "cv1");
+    });
+
+    it("cancel with no notify emails and no contact email still writes the thread line — the signal that always exists", async () => {
+      dbMocks.getContact.mockResolvedValue(OWNER);
+      const { result } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "b1" });
+      expect(result).toEqual({ ok: true });
+      expect(sendMock).not.toHaveBeenCalled();
+      expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ channel: "voice", subject: "Booking cancelled by phone" }), "voice", "ai");
+      expect(dbMocks.incrementUnreadCount).toHaveBeenCalledWith({}, "a1", "cv1");
+    });
+
+    it("a Spanish-speaking caller gets the Spanish cancellation email; the staff alert stays English", async () => {
+      const esCtx: ToolContext = {
+        ...notifyCtx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+      };
+      const pre = { ...emptyCallState(), transcript: [
+        { role: "caller" as const, text: "Hola, necesito cancelar mi cita para mañana, por favor.", at: "2027-06-01T12:00:00Z" },
+      ] };
+      const { result } = await runTool(pre, esCtx, "cancel_appointment", { bookingId: "b1" });
+      expect(result).toEqual({ ok: true });
+      const customer = sentTo("ana@example.com");
+      expect(customer).toHaveLength(1);
+      expect(customer[0]!.subject).toBe("Tu cita fue cancelada");
+      expect(customer[0]!.body).toContain("Si no pediste esta cancelación");
+      expect(sentTo(STAFF[0]!)[0]!.subject).toMatch(/^Booking cancelled by phone/);
+    });
+
+    it("reschedule: the staff alert says moved, with the old AND new times, alongside the unchanged customer email", async () => {
+      const { result } = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(result).not.toHaveProperty("emailFailed");
+      for (const to of STAFF) {
+        const mails = sentTo(to);
+        expect(mails).toHaveLength(1);
+        expect(mails[0]!.fromAddress).toBeUndefined();
+        expect(mails[0]!.subject).toMatch(/^Booking moved by phone: /);
+        expect(mails[0]!.subject).toContain("Jun 1");
+        expect(mails[0]!.subject).toContain("Jun 2");
+        expect(mails[0]!.html).toContain(CONTACT_URL);
+      }
+      const customer = sentTo("ana@example.com");
+      expect(customer).toHaveLength(1);
+      expect(customer[0]!.subject).toBe("Your booking has been moved");
+      expect(customer[0]!.body).toContain("https://x.example/b/pub1/cancel/newtok");
+      expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+        conversationId: "cv1", channel: "voice", direction: "inbound", subject: "Booking moved by phone",
+      }), "voice", "ai");
+      expect(dbMocks.incrementUnreadCount).toHaveBeenCalledWith({}, "a1", "cv1");
+    });
+
+    it("every leg failing still returns exactly { ok: true } for a cancel, and the logs carry no caller details", async () => {
+      sendMock.mockRejectedValue(new Error("mail down"));
+      dbMocks.ensureConversation.mockRejectedValue(new Error("db down"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const logs = errSpy.mock.calls.map((c) => c.map(String).join(" "));
+      errSpy.mockRestore();
+      expect(result).toEqual({ ok: true });
+      // Every leg was tried.
+      expect(sendMock).toHaveBeenCalledTimes(3);
+      expect(dbMocks.ensureConversation).toHaveBeenCalled();
+      expect(logs.length).toBeGreaterThan(0);
+      for (const l of logs) {
+        expect(l).not.toContain("9562921696");
+        expect(l).not.toContain("Ana");
+        expect(l).not.toContain("Ruiz");
+        expect(l).not.toContain("ana@example.com");
+        expect(l).not.toContain("https://");
+      }
+    });
+
+    it("a failed cancellation email is logged by booking id, not surfaced", async () => {
+      sendMock.mockImplementation(async (m: Sent) => {
+        if (m.to === "ana@example.com") throw new Error("mail down");
+        return { providerMessageId: "x" };
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
+      errSpy.mockRestore();
+      expect(result).toEqual({ ok: true });
+      expect(logs.some((l) => /cancellation email failed/.test(l) && l.includes("b1"))).toBe(true);
+    });
+
+    it("every leg failing still returns ok:true for a reschedule — emailFailed because the customer's email failed", async () => {
+      sendMock.mockRejectedValue(new Error("mail down"));
+      dbMocks.ensureConversation.mockRejectedValue(new Error("db down"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      errSpy.mockRestore();
+      expect(result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
+      expect(dbMocks.ensureConversation).toHaveBeenCalled();
+    });
+
+    it("a staff-alert or thread failure never sets emailFailed — those are for the business, not the caller", async () => {
+      sendMock.mockImplementation(async (m: Sent) => {
+        if (m.to !== "ana@example.com") throw new Error("staff mail down");
+        return { providerMessageId: "x" };
+      });
+      dbMocks.ensureConversation.mockRejectedValue(new Error("db down"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      errSpy.mockRestore();
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(result).not.toHaveProperty("emailFailed");
+    });
+
+    it("a mail provider that throws on setup costs neither change, and the thread line is still written", async () => {
+      providerSetup.fails = true;
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const cancel = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const move = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      errSpy.mockRestore();
+      expect(cancel.result).toEqual({ ok: true });
+      // The contact HAS an email and it could not be sent: that is the flag.
+      expect(move.result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
+      expect(dbMocks.createMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it("the legs run side by side, and all of them finish before the tool answers", async () => {
+      // Dead air: this runs while the caller waits on the line, so the legs
+      // must not queue behind one another — and nothing may be left running
+      // un-awaited when the tool returns. Both a mail leg and the thread leg
+      // are held open; if either leg waited on the other, only one of the
+      // two would have started.
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      sendMock.mockImplementation(async () => { await gate; return { providerMessageId: "x" }; });
+      dbMocks.ensureConversation.mockImplementation(async () => { await gate; return { id: "cv1", created: false }; });
+
+      const pending = runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      let returned = false;
+      void pending.then(() => { returned = true; });
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+
+      expect(sendMock).toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).toHaveBeenCalled();
+      expect(returned).toBe(false);
+
+      release();
+      const { result } = await pending;
+      expect(result).toEqual({ ok: true });
+      expect(dbMocks.createMessage).toHaveBeenCalled();
+      expect(dbMocks.incrementUnreadCount).toHaveBeenCalled();
     });
   });
 });
