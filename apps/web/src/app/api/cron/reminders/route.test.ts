@@ -136,6 +136,11 @@ vi.mock("@bis/db", () => ({
   countExpiredUsage: async () => { throw new Error("route.test: no account is billed"); },
   // markAutomationSmsSent records each billable text's segments.
   recordUsage: async () => "recorded" as const,
+  // M7a PR-3: `stripe-gateway.ts` (reached from `usage-report.ts`) spreads
+  // this into a module-level const at IMPORT time (`PRICE_KEYS`), so a bare
+  // factory mock has to carry it even though nothing in this suite ever
+  // dereferences it through a call. The real value, from `packages/db/src/billing.ts`.
+  METER_KEYS: ["voice_minutes", "sms", "ai_chats"] as const,
 }));
 
 const sendMock = vi.fn();
