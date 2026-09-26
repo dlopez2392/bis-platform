@@ -61,6 +61,46 @@ const denied = (table: string) => ({
   message: expect.stringMatching(new RegExp(`permission denied for table ${table}`, "i")),
 });
 
+// Same house shape as billing-schema.test.ts's stripe_webhook_events block:
+// service_role holds every privilege, authenticated and anon hold none at
+// all (not just refused by RLS — no grant to refuse in the first place).
+const SERVICE_ROLE_ALL = ["DELETE", "INSERT", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]
+  .map((privilege_type) => ({ grantee: "service_role", privilege_type }));
+
+describe("0052 billing_links: grants, anon and RLS (house pattern from stripe_webhook_events)", () => {
+  it("billing_links: anon holds nothing (mutation: drop the revoke from anon → FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select privilege_type from information_schema.role_table_grants
+           where table_schema = 'public' and table_name = 'billing_links' and grantee = 'anon'`);
+      expect(rows).toEqual([]);
+    }));
+
+  it("billing_links: neither authenticated nor anon holds MAINTAIN (mutation: enumerate the revoke like 0025 → FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ auth: boolean; anon: boolean }>(
+        `select has_table_privilege('authenticated', 'public.billing_links', 'MAINTAIN') as auth,
+                has_table_privilege('anon', 'public.billing_links', 'MAINTAIN') as anon`);
+      expect(rows[0]).toEqual({ auth: false, anon: false });
+    }));
+
+  it("billing_links: the whole grant set across every role but postgres is exactly service_role's default ACL (mutation: grant select on billing_links to authenticated → FAILS; also catches service_role missing UPDATE or DELETE)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select grantee, privilege_type from information_schema.role_table_grants
+           where table_schema = 'public' and table_name = 'billing_links' and grantee <> 'postgres'
+           order by grantee, privilege_type`);
+      expect(rows).toEqual(SERVICE_ROLE_ALL);
+    }));
+
+  it("billing_links: row level security is on (mutation: drop its enable row level security → FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ relrowsecurity: boolean }>(
+        `select relrowsecurity from pg_class where oid = 'public.billing_links'::regclass`);
+      expect(rows[0]!.relrowsecurity).toBe(true);
+    }));
+});
+
 describe("0052 billing_links: service_role only (42501 AND 'permission denied for table billing_links': the GRANT refusing)", () => {
   it("neither a client nor the agency's own JWT can READ a link (it holds the payer's email and a live payment URL) (mutation: grant select on billing_links to authenticated → FAILS)", () =>
     withRollback(async (c) => {

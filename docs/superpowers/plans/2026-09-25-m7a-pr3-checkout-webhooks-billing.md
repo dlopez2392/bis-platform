@@ -192,7 +192,7 @@ Created:
 - `src/account-billing.ts`: the only writer of `account_billing`, `billing_links` and `stripe_webhook_events`. Pure `decideMirror`.
 - `src/account-billing.test.ts` (17, no database).
 - `src/test/account-billing.test.ts` (4, live).
-- `src/test/billing-checkout-schema.test.ts` (7, live).
+- `src/test/billing-checkout-schema.test.ts` (11, live).
 - `src/billing.test.ts` (1, no database).
 
 Modified:
@@ -254,7 +254,7 @@ Created:
 - `apps/web/e2e/billing.spec.ts` (2).
 - `docs/runbooks/stripe-billing.md`: the live setup, the failed-payment settings, the customer invariant and the >24 h resend rule (Task 13, Step 8).
 
-**New test count: 115** = db 11 live + 19 unit, web 83, e2e 2 (itemised in Task 13, Step 1). `it.each` is not used; each `it` is one test.
+**New test count: 119** = db 15 live + 19 unit, web 83, e2e 2 (itemised in Task 13, Step 1). `it.each` is not used; each `it` is one test.
 
 ## Task order and checkpoints
 
@@ -377,6 +377,46 @@ async function refused(c: Client, sql: string, params: unknown[]): Promise<unkno
 const denied = (table: string) => ({
   code: "42501",
   message: expect.stringMatching(new RegExp(`permission denied for table ${table}`, "i")),
+});
+
+// Same house shape as billing-schema.test.ts's stripe_webhook_events block:
+// service_role holds every privilege, authenticated and anon hold none at
+// all (not just refused by RLS — no grant to refuse in the first place).
+const SERVICE_ROLE_ALL = ["DELETE", "INSERT", "REFERENCES", "SELECT", "TRIGGER", "TRUNCATE", "UPDATE"]
+  .map((privilege_type) => ({ grantee: "service_role", privilege_type }));
+
+describe("0052 billing_links: grants, anon and RLS (house pattern from stripe_webhook_events)", () => {
+  it("billing_links: anon holds nothing (mutation: drop the revoke from anon → FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select privilege_type from information_schema.role_table_grants
+           where table_schema = 'public' and table_name = 'billing_links' and grantee = 'anon'`);
+      expect(rows).toEqual([]);
+    }));
+
+  it("billing_links: neither authenticated nor anon holds MAINTAIN (mutation: enumerate the revoke like 0025 → FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ auth: boolean; anon: boolean }>(
+        `select has_table_privilege('authenticated', 'public.billing_links', 'MAINTAIN') as auth,
+                has_table_privilege('anon', 'public.billing_links', 'MAINTAIN') as anon`);
+      expect(rows[0]).toEqual({ auth: false, anon: false });
+    }));
+
+  it("billing_links: the whole grant set across every role but postgres is exactly service_role's default ACL (mutation: grant select on billing_links to authenticated → FAILS; also catches service_role missing UPDATE or DELETE)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select grantee, privilege_type from information_schema.role_table_grants
+           where table_schema = 'public' and table_name = 'billing_links' and grantee <> 'postgres'
+           order by grantee, privilege_type`);
+      expect(rows).toEqual(SERVICE_ROLE_ALL);
+    }));
+
+  it("billing_links: row level security is on (mutation: drop its enable row level security → FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ relrowsecurity: boolean }>(
+        `select relrowsecurity from pg_class where oid = 'public.billing_links'::regclass`);
+      expect(rows[0]!.relrowsecurity).toBe(true);
+    }));
 });
 
 describe("0052 billing_links: service_role only (42501 AND 'permission denied for table billing_links': the GRANT refusing)", () => {
@@ -592,7 +632,7 @@ Expected: no lines from the first, and `0` from the second. (`grep -P` refuses t
 
 - [ ] **Step 4: The teardown comment**
 
-In `packages/db/src/account-teardown.ts`, in the comment paragraph beginning `` `account_billing` and `usage_events` (0051) are deliberately not on it``, replace its first sentence's subject with `` `account_billing`, `usage_events` (0051) and `billing_links` (0052) `` and its proof sentence with `` `billing-schema.test.ts` and `billing-checkout-schema.test.ts` prove those cascades live. `` Nothing else changes.
+In `packages/db/src/account-teardown.ts`, in the comment paragraph beginning `` `account_billing` and `usage_events` (0051) are deliberately not on it``, replace its first sentence's subject with `` `account_billing`, `usage_events` (0051) and `billing_links` (0052) ``, "both carry" with "all three carry" (three names now, not two), and its proof sentence with `` `billing-schema.test.ts` and `billing-checkout-schema.test.ts` prove those cascades live. `` Also add, to the closing parenthetical about `plans`, that `billing_links.plan_id` is `restrict` toward it too, same as `account_billing.plan_id`. Nothing else changes.
 
 - [ ] **Step 5: Commit**
 
@@ -605,12 +645,13 @@ git commit -m "feat(db): 0052 billing start, period start and billing_links (ser
 
 ### Checkpoint A (ORCHESTRATOR ONLY, not an implementer step)
 
-1. **Apply 0052 to the CI project, and ONLY there**: run `ci-project-setup.yml` with `push-dry-run` (the listing must show exactly `0052_billing_checkout.sql` pending), then `push`, then `migrations` (0052 listed as applied). Ledger line: `0052 APPLIED to bis-ci <run id> — NEVER RE-APPLY there`.
-2. Push the branch. CI `verify` runs the db suite on `bis-ci`. Read the check runs for the head SHA. In the log, `src/test/billing-checkout-schema.test.ts` shows 7 passed.
+1. **Apply 0052 to the CI project, and ONLY there**: first run `gh run list --status in_progress` and confirm no other branch's `verify` is running against `bis-ci` — the migration's `ALTER TABLE public.account_billing` (ACCESS EXCLUSIVE while the new columns and their NOT NULL are added) followed by `create table public.billing_links` with FKs onto `accounts` and `plans` (SHARE ROW EXCLUSIVE there) can deadlock against `billing-schema.test.ts`'s seed, which locks `accounts` → `plans` → `account_billing` in a fixed order inside its own transaction. Only once the list is empty, run `ci-project-setup.yml` with `push-dry-run` (the listing must show exactly `0052_billing_checkout.sql` pending), then `push`, then `migrations` (0052 listed as applied). Ledger line: `0052 APPLIED to bis-ci <run id> — NEVER RE-APPLY there`.
+2. Push the branch. CI `verify` runs the db suite on `bis-ci`. Read the check runs for the head SHA. In the log, `src/test/billing-checkout-schema.test.ts` shows 11 passed.
 3. **Mutation probes**, as PR-1 and PR-2 ran them:
    - Use a throwaway branch `probe/m7a-pr3-db` in its own worktree, with one commit per probe group.
    - A migration probe is NOT a commit on the branch. It is an ALTER run on `bis-ci` through MCP `execute_sql` inside the probe window, then reverted with the inverse ALTER. The orchestrator records both statements in the ledger.
-   - The probes are the mutations named in the 7 titles. The grant ones are `grant select on billing_links to authenticated` and `grant insert on billing_links to authenticated`.
+   - The probes are the mutations named in the 11 titles. The grant ones are `grant select on billing_links to authenticated`, `grant insert on billing_links to authenticated`, `grant update on billing_links to authenticated`, and `grant all on billing_links to anon`. The RLS one is `alter table billing_links disable row level security`.
+   - **After the "on delete restrict" probe** (`alter table public.billing_links drop constraint billing_links_account_id_fkey, add constraint billing_links_account_id_fkey foreign key (account_id) references public.accounts(id) on delete restrict` — `alter constraint` cannot change the delete action, only drop-and-readd can — exercised through the live cascade test): the live test's `withTestAccount` teardown fails on `billing_links` as expected, but it fails BEFORE the account row is deleted, and the outer test's own `finally` then fails to delete its `plans` row too (the row is still referenced by the stranded `billing_links` row) and only logs it, since the test body already threw. This leaves two orphans on `bis-ci`: the stranded fixture account (with its `billing_links` row still attached) and the plan named `Link cascade <RUN>` (the `RUN` suffix from that probe's own test run, read from the failing test's own title/output). After reverting with `alter table public.billing_links drop constraint billing_links_account_id_fkey, add constraint billing_links_account_id_fkey foreign key (account_id) references public.accounts(id) on delete cascade`, delete the stranded fixture account first (its `billing_links` row cascades away with it), then delete the now-unreferenced `Link cascade <RUN>` plan row. Record both deletes in the ledger.
    - **Shared-project hazard: the "drop the default" probe.** `alter table public.account_billing alter column billing_started_at drop default` makes EVERY other branch's `insert into account_billing (account_id, plan_id)` fixture fail with 23502 while it stands. Run it LAST and ALONE. Start it only when `gh run list --status in_progress` shows no other branch's `verify` running. Revert it (`... set default now()`) the moment its one probe run finishes, and record both statements and both times in the ledger. The `billing_links` probes and the NOT NULL probe are safe: no other branch writes that table or a null there.
    - Confirm each named test goes red for its own reason, then revert, and re-run `verify` green.
 4. Production is NOT touched here (Task 13, Step 2).
@@ -912,7 +953,7 @@ function world(opts: { row?: Record<string, unknown> | null; updatesNeverMatch?:
         update: (p: Record<string, unknown>) => { patch = p; return chain; },
         insert: async (r: Record<string, unknown>) => {
           log.push("insert");
-          if (state.row) return { error: { code: "23505", message: "duplicate key value" } };
+          if (state.row) return { error: { code: "23505", constraint: "account_billing_pkey", message: "duplicate key value" } };
           state.row = { ...r };
           return { error: null };
         },
@@ -964,7 +1005,7 @@ describe("mirrorSubscription: the first checkout's event burst (B5)", () => {
     expect(w.state.row?.subscription_status).toBe("active");
   });
 
-  it("an insert that hits 23505 (another delivery inserted first) is a conflict: the next attempt reads THAT row and updates it on its version (mutation: throw on 23505 → FAILS; report the lost insert as written → the row stays 'incomplete', FAILS)", async () => {
+  it("an insert that hits 23505 naming account_billing_pkey (another delivery inserted first) is a conflict: the next attempt reads THAT row and updates it on its version (mutation: throw on 23505 → FAILS; ignore the constraint name and treat every 23505 as a conflict → FAILS on a stripe_customer_id/stripe_subscription_id collision; report the lost insert as written → the row stays 'incomplete', FAILS)", async () => {
     const w = world();
     let n = 0;
     const read = async () => { n += 1; if (n === 2) w.concurrent(false); return snap({ status: "active" }); };
@@ -1333,6 +1374,13 @@ export async function getBillingLink(db: SupabaseClient, accountId: string): Pro
  * 23505 → false; otherwise it updates only while the stored session is still
  * `expectedSessionId` → false when another tab replaced it first. The caller
  * expires its own new session on false.
+ *
+ * The 23505 → false branch checks the CONSTRAINT NAME, not just the code:
+ * `billing_links` carries a second unique key (`stripe_customer_id`), and a
+ * violation there is a different account colliding on the same Stripe
+ * customer — a data-integrity bug, not "someone already saved a link for
+ * THIS account". Only `billing_links_pkey` is a CAS conflict; any other
+ * 23505 throws.
  */
 export async function saveBillingLink(
   db: SupabaseClient, link: BillingLinkWrite, expectedSessionId: string | null, now: Date,
@@ -1345,7 +1393,7 @@ export async function saveBillingLink(
   if (expectedSessionId === null) {
     const { error } = await db.from("billing_links").insert({ account_id: link.accountId, ...row });
     if (!error) return true;
-    if (error.code === "23505") return false;
+    if (error.code === "23505" && error.constraint === "billing_links_pkey") return false;
     throw new Error(`saveBillingLink insert failed: ${error.message}`);
   }
   const { data, error } = await db.from("billing_links").update(row)
@@ -1502,7 +1550,11 @@ export const MIRROR_ATTEMPTS = 3;
  *
  * COMPARE-AND-SET (B5). The stored row is read BEFORE Stripe is asked, and
  * written only while it is still that row: an update filtered on its
- * updated_at, or an insert when there was none (a 23505 is the same signal).
+ * updated_at, or an insert when there was none (a 23505 naming
+ * `account_billing_pkey` is the same signal — another delivery inserted
+ * first. A 23505 naming `stripe_customer_id` or `stripe_subscription_id`
+ * instead is a different account already holding that Stripe id, which is
+ * not this race, and throws).
  * A delivery that read Stripe earlier but reaches the database later
  * therefore loses, reads the row and Stripe again, and writes the NEWER
  * state instead of overwriting it with an older one. A REFUSAL is returned
@@ -1556,7 +1608,7 @@ async function writeMirror(
   }
   if (existing === null) {
     const { error } = await db.from("account_billing").insert(decision.row);
-    if (error?.code === "23505") return "conflict";
+    if (error?.code === "23505" && error.constraint === "account_billing_pkey") return "conflict";
     if (error) throw new Error(`mirrorSubscription insert failed: ${error.message}`);
   } else {
     const { data, error } = await db.from("account_billing").update(decision.row)
@@ -1587,7 +1639,10 @@ async function checkedPlan(
 }
 
 /** Complimentary (G16): on a plan, no Stripe subscription, never paused
- *  (0051's CHECK). Only for an account with NO billing row. */
+ *  (0051's CHECK). Only for an account with NO billing row: a 23505 naming
+ *  `account_billing_pkey` means one now exists (already_billed); any other
+ *  23505 (there should be none here, since this insert carries no Stripe id)
+ *  throws instead of being read as the same thing. */
 export async function markComplimentary(
   db: SupabaseClient, input: { accountId: string; planId: string; now: Date },
 ): Promise<{ ok: true } | { ok: false; reason: PlanRefusal | "already_billed" }> {
@@ -1598,7 +1653,7 @@ export async function markComplimentary(
     account_id: input.accountId, plan_id: input.planId, complimentary: true, billing_started_at: at, updated_at: at,
   });
   if (error) {
-    if (error.code === "23505") return { ok: false, reason: "already_billed" };
+    if (error.code === "23505" && error.constraint === "account_billing_pkey") return { ok: false, reason: "already_billed" };
     throw new Error(`markComplimentary failed: ${error.message}`);
   }
   await writePermissions(db, input.accountId, checked.plan.features);
@@ -5440,7 +5495,7 @@ git commit -m "feat(billing): payment-failed banner on every account page, Check
 
 **Files:**
 - Create: `apps/web/e2e/billing.spec.ts` (2 tests, serial)
-- Modify: `apps/web/e2e/fixtures/sweep.ts` (the plans leg's comment only: "e2e never creates billing rows" stops being true)
+- Modify: `apps/web/e2e/fixtures/sweep.ts` (the plans leg's comment only: "e2e never creates billing rows" stops being true, AND `billing_links.plan_id` (0052) is now also `on delete restrict` toward the plan, same as `account_billing.plan_id` (0051) — the leg's comment names both restricting tables)
 
 **What it proves** (spec section 6, "E2E"):
 - **B1:** a real test-mode Checkout session holds the plan's four prices.
@@ -5617,7 +5672,7 @@ It runs only in CI's `e2e` job (Stripe test key + the fixture webhook secret). L
 
 - [ ] **Step 4: The sweep's stale comment**
 
-In `apps/web/e2e/fixtures/sweep.ts`, leg 6 (plans), replace the four-line comment paragraph that begins `// A plan referenced by` and ends `never thrown.` (it says "e2e never creates billing rows") with:
+In `apps/web/e2e/fixtures/sweep.ts`, leg 6 (plans), replace the four-line comment paragraph that begins `// A plan referenced by` and ends `never thrown.` — it says "e2e never creates billing rows", which this PR makes false, and it names only `account_billing`'s restrict FK toward the plan, when `billing_links.plan_id` (0052) is now ALSO `on delete restrict` toward the same plan and blocks this leg too — with:
 
 ```ts
   // A plan referenced by `account_billing` or `billing_links` (0051/0052,
@@ -5648,7 +5703,7 @@ git commit -m "test(e2e): a real test-mode Checkout holds four prices; a signed 
 
 | Scope | New tests |
 |---|---|
-| db, live: `billing-checkout-schema` / `account-billing` | 7 / 4 |
+| db, live: `billing-checkout-schema` / `account-billing` | 11 / 4 |
 | db, unit: `account-billing` / `billing` / `usage` | 17 / 1 / +1 |
 | `stripe-gateway` / `stripe-webhook` / `webhook` / webhook `route` / `ci-workflow` | +8 / 3 / 7 / 6 / +1 |
 | `billing-view` / `billing-link` email / `billing-link` / `change-plan` / `portal` | 9 / 3 / 9 / 2 / 3 |
@@ -5657,7 +5712,7 @@ git commit -m "test(e2e): a real test-mode Checkout holds four prices; a signed 
 | `billing-banner` / account `layout` / `billing-done` | 3 / 2 / 2 |
 | e2e | 2 |
 
-**Total 115.** Edited, not new:
+**Total 119.** Edited, not new:
 - `usage.test.ts`: the paging fixture;
 - `test/usage.test.ts`: the `bill()` helper plus that test's title.
 
@@ -5850,7 +5905,7 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, parity, and t
 
 | File | Tests |
 |---|---|
-| `billing-checkout-schema` | 7 (grants 2, shape 3, account_billing 1, live cascade 1) |
+| `billing-checkout-schema` | 11 (grants 6, shape 3, account_billing 1, live cascade 1) |
 | `account-billing` unit | 17 (decide 3 + past-due 1 + refusals 4 + writes 3 + first-checkout burst 3 + complimentary 1 + claim/save 2) |
 | `account-billing` live | 4 |
 | `billing` unit | 1 |
@@ -5877,7 +5932,7 @@ Orchestrator: ledger lines for Checkpoint A, the production apply, parity, and t
 | `billing-done` | 2 |
 | e2e | 2 |
 
-**Total 115** (db 11 live + 19 unit, web 83, e2e 2). Files: 40 created, 22 modified. Tasks: 13, plus Checkpoint A.
+**Total 119** (db 15 live + 19 unit, web 83, e2e 2). Files: 40 created, 22 modified. Tasks: 13, plus Checkpoint A.
 
 **Existing tests this plan must not break (each named in its task)**
 - The whole db suite's `account_billing` fixtures. 0052 is additive, and `billing_started_at` has a default, so none changes except the one that must: `usage.test`'s `bill()`.
@@ -5941,7 +5996,7 @@ Verification, in a scratch copy OUTSIDE the worktree (`git archive 0a8fff9`, eve
   - the webhook's reader skipping Stripe (3 tests red);
   - Change plan mirroring the pre-change snapshot.
 
-The live db tests (11) and the e2e (2) still run only in CI.
+The live db tests (15) and the e2e (2) still run only in CI.
 
 **Correction round 2 (2026-09-25): the opus re-review of 21aecb3 said FIX FIRST.** It confirmed round 1's nine findings closed. Each new item was checked against the plan, and against the reviewer's probe (`rv-probe.test.ts`), before it was applied. None was rejected.
 1. **A refusal could still leave a stale state.** `writeMirror` reads the billing link AFTER the Stripe read. On a first checkout, a concurrent delivery can insert the row and consume the link in between, so this attempt refused `customer_mismatch` over an `incomplete` row. The reviewer's probe confirmed it on 21aecb3 (`expected 'incomplete' to be 'active'`). Fix: a refusal re-reads the row, and if its `updated_at` differs from the one read before Stripe (a row that appeared or went included), it is a conflict and the mirror retries. The B5 and G5 claims now say so. New test: the refusal-on-a-moved-row case, shaped like the probe. The reviewer's probe itself passes against the fixed code.
