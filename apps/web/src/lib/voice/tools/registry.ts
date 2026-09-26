@@ -82,8 +82,10 @@ type BookingContact = {
 };
 
 /**
- * Booking tools are bound to the verified caller. A booking may be moved or
- * cancelled on this call only when EITHER
+ * Booking tools are bound to the caller ID — what the carrier presents on
+ * the call. Nothing here reads a STIR/SHAKEN attestation, so it is not
+ * authentication; it is simply the only identity a call carries. A booking
+ * may be moved or cancelled on this call only when EITHER
  *   (a) it was made on this call — `state.bookings` is written only by
  *       book_appointment and reschedule_appointment, from ids the database
  *       returned, never from anything the model passes; OR
@@ -260,10 +262,11 @@ export async function runTool(
       return { state, result: { slots } };
     }
 
-    // Booking tools are bound to the verified caller: caller ID is the only
-    // identity. A number the caller recites is never looked up — the schema
-    // no longer declares one, and a stray `phone` arg (models do send
-    // undeclared args) that is not the caller ID is refused, not queried.
+    // Booking tools are bound to the caller ID: it is the only identity a
+    // call carries (presented, not authenticated). A number the caller
+    // recites is never looked up — the schema no longer declares one, and a
+    // stray `phone` arg (models do send undeclared args) that is not the
+    // caller ID is refused, not queried.
     // Every refusal leaves `state` untouched: nothing was found for anyone.
     case "find_my_booking": {
       if (!ctx.callerNumber) {

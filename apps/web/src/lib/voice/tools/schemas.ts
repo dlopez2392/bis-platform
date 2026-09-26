@@ -9,7 +9,7 @@ const BOOKING_TOOLS = [
   { type: "function", name: "book_appointment",
     description: "Book an appointment at an available ISO start time. Requires the caller's name and a phone number (their caller ID is used if they don't give one). You MUST first ask whether they would like an email confirmation: pass their email, or emailDeclined: true if they said no. The tool refuses to book without one of the two.",
     parameters: { type: "object", properties: { startsAt: { type: "string" }, name: { type: "string" }, email: { type: "string" }, emailDeclined: { type: "boolean", description: "true ONLY after you asked whether they want an email confirmation and they declined or could not give one" }, phone: { type: "string" }, notes: { type: "string" } }, required: ["startsAt", "name"] } },
-  // Booking tools are bound to the verified caller (registry.ts): the two
+  // Booking tools are bound to the caller ID (registry.ts): the two
   // below refuse a booking that is neither under the caller ID nor made on
   // this call, and find_my_booking takes no number at all — the contract
   // says so, so the model never asks a caller for one to look up.

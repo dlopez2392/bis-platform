@@ -85,7 +85,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       ? `The caller is calling from ${input.callerNumber}. Treat that as their callback number unless they give a different one.`
       : onWeb
         ? "You do not have a way to reach them yet. Ask for an email address or a phone number when you need one, and use capture_lead to record it."
-        // Booking tools are bound to the verified caller (tools/registry.ts):
+        // Booking tools are bound to the caller ID (tools/registry.ts):
         // with no caller ID, find_my_booking refuses and a booking made
         // before this call cannot be changed. Said up front so the model
         // does not promise a lookup the tool will refuse. The no-booking

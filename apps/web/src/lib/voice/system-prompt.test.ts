@@ -155,7 +155,7 @@ describe("buildSystemPrompt", () => {
   });
 });
 
-// Booking tools are bound to the verified caller (tools/registry.ts). The
+// Booking tools are bound to the caller ID (tools/registry.ts). The
 // prompt says the same thing the tools enforce, so the model does not promise
 // a lookup the tool will refuse. Pinned on phrases that appear ONLY in the new
 // lines — "number they are calling from" alone is also in the read-back rule.

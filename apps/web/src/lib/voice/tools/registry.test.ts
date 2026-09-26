@@ -101,7 +101,7 @@ describe("check_availability", () => {
   });
 });
 
-// Booking tools are bound to the verified caller: caller ID is the only
+// Booking tools are bound to the caller ID: it is the only
 // identity, and a number the caller recites never finds, reveals, moves or
 // cancels anything.
 describe("find_my_booking", () => {
@@ -479,7 +479,7 @@ describe("book_appointment", () => {
 describe("reschedule / cancel", () => {
   // Every fixture here OWNS the booking it changes: the contact's phone is
   // the caller ID. The ownership rule itself is pinned in "bound to the
-  // verified caller" below.
+  // caller ID" below.
   const OWNER = { id: "ct1", first_name: "Ana", last_name: "Ruiz", email: null, phone: "+19562921696" };
   beforeEach(() => {
     dbMocks.getContact.mockResolvedValue(OWNER);
@@ -704,13 +704,13 @@ describe("reschedule / cancel", () => {
     });
   });
 
-  // Booking tools are bound to the verified caller. A booking may be moved or
+  // Booking tools are bound to the caller ID. A booking may be moved or
   // cancelled only when it was made on THIS call, or when its contact's phone
   // is the caller ID. Everything a refusal must not do is asserted against a
   // context where doing it would be observable: a video calendar (so a room
   // would be minted), notify emails set and a contact email on file (so mail
   // would go out).
-  describe("bound to the verified caller", () => {
+  describe("bound to the caller ID", () => {
     const newSlot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") };
     const NEW_ISO = "2027-06-02T14:00:00.000Z";
     const ROW = { id: "b1", contact_id: "ct2", calendar_id: "cal1",

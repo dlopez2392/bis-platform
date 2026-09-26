@@ -66,7 +66,7 @@ describe("toolSchemas", () => {
     expect(names).not.toContain("book_appointment");
   });
 
-  // Booking tools are bound to the verified caller. A declared `phone`
+  // Booking tools are bound to the caller ID. A declared `phone`
   // parameter is an invitation to pass whatever number the caller recites;
   // the tool takes none, and says it only looks up the number they are
   // calling from.
