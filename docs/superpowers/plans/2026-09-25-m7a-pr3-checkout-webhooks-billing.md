@@ -6073,3 +6073,148 @@ These were the plan's eight questions. On 2026-09-25 danlo answered "go with you
    - (h) The failed-payment settings (DECISION 7, Task 13 Step 5) decide which statuses the pause sees: after the last retry Stripe marks the subscription `unpaid`, never auto-`canceled`.
 2. **M7 #3 (multi-agency):** the composite FK `account_billing (plan_id, agency_id)` with 0050's pattern (G10). The writers' agency checks stay as defence in depth.
 3. **Settle B4 before the first live mid-month Change plan** (DECISION 2 was taken on it unverified, and danlo accepted the risk). On a Stripe TEST clock: a subscription on plan A with metered usage, an in-place price swap to plan B mid-period (`updateSubscriptionPrices`), then advance the clock past the period end and read the invoice. If the meters are not priced as B4 says, write a small follow-up plan (Stripe subscription schedules, or a switch at the next billing date) before any live Change plan.
+
+## Execution corrections (2026-09-26)
+
+Everything above is the plan as reviewed and executed; it is left as written. This section records where the SHIPPED code deliberately departs from it, and why. It condenses the reviews held during execution (the orchestrator's corrections list). Where the code and the task text above disagree, the code is right. Commits are on `feat/m7a-pr3-billing`, listed by `git log origin/main..HEAD`.
+
+### Real test totals (against the plan's 119)
+
+**Counted on 2026-09-26 at `cf15c788`** (the two commits after it touch docs only), from each runner's own collection, never from this plan:
+- **Web:** `vitest run --reporter=json` over the 27 web test files that differ from `origin/main` (`7cd7b481`, which already holds A11 #146): **389 tests, 389 passed**. The seven modified files, collected the same way in a scratch worktree of `origin/main`, hold 210, so they add 32.
+- **db:** `vitest list --json` over the six db files (collection only; its config left out `globalSetup`, so nothing connected or swept). It returned 71, the same as a static count of `it(` per file; none of the six uses `.each`, and their loops are inside test bodies. Main's `usage.test.ts` holds 15 and its `test/usage.test.ts` 8.
+- **e2e:** the `test(` blocks in `billing.spec.ts`.
+
+| Scope | Plan | Real |
+|---|---|---|
+| db, live: `billing-checkout-schema` / `account-billing` | 11 / 4 | 11 / 5 |
+| db, unit: `account-billing` / `billing` / `usage` | 17 / 1 / +1 | 30 / 1 / +1 |
+| `stripe-gateway` / `stripe-webhook` / `webhook` / webhook `route` / `ci-workflow` | +8 / 3 / 7 / 6 / +1 | +26 (58 → 84) / 5 / 7 / 9 / +1 |
+| `billing-view` / `billing-link` email / `billing-link` / `change-plan` / `portal` | 9 / 3 / 9 / 2 / 3 | 12 / 3 / 22 / 2 / 8 |
+| `billing-actions` / `billing-card` / `billing-section` / `registry` | 8 / 5 / 3 / +1 | 28 / 17 / 5 / +2 |
+| client billing `page` / `actions` / `nav-groups` | 4 / 3 / +1 | 6 / 8 / +1 |
+| `billing-banner` / account `layout` / `billing-done` | 3 / 2 / 2 | 3 / 4 / 2 |
+| Not in the plan: `account-billing-read` / `manage-billing-button` / `shared-read` / styleguide `billing-card-states` / `material` / Settings `page` | none | 2 / 2 / 1 / 1 / +1 / +1 |
+| e2e (`billing.spec.ts`) | 2 | 2 |
+| **Total** | **119** (db 15 live + 19 unit, web 83, e2e 2) | **229** (db 16 live + 32 unit, web 179, e2e 2) |
+
+Edited without new tests: `cron/reminders/route.test.ts` (30 → 30; the `@bis/db` mock carries `METER_KEYS`, `57eacc93`), db `test/usage.test.ts` (8 → 8; the `bill()` helper), `e2e/client-access.spec.ts` (the client nav list gains Billing), and `e2e/fixtures/sweep.ts` (comments). Files: 47 created and 26 modified, not counting this plan (the plan said 40 and 22).
+
+Task 13 Step 1's run command does not reach every new file (for example `settings/page.test.ts`, `components/ui/material.test.ts`, `nav-groups`, `registry`, `ci/ci-workflow.test.ts`). To recount, run `git diff --name-only --diff-filter=AM origin/main HEAD -- apps/web | grep '\.test\.ts$'` and pass that list to vitest.
+
+### Task 1 (`94bddbc9`, `7b817d38`)
+
+No departures.
+
+### Task 2 (`6fac6b42`, `4958fa29`, `f46b56bc`, `f2b0842d`)
+
+- **23505.** `PostgrestError` has no `constraint` field (postgrest-js 2.110.8), so the plan's `error.constraint` never compiled as claimed (External facts, "typechecks"). The code parses the name out of the message (`/unique constraint "([^"]+)"/`) and compares it with `===`. Only `*_pkey` is the race or compare-and-set conflict; a 23505 on any other key, or one it cannot parse, throws.
+- **Link consumption** (`linkLedTo`). A link is consumed only when the customer matches AND `snapshot.startedAt * 1000 >= Date.parse(link.sentAt)`, and the delete is keyed by `checkout_session_id` too. On customer match alone, a late event for an OLD subscription deleted the NEW open link, which allowed two open sessions (G2). The plan's fixtures sent the link AFTER the subscription started, which no real first checkout does; the code's fixtures are corrected.
+- **A new refusal, `ended_other_subscription`** (add it to G7's list). It covers an ended subscription that STARTED BEFORE the stored one, i.e. history. A NEWER ended one still replaces the stored one and consumes its link; `f2b0842d` fixed the first version, which refused every ended non-stored subscription and so wedged Send.
+- `writePermissions` is the only features filter; `decideMirror` passes `plan.features` through.
+- Counts: unit 30 (plan 17), live 5 (plan 4).
+
+### Task 3 (`71c7eb6b`, `9e738612`, `5de8e323`, `75537d40`; grown by `a8bf5ae5` and `692783e0`)
+
+- `stripe-gateway.test.ts` is 58 on `main` (with A11) and 84 here; `stripe-webhook.test.ts` is 5. Each of the nine new Stripe calls is pinned with its exact params AND options through a stub client, including the no-url, unknown or null status and portal `has_more` refusals.
+- `FakeGateway.updateSubscriptionPrices` is all-or-nothing, and the fake refuses a reused key with different changes. `canonical()` throws on a Date, Map, Set or class instance instead of hashing it as `{}`. `updateSubscriptionPrices` carries the B4 / DECISION 2 label.
+- Later additions: `updateCustomerEmail` (Task 7). `listPortalConfigurations` returns each feature's on/off (Task 7). The fake throws `StripeInvalidRequestError`, as Stripe does, on expiring a session that is not open and on an unknown customer.
+
+### Task 4 (`1e6e3553`)
+
+- `claimWebhookEvent` has no in-progress state. A duplicate delivery that arrives while the first is still running claims `retry` and runs in parallel. So NOTHING on the webhook path may send anything, and every write is idempotent (`webhook.ts`'s doc comment).
+- A refusal's reason lives only in Vercel's runtime logs, which have limited retention. Carried to Next plans: record the outcome on the `stripe_webhook_events` row.
+
+### Task 5 (`cfd7d8b4`, `e25de3be`)
+
+- A signature failure logs one fixed line (never the header or body) and answers 400. A SIGNED event BIS cannot read answers **500**, not 400, so Stripe retries and the fault stays visible; a `SyntaxError` is named by type only. The secret is trimmed. The route hands `processStripeEvent` the key's mode.
+- Counts: `route.test.ts` 9 (plan 6).
+
+### Task 6 (`35097226`, `7d0ecc6b`, `9746845c`)
+
+- **G18:** a live link is shown and copyable on a COMPLIMENTARY account too. `link` and `can.copyLink` no longer depend on the status word.
+- **G13/G21:** the agency card says "Payment failed" on `incomplete` (accepted for the agency: it can flash during a successful first checkout). No "Next invoice" is shown while `incomplete`.
+- `billing.includes.none` was false for zero-rate or feature-less plans, and it reaches clients in the Task 7 email. It is reworded.
+- The `plainSpaces` comment says Node 22 and 24 do NOT emit U+202F (measured). The regex's characters are written as `\u` escapes.
+- Tests added: single-plan and no-plans action cases, a `formatDay` zone-crossing fixture, `over` at the exact allowance, and a unit test for `showsPaymentFailedBanner`. `billing-view` has 12 (plan 9).
+- Deferred item corrected: `monthStartInZone`'s real limit is zones with half- or quarter-hour offsets (the weekly window compares hours only), NOT DST at midnight, which was proven correct for 2024-2036.
+
+### Task 7 (`a8bf5ae5`, `d6ef6153`, `692783e0`, `266a2b14`, `d450403e`)
+
+- **Bug fixed (from the Task 2 re-review).** The checkout key covered only params plus `previous`. A link paid, then canceled, then re-sent for the same plan within 24 h replayed the COMPLETED session. It was saved with a `sent_at` after its own subscription started, so it was never consumed and Send was blocked for good. Every Send now mints its own request id, and the customer and Checkout keys include it; `previous` is gone. G3's "key is params" text is stale: a failed-then-retried first Send can leave an unused customer (harmless).
+- Why the key is per Send (labelled as an assumption from Stripe's idempotency docs): Stripe saves a 5xx under its key and replays it, so an input-derived key would turn one transient error into a refused Send for 24 h.
+- **The corrected-address rules.** An unbilled account reuses the link's customer only when the link went to the same address (trimmed, case-insensitive); otherwise it gets a new customer. A billed account keeps its one customer, and that customer's email is moved to the new recipient first (`updateCustomerEmail`); if that fails, the Send stops. A Send that loses a race puts back the address of the link that is live NOW.
+- `ensurePortalConfiguration` reads each feature. A tagged configuration edited in the dashboard (self-cancel switched on, say) is passed over, logged and replaced, and the replacement's key names the configurations it replaces. This keeps DECISION 3.
+- Errors are logged by class, code and status, with the message cut to 300 characters and email addresses redacted (`loggableError`), never whole. Copy: "our secure payment page".
+- Counts: plan 17 (3 + 9 + 2 + 3), real 35 (email 3, `billing-link` 22, `change-plan` 2, `portal` 8).
+
+### Task 8 (`9bb73d48`, `d743ac88`)
+
+- Reply-to is `normalizeReplyTo(AGENCY_SUPPORT_EMAIL) ?? "hello@bis-rgv.com"`, the same fallback as the Website page. Open question for danlo: is `hello@bis-rgv.com` read?
+- **Mark complimentary with a dead stored link** (`settleDeadLink`). The stored link is marked expired BEFORE the Stripe expire, so a transient failure can leave a payable session shown as dead. So it asks Stripe first:
+  - `open` → expire it at Stripe, then mark;
+  - `complete` → refuse ("already finished checkout");
+  - `expired` → mark;
+  - any failure, or no usable key → refuse.
+
+  Every refusal the database can decide comes before Stripe is asked. Assumptions X1 (Stripe refuses to expire a non-open session) and X2 (an expired session cannot be paid, even mid-3-D Secure) are labelled; the runbook's pre-launch probe settles them.
+- A refused mirror after a paid Change plan is logged.
+- Counts: `billing-actions` 28 (plan 8).
+
+### Task 9 (`9c212136`, `d9a1d2ba`)
+
+- **Change plan re-mints its request id after a refused answer.** A same-dialog retry would reuse the key, and Stripe would replay the saved 5xx for 24 h (assumption). A paid Change plan that throws says `billing.error.changePlanUnconfirmed` ("Stripe didn't confirm the change … check the plan shown here"), because after a timeout the swap may have applied and "Nothing was charged" could be false. A subscription hand-edited in Stripe gets its own copy (`subscriptionEdited`).
+- `billing.error.email` shows on the email FIELD. Stop complimentary while a link is live runs without an Undo, which could only have failed. The card, its skeleton and its error card all carry `id="billing"`, so the deferred "skeleton lacks the anchor" item is closed.
+- Counts: `billing-card` 17 (plan 5), `billing-section` 5 (plan 3), `registry` +2 (plan +1).
+
+### Task 10 (`4e68ae4d`, `cf9d66c4`, `779017f6`)
+
+- The layout and the page read the billing row through `readAccountBilling` (React `cache()`, `lib/billing/account-billing-read.ts`): one read per navigation, not two or three.
+- The client's page says **"Payment processing"** for an `incomplete` first payment, whoever opens it. The agency's Settings card keeps G13's "Payment failed".
+- Manage billing never rejects: a database error or a Stripe config fault is the plain sentence plus a log line naming the account. A canceled subscription's help line offers past invoices. `client-access.spec.ts`'s `CLIENT_NAV` gains "Billing".
+- Counts: `page` 6 (plan 4), `actions` 8 (plan 3), plus `manage-billing-button` 2, `shared-read` 1 and `account-billing-read` 2 (not in the plan).
+
+### Task 11 (`e9e2787e`, `c9a0c884`)
+
+- Both banner links target Task 9's `#billing` and Task 10's `/billing`. All three are on this branch, so the merge-order condition is met.
+- Copy: the client banner's link says "Go to Billing". `/billing-done` (cancelled) says "the link you were sent", because the link may have gone by Copy link and not by email.
+- The layout test's audience flag is switchable, so hard-coding `"client"` is now red.
+- Still open (needs D7): the running-build checks. They are the banner's focus ring on `--crit-bg` in both themes; the Conversations thread's fixed-header height (`message-thread.tsx:27`) with the banner (~60 px) above it; the banner above `max-w-2xl` pages; `/billing-done` signed out and as a client; and 375 px.
+
+### Task 12 (`0817ab65`, `cf15c788`)
+
+- The portal configuration BIS uses reads back from Stripe exactly equal to `portalFeatureFlags()` (B3 read-back). A drifted one would be replaced on every click.
+- X1 is observed on an EXPIRED session only. X1 on a COMPLETED session, and X2, cannot be observed, because no Stripe API completes a Checkout session. Both are reported as "NOT observed" warnings every run; the runbook's manual TEST-mode probe settles them.
+- Every assumption outcome is reported from `finally`, and every Supabase read asserts its `error` first.
+
+### Task 13 (this commit series: `07339d5d`, `7ba1d88d`)
+
+- **Step 8's refusal remedy was wrong.** "Fix the account … re-send the event from the dashboard" does not work: a refused event is already stamped, so the resent copy answers `duplicate`. The runbook (`docs/runbooks/stripe-billing.md`, `07339d5d`) says to clear `processed_at` first, or to edit the subscription's metadata so Stripe fires a fresh `customer.subscription.updated`. It also covers:
+  - every refusal reason and what to do about it;
+  - events lost after ~3 days (claimed but unstamped, and never claimed);
+  - the signature-failure line;
+  - the customer invariant, with the settle-first query and "move `updated_at` forward" on any hand edit;
+  - expiring before deleting a link;
+  - `resource_missing`, and leftover completed links;
+  - the >24 h resend tripwire;
+  - portal drift and the 24 h deactivation trap;
+  - the X1/X2 probe;
+  - B4 on a test clock.
+- **Step 5.4 ("Send test event → 200 ignored") is UNVERIFIED.** A dashboard test event may be `livemode: false` on a live endpoint (answer: 400 `wrong mode`, which still proves the secret), and the button may not exist. The runbook lists every answer.
+- `AGENCY_SUPPORT_EMAIL` was already in `.env.example` (for the Website page). Its comment now names the billing-link reply-to, "not sensitive" and "never blank" (`7ba1d88d`). It is set on Vercel Production in runbook step 1.3.
+- **Step 6's check misses A11.** `git log origin/main --oneline | grep -i "already exists"` finds nothing: A11 landed as `7cd7b481`, "fix(billing): stamp a meter event Stripe already holds …" (#146). The prerequisite IS met. Check by commit (`git merge-base --is-ancestor 7cd7b481 origin/main`), not by title. This branch carries A11 through a merge of the fix branch (`5d4d7217`), not `main`'s squash, so merge `origin/main` in before the PR.
+
+### Deferred list: now
+
+- Removed as fixed: "Stripe and SMTP error messages are logged whole" (`loggableError`, Task 7); "`BillingCardSkeleton` lacks `id="billing"`" (Task 9).
+- Widened: a refusal, or a leftover completed link, blocks Send through `checkout_finished`. A link whose session Stripe no longer knows (`resource_missing`) blocks BOTH Send (`stripe_failed`) and Mark complimentary. The runbook gives the manual fix for each.
+- Reworded: `monthStartInZone` (Task 6 above).
+
+### Still open, for the whole-branch review or later
+
+- The Change-plan dialog's request-id wiring is pinned by a static source scan. That proves the call is present, not that it runs (a dead `if (false)` call would pass); a render-based test would close it.
+- M-6: `listPlans` is not agency-scoped (M7 #3). M-7: `/styleguide` renders the Billing card several times, so `id="billing"` is duplicated there.
+- Nothing tells the agency when a mirror is refused; it is only in the logs. Next plans: record the outcome on the event row.
+- `sumUsageSince` and `countBilledAccountsByPlan` page by offset, which can drift (display only; keyset paging later).
+- `monthStartInZone` in half- and quarter-hour zones.
+- The running-build design review (needs D7): every screen, both themes, the blur fallback, 375 px, the keyboard.
