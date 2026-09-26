@@ -337,8 +337,10 @@ Two more consequences to expect:
   invalidates every token issued before the redeploy (they live 30 minutes,
   `guards.ts:19`), and silently: a form submitted from an old page is filed
   as spam behind a success message, a booking returns the same fake success
-  and books nothing, and a chat refuses to start. Rotate outside business
-  hours.
+  and books nothing (`apps/web/src/app/b/[publicId]/actions.ts:222-236`), and
+  a chat refuses to start
+  (`apps/web/src/app/api/concierge/[publicId]/turn/route.ts:205-219`). Rotate
+  outside business hours.
 
 **Verify** each rotation where it is used: the production smoke, one cron run
 returning 200, one form submission and one booking from a freshly loaded
@@ -373,8 +375,12 @@ deleted, a red run means the new key is missing somewhere step 2 names.
 ## Part F — record
 
 1. Change this file's status line to the date each part was done, and do the
-   same for the Preview row in `ci-supabase-project.md` ("Facts") and the
-   Preview bullet in `CLAUDE.md`.
+   same everywhere else a dated "not done" stands: the "Clerk it trusts" and
+   "Vercel Preview" rows in `ci-supabase-project.md` ("Facts"), the
+   production-isolation bullet in `CLAUDE.md`, and the superseded note in
+   `clerk-setup.md` Part E. `git grep -n -i "not done" -- CLAUDE.md
+   docs/runbooks` lists them (plus one unrelated line in `clerk-setup.md`'s
+   troubleshooting list).
 2. Ledger line: `ISOLATION DONE <date> — Preview on bis-ci, protection on,
    dev issuer off production, rotated: <names>`.
 
