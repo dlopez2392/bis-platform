@@ -379,8 +379,9 @@ deleted, a red run means the new key is missing somewhere step 2 names.
    "Vercel Preview" rows in `ci-supabase-project.md` ("Facts"), the
    production-isolation bullet in `CLAUDE.md`, and the superseded note in
    `clerk-setup.md` Part E. `git grep -n -i "not done" -- CLAUDE.md
-   docs/runbooks` lists them (plus one unrelated line in `clerk-setup.md`'s
-   troubleshooting list).
+   docs/runbooks` lists them among a few unrelated hits (D7's own status,
+   troubleshooting notes, this step); change only the ones that name this
+   runbook's work.
 2. Ledger line: `ISOLATION DONE <date> — Preview on bis-ci, protection on,
    dev issuer off production, rotated: <names>`.
 
