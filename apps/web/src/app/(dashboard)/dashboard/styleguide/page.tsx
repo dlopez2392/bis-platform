@@ -28,6 +28,8 @@ import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposa
 import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
 import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
+import { BillingBanner } from "@/components/billing-banner";
+import { BILLING_STATUS_TREATMENTS, type BillingStatus } from "@/lib/billing/billing-view";
 import { SmsPreview } from "@/components/sms-preview";
 import { withOptOut } from "@/lib/sms/opt-out";
 import {
@@ -526,6 +528,28 @@ export default async function StyleguidePage() {
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">Several — billed clients whose usage has waited over a day</p>
               <UsageStaleBanner count={3} />
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Billing status and banner" file="lib/billing/billing-view.ts · components/billing-banner.tsx">
+          {/* DESIGN rule 3: every billing state is a dot AND a word, in token
+              classes only (billing-view.test.ts pins them). The banner is the
+              payment-failed one, in both audiences' words. */}
+          <div className="w-full space-y-5">
+            <div className="flex flex-wrap gap-2">
+              {(Object.keys(BILLING_STATUS_TREATMENTS) as BillingStatus[]).map((s) => (
+                <DotPill key={s} label={BILLING_STATUS_TREATMENTS[s].label} chip={BILLING_STATUS_TREATMENTS[s].chip}
+                  dot={BILLING_STATUS_TREATMENTS[s].dot} data-status={s} />
+              ))}
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">The client, on every page of their account</p>
+              <BillingBanner audience="client" accountId="styleguide" />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">The agency, inside that account</p>
+              <BillingBanner audience="agency" accountId="styleguide" />
             </div>
           </div>
         </Section>
