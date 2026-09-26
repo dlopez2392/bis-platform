@@ -252,9 +252,6 @@ export function decideMirror(input: {
   if (plan.agencyId !== account.agencyId) return refuse("plan_other_agency");
   const sameSubscription = existing !== null && existing.stripeSubscriptionId === s.id;
   if (existing?.stripeSubscriptionId && !sameSubscription) {
-    if (existing.subscriptionStatus && !ENDED_STATUSES.includes(existing.subscriptionStatus)) {
-      return refuse("another_live_subscription");
-    }
     // An ended subscription OLDER than the stored one is history: a late event
     // for an old canceled subscription must not rewrite the id of a newer
     // ended one and move billing_started_at backwards. A NEWER one that has
@@ -263,8 +260,16 @@ export function decideMirror(input: {
     // so it consumes its link: refused, that link's completed session would
     // make every Send answer checkout_finished forever. billing_started_at is
     // the stored subscription's own start_date (set whenever the id changes).
+    //
+    // Tested BEFORE the live-subscription check (final review m1): whether
+    // the stored one is live or ended, an old ended subscription is stale
+    // history, and naming it another_live_subscription would send an operator
+    // to the runbook's "cancel and refund" over a legitimate final invoice.
     if (ENDED_STATUSES.includes(s.status) && s.startedAt * 1000 < Date.parse(existing.billingStartedAt)) {
       return refuse("ended_other_subscription");
+    }
+    if (existing.subscriptionStatus && !ENDED_STATUSES.includes(existing.subscriptionStatus)) {
+      return refuse("another_live_subscription");
     }
   }
   const unpaid = PAST_DUE_STATUSES.includes(s.status);

@@ -121,6 +121,16 @@ describe("decideMirror: named refusals (G7, G10)", () => {
       .toBe("write");
   });
 
+  it("a late event for an OLD, already-ended subscription is ended_other_subscription (stale, no action) even while the stored NEWER one is live, never another_live_subscription, whose runbook answer is 'cancel and refund' and would refund a legitimate final invoice (final review m1); a DIFFERENT live one, or an ended one NEWER than the stored live one, is still another_live_subscription (mutation: test the live stored subscription before the ended-and-older one → FAILS)", () => {
+    const newerLive = stored({ stripeSubscriptionId: "sub_new", subscriptionStatus: "active", billingStartedAt: iso(START + 500) });
+    expect(decideMirror({ ...base, existing: newerLive, snapshot: snap({ id: "sub_old", status: "canceled" }) }))
+      .toEqual({ kind: "refused", reason: "ended_other_subscription" });
+    expect(decideMirror({ ...base, existing: newerLive, snapshot: snap({ id: "sub_other", status: "active" }) }))
+      .toEqual({ kind: "refused", reason: "another_live_subscription" });
+    expect(decideMirror({ ...base, existing: newerLive, snapshot: snap({ id: "sub_later", status: "canceled", startedAt: START + 900 }) }))
+      .toEqual({ kind: "refused", reason: "another_live_subscription" });
+  });
+
   it("refuses an unknown account, an unknown plan, a plan of another agency, and a status BIS does not know (mutation: drop the agency check → FAILS; cast the status → FAILS)", () => {
     expect(decideMirror({ ...base, account: null, snapshot: snap() })).toEqual({ kind: "refused", reason: "unknown_account" });
     expect(decideMirror({ ...base, plan: null, snapshot: snap() })).toEqual({ kind: "refused", reason: "unknown_plan" });
