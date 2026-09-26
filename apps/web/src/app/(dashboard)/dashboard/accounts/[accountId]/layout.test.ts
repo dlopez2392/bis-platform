@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
-vi.mock("@/lib/auth", () => ({ requireAccountAccess: async () => ({ userId: "u", isAgency: false }) }));
+// A switchable flag, not a fixed `isAgency: false`: a fixed stub can never
+// exercise the agency branch, so `audience={isAgency ? "agency" : "client"}`
+// could be replaced by a hard-coded "client" and every test here would still
+// pass (Opus review of 2223893).
+const auth = vi.hoisted(() => ({ isAgency: false }));
+vi.mock("@/lib/auth", () => ({ requireAccountAccess: async () => ({ userId: "u", isAgency: auth.isAgency }) }));
 vi.mock("next/navigation", () => ({ notFound: () => { throw new Error("NOT_FOUND"); } }));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({ from: () => { const c = { select: () => c, eq: () => c, maybeSingle: async () => ({ data: { id: "a", name: "A" }, error: null }) }; return c; } }),
@@ -24,6 +29,7 @@ const render = () => Layout({ children: "page", params: Promise.resolve({ accoun
 // plan review saw exactly that: `Error: getAccountBilling failed: timeout`).
 beforeEach(() => {
   billing.read.mockReset();
+  auth.isAgency = false;
 });
 
 describe("account layout: the payment-failed banner (G21)", () => {
@@ -33,6 +39,17 @@ describe("account layout: the payment-failed banner (G21)", () => {
     billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "active", billingPausedAt: null });
     expect(find(await render(), BillingBanner)).toHaveLength(0);
     billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "incomplete", billingPausedAt: null });
+    expect(find(await render(), BillingBanner)).toHaveLength(0);
+  });
+
+  it("shows the AGENCY banner, inside that same account, on a past-due subscription (mutation: hard-code audience=\"client\" in the layout instead of threading isAgency → FAILS)", async () => {
+    auth.isAgency = true;
+    billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "past_due", billingPausedAt: null });
+    expect(find(await render(), BillingBanner).map((b) => (b.props as { audience: string }).audience)).toEqual(["agency"]);
+  });
+
+  it("shows no banner once billing is paused, even on a past-due subscription (mutation: swap showsPaymentFailedBanner for a bare subscriptionStatus === \"past_due\" check → FAILS)", async () => {
+    billing.read.mockResolvedValue({ complimentary: false, subscriptionStatus: "past_due", billingPausedAt: "2026-09-01T00:00:00Z" });
     expect(find(await render(), BillingBanner)).toHaveLength(0);
   });
 

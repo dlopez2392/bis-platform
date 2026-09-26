@@ -16,6 +16,10 @@ describe("BillingBanner", () => {
     const html = render("client");
     expect(renderedText(html).replace(/\s+/g, " ").trim()).toBe(`${m["billing.banner.client"]} ${m["billing.banner.clientAction"]}`);
     expect(html).toContain('href="/dashboard/accounts/acct_1/billing"');
+    // renderedText strips tags to spaces, so a missing `{" "}` between the
+    // sentence and the link would still read as one space in the plain-text
+    // assertion above. Assert the RAW markup too: a real gap, not a tag.
+    expect(html).toMatch(/running\. <a /);
   });
 
   it("tells the AGENCY, inside that account, and links to the Billing card (mutation: show the client sentence to the agency → FAILS)", () => {

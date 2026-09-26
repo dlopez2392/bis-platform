@@ -2270,13 +2270,13 @@ export const m = {
   "billing.page.canceled": "Your subscription has ended.",
   "billing.page.portalFailed": "Billing couldn't open just now. Try again in a minute.",
   "billing.banner.client": "Your payment didn't go through. Update your card to keep automations running.",
-  "billing.banner.clientAction": "Update your card",
+  "billing.banner.clientAction": "Go to Billing",
   "billing.banner.agency": "This client's last payment didn't go through.",
   "billing.banner.agencyAction": "See billing",
   "billing.done.success.title": "You're all set",
   "billing.done.success.body": "Your plan starts as soon as your payment is confirmed, usually within a minute. You can close this tab.",
   "billing.done.cancelled.title": "Checkout wasn't finished",
-  "billing.done.cancelled.body": "Nothing was charged. Use the link in your email to try again.",
+  "billing.done.cancelled.body": "Nothing was charged. Use the link you were sent to try again.",
 } as const;
 
 export type MessageKey = keyof typeof m;
