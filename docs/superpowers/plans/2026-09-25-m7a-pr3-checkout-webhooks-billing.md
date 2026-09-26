@@ -6035,17 +6035,17 @@ Verification, in a fresh scratch copy OUTSIDE the worktree (`git archive` of 21a
 
 Minor findings from the plan review of 0a8fff9, not applied in the correction round. The whole-branch reviewer decides each one:
 - `maxDuration = 30` against the SDK's 2 retries × 20 s per call. The mirror now makes up to 1 + `MIRROR_ATTEMPTS` Stripe reads. Everything is idempotent, so a timeout is safe, but it can cut a mirror between its writes; the retry heals it.
-- The portal action (`billing/actions.ts`) and most Billing-card section reads go through `serviceDb()`. The house rule is `dbForRequest()` wherever RLS allows it; `billing_links` genuinely needs the service role.
+- ~~The portal action (`billing/actions.ts`)~~ and most Billing-card section reads go through `serviceDb()`. The house rule is `dbForRequest()` wherever RLS allows it; `billing_links` genuinely needs the service role. **Portal half resolved** (whole-branch review): the portal action reads `account_billing` through `readAccountBilling`, which is `dbForRequest()` (RLS). The section reads stand as described.
 - `sumUsageSince` pages by offset over a table that is being written, one round trip per 1,000 rows per page view. Consider a per-meter `SUM` SQL function (it would have to ride in 0052, before Checkpoint A).
 - The complimentary writes are not atomic. A `permissions` write that fails after the row write never heals, which matters once PR-4 reads permissions.
 - If the mirror REFUSES a completed checkout, `checkout_finished` blocks Send for that account permanently (`billing-link.ts`).
 - `monthStartInZone` is tested only for Chicago. Add a zone whose DST change falls at midnight, or document the limit.
 - Nothing refuses the public CI webhook literal when a LIVE key is present.
-- The A11 prerequisite check (Task 13 Step 6) greps commit titles. Check by PR number or commit instead.
-- Stripe and SMTP error messages are logged whole and may contain the recipient's email (`billing-link.ts`).
-- The loading skeleton (`BillingCardSkeleton`) lacks `id="billing"`, so a ⌘K jump during streaming lands nowhere.
+- ~~The A11 prerequisite check (Task 13 Step 6) greps commit titles. Check by PR number or commit instead.~~ **Resolved:** checked by ancestry (Whole-branch review fixes, below).
+- ~~Stripe and SMTP error messages are logged whole and may contain the recipient's email (`billing-link.ts`).~~ **Resolved:** `loggableError` (Task 7); the last raw logs went in m3 and `4888fb60`.
+- ~~The loading skeleton (`BillingCardSkeleton`) lacks `id="billing"`, so a ⌘K jump during streaming lands nowhere.~~ **Resolved** (Task 9): `billing-card.tsx`'s skeleton carries `id="billing"`.
 - The Plans page's "N clients" now counts canceled rows too.
-- Weak tests: the webhook "out of order" test repeats the first test's shape, since the real ordering guard is now Task 2's compare-and-set test. `saveBillingLink`'s insert race (23505 → false) is untested.
+- Weak tests: the webhook "out of order" test repeats the first test's shape, since the real ordering guard is now Task 2's compare-and-set test. ~~`saveBillingLink`'s insert race (23505 → false) is untested.~~ **Resolved:** `packages/db/src/account-billing.test.ts` tests it ("save: … reports a lost race as false"; "saveBillingLink insert: billing_links_pkey … is false").
 
 ## DECISIONS (danlo, 2026-09-25)
 
@@ -6218,3 +6218,13 @@ No departures.
 - `sumUsageSince` and `countBilledAccountsByPlan` page by offset, which can drift (display only; keyset paging later).
 - `monthStartInZone` in half- and quarter-hour zones.
 - The running-build design review (needs D7): every screen, both themes, the blur fallback, 375 px, the keyboard.
+
+### Whole-branch review fixes (2026-09-26)
+
+- **I1 (merge blocker), `d70c33b3`.** With a usable key but no `STRIPE_WEBHOOK_SECRET`, the card offered Send and the action sent, so a client who paid was answered 503 on every event and stayed Unbilled. `STRIPE_WEBHOOK_SECRET` is now read in one place, `webhookSecretFromEnv` (`lib/billing/stripe-gateway.ts`, trimmed exactly as the route trimmed it; the route uses it too). `sendBillingLinkAction` refuses with `billing.error.noWebhook`. **Deviation from the review's wording:** the card gets a SEPARATE `webhookReady` flag gating Send only, not a stricter `stripeReady`. `stripeReady` also gates paid Change plan (`billing-view.ts`) and shows `billing.card.noStripe` ("Stripe isn't connected … The Plans page says why"), both wrong when only the secret is missing. So there is a new line, `billing.card.noWebhook`, rather than a reuse of noStripe. With neither set, only noStripe shows. Mark complimentary and Change plan are unchanged. CI's e2e job exports `STRIPE_WEBHOOK_SECRET` (the literal `whsec_bis_ci_e2e_fixture_only`, `ci.yml`), the name the helper reads, so Send stays available there; `billing.spec.ts` already skips without it.
+- **m1, `8b54178c`.** `decideMirror` checked "the stored subscription is live" before "this one ended and started before the stored one", so a late event for an old ended subscription was refused as `another_live_subscription` (runbook: cancel and refund) whenever the stored one was live. The ended-and-older check now runs first.
+- **m2, `d70c33b3`.** `billing-section.test.ts` now pins the env wiring: probe M14 (hard-code `stripeReady: true`) fails "without a usable Stripe key the card is not stripeReady …", and each hard-coded `webhookReady` value fails a named test.
+- **m3, `5804647d`.** The webhook route's processing catch logged `e.message` raw. Both of its catches now go through `loggableError`, and a SyntaxError is still named by its type only. While checking "loggableError everywhere" before striking it, one more raw log turned up, in `billing-section.tsx`'s failed-read catch. Fixed in `4888fb60`.
+- **Runbook, `33dd8d2c`.** Billing links are off without the secret, so the order of live-setup steps can no longer leave a payer unbilled while the secret is MISSING. A WRONG secret still can, and step 5 catches it. `ended_other_subscription` is a stale event needing no action. New 5.8: expire any open link before creating a subscription by hand (consuming a link deletes its row and never expires its session).
+- **Task 13 Step 6 is satisfied** by `7cd7b481` (#146): `git merge-base --is-ancestor 7cd7b48 origin/main` exits 0 (after `git fetch`, `origin/main` was `7cd7b481` itself).
+- Struck from "Deferred to whole-branch review" as resolved, each checked in the code: the portal's billing read (RLS, through `readAccountBilling`); `loggableError` everywhere; the skeleton's `id="billing"`; the `saveBillingLink` insert race (tested). Still standing from that list: the Billing-card section's `serviceDb()` reads.
