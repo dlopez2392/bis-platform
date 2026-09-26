@@ -85,7 +85,7 @@ async function revertToPending(
  * The write helper's own call threw AFTER the compare-and-swap already
  * stamped the proposal `accepted` — this can only mean the write is
  * AMBIGUOUS. `addTask`, `fillContactBlanks` and `moveOpportunityToStage`
- * each perform their real write, THEN a separate `emit` insert into
+ * each perform their real write, THEN a separate `emit` append to
  * `events`, as two non-transactional round-trips (`addTask`,
  * packages/db/src/activities.ts:23-36): a throw from the second leaves the
  * first's row sitting in the database while the caller sees a failure.
