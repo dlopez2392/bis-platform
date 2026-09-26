@@ -100,6 +100,38 @@ describe("booking accessors", () => {
     });
   });
 
+  /**
+   * Same bug class, the other writer: the phone receptionist cancels and
+   * reschedules through setBookingStatus, and an event with no actorType
+   * defaulted to 'user' — crediting a signed-in person with a change the AI
+   * made on a call. Both halves are pinned: the passed value lands, and every
+   * existing caller that passes nothing keeps 'user'.
+   */
+  it("setBookingStatus threads actorType through to the booking.status_changed event, 'user' when omitted", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Status", email: "status-changer@example.com" }, "user_test");
+      const byVoice = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-03-06T15:00:00Z"),
+          endsAt: new Date("2027-03-06T16:00:00Z") }, "user_test");
+      const byOperator = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-03-07T15:00:00Z"),
+          endsAt: new Date("2027-03-07T16:00:00Z") }, "user_test");
+      await setBookingStatus(db, accountId, byVoice.id, "cancelled", "voice", "ai");
+      await setBookingStatus(db, accountId, byOperator.id, "completed", "user_test");
+      const { data: ev } = await db.from("events").select("actor_type, actor_id, payload")
+        .eq("account_id", accountId).eq("type", "booking.status_changed");
+      expect(ev).toHaveLength(2);
+      const rows = (ev ?? []) as { actor_type: string; actor_id: string; payload: { bookingId: string } }[];
+      const voiceRow = rows.find((r) => r.payload.bookingId === byVoice.id);
+      const operatorRow = rows.find((r) => r.payload.bookingId === byOperator.id);
+      expect(voiceRow?.actor_type).toBe("ai");
+      expect(voiceRow?.actor_id).toBe("voice");
+      expect(operatorRow?.actor_type).toBe("user");
+    });
+  });
+
   it("reminder window: due exactly once, stamped after send", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");

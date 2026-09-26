@@ -291,9 +291,14 @@ export async function cancelBookingByToken(
   return row;
 }
 
-/** Operator transitions: cancel, mark completed, mark no-show. */
+/**
+ * Operator transitions: cancel, mark completed, mark no-show. Also the phone
+ * receptionist's cancel/reschedule, which passes `actorType: "ai"` — omitted,
+ * it stays `"user"`, so every operator call site keeps its attribution.
+ */
 export async function setBookingStatus(
   db: SupabaseClient, accountId: string, bookingId: string, status: BookingStatus, actorId: string,
+  actorType: ActorType = "user",
 ): Promise<void> {
   const nowIso = new Date().toISOString();
   // THE AUTOMATION CLOCKS (0026; spec, "Decisions taken after Milestone A
@@ -312,7 +317,7 @@ export async function setBookingStatus(
     .select("id");
   if (error) throw new Error(`setBookingStatus failed: ${error.message}`);
   if (!data?.length) throw new Error(`setBookingStatus: no booking ${bookingId} for account ${accountId}`);
-  await emit(db, accountId, "booking.status_changed", actorId, { bookingId, status });
+  await emit(db, accountId, "booking.status_changed", actorId, { bookingId, status }, actorType);
 }
 
 /**
