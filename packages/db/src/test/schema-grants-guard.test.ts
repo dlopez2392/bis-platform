@@ -3,14 +3,20 @@ import type { Client } from "pg";
 import { withRollback } from "./db";
 
 /**
- * THE SCHEMA-WIDE GUARD. Every table in `public`:
+ * THE SCHEMA-WIDE GUARD. Every relation in `public` that the data API can
+ * expose (tables, partitioned tables, views, materialized views, foreign
+ * tables):
  *   - has row level security on;
  *   - has no policy that applies to PUBLIC;
  *   - gives `anon` and `authenticated` EXACTLY the write privileges allow-listed below.
- * Supabase's default privileges grant ALL on every new table to anon and
- * authenticated (packages/db/supabase/bootstrap/ci-project.sql:58-63), so a migration that
- * forgets its revoke fails here, naming the table. The allow-list IS the client
- * role's write surface, written out: changing it is a deliberate, reviewed edit.
+ * Supabase's default privileges grant ALL on every new table AND view to anon
+ * and authenticated (packages/db/supabase/bootstrap/ci-project.sql:58-63), so a
+ * migration that forgets its revoke fails here, naming the relation. A view
+ * or materialized view cannot enable row level security, so one created in
+ * `public` always lands in `rlsOff`: that is deliberate, and it forces an
+ * explicit, reviewed decision here rather than a silent read path around the
+ * tables' policies. There are none today. The allow-list IS the client role's
+ * write surface, written out: changing it is a deliberate, reviewed edit.
  * Privileges are read with has_table_privilege / has_column_privilege, which
  * count a grant to PUBLIC as the role's own and see PG17's MAINTAIN.
  * information_schema lists a PUBLIC grant only under grantee 'PUBLIC' (so a
@@ -23,13 +29,13 @@ type Surface = { rlsOff: string[]; publicPolicies: string[]; writes: Record<stri
 async function writeSurface(c: Client): Promise<Surface> {
   const { rows: rls } = await c.query<{ t: string }>(
     `select c.relname as t from pg_class c join pg_namespace n on n.oid = c.relnamespace
-      where n.nspname = 'public' and c.relkind in ('r','p') and not c.relrowsecurity order by 1`);
+      where n.nspname = 'public' and c.relkind in ('r','p','v','m','f') and not c.relrowsecurity order by 1`);
   const { rows: pol } = await c.query<{ p: string }>(
     `select tablename || '.' || policyname as p from pg_policies
       where schemaname = 'public' and 'public' = any(roles) order by 1`);
   const { rows } = await c.query<{ k: string; p: string }>(
     `with t as (select c.oid, c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
-                 where n.nspname = 'public' and c.relkind in ('r','p')),
+                 where n.nspname = 'public' and c.relkind in ('r','p','v','m','f')),
           r(role) as (values ('anon'::name), ('authenticated'::name)),
           tp(priv) as (values ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER'), ('MAINTAIN')),
           cp(priv) as (values ('INSERT'), ('UPDATE'), ('REFERENCES'))
@@ -87,8 +93,8 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   "authenticated users": IUD,
 };
 
-describe("schema guard: every public table", () => {
-  it("has row level security enabled (mutation: disable it on any table -> FAILS naming it)", () =>
+describe("schema guard: every public table, view, materialized view and foreign table", () => {
+  it("has row level security enabled (mutation: disable it on any table, or create any view -> FAILS naming it)", () =>
     withRollback(async (c) => { expect((await writeSurface(c)).rlsOff).toEqual([]); }));
 
   it("has no policy that applies to PUBLIC", () =>
@@ -103,6 +109,18 @@ describe("schema guard: the guard sees what it claims to (positive controls, rol
     withRollback(async (c) => {
       const probe = `zz_guard_probe_${RUN}`;
       await c.query(`create table public.${probe} (id int, note text)`);
+      // Explicit, so the control does not depend on the default ACL (which adds more on top).
+      await c.query(`grant insert, update, delete on public.${probe} to anon, authenticated`);
+      const s = await writeSurface(c);
+      expect(s.rlsOff).toContain(probe);
+      expect(s.writes[`authenticated ${probe}`]).toEqual(expect.arrayContaining(IUD));
+      expect(s.writes[`anon ${probe}`]).toEqual(expect.arrayContaining(IUD));
+    }));
+
+  it("a new view is reported as having no row level security, with its write grants, for both roles (mutation: scan tables only -> FAILS)", () =>
+    withRollback(async (c) => {
+      const probe = `zz_guard_view_${RUN}`;
+      await c.query(`create view public.${probe} as select 1 as x`);
       // Explicit, so the control does not depend on the default ACL (which adds more on top).
       await c.query(`grant insert, update, delete on public.${probe} to anon, authenticated`);
       const s = await writeSurface(c);

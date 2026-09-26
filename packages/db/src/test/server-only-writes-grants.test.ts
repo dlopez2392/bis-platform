@@ -123,21 +123,36 @@ describe("0053: server-only tables, at the catalogue", () => {
     }));
 });
 
-describe("0053: a member of a real account reads, and is refused every write by privilege", () => {
-  it("POSITIVE CONTROL (green before AND after): the member sees exactly its own row in each table", () =>
-    withRollback(async (c) => {
-      const s = await seed(c, "READ");
-      await actAs(c, { org_id: org("READ"), sub: "user_SOW_READ" });
-      const ids: Record<string, string> = {
-        events: s.eventId, form_submissions: s.submissionId, conversations: s.conversationId,
-        messages: s.messageId, bookings: s.bookingId, call_proposals: s.proposalId,
-      };
-      for (const [table, id] of Object.entries(ids)) {
-        const { rows } = await c.query(`select id::text as id from ${table} where account_id = $1`, [s.accountId]);
-        expect(rows, table).toEqual([{ id }]);
-      }
-    }));
+// Tenancy on READ for the six server-written tables. GREEN BEFORE AND AFTER
+// 0053: each read policy keeps the using clause of the policy it replaces.
+// Two real accounts, both with client access on, one row each in every table;
+// the member of the first asks for BOTH accounts' rows and must get exactly
+// its own. The WHERE names both accounts on purpose, so the answer comes from
+// RLS and not from the query. One case per table, so a policy opened to every
+// tenant turns THAT table's case red by name. This is also the file's positive
+// control: a member that could read nothing at all would pass every refusal
+// below for the wrong reason, and these cases would be red.
+const READ_CASES = [
+  ["events", "eventId"], ["form_submissions", "submissionId"], ["conversations", "conversationId"],
+  ["messages", "messageId"], ["bookings", "bookingId"], ["call_proposals", "proposalId"],
+] as const;
 
+describe("0053: a member reads its own account's rows and never another account's (green before AND after)", () => {
+  for (const [table, key] of READ_CASES) {
+    it(`${table}: the member of one account reads exactly its own row, not the other account's (mutation: widen its read policy to using (true) -> FAILS)`, () =>
+      withRollback(async (c) => {
+        const own = await seed(c, `TEN_A_${table}`);
+        const other = await seed(c, `TEN_B_${table}`);
+        await actAs(c, { org_id: org(`TEN_A_${table}`), sub: "user_SOW_TEN" });
+        const { rows } = await c.query(
+          `select id::text as id from ${table} where account_id in ($1, $2) order by id`,
+          [own.accountId, other.accountId]);
+        expect(rows, table).toEqual([{ id: own[key] }]);
+      }));
+  }
+});
+
+describe("0053: a member of a real account is refused every write by privilege", () => {
   // Each case below is one 0053 decides. Refusals that earlier migrations
   // decided are pinned beside those migrations' tests (rls.test.ts,
   // booking-grants.test.ts, call-proposals-grants.test.ts), not repeated here.
@@ -156,9 +171,8 @@ describe("0053: a member of a real account reads, and is refused every write by 
         `insert into bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token)
            values ($1,$2,$3, now() + interval '2 days', now() + interval '2 days 1 hour', $4)`,
         [s.accountId, s.calendarId, s.contactId, `tok_SOW_INS2_${RUN}`])).toMatchObject(byPrivilege("bookings"));
-      // calendars is one per account (calendars_one_per_account); a second
-      // insert would be refused by that before 0053 too, which proves nothing.
-      // A fresh account with no calendar isolates the grant. Owner FIRST: as a
+      // calendars is one per account (calendars_one_per_account), so a fresh
+      // account with no calendar isolates the grant. Owner FIRST: as a
       // member, RLS on agencies returns no row.
       await actAsOwner(c);
       const { rows: [agency] } = await c.query("select id from agencies limit 1");
@@ -245,17 +259,35 @@ describe("0053: what the member can still do (green before AND after; the narrow
 });
 
 describe("0053: call_proposals_decision_complete", () => {
-  it("a decided proposal names its decider and time; a pending one names neither (mutation: drop the CHECK -> FAILS)", () =>
+  // Every condition in the CHECK has a case that only it refuses, so dropping
+  // any one of them lets exactly that case land. `decided_by is not null` is
+  // not redundant with the btrim test beside it: btrim(NULL) <> '' is NULL,
+  // and a CHECK passes on NULL. Each case gets a call of its own, so
+  // call_proposals_one_pending_unique (0040) never decides one. Every refusal
+  // is matched on the constraint's NAME, because the status and kind lists
+  // raise 23514 too.
+  it("a decided proposal names its decider and time; a pending one names neither (mutation: drop the CHECK, or any one of its conditions -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c, "CHK");
-      const { rows: [p] } = await c.query("select call_id from call_proposals where id = $1", [s.proposalId]);
-      // kinds other than the seed's pending 'task', so call_proposals_one_pending_unique (0040) never decides a case
-      const ins = (status: string, at: string | null, by: string | null, kind: string) => refused(c,
-        `insert into call_proposals (account_id, call_id, kind, payload, evidence, status, decided_at, decided_by)
-           values ($1,$2,$6,'{}'::jsonb,'evidence',$3,$4,$5)`, [s.accountId, p.call_id, status, at, by, kind]);
-      expect(await ins("accepted", null, null, "contact_field")).toMatchObject({ code: "23514" });
-      expect(await ins("accepted", "2026-09-26T00:00:00Z", " ", "contact_field")).toMatchObject({ code: "23514" });
-      expect(await ins("pending", null, "user_x", "opportunity_stage")).toMatchObject({ code: "23514" });
-      expect(await ins("dismissed", "2026-09-26T00:00:00Z", "user_x", "contact_field")).toBeNull();
+      const { rows: [seeded] } = await c.query("select call_id from call_proposals where id = $1", [s.proposalId]);
+      const ins = async (status: string, at: string | null, by: string | null) => {
+        const { rows: [call] } = await c.query(
+          `insert into calls (account_id, phone_number_id)
+             select account_id, phone_number_id from calls where id = $1 returning id`, [seeded.call_id]);
+        return refused(c,
+          `insert into call_proposals (account_id, call_id, kind, payload, evidence, status, decided_at, decided_by)
+             values ($1,$2,'task','{}'::jsonb,'evidence',$3,$4,$5)`, [s.accountId, call.id, status, at, by]);
+      };
+      const byCheck = { code: "23514", message: expect.stringMatching(/call_proposals_decision_complete/) };
+      const at = "2026-09-26T00:00:00Z";
+      expect(await ins("accepted", null, null), "decided, names neither").toMatchObject(byCheck);
+      expect(await ins("accepted", null, "user_x"), "decided, no time").toMatchObject(byCheck);
+      expect(await ins("accepted", at, null), "decided, no decider").toMatchObject(byCheck);
+      expect(await ins("accepted", at, " "), "decided, blank decider").toMatchObject(byCheck);
+      expect(await ins("pending", null, "user_x"), "pending, names a decider").toMatchObject(byCheck);
+      expect(await ins("pending", at, null), "pending, names a time").toMatchObject(byCheck);
+      expect(await ins("pending", at, "user_x"), "pending, names both").toMatchObject(byCheck);
+      expect(await ins("dismissed", at, "user_x"), "decided, names both").toBeNull();
+      expect(await ins("pending", null, null), "pending, names neither").toBeNull();
     }));
 });

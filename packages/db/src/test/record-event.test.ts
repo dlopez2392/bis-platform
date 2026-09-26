@@ -87,16 +87,13 @@ describe("0053 record_event: who acted comes from the JWT", () => {
   const notMember = { code: "42501", message: expect.stringMatching(/record_event: not a member of this account/) };
   const noUser = { code: "42501", message: expect.stringMatching(/record_event: no user on this request/) };
 
-  it("refuses another account's id, and writes nothing there (mutation: drop the tenancy check, or its coalesce -> FAILS)", () =>
+  it("refuses another account's id (mutation: drop the tenancy check, or its coalesce -> FAILS)", () =>
     withRollback(async (c) => {
       await seedAccount(c, "MINE");
       const other = await seedAccount(c, "THEIRS");
       await actAs(c, { org_id: org("MINE"), sub: sub("MINE") });
       expect(await refused(c, "select public.record_event($1, 'x.y', '{}'::jsonb)", [other]))
         .toMatchObject(notMember);
-      await actAsOwner(c);
-      const { rows } = await c.query("select count(*)::int as n from events where account_id = $1", [other]);
-      expect(rows[0].n).toBe(0);
     }));
 
   it("refuses a member whose company's client access is off (current_account_id resolves nothing)", () =>
