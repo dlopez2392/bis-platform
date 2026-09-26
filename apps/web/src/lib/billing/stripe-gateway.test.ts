@@ -5,6 +5,7 @@ import type Stripe from "stripe";
 import {
   billingGatewayFromEnv, priceCreateParams, PRODUCTION_SUPABASE_REF, stripeGateway, stripeKeyVerdict,
   STRIPE_API_VERSION, meterEventParams, meterEventFailureKind, METER_EVENT_TIMEOUT_MS,
+  checkoutSessionParams, idempotencyKey, subscriptionSnapshot, portalConfigurationParams, PORTAL_VERSION,
   type StripeEnv, type MeterEventInput,
 } from "./stripe-gateway";
 import { FakeGateway } from "./fake-gateway";
@@ -442,5 +443,102 @@ describe("FakeGateway meter events (as Stripe does: replay is A10; a held identi
     const refused = Object.assign(new Error("No such customer"), { type: "StripeInvalidRequestError" });
     g.failOn = { op: "reportMeterEvent", error: refused };
     await expect(g.reportMeterEvent(EVENT, "k1")).rejects.toBe(refused);
+  });
+});
+
+const PRICES = { base: "price_b", voice_minutes: "price_v", sms: "price_s", ai_chats: "price_a" };
+const CHECKOUT = {
+  accountId: "11111111-1111-4111-8111-111111111111", planId: "22222222-2222-4222-8222-222222222222",
+  customerId: "cus_1", priceIds: PRICES,
+  successUrl: "https://app.example/billing-done?result=success", cancelUrl: "https://app.example/billing-done?result=cancelled",
+};
+
+describe("checkoutSessionParams", () => {
+  it("is a subscription with the plan's FOUR prices: the base once, the three metered ones with no quantity (Stripe measures them), and the account + plan in BOTH the session's and the subscription's metadata (mutation: drop a meter price → FAILS; give a metered line a quantity → FAILS; drop subscription_data.metadata → the webhook cannot find the account, FAILS)", () => {
+    expect(checkoutSessionParams(CHECKOUT)).toEqual({
+      mode: "subscription", customer: "cus_1", client_reference_id: CHECKOUT.accountId,
+      line_items: [{ price: "price_b", quantity: 1 }, { price: "price_v" }, { price: "price_s" }, { price: "price_a" }],
+      subscription_data: { metadata: { bis_account_id: CHECKOUT.accountId, bis_plan_id: CHECKOUT.planId } },
+      metadata: { bis_account_id: CHECKOUT.accountId, bis_plan_id: CHECKOUT.planId },
+      success_url: CHECKOUT.successUrl, cancel_url: CHECKOUT.cancelUrl,
+    });
+  });
+
+  it("refuses a non-customer id and a non-price id before anything leaves the process (mutation: drop either guard → FAILS)", () => {
+    expect(() => checkoutSessionParams({ ...CHECKOUT, customerId: "acct_1" })).toThrow(/customerId/);
+    expect(() => checkoutSessionParams({ ...CHECKOUT, priceIds: { ...PRICES, sms: "prod_x" } })).toThrow(/sms/);
+  });
+});
+
+describe("idempotencyKey", () => {
+  it("changes when ANY parameter changes, nested or not, and not when key order does (every key covers every parameter) (mutation: hash only the top-level keys → the nested change keeps the key, FAILS; hash JSON.stringify unsorted → the reordered object changes the key, FAILS)", () => {
+    const k = idempotencyKey("bis-checkout", "req_1", CHECKOUT);
+    expect(idempotencyKey("bis-checkout", "req_1", { ...CHECKOUT, priceIds: { ...PRICES, sms: "price_s2" } })).not.toBe(k);
+    expect(idempotencyKey("bis-checkout", "req_2", CHECKOUT)).not.toBe(k);
+    const reordered = Object.fromEntries(Object.entries(CHECKOUT).reverse());
+    expect(idempotencyKey("bis-checkout", "req_1", reordered)).toBe(k);
+    expect(k).toMatch(/^bis-checkout-req_1-[0-9a-f]{24}$/);
+  });
+});
+
+describe("subscriptionSnapshot", () => {
+  const sub = (over: Record<string, unknown> = {}) => ({
+    id: "sub_1", customer: "cus_1", status: "past_due", start_date: 1_790_000_000,
+    metadata: { bis_account_id: CHECKOUT.accountId, bis_plan_id: "stale-in-metadata" },
+    items: {
+      has_more: false,
+      data: [
+        { id: "si_b", current_period_start: 1_790_000_000, current_period_end: 1_792_592_000,
+          price: { id: "price_b", metadata: { bis_plan_id: CHECKOUT.planId, bis_price: "base" } } },
+        { id: "si_s", current_period_start: 1_790_000_060, current_period_end: 1_792_592_060,
+          price: { id: "price_s", metadata: { bis_plan_id: CHECKOUT.planId, bis_price: "sms" } } },
+      ],
+    },
+    ...over,
+  }) as unknown as Stripe.Subscription;
+
+  it("reads the plan from the BASE PRICE's metadata (not the subscription's), the period from the items (earliest), the customer id from an expanded customer too (G6) (mutation: plan from subscription metadata → 'stale-in-metadata', FAILS; period from the last item → FAILS)", () => {
+    expect(subscriptionSnapshot(sub({ customer: { id: "cus_1" } }))).toEqual({
+      id: "sub_1", customerId: "cus_1", status: "past_due", accountId: CHECKOUT.accountId, planId: CHECKOUT.planId,
+      currentPeriodStart: 1_790_000_000, currentPeriodEnd: 1_792_592_000, startedAt: 1_790_000_000,
+      items: [
+        { id: "si_b", priceId: "price_b", priceKey: "base", planId: CHECKOUT.planId },
+        { id: "si_s", priceId: "price_s", priceKey: "sms", planId: CHECKOUT.planId },
+      ],
+    });
+  });
+
+  it("refuses a subscription whose items do not fit one page rather than guess (B8) (mutation: ignore has_more → FAILS)", () => {
+    expect(() => subscriptionSnapshot(sub({ items: { has_more: true, data: [] } }))).toThrow(/items/);
+  });
+});
+
+describe("the new gateway surface", () => {
+  it("portalConfigurationParams: card updates and invoice history ON; self-cancel, plan switching and profile edits OFF; tagged with the version BIS looks for (G19) (mutation: enable subscription_cancel → FAILS)", () => {
+    expect(portalConfigurationParams()).toEqual({
+      features: {
+        invoice_history: { enabled: true }, payment_method_update: { enabled: true },
+        customer_update: { enabled: false }, subscription_cancel: { enabled: false }, subscription_update: { enabled: false },
+      },
+      metadata: { bis_portal: PORTAL_VERSION },
+    });
+  });
+
+  it("billingGatewayFromEnv says which MODE its key is, for the webhook's livemode check (mutation: always false → a live endpoint's every event is refused, FAILS)", () => {
+    const test = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_test_x", NEXT_PUBLIC_SUPABASE_URL: "https://ci.supabase.co" });
+    expect(test.ok && test.live).toBe(false);
+    const live = billingGatewayFromEnv({ STRIPE_SECRET_KEY: "sk_live_x", VERCEL_ENV: "production", NEXT_PUBLIC_SUPABASE_URL: "https://tlbkbmlrfafquucsmsmm.supabase.co" });
+    expect(live.ok && live.live).toBe(true);
+  });
+
+  it("FakeGateway.createCheckoutSession replays one key, refuses the same key with other params, and expire only works on an open session, as Stripe does (mutation: mint a new session on a replayed key → FAILS)", async () => {
+    const fake = new FakeGateway();
+    const a = await fake.createCheckoutSession(CHECKOUT, "k1");
+    expect(await fake.createCheckoutSession(CHECKOUT, "k1")).toEqual(a);
+    await expect(fake.createCheckoutSession({ ...CHECKOUT, customerId: "cus_2" }, "k1")).rejects.toThrow(/idempotency/);
+    expect(await fake.getCheckoutSessionStatus(a.id)).toBe("open");
+    await fake.expireCheckoutSession(a.id);
+    expect(await fake.getCheckoutSessionStatus(a.id)).toBe("expired");
+    await expect(fake.expireCheckoutSession(a.id)).rejects.toThrow(/open/);
   });
 });
