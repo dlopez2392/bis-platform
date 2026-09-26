@@ -85,9 +85,20 @@ export function loggableError(e: unknown): string {
 /**
  * Spec flow 2 (plan G2, G3, G18). Order matters for money:
  *   refuse a live subscription → the previous session: complete → stop;
- *   open → mark the stored link expired, THEN expire it at Stripe → reuse or
- *   create the customer → create the session → save it conditionally on the
- *   previous one → email it.
+ *   open → mark the stored link expired, THEN expire it at Stripe → the
+ *   customer → create the session → save it conditionally on the previous
+ *   one → email it.
+ *
+ * THE CUSTOMER, and so the address Stripe's receipts and failed-payment
+ * emails go to:
+ *   - billed (the row holds a customer): always that one (G3), with its email
+ *     moved to this recipient BEFORE the session is made; if that update
+ *     fails, the Send stops at stripe_failed with nothing made or sent;
+ *   - unbilled: the link's customer only when the link went to this same
+ *     address (trimmed, case-insensitive), else a new customer.
+ * Two Sends at once on a billed account both move the shared customer's
+ * email before either saves; the loser ("stale") puts it back to the
+ * winner's saved address, and only logs if that fails.
  *
  * THE KEYS. Each Stripe create is keyed on every parameter it sends PLUS this
  * Send's own request id, minted once per call. Within the call the SDK's own
@@ -182,6 +193,21 @@ export async function sendBillingLink(deps: SendBillingLinkDeps, input: SendBill
       await gateway.expireCheckoutSession(session.id);
     } catch (e) {
       console.error(`billing link: could not expire the losing session ${session.id}: ${loggableError(e)}`);
+    }
+    // A billed account's customer is shared by every Send, and this one
+    // already moved its email to OUR address before losing. Put it back to
+    // the address the winning (live) link went to, so receipts follow that
+    // link. A failure here is logged, not thrown: the winner's link stands,
+    // and its next Send sets the email again.
+    if (billing?.stripeCustomerId && current && current.stripeCustomerId === customerId
+      && !sameAddress(current.sentTo, input.email)) {
+      try {
+        await gateway.updateCustomerEmail(customerId, current.sentTo, idempotencyKey("bis-customer-email-restore", input.accountId, {
+          customerId, email: current.sentTo, requestId,
+        }));
+      } catch (e) {
+        console.error(`billing link: could not put the customer's email back for account ${input.accountId} after losing a race: ${loggableError(e)}`);
+      }
     }
     return { ok: false, reason: "stale" };
   }

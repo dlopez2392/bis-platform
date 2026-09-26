@@ -139,6 +139,64 @@ describe("sendBillingLink", () => {
     expect([...gateway.checkoutSessions.values()].at(-1)!.input.customerId).toBe("cus_stored");
   });
 
+  it("a billed account whose customer email update FAILS stops there: 'stripe_failed', no session made, nothing saved, nothing sent (re-review finding 1) (mutation: swallow the update's failure → a link goes out while receipts still go to the old owner, FAILS)", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    seedStoredCustomer("old-owner@example.com");
+    db.getAccountBilling.mockResolvedValue(stored({ subscriptionStatus: "canceled" }));
+    gateway.failOn = {
+      op: "updateCustomerEmail",
+      error: Object.assign(new Error("An unknown error occurred"), { type: "StripeAPIError", statusCode: 500 }),
+    };
+    expect(await sendBillingLink(deps(), INPUT)).toEqual({ ok: false, reason: "stripe_failed" });
+    expect(gateway.calls.filter((c) => c.op === "createCheckoutSession")).toEqual([]);
+    expect(db.saveBillingLink).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    expect(gateway.customers[0]!.email).toBe("old-owner@example.com");
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+
+  /** Two Sends at once on a billed account, to two addresses: each moves the
+   *  customer's email before either saves, and the save lets one win. The
+   *  database mocks behave like the conditional insert: first save wins. */
+  const raceTwoSends = async () => {
+    seedStoredCustomer("old-owner@example.com");
+    db.getAccountBilling.mockResolvedValue(stored({ subscriptionStatus: "canceled" }));
+    let savedLink: BillingLink | null = null;
+    db.getBillingLink.mockImplementation(async () => savedLink);
+    db.saveBillingLink.mockImplementation(async (_db: unknown, l: Omit<BillingLink, "sentAt" | "updatedAt">) => {
+      if (savedLink) return false;
+      savedLink = { ...l, sentAt: NOW.toISOString(), updatedAt: NOW.toISOString() };
+      return true;
+    });
+    const results = await Promise.all([
+      sendBillingLink(deps(), { ...INPUT, email: "first@example.com" }),
+      sendBillingLink(deps(), { ...INPUT, email: "second@example.com" }),
+    ]);
+    return { results, winner: savedLink as BillingLink | null };
+  };
+
+  it("two Sends at once to two addresses on a billed account: the loser puts the customer's email back to the WINNER's saved address, under its own key, so receipts go where the live link went (re-review finding 2) (mutation: skip the restore → the customer ends on the loser's address, FAILS)", async () => {
+    const { results, winner } = await raceTwoSends();
+    expect(results.map((r) => (r.ok ? "ok" : r.reason)).sort()).toEqual(["ok", "stale"]);
+    expect(sent.map((m) => m.to)).toEqual([winner!.sentTo]);
+    expect(gateway.customers[0]!.email).toBe(winner!.sentTo);
+    const updates = gateway.calls.filter((c) => c.op === "updateCustomerEmail");
+    expect(updates).toHaveLength(3);
+    expect(updates[2]!.input).toEqual({ customerId: "cus_stored", email: winner!.sentTo });
+    expect(new Set(updates.map((c) => c.key)).size).toBe(3);
+  });
+
+  it("a restore that fails is logged, never thrown: the winner's link is valid, so the loser still answers 'stale' (re-review finding 2) (mutation: let the restore's failure throw → the loser's action crashes, FAILS)", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    gateway.failOn = {
+      op: "updateCustomerEmail", after: 2,
+      error: Object.assign(new Error("An unknown error occurred"), { type: "StripeAPIError", statusCode: 500 }),
+    };
+    const { results } = await raceTwoSends();
+    expect(results.map((r) => (r.ok ? "ok" : r.reason)).sort()).toEqual(["ok", "stale"]);
+    expect(log.mock.calls.map((c) => c.join(" ")).join("\n")).toMatch(/could not put the customer's email back.*StripeAPIError/);
+  });
+
   it("a blank reply-to is no header at all, through the house helper (mutation: pass it on truthiness → a header of spaces, FAILS)", async () => {
     expect((await sendBillingLink(deps({ replyTo: "   " }), INPUT)).ok).toBe(true);
     expect(sent[0]).not.toHaveProperty("replyTo");
