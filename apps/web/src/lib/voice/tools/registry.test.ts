@@ -989,7 +989,10 @@ describe("reschedule / cancel", () => {
       expect(dbMocks.createMessage).toHaveBeenCalledTimes(2);
     });
 
-    it("the legs run side by side, and all of them finish before the tool answers", async () => {
+    it.each([
+      ["cancel_appointment", { bookingId: "b1" }],
+      ["reschedule_appointment", { bookingId: "b1", startsAt: NEW_ISO }],
+    ] as const)("%s: the legs run side by side, and all of them finish before the tool answers", async (tool, args) => {
       // Dead air: this runs while the caller waits on the line, so the legs
       // must not queue behind one another — and nothing may be left running
       // un-awaited when the tool returns. Both a mail leg and the thread leg
@@ -1000,7 +1003,7 @@ describe("reschedule / cancel", () => {
       sendMock.mockImplementation(async () => { await gate; return { providerMessageId: "x" }; });
       dbMocks.ensureConversation.mockImplementation(async () => { await gate; return { id: "cv1", created: false }; });
 
-      const pending = runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const pending = runTool(emptyCallState(), notifyCtx, tool, { ...args });
       let returned = false;
       void pending.then(() => { returned = true; });
       for (let i = 0; i < 50; i++) await Promise.resolve();
@@ -1011,9 +1014,40 @@ describe("reschedule / cancel", () => {
 
       release();
       const { result } = await pending;
-      expect(result).toEqual({ ok: true });
+      expect(result).toMatchObject({ ok: true });
       expect(dbMocks.createMessage).toHaveBeenCalled();
       expect(dbMocks.incrementUnreadCount).toHaveBeenCalled();
+    });
+
+    // One leg held open at a time: a leg that was started but not awaited
+    // would let the tool answer while it is still in flight — and a send or
+    // write still running when the call ends is a notification lost.
+    it.each([
+      ["cancel_appointment", "staff alert"], ["cancel_appointment", "thread line"],
+      ["cancel_appointment", "customer email"],
+      ["reschedule_appointment", "staff alert"], ["reschedule_appointment", "thread line"],
+      ["reschedule_appointment", "customer email"],
+    ] as const)("%s does not answer while its %s is still in flight", async (tool, leg) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      if (leg === "thread line") {
+        dbMocks.ensureConversation.mockImplementation(async () => { await gate; return { id: "cv1", created: false }; });
+      } else {
+        sendMock.mockImplementation(async (m: Sent) => {
+          const toCustomer = m.to === "ana@example.com";
+          if (toCustomer === (leg === "customer email")) await gate;
+          return { providerMessageId: "x" };
+        });
+      }
+      const args = tool === "cancel_appointment" ? { bookingId: "b1" } : { bookingId: "b1", startsAt: NEW_ISO };
+      const pending = runTool(emptyCallState(), notifyCtx, tool, args);
+      let returned = false;
+      void pending.then(() => { returned = true; });
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      expect(returned).toBe(false);
+      release();
+      await pending;
+      expect(returned).toBe(true);
     });
   });
 });
