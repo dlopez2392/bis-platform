@@ -369,7 +369,11 @@ Every step is reversible until **Part H2**. Put the old `pk_test_` /
 instance again. Nothing else needs undoing: the production instance, its DNS
 records and the second Supabase provider are all additive while the migration
 is in flight. (The development provider is not harmless once the migration is
-done; see Part E's superseded note.)
+done; see Part E's superseded note.) Once `production-isolation.md` Part D
+has removed that provider, putting the `pk_test_` pair back on Production
+fails quietly (the second of "The two failures that are silent", above)
+unless the development provider is re-added first (that runbook's Part D
+rollback).
 
 After Part H2 it is no longer reversible by env alone: the account rows now
 hold production org ids, so a rollback also means running the two `update`

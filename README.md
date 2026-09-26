@@ -49,8 +49,7 @@ migration to it: docs/runbooks/ci-supabase-project.md.
 Vercel project "bis-platform" (team danlopez508-8452s-projects), Root Directory apps/web,
 framework pinned via apps/web/vercel.json. Push to main = deploy.
 Env vars: see .env.example (service-role + db-url are server-only, never NEXT_PUBLIC).
-Production holds production's values; Preview must hold only the Clerk
-development instance, the CI Supabase project and non-secret config, behind
-Vercel Authentication (docs/runbooks/production-isolation.md). As of
-2026-09-26 that is NOT yet the case: Preview still names production's database
-and Deployment Protection is off. The runbook is the owner's checklist.
+Production's values belong on Production only. Preview must hold only the
+Clerk development instance, the CI Supabase project and non-secret config,
+behind Vercel Authentication. The owner's steps to get there, and whether they
+are done, are in docs/runbooks/production-isolation.md.
