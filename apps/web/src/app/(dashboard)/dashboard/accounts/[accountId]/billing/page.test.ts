@@ -88,7 +88,7 @@ describe("the client Billing page", () => {
     expect(find(tree, ManageBillingButton)).toHaveLength(0);
   });
 
-  it("a first payment still going through says 'Payment processing' on a warning dot to the CLIENT, never 'Payment failed' (the agency card keeps G13's word); no next invoice; the card help line (mutation: use BILLING_STATUS_TREATMENTS as is → FAILS)", async () => {
+  it("a first payment still going through says 'Payment processing' on a warning dot on this page, whoever opens it, never 'Payment failed' (the agency's Settings card keeps G13's word); no next invoice; the card help line (mutation: use BILLING_STATUS_TREATMENTS as is → FAILS)", async () => {
     dbm.getAccountBilling.mockResolvedValue({ ...PAID, subscriptionStatus: "incomplete" });
     const tree = await page();
     const [pill] = find(tree, DotPill);

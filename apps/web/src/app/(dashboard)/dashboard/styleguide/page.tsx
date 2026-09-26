@@ -567,8 +567,9 @@ export default async function StyleguidePage() {
         <Section title="Manage billing" file="…/accounts/[accountId]/billing/manage-billing-button.tsx">
           {/* The client Billing page's one primary (DESIGN rule 8). Pressing it
               here shows its failure state: the sentence, said inline. Beside
-              it, the one status word only the CLIENT sees: a first payment
-              still going through (the agency card says Payment failed). */}
+              it, the one status word only the Billing PAGE uses: a first
+              payment still going through, in the client's words to whoever
+              opens the page (the agency's Settings card says Payment failed). */}
           <div className="w-full space-y-4">
             <DotPill {...PAYMENT_PROCESSING} data-status="payment_processing" />
             <ManageBillingButton open={styleguidePortalFailed} help={m["billing.page.manageHelp"]} />

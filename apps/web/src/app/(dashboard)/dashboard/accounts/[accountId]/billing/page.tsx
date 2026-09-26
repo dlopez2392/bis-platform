@@ -60,7 +60,10 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
   const now = new Date();
   const used = await sumUsageSince(db, accountId, usagePeriodStart(billing, zone, now).start.toISOString());
   const view = billingCardView({ billing, link: null, plan, activePlans: [], used, zone, now, defaultEmail: "", stripeReady: true });
-  // A first payment still going through: the client's own word (client-status.ts).
+  // A first payment still going through: the client's word, shown to whoever
+  // opens this page, the agency included (it sees the client's page as the
+  // client does). The agency's own card on Settings keeps "Payment failed".
+  // client-status.ts says why.
   const processing = billing.subscriptionStatus === "incomplete";
   const t = processing ? PAYMENT_PROCESSING : BILLING_STATUS_TREATMENTS[view.status];
 
