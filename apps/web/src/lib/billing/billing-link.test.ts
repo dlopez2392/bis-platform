@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { AccountBilling, BillingLink, Plan } from "@bis/db";
 
 const db = vi.hoisted(() => ({
@@ -51,6 +51,12 @@ beforeEach(() => {
   db.getBillingLink.mockReset().mockResolvedValue(null);
   db.saveBillingLink.mockReset().mockResolvedValue(true);
   db.markBillingLinkExpired.mockReset().mockResolvedValue(undefined);
+});
+
+// A test that fails before its own mockRestore() must not hand its console
+// spy (and the calls on it) to the next test: each red stays its own.
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("sendBillingLink", () => {
@@ -203,14 +209,21 @@ describe("sendBillingLink", () => {
     log.mockRestore();
   });
 
-  it("a Stripe refusal is 'stripe_failed' with nothing saved; a DATABASE failure is not disguised as Stripe's (mutation: catch every error as stripe_failed → FAILS)", async () => {
+  it("a Stripe refusal is 'stripe_failed' with nothing saved; a DATABASE failure among the Stripe steps (marking the old link expired, the one database write inside them) is not disguised as Stripe's, and leaves the old session open (mutation: catch every error as stripe_failed → FAILS)", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     gateway.failOn = { op: "createCheckoutSession", error: Object.assign(new Error("card_declined"), { type: "StripeCardError" }) };
     expect(await sendBillingLink(deps(), INPUT)).toEqual({ ok: false, reason: "stripe_failed" });
     expect(db.saveBillingLink).not.toHaveBeenCalled();
     gateway.failOn = null;
-    db.getBillingLink.mockRejectedValue(new Error("getBillingLink failed: timeout"));
-    await expect(sendBillingLink(deps(), INPUT)).rejects.toThrow(/getBillingLink failed/);
+    // A failure BEFORE the Stripe steps (the reads) would be rethrown by any
+    // catch, so it could not tell the two catches apart; this one is inside.
+    const open = await gateway.createCheckoutSession({
+      accountId: ACCOUNT, planId: PLAN.id, customerId: "cus_linked", priceIds: PLAN.stripePriceIds, successUrl: "https://x", cancelUrl: "https://y",
+    }, "open-key");
+    db.getBillingLink.mockResolvedValue(prevLink(open.id));
+    db.markBillingLinkExpired.mockRejectedValue(new Error("markBillingLinkExpired failed: timeout"));
+    await expect(sendBillingLink(deps(), INPUT)).rejects.toThrow(/markBillingLinkExpired failed/);
+    expect(await gateway.getCheckoutSessionStatus(open.id)).toBe("open");
     log.mockRestore();
   });
 
