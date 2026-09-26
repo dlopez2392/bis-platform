@@ -10,6 +10,7 @@ import { BILLING_STATUS_TREATMENTS, billingCardView, safeZone, usagePeriodStart 
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { openBillingPortalAction } from "./actions";
+import { PAYMENT_PROCESSING } from "./client-status";
 import { ManageBillingButton } from "./manage-billing-button";
 
 export const dynamic = "force-dynamic";
@@ -59,7 +60,9 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
   const now = new Date();
   const used = await sumUsageSince(db, accountId, usagePeriodStart(billing, zone, now).start.toISOString());
   const view = billingCardView({ billing, link: null, plan, activePlans: [], used, zone, now, defaultEmail: "", stripeReady: true });
-  const t = BILLING_STATUS_TREATMENTS[view.status];
+  // A first payment still going through: the client's own word (client-status.ts).
+  const processing = billing.subscriptionStatus === "incomplete";
+  const t = processing ? PAYMENT_PROCESSING : BILLING_STATUS_TREATMENTS[view.status];
 
   return (
     <>
@@ -68,7 +71,7 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
         <Card>
           <CardHeader>
             <CardTitle>{plan.name}</CardTitle>
-            <CardAction><DotPill label={t.label} chip={t.chip} dot={t.dot} data-status={view.status} /></CardAction>
+            <CardAction><DotPill label={t.label} chip={t.chip} dot={t.dot} data-status={processing ? "payment_processing" : view.status} /></CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <p className="text-sm text-foreground tabular-nums">
@@ -87,7 +90,10 @@ export default async function BillingPage({ params }: { params: Promise<{ accoun
             {view.nextInvoice ? <p className="text-sm text-muted-foreground tabular-nums">{view.nextInvoice}</p> : null}
             {view.status === "canceled" ? <p className="text-sm text-muted-foreground">{m["billing.page.canceled"]}</p> : null}
             {!billing.complimentary && billing.stripeCustomerId ? (
-              <ManageBillingButton open={openBillingPortalAction.bind(null, accountId)} />
+              <ManageBillingButton
+                open={openBillingPortalAction.bind(null, accountId)}
+                help={view.status === "canceled" ? m["billing.page.manageHelp.canceled"] : m["billing.page.manageHelp"]}
+              />
             ) : null}
           </CardContent>
         </Card>

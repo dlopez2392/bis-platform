@@ -2266,6 +2266,8 @@ export const m = {
   "billing.page.usage": "Your usage",
   "billing.page.manage": "Manage billing",
   "billing.page.manageHelp": "Update your card and see past invoices on Stripe's secure page.",
+  "billing.page.manageHelp.canceled": "See and download your past invoices on Stripe's secure page.",
+  "billing.page.status.processing": "Payment processing",
   "billing.page.complimentary": "Your plan is complimentary. There's nothing to pay.",
   "billing.page.canceled": "Your subscription has ended.",
   "billing.page.portalFailed": "Billing couldn't open just now. Try again in a minute.",

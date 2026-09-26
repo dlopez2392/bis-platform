@@ -30,6 +30,7 @@ import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confi
 import { DotPill } from "@/components/dot-pill";
 import { BillingBanner } from "@/components/billing-banner";
 import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
+import { PAYMENT_PROCESSING } from "../accounts/[accountId]/billing/client-status";
 import { BILLING_STATUS_TREATMENTS, type BillingStatus } from "@/lib/billing/billing-view";
 import { SmsPreview } from "@/components/sms-preview";
 import { withOptOut } from "@/lib/sms/opt-out";
@@ -565,8 +566,13 @@ export default async function StyleguidePage() {
 
         <Section title="Manage billing" file="…/accounts/[accountId]/billing/manage-billing-button.tsx">
           {/* The client Billing page's one primary (DESIGN rule 8). Pressing it
-              here shows its failure state: the sentence, said inline. */}
-          <ManageBillingButton open={styleguidePortalFailed} />
+              here shows its failure state: the sentence, said inline. Beside
+              it, the one status word only the CLIENT sees: a first payment
+              still going through (the agency card says Payment failed). */}
+          <div className="w-full space-y-4">
+            <DotPill {...PAYMENT_PROCESSING} data-status="payment_processing" />
+            <ManageBillingButton open={styleguidePortalFailed} help={m["billing.page.manageHelp"]} />
+          </div>
         </Section>
 
         <Section title="Empty state" file="components/empty-state.tsx">

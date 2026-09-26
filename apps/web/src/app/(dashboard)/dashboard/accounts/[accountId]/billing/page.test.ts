@@ -22,6 +22,7 @@ const { default: BillingPage } = await import("./page");
 const { EmptyState } = await import("@/components/empty-state");
 const { ManageBillingButton } = await import("./manage-billing-button");
 const { m } = await import("@/lib/messages");
+const { DotPill } = await import("@/components/dot-pill");
 
 /** Every element of a type in the tree the page returns (it is CALLED, not rendered). */
 function find(node: ReactNode, type: unknown): ReactElement[] {
@@ -85,5 +86,26 @@ describe("the client Billing page", () => {
     const tree = await page();
     expect(text(tree)).toContain(m["billing.page.complimentary"]);
     expect(find(tree, ManageBillingButton)).toHaveLength(0);
+  });
+
+  it("a first payment still going through says 'Payment processing' on a warning dot to the CLIENT, never 'Payment failed' (the agency card keeps G13's word); no next invoice; the card help line (mutation: use BILLING_STATUS_TREATMENTS as is → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue({ ...PAID, subscriptionStatus: "incomplete" });
+    const tree = await page();
+    const [pill] = find(tree, DotPill);
+    expect(pill?.props).toMatchObject({ label: m["billing.page.status.processing"], dot: "bg-warning" });
+    const words = text(tree);
+    expect(words).not.toContain(m["billing.status.payment_failed"]);
+    expect(words).not.toContain("Next invoice");
+    const [button] = find(tree, ManageBillingButton);
+    expect(button?.props).toMatchObject({ help: m["billing.page.manageHelp"] });
+  });
+
+  it("a canceled subscription says it has ended and still offers Manage billing for past invoices, with help that does not ask for a card (mutation: hide the button on canceled → FAILS; the card help line on canceled → FAILS)", async () => {
+    dbm.getAccountBilling.mockResolvedValue({ ...PAID, subscriptionStatus: "canceled" });
+    const tree = await page();
+    expect(text(tree)).toContain(m["billing.page.canceled"]);
+    const buttons = find(tree, ManageBillingButton);
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]!.props).toMatchObject({ help: m["billing.page.manageHelp.canceled"] });
   });
 });

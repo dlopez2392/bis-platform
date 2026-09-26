@@ -627,9 +627,10 @@ describe("wave 2 — styleguide carries this pass's variants (DESIGN.md DoD)", (
     // renders them.
     expect(s).toContain('(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)');
   });
-  it("indexes the client Billing page's Manage billing button (M7a PR-3 Task 10) (mutation: drop the specimen → FAILS)", () => {
+  it("indexes the client Billing page's Manage billing button and its client-only 'Payment processing' pill (M7a PR-3 Task 10) (mutation: drop either specimen → FAILS)", () => {
     expect(s).toContain('import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";');
-    expect(s).toContain("<ManageBillingButton open={styleguidePortalFailed} />");
+    expect(s).toContain('<ManageBillingButton open={styleguidePortalFailed} help={m["billing.page.manageHelp"]} />');
+    expect(s).toContain('<DotPill {...PAYMENT_PROCESSING} data-status="payment_processing" />');
   });
 });
 

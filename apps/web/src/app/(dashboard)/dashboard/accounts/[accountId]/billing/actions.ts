@@ -32,22 +32,43 @@ const failed = { ok: false as const, error: m["billing.page.portalFailed"] };
  * click proves it.
  */
 export async function openBillingPortalAction(accountId: string): Promise<{ ok: false; error: string }> {
-  await requireAccountAccess(accountId);
+  const { isAgency } = await requireAccountAccess(accountId);
   if (!UUID.test(accountId)) return failed;
-  const billing = await readAccountBilling(accountId);
-  if (!billing?.stripeCustomerId) return failed;
+  // Inside a try: a rejected action would swap the whole page for the error
+  // boundary, and this is a button whose failure is one sentence.
+  let customerId: string | null;
+  try {
+    customerId = (await readAccountBilling(accountId))?.stripeCustomerId ?? null;
+  } catch (e) {
+    console.error(`billing portal: billing read failed for account ${accountId}: ${loggableError(e)}`);
+    return failed;
+  }
+  // Complimentary or unbilled: the page shows no button, so this is a stale
+  // page or a hand-made call. Nothing to log.
+  if (!customerId) return failed;
+  // The two configuration faults are LOGGED: each breaks Manage billing for
+  // every client at once, and the client only ever sees the one sentence.
   const gateway = billingGatewayFromEnv();
-  if (!gateway.ok) return failed;
+  if (!gateway.ok) {
+    console.error(`billing portal: Stripe not usable (${gateway.reason}) for account ${accountId}`);
+    return failed;
+  }
   const origin = configuredOrigin() ?? originFrom(await headers());
-  if (!origin) return failed;
+  if (!origin) {
+    console.error(`billing portal: no origin to return to (APP_ORIGIN unset and no Host header) for account ${accountId}`);
+    return failed;
+  }
   let url: string;
   try {
     url = await openPortal(gateway.gateway, {
-      customerId: billing.stripeCustomerId, returnUrl: `${origin}/dashboard/accounts/${accountId}/billing`,
+      customerId, returnUrl: `${origin}/dashboard/accounts/${accountId}/billing`,
     });
   } catch (e) {
     console.error(`billing portal: failed for account ${accountId}: ${loggableError(e)}`);
     return failed;
   }
+  // The route works for the agency (G20), and then it opens a CLIENT's
+  // card and invoices: leave a trace. The account id only.
+  if (isAgency) console.info(`billing portal: the agency opened the portal for account ${accountId}`);
   redirect(url);
 }
