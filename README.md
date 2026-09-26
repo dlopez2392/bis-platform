@@ -28,12 +28,12 @@ not open the CI project. CI_SUPABASE_DB_URL must be the **Session pooler** URI
 (aws-…pooler.supabase.com:5432, user postgres.<ref>): the direct
 db.<ref>.supabase.co host is IPv6-only and GitHub-hosted runners have no IPv6.
 
-The guard protects CI only. The three gates run LOCALLY against whatever
-apps/web/.env.local and packages/db/.env point at, with no target check, and
-the db suite and e2e create and delete rows. Until both files point at the CI
-project (docs/runbooks/ci-supabase-project.md, section 9), running
-`pnpm check` or `pnpm --filter web test:e2e` on a machine whose env still
-points at production WRITES PRODUCTION.
+That guard is CI's. Locally, since #135, the live suites and e2e refuse
+production themselves: they throw before connecting when
+apps/web/.env.local or packages/db/.env names production's project. Until both
+files point at the CI project (docs/runbooks/ci-supabase-project.md, section
+9), `pnpm check` and `pnpm --filter web test:e2e` on such a machine are
+refused, not run.
 
 A ruleset on main requires `verify` and `e2e` green on a PR's head commit
 (CLAUDE.md). Read the checks for the head SHA before merging, and let
@@ -49,4 +49,8 @@ migration to it: docs/runbooks/ci-supabase-project.md.
 Vercel project "bis-platform" (team danlopez508-8452s-projects), Root Directory apps/web,
 framework pinned via apps/web/vercel.json. Push to main = deploy.
 Env vars: see .env.example (service-role + db-url are server-only, never NEXT_PUBLIC).
-Deployment Protection is disabled; the app's own Clerk auth is the gate.
+Production holds production's values; Preview must hold only the Clerk
+development instance, the CI Supabase project and non-secret config, behind
+Vercel Authentication (docs/runbooks/production-isolation.md). As of
+2026-09-26 that is NOT yet the case: Preview still names production's database
+and Deployment Protection is off. The runbook is the owner's checklist.
