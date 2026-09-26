@@ -116,12 +116,15 @@ function expectRefusedByPrivilege(r: Rest, table: string) {
   expect(e.message, r.body).toMatch(new RegExp(`permission denied for table ${table}\\b`));
 }
 
+type AppRoleClaim = { shape: "absent" | "null" | "string" | "other"; isAgency: boolean };
+
 /**
- * Whether the minted token's payload has an `app_role` key. Only that boolean
- * leaves this function: never the token, never a claim or its value, and no
- * error below echoes either.
+ * The SHAPE of the minted token's `app_role` claim, and whether it names the
+ * agency exactly as app.is_agency() tests it (`= 'agency_admin'`, 0001). Only
+ * those two leave this function: never the token, never the claim's value,
+ * and no error below echoes either.
  */
-function carriesAppRole(token: string): boolean {
+function appRoleClaim(token: string): AppRoleClaim {
   const payload = token.split(".")[1];
   if (!payload) throw new Error("the minted Clerk token is not a JWT");
   let claims: unknown;
@@ -133,7 +136,11 @@ function carriesAppRole(token: string): boolean {
   if (typeof claims !== "object" || claims === null) {
     throw new Error("the minted Clerk token's payload is not an object");
   }
-  return Object.prototype.hasOwnProperty.call(claims, "app_role");
+  if (!Object.prototype.hasOwnProperty.call(claims, "app_role")) return { shape: "absent", isAgency: false };
+  const value = (claims as Record<string, unknown>).app_role;
+  if (value === null) return { shape: "null", isAgency: false };
+  if (typeof value === "string") return { shape: "string", isAgency: value === "agency_admin" };
+  return { shape: "other", isAgency: false };
 }
 
 /** This fixture account's probe events carrying `run`, read with the service client. */
@@ -275,14 +282,30 @@ test.describe("the client role at the data API: server code writes the record-ke
 
   test("record_event refuses, for a client's token, an account it is not a member of", async () => {
     const { token } = await asClient();
-    // A CLIENT's token, not the agency's: auth.setup.ts creates the fixture
+    // A CLIENT's token, not the agency's. auth.setup.ts creates the fixture
     // user with no public_metadata and fails the run if it ever carries
-    // `app_role`, and the session token renders that claim from
-    // public_metadata (docs/runbooks/clerk-setup.md:74). So the claim is
-    // absent, and app.is_agency() is NULL here rather than false; that is
-    // the case record_event's coalesce exists for. Checked on the token
-    // itself; only presence is ever reported.
-    expect(carriesAppRole(token), "the fixture's minted token carries an app_role claim").toBe(false);
+    // `app_role`; the session token renders the claim from
+    // `{{user.public_metadata.app_role}}` (docs/runbooks/clerk-setup.md:74).
+    // What Clerk renders for that unresolved shortcode is an ASSUMPTION here,
+    // not a measurement: absent, or JSON null. Either way app.jwt()->>'app_role'
+    // is SQL NULL, so app.is_agency() is NULL rather than false, which is the
+    // case record_event's coalesce exists for. The shape is recorded on every
+    // run (annotation and log line, never the value), so the first CI run
+    // shows which. A non-agency STRING still passes, because the property this
+    // case needs is "not the agency", but is flagged: is_agency() is then
+    // false rather than NULL, and the NULL branch is covered only at the
+    // database level (packages/db record-event.test.ts).
+    const role = appRoleClaim(token);
+    expect(role.isAgency, "the fixture's minted token names the agency").toBe(false);
+    test.info().annotations.push({ type: "app_role claim shape", description: role.shape });
+    console.log(`server-only-writes: the client token's app_role claim is ${role.shape}`);
+    if (role.shape === "string" || role.shape === "other") {
+      const note =
+        `the client token carries a non-agency app_role claim (${role.shape}), so app.is_agency() is ` +
+        `false here rather than NULL; the NULL branch is covered at the database level only`;
+      test.info().annotations.push({ type: "warning", description: note });
+      console.warn(`server-only-writes: ${note}`);
+    }
 
     // A random id names no account, so nothing here touches any other
     // account. There is no read-back: events.account_id references accounts,
