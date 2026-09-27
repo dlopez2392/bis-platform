@@ -238,6 +238,45 @@ describe("findDuplicate's fallback: spec clarification (bare-stored is the SAME 
       expect(read).toEqual(expect.arrayContaining([["account_id", "a1"]]));
     }
   });
+
+  it("a contact stored WITH an explicit + that reads as the SAME +52 number merges (re-review; mutation: decide by the raw '+' shape instead of what it reads as → a twin instead of a merge, FAILS)", async () => {
+    // "+52 1 899 922 1234" carries a "+" — the old shape-only rule called
+    // this a twin — but it reads as the exact same +528999221234 the
+    // incoming number does, so it must merge.
+    const m = memoryDb([{ id: "c-521-plus", account_id: "a1", phone: "+52 1 899 922 1234", phone_key: "5218999221234" }]);
+    const result = await createContact(m.db, "a1", { phone: "899 922 1234" }, "user_test");
+    expect(result).toEqual({ id: "c-521-plus", existing: true, flagged: false });
+    expect(m.tables.contacts).toHaveLength(1);
+  });
+
+  it("a contact stored WITHOUT a + but that reads as a firm +1 claim is a TWIN, not a merge (re-review; mutation: decide by the raw '+' shape instead of what it reads as → wrongly merged, FAILS)", async () => {
+    // "1 (899) 922-1234" has NO "+" — the old shape-only rule called this
+    // bare and merged it — but its leading "1" is an explicit NANP marker:
+    // it reads as +18999221234, a firm US claim, so it must be a twin, the
+    // same as the already-correct "+1 899 922 1234" case.
+    const m = memoryDb([{ id: "c-nanp-noplus", account_id: "a1", phone: "1 (899) 922-1234", phone_key: "8999221234" }]);
+    const result = await createContact(m.db, "a1", { phone: "899 922 1234" }, "user_test");
+    expect(result).toMatchObject({ existing: false, flagged: true });
+    expect(m.tables.contacts).toHaveLength(2);
+    expect(m.tables.contact_duplicate_flags).toHaveLength(1);
+  });
+
+  it("flagDuplicatePair's own failure log carries only the Postgres error CODE, never the message (review M8a; mutation: log the message too → FAILS)", async () => {
+    const m = memoryDb([{ id: "c-us", account_id: "a1", phone: "+18999221234", phone_key: "8999221234" }]);
+    const realFrom = (m.db as unknown as { from: (t: string) => unknown }).from.bind(m.db);
+    (m.db as unknown as { from: (t: string) => unknown }).from = (table: string) => {
+      if (table === "contact_duplicate_flags") {
+        return { insert: () => Promise.resolve({ error: { code: "42P01", message: "a customer's private detail that must never be logged" } }) };
+      }
+      return realFrom(table);
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await createContact(m.db, "a1", { phone: "899 922 1234" }, "user_test");
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    const [line] = errSpy.mock.calls[0]!;
+    expect(String(line)).toContain("42P01");
+    expect(String(line)).not.toContain("a customer's private detail");
+  });
 });
 
 describe("updateContact: an unchanged number keeps its flag (review C1)", () => {
@@ -263,6 +302,47 @@ describe("updateContact: an unchanged number keeps its flag (review C1)", () => 
     await updateContact(m.db, "a1", "c1", { phone: "(956) 292-1696" }, "user_test");
     expect(m.tables.contacts[0]).toMatchObject({ phone: "+19562921696", phone_country_unconfirmed: false });
   });
+
+  it.each([
+    ["+1 (551) 234-5678"],
+    ["1 (551) 234-5678"],
+  ])("re-writing the same number back keeps the flag even when the STORED text is formatted, not pure E.164: %s (re-review C1; mutation: compare against the raw stored text instead of normalisePhone(currentPhone)?.e164 → the flag is cleared, FAILS)", async (stored) => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: stored, phone_key: "5512345678", phone_country_unconfirmed: true }]);
+    await updateContact(m.db, "a1", "c1", { phone: stored }, "user_test");
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
+  });
+});
+
+describe("updateContact: its own current-phone read fails closed and stays account-scoped (re-review N2, N3)", () => {
+  it("the current-phone read is account-scoped (mutation: drop the account_id filter on that read → FAILS)", async () => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
+    await updateContact(m.db, "a1", "c1", { phone: "+15512345678" }, "user_test");
+    expect(m.reads.length).toBeGreaterThan(0);
+    for (const read of m.reads) {
+      expect(read).toEqual(expect.arrayContaining([["account_id", "a1"]]));
+    }
+  });
+
+  it("a failed current-phone read aborts the write entirely — never fails open and writes anyway (mutation: swallow the read error instead of throwing → a write proceeds despite the failed check, FAILS)", async () => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
+    const realFrom = (m.db as unknown as { from: (t: string) => unknown }).from.bind(m.db);
+    let call = 0;
+    (m.db as unknown as { from: (t: string) => unknown }).from = (table: string) => {
+      if (table === "contacts") {
+        call++;
+        if (call === 1) {
+          return {
+            select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: { code: "53300", message: "too many connections" } }) }) }) }),
+          };
+        }
+      }
+      return realFrom(table);
+    };
+    await expect(updateContact(m.db, "a1", "c1", { phone: "(956) 292-1696" }, "user_test")).rejects.toThrow();
+    // Unchanged — the failed check must have aborted the write, not just
+    // failed to compare correctly.
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
+  });
 });
 
 describe("applyImportBatch: a CSV re-import of a flagged contact's own exported row keeps the flag (review C1)", () => {
@@ -270,6 +350,17 @@ describe("applyImportBatch: a CSV re-import of a flagged contact's own exported 
     const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
     const index: MatchIndex = { byEmail: new Map(), byPhone: new Map([["5512345678", "c1"]]) };
     const result = await applyImportBatch(m.db, "a1", [{ input: { phone: "+15512345678" }, tags: [] }], index, "user_test", { createTags: false });
+    expect(result).toEqual({ created: 0, updated: 1, flagged: 0 });
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
+  });
+
+  it.each([
+    ["+1 (551) 234-5678"],
+    ["1 (551) 234-5678"],
+  ])("re-importing a row that matches a FORMATTED stored number (not pure E.164) keeps the flag: %s (re-review C1; mutation: compare against the raw stored text → the flag is cleared, FAILS)", async (stored) => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: stored, phone_key: "5512345678", phone_country_unconfirmed: true }]);
+    const index: MatchIndex = { byEmail: new Map(), byPhone: new Map([["5512345678", "c1"]]) };
+    const result = await applyImportBatch(m.db, "a1", [{ input: { phone: stored }, tags: [] }], index, "user_test", { createTags: false });
     expect(result).toEqual({ created: 0, updated: 1, flagged: 0 });
     expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
   });

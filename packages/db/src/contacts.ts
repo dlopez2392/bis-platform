@@ -44,6 +44,28 @@ export function phoneKeyOf(raw: string | null | undefined): string {
 }
 
 /**
+ * True when a stored phone carries NO explicit country marker at all — no
+ * `+`, no `00`/`011` international prefix, and not the bare NANP/Mexican
+ * code forms (eleven digits starting `1`, twelve starting `52`, thirteen
+ * starting `521`). Such a number has never been told its country; the
+ * fallback lookup in `findDuplicate` merges it into whatever contact a
+ * later, country-confirmed read of the same digits belongs to, regardless
+ * of how those bare digits would normalise TODAY (ambiguous or not) — a
+ * shape check (`startsWith("+")`) is not enough, because "1 (899)
+ * 922-1234" carries a marker (the leading `1`) without a `+`.
+ */
+function hasNoCountryMarker(raw: string): boolean {
+  const text = raw.trim();
+  if (text.startsWith("+")) return false;
+  const digits = text.replace(/[^0-9]/g, "");
+  if (digits.startsWith("011") || digits.startsWith("00")) return false;
+  if (digits.length === 11 && digits.startsWith("1")) return false;
+  if (digits.length === 12 && digits.startsWith("52")) return false;
+  if (digits.length === 13 && digits.startsWith("521")) return false;
+  return true;
+}
+
+/**
  * `currentPhone`, when passed, is the row's phone BEFORE this write (omitted
  * entirely for a brand-new insert, where there is nothing to compare
  * against). An unchanged number keeps whatever flag it already had: a CSV
@@ -61,7 +83,18 @@ function toRow(input: Partial<ContactInput>, currentPhone?: string | null) {
   if (input.email !== undefined) row.email = input.email?.trim() || null;
   if (input.phone !== undefined) {
     const fields = phoneFields(input.phone);
-    Object.assign(row, currentPhone !== undefined && fields.phone !== null && fields.phone === currentPhone
+    // Compare against what the STORED number READS AS, never its raw text.
+    // The 0054 backfill flagged exactly the rows that are NOT already pure
+    // E.164 (plan G4) — a formatted stored value ("+1 (551) 234-5678", "1
+    // (551) 234-5678") never equals a freshly-normalised incoming string as
+    // RAW text, so comparing against the raw column missed every one of
+    // them and cleared their flag on a no-op re-save (review C1,
+    // re-review). Falls back to the raw text only when the stored value
+    // does not parse as a number at all (kept as typed, same as phoneFields).
+    const currentReads = currentPhone !== undefined
+      ? (normalisePhone(currentPhone)?.e164 ?? currentPhone)
+      : undefined;
+    Object.assign(row, currentReads !== undefined && fields.phone !== null && fields.phone === currentReads
       ? { phone: fields.phone }
       : fields);
   }
@@ -193,27 +226,34 @@ async function findDuplicate(
     // "521…" and was missed entirely by the bare-only lookup, a SILENT
     // duplicate rather than even a flagged twin).
     //
-    // Per the spec (orchestrator decision, superseding the reading this
-    // lookup shipped with): a contact stored WITHOUT its own "+" — however
-    // its bare digits would normalise TODAY, ambiguous or not — is not a
-    // separate person who happens to share a number; it is THIS contact,
-    // just not yet told which country it's in. Merge into it. A contact
-    // stored WITH an explicit "+" is a genuine country TWIN: the +1 the old
-    // buggy toE164 gave every ten digits is a firm (if wrong) claim, and
-    // that contact is left alone, flagged for a human to resolve.
+    // Per the spec (orchestrator decision): the same-or-twin call is decided
+    // by what the stored number READS AS, never by whether its raw text
+    // happens to carry a "+" (re-review: "+52 1 899…" HAS a "+" but reads as
+    // the SAME +52 number, and must merge; "1 (899) 922-1234" has NO "+" but
+    // reads as a firm +1 claim, and must be a twin — shape alone got both of
+    // those backwards). A stored number with NO explicit country marker at
+    // all — plain digits, however punctuated — hasn't been told its country
+    // yet and is unconditionally THIS contact, regardless of how those bare
+    // digits would normalise today (ambiguous or not). A stored number that
+    // DOES carry an explicit marker (a "+", `00`/`011`, or the bare
+    // NANP/Mexican code forms) is the SAME contact only if it reads as the
+    // exact +52 number being matched; otherwise (it reads as +1, or
+    // anything else) it is left alone as a genuine country TWIN, flagged
+    // for a human to resolve.
     //
     // No `.limit(1)`: with a bare-stored contact and a +1-stored contact
     // both keyed under the same bare ten digits, taking only whichever
     // Postgres returns first could hand back the +1 one and miss the bare
     // (same) contact entirely, minting a THIRD contact (review m3). Fetch
-    // every candidate and prefer the bare one.
+    // every candidate and prefer the one that reads as the same contact.
     if (!result.phoneMatch && /^52\d{10}$/.test(pKey)) {
       const tenDigits = pKey.slice(2);
       const { data: bare, error: bareErr } = await db.from("contacts").select("id, phone")
         .eq("account_id", accountId).in("phone_key", [tenDigits, `521${tenDigits}`]).limit(10);
       if (bareErr) throw new Error(`contact dedupe failed: ${bareErr.message}`);
       const hits = (bare ?? []) as { id: string; phone: string | null }[];
-      const bareHit = hits.find((h) => h.phone !== null && !h.phone.trim().startsWith("+"));
+      const bareHit = hits.find((h) =>
+        h.phone !== null && (hasNoCountryMarker(h.phone) || normalisePhone(h.phone)?.e164 === `+${pKey}`));
       if (bareHit) result.phoneMatch = bareHit.id;
       else if (hits[0]) result.countryTwin = hits[0].id;
     }
