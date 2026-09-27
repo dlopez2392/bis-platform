@@ -143,19 +143,30 @@ describe("telnyxSmsProvider: a refusal carries the provider's codes", () => {
   const STOP_BODY = JSON.stringify({ errors: [{ code: "40300", title: "Blocked due to STOP message",
     detail: "Messages cannot be sent from '+19565061545' to '+15551112222' due to an existing block rule." }] });
 
-  it("a STOP block is an SmsProviderError with status and code 40300, message unchanged (mutation: throw a plain Error → FAILS)", async () => {
+  it("a STOP block is an SmsProviderError with status and code 40300, message unchanged (mutation: throw a plain Error → FAILS; drop this.name in types.ts → FAILS)", async () => {
     stubFetch(() => Promise.resolve(new Response(STOP_BODY, { status: 400 })));
     const err = await telnyxSmsProvider("k").send(INPUT).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(SmsProviderError);
+    expect((err as SmsProviderError).name).toBe("SmsProviderError");
     expect((err as SmsProviderError).status).toBe(400);
     expect((err as SmsProviderError).codes).toEqual(["40300"]);
     expect((err as Error).message).toBe(`telnyx send failed (400): ${STOP_BODY}`);
   });
 
-  it("a body that is not Telnyx's error shape carries no codes and still throws the old message", async () => {
+  it("a body that is not Telnyx's error shape carries no codes and still throws the old message (mutation: throw a plain Error → FAILS; status hard-coded 400 → FAILS)", async () => {
     stubFetch(() => Promise.resolve(new Response("number not owned", { status: 422 })));
     const err = await telnyxSmsProvider("k").send(INPUT).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SmsProviderError);
+    expect((err as SmsProviderError).status).toBe(422);
     expect((err as SmsProviderError).codes).toEqual([]);
+    expect((err as Error).message).toBe("telnyx send failed (422): number not owned");
+  });
+
+  it("a refusal with more than one code keeps them all, in order (mutation: errorCodes(text).slice(0, 1) at the throw site → FAILS)", async () => {
+    const body = JSON.stringify({ errors: [{ code: "10007" }, { code: "40300" }] });
+    stubFetch(() => Promise.resolve(new Response(body, { status: 400 })));
+    const err = await telnyxSmsProvider("k").send(INPUT).catch((e: unknown) => e);
+    expect((err as SmsProviderError).codes).toEqual(["10007", "40300"]);
   });
 });
 
@@ -169,5 +180,9 @@ describe("errorCodes", () => {
     expect(errorCodes(JSON.stringify({ errors: "x" }))).toEqual([]);
     expect(errorCodes(JSON.stringify({ errors: [null, { code: { a: 1 } }, {}] }))).toEqual([]);
     expect(errorCodes("null")).toEqual([]);
+  });
+
+  it("skips a null entry without losing a real code beside it (mutation: e?.code → e.code → FAILS)", () => {
+    expect(errorCodes(JSON.stringify({ errors: [null, { code: "40300" }] }))).toEqual(["40300"]);
   });
 });
