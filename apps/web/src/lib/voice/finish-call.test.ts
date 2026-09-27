@@ -8,6 +8,7 @@ const dbMocks = vi.hoisted(() => ({
   // The send gate's reads (lib/consent/gate.ts): the text-back and the staff
   // alert go through the REAL gate, allowed by default.
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
+  recordCarrierBlock: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -375,7 +376,12 @@ describe("finishCall", () => {
 
 describe("finishCall — missed-call text-back", () => {
   it("a call that ENDS at 22:00 CDT is held until 08:00 on the call's own row, and no message row is written (review R2-I3; mutation: callId: null → nothing held, FAILS; now: new Date() → judged at test time, FAILS)", async () => {
-    const night = { callRowId: "call1", startedAt: new Date("2027-06-02T02:58:00Z"), endedAt: new Date("2027-06-02T03:00:00Z") };
+    // startedAt is INSIDE the sending hours (20:00 CDT) and endedAt is
+    // OUTSIDE them (22:00 CDT): if the code judged the hours from startedAt
+    // instead of endedAt (I3c), this call would be sent, not held, and the
+    // assertions below would catch it — both used to fall outside the
+    // hours, so that swap was unobservable.
+    const night = { callRowId: "call1", startedAt: new Date("2027-06-02T01:00:00Z"), endedAt: new Date("2027-06-02T03:00:00Z") };
     await finishCall(abandonedState(), textbackCtx, night);
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith({}, expect.objectContaining({
       source: "textback", subjectKey: "call:call1", status: "held", heldUntil: "2027-06-02T13:00:00.000Z",
@@ -761,12 +767,12 @@ describe("finishCall — text-back cooldown", () => {
     expect(smsRefs.send).toHaveBeenCalledOnce();
   });
 
-  it("asks about THIS account and THIS conversation only, over a 24-hour window", async () => {
+  it("asks about THIS account and THIS conversation only, over a 24-hour window judged from the call's own end (M4; mutation: Date.now() instead of r.now → FAILS)", async () => {
     // Tenant scope is the load-bearing half: a conversation id is a bare uuid,
     // and this read must never be satisfiable by another tenant's messages.
-    const before = Date.now();
+    // The window is judged from the call's OWN end (`meta.endedAt`), never
+    // the wall clock — a replay against a fixed fixture must be deterministic.
     await finishCall(abandonedState(), textbackCtx, meta);
-    const after = Date.now();
 
     expect(dbMocks.hasRecentOutboundSms).toHaveBeenCalledOnce();
     const [db, accountId, conversationId, since] = dbMocks.hasRecentOutboundSms.mock.calls[0]!;
@@ -774,8 +780,7 @@ describe("finishCall — text-back cooldown", () => {
     expect(accountId).toBe("a1");
     expect(conversationId).toBe("cv1");
     const windowMs = 24 * 60 * 60 * 1000;
-    expect((since as Date).getTime()).toBeGreaterThanOrEqual(before - windowMs);
-    expect((since as Date).getTime()).toBeLessThanOrEqual(after - windowMs);
+    expect((since as Date).getTime()).toBe(meta.endedAt.getTime() - windowMs);
   });
 
   it("is consulted only AFTER the gate — a refused account is never even asked", async () => {

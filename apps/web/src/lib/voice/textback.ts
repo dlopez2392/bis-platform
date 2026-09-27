@@ -74,7 +74,8 @@ export interface TextbackRequest {
   /** The language the CALLER spoke, not the profile's setting. */
   language: "en" | "es";
   /** Customer-facing name, `brandDisplayName` already applied. NEVER
-   *  `accounts.name`. */
+   *  `accounts.name` — that is the agency's internal label and it reached a
+   *  stranger's phone from this exact context once already. */
   brandName: string;
   /** `voice_profiles.textback_body`. Empty means use the live default. */
   textbackBody: string;
@@ -119,6 +120,9 @@ export function parseTextbackPayload(raw: unknown): TextbackPayload | null {
  * The ids come back even when `pending` is null, and that is load-bearing for
  * `finishCall`: a suppressed text-back still hands its contact and
  * conversation to the call row, so the call is not orphaned from its thread.
+ * Collapsing this to `PendingTextback | null` would silently drop that, and
+ * the only symptom would be a dashboard with no path from a call to its own
+ * conversation.
  */
 export interface TextbackOutcome {
   /** Null only when the A2P check refused — nothing was written at all. */
@@ -207,13 +211,18 @@ export async function prepareTextback(
 
   const contactId = r.contactId
     ?? (r.resolveContact ? await r.resolveContact() : await contactForCallerId(db, accountId, r.callerNumber));
+  // A resolver that came back empty is not an error: `finishCall`'s can, when
+  // there is neither a lead nor a caller id to build a contact from. Nothing
+  // to hang a conversation on, so nothing to send.
   if (!contactId) return { contactId: null, conversationId: null, pending: null, notSent: "no_contact" };
   const conversation = await ensureConversation(db, accountId, contactId, ACTOR_ID, ACTOR_TYPE);
   const conversationId = conversation.id;
 
   // The cooldown, consulted AFTER the conversation exists (that is what "this
-  // caller" is keyed on) and BEFORE the message row is written.
-  const since = new Date(Date.now() - TEXTBACK_COOLDOWN_MS);
+  // caller" is keyed on) and BEFORE the message row is written. Judged from
+  // `r.now` — the instant the hours are judged at — never the wall clock:
+  // the release pass replays this against its OWN tick, not the real time.
+  const since = new Date(r.now.getTime() - TEXTBACK_COOLDOWN_MS);
   if (await hasRecentOutboundSms(db, accountId, conversationId, since)) {
     console.error(
       `${r.label}: text-back suppressed — conversation ${conversationId} ` +
@@ -417,6 +426,11 @@ export const releaseTextback: Releaser = async (ctx, row: AutomationLogRow) => {
   switch (outcome.notSent) {
     case "held": return "held";
     case "blocked": return "skipped";
+    // A hold write that failed at RELEASE (I1, 2026-09-27): the row's past
+    // held_until is untouched, so it is examined again next tick — never
+    // logged "No longer due" and abandoned. No write here on purpose: this
+    // IS the retry, not a new decision.
+    case "unheld": return "failed";
     case "cooldown":
       await logSkipped(ctx, subjectOf(row), REASONS.recentText);
       return "skipped";

@@ -749,4 +749,38 @@ describe("callerInTouchSince", () => {
       expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(true);
     });
   });
+
+  it("ignores a later call from the SAME number on ANOTHER account (M1; mutation: drop .eq(\"account_id\", …) → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const caller = "+19565550403";
+      const contact = await createContact(db, accountId, { firstName: "Rosa", phone: caller }, "user_test");
+      const convo = await ensureConversation(db, accountId, contact.id, "user_test");
+      const missed = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      const { data } = await db.from("calls").select("started_at").eq("id", missed.id).single();
+      const since = (data as { started_at: string }).started_at;
+      await withTestAccount(async (otherDb, otherAccountId) => {
+        const otherNum = await assignPhoneNumber(otherDb, otherAccountId, { e164: testPhoneNumber() }, "user_test");
+        // Same caller number, a LATER call — but on a different account.
+        await startCallRow(otherDb, otherAccountId, { phoneNumberId: otherNum.id, callerE164: caller });
+        expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
+      });
+    });
+  });
+
+  it("ignores an inbound message that is not SMS (M7; mutation: drop .eq(\"channel\", \"sms\") → an inbound email counts, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const caller = "+19565550404";
+      const contact = await createContact(db, accountId, { firstName: "Ivan", phone: caller }, "user_test");
+      const convo = await ensureConversation(db, accountId, contact.id, "user_test");
+      const missed = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      const { data } = await db.from("calls").select("started_at").eq("id", missed.id).single();
+      const since = (data as { started_at: string }).started_at;
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "inbound", body: "a reply, by email" }, "user_test");
+      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "inbound", body: "still need a quote" }, "user_test");
+      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(true);
+    });
+  });
 });

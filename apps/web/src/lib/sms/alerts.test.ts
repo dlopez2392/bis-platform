@@ -248,6 +248,16 @@ describe("sendAlertSms", () => {
     expect(sendMock).toHaveBeenCalledWith({ to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
   });
 
+  // I2 (decision 2): a business owner who texted STOP to their own alert
+  // number gets no alerts from it — the send gate's ledger check, not just
+  // the A2P/loop-guard checks above.
+  it("a stopped alert phone gets nothing: the provider is never called, and the ledger is checked for THAT number (I2; mutation: skip the ledger check → sends anyway, FAILS)", async () => {
+    consentMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-01T00:00:00Z", method: "carrier_block", eventId: "e1" });
+    await sendAlertSms({} as never, ACCOUNT_ID, ALERT_PHONE, "New booking: now - Test.");
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(consentMocks.readConsentState).toHaveBeenCalledWith({}, ACCOUNT_ID, "sms", ALERT_PHONE);
+  });
+
   it("refuses without sending when A2P is not approved (mutation: send regardless of gate.ok → FAILS)", async () => {
     resolveSmsSenderMock.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
     await sendAlertSms({} as never, ACCOUNT_ID, ALERT_PHONE, "New booking: now - Test.");

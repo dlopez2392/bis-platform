@@ -130,6 +130,10 @@ async function post(token: string | undefined, body: Record<string, string> = {}
 }
 
 beforeEach(() => {
+  // M2's fake clock is scoped to its own test, but restored here too: an
+  // assertion throwing between setSystemTime and useRealTimers must not
+  // leave every later test in this file running on a frozen 2026-10-06.
+  vi.useRealTimers();
   delete process.env.TELNYX_PUBLIC_KEY;
   events.length = 0;
   getCallByHandoffTokenMock.mockReset().mockResolvedValue(REQUESTED);
@@ -223,6 +227,10 @@ describe("voice texml handoff-result route", () => {
   // error, and at socket close nobody knows which happened yet. So this route
   // is the compensation: the only place where the truth exists.
   it("a transfer that reached nobody texts the caller back — the lead is not lost", async () => {
+    // M2: `expect.any(Date)` alone lets ANY Date through, `new Date(0)`
+    // included — pin the clock so the assertion below can actually tell.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-06T17:00:00Z"));
     getVoiceProfileMock.mockResolvedValue(TEXTING);
     const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
     // The apology still goes out, unchanged and undelayed.
@@ -244,9 +252,10 @@ describe("voice texml handoff-result route", () => {
       // The call's row: the held row's subject when this lands overnight
       // (review R2-I3; mutation: callId: null → FAILS).
       callId: "c1",
-      now: expect.any(Date),
+      now: new Date("2026-10-06T17:00:00Z"),
     });
     expect(deliverTextbackMock).toHaveBeenCalledOnce();
+    vi.useRealTimers();
   });
 
   it("a transfer that REACHED a person never texts — the defect the feature exists to prevent", async () => {

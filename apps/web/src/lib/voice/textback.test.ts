@@ -6,6 +6,10 @@ const dbMocks = vi.hoisted(() => ({
   recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(), getVoiceProfile: vi.fn(), getBranding: vi.fn(),
   // The send gate's reads: the text-back goes through the REAL gate.
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(),
+  // Unused by any scenario here (no test drives a 40300 carrier refusal), but
+  // the gate's `deliver` path can reach it — an unmocked call would fall
+  // through to the real implementation and throw against this file's fake DB.
+  recordCarrierBlock: vi.fn(),
   // The release's "has this caller been in touch since?" read (danlo, 2026-09-26).
   callerInTouchSince: vi.fn(),
 }));
@@ -78,6 +82,17 @@ describe("prepareTextback: the send gate decides before any row", () => {
     expect(pending.cleared.body).toBe((dbMocks.createMessage.mock.calls[0]![2] as { body: string }).body);
     expect(pending.cleared.to).toBe("+19562921696");
     expect(pending.cleared.kind).toBe("voice.textback");
+  });
+
+  // M4: the cooldown window is judged from the REQUEST's own `now` — the
+  // instant the hours are judged at, and at RELEASE the tick's `ctx.now`,
+  // never the real wall clock — so a replay against the same fixture is
+  // deterministic (mutation: `Date.now()` instead of `r.now` → FAILS).
+  it("the cooldown window is judged from r.now, not the wall clock (mutation: Date.now() instead of r.now → FAILS)", async () => {
+    await prepared({ now: NOON });
+    expect(dbMocks.hasRecentOutboundSms).toHaveBeenCalledWith(
+      DB, "a1", "cv1", new Date(NOON.getTime() - 24 * 60 * 60 * 1000),
+    );
   });
 
   it("a call missed at 22:00 is HELD until 08:00 on the automation log — source textback, subject call:<id>, with what a release needs — and nothing else is written (mutation: send at night → FAILS)", async () => {
@@ -251,11 +266,38 @@ describe("releaseTextback — the 08:00 send of a call missed overnight", () => 
     expect(logWrites()).toEqual([expect.objectContaining({ status: "skipped", reason: "A text already went to this person today" })]);
   });
 
+  // M3: a STOP that arrived overnight — after the row was held, before its
+  // 08:00 release — must still win. The gate re-reads the ledger inside
+  // `prepareTextback`, so this is a regression guard on that re-read.
+  it("a stop that landed overnight wins at the 08:00 release: skipped, never sent (mutation: skip the gate's re-read on release → sent, FAILS)", async () => {
+    dbMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-07T05:00:00Z", method: "carrier_block", eventId: "e1" });
+    expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held())).toBe("skipped");
+    expect(sms.send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "skipped", reason: "They stopped texts from this business" })]);
+  });
+
   it("a subject or payload it cannot read leaves the queue as 'No longer due' (mutation: re-run with a guessed id → FAILS)", async () => {
     expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held({ subject_key: "booking:x" }))).toBe("skipped");
     expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held({ payload: { callerNumber: 5 } }))).toBe("skipped");
     expect(logWrites().map((w) => w.reason)).toEqual(["No longer due", "No longer due"]);
     expect(sms.send).not.toHaveBeenCalled();
+  });
+
+  // I1 (2026-09-27 review): a release that lands past the hours AGAIN
+  // (they closed again by the time this row got its turn) re-defers and
+  // tries to re-hold. If THAT write fails, the row must keep retrying next
+  // tick — not be logged "skipped: No longer due" and abandoned for good.
+  it("a hold-write failure AT RELEASE fails the release rather than dropping it — the row keeps its past held_until and is retried next tick (I1; mutation: fall through to default → skipped 'No longer due', FAILS)", async () => {
+    dbMocks.recordAutomationLog.mockRejectedValueOnce(new Error("db down"));
+    // 21:05 CDT the next day: past the close again, so the release re-defers
+    // and tries to re-hold for the NEXT opening — and that write is the one
+    // that fails here.
+    const pastCloseAgain = new Date("2026-10-08T02:05:00Z");
+    expect(await releaseTextback(ctx(pastCloseAgain), held())).toBe("failed");
+    expect(sms.send).not.toHaveBeenCalled();
+    // Exactly the one (failed) write attempt — no second "No longer due" row.
+    expect(logWrites()).toHaveLength(1);
+    expect(logWrites()[0]).toMatchObject({ status: "held" });
   });
 });
 
@@ -269,7 +311,11 @@ describe("releaseTextback — the caller may have been served since", () => {
   const held = (): AutomationLogRow => ({
     id: "log_tb", account_id: "a1", source: "textback", channel: "sms", contact_id: "ct_1",
     subject_key: "call:call1", status: "held", reason: "Held until 8:00 AM — quiet hours", held_until: EIGHT_AM,
-    payload: PAYLOAD, occurred_at: TEN_PM.toISOString(),
+    // occurred_at is a LATER re-hold instant than the payload's own missedAt
+    // (I3a): if the code read row.occurred_at instead of payload.missedAt,
+    // the two would differ and the assertion below would catch it — with
+    // them equal (the old fixture), that bug was invisible.
+    payload: PAYLOAD, occurred_at: new Date(TEN_PM.getTime() + 3600_000).toISOString(),
   });
   const ctx = (): PassContext => ({
     db: DB as never, now: new Date(EIGHT_AM), origin: "", email: { isFake: true, send: vi.fn() }, sms: fakeSmsGate(),
@@ -298,7 +344,13 @@ describe("releaseTextback — the caller may have been served since", () => {
     dbMocks.callerInTouchSince.mockRejectedValue(new Error("fetch failed"));
     expect(await releaseTextback(ctx(), held())).toBe("held");
     expect(sms.send).not.toHaveBeenCalled();
-    expect(logWrites().at(-1)).toMatchObject({ status: "held", reason: "Waiting a few minutes: couldn't check whether they can get texts" });
+    // I3b: pinned to the ACTUAL 15-minute offset and the ORIGINAL payload —
+    // an unbounded objectContaining let any heldUntil/payload through.
+    expect(logWrites().at(-1)).toMatchObject({
+      status: "held", reason: "Waiting a few minutes: couldn't check whether they can get texts",
+      heldUntil: new Date(new Date(EIGHT_AM).getTime() + 15 * 60_000).toISOString(),
+      payload: expect.objectContaining({ missedAt: TEN_PM.toISOString() }),
+    });
   });
 });
 
