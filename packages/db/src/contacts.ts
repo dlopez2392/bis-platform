@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
+import { normalisePhone } from "./phone";
 
 export type ContactInput = {
   firstName?: string; lastName?: string; email?: string; phone?: string;
@@ -17,14 +18,37 @@ export type ContactInput = {
 // the detail page, which both show the "No marketing emails" switch off these
 // two reads. Snake_case end to end, like every other column here.
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at, sort_name, marketing_email_opted_out_at";
+  "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at, sort_name, marketing_email_opted_out_at, phone_country_unconfirmed";
+
+/**
+ * A phone as the contact row stores it (F-009, consent chain spec §4.1 item
+ * 1): the E.164 `normalisePhone` reads, with its country flag; or, for input
+ * that does not read as a number at all ("call after 5", a partial), the
+ * trimmed text as typed with no flag — the CRM keeps what the operator wrote,
+ * and the send gate refuses it as no number. Blank is null.
+ *
+ * Exported for the country pick and its tests; every write in this module
+ * goes through it, so no path can store a number without its flag.
+ */
+export function phoneFields(raw: string | null | undefined): { phone: string | null; phone_country_unconfirmed: boolean } {
+  const trimmed = raw?.trim() || null;
+  if (!trimmed) return { phone: null, phone_country_unconfirmed: false };
+  const n = normalisePhone(trimmed);
+  return n ? { phone: n.e164, phone_country_unconfirmed: n.unconfirmed } : { phone: trimmed, phone_country_unconfirmed: false };
+}
+
+/** The dedupe key of a phone as it WILL be stored: `phoneDigits` of `phoneFields`. */
+export function phoneKeyOf(raw: string | null | undefined): string {
+  const { phone } = phoneFields(raw);
+  return phone ? phoneDigits(phone) : "";
+}
 
 function toRow(input: Partial<ContactInput>) {
   const row: Record<string, unknown> = {};
   if (input.firstName !== undefined) row.first_name = input.firstName;
   if (input.lastName !== undefined) row.last_name = input.lastName;
   if (input.email !== undefined) row.email = input.email?.trim() || null;
-  if (input.phone !== undefined) row.phone = input.phone?.trim() || null;
+  if (input.phone !== undefined) Object.assign(row, phoneFields(input.phone));
   if (input.companyName !== undefined) row.company_name = input.companyName;
   if (input.source !== undefined) row.source = input.source;
   if (input.custom !== undefined) row.custom = input.custom;
@@ -82,7 +106,10 @@ export function emailKey(value: string): string {
     .replace(/\+[^@]*@/, "@");
 }
 
-type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null };
+/** `countryTwin`: a contact holding the same ten digits under +1 when the
+ *  new number is their +52 reading (review R1-I3). Not the same person for
+ *  sure, so it is recorded for the merge queue, never merged. */
+type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null; countryTwin: string | null };
 
 /**
  * Both lookups ALWAYS run, and that is the change. The old version returned on
@@ -124,7 +151,7 @@ type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null };
 async function findDuplicate(
   db: SupabaseClient, accountId: string, email?: string, phone?: string,
 ): Promise<DuplicateMatch> {
-  const result: DuplicateMatch = { emailMatch: null, phoneMatch: null };
+  const result: DuplicateMatch = { emailMatch: null, phoneMatch: null, countryTwin: null };
 
   const eKey = email ? emailKey(email) : "";
   if (eKey) {
@@ -134,15 +161,48 @@ async function findDuplicate(
     if (data && data.length > 0) result.emailMatch = data[0]!.id as string;
   }
 
-  const pKey = phone ? phoneDigits(phone) : "";
+  const pKey = phone ? phoneKeyOf(phone) : "";
   if (pKey) {
     const { data, error } = await db.from("contacts").select("id")
       .eq("account_id", accountId).eq("phone_key", pKey).limit(1);
     if (error) throw new Error(`contact dedupe failed: ${error.message}`);
     if (data && data.length > 0) result.phoneMatch = data[0]!.id as string;
+
+    // 0033's phone_key is the stored DIGITS, so a contact saved before F-009
+    // as "899 922 1234" keys 8999221234 while its +52 reading keys
+    // 528999221234 (review R1-I3). On a miss for a +52 ten-digit number, look
+    // up the bare ten: a contact whose stored phone reads as this same +52
+    // number IS this contact; one that reads as +1 is its country twin.
+    if (!result.phoneMatch && /^52\d{10}$/.test(pKey)) {
+      const { data: bare, error: bareErr } = await db.from("contacts").select("id, phone")
+        .eq("account_id", accountId).eq("phone_key", pKey.slice(2)).limit(1);
+      if (bareErr) throw new Error(`contact dedupe failed: ${bareErr.message}`);
+      const hit = (bare ?? [])[0] as { id: string; phone: string | null } | undefined;
+      if (hit && normalisePhone(hit.phone)?.e164 === `+${pKey}`) result.phoneMatch = hit.id;
+      else if (hit) result.countryTwin = hit.id;
+    }
   }
 
   return result;
+}
+
+/** One pair onto contact_duplicate_flags (0033), for the merge queue. A
+ *  repeat (23505) is the designed no-op. Called AFTER the write it is about
+ *  has succeeded, so a failure here is logged, never thrown: throwing would
+ *  report a failure for a write that happened (review R3-M11). */
+async function flagDuplicatePair(
+  db: SupabaseClient, accountId: string, one: string, other: string, reason: string,
+): Promise<boolean> {
+  const [contactA, contactB] = [one, other].sort();
+  const { error } = await db.from("contact_duplicate_flags")
+    .insert({ account_id: accountId, contact_a: contactA, contact_b: contactB, reason });
+  if (error && error.code !== "23505") {
+    // The Postgres code only, never the message: loggableError lives in
+    // apps/web, which packages/db cannot import, and a code carries no one's data.
+    console.error(`contact duplicate flag (${reason}) for account ${accountId} not recorded: code ${error.code ?? "none"}`);
+    return false;
+  }
+  return true;
 }
 
 export async function createContact(
@@ -150,8 +210,9 @@ export async function createContact(
   actorType: ActorType = "user",
 ): Promise<{ id: string; existing: boolean; flagged: boolean }> {
   const email = input.email?.trim().toLowerCase();
-  const phone = input.phone?.trim();
-  const match = await findDuplicate(db, accountId, email || undefined, phone || undefined);
+  // The phone as it will be STORED, so the event names what the row holds.
+  const phone = phoneFields(input.phone).phone ?? undefined;
+  const match = await findDuplicate(db, accountId, email || undefined, phone);
   const winner = match.emailMatch ?? match.phoneMatch;
 
   // Two DIFFERENT existing contacts both look like this person. The row still
@@ -178,6 +239,12 @@ export async function createContact(
     flagged = true;
   }
 
+  // An email match still queues the country twin its +52 number found
+  // (re-review minor 12): the person is the email's contact, and the +1 one
+  // with the same ten digits is for the merge tool to judge.
+  if (winner && match.countryTwin !== null && match.countryTwin !== winner) {
+    flagged = (await flagDuplicatePair(db, accountId, winner, match.countryTwin, "phone_country_twin")) || flagged;
+  }
   if (winner) return { id: winner, existing: true, flagged };
 
   const { data, error } = await db.from("contacts")
@@ -185,7 +252,9 @@ export async function createContact(
   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
     actorType);
-  return { id: data.id, existing: false, flagged: false };
+  const twinFlagged = match.countryTwin !== null
+    && await flagDuplicatePair(db, accountId, data.id, match.countryTwin, "phone_country_twin");
+  return { id: data.id, existing: false, flagged: twinFlagged };
 }
 
 export async function updateContact(
@@ -250,9 +319,11 @@ export async function fillContactBlanks(
 
   const filled = Object.keys(patch);
   if (filled.length === 0) return [];
+  // The phone is stored as every write stores it, with its country flag.
+  const written = "phone" in patch ? { ...patch, ...phoneFields(String(patch.phone)) } : patch;
 
   const { error } = await db.from("contacts")
-    .update({ ...patch, updated_at: new Date().toISOString() })
+    .update({ ...written, updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", contactId);
   if (error) throw new Error(`fillContactBlanks failed: ${error.message}`);
   await emit(db, accountId, "contact.updated", actorId, { contactId, fields: filled }, actorType);
@@ -547,4 +618,54 @@ export async function deleteContacts(
     .eq("account_id", accountId).in("id", deletable).select("id");
   if (error) throw new Error(`deleteContacts failed: ${error.message}`);
   return { deleted: (data ?? []).length, skippedBlocked: blocked.size };
+}
+
+/**
+ * F-009's flag for one contact (0054): true when its stored phone's country
+ * is unknown and texts are held until a person picks it. A missing contact
+ * reads false: there is nothing to hold. THROWS on a read error; the send
+ * gate turns that into `blocked: ledger_unavailable` (it fails closed).
+ */
+export async function readPhoneCountryFlag(db: SupabaseClient, accountId: string, contactId: string): Promise<boolean> {
+  const { data, error } = await db.from("contacts").select("phone_country_unconfirmed")
+    .eq("account_id", accountId).eq("id", contactId).maybeSingle();
+  if (error) throw new Error(`readPhoneCountryFlag failed: ${error.message}`);
+  return (data as { phone_country_unconfirmed: boolean } | null)?.phone_country_unconfirmed === true;
+}
+
+/**
+ * The contact drawer's "Mexico (+52)" / "US (+1)" (F-009, spec §6): writes
+ * `phone` and `phone_country_unconfirmed` together, ONLY while the stored
+ * phone is still `expectedPhone` — a concurrent edit to the number wins and
+ * this answers "changed". The undo is the same call with the two phones
+ * swapped and the flag set again.
+ *
+ * A number that becomes some OTHER contact's (the flagged "+1 551…" picked as
+ * "+52 551…" when a Mexican caller's contact already holds +52 551…) is still
+ * written — the operator's answer is the truth about this row — and the pair
+ * goes onto contact_duplicate_flags (reason 'phone_country_pick'), the queue a
+ * merge tool reads. phone_key is not unique, so nothing refuses the write.
+ */
+export async function setContactPhoneCountry(
+  db: SupabaseClient, accountId: string, contactId: string,
+  input: { expectedPhone: string; phone: string; unconfirmed: boolean },
+  actorId: string, actorType: ActorType = "user",
+): Promise<"updated" | "changed"> {
+  const { data, error } = await db.from("contacts")
+    .update({ phone: input.phone, phone_country_unconfirmed: input.unconfirmed, updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", contactId).eq("phone", input.expectedPhone)
+    .select("id");
+  if (error) throw new Error(`setContactPhoneCountry failed: ${error.message}`);
+  if (!data?.length) return "changed";
+
+  const { data: twins, error: twinErr } = await db.from("contacts").select("id")
+    .eq("account_id", accountId).eq("phone_key", phoneDigits(input.phone)).neq("id", contactId).limit(1);
+  // The phone is written: a failure from here on is logged, never thrown
+  // (a throw would report a failed pick that succeeded; review R3-M11).
+  const twin = twinErr ? undefined : (twins ?? [])[0] as { id: string } | undefined;
+  if (twinErr) console.error(`setContactPhoneCountry: duplicate check for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
+  if (twin) await flagDuplicatePair(db, accountId, contactId, twin.id, "phone_country_pick");
+  await emit(db, accountId, "contact.updated", actorId,
+    { contactId, fields: ["phone", "phone_country_unconfirmed"] }, actorType);
+  return "updated";
 }

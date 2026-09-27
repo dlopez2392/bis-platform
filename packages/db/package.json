@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./search-term": "./src/search-term.ts"
+    "./search-term": "./src/search-term.ts",
+    "./phone": "./src/phone.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -26,6 +27,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.110.8"
+    "@supabase/supabase-js": "^2.110.8",
+    "libphonenumber-js": "1.13.14"
   }
 }
