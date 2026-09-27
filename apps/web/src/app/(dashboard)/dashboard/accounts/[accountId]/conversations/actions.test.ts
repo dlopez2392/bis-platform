@@ -127,12 +127,23 @@ vi.mock("@bis/db", () => ({
     return svc.db;
   },
   recordUsage: vi.fn(),
+  // The send gate's reads (lib/consent/gate.ts): the composer goes through
+  // the REAL gate, so its ledger and country-flag reads are mocked here,
+  // allowed by default.
+  readConsentState: vi.fn(async () => ({ state: "allowed" })),
+  readPhoneCountryFlag: vi.fn(async () => false),
+  readAccountTimezone: vi.fn(async () => "America/Chicago"),
+  recordCarrierBlock: vi.fn(),
 }));
 
 import { sendEmailAction, sendSmsAction, markConversationReadAction } from "./actions";
 import {
   createMessage, updateMessageStatus, recordUsage, getContact, ensureConversation, clearUnreadCount,
+  readConsentState, readPhoneCountryFlag,
 } from "@bis/db";
+import { m } from "@/lib/messages";
+import { sendRejectedReason } from "./send-errors";
+import { SmsProviderError } from "@/lib/sms/types";
 
 const createMessageMock = vi.mocked(createMessage);
 const updateMessageStatusMock = vi.mocked(updateMessageStatus);
@@ -293,14 +304,16 @@ describe("sendSmsAction — the from number comes from the gate and nowhere else
     expect(smsSendMock).toHaveBeenCalledWith(expect.objectContaining({ from: "+19565550001" }));
   });
 
-  it("reads the gate on the request client, not the service client (mutation: resolveSmsSender(serviceDb()) -> FAILS)", async () => {
+  it("the send gate runs on the SERVICE client, and only after the contact was read on the request client, the read that authorises it (mutation: read the contact on the service client -> FAILS)", async () => {
     await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
 
-    expect(gateMock.mock.calls[0]![0]).toBe(req.db);
+    expect(vi.mocked(getContact).mock.calls[0]![0]).toBe(req.db);
+    expect(gateMock.mock.calls[0]![0]).toBe(svc.db);
+    expect(vi.mocked(getContact).mock.invocationCallOrder[0]!).toBeLessThan(gateMock.mock.invocationCallOrder[0]!);
   });
 });
 
-describe("sendSmsAction — the contact's phone must survive toE164 before anything is written", () => {
+describe("sendSmsAction — the contact's phone must survive normalisation (F-009) before anything is written", () => {
   it("rejects an unnormalizable phone before any row is written", async () => {
     contactRow.phone = "not a phone";
 
@@ -517,5 +530,53 @@ describe("0053 — every write-path action requires access before touching anyth
     requireAccountAccessMock.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
     await expect(markConversationReadAction("acct_1", "convo_9")).rejects.toThrow("NEXT_REDIRECT");
     expect(vi.mocked(clearUnreadCount)).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Consent chain PR-1 (spec §6): the composer goes through the send gate as
+ * `staff.composer_sms`. A refusal after an attempt (a stale tab, or a stop
+ * that landed since the page rendered) says the SAME line the composer shows
+ * on render (lib/consent/composer-state.ts); an unreadable ledger is a
+ * failure, never worded as the customer's choice.
+ */
+describe("sendSmsAction — the consent gate's refusals", () => {
+  const send = () => sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" })).catch((e: unknown) => e);
+
+  it("a stopped number: rejected with the composer's own stopped line; nothing written, nothing sent (mutation: rethrow the raw reason → FAILS)", async () => {
+    vi.mocked(readConsentState).mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T15:00:00Z", method: "keyword", eventId: "e1" });
+    expect(sendRejectedReason(await send())).toBe(m["compose.smsStoppedUndated"]);
+    expect(createMessageMock).not.toHaveBeenCalled();
+    expect(smsSendMock).not.toHaveBeenCalled();
+  });
+
+  it("held, and a number that could be Mexican or US, each say their own line (mutation: swap the two lines → FAILS)", async () => {
+    vi.mocked(readConsentState).mockResolvedValueOnce({ state: "held", since: "2026-10-03T15:00:00Z", method: "free_text", eventId: "e2" });
+    expect(sendRejectedReason(await send())).toBe(m["compose.smsHeld"]);
+    vi.mocked(readPhoneCountryFlag).mockResolvedValueOnce(true);
+    expect(sendRejectedReason(await send())).toBe(m["compose.smsCheckNumber"]);
+    expect(smsSendMock).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable state answers the render's own line, never the customer's choice (review R3-M2; mutation: map it to the stopped line → FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(readConsentState).mockRejectedValueOnce(new Error("permission denied for table consent_events"));
+    expect(sendRejectedReason(await send())).toBe(m["compose.smsStateUnknown"]);
+    expect(smsSendMock).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("a carrier refusal for a number that texted STOP says the stopped line on the FIRST attempt, and the row is marked failed (review R3-I3; mutation: throw the provider's error → FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    smsSendMock.mockRejectedValueOnce(new SmsProviderError('telnyx send failed (400): {"errors":[{"code":"40300"}]}', 400, ["40300"]));
+    expect(sendRejectedReason(await send())).toBe(m["compose.smsStoppedUndated"]);
+    expect(updateMessageStatusMock).toHaveBeenCalledWith(svc.db, "acct_1", "msg_1", "failed", expect.anything(), "user_1");
+    spy.mockRestore();
+  });
+
+  it("the ledger is read for THIS account, sms, on the contact's NORMALISED number (mutation: pass the stored phone as typed → FAILS)", async () => {
+    contactRow.phone = "(956) 292-1696";
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+    expect(vi.mocked(readConsentState)).toHaveBeenCalledWith(svc.db, "acct_1", "sms", "+19562921696");
   });
 });

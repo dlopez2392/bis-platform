@@ -63,8 +63,16 @@ vi.mock("./actions", () => ({
 vi.mock("../actions", () => ({
   updateContactFieldAction: async () => ({ ok: true }), setMarketingEmailOptOutAction: async () => ({ ok: true }),
 }));
-// The timeline is not what this pins, and it pulls in the message composer.
-vi.mock("./activity-timeline", () => ({ ActivityTimeline: () => null }));
+// The timeline pulls in the message composer; only its props are pinned.
+const timelineProps = vi.fn();
+vi.mock("./activity-timeline", () => ({
+  ActivityTimeline: (props: Record<string, unknown>) => { timelineProps(props); return null; },
+}));
+// Consent chain PR-1: the composer's recipient read, stubbed per test.
+const recipientState = vi.fn();
+vi.mock("@/lib/consent/recipient-state", () => ({
+  smsRecipientState: (...a: unknown[]) => recipientState(...a),
+}));
 
 /** The switch's props, as the REAL panel hands them down — so this proves the
  *  zone reaches the switch, not merely the panel. */
@@ -82,6 +90,8 @@ vi.mock("next/navigation", () => ({
 }));
 
 const { default: ContactDetailPage } = await import("./page");
+const { m } = await import("@/lib/messages");
+const { formatDateInZone } = await import("@/lib/format");
 
 const CONTACT = {
   id: "ct1", first_name: "Ana", last_name: "Reyes", email: "ana@example.com", phone: null,
@@ -100,6 +110,7 @@ describe("ContactDetailPage: the zone the opt-out's date is printed in", () => {
     switchProps.mockClear();
     renderZone.mockClear();
     accountsEq.mockClear();
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
   });
 
   it("the account's own timezone reaches the switch (mutation: renderZone(undefined) -> FAILS)", async () => {
@@ -134,5 +145,39 @@ describe("ContactDetailPage: the zone the opt-out's date is printed in", () => {
     await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
     expect(renderZone).not.toHaveBeenCalled();
     expect(switchProps).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Consent chain PR-1 (spec §6): the composer is closed, with one line, when
+ * the recipient's texts are stopped, held or the number is unconfirmed.
+ */
+describe("ContactDetailPage: the recipient's texts state", () => {
+  beforeEach(() => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    timelineProps.mockClear();
+  });
+
+  it("a stopped number: the composer's line carries the stop date in the ACCOUNT's zone (mutation: format the date in UTC → 'Oct 4', FAILS)", async () => {
+    // 02:30Z on the 4th is still the 3rd in Chicago: a UTC date would say 4.
+    recipientState.mockResolvedValue({ kind: "stopped", since: "2026-10-04T02:30:00.000Z" });
+    await render();
+    expect(recipientState).toHaveBeenCalledWith(expect.anything(), "acct1", CONTACT);
+    expect(timelineProps.mock.calls[0]![0]).toMatchObject({
+      smsBlockedLine: m["compose.smsStopped"].replace("{date}", formatDateInZone("2026-10-04T02:30:00.000Z", "America/Chicago")),
+    });
+    expect(String(timelineProps.mock.calls[0]![0].smsBlockedLine)).toContain("Oct 3");
+  });
+
+  it("an ok recipient: no line, the form shows (mutation: always pass the held line → FAILS)", async () => {
+    await render();
+    expect(timelineProps.mock.calls[0]![0]).toMatchObject({ smsBlockedLine: null });
+  });
+
+  it("an unreadable state closes the composer with the error line, never an open form", async () => {
+    recipientState.mockResolvedValue({ kind: "unknown" });
+    await render();
+    expect(timelineProps.mock.calls[0]![0]).toMatchObject({ smsBlockedLine: m["compose.smsStateUnknown"] });
   });
 });

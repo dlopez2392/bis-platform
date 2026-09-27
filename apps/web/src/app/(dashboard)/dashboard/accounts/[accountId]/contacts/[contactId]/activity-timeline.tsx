@@ -47,6 +47,7 @@ export function ActivityTimeline({
   contactHasEmail,
   contactHasPhone,
   smsGate,
+  smsBlockedLine,
   notes,
   tasks,
   opportunities,
@@ -65,6 +66,10 @@ export function ActivityTimeline({
   // a plain prop — MessageComposer is a client component and must not query
   // the database itself.
   smsGate: SmsGate;
+  /** Consent chain spec §6: the one line the Text tab shows in place of the
+   *  form when the recipient's texts are stopped, held or the number is
+   *  unconfirmed (lib/consent/composer-state.ts); null when it may text. */
+  smsBlockedLine: string | null;
   notes: Note[];
   tasks: Task[];
   opportunities: Opportunity[];
@@ -203,6 +208,7 @@ export function ActivityTimeline({
           contactHasEmail={contactHasEmail}
           contactHasPhone={contactHasPhone}
           smsGate={smsGate}
+          smsBlockedLine={smsBlockedLine}
           noteAction={boundAddNote}
           emailAction={emailAction}
           smsAction={smsAction}
