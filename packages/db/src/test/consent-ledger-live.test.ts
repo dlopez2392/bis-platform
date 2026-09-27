@@ -5,7 +5,7 @@ import { appendConsentEvent, readConsentState } from "../consent";
 
 /** 0054 through PostgREST, on the CI project only (withTestAccount + serviceDb). */
 describe("0054 consent.ts against the live table (CI only: withTestAccount + serviceDb)", () => {
-  it("appendConsentEvent writes through the service role and readConsentState reads the newest deciding row; the account's teardown removes both", async () => {
+  it("appendConsentEvent writes through the service role and readConsentState reads the newest deciding row; the account's teardown removes both (mutation: drop the `resubscribed` branch of consentStateOf's early return → the final check reads 'held' instead of 'allowed', FAILS)", async () => {
     let accountId = "";
     await withTestAccount(async (_tdb, id) => {
       accountId = id;

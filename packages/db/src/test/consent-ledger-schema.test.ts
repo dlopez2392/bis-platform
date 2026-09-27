@@ -219,13 +219,17 @@ describe("0054 consent_events: occurred_at must be sane (orchestrator decision)"
   const INSERT_AT = `insert into consent_events (account_id, channel, address, action, method, occurred_at)
     values ($1, 'sms', '+19565550100', 'revoked', 'carrier_block', $2) returning id`;
 
-  it("a future occurred_at (beyond 5 minutes of clock skew) is refused; an 'infinity' occurred_at is refused; a past time is accepted (mutation: drop consent_events_occurred_at_sane → FAILS)", () =>
+  it("a future occurred_at (beyond 5 minutes of clock skew) is refused; 'infinity' and '-infinity' are both refused; a past time is accepted (mutation: drop consent_events_occurred_at_sane → FAILS; mutation: keep the time bound but drop isfinite(occurred_at) → '-infinity' alone survives, FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const bad = { code: "23514", constraint: "consent_events_occurred_at_sane" };
       const wellBeyondSkew = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour ahead
       expect(await refused(c, INSERT_AT, [s.a, wellBeyondSkew])).toMatchObject(bad);
       expect(await refused(c, INSERT_AT, [s.a, "infinity"])).toMatchObject(bad);
+      // '-infinity' passes the time BOUND trivially (it is <= anything), so
+      // only isfinite() catches it; 'infinity' alone cannot prove isfinite
+      // is doing any work, since the bound already refuses it on its own.
+      expect(await refused(c, INSERT_AT, [s.a, "-infinity"])).toMatchObject(bad);
       // The control: a plainly past time is accepted (this is what every
       // backfill writes).
       await c.query(INSERT_AT, [s.a, "2026-01-01T10:00:00Z"]);

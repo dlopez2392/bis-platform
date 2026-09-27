@@ -121,22 +121,6 @@ describe("readConsentState", () => {
       ["order", "id", { ascending: false }],
     ]);
   });
-
-  it("guards consent-ledger-live.test.ts's premise, since that test is CI-only and cannot run here: a 20-row window truncates from whichever end the read is sorted from, and only the newest-first end keeps the deciding row that a wrong 21st-oldest row would otherwise roll off (mutation: order ascending in readConsentState — modeled here by reading the OLDEST 20 of 21 rows instead of the newest 20 — → 'stopped' instead of 'allowed', FAILS)", () => {
-    const older = Array.from({ length: 20 }, (_, i) =>
-      row("revoked", `2026-01-${String(i + 1).padStart(2, "0")}T10:00:00Z`, "carrier_block"));
-    const newest = row("resubscribed", "2026-09-01T10:00:00Z", "start_keyword");
-    // The real query: newest-first, limit 20. Of the 21 rows, this window
-    // is `newest` plus the 19 newest of `older` (the single oldest one
-    // rolls off) — `newest` is the deciding row and it decides: allowed.
-    const newestFirstWindow = [newest, ...older.slice(1)];
-    expect(consentStateOf(newestFirstWindow).state).toBe("allowed");
-    // The mutated query: oldest-first, limit 20. Of the same 21 rows, this
-    // window is all 20 of `older` — `newest` is the 21st and oldest-last,
-    // so it rolls off, and every row left is `revoked`: stopped.
-    const oldestFirstWindow = older;
-    expect(consentStateOf(oldestFirstWindow).state).toBe("stopped");
-  });
 });
 
 describe("recordCarrierBlock", () => {
