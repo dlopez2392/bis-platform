@@ -94,9 +94,19 @@ function toRow(input: Partial<ContactInput>, currentPhone?: string | null) {
     const currentReads = currentPhone !== undefined
       ? (normalisePhone(currentPhone)?.e164 ?? currentPhone)
       : undefined;
-    Object.assign(row, currentReads !== undefined && fields.phone !== null && fields.phone === currentReads
-      ? { phone: fields.phone }
-      : fields);
+    // Unchanged writes NEITHER column — never even the normalised text
+    // (re-review, round 2 regression). A row stored bare ("55 1234 5678",
+    // written before this deploy, the backfill not yet run, flag still
+    // false by default) re-saved with the same number must not become a
+    // confirmed-looking "+15512345678" with the flag left stale at false:
+    // the gate re-derives a BARE stored number at send time (ambiguous
+    // means held), but a "+1…" text with an untouched false flag reads as
+    // already-confirmed and would be texted. Leaving both columns alone
+    // keeps the bare text bare, so the gate keeps re-deriving and holding
+    // it exactly as before this write.
+    if (!(currentReads !== undefined && fields.phone !== null && fields.phone === currentReads)) {
+      Object.assign(row, fields);
+    }
   }
   if (input.companyName !== undefined) row.company_name = input.companyName;
   if (input.source !== undefined) row.source = input.source;

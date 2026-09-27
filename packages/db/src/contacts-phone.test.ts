@@ -309,7 +309,22 @@ describe("updateContact: an unchanged number keeps its flag (review C1)", () => 
   ])("re-writing the same number back keeps the flag even when the STORED text is formatted, not pure E.164: %s (re-review C1; mutation: compare against the raw stored text instead of normalisePhone(currentPhone)?.e164 → the flag is cleared, FAILS)", async (stored) => {
     const m = memoryDb([{ id: "c1", account_id: "a1", phone: stored, phone_key: "5512345678", phone_country_unconfirmed: true }]);
     await updateContact(m.db, "a1", "c1", { phone: stored }, "user_test");
-    expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
+    // Unchanged writes NEITHER column (round-3 fix) — the stored TEXT stays
+    // exactly as it was (never rewritten to pure E.164), and so does the flag.
+    expect(m.tables.contacts[0]).toMatchObject({ phone: stored, phone_country_unconfirmed: true });
+  });
+
+  it.each([
+    ["55 1234 5678"],
+    ["+15512345678"],
+  ])("an UNFLAGGED bare-stored number (written before this deploy, the backfill not yet run) re-saved with the same number is rewritten as NEITHER text nor flag — %s (mutation: write the normalised phone even when unchanged → the bare text becomes a confirmed-looking +1 number with the flag still false, FAILS)", async (incoming) => {
+    // The gate re-derives a BARE stored number at send time (ambiguous means
+    // held); a "+1…" text with an untouched false flag reads as already
+    // confirmed and would be texted. So an unchanged number must leave the
+    // stored bare text — and the stale false flag — exactly alone.
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: "55 1234 5678", phone_key: "5512345678", phone_country_unconfirmed: false }]);
+    await updateContact(m.db, "a1", "c1", { phone: incoming }, "user_test");
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "55 1234 5678", phone_country_unconfirmed: false });
   });
 });
 
@@ -362,7 +377,20 @@ describe("applyImportBatch: a CSV re-import of a flagged contact's own exported 
     const index: MatchIndex = { byEmail: new Map(), byPhone: new Map([["5512345678", "c1"]]) };
     const result = await applyImportBatch(m.db, "a1", [{ input: { phone: stored }, tags: [] }], index, "user_test", { createTags: false });
     expect(result).toEqual({ created: 0, updated: 1, flagged: 0 });
-    expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
+    // Unchanged writes NEITHER column (round-3 fix) — the stored TEXT stays
+    // exactly as it was.
+    expect(m.tables.contacts[0]).toMatchObject({ phone: stored, phone_country_unconfirmed: true });
+  });
+
+  it.each([
+    ["55 1234 5678"],
+    ["+15512345678"],
+  ])("re-importing an UNFLAGGED bare-stored contact's own number leaves the text and flag exactly alone — %s (mutation: write the normalised phone even when unchanged → the bare text becomes a confirmed-looking +1 number with the flag still false, FAILS)", async (incoming) => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: "55 1234 5678", phone_key: "5512345678", phone_country_unconfirmed: false }]);
+    const index: MatchIndex = { byEmail: new Map(), byPhone: new Map([["5512345678", "c1"]]) };
+    const result = await applyImportBatch(m.db, "a1", [{ input: { phone: incoming }, tags: [] }], index, "user_test", { createTags: false });
+    expect(result).toEqual({ created: 0, updated: 1, flagged: 0 });
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "55 1234 5678", phone_country_unconfirmed: false });
   });
 });
 
