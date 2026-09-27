@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { SMS_KINDS } from "./classes";
 
 /**
@@ -37,10 +38,20 @@ function walk(dir: string): string[] {
 const isTest = (f: string) => /\.test\.tsx?$/.test(f);
 /** Forward slashes, relative to the repo, whatever the OS (Windows prints `\`). */
 const rel = (f: string) => relative(REPO, f).split(sep).join("/");
-/** A file's CODE: block comments, then line comments, stripped (a `//` after a `:` is a URL). */
-const code = (f: string) => readFileSync(f, "utf-8")
-  .replace(/\/\*[\s\S]*?\*\//g, "")
-  .replace(/(^|[^:])\/\/.*$/gm, "$1");
+/** A file parsed by TypeScript itself (`.tsx` as TSX). */
+const parse = (f: string, text: string) =>
+  ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true, f.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+const printer = ts.createPrinter({ removeComments: true });
+const printed = new Map<string, string>();
+/** A file's CODE: TypeScript's own printer with the comments removed. Regexes
+ *  cannot do it: stripping block comments first let a `// …/dashboard/*` line
+ *  comment swallow real code up to the next block comment's end, and a regex literal holding
+ *  `\/\/` read as a line comment and ate the rest of its line. */
+function code(f: string, text?: string): string {
+  if (text !== undefined) return printer.printFile(parse(f, text));
+  if (!printed.has(f)) printed.set(f, printer.printFile(parse(f, readFileSync(f, "utf-8"))));
+  return printed.get(f)!;
+}
 
 const webSources = () => walk(WEB_SRC).filter((f) => !isTest(f));
 const dbSources = () => walk(DB_SRC).filter((f) => !isTest(f));
@@ -54,10 +65,31 @@ const moduleId = (abs: string) => rel(abs).replace(/\.(?:ts|tsx|js|jsx|mjs|cjs)$
  *  against the file's own folder (packages are not followed). */
 function importsOf(file: string, src: string = code(file)): string[] {
   return [...src.matchAll(SPECIFIER)].flatMap(([, spec]) =>
-    spec!.startsWith("@/") ? [moduleId(join(WEB_SRC, spec!.slice(2)))]
-    : spec!.startsWith(".") ? [moduleId(join(dirname(file), spec!))]
-    : []);
+    spec!.startsWith("@/") || spec!.startsWith(".") ? [resolveSpec(file, spec!)] : []);
 }
+/** One specifier's module id, resolved against `file`'s folder (a package name stays as it is). */
+const resolveSpec = (file: string, spec: string) =>
+  spec.startsWith("@/") ? moduleId(join(WEB_SRC, spec.slice(2)))
+  : spec.startsWith(".") ? moduleId(join(dirname(file), spec))
+  : spec;
+const GATE_FILE = join(WEB_SRC, "lib", "consent", "gate.ts");
+
+describe("every scan reads the code, and only the comments are gone", () => {
+  it("code after a `// …/*` line comment, and after a regex literal holding \\/\\/, is still scanned, while the comments themselves are not (mutation: strip block comments, then line comments, with regexes → FAILS)", () => {
+    const src = [
+      "// fires for every /api/cron/* tick",
+      "import { getSmsProvider } from \"@/lib/sms\";",
+      "const HOST = /^https?:\\/\\//; const provider = getSmsProvider();",
+      "/** a doc comment naming quiet_start */",
+      "export const tsx = <div>{/* a JSX comment naming quiet_end */}{provider.name}</div>;",
+    ].join("\n");
+    const seen = code("probe.tsx", src);
+    expect(seen).toContain("import { getSmsProvider } from \"@/lib/sms\";");
+    expect(seen).toMatch(/const provider = getSmsProvider\(\);/);
+    expect(seen).toMatch(/\{provider\.name\}/);
+    expect(seen).not.toMatch(/fires for every|quiet_start|quiet_end/);
+  });
+});
 
 describe("scan 1: only the send gate reaches an SMS provider", () => {
   // The provider's own modules, and the gate. alerts.ts is IN lib/sms but is
@@ -102,6 +134,36 @@ describe("scan 1: only the send gate reaches an SMS provider", () => {
   it("only the Telnyx provider names the messages endpoint: no raw fetch around the gate (review R3-M1; mutation: fetch https://api.telnyx.com/v2/messages from a pass → FAILS naming it; the list holding telnyx.ts is the positive control)", () => {
     expect(webSources().filter((f) => /\/v2\/messages\b/.test(code(f))).map(rel)).toEqual(["apps/web/src/lib/sms/telnyx.ts"]);
   });
+
+  it("exactly two files name api.telnyx.com: the SMS provider and the number purchase (mutation: a third file names https://api.telnyx.com → FAILS naming it)", () => {
+    expect(webSources().filter((f) => /api\.telnyx\.com/.test(code(f))).map(rel).sort())
+      .toEqual(["apps/web/src/lib/sms/telnyx.ts", "apps/web/src/lib/voice/telnyx-numbers.ts"]);
+  });
+
+  it("the gate exports nothing it imports from lib/sms, so nothing reaches the provider THROUGH the gate (mutation: gate.ts adds export { getSmsProvider }, or export … from \"@/lib/sms\" → FAILS naming it; the lib/sms names it sees are the positive control)", () => {
+    const sf = parse(GATE_FILE, readFileSync(GATE_FILE, "utf-8"));
+    const isSms = (spec: ts.Expression | undefined) => !!spec && ts.isStringLiteral(spec)
+      && /^apps\/web\/src\/lib\/sms(?:\/|$)/.test(resolveSpec(GATE_FILE, spec.text));
+    const smsNames = new Set<string>();
+    for (const s of sf.statements) {
+      if (!ts.isImportDeclaration(s) || !isSms(s.moduleSpecifier)) continue;
+      const clause = s.importClause;
+      if (clause?.name) smsNames.add(clause.name.text);
+      const bound = clause?.namedBindings;
+      if (bound && ts.isNamespaceImport(bound)) smsNames.add(bound.name.text);
+      if (bound && ts.isNamedImports(bound)) bound.elements.forEach((e) => smsNames.add(e.name.text));
+    }
+    const leaks = sf.statements.filter((s) =>
+      (ts.isExportDeclaration(s) && (isSms(s.moduleSpecifier)
+        || (!s.moduleSpecifier && !!s.exportClause && ts.isNamedExports(s.exportClause)
+          && s.exportClause.elements.some((e) => smsNames.has((e.propertyName ?? e.name).text)))))
+      || (ts.isExportAssignment(s) && ts.isIdentifier(s.expression) && smsNames.has(s.expression.text))
+      || (ts.isVariableStatement(s) && !!s.modifiers?.some((mod) => mod.kind === ts.SyntaxKind.ExportKeyword)
+        && s.declarationList.declarations.some((d) => !!d.initializer && ts.isIdentifier(d.initializer) && smsNames.has(d.initializer.text))))
+      .map((s) => s.getText(sf));
+    expect([...smsNames]).toEqual(expect.arrayContaining(["getSmsProvider", "SmsProviderError"]));
+    expect(leaks).toEqual([]);
+  });
 });
 
 describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
@@ -109,12 +171,25 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
   // (review R3-I4: `[a-z_]+` could not see "operator.alert_sms_v2", and a
   // kind held in a constant has no `kind:` in front of it).
   const KIND_LITERAL = /["'`]((?:automation|voice|staff|operator|consent)\.[^"'`]+)["'`]/g;
-  const GATE_CALLERS = /from\s+["'](?:@\/lib\/consent\/gate|\.\/gate|\.\.\/send-sms|\.\/send-sms)["']/;
+  // A gate caller imports the gate or the automations' send-sms by ANY path:
+  // resolved, not spelled (review of 884220c2: `../../../../lib/consent/gate`
+  // from a route slipped past a regex of four spellings).
+  const GATE_MODULES = new Set(["apps/web/src/lib/consent/gate", "apps/web/src/lib/automations/send-sms"]);
+  const isGateCaller = (f: string, src?: string) => importsOf(f, src).some((m) => GATE_MODULES.has(m));
 
   function kindLiterals(): { file: string; kind: string }[] {
-    return webSources().filter((f) => GATE_CALLERS.test(code(f)))
+    return webSources().filter((f) => isGateCaller(f))
       .flatMap((f) => [...code(f).matchAll(KIND_LITERAL)].map((m) => ({ file: rel(f), kind: m[1]! })));
   }
+
+  it("a gate caller is found by its resolved import, whatever the path spells (mutation: match the four spelled specifiers again → FAILS)", () => {
+    const at = (...p: string[]) => join(WEB_SRC, ...p);
+    expect(isGateCaller(at("app", "api", "sms", "inbound", "route.ts"), `import { decideSms } from "../../../../lib/consent/gate";`)).toBe(true);
+    expect(isGateCaller(at("lib", "automations", "passes", "probe.ts"), `import { sendAutomationSms } from "../send-sms.ts";`)).toBe(true);
+    expect(isGateCaller(at("app", "probe.ts"), `const g = await import("@/lib/automations/send-sms");`)).toBe(true);
+    expect(isGateCaller(at("lib", "consent", "probe.ts"), `import type { SmsRequest } from "./gate";`)).toBe(true);
+    expect(isGateCaller(at("lib", "consent", "probe.ts"), `import { fakeSmsGate } from "./fake-gate";`)).toBe(false);
+  });
 
   it("each kind literal in a file that sends through the gate is a registry key (mutation: a pass sends kind \"automation.review_requests\" → FAILS naming it)", () => {
     expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS))).toEqual([]);
@@ -136,19 +211,21 @@ describe("scan 3: the ledger has one writer, and it only appends", () => {
     expect(touching).toEqual(["packages/db/src/consent.ts"]);
   });
 
-  it("consent.ts never updates, upserts or deletes on it (mutation: add .update( to a consent_events call → FAILS)", () => {
+  it("consent.ts never updates, upserts or deletes, anywhere in the file, however the table is spelled (mutation: add .update( to a consent_events call, or .delete() after .from(\"consent_events\" as never) or .from(CONST) → FAILS)", () => {
     const src = code(join(DB_SRC, "consent.ts"));
-    const calls = [...src.matchAll(/\.from\(\s*["']consent_events["']\s*\)([\s\S]*?);/g)].map((m) => m[1]!);
-    expect(calls.length).toBeGreaterThanOrEqual(2);   // the read and the insert: the scan sees both
-    expect(calls.filter((c) => /\.(update|upsert|delete)\(/.test(c))).toEqual([]);
+    expect(src.match(/\.from\(/g)?.length).toBeGreaterThanOrEqual(2);   // the read and the insert: the scan sees both
+    expect(src).toMatch(/\.insert\(/);
+    expect(src.match(/\.(?:update|upsert|delete)\s*\(/g) ?? []).toEqual([]);
   });
 });
 
 describe("scan 5: nothing reads the retired quiet-hours settings", () => {
   const QUIET = /\bquiet_(enabled|start|end)\b|\bautomation_settings\b|\breadQuietSettings\b|\bsaveQuietSettings\b/;
 
-  it("no source file names automation_settings or its quiet_* columns (mutation: bring readQuietSettings back → FAILS naming it)", () => {
-    expect([...webSources(), ...dbSources()].filter((f) => QUIET.test(code(f))).map(rel)).toEqual([]);
+  it("no source file names automation_settings or its quiet_* columns (mutation: bring readQuietSettings back → FAILS naming it; the list holding gate.ts and consent.ts is the positive control: an empty file list FAILS)", () => {
+    const quietFiles = [...webSources(), ...dbSources()];
+    expect(quietFiles.map(rel)).toEqual(expect.arrayContaining(["apps/web/src/lib/consent/gate.ts", "packages/db/src/consent.ts"]));
+    expect(quietFiles.filter((f) => QUIET.test(code(f))).map(rel)).toEqual([]);
   });
 
   it("the scan can see the column name where it still exists: the migrations (the positive control)", () => {
@@ -160,8 +237,11 @@ describe("scan 5: nothing reads the retired quiet-hours settings", () => {
 describe("F-009: toE164 is gone, and the fake gate stays in the tests", () => {
   const FAKE_GATE = "apps/web/src/lib/consent/fake-gate";
 
-  it("no source file defines or calls toE164 (mutation: re-add it to phone-number.ts → FAILS)", () => {
-    expect(webSources().filter((f) => /\btoE164\b/.test(code(f))).map(rel)).toEqual([]);
+  it("no source file defines or calls toE164 (mutation: re-add it to phone-number.ts → FAILS; the list holding phone-number.ts, where it lived, and a definition the check does see are the positive controls: an empty file list FAILS)", () => {
+    const e164Files = webSources();
+    expect(e164Files.map(rel)).toContain("apps/web/src/lib/voice/phone-number.ts");
+    expect(code("probe.ts", "export const toE164 = e164Of;")).toMatch(/\btoE164\b/);
+    expect(e164Files.filter((f) => /\btoE164\b/.test(code(f))).map(rel)).toEqual([]);
   });
 
   it("only test files import lib/consent/fake-gate, by ANY path: @/lib/consent/fake-gate, ./fake-gate, ../consent/fake-gate (mutation: a pass imports it as ../../consent/fake-gate → FAILS naming it)", () => {
@@ -187,6 +267,10 @@ describe("the carrier bypass: only the text-back sets numberFromCarrier", () => 
     expect(naming).toEqual(["apps/web/src/lib/consent/gate.ts", "apps/web/src/lib/voice/textback.ts"]);
     expect(code(join(WEB_SRC, "lib", "voice", "textback.ts"))).toMatch(/\bnumberFromCarrier\s*:\s*true\b/);
     expect(code(join(WEB_SRC, "lib", "consent", "gate.ts"))).not.toMatch(/\b(?:numberFromCarrier|fromCarrier)\s*[:=]\s*true\b/);
+  });
+
+  it("the gate's carrier line is pinned, so only an explicit true skips the stored flag (mutation: req.numberFromCarrier !== false → FAILS)", () => {
+    expect(code(GATE_FILE)).toContain("const fromCarrier = req.numberFromCarrier === true;");
   });
 });
 
@@ -214,7 +298,9 @@ describe("the carrier bypass: only the text-back sets numberFromCarrier", () => 
 const WRITES = /(?<!function\s+)\b(createContact|updateContact|fillContactBlanks|applyImportBatch)\s*\(/g;
 /** The index of each write's contact input (contacts.ts, contact-import.ts). */
 const INPUT_ARG: Record<string, number> = { createContact: 2, updateContact: 3, fillContactBlanks: 3, applyImportBatch: 2 };
-const NORMALISER = /\b(e164Of|toE164|spokenPhone|normalisePhone)\s*\(/g;
+/** `repickPhoneCountry(…, "US")` is exactly the old `toE164`; `extractCallerNumber` reads a carrier event's caller. */
+const NORMALISER_NAMES = ["e164Of", "toE164", "spokenPhone", "normalisePhone", "repickPhoneCountry", "extractCallerNumber"];
+const NORMALISER = new RegExp(`\\b(${NORMALISER_NAMES.join("|")})\\s*\\(`, "g");
 /** `name = rhs;` (declared, reassigned, destructured, or a member of `name`). */
 const ASSIGNMENT = /(?<![\w$.])(\{[^{}]*\}|[A-Za-z_$][\w$]*)((?:\s*(?:\??\.[A-Za-z_$][\w$]*|\[[^\]\n]*\]))*)\s*(?::[^=;{}]+?)?=(?![=>])([^;]*);/g;
 
@@ -305,7 +391,13 @@ function normalisedIntoWrites(src: string, builder: boolean): string[] {
     return input === undefined ? [] : [input];
   });
   if (writes.length === 0) return [...hits].sort();
+  const { numbers, readings } = carriedLocals(src);
+  for (const args of writes) numbersIn(args, numbers, readings).forEach((c) => hits.add(c));
+  return [...hits].sort();
+}
 
+/** The locals of `src` that carry a normaliser's number, or a reading. */
+function carriedLocals(src: string): { numbers: Carried; readings: Carried } {
   const numbers: Carried = new Map();
   const readings: Carried = new Map();
   const assignments = [...src.matchAll(ASSIGNMENT)].map((m) => ({
@@ -328,8 +420,60 @@ function normalisedIntoWrites(src: string, builder: boolean): string[] {
       }
     }
   }
-  for (const args of writes) numbersIn(args, numbers, readings).forEach((c) => hits.add(c));
-  return [...hits].sort();
+  return { numbers, readings };
+}
+
+/** A renamed import reads as its own name (`import { e164Of as toNumber }`:
+ *  every `toNumber` is `e164Of`), so a rename cannot hide a normaliser. */
+function dealias(src: string): string {
+  let out = src;
+  for (const m of src.matchAll(new RegExp(`\\b(${NORMALISER_NAMES.join("|")})\\s+as\\s+([A-Za-z_$][\\w$]*)`, "g"))) {
+    out = out.replace(new RegExp(`(?<![\\w$.])${escapeRe(m[2]!)}(?![\\w$])`, "g"), m[1]!);
+  }
+  return out;
+}
+
+/** An object key `phone` (quoted or not; after `{` or `,`, so a ternary's `? phone :` is not one). */
+const PHONE_KEY = /(?<![\w$.])(?:(["'])phone\1|phone)\s*:(?!:)/g;
+/** A `phone` binding or member being given a value: `const phone =`, `phone =`,
+ *  `input.phone =`, `input["phone"] =` (a type annotation allowed; not `==`, not `=>`). */
+const PHONE_BINDING = /(?:(?<![\w$])phone|\[\s*(["'])phone\1\s*\])\s*(?::[^=;{}()]+?)?=(?![=>])/g;
+
+/** The value that starts at `from`: up to the first top-level `,` or `;`, or the bracket that closes around it. */
+function valueAt(src: string, blank: string, from: number): string {
+  let depth = 0;
+  for (let i = from; i < blank.length; i++) {
+    const c = blank[i]!;
+    if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c) && --depth < 0) return src.slice(from, i);
+    else if ((c === "," || c === ";") && depth === 0) return src.slice(from, i);
+  }
+  return src.slice(from);
+}
+
+/** Every normaliser call whose NUMBER is put under a `phone` key or into a `phone`
+ *  binding in `src`, directly or through a local of the same file, whatever
+ *  happens to it next: a helper's return, a builder's output, a typed local,
+ *  `Object.assign`. Which write it reaches, if any, does not matter. */
+function normalisedPhones(src: string): string[] {
+  const blank = blankStrings(src);
+  const values: { at: number; value: string }[] = [];
+  for (const m of src.matchAll(PHONE_KEY)) {
+    const i = m.index!;
+    if (blank[i] !== src[i] || !/[{,]\s*$/.test(blank.slice(0, i))) continue;   // inside a string, or not a key
+    values.push({ at: i, value: valueAt(src, blank, i + m[0].length) });
+  }
+  for (const m of src.matchAll(PHONE_BINDING)) {
+    if (blank[m.index!] !== src[m.index!]) continue;                               // inside a string
+    values.push({ at: m.index!, value: valueAt(src, blank, m.index! + m[0].length) });
+  }
+  // A local carries a number into a value only if it was assigned BEFORE it:
+  // locals are followed by name, and a later function's `normalized` is not
+  // an earlier one's.
+  return [...new Set(values.flatMap(({ at, value }) => {
+    const { numbers, readings } = carriedLocals(src.slice(0, at));
+    return numbersIn(value, numbers, readings);
+  }))].sort();
 }
 
 describe("F-009: every contact write gets the number as typed or as said", () => {
@@ -354,17 +498,56 @@ describe("F-009: every contact write gets the number as typed or as said", () =>
       "a transcribed number stored as said; the accept's fillContactBlanks judges it",
     "apps/web/src/lib/concierge/lead.ts: spokenPhone(lead.phone, null)":
       "a model-written number as said, which the form path's createContact judges",
+    "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts: repickPhoneCountry(contact.phone, country)":
+      "the drawer's country pick: staff chose the country explicitly, and the flag is written alongside (setContactPhoneCountry, unconfirmed: false)",
+    "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts: normalisePhone(previous.phone)":
+      "the country pick's Undo restores the prior number with the reading's own flag written alongside (setContactPhoneCountry)",
+    "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts: normalisePhone(undo.priorPhone)":
+      "the inline phone edit's Undo restores the prior number with the reading's own flag written alongside (setContactPhoneCountry)",
   };
-  const found = () => [...webSources(), ...dbSources()].flatMap((f) =>
-    normalisedIntoWrites(code(f), BUILDERS.has(rel(f))).map((c) => `${rel(f)}: ${c}`));
+  /** A file's code as the phone rules read it: comments gone, renamed normalisers under their own names. */
+  const scanned = (f: string) => dealias(code(f));
+  const intoWrites = () => [...webSources(), ...dbSources()].flatMap((f) =>
+    normalisedIntoWrites(scanned(f), BUILDERS.has(rel(f))).map((c) => `${rel(f)}: ${c}`));
+  /** packages/db is not in it: phoneFields IS the one place a number is normalised for a write. */
+  const intoPhones = () => webSources().flatMap((f) => normalisedPhones(scanned(f)).map((c) => `${rel(f)}: ${c}`));
 
   it("no production file hands a contact write a normaliser's number, directly, through a local, or from a builder, beyond the allow-listed carrier and spoken numbers (mutation: the booking page writes phone: e164Of(phone) → FAILS naming it)", () => {
-    expect(found().filter((h) => !(h in ALLOWED))).toEqual([]);
+    expect(intoWrites().filter((h) => !(h in ALLOWED))).toEqual([]);
+  });
+
+  it("no production file under apps/web/src puts a normaliser's number under a phone key or into a phone binding, whatever the write, beyond the allow-list (review of 884220c2; mutation: a same-file helper returns { phone: e164Of(raw) } → FAILS naming it)", () => {
+    expect(intoPhones().filter((h) => !(h in ALLOWED))).toEqual([]);
   });
 
   it("every allow-listed number is still found where it is named: the scan follows a local to the write (the positive control; mutation: the inbound route writes the raw sender → its entry goes stale and FAILS)", () => {
-    const hits = found();
-    expect(Object.keys(ALLOWED).filter((h) => !hits.includes(h))).toEqual([]);
+    const hits = new Set([...intoWrites(), ...intoPhones()]);
+    expect(Object.keys(ALLOWED).filter((h) => !hits.has(h))).toEqual([]);
+  });
+
+  it("each BUILDERS path exists, so a renamed builder cannot drop out of the scan unseen (mutation: point a BUILDERS entry at a missing path → FAILS naming it)", () => {
+    expect([...BUILDERS].filter((b) => !existsSync(join(REPO, b)))).toEqual([]);
+  });
+
+  it("repickPhoneCountry (with \"US\" it is exactly the old toE164) and extractCallerNumber are normalisers too (mutation: drop either from NORMALISER → FAILS)", () => {
+    expect(normalisedIntoWrites(`await createContact(db, a, { phone: repickPhoneCountry(raw, "US") }, u);`, false)).toEqual([`repickPhoneCountry(raw, "US")`]);
+    expect(normalisedIntoWrites(`const from = extractCallerNumber(event.data);\nawait createContact(db, a, { phone: from }, u);`, false)).toEqual(["extractCallerNumber(event.data)"]);
+  });
+
+  it("the phone rule catches a same-file helper, a cross-file builder, a typed local, a renamed import, Object.assign, a quoted key and a local, and passes a number as typed (the positive control; mutation: read only unquoted `phone:` keys → FAILS)", () => {
+    const phones = (src: string) => normalisedPhones(dealias(src));
+    expect(phones(`function toInput(raw: string) {\n  return { name: "x", phone: e164Of(raw) };\n}`)).toEqual(["e164Of(raw)"]);
+    expect(phones(`export function buildInput(row: Row): ContactInput {\n  const input: ContactInput = {};\n  input.phone = normalisePhone(row.phone)?.e164 ?? row.phone;\n  return input;\n}`)).toEqual(["normalisePhone(row.phone)"]);
+    expect(phones(`const input: { phone?: string } = { phone: e164Of(raw) ?? undefined };`)).toEqual(["e164Of(raw)"]);
+    expect(phones(`import { e164Of as toNumber } from "@/lib/voice/phone-number";\nconst input = { phone: toNumber(raw) };`)).toEqual(["e164Of(raw)"]);
+    expect(phones(`Object.assign(input, { phone: spokenPhone(said, null) });`)).toEqual(["spokenPhone(said, null)"]);
+    expect(phones(`const row = { "phone": extractCallerNumber(data) };\nrow["phone"] = e164Of(other);`)).toEqual(["e164Of(other)", "extractCallerNumber(data)"]);
+    expect(phones(`const p = repickPhoneCountry(raw, "US");\nconst input = { ...rest, phone: p };`)).toEqual([`repickPhoneCountry(raw, "US")`]);
+    // As typed: a normaliser under another key, a reading, a ternary, a string.
+    expect(phones(`const input = { phone: raw, e164: e164Of(raw) };`)).toEqual([]);
+    expect(phones(`const n = normalisePhone(raw);\nconst input = { phone: raw, unconfirmed: n?.unconfirmed === true };`)).toEqual([]);
+    expect(phones(`const shown = typed ? phone : e164Of(other);`)).toEqual([]);
+    expect(phones(`const label = "phone: e164Of(raw)";`)).toEqual([]);
   });
 
   it("the scan catches phone: e164Of(raw) and each indirect shape in a fixture, and passes a number as typed (the positive control; mutation: read only the write's own arguments → FAILS)", () => {
