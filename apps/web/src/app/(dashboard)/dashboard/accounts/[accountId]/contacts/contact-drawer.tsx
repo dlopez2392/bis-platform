@@ -221,9 +221,12 @@ export function ContactDrawer({
                     key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`}
                     accountId={accountId}
                     contactId={row.id}
-                    // The phone as RENDERED (review I3): the pick is judged
-                    // against this, not merely the phone the server re-reads.
-                    phone={row.phone ?? ""}
+                    // The phone as RENDERED (review I3), from the SUMMARY —
+                    // never `row.phone`, which is a `?peek=` deep link's
+                    // all-null stub (round 3: that stub answered `""`, and
+                    // the pick's compare-and-set must fail closed on it,
+                    // not merely tolerate it).
+                    phone={load.summary.phone ?? ""}
                     unconfirmed={load.summary.phone_country_unconfirmed}
                     onChanged={() => setRetryNonce((n) => n + 1)}
                   />

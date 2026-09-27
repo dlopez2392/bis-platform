@@ -122,7 +122,15 @@ export function InlineField(
     // toast. For a `required` field first filled in from empty that is EVERY
     // first save. Asked of the exact value undo would send, with the exact
     // rule the server will apply to it.
-    const undoable = normalize(prior).ok;
+    //
+    // Phone is different (round 3, CRITICAL): it is undoable exactly when
+    // the save handed back a payload to restore, never `normalize(prior).ok`
+    // — that would offer Undo for a phone edit with no payload (a prior
+    // getContact read that raced or failed) and commitInlineUndo would then
+    // have nothing to route to but `save(prior)`, the exact re-derive-the-
+    // flag-from-text bug this whole fix exists to close. No payload means no
+    // Undo button for phone, full stop.
+    const undoable = field === "phone" ? phoneUndo !== undefined : normalize(prior).ok;
     toast.success(m["inline.saved"].replace("{label}", label), {
       action: undoable
         ? {

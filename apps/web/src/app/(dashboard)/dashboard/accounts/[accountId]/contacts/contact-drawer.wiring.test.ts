@@ -52,6 +52,7 @@ const GOOD = {
   recent: [{ kind: "note", label: "Note", at: "2026-09-01T10:00:00+00:00" }],
   marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00",
   phone_country_unconfirmed: false,
+  phone: "+15512345678",
   zone: { zone: "UTC", guessed: false, label: "UTC" },
 };
 
@@ -232,5 +233,20 @@ describe("the inline phone Undo is server-authoritative", () => {
 
   it("the panel's phone Undo calls the dedicated action too", () => {
     expect(panel).toMatch(/undoPhone: \(undo: PhoneInlineUndo\) => undoInlinePhoneEditAction\(accountId, contactId, undo\)/);
+  });
+
+  /**
+   * #24/#25: the prior pins only checked `undoPhone:` EXISTS somewhere in
+   * the file — `field === "phone"` flipped to `false` (so `undoPhone` is
+   * NEVER actually attached to any field's props) left them green. These
+   * anchor the guard and the prop in ONE match, so severing that link is
+   * what fails them.
+   */
+  it("the drawer attaches undoPhone to InlineField ONLY when field is phone (mutation: field === \"phone\" → false → FAILS)", () => {
+    expect(drawer).toMatch(/\{\.\.\.\(field === "phone" \? \{\s*undoPhone: async \(undo: PhoneInlineUndo\)/);
+  });
+
+  it("the panel attaches undoPhone to InlineField ONLY when field is phone (mutation: field === \"phone\" → false → FAILS)", () => {
+    expect(panel).toMatch(/\{\.\.\.\(field === "phone" \? \{\s*undoPhone: \(undo: PhoneInlineUndo\)/);
   });
 });

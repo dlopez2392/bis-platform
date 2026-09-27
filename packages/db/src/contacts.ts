@@ -748,13 +748,16 @@ export async function readPhoneCountryFlag(db: SupabaseClient, accountId: string
  */
 export async function setContactPhoneCountry(
   db: SupabaseClient, accountId: string, contactId: string,
-  input: { expectedPhone: string; phone: string; unconfirmed: boolean },
+  input: { expectedPhone: string | null; phone: string; unconfirmed: boolean },
   actorId: string, actorType: ActorType = "user",
 ): Promise<"updated" | "changed"> {
-  const { data, error } = await db.from("contacts")
+  // `expectedPhone: null` (the inline Undo restoring a number a CLEAR wiped)
+  // needs `.is(...)`: PostgREST's `eq.null` never matches a NULL column.
+  let q = db.from("contacts")
     .update({ phone: input.phone, phone_country_unconfirmed: input.unconfirmed, updated_at: new Date().toISOString() })
-    .eq("account_id", accountId).eq("id", contactId).eq("phone", input.expectedPhone)
-    .select("id");
+    .eq("account_id", accountId).eq("id", contactId);
+  q = input.expectedPhone === null ? q.is("phone", null) : q.eq("phone", input.expectedPhone);
+  const { data, error } = await q.select("id");
   if (error) throw new Error(`setContactPhoneCountry failed: ${error.message}`);
   if (!data?.length) return "changed";
 

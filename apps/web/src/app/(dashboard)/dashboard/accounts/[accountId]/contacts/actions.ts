@@ -44,25 +44,34 @@ export async function updateContactFieldAction(
   if (!EDITABLE_FIELDS.includes(field)) return { ok: false, error: "Unknown field." };
   const norm = normalizeFieldInput(field, value);
   if (!norm.ok) return norm;
-  let undo: PhoneInlineUndo | undefined;
+  const db = await dbForRequest();
+  let priorPhone: string | undefined;
+  let priorUnconfirmed = false;
   try {
-    const db = await dbForRequest();
     if (field === "phone") {
       const before = await getContact(db, accountId, contactId);
-      await updateContact(db, accountId, contactId, { phone: norm.value }, userId);
-      const after = await getContact(db, accountId, contactId);
-      if (typeof before?.phone === "string" && typeof after?.phone === "string") {
-        undo = {
-          priorPhone: before.phone,
-          priorUnconfirmed: before.phone_country_unconfirmed === true,
-          editedPhone: after.phone,
-        };
+      if (typeof before?.phone === "string") {
+        priorPhone = before.phone;
+        priorUnconfirmed = before.phone_country_unconfirmed === true;
       }
-    } else {
-      await updateContact(db, accountId, contactId, { [FIELD_TO_INPUT_KEY[field]]: norm.value }, userId);
     }
+    await updateContact(db, accountId, contactId, { [FIELD_TO_INPUT_KEY[field]]: norm.value }, userId);
   } catch {
     return { ok: false, error: "Save failed — please try again." };
+  }
+  // The write has already committed by here: a failed read-back (m4) costs
+  // the Undo button, never the truth that the edit went through — this
+  // never turns into "Save failed" for a save that actually succeeded.
+  // `editedPhone` may be `null` (a CLEAR): the phone field's Undo must be
+  // offered for that too (round 3, CRITICAL — see inline-phone-undo.ts).
+  let undo: PhoneInlineUndo | undefined;
+  if (field === "phone" && priorPhone !== undefined) {
+    try {
+      const after = await getContact(db, accountId, contactId);
+      undo = { priorPhone, priorUnconfirmed, editedPhone: after?.phone ?? null };
+    } catch (e) {
+      console.error(`updateContactFieldAction: account ${accountId} contact ${contactId}: read-back after save failed: ${loggableError(e)}`);
+    }
   }
   revalidatePath(contactsPath(accountId));
   revalidatePath(`${contactsPath(accountId)}/${contactId}`);
@@ -186,12 +195,12 @@ export async function setPhoneCountryAction(
     const db = await dbForRequest();
     const contact = await getContact(db, accountId, contactId);
     if (!contact?.phone) return { ok: false, error: m["contact.phoneCountry.changed"] };
-    // Only gates when the SEEN phone itself reads as a ten-digit-based
-    // number — every row that renders the Check number state got there
-    // because ITS phone read that way, so a `seenPhone` that does not is
-    // not this check's job; the "unreadable" branch below still catches it.
+    // Fails CLOSED (round 3, IMPORTANT): a `seenPhone` that is missing or
+    // does not itself read as a ten-digit-based number answers "changed"
+    // rather than falling through — an empty stub (a `?peek=` row) or an
+    // unseen number must never be treated as "no opinion, proceed".
     const seenReads = repickPhoneCountry(seenPhone, "US");
-    if (seenReads !== null && repickPhoneCountry(contact.phone, "US") !== seenReads) {
+    if (seenReads === null || repickPhoneCountry(contact.phone, "US") !== seenReads) {
       return { ok: false, error: m["contact.phoneCountry.changed"] };
     }
     if (contact.phone_country_unconfirmed !== true && normalisePhone(contact.phone)?.unconfirmed !== true) {
@@ -267,8 +276,8 @@ export async function undoInlinePhoneEditAction(
 ): Promise<PhoneCountryUndoResult> {
   const { userId } = await requireAccountAccess(accountId);
   if (
-    typeof undo?.editedPhone !== "string" ||
-    typeof undo.priorPhone !== "string" ||
+    (undo?.editedPhone !== null && typeof undo?.editedPhone !== "string") ||
+    typeof undo?.priorPhone !== "string" ||
     typeof undo.priorUnconfirmed !== "boolean"
   ) {
     return { ok: false, error: m["contact.phoneCountry.failed"] };

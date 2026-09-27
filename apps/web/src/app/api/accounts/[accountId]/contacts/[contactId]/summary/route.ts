@@ -31,6 +31,11 @@ export type ContactSummary = {
    *  backfill ran is still ambiguous, and the send gate refuses it either
    *  way (gate.ts step 5), so the drawer must offer the fix either way. */
   phone_country_unconfirmed: boolean;
+  /** The stored phone itself (round 3, review I3): the Check number row's
+   *  pick is judged against the number the OPERATOR SAW, and in the drawer
+   *  that must be this — a real read — never the list row's stub (a
+   *  `?peek=` deep link's row is all-null). */
+  phone: string | null;
   /** The account's zone, resolved by `renderZone` like every other date
    *  screen — the drawer prints the opt-out's "Off since" date in it, and
    *  names the zone on that line when it was `guessed` (#123 m3). */
@@ -110,6 +115,7 @@ export async function GET(
     marketing_email_opted_out_at: contact.marketing_email_opted_out_at ?? null,
     phone_country_unconfirmed:
       contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true,
+    phone: contact.phone ?? null,
     zone: { zone: zone.zone, guessed: zone.guessed, label: zone.label },
   };
   return NextResponse.json(body);

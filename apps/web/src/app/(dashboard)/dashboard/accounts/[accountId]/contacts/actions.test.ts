@@ -68,13 +68,12 @@ describe("updateContactFieldAction", () => {
     });
   });
 
-  it("a first fill from empty (no prior real number) answers no `undo`: nothing to restore through the dedicated path", async () => {
-    dbMocks.getContact
-      .mockResolvedValueOnce({ id: "c1", phone: null, phone_country_unconfirmed: false })
-      .mockResolvedValueOnce({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
+  it("a first fill from empty (no prior real number) answers no `undo`: nothing to restore through the dedicated path, and never reads the row back (mutation: read-back unconditionally → the leftover mock value pollutes the next test, FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValueOnce({ id: "c1", phone: null, phone_country_unconfirmed: false });
     dbMocks.updateContact.mockResolvedValue(undefined);
     const r = await updateContactFieldAction("a1", "c1", "phone", "(956) 292-1696");
     expect(r).toEqual({ ok: true });
+    expect(dbMocks.getContact).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -223,9 +222,29 @@ describe("setPhoneCountryAction", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
-  it("a number that is not ten national digits is 'unreadable', never guessed", async () => {
+  // Re-derived (round 3, fail-closed I3): a `seenPhone` this unreadable
+  // NEVER matches (repickPhoneCountry(seenPhone, "US") is null for it, and
+  // the fail-closed check refuses on that alone), so the seen-check now
+  // answers "changed" before the later re-pick attempt ever runs — the old
+  // expectation (`unreadable`) was the OLD open-check's path, no longer
+  // reachable through this entry point once the seen phone itself cannot
+  // be read. Input: "+44 20 7946 0958" as both stored and seen. Old: an
+  // "unreadable" refusal. New: a "changed" refusal (measured on this tree).
+  it("a number that is not ten national digits fails closed on the unread SEEN phone before ever reaching the re-pick attempt (mutation: fail open on an unreadable seenPhone → FAILS)", async () => {
     dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "+44 20 7946 0958", phone_country_unconfirmed: true });
-    expect(await setPhoneCountryAction("a1", "c1", "MX", "+44 20 7946 0958")).toEqual({ ok: false, error: m["contact.phoneCountry.unreadable"] });
+    expect(await setPhoneCountryAction("a1", "c1", "MX", "+44 20 7946 0958")).toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
+    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Round 3, IMPORTANT: fails CLOSED. An empty seen phone (the drawer's
+   * `?peek=` stub row used to send this) or any other unreadable seen
+   * phone answers "changed" and writes nothing — never "no opinion,
+   * proceed".
+   */
+  it("an empty seenPhone (a stub row) fails closed: 'changed', no write (mutation: seenReads !== null && … → FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue(flagged);
+    expect(await setPhoneCountryAction("a1", "c1", "MX", "")).toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
     expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
   });
 
@@ -361,9 +380,12 @@ describe("undoInlinePhoneEditAction", () => {
     expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
   });
 
-  it("a non-string editedPhone is refused, never written", async () => {
+  // Round 3 (CRITICAL): `editedPhone: null` is now VALID — a clear wipes the
+  // column to null, and the Undo must be able to compare-and-set against
+  // that. Anything ELSE non-string is still refused.
+  it("a numeric (not null, not string) editedPhone is refused, never written (mutation: drop the typeof check for editedPhone → FAILS)", async () => {
     const r = await undoInlinePhoneEditAction("a1", "c1", {
-      editedPhone: null as never, priorPhone: "+19565550100", priorUnconfirmed: true,
+      editedPhone: 12345 as never, priorPhone: "+19565550100", priorUnconfirmed: true,
     });
     expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
     expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
@@ -402,5 +424,51 @@ describe("undoInlinePhoneEditAction", () => {
       "user_1",
     );
     expect(r).toEqual({ ok: true });
+  });
+
+  /**
+   * Round 3, CRITICAL. Measured on the pre-fix tree:
+   * `{"undoPayload":null,"afterEdit":null,"undo":{"ok":true},"final":{"phone":"+15512345678","flag":false}}`
+   * — clearing a flagged number produced NO undo payload (the old
+   * `typeof after?.phone === "string"` guard rejected `null`), so Undo fell
+   * back to `save(prior)` and the flag came back CONFIRMED. Now the save
+   * answers a real `undo` for a clear too (`editedPhone: null`), and the
+   * dedicated action compare-and-sets against a null stored phone.
+   */
+  it("a flagged number, CLEARED, then undone, comes back byte-identical AND flagged (mutation: reject a null editedPhone again → FAILS)", async () => {
+    const { updateContactFieldAction } = await import("./actions");
+    dbMocks.getContact
+      .mockResolvedValueOnce({ id: "c1", phone: "+15512345678", phone_country_unconfirmed: true })
+      .mockResolvedValueOnce({ id: "c1", phone: null, phone_country_unconfirmed: false });
+    dbMocks.updateContact.mockResolvedValue(undefined);
+    const saved = await updateContactFieldAction("a1", "c1", "phone", "");
+    if (!saved.ok || !saved.undo) throw new Error("expected an undo payload for a clear");
+    expect(saved.undo).toEqual({ priorPhone: "+15512345678", priorUnconfirmed: true, editedPhone: null });
+    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
+    const r = await undoInlinePhoneEditAction("a1", "c1", saved.undo);
+    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
+      {}, "a1", "c1",
+      { expectedPhone: null, phone: "+15512345678", unconfirmed: true },
+      "user_1",
+    );
+    expect(r).toEqual({ ok: true });
+  });
+
+  /**
+   * NEW-10: the R3-M12 floor applies to the inline Undo exactly as it does
+   * to the pick's own undo — the normaliser's OWN form of the prior text is
+   * restored, and the flag is never cleared for a number the normaliser
+   * still calls ambiguous, whatever the caller's `priorUnconfirmed` says.
+   */
+  it("restores the normaliser's form and keeps the flag for a number it still calls ambiguous, whatever the caller says (R3-M12 floor; mutation: write undo.priorPhone/priorUnconfirmed as sent → FAILS)", async () => {
+    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
+    await undoInlinePhoneEditAction("a1", "c1", {
+      editedPhone: "+14155551234", priorPhone: "55 1234 5678", priorUnconfirmed: false,
+    });
+    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
+      {}, "a1", "c1",
+      { expectedPhone: "+14155551234", phone: "+15512345678", unconfirmed: true },
+      "user_1",
+    );
   });
 });

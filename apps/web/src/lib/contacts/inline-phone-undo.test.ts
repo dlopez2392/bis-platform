@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { m } from "@/lib/messages";
 import { commitInlineUndo, type PhoneInlineUndo } from "./inline-phone-undo";
 
 /**
@@ -29,10 +30,30 @@ describe("commitInlineUndo", () => {
     expect(r).toEqual({ ok: true });
   });
 
-  it("without a phoneUndo payload (the save didn't return one), the phone field falls back to save(prior) too (mutation: throw instead of falling back → FAILS)", async () => {
+  // Round 3 (CRITICAL): the phone field NEVER falls back to save(prior) —
+  // that path is exactly what re-derives the flag from text and lost it on
+  // a clear. Without a payload (or no undoPhone wired), it answers failed.
+  it("without a phoneUndo payload, the phone field does NOT fall back to save(prior) — it answers failed (mutation: fall back to save(priorValue) → FAILS)", async () => {
     const save = vi.fn(async () => ({ ok: true as const }));
     const r = await commitInlineUndo("phone", "+19565550100", undefined, save, vi.fn());
-    expect(save).toHaveBeenCalledWith("+19565550100");
+    expect(save).not.toHaveBeenCalled();
+    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
+  });
+
+  it("without undoPhone wired (even with a payload), the phone field still refuses rather than falling back", async () => {
+    const save = vi.fn(async () => ({ ok: true as const }));
+    const r = await commitInlineUndo("phone", "+19565550100", UNDO, save, undefined);
+    expect(save).not.toHaveBeenCalled();
+    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
+  });
+
+  it("a null editedPhone (the prior edit CLEARED the number) is a valid payload, routed the same way", async () => {
+    const save = vi.fn();
+    const undoPhone = vi.fn(async () => ({ ok: true as const }));
+    const cleared: PhoneInlineUndo = { ...UNDO, editedPhone: null };
+    const r = await commitInlineUndo("phone", "+19565550100", cleared, save, undoPhone);
+    expect(undoPhone).toHaveBeenCalledWith(cleared);
+    expect(save).not.toHaveBeenCalled();
     expect(r).toEqual({ ok: true });
   });
 });

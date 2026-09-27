@@ -25,6 +25,7 @@ function real(): ContactSummary {
     ],
     marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00",
     phone_country_unconfirmed: true,
+    phone: "+15512345678",
     zone: { zone: "America/Chicago", guessed: false, label: "America/Chicago" },
   };
 }
@@ -216,6 +217,35 @@ describe("parseContactSummary: phone_country_unconfirmed is tolerated, never req
     for (const v of ["true", "false", 1, {}, null]) {
       expect(parseContactSummary(wire({ ...real(), phone_country_unconfirmed: v }))?.phone_country_unconfirmed).toBe(false);
     }
+  });
+});
+
+/**
+ * Round 3, review I3: the drawer's Check number row passes THIS field as
+ * the phone the operator SAW — never the list row's `?peek=` stub. TOLERATED
+ * like the flag: missing, or anything but a string, is null (a server from
+ * before round 3 sends none), and the row's pick then fails closed on it
+ * rather than trusting a stub.
+ */
+describe("parseContactSummary: phone (round 3, review I3)", () => {
+  it("carries the stored phone through (mutation: drop the field from the return → FAILS)", () => {
+    expect(parseContactSummary(wire(real()))?.phone).toBe("+15512345678");
+  });
+
+  it("missing (a server from before round 3) is null and the rest still loads (mutation: make it required → null, FAILS)", () => {
+    const parsed = parseContactSummary(without("phone"));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.phone).toBeNull();
+  });
+
+  it("anything but a real string is null — never coerced (mutation: String(v) → FAILS)", () => {
+    for (const v of [1, {}, true]) {
+      expect(parseContactSummary(wire({ ...real(), phone: v }))?.phone).toBeNull();
+    }
+  });
+
+  it("a contact with no phone at all parses to null, not dropped", () => {
+    expect(parseContactSummary(wire({ ...real(), phone: null }))?.phone).toBeNull();
   });
 });
 

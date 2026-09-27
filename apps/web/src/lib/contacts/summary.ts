@@ -107,6 +107,11 @@ export function parseContactSummary(json: unknown): ParsedContactSummary | null 
     // refused summary). The send gate still refuses an ambiguous number
     // either way; a missing/false row loses a shortcut, never a guard.
     phone_country_unconfirmed: json.phone_country_unconfirmed === true,
+    // TOLERATED like the flag above: missing, or anything but a string, is
+    // null — a server from before round 3 sends none, and the drawer's
+    // Check number row then has nothing to pass as `seenPhone` (its pick
+    // fails closed rather than trusting a stub).
+    phone: typeof json.phone === "string" ? json.phone : null,
     zone: parseZone(json.zone),
   };
 }

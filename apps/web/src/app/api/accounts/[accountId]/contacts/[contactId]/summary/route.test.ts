@@ -140,6 +140,34 @@ describe("contact summary route", () => {
       expect(await flagOf({ phone: null, phone_country_unconfirmed: false })).toBe(false);
     });
   });
+
+  /**
+   * Round 3, review I3: the raw stored phone, so the drawer can pass the
+   * number the operator actually SAW to the Check number row's pick — never
+   * the list row's `?peek=` stub.
+   */
+  describe("phone (round 3)", () => {
+    function emptySources() {
+      access.mockResolvedValue({ userId: "u1", isAgency: true });
+      for (const k of ["listContactTags", "listNotes", "listContactSubmissions",
+        "listContactMessages", "listContactOpportunities", "listContactCalls"] as const) {
+        dbMocks[k].mockResolvedValue([]);
+      }
+    }
+    it("is the stored phone, verbatim (mutation: drop the field from the body → FAILS)", async () => {
+      emptySources();
+      dbMocks.getContact.mockResolvedValue({ id: "c1", marketing_email_opted_out_at: null, phone: "+15512345678" });
+      const body = await (await GET(req(), ctx())).json();
+      expect(body.phone).toBe("+15512345678");
+    });
+
+    it("is null (not absent) for a contact with no phone", async () => {
+      emptySources();
+      dbMocks.getContact.mockResolvedValue({ id: "c1", marketing_email_opted_out_at: null, phone: null });
+      const body = await (await GET(req(), ctx())).json();
+      expect(body).toHaveProperty("phone", null);
+    });
+  });
 });
 
 /**
