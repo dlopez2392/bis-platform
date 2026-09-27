@@ -1,0 +1,12375 @@
+# Consent Chain PR-1: the Ledger, F-009 and the One Send Gate Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Ship consent chain PR-1 (spec §7, the PR-1 row): the append-only consent ledger (`consent_events`, migration 0054) with RLS; F-009 (one `normalisePhone`, `+52`, the `phone_country_unconfirmed` flag, its backfill and the drawer's country control); the SMS message-class registry and the FIXED sending hours; the one send gate; all five SMS paths through it; and the source scans that keep it that way.
+
+**Architecture:** Three layers. **Data** (`packages/db`): 0054 adds the ledger, the flag column and the `'textback'` log source; `consent.ts` is the ledger's only reader-writer module; `phone.ts` (exported as `@bis/db/phone`) is F-009's one rule, and the contact write path stores what it says. **The gate** (`apps/web/src/lib/consent/`): `classes.ts` (kind → class, hours, footer), `hours.ts` (the fixed window), `gate.ts` (the nine steps of spec §4.1 item 3, failing closed). **The paths**: the automation harness, the text-back, the call alert, the composer and the alert-phone code call the gate and nothing else; `holdOrSend` turns the gate's `deferred` into its held row and its `blocked` into a `skipped` row with the reason. Source scans (Task 15) pin the shape.
+
+**Tech Stack:** Next.js 16 (App Router, server actions), Supabase Postgres 17 (RLS; the local replica is PG18), `@supabase/supabase-js`, vitest 4, Playwright, `libphonenumber-js@1.13.14` (new, MIT), Tailwind 4 with the repo's tokens.
+
+**Spec:** `docs/superpowers/specs/2026-09-26-consent-chain-design.md` (branch `docs/consent-chain-spec`, 900f23f9). §1.1 decisions 1–9 are binding; §1.2 defaults 10–17 stand; §1.3 choices 18–31 are approved. This plan covers §3 (the PR-1 schema), §4.1, the PR-1 parts of §6 and §8, and the PR-1 row of §7. It does NOT cover keywords, holds, grants, staff Stop/Resume, the To-do rows or the Telnyx reconciliation (PR-2), or anything email beyond choice 31's hours (PR-3).
+
+## Global Constraints
+
+- Tier: **HIGH (legal)** (spec §8). Every new assertion names, in its title, the mutation that turns it red, and every task records its probes with the tests they turned red (measured on the finished tree, 2026-09-26). The reviewer re-applies them.
+- **One gate.** After this PR nothing but `apps/web/src/lib/consent/gate.ts` and the provider's own modules (`lib/sms/index.ts`, `telnyx.ts`, `fake.ts`, `types.ts`) reaches an SMS provider (Task 15, scan 1). The gate **fails closed**: a ledger or flag read error is `blocked: ledger_unavailable`, logged through `loggableError`, never a send (spec §4.1 item 3, §5).
+- **The ledger is append-only by grants** (spec §3): no role, `service_role` included, holds `UPDATE`, `DELETE`, `TRUNCATE` or `MAINTAIN` on `consent_events`; only `packages/db/src/consent.ts` touches it (scan 3). State = the newest row whose action is `revoked`, `held`, `hold_released` or `resubscribed`, by `occurred_at` then `id`; `granted` never decides (choice 28).
+- **The hours are FIXED** (decision 4, choices 18, 21, 31), verbatim: automated texts "only 8 a.m.–9 p.m. in the recipient's zone (the contact's zone if known, otherwise the account's)"; marketing texts "not before 9 a.m., on Sunday not before noon, and until 9 p.m."; "Staff-typed conversation replies, staff alerts and alert-phone codes may go at any hour"; "Automations are **rescheduled** into the window, not dropped"; except choice 21: a text or email whose purpose has passed before the window opens is not sent, logged "Not sent: quiet hours ran past the appointment". Automated email is on the same automated window (choice 31). BIS stores no per-contact zone (spec §4.1 item 2), so every recipient uses `accounts.timezone`, falling back to America/Chicago (0001's default) when it cannot be resolved.
+- **F-009** (spec §4.1 item 1, choice 30): a number with a country code is kept as given (the retired Mexican mobile `1` after `52` dropped); ten digits valid only as US → `+1`, only as Mexican → `+52`; valid as both or neither → `+1` AND `phone_country_unconfirmed`; numbers from the carrier are never flagged. A flagged number is held by the gate until staff pick the country (decision 3).
+- **Copy** lives in `apps/web/src/lib/messages.ts`, in plain language (DESIGN.md "Voice"; `messages.test.ts` scans every key). Where §6 gives words, they are used verbatim and pinned by `copy.test.ts`; every other line is this plan's (G15).
+- **UI** follows DESIGN.md: tokens only; both themes through `.dark`; status is a dot and a word (`DotPill`); loaded/empty/error states; one primary per view (rule 8: the Check number buttons are ghost); reversible actions run at once with an undo toast (rule 6); new variants get a `/dashboard/styleguide` specimen.
+- **Supabase: never write to either project, never read production.** The orchestrator applies 0054 exactly once per project (Task 17); a production READ needs danlo's explicit go. Local env files point at PRODUCTION, so the db suite, Playwright and `pnpm check` REFUSE to run locally (#135, by design). **Never work around that.**
+- **DB tests** (`packages/db`): `withRollback` tests run on the local PG18 replica (below) AND in CI; `withTestAccount`/`serviceDb` tests are CI only and fail to connect locally, which is expected. The replica (memory `bis-local-db-replica`): two databases on `localhost:55433`, `pre` (every migration except 0054) and `post` (`pre` plus 0054), built by the orchestrator's script from this branch's migration files. A lane runs a db test file with `SUPABASE_DB_URL=postgresql://postgres@localhost:55433/<pre|post>`; a lane worktree has no `packages/db/.env` (gitignored, never copied), so nothing else is in the environment.
+- **Full web suite, every lane, every task that says so:** `pnpm --filter web test`. In a lane worktree (no `apps/web/.env.local`) it ends with exactly **two failing suites**, the same two as on `main`, each throwing before its tests run: `src/app/f/[publicId]/actions.returning-lead.test.ts` and `src/app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/actions.test.ts` ("SUPABASE_SERVICE_ROLE_KEY missing — this suite needs apps/web/.env.local"). Everything else passes. Any other failure is the lane's.
+- **`vi.mock("@bis/db")` factories.** When a task adds a new top-level `@bis/db` import to a module, every test that mocks `@bis/db` and imports that module (directly or through another) must define the new export, or the new code path reads an undefined mock and passes vacuously (the gate fails closed on a thrown read, so a missing `readConsentState` mock turns every send into `ledger_unavailable` and hides the behaviour under test). Each task below names the factories it changed.
+- **E2E** runs only on the per-run fixture account ("E2E Client Co …", `auth.setup.ts`), never `Test Client One`, and needs nothing from PR-2.
+- **Lanes** (2 at a time, disjoint files, `.claude/worktrees/<lane>` on `feat/consent-pr1`): each lane commits locally; the orchestrator cherry-picks onto `feat/consent-pr1` at each checkpoint. Nobody pushes until Task 17.
+- Gates before merge: `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`, all in CI (`verify`, `e2e`). Read the check runs FOR THE HEAD SHA.
+
+## Prerequisites
+
+1. **#149 and #150 merged to main, main merged into `feat/consent-pr1`.**
+   - The first task that needs it is **Task 1**: 0054 follows 0053's grant convention (a new `contacts` column is client-updatable only when granted by name), and Task 1 edits three grant-pinning tests that #150 created or rewrote (`schema-grants-guard.test.ts`, `server-only-writes-grants.test.ts`, `contacts-marketing-optout-schema.test.ts`), plus `automations-b-schema.test.ts`, which #150 also changes.
+   - **Task 7** is the first that needs #149 (it rewrites `lib/voice/phone-number.ts`, whose `isCallerIdNumber` #149 added, and touches `tools/registry.ts` and `finish-call.ts`, which #149 changes).
+   - Tasks 2–6 touch no file either PR touches, so Lane A's Task 2 and all of Lane B's Phase 1 (Tasks 4–6) may start before the merges. Every diff below was produced against `main` 61e7f113 + #149 (head f352bc9f) + #150 (head 90306a64), merged in that order. If either PR changes before it merges, re-derive only the hunks that touch its files (the four Task 1 test edits add one column name or one source in sorted position; nothing else depends on their exact text).
+2. **0053 is applied to both Supabase projects** (it merges with #150). Task 17's CI dry run must list exactly one new file, 0054.
+3. **The local replica exists** (orchestrator, once, before Task 1; memory `bis-local-db-replica`): PG18 on `localhost:55433` with `pre` and `post` as described in Global Constraints, rebuilt only if a migration file changes. The script this plan's replay used, run as `replica.sh <repo-root> 0054_consent_ledger.sql` (it never touches a Supabase project):
+
+````bash
+#!/usr/bin/env bash
+# Local PG18 replica (memory: bis-local-db-replica). Usage:
+#   replica.sh <repo-root> <new-migration-file-basename>
+# Builds database `pre` (every migration except the new one) and `post`
+# (pre + the new one) on localhost:55433. Never touches a Supabase project.
+set -euo pipefail
+ROOT="$1"; NEW="$2"
+PGBIN="/c/Program Files/PostgreSQL/18/bin"
+DATA="$(dirname "$0")/pgdata"
+PORT=55433
+PSQL=("$PGBIN/psql.exe" -X -q -v ON_ERROR_STOP=1 -h localhost -p "$PORT" -U postgres)
+
+if [ -d "$DATA" ]; then "$PGBIN/pg_ctl.exe" -D "$DATA" stop -m fast </dev/null >/dev/null 2>&1 || true; rm -rf "$DATA"; fi
+"$PGBIN/initdb.exe" -D "$DATA" -U postgres -A trust -E UTF8 --locale=C </dev/null >/dev/null
+"$PGBIN/pg_ctl.exe" -D "$DATA" -o "-p $PORT" -l "$DATA/log.txt" start </dev/null >/dev/null 2>&1
+sleep 3
+
+"${PSQL[@]}" -d postgres -c "create role anon nologin noinherit; create role authenticated nologin noinherit; create role service_role nologin noinherit bypassrls; grant anon, authenticated, service_role to postgres;"
+"${PSQL[@]}" -d postgres -c "create database pre"
+"${PSQL[@]}" -d pre -c "create schema if not exists app; create schema if not exists extensions;
+alter default privileges for role postgres in schema public grant all on tables to postgres, anon, authenticated, service_role;
+alter default privileges for role postgres in schema public grant all on sequences to postgres, anon, authenticated, service_role;
+alter default privileges for role postgres in schema public grant all on functions to postgres, anon, authenticated, service_role;
+alter default privileges for role postgres in schema app grant all on functions to anon, authenticated, service_role;"
+
+for f in "$ROOT"/packages/db/supabase/migrations/*.sql; do
+  b="$(basename "$f")"
+  [ "$b" = "$NEW" ] && continue
+  "${PSQL[@]}" -d pre -1 -f "$f" >/dev/null
+done
+"${PSQL[@]}" -d postgres -c "create database post template pre"
+"${PSQL[@]}" -d post -1 -f "$ROOT/packages/db/supabase/migrations/$NEW" >/dev/null
+echo "replica up: pre (without $NEW) and post (with it) on :$PORT"
+````
+4. **No new env var, no new secret, no CI workflow change.** 0054 reaches the CI project through the existing `ci-project-setup.yml` steps (`push-dry-run`, `push`, `migrations`, `fingerprint`, `migration-history`).
+
+## External facts: verified vs assumed
+
+Verified on 2026-09-26:
+- **E1. libphonenumber-js.** Installed `libphonenumber-js@1.13.14`, licence MIT (`package.json`). `metadata.max.json` is 157,416 bytes, `metadata.min.json` 83,892. Measured with node against the installed package (scratch script):
+  - MIN metadata validates by LENGTH only: every ten digits is "valid" as a Mexican number, so every US number would read as ambiguous. MAX (and mobile) tell them apart. The plan imports `libphonenumber-js/max`.
+  - Under max: `956 292 1696` (McAllen) is valid as US only; `899 922 1234` (Reynosa), `81 8123 4567` (Monterrey), `656 123 4567` (Juárez) as Mexican only; `868 812 3456` (Matamoros) is valid under +52 and INVALID under +1 (868 is Trinidad in the NANP, and this number is not valid there); `55 1234 5678` is valid under both (CDMX 55; New Jersey 551); `956 123 4567` is valid under neither.
+  - `+52 1 …` (the retired mobile `1`) is INVALID until the `1` is dropped. With a default country of US, the library mis-parses `00 52 …`, so `phone.ts` strips `00` and `011` itself before asking.
+- **E2. It stays on the server.** Only `packages/db/src/phone.ts` imports the library. In `apps/web` no `"use client"` module imports `@bis/db/phone` or `lib/voice/phone-number` at run time; `phone-country-row.tsx` and `lib/contacts/phone-country.ts` import the `PhoneCountry` TYPE only (erased at compile). Checked by grep over every `"use client"` file on the finished tree.
+- **E3. Telnyx's refusal for a number that texted STOP** (developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out, read 2026-09-26): code `40300`, title "Blocked due to STOP message", body `{"errors":[{"code":"40300","title":"Blocked due to STOP message","detail":"Messages cannot be sent from '{from}' to '{to}' due to an existing block rule."}]}`. The same page: "block rules operate at the **messaging profile level**. If a user opts out from one number on your profile, they're opted out from all numbers on that profile" (the reason spec §5 makes one profile per texting account a go-live precondition).
+- **E4. Postgres referential actions run as the table's owner.** On the PG18 replica, `consent-ledger-schema.test.ts` proves that a `service_role` delete of a contact nulls `consent_events.contact_id` and keeps the row, and that deleting the account removes its ledger rows, although neither role holds `UPDATE` or `DELETE` on the table.
+- **E5. The stage replay.** Every task below was replayed in order on a clean checkout of the base (main + #149 + #150): its tests first (the RED lists are that run's output), then its implementation (the GREEN lists), then `tsc --noEmit` for `apps/web` and `packages/db` (exit 0 after every task), each task committed. Counts in this plan are read off those runs, not typed.
+- **E6. The full suites, at every task.** `pnpm --filter web test` ran at every one of the 16 staged commits (and each task's GREEN list below carries its line): 0 failed at every commit; the only failing suites at every commit are the two env suites (Global Constraints), exactly as on the base. Passed: 4,321 on the base and after Tasks 1–3, 4,451 after Task 16 (321 test files, 31 skipped throughout). `pnpm --filter web lint` at the checkpoint commits (after Tasks 6, 8, 14, 15, 16): 0 errors and the same 2 warnings as the base. The db suite on the replica, base on `pre` vs the finished tree on `post`, per test: no test flips from pass to fail; 100 tests are new and pass; the 4 new failures are the CI-only tests of `consent-ledger-live.test.ts` (1) and `contacts-phone-live.test.ts` (3); 3 tests leave (the two quiet-hours accessor tests Task 10 deletes, CI-only, and the `automations-b-schema` catalogue test, renamed).
+- **E7. `vitest` path filters.** A full path with brackets and parentheses, double-quoted, selects exactly that file (`pnpm exec vitest run "src/app/(dashboard)/…/[accountId]/…/actions.test.ts"`).
+- **E8. The production build.** `pnpm --filter web build` of the finished tree (the Task 16 commit of the replay) succeeds with no env at all (Next 16.3.6, Turbopack). libphonenumber's metadata (its `country_calling_codes` table) is in 4 server chunks and in 0 files under `.next/static`, so it never reaches a browser (E2, measured).
+
+Assumptions (not verified; each names what settles it):
+- **A1.** Telnyx answers the `40300` refusal with a non-2xx HTTP status (the docs give the body, not the status). The code never depends on the status: `SmsProviderError` is thrown for every non-2xx and the gate keys on the CODE. Settled the first time a real send to an opted-out number fails (PR-2's reconciliation checks it).
+- **A2.** Tex. Bus. & Com. Code §301.051's hours reach texts (danlo's reading; spec §10). The code applies them to the four marketing kinds either way. Counsel settles it (spec §5, go-live item 3).
+- **A3.** The CI project (Postgres 17) runs referential actions as the owner exactly as the PG18 replica does (E4). Task 17 settles it: `consent-ledger-schema.test.ts` runs in CI's `verify` job against the CI project once 0054 is there.
+- **A4.** The production contact rows the backfill will flag are few (no account has texted a customer, spec §5 "Rollout"). Settled by Task 17's count, which danlo sees before any write.
+- **A5.** `pnpm install --frozen-lockfile --prefer-offline` succeeds on a clean runner with Task 2's lock change (it did on this machine after the change; CI's `verify` settles it).
+- **A6.** The Supabase MCP connector can read the CI project (`odnobiodsftffphuuosz`, organization `bis-ci`) as well as production. Only Task 17 step 2's CI-side pre-flight depends on it, and that step says what to do if it cannot. Settled the first time the orchestrator tries it.
+
+## Spec gaps resolved here (the reviewer should confirm or overrule)
+
+- **G1. Scan 4 is not in PR-1.** Spec §8 scan 4 pins `customer_initiated` kinds to three files "and never under `lib/automations/`", but spec §4.1 item 2 classes `automation.instant_reply` (sent from `lib/automations/instant-reply.ts`) as `customer_initiated`. The two cannot both hold. Scan 4 is about the EMAIL class of §4.3 (its four conditions include "no cron pass sends it", and a held instant reply IS released by the cron), so it ships with the email kinds in PR-3. For SMS the class changes nothing but the hours (a stop blocks every SMS kind, decision 2), and the instant reply's hours are `automated` per the spec's own table. Recorded in `scans.test.ts`'s header.
+- **G2. `tasks.consent_event_id` waits for PR-2.** Spec §3 lists it under "Other changes", but nothing in PR-1 writes or reads a To-do row about consent (holds and their To-dos are PR-2, §4.2). Adding an unread FK column now would also force a grant decision under 0053's convention with no reader to justify it. PR-2's migration adds it with the code that writes it.
+- **G3. A blocked automation.** Spec §4.1 item 4: "A `blocked` automation is logged in `automation_log` with the gate's reason". `automation_log.status` stays `sent | held | skipped | failed` (no migration): a gate refusal is `skipped` with the reason in words (`BLOCK_REASONS` in `hold-or-send.ts`: "They stopped texts from this business", "Texts to them are on hold", "Their number could be Mexican or US. Pick its country on their contact", and the existing "No phone number we can text" / "Texting isn't set up for this company yet"), and every SMS-capable pass counts it in a new `blocked` counter. `ledger_unavailable` is NOT a refusal: it is `failed`, so the next tick retries (spec §5, "the caller's normal retry applies").
+- **G4. The backfill** (spec §4.1 item 1): the orchestrator's, never a migration, because "could be Mexican" needs libphonenumber's metadata. The read (`0054-phone-country-candidates.sql`) lists unflagged contacts whose `phone_key` has ten digits and whose number the SAME account has never seen inbound (not a `calls.caller_e164`, folded like `phone_key`; not the contact of an inbound SMS, because the inbound route files a text under the contact its sender matched). The decision (`couldBeMexican`): a stored `+1`/`1`+ten-digit number whose ten digits are valid under +52 (what the old `toE164` did to a Reynosa number), or a bare ten-digit number a write today would flag. A bare Mexican-only number is not flagged: the gate already reads it as `+52`. The write (`flagSql`) flags a row only while it is still unflagged AND its `phone_key` is the one read, so a re-run is a no-op and a number edited in between is left alone (proved on the replica, Task 3). **Count first; write only with the flag; production needs danlo's go** (Task 17, QUESTIONS 1).
+- **G5. `contacts.dnd`** (choice 25): `0054-dnd-preflight.sql` counts non-empty values per account (no value printed). Task 17 runs it on both projects before 0054 reaches production. Zero rows on both: nothing to do. Any row: the orchestrator stops before the merge and asks danlo (QUESTIONS 4); converting them to staff-recorded stops is its own plan.
+- **G6. The text-back's 08:00 re-send.** The text-back joins the held-row queue (spec §4.1 item 4) with its own `automation_log` source, `'textback'` (0054 widens 0047's CHECK; `AUTOMATION_LOG_SOURCES`, `SOURCE_TITLES` "Missed-call text-back" and `RELEASERS` follow in Task 11). The held row's subject is `call:<calls.id>`, its payload the caller number, contact, conversation and language (`TextbackPayload`, parsed, never cast). `releaseTextback` re-runs the whole decision through the gate at release time, so a stop that landed overnight wins. The call's own `endedAt` (not a fresh clock) is what the hours are judged at. A call with no row cannot be held (no subject); it is logged "outside the sending hours, and a call with no row cannot be held" and not sent.
+- **G7. Choice 21's deadlines.** Only the three passes that already carried a deadline keep one: the email reminder and the SMS reminder (`startsAt`) and the appointment confirmation (`appointmentConfirmDeadline`). A deadline at or before the window's opening → `skipped`, "Not sent: quiet hours ran past the appointment" (`hold-or-send.ts:184`'s "deadline sends now" branch is gone). Everything else is rescheduled. Nothing new gets a deadline: a review ask or a text-back at 08:00 is still useful.
+- **G8. Telnyx's opted-out code** is `40300` (E3). The gate records `revoked` / `carrier_block` only when the provider is NOT redirected to a developer's phone (a redirected refusal is about THAT phone), and only if the address is not already stopped (idempotent, like §4.3's rule). A failure to record is logged, never thrown over the send's own result.
+- **G9. libphonenumber:** `libphonenumber-js@1.13.14` (exact), `max` metadata (E1), in `packages/db/package.json` `dependencies` (the package whose code imports it), reached by the web app only through `@bis/db/phone` (a new subpath export), never in a browser bundle (E2). Licence MIT (choice 30).
+- **G10. Composer and alert-code refusals: when, and in what words.**
+  - The composer is closed **on render** (spec §6: "the text composer is disabled with one line") by `smsRecipientState` (the ledger state of the contact's normalised number, and the flag), read on the server page; the line is `composerStateLine`. A refusal **after an attempt** (a stale tab, or a stop that landed since the page rendered) answers the same words through `composerBlockedLine`, from the same module, so the two cannot disagree. Stopped (spec §6, verbatim): "They stopped texts on {date}. You can't text this number until they text START." (the date in the account's zone; undated after an attempt, which has no date to hand). Held, unconfirmed and unreadable are this plan's lines (G15). An unreadable state closes the form ("Couldn't check whether they can get texts. Reload the page to try again."): it fails closed, like the gate.
+  - The alert-phone code is refused **after the attempt** only: the card cannot know the state of a number before it is typed. A stopped number reads spec §6's line verbatim: "This number has stopped texts from your business line. Text START to it from that phone to turn them back on." Any other refusal keeps today's "couldn't be sent" line.
+- **G11. Where `normalisePhone` lives, and `phone_key` on a `+52` pick.** `packages/db/src/phone.ts`, because the contact write path (`createContact`, `updateContact`, `fillContactBlanks`, the CSV import's dedupe key) must store what it says and lives in `packages/db`; the web app's `e164Of` wraps it. Dedupe keys the number AS IT WILL BE STORED (`phoneKeyOf`), so a Reynosa number no longer collides with its mis-stored `+1` copy. A drawer pick that moves a number onto another contact's key still writes (the operator's answer is the truth about that row; `phone_key` is not unique) and records the pair in `contact_duplicate_flags` with reason `phone_country_pick`, the queue a merge tool reads (0033); a repeat is a no-op (23505). Undo restores the phone and the flag; the duplicate flag stays for the merge tool to re-check.
+- **G12. The A2P read.** Spec §4.1 item 3 step 3 runs `resolveSmsSender` in the gate. Its own read error THROWS, as it always has, into each caller's existing catch (a failed tick, an error line in the composer); only the ledger and flag reads become `blocked: ledger_unavailable`. That keeps every caller's current handling of an A2P outage unchanged.
+- **G13. Retiring the quiet-hours form.** The switch, the two pickers, `saveQuietHoursAction`, `readQuietSettings`/`saveQuietSettings`/`DEFAULT_QUIET_SETTINGS`/`isClock` and the ten form lines go (Task 10). The card stays at `#quiet-hours`, read-only, in the spec's words (§6). `automation_settings` and its columns stay until a later migration drops them after parity (spec §3); nothing reads them (scan 5).
+- **G14. The drawer in PR-1.** The Messages block "lands in parts" (spec §6); PR-1 ships the Texts row's Check number state only. So the row renders NOTHING unless the number could be Mexican or US, sits above the existing "No marketing emails" switch (which PR-3 replaces), and uses the drawer's own summary states for loading (the skeleton) and error ("Couldn't load"). It renders in the drawer and on the full contact page, like the switch. The summary API reports `phone_country_unconfirmed` as the flag OR "the stored number reads both ways" (a number saved before the backfill ran is ambiguous too, and the gate refuses it either way); the drawer's parser tolerates the field missing (a server from before this PR). The pick rewrites the stored number's ten digits under the chosen country and clears the flag (spec §4.2, "The number's country"), compare-and-set on the phone the action read; the undo only ever restores the SAME ten digits (its arguments come off the wire).
+- **G15. Copy the spec does not give** (the voice rule applies; each is pinned where it renders): the row's word "Check number" (§6 names the state) and label "Texts" under "Messages"; toasts "Saved as a Mexican number" / "Saved as a US number" with Undo; "Their number changed while you were choosing. Reload to see it."; "That number can't be read as a US or Mexican number. Edit it instead."; the composer's held, unconfirmed and unreadable lines (G10); the alert phone's legend "Country of this number"; the Activity source title "Missed-call text-back"; the three new automation-log reasons (G3). The drawer says "Mexico (+52)" (§6, verbatim) and Settings "México (+52)" (§6, verbatim): the spec spells them differently and both are kept as written.
+- **G16. The ledger's actor column.** Spec §3 names `actor_user_id uuid` FK `users`. Staff actions know the Clerk user id (`requireAccountAccess` → `userId`, a string like `user_…`), which is what `events.actor_id` already stores; a uuid FK would need a lookup and would fail for the ids this codebase actually carries. 0054 has `actor_id text`, required (non-blank) for `staff` and `staff_undo` by a CHECK. PR-2 writes it.
+- **G17. Grants.** Spec §3 says "revoke all from anon and authenticated; grant select to authenticated" AND "No role, `service_role` included, holds update or delete". 0054 revokes ALL from `anon`, `authenticated` AND `service_role` (the default ACL hands all three ALL, `MAINTAIN` included), then grants `SELECT` to `authenticated` and `SELECT, INSERT` to `service_role`. The contact reference is composite (`(account_id, contact_id)` → `contacts(account_id, id)`, 0050's pattern), `on delete set null (contact_id)`, so a row can never name another account's contact.
+- **G18. `phone_country_unconfirmed` is client-updatable** (`grant update (phone_country_unconfirmed) … to authenticated`), by name, under 0053's rule. The operator's inline phone edit (`updateContactFieldAction`) runs on the request's RLS client and writes the flag in the same statement as the phone (`phoneFields`); without the grant every phone edit would fail. It is a guard against the platform's own misreading, not a consent record.
+- **G19. The registry's footer column.** Spec §4.1 item 2 says "Each kind keeps today's footer". The registry records it: `stop_line` (`withOptOut`) for the seven automation kinds and the text-back, `none` for the composer, the alert and the code, exactly as each path sent before. The gate applies it (step 7) BEFORE a caller's `prepare` writes its message row, so the thread shows the text as sent.
+- **G20. Spec line numbers** are cited at `61e7f113`; #149 and #150 moved some (`finish-call.ts`, `registry.ts`, `conversations/actions.ts`). Tasks name functions, not lines.
+
+
+## File Structure
+
+33 files created, 103 modified (136 total), across 16 implementation tasks. Test counts are read off the staged replay (E5); a modified test file shows before → after.
+
+**packages/db**
+
+Created:
+- `src/test/consent-ledger-schema.test.ts` (15 tests; Task 1)
+- `src/consent.test.ts` (13 tests; Task 1)
+- `src/test/consent-ledger-live.test.ts` (1 test, CI only; Task 1)
+- `supabase/migrations/0054_consent_ledger.sql` (Task 1)
+- `src/consent.ts` (Task 1)
+- `src/phone.test.ts` (42 tests; Task 2)
+- `src/contacts-phone.test.ts` (8 tests; Task 2)
+- `src/test/contacts-phone-live.test.ts` (3 tests, CI only; Task 2)
+- `src/phone.ts` (Task 2)
+- `src/backfill/phone-country.test.ts` (12 tests; Task 3)
+- `src/test/phone-country-backfill.test.ts` (3 tests; Task 3)
+- `supabase/backfills/0054-phone-country-candidates.sql` (Task 3)
+- `supabase/backfills/0054-dnd-preflight.sql` (Task 3)
+- `src/backfill/phone-country.ts` (Task 3)
+- `src/backfill/phone-country-run.ts` (Task 3)
+
+Modified:
+- `src/test/schema-grants-guard.test.ts` (6 → 6 tests; Task 1)
+- `src/test/server-only-writes-grants.test.ts` (27 → 27 tests; Task 1)
+- `src/test/contacts-marketing-optout-schema.test.ts` (3 → 3 tests; Task 1)
+- `src/test/automations-b-schema.test.ts` (13 → 13 tests; Task 1)
+- `src/index.ts` (Tasks 1, 2)
+- `src/account-teardown.ts` (Task 1)
+- `package.json` (Tasks 2, 3)
+- `src/contacts.ts` (Task 2)
+- `src/contact-import.ts` (Task 2)
+- `src/ci/sql-files.test.ts` (28 → 34 tests; Task 3)
+- `src/test/automation-log-grants.test.ts` (31 → 29 tests; Task 10)
+- `src/automation-settings.ts` (Task 10)
+- `src/automation-log.ts` (Task 11)
+
+**apps/web**
+
+Created:
+- `src/lib/loggable-error.ts` (Task 4)
+- `src/lib/consent/classes.test.ts` (14 tests; Task 5)
+- `src/lib/consent/hours.test.ts` (14 tests; Task 5)
+- `src/lib/consent/classes.ts` (Task 5)
+- `src/lib/consent/hours.ts` (Task 5)
+- `src/lib/consent/copy.test.ts` (5 tests; Task 6)
+- `src/lib/consent/gate.test.ts` (32 tests; Task 8)
+- `src/lib/consent/gate.ts` (Task 8)
+- `src/lib/consent/fake-gate.ts` (Task 8)
+- `src/lib/consent/composer-state.test.ts` (6 tests; Task 12)
+- `src/lib/consent/recipient-state.test.ts` (6 tests; Task 12)
+- `src/lib/consent/composer-state.ts` (Task 12)
+- `src/lib/consent/recipient-state.ts` (Task 12)
+- `src/lib/contacts/phone-country.test.ts` (9 tests; Task 14)
+- `src/lib/contacts/phone-country.ts` (Task 14)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/phone-country-row.tsx` (Task 14)
+- `src/lib/consent/scans.test.ts` (10 tests; Task 15)
+- `e2e/consent-phone-country.spec.ts` (2 tests, CI only; Task 16)
+
+Modified:
+- `src/lib/sms/telnyx.test.ts` (7 → 11 tests; Task 4)
+- `src/lib/sms/types.ts` (Task 4)
+- `src/lib/sms/telnyx.ts` (Task 4)
+- `src/lib/billing/billing-link.ts` (Task 4)
+- `src/lib/messages.ts` (Tasks 6, 10)
+- `src/lib/voice/phone-number.test.ts` (18 → 19 tests; Task 7)
+- `src/lib/voice/phone-number.ts` (Tasks 7, 15)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.ts` (Task 7)
+- `src/app/api/sms/inbound/route.ts` (Task 7)
+- `src/app/api/voice/texml/route.ts` (Task 7)
+- `src/app/b/[publicId]/actions.ts` (Task 7)
+- `src/lib/forms/enrich.ts` (Task 7)
+- `src/lib/proposals/generate.ts` (Task 7)
+- `src/lib/voice/sip-headers.ts` (Task 7)
+- `src/lib/voice/tools/registry.ts` (Task 7)
+- `src/lib/automations/instant-reply.ts` (Tasks 7, 9)
+- `src/lib/voice/finish-call.ts` (Tasks 7, 11)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx` (Tasks 7, 12, 14)
+- `src/lib/sms/opt-out.ts` (Task 8)
+- `src/lib/automations/harness.test.ts` (8 → 4 tests; Task 9)
+- `src/lib/automations/hold-or-send.test.ts` (16 → 26 tests; Task 9)
+- `src/lib/automations/send-sms.test.ts` (16 → 17 tests; Task 9)
+- `src/lib/automations/instant-reply.test.ts` (24 → 26 tests; Task 9)
+- `src/lib/automations/sentinel.test.ts` (5 → 5 tests; Task 9)
+- `src/lib/automations/imports.test.ts` (2 → 2 tests; Task 9)
+- `src/lib/automations/passes/appointment-confirm.test.ts` (14 → 14 tests; Task 9)
+- `src/lib/automations/passes/followups.test.ts` (9 → 8 tests; Task 9)
+- `src/lib/automations/passes/no-show-nudge.test.ts` (29 → 29 tests; Task 9)
+- `src/lib/automations/passes/quote-followup.test.ts` (20 → 20 tests; Task 9)
+- `src/lib/automations/passes/reactivation.test.ts` (21 → 20 tests; Task 9)
+- `src/lib/automations/passes/referral-ask.test.ts` (25 → 25 tests; Task 9)
+- `src/lib/automations/passes/reminders.test.ts` (9 → 9 tests; Task 9)
+- `src/lib/automations/passes/review-request.test.ts` (37 → 37 tests; Task 9)
+- `src/lib/automations/passes/sms-reminder.test.ts` (19 → 19 tests; Task 9)
+- `src/lib/automations/passes/site-traffic.test.ts` (9 → 9 tests; Task 9)
+- `src/lib/automations/passes/usage-report.test.ts` (19 → 19 tests; Task 9)
+- `src/lib/automations/passes/weekly-agency-report.test.ts` (3 → 3 tests; Task 9)
+- `src/lib/automations/passes/weekly-report.test.ts` (7 → 7 tests; Task 9)
+- `src/lib/automations/passes/release-held.test.ts` (10 → 10 tests; Task 9)
+- `src/app/api/cron/reminders/route.test.ts` (30 → 30 tests; Task 9)
+- `src/lib/automations/context.ts` (Task 9)
+- `src/lib/automations/harness.ts` (Task 9)
+- `src/lib/automations/send-sms.ts` (Task 9)
+- `src/lib/automations/hold-or-send.ts` (Task 9)
+- `src/lib/automations/passes/appointment-confirm.ts` (Task 9)
+- `src/lib/automations/passes/followups.ts` (Task 9)
+- `src/lib/automations/passes/no-show-nudge.ts` (Task 9)
+- `src/lib/automations/passes/quote-followup.ts` (Task 9)
+- `src/lib/automations/passes/reactivation.ts` (Task 9)
+- `src/lib/automations/passes/referral-ask.ts` (Task 9)
+- `src/lib/automations/passes/reminders.ts` (Task 9)
+- `src/lib/automations/passes/review-request.ts` (Task 9)
+- `src/lib/automations/passes/sms-reminder.ts` (Task 9)
+- `src/lib/automations/quiet-hours.test.ts` (16 → 6 tests; Task 10)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.test.ts` (2 → 4 tests; Task 10)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.test.ts` (64 → 56 tests; Task 10)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/page.test.ts` (32 → 31 tests; Task 10)
+- `e2e/activity.spec.ts` (CI only; Task 10)
+- `src/lib/automations/quiet-hours.ts` (Task 10)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.tsx` (Task 10)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/page.tsx` (Task 10)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.ts` (Task 10)
+- `src/lib/voice/textback.test.ts` (6 → 16 tests; Task 11)
+- `src/lib/voice/finish-call.test.ts` (98 → 98 tests; Task 11)
+- `src/lib/sms/alerts.test.ts` (31 → 31 tests; Task 11)
+- `src/lib/voice/textback.ts` (Task 11)
+- `src/app/api/voice/texml/handoff-result/route.ts` (Task 11)
+- `src/lib/sms/alerts.ts` (Task 11)
+- `src/lib/automations/passes/release-held.ts` (Task 11)
+- `src/lib/automations/log-titles.ts` (Task 11)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts` (31 → 35 tests; Task 12)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts` (3 → 8 tests; Tasks 12, 14)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts` (Task 12)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.tsx` (Task 12)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/message-composer.tsx` (Task 12)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts` (21 → 24 tests; Task 13)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts` (Task 13)
+- `src/components/alert-phone-card.tsx` (Task 13)
+- `src/app/(dashboard)/dashboard/styleguide/settings-field-cards.tsx` (Task 13)
+- `src/lib/contacts/summary.test.ts` (26 → 30 tests; Task 14)
+- `src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.test.ts` (7 → 10 tests; Task 14)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts` (15 → 25 tests; Task 14)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts` (9 → 9 tests; Task 14)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts` (Task 14)
+- `src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts` (Task 14)
+- `src/lib/contacts/summary.ts` (Task 14)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx` (Task 14)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/contact-fields-panel.tsx` (Task 14)
+- `src/app/(dashboard)/dashboard/styleguide/page.tsx` (Task 14)
+
+**repo root**
+
+Modified:
+- `pnpm-lock.yaml` (Task 2)
+
+**New tests: 260**: every test in a new file, plus what each modified file gained (a file that lost or rewrote tests counts 0, never negative). 6 of them run only in CI: `consent-ledger-live` 1, `contacts-phone-live` 3, the e2e spec 2.
+
+## Task order and checkpoints
+
+17 tasks, 3 orchestrator checkpoints, at most 2 lanes at a time. Each lane is a worktree on `feat/consent-pr1` (`.claude/worktrees/consent-pr1-<lane>`), created from the branch head at the phase's start, with `pnpm install --frozen-lockfile --prefer-offline`. Lanes commit locally, one commit per task (the message is in each task's last step), and never push. The orchestrator cherry-picks at each checkpoint, in task order.
+
+**Phase 1** (two lanes, no shared file):
+- **Lane A** (`packages/db` only): Task 1 → Task 2 → Task 3.
+- **Lane B** (`apps/web` only, no database dependency): Task 4 → Task 5 → Task 6.
+
+**Checkpoint A (orchestrator only).** Cherry-pick Tasks 1–6 onto `feat/consent-pr1`. On that head: `pnpm install --frozen-lockfile --prefer-offline` (Task 2 changed the lock); `pnpm --filter @bis/db typecheck`; `pnpm --filter web typecheck`; `pnpm --filter web test` (Global Constraints, "Full web suite"); the whole db suite twice with the JSON reporter, the branch's parent (before Task 1) on the replica's `pre` and this head on `post` (`SUPABASE_DB_URL=postgresql://postgres@localhost:55433/<db> pnpm --filter @bis/db exec vitest run --reporter=json --outputFile=<file>`), then diff the per-test statuses: no test may go from passed to failed; the only new failures allowed are the CI-only files `consent-ledger-live.test.ts` and `contacts-phone-live.test.ts` (the `withTestAccount`/`serviceDb` tests fail to connect in both runs). Nothing goes to any Supabase project here: 0054 reaches the CI project only in Task 17, when the branch is otherwise ready (runbook §6: "a grant change pushed to the CI project turns every OTHER branch's grant-pinning tests red until this branch merges").
+
+**Phase 2** (one lane, because everything after it builds on it): Task 7 → Task 8.
+
+**Checkpoint B (orchestrator only).** Cherry-pick Tasks 7–8; the same checks as Checkpoint A.
+
+**Phase 3** (two lanes, no shared file; Task 6 put every new copy line in place so neither lane edits `messages.ts` except Task 10's removals):
+- **Lane A** (automations and the call-end texts): Task 9 → Task 10 → Task 11.
+- **Lane B** (the screens): Task 12 → Task 13 → Task 14.
+
+**Checkpoint C (orchestrator only).** Cherry-pick Tasks 9–14; the same checks, plus `pnpm --filter web lint`.
+
+**Phase 4** (the integration branch itself, in order): Task 15 (the scans; it also deletes the `toE164` alias Task 7 left for the Phase 3 callers) → Task 16 (e2e) → Task 17 (gates, 0054 to CI then production, parity, the backfill, handoff).
+
+Dependencies, in full:
+- Task 1: Prerequisite 1 (#150). Task 2: none in code (Lane A order). Task 3: Task 2.
+- Tasks 4, 5, 6: none.
+- Task 7: Task 2; Prerequisite 1 (#149). Task 8: Tasks 1, 2, 4, 5.
+- Task 9: Tasks 7, 8. Task 10: Tasks 6, 9. Task 11: Tasks 1, 6, 8, 9.
+- Task 12: Tasks 6, 7, 8. Task 13: Tasks 2, 6, 8. Task 14: Tasks 2, 6, 12.
+- Task 15: Tasks 1–14. Task 16: Task 14. Task 17: everything.
+
+Commands run from the lane's worktree root (Git Bash), unless a step says otherwise.
+
+**How to read each task.** Step 1 writes the tests, as complete files or as diffs against the task's parent commit. Step 2 runs them, and "Expected" is the RED output of the staged replay (E5), by name. Step 3 writes the implementation. Step 4 runs again; "Expected" is the GREEN output. Step 5's probes were applied to the finished tree one at a time; each row names the tests it turned red. A code block titled "Replace the whole file" is the complete new file; one titled "Apply" is a unified diff against the parent commit.
+
+
+---
+
+### Task 1: Migration 0054 (the ledger, the flag, the textback source) and the ledger module
+
+**Owner:** bis-db-schema. Writes the migration and its proof; **never applies it** (Task 17 does, once per project). **Lane:** A (Phase 1). **Depends on:** Prerequisite 1 (#150 merged: 0053's grant convention and the grant-pinning tests it created).
+
+The schema half of spec §3 and the only migration in PR-1. Additive only, so production takes it BEFORE the merge deploy (Task 17). The four existing tests that pin grants or the `automation_log` source list are edited here, in the same task as the migration they describe, so the suite is never red on a commit.
+
+**Files:**
+- Create: `packages/db/src/test/consent-ledger-schema.test.ts` (15 tests)
+- Modify: `packages/db/src/test/schema-grants-guard.test.ts` (6 tests)
+- Modify: `packages/db/src/test/server-only-writes-grants.test.ts` (27 tests)
+- Modify: `packages/db/src/test/contacts-marketing-optout-schema.test.ts` (3 tests)
+- Modify: `packages/db/src/test/automations-b-schema.test.ts` (13 tests)
+- Create: `packages/db/src/consent.test.ts` (13 tests)
+- Create: `packages/db/src/test/consent-ledger-live.test.ts` (CI only)
+- Create: `packages/db/supabase/migrations/0054_consent_ledger.sql`
+- Create: `packages/db/src/consent.ts`
+- Modify: `packages/db/src/index.ts` (an intermediate state; a later task finishes it)
+- Modify: `packages/db/src/account-teardown.ts`
+
+**Interfaces:**
+- Consumes: `withRollback`, `actAs`, `actAsOwner` (`src/test/db.ts`); `withTestAccount` (`src/test/fixtures.ts`); `serviceDb`; 0050's `contacts_account_id_id_key`; 0047's `automation_log_source_check`.
+- Produces:
+  - `public.consent_events` (columns, CHECKs, index, RLS and grants exactly as in the file below).
+  - `public.contacts.phone_country_unconfirmed boolean not null default false`, UPDATE granted to `authenticated` by name.
+  - `automation_log_source_check` accepts `'textback'` (the TypeScript list gains it in Task 11, with its two `Record`s).
+  - `packages/db/src/consent.ts`, re-exported from `@bis/db`:
+    - `type ConsentChannel = "sms" | "email"`, `type ConsentAction`, `CONSENT_METHODS` (14), `type ConsentMethod`, `DECIDING_ACTIONS`
+    - `type ConsentState = { state: "allowed" } | { state: "stopped" | "held"; since: string; method: ConsentMethod; eventId: string }`
+    - `consentStateOf(rows: readonly ConsentRow[]): ConsentState` (pure)
+    - `readConsentState(db, accountId, channel, address): Promise<ConsentState>`: THROWS on a read error
+    - `appendConsentEvent(db, e: ConsentEventInput): Promise<{ id: string }>`
+    - `recordCarrierBlock(db, { accountId, address, contactId, kind }): Promise<"appended" | "already_stopped">`
+
+The replica (Global Constraints, "DB tests"): RED runs against database `pre` (every migration but 0054), GREEN against `post`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `packages/db/src/test/consent-ledger-schema.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import type { Client } from "pg";
+import { withRollback, actAs, actAsOwner } from "./db";
+
+/**
+ * 0054 (consent chain PR-1). Everything here runs in a
+ * rolled-back transaction (`withRollback`), so it runs on the local PG18
+ * replica as well as on the CI project. The live half (consent.ts through
+ * PostgREST) is consent-ledger-live.test.ts, CI only.
+ *
+ * RED BEFORE APPLY: every test in this file (the table, the column and the
+ * 'textback' source do not exist yet).
+ */
+const RUN = Math.random().toString(36).slice(2, 10);
+const orgId = (label: string) => `org_CONSENT_${label}_${RUN}`;
+
+type Seeded = { a: string; b: string; contactA: string; contactB: string };
+
+async function seed(c: Client): Promise<Seeded> {
+  const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
+  const mk = async (label: string) => (await c.query<{ id: string }>(
+    "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,$2,$3,true) returning id",
+    [agency!.id, orgId(label), `Consent ${label}`])).rows[0]!.id;
+  const a = await mk("A");
+  const b = await mk("B");
+  const contact = async (account: string) => (await c.query<{ id: string }>(
+    "insert into contacts (account_id, first_name, phone) values ($1, 'Ana', '+19565550100') returning id", [account])).rows[0]!.id;
+  return { a, b, contactA: await contact(a), contactB: await contact(b) };
+}
+
+const INSERT = `insert into consent_events (account_id, channel, address, action, method, contact_id, actor_id, note, evidence)
+  values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb)) returning id`;
+type Row = { account: string; channel?: string; address?: string; action?: string; method?: string;
+  contact?: string | null; actor?: string | null; note?: string | null; evidence?: string | null };
+const params = (r: Row) => [r.account, r.channel ?? "sms", r.address ?? "+19565550100", r.action ?? "revoked",
+  r.method ?? "keyword", r.contact ?? null, r.actor ?? null, r.note ?? null, r.evidence ?? null];
+
+/** One statement expected to fail, inside a savepoint so the transaction survives. */
+async function refused(c: Client, sql: string, p: unknown[]): Promise<unknown> {
+  await c.query("savepoint probe");
+  try {
+    await c.query(sql, p);
+    return null;
+  } catch (e) {
+    return e;
+  } finally {
+    await c.query("rollback to savepoint probe");
+  }
+}
+
+// The whole grant set on the table, every role but the owner.
+const GRANTS = `select grantee, privilege_type from information_schema.role_table_grants
+  where table_schema = 'public' and table_name = 'consent_events' and grantee <> 'postgres'
+  order by grantee, privilege_type`;
+
+describe("0054 consent_events: append-only by grants, RLS on, SELECT for the account's users", () => {
+  it("the whole grant set is SELECT for authenticated and SELECT, INSERT for service_role, nothing for anon (mutation: drop `revoke ... from service_role` → service_role keeps UPDATE and DELETE, FAILS; grant update to authenticated → FAILS)", () =>
+    withRollback(async (c) => {
+      expect((await c.query(GRANTS)).rows).toEqual([
+        { grantee: "authenticated", privilege_type: "SELECT" },
+        { grantee: "service_role", privilege_type: "INSERT" },
+        { grantee: "service_role", privilege_type: "SELECT" },
+      ]);
+    }));
+
+  it("no role holds UPDATE, DELETE, TRUNCATE or MAINTAIN, which information_schema cannot see (mutation: grant maintain to service_role → FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ r: string; p: string }>(
+        `select r, p from unnest(array['anon','authenticated','service_role']) r
+           cross join unnest(array['UPDATE','DELETE','TRUNCATE','MAINTAIN']) p
+          where has_table_privilege(r, 'public.consent_events', p)`);
+      expect(rows).toEqual([]);
+    }));
+
+  it("service_role's UPDATE and DELETE are refused by the grant, 42501 naming the table (mutation: grant update, delete to service_role → FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await c.query(INSERT, params({ account: s.a }));
+      await c.query("set local role service_role");
+      const denied = { code: "42501", message: expect.stringMatching(/permission denied for table consent_events/) };
+      expect(await refused(c, "update consent_events set note = 'x'", [])).toMatchObject(denied);
+      expect(await refused(c, "delete from consent_events", [])).toMatchObject(denied);
+    }));
+
+  it("row level security is on, with one SELECT policy for authenticated (mutation: disable row level security → FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows: [rel] } = await c.query<{ relrowsecurity: boolean }>(
+        "select relrowsecurity from pg_class where oid = 'public.consent_events'::regclass");
+      expect(rel!.relrowsecurity).toBe(true);
+      const { rows } = await c.query(
+        "select policyname, cmd, roles::text as roles from pg_policies where schemaname = 'public' and tablename = 'consent_events'");
+      expect(rows).toEqual([{ policyname: "consent_events_read", cmd: "SELECT", roles: "{authenticated}" }]);
+    }));
+
+  it("a client reads its own account's rows and not another's; a client token has no app_role claim (mutation: using (true) → the B row is visible, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const own = (await c.query<{ id: string }>(INSERT, params({ account: s.a }))).rows[0]!.id;
+      await c.query(INSERT, params({ account: s.b }));
+      await actAs(c, { org_id: orgId("A"), sub: "user_consent_a" });
+      const { rows } = await c.query<{ id: string }>("select id from consent_events where account_id in ($1, $2)", [s.a, s.b]);
+      expect(rows.map((r) => r.id)).toEqual([own]);
+    }));
+
+  it("a client cannot insert, even into its own account (42501 on the grant) (mutation: grant insert to authenticated → FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await actAs(c, { org_id: orgId("A"), sub: "user_consent_a" });
+      expect(await refused(c, INSERT, params({ account: s.a })))
+        .toMatchObject({ code: "42501", message: expect.stringMatching(/permission denied for table consent_events/) });
+    }));
+});
+
+describe("0054 consent_events: shape", () => {
+  it("an SMS address must be E.164 and an email address lowercased and trimmed (mutation: drop consent_events_address_check → FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const bad = { code: "23514", constraint: "consent_events_address_check" };
+      expect(await refused(c, INSERT, params({ account: s.a, address: "9565550100" }))).toMatchObject(bad);
+      expect(await refused(c, INSERT, params({ account: s.a, address: "+09565550100" }))).toMatchObject(bad);
+      expect(await refused(c, INSERT, params({ account: s.a, channel: "email", address: "Ana@Example.com" }))).toMatchObject(bad);
+      expect(await refused(c, INSERT, params({ account: s.a, channel: "email", address: " ana@example.com" }))).toMatchObject(bad);
+      // The near-misses that must pass: the controls.
+      await c.query(INSERT, params({ account: s.a, address: "+528999221234" }));
+      await c.query(INSERT, params({ account: s.a, channel: "email", address: "ana@example.com" }));
+    }));
+
+  it("a staff resubscribe needs a non-blank note; a keyword resubscribe does not (mutation: drop consent_events_note_check → FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const staff = { account: s.a, action: "resubscribed", method: "staff", actor: "user_1" };
+      expect(await refused(c, INSERT, params(staff))).toMatchObject({ code: "23514", constraint: "consent_events_note_check" });
+      expect(await refused(c, INSERT, params({ ...staff, note: "   " }))).toMatchObject({ code: "23514", constraint: "consent_events_note_check" });
+      await c.query(INSERT, params({ ...staff, note: "Asked on the phone, 3 Oct" }));
+      await c.query(INSERT, params({ account: s.a, action: "resubscribed", method: "start_keyword" }));
+    }));
+
+  it("a staff or staff_undo row names its actor (mutation: drop consent_events_actor_check → FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      expect(await refused(c, INSERT, params({ account: s.a, method: "staff" })))
+        .toMatchObject({ code: "23514", constraint: "consent_events_actor_check" });
+      expect(await refused(c, INSERT, params({ account: s.a, action: "held", method: "staff_undo", actor: " " })))
+        .toMatchObject({ code: "23514", constraint: "consent_events_actor_check" });
+    }));
+
+  it("the closed lists refuse an unknown action or method, and evidence is an object with an excerpt of at most 160 characters", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      expect(await refused(c, INSERT, params({ account: s.a, action: "paused" })))
+        .toMatchObject({ code: "23514", constraint: "consent_events_action_check" });
+      expect(await refused(c, INSERT, params({ account: s.a, method: "sms_stop" })))
+        .toMatchObject({ code: "23514", constraint: "consent_events_method_check" });
+      expect(await refused(c, INSERT, params({ account: s.a, evidence: JSON.stringify({ excerpt: "x".repeat(161) }) })))
+        .toMatchObject({ code: "23514", constraint: "consent_events_evidence_check" });
+      expect(await refused(c, INSERT, params({ account: s.a, evidence: "[]" })))
+        .toMatchObject({ code: "23514", constraint: "consent_events_evidence_check" });
+      await c.query(INSERT, params({ account: s.a, evidence: JSON.stringify({ excerpt: "x".repeat(160) }) }));
+    }));
+
+  it("the contact must be the row's own account's (mutation: a plain FK on contact_id → the crossed insert succeeds, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      expect(await refused(c, INSERT, params({ account: s.a, contact: s.contactB })))
+        .toMatchObject({ code: "23503", constraint: "consent_events_contact_fkey" });
+      await c.query(INSERT, params({ account: s.a, contact: s.contactA }));
+    }));
+});
+
+describe("0054 consent_events: deletes, as the roles that make them", () => {
+  it("a contact deleted by service_role nulls contact_id and keeps the row, though service_role holds no UPDATE (mutation: on delete cascade → the row is gone, FAILS; on delete set null without (contact_id) → 23502 on account_id, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const id = (await c.query<{ id: string }>(INSERT, params({ account: s.a, contact: s.contactA }))).rows[0]!.id;
+      await c.query("set local role service_role");
+      await c.query("delete from contacts where id = $1", [s.contactA]);
+      await actAsOwner(c);
+      const { rows } = await c.query("select account_id, contact_id from consent_events where id = $1", [id]);
+      expect(rows).toEqual([{ account_id: s.a, contact_id: null }]);
+    }));
+
+  it("an account deleted by service_role takes its ledger with it, though service_role holds no DELETE (mutation: account_id on delete restrict → the delete FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await c.query(INSERT, params({ account: s.b }));
+      await c.query("set local role service_role");
+      await c.query("delete from contacts where account_id = $1", [s.b]);
+      await c.query("delete from accounts where id = $1", [s.b]);
+      await actAsOwner(c);
+      expect((await c.query("select 1 from consent_events where account_id = $1", [s.b])).rows).toEqual([]);
+    }));
+});
+
+describe("0054 contacts.phone_country_unconfirmed and the textback source", () => {
+  it("the flag is boolean, not null, default false, and client-updatable by name (mutation: drop the grant → the client update is 42501, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const { rows: [col] } = await c.query(
+        `select data_type, is_nullable, column_default from information_schema.columns
+          where table_schema = 'public' and table_name = 'contacts' and column_name = 'phone_country_unconfirmed'`);
+      expect(col).toEqual({ data_type: "boolean", is_nullable: "NO", column_default: "false" });
+      await actAs(c, { org_id: orgId("A"), sub: "user_consent_a" });
+      const r = await c.query("update contacts set phone_country_unconfirmed = true where id = $1", [s.contactA]);
+      expect(r.rowCount).toBe(1);
+    }));
+
+  it("automation_log accepts source 'textback' and still refuses an unknown one (mutation: leave 0047's list → FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await c.query(
+        "insert into automation_log (account_id, source, channel, subject_key, status) values ($1,'textback','sms','call:x','sent')", [s.a]);
+      expect(await refused(c,
+        "insert into automation_log (account_id, source, channel, subject_key, status) values ($1,'text_back','sms','call:y','sent')", [s.a]))
+        .toMatchObject({ code: "23514", constraint: "automation_log_source_check" });
+    }));
+});
+```
+
+Apply to `packages/db/src/test/schema-grants-guard.test.ts` (against the task's parent commit):
+
+```diff
+@@ -75,7 +75,7 @@ const EXPECTED_WRITES: Record<string, string[]> = {
+   "authenticated contact_tags": IUD,
+   "authenticated contacts": insertDeleteAndUpdate([
+     "assigned_to", "attribution", "company_name", "custom", "dnd", "email", "first_name", "last_name",
+-    "marketing_email_opted_out_at", "phone", "source", "updated_at",
++    "marketing_email_opted_out_at", "phone", "phone_country_unconfirmed", "source", "updated_at",
+   ]),
+   "authenticated custom_fields": IUD,
+   "authenticated custom_values": IUD,
+```
+
+Apply to `packages/db/src/test/server-only-writes-grants.test.ts` (against the task's parent commit):
+
+```diff
+@@ -104,7 +104,7 @@ describe("0053: server-only tables, at the catalogue", () => {
+           order by column_name`, [table])).rows.map((r) => r.column_name);
+       expect(await cols("contacts")).toEqual([
+         "assigned_to", "attribution", "company_name", "custom", "dnd", "email", "first_name", "last_name",
+-        "marketing_email_opted_out_at", "phone", "source", "updated_at",
++        "marketing_email_opted_out_at", "phone", "phone_country_unconfirmed", "source", "updated_at",
+       ]);
+       expect(await cols("opportunities")).toEqual([
+         "assigned_to", "contact_id", "custom", "monetary_value", "name", "pipeline_id", "stage_changed_at", "stage_id",
+```
+
+Apply to `packages/db/src/test/contacts-marketing-optout-schema.test.ts` (against the task's parent commit):
+
+```diff
+@@ -67,7 +67,7 @@ describe("0049 contacts.marketing_email_opted_out_at", () => {
+           order by attname`);
+       expect(rows.map((r) => r.attname)).toEqual([
+         "assigned_to", "attribution", "company_name", "custom", "dnd", "email", "first_name", "last_name",
+-        "marketing_email_opted_out_at", "phone", "sort_name", "source", "updated_at",
++        "marketing_email_opted_out_at", "phone", "phone_country_unconfirmed", "sort_name", "source", "updated_at",
+       ]);
+     });
+   });
+```
+
+Apply to `packages/db/src/test/automations-b-schema.test.ts` (against the task's parent commit):
+
+```diff
+@@ -165,7 +165,7 @@ describe("0047 - the nine columns exist and carry their constraints", () => {
+  * own transaction.
+  */
+ describe("0047 - the catalogue, read directly", () => {
+-  it("both CHECKs list every value, eight keys and thirteen sources, in one read", async () => {
++  it("both CHECKs list every value, eight keys and fourteen sources (0054 added textback), in one read", async () => {
+     // The insert cases above prove one value at a time and cannot see a value
+     // that was DROPPED and never re-added unless someone thought to test it.
+     // This sees the whole list at once. `pg_get_constraintdef` renders an
+@@ -183,7 +183,7 @@ describe("0047 - the catalogue, read directly", () => {
+         "CHECK ((source = ANY (ARRAY['reminders'::text, 'followups'::text, 'review_request'::text, "
+         + "'no_show_nudge'::text, 'sms_reminder'::text, 'instant_reply'::text, 'weekly_report'::text, "
+         + "'concierge'::text, 'voice'::text, 'appointment_confirm'::text, 'referral_ask'::text, "
+-        + "'reactivation'::text, 'quote_followup'::text])))");
++        + "'reactivation'::text, 'quote_followup'::text, 'textback'::text])))");
+       expect(rows[1]!.def).toBe(
+         "CHECK ((recipe_key = ANY (ARRAY['review_request'::text, 'no_show_nudge'::text, "
+         + "'sms_reminder'::text, 'instant_reply'::text, 'appointment_confirm'::text, "
+```
+
+Create `packages/db/src/consent.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { consentStateOf, readConsentState, recordCarrierBlock, appendConsentEvent, type ConsentRow } from "./consent";
+
+/**
+ * Spec §3's state table, pure (no database): the newest DECIDING row wins,
+ * `granted` never decides (choice 28), ties break on id. The live reads and
+ * writes are proven against the real table in src/test/consent-ledger-*.
+ */
+let seq = 0;
+const row = (action: ConsentRow["action"], occurred_at: string, method: ConsentRow["method"] = "keyword", id?: string): ConsentRow =>
+  ({ id: id ?? `00000000-0000-0000-0000-${String(++seq).padStart(12, "0")}`, action, method, occurred_at });
+
+describe("consentStateOf — spec §3's table", () => {
+  it("no rows is allowed", () => {
+    expect(consentStateOf([])).toEqual({ state: "allowed" });
+  });
+
+  it("revoked is stopped, carrying its time, method and id", () => {
+    const r = row("revoked", "2026-10-03T15:00:00Z", "keyword");
+    expect(consentStateOf([r])).toEqual({ state: "stopped", since: r.occurred_at, method: "keyword", eventId: r.id });
+  });
+
+  it("held is held", () => {
+    expect(consentStateOf([row("held", "2026-10-03T15:00:00Z", "free_text")]).state).toBe("held");
+  });
+
+  it("resubscribed after revoked is allowed; revoked after resubscribed is stopped (mutation: sort ascending → FAILS)", () => {
+    expect(consentStateOf([row("revoked", "2026-10-03T15:00:00Z"), row("resubscribed", "2026-10-04T15:00:00Z", "start_keyword")]).state).toBe("allowed");
+    expect(consentStateOf([row("resubscribed", "2026-10-03T15:00:00Z", "start_keyword"), row("revoked", "2026-10-04T15:00:00Z")]).state).toBe("stopped");
+  });
+
+  it("a release newer than a keyword STOP lifts it, so the reducer alone cannot guard it: spec §3 line 153 puts that guard in PR-2's release function; a stop AFTER a release is stopped", () => {
+    const hold = row("held", "2026-10-03T10:00:00Z", "free_text");
+    const stop = row("revoked", "2026-10-03T11:00:00Z", "keyword");
+    const release = row("hold_released", "2026-10-03T12:00:00Z", "staff");
+    // Release newest: the order of events says allowed. PR-2's release
+    // function writes hold_released ONLY while the state is held (spec §3,
+    // "a keyword stop that lands in between cannot be undone by a stale
+    // click"), so this row sequence never reaches the table.
+    expect(consentStateOf([hold, stop, release]).state).toBe("allowed");
+    expect(consentStateOf([hold, release, row("revoked", "2026-10-03T13:00:00Z")]).state).toBe("stopped");
+  });
+
+  it("granted NEVER decides, even newest (mutation: count granted as deciding → allowed, FAILS)", () => {
+    const stop = row("revoked", "2026-10-03T15:00:00Z");
+    expect(consentStateOf([stop, row("granted", "2026-10-05T15:00:00Z", "form")]).state).toBe("stopped");
+    expect(consentStateOf([row("granted", "2026-10-05T15:00:00Z", "booking")])).toEqual({ state: "allowed" });
+  });
+
+  it("compares INSTANTS, not strings (mutation: compare occurred_at as strings → FAILS)", () => {
+    // 16:00+02:00 is 14:00Z, an hour BEFORE 15:00Z, yet sorts after it as a
+    // string: a string compare would call the stop newest.
+    const earlier = row("revoked", "2026-10-03T16:00:00+02:00");
+    const later = row("resubscribed", "2026-10-03T15:00:00+00:00", "start_keyword");
+    expect(consentStateOf([earlier, later]).state).toBe("allowed");
+  });
+
+  it("the same instant: the larger id wins (mutation: drop the id tiebreak → order-dependent, FAILS one way)", () => {
+    const a = row("revoked", "2026-10-03T15:00:00Z", "keyword", "00000000-0000-0000-0000-00000000000a");
+    const b = row("resubscribed", "2026-10-03T15:00:00Z", "start_keyword", "00000000-0000-0000-0000-00000000000b");
+    expect(consentStateOf([a, b]).state).toBe("allowed");
+    expect(consentStateOf([b, a]).state).toBe("allowed");
+  });
+});
+
+/** A PostgREST-shaped chain that records what it was asked. */
+function fakeDb(o: { read?: { data: unknown; error: unknown }; insert?: { data: unknown; error: unknown } }) {
+  const calls: Array<[string, ...unknown[]]> = [];
+  const chain: Record<string, (...a: unknown[]) => unknown> = {};
+  for (const k of ["select", "eq", "in", "order", "insert"]) {
+    chain[k] = (...a: unknown[]) => { calls.push([k, ...a]); return chain; };
+  }
+  chain.limit = (...a: unknown[]) => { calls.push(["limit", ...a]); return Promise.resolve(o.read ?? { data: [], error: null }); };
+  chain.single = () => Promise.resolve(o.insert ?? { data: { id: "e1" }, error: null });
+  const db = { from: (t: string) => { calls.push(["from", t]); return chain; } } as unknown as SupabaseClient;
+  return { db, calls };
+}
+
+describe("readConsentState", () => {
+  it("asks for the newest deciding row of that address, newest first by time then id, one row", async () => {
+    const f = fakeDb({ read: { data: [], error: null } });
+    expect(await readConsentState(f.db, "a1", "sms", "+19562921696")).toEqual({ state: "allowed" });
+    expect(f.calls).toEqual(expect.arrayContaining([
+      ["from", "consent_events"],
+      ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19562921696"],
+      ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]],
+      ["order", "occurred_at", { ascending: false }], ["order", "id", { ascending: false }],
+      ["limit", 1],
+    ]));
+  });
+
+  it("THROWS on a read error (the gate fails closed on it; mutation: return allowed → FAILS)", async () => {
+    const f = fakeDb({ read: { data: null, error: { message: "permission denied" } } });
+    await expect(readConsentState(f.db, "a1", "sms", "+19562921696")).rejects.toThrow("readConsentState failed: permission denied");
+  });
+});
+
+describe("recordCarrierBlock", () => {
+  it("appends revoked / carrier_block with the kind as evidence", async () => {
+    const f = fakeDb({ read: { data: [], error: null } });
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: "c1", kind: "voice.textback" })).toBe("appended");
+    const insert = f.calls.find((c) => c[0] === "insert")?.[1];
+    expect(insert).toMatchObject({ account_id: "a1", channel: "sms", address: "+19562921696", action: "revoked",
+      method: "carrier_block", contact_id: "c1", evidence: { kind: "voice.textback" } });
+  });
+
+  it("an address already stopped gets NO second row (spec §4.3 idempotency; mutation: always append → FAILS)", async () => {
+    const f = fakeDb({ read: { data: [row("revoked", "2026-10-03T15:00:00Z")], error: null } });
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: null, kind: "voice.textback" })).toBe("already_stopped");
+    expect(f.calls.some((c) => c[0] === "insert")).toBe(false);
+  });
+});
+
+describe("appendConsentEvent", () => {
+  it("throws when the insert is refused — a CHECK violation is never swallowed", async () => {
+    const f = fakeDb({ insert: { data: null, error: { message: "violates check constraint" } } });
+    await expect(appendConsentEvent(f.db, { accountId: "a1", channel: "sms", address: "bad", action: "revoked", method: "staff" }))
+      .rejects.toThrow("violates check constraint");
+  });
+});
+```
+
+Create `packages/db/src/test/consent-ledger-live.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { withTestAccount } from "./fixtures";
+import { serviceDb } from "../service";
+import { appendConsentEvent, readConsentState } from "../consent";
+
+/** 0054 through PostgREST, on the CI project only (withTestAccount + serviceDb). */
+describe("0054 consent.ts against the live table (CI only: withTestAccount + serviceDb)", () => {
+  it("appendConsentEvent writes through the service role and readConsentState reads the newest deciding row; the account's teardown removes both (mutation: order ascending in readConsentState → reads 'stopped', FAILS)", async () => {
+    let accountId = "";
+    await withTestAccount(async (_tdb, id) => {
+      accountId = id;
+      const db = serviceDb();
+      await appendConsentEvent(db, { accountId: id, channel: "sms", address: "+19565550177", action: "revoked", method: "carrier_block", occurredAt: "2026-09-01T10:00:00Z" });
+      await appendConsentEvent(db, { accountId: id, channel: "sms", address: "+19565550177", action: "granted", method: "inbound_text", occurredAt: "2026-09-02T10:00:00Z" });
+      expect(await readConsentState(db, id, "sms", "+19565550177")).toMatchObject({ state: "stopped", method: "carrier_block" });
+      await appendConsentEvent(db, { accountId: id, channel: "sms", address: "+19565550177", action: "resubscribed", method: "start_keyword", occurredAt: "2026-09-03T10:00:00Z" });
+      expect(await readConsentState(db, id, "sms", "+19565550177")).toEqual({ state: "allowed" });
+    });
+    const { data, error } = await serviceDb().from("consent_events").select("id").eq("account_id", accountId);
+    expect(error).toBeNull();
+    expect(data).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd packages/db
+SUPABASE_DB_URL=postgresql://postgres@localhost:55433/pre pnpm exec vitest run src/test/consent-ledger-schema.test.ts src/test/schema-grants-guard.test.ts src/test/server-only-writes-grants.test.ts src/test/contacts-marketing-optout-schema.test.ts src/test/automations-b-schema.test.ts src/consent.test.ts
+```
+
+Expected (the staged replay's RED run):
+- `src/test/automations-b-schema.test.ts`: **1 failing** that Step 4 turns green; 4 already pass; 8 CI-only (`withTestAccount`) fail to connect here and in Step 4 alike:
+  - 0047 - the catalogue, read directly both CHECKs list every value, eight keys and fourteen sources (0054 added textback), in one read
+- `src/test/consent-ledger-schema.test.ts`: **15 failing** that Step 4 turns green:
+  - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users the whole grant set is SELECT for authenticated and SELECT, INSERT for service_role, nothing for anon (mutation: drop `revoke ... from service_role` → service_role keeps UPDATE and DELETE, FAILS; grant update to authenticated → FAILS)
+  - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users no role holds UPDATE, DELETE, TRUNCATE or MAINTAIN, which information_schema cannot see (mutation: grant maintain to service_role → FAILS)
+  - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users service_role's UPDATE and DELETE are refused by the grant, 42501 naming the table (mutation: grant update, delete to service_role → FAILS)
+  - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users row level security is on, with one SELECT policy for authenticated (mutation: disable row level security → FAILS)
+  - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users a client reads its own account's rows and not another's; a client token has no app_role claim (mutation: using (true) → the B row is visible, FAILS)
+  - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users a client cannot insert, even into its own account (42501 on the grant) (mutation: grant insert to authenticated → FAILS)
+  - 0054 consent_events: shape an SMS address must be E.164 and an email address lowercased and trimmed (mutation: drop consent_events_address_check → FAILS)
+  - 0054 consent_events: shape a staff resubscribe needs a non-blank note; a keyword resubscribe does not (mutation: drop consent_events_note_check → FAILS)
+  - 0054 consent_events: shape a staff or staff_undo row names its actor (mutation: drop consent_events_actor_check → FAILS)
+  - 0054 consent_events: shape the closed lists refuse an unknown action or method, and evidence is an object with an excerpt of at most 160 characters
+  - 0054 consent_events: shape the contact must be the row's own account's (mutation: a plain FK on contact_id → the crossed insert succeeds, FAILS)
+  - 0054 consent_events: deletes, as the roles that make them a contact deleted by service_role nulls contact_id and keeps the row, though service_role holds no UPDATE (mutation: on delete cascade → the row is gone, FAILS; on delete set null without (contact_id) → 23502 on account_id, FAILS)
+  - 0054 consent_events: deletes, as the roles that make them an account deleted by service_role takes its ledger with it, though service_role holds no DELETE (mutation: account_id on delete restrict → the delete FAILS)
+  - 0054 contacts.phone_country_unconfirmed and the textback source the flag is boolean, not null, default false, and client-updatable by name (mutation: drop the grant → the client update is 42501, FAILS)
+  - 0054 contacts.phone_country_unconfirmed and the textback source automation_log accepts source 'textback' and still refuses an unknown one (mutation: leave 0047's list → FAILS)
+- `src/test/contacts-marketing-optout-schema.test.ts`: **1 failing** that Step 4 turns green; 2 already pass:
+  - 0049 contacts.marketing_email_opted_out_at is writable by the client role through 0053's column grant
+- `src/test/schema-grants-guard.test.ts`: **1 failing** that Step 4 turns green; 5 already pass:
+  - schema guard: every public table, view, materialized view and foreign table gives anon nothing and authenticated exactly the allow-listed writes (mutation: re-grant insert on messages -> FAILS)
+- `src/test/server-only-writes-grants.test.ts`: **1 failing** that Step 4 turns green; 26 already pass:
+  - 0053: server-only tables, at the catalogue contacts and opportunities: UPDATE is exactly the operator columns (mutation: add reactivation_sent_at -> FAILS)
+- `src/consent.test.ts`: **fails to load** (13 tests once it loads): `Cannot find module './consent' imported from packages/db/src/consent.test.ts`
+
+- [ ] **Step 3: Implement**
+
+Create `packages/db/supabase/migrations/0054_consent_ledger.sql`:
+
+```sql
+-- 0054_consent_ledger.sql
+-- Consent chain PR-1 (docs/superpowers/specs/2026-09-26-consent-chain-design.md
+-- sections 3 and 4.1; plan docs/superpowers/plans/2026-09-26-consent-pr1-ledger-and-gate.md).
+--
+-- ADDITIVE ONLY. The build before this file runs unchanged against it: it
+-- never reads consent_events, never writes the new contacts column (its
+-- default covers every insert), and never writes the new automation_log
+-- source. So production takes this file BEFORE the merge deploy, and the
+-- build after it can rely on it from its first request.
+--
+-- 1. consent_events: the ledger. Append-only BY GRANTS: after this file no
+--    role, service_role included, holds UPDATE or DELETE on it. Rows still
+--    leave with their account (on delete cascade) and let go of a deleted
+--    contact (on delete set null (contact_id)), because a referential
+--    action runs as the table's OWNER, not as the role that deleted the
+--    parent row; consent-ledger-schema.test.ts proves both.
+--    Writers: packages/db/src/consent.ts only, as the service role.
+--    Readers: the send gate (service role) and the account's own users under
+--    RLS (SELECT only).
+-- 2. contacts.phone_country_unconfirmed: F-009's "this ten-digit number could
+--    be Mexican or US" flag. The send gate holds a flagged contact until a
+--    person picks the country. Client-UPDATABLE by name (0053's rule for a
+--    new contacts column), the same as `phone` itself: the operator's
+--    contact edits write the flag in the same statement as the phone, and
+--    deciding a number's country through the data API is the same act as
+--    the drawer's country buttons. It is a guard against the platform's own
+--    misreading of a number, not a consent record; consent is in 1.
+-- 3. automation_log: the missed-call text-back gets its own source,
+--    'textback', so a text-back held overnight is released at 08:00 by the
+--    same queue every automation uses. The list is 0047's (0047:82-86)
+--    verbatim, plus the new value at the end.
+--
+-- No backslash anywhere in this file (the MCP apply rule): the E.164 CHECK
+-- spells a literal plus as [+].
+--
+-- ROLLBACK (the build after this file reads the table and the column, so roll
+-- the app back first):
+--   drop table public.consent_events;
+--   alter table public.contacts drop column phone_country_unconfirmed;
+--   delete from public.automation_log where source = 'textback';
+--   then re-add 0047's automation_log_source_check exactly.
+
+set local lock_timeout = '5s';
+
+-- 1. The ledger.
+create table public.consent_events (
+  id uuid primary key default gen_random_uuid(),
+  account_id uuid not null references public.accounts(id) on delete cascade,
+  channel text not null
+    constraint consent_events_channel_check check (channel in ('sms', 'email')),
+  address text not null,
+  action text not null
+    constraint consent_events_action_check check (action in ('granted', 'revoked', 'held', 'hold_released', 'resubscribed')),
+  method text not null
+    constraint consent_events_method_check check (method in (
+      'keyword', 'start_keyword', 'free_text', 'staff', 'staff_undo', 'carrier_block',
+      'unsubscribe_link', 'one_click', 'unsubscribe_page', 'form', 'booking', 'inbound_text',
+      'backfill_0049', 'backfill_telnyx')),
+  contact_id uuid,
+  actor_id text,
+  note text,
+  source_ref text
+    constraint consent_events_source_ref_check check (source_ref is null or char_length(source_ref) <= 200),
+  evidence jsonb not null default '{}'::jsonb
+    constraint consent_events_evidence_check check (
+      jsonb_typeof(evidence) = 'object'
+      and char_length(coalesce(evidence ->> 'excerpt', '')) <= 160),
+  occurred_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  constraint consent_events_address_check check (
+    (channel = 'sms' and address ~ '^[+][1-9][0-9]{7,14}$')
+    or (channel = 'email' and address = lower(address) and address = btrim(address)
+        and char_length(address) between 3 and 254 and position('@' in address) > 1)),
+  constraint consent_events_note_check check (
+    method <> 'staff' or action <> 'resubscribed' or (note is not null and btrim(note) <> '')),
+  constraint consent_events_actor_check check (
+    method not in ('staff', 'staff_undo') or (actor_id is not null and btrim(actor_id) <> '')),
+  -- The contact is the row's OWN account's (0050's pattern, onto
+  -- contacts_account_id_id_key). A deleted contact nulls only contact_id;
+  -- the row keeps its account and its address, so the evidence outlives a
+  -- merge or a delete.
+  constraint consent_events_contact_fkey foreign key (account_id, contact_id)
+    references public.contacts (account_id, id) on delete set null (contact_id)
+);
+
+comment on table public.consent_events is
+  'The consent ledger: one append-only row per grant, revoke, hold, hold release or resubscribe, per account and normalised address. State = the newest row whose action is revoked, held, hold_released or resubscribed. Written only by packages/db/src/consent.ts as the service role; no role holds UPDATE or DELETE.';
+comment on column public.consent_events.actor_id is
+  'The staff member for method staff or staff_undo: the Clerk user id, the events.actor_id convention.';
+
+create index consent_events_address_idx
+  on public.consent_events (account_id, channel, address, occurred_at desc, id desc);
+
+alter table public.consent_events enable row level security;
+create policy consent_events_read on public.consent_events for select to authenticated
+  using (app.is_agency() or account_id = app.current_account_id());
+-- revoke all, then grant back only what each role needs (0040's shape; the
+-- default ACL hands ALL, MAINTAIN included, to all three roles by name).
+revoke all on public.consent_events from anon, authenticated, service_role;
+grant select on public.consent_events to authenticated;
+grant select, insert on public.consent_events to service_role;
+
+-- 2. F-009's flag.
+alter table public.contacts
+  add column phone_country_unconfirmed boolean not null default false;
+
+comment on column public.contacts.phone_country_unconfirmed is
+  'F-009: true when the stored phone came from ten digits valid as both a +1 and a +52 number, or as neither, so its country is unknown. The send gate holds texts to this contact until a person picks the country. Client-updatable (0054), like phone.';
+
+grant update (phone_country_unconfirmed) on public.contacts to authenticated;
+
+-- 3. The text-back's own automation_log source.
+alter table public.automation_log drop constraint automation_log_source_check;
+alter table public.automation_log add constraint automation_log_source_check
+  check (source in (
+    'reminders', 'followups', 'review_request', 'no_show_nudge', 'sms_reminder',
+    'instant_reply', 'weekly_report', 'concierge', 'voice',
+    'appointment_confirm', 'referral_ask', 'reactivation', 'quote_followup',
+    'textback'));
+```
+
+Create `packages/db/src/consent.ts`:
+
+```ts
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+/**
+ * The consent ledger (0054, consent chain spec §3): append-only, per
+ * account, keyed on the normalised address (E.164 for SMS, the lowercased
+ * address for email). THE ONLY MODULE THAT WRITES `consent_events` (source
+ * scan 3, apps/web's lib/consent/scans.test.ts); every write is the service
+ * role's, and no role holds UPDATE or DELETE on the table.
+ */
+export type ConsentChannel = "sms" | "email";
+export type ConsentAction = "granted" | "revoked" | "held" | "hold_released" | "resubscribed";
+export const CONSENT_METHODS = [
+  "keyword", "start_keyword", "free_text", "staff", "staff_undo", "carrier_block",
+  "unsubscribe_link", "one_click", "unsubscribe_page", "form", "booking", "inbound_text",
+  "backfill_0049", "backfill_telnyx",
+] as const;
+export type ConsentMethod = (typeof CONSENT_METHODS)[number];
+
+/** The rows that decide the state. `granted` is evidence only and never does (choice 28). */
+export const DECIDING_ACTIONS = ["revoked", "held", "hold_released", "resubscribed"] as const satisfies readonly ConsentAction[];
+
+export type ConsentRow = {
+  id: string; action: ConsentAction; method: ConsentMethod; occurred_at: string;
+};
+
+export type ConsentState =
+  | { state: "allowed" }
+  | { state: "stopped"; since: string; method: ConsentMethod; eventId: string }
+  | { state: "held"; since: string; method: ConsentMethod; eventId: string };
+
+/**
+ * Spec §3's table, pure. The newest DECIDING row, by `occurred_at` then `id`
+ * (both descending), decides: none / `hold_released` / `resubscribed` →
+ * allowed; `revoked` → stopped; `held` → held. `granted` rows are skipped
+ * wherever they sort. Compared as instants, never as strings: PostgREST and
+ * a backfill can spell the same moment differently.
+ */
+export function consentStateOf(rows: readonly ConsentRow[]): ConsentState {
+  const deciding = rows.filter((r) => (DECIDING_ACTIONS as readonly string[]).includes(r.action));
+  deciding.sort((a, b) => {
+    const t = Date.parse(b.occurred_at) - Date.parse(a.occurred_at);
+    return t !== 0 ? t : b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+  });
+  const newest = deciding[0];
+  if (!newest || newest.action === "hold_released" || newest.action === "resubscribed") return { state: "allowed" };
+  return {
+    state: newest.action === "revoked" ? "stopped" : "held",
+    since: newest.occurred_at, method: newest.method, eventId: newest.id,
+  };
+}
+
+/**
+ * One address's state. Reads only the newest deciding row (the index
+ * `consent_events_address_idx` serves it). THROWS on a read error: the send
+ * gate turns that into `blocked: ledger_unavailable` (fails closed, §4.1).
+ */
+export async function readConsentState(
+  db: SupabaseClient, accountId: string, channel: ConsentChannel, address: string,
+): Promise<ConsentState> {
+  const { data, error } = await db.from("consent_events")
+    .select("id, action, method, occurred_at")
+    .eq("account_id", accountId).eq("channel", channel).eq("address", address)
+    .in("action", [...DECIDING_ACTIONS])
+    .order("occurred_at", { ascending: false }).order("id", { ascending: false })
+    .limit(1);
+  if (error) throw new Error(`readConsentState failed: ${error.message}`);
+  return consentStateOf((data ?? []) as ConsentRow[]);
+}
+
+export type ConsentEventInput = {
+  accountId: string;
+  channel: ConsentChannel;
+  address: string;
+  action: ConsentAction;
+  method: ConsentMethod;
+  contactId?: string | null;
+  actorId?: string | null;
+  note?: string | null;
+  sourceRef?: string | null;
+  evidence?: Record<string, unknown>;
+  occurredAt?: string;
+};
+
+/** The one INSERT into the ledger. The table's CHECKs refuse a bad shape. */
+export async function appendConsentEvent(db: SupabaseClient, e: ConsentEventInput): Promise<{ id: string }> {
+  const { data, error } = await db.from("consent_events").insert({
+    account_id: e.accountId, channel: e.channel, address: e.address,
+    action: e.action, method: e.method,
+    contact_id: e.contactId ?? null, actor_id: e.actorId ?? null, note: e.note ?? null,
+    source_ref: e.sourceRef ?? null, evidence: e.evidence ?? {},
+    ...(e.occurredAt ? { occurred_at: e.occurredAt } : {}),
+  }).select("id").single();
+  if (error || !data) throw new Error(`appendConsentEvent failed: ${error?.message ?? "no row"}`);
+  return { id: (data as { id: string }).id };
+}
+
+/**
+ * The carrier refused a send because the number opted out (gate step 9).
+ * Appends `revoked` / `carrier_block` unless the address is ALREADY stopped
+ * (spec §4.3's idempotency rule, applied here too). Read-then-insert, not
+ * atomic: two refused sends at once can both append, which leaves the same
+ * state (stopped) and is harmless.
+ */
+export async function recordCarrierBlock(
+  db: SupabaseClient,
+  input: { accountId: string; address: string; contactId: string | null; kind: string },
+): Promise<"appended" | "already_stopped"> {
+  const now = await readConsentState(db, input.accountId, "sms", input.address);
+  if (now.state === "stopped") return "already_stopped";
+  await appendConsentEvent(db, {
+    accountId: input.accountId, channel: "sms", address: input.address,
+    action: "revoked", method: "carrier_block", contactId: input.contactId,
+    evidence: { kind: input.kind },
+  });
+  return "appended";
+}
+```
+
+Apply to `packages/db/src/index.ts` (against the task's parent commit):
+
+```diff
+@@ -18,6 +18,10 @@ export { createContact, updateContact, listContacts, getContact,
+          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
+          type ContactInput, type SortKey, type SortDir } from "./contacts";
+ export { setMarketingEmailOptOut } from "./contacts";
++export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
++         CONSENT_METHODS, DECIDING_ACTIONS,
++         type ConsentChannel, type ConsentAction, type ConsentMethod, type ConsentRow,
++         type ConsentState, type ConsentEventInput } from "./consent";
+ export { buildMatchIndex, applyImportBatch,
+          type MatchIndex, type ImportRow } from "./contact-import";
+ export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask } from "./activities";
+```
+
+Apply to `packages/db/src/account-teardown.ts` (against the task's parent commit):
+
+```diff
+@@ -30,7 +30,10 @@ export const ACCOUNT_OWNED_TABLES = [
+ /**
+  * ⚠️ `alert_phone_verifications` (0036) is DELIBERATELY not on that list,
+  * neither is `contact_duplicate_flags` (0033), neither is `screened_calls`
+- * (0039).
++ * (0039), neither is `consent_events` (0054: `account_id … on delete
++ * cascade`, and its contact reference is `on delete set null (contact_id)`,
++ * so deleting `contacts` above keeps each ledger row until the account's own
++ * deletion carries it away; consent-ledger-schema.test.ts proves both).
+  *
+  * All three carry `account_id … on delete cascade` rather than `restrict`,
+  * so the account's own deletion below carries their rows away — they are
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd packages/db
+SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/test/consent-ledger-schema.test.ts src/test/schema-grants-guard.test.ts src/test/server-only-writes-grants.test.ts src/test/contacts-marketing-optout-schema.test.ts src/test/automations-b-schema.test.ts src/consent.test.ts
+cd ../.. && pnpm --filter web test
+```
+
+Expected (the staged replay's GREEN run):
+69 passed across the task's test files:
+- `src/test/automations-b-schema.test.ts`: 5 passed; 8 CI-only fail to connect (`withTestAccount`)
+- `src/test/consent-ledger-schema.test.ts`: 15 passed
+- `src/test/contacts-marketing-optout-schema.test.ts`: 3 passed
+- `src/test/schema-grants-guard.test.ts`: 6 passed
+- `src/test/server-only-writes-grants.test.ts`: 27 passed
+- `src/consent.test.ts`: 13 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4321 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+22 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **sort ascending** — in `src/consent.ts`: `const t = Date.parse(b.occurred_at) - Date.parse(a.occurred_at);` → `const t = Date.parse(a.occurred_at) - Date.parse(b.occurred_at);`; turns red 3 tests:
+    - consentStateOf — spec §3's table resubscribed after revoked is allowed; revoked after resubscribed is stopped (mutation: sort ascending → FAILS)
+    - consentStateOf — spec §3's table a release newer than a keyword STOP lifts it, so the reducer alone cannot guard it: spec §3 line 153 puts that guard in PR-2's release function; a stop AFTER a release is stopped
+    - consentStateOf — spec §3's table compares INSTANTS, not strings (mutation: compare occurred_at as strings → FAILS)
+2. **string compare** — in `src/consent.ts`: `const t = Date.parse(b.occurred_at) - Date.parse(a.occurred_at);` → `const t = b.occurred_at < a.occurred_at ? -1 : b.occurred_at > a.occurred_at ? 1 : 0;`; turns red 1 test:
+    - consentStateOf — spec §3's table compares INSTANTS, not strings (mutation: compare occurred_at as strings → FAILS)
+3. **granted decides** — in `src/consent.ts`: `export const DECIDING_ACTIONS = ["revoked", "held", "hold_released", "resubscribed"] as const` → `export const DECIDING_ACTIONS = ["revoked", "held", "hold_released", "resubscribed", "granted"] as const`; turns red 2 tests:
+    - consentStateOf — spec §3's table granted NEVER decides, even newest (mutation: count granted as deciding → allowed, FAILS)
+    - readConsentState asks for the newest deciding row of that address, newest first by time then id, one row
+4. **no id tiebreak** — in `src/consent.ts`: `return t !== 0 ? t : b.id < a.id ? -1 : b.id > a.id ? 1 : 0;` → `return t;`; turns red 1 test:
+    - consentStateOf — spec §3's table the same instant: the larger id wins (mutation: drop the id tiebreak → order-dependent, FAILS one way)
+5. **read error allowed** — in `src/consent.ts`: ``  if (error) throw new Error(`readConsentState failed: ${error.message}`);`` → `  if (error) return { state: "allowed" };`; turns red 1 test:
+    - readConsentState THROWS on a read error (the gate fails closed on it; mutation: return allowed → FAILS)
+6. **carrier always append** — in `src/consent.ts`: delete `  if (now.state === "stopped") return "already_stopped";⏎`; turns red 1 test:
+    - recordCarrierBlock an address already stopped gets NO second row (spec §4.3 idempotency; mutation: always append → FAILS)
+7. **held as stopped** — in `src/consent.ts`: `state: newest.action === "revoked" ? "stopped" : "held",` → `state: "stopped",`; turns red 1 test:
+    - consentStateOf — spec §3's table held is held
+8. **grant update+delete to service_role** — SQL run on `post` after 0054: `grant update, delete on public.consent_events to service_role`; turns red 3 tests:
+    - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users the whole grant set is SELECT for authenticated and SELECT, INSERT for service_role, nothing for anon (mutation: drop `revoke ... from service_role` → service_role keeps UPDATE and DELETE, FAILS; grant update to authenticated → FAILS)
+    - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users no role holds UPDATE, DELETE, TRUNCATE or MAINTAIN, which information_schema cannot see (mutation: grant maintain to service_role → FAILS)
+    - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users service_role's UPDATE and DELETE are refused by the grant, 42501 naming the table (mutation: grant update, delete to service_role → FAILS)
+9. **grant maintain to service_role** — SQL run on `post` after 0054: `grant maintain on public.consent_events to service_role`; turns red 1 test:
+    - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users no role holds UPDATE, DELETE, TRUNCATE or MAINTAIN, which information_schema cannot see (mutation: grant maintain to service_role → FAILS)
+10. **rls off** — SQL run on `post` after 0054: `alter table public.consent_events disable row level security`; turns red 3 tests:
+    - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users row level security is on, with one SELECT policy for authenticated (mutation: disable row level security → FAILS)
+    - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users a client reads its own account's rows and not another's; a client token has no app_role claim (mutation: using (true) → the B row is visible, FAILS)
+    - schema guard: every public table, view, materialized view and foreign table has row level security enabled (mutation: disable it on any table, or create any view -> FAILS naming it)
+11. **policy using true** — SQL run on `post` after 0054: `drop policy consent_events_read on public.consent_events; create policy consent_events_read on public.consent_events for select to authenticated using (true)`; turns red 1 test:
+    - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users a client reads its own account's rows and not another's; a client token has no app_role claim (mutation: using (true) → the B row is visible, FAILS)
+12. **grant insert to authenticated** — SQL run on `post` after 0054: `grant insert on public.consent_events to authenticated`; turns red 3 tests:
+    - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users the whole grant set is SELECT for authenticated and SELECT, INSERT for service_role, nothing for anon (mutation: drop `revoke ... from service_role` → service_role keeps UPDATE and DELETE, FAILS; grant update to authenticated → FAILS)
+    - 0054 consent_events: append-only by grants, RLS on, SELECT for the account's users a client cannot insert, even into its own account (42501 on the grant) (mutation: grant insert to authenticated → FAILS)
+    - schema guard: every public table, view, materialized view and foreign table gives anon nothing and authenticated exactly the allow-listed writes (mutation: re-grant insert on messages -> FAILS)
+13. **drop address check** — SQL run on `post` after 0054: `alter table public.consent_events drop constraint consent_events_address_check`; turns red 1 test:
+    - 0054 consent_events: shape an SMS address must be E.164 and an email address lowercased and trimmed (mutation: drop consent_events_address_check → FAILS)
+14. **drop note check** — SQL run on `post` after 0054: `alter table public.consent_events drop constraint consent_events_note_check`; turns red 1 test:
+    - 0054 consent_events: shape a staff resubscribe needs a non-blank note; a keyword resubscribe does not (mutation: drop consent_events_note_check → FAILS)
+15. **drop actor check** — SQL run on `post` after 0054: `alter table public.consent_events drop constraint consent_events_actor_check`; turns red 1 test:
+    - 0054 consent_events: shape a staff or staff_undo row names its actor (mutation: drop consent_events_actor_check → FAILS)
+16. **drop evidence check** — SQL run on `post` after 0054: `alter table public.consent_events drop constraint consent_events_evidence_check`; turns red 1 test:
+    - 0054 consent_events: shape the closed lists refuse an unknown action or method, and evidence is an object with an excerpt of at most 160 characters
+17. **plain contact fk** — SQL run on `post` after 0054: `alter table public.consent_events drop constraint consent_events_contact_fkey, add constraint consent_events_contact_fkey foreign key (contact_id) references public.contacts(id) on delete set null`; turns red 1 test:
+    - 0054 consent_events: shape the contact must be the row's own account's (mutation: a plain FK on contact_id → the crossed insert succeeds, FAILS)
+18. **contact fk cascade** — SQL run on `post` after 0054: `alter table public.consent_events drop constraint consent_events_contact_fkey, add constraint consent_events_contact_fkey foreign key (account_id, contact_id) references public.contacts(account_id, id) on delete cascade`; turns red 1 test:
+    - 0054 consent_events: deletes, as the roles that make them a contact deleted by service_role nulls contact_id and keeps the row, though service_role holds no UPDATE (mutation: on delete cascade → the row is gone, FAILS; on delete set null without (contact_id) → 23502 on account_id, FAILS)
+19. **contact fk set null both** — SQL run on `post` after 0054: `alter table public.consent_events drop constraint consent_events_contact_fkey, add constraint consent_events_contact_fkey foreign key (account_id, contact_id) references public.contacts(account_id, id) on delete set null`; turns red 1 test:
+    - 0054 consent_events: deletes, as the roles that make them a contact deleted by service_role nulls contact_id and keeps the row, though service_role holds no UPDATE (mutation: on delete cascade → the row is gone, FAILS; on delete set null without (contact_id) → 23502 on account_id, FAILS)
+20. **account fk restrict** — SQL run on `post` after 0054: `alter table public.consent_events drop constraint consent_events_account_id_fkey, add constraint consent_events_account_id_fkey foreign key (account_id) references public.accounts(id) on delete restrict`; turns red 1 test:
+    - 0054 consent_events: deletes, as the roles that make them an account deleted by service_role takes its ledger with it, though service_role holds no DELETE (mutation: account_id on delete restrict → the delete FAILS)
+21. **revoke flag grant** — SQL run on `post` after 0054: `revoke update (phone_country_unconfirmed) on public.contacts from authenticated`; turns red 4 tests:
+    - 0054 contacts.phone_country_unconfirmed and the textback source the flag is boolean, not null, default false, and client-updatable by name (mutation: drop the grant → the client update is 42501, FAILS)
+    - 0049 contacts.marketing_email_opted_out_at is writable by the client role through 0053's column grant
+    - schema guard: every public table, view, materialized view and foreign table gives anon nothing and authenticated exactly the allow-listed writes (mutation: re-grant insert on messages -> FAILS)
+    - 0053: server-only tables, at the catalogue contacts and opportunities: UPDATE is exactly the operator columns (mutation: add reactivation_sent_at -> FAILS)
+22. **source list without textback** — SQL run on `post` after 0054: `alter table public.automation_log drop constraint automation_log_source_check, add constraint automation_log_source_check check (source in ('reminders','followups','review_request','no_show_nudge','sms_reminder','instant_reply','weekly_report','concierge','voice','appointment_confirm','referral_ask','reactivation','quote_followup'))`; turns red 2 tests:
+    - 0047 - the catalogue, read directly both CHECKs list every value, eight keys and fourteen sources (0054 added textback), in one read
+    - 0054 contacts.phone_country_unconfirmed and the textback source automation_log accepts source 'textback' and still refuses an unknown one (mutation: leave 0047's list → FAILS)
+
+- [ ] **Step 6: The whole db suite on the replica, before and after.** Run the full db suite against `pre` with the parent commit checked out and against `post` with this commit, JSON reporter both times, and diff the per-test statuses. Expected at this commit: no test flips from pass to fail; the only new local failure is `consent-ledger-live.test.ts` (CI only); every other difference is a new or renamed test passing. The failures both runs share are the `withTestAccount`/`serviceDb` tests, which need the CI project. For scale, measured on the finished tree (all 16 tasks) against the base: 445 fail on `pre`; 447 on `post`, the same 443 plus the four CI-only tests of Tasks 1 and 2, less the two quiet-accessor tests Task 10 deletes; 100 new tests pass; no test flips.
+
+- [ ] **Step 7: Commit (locally; never push)**
+
+```bash
+git add "packages/db/src/test/consent-ledger-schema.test.ts" \
+        "packages/db/src/test/schema-grants-guard.test.ts" \
+        "packages/db/src/test/server-only-writes-grants.test.ts" \
+        "packages/db/src/test/contacts-marketing-optout-schema.test.ts" \
+        "packages/db/src/test/automations-b-schema.test.ts" \
+        "packages/db/src/consent.test.ts" \
+        "packages/db/src/test/consent-ledger-live.test.ts" \
+        "packages/db/supabase/migrations/0054_consent_ledger.sql" \
+        "packages/db/src/consent.ts" \
+        "packages/db/src/index.ts" \
+        "packages/db/src/account-teardown.ts"
+git commit -m "feat(db): 0054 — the consent ledger, the phone-country flag, the textback source; consent.ts"
+```
+
+---
+
+### Task 2: F-009: `normalisePhone`, and the contacts write path stores E.164 and the flag
+
+**Owner:** bis-crm. **Lane:** A (Phase 1). **Depends on:** None in code (the new column is read only at run time, so this compiles and unit-tests without Task 1). Lane A order puts it after Task 1.
+
+F-009 (spec §4.1 item 1). One function decides what every typed or spoken number becomes, and it lives in `packages/db` because the contact write path (`createContact`, `updateContact`, `fillContactBlanks`, the CSV import's dedupe key) is there; the web app reaches it as `@bis/db/phone`, a server-only subpath, so libphonenumber's metadata never ships to a browser (Task 14's client code imports its TYPE only).
+
+**Files:**
+- Create: `packages/db/src/phone.test.ts` (42 tests)
+- Create: `packages/db/src/contacts-phone.test.ts` (8 tests)
+- Create: `packages/db/src/test/contacts-phone-live.test.ts` (CI only)
+- Modify: `packages/db/package.json` (an intermediate state; a later task finishes it)
+- Modify: `pnpm-lock.yaml`
+- Create: `packages/db/src/phone.ts`
+- Modify: `packages/db/src/contacts.ts`
+- Modify: `packages/db/src/contact-import.ts`
+- Modify: `packages/db/src/index.ts`
+
+**Interfaces:**
+- Produces, `@bis/db/phone` (`packages/db/src/phone.ts`, new package export `"./phone"`):
+  - `type PhoneCountry = "US" | "MX"`; `type NormalisedPhone = { e164: string; unconfirmed: boolean }`
+  - `normalisePhone(raw: string | null | undefined): NormalisedPhone | null`
+  - `phoneForCountry(raw, country: PhoneCountry): string | null` (the alert phone, Task 13)
+  - `repickPhoneCountry(stored, country: PhoneCountry): string | null` (the drawer's pick, Task 14)
+  - `couldBeMexican(stored): boolean` (the backfill, Task 3)
+- Produces, `@bis/db`: `phoneFields(raw) → { phone, phone_country_unconfirmed }`, `readPhoneCountryFlag(db, accountId, contactId): Promise<boolean>` (throws on a read error), `setContactPhoneCountry(db, accountId, contactId, { expectedPhone, phone, unconfirmed }, actorId): Promise<"updated" | "changed">`. `phoneKeyOf` is exported from `contacts.ts` for `contact-import.ts` only.
+- `contacts.COLS` gains `phone_country_unconfirmed`, so `getContact`/`listContacts` rows carry it.
+
+- [ ] **Step 0: Add the dependency (exact version, the db package only).**
+
+```bash
+pnpm --filter @bis/db add libphonenumber-js@1.13.14 --save-exact
+```
+
+Expected: `packages/db/package.json` gains `"libphonenumber-js": "1.13.14"` under `dependencies`, and `pnpm-lock.yaml` gains that package and nothing else new; pnpm also rewrites four `eslint-import-resolver-typescript` / `eslint-module-utils` snapshot keys into their fully qualified peer form (the same versions; measured on this machine's pnpm, the lock diff below). `pnpm install --frozen-lockfile --prefer-offline` accepts the result (it did in the replay, E5). Then add the `"./phone"` export by hand (the package.json diff below). Every other lane runs `pnpm install --frozen-lockfile --prefer-offline` after Checkpoint A.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `packages/db/src/phone.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { normalisePhone, phoneForCountry, repickPhoneCountry, couldBeMexican } from "./phone";
+
+/**
+ * F-009's table (consent chain spec §8, "normalisePhone: a table of US-only,
+ * MX-only, both, neither, +52 1, 00 52, carrier-supplied and border-city
+ * numbers"). The ten-digit rows are real area codes whose verdicts were
+ * measured against libphonenumber-js 1.13.14's max metadata on 2026-09-26
+ * (plan, External facts).
+ */
+describe("normalisePhone: ten digits, judged by country", () => {
+  it.each([
+    // [label, input, e164, unconfirmed]
+    ["McAllen, US only (956)", "(956) 292-1696", "+19562921696", false],
+    ["El Paso, US only (915)", "915-234-5678", "+19152345678", false],
+    ["Toronto, NANP only (416)", "416 555 0199", "+14165550199", false],
+    ["Reynosa, MX only (899)", "899 922 1234", "+528999221234", false],
+    ["Matamoros, MX only (868; +1 868 is Trinidad and invalid here)", "8688123456", "+528688123456", false],
+    ["Monterrey, MX only (81)", "81 8123 4567", "+528181234567", false],
+    ["Juarez, MX only (656)", "656.123.4567", "+526561234567", false],
+    ["CDMX 55 is also New Jersey 551: BOTH", "55 1234 5678", "+15512345678", true],
+    ["an invalid exchange in 956: NEITHER", "956 123 4567", "+19561234567", true],
+    ["junk ten digits: NEITHER", "123-456-7890", "+11234567890", true],
+  ])("%s", (_label, input, e164, unconfirmed) => {
+    expect(normalisePhone(input)).toEqual({ e164, unconfirmed });
+  });
+});
+
+describe("normalisePhone: a number with a country code is kept as given", () => {
+  it.each([
+    ["+1, as a carrier sends it", "+19562921696", "+19562921696"],
+    ["+1 of an ambiguous number is NOT flagged: the code is the confirmation", "+15512345678", "+15512345678"],
+    ["+52, as a carrier sends it", "+528999221234", "+528999221234"],
+    ["+52 1 drops the retired mobile 1", "+52 1 899 922 1234", "+528999221234"],
+    ["00 52 (dialled from Mexico)", "00 52 899 922 1234", "+528999221234"],
+    ["00 52 1 drops the 1 too", "0052 1 899 922 1234", "+528999221234"],
+    ["011 52 (dialled from the US)", "011 52 899 922 1234", "+528999221234"],
+    ["1 + ten digits is the NANP trunk prefix", "1 (956) 292-1696", "+19562921696"],
+    ["a UK number typed with +", "+44 20 7946 0958", "+442079460958"],
+  ])("%s", (_label, input, e164) => {
+    expect(normalisePhone(input)).toEqual({ e164, unconfirmed: false });
+  });
+});
+
+describe("normalisePhone: nothing to text", () => {
+  it.each([[""], ["   "], [null], [undefined], ["12345"], ["call me"], ["+0 123 4567 8901"]])("%j → null", (input) => {
+    expect(normalisePhone(input)).toBeNull();
+  });
+});
+
+describe("phoneForCountry: a number typed beside a country choice", () => {
+  it("ten national digits take the chosen country", () => {
+    expect(phoneForCountry("956 292 1696", "US")).toBe("+19562921696");
+    expect(phoneForCountry("956 292 1696", "MX")).toBe("+529562921696");
+    expect(phoneForCountry("1 956 292 1696", "US")).toBe("+19562921696");
+    expect(phoneForCountry("52 1 899 922 1234", "MX")).toBe("+528999221234");
+  });
+
+  it("a typed country code must agree with the choice (mutation: return the typed E.164 regardless → FAILS)", () => {
+    expect(phoneForCountry("+52 899 922 1234", "MX")).toBe("+528999221234");
+    expect(phoneForCountry("+52 899 922 1234", "US")).toBeNull();
+    expect(phoneForCountry("+1 956 292 1696", "MX")).toBeNull();
+    expect(phoneForCountry("011 52 899 922 1234", "MX")).toBe("+528999221234");
+    expect(phoneForCountry("+44 20 7946 0958", "US")).toBeNull();
+  });
+
+  it("anything that is not ten national digits is null", () => {
+    expect(phoneForCountry("", "US")).toBeNull();
+    expect(phoneForCountry("12345", "MX")).toBeNull();
+  });
+});
+
+describe("repickPhoneCountry: the drawer's country pick re-reads the stored digits", () => {
+  it("a +1 reading becomes +52 and back (mutation: keep a stored + as given → the MX pick stays +1, FAILS)", () => {
+    expect(repickPhoneCountry("+15512345678", "MX")).toBe("+525512345678");
+    expect(repickPhoneCountry("+525512345678", "US")).toBe("+15512345678");
+    expect(repickPhoneCountry("(551) 234-5678", "MX")).toBe("+525512345678");
+  });
+
+  it("a stored phone that is not a ten-digit reading is refused, never guessed", () => {
+    expect(repickPhoneCountry("+442079460958", "US")).toBeNull();
+    expect(repickPhoneCountry(null, "MX")).toBeNull();
+  });
+});
+
+describe("couldBeMexican: the 0054 backfill's test", () => {
+  it.each([
+    // [label, stored, flagged]
+    ["+1 and ten digits valid under +52 (CDMX 55, also NJ 551)", "+15512345678", true],
+    ["+1 and a Reynosa number the old toE164 made American", "+18999221234", true],
+    ["1 and ten digits, no plus, valid under +52", "1 (899) 922-1234", true],
+    ["+1 McAllen, not a Mexican number", "+19562921696", false],
+    ["bare ten digits valid under both", "55 1234 5678", true],
+    ["bare ten digits valid under neither (a write would flag it too)", "956 123 4567", true],
+    ["bare Reynosa: the gate already reads it as +52, no flag", "899 922 1234", false],
+    ["bare McAllen", "(956) 292-1696", false],
+    ["already +52", "+528999221234", false],
+    ["a UK number", "+44 20 7946 0958", false],
+    ["blank", "", false],
+  ])("%s → %s", (_label, stored, flagged) => {
+    expect(couldBeMexican(stored)).toBe(flagged);
+  });
+});
+```
+
+Create `packages/db/src/contacts-phone.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { phoneFields, phoneKeyOf } from "./contacts";
+
+/**
+ * F-009 on write (consent chain spec §4.1 item 1): every contact write
+ * stores the normalised number and the flag together, and dedupes on the
+ * key of what it WILL store. Pure; the live writes are CI-only
+ * (src/test/contacts-phone-live.test.ts).
+ */
+describe("phoneFields", () => {
+  it("a US number is stored as E.164, unflagged", () => {
+    expect(phoneFields("(956) 292-1696")).toEqual({ phone: "+19562921696", phone_country_unconfirmed: false });
+  });
+
+  it("a plainly Mexican ten digits is stored as +52, unflagged (mutation: always +1 → FAILS)", () => {
+    expect(phoneFields("899 922 1234")).toEqual({ phone: "+528999221234", phone_country_unconfirmed: false });
+  });
+
+  it("an ambiguous ten digits is stored as +1 AND flagged (mutation: drop the flag → FAILS)", () => {
+    expect(phoneFields("55 1234 5678")).toEqual({ phone: "+15512345678", phone_country_unconfirmed: true });
+  });
+
+  it("what the normaliser cannot read is kept as typed, trimmed, unflagged — never dropped", () => {
+    expect(phoneFields("  ext. 12  ")).toEqual({ phone: "ext. 12", phone_country_unconfirmed: false });
+  });
+
+  it("blank is null, unflagged", () => {
+    expect(phoneFields("   ")).toEqual({ phone: null, phone_country_unconfirmed: false });
+    expect(phoneFields(null)).toEqual({ phone: null, phone_country_unconfirmed: false });
+  });
+});
+
+describe("phoneKeyOf — the dedupe key of the number as it will be stored", () => {
+  it("a Mexican number keys on its +52 digits, so it does NOT collide with the same ten digits under +1 (mutation: key the raw digits → FAILS)", () => {
+    expect(phoneKeyOf("899 922 1234")).toBe("528999221234");
+    expect(phoneKeyOf("+1 899 922 1234")).not.toBe(phoneKeyOf("899 922 1234"));
+  });
+
+  it("the same US number spelled two ways keys the same", () => {
+    expect(phoneKeyOf("(956) 292-1696")).toBe(phoneKeyOf("+19562921696"));
+  });
+
+  it("blank is the empty key", () => {
+    expect(phoneKeyOf("")).toBe("");
+    expect(phoneKeyOf(undefined)).toBe("");
+  });
+});
+```
+
+Create `packages/db/src/test/contacts-phone-live.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { withTestAccount } from "./fixtures";
+import { createContact, readPhoneCountryFlag, setContactPhoneCountry } from "../contacts";
+
+/**
+ * F-009's write path against the live table, on the CI project only
+ * (withTestAccount + serviceDb). The pure halves are src/contacts-phone.test.ts.
+ */
+describe("F-009 on the contacts table (CI only: withTestAccount + serviceDb)", () => {
+  it("createContact stores an ambiguous number as +1 AND flagged, and dedupes the same number typed another way (mutation: store the raw input → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId, { firstName: "Amb", phone: "55 1234 5678" }, "user_test");
+      const { data } = await db.from("contacts").select("phone, phone_country_unconfirmed").eq("id", a.id).single();
+      expect(data).toEqual({ phone: "+15512345678", phone_country_unconfirmed: true });
+      expect(await readPhoneCountryFlag(db, accountId, a.id)).toBe(true);
+      const again = await createContact(db, accountId, { firstName: "Amb2", phone: "(551) 234-5678" }, "user_test");
+      expect(again.id).toBe(a.id);
+    });
+  });
+
+  it("a Reynosa number is stored +52 and does NOT dedupe onto the same ten digits under +1 (mutation: key the raw digits → one contact, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const us = await createContact(db, accountId, { firstName: "Us", phone: "+18999221234" }, "user_test");
+      const mx = await createContact(db, accountId, { firstName: "Mx", phone: "899 922 1234" }, "user_test");
+      expect(mx.id).not.toBe(us.id);
+      const { data } = await db.from("contacts").select("phone").eq("id", mx.id).single();
+      expect(data).toEqual({ phone: "+528999221234" });
+    });
+  });
+
+  it("setContactPhoneCountry writes phone and flag together only while the phone is unchanged, and flags a twin (mutation: drop the expectedPhone guard → 'updated', FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const flagged = await createContact(db, accountId, { firstName: "Flag", phone: "55 1234 5678" }, "user_test");
+      const twin = await createContact(db, accountId, { firstName: "Twin", phone: "+525512345678" }, "user_test");
+
+      expect(await setContactPhoneCountry(db, accountId, flagged.id,
+        { expectedPhone: "+19999999999", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("changed");
+      expect(await readPhoneCountryFlag(db, accountId, flagged.id)).toBe(true);
+
+      expect(await setContactPhoneCountry(db, accountId, flagged.id,
+        { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("updated");
+      const { data } = await db.from("contacts").select("phone, phone_country_unconfirmed").eq("id", flagged.id).single();
+      expect(data).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
+
+      const [a, b] = [flagged.id, twin.id].sort();
+      const { data: flags } = await db.from("contact_duplicate_flags").select("reason")
+        .eq("account_id", accountId).eq("contact_a", a).eq("contact_b", b);
+      expect(flags).toEqual([{ reason: "phone_country_pick" }]);
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd packages/db
+pnpm exec vitest run src/phone.test.ts src/contacts-phone.test.ts
+```
+
+Expected (the staged replay's RED run):
+- `src/contacts-phone.test.ts`: **8 failing** that Step 4 turns green:
+  - phoneFields a US number is stored as E.164, unflagged
+  - phoneFields a plainly Mexican ten digits is stored as +52, unflagged (mutation: always +1 → FAILS)
+  - phoneFields an ambiguous ten digits is stored as +1 AND flagged (mutation: drop the flag → FAILS)
+  - phoneFields what the normaliser cannot read is kept as typed, trimmed, unflagged — never dropped
+  - phoneFields blank is null, unflagged
+  - phoneKeyOf — the dedupe key of the number as it will be stored a Mexican number keys on its +52 digits, so it does NOT collide with the same ten digits under +1 (mutation: key the raw digits → FAILS)
+  - phoneKeyOf — the dedupe key of the number as it will be stored the same US number spelled two ways keys the same
+  - phoneKeyOf — the dedupe key of the number as it will be stored blank is the empty key
+- `src/phone.test.ts`: **fails to load** (42 tests once it loads): `Cannot find module './phone' imported from packages/db/src/phone.test.ts`
+
+- [ ] **Step 3: Implement**
+
+Apply to `packages/db/package.json` (against the task's parent commit):
+
+```diff
+@@ -4,7 +4,8 @@
+   "type": "module",
+   "exports": {
+     ".": "./src/index.ts",
+-    "./search-term": "./src/search-term.ts"
++    "./search-term": "./src/search-term.ts",
++    "./phone": "./src/phone.ts"
+   },
+   "scripts": {
+     "typecheck": "tsc --noEmit",
+@@ -26,6 +27,7 @@
+     "vitest": "^4.1.10"
+   },
+   "dependencies": {
+-    "@supabase/supabase-js": "^2.110.8"
++    "@supabase/supabase-js": "^2.110.8",
++    "libphonenumber-js": "1.13.14"
+   }
+ }
+```
+
+Expected lock change in `pnpm-lock.yaml` (against the task's parent commit):
+
+```diff
+@@ -125,6 +125,9 @@ importers:
+       '@supabase/supabase-js':
+         specifier: ^2.110.8
+         version: 2.110.8
++      libphonenumber-js:
++        specifier: 1.13.14
++        version: 1.13.14
+     devDependencies:
+       '@types/pg':
+         specifier: ^8.20.0
+@@ -2810,6 +2813,9 @@ packages:
+     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
+     engines: {node: '>= 0.8.0'}
+ 
++  libphonenumber-js@1.13.14:
++    resolution: {integrity: sha512-llihgCcx0BFLksecLP+x1J+6JDE1GsXS1RN/LoPF6qcwpeQcnjj0lcvZxY8AzbEpYwyZWPZW/nDuqkqzm3amiw==}
++
+   lightningcss-android-arm64@1.32.0:
+     resolution: {integrity: sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg==}
+     engines: {node: '>= 12.0.0'}
+@@ -5926,7 +5932,7 @@ snapshots:
+       '@next/eslint-plugin-next': 16.3.6(eslint@9.39.5(jiti@2.7.0))
+       eslint: 9.39.5(jiti@2.7.0)
+       eslint-import-resolver-node: 0.3.10
+-      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.5(jiti@2.7.0))
++      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0))
+       eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.5(jiti@2.7.0))
+       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.39.5(jiti@2.7.0))
+       eslint-plugin-react: 7.37.5(eslint@9.39.5(jiti@2.7.0))
+@@ -5949,7 +5955,7 @@ snapshots:
+     transitivePeerDependencies:
+       - supports-color
+ 
+-  eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.5(jiti@2.7.0)):
++  eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)):
+     dependencies:
+       '@nolyfill/is-core-module': 1.0.39
+       debug: 4.4.3
+@@ -5964,14 +5970,14 @@ snapshots:
+     transitivePeerDependencies:
+       - supports-color
+ 
+-  eslint-module-utils@2.14.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.5(jiti@2.7.0)):
++  eslint-module-utils@2.14.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)):
+     dependencies:
+       debug: 3.2.7
+     optionalDependencies:
+       '@typescript-eslint/parser': 8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+       eslint: 9.39.5(jiti@2.7.0)
+       eslint-import-resolver-node: 0.3.10
+-      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.5(jiti@2.7.0))
++      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0))
+     transitivePeerDependencies:
+       - supports-color
+ 
+@@ -5986,7 +5992,7 @@ snapshots:
+       doctrine: 2.1.0
+       eslint: 9.39.5(jiti@2.7.0)
+       eslint-import-resolver-node: 0.3.10
+-      eslint-module-utils: 2.14.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.5(jiti@2.7.0))
++      eslint-module-utils: 2.14.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0)))(eslint@9.39.5(jiti@2.7.0))
+       hasown: 2.0.4
+       is-core-module: 2.16.2
+       is-glob: 4.0.3
+@@ -6483,6 +6489,8 @@ snapshots:
+       prelude-ls: 1.2.1
+       type-check: 0.4.0
+ 
++  libphonenumber-js@1.13.14: {}
++
+   lightningcss-android-arm64@1.32.0:
+     optional: true
+```
+
+Create `packages/db/src/phone.ts`:
+
+```ts
+import { parsePhoneNumberFromString } from "libphonenumber-js/max";
+
+/**
+ * F-009: every typed or spoken number becomes E.164 HERE, and nowhere else
+ * (consent chain spec §4.1 item 1, choice 30). It replaces apps/web's
+ * `toE164`, which turned ANY ten digits into `+1`, so a Reynosa or Matamoros
+ * number a caller spoke was stored as a US number and texted as one.
+ *
+ * The rules, in order:
+ *   1. A number that carries a country code is kept as given: `+…`, or the
+ *      international prefixes `011` (dialled from the US) and `00` (from
+ *      Mexico). `+52 1 …` (the retired Mexican mobile `1`) drops the `1`.
+ *   2. Eleven digits starting with `1` is the NANP trunk prefix a person
+ *      types: `+1…`, kept as given.
+ *   3. Ten digits: valid ONLY under +1 (the NANP plan: the US, Canada,
+ *      Puerto Rico, the Caribbean) → `+1`; valid ONLY under +52 → `+52`;
+ *      valid under both, or under neither → `+1` (today's reading, so the
+ *      stored `phone_key` does not move) AND `unconfirmed`, so the send gate
+ *      holds it until a person picks the country (decision 3).
+ *   4. Any other 8–15 digits → `+` and the digits, as `toE164` did.
+ *   5. Anything else → null: nothing we can text.
+ *
+ * Validity comes from libphonenumber-js's MAX metadata. The default MIN
+ * metadata validates by LENGTH only, so every ten digits is "valid" as a
+ * Mexican number and every US number would read as ambiguous (measured
+ * 2026-09-26 on libphonenumber-js 1.13.14: 956-292-1696 is MX-valid under
+ * min and MX-invalid under max).
+ *
+ * Numbers that arrive from the CARRIER (an inbound caller, an inbound
+ * sender) already carry `+`, so rule 1 keeps them and they are never
+ * `unconfirmed`.
+ */
+export type PhoneCountry = "US" | "MX";
+
+export type NormalisedPhone = {
+  /** E.164, e.g. "+19565550100". */
+  e164: string;
+  /** True only for a bare ten-digit number valid under both +1 and +52, or under neither. */
+  unconfirmed: boolean;
+};
+
+const CODE: Record<PhoneCountry, string> = { US: "1", MX: "52" };
+
+function digitsOf(raw: string): string {
+  return raw.replace(/[^0-9]/g, "");
+}
+
+/** `+521XXXXXXXXXX` → `+52XXXXXXXXXX`. Mexico retired the mobile `1` in 2019. */
+function dropRetiredMexicanOne(e164: string): string {
+  return /^\+521\d{10}$/.test(e164) ? `+52${e164.slice(4)}` : e164;
+}
+
+function international(digits: string): NormalisedPhone | null {
+  if (digits.length < 8 || digits.length > 15 || digits.startsWith("0")) return null;
+  return { e164: dropRetiredMexicanOne(`+${digits}`), unconfirmed: false };
+}
+
+function validUnder(tenDigits: string, country: PhoneCountry): boolean {
+  return parsePhoneNumberFromString(tenDigits, country)?.isValid() === true;
+}
+
+export function normalisePhone(raw: string | null | undefined): NormalisedPhone | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  const digits = digitsOf(text);
+  if (text.startsWith("+")) return international(digits);
+  if (digits.startsWith("011")) return international(digits.slice(3));
+  if (digits.startsWith("00")) return international(digits.slice(2));
+  if (digits.length === 11 && digits.startsWith("1")) return { e164: `+${digits}`, unconfirmed: false };
+  if (digits.length === 10) {
+    const us = validUnder(digits, "US");
+    const mx = validUnder(digits, "MX");
+    if (mx && !us) return { e164: `+52${digits}`, unconfirmed: false };
+    return { e164: `+1${digits}`, unconfirmed: us === mx };
+  }
+  if (digits.length >= 8 && digits.length <= 15) {
+    return { e164: dropRetiredMexicanOne(`+${digits}`), unconfirmed: false };
+  }
+  return null;
+}
+
+/**
+ * The ten national digits of a number that is (or was read as) +1 or +52:
+ * `+1XXXXXXXXXX`, `1XXXXXXXXXX`, `+52XXXXXXXXXX`, `+521XXXXXXXXXX`, or bare
+ * ten digits, with or without separators. Null for anything else.
+ */
+function nationalTen(raw: string): string | null {
+  let digits = digitsOf(raw);
+  if (digits.startsWith("011")) digits = digits.slice(3);
+  else if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.length === 10) return digits;
+  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  if (digits.length === 12 && digits.startsWith("52")) return digits.slice(2);
+  if (digits.length === 13 && digits.startsWith("521")) return digits.slice(3);
+  return null;
+}
+
+/**
+ * A number TYPED beside a country control (the alert phone, spec §6).
+ * Without a country code, its ten national digits take the chosen country.
+ * WITH one (`+`, `00`, `011`), that code must be the chosen country's, or the
+ * answer is null: a typed `+52` under "US (+1)" is a contradiction to show
+ * the person, not one to settle for them.
+ */
+export function phoneForCountry(raw: string | null | undefined, country: PhoneCountry): string | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  const digits = digitsOf(text);
+  const explicit = text.startsWith("+") ? digits
+    : digits.startsWith("011") ? digits.slice(3)
+    : digits.startsWith("00") ? digits.slice(2)
+    : null;
+  if (explicit !== null) {
+    const e164 = international(explicit)?.e164 ?? null;
+    if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null;
+    return nationalTen(e164) === null ? null : e164;
+  }
+  const national = nationalTen(text);
+  return national === null ? null : `+${CODE[country]}${national}`;
+}
+
+/**
+ * The contact drawer's "Mexico (+52)" / "US (+1)" (spec §6, F-009): the
+ * stored number's ten national digits, re-read under the country a person
+ * chose. A flagged number is always one of these shapes (the flag is only
+ * ever set on a ten-digit reading), so null means the stored phone changed
+ * under the drawer, and the pick must be refused, not guessed.
+ */
+export function repickPhoneCountry(stored: string | null | undefined, country: PhoneCountry): string | null {
+  const national = nationalTen(String(stored ?? ""));
+  return national === null ? null : `+${CODE[country]}${national}`;
+}
+
+/**
+ * The 0054 backfill's test (spec §4.1 item 1: "flag every stored `+1` number
+ * that is also a valid Mexican number"). A number stored WITH its +1 (or as
+ * `1` and ten digits) is flagged when its ten digits are valid under +52:
+ * the old `toE164` turned any ten digits into +1, so a Reynosa number spoken
+ * to Sofía or typed into a form could be sitting here as a US one. A bare
+ * ten-digit number is flagged exactly when a write today would flag it
+ * (`normalisePhone(...).unconfirmed`); a bare number valid only under +52 is
+ * not, because the gate already reads it as +52. Everything else: false.
+ * Whether the account has SEEN the number inbound is the SQL's half.
+ */
+export function couldBeMexican(stored: string | null | undefined): boolean {
+  const text = String(stored ?? "").trim();
+  const digits = digitsOf(text);
+  const plusOne = digits.length === 11 && digits.startsWith("1");
+  if (text.startsWith("+") || plusOne) return plusOne && validUnder(digits.slice(1), "MX");
+  return digits.length === 10 && normalisePhone(text)?.unconfirmed === true;
+}
+```
+
+Apply to `packages/db/src/contacts.ts` (against the task's parent commit):
+
+```diff
+@@ -1,6 +1,7 @@
+ import type { SupabaseClient } from "@supabase/supabase-js";
+ import { emit, type ActorType } from "./events";
+ import { sanitizeSearchTerm } from "./search-term";
++import { normalisePhone } from "./phone";
+ 
+ export type ContactInput = {
+   firstName?: string; lastName?: string; email?: string; phone?: string;
+@@ -17,14 +18,37 @@ export type ContactInput = {
+ // the detail page, which both show the "No marketing emails" switch off these
+ // two reads. Snake_case end to end, like every other column here.
+ const COLS =
+-  "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at, sort_name, marketing_email_opted_out_at";
++  "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at, sort_name, marketing_email_opted_out_at, phone_country_unconfirmed";
++
++/**
++ * A phone as the contact row stores it (F-009, consent chain spec §4.1 item
++ * 1): the E.164 `normalisePhone` reads, with its country flag; or, for input
++ * that does not read as a number at all ("call after 5", a partial), the
++ * trimmed text as typed with no flag — the CRM keeps what the operator wrote,
++ * and the send gate refuses it as no number. Blank is null.
++ *
++ * Exported for the country pick and its tests; every write in this module
++ * goes through it, so no path can store a number without its flag.
++ */
++export function phoneFields(raw: string | null | undefined): { phone: string | null; phone_country_unconfirmed: boolean } {
++  const trimmed = raw?.trim() || null;
++  if (!trimmed) return { phone: null, phone_country_unconfirmed: false };
++  const n = normalisePhone(trimmed);
++  return n ? { phone: n.e164, phone_country_unconfirmed: n.unconfirmed } : { phone: trimmed, phone_country_unconfirmed: false };
++}
++
++/** The dedupe key of a phone as it WILL be stored: `phoneDigits` of `phoneFields`. */
++export function phoneKeyOf(raw: string | null | undefined): string {
++  const { phone } = phoneFields(raw);
++  return phone ? phoneDigits(phone) : "";
++}
+ 
+ function toRow(input: Partial<ContactInput>) {
+   const row: Record<string, unknown> = {};
+   if (input.firstName !== undefined) row.first_name = input.firstName;
+   if (input.lastName !== undefined) row.last_name = input.lastName;
+   if (input.email !== undefined) row.email = input.email?.trim() || null;
+-  if (input.phone !== undefined) row.phone = input.phone?.trim() || null;
++  if (input.phone !== undefined) Object.assign(row, phoneFields(input.phone));
+   if (input.companyName !== undefined) row.company_name = input.companyName;
+   if (input.source !== undefined) row.source = input.source;
+   if (input.custom !== undefined) row.custom = input.custom;
+@@ -134,7 +158,7 @@ async function findDuplicate(
+     if (data && data.length > 0) result.emailMatch = data[0]!.id as string;
+   }
+ 
+-  const pKey = phone ? phoneDigits(phone) : "";
++  const pKey = phone ? phoneKeyOf(phone) : "";
+   if (pKey) {
+     const { data, error } = await db.from("contacts").select("id")
+       .eq("account_id", accountId).eq("phone_key", pKey).limit(1);
+@@ -150,8 +174,9 @@ export async function createContact(
+   actorType: ActorType = "user",
+ ): Promise<{ id: string; existing: boolean; flagged: boolean }> {
+   const email = input.email?.trim().toLowerCase();
+-  const phone = input.phone?.trim();
+-  const match = await findDuplicate(db, accountId, email || undefined, phone || undefined);
++  // The phone as it will be STORED, so the event names what the row holds.
++  const phone = phoneFields(input.phone).phone ?? undefined;
++  const match = await findDuplicate(db, accountId, email || undefined, phone);
+   const winner = match.emailMatch ?? match.phoneMatch;
+ 
+   // Two DIFFERENT existing contacts both look like this person. The row still
+@@ -250,9 +275,11 @@ export async function fillContactBlanks(
+ 
+   const filled = Object.keys(patch);
+   if (filled.length === 0) return [];
++  // The phone is stored as every write stores it, with its country flag.
++  const written = "phone" in patch ? { ...patch, ...phoneFields(String(patch.phone)) } : patch;
+ 
+   const { error } = await db.from("contacts")
+-    .update({ ...patch, updated_at: new Date().toISOString() })
++    .update({ ...written, updated_at: new Date().toISOString() })
+     .eq("account_id", accountId).eq("id", contactId);
+   if (error) throw new Error(`fillContactBlanks failed: ${error.message}`);
+   await emit(db, accountId, "contact.updated", actorId, { contactId, fields: filled }, actorType);
+@@ -548,3 +575,56 @@ export async function deleteContacts(
+   if (error) throw new Error(`deleteContacts failed: ${error.message}`);
+   return { deleted: (data ?? []).length, skippedBlocked: blocked.size };
+ }
++
++/**
++ * F-009's flag for one contact (0054): true when its stored phone's country
++ * is unknown and texts are held until a person picks it. A missing contact
++ * reads false: there is nothing to hold. THROWS on a read error; the send
++ * gate turns that into `blocked: ledger_unavailable` (it fails closed).
++ */
++export async function readPhoneCountryFlag(db: SupabaseClient, accountId: string, contactId: string): Promise<boolean> {
++  const { data, error } = await db.from("contacts").select("phone_country_unconfirmed")
++    .eq("account_id", accountId).eq("id", contactId).maybeSingle();
++  if (error) throw new Error(`readPhoneCountryFlag failed: ${error.message}`);
++  return (data as { phone_country_unconfirmed: boolean } | null)?.phone_country_unconfirmed === true;
++}
++
++/**
++ * The contact drawer's "Mexico (+52)" / "US (+1)" (F-009, spec §6): writes
++ * `phone` and `phone_country_unconfirmed` together, ONLY while the stored
++ * phone is still `expectedPhone` — a concurrent edit to the number wins and
++ * this answers "changed". The undo is the same call with the two phones
++ * swapped and the flag set again.
++ *
++ * A number that becomes some OTHER contact's (the flagged "+1 551…" picked as
++ * "+52 551…" when a Mexican caller's contact already holds +52 551…) is still
++ * written — the operator's answer is the truth about this row — and the pair
++ * goes onto contact_duplicate_flags (reason 'phone_country_pick'), the queue a
++ * merge tool reads. phone_key is not unique, so nothing refuses the write.
++ */
++export async function setContactPhoneCountry(
++  db: SupabaseClient, accountId: string, contactId: string,
++  input: { expectedPhone: string; phone: string; unconfirmed: boolean },
++  actorId: string, actorType: ActorType = "user",
++): Promise<"updated" | "changed"> {
++  const { data, error } = await db.from("contacts")
++    .update({ phone: input.phone, phone_country_unconfirmed: input.unconfirmed, updated_at: new Date().toISOString() })
++    .eq("account_id", accountId).eq("id", contactId).eq("phone", input.expectedPhone)
++    .select("id");
++  if (error) throw new Error(`setContactPhoneCountry failed: ${error.message}`);
++  if (!data?.length) return "changed";
++
++  const { data: twins, error: twinErr } = await db.from("contacts").select("id")
++    .eq("account_id", accountId).eq("phone_key", phoneDigits(input.phone)).neq("id", contactId).limit(1);
++  if (twinErr) throw new Error(`setContactPhoneCountry duplicate check failed: ${twinErr.message}`);
++  const twin = (twins ?? [])[0] as { id: string } | undefined;
++  if (twin) {
++    const [contactA, contactB] = [contactId, twin.id].sort();
++    const { error: flagErr } = await db.from("contact_duplicate_flags")
++      .insert({ account_id: accountId, contact_a: contactA, contact_b: contactB, reason: "phone_country_pick" });
++    if (flagErr && flagErr.code !== "23505") throw new Error(`contact duplicate flag failed: ${flagErr.message}`);
++  }
++  await emit(db, accountId, "contact.updated", actorId,
++    { contactId, fields: ["phone", "phone_country_unconfirmed"] }, actorType);
++  return "updated";
++}
+```
+
+Apply to `packages/db/src/contact-import.ts` (against the task's parent commit):
+
+```diff
+@@ -1,5 +1,5 @@
+ import type { SupabaseClient } from "@supabase/supabase-js";
+-import { createContact, updateContact, addTagToContacts, listTags, phoneDigits,
++import { createContact, updateContact, addTagToContacts, listTags, phoneDigits, phoneKeyOf,
+          type ContactInput } from "./contacts";
+ 
+ /**
+@@ -138,7 +138,9 @@ export async function applyImportBatch(
+ 
+   for (const row of rows) {
+     const email = row.input.email?.trim().toLowerCase() || undefined;
+-    const phoneKey = row.input.phone ? phoneDigits(row.input.phone.trim()) : "";
++    // The key of the phone as it WILL be stored (F-009), so a Mexican number
++    // typed as ten digits meets the +52 contact it belongs to.
++    const phoneKey = row.input.phone ? phoneKeyOf(row.input.phone) : "";
+     const hitId = (email && index.byEmail.get(email)) ||
+       (phoneKey && index.byPhone.get(phoneKey)) || undefined;
+```
+
+Apply to `packages/db/src/index.ts` (against the task's parent commit):
+
+```diff
+@@ -17,7 +17,7 @@ export { createContact, updateContact, listContacts, getContact,
+          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
+          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
+          type ContactInput, type SortKey, type SortDir } from "./contacts";
+-export { setMarketingEmailOptOut } from "./contacts";
++export { setMarketingEmailOptOut, readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
+ export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
+          CONSENT_METHODS, DECIDING_ACTIONS,
+          type ConsentChannel, type ConsentAction, type ConsentMethod, type ConsentRow,
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd packages/db
+pnpm exec vitest run src/phone.test.ts src/contacts-phone.test.ts
+pnpm typecheck
+cd ../.. && pnpm --filter web test
+```
+
+Expected (the staged replay's GREEN run):
+50 passed across the task's test files:
+- `src/contacts-phone.test.ts`: 8 passed
+- `src/phone.test.ts`: 42 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4321 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+10 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **min metadata** — in `src/phone.ts`: `libphonenumber-js/max` → `libphonenumber-js/min`; turns red 9 tests:
+    - phoneFields a US number is stored as E.164, unflagged
+    - normalisePhone: ten digits, judged by country McAllen, US only (956)
+    - normalisePhone: ten digits, judged by country El Paso, US only (915)
+    - normalisePhone: ten digits, judged by country Toronto, NANP only (416)
+    - normalisePhone: ten digits, judged by country Matamoros, MX only (868; +1 868 is Trinidad and invalid here)
+    - normalisePhone: ten digits, judged by country an invalid exchange in 956: NEITHER
+    - couldBeMexican: the 0054 backfill's test +1 McAllen, not a Mexican number → +19562921696
+    - couldBeMexican: the 0054 backfill's test bare ten digits valid under neither (a write would flag it too) → 956 123 4567
+    - couldBeMexican: the 0054 backfill's test bare McAllen → (956) 292-1696
+2. **keep the retired Mexican 1** — in `src/phone.ts`: ``return /^\+521\d{10}$/.test(e164) ? `+52${e164.slice(4)}` : e164;`` → `return e164;`; turns red 2 tests:
+    - normalisePhone: a number with a country code is kept as given +52 1 drops the retired mobile 1
+    - normalisePhone: a number with a country code is kept as given 00 52 1 drops the 1 too
+3. **never unconfirmed** — in `src/phone.ts`: `unconfirmed: us === mx };` → `unconfirmed: false };`; turns red 6 tests:
+    - phoneFields an ambiguous ten digits is stored as +1 AND flagged (mutation: drop the flag → FAILS)
+    - normalisePhone: ten digits, judged by country CDMX 55 is also New Jersey 551: BOTH
+    - normalisePhone: ten digits, judged by country an invalid exchange in 956: NEITHER
+    - normalisePhone: ten digits, judged by country junk ten digits: NEITHER
+    - couldBeMexican: the 0054 backfill's test bare ten digits valid under both → 55 1234 5678
+    - couldBeMexican: the 0054 backfill's test bare ten digits valid under neither (a write would flag it too) → 956 123 4567
+4. **MX wins when both are valid** — in `src/phone.ts`: `if (mx && !us)` → `if (mx)`; turns red 3 tests:
+    - phoneFields an ambiguous ten digits is stored as +1 AND flagged (mutation: drop the flag → FAILS)
+    - normalisePhone: ten digits, judged by country CDMX 55 is also New Jersey 551: BOTH
+    - couldBeMexican: the 0054 backfill's test bare ten digits valid under both → 55 1234 5678
+5. **no 00 prefix** — in `src/phone.ts`: delete `if (digits.startsWith("00")) return international(digits.slice(2));`; turns red 2 tests:
+    - normalisePhone: a number with a country code is kept as given 00 52 (dialled from Mexico)
+    - normalisePhone: a number with a country code is kept as given 00 52 1 drops the 1 too
+6. **typed country code ignored** — in `src/phone.ts`: ``if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null;`` → `if (e164 === null) return null;`; turns red 1 test:
+    - phoneForCountry: a number typed beside a country choice a typed country code must agree with the choice (mutation: return the typed E.164 regardless → FAILS)
+7. **backfill: flag MX-only bare numbers too** — in `src/phone.ts`: `return digits.length === 10 && normalisePhone(text)?.unconfirmed === true;` → `return digits.length === 10 && validUnder(digits, "MX");`; turns red 2 tests:
+    - couldBeMexican: the 0054 backfill's test bare ten digits valid under neither (a write would flag it too) → 956 123 4567
+    - couldBeMexican: the 0054 backfill's test bare Reynosa: the gate already reads it as +52, no flag → 899 922 1234
+8. **store the raw input** — in `src/contacts.ts`: `return n ? { phone: n.e164, phone_country_unconfirmed: n.unconfirmed } : { phone: trimmed, phone_country_unconfirmed: false };` → `return { phone: trimmed, phone_country_unconfirmed: n?.unconfirmed ?? false };`; turns red 4 tests:
+    - phoneFields a US number is stored as E.164, unflagged
+    - phoneFields a plainly Mexican ten digits is stored as +52, unflagged (mutation: always +1 → FAILS)
+    - phoneFields an ambiguous ten digits is stored as +1 AND flagged (mutation: drop the flag → FAILS)
+    - phoneKeyOf — the dedupe key of the number as it will be stored a Mexican number keys on its +52 digits, so it does NOT collide with the same ten digits under +1 (mutation: key the raw digits → FAILS)
+9. **drop the flag** — in `src/contacts.ts`: `phone_country_unconfirmed: n.unconfirmed }` → `phone_country_unconfirmed: false }`; turns red 1 test:
+    - phoneFields an ambiguous ten digits is stored as +1 AND flagged (mutation: drop the flag → FAILS)
+10. **key the raw digits** — in `src/contacts.ts`: `  return phone ? phoneDigits(phone) : "";` → `  return raw ? phoneDigits(raw) : "";`; turns red 1 test:
+    - phoneKeyOf — the dedupe key of the number as it will be stored a Mexican number keys on its +52 digits, so it does NOT collide with the same ten digits under +1 (mutation: key the raw digits → FAILS)
+
+- [ ] **Step 6: CI-only proof.** `src/test/contacts-phone-live.test.ts` (3 tests, `withTestAccount`) runs in CI's `verify` job after 0054 reaches the CI project (Task 17). Locally it fails to connect; that is expected and is not a reason to point it anywhere.
+
+- [ ] **Step 7: Commit (locally; never push)**
+
+```bash
+git add "packages/db/src/phone.test.ts" \
+        "packages/db/src/contacts-phone.test.ts" \
+        "packages/db/src/test/contacts-phone-live.test.ts" \
+        "packages/db/package.json" \
+        "pnpm-lock.yaml" \
+        "packages/db/src/phone.ts" \
+        "packages/db/src/contacts.ts" \
+        "packages/db/src/contact-import.ts" \
+        "packages/db/src/index.ts"
+git commit -m "feat(db): F-009 — normalisePhone (+52, the unconfirmed flag) and the contacts write path"
+```
+
+---
+
+### Task 3: The phone-country backfill and the `dnd` pre-flight: two read files, the deciding module, the CLI
+
+**Owner:** bis-db-schema. **Lane:** A (Phase 1). **Depends on:** Task 2 (`couldBeMexican`).
+
+Spec §4.1 item 1's backfill and choice 25's pre-flight, as files the orchestrator runs (Task 17), never as a migration: which numbers "could be Mexican" needs libphonenumber's metadata, which SQL does not have. The read is SQL, the decision is TypeScript, the write is SQL the CLI emits, and nothing here connects to a database.
+
+**Files:**
+- Create: `packages/db/src/backfill/phone-country.test.ts` (12 tests)
+- Create: `packages/db/src/test/phone-country-backfill.test.ts` (3 tests)
+- Modify: `packages/db/src/ci/sql-files.test.ts` (28 → 34 tests)
+- Create: `packages/db/supabase/backfills/0054-phone-country-candidates.sql`
+- Create: `packages/db/supabase/backfills/0054-dnd-preflight.sql`
+- Create: `packages/db/src/backfill/phone-country.ts`
+- Create: `packages/db/src/backfill/phone-country-run.ts`
+- Modify: `packages/db/package.json`
+
+**Interfaces:**
+- Produces: `supabase/backfills/0054-phone-country-candidates.sql` (read: `id, account_id, phone, phone_key`), `supabase/backfills/0054-dnd-preflight.sql` (read: counts only), `src/backfill/phone-country.ts` (`parseCandidates`, `rowsToFlag`, `countByAccount`, `flagSql`), and the script `pnpm --filter @bis/db backfill:phone-country <candidates-file> [--emit-sql <out.sql>]`.
+- Consumed by: Task 17 (production only, with danlo's go; on the CI project the rolled-back DB test is the proof).
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `packages/db/src/backfill/phone-country.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { sqlRefusals } from "../ci/sql";
+import { countByAccount, flagSql, parseCandidates, rowsToFlag, type CandidateRow } from "./phone-country";
+
+const A = "11111111-1111-4111-8111-111111111111";
+const B = "22222222-2222-4222-8222-222222222222";
+const row = (n: number, phone: string, phone_key: string, account = A): CandidateRow =>
+  ({ id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`, account_id: account, phone, phone_key });
+
+describe("parseCandidates", () => {
+  it("reads execute_sql's JSON array", () => {
+    const r = row(1, "+15512345678", "5512345678");
+    expect(parseCandidates(JSON.stringify([r]))).toEqual([r]);
+  });
+
+  it("reads ci:sql's tab-separated text with its header", () => {
+    const r = row(2, "55 1234 5678", "5512345678");
+    expect(parseCandidates(`id\taccount_id\tphone\tphone_key\n${r.id}\t${r.account_id}\t${r.phone}\t${r.phone_key}\n`)).toEqual([r]);
+  });
+
+  it("THROWS on a malformed row rather than half-reading it (mutation: skip bad rows → FAILS)", () => {
+    expect(() => parseCandidates(JSON.stringify([{ ...row(3, "+15512345678", "5512345678"), id: "x'); drop table contacts; --" }])))
+      .toThrow("row 1: id is not a uuid");
+    expect(() => parseCandidates(JSON.stringify([row(4, "+15512345678", "55123")]))).toThrow("phone_key is not ten digits");
+    expect(() => parseCandidates("id\tphone\n1\t2")).toThrow("header");
+  });
+
+  it("empty input is no rows", () => {
+    expect(parseCandidates("  \n")).toEqual([]);
+  });
+});
+
+describe("rowsToFlag", () => {
+  it("keeps exactly the numbers that could be Mexican (mutation: keep every candidate → FAILS)", () => {
+    const rows = [
+      row(1, "+15512345678", "5512345678"),   // +1, valid under +52: flag
+      row(2, "+19562921696", "9562921696"),   // McAllen: no
+      row(3, "55 1234 5678", "5512345678"),   // bare, both: flag
+      row(4, "899 922 1234", "8999221234"),   // bare Reynosa: the gate reads +52 already
+    ];
+    expect(rowsToFlag(rows).map((r) => r.phone)).toEqual(["+15512345678", "55 1234 5678"]);
+  });
+});
+
+describe("countByAccount", () => {
+  it("counts per account", () => {
+    expect([...countByAccount([row(1, "x", "5512345678"), row(2, "x", "5512345678", B), row(3, "x", "5512345678")])])
+      .toEqual([[A, 2], [B, 1]]);
+  });
+});
+
+describe("flagSql", () => {
+  const sql = flagSql([row(1, "+15512345678", "5512345678"), row(2, "55 1234 5678", "5512345678")]);
+
+  it("guards on BOTH still-unflagged and the phone_key that was read (mutation: drop the phone_key pairing → FAILS)", () => {
+    expect(sql).toContain("where phone_country_unconfirmed = false");
+    expect(sql).toContain("and (id, phone_key) in (values");
+    expect(sql).toContain(`('${row(1, "", "").id}'::uuid, '5512345678')`);
+    expect(sql).toContain("returning id;");
+  });
+
+  it("never carries a phone number, only ids and keys", () => {
+    expect(sql).not.toContain("+15512345678");
+    expect(sql).not.toContain("55 1234 5678");
+  });
+
+  it("is ASCII, backslash-free, and passes ci:sql's WRITE gate (no transaction control)", () => {
+    expect([...sql].every((ch) => ch.charCodeAt(0) <= 0x7e)).toBe(true);
+    expect(sql.includes(String.fromCharCode(0x5c))).toBe(false);
+    expect(sqlRefusals(sql, { allowWrite: true })).toEqual([]);
+    expect(sqlRefusals(sql, { allowWrite: false }).length).toBeGreaterThan(0);
+  });
+
+  it("refuses to emit an empty update", () => {
+    expect(() => flagSql([])).toThrow("nothing to flag");
+  });
+});
+
+describe("the read file", () => {
+  const text = readFileSync(fileURLToPath(new URL("../../supabase/backfills/0054-phone-country-candidates.sql", import.meta.url)), "utf8");
+  it("selects exactly the four columns the parser reads, in order", () => {
+    expect(text).toMatch(/select c\.id, c\.account_id, c\.phone, c\.phone_key\s/);
+  });
+  it("skips numbers already flagged and numbers the account has seen inbound (mutation: drop either NOT EXISTS → FAILS)", () => {
+    expect(text).toContain("c.phone_country_unconfirmed = false");
+    expect(text).toContain("from public.calls k");
+    expect(text).toContain("m.direction = 'inbound'");
+  });
+});
+```
+
+Create `packages/db/src/test/phone-country-backfill.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import type { Client } from "pg";
+import { withRollback } from "./db";
+import { parseCandidates, rowsToFlag, flagSql } from "../backfill/phone-country";
+
+/**
+ * The 0054 phone-country backfill end to end, in a rolled-back transaction
+ * (so it runs on the local replica and on the CI project alike): the read
+ * file, the deciding module, the emitted UPDATE, and a second run. Spec §8
+ * "backfill idempotency"; spec §4.1 item 1 for who is flagged.
+ */
+const READ = readFileSync(fileURLToPath(new URL("../../supabase/backfills/0054-phone-country-candidates.sql", import.meta.url)), "utf8");
+const RUN = Math.random().toString(36).slice(2, 10);
+
+async function seed(c: Client) {
+  const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
+  const { rows: [acct] } = await c.query<{ id: string }>(
+    "insert into accounts (agency_id, clerk_org_id, name) values ($1, $2, 'Backfill Co') returning id", [agency!.id, `org_BF_${RUN}`]);
+  const account = acct!.id;
+  const contact = async (name: string, phone: string) => (await c.query<{ id: string }>(
+    "insert into contacts (account_id, first_name, phone) values ($1, $2, $3) returning id", [account, name, phone])).rows[0]!.id;
+  const ids = {
+    plusOne: await contact("plus one, could be Mexican", "+15512345678"),
+    legacy: await contact("bare ten digits, both", "55 1234 5679"),
+    mcallen: await contact("McAllen", "+19562921696"),
+    caller: await contact("called in", "+15512349999"),
+    texter: await contact("texted in", "(551) 234-8888"),
+    mexican: await contact("already +52", "+528999221234"),
+  };
+  const { rows: [num] } = await c.query<{ id: string }>(
+    "insert into phone_numbers (account_id, e164) values ($1, $2) returning id", [account, `+1${Math.floor(2_000_000_000 + Math.random() * 7_000_000_000)}`]);
+  await c.query("insert into calls (account_id, phone_number_id, caller_e164) values ($1, $2, '+15512349999')", [account, num!.id]);
+  const { rows: [conv] } = await c.query<{ id: string }>(
+    "insert into conversations (account_id, contact_id) values ($1, $2) returning id", [account, ids.texter]);
+  await c.query("insert into messages (account_id, conversation_id, channel, direction, body) values ($1, $2, 'sms', 'inbound', 'hola')", [account, conv!.id]);
+  return { account, ids };
+}
+
+async function candidates(c: Client, account: string) {
+  const { rows } = await c.query(READ);
+  return parseCandidates(JSON.stringify(rows.filter((r: { account_id: string }) => r.account_id === account)));
+}
+
+describe("the 0054 phone-country backfill (read file + deciding module + emitted UPDATE)", () => {
+  it("lists only unflagged ten-digit numbers the account has not seen inbound (mutation: drop the calls NOT EXISTS → 'called in' listed, FAILS)", () =>
+    withRollback(async (c) => {
+      const { account, ids } = await seed(c);
+      const listed = (await candidates(c, account)).map((r) => r.id).sort();
+      expect(listed).toEqual([ids.plusOne, ids.legacy, ids.mcallen].sort());
+    }));
+
+  it("flags exactly the ones that could be Mexican, and a second run flags nothing (idempotent; mutation: drop `phone_country_unconfirmed = false` from the UPDATE → 2 rows again, FAILS)", () =>
+    withRollback(async (c) => {
+      const { account, ids } = await seed(c);
+      const flag = rowsToFlag(await candidates(c, account));
+      expect(flag.map((r) => r.id).sort()).toEqual([ids.plusOne, ids.legacy].sort());
+      const first = await c.query(flagSql(flag));
+      expect(first.rows.map((r: { id: string }) => r.id).sort()).toEqual([ids.plusOne, ids.legacy].sort());
+      const again = await c.query(flagSql(flag));
+      expect(again.rowCount).toBe(0);
+      expect(rowsToFlag(await candidates(c, account))).toEqual([]);
+    }));
+
+  it("a number edited between the read and the write is left alone (mutation: match on id only → flagged, FAILS)", () =>
+    withRollback(async (c) => {
+      const { account, ids } = await seed(c);
+      const flag = rowsToFlag(await candidates(c, account));
+      await c.query("update contacts set phone = '+19562921697' where id = $1", [ids.plusOne]);
+      const res = await c.query(flagSql(flag));
+      expect(res.rows.map((r: { id: string }) => r.id)).toEqual([ids.legacy]);
+    }));
+});
+```
+
+Apply to `packages/db/src/ci/sql-files.test.ts` (against the task's parent commit):
+
+```diff
+@@ -24,8 +24,10 @@ const FILES = [
+   "parity/fingerprint.sql",
+   "parity/fingerprint-detail.sql",
+   "parity/migration-history.sql",
++  "backfills/0054-phone-country-candidates.sql",
++  "backfills/0054-dnd-preflight.sql",
+ ];
+-const READS = FILES.filter((f) => f.startsWith("parity/"));
++const READS = FILES.filter((f) => f.startsWith("parity/") || f.startsWith("backfills/"));
+ 
+ const oneLine = (s: string) => s.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd packages/db
+SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/backfill/phone-country.test.ts src/test/phone-country-backfill.test.ts src/ci/sql-files.test.ts
+```
+
+Expected (the staged replay's RED run):
+- `src/backfill/phone-country.test.ts`: **fails to load** (12 tests once it loads): `Cannot find module './phone-country' imported from packages/db/src/backfill/phone-country.test.ts`
+- `src/ci/sql-files.test.ts`: **6 failing** that Step 4 turns green; 28 already pass:
+  - CI SQL files: bytes backfills/0054-phone-country-candidates.sql is ASCII only
+  - CI SQL files: bytes backfills/0054-dnd-preflight.sql is ASCII only
+  - CI SQL files: bytes backfills/0054-phone-country-candidates.sql has no backslash
+  - CI SQL files: bytes backfills/0054-dnd-preflight.sql has no backslash
+  - CI SQL files: mode backfills/0054-phone-country-candidates.sql passes ci:sql's read gate
+  - CI SQL files: mode backfills/0054-dnd-preflight.sql passes ci:sql's read gate
+- `src/test/phone-country-backfill.test.ts`: **fails to load** (3 tests once it loads): `Cannot find module '../backfill/phone-country' imported from packages/db/src/test/phone-country-backfill.test.ts`
+
+- [ ] **Step 3: Implement**
+
+Create `packages/db/supabase/backfills/0054-phone-country-candidates.sql`:
+
+```sql
+-- Consent chain PR-1, the 0054 phone-country backfill: the READ half.
+--
+-- READ ONLY. It lists every contact whose stored number is a ten-digit
+-- reading (a +1 number or bare ten digits: phone_key has ten digits) that is
+-- not flagged yet, and that the SAME account has never seen inbound: not the
+-- caller of a call (calls.caller_e164, folded the way phone_key folds), and
+-- not the contact of an inbound text (the inbound route files a text under
+-- the contact its sender's number matched, so the conversation is the
+-- record). Spec 4.1 item 1: "unless the same account has seen it as the
+-- caller or sender of an inbound call or text".
+--
+-- Whether a number COULD BE MEXICAN is not decidable in SQL (it needs
+-- libphonenumber's metadata); `pnpm --filter @bis/db backfill:phone-country`
+-- reads this file's output and decides. Run on the CI project with
+-- `pnpm --filter @bis/db ci:sql supabase/backfills/0054-phone-country-candidates.sql`,
+-- on production only with danlo's go, through execute_sql.
+--
+-- ASCII only, no backslash (memory bis-mcp-sql-escapes); ci:sql's read gate
+-- passes it (src/ci/sql-files.test.ts).
+select c.id, c.account_id, c.phone, c.phone_key
+from public.contacts c
+where c.phone is not null
+  and c.phone_country_unconfirmed = false
+  and c.phone_key ~ '^[0-9]{10}$'
+  and not exists (
+    select 1
+    from public.calls k
+    where k.account_id = c.account_id
+      and k.caller_e164 is not null
+      and (case
+             when length(regexp_replace(k.caller_e164, '[^0-9]', '', 'g')) = 11
+              and left(regexp_replace(k.caller_e164, '[^0-9]', '', 'g'), 1) = '1'
+             then substr(regexp_replace(k.caller_e164, '[^0-9]', '', 'g'), 2)
+             else regexp_replace(k.caller_e164, '[^0-9]', '', 'g')
+           end) = c.phone_key
+  )
+  and not exists (
+    select 1
+    from public.conversations v
+    join public.messages m on m.conversation_id = v.id and m.account_id = v.account_id
+    where v.account_id = c.account_id
+      and v.contact_id = c.id
+      and m.channel = 'sms'
+      and m.direction = 'inbound'
+  )
+order by c.account_id, c.id;
+```
+
+Create `packages/db/supabase/backfills/0054-dnd-preflight.sql`:
+
+```sql
+-- Consent chain PR-1, choice 25's pre-flight: the gate does NOT read
+-- contacts.dnd (0003: jsonb not null default '{}', read and written by no
+-- code), so any contact that carries a non-empty value there must be found
+-- BEFORE the gate ships and turned into staff-recorded stops by a plan of
+-- its own. READ ONLY. Expected answer on both databases: no rows.
+--
+-- Run on the CI project with
+-- `pnpm --filter @bis/db ci:sql supabase/backfills/0054-dnd-preflight.sql`,
+-- on production only with danlo's go, through execute_sql. Counts only:
+-- no contact's value is printed.
+--
+-- ASCII only, no backslash (memory bis-mcp-sql-escapes); ci:sql's read gate
+-- passes it (src/ci/sql-files.test.ts).
+select c.account_id, jsonb_typeof(c.dnd) as shape, count(*) as contacts
+from public.contacts c
+where c.dnd <> '{}'::jsonb
+group by c.account_id, jsonb_typeof(c.dnd)
+order by c.account_id, shape;
+```
+
+Create `packages/db/src/backfill/phone-country.ts`:
+
+```ts
+import { couldBeMexican } from "../phone";
+
+/**
+ * The 0054 phone-country backfill's DECIDING half (consent chain spec §4.1
+ * item 1). Pure: the read is supabase/backfills/0054-phone-country-candidates.sql,
+ * run by the orchestrator; this turns its rows into the ids to flag and the
+ * one UPDATE that flags them. Nothing here connects to a database.
+ *
+ * The UPDATE is guarded twice: it flags a row only while it is still
+ * unflagged AND its phone_key is still the one that was read, so a number
+ * edited between the read and the write is left alone (the next write of it
+ * flags it through `phoneFields` if it is still ambiguous).
+ */
+export type CandidateRow = { id: string; account_id: string; phone: string; phone_key: string };
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const KEY = /^[0-9]{10}$/;
+
+function checked(r: Record<string, unknown>, at: string): CandidateRow {
+  const { id, account_id, phone, phone_key } = r;
+  if (typeof id !== "string" || !UUID.test(id)) throw new Error(`${at}: id is not a uuid`);
+  if (typeof account_id !== "string" || !UUID.test(account_id)) throw new Error(`${at}: account_id is not a uuid`);
+  if (typeof phone !== "string") throw new Error(`${at}: phone is not text`);
+  if (typeof phone_key !== "string" || !KEY.test(phone_key)) throw new Error(`${at}: phone_key is not ten digits`);
+  return { id, account_id, phone, phone_key };
+}
+
+/**
+ * The read's output, as either `execute_sql`'s JSON array or `ci:sql`'s
+ * tab-separated text with a header row. THROWS on anything malformed: a
+ * backfill that half-understood its input must not emit a write.
+ */
+export function parseCandidates(text: string): CandidateRow[] {
+  const trimmed = text.trim();
+  if (trimmed === "") return [];
+  if (trimmed.startsWith("[")) {
+    const rows: unknown = JSON.parse(trimmed);
+    if (!Array.isArray(rows)) throw new Error("candidates: not an array");
+    return rows.map((r, i) => {
+      if (typeof r !== "object" || r === null) throw new Error(`row ${i + 1}: not an object`);
+      return checked(r as Record<string, unknown>, `row ${i + 1}`);
+    });
+  }
+  const [header, ...lines] = trimmed.split(/\r?\n/);
+  const names = header!.split("\t");
+  if (names.join(",") !== "id,account_id,phone,phone_key") {
+    throw new Error(`candidates: header is "${names.join(",")}", expected id,account_id,phone,phone_key`);
+  }
+  return lines.filter((l) => l.trim() !== "").map((l, i) => {
+    const cells = l.split("\t");
+    if (cells.length !== 4) throw new Error(`line ${i + 2}: ${cells.length} cells, expected 4`);
+    return checked({ id: cells[0], account_id: cells[1], phone: cells[2], phone_key: cells[3] }, `line ${i + 2}`);
+  });
+}
+
+/** The rows whose number could be Mexican: the ones to flag. */
+export function rowsToFlag(rows: readonly CandidateRow[]): CandidateRow[] {
+  return rows.filter((r) => couldBeMexican(r.phone));
+}
+
+/** Per account, how many: what the orchestrator reads out before any write. */
+export function countByAccount(rows: readonly CandidateRow[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.account_id, (counts.get(r.account_id) ?? 0) + 1);
+  return counts;
+}
+
+/**
+ * The one UPDATE. Every value in it was shape-checked by `parseCandidates`
+ * (uuids and ten digits only), so nothing a row carries can break out of its
+ * literal. ASCII, no backslash, no transaction control: `ci:sql
+ * --allow-write` and `execute_sql` both take it as is.
+ */
+export function flagSql(rows: readonly CandidateRow[]): string {
+  if (rows.length === 0) throw new Error("flagSql: nothing to flag");
+  for (const [i, r] of rows.entries()) checked(r, `row ${i + 1}`);
+  const values = rows.map((r) => `  ('${r.id}'::uuid, '${r.phone_key}')`).join(",\n");
+  return [
+    "-- Consent chain PR-1: the 0054 phone-country backfill's WRITE half,",
+    "-- emitted by `pnpm --filter @bis/db backfill:phone-country --emit-sql`.",
+    `-- ${rows.length} contact(s). Flags a row only while still unflagged and its`,
+    "-- phone_key is still the one read.",
+    "update public.contacts",
+    "set phone_country_unconfirmed = true",
+    "where phone_country_unconfirmed = false",
+    "  and (id, phone_key) in (values",
+    values,
+    "  )",
+    "returning id;",
+    "",
+  ].join("\n");
+}
+```
+
+Create `packages/db/src/backfill/phone-country-run.ts`:
+
+```ts
+/**
+ * `pnpm --filter @bis/db backfill:phone-country <candidates-file> [--emit-sql <out.sql>]`
+ *
+ * Reads the output of supabase/backfills/0054-phone-country-candidates.sql
+ * (execute_sql's JSON, or ci:sql's tab-separated text), prints how many
+ * candidates could be Mexican, per account, and WRITES NOTHING unless
+ * `--emit-sql` names a file — and then it writes that file, never a
+ * database. Running the emitted SQL is the orchestrator's step, on the CI
+ * project first and on production only with danlo's go (the plan's final
+ * task). Never prints a phone number.
+ */
+import { readFileSync, writeFileSync } from "node:fs";
+import { countByAccount, flagSql, parseCandidates, rowsToFlag } from "./phone-country";
+
+function main(): void {
+  const args = process.argv.slice(2);
+  const emitAt = args.indexOf("--emit-sql");
+  const out = emitAt >= 0 ? args[emitAt + 1] : undefined;
+  const input = args.find((a, i) => !a.startsWith("--") && i !== emitAt + 1);
+  if (!input || (emitAt >= 0 && !out)) {
+    console.error("usage: backfill:phone-country <candidates-file> [--emit-sql <out.sql>]");
+    process.exit(2);
+  }
+  const candidates = parseCandidates(readFileSync(input, "utf8"));
+  const flag = rowsToFlag(candidates);
+  console.log(`candidates read: ${candidates.length}`);
+  console.log(`could be Mexican (to flag): ${flag.length}`);
+  for (const [account, n] of countByAccount(flag)) console.log(`  account ${account}: ${n}`);
+  if (!out) {
+    console.log("no --emit-sql: nothing written");
+    return;
+  }
+  if (flag.length === 0) {
+    console.log("nothing to flag: no SQL written");
+    return;
+  }
+  writeFileSync(out, flagSql(flag));
+  console.log(`wrote ${out} (${flag.length} row(s)); run it with ci:sql --allow-write on the CI project first`);
+}
+
+main();
+```
+
+Apply to `packages/db/package.json` (against the task's parent commit):
+
+```diff
+@@ -15,7 +15,8 @@
+     "db:migrations:ci": "tsx src/ci/push-run.ts list",
+     "ci:sql": "tsx src/ci/sql-run.ts",
+     "ci:seed": "tsx src/ci-seed/run.ts",
+-    "db:seed-demo": "tsx src/demo/run.ts"
++    "db:seed-demo": "tsx src/demo/run.ts",
++    "backfill:phone-country": "tsx src/backfill/phone-country-run.ts"
+   },
+   "devDependencies": {
+     "@types/pg": "^8.20.0",
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd packages/db
+SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/backfill/phone-country.test.ts src/test/phone-country-backfill.test.ts src/ci/sql-files.test.ts
+pnpm typecheck
+cd ../.. && pnpm --filter web test
+```
+
+Expected (the staged replay's GREEN run):
+49 passed across the task's test files:
+- `src/backfill/phone-country.test.ts`: 12 passed
+- `src/ci/sql-files.test.ts`: 34 passed
+- `src/test/phone-country-backfill.test.ts`: 3 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4321 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+7 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **skip bad rows instead of throwing** — in `src/backfill/phone-country.ts`: delete ``  if (typeof id !== "string" || !UUID.test(id)) throw new Error(`${at}: id is not a uuid`);``; turns red 1 test:
+    - parseCandidates THROWS on a malformed row rather than half-reading it (mutation: skip bad rows → FAILS)
+2. **flag every candidate** — in `src/backfill/phone-country.ts`: `  return rows.filter((r) => couldBeMexican(r.phone));` → `  return [...rows];`; turns red 1 test:
+    - rowsToFlag keeps exactly the numbers that could be Mexican (mutation: keep every candidate → FAILS)
+3. **emit an empty update** — in `src/backfill/phone-country.ts`: delete `  if (rows.length === 0) throw new Error("flagSql: nothing to flag");`; turns red 1 test:
+    - flagSql refuses to emit an empty update
+4. **carry the phone into the SQL** — in `src/backfill/phone-country.ts`: ``  const values = rows.map((r) => `  ('${r.id}'::uuid, '${r.phone_key}')`).join(",\n");`` → ``  const values = rows.map((r) => `  ('${r.id}'::uuid, '${r.phone_key}') -- ${r.phone}`).join(",\n");``; turns red 1 test:
+    - flagSql never carries a phone number, only ids and keys
+5. **drop calls not-exists** — in `supabase/backfills/0054-phone-country-candidates.sql`: `  and not exists (⏎    select 1⏎    from public.calls k` → `  and exists (⏎    select 1⏎    from public.calls k`; turns red 3 tests:
+    - the 0054 phone-country backfill (read file + deciding module + emitted UPDATE) lists only unflagged ten-digit numbers the account has not seen inbound (mutation: drop the calls NOT EXISTS → 'called in' listed, FAILS)
+    - the 0054 phone-country backfill (read file + deciding module + emitted UPDATE) flags exactly the ones that could be Mexican, and a second run flags nothing (idempotent; mutation: drop `phone_country_unconfirmed = false` from the UPDATE → 2 rows again, FAILS)
+    - the 0054 phone-country backfill (read file + deciding module + emitted UPDATE) a number edited between the read and the write is left alone (mutation: match on id only → flagged, FAILS)
+6. **no unflagged guard** — in `src/backfill/phone-country.ts`: `    "where phone_country_unconfirmed = false",⏎    "  and (id, phone_key) in (values",` → `    "where (id, phone_key) in (values",`; turns red 1 test:
+    - the 0054 phone-country backfill (read file + deciding module + emitted UPDATE) flags exactly the ones that could be Mexican, and a second run flags nothing (idempotent; mutation: drop `phone_country_unconfirmed = false` from the UPDATE → 2 rows again, FAILS)
+7. **id only** — in `src/backfill/phone-country.ts`: `` `  ('${r.id}'::uuid, '${r.phone_key}')` `` → `` `  ('${r.id}'::uuid, (select phone_key from public.contacts where id = '${r.id}'))` ``; turns red 1 test:
+    - the 0054 phone-country backfill (read file + deciding module + emitted UPDATE) a number edited between the read and the write is left alone (mutation: match on id only → flagged, FAILS)
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "packages/db/src/backfill/phone-country.test.ts" \
+        "packages/db/src/test/phone-country-backfill.test.ts" \
+        "packages/db/src/ci/sql-files.test.ts" \
+        "packages/db/supabase/backfills/0054-phone-country-candidates.sql" \
+        "packages/db/supabase/backfills/0054-dnd-preflight.sql" \
+        "packages/db/src/backfill/phone-country.ts" \
+        "packages/db/src/backfill/phone-country-run.ts" \
+        "packages/db/package.json"
+git commit -m "feat(db): the 0054 phone-country backfill (read, decide, emit) and the dnd pre-flight"
+```
+
+---
+
+### Task 4: The provider's refusal codes, and `loggableError` where the gate can reach it
+
+**Owner:** bis-comms. **Lane:** B (Phase 1). **Depends on:** None.
+
+Gate step 9 needs the provider's own refusal code, and `loggableError` (spec §5: the gate logs through it) lives in `billing-link.ts`, which the gate must not import. Both are small and have no database dependency, so Lane B starts here while Lane A writes the migration.
+
+**Files:**
+- Modify: `apps/web/src/lib/sms/telnyx.test.ts` (7 → 11 tests)
+- Modify: `apps/web/src/lib/sms/types.ts`
+- Modify: `apps/web/src/lib/sms/telnyx.ts`
+- Create: `apps/web/src/lib/loggable-error.ts`
+- Modify: `apps/web/src/lib/billing/billing-link.ts`
+
+**Interfaces:**
+- Produces: `class SmsProviderError extends Error { status: number; codes: readonly string[] }` (`lib/sms/types.ts`); `errorCodes(text: string): string[]` (`lib/sms/telnyx.ts`, never throws); `loggableError(e: unknown): string` now in `lib/loggable-error.ts` (`billing-link.ts` re-exports it, so its callers and tests are unchanged).
+- The Telnyx refusal body for a number that texted STOP is VERIFIED (External facts, E3).
+
+- [ ] **Step 1: Write the failing tests**
+
+Apply to `apps/web/src/lib/sms/telnyx.test.ts` (against the task's parent commit):
+
+```diff
+@@ -1,5 +1,6 @@
+ import { describe, it, expect, vi, afterEach } from "vitest";
+-import { telnyxSmsProvider } from "./telnyx";
++import { telnyxSmsProvider, errorCodes } from "./telnyx";
++import { SmsProviderError } from "./types";
+ 
+ /**
+  * The one module in this feature that spends money, and until now it was
+@@ -131,3 +132,42 @@ describe("telnyxSmsProvider", () => {
+       .rejects.toThrow(expect.not.stringContaining("super_secret_key") as unknown as RegExp);
+   });
+ });
++
++/**
++ * Consent chain PR-1, gate step 9: a refusal carries Telnyx's own codes, so
++ * the gate can tell "this number texted STOP" (40300, VERIFIED against
++ * developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out on
++ * 2026-09-26) from every other failure.
++ */
++describe("telnyxSmsProvider: a refusal carries the provider's codes", () => {
++  const STOP_BODY = JSON.stringify({ errors: [{ code: "40300", title: "Blocked due to STOP message",
++    detail: "Messages cannot be sent from '+19565061545' to '+15551112222' due to an existing block rule." }] });
++
++  it("a STOP block is an SmsProviderError with status and code 40300, message unchanged (mutation: throw a plain Error → FAILS)", async () => {
++    stubFetch(() => Promise.resolve(new Response(STOP_BODY, { status: 400 })));
++    const err = await telnyxSmsProvider("k").send(INPUT).catch((e: unknown) => e);
++    expect(err).toBeInstanceOf(SmsProviderError);
++    expect((err as SmsProviderError).status).toBe(400);
++    expect((err as SmsProviderError).codes).toEqual(["40300"]);
++    expect((err as Error).message).toBe(`telnyx send failed (400): ${STOP_BODY}`);
++  });
++
++  it("a body that is not Telnyx's error shape carries no codes and still throws the old message", async () => {
++    stubFetch(() => Promise.resolve(new Response("number not owned", { status: 422 })));
++    const err = await telnyxSmsProvider("k").send(INPUT).catch((e: unknown) => e);
++    expect((err as SmsProviderError).codes).toEqual([]);
++  });
++});
++
++describe("errorCodes", () => {
++  it("reads every errors[].code, numbers as strings (mutation: read only the first → FAILS)", () => {
++    expect(errorCodes(JSON.stringify({ errors: [{ code: "40300" }, { code: 10007 }] }))).toEqual(["40300", "10007"]);
++  });
++
++  it("never throws: not JSON, no errors array, codes of the wrong type (mutation: drop the try → FAILS)", () => {
++    expect(errorCodes("<html>")).toEqual([]);
++    expect(errorCodes(JSON.stringify({ errors: "x" }))).toEqual([]);
++    expect(errorCodes(JSON.stringify({ errors: [null, { code: { a: 1 } }, {}] }))).toEqual([]);
++    expect(errorCodes("null")).toEqual([]);
++  });
++});
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/sms/telnyx.test.ts
+```
+
+Expected (the staged replay's RED run):
+- `src/lib/sms/telnyx.test.ts`: **4 failing** that Step 4 turns green; 7 already pass:
+  - telnyxSmsProvider: a refusal carries the provider's codes a STOP block is an SmsProviderError with status and code 40300, message unchanged (mutation: throw a plain Error → FAILS)
+  - telnyxSmsProvider: a refusal carries the provider's codes a body that is not Telnyx's error shape carries no codes and still throws the old message
+  - errorCodes reads every errors[].code, numbers as strings (mutation: read only the first → FAILS)
+  - errorCodes never throws: not JSON, no errors array, codes of the wrong type (mutation: drop the try → FAILS)
+
+- [ ] **Step 3: Implement**
+
+Apply to `apps/web/src/lib/sms/types.ts` (against the task's parent commit):
+
+```diff
+@@ -15,3 +15,17 @@ export interface SmsProvider {
+   readonly redirectTo?: string;
+   send(input: SendSmsInput): Promise<SendSmsResult>;
+ }
++
++/**
++ * A send the provider REFUSED (a non-2xx answer), with what it said. `codes`
++ * are the provider's own error codes from the body (Telnyx: `errors[].code`,
++ * e.g. "40300" for a number that texted STOP), empty when the body carried
++ * none or was not JSON. The message is unchanged from before this class
++ * existed: it is what lands in `messages.error`.
++ */
++export class SmsProviderError extends Error {
++  constructor(message: string, readonly status: number, readonly codes: readonly string[]) {
++    super(message);
++    this.name = "SmsProviderError";
++  }
++}
+```
+
+Replace the whole file `apps/web/src/lib/sms/telnyx.ts` with:
+
+```ts
+import { SmsProviderError, type SmsProvider, type SendSmsInput, type SendSmsResult } from "./types";
+
+const TELNYX_MESSAGES_URL = "https://api.telnyx.com/v2/messages";
+
+/** Outbound sends must not hold a webhook open. finishCall runs on Telnyx's
+ *  own callback after the caller hung up; a hanging provider there would keep
+ *  that request alive for the platform's whole function timeout. */
+const SEND_TIMEOUT_MS = 10_000;
+
+class TelnyxSmsProvider implements SmsProvider {
+  readonly isFake = false;
+  constructor(
+    private readonly apiKey: string,
+    readonly redirectTo?: string,
+  ) {}
+
+  async send(input: SendSmsInput): Promise<SendSmsResult> {
+    const to = this.redirectTo ?? input.to;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+    try {
+      const res = await fetch(TELNYX_MESSAGES_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ from: input.from, to, text: input.body }),
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      if (!res.ok) throw new SmsProviderError(`telnyx send failed (${res.status}): ${text}`, res.status, errorCodes(text));
+      const parsed = JSON.parse(text) as { data?: { id?: string } };
+      const id = parsed.data?.id;
+      if (!id) throw new Error(`telnyx send returned no message id: ${text}`);
+      return { providerMessageId: id };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
+ * Telnyx error codes from a refused send's body, `{"errors":[{"code":"40300",…}]}`
+ * (developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out, read
+ * 2026-09-26). Never throws: a body that is not that shape has no codes.
+ */
+export function errorCodes(text: string): string[] {
+  try {
+    const parsed = JSON.parse(text) as { errors?: { code?: unknown }[] };
+    if (!Array.isArray(parsed.errors)) return [];
+    return parsed.errors.map((e) => e?.code).filter((c) => typeof c === "string" || typeof c === "number").map(String);
+  } catch {
+    return [];
+  }
+}
+
+export function telnyxSmsProvider(apiKey: string, redirectTo?: string): SmsProvider {
+  return new TelnyxSmsProvider(apiKey, redirectTo);
+}
+```
+
+Create `apps/web/src/lib/loggable-error.ts`:
+
+```ts
+/**
+ * A thrown value as a log line may carry it. Moved here from
+ * lib/billing/billing-link.ts (which re-exports it) so code outside billing,
+ * the SMS send gate first, logs through the same redaction.
+ */
+/** Anything shaped like an email address. Generous on purpose: a false
+ *  match costs a word in a log line, a miss puts a person's address there. */
+const EMAIL_LIKE = /[^\s<>()[\]{},;:"'`]+@[^\s<>()[\]{},;:"'`]+/g;
+
+/**
+ * An error as a log line may carry it: its class (the SDK's `.type`, else its
+ * name), Stripe's `code` and HTTP status when present, and its message with
+ * every email address replaced by "[email]", cut to 300 characters. Stripe's
+ * and the mail provider's messages can quote the recipient ("Invalid email
+ * address: …", "550 <…>: recipient rejected"), and a log is no place for a
+ * client's address (review correction 4).
+ */
+export function loggableError(e: unknown): string {
+  const o = typeof e === "object" && e !== null
+    ? (e as { type?: unknown; name?: unknown; code?: unknown; statusCode?: unknown; message?: unknown })
+    : {};
+  const kind = typeof o.type === "string" ? o.type : typeof o.name === "string" ? o.name : typeof e;
+  const code = typeof o.code === "string" ? ` code=${o.code}` : "";
+  const status = typeof o.statusCode === "number" ? ` status=${o.statusCode}` : "";
+  const raw = typeof o.message === "string" ? o.message : String(e);
+  return `${kind}${code}${status}: ${raw.replace(EMAIL_LIKE, "[email]").slice(0, 300)}`;
+}
+```
+
+Apply to `apps/web/src/lib/billing/billing-link.ts` (against the task's parent commit):
+
+```diff
+@@ -1,4 +1,5 @@
+ import { randomUUID } from "node:crypto";
++import { loggableError } from "@/lib/loggable-error";
+ import {
+   ENDED_STATUSES, getAccountBilling, getBillingLink, markBillingLinkExpired, saveBillingLink,
+   type Branding, type Plan, type SupabaseClient,
+@@ -59,28 +60,9 @@ function sameAddress(a: string, b: string): boolean {
+   return a.trim().toLowerCase() === b.trim().toLowerCase();
+ }
+ 
+-/** Anything shaped like an email address. Generous on purpose: a false
+- *  match costs a word in a log line, a miss puts a person's address there. */
+-const EMAIL_LIKE = /[^\s<>()[\]{},;:"'`]+@[^\s<>()[\]{},;:"'`]+/g;
+-
+-/**
+- * An error as a log line may carry it: its class (the SDK's `.type`, else its
+- * name), Stripe's `code` and HTTP status when present, and its message with
+- * every email address replaced by "[email]", cut to 300 characters. Stripe's
+- * and the mail provider's messages can quote the recipient ("Invalid email
+- * address: …", "550 <…>: recipient rejected"), and a log is no place for a
+- * client's address (review correction 4).
+- */
+-export function loggableError(e: unknown): string {
+-  const o = typeof e === "object" && e !== null
+-    ? (e as { type?: unknown; name?: unknown; code?: unknown; statusCode?: unknown; message?: unknown })
+-    : {};
+-  const kind = typeof o.type === "string" ? o.type : typeof o.name === "string" ? o.name : typeof e;
+-  const code = typeof o.code === "string" ? ` code=${o.code}` : "";
+-  const status = typeof o.statusCode === "number" ? ` status=${o.statusCode}` : "";
+-  const raw = typeof o.message === "string" ? o.message : String(e);
+-  return `${kind}${code}${status}: ${raw.replace(EMAIL_LIKE, "[email]").slice(0, 300)}`;
+-}
++// Moved to lib/loggable-error.ts (consent chain PR-1) so the SMS send gate can
++// use it without importing billing; re-exported for every existing importer.
++export { loggableError };
+ 
+ /**
+  * Spec flow 2 (plan G2, G3, G18). Order matters for money:
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/sms/telnyx.test.ts src/lib/billing
+pnpm typecheck
+pnpm test
+```
+
+Expected (the staged replay's GREEN run):
+11 passed across the task's test files:
+- `src/lib/sms/telnyx.test.ts`: 11 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4325 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+3 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **plain Error on a refusal** — in `src/lib/sms/telnyx.ts`: ``throw new SmsProviderError(`telnyx send failed (${res.status}): ${text}`, res.status, errorCodes(text));`` → ``throw new Error(`telnyx send failed (${res.status}): ${text}`);``; turns red 2 tests:
+    - telnyxSmsProvider: a refusal carries the provider's codes a STOP block is an SmsProviderError with status and code 40300, message unchanged (mutation: throw a plain Error → FAILS)
+    - telnyxSmsProvider: a refusal carries the provider's codes a body that is not Telnyx's error shape carries no codes and still throws the old message
+2. **first code only** — in `src/lib/sms/telnyx.ts`: `return parsed.errors.map((e) => e?.code)` → `return parsed.errors.slice(0, 1).map((e) => e?.code)`; turns red 1 test:
+    - errorCodes reads every errors[].code, numbers as strings (mutation: read only the first → FAILS)
+3. **errorCodes can throw** — in `src/lib/sms/telnyx.ts`: `  } catch {⏎    return [];⏎  }⏎}` → `  } finally {⏎  }⏎}`; turns red 3 tests:
+    - telnyxSmsProvider throws with the status and the provider's reason on a non-2xx
+    - telnyxSmsProvider: a refusal carries the provider's codes a body that is not Telnyx's error shape carries no codes and still throws the old message
+    - errorCodes never throws: not JSON, no errors array, codes of the wrong type (mutation: drop the try → FAILS)
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/lib/sms/telnyx.test.ts" \
+        "apps/web/src/lib/sms/types.ts" \
+        "apps/web/src/lib/sms/telnyx.ts" \
+        "apps/web/src/lib/loggable-error.ts" \
+        "apps/web/src/lib/billing/billing-link.ts"
+git commit -m "feat(sms): the provider's refusal codes (SmsProviderError); loggableError in its own module"
+```
+
+---
+
+### Task 5: The message-class registry and the fixed sending hours
+
+**Owner:** bis-comms. **Lane:** B (Phase 1). **Depends on:** None (`wallInstant` already exists in `lib/automations/quiet-hours.ts`; Task 10 keeps it).
+
+Spec §4.1 item 2 and decision 4. The registry is the one place a kind's class, hours and footer live; the hours module is the one place the fixed window is computed (the gate uses it, and so does `holdOrSend`, so a held row's time and the gate's deferral can never disagree).
+
+**Files:**
+- Create: `apps/web/src/lib/consent/classes.test.ts` (14 tests)
+- Create: `apps/web/src/lib/consent/hours.test.ts` (14 tests)
+- Create: `apps/web/src/lib/consent/classes.ts`
+- Create: `apps/web/src/lib/consent/hours.ts`
+
+**Interfaces:**
+- Produces (`lib/consent/classes.ts`): `type SmsClass`, `SMS_KINDS` (11 kinds), `type SmsKind`, `type AutomationSmsKind` (the `automation.*` kinds), `isSmsKind(kind: string): kind is SmsKind`.
+- Produces (`lib/consent/hours.ts`): `type HoursRule = "automated" | "marketing" | "any"`, `FALLBACK_ZONE = "America/Chicago"`, `hoursZone(zone)`, `nextOpening(rule, now, zone): Date | null` (null = inside the window, send now), `expiresBeforeOpening(opening, deadline): boolean` (choice 21).
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `apps/web/src/lib/consent/classes.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { SMS_KINDS, isSmsKind } from "./classes";
+
+/**
+ * The registry IS the spec's §4.1 item 2 table, row for row: a kind moved to
+ * a looser class or hours rule is a legal change, not a refactor, so it must
+ * fail here and be argued in review. The footer column is this plan's (the
+ * spec's table has none): `stop_line` for exactly the kinds that carried
+ * `withOptOut` before the registry existed.
+ */
+const SPEC_TABLE: Record<string, [string, string, string]> = {
+  "automation.instant_reply": ["customer_initiated", "automated", "stop_line"],
+  "automation.appointment_confirm": ["informational", "automated", "stop_line"],
+  "automation.sms_reminder": ["informational", "automated", "stop_line"],
+  "automation.no_show_nudge": ["marketing", "marketing", "stop_line"],
+  "automation.referral_ask": ["marketing", "marketing", "stop_line"],
+  "automation.review_request": ["marketing", "marketing", "stop_line"],
+  "automation.quote_followup": ["marketing", "marketing", "stop_line"],
+  "voice.textback": ["informational", "automated", "stop_line"],
+  "staff.composer_sms": ["staff_typed", "any", "none"],
+  "operator.alert_sms": ["operator", "any", "none"],
+  "operator.alert_phone_code": ["operator", "any", "none"],
+};
+
+describe("SMS_KINDS — the spec's table, row for row", () => {
+  it("has exactly the spec's eleven PR-1 kinds (mutation: add or drop a kind → FAILS)", () => {
+    expect(Object.keys(SMS_KINDS).sort()).toEqual(Object.keys(SPEC_TABLE).sort());
+    expect(Object.keys(SMS_KINDS)).toHaveLength(11);
+  });
+
+  it.each(Object.entries(SPEC_TABLE))("%s is %j (mutation: move a marketing kind to automated hours → FAILS)", (kind, [cls, hours, footer]) => {
+    const spec = SMS_KINDS[kind as keyof typeof SMS_KINDS];
+    expect([spec.class, spec.hours, spec.footer]).toEqual([cls, hours, footer]);
+  });
+
+  it("the consent.* kinds are NOT here yet: PR-2 is the first code to send them", () => {
+    expect(Object.keys(SMS_KINDS).filter((k) => k.startsWith("consent."))).toEqual([]);
+  });
+});
+
+describe("isSmsKind", () => {
+  it("knows the registry's kinds and nothing inherited from Object (mutation: `in` → 'toString' passes, FAILS)", () => {
+    expect(isSmsKind("voice.textback")).toBe(true);
+    expect(isSmsKind("toString")).toBe(false);
+    expect(isSmsKind("constructor")).toBe(false);
+    expect(isSmsKind("automation.reactivation")).toBe(false);
+  });
+});
+```
+
+Create `apps/web/src/lib/consent/hours.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
+
+const CHI = "America/Chicago";
+const at = (iso: string) => new Date(iso);
+const iso = (d: Date | null) => d?.toISOString() ?? null;
+
+describe("nextOpening: automated hours, 08:00-21:00 every day", () => {
+  it("20:59 sends, 21:00 waits for tomorrow's 08:00 (mutation: `< CLOSE` → `<= CLOSE` → FAILS)", () => {
+    // Tue 2026-10-06, CDT (UTC-5).
+    expect(nextOpening("automated", at("2026-10-07T01:59:00Z"), CHI)).toBeNull();
+    expect(iso(nextOpening("automated", at("2026-10-07T02:00:00Z"), CHI))).toBe("2026-10-07T13:00:00.000Z");
+  });
+
+  it("07:59 waits for today's 08:00, and 08:00 sends (mutation: `>= open` → `> open` → FAILS)", () => {
+    expect(iso(nextOpening("automated", at("2026-10-06T12:59:00Z"), CHI))).toBe("2026-10-06T13:00:00.000Z");
+    expect(nextOpening("automated", at("2026-10-06T13:00:00Z"), CHI)).toBeNull();
+  });
+
+  it("the recipient's zone decides: one instant, two zones, two answers (mutation: ignore `zone` → FAILS)", () => {
+    const t = at("2026-10-06T13:30:00Z"); // 08:30 in Chicago, 06:30 in Los Angeles
+    expect(nextOpening("automated", t, CHI)).toBeNull();
+    expect(iso(nextOpening("automated", t, "America/Los_Angeles"))).toBe("2026-10-06T15:00:00.000Z");
+  });
+
+  it("an unresolvable zone reads as America/Chicago, never as no window and never as UTC (mutation: fall back to UTC → FAILS)", () => {
+    const t = at("2026-10-06T12:00:00Z"); // 07:00 in Chicago, 12:00 in UTC
+    expect(iso(nextOpening("automated", t, "America/Nowhere"))).toBe("2026-10-06T13:00:00.000Z");
+    expect(iso(nextOpening("automated", t, null))).toBe("2026-10-06T13:00:00.000Z");
+    expect(nextOpening("automated", t, "UTC")).toBeNull();
+    expect(hoursZone("America/Nowhere")).toBe(CHI);
+  });
+
+  it("SPRING FORWARD (Sun 2026-03-08): held at 01:30 CST, it opens at 08:00 CDT = 13:00Z", () => {
+    expect(iso(nextOpening("automated", at("2026-03-08T07:30:00Z"), CHI))).toBe("2026-03-08T13:00:00.000Z");
+  });
+
+  it("FALL BACK (Sun 2026-11-01): held at 00:30 CDT, it opens at 08:00 CST = 14:00Z", () => {
+    expect(iso(nextOpening("automated", at("2026-11-01T05:30:00Z"), CHI))).toBe("2026-11-01T14:00:00.000Z");
+  });
+});
+
+describe("nextOpening: marketing hours, 09:00-21:00, Sunday from noon", () => {
+  it("Saturday 08:59 waits for 09:00; 09:00 sends (mutation: marketing opens at 08:00 → FAILS)", () => {
+    // Sat 2026-10-10, CDT.
+    expect(iso(nextOpening("marketing", at("2026-10-10T13:59:00Z"), CHI))).toBe("2026-10-10T14:00:00.000Z");
+    expect(nextOpening("marketing", at("2026-10-10T14:00:00Z"), CHI)).toBeNull();
+  });
+
+  it("Sunday 11:59 waits for noon; 12:00 sends (mutation: drop the Sunday rule → FAILS)", () => {
+    // Sun 2026-10-11, CDT.
+    expect(iso(nextOpening("marketing", at("2026-10-11T16:59:00Z"), CHI))).toBe("2026-10-11T17:00:00.000Z");
+    expect(nextOpening("marketing", at("2026-10-11T17:00:00Z"), CHI)).toBeNull();
+  });
+
+  it("Saturday 21:00 opens on SUNDAY'S noon, the next day's own rule (mutation: use today's weekday for tomorrow → FAILS)", () => {
+    expect(iso(nextOpening("marketing", at("2026-10-11T02:00:00Z"), CHI))).toBe("2026-10-11T17:00:00.000Z");
+  });
+
+  it("the Sunday of the fall-back change opens at noon CST = 18:00Z", () => {
+    expect(iso(nextOpening("marketing", at("2026-11-01T05:30:00Z"), CHI))).toBe("2026-11-01T18:00:00.000Z");
+  });
+
+  it("the automated window is open at 08:30 on a Sunday while marketing is not: the rule decides", () => {
+    const t = at("2026-10-11T13:30:00Z");
+    expect(nextOpening("automated", t, CHI)).toBeNull();
+    expect(iso(nextOpening("marketing", t, CHI))).toBe("2026-10-11T17:00:00.000Z");
+  });
+});
+
+describe("nextOpening: any", () => {
+  it("never waits, at 03:00 or at any hour (mutation: treat `any` as automated → FAILS)", () => {
+    expect(nextOpening("any", at("2026-10-06T08:00:00Z"), CHI)).toBeNull();
+  });
+});
+
+describe("expiresBeforeOpening: choice 21", () => {
+  const opening = at("2026-10-06T13:00:00Z");
+  it("a deadline at or before the opening expires; one a minute after does not (mutation: `<=` → `<` → FAILS)", () => {
+    expect(expiresBeforeOpening(opening, at("2026-10-06T12:30:00Z"))).toBe(true);
+    expect(expiresBeforeOpening(opening, at("2026-10-06T13:00:00Z"))).toBe(true);
+    expect(expiresBeforeOpening(opening, at("2026-10-06T13:01:00Z"))).toBe(false);
+  });
+
+  it("an open window, or no deadline, never expires", () => {
+    expect(expiresBeforeOpening(null, at("2026-10-06T12:30:00Z"))).toBe(false);
+    expect(expiresBeforeOpening(opening, null)).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/consent/classes.test.ts src/lib/consent/hours.test.ts
+```
+
+Expected (the staged replay's RED run):
+- `src/lib/consent/classes.test.ts`: **fails to load** (14 tests once it loads): `Cannot find module './classes' imported from apps/web/src/lib/consent/classes.test.ts`
+- `src/lib/consent/hours.test.ts`: **fails to load** (14 tests once it loads): `Cannot find module './hours' imported from apps/web/src/lib/consent/hours.test.ts`
+
+- [ ] **Step 3: Implement**
+
+Create `apps/web/src/lib/consent/classes.ts`:
+
+```ts
+import type { HoursRule } from "./hours";
+
+/**
+ * The message-class registry (consent chain spec §4.1 item 2). Every SMS the
+ * platform sends has a stable KIND, and the kind — never the caller — decides
+ * its class, its hours and its footer. The send gate (gate.ts) throws on a
+ * kind that is not here, and source scan 2 (scans.test.ts) fails on any kind
+ * literal passed to the gate that is not here.
+ *
+ * Classes: `customer_initiated` (a reply to what the customer just did),
+ * `informational`, `marketing`, `staff_typed`, `operator`, `consent_reply`.
+ * For SMS the class exempts NOTHING from a stop: after a stop the business
+ * sends nothing but the one confirmation (decision 2), so the gate reads the
+ * ledger for every kind here. The class decides the hours and, from PR-3 on,
+ * which EMAIL kinds an unsubscribe does not stop (decision 7).
+ *
+ * The three `consent.*` kinds (the stop and start confirmations and the
+ * help reply) arrive with PR-2, which is the first code to send them.
+ *
+ * Footer: `stop_line` is `withOptOut`'s disclosure, exactly as
+ * sendAutomationSms and the text-back appended it before this registry
+ * existed; `none` is what the composer, the alerts and the code sent.
+ */
+export type SmsClass =
+  | "customer_initiated" | "informational" | "marketing" | "staff_typed" | "operator" | "consent_reply";
+
+export type SmsKindSpec = { readonly class: SmsClass; readonly hours: HoursRule; readonly footer: "stop_line" | "none" };
+
+export const SMS_KINDS = {
+  "automation.instant_reply": { class: "customer_initiated", hours: "automated", footer: "stop_line" },
+  "automation.appointment_confirm": { class: "informational", hours: "automated", footer: "stop_line" },
+  "automation.sms_reminder": { class: "informational", hours: "automated", footer: "stop_line" },
+  // Review requests, quote follow-ups and no-show nudges as MARKETING is the
+  // spec's proposal (the stricter choice), for counsel with this table.
+  "automation.no_show_nudge": { class: "marketing", hours: "marketing", footer: "stop_line" },
+  "automation.referral_ask": { class: "marketing", hours: "marketing", footer: "stop_line" },
+  "automation.review_request": { class: "marketing", hours: "marketing", footer: "stop_line" },
+  "automation.quote_followup": { class: "marketing", hours: "marketing", footer: "stop_line" },
+  "voice.textback": { class: "informational", hours: "automated", footer: "stop_line" },
+  "staff.composer_sms": { class: "staff_typed", hours: "any", footer: "none" },
+  "operator.alert_sms": { class: "operator", hours: "any", footer: "none" },
+  "operator.alert_phone_code": { class: "operator", hours: "any", footer: "none" },
+} as const satisfies Record<string, SmsKindSpec>;
+
+export type SmsKind = keyof typeof SMS_KINDS;
+
+/** The kinds an automation pass sends through sendAutomationSms. */
+export type AutomationSmsKind = Extract<SmsKind, `automation.${string}`>;
+
+export function isSmsKind(kind: string): kind is SmsKind {
+  return Object.prototype.hasOwnProperty.call(SMS_KINDS, kind);
+}
+```
+
+Create `apps/web/src/lib/consent/hours.ts`:
+
+```ts
+import { resolveAccountZone } from "@/lib/booking/followup-timing";
+import { wallInstant } from "@/lib/automations/quiet-hours";
+
+/**
+ * The FIXED sending hours (consent chain spec decision 4, choices 18 and 31).
+ * They cannot be switched off, and nothing reads the old per-account quiet
+ * hours any more (`automation_settings.quiet_*`, source scan 5).
+ *
+ *   automated  08:00–21:00 every day, in the recipient's zone: every
+ *              automated text, and every automated email (choice 31);
+ *   marketing  09:00–21:00 Monday to Saturday, 12:00–21:00 on Sunday: the
+ *              Texas solicitation hours (Tex. Bus. & Com. Code §301.051, an
+ *              ASSUMPTION that they reach texts, for counsel);
+ *   any        no window: staff-typed replies, operator alerts and codes.
+ *
+ * The start is inside the window and the end is outside it: 20:59 sends,
+ * 21:00 waits for tomorrow's opening.
+ *
+ * The RECIPIENT's zone is the contact's when one is known, otherwise the
+ * account's (spec §4.1 item 2). BIS stores no contact zone yet, so callers
+ * pass the account's. A zone Intl cannot resolve falls back to
+ * America/Chicago (0001's default for `accounts.timezone`), never to "no
+ * window": the old quiet-hours module failed OPEN on a junk zone, which a
+ * fixed legal window cannot.
+ */
+export type HoursRule = "automated" | "marketing" | "any";
+
+export const FALLBACK_ZONE = "America/Chicago";
+
+const CLOSE = 21 * 60;
+
+function openingMinute(rule: Exclude<HoursRule, "any">, weekday: number): number {
+  if (rule === "automated") return 8 * 60;
+  return weekday === 0 ? 12 * 60 : 9 * 60;
+}
+
+type Wall = { year: number; month: number; day: number; weekday: number; minutes: number };
+
+const WEEKDAYS: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+/** `hourCycle: "h23"` and "en-US", for the reasons quiet-hours.ts's `wallOf` gives. */
+function wallOf(instant: Date, zone: string): Wall {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit", weekday: "short",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(instant);
+  const get = (t: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === t)?.value ?? "";
+  return {
+    year: Number(get("year")), month: Number(get("month")), day: Number(get("day")),
+    weekday: WEEKDAYS[get("weekday")] ?? NaN,
+    minutes: Number(get("hour")) * 60 + Number(get("minute")),
+  };
+}
+
+function nextCalendarDay(w: Wall): { year: number; month: number; day: number; weekday: number } {
+  const t = new Date(Date.UTC(w.year, w.month - 1, w.day + 1));
+  return { year: t.getUTCFullYear(), month: t.getUTCMonth() + 1, day: t.getUTCDate(), weekday: t.getUTCDay() };
+}
+
+/** The zone a window is read in: the recipient's, or the fallback. */
+export function hoursZone(zone: string | null | undefined): string {
+  return resolveAccountZone(zone) ?? FALLBACK_ZONE;
+}
+
+/**
+ * Null when a send under `rule` may go at `now` in `zone`; otherwise the
+ * next instant the window opens. Throws only on an invalid `now` (a caller
+ * bug, never data).
+ */
+export function nextOpening(rule: HoursRule, now: Date, zone: string | null | undefined): Date | null {
+  if (rule === "any") return null;
+  if (!Number.isFinite(now.getTime())) throw new Error("nextOpening: invalid instant");
+  const z = hoursZone(zone);
+  const wall = wallOf(now, z);
+  const open = openingMinute(rule, wall.weekday);
+  if (wall.minutes >= open && wall.minutes < CLOSE) return null;
+  if (wall.minutes < open) return wallInstant(wall.year, wall.month, wall.day, open, z);
+  const next = nextCalendarDay(wall);
+  return wallInstant(next.year, next.month, next.day, openingMinute(rule, next.weekday), z);
+}
+
+/**
+ * Choice 21: a send whose purpose has passed before its window opens is not
+ * sent at all. `deadline` at or before the opening → true. A send inside
+ * its window, or with no deadline, never expires here.
+ */
+export function expiresBeforeOpening(opening: Date | null, deadline: Date | null | undefined): boolean {
+  if (opening === null || !deadline) return false;
+  return deadline.getTime() <= opening.getTime();
+}
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/consent/classes.test.ts src/lib/consent/hours.test.ts
+pnpm typecheck
+pnpm test
+```
+
+Expected (the staged replay's GREEN run):
+28 passed across the task's test files:
+- `src/lib/consent/classes.test.ts`: 14 passed
+- `src/lib/consent/hours.test.ts`: 14 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4353 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+11 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **close inclusive** — in `src/lib/consent/hours.ts`: `wall.minutes < CLOSE) return null;` → `wall.minutes <= CLOSE) return null;`; turns red 2 tests:
+    - nextOpening: automated hours, 08:00-21:00 every day 20:59 sends, 21:00 waits for tomorrow's 08:00 (mutation: `< CLOSE` → `<= CLOSE` → FAILS)
+    - nextOpening: marketing hours, 09:00-21:00, Sunday from noon Saturday 21:00 opens on SUNDAY'S noon, the next day's own rule (mutation: use today's weekday for tomorrow → FAILS)
+2. **open exclusive** — in `src/lib/consent/hours.ts`: `if (wall.minutes >= open && wall.minutes` → `if (wall.minutes > open && wall.minutes`; turns red 3 tests:
+    - nextOpening: automated hours, 08:00-21:00 every day 07:59 waits for today's 08:00, and 08:00 sends (mutation: `>= open` → `> open` → FAILS)
+    - nextOpening: marketing hours, 09:00-21:00, Sunday from noon Saturday 08:59 waits for 09:00; 09:00 sends (mutation: marketing opens at 08:00 → FAILS)
+    - nextOpening: marketing hours, 09:00-21:00, Sunday from noon Sunday 11:59 waits for noon; 12:00 sends (mutation: drop the Sunday rule → FAILS)
+3. **ignore the zone** — in `src/lib/consent/hours.ts`: `const z = hoursZone(zone);` → `const z = hoursZone("America/Chicago");`; turns red 2 tests:
+    - nextOpening: automated hours, 08:00-21:00 every day the recipient's zone decides: one instant, two zones, two answers (mutation: ignore `zone` → FAILS)
+    - nextOpening: automated hours, 08:00-21:00 every day an unresolvable zone reads as America/Chicago, never as no window and never as UTC (mutation: fall back to UTC → FAILS)
+4. **fallback UTC** — in `src/lib/consent/hours.ts`: `return resolveAccountZone(zone) ?? FALLBACK_ZONE;` → `return resolveAccountZone(zone) ?? "UTC";`; turns red 1 test:
+    - nextOpening: automated hours, 08:00-21:00 every day an unresolvable zone reads as America/Chicago, never as no window and never as UTC (mutation: fall back to UTC → FAILS)
+5. **marketing opens 08:00** — in `src/lib/consent/hours.ts`: `return weekday === 0 ? 12 * 60 : 9 * 60;` → `return weekday === 0 ? 12 * 60 : 8 * 60;`; turns red 1 test:
+    - nextOpening: marketing hours, 09:00-21:00, Sunday from noon Saturday 08:59 waits for 09:00; 09:00 sends (mutation: marketing opens at 08:00 → FAILS)
+6. **no Sunday rule** — in `src/lib/consent/hours.ts`: `return weekday === 0 ? 12 * 60 : 9 * 60;` → `return 9 * 60;`; turns red 4 tests:
+    - nextOpening: marketing hours, 09:00-21:00, Sunday from noon Sunday 11:59 waits for noon; 12:00 sends (mutation: drop the Sunday rule → FAILS)
+    - nextOpening: marketing hours, 09:00-21:00, Sunday from noon Saturday 21:00 opens on SUNDAY'S noon, the next day's own rule (mutation: use today's weekday for tomorrow → FAILS)
+    - nextOpening: marketing hours, 09:00-21:00, Sunday from noon the Sunday of the fall-back change opens at noon CST = 18:00Z
+    - nextOpening: marketing hours, 09:00-21:00, Sunday from noon the automated window is open at 08:30 on a Sunday while marketing is not: the rule decides
+7. **tomorrow read with today's weekday** — in `src/lib/consent/hours.ts`: `openingMinute(rule, next.weekday), z);` → `openingMinute(rule, wall.weekday), z);`; turns red 1 test:
+    - nextOpening: marketing hours, 09:00-21:00, Sunday from noon Saturday 21:00 opens on SUNDAY'S noon, the next day's own rule (mutation: use today's weekday for tomorrow → FAILS)
+8. **'any' treated as automated** — in `src/lib/consent/hours.ts`: delete `if (rule === "any") return null;`; turns red 1 test:
+    - nextOpening: any never waits, at 03:00 or at any hour (mutation: treat `any` as automated → FAILS)
+9. **expiry strict** — in `src/lib/consent/hours.ts`: `return deadline.getTime() <= opening.getTime();` → `return deadline.getTime() < opening.getTime();`; turns red 1 test:
+    - expiresBeforeOpening: choice 21 a deadline at or before the opening expires; one a minute after does not (mutation: `<=` → `<` → FAILS)
+10. **a marketing kind on automated hours** — in `src/lib/consent/classes.ts`: `"automation.review_request": { class: "marketing", hours: "marketing", footer: "stop_line" },` → `"automation.review_request": { class: "marketing", hours: "automated", footer: "stop_line" },`; turns red 1 test:
+    - SMS_KINDS — the spec's table, row for row automation.review_request is ["marketing","marketing","stop_line"] (mutation: move a marketing kind to automated hours → FAILS)
+11. **isSmsKind with `in`** — in `src/lib/consent/classes.ts`: `return Object.prototype.hasOwnProperty.call(SMS_KINDS, kind);` → `return kind in SMS_KINDS;`; turns red 1 test:
+    - isSmsKind knows the registry's kinds and nothing inherited from Object (mutation: `in` → 'toString' passes, FAILS)
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/lib/consent/classes.test.ts" \
+        "apps/web/src/lib/consent/hours.test.ts" \
+        "apps/web/src/lib/consent/classes.ts" \
+        "apps/web/src/lib/consent/hours.ts"
+git commit -m "feat(consent): the SMS kind registry and the fixed sending hours"
+```
+
+---
+
+### Task 6: The copy: every new PR-1 line, added in one place
+
+**Owner:** bis-frontend (the copy catalogue). **Lane:** B (Phase 1). **Depends on:** None.
+
+Every new line of PR-1 copy lands in `messages.ts` in ONE commit, so the two Phase 3 lanes never edit the same file. The retired quiet-hours lines are removed later, by Task 10, with the form that uses them. The spec's verbatim sentences are pinned by `copy.test.ts`; the rest are this plan's words (Spec gaps resolved here, G15).
+
+**Files:**
+- Create: `apps/web/src/lib/consent/copy.test.ts` (5 tests)
+- Modify: `apps/web/src/lib/messages.ts` (an intermediate state; a later task finishes it)
+
+**Interfaces:**
+- Produces the keys (23 of them, read off the file): `contact.messages.{title,texts}`, `contact.phoneCountry.{word,line,mx,us,mxToast,usToast,failed,changed,unreadable,undoBusy}`, `settings.alertPhoneCountry{,Us,Mx}`, `settings.alertPhoneStopped`, `compose.sms{Stopped,StoppedUndated,Held,CheckNumber,StateUnknown}`, `automations.quiet.fixed`, `activity.source.textback`.
+- `messages.test.ts`'s existing scan (no milestone codes, no `{{`) covers the new keys unchanged.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `apps/web/src/lib/consent/copy.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { m } from "@/lib/messages";
+
+/**
+ * Consent chain spec §6 gives some of PR-1's words VERBATIM; they are
+ * pinned here, once, so a later "tidy" of the copy fails in review instead
+ * of quietly changing what the spec (and counsel, for the hours) approved.
+ * The rest of PR-1's copy is this plan's (Spec gaps resolved here) and is
+ * pinned where it renders.
+ */
+describe("the spec's own words (§6)", () => {
+  it("the fixed sending hours, with the account's zone as {zone} (mutation: '8 a.m.' → '8am' FAILS)", () => {
+    expect(m["automations.quiet.fixed"]).toBe(
+      "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens.");
+  });
+
+  it("the Texts row's Check number state", () => {
+    expect(m["contact.phoneCountry.line"]).toBe("This number could be Mexican or US.");
+    expect(m["contact.phoneCountry.mx"]).toBe("Mexico (+52)");
+    expect(m["contact.phoneCountry.us"]).toBe("US (+1)");
+  });
+
+  it("the composer's stopped line, with its date as {date}", () => {
+    expect(m["compose.smsStopped"]).toBe("They stopped texts on {date}. You can't text this number until they text START.");
+  });
+
+  it("the alert phone's country choice and its stopped line", () => {
+    expect(m["settings.alertPhoneCountryUs"]).toBe("US (+1)");
+    expect(m["settings.alertPhoneCountryMx"]).toBe("México (+52)");
+    expect(m["settings.alertPhoneStopped"]).toBe(
+      "This number has stopped texts from your business line. Text START to it from that phone to turn them back on.");
+  });
+
+  it("no PR-1 line exposes a code, a kind or template syntax other than its own placeholder (DESIGN.md voice)", () => {
+    const keys = Object.keys(m).filter((k) => /^(contact\.phoneCountry|contact\.messages|compose\.sms(Stopped|StoppedUndated|Held|CheckNumber|StateUnknown)|settings\.alertPhone(Country|Stopped)|automations\.quiet\.fixed|activity\.source\.textback)/.test(k));
+    // 23, read off messages.ts: 10 contact.phoneCountry, 2 contact.messages,
+    // 5 compose, 4 settings.alertPhone, the hours sentence, the textback title.
+    expect(keys.length).toBe(23);
+    for (const k of keys) {
+      const text = m[k as keyof typeof m];
+      expect(text).not.toMatch(/\{\{|40300|unconfirmed_number|ledger|automation\./);
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/consent/copy.test.ts
+```
+
+Expected (the staged replay's RED run):
+- `src/lib/consent/copy.test.ts`: **5 failing** that Step 4 turns green:
+  - the spec's own words (§6) the fixed sending hours, with the account's zone as {zone} (mutation: '8 a.m.' → '8am' FAILS)
+  - the spec's own words (§6) the Texts row's Check number state
+  - the spec's own words (§6) the composer's stopped line, with its date as {date}
+  - the spec's own words (§6) the alert phone's country choice and its stopped line
+  - the spec's own words (§6) no PR-1 line exposes a code, a kind or template syntax other than its own placeholder (DESIGN.md voice)
+
+- [ ] **Step 3: Implement**
+
+Apply to `apps/web/src/lib/messages.ts` (against the task's parent commit):
+
+```diff
+@@ -458,6 +458,22 @@ export const m = {
+   // `flipMarketingOptOut`, so the box is always named by what it says.
+   "contact.marketingOptOut.undoBusy": "Your last change is still saving. Use the “{label}” box to change it back.",
+ 
++  // The contact's "Messages" block (consent chain spec §6). PR-1 ships only
++  // the Texts row's Check number state (F-009); the rest lands in PR-2/PR-3.
++  // "line", "mx" and "us" are the spec's words, verbatim.
++  "contact.messages.title": "Messages",
++  "contact.messages.texts": "Texts",
++  "contact.phoneCountry.word": "Check number",
++  "contact.phoneCountry.line": "This number could be Mexican or US.",
++  "contact.phoneCountry.mx": "Mexico (+52)",
++  "contact.phoneCountry.us": "US (+1)",
++  "contact.phoneCountry.mxToast": "Saved as a Mexican number",
++  "contact.phoneCountry.usToast": "Saved as a US number",
++  "contact.phoneCountry.failed": "Couldn't save that — please try again.",
++  "contact.phoneCountry.changed": "Their number changed while you were choosing. Reload to see it.",
++  "contact.phoneCountry.unreadable": "That number can't be read as a US or Mexican number. Edit it instead.",
++  "contact.phoneCountry.undoBusy": "Your last change is still saving. Edit the number itself to change it back.",
++
+   // The contact drawer's recent-activity feed (Task 2's summary route,
+   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
+   // {placeholder} convention (see setup.progress above) — the route
+@@ -582,6 +598,12 @@ export const m = {
+   // FROM yet.
+   "settings.alertPhoneNotClearedToSend": "Texting isn't turned on for this account yet, so no verification code can go out. See the Checklist page.",
+   "settings.alertPhoneTooManyCodes": "Too many codes have been requested for this number in the last hour. Try again in about an hour.",
++  // The alert phone's country (consent chain PR-1, F-009): never ambiguous.
++  "settings.alertPhoneCountry": "Country of this number",
++  "settings.alertPhoneCountryUs": "US (+1)",
++  "settings.alertPhoneCountryMx": "México (+52)",
++  // Spec §6, verbatim: the code could not go because that phone texted STOP.
++  "settings.alertPhoneStopped": "This number has stopped texts from your business line. Text START to it from that phone to turn them back on.",
+   "settings.alertPhoneSendFailed": "The verification code couldn't be sent. Try again in a moment.",
+   "settings.alertPhoneCodeSent": "Code sent — check that phone for a text.",
+   // Deliberately does not say the number was right or wrong — only that
+@@ -640,6 +662,13 @@ export const m = {
+   // Says WHO is holding it up and what unblocks it, rather than "unavailable".
+   "compose.smsBlockedA2p": "Texting is off until this company's A2P registration is approved",
+   "compose.smsBlockedNoNumber": "Texting needs a live phone number on this company",
++  // The consent gate (lib/consent/composer-state.ts): the one line the text
++  // composer shows in place of its form, and the toast a refused send gives.
++  "compose.smsStopped": "They stopped texts on {date}. You can't text this number until they text START.",
++  "compose.smsStoppedUndated": "They stopped texts from you. You can't text this number until they text START.",
++  "compose.smsHeld": "Texts to them are on hold while you check whether they asked to stop.",
++  "compose.smsCheckNumber": "This number could be Mexican or US. Pick its country on their contact before you text it.",
++  "compose.smsStateUnknown": "Couldn't check whether they can get texts. Reload the page to try again.",
+   // {n} segments — SMS bills per segment, and a single non-GSM character
+   // (an accent, a curly apostrophe) drops the whole message to 70 per segment.
+   "compose.smsSegments": "{chars} characters · {segments} message(s)",
+@@ -1433,6 +1462,8 @@ export const m = {
+   "automations.quiet.saveFailed": "Could not save quiet hours.",
+   "automations.quiet.invalidTime": "Enter both times as hours and minutes, like 9:00 PM.",
+   "automations.quiet.readFailed": "Couldn't load the current quiet hours. Reload the page before changing them.",
++  // Spec §6, verbatim: the fixed sending hours, read-only (decision 4).
++  "automations.quiet.fixed": "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens.",
+   "automations.activityLink": "See what went out",
+   // The page's four group headings, in the order the customer lives it; the
+   // last group is the one rule that holds every automation back.
+@@ -1485,6 +1516,7 @@ export const m = {
+   "activity.source.weekly_report": "Weekly report",
+   "activity.source.concierge": "Website assistant",
+   "activity.source.voice": "Phone assistant",
++  "activity.source.textback": "Missed-call text-back",
+ 
+   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
+   // audiences: this is the client's own business data (who rang, what the
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/consent/copy.test.ts src/lib/messages.test.ts
+pnpm test
+```
+
+Expected (the staged replay's GREEN run):
+5 passed across the task's test files:
+- `src/lib/consent/copy.test.ts`: 5 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4358 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites. `pnpm lint`: ✖ 2 problems (0 errors, 2 warnings).
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+2 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **hours sentence reworded** — in `src/lib/messages.ts`: `go out between 8 a.m. and 9 p.m. in your time zone` → `go out between 8am and 9pm in your time zone`; turns red 1 test:
+    - the spec's own words (§6) the fixed sending hours, with the account's zone as {zone} (mutation: '8 a.m.' → '8am' FAILS)
+2. **México without the accent in Settings** — in `src/lib/messages.ts`: `"settings.alertPhoneCountryMx": "México (+52)"` → `"settings.alertPhoneCountryMx": "Mexico (+52)"`; turns red 1 test:
+    - the spec's own words (§6) the alert phone's country choice and its stopped line
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/lib/consent/copy.test.ts" \
+        "apps/web/src/lib/messages.ts"
+git commit -m "feat(copy): consent chain PR-1's lines (Check number, the composer, the alert phone, the fixed hours)"
+```
+
+---
+
+### Task 7: `e164Of`: one normaliser behind every typed or spoken number
+
+**Owner:** bis-voice (owns `lib/voice/phone-number.ts`). **Lane:** single (Phase 2). **Depends on:** Task 2; Prerequisite 1 (#149 changes `phone-number.ts`, `registry.ts`, `finish-call.ts` and `textback.ts`).
+
+`toE164` read any ten digits as `+1`, so a Reynosa number spoken to Sofía or typed into the booking page was stored and texted as a US number. `e164Of` keeps every call site's shape (E.164 or null) and puts F-009's rule behind it; every call site changes by name only.
+
+**Files:**
+- Modify: `apps/web/src/lib/voice/phone-number.test.ts` (18 → 19 tests)
+- Modify: `apps/web/src/lib/voice/phone-number.ts` (an intermediate state; a later task finishes it)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.ts`
+- Modify: `apps/web/src/app/api/sms/inbound/route.ts`
+- Modify: `apps/web/src/app/api/voice/texml/route.ts`
+- Modify: `apps/web/src/app/b/[publicId]/actions.ts`
+- Modify: `apps/web/src/lib/forms/enrich.ts`
+- Modify: `apps/web/src/lib/proposals/generate.ts`
+- Modify: `apps/web/src/lib/voice/sip-headers.ts`
+- Modify: `apps/web/src/lib/voice/tools/registry.ts`
+- Modify: `apps/web/src/lib/automations/instant-reply.ts` (an intermediate state; a later task finishes it)
+- Modify: `apps/web/src/lib/voice/finish-call.ts` (an intermediate state; a later task finishes it)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx` (an intermediate state; a later task finishes it)
+
+**Interfaces:**
+- Produces: `e164Of(raw: string | null | undefined): string | null` (= `normalisePhone(raw)?.e164 ?? null`), and `isCallerIdNumber` rebuilt on it. `toE164` stays, for now, as a deprecated ALIAS of `e164Of` (the file's last lines): nine more files use it and Tasks 9, 12 and 13 rewrite them (the passes, the composer, the alert phone), so deleting it here would break the build until then. Because it IS `e164Of`, those callers already get F-009's rule. Task 15 deletes the alias, and its scan keeps it gone.
+- Every one of the 11 call sites below changes `toE164` → `e164Of` and nothing else (41 occurrences in those 11 files at the base, counted).
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace the whole file `apps/web/src/lib/voice/phone-number.test.ts` with:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { e164Of, isCallerIdNumber } from "./phone-number";
+
+describe("e164Of — normalisePhone's E.164 (F-009)", () => {
+  it.each([
+    ["9562921696", "+19562921696"],
+    ["(956) 292-1696", "+19562921696"],
+    ["19562921696", "+19562921696"],
+    ["+19562921696", "+19562921696"],
+    ["525512345678", "+525512345678"],
+    // THE F-009 case: ten digits valid only in Mexico are +52, never +1
+    // (mutation: e164Of = old toE164, any ten digits → +1 → FAILS).
+    ["(899) 922-1234", "+528999221234"],
+  ])("%s → %s", (raw, want) => expect(e164Of(raw)).toBe(want));
+  it.each([["", null], ["12345", null], [null, null], [undefined, null],
+    ["12345678901234567890", null]])("invalid %s → null", (raw, want) =>
+    expect(e164Of(raw)).toBe(want));
+});
+
+// The one rule for "this stored phone is the number the call came from".
+// Contacts keep a phone in whatever shape it was typed, so it is normalized
+// before the compare; a call with no caller ID matches nothing at all.
+describe("isCallerIdNumber", () => {
+  it.each([
+    ["+19562921696", true],
+    ["(956) 292-1696", true],
+    ["956-292-1696", true],
+    ["+19565550100", false],
+    ["", false],
+    [null, false],
+    [undefined, false],
+  ])("stored %s against caller ID +19562921696 → %s", (stored, want) =>
+    expect(isCallerIdNumber(stored, "+19562921696")).toBe(want));
+
+  it("a withheld caller ID matches nothing — not even a blank stored phone", () => {
+    expect(isCallerIdNumber(null, null)).toBe(false);
+    expect(isCallerIdNumber("", null)).toBe(false);
+    expect(isCallerIdNumber("+19562921696", null)).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/voice/phone-number.test.ts
+```
+
+Expected (the staged replay's RED run):
+- `src/lib/voice/phone-number.test.ts`: **11 failing** that Step 4 turns green; 8 already pass:
+  - e164Of — normalisePhone's E.164 (F-009) 9562921696 → +19562921696
+  - e164Of — normalisePhone's E.164 (F-009) (956) 292-1696 → +19562921696
+  - e164Of — normalisePhone's E.164 (F-009) 19562921696 → +19562921696
+  - e164Of — normalisePhone's E.164 (F-009) +19562921696 → +19562921696
+  - e164Of — normalisePhone's E.164 (F-009) 525512345678 → +525512345678
+  - e164Of — normalisePhone's E.164 (F-009) (899) 922-1234 → +528999221234
+  - e164Of — normalisePhone's E.164 (F-009) invalid  → null
+  - e164Of — normalisePhone's E.164 (F-009) invalid 12345 → null
+  - e164Of — normalisePhone's E.164 (F-009) invalid null → null
+  - e164Of — normalisePhone's E.164 (F-009) invalid undefined → null
+  - e164Of — normalisePhone's E.164 (F-009) invalid 12345678901234567890 → null
+
+- [ ] **Step 3: Implement**
+
+Replace the whole file `apps/web/src/lib/voice/phone-number.ts` with:
+
+```ts
+import { normalisePhone } from "@bis/db/phone";
+
+/**
+ * E.164 or nothing, by F-009's one rule (packages/db/src/phone.ts,
+ * `normalisePhone`): a number with a country code is kept as given, and ten
+ * digits become +1 or +52 by which country's plan they are valid in. It
+ * replaced `toE164`, which made ANY ten digits +1 — so a Reynosa number a
+ * caller spoke was stored as a US one. External APIs accept only E.164
+ * (live-verified 2026-07-26: "9562921696", "(956) 292-1696" and
+ * "19562921696" are refused; "+19562921696" passes).
+ *
+ * A number valid as both a US and a Mexican one comes back as `+1` here;
+ * whether its country is CONFIRMED is `normalisePhone`'s `unconfirmed`,
+ * which the contact row stores and the send gate reads. Use normalisePhone
+ * directly wherever that matters.
+ */
+export function e164Of(raw: string | null | undefined): string | null {
+  return normalisePhone(raw)?.e164 ?? null;
+}
+
+/**
+ * Is a contact's stored phone the number this call came from? Contacts keep a
+ * phone in whatever shape it was typed ("(956) 292-1696" from a web form), so
+ * it is normalized before the compare. Caller ID is what the carrier presents,
+ * not an authentication — but it is the one identity a call carries, and the
+ * voice tools act on a contact only when it is this number. A withheld caller
+ * ID matches nothing, not even a blank stored phone.
+ */
+export function isCallerIdNumber(
+  stored: string | null | undefined, callerNumber: string | null | undefined,
+): boolean {
+  return !!callerNumber && e164Of(stored) === callerNumber;
+}
+
+/**
+ * @deprecated The old name, kept ONLY while Tasks 9, 12 and 13 move its last
+ * callers (the passes, the composer, the alert phone). It IS e164Of, so those
+ * callers already get F-009's rule. Task 15 deletes it, and its scan keeps it
+ * deleted.
+ */
+export const toE164 = e164Of;
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.ts` (against the task's parent commit):
+
+```diff
+@@ -32,7 +32,7 @@ import {
+   type PhoneNumberStatus, type VoiceProfilePatch,
+ } from "@bis/db";
+ import { requireAccountAccess } from "@/lib/auth";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { e164Of } from "@/lib/voice/phone-number";
+ import { resolveHandoffTarget } from "@/lib/voice/handoff";
+ import { m } from "@/lib/messages";
+ 
+@@ -91,7 +91,7 @@ export async function assignNumberAction(
+   const { userId, isAgency } = await requireAccountAccess(accountId);
+   if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
+ 
+-  const e164 = toE164(String(formData.get("e164") ?? ""));
++  const e164 = e164Of(String(formData.get("e164") ?? ""));
+   if (!e164) return { ok: false, error: m["voice.numbers.badE164"] };
+ 
+   const telnyxId = String(formData.get("telnyxId") ?? "").trim();
+@@ -226,7 +226,7 @@ export async function setNumberStatusAction(
+  *    second spelling is one this screen and the call path would read
+  *    differently. Same rule `setAlertPhoneAction` follows for `alert_phone`.
+  *
+- * ② WHAT IS STORED IS `toE164(input)` OR NULL, never a raw string. The
++ * ② WHAT IS STORED IS `e164Of(input)` OR NULL, never a raw string. The
+  *    handoff TeXML interpolates this column into an XML document UNESCAPED,
+  *    which is safe only because every value in it has passed E.164 — the
+  *    validation here and the CHECK behind it are that safety, not a nicety.
+@@ -254,7 +254,7 @@ export async function setTransferPhoneAction(
+   if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
+ 
+   const raw = String(formData.get("transfer_phone") ?? "").trim();
+-  const transferPhone = raw ? toE164(raw) : null;
++  const transferPhone = raw ? e164Of(raw) : null;
+   if (raw && !transferPhone) return { ok: false, error: m["voice.transfer.badE164"] };
+ 
+   if (transferPhone) {
+```
+
+Apply to `apps/web/src/app/api/sms/inbound/route.ts` (against the task's parent commit):
+
+```diff
+@@ -31,7 +31,7 @@ import {
+   type MessageStatus, type SupabaseClient,
+ } from "@bis/db";
+ import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { e164Of } from "@/lib/voice/phone-number";
+ 
+ // A webhook, not a user action: there is no session, no operator, no AI
+ // persona — "system" is the actor for every write this route makes.
+@@ -73,7 +73,7 @@ type TelnyxWebhookBody = {
+ };
+ 
+ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefined): Promise<void> {
+-  const calledNumber = toE164(payload?.to?.[0]?.phone_number ?? null);
++  const calledNumber = e164Of(payload?.to?.[0]?.phone_number ?? null);
+   if (!calledNumber) {
+     log("inbound message with no resolvable called (to) number");
+     return;
+@@ -111,7 +111,7 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
+   // record of the operator as their own lead. Recognised and dropped here,
+   // BEFORE the retry-dedupe check: there is no message worth deduping
+   // against, only a sender worth never filing.
+-  const fromNumber = toE164(payload?.from?.phone_number ?? null);
++  const fromNumber = e164Of(payload?.from?.phone_number ?? null);
+   // Contained on purpose: getAlertPhone is a plain accounts.alert_phone
+   // SELECT, and a transient read failure here (a DB blip, not a real
+   // "the operator texted their own line" case) must never escape into the
+```
+
+Apply to `apps/web/src/app/api/voice/texml/route.ts` (against the task's parent commit):
+
+```diff
+@@ -33,7 +33,7 @@
+ // hears the SAME sentence as any other refusal; only the log line names the
+ // reason.
+ import { NextResponse, after } from "next/server";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { e164Of } from "@/lib/voice/phone-number";
+ import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
+ import { callAnswerable } from "@/lib/voice/accept-gate";
+ import { newHandoffToken } from "@/lib/voice/handoff";
+@@ -240,7 +240,7 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
+  * owned number on the outbound leg, and the caller's own number is not one.
+  */
+ export function forwardTarget(env: NodeJS.ProcessEnv = process.env): string | null {
+-  return toE164(env.VOICE_FORWARD_TO);
++  return e164Of(env.VOICE_FORWARD_TO);
+ }
+ 
+ export function forwardXml(to: string, callerId: string | null): string {
+@@ -375,7 +375,7 @@ export async function GET(req: Request): Promise<NextResponse> {
+     return new NextResponse(null, { status: 405 });
+   }
+   const params = new URL(req.url).searchParams;
+-  return respond(toE164(params.get("To")), toE164(params.get("From")), actionOrigin(req));
++  return respond(e164Of(params.get("To")), e164Of(params.get("From")), actionOrigin(req));
+ }
+ 
+ export async function POST(req: Request): Promise<NextResponse> {
+@@ -404,14 +404,14 @@ export async function POST(req: Request): Promise<NextResponse> {
+   if (publicKey) {
+     const timestamp = req.headers.get("telnyx-timestamp");
+     const signatureB64 = req.headers.get("telnyx-signature-ed25519");
+-    // Sanitized through toE164 before logging — claimedTo/claimedFrom are
++    // Sanitized through e164Of before logging — claimedTo/claimedFrom are
+     // still unauthenticated at this point (that's the whole reason we're
+     // rejecting), so raw interpolation would let a prober inject newlines or
+     // control characters into the log stream and forge fake decline lines of
+-    // unbounded length. toE164 collapses anything that isn't a real phone
++    // unbounded length. e164Of collapses anything that isn't a real phone
+     // number to null, logged as "none".
+-    const safeTo = toE164(claimedTo) ?? "none";
+-    const safeFrom = toE164(claimedFrom) ?? "none";
++    const safeTo = e164Of(claimedTo) ?? "none";
++    const safeFrom = e164Of(claimedFrom) ?? "none";
+     if (!timestamp || !signatureB64) {
+       console.error(`texml: rejected request (missing-headers), claimedTo ${safeTo}, claimedFrom ${safeFrom}`);
+       return new NextResponse(null, { status: 403 });
+@@ -422,5 +422,5 @@ export async function POST(req: Request): Promise<NextResponse> {
+       return new NextResponse(null, { status: 403 });
+     }
+   }
+-  return respond(toE164(claimedTo), toE164(claimedFrom), actionOrigin(req));
++  return respond(e164Of(claimedTo), e164Of(claimedFrom), actionOrigin(req));
+ }
+```
+
+Apply to `apps/web/src/app/b/[publicId]/actions.ts` (against the task's parent commit):
+
+```diff
+@@ -19,7 +19,7 @@ import {
+   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
+   verifyRenderToken, hashIp, isValidEmail, isValidPhone, parseAttribution,
+ } from "@/lib/forms/guards";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { e164Of } from "@/lib/voice/phone-number";
+ // The SAME helper the sibling public-form action uses, not a re-implementation
+ // (I3) — see its docstring in that file for why it is exported.
+ import { setAttribution } from "@/lib/forms/enrich";
+@@ -292,7 +292,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
+       // Voice stores E.164; storing web input as-typed made the same person
+       // two contacts and hid web bookings from find_my_booking. Parseable →
+       // E.164, unparseable → as typed (never mangled, never rejected here).
+-      phone: phone ? (toE164(phone) ?? phone) : undefined,
++      phone: phone ? (e164Of(phone) ?? phone) : undefined,
+       source: "booking",
+     }, ACTOR_ID, ACTOR_TYPE);
+     const contactId = created.id;
+```
+
+Apply to `apps/web/src/lib/forms/enrich.ts` (against the task's parent commit):
+
+```diff
+@@ -10,7 +10,7 @@ import { emailBrand } from "@/lib/email/templates/shell";
+ import { leadAlertEmail } from "@/lib/email/templates/lead-alert";
+ import { leadReceiptEmail, leadReceiptSubject } from "@/lib/email/templates/lead-receipt";
+ import { isValidEmail } from "@/lib/forms/guards";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { e164Of } from "@/lib/voice/phone-number";
+ import { sendInstantReply } from "@/lib/automations/instant-reply";
+ 
+ /**
+@@ -80,7 +80,7 @@ export async function enrich(
+     // stay obviously in lockstep rather than drift into two implementations
+     // of the same normalization.
+     const rawPhone = byKind.get("core.phone") || "";
+-    phoneE164 = rawPhone ? toE164(rawPhone) : null;
++    phoneE164 = rawPhone ? e164Of(rawPhone) : null;
+     const created = await createContact(db, accountId, {
+       firstName: byKind.get("core.first_name") || undefined,
+       lastName: byKind.get("core.last_name") || undefined,
+@@ -226,7 +226,7 @@ async function fillBlanks(
+     ["firstName", "first_name", byKind.get("core.first_name") ?? ""],
+     ["lastName", "last_name", byKind.get("core.last_name") ?? ""],
+     ["email", "email", byKind.get("core.email") ?? ""],
+-    ["phone", "phone", rawPhone ? (toE164(rawPhone) ?? rawPhone) : ""],
++    ["phone", "phone", rawPhone ? (e164Of(rawPhone) ?? rawPhone) : ""],
+     ["companyName", "company_name", byKind.get("core.company_name") ?? ""],
+   ];
+   for (const [input, column, incoming] of pairs) {
+```
+
+Apply to `apps/web/src/lib/proposals/generate.ts` (against the task's parent commit):
+
+```diff
+@@ -2,7 +2,7 @@ import { insertProposal, type CallOutcome, type TranscriptEvent, type serviceDb
+ import { groundedEvidence } from "./grounding";
+ import { callIsEligible } from "./eligibility";
+ import { isValidEmail } from "@/lib/forms/guards";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { e164Of } from "@/lib/voice/phone-number";
+ 
+ /**
+  * At most three per call — a per-call BUDGET SHARED ACROSS KINDS, not three
+@@ -381,7 +381,7 @@ export async function generateProposals(input: {
+         // worth nothing to a reviewer either way.
+         let storedValue = value;
+         if (field === "phone") {
+-          const normalizedPhone = toE164(value);
++          const normalizedPhone = e164Of(value);
+           if (!normalizedPhone) continue;
+           storedValue = normalizedPhone;
+         } else if (field === "email") {
+```
+
+Apply to `apps/web/src/lib/voice/sip-headers.ts` (against the task's parent commit):
+
+```diff
+@@ -1,6 +1,6 @@
+ // sip_headers is an ARRAY of {name, value} (openai SDK RealtimeCallIncomingWebhookEvent.Data).
+ // Values carry caller PII — sipHeaderNames exists so logs can prove shape without leaking.
+-import { toE164 } from "./phone-number";
++import { e164Of } from "./phone-number";
+ 
+ const NUMBER_RE = /(?:tel:|sip:)\+?([0-9]{7,15})/i;
+ 
+@@ -17,18 +17,18 @@ function numberFromHeader(list: Header[], name: string): string | null {
+   if (!hit || typeof hit.value !== "string") return null;
+   // X-BIS-Called carries a bare E.164 we wrote ourselves; SIP URIs need the regex.
+   if (name === "x-bis-called") {
+-    return toE164(hit.value);
++    return e164Of(hit.value);
+   }
+   const match = hit.value.match(NUMBER_RE);
+   if (!match) return null;
+-  return toE164(match[1]!);
++  return e164Of(match[1]!);
+ }
+ 
+ /**
+  * A header read VERBATIM — no phone-number coercion. `numberFromHeader` above
+- * runs every value it touches through `toE164`, which is exactly right for a
++ * runs every value it touches through `e164Of`, which is exactly right for a
+  * number and destroys anything else: a handoff token is 32 hex characters and
+- * `toE164` would return null for it.
++ * `e164Of` would return null for it.
+  */
+ function rawHeader(list: Header[], name: string): string | null {
+   const hit = list.find((h) => h && typeof h === "object" && String(h.name).toLowerCase() === name);
+```
+
+Apply to `apps/web/src/lib/voice/tools/registry.ts` (against the task's parent commit):
+
+```diff
+@@ -9,7 +9,7 @@ import {
+   type CalendarRow, type VoiceProfileRow, type Branding,
+ } from "@bis/db";
+ import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
+-import { toE164, isCallerIdNumber } from "../phone-number";
++import { e164Of, isCallerIdNumber } from "../phone-number";
+ import { getEmailProvider } from "@/lib/email";
+ import { getMeetingProvider } from "@/lib/meetings/provider";
+ import { emailBrand } from "@/lib/email/templates/shell";
+@@ -91,7 +91,7 @@ type BookingContact = {
+  *       returned, never from anything the model passes; OR
+  *   (b) the call shows a caller ID and the booking's contact's phone IS it.
+  *       `contacts.phone` is stored as typed ("(956) 292-1696" from a web
+- *       form), so it is normalized with `toE164` before the compare — a raw
++ *       form), so it is normalized with `e164Of` before the compare — a raw
+  *       string compare would refuse the rightful caller.
+  *
+  * Checked before anything is looked up, written or sent. The contact is read
+@@ -275,7 +275,7 @@ export async function runTool(
+           + `Apologize, then ${nextStep(ctx)} so the team can help them.` } };
+       }
+       const recited = String(args?.phone ?? "").trim();
+-      if (recited && toE164(recited) !== ctx.callerNumber) {
++      if (recited && e164Of(recited) !== ctx.callerNumber) {
+         return { state, result: { found: false, verified: false, error:
+           "Appointments can only be looked up for the number they are calling from, and that is not the number they gave. "
+           + "Do not confirm, read out, change or cancel anything for another number. "
+@@ -306,7 +306,7 @@ export async function runTool(
+     case "take_message": {
+       const body = String(args?.body ?? "").trim();
+       if (!body) return { state, result: { ok: false, error: "message body required" } };
+-      const callbackNumber = toE164(String(args?.callbackNumber ?? "")) ?? ctx.callerNumber ?? undefined;
++      const callbackNumber = e164Of(String(args?.callbackNumber ?? "")) ?? ctx.callerNumber ?? undefined;
+       return {
+         state: withMessage(state, { body, callbackNumber, at: now.toISOString() }),
+         result: { ok: true },
+@@ -330,14 +330,14 @@ export async function runTool(
+       // "need a phone or email" — those are different problems for the model
+       // to voice differently.
+       const rawPhone = String(args?.phone ?? "").trim();
+-      if (rawPhone && !toE164(rawPhone)) {
++      if (rawPhone && !e164Of(rawPhone)) {
+         return {
+           state,
+           result: { ok: false, error: "That phone number doesn't look complete — could you give it to me again?" },
+         };
+       }
+ 
+-      const phone = toE164(String(args?.phone ?? "")) ?? ctx.callerNumber;
++      const phone = e164Of(String(args?.phone ?? "")) ?? ctx.callerNumber;
+       const email = String(args?.email ?? "").trim() || null;
+       if (!phone && !email) {
+         return { state, result: { ok: false, error: "need a phone number or an email to book" } };
+```
+
+Apply to `apps/web/src/lib/automations/instant-reply.ts` (against the task's parent commit):
+
+```diff
+@@ -54,7 +54,7 @@ export type InstantReplyInput = {
+    *  (account, contact), so a returning contact's second submission lands in
+    *  the same thread the hold reads. */
+   conversationId: string;
+-  /** `toE164(rawPhone)`: null when the person typed nothing, or something the
++  /** `e164Of(rawPhone)`: null when the person typed nothing, or something the
+    *  parser could not read. A number stored as typed is NOT textable. */
+   phoneE164: string | null;
+   /** The submission's normalized locale — the language the person filled the
+```
+
+Apply to `apps/web/src/lib/voice/finish-call.ts` (against the task's parent commit):
+
+```diff
+@@ -15,7 +15,7 @@ import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
+ import { detectSpokenLanguage } from "./language";
+ import { generateSummary } from "./summary-service";
+ import { summaryFactLine } from "./summarize";
+-import { toE164, isCallerIdNumber } from "./phone-number";
++import { e164Of, isCallerIdNumber } from "./phone-number";
+ // STATIC, not the lazy `await import(...)` this repo otherwise reaches for
+ // near route handlers: the documented page-data trap (a module-scope DB
+ // import breaking `next build`'s page-data collection) doesn't apply to a
+@@ -283,7 +283,7 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
+     const created = await createContact(ctx.db, ctx.accountId, {
+       firstName: firstName || "Caller",
+       lastName,
+-      phone: toE164(fields.callbackNumber) ?? ctx.callerNumber ?? undefined,
++      phone: e164Of(fields.callbackNumber) ?? ctx.callerNumber ?? undefined,
+       email: fields.email,
+       source: "voice",
+     }, ACTOR_ID, ACTOR_TYPE);
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx` (against the task's parent commit):
+
+```diff
+@@ -11,7 +11,7 @@ import { ContactFieldsPanel } from "./contact-fields-panel";
+ import { ActivityTimeline } from "./activity-timeline";
+ import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
+ import { resolveSmsSender } from "@/lib/sms/sender";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { e164Of } from "@/lib/voice/phone-number";
+ import { renderZone } from "@/lib/zone";
+ 
+ export const dynamic = "force-dynamic";
+@@ -60,10 +60,10 @@ export default async function ContactDetailPage({
+           accountId={accountId}
+           contactId={contactId}
+           contactHasEmail={Boolean(contact.email)}
+-          // Same toE164-based notion of "usable" sendSmsAction itself gates
++          // Same e164Of-based notion of "usable" sendSmsAction itself gates
+           // on (actions.ts) — mirrors contactHasEmail above so SMS fails up
+           // front, in place of the form, instead of only on submit.
+-          contactHasPhone={Boolean(toE164(contact.phone))}
++          contactHasPhone={Boolean(e164Of(contact.phone))}
+           smsGate={smsGate}
+           notes={notes}
+           tasks={tasks}
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm typecheck
+pnpm test
+```
+
+The full web suite, because 11 files changed: expected all green except the two suites that need `apps/web/.env.local` (Global Constraints, "Full web suite").
+
+Expected (the staged replay's GREEN run):
+19 passed across the task's test files:
+- `src/lib/voice/phone-number.test.ts`: 19 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4359 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+1 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **the old any-ten-digits-is-+1 rule** — in `src/lib/voice/phone-number.ts`: `  return normalisePhone(raw)?.e164 ?? null;` → ``  const d = String(raw ?? "").replace(/[^0-9]/g, "");⏎  return d.length === 10 ? `+1${d}` : (normalisePhone(raw)?.e164 ?? null);``; turns red 1 test:
+    - e164Of — normalisePhone's E.164 (F-009) (899) 922-1234 → +528999221234
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/lib/voice/phone-number.test.ts" \
+        "apps/web/src/lib/voice/phone-number.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.ts" \
+        "apps/web/src/app/api/sms/inbound/route.ts" \
+        "apps/web/src/app/api/voice/texml/route.ts" \
+        "apps/web/src/app/b/[publicId]/actions.ts" \
+        "apps/web/src/lib/forms/enrich.ts" \
+        "apps/web/src/lib/proposals/generate.ts" \
+        "apps/web/src/lib/voice/sip-headers.ts" \
+        "apps/web/src/lib/voice/tools/registry.ts" \
+        "apps/web/src/lib/automations/instant-reply.ts" \
+        "apps/web/src/lib/voice/finish-call.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx"
+git commit -m "refactor(phone): e164Of — every typed or spoken number through normalisePhone (F-009)"
+```
+
+---
+
+### Task 8: The send gate
+
+**Owner:** bis-comms. **Lane:** single (Phase 2). **Depends on:** Tasks 1, 2, 4, 5.
+
+Spec §4.1 item 3: the one module that may reach an SMS provider, its nine steps in the spec's order, failing closed. Two entry points, because two callers must write a durable row between the decision and the carrier round trip: `sendSms` (decide and deliver in one call; `prepare` writes the caller's row once the send is cleared) and `decideSms` → `deliverSms` (the text-back, which writes its message row itself, and re-checks the ledger at delivery). A `ClearedSms` can only be made by `decideSms` (a module-private symbol), so no caller can deliver a text the gate did not clear.
+
+**Files:**
+- Create: `apps/web/src/lib/consent/gate.test.ts` (32 tests)
+- Create: `apps/web/src/lib/consent/gate.ts`
+- Create: `apps/web/src/lib/consent/fake-gate.ts`
+- Modify: `apps/web/src/lib/sms/opt-out.ts`
+
+**Interfaces:**
+- Produces (`lib/consent/gate.ts`):
+  - `type SmsRequest = { accountId; kind: SmsKind; to: string | null | undefined; body; contactId?; language?: "en" | "es"; deadline?: Date | null; contactZone?: string | null; accountZone?: string | null; now?: Date }`
+  - `type SmsBlockReason = "no_number" | "a2p_not_approved" | "no_live_number" | "stopped" | "held" | "unconfirmed_number" | "window_after_deadline" | "ledger_unavailable"`
+  - `type SmsSendResult = sent { providerMessageId, to, from, body, billable, segments } | deferred { until, zone } | blocked { reason } | failed { stage: "provider_unavailable" | "prepare" | "provider", error, carrierBlocked }`
+  - `decideSms(db, req): Promise<SmsDecision>`, `deliverSms(db, cleared, opts?)`, `sendSms(db, req, opts?)`, `type SmsSender`, `smsSenderFor(db): SmsSender`
+- Produces (`lib/consent/fake-gate.ts`, TESTS ONLY; Task 15's scan refuses a production import): `fakeSmsGate({ send?, from?, decide?, billable? }): SmsSender & { calls: SmsRequest[] }`.
+- `resolveSmsSender`'s own read error still THROWS (into each caller's existing catch), as it always has; only the ledger and flag reads are turned into `ledger_unavailable` (G12).
+
+**Mock factories changed** (Global Constraints, `vi.mock("@bis/db")`): `gate.test.ts` mocks `@bis/db` with exactly the gate's four reads (`readConsentState`, `readPhoneCountryFlag`, `readAccountTimezone`, `recordCarrierBlock`), plus `@/lib/sms/sender` and `@/lib/sms`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `apps/web/src/lib/consent/gate.test.ts`:
+
+```ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const db = vi.hoisted(() => ({
+  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
+}));
+vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
+const sender = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
+vi.mock("@/lib/sms/sender", () => sender);
+const factory = vi.hoisted(() => ({ getSmsProvider: vi.fn() }));
+vi.mock("@/lib/sms", () => factory);
+
+import { decideSms, deliverSms, sendSms, type SmsRequest } from "./gate";
+import { SMS_KINDS, type SmsKind } from "./classes";
+import { SmsProviderError } from "@/lib/sms/types";
+import { m } from "@/lib/messages";
+
+const DB = {} as never;
+const FROM = "+19565550000";
+// Tue 2026-10-06 15:00 in Chicago (CDT): inside every window.
+const DAY = new Date("2026-10-06T20:00:00Z");
+const base = (over: Partial<SmsRequest> = {}): SmsRequest => ({
+  accountId: "acct_1", kind: "automation.sms_reminder", to: "(956) 292-1696", body: "See you at 3",
+  contactId: "ct_1", accountZone: "America/Chicago", now: DAY, ...over,
+});
+const send = vi.fn();
+const provider = (over: Record<string, unknown> = {}) => ({ isFake: true, send, ...over });
+
+beforeEach(() => {
+  for (const fn of [...Object.values(db), ...Object.values(sender), ...Object.values(factory), send]) fn.mockReset();
+  sender.resolveSmsSender.mockResolvedValue({ ok: true, from: FROM, ownedNumbers: [FROM] });
+  db.readConsentState.mockResolvedValue({ state: "allowed" });
+  db.readPhoneCountryFlag.mockResolvedValue(false);
+  db.readAccountTimezone.mockResolvedValue("America/Chicago");
+  db.recordCarrierBlock.mockResolvedValue("appended");
+  factory.getSmsProvider.mockReturnValue(provider());
+  send.mockResolvedValue({ providerMessageId: "p_1" });
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+describe("decideSms: steps 1-3", () => {
+  it("throws on a kind the registry does not hold (mutation: drop the isSmsKind check → resolves, FAILS)", async () => {
+    await expect(decideSms(DB, base({ kind: "automation.nope" as SmsKind }))).rejects.toThrow(/unknown SMS kind "automation.nope"/);
+  });
+
+  it("normalises `to`: a Reynosa number is +52, and nothing textable is blocked no_number before any read (mutation: skip the normalisation → +1 8999221234, FAILS)", async () => {
+    const d = await decideSms(DB, base({ to: "899 922 1234" }));
+    expect(d.kind === "clear" && d.send.to).toBe("+528999221234");
+    expect(await decideSms(DB, base({ to: "call me" }))).toEqual({ kind: "blocked", reason: "no_number" });
+    expect(sender.resolveSmsSender).toHaveBeenCalledTimes(1);
+  });
+
+  it("the A2P sender check runs for every path and its refusal is the reason; the ledger is not read (mutation: drop step 3 → clear, FAILS)", async () => {
+    sender.resolveSmsSender.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+    expect(await decideSms(DB, base({ kind: "staff.composer_sms" }))).toEqual({ kind: "blocked", reason: "a2p_not_approved" });
+    expect(db.readConsentState).not.toHaveBeenCalled();
+  });
+});
+
+describe("decideSms: steps 4-5, the ledger and the flag", () => {
+  it.each(Object.keys(SMS_KINDS) as SmsKind[])(
+    "%s is blocked by a stop: a stop covers everything (decision 2) (mutation: skip the ledger for staff or operator kinds → FAILS)",
+    async (kind) => {
+      db.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-01T00:00:00Z", method: "carrier_block", eventId: "e1" });
+      expect(await decideSms(DB, base({ kind }))).toEqual({ kind: "blocked", reason: "stopped" });
+      expect(db.readConsentState).toHaveBeenCalledWith(DB, "acct_1", "sms", "+19562921696");
+    });
+
+  it("a hold blocks as held, not as stopped (mutation: map held to stopped → FAILS)", async () => {
+    db.readConsentState.mockResolvedValue({ state: "held", since: "2026-10-01T00:00:00Z", method: "free_text", eventId: "e2" });
+    expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "held" });
+  });
+
+  it("an unreadable ledger FAILS CLOSED as ledger_unavailable and logs no phone number (mutation: catch → allowed → clear, FAILS)", async () => {
+    db.readConsentState.mockRejectedValue(new Error("readConsentState failed: timeout"));
+    expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    const line = String(vi.mocked(console.error).mock.calls[0]?.[0]);
+    expect(line).toMatch(/automation\.sms_reminder for account acct_1 blocked/);
+    expect(line).not.toMatch(/956/);
+  });
+
+  it("a contact whose country is unconfirmed is blocked; with no contact the flag is never read (mutation: skip the flag → clear, FAILS)", async () => {
+    db.readPhoneCountryFlag.mockResolvedValue(true);
+    expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
+    expect(db.readPhoneCountryFlag).toHaveBeenCalledWith(DB, "acct_1", "ct_1");
+    db.readPhoneCountryFlag.mockClear();
+    expect((await decideSms(DB, base({ contactId: null }))).kind).toBe("clear");
+    expect(db.readPhoneCountryFlag).not.toHaveBeenCalled();
+  });
+
+  it("a bare ten-digit number valid as both +1 and +52 is blocked even with no flag stored (mutation: ignore normalisePhone's unconfirmed → clear, FAILS)", async () => {
+    expect(await decideSms(DB, base({ to: "55 1234 5678", contactId: null }))).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
+  });
+});
+
+describe("decideSms: step 6, the kind's hours", () => {
+  // Sun 2026-10-11 10:00 in Chicago: automated hours open, marketing hours not.
+  const SUNDAY_10 = new Date("2026-10-11T15:00:00Z");
+
+  it("marketing waits for Sunday noon while an automated kind goes (mutation: read hours off the wrong kind → FAILS)", async () => {
+    expect(await decideSms(DB, base({ kind: "automation.review_request", now: SUNDAY_10 })))
+      .toEqual({ kind: "deferred", until: new Date("2026-10-11T17:00:00Z"), zone: "America/Chicago" });
+    expect((await decideSms(DB, base({ kind: "automation.sms_reminder", now: SUNDAY_10 }))).kind).toBe("clear");
+  });
+
+  it("staff, operator and code kinds go at 03:00 (mutation: give staff.composer_sms automated hours → FAILS)", async () => {
+    const at3 = new Date("2026-10-06T08:00:00Z");
+    for (const kind of ["staff.composer_sms", "operator.alert_sms", "operator.alert_phone_code"] as const) {
+      expect((await decideSms(DB, base({ kind, now: at3, contactId: null }))).kind).toBe("clear");
+    }
+  });
+
+  it("the zone passed wins, and with none passed the account's is read (mutation: ignore accountZone → the LA case clears, FAILS)", async () => {
+    const t = new Date("2026-10-06T13:30:00Z"); // 08:30 Chicago, 06:30 Los Angeles
+    expect(await decideSms(DB, base({ now: t, accountZone: "America/Los_Angeles" })))
+      .toEqual({ kind: "deferred", until: new Date("2026-10-06T15:00:00Z"), zone: "America/Los_Angeles" });
+    expect(db.readAccountTimezone).not.toHaveBeenCalled();
+    db.readAccountTimezone.mockResolvedValue("America/Los_Angeles");
+    expect((await decideSms(DB, base({ now: t, accountZone: undefined }))).kind).toBe("deferred");
+    expect(db.readAccountTimezone).toHaveBeenCalledWith(DB, "acct_1");
+  });
+
+  it("choice 21: a deadline at or before the opening is blocked, one after it waits (mutation: drop the deadline rule → deferred, FAILS)", async () => {
+    const at6 = new Date("2026-10-06T11:00:00Z"); // 06:00 Chicago
+    expect(await decideSms(DB, base({ now: at6, deadline: new Date("2026-10-06T12:30:00Z") })))
+      .toEqual({ kind: "blocked", reason: "window_after_deadline" });
+    expect(await decideSms(DB, base({ now: at6, deadline: new Date("2026-10-06T13:30:00Z") })))
+      .toEqual({ kind: "deferred", until: new Date("2026-10-06T13:00:00Z"), zone: "America/Chicago" });
+  });
+});
+
+describe("decideSms: step 7, the footer", () => {
+  it("automation kinds carry the STOP line in the body's language; staff kinds carry none (mutation: footer on every kind → FAILS)", async () => {
+    const en = await decideSms(DB, base());
+    expect(en.kind === "clear" && en.send.body).toBe(`See you at 3 ${m["sms.optOut.en"]}`);
+    const es = await decideSms(DB, base({ language: "es" }));
+    expect(es.kind === "clear" && es.send.body).toBe(`See you at 3 ${m["sms.optOut.es"]}`);
+    const staff = await decideSms(DB, base({ kind: "staff.composer_sms" }));
+    expect(staff.kind === "clear" && staff.send.body).toBe("See you at 3");
+  });
+});
+
+describe("sendSms: steps 8-9", () => {
+  it("the provider is taken BEFORE prepare, prepare runs with the final text, then the send (mutation: send before prepare → FAILS)", async () => {
+    const order: string[] = [];
+    factory.getSmsProvider.mockImplementation(() => { order.push("provider"); return provider(); });
+    send.mockImplementation(async () => { order.push("send"); return { providerMessageId: "p_9" }; });
+    const prepare = vi.fn(async () => { order.push("prepare"); });
+    const r = await sendSms(DB, base(), { prepare });
+    expect(order).toEqual(["provider", "prepare", "send"]);
+    expect(prepare).toHaveBeenCalledWith({ body: `See you at 3 ${m["sms.optOut.en"]}`, to: "+19562921696", from: FROM });
+    expect(r).toEqual({ kind: "sent", providerMessageId: "p_9", to: "+19562921696", from: FROM,
+      body: `See you at 3 ${m["sms.optOut.en"]}`, billable: false, segments: 1 });
+  });
+
+  it("no provider → failed provider_unavailable and prepare never runs: no row for a misconfiguration (mutation: prepare first → FAILS)", async () => {
+    factory.getSmsProvider.mockImplementation(() => { throw new Error("TELNYX_API_KEY is required in production"); });
+    const prepare = vi.fn();
+    expect(await sendSms(DB, base(), { prepare })).toMatchObject({ kind: "failed", stage: "provider_unavailable" });
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("a failing prepare stops the send (mutation: swallow prepare's throw → send runs, FAILS)", async () => {
+    const r = await sendSms(DB, base(), { prepare: async () => { throw new Error("createMessage failed"); } });
+    expect(r).toMatchObject({ kind: "failed", stage: "prepare", error: "createMessage failed" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a Telnyx 40300 refusal appends carrier_block for the normalised number and contact (mutation: drop step 9 → FAILS)", async () => {
+    send.mockRejectedValue(new SmsProviderError("telnyx send failed (403): …", 403, ["40300"]));
+    const r = await sendSms(DB, base());
+    expect(r).toMatchObject({ kind: "failed", stage: "provider", carrierBlocked: true });
+    expect(db.recordCarrierBlock).toHaveBeenCalledWith(DB, {
+      accountId: "acct_1", address: "+19562921696", contactId: "ct_1", kind: "automation.sms_reminder" });
+  });
+
+  it("another code, or a provider redirected to a developer's phone, appends nothing (mutation: drop the redirect guard → FAILS)", async () => {
+    send.mockRejectedValue(new SmsProviderError("telnyx send failed (422): …", 422, ["40001"]));
+    expect(await sendSms(DB, base())).toMatchObject({ carrierBlocked: false });
+    factory.getSmsProvider.mockReturnValue(provider({ isFake: false, redirectTo: "+15550009999" }));
+    send.mockRejectedValue(new SmsProviderError("telnyx send failed (403): …", 403, ["40300"]));
+    expect(await sendSms(DB, base())).toMatchObject({ carrierBlocked: false });
+    expect(db.recordCarrierBlock).not.toHaveBeenCalled();
+  });
+
+  it("a carrier block that cannot be recorded is logged and the result is still the failure (mutation: let the write throw → rejects, FAILS)", async () => {
+    send.mockRejectedValue(new SmsProviderError("x", 403, ["40300"]));
+    db.recordCarrierBlock.mockRejectedValue(new Error("insert failed"));
+    await expect(sendSms(DB, base())).resolves.toMatchObject({ kind: "failed", carrierBlocked: true });
+  });
+});
+
+describe("sendSms: usage", () => {
+  it("a real, unredirected provider bills the segments of the text AS SENT, footer included (mutation: billable inverted → FAILS)", async () => {
+    factory.getSmsProvider.mockReturnValue(provider({ isFake: false }));
+    expect(await sendSms(DB, base())).toMatchObject({ kind: "sent", billable: true, segments: 1 });
+  });
+
+  it("a usage count that throws AFTER the send is still a sent text, never a failed one (mutation: work usage out inside the send's try → failed, FAILS)", async () => {
+    const odd = { send, get isFake(): boolean { throw new Error("provider shape changed"); } };
+    factory.getSmsProvider.mockReturnValue(odd);
+    expect(await sendSms(DB, base())).toMatchObject({ kind: "sent", providerMessageId: "p_1", billable: false, segments: 0 });
+  });
+});
+
+describe("deliverSms: the split callers", () => {
+  it("re-reads the ledger, so a stop that lands between decide and deliver wins (mutation: no re-check → sent, FAILS)", async () => {
+    const d = await decideSms(DB, base());
+    if (d.kind !== "clear") throw new Error("expected clear");
+    db.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-06T20:00:01Z", method: "keyword", eventId: "e3" });
+    expect(await deliverSms(DB, d.send)).toEqual({ kind: "blocked", reason: "stopped" });
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/consent/gate.test.ts
+```
+
+Expected (the staged replay's RED run):
+- `src/lib/consent/gate.test.ts`: **fails to load** (32 tests once it loads): `Cannot find module '/src/lib/consent/gate' imported from apps/web/src/lib/consent/gate.test.ts`
+
+- [ ] **Step 3: Implement**
+
+Create `apps/web/src/lib/consent/gate.ts`:
+
+```ts
+import {
+  readConsentState, recordCarrierBlock, readPhoneCountryFlag, readAccountTimezone, type SupabaseClient,
+} from "@bis/db";
+import { normalisePhone } from "@bis/db/phone";
+import { getSmsProvider } from "@/lib/sms";
+import { SmsProviderError, type SmsProvider } from "@/lib/sms/types";
+import { resolveSmsSender } from "@/lib/sms/sender";
+import { withOptOut } from "@/lib/sms/opt-out";
+import { segmentsFor } from "@/lib/sms/segments";
+import { smsBillable } from "@/lib/billing/usage";
+import { loggableError } from "@/lib/loggable-error";
+import { SMS_KINDS, isSmsKind, type SmsKind } from "./classes";
+import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
+
+/**
+ * THE SEND GATE (consent chain spec §4.1 item 3). The only module outside
+ * lib/sms's own provider files that may reach an SMS provider (source scan
+ * 1, scans.test.ts). Every text the platform sends — automations, the
+ * missed-call text-back, the composer, staff alerts, the alert-phone code —
+ * comes through `sendSms`, or through `decideSms` then `deliverSms` where a
+ * caller must write a durable row between the decision and the carrier
+ * round trip (the text-back, the call alert).
+ *
+ * The steps, in the spec's order:
+ *   1. a kind missing from the registry THROWS (a programming error);
+ *   2. `to` is normalised (F-009); nothing textable → blocked `no_number`;
+ *   3. `resolveSmsSender`: A2P approved and a live number, else blocked
+ *      with its reason (its own read error THROWS, as it always has, into
+ *      each caller's existing catch);
+ *   4. the ledger: stopped → blocked `stopped`, held → blocked `held`;
+ *   5. an unconfirmed number (the normalisation said so, or the contact's
+ *      `phone_country_unconfirmed`) → blocked `unconfirmed_number`;
+ *   6. the kind's hours: outside them → `deferred` until they open, unless
+ *      the deadline falls first (choice 21) → blocked `window_after_deadline`;
+ *   7. the kind's footer;
+ *   8. the provider;
+ *   9. a refusal whose code says the number opted out (Telnyx 40300,
+ *      VERIFIED from Telnyx's docs, see the plan) appends `revoked` /
+ *      `carrier_block` to the ledger — never for a provider redirected to a
+ *      developer's phone, whose refusal is about THAT number.
+ *
+ * FAILS CLOSED: a ledger (or flag) read error is blocked
+ * `ledger_unavailable`, logged through `loggableError`, never a send.
+ */
+export type SmsRequest = {
+  accountId: string;
+  kind: SmsKind;
+  /** The number as stored or typed. The gate normalises it (step 2). */
+  to: string | null | undefined;
+  body: string;
+  contactId?: string | null;
+  /** The body's language; it picks the footer's. English by default. */
+  language?: "en" | "es";
+  /** Choice 21: the latest instant this send is still useful. */
+  deadline?: Date | null;
+  /** The contact's own zone. BIS stores none yet (§4.1 item 2), so null. */
+  contactZone?: string | null;
+  /** The account's zone when the caller has it. `undefined` → the gate
+   *  reads `accounts.timezone` (only for a kind that has hours). */
+  accountZone?: string | null;
+  /** The instant the hours are judged at. Passes hand in their tick's `now`. */
+  now?: Date;
+};
+
+export type SmsBlockReason =
+  | "no_number" | "a2p_not_approved" | "no_live_number" | "stopped" | "held"
+  | "unconfirmed_number" | "window_after_deadline" | "ledger_unavailable";
+
+const CLEARED: unique symbol = Symbol("cleared-sms");
+
+/** A send `decideSms` cleared. Only this module can make one. */
+export type ClearedSms = {
+  readonly [CLEARED]: true;
+  readonly accountId: string;
+  readonly kind: SmsKind;
+  readonly to: string;
+  readonly from: string;
+  /** The body exactly as it will be sent, footer included. */
+  readonly body: string;
+  readonly contactId: string | null;
+};
+
+export type SmsDecision =
+  | { kind: "clear"; send: ClearedSms }
+  /** Outside the kind's hours: `until` is when they open, `zone` the one
+   *  they were read in (a held row says "Held until 8:00 AM" in it). */
+  | { kind: "deferred"; until: Date; zone: string }
+  | { kind: "blocked"; reason: SmsBlockReason };
+
+export type SmsSendOptions = {
+  /** Runs once the send is cleared and a provider is in hand, with the text
+   *  exactly as it will leave. Write-then-send callers write their message
+   *  row here. A throw aborts the send: nothing leaves. */
+  prepare?: (cleared: { body: string; to: string; from: string }) => Promise<void>;
+};
+
+export type SmsSendResult =
+  | { kind: "sent"; providerMessageId: string; to: string; from: string; body: string; billable: boolean; segments: number }
+  /** Outside the kind's hours: `until` is when they open, `zone` the one
+   *  they were read in (a held row says "Held until 8:00 AM" in it). */
+  | { kind: "deferred"; until: Date; zone: string }
+  | { kind: "blocked"; reason: SmsBlockReason }
+  | { kind: "failed"; stage: "provider_unavailable" | "prepare" | "provider"; error: string; carrierBlocked: boolean };
+
+export type SmsSender = (req: SmsRequest, opts?: SmsSendOptions) => Promise<SmsSendResult>;
+
+/** Steps 4 and 5's reads. Null = allowed; a reason = blocked. */
+async function consentBlock(
+  db: SupabaseClient, accountId: string, kind: SmsKind, address: string, contactId: string | null,
+): Promise<SmsBlockReason | null> {
+  try {
+    const state = await readConsentState(db, accountId, "sms", address);
+    if (state.state === "stopped") return "stopped";
+    if (state.state === "held") return "held";
+    if (contactId && await readPhoneCountryFlag(db, accountId, contactId)) return "unconfirmed_number";
+    return null;
+  } catch (e) {
+    console.error(`consent gate: ${kind} for account ${accountId} blocked, consent state unreadable: ${loggableError(e)}`);
+    return "ledger_unavailable";
+  }
+}
+
+export async function decideSms(db: SupabaseClient, req: SmsRequest): Promise<SmsDecision> {
+  if (!isSmsKind(req.kind)) throw new Error(`consent gate: unknown SMS kind "${String(req.kind)}"`);
+  const spec = SMS_KINDS[req.kind];
+  const number = normalisePhone(req.to);
+  if (!number) return { kind: "blocked", reason: "no_number" };
+
+  const sender = await resolveSmsSender(db, req.accountId);
+  if (!sender.ok) return { kind: "blocked", reason: sender.reason };
+
+  const contactId = req.contactId ?? null;
+  const blocked = await consentBlock(db, req.accountId, req.kind, number.e164, contactId);
+  if (blocked) return { kind: "blocked", reason: blocked };
+  if (number.unconfirmed) return { kind: "blocked", reason: "unconfirmed_number" };
+
+  if (spec.hours !== "any") {
+    let zone = req.contactZone ?? null;
+    if (!zone) {
+      try {
+        zone = req.accountZone !== undefined ? req.accountZone : await readAccountTimezone(db, req.accountId);
+      } catch (e) {
+        // The fallback zone still applies (hours.ts): an unread zone narrows
+        // nothing and never opens the window.
+        console.error(`consent gate: account ${req.accountId}'s zone unreadable, using the fallback: ${loggableError(e)}`);
+      }
+    }
+    const opening = nextOpening(spec.hours, req.now ?? new Date(), zone);
+    if (expiresBeforeOpening(opening, req.deadline)) return { kind: "blocked", reason: "window_after_deadline" };
+    if (opening) return { kind: "deferred", until: opening, zone: hoursZone(zone) };
+  }
+
+  const body = spec.footer === "stop_line" ? withOptOut(req.body, req.language) : req.body;
+  return {
+    kind: "clear",
+    send: { [CLEARED]: true, accountId: req.accountId, kind: req.kind, to: number.e164, from: sender.from, body, contactId },
+  };
+}
+
+async function deliver(
+  db: SupabaseClient, cleared: ClearedSms, opts: SmsSendOptions, recheck: boolean,
+): Promise<SmsSendResult> {
+  if (recheck) {
+    const blocked = await consentBlock(db, cleared.accountId, cleared.kind, cleared.to, cleared.contactId);
+    if (blocked) return { kind: "blocked", reason: blocked };
+  }
+  let provider: SmsProvider;
+  try {
+    provider = getSmsProvider();
+  } catch (e) {
+    return { kind: "failed", stage: "provider_unavailable", error: e instanceof Error ? e.message : String(e), carrierBlocked: false };
+  }
+  const { to, from, body } = cleared;
+  try {
+    await opts.prepare?.({ body, to, from });
+  } catch (e) {
+    return { kind: "failed", stage: "prepare", error: e instanceof Error ? e.message : String(e), carrierBlocked: false };
+  }
+  let providerMessageId: string;
+  try {
+    ({ providerMessageId } = await provider.send({ to, from, body }));
+  } catch (e) {
+    const carrierBlocked = e instanceof SmsProviderError && e.codes.includes("40300") && provider.redirectTo === undefined;
+    if (carrierBlocked) {
+      try {
+        await recordCarrierBlock(db, { accountId: cleared.accountId, address: to, contactId: cleared.contactId, kind: cleared.kind });
+      } catch (writeErr) {
+        console.error(`consent gate: carrier block for account ${cleared.accountId} not recorded: ${loggableError(writeErr)}`);
+      }
+    }
+    return { kind: "failed", stage: "provider", error: e instanceof Error ? e.message : String(e), carrierBlocked };
+  }
+  // AFTER the send's try, never inside it: the text is out, and nothing
+  // about its usage may turn it into a `failed` (a caller would mark its row
+  // failed and a retry would text the customer twice).
+  return { kind: "sent", providerMessageId, to, from, body, ...usageOf(provider, body, cleared.accountId) };
+}
+
+/** What a delivered text bills. Never throws: a counting bug loses one text's usage, logged. */
+function usageOf(provider: SmsProvider, body: string, accountId: string): { billable: boolean; segments: number } {
+  try {
+    return { billable: smsBillable(provider), segments: segmentsFor(body).segments };
+  } catch (e) {
+    console.error(`consent gate: usage not worked out for a text on account ${accountId}, so it will not bill: ${loggableError(e)}`);
+    return { billable: false, segments: 0 };
+  }
+}
+
+/** The second half, for a caller that wrote a durable row after `decideSms`.
+ *  Re-reads the ledger first: a stop that landed in between still wins. */
+export function deliverSms(db: SupabaseClient, cleared: ClearedSms, opts: SmsSendOptions = {}): Promise<SmsSendResult> {
+  return deliver(db, cleared, opts, true);
+}
+
+/** Decide and deliver in one call: every path without a row to write in between. */
+export async function sendSms(db: SupabaseClient, req: SmsRequest, opts: SmsSendOptions = {}): Promise<SmsSendResult> {
+  const decision = await decideSms(db, req);
+  if (decision.kind !== "clear") return decision;
+  return deliver(db, decision.send, opts, false);
+}
+
+/** `sendSms` bound to one client: what a cron tick's `ctx.sms` is (harness.ts). */
+export function smsSenderFor(db: SupabaseClient): SmsSender {
+  return (req, opts) => sendSms(db, req, opts);
+}
+```
+
+Create `apps/web/src/lib/consent/fake-gate.ts`:
+
+```ts
+import { normalisePhone } from "@bis/db/phone";
+import { withOptOut } from "@/lib/sms/opt-out";
+import { segmentsFor } from "@/lib/sms/segments";
+import { SMS_KINDS } from "./classes";
+import type { SmsRequest, SmsSendResult, SmsSender } from "./gate";
+
+/**
+ * A stand-in for the send gate, FOR TESTS ONLY: scans.test.ts refuses an
+ * import of this module from any file that is not a test. It clears every
+ * send unless `decide` answers first, applies the kind's footer the way the
+ * gate does (the registry's own `footer`), runs `prepare`, then hands the
+ * text to `send` — so a pass's write-then-send, and its assertions on the
+ * text as sent, keep meaning what they meant against the old provider fake.
+ * The gate's own behaviour is proven in gate.test.ts, against the real
+ * module; this fake proves nothing about it.
+ */
+export type FakeSmsGate = SmsSender & { calls: SmsRequest[] };
+
+export function fakeSmsGate(o: {
+  send?: (m: { to: string; from: string; body: string }) => Promise<{ providerMessageId: string }>;
+  from?: string;
+  decide?: (req: SmsRequest) => SmsSendResult | null;
+  billable?: boolean;
+} = {}): FakeSmsGate {
+  const calls: SmsRequest[] = [];
+  const gate: SmsSender = async (req, opts = {}) => {
+    calls.push(req);
+    const decided = o.decide?.(req) ?? null;
+    if (decided) return decided;
+    const to = normalisePhone(req.to)?.e164;
+    if (!to) return { kind: "blocked", reason: "no_number" };
+    const from = o.from ?? "+19565550000";
+    const body = SMS_KINDS[req.kind].footer === "stop_line" ? withOptOut(req.body, req.language) : req.body;
+    try {
+      await opts.prepare?.({ body, to, from });
+    } catch (e) {
+      return { kind: "failed", stage: "prepare", error: e instanceof Error ? e.message : String(e), carrierBlocked: false };
+    }
+    try {
+      const send = o.send ?? (async () => ({ providerMessageId: "fake_sms" }));
+      const { providerMessageId } = await send({ to, from, body });
+      return { kind: "sent", providerMessageId, to, from, body, billable: o.billable ?? false, segments: segmentsFor(body).segments };
+    } catch (e) {
+      return { kind: "failed", stage: "provider", error: e instanceof Error ? e.message : String(e), carrierBlocked: false };
+    }
+  };
+  return Object.assign(gate, { calls });
+}
+```
+
+Apply to `apps/web/src/lib/sms/opt-out.ts` (against the task's parent commit):
+
+```diff
+@@ -19,17 +19,20 @@ import { m } from "@/lib/messages";
+  * carriers the LANGUAGE and nothing else. Do not "finish the job" by adding
+  * keyword handling to the inbound webhook.
+  *
+- * WHERE IT IS APPLIED — the two places a message goes out unprompted:
+- * `sendAutomationSms` (reminders, review requests, no-show nudges, the form
+- * instant reply) and the missed-call text-back. Deliberately NOT applied to
++ * WHERE IT IS APPLIED — by the send gate (lib/consent/gate.ts, step 7), for
++ * every kind whose registry row says `footer: "stop_line"`
++ * (lib/consent/classes.ts): the automation kinds and the missed-call
++ * text-back, exactly the two places that appended it before the registry
++ * existed. Deliberately NOT applied to
+  * an operator's own typed reply in Conversations — that is a human in a
+  * thread the customer opened, and CTIA asks for the disclosure on programme
+  * messages, not on every line of a conversation — nor to the lead alert or
+  * the alert-phone verification code, which go to the BUSINESS OWNER about
+  * their own account and are not a marketing programme they can leave.
+  *
+- * Applied where the body is BUILT, not at the provider call, so the message
+- * row written to the conversation is the text that was actually sent. An
++ * Applied by the gate BEFORE a caller's `prepare` writes its message row,
++ * and handed to it, so the row written to the conversation is the text that
++ * was actually sent. An
+  * operator reading the thread must not see a shorter message than the
+  * customer got.
+  *
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/consent src/lib/sms
+pnpm typecheck
+pnpm test
+```
+
+Expected (the staged replay's GREEN run):
+32 passed across the task's test files:
+- `src/lib/consent/gate.test.ts`: 32 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4391 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites. `pnpm lint`: ✖ 2 problems (0 errors, 2 warnings).
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+15 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **no registry check** — in `src/lib/consent/gate.ts`: delete ``if (!isSmsKind(req.kind)) throw new Error(`consent gate: unknown SMS kind "${String(req.kind)}"`);``; turns red 1 test:
+    - decideSms: steps 1-3 throws on a kind the registry does not hold (mutation: drop the isSmsKind check → resolves, FAILS)
+2. **skip normalisation** — in `src/lib/consent/gate.ts`: `send: { [CLEARED]: true, accountId: req.accountId, kind: req.kind, to: number.e164,` → ``send: { [CLEARED]: true, accountId: req.accountId, kind: req.kind, to: `+1${String(req.to).replace(/[^0-9]/g, "")}`,``; turns red 1 test:
+    - decideSms: steps 1-3 normalises `to`: a Reynosa number is +52, and nothing textable is blocked no_number before any read (mutation: skip the normalisation → +1 8999221234, FAILS)
+3. **skip the ledger for staff and operator kinds** — in `src/lib/consent/gate.ts`: `const blocked = await consentBlock(db, req.accountId, req.kind, number.e164, contactId);` → `const blocked = spec.class === "staff_typed" || spec.class === "operator" ? null : await consentBlock(db, req.accountId, req.kind, number.e164, contactId);`; turns red 3 tests:
+    - decideSms: steps 4-5, the ledger and the flag staff.composer_sms is blocked by a stop: a stop covers everything (decision 2) (mutation: skip the ledger for staff or operator kinds → FAILS)
+    - decideSms: steps 4-5, the ledger and the flag operator.alert_sms is blocked by a stop: a stop covers everything (decision 2) (mutation: skip the ledger for staff or operator kinds → FAILS)
+    - decideSms: steps 4-5, the ledger and the flag operator.alert_phone_code is blocked by a stop: a stop covers everything (decision 2) (mutation: skip the ledger for staff or operator kinds → FAILS)
+4. **held read as stopped** — in `src/lib/consent/gate.ts`: `if (state.state === "held") return "held";` → `if (state.state === "held") return "stopped";`; turns red 1 test:
+    - decideSms: steps 4-5, the ledger and the flag a hold blocks as held, not as stopped (mutation: map held to stopped → FAILS)
+5. **fail open** — in `src/lib/consent/gate.ts`: `return "ledger_unavailable";` → `return null;`; turns red 1 test:
+    - decideSms: steps 4-5, the ledger and the flag an unreadable ledger FAILS CLOSED as ledger_unavailable and logs no phone number (mutation: catch → allowed → clear, FAILS)
+6. **skip the contact flag** — in `src/lib/consent/gate.ts`: delete `if (contactId && await readPhoneCountryFlag(db, accountId, contactId)) return "unconfirmed_number";`; turns red 1 test:
+    - decideSms: steps 4-5, the ledger and the flag a contact whose country is unconfirmed is blocked; with no contact the flag is never read (mutation: skip the flag → clear, FAILS)
+7. **ignore the normaliser's unconfirmed** — in `src/lib/consent/gate.ts`: delete `if (number.unconfirmed) return { kind: "blocked", reason: "unconfirmed_number" };`; turns red 1 test:
+    - decideSms: steps 4-5, the ledger and the flag a bare ten-digit number valid as both +1 and +52 is blocked even with no flag stored (mutation: ignore normalisePhone's unconfirmed → clear, FAILS)
+8. **no deadline rule (choice 21)** — in `src/lib/consent/gate.ts`: delete `if (expiresBeforeOpening(opening, req.deadline)) return { kind: "blocked", reason: "window_after_deadline" };`; turns red 1 test:
+    - decideSms: step 6, the kind's hours choice 21: a deadline at or before the opening is blocked, one after it waits (mutation: drop the deadline rule → deferred, FAILS)
+9. **send inside the hours' closed window** — in `src/lib/consent/gate.ts`: delete `if (opening) return { kind: "deferred", until: opening, zone: hoursZone(zone) };`; turns red 3 tests:
+    - decideSms: step 6, the kind's hours marketing waits for Sunday noon while an automated kind goes (mutation: read hours off the wrong kind → FAILS)
+    - decideSms: step 6, the kind's hours the zone passed wins, and with none passed the account's is read (mutation: ignore accountZone → the LA case clears, FAILS)
+    - decideSms: step 6, the kind's hours choice 21: a deadline at or before the opening is blocked, one after it waits (mutation: drop the deadline rule → deferred, FAILS)
+10. **footer on every kind** — in `src/lib/consent/gate.ts`: `const body = spec.footer === "stop_line" ? withOptOut(req.body, req.language) : req.body;` → `const body = withOptOut(req.body, req.language);`; turns red 1 test:
+    - decideSms: step 7, the footer automation kinds carry the STOP line in the body's language; staff kinds carry none (mutation: footer on every kind → FAILS)
+11. **no re-check on deliver** — in `src/lib/consent/gate.ts`: `  if (recheck) {` → `  if (false) {`; turns red 1 test:
+    - deliverSms: the split callers re-reads the ledger, so a stop that lands between decide and deliver wins (mutation: no re-check → sent, FAILS)
+12. **carrier block for a redirected provider too** — in `src/lib/consent/gate.ts`: `e.codes.includes("40300") && provider.redirectTo === undefined;` → `e.codes.includes("40300");`; turns red 1 test:
+    - sendSms: steps 8-9 another code, or a provider redirected to a developer's phone, appends nothing (mutation: drop the redirect guard → FAILS)
+13. **no carrier block recorded** — in `src/lib/consent/gate.ts`: delete `        await recordCarrierBlock(db, { accountId: cleared.accountId, address: to, contactId: cleared.contactId, kind: cleared.kind });`; turns red 1 test:
+    - sendSms: steps 8-9 a Telnyx 40300 refusal appends carrier_block for the normalised number and contact (mutation: drop step 9 → FAILS)
+14. **prepare after the send** — in `src/lib/consent/gate.ts`: `    await opts.prepare?.({ body, to, from });⏎  } catch (e) {⏎    return { kind: "failed", stage: "prepare"` → `    void 0;⏎  } catch (e) {⏎    return { kind: "failed", stage: "prepare"`; turns red 2 tests:
+    - sendSms: steps 8-9 the provider is taken BEFORE prepare, prepare runs with the final text, then the send (mutation: send before prepare → FAILS)
+    - sendSms: steps 8-9 a failing prepare stops the send (mutation: swallow prepare's throw → send runs, FAILS)
+15. **usage worked out inside the send's try** — in `src/lib/consent/gate.ts`: `    ({ providerMessageId } = await provider.send({ to, from, body }));` → `    ({ providerMessageId } = await provider.send({ to, from, body }));⏎    smsBillable(provider);`; turns red 1 test:
+    - sendSms: usage a usage count that throws AFTER the send is still a sent text, never a failed one (mutation: work usage out inside the send's try → failed, FAILS)
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/lib/consent/gate.test.ts" \
+        "apps/web/src/lib/consent/gate.ts" \
+        "apps/web/src/lib/consent/fake-gate.ts" \
+        "apps/web/src/lib/sms/opt-out.ts"
+git commit -m "feat(consent): the send gate (decideSms, deliverSms, sendSms) and its test double"
+```
+
+---
+
+### Task 9: Every automation text through the gate (the kinds, the fixed hours, `blocked`)
+
+**Owner:** bis-automations. **Lane:** A (Phase 3). **Depends on:** Task 8 (and, through it, 1, 2, 4, 5); Task 7 (`instant-reply.ts` arrives here already on `e164Of`).
+
+Spec §4.1 item 4, first bullet and the `holdOrSend` bullets. The harness's `ctx.sms` becomes the gate; every pass hands the gate its kind and the stored phone (the gate normalises); `holdOrSend` computes the window from the fixed hours (no settings read) and turns the gate's `deferred` into its held row and its `blocked` into a `skipped` row with the reason (G3); choice 21 replaces "the deadline sends now".
+
+**Files:**
+- Modify: `apps/web/src/lib/automations/harness.test.ts` (8 → 4 tests)
+- Modify: `apps/web/src/lib/automations/hold-or-send.test.ts` (16 → 26 tests)
+- Modify: `apps/web/src/lib/automations/send-sms.test.ts` (16 → 17 tests)
+- Modify: `apps/web/src/lib/automations/instant-reply.test.ts` (24 → 26 tests)
+- Modify: `apps/web/src/lib/automations/sentinel.test.ts` (5 tests)
+- Modify: `apps/web/src/lib/automations/imports.test.ts` (2 tests)
+- Modify: `apps/web/src/lib/automations/passes/appointment-confirm.test.ts` (14 tests)
+- Modify: `apps/web/src/lib/automations/passes/followups.test.ts` (9 → 8 tests)
+- Modify: `apps/web/src/lib/automations/passes/no-show-nudge.test.ts` (29 tests)
+- Modify: `apps/web/src/lib/automations/passes/quote-followup.test.ts` (20 tests)
+- Modify: `apps/web/src/lib/automations/passes/reactivation.test.ts` (21 → 20 tests)
+- Modify: `apps/web/src/lib/automations/passes/referral-ask.test.ts` (25 tests)
+- Modify: `apps/web/src/lib/automations/passes/reminders.test.ts` (9 tests)
+- Modify: `apps/web/src/lib/automations/passes/review-request.test.ts` (37 tests)
+- Modify: `apps/web/src/lib/automations/passes/sms-reminder.test.ts` (19 tests)
+- Modify: `apps/web/src/lib/automations/passes/site-traffic.test.ts` (9 tests)
+- Modify: `apps/web/src/lib/automations/passes/usage-report.test.ts` (19 tests)
+- Modify: `apps/web/src/lib/automations/passes/weekly-agency-report.test.ts` (3 tests)
+- Modify: `apps/web/src/lib/automations/passes/weekly-report.test.ts` (7 tests)
+- Modify: `apps/web/src/lib/automations/passes/release-held.test.ts` (10 tests)
+- Modify: `apps/web/src/app/api/cron/reminders/route.test.ts` (30 tests)
+- Modify: `apps/web/src/lib/automations/context.ts`
+- Modify: `apps/web/src/lib/automations/harness.ts`
+- Modify: `apps/web/src/lib/automations/send-sms.ts`
+- Modify: `apps/web/src/lib/automations/hold-or-send.ts`
+- Modify: `apps/web/src/lib/automations/instant-reply.ts`
+- Modify: `apps/web/src/lib/automations/passes/appointment-confirm.ts`
+- Modify: `apps/web/src/lib/automations/passes/followups.ts`
+- Modify: `apps/web/src/lib/automations/passes/no-show-nudge.ts`
+- Modify: `apps/web/src/lib/automations/passes/quote-followup.ts`
+- Modify: `apps/web/src/lib/automations/passes/reactivation.ts`
+- Modify: `apps/web/src/lib/automations/passes/referral-ask.ts`
+- Modify: `apps/web/src/lib/automations/passes/reminders.ts`
+- Modify: `apps/web/src/lib/automations/passes/review-request.ts`
+- Modify: `apps/web/src/lib/automations/passes/sms-reminder.ts`
+
+**Interfaces:**
+- Consumes: `smsSenderFor`, `SmsSender`, `SmsBlockReason` (Task 8); `SMS_KINDS`, `AutomationSmsKind` (Task 5); `nextOpening`, `expiresBeforeOpening`, `hoursZone` (Task 5); `fakeSmsGate` (tests).
+- Produces:
+  - `PassContext.sms: SmsSender`; `PassContext.quiet` is gone.
+  - `sendAutomationSms(ctx: Pick<PassContext, "db" | "sms" | "now">, { accountId, contactId, kind, to, body, language?, accountTimezone, onProviderFailure })`; `class SmsDeferred(until)`, `class SmsBlocked(reason)`, `type AutomationBlockReason`.
+  - `holdOrSend(ctx: Pick<PassContext, "db" | "now">, subject: HoldSubject, send): Promise<"sent" | "held" | "skipped">`; `HoldSubject.smsKind` (required on the sms channel); `REASONS.{windowAfterDeadline,textsStopped,textsHeld,numberUnconfirmed}`; exported `BLOCK_REASONS` and `writeHeld(ctx, subject, until, zone)` (Task 11 uses both).
+  - Every SMS-capable pass reports a new `blocked` counter (the cron route's JSON shows it).
+  - `InstantReplyOutcome` gains `{ kind: "blocked"; reason }`.
+
+**Mock factories changed** (Global Constraints, `vi.mock("@bis/db")`): `instant-reply.test.ts` and `sentinel.test.ts` go through the REAL gate, so their `@bis/db` factories gain `readConsentState` (allowed), `readPhoneCountryFlag` (false) and `readAccountTimezone`; `api/cron/reminders/route.test.ts` drops `readQuietSettings`. Pass tests use `fakeSmsGate` instead of a provider fake.
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace the whole file `apps/web/src/lib/automations/harness.test.ts` with:
+
+```ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const gate = vi.hoisted(() => ({ smsSenderFor: vi.fn() }));
+vi.mock("@/lib/consent/gate", () => gate);
+vi.mock("@/lib/email", () => ({
+  getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }),
+}));
+
+import { buildPassContext, runPasses } from "./harness";
+import type { Pass, PassContext } from "./context";
+
+function ctx(): PassContext {
+  return buildPassContext({
+    db: {} as never, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com",
+  });
+}
+
+beforeEach(() => {
+  gate.smsSenderFor.mockReset().mockReturnValue(vi.fn());
+});
+
+describe("runPasses — independent error isolation, the finishCall-legs pattern", () => {
+  it("a pass that rejects OUTRIGHT is reported under its own key as errored, and the next pass still runs", async () => {
+    // Not a send inside a pass (each pass catches those itself) — the pass's
+    // own `run` blowing up, e.g. its due-query throwing. Mutation: remove the
+    // try/catch around `pass.run(ctx)` in harness.ts and this must fail.
+    const ran: string[] = [];
+    const boom: Pass = { key: "boom", run: async () => { throw new Error("db exploded"); } };
+    const fine: Pass = { key: "fine", run: async () => { ran.push("fine"); return { sent: 2 }; } };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const results = await runPasses([boom, fine], ctx());
+
+    expect(results).toEqual({ boom: { errored: 1 }, fine: { sent: 2 } });
+    expect(ran).toEqual(["fine"]);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("boom"));
+    spy.mockRestore();
+  });
+
+  it("runs passes in registry order, each handed the SAME context", async () => {
+    const seen: PassContext[] = [];
+    const order: string[] = [];
+    const mk = (key: string): Pass => ({
+      key, run: async (c) => { seen.push(c); order.push(key); return {}; },
+    });
+    const c = ctx();
+    await runPasses([mk("a"), mk("b"), mk("c")], c);
+    expect(order).toEqual(["a", "b", "c"]);
+    expect(seen.every((s) => s === c)).toBe(true);
+  });
+});
+
+describe("buildPassContext — texts go through the send gate, bound to the tick", () => {
+  it("ctx.sms IS the gate bound to this tick's own client, and building it constructs no SMS provider (mutation: bind the gate to another client → FAILS)", () => {
+    const bound = vi.fn();
+    gate.smsSenderFor.mockReturnValue(bound);
+    const db = { tick: "db" } as never;
+    const c = buildPassContext({ db, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com" });
+    expect(gate.smsSenderFor).toHaveBeenCalledWith(db);
+    expect(c.sms).toBe(bound);
+  });
+});
+
+describe("PassContext — structurally cannot carry the agency's internal label", () => {
+  it("has no accountName (pnpm typecheck fails here if someone adds one)", () => {
+    const c = ctx();
+    // @ts-expect-error accountName is deliberately absent from PassContext.
+    // If it is ever added, this directive becomes unused and `tsc` refuses it.
+    expect(c.accountName).toBeUndefined();
+  });
+});
+```
+
+Replace the whole file `apps/web/src/lib/automations/hold-or-send.test.ts` with:
+
+```ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const dbMocks = vi.hoisted(() => ({ recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn() }));
+vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
+
+import { holdOrSend, writeHeld, logSkipped, REASONS, subjectOf, verdict, type HoldSubject } from "./hold-or-send";
+import { SmsBlocked, SmsDeferred, type AutomationBlockReason } from "./send-sms";
+
+const NIGHT = new Date("2026-09-22T04:00:00Z");   // 23:00 CDT, Mon Sept 21
+const NOON = new Date("2026-09-21T17:00:00Z");    // 12:00 CDT, Mon Sept 21
+const END = "2026-09-22T13:00:00.000Z";           // 08:00 CDT, Tue Sept 22
+// Sun Sept 20, 10:00 CDT: automated hours are open, marketing hours are not.
+const SUNDAY_10 = new Date("2026-09-20T15:00:00Z");
+const SUNDAY_NOON = "2026-09-20T17:00:00.000Z";
+
+function subject(overrides: Partial<HoldSubject> = {}): HoldSubject {
+  return {
+    accountId: "acct_1", accountTimezone: "America/Chicago", source: "sms_reminder", channel: "sms",
+    smsKind: "automation.sms_reminder", subjectKey: "booking:bk_1", contactId: "ct_1", ...overrides,
+  };
+}
+const ctx = (now: Date) => ({ db: {} as never, now });
+const logWrites = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
+
+beforeEach(() => {
+  dbMocks.recordAutomationLog.mockReset().mockResolvedValue(undefined);
+  dbMocks.getAutomationLogEntry.mockReset().mockResolvedValue(null);
+  vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
+});
+
+describe("holdOrSend: the fixed hours", () => {
+  it("inside the hours: sends, then writes ONE sent row (mutation: skip the record → FAILS)", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(NOON), subject(), send)).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(logWrites()).toEqual([{
+      accountId: "acct_1", source: "sms_reminder", channel: "sms", subjectKey: "booking:bk_1", contactId: "ct_1",
+      status: "sent", reason: "",
+    }]);
+  });
+
+  it("outside the hours: does NOT send; the held row carries the 08:00 opening and a client-readable reason (mutation: skip the hours check → sent, FAILS)", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(NIGHT), subject(), send)).toBe("held");
+    expect(send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      status: "held", heldUntil: END, reason: "Held until 8:00 AM — quiet hours",
+    })]);
+  });
+
+  it("an SMS subject's hours are its KIND's: a marketing text waits for Sunday noon while an automated one goes (mutation: read the automated rule for every sms kind → FAILS)", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(SUNDAY_10), subject({ source: "review_request", smsKind: "automation.review_request" }), send)).toBe("held");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "held", heldUntil: SUNDAY_NOON })]);
+    expect(await holdOrSend(ctx(SUNDAY_10), subject(), send)).toBe("sent");
+  });
+
+  it("an EMAIL subject keeps the automated hours, whatever its recipe (choice 31) (mutation: send email at any hour → FAILS)", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(NIGHT), subject({ source: "reminders", channel: "email", smsKind: undefined }), send)).toBe("held");
+    expect(send).not.toHaveBeenCalled();
+    expect(await holdOrSend(ctx(SUNDAY_10), subject({ source: "reactivation", channel: "email", smsKind: undefined }), send)).toBe("sent");
+  });
+
+  it("an SMS subject with no kind is a programming error and throws, never guessing the weaker rule (mutation: default to automated → FAILS)", async () => {
+    await expect(holdOrSend(ctx(NOON), subject({ smsKind: undefined }), vi.fn())).rejects.toThrow(/has no smsKind/);
+  });
+
+  it("choice 21: a deadline at or before the opening is NOT sent and NOT held; one after it is held (mutation: drop the deadline rule → the first is held, FAILS)", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(NIGHT), subject({ deadline: new Date(END) }), send)).toBe("skipped");
+    expect(await holdOrSend(ctx(NIGHT), subject({ deadline: new Date("2026-09-22T13:30:00Z") }), send)).toBe("held");
+    expect(send).not.toHaveBeenCalled();
+    expect(logWrites().map((w) => [w.status, w.reason])).toEqual([
+      ["skipped", "Not sent: quiet hours ran past the appointment"],
+      ["held", "Held until 8:00 AM — quiet hours"],
+    ]);
+  });
+
+  it("a deadline inside the open hours is irrelevant: it sends (mutation: expire on any deadline → FAILS)", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(NOON), subject({ deadline: new Date("2026-09-21T18:00:00Z") }), send)).toBe("sent");
+  });
+
+  it("an unresolvable account zone keeps America/Chicago's hours and says so in the log line — never 'no window' (mutation: fail open → sent, FAILS)", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(NIGHT), subject({ accountTimezone: "America/Nowhere" }), send)).toBe("held");
+    expect(send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "held", heldUntil: END })]);
+    expect(String(vi.mocked(console.error).mock.calls[0]?.[0])).toMatch(/cannot be resolved/);
+  });
+});
+
+describe("holdOrSend: what the send gate answers", () => {
+  it("SmsDeferred from the send becomes the held row, at the gate's own opening (mutation: treat it as a failure → FAILS)", async () => {
+    const until = new Date("2026-09-22T14:00:00Z");
+    expect(await holdOrSend(ctx(NOON), subject(), async () => { throw new SmsDeferred(until); })).toBe("held");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "held", heldUntil: until.toISOString() })]);
+  });
+
+  it.each<[AutomationBlockReason, string]>([
+    ["stopped", "They stopped texts from this business"],
+    ["held", "Texts to them are on hold"],
+    ["unconfirmed_number", "Their number could be Mexican or US. Pick its country on their contact"],
+    ["window_after_deadline", "Not sent: quiet hours ran past the appointment"],
+    ["no_number", "No phone number we can text"],
+    ["a2p_not_approved", "Texting isn't set up for this company yet"],
+    ["no_live_number", "Texting isn't set up for this company yet"],
+  ])("SmsBlocked(%s) is ONE skipped row reading %j, and no throw (mutation: rethrow it → FAILS)", async (reason, words) => {
+    expect(await holdOrSend(ctx(NOON), subject(), async () => { throw new SmsBlocked(reason); })).toBe("skipped");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "skipped", reason: words })]);
+  });
+
+  it("any other throw writes a failed row with the plain reason and RETHROWS so the pass counts it", async () => {
+    await expect(holdOrSend(ctx(NOON), subject(), async () => { throw new Error("carrier"); })).rejects.toThrow("carrier");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "failed", reason: REASONS.failed })]);
+  });
+});
+
+describe("holdOrSend: the log legs", () => {
+  it("a log write that fails never fails the send: still sent, one console.error (mutation: let record throw → FAILS)", async () => {
+    dbMocks.recordAutomationLog.mockRejectedValue(new Error("log down"));
+    expect(await holdOrSend(ctx(NOON), subject(), vi.fn(async () => {}))).toBe("sent");
+    expect(console.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("a held write that fails REJECTS the call — nothing sent, the pass will count it (mutation: swallow it → FAILS)", async () => {
+    dbMocks.recordAutomationLog.mockRejectedValue(new Error("log down"));
+    const send = vi.fn(async () => {});
+    await expect(holdOrSend(ctx(NIGHT), subject(), send)).rejects.toThrow("log down");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("re-holding with an UNCHANGED held_until does not re-write the row, so `occurred_at` does not bump (mutation: drop the getAutomationLogEntry check → FAILS)", async () => {
+    dbMocks.getAutomationLogEntry.mockResolvedValue({ status: "held", held_until: END });
+    expect(await holdOrSend(ctx(NIGHT), subject(), vi.fn())).toBe("held");
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+    expect(dbMocks.getAutomationLogEntry).toHaveBeenCalledWith(expect.anything(), "acct_1", "sms_reminder", "booking:bk_1");
+  });
+
+  it("re-holding with a CHANGED held_until still writes", async () => {
+    dbMocks.getAutomationLogEntry.mockResolvedValue({ status: "held", held_until: "2026-09-22T12:00:00.000Z" });
+    expect(await holdOrSend(ctx(NIGHT), subject(), vi.fn())).toBe("held");
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledTimes(1);
+  });
+
+  it("writeHeld, the text-back's way in, writes the same held row a pass does (mutation: drop its unchanged check → FAILS on the second call)", async () => {
+    await writeHeld({ db: {} as never }, subject(), new Date(END), "America/Chicago");
+    dbMocks.getAutomationLogEntry.mockResolvedValue({ status: "held", held_until: END });
+    await writeHeld({ db: {} as never }, subject(), new Date(END), "America/Chicago");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "held", heldUntil: END, reason: "Held until 8:00 AM — quiet hours" })]);
+  });
+});
+
+describe("logSkipped, subjectOf, verdict", () => {
+  it("logSkipped writes a skipped row and never throws", async () => {
+    await logSkipped({ db: {} as never }, subject(), REASONS.noPhone);
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "skipped", reason: "No phone number we can text" }));
+    dbMocks.recordAutomationLog.mockRejectedValue(new Error("down"));
+    await expect(logSkipped({ db: {} as never }, subject(), REASONS.noPhone)).resolves.toBeUndefined();
+  });
+
+  it("subjectOf maps a log row back to the subject the release re-writes, payload included", () => {
+    expect(subjectOf({
+      id: "l1", account_id: "acct_1", source: "instant_reply", channel: "sms", contact_id: "ct_9",
+      subject_key: "submission:s1", status: "held", reason: "x", held_until: END, payload: { locale: "es" }, occurred_at: END,
+    })).toEqual({ accountId: "acct_1", source: "instant_reply", channel: "sms", subjectKey: "submission:s1", contactId: "ct_9", payload: { locale: "es" } });
+  });
+
+  it("subjectOf preserves an `ai` channel rather than coercing it to sms (mutation: coerce → FAILS)", () => {
+    expect(subjectOf({
+      id: "l2", account_id: "acct_1", source: "voice", channel: "ai", contact_id: "ct_9",
+      subject_key: "call:c1", status: "sent", reason: "", held_until: null, payload: {}, occurred_at: END,
+    }).channel).toBe("ai");
+  });
+
+  it("verdict reads a pass's counters: sent beats held beats failed beats skipped (mutation: reverse the branch order → FAILS)", () => {
+    expect(verdict({ sent: 1, held: 0, failed: 0 })).toBe("sent");
+    expect(verdict({ sent: 0, held: 1, failed: 0 })).toBe("held");
+    expect(verdict({ sent: 0, held: 0, failed: 1 })).toBe("failed");
+    expect(verdict({ sent: 0, held: 0, failed: 0 })).toBe("skipped");
+    expect(verdict({ sent: 1, held: 1, failed: 1 })).toBe("sent");
+    expect(verdict({ sent: 0, held: 1, failed: 1 })).toBe("held");
+  });
+});
+```
+
+Replace the whole file `apps/web/src/lib/automations/send-sms.test.ts` with:
+
+```ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const dbMocks = vi.hoisted(() => ({
+  ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(), recordUsage: vi.fn(),
+}));
+vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
+
+import { SMS_RETRY_COOLDOWN_MS } from "./caps";
+import type { PassContext } from "./context";
+import {
+  sendAutomationSms, markAutomationSmsSent, smsCooldownActive, SmsBlocked, SmsDeferred, type AutomationSmsInput,
+} from "./send-sms";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { segmentsFor } from "@/lib/sms/segments";
+
+const NOW = new Date("2026-09-09T14:00:00Z");
+const HOUR = 60 * 60 * 1000;
+
+describe("smsCooldownActive — one attempt per booking per day", () => {
+  it("is off with no marker, on for a marker younger than 24h, off again at exactly 24h", () => {
+    // Mutation: `<=` instead of `<` and the 24h case flips.
+    expect(smsCooldownActive(null, NOW)).toBe(false);
+    expect(smsCooldownActive(new Date(NOW.getTime() - SMS_RETRY_COOLDOWN_MS + 60_000).toISOString(), NOW)).toBe(true);
+    expect(smsCooldownActive(new Date(NOW.getTime() - SMS_RETRY_COOLDOWN_MS).toISOString(), NOW)).toBe(false);
+    expect(smsCooldownActive(new Date(NOW.getTime() - 25 * HOUR).toISOString(), NOW)).toBe(false);
+  });
+
+  it("holds on a marker in the future (clock skew) and on one it cannot read — the safe direction", () => {
+    expect(smsCooldownActive(new Date(NOW.getTime() + HOUR).toISOString(), NOW)).toBe(true);
+    expect(smsCooldownActive("not a timestamp", NOW)).toBe(true);
+  });
+
+  it("pins the constant", () => {
+    expect(SMS_RETRY_COOLDOWN_MS).toBe(24 * HOUR);
+  });
+});
+
+const smsSend = vi.fn();
+const gateSend = vi.fn(async (m: { to: string; from: string; body: string }) => smsSend(m));
+function ctx(over: Partial<PassContext> = {}): PassContext {
+  return {
+    db: {} as never, now: NOW, origin: "https://app.example.com",
+    email: { isFake: true, send: async () => ({ providerMessageId: "e" }) },
+    sms: fakeSmsGate({ send: gateSend }),
+    ...over,
+  };
+}
+const input = (onProviderFailure = vi.fn(async () => {})): AutomationSmsInput => ({
+  accountId: "acct_1", contactId: "ct_1", kind: "automation.sms_reminder", to: "(956) 555-0101", body: "hi",
+  accountTimezone: "America/Chicago", onProviderFailure,
+});
+
+beforeEach(() => {
+  for (const fn of Object.values(dbMocks)) fn.mockReset();
+  dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
+  dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
+  dbMocks.updateMessageStatus.mockResolvedValue(undefined);
+  smsSend.mockReset().mockResolvedValue({ providerMessageId: "s1" });
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+describe("sendAutomationSms — through the send gate, write then send", () => {
+  it("hands the gate the kind, the stored number, the body, the contact, the account's zone and the TICK's instant (mutation: drop `now` → the gate judges the hours at the wall clock, FAILS)", async () => {
+    const gate = vi.fn(async () => ({ kind: "blocked" as const, reason: "no_number" as const }));
+    await expect(sendAutomationSms(ctx({ sms: gate }), input())).rejects.toBeInstanceOf(SmsBlocked);
+    expect(gate).toHaveBeenCalledWith({
+      accountId: "acct_1", kind: "automation.sms_reminder", to: "(956) 555-0101", body: "hi",
+      contactId: "ct_1", language: undefined, accountZone: "America/Chicago", now: NOW,
+    }, { prepare: expect.any(Function) });
+  });
+
+  it("the gate's prepare writes the conversation and the message row with the text AS SENT, then the send; both ids come back (mutation: store input.body → the row lacks the STOP line, FAILS)", async () => {
+    const onProviderFailure = vi.fn(async () => {});
+    expect(await sendAutomationSms(ctx(), input(onProviderFailure))).toEqual({ messageId: "msg_1", providerMessageId: "s1", usage: null });
+    expect(dbMocks.ensureConversation).toHaveBeenCalledWith(expect.anything(), "acct_1", "ct_1", "automation", "system");
+    // Spelled out rather than wrapped in withOptOut(), so this still fails if
+    // that helper quietly becomes a no-op.
+    const sentBody = "hi Reply STOP to opt out.";
+    expect(dbMocks.createMessage).toHaveBeenCalledWith(expect.anything(), "acct_1",
+      { conversationId: "convo_1", channel: "sms", direction: "outbound", body: sentBody }, "automation", "system");
+    expect(smsSend).toHaveBeenCalledWith({ to: "+19565550101", from: "+19565550000", body: sentBody });
+    expect(onProviderFailure).not.toHaveBeenCalled();
+  });
+
+  it("a deferral throws SmsDeferred carrying the opening, and writes no row (mutation: return a sent result → FAILS)", async () => {
+    const until = new Date("2026-09-10T13:00:00Z");
+    const deferred = fakeSmsGate({ decide: () => ({ kind: "deferred", until, zone: "America/Chicago" }) });
+    const e = await sendAutomationSms(ctx({ sms: deferred }), input()).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(SmsDeferred);
+    expect((e as SmsDeferred).until).toEqual(until);
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it("a refusal throws SmsBlocked with the gate's reason, and writes no row (mutation: swallow it → resolves, FAILS)", async () => {
+    const stopped = fakeSmsGate({ decide: () => ({ kind: "blocked", reason: "stopped" }) });
+    const e = await sendAutomationSms(ctx({ sms: stopped }), input()).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(SmsBlocked);
+    expect((e as SmsBlocked).reason).toBe("stopped");
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable ledger is a FAILURE, not a refusal: the pass counts it failed and retries next tick (mutation: throw SmsBlocked for ledger_unavailable → FAILS)", async () => {
+    const down = fakeSmsGate({ decide: () => ({ kind: "blocked", reason: "ledger_unavailable" }) });
+    const e = await sendAutomationSms(ctx({ sms: down }), input()).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(Error);
+    expect(e).not.toBeInstanceOf(SmsBlocked);
+    expect(String((e as Error).message)).toMatch(/consent ledger could not be read/);
+  });
+
+  it("on a provider failure: marks the row failed, THEN runs the marker, then rethrows the provider's error (mutation: swap the order, or swallow the throw → FAILS)", async () => {
+    const order: string[] = [];
+    dbMocks.updateMessageStatus.mockImplementation(async () => { order.push("failed"); });
+    const onProviderFailure = vi.fn(async () => { order.push("marker"); });
+    smsSend.mockRejectedValueOnce(new Error("carrier timeout"));
+    await expect(sendAutomationSms(ctx(), input(onProviderFailure))).rejects.toThrow("carrier timeout");
+    expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(expect.anything(), "acct_1", "msg_1", "failed",
+      { error: "carrier timeout" }, "automation", "system");
+    expect(order).toEqual(["failed", "marker"]);
+  });
+
+  it("a marker that itself throws is logged and swallowed; the provider's error still propagates", async () => {
+    smsSend.mockRejectedValueOnce(new Error("carrier timeout"));
+    const onProviderFailure = vi.fn(async () => { throw new Error("db down"); });
+    await expect(sendAutomationSms(ctx(), input(onProviderFailure))).rejects.toThrow("carrier timeout");
+    expect(onProviderFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("no provider (TELNYX_API_KEY unset in production): nothing in the inbox and no attempt marker (mutation: run the marker on every failure → FAILS)", async () => {
+    const onProviderFailure = vi.fn(async () => {});
+    const noProvider = fakeSmsGate({ decide: () => ({
+      kind: "failed", stage: "provider_unavailable", error: "TELNYX_API_KEY is required in production", carrierBlocked: false }) });
+    await expect(sendAutomationSms(ctx({ sms: noProvider }), input(onProviderFailure))).rejects.toThrow(/TELNYX_API_KEY/);
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(onProviderFailure).not.toHaveBeenCalled();
+  });
+});
+
+describe("markAutomationSmsSent — best effort, after the stamp", () => {
+  it("marks the row sent with the provider id, and swallows its own failure", async () => {
+    await markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1", usage: null }, "test");
+    expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(expect.anything(), "acct_1", "msg_1", "sent",
+      { providerMessageId: "s1" }, "automation", "system");
+    dbMocks.updateMessageStatus.mockRejectedValue(new Error("status write failed"));
+    await expect(markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1", usage: null }, "test")).resolves.toBeUndefined();
+  });
+});
+
+describe("usage: what an automation text bills (client billing)", () => {
+  it("a text the gate says bills carries ITS segment count, the text as sent (mutation: count input.body → FAILS)", async () => {
+    const body = "x".repeat(150);
+    expect(segmentsFor(body).segments).toBe(1);
+    const billing = fakeSmsGate({ send: gateSend, billable: true });
+    const sent = await sendAutomationSms(ctx({ sms: billing }), { ...input(), body });
+    expect(sent.usage).toEqual({ segments: 2, sentAt: expect.any(Date) });
+  });
+
+  it("a text the gate says does not bill (the fake provider, or one redirected to a developer's phone) has no usage (mutation: ignore `billable` → FAILS)", async () => {
+    expect((await sendAutomationSms(ctx(), input())).usage).toBeNull();
+  });
+
+  it("markAutomationSmsSent records the segments against the message, AFTER the status write (mutation: record before the status write → call order FAILS)", async () => {
+    const sentAt = new Date("2026-09-09T14:00:05Z");
+    await markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1", usage: { segments: 3, sentAt } }, "test");
+    expect(dbMocks.recordUsage).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "acct_1", meter: "sms", quantity: 3, occurredAt: sentAt, sourceRef: "message:msg_1",
+    });
+    expect(dbMocks.updateMessageStatus.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordUsage.mock.invocationCallOrder[0]!);
+  });
+
+  it("records nothing for a text with no usage, and a failing usage write never escapes (mutation: ignore usage: null → FAILS; remove recordUsageSafely's catch → rejects, FAILS)", async () => {
+    await markAutomationSmsSent(ctx(), "acct_1", { messageId: "msg_1", providerMessageId: "s1", usage: null }, "test");
+    expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+    dbMocks.recordUsage.mockRejectedValue(new Error("usage_events is down"));
+    await expect(markAutomationSmsSent(ctx(), "acct_1",
+      { messageId: "msg_1", providerMessageId: "s1", usage: { segments: 1, sentAt: NOW } }, "test")).resolves.toBeUndefined();
+    expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("every module that sends with sendAutomationSms( also CALLS markAutomationSmsSent(, where its usage is recorded; comments do not count (mutation: delete one pass's markAutomationSmsSent call → that file is named here, FAILS; replace the call with a comment that names it → still named, FAILS; delete either comment-stripping regex → the stripper self-check FAILS)", () => {
+    const ROOT = fileURLToPath(new URL(".", import.meta.url));
+    const walk = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) return walk(full);
+      return full.endsWith(".ts") && !full.endsWith(".test.ts") ? [full] : [];
+    });
+    const rel = (f: string) => f.slice(ROOT.length).replace(/\\/g, "/");
+    // The CODE of a file: block comments, then line comments, stripped (a
+    // `//` right after a `:` is a URL, not a comment), so a doc comment that
+    // names the call cannot satisfy the scan.
+    const code = (f: string) => readFileSync(f, "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // Guards the stripper itself, both halves: a phrase only send-sms.ts's
+    // BLOCK doc comment holds (mutation: delete the block-comment regex →
+    // FAILS), and one only a `//` LINE comment there holds (mutation: delete
+    // the line-comment regex → FAILS).
+    const sendSmsSource = readFileSync(join(ROOT, "send-sms.ts"), "utf-8");
+    expect(sendSmsSource).toContain("AFTER the dedupe stamp");
+    expect(code(join(ROOT, "send-sms.ts"))).not.toContain("AFTER the dedupe stamp");
+    expect(sendSmsSource).toContain("  // THE choke point for every unprompted text");
+    expect(code(join(ROOT, "send-sms.ts"))).not.toContain("THE choke point for every unprompted text");
+    const senders = walk(ROOT).filter((f) => rel(f) !== "send-sms.ts" && code(f).includes("sendAutomationSms("));
+    // Guards the fixture: the seven callers on 2026-09-25. A new caller reds
+    // here until it is added, which is the moment to check it bills.
+    expect(senders.map(rel).sort()).toEqual([
+      "instant-reply.ts", "passes/appointment-confirm.ts", "passes/no-show-nudge.ts", "passes/quote-followup.ts",
+      "passes/referral-ask.ts", "passes/review-request.ts", "passes/sms-reminder.ts",
+    ]);
+    expect(senders.filter((f) => !code(f).includes("markAutomationSmsSent(")).map(rel)).toEqual([]);
+  });
+});
+```
+
+Apply to `apps/web/src/lib/automations/instant-reply.test.ts` (against the task's parent commit):
+
+```diff
+@@ -4,15 +4,18 @@ const dbMocks = vi.hoisted(() => ({
+   getAutomation: vi.fn(), hasRecentOutboundSms: vi.fn(), countInstantRepliesSince: vi.fn(),
+   stampInstantReplySent: vi.fn(),
+   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
+-  readQuietSettings: vi.fn(), readAccountTimezone: vi.fn(), recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(),
++  readAccountTimezone: vi.fn(), recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(),
++  // The send gate's own reads (lib/consent/gate.ts): the instant reply goes
++  // through the REAL gate, so the ledger and the number's country are mocked
++  // here, allowed by default.
++  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(),
+ }));
+ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
+ const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
+ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => senderMock.resolveSmsSender(...a) }));
+-// The factories, mocked exactly as harness.test.ts mocks them: this module
+-// reaches the SMS provider only through harness.ts's lazySmsProvider
+-// (imports.test.ts forbids anything else), so the factory is where the
+-// provider under test comes from.
++// The factory, mocked: this module reaches the SMS provider only through the
++// send gate (lib/consent/scans.test.ts forbids anything else), and the gate
++// takes it from here once a send is cleared.
+ const smsFactory = vi.hoisted(() => ({ getSmsProvider: vi.fn() }));
+ vi.mock("@/lib/sms", () => ({ getSmsProvider: () => smsFactory.getSmsProvider() }));
+ vi.mock("@/lib/email", () => ({
+@@ -24,6 +27,7 @@ import {
+ } from "./caps";
+ import { sendInstantReply, releaseInstantReply, parseInstantReplyPayload, type InstantReplyInput } from "./instant-reply";
+ import type { AutomationLogRow } from "@bis/db";
++import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ 
+ const NOW = new Date("2026-09-10T15:00:00Z");
+ const smsSend = vi.fn();
+@@ -57,7 +61,8 @@ beforeEach(() => {
+   smsSend.mockReset().mockResolvedValue({ providerMessageId: "s1" });
+   smsFactory.getSmsProvider.mockReset()
+     .mockReturnValue({ isFake: true, send: (...a: unknown[]) => smsSend(...a) });
+-  dbMocks.readQuietSettings.mockResolvedValue({ enabled: false, start: "21:00", end: "08:00" });
++  dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
++  dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
+   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
+   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+   dbMocks.getAutomationLogEntry.mockResolvedValue(null);   // Task 3: the held path reads the existing row before re-holding
+@@ -228,13 +233,11 @@ describe("sendInstantReply — the send", () => {
+   });
+ });
+ 
+-describe("instant reply — quiet hours", () => {
++describe("instant reply — the fixed automated hours (08:00-21:00)", () => {
+   const NIGHT = new Date("2026-09-22T04:00:00Z");   // 23:00 CDT
+-  const ON = { enabled: true, start: "21:00", end: "08:00" };
+   const END = "2026-09-22T13:00:00.000Z";
+ 
+   it("a form submitted at 23:00: held, not texted, not stamped; the held row carries what a release needs (mutation: bypass holdOrSend → FAILS)", async () => {
+-    dbMocks.readQuietSettings.mockResolvedValue(ON);
+     expect(await sendInstantReply(input({ now: NIGHT, locale: "es", consentWithheld: false }))).toEqual({ kind: "held" });
+     expect(smsSend).not.toHaveBeenCalled();
+     expect(dbMocks.createMessage).not.toHaveBeenCalled();
+@@ -246,22 +249,19 @@ describe("instant reply — quiet hours", () => {
+     });
+   });
+ 
+-  it("the window is read for the SUBMISSION's account, in that account's zone, not the sender's default (mutation: hardcode either → FAILS)", async () => {
+-    // Same instant NIGHT holds under Chicago (23:00, inside 21:00–08:00): here
++  it("the hours are read in the SUBMISSION's account's zone, not a default (mutation: hardcode the zone → FAILS)", async () => {
++    // Same instant NIGHT holds under Chicago (23:00, outside 08:00–21:00): here
+     // it must NOT hold, because Tokyo reads it as 13:00 the next day — well
+     // outside the window. A test that also sends "sent" under Chicago could
+     // not tell a real zone read from a hardcoded one; this one can.
+-    dbMocks.readQuietSettings.mockResolvedValue(ON);
+     dbMocks.readAccountTimezone.mockResolvedValue("Asia/Tokyo");   // NIGHT (23:00 Chicago) is 13:00 JST Sept 22
+     expect((await sendInstantReply(input({ now: NIGHT }))).kind).toBe("sent");
+-    expect(dbMocks.readQuietSettings).toHaveBeenCalledWith(expect.anything(), "acct_1");
+     expect(dbMocks.readAccountTimezone).toHaveBeenCalledWith(expect.anything(), "acct_1");
+   });
+ 
+   it("nothing is read for a submission the free checks refuse, and nothing is logged for an account without the recipe (mutation: log `disabled` → FAILS)", async () => {
+     dbMocks.getAutomation.mockResolvedValue({ ...ROW, enabled: false });
+     expect(await sendInstantReply(input())).toEqual({ kind: "skipped", reason: "disabled" });
+-    expect(dbMocks.readQuietSettings).not.toHaveBeenCalled();
+     expect(dbMocks.readAccountTimezone).not.toHaveBeenCalled();
+     expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+   });
+@@ -281,13 +281,33 @@ describe("instant reply — quiet hours", () => {
+   });
+ });
+ 
++describe("instant reply — the consent gate, through the real gate", () => {
++  it("a number that stopped texts is NOT texted: no message row, not stamped, one skipped row a client can read (mutation: skip the ledger in the gate → sent, FAILS)", async () => {
++    dbMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-09-01T00:00:00Z", method: "carrier_block", eventId: "ev_1" });
++    expect(await sendInstantReply(input())).toEqual({ kind: "blocked", reason: "the consent gate refused it; the log row says why" });
++    expect(smsSend).not.toHaveBeenCalled();
++    expect(dbMocks.createMessage).not.toHaveBeenCalled();
++    expect(dbMocks.stampInstantReplySent).not.toHaveBeenCalled();
++    expect(dbMocks.readConsentState).toHaveBeenCalledWith(expect.anything(), "acct_1", "sms", "+19565550101");
++    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => [c[1].subjectKey, c[1].status, c[1].reason]))
++      .toEqual([["submission:sub_1", "skipped", "They stopped texts from this business"]]);
++  });
++
++  it("a contact whose number's country is unconfirmed is held back the same way (mutation: skip the flag read → sent, FAILS)", async () => {
++    dbMocks.readPhoneCountryFlag.mockResolvedValue(true);
++    expect((await sendInstantReply(input())).kind).toBe("blocked");
++    expect(dbMocks.readPhoneCountryFlag).toHaveBeenCalledWith(expect.anything(), "acct_1", "ct_1");
++    expect(smsSend).not.toHaveBeenCalled();
++  });
++});
++
+ describe("releaseInstantReply — from the held row's payload", () => {
+   const heldRow = (payload: Record<string, unknown>): AutomationLogRow => ({
+     id: "log_i", account_id: "acct_1", source: "instant_reply", channel: "sms", contact_id: "ct_1",
+     subject_key: "submission:sub_1", status: "held", reason: "x", held_until: "2026-09-22T13:00:00.000Z", payload, occurred_at: "2026-09-22T04:00:00.000Z",
+   });
+   const PAYLOAD = { contactId: "ct_1", conversationId: "convo_1", phoneE164: "+19565550101", locale: "en", consentWithheld: false };
+-  const ctx = { db: {} as never, now: new Date("2026-09-22T13:00:00Z"), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }), quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }) };
++  const ctx = { db: {} as never, now: new Date("2026-09-22T13:00:00Z"), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate() };
+ 
+   it("re-runs every check and sends: the text goes, the submission is stamped, the row flips to sent (mutation: skip the stamp on release → FAILS)", async () => {
+     expect(await releaseInstantReply(ctx, heldRow(PAYLOAD))).toBe("sent");
+```
+
+Apply to `apps/web/src/lib/automations/sentinel.test.ts` (against the task's parent commit):
+
+```diff
+@@ -36,7 +36,8 @@ const dbMocks = vi.hoisted(() => ({
+   getAgencyReportTarget: vi.fn(), stampAgencyReportSent: vi.fn(), listAccountsForWeeklyRollup: vi.fn(),
+   recordAutomationLog: vi.fn(),
+   // Part C: the inline instant reply reads the window and the zone; the held path reads the existing row.
+-  readQuietSettings: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
++  readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
++  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(),
+   // The release pass's own queue read — first in the registry, every tick.
+   listReleasableHolds: vi.fn(),
+   // The usage report, last in the registry: no account is billed here.
+@@ -55,6 +56,7 @@ import type {
+ } from "@bis/db";
+ import { runPasses } from "./harness";
+ import { PASSES } from "./registry";
++import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import type { PassContext } from "./context";
+ import { sendInstantReply, type InstantReplyInput } from "./instant-reply";
+ 
+@@ -198,7 +200,8 @@ beforeEach(() => {
+   // RUN under the sentinel, not error out of the harness: a pass that quietly
+   // fails is a pass the scan never looked at (the withBookingCancelled lesson).
+   dbMocks.listSitesToSync.mockResolvedValue([]);
+-  dbMocks.readQuietSettings.mockResolvedValue({ enabled: false, start: "21:00", end: "08:00" });
++  dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
++  dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
+   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
+   dbMocks.getAutomationLogEntry.mockResolvedValue(null);
+   dbMocks.listReleasableHolds.mockResolvedValue([]);
+@@ -223,8 +226,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
+     const smsSend = vi.fn(async () => ({ providerMessageId: "s" }));
+     const ctx: PassContext = {
+       db: {} as never, now: TICK, origin: "https://app.example.com",
+-      email: { isFake: true, send: emailSend }, sms: () => ({ isFake: true, send: smsSend }),
+-      quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
++      email: { isFake: true, send: emailSend }, sms: fakeSmsGate({ send: smsSend }),
+     };
+ 
+     const results = await runPasses(PASSES, ctx);
+```
+
+Replace the whole file `apps/web/src/lib/automations/imports.test.ts` with:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * "Nothing new sends" made structural. A pass receives its providers on
+ * `ctx`; it never imports a provider or a provider factory. The harness is
+ * the ONLY module allowed to import the EMAIL factory; NO module here may
+ * import the SMS factory or the Telnyx provider (consent chain PR-1: texts go
+ * through `ctx.sms`, which is the send gate, and lib/consent/scans.test.ts
+ * pins the gate as the only importer app-wide). Test files are exempt: they
+ * mock those modules.
+ *
+ * Mutations: add `import { getSmsProvider } from "@/lib/sms"` to harness.ts
+ * or to any pass file → FAILS; add the email factory to a pass file → FAILS.
+ */
+const ROOT = fileURLToPath(new URL(".", import.meta.url));
+// Static `from "…"` and dynamic `import("…")` alike; `/index` spelled out
+// or not; `.tsx` as well as `.ts`. Each rule names the files allowed past it.
+const FORBIDDEN: readonly { rule: RegExp; allowed: readonly string[] }[] = [
+  // The factories, by alias OR by relative path (`../../email` from passes/),
+  // with or without `/index` and a `.js`/`.ts` suffix.
+  { rule: /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)email(?:\/index)?(?:\.[jt]s)?["']/, allowed: ["harness.ts"] },
+  { rule: /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)sms(?:\/index)?(?:\.[jt]s)?["']/, allowed: [] },
+  { rule: /(?:from\s+|import\s*\(\s*)["'][^"']*\/resend["']/, allowed: ["harness.ts"] },   // the real email provider
+  { rule: /(?:from\s+|import\s*\(\s*)["'][^"']*\/telnyx["']/, allowed: [] },              // the real sms provider
+];
+
+function walk(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) return walk(full);
+    const isSource = full.endsWith(".ts") || full.endsWith(".tsx");
+    const isTest = full.endsWith(".test.ts") || full.endsWith(".test.tsx");
+    return isSource && !isTest ? [full] : [];
+  });
+}
+const rel = (file: string) => file.slice(ROOT.length).replace(/\\/g, "/");
+
+describe("automations — providers come from ctx, never from imports", () => {
+  it("only the harness imports the email factory, and NO module here imports the SMS factory or Telnyx", () => {
+    const offenders: string[] = [];
+    for (const file of walk(ROOT)) {
+      const src = readFileSync(file, "utf-8");
+      for (const { rule, allowed } of FORBIDDEN) {
+        if (!allowed.includes(rel(file)) && rule.test(src)) offenders.push(`${rel(file)}: ${rule}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the scan actually reaches the pass files (guards the fixture)", () => {
+    expect(walk(ROOT).map(rel)).toEqual(expect.arrayContaining(
+      ["harness.ts", "context.ts", "registry.ts", "passes/reminders.ts", "passes/followups.ts",
+       "passes/review-request.ts", "send-sms.ts", "passes/no-show-nudge.ts", "passes/sms-reminder.ts",
+       "instant-reply.ts", "instant-reply-copy.ts", "passes/site-traffic.ts"],
+    ));
+  });
+});
+```
+
+Apply to `apps/web/src/lib/automations/passes/appointment-confirm.test.ts` (against the task's parent commit):
+
+```diff
+@@ -17,13 +17,14 @@ const gate = vi.fn(async () => ({ ok: true as const, from: "+19565550000" }));
+ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => gate(...(a as [])) }));
+ 
+ import type { PassContext } from "../context";
++import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
+ import { formatWhen } from "@/lib/booking/time";
+ import { appointmentConfirmPass, releaseAppointmentConfirm } from "./appointment-confirm";
+ 
+-const TICK = new Date("2027-04-12T12:00:00.000Z");
+-const ON = { enabled: true, start: "21:00", end: "08:00" };
+-const OFF = { enabled: false, start: "21:00", end: "08:00" };
++// 09:00 CDT: inside the fixed automated hours (08:00-21:00), so the default
++// tick sends. The quiet-hours case below moves the clock to 02:00 itself.
++const TICK = new Date("2027-04-12T14:00:00.000Z");
+ // The ARGUMENT is typed, not just the return: the plan's `vi.fn(async () =>
+ // …)` gives `mock.calls` an empty tuple, so `calls[0]![0].body` is TS2493
+ // ("tuple of length 0 has no element at index 0") and `pnpm --filter web
+@@ -36,13 +37,12 @@ function ctx(over: Partial<PassContext> = {}): PassContext {
+   return {
+     db: {} as PassContext["db"], now: TICK, origin: "https://app.example",
+     email: { isFake: true, send: vi.fn() } as unknown as PassContext["email"],
+-    sms: () => ({ isFake: true, send }) as unknown as ReturnType<PassContext["sms"]>,
+-    quiet: async () => OFF,
++    sms: fakeSmsGate({ send }),
+     ...over,
+   };
+ }
+ 
+-const STARTS = new Date(TICK.getTime() + 47 * 3600_000).toISOString();   // 04:00 PDT · 06:00 CDT, Apr 14
++const STARTS = new Date(TICK.getTime() + 47 * 3600_000).toISOString();   // 06:00 PDT · 08:00 CDT, Apr 14
+ 
+ /** Distinctive, complete fixture. Booker in Los Angeles, account in Chicago
+  *  (spec amendment B13, and the `sms-reminder.test.ts:23-35` model): the two
+@@ -84,7 +84,7 @@ describe("the confirmation ask sends", () => {
+   it("texts, stamps, and writes ONE sent log row", async () => {
+     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
+     const c = await appointmentConfirmPass.run(ctx());
+-    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
++    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
+     expect(send).toHaveBeenCalledTimes(1);
+     expect(dbMocks.stampAppointmentConfirmAsked).toHaveBeenCalledWith(expect.anything(), "bk_1");
+     const body = send.mock.calls[0]![0].body as string;
+@@ -127,7 +127,7 @@ describe("the confirmation ask sends", () => {
+     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
+     send.mockRejectedValueOnce(new Error("carrier timeout"));
+     const c = await appointmentConfirmPass.run(ctx());
+-    expect(c).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
++    expect(c).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
+     expect(dbMocks.stampAppointmentConfirmSmsFailed).toHaveBeenCalledWith(expect.anything(), "bk_1");
+     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+       source: "appointment_confirm", subjectKey: "booking:bk_1", status: "failed", reason: "Couldn't be delivered",
+@@ -146,7 +146,7 @@ describe("the confirmation ask sends", () => {
+     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
+     dbMocks.stampAppointmentConfirmAsked.mockRejectedValue(new Error("PostgREST 503"));
+     const c = await appointmentConfirmPass.run(ctx());
+-    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
++    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
+     expect(send).toHaveBeenCalledTimes(1);
+     expect(dbMocks.stampAppointmentConfirmAsked).toHaveBeenCalledTimes(STAMP_RETRY_DELAYS_MS.length + 1);
+     // The log row still says `sent`, because it was: the log is what went out,
+@@ -190,7 +190,7 @@ describe("the confirmation ask sends", () => {
+     ]);
+     const c = await appointmentConfirmPass.run(ctx());
+     expect(c).toEqual({
+-      sent: 0, failed: 0, unstamped: 0, held: 0,
++      sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+       skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 1,
+     });
+     expect(send).not.toHaveBeenCalled();
+@@ -213,9 +213,9 @@ describe("the confirmation ask sends", () => {
+ describe("the confirmation ask and quiet hours", () => {
+   it("inside the window it HOLDS: no send, no stamp, one held row with the window's end", async () => {
+     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
+-    // 02:00 Chicago on the tick date — inside the default 21:00–08:00 window.
++    // 02:00 Chicago on the tick date: before the fixed hours open at 08:00.
+     const night = new Date("2027-04-12T07:00:00.000Z");
+-    const c = await appointmentConfirmPass.run(ctx({ now: night, quiet: async () => ON }));
++    const c = await appointmentConfirmPass.run(ctx({ now: night }));
+     expect(c.held).toBe(1);
+     expect(c.sent).toBe(0);
+     expect(send).not.toHaveBeenCalled();                          // Mutation: bypass holdOrSend → this reds
+```
+
+Apply to `apps/web/src/lib/automations/passes/followups.test.ts` (against the task's parent commit):
+
+```diff
+@@ -14,10 +14,6 @@ import { followupsPass, releaseFollowup } from "./followups";
+ const MORNING = new Date("2026-09-22T14:00:00Z");
+ // 03:00 CDT on Sept 22 — NOT in the band, and inside the default quiet window.
+ const SMALL_HOURS = new Date("2026-09-22T08:00:00Z");
+-const ON = { enabled: true, start: "21:00", end: "08:00" };
+-const OFF = { ...ON, enabled: false };
+-// A window ending at NOON: the band (08–11) is entirely inside it, so a follow-up due at 09:00 is held until 12:00.
+-const UNTIL_NOON = { enabled: true, start: "21:00", end: "12:00" };
+ const NOON = new Date("2026-09-22T17:00:00Z");
+ 
+ function row(overrides: Partial<DueFollowup> = {}): DueFollowup {
+@@ -35,14 +31,14 @@ const heldRow = (): AutomationLogRow => ({
+   subject_key: "booking:bk_f1", status: "held", reason: "Held until 12:00 PM — quiet hours", held_until: NOON.toISOString(), payload: {}, occurred_at: MORNING.toISOString(),
+ });
+ const emailSend = vi.fn();
+-function ctx(now: Date, quiet = OFF): PassContext {
++function ctx(now: Date): PassContext {
+   return {
+     db: {} as never, now, origin: "https://app.example.com",
+     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
+-    sms: () => { throw new Error("follow-ups never text"); }, quiet: async () => quiet,
++    sms: async () => { throw new Error("follow-ups never text"); },
+   };
+ }
+-const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0 };
++const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0 };
+ const logCalls = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
+ 
+ beforeEach(() => {
+@@ -57,7 +53,7 @@ beforeEach(() => {
+ });
+ 
+ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN IT GOES", () => {
+-  it("in the band, quiet off: sent and stamped, one sent row", async () => {
++  it("in the band: sent and stamped, one sent row", async () => {
+     dbMocks.listDueFollowups.mockResolvedValue([row()]);
+     expect(await followupsPass.run(ctx(MORNING))).toEqual({ ...EMPTY, sent: 1 });
+     expect(dbMocks.stampFollowupSent).toHaveBeenCalledWith(expect.anything(), "bk_f1");
+@@ -66,21 +62,13 @@ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN I
+ 
+   it("outside the band the gate still waits — no row, no send, whatever the window says (mutation: skip the gate on the normal tick → FAILS)", async () => {
+     dbMocks.listDueFollowups.mockResolvedValue([row()]);
+-    expect(await followupsPass.run(ctx(SMALL_HOURS, OFF))).toEqual({ ...EMPTY, waitingForMorning: 1 });
++    expect(await followupsPass.run(ctx(SMALL_HOURS))).toEqual({ ...EMPTY, waitingForMorning: 1 });
+     expect(logCalls()).toEqual([]);
+   });
+ 
+-  it("in the band but inside a window that ends at noon: HELD until 12:00 (the band and the window compose; mutation: bypass holdOrSend → FAILS)", async () => {
+-    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+-    expect(await followupsPass.run(ctx(MORNING, UNTIL_NOON))).toEqual({ ...EMPTY, held: 1 });
+-    expect(emailSend).not.toHaveBeenCalled();
+-    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+-    expect(logCalls()).toEqual([expect.objectContaining({ status: "held", heldUntil: NOON.toISOString(), reason: "Held until 12:00 PM — quiet hours" })]);
+-  });
+-
+   it("release at noon: the band is CLOSED, and the release sends anyway because the band was satisfied at hold time (mutation: apply the gate on release → FAILS)", async () => {
+     dbMocks.getDueFollowupById.mockResolvedValue({ due: row() });
+-    expect(await releaseFollowup(ctx(NOON, UNTIL_NOON), heldRow())).toBe("sent");
++    expect(await releaseFollowup(ctx(NOON), heldRow())).toBe("sent");
+     expect(emailSend).toHaveBeenCalledTimes(1);
+     expect(dbMocks.stampFollowupSent).toHaveBeenCalledWith(expect.anything(), "bk_f1");
+   });
+@@ -92,7 +80,7 @@ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN I
+     dbMocks.getDueFollowupById.mockResolvedValue({ due: row({
+       startsAt: "2026-09-20T19:00:00.000Z", endsAt: "2026-09-20T20:00:00.000Z",   // 45h before NOON
+     }) });
+-    expect(await releaseFollowup(ctx(NOON, UNTIL_NOON), heldRow())).toBe("skipped");
++    expect(await releaseFollowup(ctx(NOON), heldRow())).toBe("skipped");
+     expect(emailSend).not.toHaveBeenCalled();
+     expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+     // ONE row, replacing the held one on the same (account, source, subject):
+```
+
+Apply to `apps/web/src/lib/automations/passes/no-show-nudge.test.ts` (against the task's parent commit):
+
+```diff
+@@ -1,5 +1,5 @@
+ import { describe, it, expect, vi, beforeEach } from "vitest";
+-import type { DueNoShowNudge, AutomationLogRow, QuietSettings } from "@bis/db";
++import type { DueNoShowNudge, AutomationLogRow } from "@bis/db";
+ 
+ const dbMocks = vi.hoisted(() => ({
+   listDueNoShowNudges: vi.fn(), stampNoShowNudged: vi.fn(), stampNoShowNudgeSmsFailed: vi.fn(),
+@@ -14,6 +14,7 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => send
+ 
+ import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
+ import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
++import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import type { PassContext } from "../context";
+ import { noShowNudgePass, releaseNoShowNudge } from "./no-show-nudge";
+ 
+@@ -47,17 +48,15 @@ const sms = (overrides: Partial<DueNoShowNudge> = {}) => row({ config: { channel
+ 
+ const emailSend = vi.fn();
+ const smsSend = vi.fn();
+-const QUIET_OFF: QuietSettings = { enabled: false, start: "21:00", end: "08:00" };
+-function ctx(now: Date = TICK, quiet: QuietSettings = QUIET_OFF): PassContext {
++function ctx(now: Date = TICK): PassContext {
+   return {
+     db: {} as never, now, origin: ORIGIN,
+     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
+-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+-    quiet: async () => quiet,
++    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+   };
+ }
+ const EMPTY = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0, skippedCalendarOff: 0,
+   waitingForMorning: 0, unresolvableTimezone: 0,
+ };
+@@ -268,21 +267,17 @@ describe("no-show nudge pass — capped, like every recipe pass that a bulk stat
+ });
+ 
+ describe("no-show nudge — quiet hours and release", () => {
+-  const UNTIL_NOON = { enabled: true, start: "21:00", end: "12:00" };
+-  // TICK is 10:00 America/New_York (this file's default row's zone); a
+-  // 21:00→12:00 window entered the previous evening ends at 12:00 THAT SAME
+-  // New York day — 2026-09-09 16:00Z. Verified against
+-  // quietWindowEnd(TICK, "America/New_York", UNTIL_NOON) directly (see the
+-  // task report).
++  // The gate defers the text to noon, as it does a marketing text on a
++  // Sunday morning (lib/consent/hours.ts); the band and the hours compose.
+   const NOON = new Date("2026-09-09T16:00:00Z");
+   const heldRow = (channel: "sms" | "email"): AutomationLogRow => ({
+     id: "log_n", account_id: "acct_1", source: "no_show_nudge", channel, contact_id: "ct_1",
+     subject_key: "booking:bk_n1", status: "held", reason: "Held until 12:00 PM — quiet hours", held_until: NOON.toISOString(), payload: {}, occurred_at: TICK.toISOString(),
+   });
+ 
+-  it("in the band, inside a window ending at noon: held, not sent, not stamped, no message row (mutation: bypass holdOrSend → FAILS)", async () => {
++  it("in the band, the gate defers the text to noon: held, not sent, not stamped, no message row (mutation: bypass holdOrSend → FAILS)", async () => {
+     dbMocks.listDueNoShowNudges.mockResolvedValue([sms()]);   // the file's default row is EMAIL and its id is bk_n1; this test needs the SMS channel
+-    const result = await noShowNudgePass.run(ctx(TICK, UNTIL_NOON));
++    const result = await noShowNudgePass.run({ ...ctx(TICK), sms: fakeSmsGate({ decide: () => ({ kind: "deferred", until: NOON, zone: "America/Chicago" }) }) });
+     expect(result.held).toBe(1);
+     expect(result.sent).toBe(0);
+     expect(smsSend).not.toHaveBeenCalled();
+@@ -295,7 +290,7 @@ describe("no-show nudge — quiet hours and release", () => {
+ 
+   it("release at noon skips the band and sends through the same path — stamp included (mutation: gate on release → FAILS)", async () => {
+     dbMocks.getDueNoShowNudgeById.mockResolvedValue({ due: sms() });
+-    expect(await releaseNoShowNudge(ctx(NOON, UNTIL_NOON), heldRow("sms"))).toBe("sent");
++    expect(await releaseNoShowNudge(ctx(NOON), heldRow("sms"))).toBe("sent");
+     expect(smsSend).toHaveBeenCalledTimes(1);
+     expect(dbMocks.stampNoShowNudged).toHaveBeenCalledWith(expect.anything(), "bk_n1");
+     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
+@@ -308,7 +303,7 @@ describe("no-show nudge — quiet hours and release", () => {
+     dbMocks.getDueNoShowNudgeById.mockResolvedValue({ due: sms({
+       endsAt: "2026-09-07T20:00:00.000Z", noShowAt: "2026-09-07T20:30:00.000Z",   // 43.5h before NOON
+     }) });
+-    expect(await releaseNoShowNudge(ctx(NOON, UNTIL_NOON), heldRow("sms"))).toBe("skipped");
++    expect(await releaseNoShowNudge(ctx(NOON), heldRow("sms"))).toBe("skipped");
+     expect(smsSend).not.toHaveBeenCalled();
+     expect(dbMocks.stampNoShowNudged).not.toHaveBeenCalled();
+     // ONE row, replacing the held one on the same (account, source, subject):
+```
+
+Apply to `apps/web/src/lib/automations/passes/quote-followup.test.ts` (against the task's parent commit):
+
+```diff
+@@ -1,5 +1,5 @@
+ import { describe, it, expect, vi, beforeEach } from "vitest";
+-import type { DueQuoteFollowup, AutomationLogRow, QuietSettings } from "@bis/db";
++import type { DueQuoteFollowup, AutomationLogRow } from "@bis/db";
+ 
+ const dbMocks = vi.hoisted(() => ({
+   listDueQuoteFollowups: vi.fn(), getDueQuoteFollowupById: vi.fn(),
+@@ -18,6 +18,7 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => send
+ 
+ import { AUTOMATION_DAILY_CAP } from "../caps";
+ import { defaultQuoteFollowupBody } from "../quote-followup-copy";
++import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import type { PassContext } from "../context";
+ import { quoteFollowupPass, releaseQuoteFollowup } from "./quote-followup";
+ 
+@@ -64,17 +65,15 @@ function heldRow(over: Partial<AutomationLogRow> = {}): AutomationLogRow {
+ 
+ const emailSend = vi.fn();
+ const smsSend = vi.fn();
+-const QUIET_OFF: QuietSettings = { enabled: false, start: "21:00", end: "08:00" };
+-function ctx(now: Date = TICK, quiet: QuietSettings = QUIET_OFF): PassContext {
++function ctx(now: Date = TICK): PassContext {
+   return {
+     db: {} as never, now, origin: "https://app.example.com",
+     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
+-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+-    quiet: async () => quiet,
++    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+   };
+ }
+ const EMPTY = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+   skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
+   waitingForMorning: 0, unresolvableTimezone: 0,
+ };
+@@ -225,16 +224,14 @@ describe("the quote follow-up's morning band, caps and cooldown", () => {
+ });
+ 
+ describe("the quote follow-up and quiet hours", () => {
+-  // 21:00 -> 12:00 puts the whole morning band inside the window, which a
+-  // window ending at 08:00 cannot do: the band OPENS at 08:00, so a
+-  // band-gated recipe never meets the default window at all.
+-  const UNTIL_NOON: QuietSettings = { enabled: true, start: "21:00", end: "12:00" };
++  // The gate defers the text to noon, as it does a marketing text on a
++  // Sunday morning (lib/consent/hours.ts); the band and the hours compose.
+   const NOON = new Date("2027-10-20T17:00:00.000Z");   // 12:00 CDT the same day
+ 
+-  it("inside the window it HOLDS: no send, no stamp, one held row ending at noon", async () => {
++  it("when the gate defers the text to noon it HOLDS: no send, no stamp, one held row ending at noon", async () => {
+     // Mutation: bypass holdOrSend and send directly -> this reds.
+     dbMocks.listDueQuoteFollowups.mockResolvedValue([row()]);
+-    expect(await quoteFollowupPass.run(ctx(TICK, UNTIL_NOON))).toEqual({ ...EMPTY, held: 1 });
++    expect(await quoteFollowupPass.run({ ...ctx(TICK), sms: fakeSmsGate({ decide: () => ({ kind: "deferred", until: NOON, zone: "America/Chicago" }) }) })).toEqual({ ...EMPTY, held: 1 });
+     expect(smsSend).not.toHaveBeenCalled();
+     expect(dbMocks.createMessage).not.toHaveBeenCalled();
+     expect(dbMocks.stampQuoteFollowupSent).not.toHaveBeenCalled();
+@@ -248,7 +245,7 @@ describe("the quote follow-up and quiet hours", () => {
+     // Mutation: apply the morning-band gate on a release -> this reds, and
+     // every row held overnight would wait a whole extra day.
+     dbMocks.getDueQuoteFollowupById.mockResolvedValue({ due: row() });
+-    expect(await releaseQuoteFollowup(ctx(NOON, UNTIL_NOON), heldRow())).toBe("sent");
++    expect(await releaseQuoteFollowup(ctx(NOON), heldRow())).toBe("sent");
+     expect(smsSend).toHaveBeenCalledTimes(1);
+     expect(dbMocks.stampQuoteFollowupSent).toHaveBeenCalledWith(expect.anything(), "opp_q1");
+     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(),
+@@ -320,7 +317,7 @@ describe("releasing a held quote follow-up", () => {
+     // band, which is the whole point of `released`.
+     const noon = new Date("2027-10-20T17:00:00.000Z");
+     expect(await releaseQuoteFollowup(
+-      ctx(noon, { enabled: true, start: "21:00", end: "12:00" }), heldRow())).toBe("skipped");
++      ctx(noon), heldRow())).toBe("skipped");
+     expect(smsSend).not.toHaveBeenCalled();
+     expect(dbMocks.stampQuoteFollowupSent).not.toHaveBeenCalled();
+     // A REAL row, never left untouched: an untouched released row keeps its
+```
+
+Apply to `apps/web/src/lib/automations/passes/reactivation.test.ts` (against the task's parent commit):
+
+```diff
+@@ -1,5 +1,5 @@
+ import { describe, it, expect, vi, beforeEach } from "vitest";
+-import type { DueReactivation, AutomationLogRow, QuietSettings } from "@bis/db";
++import type { DueReactivation, AutomationLogRow } from "@bis/db";
+ 
+ const dbMocks = vi.hoisted(() => ({
+   listDueReactivations: vi.fn(), getDueReactivationById: vi.fn(),
+@@ -73,17 +73,15 @@ const smsSend = vi.fn();
+ /** The LAZY getter itself is the spy, not just the provider's send: this
+  *  recipe must never so much as ASK for an SMS provider. */
+ const smsFactory = vi.fn(() => ({ isFake: true as const, send: (...a: unknown[]) => smsSend(...a) }));
+-const QUIET_OFF: QuietSettings = { enabled: false, start: "21:00", end: "08:00" };
+-function ctx(now: Date = TICK, quiet: QuietSettings = QUIET_OFF): PassContext {
++function ctx(now: Date = TICK): PassContext {
+   return {
+     db: {} as never, now, origin: "https://app.example.com",
+     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
+     sms: smsFactory as unknown as PassContext["sms"],
+-    quiet: async () => quiet,
+   };
+ }
+ const EMPTY = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+   skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+   skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
+ };
+@@ -216,30 +214,17 @@ describe("the reactivation check-in's own daily cap", () => {
+   });
+ });
+ 
+-describe("the reactivation check-in and quiet hours", () => {
+-  // 21:00 → 12:00 puts the whole morning band inside the window, which a
+-  // window ending at 08:00 cannot do: the band OPENS at 08:00, so a
+-  // band-gated recipe never meets the default window at all.
+-  const UNTIL_NOON: QuietSettings = { enabled: true, start: "21:00", end: "12:00" };
++describe("the reactivation check-in and its held rows", () => {
++  // The band (08:00-11:00) lies inside the fixed automated hours an EMAIL
++  // keeps (choice 31), so a normal tick cannot hold a check-in any more; a
++  // row held before the fixed hours shipped is still released like this.
+   const NOON = new Date("2027-09-24T17:00:00.000Z");   // 12:00 CDT the same day
+ 
+-  it("inside the window it HOLDS: no send, no stamp, one held row ending at noon", async () => {
+-    // Mutation: bypass holdOrSend and call ctx.email.send directly → this reds.
+-    dbMocks.listDueReactivations.mockResolvedValue([row()]);
+-    expect(await reactivationPass.run(ctx(TICK, UNTIL_NOON))).toEqual({ ...EMPTY, held: 1 });
+-    expect(emailSend).not.toHaveBeenCalled();
+-    expect(dbMocks.stampReactivationSent).not.toHaveBeenCalled();
+-    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+-      source: "reactivation", channel: "email", subjectKey: "contact:ct_1", status: "held",
+-      heldUntil: NOON.toISOString(),
+-    }));
+-  });
+-
+   it("released at noon it skips the band and sends through the same path, stamp included", async () => {
+     // Mutation: apply the morning-band gate on a release → this reds, and
+     // every row held overnight would wait a whole extra day.
+     dbMocks.getDueReactivationById.mockResolvedValue({ due: row() });
+-    expect(await releaseReactivation(ctx(NOON, UNTIL_NOON), heldRow())).toBe("sent");
++    expect(await releaseReactivation(ctx(NOON), heldRow())).toBe("sent");
+     expect(emailSend).toHaveBeenCalledTimes(1);
+     expect(dbMocks.stampReactivationSent).toHaveBeenCalledWith(expect.anything(), "ct_1");
+     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(),
+```
+
+Apply to `apps/web/src/lib/automations/passes/referral-ask.test.ts` (against the task's parent commit):
+
+```diff
+@@ -1,5 +1,5 @@
+ import { describe, it, expect, vi, beforeEach } from "vitest";
+-import type { DueReferralAsk, AutomationLogRow, QuietSettings } from "@bis/db";
++import type { DueReferralAsk, AutomationLogRow } from "@bis/db";
+ 
+ const dbMocks = vi.hoisted(() => ({
+   listDueReferralAsks: vi.fn(), getDueReferralAskById: vi.fn(),
+@@ -17,6 +17,7 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => send
+ 
+ import { m } from "@/lib/messages";
+ import { AUTOMATION_DAILY_CAP } from "../caps";
++import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import type { PassContext } from "../context";
+ import { referralAskPass, releaseReferralAsk } from "./referral-ask";
+ 
+@@ -69,17 +70,15 @@ function heldRow(over: Partial<AutomationLogRow> = {}): AutomationLogRow {
+ 
+ const emailSend = vi.fn();
+ const smsSend = vi.fn();
+-const QUIET_OFF: QuietSettings = { enabled: false, start: "21:00", end: "08:00" };
+-function ctx(now: Date = TICK, quiet: QuietSettings = QUIET_OFF): PassContext {
++function ctx(now: Date = TICK): PassContext {
+   return {
+     db: {} as never, now, origin: "https://app.example.com",
+     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
+-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+-    quiet: async () => quiet,
++    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+   };
+ }
+ const EMPTY = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+   skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
+   waitingForMorning: 0, waitingForReviewRequest: 0, unresolvableTimezone: 0,
+   skippedNoMailingAddress: 0, skippedNoReplyTo: 0, skippedOptedOut: 0,
+@@ -364,16 +363,14 @@ describe("the referral ask's caps and cooldown", () => {
+ });
+ 
+ describe("the referral ask and quiet hours", () => {
+-  // 21:00 → 12:00 puts the whole morning band inside the window, which a
+-  // window ending at 08:00 cannot do: the band OPENS at 08:00, so a
+-  // band-gated recipe never meets the default window at all.
+-  const UNTIL_NOON: QuietSettings = { enabled: true, start: "21:00", end: "12:00" };
++  // The gate defers the text to noon, as it does a marketing text on a
++  // Sunday morning (lib/consent/hours.ts); the band and the hours compose.
+   const NOON = new Date("2027-09-24T17:00:00.000Z");   // 12:00 CDT the same day
+ 
+-  it("inside the window it HOLDS: no send, no stamp, one held row ending at noon", async () => {
++  it("when the gate defers the text to noon it HOLDS: no send, no stamp, one held row ending at noon", async () => {
+     // Mutation: bypass holdOrSend and send directly → this reds.
+     dbMocks.listDueReferralAsks.mockResolvedValue([row()]);
+-    expect(await referralAskPass.run(ctx(TICK, UNTIL_NOON))).toEqual({ ...EMPTY, held: 1 });
++    expect(await referralAskPass.run({ ...ctx(TICK), sms: fakeSmsGate({ decide: () => ({ kind: "deferred", until: NOON, zone: "America/Chicago" }) }) })).toEqual({ ...EMPTY, held: 1 });
+     expect(smsSend).not.toHaveBeenCalled();
+     expect(dbMocks.createMessage).not.toHaveBeenCalled();
+     expect(dbMocks.stampReferralAsked).not.toHaveBeenCalled();
+@@ -387,7 +384,7 @@ describe("the referral ask and quiet hours", () => {
+     // Mutation: apply the morning-band gate on a release → this reds, and
+     // every row held overnight would wait a whole extra day.
+     dbMocks.getDueReferralAskById.mockResolvedValue({ due: row() });
+-    expect(await releaseReferralAsk(ctx(NOON, UNTIL_NOON), heldRow())).toBe("sent");
++    expect(await releaseReferralAsk(ctx(NOON), heldRow())).toBe("sent");
+     expect(smsSend).toHaveBeenCalledTimes(1);
+     expect(dbMocks.stampReferralAsked).toHaveBeenCalledWith(expect.anything(), "bk_r1");
+     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(),
+@@ -445,7 +442,7 @@ describe("releasing a held referral ask", () => {
+     // band, which is the whole point of `released`.
+     const noon = new Date("2027-09-24T17:00:00.000Z");
+     expect(await releaseReferralAsk(
+-      ctx(noon, { enabled: true, start: "21:00", end: "12:00" }), heldRow())).toBe("skipped");
++      ctx(noon), heldRow())).toBe("skipped");
+     expect(smsSend).not.toHaveBeenCalled();
+     expect(dbMocks.stampReferralAsked).not.toHaveBeenCalled();
+     // A REAL row, never left untouched: an untouched released row keeps its
+```
+
+Apply to `apps/web/src/lib/automations/passes/reminders.test.ts` (against the task's parent commit):
+
+```diff
+@@ -12,7 +12,6 @@ import { remindersPass, releaseReminder } from "./reminders";
+ const NIGHT = new Date("2026-09-22T04:00:00Z");   // 23:00 CDT, Sept 21
+ const NOON = new Date("2026-09-21T17:00:00Z");    // 12:00 CDT
+ const END = "2026-09-22T13:00:00.000Z";           // 08:00 CDT, Sept 22
+-const ON = { enabled: true, start: "21:00", end: "08:00" };
+ 
+ function row(overrides: Partial<DueReminder> = {}): DueReminder {
+   return {
+@@ -32,12 +31,11 @@ const held = (subjectKey = "booking:bk_1"): AutomationLogRow => ({
+ });
+ 
+ const emailSend = vi.fn();
+-function ctx(now: Date, quiet = ON): PassContext {
++function ctx(now: Date): PassContext {
+   return {
+     db: {} as never, now, origin: "https://app.example.com",
+     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
+-    sms: () => { throw new Error("the email reminder never texts"); },
+-    quiet: async () => quiet,
++    sms: async () => { throw new Error("the email reminder never texts"); },
+   };
+ }
+ const logCalls = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
+@@ -52,10 +50,10 @@ beforeEach(() => {
+   vi.spyOn(console, "error").mockImplementation(() => {});
+ });
+ 
+-describe("the email reminder under quiet hours", () => {
+-  it("inside the window: NOT sent, NOT stamped, one held row with the window's end (mutation: send before holdOrSend → FAILS)", async () => {
++describe("the email reminder under the fixed hours (08:00-21:00, choice 31)", () => {
++  it("outside the hours: NOT sent, NOT stamped, one held row with the window's end (mutation: send before holdOrSend → FAILS)", async () => {
+     dbMocks.listDueReminders.mockResolvedValue([row()]);
+-    expect(await remindersPass.run(ctx(NIGHT))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 1 });
++    expect(await remindersPass.run(ctx(NIGHT))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 1, blocked: 0 });
+     expect(emailSend).not.toHaveBeenCalled();
+     expect(dbMocks.stampReminderSent).not.toHaveBeenCalled();
+     expect(logCalls()).toEqual([expect.objectContaining({
+@@ -64,23 +62,27 @@ describe("the email reminder under quiet hours", () => {
+     })]);
+   });
+ 
+-  it("outside the window: sent, stamped, one sent row — exactly as before, plus the row", async () => {
++  it("inside the hours: sent, stamped, one sent row — exactly as before, plus the row", async () => {
+     dbMocks.listDueReminders.mockResolvedValue([row()]);
+-    expect(await remindersPass.run(ctx(NOON))).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0 });
++    expect(await remindersPass.run(ctx(NOON))).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0 });
+     expect(emailSend).toHaveBeenCalledTimes(1);
+     expect(dbMocks.stampReminderSent).toHaveBeenCalledWith(expect.anything(), "bk_1");
+     expect(logCalls()).toEqual([expect.objectContaining({ status: "sent", subjectKey: "booking:bk_1" })]);
+   });
+ 
+-  it("the exemption: an appointment at 07:30 tomorrow sends at 23:00 tonight (mutation: drop `deadline` from the subject → FAILS)", async () => {
++  it("choice 21: an appointment at 07:30 tomorrow is NOT emailed at 23:00 tonight, nor held past it; one skipped row says why (mutation: drop `deadline` from the subject → held, FAILS)", async () => {
+     dbMocks.listDueReminders.mockResolvedValue([row({ startsAt: "2026-09-22T12:30:00.000Z" })]);
+-    expect(await remindersPass.run(ctx(NIGHT))).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0 });
+-    expect(emailSend).toHaveBeenCalledTimes(1);
++    expect(await remindersPass.run(ctx(NIGHT))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 1 });
++    expect(emailSend).not.toHaveBeenCalled();
++    expect(dbMocks.stampReminderSent).not.toHaveBeenCalled();
++    expect(logCalls()).toEqual([expect.objectContaining({
++      subjectKey: "booking:bk_1", status: "skipped", reason: "Not sent: quiet hours ran past the appointment",
++    })]);
+   });
+ 
+   it("no email on file: a skipped row with the plain reason, still counted failed as the route always counted it", async () => {
+     dbMocks.listDueReminders.mockResolvedValue([row({ contactEmail: null })]);
+-    expect(await remindersPass.run(ctx(NOON))).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0 });
++    expect(await remindersPass.run(ctx(NOON))).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, blocked: 0 });
+     expect(logCalls()).toEqual([expect.objectContaining({ status: "skipped", reason: "No email address on file" })]);
+     expect(emailSend).not.toHaveBeenCalled();
+   });
+```
+
+Apply to `apps/web/src/lib/automations/passes/review-request.test.ts` (against the task's parent commit):
+
+```diff
+@@ -1,5 +1,5 @@
+ import { describe, it, expect, vi, beforeEach } from "vitest";
+-import type { DueReviewRequest, AutomationLogRow, QuietSettings } from "@bis/db";
++import type { DueReviewRequest, AutomationLogRow } from "@bis/db";
+ 
+ const dbMocks = vi.hoisted(() => ({
+   listDueReviewRequests: vi.fn(), stampReviewRequested: vi.fn(), countReviewRequestsSince: vi.fn(),
+@@ -15,6 +15,7 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => send
+ 
+ import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
+ import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
++import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import type { PassContext } from "../context";
+ import { reviewRequestPass, releaseReviewRequest } from "./review-request";
+ import { remindersPass } from "./reminders";
+@@ -47,17 +48,15 @@ function row(overrides: Partial<DueReviewRequest> = {}): DueReviewRequest {
+ 
+ const emailSend = vi.fn();
+ const smsSend = vi.fn();
+-const QUIET_OFF: QuietSettings = { enabled: false, start: "21:00", end: "08:00" };
+-function ctx(now: Date = TICK, quiet: QuietSettings = QUIET_OFF): PassContext {
++function ctx(now: Date = TICK): PassContext {
+   return {
+     db: {} as never, now, origin: "https://app.example.com",
+     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
+-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+-    quiet: async () => quiet,
++    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+   };
+ }
+ const EMPTY = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+ };
+ 
+@@ -284,7 +283,7 @@ describe("caps — recipe passes only", () => {
+         brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
+       fromEmail: null, meetingUrl: null,
+     })));
+-    expect(await remindersPass.run(ctx())).toEqual({ sent: 30, failed: 0, unstamped: 0, held: 0 });
++    expect(await remindersPass.run(ctx())).toEqual({ sent: 30, failed: 0, unstamped: 0, held: 0, blocked: 0 });
+   });
+ });
+ 
+@@ -356,21 +355,17 @@ describe("review-request pass — the completion clock (0026)", () => {
+ });
+ 
+ describe("review request — quiet hours and release", () => {
+-  const UNTIL_NOON = { enabled: true, start: "21:00", end: "12:00" };
+-  // TICK is 10:00 America/New_York; a 21:00→12:00 window entered the
+-  // previous evening ends at 12:00 THAT SAME New York day — 2026-09-09
+-  // 16:00Z, not the followups.test.ts fixture's Sept-22/Chicago NOON.
+-  // Verified against quietWindowEnd(TICK, "America/New_York", UNTIL_NOON)
+-  // directly (see the task report).
++  // The gate defers the text to noon, as it does a marketing text on a
++  // Sunday morning (lib/consent/hours.ts); the band and the hours compose.
+   const NOON = new Date("2026-09-09T16:00:00Z");
+   const heldRow = (channel: "sms" | "email"): AutomationLogRow => ({
+     id: "log_r", account_id: "acct_1", source: "review_request", channel, contact_id: "ct_1",
+     subject_key: "booking:bk_r1", status: "held", reason: "Held until 12:00 PM — quiet hours", held_until: NOON.toISOString(), payload: {}, occurred_at: TICK.toISOString(),
+   });
+ 
+-  it("in the band, inside a window ending at noon: held, not sent, not stamped, no message row (mutation: bypass holdOrSend → FAILS)", async () => {
++  it("in the band, the gate defers the text to noon: held, not sent, not stamped, no message row (mutation: bypass holdOrSend → FAILS)", async () => {
+     dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } })]);   // the file's default row is EMAIL and its id is bk_r1; this test needs the SMS channel
+-    const result = await reviewRequestPass.run(ctx(TICK, UNTIL_NOON));
++    const result = await reviewRequestPass.run({ ...ctx(TICK), sms: fakeSmsGate({ decide: () => ({ kind: "deferred", until: NOON, zone: "America/Chicago" }) }) });
+     expect(result.held).toBe(1);
+     expect(result.sent).toBe(0);
+     expect(smsSend).not.toHaveBeenCalled();
+@@ -383,7 +378,7 @@ describe("review request — quiet hours and release", () => {
+ 
+   it("release at noon skips the band and sends through the same path — stamp included (mutation: gate on release → FAILS)", async () => {
+     dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({ config: { channel: "sms", reviewUrl: URL } }) });
+-    expect(await releaseReviewRequest(ctx(NOON, UNTIL_NOON), heldRow("sms"))).toBe("sent");
++    expect(await releaseReviewRequest(ctx(NOON), heldRow("sms"))).toBe("sent");
+     expect(smsSend).toHaveBeenCalledTimes(1);
+     expect(dbMocks.stampReviewRequested).toHaveBeenCalledWith(expect.anything(), "bk_r1");
+     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
+@@ -399,7 +394,7 @@ describe("review request — quiet hours and release", () => {
+       config: { channel: "sms", reviewUrl: URL },
+       followupSentAt: "2026-09-09T12:30:00.000Z",   // NY Wed 08:30, the same local day as NOON
+     }) });
+-    expect(await releaseReviewRequest(ctx(NOON, UNTIL_NOON), heldRow("sms"))).toBe("skipped");
++    expect(await releaseReviewRequest(ctx(NOON), heldRow("sms"))).toBe("skipped");
+     expect(smsSend).not.toHaveBeenCalled();
+     expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+     // ONE row, replacing the held one on the same (account, source, subject):
+```
+
+Apply to `apps/web/src/lib/automations/passes/sms-reminder.test.ts` (against the task's parent commit):
+
+```diff
+@@ -13,6 +13,7 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => send
+ import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
+ import { formatWhen } from "@/lib/booking/time";
+ import { AUTOMATION_TICK_CAP } from "../caps";
++import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import type { PassContext } from "../context";
+ import type { AutomationLogRow } from "@bis/db";
+ import { smsReminderPass, releaseSmsReminder } from "./sms-reminder";
+@@ -37,17 +38,14 @@ function row(overrides: Partial<DueSmsReminder> = {}): DueSmsReminder {
+ 
+ const smsSend = vi.fn();
+ const emailSend = vi.fn();
+-const QUIET_OFF = { enabled: false, start: "21:00", end: "08:00" };
+-const QUIET_ON = { ...QUIET_OFF, enabled: true };
+-function ctx(now: Date = TICK, quiet = QUIET_OFF): PassContext {
++function ctx(now: Date = TICK): PassContext {
+   return {
+     db: {} as never, now, origin: "https://app.example.com",
+     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
+-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+-    quiet: async () => quiet,
++    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+   };
+ }
+-const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
++const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
+ 
+ beforeEach(() => {
+   for (const fn of Object.values(dbMocks)) fn.mockReset();
+@@ -176,7 +174,7 @@ describe("sms reminder pass — UNCAPPED, like the email reminder it pairs with"
+   });
+ });
+ 
+-describe("sms reminder pass — quiet hours", () => {
++describe("sms reminder pass — the fixed automated hours (08:00-21:00)", () => {
+   // 06:30 CDT for an 08:30 CDT appointment: due (inside 90–135 min), inside the window, and the appointment is AFTER the window ends.
+   const EARLY = new Date("2026-09-22T11:30:00Z");
+   const APPT_0830 = "2026-09-22T13:30:00.000Z";
+@@ -186,9 +184,9 @@ describe("sms reminder pass — quiet hours", () => {
+     subject_key: "booking:bk_s1", status: "held", reason: "Held until 8:00 AM — quiet hours", held_until: END, payload: {}, occurred_at: EARLY.toISOString(),
+   });
+ 
+-  it("inside the window with the appointment after its end: NOT sent, NO message row, NOT stamped, one held row (mutation: bypass holdOrSend → FAILS)", async () => {
++  it("before 08:00 with the appointment after 08:00: NOT sent, NO message row, NOT stamped, one held row (mutation: bypass holdOrSend → FAILS)", async () => {
+     dbMocks.listDueSmsReminders.mockResolvedValue([row({ startsAt: APPT_0830, accountTimezone: "America/Chicago" })]);
+-    expect(await smsReminderPass.run(ctx(EARLY, QUIET_ON))).toEqual({ ...EMPTY, held: 1 });
++    expect(await smsReminderPass.run(ctx(EARLY))).toEqual({ ...EMPTY, held: 1 });
+     expect(smsSend).not.toHaveBeenCalled();
+     expect(dbMocks.createMessage).not.toHaveBeenCalled();
+     expect(dbMocks.stampSmsReminderSent).not.toHaveBeenCalled();
+@@ -197,11 +195,15 @@ describe("sms reminder pass — quiet hours", () => {
+     }));
+   });
+ 
+-  it("the exemption: 05:30 for a 07:30 job — before the window ends — sends now (mutation: drop `deadline` → FAILS)", async () => {
++  it("choice 21: 05:30 for a 07:30 job is NOT texted, and not held past the job; a skipped row says why (mutation: drop `deadline` → held, FAILS)", async () => {
+     const fiveThirty = new Date("2026-09-22T10:30:00Z");
+     dbMocks.listDueSmsReminders.mockResolvedValue([row({ startsAt: "2026-09-22T12:30:00.000Z", accountTimezone: "America/Chicago" })]);
+-    expect(await smsReminderPass.run(ctx(fiveThirty, QUIET_ON))).toEqual({ ...EMPTY, sent: 1 });
+-    expect(smsSend).toHaveBeenCalledTimes(1);
++    expect(await smsReminderPass.run(ctx(fiveThirty))).toEqual({ ...EMPTY, blocked: 1 });
++    expect(smsSend).not.toHaveBeenCalled();
++    expect(dbMocks.createMessage).not.toHaveBeenCalled();
++    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
++      subjectKey: "booking:bk_s1", status: "skipped", reason: "Not sent: quiet hours ran past the appointment",
++    }));
+   });
+ 
+   it("no textable phone / gate refused: a skipped row with the plain reason (mutation: drop either logSkipped → FAILS)", async () => {
+```
+
+Apply to `apps/web/src/lib/automations/passes/site-traffic.test.ts` (against the task's parent commit):
+
+```diff
+@@ -31,8 +31,7 @@ const DAY = { visitors: 10, pageviews: 20, pages: [{ value: "/", visitors: 10, p
+   devices: [{ value: "mobile", visitors: 7, pageviews: 14 }] };
+ const ctx = (): PassContext => ({
+   db: {} as never, now: TICK, origin: "https://app.example.com",
+-  email: { isFake: true, send: vi.fn() }, sms: () => ({ isFake: true, send: vi.fn() }),
+-  quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
++  email: { isFake: true, send: vi.fn() }, sms: vi.fn(),
+ });
+ const EMPTY = { synced: 0, daysSynced: 0, failed: 0, skippedNotYet: 0, skippedUpToDate: 0, skippedCap: 0, unresolvableTimezone: 0 };
+```
+
+Apply to `apps/web/src/lib/automations/passes/usage-report.test.ts` (against the task's parent commit):
+
+```diff
+@@ -32,8 +32,7 @@ const SECS = 1790344800;   // 2026-09-25T14:00:00Z in seconds
+ 
+ const ctx = (): PassContext => ({
+   db: {} as never, now: TICK, origin: "https://app.example.com",
+-  email: { isFake: true, send: vi.fn() }, sms: () => ({ isFake: true, send: vi.fn() }),
+-  quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
++  email: { isFake: true, send: vi.fn() }, sms: vi.fn(),
+ });
+ const EMPTY = {
+   reported: 0, alreadyAtStripe: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
+```
+
+Apply to `apps/web/src/lib/automations/passes/weekly-agency-report.test.ts` (against the task's parent commit):
+
+```diff
+@@ -47,8 +47,7 @@ function ctx(now: Date = TICK): PassContext {
+   return {
+     db: {} as never, now, origin: ORIGIN,
+     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
+-    sms: () => ({ isFake: true, send: () => Promise.reject(new Error("not used by this pass")) }),
+-    quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
++    sms: async () => { throw new Error("not used by this pass"); },
+   };
+ }
+```
+
+Apply to `apps/web/src/lib/automations/passes/weekly-report.test.ts` (against the task's parent commit):
+
+```diff
+@@ -12,6 +12,7 @@ vi.mock("@/lib/reports/weekly-metrics", () => ({ weeklyMetrics: (...a: unknown[]
+ 
+ import { lastWeekMonday } from "@/lib/reports/weekly-window";
+ import type { WeeklyNumbers } from "@/lib/reports/weekly-metrics";
++import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import type { PassContext } from "../context";
+ import { weeklyClientReportPass } from "./weekly-report";
+ 
+@@ -49,8 +50,7 @@ function ctx(now: Date = TICK): PassContext {
+   return {
+     db: {} as never, now, origin: ORIGIN,
+     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
+-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+-    quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
++    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+   };
+ }
+```
+
+Apply to `apps/web/src/lib/automations/passes/release-held.test.ts` (against the task's parent commit):
+
+```diff
+@@ -15,6 +15,7 @@ vi.mock("./sms-reminder", () => ({ releaseSmsReminder: (...a: unknown[]) => rele
+ vi.mock("../instant-reply", () => ({ releaseInstantReply: (...a: unknown[]) => releasers.instant(...a) }));
+ vi.mock("./quote-followup", () => ({ releaseQuoteFollowup: (...a: unknown[]) => releasers.quoteFollowup(...a) }));
+ 
++import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import type { PassContext } from "../context";
+ import { releaseHeldPass, RELEASERS, RELEASE_BATCH, RELEASE_BUDGET_MS } from "./release-held";
+ 
+@@ -25,8 +26,7 @@ const row = (source: AutomationLogRow["source"], key: string): AutomationLogRow
+ });
+ const ctx: PassContext = {
+   db: {} as never, now: NOW, origin: "https://app.example.com",
+-  email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: () => ({ isFake: true, send: async () => ({ providerMessageId: "s" }) }),
+-  quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
++  email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate(),
+ };
+ 
+ beforeEach(() => {
+```
+
+Apply to `apps/web/src/app/api/cron/reminders/route.test.ts` (against the task's parent commit):
+
+```diff
+@@ -120,7 +120,6 @@ vi.mock("@bis/db", () => ({
+   // Task 3 (part C): the reminder and follow-up passes now read the account's
+   // quiet window on every send and write the automation log. Off here so
+   // the 30 route tests keep their exact bodies; the log write is a no-op.
+-  readQuietSettings: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
+   recordAutomationLog: async () => undefined,
+   // The release pass (Part C, Task 6): first in the registry, every tick.
+   // Nothing is ever held in this suite's fixtures, so its queue is empty.
+@@ -237,23 +236,23 @@ function bookerZoneWhen(startsAt: string, timeZone: string): string {
+ 
+ const EMPTY_RELEASE = { examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 };
+ const EMPTY_FOLLOWUPS = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+   skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+ };
+ const EMPTY_REVIEW_REQUESTS = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+   skippedSmsGate: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+   skippedRecentFailure: 0,
+ };
+ const EMPTY_REFERRAL_ASKS = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
+   waitingForMorning: 0, waitingForReviewRequest: 0, unresolvableTimezone: 0,
+   // B21: the email channel's three marketing-email skips.
+   skippedNoMailingAddress: 0, skippedNoReplyTo: 0, skippedOptedOut: 0,
+ };
+ const EMPTY_NO_SHOW_NUDGES = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0, skippedCalendarOff: 0,
+   waitingForMorning: 0, unresolvableTimezone: 0,
+ };
+@@ -265,19 +264,19 @@ const EMPTY_WEEKLY_CLIENT = { sent: 0, failed: 0, skippedNotMonday: 0, skippedAl
+ const EMPTY_WEEKLY_AGENCY = { sent: 0, failed: 0, skippedNoRecipient: 1, skippedNotMonday: 0, skippedAlreadySent: 0, unresolvableTimezone: 0, unstamped: 0 };
+ const EMPTY_SITE_TRAFFIC = { synced: 0, daysSynced: 0, failed: 0, skippedNotYet: 0, skippedUpToDate: 0, skippedCap: 0, unresolvableTimezone: 0 };
+ const EMPTY_SMS_REMINDERS = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0,
+ };
+ const EMPTY_APPOINTMENT_CONFIRMS = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0,
+   unresolvableTimezone: 0,
+ };
+ const EMPTY_REACTIVATIONS = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+   skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+   skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
+ };
+ const EMPTY_QUOTE_FOLLOWUPS = {
+-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
++  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
+   waitingForMorning: 0, unresolvableTimezone: 0,
+ };
+@@ -350,7 +349,7 @@ describe("GET /api/cron/reminders", () => {
+     const body = await res.json();
+ 
+     expect(res.status).toBe(200);
+-    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
++    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
+     expect(stampReminderSentMock).toHaveBeenCalledTimes(1);
+     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_ok");
+     expect(stampReminderSentMock).not.toHaveBeenCalledWith(expect.anything(), "bk_fail");
+@@ -373,7 +372,7 @@ describe("GET /api/cron/reminders", () => {
+     const res = await GET(req(`Bearer ${SECRET}`));
+     const body = await res.json();
+ 
+-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
++    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
+     expect(stampReminderSentMock).toHaveBeenCalledTimes(2);
+     expect(sendMock).toHaveBeenCalledTimes(1);
+   });
+@@ -396,7 +395,7 @@ describe("GET /api/cron/reminders", () => {
+ 
+     // Counted as sent, never as failed: folding the stamp into the outer catch
+     // would misreport a stamp failure as a send failure in triage.
+-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
++    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
+     expect(stampReminderSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
+     expect(sendMock).toHaveBeenCalledTimes(1);
+   });
+@@ -412,7 +411,7 @@ describe("GET /api/cron/reminders", () => {
+     const res = await GET(req(`Bearer ${SECRET}`));
+     const body = await res.json();
+ 
+-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
++    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
+     expect(sendMock).toHaveBeenCalledTimes(1);
+     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_fail");
+   });
+@@ -505,7 +504,7 @@ describe("GET /api/cron/reminders", () => {
+     const res = await GET(req(`Bearer ${SECRET}`));
+     const body = await res.json();
+ 
+-    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
++    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
+     expect(sendMock).not.toHaveBeenCalled();
+     expect(stampReminderSentMock).not.toHaveBeenCalled();
+   });
+@@ -521,10 +520,10 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
+ 
+     expect(res.status).toBe(200);
+     expect(body).toEqual({
+-      sent: 0, failed: 0, unstamped: 0, held: 0,
++      sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+       releaseHeld: EMPTY_RELEASE,
+       followups: {
+-        sent: 1, failed: 0, unstamped: 0, held: 0,
++        sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0,
+         skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+       },
+       reviewRequests: EMPTY_REVIEW_REQUESTS,
+@@ -562,10 +561,10 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
+     const body = await res.json();
+ 
+     expect(body).toEqual({
+-      sent: 1, failed: 0, unstamped: 0, held: 0,
++      sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0,
+       releaseHeld: EMPTY_RELEASE,
+       followups: {
+-        sent: 1, failed: 0, unstamped: 0, held: 0,
++        sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0,
+         skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+       },
+       reviewRequests: EMPTY_REVIEW_REQUESTS,
+@@ -597,7 +596,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
+     const body = await res.json();
+ 
+     expect(body.followups).toEqual({
+-      sent: 0, failed: 1, unstamped: 0, held: 0,
++      sent: 0, failed: 1, unstamped: 0, held: 0, blocked: 0,
+       skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+     });
+     expect(stampFollowupSentMock).not.toHaveBeenCalled();
+@@ -616,7 +615,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
+     // 37h backward window ages it out, so it is never a "failure" to report.
+     // (It was 25h under the daily cron; the Pro cadence re-derived it.)
+     expect(body.followups).toEqual({
+-      sent: 0, failed: 0, unstamped: 0, held: 0,
++      sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+       skippedNoEmail: 1, waitingForMorning: 0, unresolvableTimezone: 0,
+     });
+     expect(sendMock).not.toHaveBeenCalled();
+@@ -638,7 +637,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
+     const body = await res.json();
+ 
+     expect(body.followups).toEqual({
+-      sent: 1, failed: 0, unstamped: 0, held: 0,
++      sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0,
+       skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+     });
+     expect(stampFollowupSentMock).toHaveBeenCalledTimes(2);
+@@ -654,7 +653,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
+     const body = await res.json();
+ 
+     expect(body.followups).toEqual({
+-      sent: 1, failed: 0, unstamped: 1, held: 0,
++      sent: 1, failed: 0, unstamped: 1, held: 0, blocked: 0,
+       skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+     });
+     expect(stampFollowupSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
+@@ -717,7 +716,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", ()
+     const body = await res.json();
+ 
+     expect(body.followups).toEqual({
+-      sent: 0, failed: 0, unstamped: 0, held: 0,
++      sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+       skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
+     });
+     expect(sendMock).not.toHaveBeenCalled();
+@@ -744,7 +743,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", ()
+     const body = await res.json();
+ 
+     expect(body.followups).toEqual({
+-      sent: 1, failed: 0, unstamped: 0, held: 0,
++      sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0,
+       skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
+     });
+     expect(sendMock).toHaveBeenCalledTimes(1);
+@@ -803,7 +802,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", ()
+     const body = await res.json();
+ 
+     expect(body.followups).toEqual({
+-      sent: 0, failed: 0, unstamped: 0, held: 0,
++      sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+       skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
+     });
+   });
+@@ -851,7 +850,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", ()
+     const body = await res.json();
+ 
+     expect(body.followups).toEqual({
+-      sent: 1, failed: 0, unstamped: 0, held: 0, skippedNoEmail: 0,
++      sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoEmail: 0,
+       waitingForMorning: 0, unresolvableTimezone: 1,
+     });
+     expect(sendMock).toHaveBeenCalledTimes(1);
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/automations src/app/api/cron
+```
+
+Expected (the staged replay's RED run):
+- `src/lib/automations/harness.test.ts`: **1 failing** that Step 4 turns green; 3 already pass:
+  - buildPassContext — texts go through the send gate, bound to the tick ctx.sms IS the gate bound to this tick's own client, and building it constructs no SMS provider (mutation: bind the gate to another client → FAILS)
+- `src/lib/automations/hold-or-send.test.ts`: **22 failing** that Step 4 turns green; 4 already pass:
+  - holdOrSend: the fixed hours inside the hours: sends, then writes ONE sent row (mutation: skip the record → FAILS)
+  - holdOrSend: the fixed hours outside the hours: does NOT send; the held row carries the 08:00 opening and a client-readable reason (mutation: skip the hours check → sent, FAILS)
+  - holdOrSend: the fixed hours an SMS subject's hours are its KIND's: a marketing text waits for Sunday noon while an automated one goes (mutation: read the automated rule for every sms kind → FAILS)
+  - holdOrSend: the fixed hours an EMAIL subject keeps the automated hours, whatever its recipe (choice 31) (mutation: send email at any hour → FAILS)
+  - holdOrSend: the fixed hours an SMS subject with no kind is a programming error and throws, never guessing the weaker rule (mutation: default to automated → FAILS)
+  - holdOrSend: the fixed hours choice 21: a deadline at or before the opening is NOT sent and NOT held; one after it is held (mutation: drop the deadline rule → the first is held, FAILS)
+  - holdOrSend: the fixed hours a deadline inside the open hours is irrelevant: it sends (mutation: expire on any deadline → FAILS)
+  - holdOrSend: the fixed hours an unresolvable account zone keeps America/Chicago's hours and says so in the log line — never 'no window' (mutation: fail open → sent, FAILS)
+  - holdOrSend: what the send gate answers SmsDeferred from the send becomes the held row, at the gate's own opening (mutation: treat it as a failure → FAILS)
+  - holdOrSend: what the send gate answers SmsBlocked(stopped) is ONE skipped row reading "They stopped texts from this business", and no throw (mutation: rethrow it → FAILS)
+  - holdOrSend: what the send gate answers SmsBlocked(held) is ONE skipped row reading "Texts to them are on hold", and no throw (mutation: rethrow it → FAILS)
+  - holdOrSend: what the send gate answers SmsBlocked(unconfirmed_number) is ONE skipped row reading "Their number could be Mexican or US. Pick its country on their contact", and no throw (mutation: rethrow it → FAILS)
+  - holdOrSend: what the send gate answers SmsBlocked(window_after_deadline) is ONE skipped row reading "Not sent: quiet hours ran past the appointment", and no throw (mutation: rethrow it → FAILS)
+  - holdOrSend: what the send gate answers SmsBlocked(no_number) is ONE skipped row reading "No phone number we can text", and no throw (mutation: rethrow it → FAILS)
+  - holdOrSend: what the send gate answers SmsBlocked(a2p_not_approved) is ONE skipped row reading "Texting isn't set up for this company yet", and no throw (mutation: rethrow it → FAILS)
+  - holdOrSend: what the send gate answers SmsBlocked(no_live_number) is ONE skipped row reading "Texting isn't set up for this company yet", and no throw (mutation: rethrow it → FAILS)
+  - holdOrSend: what the send gate answers any other throw writes a failed row with the plain reason and RETHROWS so the pass counts it
+  - holdOrSend: the log legs a log write that fails never fails the send: still sent, one console.error (mutation: let record throw → FAILS)
+  - holdOrSend: the log legs a held write that fails REJECTS the call — nothing sent, the pass will count it (mutation: swallow it → FAILS)
+  - holdOrSend: the log legs re-holding with an UNCHANGED held_until does not re-write the row, so `occurred_at` does not bump (mutation: drop the getAutomationLogEntry check → FAILS)
+  - holdOrSend: the log legs re-holding with a CHANGED held_until still writes
+  - holdOrSend: the log legs writeHeld, the text-back's way in, writes the same held row a pass does (mutation: drop its unchanged check → FAILS on the second call)
+- `src/lib/automations/imports.test.ts`: **1 failing** that Step 4 turns green; 1 already pass:
+  - automations — providers come from ctx, never from imports only the harness imports the email factory, and NO module here imports the SMS factory or Telnyx
+- `src/lib/automations/instant-reply.test.ts`: **12 failing** that Step 4 turns green; 14 already pass:
+  - sendInstantReply — the destination allowlist (danlo, 2026-09-07: +1 and +52 only, as real shapes) a US number, a Mexican number, and a Mexican number typed with the legacy mobile 1 all proceed to the send
+  - sendInstantReply — the gates the daily cap: the 25th stamp inside 24h blocks the 26th text, logged; 24 lets it through
+  - sendInstantReply — the send English: provider → conversation → message row → send → STAMP → mark sent, the saved body VERBATIM
+  - sendInstantReply — the send Spanish: the locale picks config.bodyEs, trimmed, and nothing else changes
+  - sendInstantReply — the send a provider failure: the row is marked failed, NOTHING is stamped, the outcome is `failed` with the message, and it does not throw
+  - sendInstantReply — the send a throwing factory (TELNYX_API_KEY unset) is a `failed` outcome with NOTHING written to the inbox
+  - sendInstantReply — the send a stamp that fails AFTER a successful send: sent + unstamped, logged, the row still marked sent
+  - instant reply — the fixed automated hours (08:00-21:00) a form submitted at 23:00: held, not texted, not stamped; the held row carries what a release needs (mutation: bypass holdOrSend → FAILS)
+  - instant reply — the fixed automated hours (08:00-21:00) the hours are read in the SUBMISSION's account's zone, not a default (mutation: hardcode the zone → FAILS)
+  - instant reply — the consent gate, through the real gate a number that stopped texts is NOT texted: no message row, not stamped, one skipped row a client can read (mutation: skip the ledger in the gate → sent, FAILS)
+  - instant reply — the consent gate, through the real gate a contact whose number's country is unconfirmed is held back the same way (mutation: skip the flag read → sent, FAILS)
+  - releaseInstantReply — from the held row's payload re-runs every check and sends: the text goes, the submission is stamped, the row flips to sent (mutation: skip the stamp on release → FAILS)
+- `src/lib/automations/send-sms.test.ts`: **10 failing** that Step 4 turns green; 7 already pass:
+  - sendAutomationSms — through the send gate, write then send hands the gate the kind, the stored number, the body, the contact, the account's zone and the TICK's instant (mutation: drop `now` → the gate judges the hours at the wall clock, FAILS)
+  - sendAutomationSms — through the send gate, write then send the gate's prepare writes the conversation and the message row with the text AS SENT, then the send; both ids come back (mutation: store input.body → the row lacks the STOP line, FAILS)
+  - sendAutomationSms — through the send gate, write then send a deferral throws SmsDeferred carrying the opening, and writes no row (mutation: return a sent result → FAILS)
+  - sendAutomationSms — through the send gate, write then send a refusal throws SmsBlocked with the gate's reason, and writes no row (mutation: swallow it → resolves, FAILS)
+  - sendAutomationSms — through the send gate, write then send an unreadable ledger is a FAILURE, not a refusal: the pass counts it failed and retries next tick (mutation: throw SmsBlocked for ledger_unavailable → FAILS)
+  - sendAutomationSms — through the send gate, write then send on a provider failure: marks the row failed, THEN runs the marker, then rethrows the provider's error (mutation: swap the order, or swallow the throw → FAILS)
+  - sendAutomationSms — through the send gate, write then send a marker that itself throws is logged and swallowed; the provider's error still propagates
+  - sendAutomationSms — through the send gate, write then send no provider (TELNYX_API_KEY unset in production): nothing in the inbox and no attempt marker (mutation: run the marker on every failure → FAILS)
+  - usage: what an automation text bills (client billing) a text the gate says bills carries ITS segment count, the text as sent (mutation: count input.body → FAILS)
+  - usage: what an automation text bills (client billing) a text the gate says does not bill (the fake provider, or one redirected to a developer's phone) has no usage (mutation: ignore `billable` → FAILS)
+- `src/lib/automations/sentinel.test.ts`: **2 failing** that Step 4 turns green; 3 already pass:
+  - the sentinel: the internal label never reaches a customer, through ANY registered pass every argument of every email send, SMS send and SMS message row is free of the label
+  - the sentinel — the inline recipe (instant reply) has no name to leak every argument of the SMS send and the message row is the SAVED body, free of the label
+- `src/lib/automations/passes/appointment-confirm.test.ts`: **8 failing** that Step 4 turns green; 6 already pass:
+  - the confirmation ask sends texts, stamps, and writes ONE sent log row
+  - the confirmation ask sends a send that throws is counted FAILED, writes the attempt marker and a failed log row, and NEVER stamps
+  - the confirmation ask sends a text that SENT but could not be stamped is counted UNSTAMPED and still counted sent — the duplicate is the known cost
+  - the confirmation ask sends falls back to the ACCOUNT's zone when the booker's is missing or junk, never to UTC
+  - the confirmation ask sends an unresolvable ACCOUNT zone with no booker zone is SKIPPED with a reason, never counted failed
+  - the confirmation ask and quiet hours inside the window it HOLDS: no send, no stamp, one held row with the window's end
+  - releasing a held confirmation ask re-reads the booking and sends
+  - releasing a held confirmation ask a released row still 24h16m out DOES send — the boundary from the other side
+- `src/lib/automations/passes/followups.test.ts`: **5 failing** that Step 4 turns green; 3 already pass:
+  - follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN IT GOES in the band: sent and stamped, one sent row
+  - follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN IT GOES outside the band the gate still waits — no row, no send, whatever the window says (mutation: skip the gate on the normal tick → FAILS)
+  - follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN IT GOES release at noon: the band is CLOSED, and the release sends anyway because the band was satisfied at hold time (mutation: apply the gate on release → FAILS)
+  - follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN IT GOES no email: a skipped row with the plain reason, counted as before
+  - follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN IT GOES an unresolvable account zone: a skipped row that says so
+- `src/lib/automations/passes/no-show-nudge.test.ts`: **21 failing** that Step 4 turns green; 8 already pass:
+  - no-show nudge pass — email channel sends with the brand name and the company's from/reply-to, the booking page as the link, then stamps
+  - no-show nudge pass — email channel uses the operator's own body when one is stored
+  - no-show nudge pass — email channel send-then-stamp: a send that throws is counted failed and NOT stamped
+  - no-show nudge pass — email channel retries a transient stamp failure; exhausted retries count unstamped while still sent
+  - no-show nudge pass — SMS channel gate → message row → send → STAMP → mark sent, with the composed body (link on the end) everywhere
+  - no-show nudge pass — SMS channel when the sender gate refuses, skips and counts it — and does NOT fall back to email
+  - no-show nudge pass — SMS channel a gate READ error fails that row and keeps the pass's counters
+  - no-show nudge pass — SMS channel a phone that cannot be normalised is no deliverable address: skipped, gate not consulted
+  - no-show nudge pass — SMS channel a provider failure marks the row failed, writes the nudge's attempt marker, counts failed, stamps nothing
+  - no-show nudge pass — SMS channel a marker younger than 24h holds the booking: counted, nothing written, caps untouched
+  - no-show nudge pass — SMS channel the EMAIL channel ignores the marker
+  - no-show nudge pass — fail closed, each case its own counter an invalid stored config sends nothing and is counted
+  - no-show nudge pass — fail closed, each case its own counter no email on the contact for the email channel is skippedNoAddress
+  - no-show nudge pass — fail closed, each case its own counter an unresolvable account timezone is held and counted under its own name
+  - no-show nudge pass — fail closed, each case its own counter a booking page that is switched off is skipped and counted — no dead link goes out — but only once its morning arrives
+  - no-show nudge pass — fail closed, each case its own counter THE CLOCK through the pass: marked 00:30 today in New York holds, the same instant 23:30 yesterday in Chicago sends
+  - no-show nudge pass — fail closed, each case its own counter a pre-0026 row (noShowAt null) runs from ends_at
+  - no-show nudge pass — capped, like every recipe pass that a bulk status change can burst per tick: N+1 eligible rows send N and skip one, which is NOT stamped
+  - no-show nudge pass — capped, like every recipe pass that a bulk status change can burst per account per day: 24 already sent in the last 24h leaves room for exactly one, counted off no_show_nudged_at
+  - no-show nudge — quiet hours and release in the band, the gate defers the text to noon: held, not sent, not stamped, no message row (mutation: bypass holdOrSend → FAILS)
+  - no-show nudge — quiet hours and release release at noon skips the band and sends through the same path — stamp included (mutation: gate on release → FAILS)
+- `src/lib/automations/passes/quote-followup.test.ts`: **12 failing** that Step 4 turns green; 8 already pass:
+  - the quote follow-up sends by the CONFIGURED channel texts, stamps THE OPPORTUNITY, and writes one sent row keyed opportunity:<id>
+  - the quote follow-up sends by the CONFIGURED channel emails the default body EXACTLY - no deal name, no price, nothing appended
+  - the quote follow-up sends by the CONFIGURED channel an invalid stored config sends nothing and writes NO log row
+  - the quote follow-up sends by the CONFIGURED channel an SMS gate refusal skips and LOGS, and never becomes an email
+  - the quote follow-up sends by the CONFIGURED channel no deliverable address on the configured channel skips under its own name
+  - the quote follow-up sends by the CONFIGURED channel an unresolvable account zone HOLDS the row with a reason rather than guessing an hour
+  - the quote follow-up's morning band, caps and cooldown outside the morning band nothing goes and NOTHING is logged - the row is due again tomorrow
+  - the quote follow-up's morning band, caps and cooldown the SMS cooldown is SILENT on a normal tick and a real skip on a release
+  - the quote follow-up's morning band, caps and cooldown the account's own daily limit is reached: skippedCap BY NAME, with a row that says so
+  - the quote follow-up and quiet hours when the gate defers the text to noon it HOLDS: no send, no stamp, one held row ending at noon
+  - the quote follow-up and quiet hours released at noon it skips the band and sends through the same path, stamp included
+  - releasing a held quote follow-up and an inbound from BEFORE the stage change is not a reply to this quote: it still sends
+- `src/lib/automations/passes/reactivation.test.ts`: **14 failing** that Step 4 turns green; 6 already pass:
+  - the reactivation check-in is EMAIL ONLY sends one email, stamps the contact, writes a sent row — and never reaches for an SMS provider
+  - the reactivation check-in is EMAIL ONLY outside the morning band nothing goes and NOTHING is logged
+  - the reactivation check-in is EMAIL ONLY an email that SENT but could not be stamped is counted UNSTAMPED and still counted sent — and for THIS recipe that is a repeat, not a duplicate
+  - the reactivation check-in is EMAIL ONLY an unresolvable account zone HOLDS the row and says so, rather than guessing an hour
+  - the reactivation check-in's own daily cap sends exactly FIVE and skips the sixth, by name and by number
+  - the reactivation check-in's own daily cap counts what already went out today, read back off the stamp column
+  - the reactivation check-in and its held rows released at noon it skips the band and sends through the same path, stamp included
+  - THE EXACT QUIET RE-CHECK on a normal tick — the due-list's bulk read is only a pre-filter a contact who wrote in since their own cutoff is skipped, silently, with THIS account's months
+  - THE EXACT QUIET RE-CHECK on a normal tick — the due-list's bulk read is only a pre-filter …and the IDENTICAL fixture sends the moment the same re-check answers quiet
+  - the operator's own words sends the stored body when there is one, and the default when it is blank
+  - the operator's own words composes the footer line from the ROW's brand name — and the no-name line for a blank brand, never 'a customer of .'
+  - the check-in never goes without a postal address and a reply-to a blank mailing address (after .trim()) skips the row on a normal tick: logged, not sent, not stamped
+  - the check-in never goes without a postal address and a reply-to a blank reply-to (after .trim()) skips the row on a normal tick: logged, not sent, not stamped
+  - the check-in never goes without a postal address and a reply-to an account that cannot send spends NONE of the tick's ten attempts — another account's customer still goes
+- `src/lib/automations/passes/referral-ask.test.ts`: **17 failing** that Step 4 turns green; 8 already pass:
+  - the referral ask sends by the CONFIGURED channel texts, stamps, and writes one sent row — with no link anywhere in the body
+  - the referral ask sends by the CONFIGURED channel emails with the company's from address and the row's OWN reply-to, and never touches the SMS provider
+  - the referral ask sends by the CONFIGURED channel an invalid stored config sends nothing and writes NO log row
+  - the referral ask sends by the CONFIGURED channel an SMS gate refusal skips and LOGS, and never becomes an email
+  - the referral EMAIL: the footer, the address and reply-to it needs, and the contact who asked the email carries the footer — the brand's line, then the account's postal address — after the body, in both parts
+  - the referral EMAIL: the footer, the address and reply-to it needs, and the contact who asked composes the footer line from the ROW's brand name — and the no-name line for a blank brand
+  - the referral EMAIL: the footer, the address and reply-to it needs, and the contact who asked a blank mailing address (after .trim()) skips an EMAIL row: logged, not sent, not stamped
+  - the referral EMAIL: the footer, the address and reply-to it needs, and the contact who asked a blank reply-to (after .trim()) skips an EMAIL row: logged, not sent, not stamped
+  - the referral EMAIL: the footer, the address and reply-to it needs, and the contact who asked a contact who asked not to get marketing email is skipped on the EMAIL channel: logged, not sent, not stamped
+  - the referral EMAIL: the footer, the address and reply-to it needs, and the contact who asked the SMS channel needs no address, no reply-to, and ignores the EMAIL opt-out — the text still goes
+  - the referral EMAIL: the footer, the address and reply-to it needs, and the contact who asked rows that cannot go spend NONE of the tick's ten attempts — another booking's email still goes
+  - THE LADDER — never two rungs on one morning holds while the review request went out THIS morning, and sends when it went out the morning before
+  - THE LADDER — never two rungs on one morning PRECEDENCE: waits, silently, while the review request is still owed — and goes the moment reviews are off
+  - the referral ask's caps and cooldown the SMS cooldown is SILENT on a normal tick and a real skip on a release
+  - the referral ask's caps and cooldown the account's own daily limit is reached: skippedCap BY NAME, with a row that says so
+  - the referral ask and quiet hours when the gate defers the text to noon it HOLDS: no send, no stamp, one held row ending at noon
+  - the referral ask and quiet hours released at noon it skips the band and sends through the same path, stamp included
+- `src/lib/automations/passes/release-held.test.ts`: passes before the implementation too (10 tests: it pins what this task keeps, or it was edited only to match the new shapes).
+- `src/lib/automations/passes/reminders.test.ts`: **6 failing** that Step 4 turns green; 3 already pass:
+  - the email reminder under the fixed hours (08:00-21:00, choice 31) outside the hours: NOT sent, NOT stamped, one held row with the window's end (mutation: send before holdOrSend → FAILS)
+  - the email reminder under the fixed hours (08:00-21:00, choice 31) inside the hours: sent, stamped, one sent row — exactly as before, plus the row
+  - the email reminder under the fixed hours (08:00-21:00, choice 31) choice 21: an appointment at 07:30 tomorrow is NOT emailed at 23:00 tonight, nor held past it; one skipped row says why (mutation: drop `deadline` from the subject → held, FAILS)
+  - the email reminder under the fixed hours (08:00-21:00, choice 31) no email on file: a skipped row with the plain reason, still counted failed as the route always counted it
+  - releaseReminder — the held row is the queue a booking still due sends through the SAME path: email, stamp, and the row flips to sent (mutation: release without stamping → FAILS)
+  - releaseReminder — the held row is the queue released while STILL inside the window (the agency lengthened it): re-held, not sent
+- `src/lib/automations/passes/review-request.test.ts`: **30 failing** that Step 4 turns green; 7 already pass:
+  - review-request pass — email channel sends with the brand name and the company's from/reply-to, appends the link, then stamps
+  - review-request pass — email channel uses the operator's own body when one is stored
+  - review-request pass — email channel send-then-stamp: a send that throws is counted failed and NOT stamped
+  - review-request pass — email channel retries a transient stamp failure; gives up after the budget and counts unstamped while still sent
+  - review-request pass — SMS channel, the sendSmsAction discipline gate → write the message row → send → STAMP → mark sent, with the composed body everywhere
+  - review-request pass — SMS channel, the sendSmsAction discipline when the sender gate refuses, skips and counts it — and does NOT fall back to email
+  - review-request pass — SMS channel, the sendSmsAction discipline a no_live_number refusal is the same skip, not an email
+  - review-request pass — SMS channel, the sendSmsAction discipline a gate READ error fails that row and keeps the pass's counters, instead of erroring the whole pass
+  - review-request pass — SMS channel, the sendSmsAction discipline constructs the SMS provider BEFORE writing the message row, so a throwing factory leaves no failed text in the inbox
+  - review-request pass — SMS channel, the sendSmsAction discipline a phone that cannot be normalised is no deliverable address: skipped, gate not even consulted
+  - review-request pass — SMS channel, the sendSmsAction discipline a provider send failure marks the message row failed, counts failed, stamps nothing
+  - review-request pass — SMS channel, the sendSmsAction discipline stamps BEFORE marking the row sent, and a failing status update cannot un-stamp or un-send
+  - review-request pass — fail closed, each case its own counter an invalid stored config sends nothing and is counted
+  - review-request pass — fail closed, each case its own counter no email on the contact for the email channel is skippedNoAddress
+  - review-request pass — fail closed, each case its own counter an unresolvable account timezone is held and counted under its own name
+  - review-request pass — fail closed, each case its own counter THE COLLISION through the pass: a follow-up stamped today (NY) holds, the same stamp yesterday (CHI) sends
+  - caps — recipe passes only per tick: N+1 eligible rows send N and skip one, which is NOT stamped
+  - caps — recipe passes only per account per day: 24 already sent in the last 24h leaves room for exactly one
+  - caps — recipe passes only rows that are merely waiting for their morning do not count against the caps
+  - caps — recipe passes only the migrated reminder pass is NOT capped: 30 due reminders send 30
+  - review-request pass — one SMS attempt per booking per day a provider failure writes the recipe's attempt marker, after the row is marked failed; nothing is stamped
+  - review-request pass — one SMS attempt per booking per day a marker younger than 24h holds the booking: counted, nothing written, nothing sent
+  - review-request pass — one SMS attempt per booking per day a marker exactly 24h old is due again
+  - review-request pass — one SMS attempt per booking per day the EMAIL channel ignores the marker — the decision is about texts
+  - review-request pass — one SMS attempt per booking per day an email provider failure writes NO marker
+  - review-request pass — the completion clock (0026) the batch-Friday case: ended 9 days ago, completed yesterday afternoon → sent this morning
+  - review-request pass — the completion clock (0026) one completion instant, two zones: stamped 00:30 today in New York holds, 23:30 yesterday in Chicago sends
+  - review-request pass — the completion clock (0026) a pre-0026 row (completedAt null) behaves exactly as before
+  - review request — quiet hours and release in the band, the gate defers the text to noon: held, not sent, not stamped, no message row (mutation: bypass holdOrSend → FAILS)
+  - review request — quiet hours and release release at noon skips the band and sends through the same path — stamp included (mutation: gate on release → FAILS)
+- `src/lib/automations/passes/site-traffic.test.ts`: passes before the implementation too (9 tests: it pins what this task keeps, or it was edited only to match the new shapes).
+- `src/lib/automations/passes/sms-reminder.test.ts`: **13 failing** that Step 4 turns green; 6 already pass:
+  - sms reminder pass — the send texts the time in the BOOKER's zone, the default closing line, then stamps, then marks the row sent
+  - sms reminder pass — the send uses the operator's own closing line when one is stored
+  - sms reminder pass — the send send-then-stamp: a provider failure marks the row failed, writes the attempt marker, counts failed, stamps nothing
+  - sms reminder pass — the send retries a transient stamp failure; exhausted retries count unstamped while still sent
+  - sms reminder pass — fail closed, each case its own counter a phone that cannot be normalised is skipped, gate not consulted
+  - sms reminder pass — fail closed, each case its own counter when the sender gate refuses, skips and counts — there is no other channel to fall to
+  - sms reminder pass — fail closed, each case its own counter a gate READ error fails that row and keeps the pass's counters; the gate is consulted once per account
+  - sms reminder pass — fail closed, each case its own counter a booking whose last text attempt failed minutes ago is RETRIED, not held — the 45-minute window bounds it to three attempts (danlo, 2026-09-07)
+  - sms reminder pass — fail closed, each case its own counter constructs the SMS provider BEFORE writing the message row
+  - sms reminder pass — UNCAPPED, like the email reminder it pairs with 30 due reminders send 30: a reminder is one-to-one with a booking the customer made
+  - sms reminder pass — the fixed automated hours (08:00-21:00) before 08:00 with the appointment after 08:00: NOT sent, NO message row, NOT stamped, one held row (mutation: bypass holdOrSend → FAILS)
+  - sms reminder pass — the fixed automated hours (08:00-21:00) choice 21: 05:30 for a 07:30 job is NOT texted, and not held past the job; a skipped row says why (mutation: drop `deadline` → held, FAILS)
+  - sms reminder pass — the fixed automated hours (08:00-21:00) release: still due → texts through the same path and the row flips to sent
+- `src/lib/automations/passes/usage-report.test.ts`: passes before the implementation too (19 tests: it pins what this task keeps, or it was edited only to match the new shapes).
+- `src/lib/automations/passes/weekly-agency-report.test.ts`: passes before the implementation too (3 tests: it pins what this task keeps, or it was edited only to match the new shapes).
+- `src/lib/automations/passes/weekly-report.test.ts`: passes before the implementation too (7 tests: it pins what this task keeps, or it was edited only to match the new shapes).
+- `src/app/api/cron/reminders/route.test.ts`: **25 failing** that Step 4 turns green; 5 already pass:
+  - GET /api/cron/reminders sends both, stamps only the success, and reports {sent:1,failed:1} when the first send throws
+  - GET /api/cron/reminders retries a transient reminder stamp failure instead of leaving the row to re-mail the booker
+  - GET /api/cron/reminders gives up on a reminder stamp after a bounded number of attempts, still counting the send as sent
+  - GET /api/cron/reminders retries only the survivor on the next invocation, once the mock reflects the earlier stamp
+  - GET /api/cron/reminders builds the cancel url from the request's own origin, the calendar public id, and the cancel token
+  - GET /api/cron/reminders builds the cancel url from APP_ORIGIN instead of the request's origin when it's set
+  - GET /api/cron/reminders formats the when-string in the BOOKER's stored zone, distinct from the account's zone
+  - GET /api/cron/reminders carries the account's from_email as fromAddress on the send (M4d: reminders are customer-facing outbound)
+  - GET /api/cron/reminders sends with fromAddress undefined when the account has no from_email set
+  - GET /api/cron/reminders carries meetingUrl into the sent reminder's join link when present, omits it when null
+  - GET /api/cron/reminders counts a reminder with no contact email as a failure, without stamping it
+  - GET /api/cron/reminders — follow-up pass sends the follow-up with the company's from/reply-to, then stamps it
+  - GET /api/cron/reminders — follow-up pass never runs the follow-up pass ahead of the reminder pass's own result (reminders pass stays unchanged)
+  - GET /api/cron/reminders — follow-up pass counts a failing follow-up send as failed and does NOT stamp it (send-then-stamp pin)
+  - GET /api/cron/reminders — follow-up pass counts a follow-up with no contact email as skippedNoEmail, sends nothing, stamps nothing
+  - GET /api/cron/reminders — follow-up pass retries a transient follow-up stamp failure — the worse of the two paths by more than double
+  - GET /api/cron/reminders — follow-up pass gives up on a follow-up stamp after a bounded number of attempts and counts it unstamped, not failed
+  - GET /api/cron/reminders — follow-up pass keeps the two passes' retry budgets separate — one path exhausting its own does not spend the other's
+  - GET /api/cron/reminders — follow-up pass falls back to the default follow-up copy when followupBody is empty
+  - GET /api/cron/reminders — follow-ups wait for the next morning holds a meeting that ended earlier the SAME morning instead of chasing it an hour later
+  - GET /api/cron/reminders — follow-ups wait for the next morning reads the morning in each ACCOUNT's own zone, not one zone for the whole tick
+  - GET /api/cron/reminders — follow-ups wait for the next morning counts a not-yet-morning follow-up with no email as waiting, not as skippedNoEmail
+  - GET /api/cron/reminders — follow-ups wait for the next morning a garbage account timezone is never thrown, and the reminder pass still completes
+  - GET /api/cron/reminders — follow-ups wait for the next morning refuses to send at an unknown hour: an unresolvable zone is held and counted separately
+  - GET /api/cron/reminders — follow-ups wait for the next morning still sends for an account whose timezone genuinely IS UTC — fail-closed, not fail-on-everything
+
+- [ ] **Step 3: Implement**
+
+Replace the whole file `apps/web/src/lib/automations/context.ts` with:
+
+```ts
+import type { SupabaseClient } from "@bis/db";
+import type { EmailProvider } from "@/lib/email/types";
+import type { SmsSender } from "@/lib/consent/gate";
+
+/**
+ * What every pass is handed for one cron tick.
+ *
+ * DELIBERATELY ABSENT: `accountName`. `accounts.name` is the agency's internal
+ * label for a company ("Rio Roofing — trial") and it has reached customers
+ * three times (the P5 copy, the email From line, the text-back body). A
+ * recipe author cannot leak what they cannot reach: due-rows carry
+ * `brandName` (resolved in the data layer) and this context carries no name
+ * at all. harness.test.ts pins the absence with a `@ts-expect-error`.
+ */
+export type PassContext = {
+  db: SupabaseClient;
+  /** The tick instant. Passes read this, never `new Date()`, so one tick has
+   *  ONE "now" — the reminder query and the follow-up gate cannot disagree
+   *  about what time it is. */
+  now: Date;
+  /** APP_ORIGIN when set, else the request's own origin — for links in
+   *  customer mail. See origin.ts for why APP_ORIGIN must win. */
+  origin: string;
+  /** Constructed once per tick by the harness. In production this THROWS at
+   *  construction when RESEND_API_KEY/EMAIL_FROM are unset — loudly, before
+   *  any query, which is the designed failure. */
+  email: EmailProvider;
+  /** THE SEND GATE, bound to this tick's client (consent chain spec §4.1
+   *  item 4: "the harness's ctx.sms() becomes the gate's sendSms"). Every
+   *  automation text goes through it, via sendAutomationSms. The provider is
+   *  constructed inside the gate only once a send is cleared, so a tick with
+   *  TELNYX_API_KEY unset in production fails only the sends it decides to
+   *  make, never the tick. There is no quiet-hours setting any more: the
+   *  hours are fixed (lib/consent/hours.ts). */
+  sms: SmsSender;
+};
+
+/** Per-pass counters, reported verbatim in the cron's JSON under the pass key. */
+export type PassCounters = Record<string, number>;
+
+/**
+ * A pass is a HARNESS ENTRY, not an implementation of a shared algorithm.
+ * The two live passes are genuinely different (reminders have no morning
+ * gate and count a missing email as `failed`; follow-ups have the gate and
+ * count it `skippedNoEmail`), so there is no listDue/send/stamp interface —
+ * each pass owns its own query, gate, send and stamp. What the registry
+ * buys is error isolation, uniform counter reporting, and one place to add
+ * a recipe.
+ */
+export type Pass = {
+  readonly key: string;
+  run(ctx: PassContext): Promise<PassCounters>;
+};
+```
+
+Replace the whole file `apps/web/src/lib/automations/harness.ts` with:
+
+```ts
+import type { SupabaseClient } from "@bis/db";
+import { getEmailProvider } from "@/lib/email";
+import { smsSenderFor } from "@/lib/consent/gate";
+import type { Pass, PassContext, PassCounters } from "./context";
+
+/**
+ * THE ONLY automations module allowed to import the EMAIL provider factory —
+ * imports.test.ts scans every other file under lib/automations for it.
+ * Everything a pass emails goes through the factory's production guard
+ * (VERCEL_ENV AND NODE_ENV). Texts no longer come from a factory here: since
+ * the consent chain's PR-1 the only way a pass texts is `ctx.sms`, which is
+ * the send gate (lib/consent/gate.ts), and the gate is the only module
+ * outside lib/sms that may reach an SMS provider (lib/consent/scans.test.ts).
+ */
+export function buildPassContext(
+  input: { db: SupabaseClient; now: Date; origin: string },
+): PassContext {
+  return { ...input, email: getEmailProvider(), sms: smsSenderFor(input.db) };
+}
+
+/**
+ * Runs every pass in order, each inside its own try/catch — the `finishCall`
+ * legs pattern. A pass whose `run` rejects OUTRIGHT (its due-query throwing,
+ * say) is reported under its own key as `{ errored: 1 }` and the tick goes on
+ * to the next pass; a send failing INSIDE a pass is that pass's business and
+ * shows up in its own counters. Sequential, not parallel, on purpose: the
+ * follow-up pass stamps `followup_sent_at` and the review-request pass reads
+ * it in the same tick, so order is part of the contract (see registry.ts).
+ */
+export async function runPasses(
+  passes: readonly Pass[], ctx: PassContext,
+): Promise<Record<string, PassCounters>> {
+  const results: Record<string, PassCounters> = {};
+  for (const pass of passes) {
+    try {
+      results[pass.key] = await pass.run(ctx);
+    } catch (e) {
+      results[pass.key] = { errored: 1 };
+      console.error(`automation pass ${pass.key} failed outright: ${String(e)}`);
+    }
+  }
+  return results;
+}
+```
+
+Replace the whole file `apps/web/src/lib/automations/send-sms.ts` with:
+
+```ts
+import { ensureConversation, createMessage, updateMessageStatus } from "@bis/db";
+import { SMS_RETRY_COOLDOWN_MS } from "./caps";
+import { recordUsageSafely } from "@/lib/billing/usage";
+import type { AutomationSmsKind } from "@/lib/consent/classes";
+import type { SmsBlockReason } from "@/lib/consent/gate";
+import type { PassContext } from "./context";
+
+/**
+ * What the two helpers below actually need: the client, the send gate and
+ * the tick's instant — not the whole cron context. A full PassContext
+ * satisfies this (it is a Pick), so every pass keeps handing over `ctx`
+ * unchanged; the inline instant reply (instant-reply.ts) builds exactly these
+ * three fields and never constructs the email provider it has no use for.
+ */
+export type SmsSendContext = Pick<PassContext, "db" | "sms" | "now">;
+
+/** The messages rows automations write are the platform's, not a person's —
+ *  the same actor shape the voice text-back uses ("voice"/"ai"). */
+export const AUTOMATION_ACTOR_ID = "automation";
+export const AUTOMATION_ACTOR_TYPE = "system" as const;
+
+export type AutomationSmsInput = {
+  accountId: string;
+  contactId: string;
+  /** Which automation this is (lib/consent/classes.ts): it decides the
+   *  hours and the footer, never the caller. */
+  kind: AutomationSmsKind;
+  /** The number as the contact row holds it. The gate normalises it, and a
+   *  ten-digit number whose country is unknown is held there (F-009). */
+  to: string;
+  body: string;
+  /** The language THIS message is written in, which decides the language of
+   *  the opt-out disclosure the gate appends to it. Optional and defaulting
+   *  to "en" because most passes have no locale to offer — the scheduled
+   *  recipes compose English copy end to end. The form instant reply is the
+   *  exception and passes the submission's own locale. */
+  language?: "en" | "es";
+  /** The account's zone, off the due row, so the gate does not re-read it. */
+  accountTimezone: string | null;
+  /** Runs on a PROVIDER failure, after the message row is marked failed: the
+   *  recipe's own attempt marker (`*_sms_failed_at`) goes here. Best effort —
+   *  its own failure is logged, never thrown, and never re-raised over the
+   *  provider's error. */
+  onProviderFailure: () => Promise<void>;
+};
+
+export type SentSms = {
+  messageId: string;
+  providerMessageId: string;
+  /**
+   * What this text bills (client billing), or null when the provider put
+   * nothing in front of the customer: the fake provider, or a real one
+   * redirected to a developer's phone. Segments are counted on the body AS
+   * SENT, the opt-out disclosure included, because that is what the carrier
+   * bills. Recorded by markAutomationSmsSent, never here.
+   */
+  usage: { segments: number; sentAt: Date } | null;
+};
+
+/** The gate said "not yet": holdOrSend writes the held row for `until`. */
+export class SmsDeferred extends Error {
+  constructor(readonly until: Date) {
+    super(`automation sms deferred until ${until.toISOString()}`);
+    this.name = "SmsDeferred";
+  }
+}
+
+/** The gate said "not to this number": holdOrSend logs the row `skipped`
+ *  with the reason. `ledger_unavailable` is never one of these: an
+ *  unreadable ledger is a FAILURE, so the pass retries next tick. */
+export type AutomationBlockReason = Exclude<SmsBlockReason, "ledger_unavailable">;
+export class SmsBlocked extends Error {
+  constructor(readonly reason: AutomationBlockReason) {
+    super(`automation sms not sent: ${reason}`);
+    this.name = "SmsBlocked";
+  }
+}
+
+/**
+ * WRITE THEN SEND — sendSmsAction's discipline, shared by every SMS-capable
+ * pass, now through the send gate (consent chain PR-1):
+ *   1. the gate decides (registry, number, A2P sender, ledger, the
+ *      number's country, the kind's hours, the footer) BEFORE any row, so
+ *      a text that must not go leaves nothing in the customer's thread;
+ *   2. the gate takes the provider FIRST: it throws in production while
+ *      TELNYX_API_KEY is unset, and a row written before it would leave a
+ *      failed text in the thread on every tick for a misconfiguration;
+ *   3. `prepare`: the conversation and the message row, with the body
+ *      exactly as it will be sent, footer included;
+ *   4. the send;
+ *   5. on a provider failure: mark the row failed, write the recipe's
+ *      attempt marker, rethrow so the caller counts `failed` and stamps
+ *      nothing.
+ * A deferral throws SmsDeferred and a refusal throws SmsBlocked; holdOrSend
+ * (hold-or-send.ts) turns each into its log row. The caller stamps its dedupe
+ * column and THEN calls markAutomationSmsSent.
+ */
+export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSmsInput): Promise<SentSms> {
+  // THE choke point for every unprompted text this platform sends on a
+  // schedule: every pass and the inline instant reply come through here, and
+  // from here through the send gate, so a new pass gets the gate's checks,
+  // hours and footer by calling this function.
+  // A holder, not a `let`: the row id is written inside the gate's callback.
+  const row: { id: string | null } = { id: null };
+  const result = await ctx.sms({
+    accountId: input.accountId, kind: input.kind, to: input.to, body: input.body,
+    contactId: input.contactId, language: input.language, accountZone: input.accountTimezone, now: ctx.now,
+  }, {
+    prepare: async ({ body }) => {
+      const convo = await ensureConversation(
+        ctx.db, input.accountId, input.contactId, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
+      row.id = (await createMessage(ctx.db, input.accountId, {
+        conversationId: convo.id, channel: "sms", direction: "outbound", body,
+      }, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE)).id;
+    },
+  });
+  switch (result.kind) {
+    case "sent":
+      if (row.id === null) throw new Error("automation sms: the gate sent without writing the message row");
+      return {
+        messageId: row.id, providerMessageId: result.providerMessageId,
+        usage: result.billable ? { segments: result.segments, sentAt: new Date() } : null,
+      };
+    case "deferred":
+      throw new SmsDeferred(result.until);
+    case "blocked":
+      if (result.reason === "ledger_unavailable") {
+        throw new Error("automation sms not sent: the consent ledger could not be read");
+      }
+      throw new SmsBlocked(result.reason);
+    case "failed":
+      if (result.stage === "provider" && row.id !== null) {
+        const messageId = row.id;
+        try {
+          await updateMessageStatus(ctx.db, input.accountId, messageId, "failed", { error: result.error },
+            AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
+        } catch (statusErr) {
+          console.error(`automation sms: could not mark message ${messageId} failed: ${String(statusErr)}`);
+        }
+        try {
+          await input.onProviderFailure();
+        } catch (markErr) {
+          console.error(`automation sms: could not record the failed attempt for message ${messageId}: ${String(markErr)}`);
+        }
+      }
+      throw new Error(result.error);
+  }
+}
+
+/**
+ * Best effort, AFTER the dedupe stamp: the text is gone and stamped, and a
+ * failure here must not re-label a delivered text "failed" (that invites a
+ * duplicate send). `what` names the recipe in the log line.
+ *
+ * Also where an automation text is BILLED (client billing): after the
+ * caller's stamp and the status write, never between the send and the stamp,
+ * where a ledger round trip would widen the window in which a crash re-sends
+ * the text. `recordUsageSafely` never throws. Every caller of
+ * sendAutomationSms calls this on its success path; send-sms.test.ts's scan
+ * keeps that true.
+ */
+export async function markAutomationSmsSent(
+  ctx: SmsSendContext, accountId: string, sent: SentSms, what: string,
+): Promise<void> {
+  try {
+    await updateMessageStatus(ctx.db, accountId, sent.messageId, "sent",
+      { providerMessageId: sent.providerMessageId }, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
+  } catch (e) {
+    console.error(`${what}: text sent but message ${sent.messageId} not marked sent: ${String(e)}`);
+  }
+  if (sent.usage) {
+    await recordUsageSafely(ctx.db, {
+      accountId, meter: "sms", quantity: sent.usage.segments,
+      occurredAt: sent.usage.sentAt, sourceRef: `message:${sent.messageId}`,
+    }, what);
+  }
+}
+
+/**
+ * Whether a booking's last FAILED text attempt is still inside the cooldown
+ * (SMS_RETRY_COOLDOWN_MS). The pass counts a hold as `skippedRecentFailure`
+ * and leaves the row unstamped, so it is simply due again once the marker
+ * ages out. A marker in the future or one that cannot be read HOLDS — the
+ * house rule for a stamp that cannot be trusted is the safe direction.
+ */
+export function smsCooldownActive(smsFailedAt: string | null, now: Date): boolean {
+  if (smsFailedAt === null) return false;
+  const t = new Date(smsFailedAt).getTime();
+  if (!Number.isFinite(t)) return true;
+  return now.getTime() - t < SMS_RETRY_COOLDOWN_MS;
+}
+```
+
+Replace the whole file `apps/web/src/lib/automations/hold-or-send.ts` with:
+
+```ts
+import {
+  recordAutomationLog, getAutomationLogEntry,
+  type AutomationLogRow, type AutomationLogSource, type AutomationLogChannel, type AutomationLogWrite,
+} from "@bis/db";
+import { resolveAccountZone } from "@/lib/booking/followup-timing";
+import { SMS_KINDS, type AutomationSmsKind } from "@/lib/consent/classes";
+import { nextOpening, expiresBeforeOpening, hoursZone, type HoursRule } from "@/lib/consent/hours";
+import { formatInstantClock } from "./quiet-hours";
+import { SmsDeferred, SmsBlocked, type AutomationBlockReason } from "./send-sms";
+import type { PassContext } from "./context";
+
+/**
+ * The one place an automated customer send meets its sending hours and the
+ * automation log (automation engine part C; consent chain spec §4.1 item 4).
+ *
+ *   holdOrSend(ctx, subject, send)
+ *     outside the hours → write (or re-write) the held row, held_until = the
+ *                         instant they open, return "held". The pass does NOT
+ *                         stamp; the release pass brings the subject back.
+ *     past its deadline → a subject whose deadline falls at or before that
+ *                         opening is logged skipped ("Not sent: quiet hours
+ *                         ran past the appointment", choice 21) and never
+ *                         sent: a reminder after the appointment is worse
+ *                         than none. The old "a deadline sends now, inside
+ *                         the window" exemption is gone (decision 4).
+ *     otherwise         → send(); write `sent`; return "sent".
+ *                         send() throwing SmsDeferred → held, as above;
+ *                         SmsBlocked → skipped with the gate's reason;
+ *                         anything else → write `failed`, rethrow.
+ *
+ * THE HOURS ARE FIXED and come from the gate's own module (lib/consent/
+ * hours.ts): an SMS subject uses its kind's rule from the registry
+ * (automated 08:00-21:00; marketing 09:00-21:00, Sunday from noon), and an
+ * EMAIL subject the automated rule (choice 31). Nothing reads the old
+ * per-account quiet-hours settings. The gate checks the hours again for SMS,
+ * at the same instant (`ctx.now`), so the two never disagree; if they ever
+ * did, its SmsDeferred lands here as a hold all the same.
+ *
+ * The `sent`/`failed`/`skipped` log writes are an isolated leg (`record`):
+ * losing one loses a history line, not a send. The `held` write is NOT
+ * isolated: it is the enqueue. If it is lost, the row simply vanishes, so it
+ * is made DIRECTLY and a failure REJECTS the call; the pass counts `failed`
+ * and its own retry-next-tick behaviour (the row is still unstamped) saves
+ * it. The inline instant reply has no next tick: there the rejection becomes
+ * `{ kind: "failed" }`, which enrich.ts records into the submission's
+ * `processing_error`.
+ */
+export type HoldContext = Pick<PassContext, "db" | "now">;
+
+export type LogSubject = {
+  accountId: string;
+  source: AutomationLogSource;
+  /** Widened to the db's own channel set (not just "sms" | "email") so
+   *  `subjectOf` can round-trip an `ai` row (voice) without coercing it —
+   *  every PASS still only ever sends sms or email, but a release reads
+   *  whatever channel the original send recorded. */
+  channel: AutomationLogChannel;
+  subjectKey: string;
+  contactId: string | null;
+  /** What a release needs that the subject row cannot re-derive. */
+  payload?: Record<string, unknown>;
+};
+
+export type HoldSubject = LogSubject & {
+  accountTimezone: string | null;
+  /** The latest instant this send is still useful. At or before the hours'
+   *  opening → not sent at all (choice 21). */
+  deadline?: Date | null;
+  /** REQUIRED on the sms channel: the kind decides the hours (a marketing
+   *  text waits for 09:00, and for noon on Sunday). holdOrSend throws
+   *  without it rather than guess the weaker rule. */
+  smsKind?: AutomationSmsKind;
+};
+
+/** Client-readable, every one of them: a business owner reads these on the Activity page. */
+export const REASONS = {
+  quietHours: (endsAt: Date, zone: string) => `Held until ${formatInstantClock(endsAt, zone)} — quiet hours`,
+  /** Choice 21: the hours opened only after the thing this send was for. */
+  windowAfterDeadline: "Not sent: quiet hours ran past the appointment",
+  /** The consent gate's refusals (lib/consent/gate.ts), in the words the
+   *  client reads on the Activity page. */
+  textsStopped: "They stopped texts from this business",
+  textsHeld: "Texts to them are on hold",
+  numberUnconfirmed: "Their number could be Mexican or US. Pick its country on their contact",
+  noEmail: "No email address on file",
+  noPhone: "No phone number we can text",
+  smsGate: "Texting isn't set up for this company yet",
+  dailyCap: "Daily limit reached",
+  failed: "Couldn't be delivered",
+  appointmentStarted: "Appointment already started",
+  noLongerDue: "No longer due",
+  recipeOff: "This automation was turned off",
+  timezone: "The company's time zone isn't set",
+  calendarOff: "The booking page is switched off",
+  recentText: "A text already went to this person today",
+  /** A RELEASED row's own SMS-cooldown branch (a failed attempt less than 24h
+   *  ago). Deliberately distinct from `recentText`, which reads oddly for a
+   *  retry after a FAILURE rather than an already-sent text today. Used only
+   *  on release (item 3, part-C cleanup): a normal tick leaves this branch
+   *  silent, unlogged, because the row is simply due again next tick — but a
+   *  row released from the HELD queue has nowhere to go back to except the
+   *  same past `held_until`, and would otherwise be re-examined, re-found
+   *  "skipped" and re-left `held` forever, parking it at the head of the
+   *  queue and starving every newer hold behind it. */
+  smsCooldown: "Waiting before trying this text again",
+  /** The confirmation ask, released after a long hold into the window in
+   *  which the email reminder is already eligible (24h15m out,
+   *  REMINDER_WINDOW_END_MS). Sending "can you confirm?" in the same quarter
+   *  hour as "here's your reminder" is ONE TEXT AND ONE EMAIL landing
+   *  together, asking the customer for the same thing twice. */
+  tooCloseToAppointment: "Too close to the appointment to ask",
+  /** The referral ask, released while the review request is still owed. The
+   *  row is written `skipped` rather than left untouched: an untouched
+   *  released row keeps its past `held_until` and parks the head of the
+   *  queue. The normal pass re-discovers the unstamped booking the next
+   *  morning and moves this same row back to `held` or `sent` in place. */
+  reviewFirst: "Waiting for the review request to go first",
+  /** A reactivation or a quote follow-up released after the customer had
+   *  already been in touch. Sending it anyway would talk straight over a live
+   *  conversation — the one failure mode these two recipes cannot survive. */
+  heardBack: "They've been in touch since",
+  /** A quote follow-up released after the operator deleted or replaced the
+   *  pipeline stage this recipe watches. A normal tick can never produce
+   *  this — the due-list filters on the stage, so a vanished one yields no
+   *  row and there is no subject to write against — but a HELD row's stage
+   *  can disappear during the hold, and that row must leave the queue with a
+   *  reason rather than sit in it. The operator-facing half of the same fact
+   *  lives on the Automations card, which can see the account's stages. */
+  stageGone: "The stage this automation watches is gone",
+  /** A MARKETING email — a reactivation, or a referral ask on the email
+   *  channel (B21) — whose account has no postal address (blank after
+   *  `.trim()`, 0048). Both are commercial email, which under CAN-SPAM (the
+   *  orchestrator's reading, not a lawyer's) must carry the sender's
+   *  physical address, so it is skipped rather than sent without one
+   *  (decision A, 2026-09-22). The save refuses to turn either recipe on
+   *  without it; this is the address cleared on the Branding page since. */
+  noMailingAddress: "The company's mailing address isn't set",
+  /** A marketing email whose account has no reply-to. The footer's opt-out
+   *  is "reply and let us know", and with no reply-to (and no `from_email`) a
+   *  reply lands in the agency's `EMAIL_FROM` mailbox rather than the
+   *  business's — an opt-out that reaches nobody who can act on it. Skipped,
+   *  like the missing address, for the same decision. */
+  noReplyTo: "The company has no reply-to address",
+  /** A referral ask on the EMAIL channel to a contact the operator marked
+   *  "No marketing emails" (`contacts.marketing_email_opted_out_at`, 0049) —
+   *  the customer replied to a footer's "reply and let us know", and this is
+   *  the promise kept (B21). Logged, because the client should be able to see
+   *  why a customer did not get one. The SMS channel never writes it: a
+   *  text's opt-out is the carrier's STOP list. Reactivation never writes it
+   *  either — its due-list query leaves opted-out contacts out altogether. */
+  optedOutEmail: "They asked not to get these emails",
+  outsideRegion: "Number is outside the US, Canada or Mexico",
+  consentWithheld: "They didn't agree to texts",
+  robocall: "Screened as a robocall",
+} as const;
+
+async function record(db: PassContext["db"], w: AutomationLogWrite): Promise<void> {
+  try {
+    await recordAutomationLog(db, w);
+  } catch (e) {
+    console.error(`automation log write failed (${w.status}) for ${w.source} ${w.subjectKey}: ${String(e)}`);
+  }
+}
+
+/**
+ * The LogSubject fields only — never the HoldSubject's `accountTimezone` or
+ * `deadline`, which are inputs to the DECISION, not the log row. Spreading
+ * the whole HoldSubject would carry a `Date` into the row's jsonb and add
+ * keys `recordAutomationLog` was never asked to write.
+ */
+function writeOf(s: LogSubject): {
+  accountId: string; source: AutomationLogSource; channel: AutomationLogChannel;
+  subjectKey: string; contactId: string | null; payload?: Record<string, unknown>;
+} {
+  return {
+    accountId: s.accountId, source: s.source, channel: s.channel,
+    subjectKey: s.subjectKey, contactId: s.contactId,
+    ...(s.payload ? { payload: s.payload } : {}),
+  };
+}
+
+export async function logSkipped(ctx: Pick<PassContext, "db">, s: LogSubject, reason: string): Promise<void> {
+  await record(ctx.db, { ...writeOf(s), status: "skipped", reason });
+}
+
+/** Every refusal the gate can hand an automation, as the Activity page says it. */
+export const BLOCK_REASONS: Record<AutomationBlockReason, string> = {
+  no_number: REASONS.noPhone,
+  a2p_not_approved: REASONS.smsGate,
+  no_live_number: REASONS.smsGate,
+  stopped: REASONS.textsStopped,
+  held: REASONS.textsHeld,
+  unconfirmed_number: REASONS.numberUnconfirmed,
+  window_after_deadline: REASONS.windowAfterDeadline,
+};
+
+function hoursRuleOf(s: HoldSubject): HoursRule {
+  if (s.channel !== "sms") return "automated";
+  if (!s.smsKind) throw new Error(`holdOrSend: sms subject ${s.source} ${s.subjectKey} has no smsKind`);
+  return SMS_KINDS[s.smsKind].hours;
+}
+
+/**
+ * The held write, shared with the missed-call text-back (lib/voice/
+ * textback.ts), which is not a pass but holds through the same queue.
+ * Re-holding under the SAME held_until does not re-stamp `occurred_at` (a
+ * subject seen on every 15-minute tick overnight would otherwise re-sort to
+ * the top of the history every time); a DIFFERENT held_until still writes.
+ * REJECTS on a failed write: this is the enqueue.
+ */
+export async function writeHeld(
+  ctx: Pick<PassContext, "db">, s: LogSubject, until: Date, zone: string,
+): Promise<void> {
+  const existing = await getAutomationLogEntry(ctx.db, s.accountId, s.source, s.subjectKey);
+  const unchanged = existing?.status === "held"
+    && existing.held_until !== null
+    && new Date(existing.held_until).getTime() === until.getTime();
+  if (unchanged) return;
+  try {
+    await recordAutomationLog(ctx.db, {
+      ...writeOf(s), status: "held", heldUntil: until.toISOString(), reason: REASONS.quietHours(until, zone),
+    });
+  } catch (e) {
+    console.error(
+      `sending hours: could not enqueue ${s.source} ${s.subjectKey} for account ${s.accountId} — `
+      + `the row stays unstamped and is due again next tick: ${String(e)}`,
+    );
+    throw e;
+  }
+}
+
+export async function holdOrSend(
+  ctx: HoldContext, s: HoldSubject, send: () => Promise<void>,
+): Promise<"sent" | "held" | "skipped"> {
+  if (resolveAccountZone(s.accountTimezone) === null) {
+    console.error(
+      `sending hours: account ${s.accountId}'s timezone ${JSON.stringify(s.accountTimezone)} cannot be resolved — `
+      + `${s.source} ${s.subjectKey} keeps the fallback zone's hours; fix the account's timezone`,
+    );
+  }
+  const zone = hoursZone(s.accountTimezone);
+  const opening = nextOpening(hoursRuleOf(s), ctx.now, zone);
+  if (expiresBeforeOpening(opening, s.deadline)) {
+    await logSkipped(ctx, s, REASONS.windowAfterDeadline);
+    return "skipped";
+  }
+  if (opening) {
+    await writeHeld(ctx, s, opening, zone);
+    return "held";
+  }
+
+  try {
+    await send();
+  } catch (e) {
+    if (e instanceof SmsDeferred) {
+      await writeHeld(ctx, s, e.until, zone);
+      return "held";
+    }
+    if (e instanceof SmsBlocked) {
+      await logSkipped(ctx, s, BLOCK_REASONS[e.reason]);
+      return "skipped";
+    }
+    await record(ctx.db, { ...writeOf(s), status: "failed", reason: REASONS.failed });
+    throw e;
+  }
+  await record(ctx.db, { ...writeOf(s), status: "sent", reason: "" });
+  return "sent";
+}
+
+export type ReleaseVerdict = "sent" | "held" | "skipped" | "failed";
+export type Releaser = (ctx: PassContext, row: AutomationLogRow) => Promise<ReleaseVerdict>;
+
+/** A held row, back into the shape the pass writes with — so the release re-writes the SAME row. */
+export function subjectOf(row: AutomationLogRow): LogSubject {
+  return {
+    accountId: row.account_id, source: row.source, channel: row.channel,
+    subjectKey: row.subject_key, contactId: row.contact_id, payload: row.payload,
+  };
+}
+
+/** What a one-row process run amounted to. */
+export function verdict(c: { sent: number; held: number; failed: number }): ReleaseVerdict {
+  if (c.sent > 0) return "sent";
+  if (c.held > 0) return "held";
+  if (c.failed > 0) return "failed";
+  return "skipped";
+}
+```
+
+Apply to `apps/web/src/lib/automations/instant-reply.ts` (against the task's parent commit):
+
+```diff
+@@ -1,12 +1,12 @@
+ import {
+   getAutomation, parseInstantReplyConfig, hasRecentOutboundSms, countInstantRepliesSince,
+-  stampInstantReplySent, readQuietSettings, readAccountTimezone, type SupabaseClient,
++  stampInstantReplySent, readAccountTimezone, type SupabaseClient,
+ } from "@bis/db";
+ import { resolveSmsSender } from "@/lib/sms/sender";
+ import {
+   AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS, INSTANT_REPLY_ALLOWED_PATTERNS,
+ } from "./caps";
+-import { lazySmsProvider } from "./harness";
++import { smsSenderFor } from "@/lib/consent/gate";
+ import { sendAutomationSms, markAutomationSmsSent, type SentSms, type SmsSendContext } from "./send-sms";
+ import {
+   holdOrSend, logSkipped, subjectOf, REASONS, type HoldSubject, type LogSubject, type Releaser,
+@@ -72,6 +72,7 @@ export type InstantReplySkip =
+ export type InstantReplyOutcome =
+   | { kind: "sent"; unstamped: boolean }
+   | { kind: "held" }
++  | { kind: "blocked"; reason: string }
+   | { kind: "failed"; error: string }
+   | { kind: "skipped"; reason: InstantReplySkip; detail?: string };
+ 
+@@ -157,12 +158,13 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
+ 
+   // The provider comes from the harness's lazy getter and from nowhere else
+   // (imports.test.ts): constructed only now, after the send is decided.
+-  const ctx: SmsSendContext = { db, sms: lazySmsProvider() };
++  const ctx: SmsSendContext = { db, sms: smsSenderFor(db), now };
+   // QUIET HOURS: the one inline send goes through the same seam as every
+   // pass. Held → the row carries the payload, and releaseInstantReply below
+   // re-runs this whole function from it when the window ends.
+   const subject: HoldSubject = {
+     ...logSubject,
++    smsKind: "automation.instant_reply",
+     accountTimezone: await readAccountTimezone(db, accountId),
+     payload: {
+       contactId: input.contactId, conversationId: input.conversationId, phoneE164: to,
+@@ -171,11 +173,12 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
+   };
+   let sent: SentSms | null = null;
+   let unstamped = false;
+-  let outcome: "sent" | "held";
++  let outcome: "sent" | "held" | "skipped";
+   try {
+-    outcome = await holdOrSend({ db, now, quiet: (id) => readQuietSettings(db, id) }, subject, async () => {
++    outcome = await holdOrSend({ db, now }, subject, async () => {
+       sent = await sendAutomationSms(ctx, {
+-        accountId, contactId: input.contactId, to, from: gate.from, body,
++        accountId, contactId: input.contactId, to, body,
++        kind: "automation.instant_reply", accountTimezone: subject.accountTimezone,
+         // The same locale that picked the body picks the opt-out
+         // disclosure's language. Sending a Spanish reply that ends in
+         // "Reply STOP to opt out." would undo the whole point of having a
+@@ -200,6 +203,7 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
+     return { kind: "failed", error };
+   }
+   if (outcome === "held") return { kind: "held" };
++  if (outcome === "skipped") return { kind: "blocked", reason: "the consent gate refused it; the log row says why" };
+   await markAutomationSmsSent(ctx, accountId, sent!, WHAT);
+   return { kind: "sent", unstamped };
+ }
+@@ -237,5 +241,7 @@ export const releaseInstantReply: Releaser = async (ctx, row) => {
+     await logSkipped(ctx, subjectOf(row), SKIP_REASONS[outcome.reason]);
+     return "skipped";
+   }
++  // holdOrSend already wrote this row `skipped` with the gate's reason.
++  if (outcome.kind === "blocked") return "skipped";
+   return outcome.kind;
+ };
+```
+
+Apply to `apps/web/src/lib/automations/passes/appointment-confirm.ts` (against the task's parent commit):
+
+```diff
+@@ -4,7 +4,7 @@ import {
+   type DueAppointmentConfirm,
+ } from "@bis/db";
+ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { normalisePhone } from "@bis/db/phone";
+ import { safeZone, formatWhen } from "@/lib/booking/time";
+ import { resolveAccountZone } from "@/lib/booking/followup-timing";
+ import { stampWithRetry } from "@/lib/booking/stamp-retry";
+@@ -61,7 +61,7 @@ export const appointmentConfirmPass: Pass = {
+ };
+ 
+ export type AppointmentConfirmCounters = {
+-  sent: number; failed: number; unstamped: number; held: number;
++  sent: number; failed: number; unstamped: number; held: number; blocked: number;
+   skippedNoAddress: number; skippedSmsGate: number; unresolvableTimezone: number;
+ };
+ 
+@@ -70,7 +70,7 @@ export type AppointmentConfirmCounters = {
+ function subjectFor(r: DueAppointmentConfirm): HoldSubject {
+   return {
+     accountId: r.accountId, accountTimezone: r.accountTimezone,
+-    source: "appointment_confirm", channel: "sms",
++    source: "appointment_confirm", channel: "sms", smsKind: "automation.appointment_confirm",
+     subjectKey: `booking:${r.bookingId}`, contactId: r.contactId,
+     deadline: appointmentConfirmDeadline(new Date(r.startsAt)),
+   };
+@@ -80,7 +80,7 @@ export async function processAppointmentConfirms(
+   ctx: PassContext, due: DueAppointmentConfirm[],
+ ): Promise<AppointmentConfirmCounters> {
+   const c: AppointmentConfirmCounters = {
+-    sent: 0, failed: 0, unstamped: 0, held: 0,
++    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+     skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0,
+   };
+   const smsGates = new Map<string, SmsGate>();
+@@ -114,7 +114,7 @@ export async function processAppointmentConfirms(
+       continue;
+     }
+ 
+-    const to = toE164(row.contactPhone);
++    const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
+     if (!to) {
+       c.skippedNoAddress++;
+       await logSkipped(ctx, subject, REASONS.noPhone);
+@@ -142,8 +142,6 @@ export async function processAppointmentConfirms(
+       );
+       continue;
+     }
+-    const from = gate.from;
+-
+     try {
+       // Still inside the per-row try, though the guard above now takes the
+       // only input that could make `formatWhen` throw: an unresolvable
+@@ -155,7 +153,8 @@ export async function processAppointmentConfirms(
+         row.brandName, formatWhen(new Date(row.startsAt), zone), row.body);
+       const outcome = await holdOrSend(ctx, subject, async () => {
+         const smsRow = await sendAutomationSms(ctx, {
+-          accountId: row.accountId, contactId: row.contactId, to, from, body,
++          accountId: row.accountId, contactId: row.contactId, to, body,
++          kind: "automation.appointment_confirm", accountTimezone: row.accountTimezone,
+           onProviderFailure: () => stampAppointmentConfirmSmsFailed(ctx.db, row.bookingId),
+         });
+         // SEND-THEN-STAMP; the stamp before the row's status, as everywhere.
+@@ -169,6 +168,10 @@ export async function processAppointmentConfirms(
+         }
+         await markAutomationSmsSent(ctx, row.accountId, smsRow, "appointment confirm");
+       });
++      if (outcome === "skipped") {
++        c.blocked++;
++        continue;
++      }
+       if (outcome === "held") {
+         c.held++;
+         continue;
+```
+
+Apply to `apps/web/src/lib/automations/passes/followups.ts` (against the task's parent commit):
+
+```diff
+@@ -43,6 +43,7 @@ export async function processFollowups(
+   let failed = 0;
+   let unstamped = 0;
+   let held = 0;
++  let blocked = 0;
+   let skippedNoEmail = 0;
+   let waitingForMorning = 0;
+   let unresolvableTimezone = 0;
+@@ -141,6 +142,10 @@ export async function processFollowups(
+           );
+         }
+       });
++      if (outcome === "skipped") {
++        blocked++;
++        continue;
++      }
+       if (outcome === "held") {
+         held++;
+         continue;
+@@ -152,7 +157,7 @@ export async function processFollowups(
+     }
+   }
+ 
+-  return { sent, failed, unstamped, held, skippedNoEmail, waitingForMorning, unresolvableTimezone };
++  return { sent, failed, unstamped, held, blocked, skippedNoEmail, waitingForMorning, unresolvableTimezone };
+ }
+ 
+ /**
+```
+
+Apply to `apps/web/src/lib/automations/passes/no-show-nudge.ts` (against the task's parent commit):
+
+```diff
+@@ -6,7 +6,7 @@ import { emailBrandNamed } from "@/lib/email/templates/shell";
+ import { normalizeReplyTo } from "@/lib/email/reply-to";
+ import { noShowNudgeEmail } from "@/lib/email/templates/no-show-nudge";
+ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { normalisePhone } from "@bis/db/phone";
+ import { resolveAccountZone } from "@/lib/booking/followup-timing";
+ import { stampWithRetry } from "@/lib/booking/stamp-retry";
+ import { laterOf } from "../anchor";
+@@ -20,7 +20,7 @@ import {
+ import type { Pass, PassContext } from "../context";
+ 
+ type Target =
+-  | { channel: "sms"; to: string; from: string }
++  | { channel: "sms"; to: string }
+   | { channel: "email"; to: string };
+ 
+ /**
+@@ -58,7 +58,7 @@ export async function processNoShowNudges(
+   ctx: PassContext, due: DueNoShowNudge[], opts: ProcessOptions,
+ ) {
+   const c = {
+-    sent: 0, failed: 0, unstamped: 0, held: 0,
++    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+     skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0,
+     skippedCap: 0, skippedCalendarOff: 0,
+     waitingForMorning: 0, unresolvableTimezone: 0,
+@@ -86,7 +86,7 @@ export async function processNoShowNudges(
+     // is the CONFIGURED one, never a guess.
+     const subject: HoldSubject = {
+       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "no_show_nudge",
+-      channel: config.channel, subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
++      channel: config.channel, smsKind: "automation.no_show_nudge", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
+     };
+ 
+     if (resolveAccountZone(row.accountTimezone) === null) {
+@@ -131,7 +131,7 @@ export async function processNoShowNudges(
+ 
+     let target: Target;
+     if (config.channel === "sms") {
+-      const to = toE164(row.contactPhone);
++      const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
+       if (!to) {
+         c.skippedNoAddress++;
+         console.error(`no-show nudge skipped, no textable phone on file for booking ${row.bookingId}`);
+@@ -171,7 +171,7 @@ export async function processNoShowNudges(
+         if (opts.released) await logSkipped(ctx, subject, REASONS.smsCooldown);
+         continue;
+       }
+-      target = { channel: "sms", to, from: gate.from };
++      target = { channel: "sms", to };
+     } else {
+       if (!row.contactEmail) {
+         c.skippedNoAddress++;
+@@ -216,7 +216,8 @@ export async function processNoShowNudges(
+       const outcome = await holdOrSend(ctx, subject, async () => {
+         if (target.channel === "sms") {
+           smsRow = await sendAutomationSms(ctx, {
+-            accountId: row.accountId, contactId: row.contactId, to: target.to, from: target.from,
++            accountId: row.accountId, contactId: row.contactId, to: target.to,
++            kind: "automation.no_show_nudge", accountTimezone: row.accountTimezone,
+             body: composeNoShowNudgeSms(body, bookingUrl),
+             onProviderFailure: () => stampNoShowNudgeSmsFailed(ctx.db, row.bookingId),
+           });
+@@ -237,6 +238,10 @@ export async function processNoShowNudges(
+ 
+         if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "no-show nudge");
+       });
++      if (outcome === "skipped") {
++        c.blocked++;
++        continue;
++      }
+       if (outcome === "held") {
+         c.held++;
+         continue;
+```
+
+Apply to `apps/web/src/lib/automations/passes/quote-followup.ts` (against the task's parent commit):
+
+```diff
+@@ -7,7 +7,7 @@ import { emailBrandNamed } from "@/lib/email/templates/shell";
+ import { normalizeReplyTo } from "@/lib/email/reply-to";
+ import { quoteFollowupEmail } from "@/lib/email/templates/quote-followup";
+ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { normalisePhone } from "@bis/db/phone";
+ import { resolveAccountZone } from "@/lib/booking/followup-timing";
+ import { stampWithRetry } from "@/lib/booking/stamp-retry";
+ import { shouldSendQuoteFollowupNow } from "../quote-followup-gate";
+@@ -20,7 +20,7 @@ import {
+ import type { Pass, PassContext } from "../context";
+ 
+ type Target =
+-  | { channel: "sms"; to: string; from: string }
++  | { channel: "sms"; to: string }
+   | { channel: "email"; to: string };
+ 
+ /**
+@@ -54,7 +54,7 @@ export async function processQuoteFollowups(
+   ctx: PassContext, due: DueQuoteFollowup[], opts: ProcessOptions,
+ ) {
+   const c = {
+-    sent: 0, failed: 0, unstamped: 0, held: 0,
++    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+     skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
+     waitingForMorning: 0, unresolvableTimezone: 0,
+   };
+@@ -86,7 +86,7 @@ export async function processQuoteFollowups(
+ 
+     const subject: HoldSubject = {
+       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "quote_followup",
+-      channel: config.channel, subjectKey: `opportunity:${row.opportunityId}`, contactId: row.contactId,
++      channel: config.channel, smsKind: "automation.quote_followup", subjectKey: `opportunity:${row.opportunityId}`, contactId: row.contactId,
+     };
+ 
+     if (resolveAccountZone(row.accountTimezone) === null) {
+@@ -125,7 +125,7 @@ export async function processQuoteFollowups(
+ 
+     let target: Target;
+     if (config.channel === "sms") {
+-      const to = toE164(row.contactPhone);
++      const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
+       if (!to) {
+         c.skippedNoAddress++;
+         console.error(`quote follow-up skipped, no textable phone on file for opportunity ${row.opportunityId}`);
+@@ -165,7 +165,7 @@ export async function processQuoteFollowups(
+         if (opts.released) await logSkipped(ctx, subject, REASONS.smsCooldown);
+         continue;
+       }
+-      target = { channel: "sms", to, from: gate.from };
++      target = { channel: "sms", to };
+     } else {
+       if (!row.contactEmail) {
+         c.skippedNoAddress++;
+@@ -206,7 +206,8 @@ export async function processQuoteFollowups(
+           // NO composer and NO trailing link: the quote is a document the
+           // operator already sent, and there is nowhere for a link to point.
+           smsRow = await sendAutomationSms(ctx, {
+-            accountId: row.accountId, contactId: row.contactId, to: target.to, from: target.from,
++            accountId: row.accountId, contactId: row.contactId, to: target.to,
++            kind: "automation.quote_followup", accountTimezone: row.accountTimezone,
+             body,
+             onProviderFailure: () => stampQuoteFollowupSmsFailed(ctx.db, row.opportunityId),
+           });
+@@ -225,6 +226,10 @@ export async function processQuoteFollowups(
+         }
+         if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "quote follow-up");
+       });
++      if (outcome === "skipped") {
++        c.blocked++;
++        continue;
++      }
+       if (outcome === "held") {
+         c.held++;
+         continue;
+```
+
+Apply to `apps/web/src/lib/automations/passes/reactivation.ts` (against the task's parent commit):
+
+```diff
+@@ -63,7 +63,7 @@ export async function processReactivations(
+   ctx: PassContext, due: DueReactivation[], opts: ProcessOptions,
+ ) {
+   const c = {
+-    sent: 0, failed: 0, unstamped: 0, held: 0,
++    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+     skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
+     skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
+   };
+@@ -210,6 +210,10 @@ export async function processReactivations(
+           );
+         }
+       });
++      if (outcome === "skipped") {
++        c.blocked++;
++        continue;
++      }
+       if (outcome === "held") {
+         c.held++;
+         continue;
+```
+
+Apply to `apps/web/src/lib/automations/passes/referral-ask.ts` (against the task's parent commit):
+
+```diff
+@@ -6,7 +6,7 @@ import { emailBrandNamed } from "@/lib/email/templates/shell";
+ import { normalizeReplyTo } from "@/lib/email/reply-to";
+ import { referralAskEmail } from "@/lib/email/templates/referral-ask";
+ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { normalisePhone } from "@bis/db/phone";
+ import { resolveAccountZone } from "@/lib/booking/followup-timing";
+ import { stampWithRetry } from "@/lib/booking/stamp-retry";
+ import { laterOf } from "../anchor";
+@@ -21,7 +21,7 @@ import {
+ import type { Pass, PassContext } from "../context";
+ 
+ type Target =
+-  | { channel: "sms"; to: string; from: string }
++  | { channel: "sms"; to: string }
+   /** `mailingAddress` is the row's, carried here once the check above has
+    *  proved it non-blank, so the footer never needs a non-null assertion. */
+   | { channel: "email"; to: string; mailingAddress: string };
+@@ -64,7 +64,7 @@ export async function processReferralAsks(
+   ctx: PassContext, due: DueReferralAsk[], opts: ProcessOptions,
+ ) {
+   const c = {
+-    sent: 0, failed: 0, unstamped: 0, held: 0,
++    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+     skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
+     waitingForMorning: 0, waitingForReviewRequest: 0, unresolvableTimezone: 0,
+     // B21, email channel only: the contact asked not to get marketing email;
+@@ -97,7 +97,7 @@ export async function processReferralAsks(
+ 
+     const subject: HoldSubject = {
+       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "referral_ask",
+-      channel: config.channel, subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
++      channel: config.channel, smsKind: "automation.referral_ask", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
+     };
+ 
+     if (resolveAccountZone(row.accountTimezone) === null) {
+@@ -147,7 +147,7 @@ export async function processReferralAsks(
+ 
+     let target: Target;
+     if (config.channel === "sms") {
+-      const to = toE164(row.contactPhone);
++      const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
+       if (!to) {
+         c.skippedNoAddress++;
+         console.error(`referral ask skipped, no textable phone on file for booking ${row.bookingId}`);
+@@ -187,7 +187,7 @@ export async function processReferralAsks(
+         if (opts.released) await logSkipped(ctx, subject, REASONS.smsCooldown);
+         continue;
+       }
+-      target = { channel: "sms", to, from: gate.from };
++      target = { channel: "sms", to };
+     } else {
+       if (!row.contactEmail) {
+         c.skippedNoAddress++;
+@@ -267,7 +267,8 @@ export async function processReferralAsks(
+           // NO composer and NO trailing link: this recipe asks for a name,
+           // never a rating, and there is nowhere for a link to point.
+           smsRow = await sendAutomationSms(ctx, {
+-            accountId: row.accountId, contactId: row.contactId, to: target.to, from: target.from,
++            accountId: row.accountId, contactId: row.contactId, to: target.to,
++            kind: "automation.referral_ask", accountTimezone: row.accountTimezone,
+             body,
+             onProviderFailure: () => stampReferralAskSmsFailed(ctx.db, row.bookingId),
+           });
+@@ -285,6 +286,10 @@ export async function processReferralAsks(
+         }
+         if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "referral ask");
+       });
++      if (outcome === "skipped") {
++        c.blocked++;
++        continue;
++      }
+       if (outcome === "held") {
+         c.held++;
+         continue;
+```
+
+Apply to `apps/web/src/lib/automations/passes/reminders.ts` (against the task's parent commit):
+
+```diff
+@@ -39,7 +39,7 @@ export const remindersPass: Pass = {
+   },
+ };
+ 
+-export type ReminderCounters = { sent: number; failed: number; unstamped: number; held: number };
++export type ReminderCounters = { sent: number; failed: number; unstamped: number; held: number; blocked: number };
+ 
+ function subjectFor(r: DueReminder): HoldSubject {
+   return {
+@@ -50,7 +50,7 @@ function subjectFor(r: DueReminder): HoldSubject {
+ 
+ /** The per-row path, shared by the tick (every due row) and the release (one held row). */
+ export async function processReminders(ctx: PassContext, reminders: DueReminder[]): Promise<ReminderCounters> {
+-  const c: ReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0 };
++  const c: ReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0 };
+ 
+   for (const reminder of reminders) {
+     const subject = subjectFor(reminder);
+@@ -102,6 +102,10 @@ export async function processReminders(ctx: PassContext, reminders: DueReminder[
+           );
+         }
+       });
++      if (outcome === "skipped") {
++        c.blocked++;
++        continue;
++      }
+       if (outcome === "held") {
+         c.held++;
+         continue;
+```
+
+Apply to `apps/web/src/lib/automations/passes/review-request.ts` (against the task's parent commit):
+
+```diff
+@@ -6,7 +6,7 @@ import { emailBrandNamed } from "@/lib/email/templates/shell";
+ import { normalizeReplyTo } from "@/lib/email/reply-to";
+ import { reviewRequestEmail } from "@/lib/email/templates/review-request";
+ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { normalisePhone } from "@bis/db/phone";
+ import { resolveAccountZone } from "@/lib/booking/followup-timing";
+ import { stampWithRetry } from "@/lib/booking/stamp-retry";
+ import { laterOf } from "../anchor";
+@@ -20,7 +20,7 @@ import {
+ import type { Pass, PassContext } from "../context";
+ 
+ type Target =
+-  | { channel: "sms"; to: string; from: string }
++  | { channel: "sms"; to: string }
+   | { channel: "email"; to: string };
+ 
+ /**
+@@ -61,7 +61,7 @@ export async function processReviewRequests(
+   ctx: PassContext, due: DueReviewRequest[], opts: ProcessOptions,
+ ) {
+   const c = {
+-    sent: 0, failed: 0, unstamped: 0, held: 0,
++    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
+     skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
+     waitingForMorning: 0, unresolvableTimezone: 0,
+   };
+@@ -90,7 +90,7 @@ export async function processReviewRequests(
+     // is the CONFIGURED one, never a guess.
+     const subject: HoldSubject = {
+       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "review_request",
+-      channel: config.channel, subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
++      channel: config.channel, smsKind: "automation.review_request", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
+     };
+ 
+     // RULE 0, before the gate, same as the follow-up pass: no resolvable
+@@ -136,7 +136,7 @@ export async function processReviewRequests(
+     // through (null = nothing we can text). Email: the address or nothing.
+     let target: Target;
+     if (config.channel === "sms") {
+-      const to = toE164(row.contactPhone);
++      const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
+       if (!to) {
+         c.skippedNoAddress++;
+         console.error(`review request skipped, no textable phone on file for booking ${row.bookingId}`);
+@@ -185,7 +185,7 @@ export async function processReviewRequests(
+         if (opts.released) await logSkipped(ctx, subject, REASONS.smsCooldown);
+         continue;
+       }
+-      target = { channel: "sms", to, from: gate.from };
++      target = { channel: "sms", to };
+     } else {
+       if (!row.contactEmail) {
+         c.skippedNoAddress++;
+@@ -233,7 +233,8 @@ export async function processReviewRequests(
+       const outcome = await holdOrSend(ctx, subject, async () => {
+         if (target.channel === "sms") {
+           smsRow = await sendAutomationSms(ctx, {
+-            accountId: row.accountId, contactId: row.contactId, to: target.to, from: target.from,
++            accountId: row.accountId, contactId: row.contactId, to: target.to,
++            kind: "automation.review_request", accountTimezone: row.accountTimezone,
+             body: composeReviewRequestSms(body, config.reviewUrl),
+             onProviderFailure: () => stampReviewRequestSmsFailed(ctx.db, row.bookingId),
+           });
+@@ -258,6 +259,10 @@ export async function processReviewRequests(
+ 
+         if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "review request");
+       });
++      if (outcome === "skipped") {
++        c.blocked++;
++        continue;
++      }
+       if (outcome === "held") {
+         c.held++;
+         continue;
+```
+
+Apply to `apps/web/src/lib/automations/passes/sms-reminder.ts` (against the task's parent commit):
+
+```diff
+@@ -3,7 +3,7 @@ import {
+   type DueSmsReminder,
+ } from "@bis/db";
+ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { normalisePhone } from "@bis/db/phone";
+ import { safeZone, formatWhen } from "@/lib/booking/time";
+ import { stampWithRetry } from "@/lib/booking/stamp-retry";
+ import { composeSmsReminder, defaultSmsReminderBody } from "../sms-reminder-copy";
+@@ -65,23 +65,23 @@ export const smsReminderPass: Pass = {
+ };
+ 
+ export type SmsReminderCounters = {
+-  sent: number; failed: number; unstamped: number; held: number; skippedNoAddress: number; skippedSmsGate: number;
++  sent: number; failed: number; unstamped: number; held: number; blocked: number; skippedNoAddress: number; skippedSmsGate: number;
+ };
+ 
+ function subjectFor(r: DueSmsReminder): HoldSubject {
+   return {
+-    accountId: r.accountId, accountTimezone: r.accountTimezone, source: "sms_reminder", channel: "sms",
++    accountId: r.accountId, accountTimezone: r.accountTimezone, source: "sms_reminder", channel: "sms", smsKind: "automation.sms_reminder",
+     subjectKey: `booking:${r.bookingId}`, contactId: r.contactId, deadline: new Date(r.startsAt),
+   };
+ }
+ 
+ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[]): Promise<SmsReminderCounters> {
+-  const c: SmsReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
++  const c: SmsReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
+   const smsGates = new Map<string, SmsGate>();
+ 
+   for (const row of due) {
+     const subject = subjectFor(row);
+-    const to = toE164(row.contactPhone);
++    const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
+     if (!to) {
+       c.skippedNoAddress++;
+       await logSkipped(ctx, subject, REASONS.noPhone);
+@@ -107,8 +107,6 @@ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[
+       );
+       continue;
+     }
+-    const from = gate.from;
+-
+     // Inside the per-row try: a junk ACCOUNT zone makes formatWhen throw,
+     // and that is this row's failure, not the pass's.
+     try {
+@@ -117,7 +115,8 @@ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[
+         row.brandName, formatWhen(new Date(row.startsAt), zone), row.body.trim() || defaultSmsReminderBody());
+       const outcome = await holdOrSend(ctx, subject, async () => {
+         const smsRow = await sendAutomationSms(ctx, {
+-          accountId: row.accountId, contactId: row.contactId, to, from, body,
++          accountId: row.accountId, contactId: row.contactId, to, body,
++          kind: "automation.sms_reminder", accountTimezone: row.accountTimezone,
+           onProviderFailure: () => stampSmsReminderFailed(ctx.db, row.bookingId),
+         });
+ 
+@@ -132,6 +131,10 @@ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[
+         }
+         await markAutomationSmsSent(ctx, row.accountId, smsRow, "text reminder");
+       });
++      if (outcome === "skipped") {
++        c.blocked++;
++        continue;
++      }
+       if (outcome === "held") {
+         c.held++;
+         continue;
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/automations src/app/api/cron
+pnpm typecheck
+pnpm test
+```
+
+The full web suite (every `vi.mock("@bis/db")` factory in a file that imports a pass was reviewed; the new top-level imports here are `@/lib/consent/*`, not `@bis/db`).
+
+Expected (the staged replay's GREEN run):
+339 passed across the task's test files:
+- `src/lib/automations/harness.test.ts`: 4 passed
+- `src/lib/automations/hold-or-send.test.ts`: 26 passed
+- `src/lib/automations/imports.test.ts`: 2 passed
+- `src/lib/automations/instant-reply.test.ts`: 26 passed
+- `src/lib/automations/send-sms.test.ts`: 17 passed
+- `src/lib/automations/sentinel.test.ts`: 5 passed
+- `src/lib/automations/passes/appointment-confirm.test.ts`: 14 passed
+- `src/lib/automations/passes/followups.test.ts`: 8 passed
+- `src/lib/automations/passes/no-show-nudge.test.ts`: 29 passed
+- `src/lib/automations/passes/quote-followup.test.ts`: 20 passed
+- `src/lib/automations/passes/reactivation.test.ts`: 20 passed
+- `src/lib/automations/passes/referral-ask.test.ts`: 25 passed
+- `src/lib/automations/passes/release-held.test.ts`: 10 passed
+- `src/lib/automations/passes/reminders.test.ts`: 9 passed
+- `src/lib/automations/passes/review-request.test.ts`: 37 passed
+- `src/lib/automations/passes/site-traffic.test.ts`: 9 passed
+- `src/lib/automations/passes/sms-reminder.test.ts`: 19 passed
+- `src/lib/automations/passes/usage-report.test.ts`: 19 passed
+- `src/lib/automations/passes/weekly-agency-report.test.ts`: 3 passed
+- `src/lib/automations/passes/weekly-report.test.ts`: 7 passed
+- `src/app/api/cron/reminders/route.test.ts`: 30 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4398 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+13 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **deferral read as a failure** — in `src/lib/automations/send-sms.ts`: `      throw new SmsDeferred(result.until);` → `      throw new Error("deferred");`; turns red 1 test:
+    - sendAutomationSms — through the send gate, write then send a deferral throws SmsDeferred carrying the opening, and writes no row (mutation: return a sent result → FAILS)
+2. **an unreadable ledger read as a refusal** — in `src/lib/automations/send-sms.ts`: delete `      if (result.reason === "ledger_unavailable") {⏎        throw new Error("automation sms not sent: the consent ledger could not be read");⏎      }⏎`; turns red 1 test:
+    - sendAutomationSms — through the send gate, write then send an unreadable ledger is a FAILURE, not a refusal: the pass counts it failed and retries next tick (mutation: throw SmsBlocked for ledger_unavailable → FAILS)
+3. **row not marked failed on a provider failure** — in `src/lib/automations/send-sms.ts`: `          await updateMessageStatus(ctx.db, input.accountId, messageId, "failed", { error: result.error },⏎            AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);` → `          void messageId;`; turns red 1 test:
+    - sendAutomationSms — through the send gate, write then send on a provider failure: marks the row failed, THEN runs the marker, then rethrows the provider's error (mutation: swap the order, or swallow the throw → FAILS)
+4. **kind-less sms guessed as automated** — in `src/lib/automations/hold-or-send.ts`: ``  if (!s.smsKind) throw new Error(`holdOrSend: sms subject ${s.source} ${s.subjectKey} has no smsKind`);`` → `  if (!s.smsKind) return "automated";`; turns red 1 test:
+    - holdOrSend: the fixed hours an SMS subject with no kind is a programming error and throws, never guessing the weaker rule (mutation: default to automated → FAILS)
+5. **email on marketing hours** — in `src/lib/automations/hold-or-send.ts`: `  if (s.channel !== "sms") return "automated";` → `  if (s.channel !== "sms") return "marketing";`; turns red 1 test:
+    - holdOrSend: the fixed hours an EMAIL subject keeps the automated hours, whatever its recipe (choice 31) (mutation: send email at any hour → FAILS)
+6. **deadline sends now (the old branch)** — in `src/lib/automations/hold-or-send.ts`: `  if (expiresBeforeOpening(opening, s.deadline)) {⏎    await logSkipped(ctx, s, REASONS.windowAfterDeadline);⏎    return "skipped";⏎  }` → `  if (expiresBeforeOpening(opening, s.deadline)) {⏎    await send();⏎    return "sent";⏎  }`; turns red 1 test:
+    - holdOrSend: the fixed hours choice 21: a deadline at or before the opening is NOT sent and NOT held; one after it is held (mutation: drop the deadline rule → the first is held, FAILS)
+7. **a refusal logged as failed** — in `src/lib/automations/hold-or-send.ts`: `      await logSkipped(ctx, s, BLOCK_REASONS[e.reason]);⏎      return "skipped";` → `      await record(ctx.db, { ...writeOf(s), status: "failed", reason: REASONS.failed });⏎      return "skipped";`; turns red 7 tests:
+    - holdOrSend: what the send gate answers SmsBlocked(stopped) is ONE skipped row reading "They stopped texts from this business", and no throw (mutation: rethrow it → FAILS)
+    - holdOrSend: what the send gate answers SmsBlocked(held) is ONE skipped row reading "Texts to them are on hold", and no throw (mutation: rethrow it → FAILS)
+    - holdOrSend: what the send gate answers SmsBlocked(unconfirmed_number) is ONE skipped row reading "Their number could be Mexican or US. Pick its country on their contact", and no throw (mutation: rethrow it → FAILS)
+    - holdOrSend: what the send gate answers SmsBlocked(window_after_deadline) is ONE skipped row reading "Not sent: quiet hours ran past the appointment", and no throw (mutation: rethrow it → FAILS)
+    - holdOrSend: what the send gate answers SmsBlocked(no_number) is ONE skipped row reading "No phone number we can text", and no throw (mutation: rethrow it → FAILS)
+    - holdOrSend: what the send gate answers SmsBlocked(a2p_not_approved) is ONE skipped row reading "Texting isn't set up for this company yet", and no throw (mutation: rethrow it → FAILS)
+    - holdOrSend: what the send gate answers SmsBlocked(no_live_number) is ONE skipped row reading "Texting isn't set up for this company yet", and no throw (mutation: rethrow it → FAILS)
+8. **stopped worded as held** — in `src/lib/automations/hold-or-send.ts`: `  stopped: REASONS.textsStopped,` → `  stopped: REASONS.textsHeld,`; turns red 1 test:
+    - holdOrSend: what the send gate answers SmsBlocked(stopped) is ONE skipped row reading "They stopped texts from this business", and no throw (mutation: rethrow it → FAILS)
+9. **wrong kind** — in `src/lib/automations/instant-reply.ts`: `        kind: "automation.instant_reply", accountTimezone: subject.accountTimezone,` → `        kind: "automation.review_request", accountTimezone: subject.accountTimezone,`; turns red 1 test:
+    - releaseInstantReply — from the held row's payload re-runs every check and sends: the text goes, the submission is stamped, the row flips to sent (mutation: skip the stamp on release → FAILS)
+10. **a refusal reported as sent** — in `src/lib/automations/instant-reply.ts`: delete `  if (outcome === "skipped") return { kind: "blocked", reason: "the consent gate refused it; the log row says why" };⏎`; turns red 2 tests:
+    - instant reply — the consent gate, through the real gate a number that stopped texts is NOT texted: no message row, not stamped, one skipped row a client can read (mutation: skip the ledger in the gate → sent, FAILS)
+    - instant reply — the consent gate, through the real gate a contact whose number's country is unconfirmed is held back the same way (mutation: skip the flag read → sent, FAILS)
+11. **the harness reaches the provider** — in `src/lib/automations/harness.ts`: `import { smsSenderFor } from "@/lib/consent/gate";` → `import { smsSenderFor } from "@/lib/consent/gate";⏎import { getSmsProvider } from "@/lib/sms";⏎void getSmsProvider;`; turns red 1 test:
+    - automations — providers come from ctx, never from imports only the harness imports the email factory, and NO module here imports the SMS factory or Telnyx
+12. **a refusal counted as held** — in `src/lib/automations/passes/sms-reminder.ts`: `      if (outcome === "skipped") {⏎        c.blocked++;` → `      if (outcome === "skipped") {⏎        c.held++;`; turns red 1 test:
+    - sms reminder pass — the fixed automated hours (08:00-21:00) choice 21: 05:30 for a 07:30 job is NOT texted, and not held past the job; a skipped row says why (mutation: drop `deadline` → held, FAILS)
+13. **marketing kind on a reminder** — in `src/lib/automations/passes/sms-reminder.ts`: `channel: "sms", smsKind: "automation.sms_reminder",` → `channel: "sms", smsKind: "automation.review_request",`; turns red 2 tests:
+    - sms reminder pass — the fixed automated hours (08:00-21:00) before 08:00 with the appointment after 08:00: NOT sent, NO message row, NOT stamped, one held row (mutation: bypass holdOrSend → FAILS)
+    - sms reminder pass — the fixed automated hours (08:00-21:00) release: still due → texts through the same path and the row flips to sent
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/lib/automations/harness.test.ts" \
+        "apps/web/src/lib/automations/hold-or-send.test.ts" \
+        "apps/web/src/lib/automations/send-sms.test.ts" \
+        "apps/web/src/lib/automations/instant-reply.test.ts" \
+        "apps/web/src/lib/automations/sentinel.test.ts" \
+        "apps/web/src/lib/automations/imports.test.ts" \
+        "apps/web/src/lib/automations/passes/appointment-confirm.test.ts" \
+        "apps/web/src/lib/automations/passes/followups.test.ts" \
+        "apps/web/src/lib/automations/passes/no-show-nudge.test.ts" \
+        "apps/web/src/lib/automations/passes/quote-followup.test.ts" \
+        "apps/web/src/lib/automations/passes/reactivation.test.ts" \
+        "apps/web/src/lib/automations/passes/referral-ask.test.ts" \
+        "apps/web/src/lib/automations/passes/reminders.test.ts" \
+        "apps/web/src/lib/automations/passes/review-request.test.ts" \
+        "apps/web/src/lib/automations/passes/sms-reminder.test.ts" \
+        "apps/web/src/lib/automations/passes/site-traffic.test.ts" \
+        "apps/web/src/lib/automations/passes/usage-report.test.ts" \
+        "apps/web/src/lib/automations/passes/weekly-agency-report.test.ts" \
+        "apps/web/src/lib/automations/passes/weekly-report.test.ts" \
+        "apps/web/src/lib/automations/passes/release-held.test.ts" \
+        "apps/web/src/app/api/cron/reminders/route.test.ts" \
+        "apps/web/src/lib/automations/context.ts" \
+        "apps/web/src/lib/automations/harness.ts" \
+        "apps/web/src/lib/automations/send-sms.ts" \
+        "apps/web/src/lib/automations/hold-or-send.ts" \
+        "apps/web/src/lib/automations/instant-reply.ts" \
+        "apps/web/src/lib/automations/passes/appointment-confirm.ts" \
+        "apps/web/src/lib/automations/passes/followups.ts" \
+        "apps/web/src/lib/automations/passes/no-show-nudge.ts" \
+        "apps/web/src/lib/automations/passes/quote-followup.ts" \
+        "apps/web/src/lib/automations/passes/reactivation.ts" \
+        "apps/web/src/lib/automations/passes/referral-ask.ts" \
+        "apps/web/src/lib/automations/passes/reminders.ts" \
+        "apps/web/src/lib/automations/passes/review-request.ts" \
+        "apps/web/src/lib/automations/passes/sms-reminder.ts"
+git commit -m "feat(automations): every automation text through the send gate; fixed hours; blocked is logged"
+```
+
+---
+
+### Task 10: Retire the per-account quiet hours: the card states the fixed hours
+
+**Owner:** bis-automations. **Lane:** A (Phase 3). **Depends on:** Task 9 (after it nothing calls `readQuietSettings`); Task 6 (`automations.quiet.fixed`).
+
+Decision 4: the hours cannot be switched off, so the switch, the two time pickers and their save action go; the card states the fixed hours in the spec's words (§6). Nothing reads `automation_settings` any more (scan 5, Task 15); the table and its columns stay until a later migration drops them after parity (spec §3, "Other changes").
+
+**Files:**
+- Modify: `apps/web/src/lib/automations/quiet-hours.test.ts` (16 → 6 tests)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.test.ts` (2 → 4 tests)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.test.ts` (64 → 56 tests)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/page.test.ts` (32 → 31 tests)
+- Modify: `packages/db/src/test/automation-log-grants.test.ts` (31 → 29 tests)
+- Modify: `apps/web/e2e/activity.spec.ts` (CI only)
+- Modify: `packages/db/src/automation-settings.ts`
+- Modify: `apps/web/src/lib/automations/quiet-hours.ts`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.tsx`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/page.tsx`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.ts`
+- Modify: `apps/web/src/lib/messages.ts`
+
+**Interfaces:**
+- Removes: `readQuietSettings`, `saveQuietSettings`, `DEFAULT_QUIET_SETTINGS`, `isClock`, `type QuietSettings` (`@bis/db`); `saveQuietHoursAction`; the quiet-window functions of `lib/automations/quiet-hours.ts` (it keeps the wall-clock helpers `hours.ts` and `month-window.ts` use); the ten `automations.quiet.*` form lines.
+- Keeps: `readAccountTimezone` (`@bis/db`), `QuietHoursCard({ zoneLabel })` (read-only, `#quiet-hours`, `data-testid="quiet-hours-card"`, `quiet-hours-fixed`).
+
+**Mock factories changed** (Global Constraints, `vi.mock("@bis/db")`): `automations/actions.test.ts` drops `saveQuietSettings` and `bumpHeldForAccount`; `automations/page.test.ts` drops `readQuietSettings` and `DEFAULT_QUIET_SETTINGS`; `automation-log-grants.test.ts` no longer imports the accessors.
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace the whole file `apps/web/src/lib/automations/quiet-hours.test.ts` with:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { wallInstant, formatInstantClock } from "./quiet-hours";
+
+const CHI = "America/Chicago";
+const at = (iso: string) => new Date(iso);
+
+/**
+ * The wall-clock fixed point that lib/consent/hours.ts (the fixed sending
+ * hours) and lib/reports/month-window.ts stand on. The per-account window
+ * these tests used to reach it through is retired (consent chain PR-1); the
+ * DST and gap cases are the same instants, asked of `wallInstant` directly.
+ */
+describe("wallInstant — a wall time in a zone, as a UTC instant", () => {
+  it("SPRING FORWARD (2026-03-08, 02:00 CST → 03:00 CDT): 08:00 that day is 13:00Z and reads 08:00 (mutation: apply the pre-shift offset → 14:00Z, FAILS)", () => {
+    const t = wallInstant(2026, 3, 8, 8 * 60, CHI);
+    expect(t.toISOString()).toBe("2026-03-08T13:00:00.000Z");
+    expect(formatInstantClock(t, CHI)).toBe("8:00 AM");
+  });
+
+  it("FALL BACK (2026-11-01, 02:00 CDT → 01:00 CST): 08:00 that day is 14:00Z", () => {
+    expect(wallInstant(2026, 11, 1, 8 * 60, CHI).toISOString()).toBe("2026-11-01T14:00:00.000Z");
+  });
+
+  it("a wall time IN the spring-forward gap (Chicago 02:30 that never happens) is the gap's end, 03:00 CDT — never an hour early (mutation: drop the gap search → 07:30Z, FAILS)", () => {
+    const t = wallInstant(2026, 3, 8, 2 * 60 + 30, CHI);
+    expect(t.toISOString()).toBe("2026-03-08T08:00:00.000Z");
+    expect(formatInstantClock(t, CHI)).toBe("3:00 AM");
+  });
+
+  it("Havana's own midnight gap: 00:00 on 2026-03-08 is the gap's end, 01:00 CDT, never the previous day", () => {
+    const t = wallInstant(2026, 3, 8, 0, "America/Havana");
+    expect(t.toISOString()).toBe("2026-03-08T05:00:00.000Z");
+    expect(formatInstantClock(t, "America/Havana")).toBe("1:00 AM");
+  });
+
+  it("east and west of UTC: 08:00 lands on each zone's own wall clock", () => {
+    expect(wallInstant(2026, 9, 22, 8 * 60, "Asia/Tokyo").toISOString()).toBe("2026-09-21T23:00:00.000Z");
+    expect(wallInstant(2026, 9, 21, 8 * 60, "Pacific/Honolulu").toISOString()).toBe("2026-09-21T18:00:00.000Z");
+  });
+});
+
+describe("formatInstantClock", () => {
+  it("renders an instant as the clock a business owner reads, in the zone asked, and never throws", () => {
+    expect(formatInstantClock(at("2026-09-22T13:00:00Z"), CHI)).toBe("8:00 AM");
+    expect(formatInstantClock(at("2026-09-22T13:00:00Z"), "Asia/Tokyo")).toBe("10:00 PM");
+    expect(formatInstantClock(at("2026-09-22T13:00:00Z"), "Mars/Olympus")).toBe("1:00 PM");   // unresolvable zone → UTC
+    expect(formatInstantClock(new Date(NaN), CHI)).toBe("?");
+  });
+});
+```
+
+Replace the whole file `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.test.ts` with:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { renderedText } from "@/lib/rendered-text";
+import { m } from "@/lib/messages";
+import { QuietHoursCard } from "./quiet-hours-card";
+
+const render = (zoneLabel: string) => renderToStaticMarkup(createElement(QuietHoursCard, { zoneLabel }));
+
+/**
+ * The sending hours are FIXED (consent chain spec decision 4), so the card
+ * that used to hold a form now states them, read-only (spec §6).
+ */
+describe("QuietHoursCard — the fixed hours, said once, never a setting", () => {
+  it("states the spec's sentence with the account's own zone (mutation: drop the zone replace → '{zone}' shows, FAILS)", () => {
+    const text = renderedText(render("America/Chicago"));
+    expect(text).toContain(m["automations.quiet.fixed"].replace("{zone}", "America/Chicago"));
+    expect(text).not.toContain("{zone}");
+  });
+
+  it("names the zone it was given, not a default (mutation: hardcode America/Chicago → FAILS)", () => {
+    expect(renderedText(render("America/Los_Angeles"))).toContain("(America/Los_Angeles)");
+  });
+
+  it("has no form, no input and no button: nothing to switch off (mutation: leave the old Save form in → FAILS)", () => {
+    const html = render("America/Chicago");
+    expect(html).not.toMatch(/<form\b|<input\b|<button\b/);
+  });
+
+  it("keeps the #quiet-hours anchor and its test id", () => {
+    const html = render("America/Chicago");
+    expect(html).toContain('id="quiet-hours"');
+    expect(html).toContain('data-testid="quiet-hours-card"');
+  });
+});
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.test.ts` (against the task's parent commit):
+
+```diff
+@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
+ 
+ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+ const dbMocks = vi.hoisted(() => ({
+-  upsertAutomation: vi.fn(), saveQuietSettings: vi.fn(), bumpHeldForAccount: vi.fn(),
++  upsertAutomation: vi.fn(),
+   // The reactivation save reads these two before turning the recipe on.
+   getMailingAddress: vi.fn(), getBranding: vi.fn(),
+ }));
+@@ -21,7 +21,7 @@ import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
+ import {
+   saveReviewRequestAction, saveNoShowNudgeAction, saveReferralAskAction, saveReactivationAction, saveSmsReminderAction,
+   saveAppointmentConfirmAction, saveQuoteFollowupAction,
+-  saveInstantReplyAction, saveQuietHoursAction,
++  saveInstantReplyAction,
+ } from "./actions";
+ 
+ const fd = (o: Record<string, string>) => {
+@@ -34,8 +34,6 @@ const URL = "https://g.page/r/x/review";
+ beforeEach(() => {
+   guardFixture.isAgency = true;
+   dbMocks.upsertAutomation.mockReset().mockResolvedValue({});
+-  dbMocks.saveQuietSettings.mockReset().mockResolvedValue(undefined);
+-  dbMocks.bumpHeldForAccount.mockReset().mockResolvedValue(0);
+   // LOAD-BEARING DEFAULTS: every existing reactivation case that turns the
+   // recipe on is about something else, so the account it saves for HAS an
+   // address and a reply-to. The refusal cases below clear one at a time.
+@@ -565,55 +563,3 @@ describe("saveInstantReplyAction", () => {
+   });
+ });
+ 
+-describe("saveQuietHoursAction", () => {
+-  it("refuses a non-agency caller before touching the database", async () => {
+-    guardFixture.isAgency = false;
+-    expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", quiet_start: "22:00", quiet_end: "07:00" })))
+-      .toEqual({ ok: false, error: m["automations.agencyOnly"] });
+-    expect(dbMocks.saveQuietSettings).not.toHaveBeenCalled();
+-  });
+-
+-  it("saves the window through serviceDb, then bumps every held row so tonight's queue is re-read under the new window (mutation: drop the bump → FAILS)", async () => {
+-    dbMocks.bumpHeldForAccount.mockResolvedValue(3);
+-    expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", quiet_start: "22:30", quiet_end: "06:15" }))).toEqual({ ok: true });
+-    expect(dbMocks.saveQuietSettings).toHaveBeenCalledWith(expect.anything(), "acct_1", { enabled: true, start: "22:30", end: "06:15" }, "user_1");
+-    expect(dbMocks.bumpHeldForAccount).toHaveBeenCalledWith(expect.anything(), "acct_1");
+-    expect(dbMocks.saveQuietSettings.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.bumpHeldForAccount.mock.invocationCallOrder[0]!);
+-  });
+-
+-  it("an unticked box saves enabled:false with the times kept", async () => {
+-    expect(await saveQuietHoursAction("acct_1", fd({ quiet_start: "21:00", quiet_end: "08:00" }))).toEqual({ ok: true });
+-    expect(dbMocks.saveQuietSettings).toHaveBeenCalledWith(expect.anything(), "acct_1", { enabled: false, start: "21:00", end: "08:00" }, "user_1");
+-  });
+-
+-  it("equal start and end while ON is refused — quiet-hours.ts treats start === end as disabled, so an enabled row with equal times would silently never be quiet (mutation: delete the guard → FAILS)", async () => {
+-    expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", quiet_start: "21:00", quiet_end: "21:00" })))
+-      .toEqual({ ok: false, error: m["automations.quiet.invalidTime"] });
+-    expect(dbMocks.saveQuietSettings).not.toHaveBeenCalled();
+-  });
+-
+-  it("equal start and end while OFF still saves — a stored disabled window with equal times is legal", async () => {
+-    expect(await saveQuietHoursAction("acct_1", fd({ quiet_start: "21:00", quiet_end: "21:00" }))).toEqual({ ok: true });
+-    expect(dbMocks.saveQuietSettings).toHaveBeenCalledWith(expect.anything(), "acct_1", { enabled: false, start: "21:00", end: "21:00" }, "user_1");
+-  });
+-
+-  it("a time that is not HH:MM is refused with the copy, and nothing is written (mutation: skip isClock → FAILS)", async () => {
+-    for (const bad of [{ quiet_start: "9pm", quiet_end: "08:00" }, { quiet_start: "21:00", quiet_end: "" }, { quiet_start: "24:00", quiet_end: "08:00" }]) {
+-      expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", ...bad })), JSON.stringify(bad))
+-        .toEqual({ ok: false, error: m["automations.quiet.invalidTime"] });
+-    }
+-    expect(dbMocks.saveQuietSettings).not.toHaveBeenCalled();
+-  });
+-
+-  it("a failed write is a Result, not a throw, and the bump never runs", async () => {
+-    dbMocks.saveQuietSettings.mockRejectedValue(new Error("down"));
+-    expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", quiet_start: "21:00", quiet_end: "08:00" })))
+-      .toEqual({ ok: false, error: m["automations.quiet.saveFailed"] });
+-    expect(dbMocks.bumpHeldForAccount).not.toHaveBeenCalled();
+-  });
+-
+-  it("a failed bump still reports success — the save landed; the queue catches up at each row's own held_until", async () => {
+-    dbMocks.bumpHeldForAccount.mockRejectedValue(new Error("down"));
+-    expect(await saveQuietHoursAction("acct_1", fd({ quiet_enabled: "on", quiet_start: "21:00", quiet_end: "08:00" }))).toEqual({ ok: true });
+-  });
+-});
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/page.test.ts` (against the task's parent commit):
+
+```diff
+@@ -23,7 +23,7 @@ const dbFixture = vi.hoisted(() => ({
+   replyToEmail: "owner@rioroofing.com" as string | null,
+ }));
+ const dbMock = vi.hoisted(() => ({
+-  getAutomation: vi.fn(), getBranding: vi.fn(), getCalendarForAccount: vi.fn(), readQuietSettings: vi.fn(),
++  getAutomation: vi.fn(), getBranding: vi.fn(), getCalendarForAccount: vi.fn(),
+   listPipelinesWithStages: vi.fn(), getMailingAddress: vi.fn(),
+ }));
+ vi.mock("@bis/db", async () => ({
+@@ -43,10 +43,8 @@ vi.mock("@bis/db", async () => ({
+   getAutomation: (...a: unknown[]) => dbMock.getAutomation(...a),
+   getBranding: (...a: unknown[]) => dbMock.getBranding(...a),
+   getCalendarForAccount: (...a: unknown[]) => dbMock.getCalendarForAccount(...a),
+-  readQuietSettings: (...a: unknown[]) => dbMock.readQuietSettings(...a),
+   listPipelinesWithStages: (...a: unknown[]) => dbMock.listPipelinesWithStages(...a),
+   getMailingAddress: (...a: unknown[]) => dbMock.getMailingAddress(...a),
+-  DEFAULT_QUIET_SETTINGS: { enabled: true, start: "21:00", end: "08:00" },
+ }));
+ const smsMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
+ vi.mock("@/lib/sms/sender", () => ({
+@@ -147,7 +145,6 @@ beforeEach(() => {
+     brandCorners: null, brandType: null, brandMode: null, replyToEmail: dbFixture.replyToEmail,
+   }));
+   dbMock.getCalendarForAccount.mockReset().mockResolvedValue({ id: "cal_1", public_id: "cal_pub_1", enabled: true });
+-  dbMock.readQuietSettings.mockReset().mockResolvedValue({ enabled: true, start: "22:30", end: "06:15" });
+   dbMock.listPipelinesWithStages.mockReset().mockResolvedValue([
+     { id: "pl_1", name: "Sales", stages: [{ id: STAGE_ID, name: "Quoted", position: 2 }] },
+   ]);
+@@ -416,10 +413,9 @@ describe("automations page — no calendar yet", () => {
+ });
+ 
+ describe("the Quiet hours card", () => {
+-  it("receives the STORED window (not the defaults) and the account's zone, and links to Activity (mutation: pass DEFAULT_QUIET_SETTINGS → FAILS)", async () => {
++  it("is handed the account's zone and nothing to save: the hours are fixed (mutation: pass a saveAction or settings again → FAILS)", async () => {
+     const { quiet } = await render();
+-    expect(quiet).toMatchObject({ settings: { enabled: true, start: "22:30", end: "06:15" }, zoneLabel: "America/Chicago" });
+-    expect(dbMock.readQuietSettings).toHaveBeenCalledWith(expect.anything(), "a1");
++    expect(quiet).toEqual({ zoneLabel: "America/Chicago" });
+   });
+   it("the page links to What went out", async () => {
+     // `render()` captures props only; render the page's markup once for the link.
+@@ -427,18 +423,6 @@ describe("the Quiet hours card", () => {
+     expect(html).toContain('href="/dashboard/accounts/a1/activity"');
+     expect(html).toContain("See what went out");
+   });
+-  it("a failed settings read degrades to null — never the defaults, which would look like a saved window — and says so in the log, never a blank page", async () => {
+-    // Mutation: fall back to DEFAULT_QUIET_SETTINGS instead of null → FAILS.
+-    // Rendering the defaults as though they were the client's stored window
+-    // would let an agency press Save and silently overwrite a real
+-    // 22:30–06:15 with the platform default.
+-    dbMock.readQuietSettings.mockRejectedValue(new Error("down"));
+-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+-    const { quiet } = await render();
+-    expect(quiet).toMatchObject({ settings: null });
+-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+-    spy.mockRestore();
+-  });
+ });
+ 
+ /**
+```
+
+Apply to `packages/db/src/test/automation-log-grants.test.ts` (against the task's parent commit):
+
+```diff
+@@ -6,7 +6,6 @@ import {
+   recordAutomationLog, listReleasableHolds, bumpHeldForAccount, listAutomationLog, countAutomationUsage,
+   getAutomationLogEntry,
+ } from "../automation-log";
+-import { readQuietSettings, saveQuietSettings } from "../automation-settings";
+ import { createContact } from "../contacts";
+ 
+ /**
+@@ -321,29 +320,6 @@ describe("0046 accessors, live (serviceDb under withTestAccount)", () => {
+     });
+   });
+ 
+-  it("readQuietSettings returns the defaults for an account with no row, and the saved window after a save", async () => {
+-    await withTestAccount(async (db, accountId) => {
+-      // The literal, not DEFAULT_QUIET_SETTINGS: comparing the accessor's
+-      // output to the same constant it reads internally would pass even if
+-      // both drifted from the migration's actual column defaults together.
+-      expect(await readQuietSettings(db, accountId)).toEqual({ enabled: true, start: "21:00", end: "08:00" });
+-      // "WITHOUT writing one" — asserted, not assumed: no row exists yet.
+-      const before = await db.from("automation_settings").select("account_id").eq("account_id", accountId);
+-      expect(before.error).toBeNull();
+-      expect(before.data).toEqual([]);
+-      await saveQuietSettings(db, accountId, { enabled: true, start: "22:30", end: "06:15" }, "user_test");
+-      expect(await readQuietSettings(db, accountId)).toEqual({ enabled: true, start: "22:30", end: "06:15" });
+-      const { data: ev, error: evErr } = await db.from("events").select("type").eq("account_id", accountId).eq("type", "automation_settings.updated");
+-      expect(evErr).toBeNull();
+-      expect(ev).toHaveLength(1);
+-    });
+-  });
+-
+-  it("saveQuietSettings refuses a clock that is not HH:MM before writing", async () => {
+-    await expect(saveQuietSettings(serviceDb(), "00000000-0000-0000-0000-000000000000", { enabled: true, start: "9pm", end: "08:00" }, "user_test"))
+-      .rejects.toThrow(/HH:MM/);
+-  });
+-
+   for (const table of TABLES) {
+     it(`${table} is carried off by the account's own deletion, so it needs no line in the teardown list`, async () => {
+       let accountId = "";
+@@ -352,7 +328,11 @@ describe("0046 accessors, live (serviceDb under withTestAccount)", () => {
+         if (table === "automation_log") {
+           await recordAutomationLog(db, { accountId: id, source: "voice", channel: "ai", contactId: null, subjectKey: "call:c", status: "sent" });
+         } else {
+-          await saveQuietSettings(db, id, { enabled: false, start: "21:00", end: "08:00" }, "user_test");
++          // The quiet-hours accessors are retired (consent chain PR-1); the
++          // table stays until a later migration drops it, so its cascade is
++          // still proven, with a plain insert.
++          const { error } = await db.from("automation_settings").insert({ account_id: id });
++          expect(error).toBeNull();
+         }
+       });
+       // withTestAccount's finally has run deleteAccountCascade, which does NOT
+```
+
+Apply to `apps/web/e2e/activity.spec.ts` (against the task's parent commit):
+
+```diff
+@@ -1,7 +1,7 @@
+ import { test, expect } from "@playwright/test";
+ import { readFileSync, existsSync } from "node:fs";
+ import { config as loadEnv } from "dotenv";
+-import { serviceDb, setClientAccess, saveQuietSettings, recordAutomationLog, DEFAULT_QUIET_SETTINGS } from "@bis/db";
++import { serviceDb, setClientAccess, recordAutomationLog } from "@bis/db";
+ 
+ // Same two paths, same reason, as every spec that talks to Supabase from the
+ // runner process rather than through a Next request.
+@@ -27,29 +27,20 @@ test.beforeAll(async () => {
+ });
+ 
+ test.describe("quiet hours (agency)", () => {
+-  test("set a window that is NOT the default, reload, read it back — the round trip through serviceDb and the authenticated-role read", async ({ page }) => {
++  test("the sending hours are stated, read-only, in the account's zone — there is nothing to save (consent chain PR-1)", async ({ page }) => {
+     const { accountId } = fixture();
+-    try {
+-      await page.goto(`/dashboard/accounts/${accountId}/automations`);
+-      const card = page.getByTestId("quiet-hours-card");
+-      await expect(card.getByText("Quiet hours", { exact: true })).toBeVisible();
+-      // 22:30 → 06:15: neither value is a default, so a page that rendered
+-      // DEFAULT_QUIET_SETTINGS after the save could not pass this.
+-      await card.getByLabel("From").fill("22:30");
+-      await card.getByLabel("Until").fill("06:15");
+-      await expect(card.getByTestId("quiet-hours-preview")).toContainText("10:30 PM – 6:15 AM");
+-      await card.getByRole("button", { name: "Save quiet hours" }).click();
+-      await expect(page.getByText("Quiet hours saved")).toBeVisible();
+-
+-      await page.reload();
+-      const after = page.getByTestId("quiet-hours-card");
+-      await expect(after.getByLabel("From")).toHaveValue("22:30");
+-      await expect(after.getByLabel("Until")).toHaveValue("06:15");
+-      await expect(after.getByRole("checkbox")).toBeChecked();
+-      await expect(after).toContainText("Times are in America/Chicago");
+-    } finally {
+-      await saveQuietSettings(serviceDb(), accountId, DEFAULT_QUIET_SETTINGS, "e2e-cleanup");
+-    }
++    await page.goto(`/dashboard/accounts/${accountId}/automations`);
++    const card = page.getByTestId("quiet-hours-card");
++    await expect(card.getByText("Quiet hours", { exact: true })).toBeVisible();
++    // The fixture account is created with no zone (auth.setup.ts), so the
++    // column default America/Chicago (0001) applies and the sentence names
++    // it; a card that dropped the {zone} replace would show "{zone}".
++    await expect(card.getByTestId("quiet-hours-fixed")).toContainText("between 8 a.m. and 9 p.m. in your time zone (America/Chicago)");
++    await expect(card.getByTestId("quiet-hours-fixed")).toContainText("on Sundays until noon");
++    // The old form is gone: no time inputs, no switch, no Save.
++    await expect(card.getByRole("button")).toHaveCount(0);
++    await expect(card.getByRole("textbox")).toHaveCount(0);
++    await expect(card.getByRole("checkbox")).toHaveCount(0);
+   });
+ 
+   test("the Automations page links to What went out", async ({ page }) => {
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/automations/quiet-hours.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/automations"
+cd ../../packages/db
+SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/test/automation-log-grants.test.ts
+```
+
+Expected (the staged replay's RED run):
+- `src/lib/automations/quiet-hours.test.ts`: passes before the implementation too (6 tests: it pins what this task keeps, or it was edited only to match the new shapes).
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.test.ts`: passes before the implementation too (56 tests: it pins what this task keeps, or it was edited only to match the new shapes).
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/page.test.ts`: **31 failing** that Step 4 turns green:
+  - automations page previews every card with the BRAND name, not the agency's internal accounts.name label
+  - automations page hands the cards NOTHING rather than the account name when the company has set no brand name
+  - automations page hands each card ITS OWN row (null where none is stored) and the SMS gate
+  - automations page hands the nudge card the real booking-page link and whether the page is on — a READ, never a write on a GET
+  - automations page hands the text-reminder card the account's zone for its sample time
+  - automations page hands the confirmation card ITS OWN row, the brand name, the account's zone and the SMS gate
+  - automations page hands the referral-ask card ITS OWN row, the brand name and the SMS gate
+  - automations page hands the reactivation card ITS OWN row and the brand name — and NO sms gate, because it is email only
+  - automations page hands the reactivation card the account id and WHAT IS MISSING — the address and the reply-to, judged like the save and the pass judge them
+  - automations page hands the referral card the account id and the SAME missing facts — the email channel needs what the check-in needs (B21)
+  - automations page a failed address read degrades to NO warning, never a false one — and says so in the log
+  - automations page hands the quote follow-up card ITS OWN row, the SMS gate, and the account's stages flattened for the select
+  - automations page prefixes a stage with its pipeline ONLY when the account has more than one pipeline
+  - automations page a failed pipeline read degrades to NO stages; the rest of the page still renders
+  - automations page hands the instant-reply card ITS OWN row, the customer-facing name for its defaults, and the SMS gate
+  - automations page — journey order renders the nine cards in journey order: first touch, the appointment, after the job, then quiet hours
+  - automations page — journey order puts each card under its own Label-role group heading, each group a section named by its h2
+  - automations page — no calendar yet renders all three cards; the nudge card gets no link and a switched-off page
+  - automations page — no calendar yet the instant-reply card renders too — it has no calendar to depend on
+  - the Quiet hours card is handed the account's zone and nothing to save: the hours are fixed (mutation: pass a saveAction or settings again → FAILS)
+  - the Quiet hours card the page links to What went out
+  - guarded reads — one failed read degrades only its own card, never the page a failed review_request automation read degrades to null; the rest of the page still renders
+  - guarded reads — one failed read degrades only its own card, never the page a failed no_show_nudge automation read degrades to null; the rest of the page still renders
+  - guarded reads — one failed read degrades only its own card, never the page a failed sms_reminder automation read degrades to null; the rest of the page still renders
+  - guarded reads — one failed read degrades only its own card, never the page a failed appointment_confirm automation read degrades to null; the rest of the page still renders
+  - guarded reads — one failed read degrades only its own card, never the page a failed referral_ask automation read degrades to null; the rest of the page still renders
+  - guarded reads — one failed read degrades only its own card, never the page a failed reactivation automation read degrades to null; the rest of the page still renders
+  - guarded reads — one failed read degrades only its own card, never the page a failed instant_reply automation read degrades to null; the rest of the page still renders
+  - guarded reads — one failed read degrades only its own card, never the page a failed SMS-sender gate read degrades to the SAME refusal resolveSmsSender itself returns for a missing row
+  - guarded reads — one failed read degrades only its own card, never the page a failed calendar read degrades to null; the nudge card shows its own off state, not a 500
+  - guarded reads — one failed read degrades only its own card, never the page a failed origin lookup degrades to an empty string; the booking link goes blank instead of 500ing the page
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.test.ts`: **3 failing** that Step 4 turns green; 1 already pass:
+  - QuietHoursCard — the fixed hours, said once, never a setting states the spec's sentence with the account's own zone (mutation: drop the zone replace → '{zone}' shows, FAILS)
+  - QuietHoursCard — the fixed hours, said once, never a setting names the zone it was given, not a default (mutation: hardcode America/Chicago → FAILS)
+  - QuietHoursCard — the fixed hours, said once, never a setting has no form, no input and no button: nothing to switch off (mutation: leave the old Save form in → FAILS)
+- `src/test/automation-log-grants.test.ts`: passes before the implementation too (20 tests: it pins what this task keeps, or it was edited only to match the new shapes); 9 CI-only (`withTestAccount`) fail to connect here and in Step 4 alike.
+
+- [ ] **Step 3: Implement**
+
+Replace the whole file `packages/db/src/automation-settings.ts` with:
+
+```ts
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+/**
+ * What is left of the automation settings module. The per-account quiet
+ * hours it used to read and save (automation_settings, 0046) are retired:
+ * the sending hours are FIXED (consent chain spec decision 4,
+ * apps/web/src/lib/consent/hours.ts), and nothing reads the table any more
+ * (source scan 5). The table and its columns stay until a later migration
+ * drops them once both databases pass the parity check.
+ */
+
+/** The inline instant reply has no due-row to carry the zone; it reads it here, once, after a send is decided. */
+export async function readAccountTimezone(db: SupabaseClient, accountId: string): Promise<string | null> {
+  const { data, error } = await db.from("accounts").select("timezone").eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`readAccountTimezone failed: ${error.message}`);
+  return (data as { timezone: string | null } | null)?.timezone ?? null;
+}
+```
+
+Replace the whole file `apps/web/src/lib/automations/quiet-hours.ts` with:
+
+```ts
+import { resolveAccountZone } from "@/lib/booking/followup-timing";
+
+/**
+ * Wall-clock arithmetic, the pure half of what was the quiet-hours module.
+ * The per-account window itself is retired (consent chain spec decision 4):
+ * the fixed sending hours are lib/consent/hours.ts, which uses `wallInstant`
+ * from here, as does lib/reports/month-window.ts. `formatInstantClock` words
+ * a held row's "Held until 8:00 AM".
+ */
+type Wall = { year: number; month: number; day: number; minutes: number };
+
+/**
+ * `hourCycle: "h23"`, never `hour12: false` (midnight renders as "24" in
+ * several locales), and "en-US" pinned so no non-Gregorian calendar sneaks
+ * in — the same two rules followup-timing.ts's `localParts` states.
+ */
+function wallOf(instant: Date, zone: string): Wall {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(instant);
+  const get = (t: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === t)?.value ?? NaN);
+  return { year: get("year"), month: get("month"), day: get("day"), minutes: get("hour") * 60 + get("minute") };
+}
+
+/**
+ * A wall reading collapsed to one comparable integer (calendar day, in
+ * epoch minutes, plus minutes-of-day). Not a real instant — never fed back
+ * through `Date.UTC` as anything but a calculator — only ever compared to
+ * another `wallKey` to answer "which of two wall times comes first".
+ */
+function wallKey(w: { year: number; month: number; day: number; minutes: number }): number {
+  return Date.UTC(w.year, w.month - 1, w.day) / 60000 + w.minutes;
+}
+
+/**
+ * The earliest instant, at minute precision, whose wall reading in `zone` is
+ * at or after `requestedKey` (see `wallKey`) — a binary search over a ±3h
+ * bracket centred on `near`, the fixed point's own (possibly pre-gap)
+ * answer. ±3h comfortably spans the IANA database's largest scheduled gap,
+ * and the bracket brackets exactly one discontinuity (the gap `near` sits
+ * next to, which is why `wallInstant` called this in the first place), so
+ * the wall reading is monotonic across it and the search converges on the
+ * gap's end: the first real instant the clock could show `requestedKey` or
+ * later.
+ */
+function firstWallReadingAtOrAfter(requestedKey: number, near: number, zone: string): Date {
+  let lo = Math.floor(near / 60000) - 180;
+  let hi = Math.floor(near / 60000) + 180;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const key = wallKey(wallOf(new Date(mid * 60000), zone));
+    if (key >= requestedKey) hi = mid; else lo = mid + 1;
+  }
+  return new Date(lo * 60000);
+}
+
+/**
+ * The UTC instant at which `zone`'s wall clock reads `minutes` past midnight
+ * on the given local date — weekly-window.ts's `localMidnightInstant` fixed
+ * point, generalised to any minute. Two iterations converge for every real
+ * offset THAT WAS ACTUALLY SHOWN; a wall time that does not exist (the
+ * spring-forward gap) is a different case, and the naive two-iteration
+ * answer for it is not reliably on either side — measured: asking Chicago
+ * for the nonexistent 2026-03-08 02:30 converges to 01:30, an HOUR BEFORE
+ * the request, not after it; asking Havana for its own nonexistent
+ * 2026-03-08 00:00 converges to 23:00 the PREVIOUS day. Both are wrong in
+ * the way that matters most for this module: a "window end" computed that
+ * way can land in the past relative to `now`.
+ *
+ * So the converged instant is re-read and checked against what was asked
+ * for. A mismatch means the request fell in a gap, and
+ * `firstWallReadingAtOrAfter` finds the actual answer: the first instant on
+ * or after which the clock could show the requested time — the gap's end,
+ * which is the right answer for "the window ends at 02:30" because that
+ * moment does not exist and the next one the clock can show is where the
+ * window has to end instead.
+ */
+/**
+ * Exported for `lib/reports/month-window.ts` (part-C cleanup item 4):
+ * `weekly-window.ts`'s `localMidnightInstant` reconciles HOURS only, so a
+ * month boundary lands 30/45 minutes wrong in a minute-offset zone (Asia/
+ * Kolkata, Australia/Adelaide, America/St_Johns) and can converge on the
+ * wrong side of a spring-forward gap entirely where local midnight itself
+ * does not exist. This is the one correct wall-time fixed point in the repo
+ * (minute precision, gap-checked) — a month window is a wall-clock boundary
+ * exactly like a quiet-hours window's end, so it reuses this rather than
+ * duplicating the fix. `weekly-window.ts`'s own callers (the weekly report)
+ * are untouched; only the month card moved.
+ */
+export function wallInstant(year: number, month: number, day: number, minutes: number, zone: string): Date {
+  const target = Date.UTC(year, month - 1, day, Math.floor(minutes / 60), minutes % 60, 0);
+  let ts = target;
+  for (let i = 0; i < 2; i++) {
+    const seen = wallOf(new Date(ts), zone);
+    const seenTs = Date.UTC(seen.year, seen.month - 1, seen.day, Math.floor(seen.minutes / 60), seen.minutes % 60, 0);
+    ts += target - seenTs;
+  }
+  const requestedKey = wallKey({ year, month, day, minutes });
+  if (wallKey(wallOf(new Date(ts), zone)) !== requestedKey) {
+    return firstWallReadingAtOrAfter(requestedKey, ts, zone);
+  }
+  return new Date(ts);
+}
+
+/**
+ * An instant on the account's wall clock: "8:00 AM". Unresolvable zone →
+ * UTC, labelled by the caller. Never throws — an invalid instant returns
+ * "?", matching `formatClock`'s own never-throws contract.
+ */
+export function formatInstantClock(instant: Date, zone: string): string {
+  if (!Number.isFinite(instant.getTime())) return "?";
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric", minute: "2-digit", timeZone: resolveAccountZone(zone) ?? "UTC",
+  }).format(instant);
+}
+```
+
+Replace the whole file `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.tsx` with:
+
+```tsx
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { m } from "@/lib/messages";
+
+/**
+ * The sending hours, READ-ONLY (consent chain spec §6, decision 4): they are
+ * fixed by law and by danlo's decision, not a setting, so there is no form,
+ * no switch and no Save. The sentence names the account's own zone, the one
+ * the hours are read in for every customer (BIS stores no per-contact zone
+ * yet). A server component: nothing here is interactive.
+ */
+export function QuietHoursCard({ zoneLabel }: { zoneLabel: string }) {
+  return (
+    <Card id="quiet-hours" data-testid="quiet-hours-card" className="scroll-mt-24">
+      <CardHeader>
+        <CardTitle>{m["automations.quiet.title"]}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-card-foreground" data-testid="quiet-hours-fixed">
+          {m["automations.quiet.fixed"].replace("{zone}", zoneLabel)}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/page.tsx` (against the task's parent commit):
+
+```diff
+@@ -1,9 +1,9 @@
+ import { headers } from "next/headers";
+ import Link from "next/link";
+ import {
+-  serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings, listPipelinesWithStages,
++  serviceDb, getAutomation, getBranding, getCalendarForAccount, listPipelinesWithStages,
+   getMailingAddress,
+-  type AutomationRow, type CalendarRow, type QuietSettings,
++  type AutomationRow, type CalendarRow,
+ } from "@bis/db";
+ import { PageHeader } from "@/components/page-header";
+ import { buttonVariants } from "@/components/ui/button";
+@@ -26,7 +26,7 @@ import {
+   saveReviewRequestAction, saveReferralAskAction, saveReactivationAction, saveNoShowNudgeAction, saveSmsReminderAction,
+   saveQuoteFollowupAction,
+   saveAppointmentConfirmAction,
+-  saveInstantReplyAction, saveQuietHoursAction,
++  saveInstantReplyAction,
+ } from "./actions";
+ 
+ export const dynamic = "force-dynamic";
+@@ -53,7 +53,7 @@ export default async function AutomationsPage({
+   // these can no longer 500 the whole agency page; only the one card that
+   // lost its read shows the degraded state, and the log line carries the
+   // account id so the hiccup is still visible.
+-  const [review, referralAsk, reactivation, noShow, smsReminder, appointmentConfirm, quoteFollowup, instantReply, account, smsGate, calendar, origin, quiet, stages, mailingAddress] = await Promise.all([
++  const [review, referralAsk, reactivation, noShow, smsReminder, appointmentConfirm, quoteFollowup, instantReply, account, smsGate, calendar, origin, stages, mailingAddress] = await Promise.all([
+     getAutomation(db, accountId, "review_request").catch((e): AutomationRow | null => {
+       console.error(`automations: review_request read failed for ${accountId}: ${String(e)}`);
+       return null;
+@@ -143,17 +143,6 @@ export default async function AutomationsPage({
+       console.error(`automations: origin lookup failed for ${accountId}: ${String(e)}`);
+       return "";
+     }),
+-    // Part C. UNLIKE the account read beside it, this degrade must not show a
+-    // plausible-but-wrong window: rendering `DEFAULT_QUIET_SETTINGS` as if it
+-    // were the saved one and letting Save fire would silently overwrite the
+-    // client's real hours with the platform default. So a failed read
+-    // degrades to `null` — the card renders a Notice and a disabled form
+-    // (the agency reloads to fix it, rather than pressing Save on a guess) —
+-    // and one log line.
+-    readQuietSettings(db, accountId).catch((e): QuietSettings | null => {
+-      console.error(`automations: quiet-hours read failed for ${accountId}: ${String(e)}`);
+-      return null;
+-    }),
+     // The quote follow-up card's stage list. Flattened across pipelines and
+     // prefixed with the pipeline's name only when there is more than one, so
+     // a single-pipeline account (every account today) reads "Quoted" rather
+@@ -273,7 +262,7 @@ export default async function AutomationsPage({
+           />
+         </Group>
+         <Group id="automations-group-rules" title={m["automations.group.rules"]}>
+-          <QuietHoursCard settings={quiet} zoneLabel={account.timezone} saveAction={saveQuietHoursAction.bind(null, accountId)} />
++          <QuietHoursCard zoneLabel={account.timezone} />
+         </Group>
+       </div>
+     </>
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.ts` (against the task's parent commit):
+
+```diff
+@@ -13,7 +13,7 @@ import {
+   serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseReferralAskConfig,
+   parseReactivationConfig, parseQuoteFollowupConfig, parseInstantReplyConfig,
+   QUOTE_FOLLOWUP_MIN_QUIET_DAYS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS,
+-  saveQuietSettings, bumpHeldForAccount, isClock, getMailingAddress, getBranding,
++  getMailingAddress, getBranding,
+   type ReviewRequestChannel,
+ } from "@bis/db";
+ import { requireAccountAccess } from "@/lib/auth";
+@@ -325,45 +325,3 @@ export async function saveInstantReplyAction(
+   revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+   return { ok: true };
+ }
+-
+-/**
+- * The quiet-hours window (part C). Same guard, same Result shape as the
+- * recipe actions above. After the save, every held row of the account is
+- * made due now (`bumpHeldForAccount`), so the release pass re-reads tonight's
+- * queue under the NEW window on the next tick — turning quiet hours off at
+- * 23:00 releases the texts at 23:15, not at 08:00; lengthening the window
+- * re-holds them. The bump is best effort: a save that landed is a success.
+- */
+-export async function saveQuietHoursAction(
+-  accountId: string, formData: FormData,
+-): Promise<ActionResult> {
+-  const { userId, isAgency } = await requireAccountAccess(accountId);
+-  if (!isAgency) return { ok: false, error: m["automations.agencyOnly"] };
+-
+-  const enabled = formData.get("quiet_enabled") === "on";
+-  const start = String(formData.get("quiet_start") ?? "").trim();
+-  const end = String(formData.get("quiet_end") ?? "").trim();
+-  if (!isClock(start) || !isClock(end)) return { ok: false, error: m["automations.quiet.invalidTime"] };
+-  // quiet-hours.ts's evaluateWindow treats start === end as DISABLED (no
+-  // window at all), so an enabled row with equal times would show ON in the
+-  // UI while never actually going quiet. Refused only while turning it on;
+-  // a stored OFF row with equal times is a legal (if pointless) rest state.
+-  if (enabled && start === end) return { ok: false, error: m["automations.quiet.invalidTime"] };
+-
+-  const db = serviceDb();
+-  try {
+-    await saveQuietSettings(db, accountId, { enabled, start, end }, userId);
+-  } catch (e) {
+-    console.error(`saveQuietHoursAction: save failed for account ${accountId}: ${String(e)}`);
+-    return { ok: false, error: m["automations.quiet.saveFailed"] };
+-  }
+-  try {
+-    const bumped = await bumpHeldForAccount(db, accountId);
+-    if (bumped > 0) console.log(`saveQuietHoursAction: ${bumped} held send(s) for account ${accountId} re-queued under the new window`);
+-  } catch (e) {
+-    console.error(`saveQuietHoursAction: could not re-queue held sends for account ${accountId}: ${String(e)}`);
+-  }
+-
+-  revalidatePath(`/dashboard/accounts/${accountId}/automations`);
+-  return { ok: true };
+-}
+```
+
+Apply to `apps/web/src/lib/messages.ts` (against the task's parent commit):
+
+```diff
+@@ -1452,16 +1452,6 @@ export const m = {
+ 
+   // Part C — the Quiet hours card (agency, on the Automations page).
+   "automations.quiet.title": "Quiet hours",
+-  "automations.quiet.body": "No automated texts or emails go to your customers between these hours. Anything due overnight waits and goes at the end. Your phone and website assistant still answer.",
+-  "automations.quiet.enabled": "Use quiet hours",
+-  "automations.quiet.from": "From",
+-  "automations.quiet.to": "Until",
+-  "automations.quiet.zone": "Times are in {zone}",
+-  "automations.quiet.save": "Save quiet hours",
+-  "automations.quiet.saved": "Quiet hours saved",
+-  "automations.quiet.saveFailed": "Could not save quiet hours.",
+-  "automations.quiet.invalidTime": "Enter both times as hours and minutes, like 9:00 PM.",
+-  "automations.quiet.readFailed": "Couldn't load the current quiet hours. Reload the page before changing them.",
+   // Spec §6, verbatim: the fixed sending hours, read-only (decision 4).
+   "automations.quiet.fixed": "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens.",
+   "automations.activityLink": "See what went out",
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/automations/quiet-hours.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/automations"
+pnpm typecheck
+pnpm test
+cd ../../packages/db
+pnpm typecheck
+SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/test/automation-log-grants.test.ts
+```
+
+Expected (the staged replay's GREEN run):
+117 passed across the task's test files:
+- `src/lib/automations/quiet-hours.test.ts`: 6 passed
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.test.ts`: 56 passed
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/page.test.ts`: 31 passed
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.test.ts`: 4 passed
+- `src/test/automation-log-grants.test.ts`: 20 passed; 9 CI-only fail to connect (`withTestAccount`)
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4381 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+2 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **zone not replaced** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.tsx`: `{m["automations.quiet.fixed"].replace("{zone}", zoneLabel)}` → `{m["automations.quiet.fixed"]}`; turns red 2 tests:
+    - QuietHoursCard — the fixed hours, said once, never a setting states the spec's sentence with the account's own zone (mutation: drop the zone replace → '{zone}' shows, FAILS)
+    - QuietHoursCard — the fixed hours, said once, never a setting names the zone it was given, not a default (mutation: hardcode America/Chicago → FAILS)
+2. **zone hardcoded** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.tsx`: `{m["automations.quiet.fixed"].replace("{zone}", zoneLabel)}` → `{m["automations.quiet.fixed"].replace("{zone}", "America/Chicago")}`; turns red 1 test:
+    - QuietHoursCard — the fixed hours, said once, never a setting names the zone it was given, not a default (mutation: hardcode America/Chicago → FAILS)
+
+- [ ] **Step 6: The e2e change (CI only).** `apps/web/e2e/activity.spec.ts`'s quiet-hours test is rewritten above to assert the read-only card on the fixture account. It runs in CI's `e2e` job; locally Playwright refuses (Global Constraints).
+
+- [ ] **Step 7: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/lib/automations/quiet-hours.test.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.test.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.test.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/page.test.ts" \
+        "packages/db/src/test/automation-log-grants.test.ts" \
+        "apps/web/e2e/activity.spec.ts" \
+        "packages/db/src/automation-settings.ts" \
+        "apps/web/src/lib/automations/quiet-hours.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/quiet-hours-card.tsx" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/page.tsx" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/automations/actions.ts" \
+        "apps/web/src/lib/messages.ts"
+git commit -m "feat(automations): the quiet hours are fixed — the card states them; the setting and its save are gone"
+```
+
+---
+
+### Task 11: The call's two texts through the gate: the missed-call text-back (held, released) and the call alert
+
+**Owner:** bis-voice. **Lane:** A (Phase 3). **Depends on:** Tasks 8 and 9 (`writeHeld`, `BLOCK_REASONS`, the release queue); Task 1 (the `'textback'` source in the CHECK); Task 6 (`activity.source.textback`).
+
+Spec §4.1 item 4: the text-back and the call alert through the gate. The text-back is `voice.textback` (informational, automated hours): outside the hours it is HELD on `automation_log` (source `'textback'`, subject `call:<callId>`) and the release pass re-runs it through the gate at 08:00 (G6); a refusal is logged `skipped` with the gate's reason. The alert is `operator.alert_sms` (any hour; a stopped alert phone gets nothing, decision 2).
+
+**Files:**
+- Modify: `apps/web/src/lib/voice/textback.test.ts` (6 → 16 tests)
+- Modify: `apps/web/src/lib/voice/finish-call.test.ts` (98 tests)
+- Modify: `apps/web/src/lib/sms/alerts.test.ts` (31 tests)
+- Modify: `packages/db/src/automation-log.ts`
+- Modify: `apps/web/src/lib/voice/textback.ts`
+- Modify: `apps/web/src/lib/voice/finish-call.ts`
+- Modify: `apps/web/src/app/api/voice/texml/handoff-result/route.ts`
+- Modify: `apps/web/src/lib/sms/alerts.ts`
+- Modify: `apps/web/src/lib/automations/passes/release-held.ts`
+- Modify: `apps/web/src/lib/automations/log-titles.ts`
+
+**Interfaces:**
+- Consumes: `decideSms`, `deliverSms`, `sendSms` (Task 8); `writeHeld`, `BLOCK_REASONS`, `REASONS`, `Releaser` (Task 9).
+- Produces:
+  - `AUTOMATION_LOG_SOURCES` gains `"textback"` (and `SOURCE_TITLES`, `RELEASERS` their entries, in the same commit, because both are `Record<AutomationLogSource, …>`).
+  - `TextbackRequest` gains `callId: string | null` and `now: Date`; `TextbackOutcome.notSent`; `prepareTextback`, `deliverTextback(db, accountId, pending, label): Promise<"sent" | "failed" | "skipped">`, `releaseTextback: Releaser`, `parseTextbackPayload`.
+  - `deliverAlertSms(db, accountId, pending)` (the `db` argument is new).
+
+**Mock factories changed** (Global Constraints, `vi.mock("@bis/db")`): `textback.test.ts`, `finish-call.test.ts` and `alerts.test.ts` go through the REAL gate: their `@bis/db` factories gain `readConsentState`, `readPhoneCountryFlag` and `readAccountTimezone` (and `recordCarrierBlock` where a refusal is exercised).
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace the whole file `apps/web/src/lib/voice/textback.test.ts` with:
+
+```ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const dbMocks = vi.hoisted(() => ({
+  updateMessageStatus: vi.fn(), recordUsage: vi.fn(), createContact: vi.fn(), fillContactBlanks: vi.fn(),
+  ensureConversation: vi.fn(), createMessage: vi.fn(), hasRecentOutboundSms: vi.fn(),
+  recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(), getVoiceProfile: vi.fn(), getBranding: vi.fn(),
+  // The send gate's reads: the text-back goes through the REAL gate.
+  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(),
+}));
+vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
+const senderMocks = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
+vi.mock("@/lib/sms/sender", () => senderMocks);
+const sms = vi.hoisted(() => ({
+  isFake: false as boolean, redirectTo: undefined as string | undefined, send: vi.fn(),
+}));
+vi.mock("@/lib/sms", () => ({
+  getSmsProvider: () => ({ isFake: sms.isFake, redirectTo: sms.redirectTo, send: (...a: unknown[]) => sms.send(...a) }),
+}));
+
+import type { serviceDb, AutomationLogRow } from "@bis/db";
+import { segmentsFor } from "@/lib/sms/segments";
+import { m } from "@/lib/messages";
+import type { PassContext } from "@/lib/automations/context";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
+import { prepareTextback, deliverTextback, releaseTextback, type TextbackRequest } from "./textback";
+
+/**
+ * The missed-call text-back through the send gate (consent chain PR-1).
+ * One module, three callers (finishCall, the handoff-result route, the
+ * release pass), so the gate's answers are proven here once.
+ */
+const DB = { tag: "service-db" } as unknown as ReturnType<typeof serviceDb>;
+const NOON = new Date("2026-10-06T17:00:00Z");     // 12:00 CDT, Tue
+const TEN_PM = new Date("2026-10-07T03:00:00Z");   // 22:00 CDT, Tue
+const EIGHT_AM = "2026-10-07T13:00:00.000Z";       // 08:00 CDT, Wed
+const LONG = "Sorry we missed you. ".repeat(9).trim();
+const STOP_EN = m["sms.optOut.en"];
+
+const request = (over: Partial<TextbackRequest> = {}): TextbackRequest => ({
+  callerNumber: "+19562921696", contactId: "ct_1", language: "en", brandName: "Rio Roofing",
+  textbackBody: "", label: "finishCall call1", callId: "call1", now: NOON, ...over,
+});
+const logWrites = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
+
+beforeEach(() => {
+  for (const fn of Object.values(dbMocks)) fn.mockReset();
+  senderMocks.resolveSmsSender.mockReset().mockResolvedValue({ ok: true, from: "+19565550100", ownedNumbers: ["+19565550100"] });
+  dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
+  dbMocks.createMessage.mockResolvedValue({ id: "m_tb" });
+  dbMocks.hasRecentOutboundSms.mockResolvedValue(false);
+  dbMocks.updateMessageStatus.mockResolvedValue(undefined);
+  dbMocks.recordUsage.mockResolvedValue("recorded");
+  dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);
+  dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
+  dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
+  dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
+  sms.isFake = false;
+  sms.redirectTo = undefined;
+  sms.send.mockReset().mockResolvedValue({ providerMessageId: "sm1" });
+  vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
+});
+
+async function prepared(over: Partial<TextbackRequest> = {}) {
+  const outcome = await prepareTextback(DB, "a1", request(over));
+  if (!outcome.pending) throw new Error(`expected a pending text-back, got ${outcome.notSent}`);
+  return outcome.pending;
+}
+
+describe("prepareTextback: the send gate decides before any row", () => {
+  it("inside the hours: one message row with the text AS SENT (the gate's STOP line) and a pending send to the caller (mutation: store the body without the footer → FAILS)", async () => {
+    const pending = await prepared();
+    expect(dbMocks.createMessage).toHaveBeenCalledWith(DB, "a1",
+      expect.objectContaining({ conversationId: "cv1", channel: "sms", direction: "outbound", body: expect.stringContaining(STOP_EN) }), "voice", "ai");
+    expect(pending.cleared.body).toBe((dbMocks.createMessage.mock.calls[0]![2] as { body: string }).body);
+    expect(pending.cleared.to).toBe("+19562921696");
+    expect(pending.cleared.kind).toBe("voice.textback");
+  });
+
+  it("a call missed at 22:00 is HELD until 08:00 on the automation log — source textback, subject call:<id>, with what a release needs — and nothing else is written (mutation: send at night → FAILS)", async () => {
+    const outcome = await prepareTextback(DB, "a1", request({ now: TEN_PM, language: "es" }));
+    expect(outcome).toEqual({ contactId: "ct_1", conversationId: "cv1", pending: null, notSent: "held" });
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([{
+      accountId: "a1", source: "textback", channel: "sms", subjectKey: "call:call1", contactId: "ct_1",
+      payload: { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "es" },
+      status: "held", heldUntil: EIGHT_AM, reason: "Held until 8:00 AM — quiet hours",
+    }]);
+  });
+
+  it("a call with no row cannot be held: at 22:00 nothing is written and the console says so (mutation: hold under a made-up key → FAILS)", async () => {
+    const outcome = await prepareTextback(DB, "a1", request({ now: TEN_PM, callId: null }));
+    expect(outcome.notSent).toBe("unheld");
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(String(vi.mocked(console.error).mock.calls[0]?.[0])).toMatch(/cannot be held/);
+  });
+
+  it("a number that stopped texts gets nothing: no message row, one skipped row with the reason (mutation: skip the gate → a row is written, FAILS)", async () => {
+    dbMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-01T00:00:00Z", method: "carrier_block", eventId: "e1" });
+    const outcome = await prepareTextback(DB, "a1", request());
+    expect(outcome.notSent).toBe("blocked");
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      source: "textback", subjectKey: "call:call1", status: "skipped", reason: "They stopped texts from this business",
+    })]);
+  });
+
+  it("an unreadable ledger is a FAILED row, not a skipped one, so it is not read as the customer's choice (mutation: log it skipped → FAILS)", async () => {
+    dbMocks.readConsentState.mockRejectedValue(new Error("permission denied for table consent_events"));
+    const outcome = await prepareTextback(DB, "a1", request());
+    expect(outcome.notSent).toBe("blocked");
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      source: "textback", subjectKey: "call:call1", status: "failed", reason: "Couldn't be delivered",
+    })]);
+  });
+
+  it("an account not cleared to text writes NOTHING, not even a contact (mutation: resolve the contact first → FAILS)", async () => {
+    senderMocks.resolveSmsSender.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+    const resolveContact = vi.fn(async () => "ct_9");
+    const outcome = await prepareTextback(DB, "a1", request({ contactId: null, resolveContact }));
+    expect(outcome.notSent).toBe("sender_refused");
+    expect(resolveContact).not.toHaveBeenCalled();
+    expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+  });
+});
+
+describe("deliverTextback — the send, and usage (client billing)", () => {
+  it("a delivered text-back records the segments of the text AS SENT, on the same service client, and a sent log row (mutation: bill 1 per text → FAILS)", async () => {
+    const pending = await prepared({ textbackBody: LONG });
+    expect(segmentsFor(pending.cleared.body).segments).toBe(2);
+    expect(await deliverTextback(DB, "a1", pending, "finishCall call1")).toBe("sent");
+    expect(dbMocks.recordUsage).toHaveBeenCalledWith(DB, {
+      accountId: "a1", meter: "sms", quantity: 2, occurredAt: expect.any(Date), sourceRef: "message:m_tb",
+    });
+    expect(logWrites()).toEqual([expect.objectContaining({ source: "textback", status: "sent", subjectKey: "call:call1" })]);
+  });
+
+  it("a fake provider, or a real one redirected to a developer's phone, records nothing (mutation: bill every send → FAILS)", async () => {
+    sms.isFake = true;
+    await deliverTextback(DB, "a1", await prepared(), "finishCall call1");
+    sms.isFake = false;
+    sms.redirectTo = "+19565550199";
+    await deliverTextback(DB, "a1", await prepared(), "finishCall call1");
+    expect(sms.send).toHaveBeenCalledTimes(2);
+    expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("a text the carrier refused records nothing, marks the row failed, and logs 'text-back failed' (mutation: record before the send → FAILS)", async () => {
+    sms.send.mockRejectedValue(new Error("carrier rejected"));
+    expect(await deliverTextback(DB, "a1", await prepared(), "finishCall call1")).toBe("failed");
+    expect(dbMocks.recordUsage).not.toHaveBeenCalled();
+    expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(DB, "a1", "m_tb", "failed", { error: "carrier rejected" }, "voice", "ai");
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("text-back failed"));
+  });
+
+  it("the 'sent' write comes straight after the send, BEFORE the usage write (mutation: record usage first → call order FAILS)", async () => {
+    await deliverTextback(DB, "a1", await prepared(), "finishCall call1");
+    expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(DB, "a1", "m_tb", "sent", { providerMessageId: "sm1" }, "voice", "ai");
+    expect(dbMocks.updateMessageStatus.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.recordUsage.mock.invocationCallOrder[0]!);
+  });
+
+  it("the usage row lands even when the 'sent' write then fails, and nothing throws (mutation: record after that write outside its finally → FAILS)", async () => {
+    const pending = await prepared();
+    dbMocks.updateMessageStatus.mockRejectedValue(new Error("db down"));
+    await expect(deliverTextback(DB, "a1", pending, "finishCall call1")).resolves.toBe("failed");
+    expect(dbMocks.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stop that lands between prepare and deliver wins: nothing sent, the row marked failed with the reason (mutation: deliver without the gate's re-check → sent, FAILS)", async () => {
+    const pending = await prepared();
+    dbMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-06T17:00:01Z", method: "carrier_block", eventId: "e2" });
+    expect(await deliverTextback(DB, "a1", pending, "finishCall call1")).toBe("skipped");
+    expect(sms.send).not.toHaveBeenCalled();
+    expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(DB, "a1", "m_tb", "failed", { error: "not sent: stopped" }, "voice", "ai");
+  });
+});
+
+describe("releaseTextback — the 08:00 send of a call missed overnight", () => {
+  const PAYLOAD = { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "en" };
+  const held = (over: Partial<AutomationLogRow> = {}): AutomationLogRow => ({
+    id: "log_tb", account_id: "a1", source: "textback", channel: "sms", contact_id: "ct_1",
+    subject_key: "call:call1", status: "held", reason: "Held until 8:00 AM — quiet hours", held_until: EIGHT_AM,
+    payload: PAYLOAD, occurred_at: TEN_PM.toISOString(), ...over,
+  });
+  const ctx = (now: Date): PassContext => ({
+    db: DB as never, now, origin: "", email: { isFake: true, send: vi.fn() }, sms: fakeSmsGate(),
+  });
+
+  beforeEach(() => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ textback_enabled: true, textback_body: "" });
+    dbMocks.getBranding.mockResolvedValue({ brandName: "Rio Roofing" });
+  });
+
+  it("at 08:00 it re-runs prepare and sends through the same path: message row, send, sent row (mutation: release without delivering → FAILS)", async () => {
+    expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held())).toBe("sent");
+    expect(sms.send).toHaveBeenCalledTimes(1);
+    expect(sms.send.mock.calls[0]![0]).toMatchObject({ to: "+19562921696" });
+    expect(logWrites().at(-1)).toMatchObject({ source: "textback", subjectKey: "call:call1", status: "sent" });
+  });
+
+  it("the text-back switched off overnight: skipped 'This automation was turned off', never sent (mutation: skip the profile re-read → FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ textback_enabled: false, textback_body: "" });
+    expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held())).toBe("skipped");
+    expect(sms.send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "skipped", reason: "This automation was turned off" })]);
+  });
+
+  it("a text that already went to them overnight: skipped with the cooldown's reason, never a second text (mutation: drop the release's cooldown branch → the row stays held forever, FAILS)", async () => {
+    dbMocks.hasRecentOutboundSms.mockResolvedValue(true);
+    expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held())).toBe("skipped");
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "skipped", reason: "A text already went to this person today" })]);
+  });
+
+  it("a subject or payload it cannot read leaves the queue as 'No longer due' (mutation: re-run with a guessed id → FAILS)", async () => {
+    expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held({ subject_key: "booking:x" }))).toBe("skipped");
+    expect(await releaseTextback(ctx(new Date(EIGHT_AM)), held({ payload: { callerNumber: 5 } }))).toBe("skipped");
+    expect(logWrites().map((w) => w.reason)).toEqual(["No longer due", "No longer due"]);
+    expect(sms.send).not.toHaveBeenCalled();
+  });
+});
+```
+
+Apply to `apps/web/src/lib/voice/finish-call.test.ts` (against the task's parent commit):
+
+```diff
+@@ -5,6 +5,9 @@ const dbMocks = vi.hoisted(() => ({
+   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
+   fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(), hasRecentOutboundSms: vi.fn(),
+   getAlertPhone: vi.fn(), getContact: vi.fn(), recordAutomationLog: vi.fn(), recordUsage: vi.fn(),
++  // The send gate's reads (lib/consent/gate.ts): the text-back and the staff
++  // alert go through the REAL gate, allowed by default.
++  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
+ }));
+ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
+ const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
+@@ -156,7 +159,9 @@ const textbackCtx: FinishContext = { ...ctx, textbackEnabled: true };
+ /** A caller who SPOKE and got nothing — classifyOutcome's "abandoned". */
+ const abandonedState = () => withTranscript(emptyCallState(), { role: "caller", text: "uh", at: "t" });
+ 
+-const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T12:00:00Z"), endedAt: new Date("2027-06-01T12:02:00Z") };
++// 12:00-12:02 in Chicago (CDT): inside the text-back's sending hours
++// (08:00-21:00), so the ordinary abandoned call is texted at once.
++const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T17:00:00Z"), endedAt: new Date("2027-06-01T17:02:00Z") };
+ 
+ beforeEach(() => {
+   Object.values(dbMocks).forEach((m) => m.mockReset());
+@@ -183,6 +188,10 @@ beforeEach(() => {
+   dbMocks.getAlertPhone.mockResolvedValue(null);
+   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+   dbMocks.recordUsage.mockResolvedValue("recorded");
++  dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
++  dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
++  dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
++  dbMocks.getAutomationLogEntry.mockResolvedValue(null);
+   // The ordinary case: a contact with all four allow-listed columns already
+   // filled, so `blankFields` computes to `[]` unless a test deliberately
+   // leaves one of these blank to exercise the propagation.
+```
+
+Apply to `apps/web/src/lib/sms/alerts.test.ts` (against the task's parent commit):
+
+```diff
+@@ -7,6 +7,11 @@ vi.mock("./sender", async () => {
+   return { ...actual, resolveSmsSender: (...a: unknown[]) => resolveSmsSenderMock(...a) };
+ });
+ 
++const consentMocks = vi.hoisted(() => ({
++  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
++}));
++vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...consentMocks }));
++
+ const sendMock = vi.fn();
+ const getSmsProviderMock = vi.fn(() => ({ isFake: true, send: sendMock }));
+ vi.mock("./index", () => ({ getSmsProvider: (...a: unknown[]) => getSmsProviderMock() }));
+@@ -24,6 +29,8 @@ const SECOND_OWNED_NUMBER = "+19565550100"; // e.g. a second row still `testing`
+ beforeEach(() => {
+   vi.clearAllMocks();
+   sendMock.mockResolvedValue({ providerMessageId: "msg_1" });
++  consentMocks.readConsentState.mockResolvedValue({ state: "allowed" });
++  consentMocks.readPhoneCountryFlag.mockResolvedValue(false);
+   resolveSmsSenderMock.mockResolvedValue({
+     ok: true, from: SENDING_NUMBER, ownedNumbers: [SENDING_NUMBER, SECOND_OWNED_NUMBER],
+   });
+@@ -198,7 +205,7 @@ describe("prepareAlertSms / deliverAlertSms (the finish-call ordering split)", (
+   });
+ 
+   it("deliverAlertSms performs the actual provider send from a prepared payload", async () => {
+-    await deliverAlertSms(ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
++    await deliverAlertSms({} as never, ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
+     expect(sendMock).toHaveBeenCalledWith({ to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
+   });
+ 
+@@ -206,7 +213,7 @@ describe("prepareAlertSms / deliverAlertSms (the finish-call ordering split)", (
+     sendMock.mockRejectedValue(new Error("telnyx down"));
+     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+     await expect(
+-      deliverAlertSms(ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "x" }),
++      deliverAlertSms({} as never, ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "x" }),
+     ).resolves.toBeUndefined();
+     expect(spy).toHaveBeenCalled();
+     spy.mockRestore();
+@@ -220,7 +227,7 @@ describe("prepareAlertSms / deliverAlertSms (the finish-call ordering split)", (
+   // callback by hand.
+   it("logs the providerMessageId and destination on a successful send (mutation: drop the success log → FAILS)", async () => {
+     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+-    await deliverAlertSms(ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
++    await deliverAlertSms({} as never, ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
+     const logged = spy.mock.calls.map((c) => c.join(" ")).join("\n");
+     expect(logged).toContain("msg_1");
+     expect(logged).toContain(ALERT_PHONE);
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/voice/textback.test.ts src/lib/voice/finish-call.test.ts src/lib/sms/alerts.test.ts
+```
+
+Expected (the staged replay's RED run):
+- `src/lib/sms/alerts.test.ts`: **2 failing** that Step 4 turns green; 29 already pass:
+  - prepareAlertSms / deliverAlertSms (the finish-call ordering split) deliverAlertSms performs the actual provider send from a prepared payload
+  - prepareAlertSms / deliverAlertSms (the finish-call ordering split) logs the providerMessageId and destination on a successful send (mutation: drop the success log → FAILS)
+- `src/lib/voice/finish-call.test.ts`: passes before the implementation too (98 tests: it pins what this task keeps, or it was edited only to match the new shapes).
+- `src/lib/voice/textback.test.ts`: **14 failing** that Step 4 turns green; 2 already pass:
+  - prepareTextback: the send gate decides before any row inside the hours: one message row with the text AS SENT (the gate's STOP line) and a pending send to the caller (mutation: store the body without the footer → FAILS)
+  - prepareTextback: the send gate decides before any row a call missed at 22:00 is HELD until 08:00 on the automation log — source textback, subject call:<id>, with what a release needs — and nothing else is written (mutation: send at night → FAILS)
+  - prepareTextback: the send gate decides before any row a call with no row cannot be held: at 22:00 nothing is written and the console says so (mutation: hold under a made-up key → FAILS)
+  - prepareTextback: the send gate decides before any row a number that stopped texts gets nothing: no message row, one skipped row with the reason (mutation: skip the gate → a row is written, FAILS)
+  - prepareTextback: the send gate decides before any row an unreadable ledger is a FAILED row, not a skipped one, so it is not read as the customer's choice (mutation: log it skipped → FAILS)
+  - prepareTextback: the send gate decides before any row an account not cleared to text writes NOTHING, not even a contact (mutation: resolve the contact first → FAILS)
+  - deliverTextback — the send, and usage (client billing) a delivered text-back records the segments of the text AS SENT, on the same service client, and a sent log row (mutation: bill 1 per text → FAILS)
+  - deliverTextback — the send, and usage (client billing) a text the carrier refused records nothing, marks the row failed, and logs 'text-back failed' (mutation: record before the send → FAILS)
+  - deliverTextback — the send, and usage (client billing) the usage row lands even when the 'sent' write then fails, and nothing throws (mutation: record after that write outside its finally → FAILS)
+  - deliverTextback — the send, and usage (client billing) a stop that lands between prepare and deliver wins: nothing sent, the row marked failed with the reason (mutation: deliver without the gate's re-check → sent, FAILS)
+  - releaseTextback — the 08:00 send of a call missed overnight at 08:00 it re-runs prepare and sends through the same path: message row, send, sent row (mutation: release without delivering → FAILS)
+  - releaseTextback — the 08:00 send of a call missed overnight the text-back switched off overnight: skipped 'This automation was turned off', never sent (mutation: skip the profile re-read → FAILS)
+  - releaseTextback — the 08:00 send of a call missed overnight a text that already went to them overnight: skipped with the cooldown's reason, never a second text (mutation: drop the release's cooldown branch → the row stays held forever, FAILS)
+  - releaseTextback — the 08:00 send of a call missed overnight a subject or payload it cannot read leaves the queue as 'No longer due' (mutation: re-run with a guessed id → FAILS)
+
+- [ ] **Step 3: Implement**
+
+Apply to `packages/db/src/automation-log.ts` (against the task's parent commit):
+
+```diff
+@@ -22,6 +22,9 @@ export const AUTOMATION_LOG_SOURCES = [
+   "referral_ask",
+   "reactivation",
+   "quote_followup",
++  // Consent chain PR-1 (0054): the missed-call text-back, held outside the
++  // sending hours and released by the same queue.
++  "textback",
+ ] as const;
+ export type AutomationLogSource = (typeof AUTOMATION_LOG_SOURCES)[number];
+ export type AutomationLogChannel = "sms" | "email" | "ai";
+```
+
+Replace the whole file `apps/web/src/lib/voice/textback.ts` with:
+
+```ts
+// The missed-call text-back, as a prepare/deliver pair.
+//
+// It lived inline in `finishCall` until 2026-09-17, when a second caller
+// appeared for it: a transfer that rings out with nobody picking up. That
+// path is reached from `/api/voice/texml/handoff-result`, long after the
+// socket and its `CallState` are gone, so the logic had to become something
+// both callers could hold. A THIRD caller arrived with the consent chain's
+// PR-1: the release pass (`releaseTextback`, below), which sends at 08:00 a
+// text-back the send gate held overnight.
+//
+// A SECOND COPY WAS THE ALTERNATIVE AND IT WAS REJECTED. What lives here is
+// not a template — it is policy: which accounts may text at all, the
+// per-caller cooldown, the send gate, and write-then-send so a provider
+// failure is a visible message rather than a silent gap. Two copies of that
+// is two things to keep in step, and the one that drifts is always the one
+// nobody is looking at.
+//
+// The shape is `lib/sms/alerts.ts`'s, deliberately: `prepare…` does every
+// read and every write and returns what to send, `deliver…` does the network
+// call. That split exists because the send is a carrier round trip inside an
+// invocation with a caller waiting on it, and it must never sit in front of
+// the durable record — or, in the handoff case, in front of the apology the
+// caller is holding a silent line to hear. The gate follows the same split:
+// `decideSms` in prepare, `deliverSms` in deliver.
+import type { serviceDb, AutomationLogRow } from "@bis/db";
+import {
+  createContact, fillContactBlanks, ensureConversation, createMessage,
+  updateMessageStatus, hasRecentOutboundSms, recordAutomationLog, getVoiceProfile, getBranding,
+} from "@bis/db";
+import { resolveSmsSender } from "@/lib/sms/sender";
+import { decideSms, deliverSms, type ClearedSms, type SmsBlockReason } from "@/lib/consent/gate";
+import { writeHeld, logSkipped, subjectOf, REASONS, BLOCK_REASONS, type LogSubject, type Releaser } from "@/lib/automations/hold-or-send";
+import { brandDisplayName } from "@/lib/email/templates/shell";
+import { defaultTextbackBody } from "./textback-body";
+import { recordUsageSafely } from "@/lib/billing/usage";
+
+/** The service-role client every voice write goes through, named the way
+ *  finish-call.ts names it rather than reaching for @supabase/supabase-js,
+ *  which apps/web does not depend on directly. */
+type VoiceDb = ReturnType<typeof serviceDb>;
+
+const ACTOR_ID = "voice";
+const ACTOR_TYPE = "ai" as const;
+
+/**
+ * How long after one outbound SMS this caller gets another.
+ *
+ * A repeat abandoned caller would otherwise get a byte-identical message on
+ * every call, and repeated identical bodies to one number is exactly what
+ * carrier filtering hunts for under 10DLC — with the CLIENT'S OWN A2P
+ * registration as the thing that gets blocked, not ours. This is a rate
+ * limit, not an opt-out: a stop is the ledger's (lib/consent/gate.ts).
+ *
+ * MODULE-PRIVATE ON PURPOSE. finish-call.test.ts pins the window with its
+ * own literal 24h rather than importing this — a test that reads the
+ * constant it is checking proves only that multiplication works.
+ */
+const TEXTBACK_COOLDOWN_HOURS = 24;
+const TEXTBACK_COOLDOWN_MS = TEXTBACK_COOLDOWN_HOURS * 60 * 60 * 1000;
+
+export interface TextbackRequest {
+  /** E.164, already normalised. No number, no text — the caller decides that. */
+  callerNumber: string;
+  /** A contact this call already established, if any. Null means resolve one
+   *  from caller ID: the minimal "Caller" + number record. */
+  contactId: string | null;
+  /** Overrides how a null `contactId` is resolved. A FUNCTION, not an id, so
+   *  it runs on the far side of the A2P check: an account that is not
+   *  cleared to text must not accumulate contacts for callers it can never
+   *  reach. */
+  resolveContact?: () => Promise<string | null>;
+  /** The language the CALLER spoke, not the profile's setting. */
+  language: "en" | "es";
+  /** Customer-facing name, `brandDisplayName` already applied. NEVER
+   *  `accounts.name`. */
+  brandName: string;
+  /** `voice_profiles.textback_body`. Empty means use the live default. */
+  textbackBody: string;
+  /** Identifies the call in log lines. */
+  label: string;
+  /** The call's row id: the automation-log subject (`call:<id>`) and what a
+   *  release re-reads. Null — a call whose row was never written — cannot
+   *  be held, so outside the hours such a text-back is not sent (logged). */
+  callId: string | null;
+  /** The instant the hours are judged at. finishCall passes the call's own
+   *  end; the release pass its tick; the handoff route the present. */
+  now: Date;
+}
+
+/** What a release needs that the call row cannot cheaply re-derive. */
+export type TextbackPayload = {
+  callerNumber: string; contactId: string; conversationId: string; language: "en" | "es";
+};
+
+export function parseTextbackPayload(raw: unknown): TextbackPayload | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const p = raw as Record<string, unknown>;
+  if (typeof p.callerNumber !== "string" || typeof p.contactId !== "string" || typeof p.conversationId !== "string") return null;
+  if (p.language !== "en" && p.language !== "es") return null;
+  return { callerNumber: p.callerNumber, contactId: p.contactId, conversationId: p.conversationId, language: p.language };
+}
+
+/**
+ * What `prepareTextback` resolved, whether or not anything is being sent.
+ *
+ * The ids come back even when `pending` is null, and that is load-bearing for
+ * `finishCall`: a suppressed text-back still hands its contact and
+ * conversation to the call row, so the call is not orphaned from its thread.
+ */
+export interface TextbackOutcome {
+  /** Null only when the A2P check refused — nothing was written at all. */
+  contactId: string | null;
+  conversationId: string | null;
+  /** Null when nothing goes out NOW; `notSent` says why. */
+  pending: PendingTextback | null;
+  notSent: null | "sender_refused" | "no_contact" | "cooldown" | "held" | "blocked" | "unheld";
+}
+
+export interface PendingTextback {
+  messageId: string;
+  conversationId: string;
+  /** The gate's clearance: the number, the sender and the text as it will go. */
+  cleared: ClearedSms;
+  /** The automation-log subject, or null for a call with no row. */
+  subject: LogSubject | null;
+}
+
+/**
+ * The contact a caller-ID-only call gets: first name "Caller", their number,
+ * source voice. `createContact` dedupes, and a hit backfills blanks rather
+ * than writing a second record.
+ */
+export async function contactForCallerId(
+  db: VoiceDb, accountId: string, callerNumber: string,
+): Promise<string> {
+  const created = await createContact(db, accountId, {
+    firstName: "Caller", phone: callerNumber, source: "voice",
+  }, ACTOR_ID, ACTOR_TYPE);
+  if (created.existing) {
+    // Safe as it stands: this dedupes on the caller ID ALONE, so a match IS
+    // the caller's own contact and the phone fill is a no-op.
+    try {
+      await fillContactBlanks(db, accountId, created.id, { phone: callerNumber }, ACTOR_ID, ACTOR_TYPE);
+    } catch (e) {
+      console.error(`textback fillContactBlanks failed for ${created.id}: ${String(e)}`);
+    }
+  }
+  return created.id;
+}
+
+async function record(db: VoiceDb, w: Parameters<typeof recordAutomationLog>[1], label: string): Promise<void> {
+  try {
+    await recordAutomationLog(db, w);
+  } catch (e) {
+    console.error(`${label}: text-back log write failed (${w.status}): ${String(e)}`);
+  }
+}
+
+/**
+ * Everything up to and including the message row: the A2P check, the body,
+ * the contact, the conversation, the cooldown, the SEND GATE's decision, the
+ * row. `pending` comes back null when nothing goes out now, and `notSent`
+ * and the console say why.
+ *
+ * THE A2P CHECK IS FIRST, before any row is written, so an account that is
+ * not cleared to text does not accumulate contacts and conversations for
+ * callers it can never reach. The gate runs it again; that is its own read.
+ *
+ * Outside the hours (a call missed at 22:00) the gate DEFERS: the text-back
+ * is held on the automation log (source `textback`, subject `call:<id>`)
+ * with what a release needs, and `releaseTextback` sends it at 08:00 through
+ * this same function (spec §4.1 item 4). A stop, a hold or an unconfirmed
+ * number BLOCKS it: one skipped row with the reason, no message row.
+ *
+ * THROWS on an unexpected failure. Every caller wraps it.
+ */
+export async function prepareTextback(
+  db: VoiceDb, accountId: string, r: TextbackRequest,
+): Promise<TextbackOutcome> {
+  const sender = await resolveSmsSender(db, accountId);
+  if (!sender.ok) return { contactId: null, conversationId: null, pending: null, notSent: "sender_refused" };
+
+  // The operator's own body is never translated: they chose those words for
+  // their own customers. Only the DEFAULT follows the caller's language. The
+  // STOP line is the gate's to add (the registry's footer for voice.textback).
+  const body = r.textbackBody.trim() || defaultTextbackBody(r.brandName, r.language);
+
+  const contactId = r.contactId
+    ?? (r.resolveContact ? await r.resolveContact() : await contactForCallerId(db, accountId, r.callerNumber));
+  if (!contactId) return { contactId: null, conversationId: null, pending: null, notSent: "no_contact" };
+  const conversation = await ensureConversation(db, accountId, contactId, ACTOR_ID, ACTOR_TYPE);
+  const conversationId = conversation.id;
+
+  // The cooldown, consulted AFTER the conversation exists (that is what "this
+  // caller" is keyed on) and BEFORE the message row is written.
+  const since = new Date(Date.now() - TEXTBACK_COOLDOWN_MS);
+  if (await hasRecentOutboundSms(db, accountId, conversationId, since)) {
+    console.error(
+      `${r.label}: text-back suppressed — conversation ${conversationId} ` +
+      `already had an outbound SMS within ${TEXTBACK_COOLDOWN_HOURS}h`,
+    );
+    return { contactId, conversationId, pending: null, notSent: "cooldown" };
+  }
+
+  const subject: LogSubject | null = r.callId === null ? null : {
+    accountId, source: "textback", channel: "sms", subjectKey: `call:${r.callId}`, contactId,
+    payload: { callerNumber: r.callerNumber, contactId, conversationId, language: r.language } satisfies TextbackPayload,
+  };
+  const decision = await decideSms(db, {
+    accountId, kind: "voice.textback", to: r.callerNumber, body, contactId, language: r.language, now: r.now,
+  });
+  if (decision.kind === "deferred") {
+    if (!subject) {
+      console.error(`${r.label}: text-back NOT sent — outside the sending hours, and a call with no row cannot be held`);
+      return { contactId, conversationId, pending: null, notSent: "unheld" };
+    }
+    await writeHeld({ db }, subject, decision.until, decision.zone);
+    return { contactId, conversationId, pending: null, notSent: "held" };
+  }
+  if (decision.kind === "blocked") {
+    console.error(`${r.label}: text-back not sent — the send gate refused it (${decision.reason})`);
+    if (subject) await recordBlocked(db, subject, decision.reason, r.label);
+    return { contactId, conversationId, pending: null, notSent: "blocked" };
+  }
+
+  // WRITE THEN SEND: the row exists before anything leaves the building, with
+  // the text exactly as the gate will send it. No unread bump — this text is
+  // OURS, and unread counts inbound.
+  const { id: messageId } = await createMessage(db, accountId, {
+    conversationId, channel: "sms", direction: "outbound", body: decision.send.body,
+  }, ACTOR_ID, ACTOR_TYPE);
+  return {
+    contactId, conversationId, notSent: null,
+    pending: { messageId, conversationId, cleared: decision.send, subject },
+  };
+}
+
+async function recordBlocked(db: VoiceDb, subject: LogSubject, reason: SmsBlockReason, label: string): Promise<void> {
+  // An unreadable ledger is a failure, never a reason a client reads as a choice.
+  const status = reason === "ledger_unavailable" ? "failed" : "skipped";
+  const words = reason === "ledger_unavailable" ? REASONS.failed : BLOCK_REASONS[reason];
+  await record(db, { ...subject, status, reason: words }, label);
+}
+
+/**
+ * The network half, and it NEVER THROWS: every caller reaches it after the
+ * thing that mattered — a call row, or a spoken apology — is already settled.
+ * Returns what happened, for the release pass.
+ *
+ * The gate re-reads the ledger here (`deliverSms`), so a stop that landed
+ * after `prepareTextback` still wins: the message row is marked failed with
+ * the reason, and nothing is sent.
+ *
+ * `label` identifies the call in the log lines. They are the only trace a
+ * failure leaves, so their wording is a contract: finish-call.test.ts
+ * asserts "text-back failed".
+ */
+export async function deliverTextback(
+  db: VoiceDb, accountId: string, pending: PendingTextback, label: string,
+): Promise<"sent" | "failed" | "skipped"> {
+  const { messageId, cleared, subject } = pending;
+  try {
+    const result = await deliverSms(db, cleared);
+    if (result.kind === "blocked") {
+      try {
+        await updateMessageStatus(db, accountId, messageId, "failed",
+          { error: `not sent: ${result.reason}` }, ACTOR_ID, ACTOR_TYPE);
+      } catch (statusError) {
+        console.error(`${label}: could not mark message ${messageId} failed: ${String(statusError)}`);
+      }
+      if (subject) await recordBlocked(db, subject, result.reason, label);
+      console.error(`${label}: text-back not sent — the send gate refused it at delivery (${result.reason})`);
+      return result.reason === "ledger_unavailable" ? "failed" : "skipped";
+    }
+    if (result.kind !== "sent") {
+      // `deferred` cannot come back from deliverSms; a `failed` is the carrier's.
+      const error = result.kind === "failed" ? result.error : "unexpected gate answer";
+      try {
+        await updateMessageStatus(db, accountId, messageId, "failed", { error }, ACTOR_ID, ACTOR_TYPE);
+      } catch (statusError) {
+        console.error(`${label}: could not mark message ${messageId} failed: ${String(statusError)}`);
+      }
+      if (subject) await record(db, { ...subject, status: "failed", reason: REASONS.failed }, label);
+      throw new Error(error);
+    }
+    // The `sent` write FIRST, straight after the send: it stores the provider
+    // id Telnyx's status webhook correlates against. USAGE (client billing)
+    // in its `finally`: the text reached the customer, so its segments bill
+    // even when that write throws into the catch below.
+    try {
+      await updateMessageStatus(db, accountId, messageId, "sent",
+        { providerMessageId: result.providerMessageId }, ACTOR_ID, ACTOR_TYPE);
+    } finally {
+      if (result.billable) {
+        await recordUsageSafely(db, {
+          accountId, meter: "sms", quantity: result.segments,
+          occurredAt: new Date(), sourceRef: `message:${messageId}`,
+        }, label);
+      }
+    }
+    if (subject) await record(db, { ...subject, status: "sent", reason: "" }, label);
+    return "sent";
+  } catch (e) {
+    console.error(`${label}: text-back failed: ${String(e)}`);
+    return "failed";
+  }
+}
+
+/**
+ * The release (source `textback`, from release-held.ts): the call missed at
+ * 22:00 gets its text at 08:00. Re-reads the voice profile (the operator may
+ * have turned the text-back off, or rewritten it, overnight) and the brand,
+ * then runs `prepareTextback` again from the held row's payload — every
+ * check re-applies, the cooldown included — and delivers.
+ */
+export const releaseTextback: Releaser = async (ctx, row: AutomationLogRow) => {
+  const match = /^call:(.+)$/.exec(row.subject_key);
+  const payload = parseTextbackPayload(row.payload);
+  if (!match || !payload) {
+    await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
+    return "skipped";
+  }
+  const db = ctx.db as VoiceDb;
+  const profile = await getVoiceProfile(db, row.account_id);
+  if (!profile?.textback_enabled) {
+    await logSkipped(ctx, subjectOf(row), REASONS.recipeOff);
+    return "skipped";
+  }
+  const branding = await getBranding(db, row.account_id);
+  const label = `release textback call ${match[1]}`;
+  const outcome = await prepareTextback(db, row.account_id, {
+    callerNumber: payload.callerNumber, contactId: payload.contactId, language: payload.language,
+    brandName: brandDisplayName(branding), textbackBody: profile.textback_body ?? "",
+    label, callId: match[1]!, now: ctx.now,
+  });
+  if (outcome.pending) return deliverTextback(db, row.account_id, outcome.pending, label);
+  switch (outcome.notSent) {
+    case "held": return "held";
+    case "blocked": return "skipped";
+    case "cooldown":
+      await logSkipped(ctx, subjectOf(row), REASONS.recentText);
+      return "skipped";
+    case "sender_refused":
+      await logSkipped(ctx, subjectOf(row), REASONS.smsGate);
+      return "skipped";
+    default:
+      await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
+      return "skipped";
+  }
+};
+```
+
+Apply to `apps/web/src/lib/voice/finish-call.ts` (against the task's parent commit):
+
+```diff
+@@ -546,6 +546,10 @@ export async function finishCall(
+         brandName: brandDisplayName(ctx.branding),
+         textbackBody: ctx.textbackBody,
+         label: `finishCall ${meta.callRowId ?? "(no row)"}`,
++        // The call's own row and instant: the held row's subject, and the
++        // clock the sending hours are judged at (never a freshly-read one).
++        callId: meta.callRowId,
++        now: meta.endedAt,
+       });
+       // Assigned to the OUTER ids rather than shadowed: the call row below
+       // points at the contact and conversation the text lives in, and a
+@@ -614,7 +618,7 @@ export async function finishCall(
+   // defense-in-depth every other leg in this function carries.
+   if (pendingAlertSms) {
+     try {
+-      await deliverAlertSms(ctx.accountId, pendingAlertSms);
++      await deliverAlertSms(ctx.db, ctx.accountId, pendingAlertSms);
+     } catch (e) {
+       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS deliver failed: ${String(e)}`);
+     }
+```
+
+Apply to `apps/web/src/app/api/voice/texml/handoff-result/route.ts` (against the task's parent commit):
+
+```diff
+@@ -289,6 +289,8 @@ async function decide(token: string, status: string): Promise<string> {
+           brandName: brandDisplayName(branding),
+           textbackBody,
+           label: `handoff-result ${callId}`,
++          callId,
++          now: new Date(),
+         });
+         if (outcome.pending) {
+           await deliverTextback(db, accountId, outcome.pending, `handoff-result ${callId}`);
+```
+
+Apply to `apps/web/src/lib/sms/alerts.ts` (against the task's parent commit):
+
+```diff
+@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@bis/db";
+ import { ALERT_CODE_TTL_MINUTES } from "@bis/db";
+ import { segmentsFor } from "./segments";
+ import { resolveSmsSender, refusesAlertLoop } from "./sender";
+-import { getSmsProvider } from "./index";
++import { sendSms } from "@/lib/consent/gate";
+ 
+ /**
+  * Business-side alert texts — the SMS twin of `bookingAlertEmail`/
+@@ -162,27 +162,30 @@ export async function prepareAlertSms(
+ }
+ 
+ /**
+- * Phase 2: the actual provider POST, and the only half with a carrier round
+- * trip in it. NEVER throws — a failure is logged and swallowed here so it
+- * can never cost the booking/call write it rides beside, same contract
+- * `sendAlertSms` always had.
++ * Phase 2: the send, through the SEND GATE (consent chain PR-1, kind
++ * `operator.alert_sms`), and the only half with a carrier round trip in it.
++ * The gate re-checks the sender, and the ledger too: a business owner who
++ * texted STOP to their own business line gets no alerts from it (decision
++ * 2). An alert keeps no hours. `pending.from` is the number prepare saw; the
++ * gate resolves its own. NEVER throws — a failure is logged and swallowed
++ * here so it can never cost the booking/call write it rides beside.
+  *
+  * Logs the provider message id AND the destination on SUCCESS too, not only
+- * on failure (alert-send-report follow-up review, finding 5: a failed alert
+- * had no symptom anywhere — no message row exists for this send, 0035's own
+- * decision 3 is why there must never be one, so the provider's delivery
+- * callback had nothing to correlate against and nothing else in this path
+- * ever logged a success at all). This is the cheap end of that finding, not
+- * the thorough one: a durable, agency-visible send record would need a
+- * product decision about where an agency would see it, which is outside a
+- * bug-fix pass — recorded as a deferred item, not silently dropped.
++ * on failure (alert-send-report follow-up review, finding 5): no message row
++ * exists for this send (0035's decision 3), so the console is its only record.
+  */
+-export async function deliverAlertSms(accountId: string, pending: PendingAlertSms): Promise<void> {
++export async function deliverAlertSms(
++  db: SupabaseClient, accountId: string, pending: PendingAlertSms,
++): Promise<void> {
+   try {
+-    const { providerMessageId } = await getSmsProvider().send(pending);
+-    console.error(
+-      `alert SMS sent for account ${accountId}: to ${pending.to} providerMessageId ${providerMessageId}`,
+-    );
++    const result = await sendSms(db, { accountId, kind: "operator.alert_sms", to: pending.to, body: pending.body });
++    if (result.kind === "sent") {
++      console.error(`alert SMS sent for account ${accountId}: to ${result.to} providerMessageId ${result.providerMessageId}`);
++      return;
++    }
++    const why = result.kind === "blocked" ? `not sent (${result.reason})`
++      : result.kind === "failed" ? result.error : "deferred";
++    console.error(`alert SMS send failed for account ${accountId}: ${why}`);
+   } catch (e) {
+     console.error(`alert SMS send failed for account ${accountId}: ${String(e)}`);
+   }
+@@ -210,7 +213,7 @@ export async function sendAlertSms(
+   try {
+     const pending = await prepareAlertSms(db, accountId, alertPhone, body);
+     if (!pending) return;
+-    await deliverAlertSms(accountId, pending);
++    await deliverAlertSms(db, accountId, pending);
+   } catch (e) {
+     console.error(`alert SMS send failed for account ${accountId}: ${String(e)}`);
+   }
+```
+
+Apply to `apps/web/src/lib/automations/passes/release-held.ts` (against the task's parent commit):
+
+```diff
+@@ -11,6 +11,7 @@ import { releaseReferralAsk } from "./referral-ask";
+ import { releaseReactivation } from "./reactivation";
+ import { releaseQuoteFollowup } from "./quote-followup";
+ import { releaseInstantReply } from "../instant-reply";
++import { releaseTextback } from "@/lib/voice/textback";
+ 
+ /**
+  * The queue's consumer (spec §1, amendment 1). FIRST in the registry on
+@@ -79,6 +80,7 @@ export const RELEASERS: Record<AutomationLogSource, Releaser | null> = {
+   referral_ask: releaseReferralAsk,
+   reactivation: releaseReactivation,
+   quote_followup: releaseQuoteFollowup,
++  textback: releaseTextback,
+   weekly_report: null,
+   concierge: null,
+   voice: null,
+```
+
+Apply to `apps/web/src/lib/automations/log-titles.ts` (against the task's parent commit):
+
+```diff
+@@ -19,6 +19,7 @@ export const SOURCE_TITLES: Record<AutomationLogSource, string> = {
+   referral_ask: m["automations.referral.title"],
+   reactivation: m["automations.reactivation.title"],
+   quote_followup: m["automations.quoteFollowup.title"],
++  textback: m["activity.source.textback"],
+ };
+ 
+ export const CHANNEL_WORDS: Record<AutomationLogChannel, string> = {
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/voice src/lib/sms src/lib/automations src/app/api/voice
+pnpm typecheck
+pnpm test
+cd ../../packages/db && pnpm typecheck
+```
+
+Expected (the staged replay's GREEN run):
+145 passed across the task's test files:
+- `src/lib/sms/alerts.test.ts`: 31 passed
+- `src/lib/voice/finish-call.test.ts`: 98 passed
+- `src/lib/voice/textback.test.ts`: 16 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4391 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+7 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **a deferred text-back sent anyway** — in `src/lib/voice/textback.ts`: `    await writeHeld({ db }, subject, decision.until, decision.zone);⏎    return { contactId, conversationId, pending: null, notSent: "held" };` → `    return { contactId, conversationId, pending: null, notSent: null };`; turns red 1 test:
+    - prepareTextback: the send gate decides before any row a call missed at 22:00 is HELD until 08:00 on the automation log — source textback, subject call:<id>, with what a release needs — and nothing else is written (mutation: send at night → FAILS)
+2. **a refusal not logged** — in `src/lib/voice/textback.ts`: `    if (subject) await recordBlocked(db, subject, decision.reason, r.label);⏎    return { contactId, conversationId, pending: null, notSent: "blocked" };` → `    return { contactId, conversationId, pending: null, notSent: "blocked" };`; turns red 2 tests:
+    - prepareTextback: the send gate decides before any row a number that stopped texts gets nothing: no message row, one skipped row with the reason (mutation: skip the gate → a row is written, FAILS)
+    - prepareTextback: the send gate decides before any row an unreadable ledger is a FAILED row, not a skipped one, so it is not read as the customer's choice (mutation: log it skipped → FAILS)
+3. **row body without the footer** — in `src/lib/voice/textback.ts`: `conversationId, channel: "sms", direction: "outbound", body: decision.send.body,` → `conversationId, channel: "sms", direction: "outbound", body,`; turns red 3 tests:
+    - finishCall — missed-call text-back texts back an ABANDONED caller when the toggle is on, and creates the contact
+    - finishCall — missed-call text-back signs with the BRAND name — the context has no agency label left to sign with
+    - prepareTextback: the send gate decides before any row inside the hours: one message row with the text AS SENT (the gate's STOP line) and a pending send to the caller (mutation: store the body without the footer → FAILS)
+4. **an unreadable ledger logged skipped** — in `src/lib/voice/textback.ts`: `  const status = reason === "ledger_unavailable" ? "failed" : "skipped";` → `  const status = "skipped";`; turns red 1 test:
+    - prepareTextback: the send gate decides before any row an unreadable ledger is a FAILED row, not a skipped one, so it is not read as the customer's choice (mutation: log it skipped → FAILS)
+5. **the call's own clock ignored** — in `src/lib/voice/textback.ts`: `    accountId, kind: "voice.textback", to: r.callerNumber, body, contactId, language: r.language, now: r.now,` → `    accountId, kind: "voice.textback", to: r.callerNumber, body, contactId, language: r.language,`; turns red 2 tests:
+    - prepareTextback: the send gate decides before any row a call missed at 22:00 is HELD until 08:00 on the automation log — source textback, subject call:<id>, with what a release needs — and nothing else is written (mutation: send at night → FAILS)
+    - prepareTextback: the send gate decides before any row a call with no row cannot be held: at 22:00 nothing is written and the console says so (mutation: hold under a made-up key → FAILS)
+6. **alert kind with hours** — in `src/lib/sms/alerts.ts`: `const result = await sendSms(db, { accountId, kind: "operator.alert_sms",` → `const result = await sendSms(db, { accountId, kind: "voice.textback",`; turns red 2 tests:
+    - prepareAlertSms / deliverAlertSms (the finish-call ordering split) deliverAlertSms performs the actual provider send from a prepared payload
+    - sendAlertSms attempts the send through resolveSmsSender's own from-number when the gate is open
+7. **text-back never released** — in `src/lib/automations/passes/release-held.ts`: `  textback: releaseTextback,` → `  textback: null,`; turns red 1 test:
+    - releaseHeldPass only the three non-releasable sources map to null — every recipe source has a real releaser
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/lib/voice/textback.test.ts" \
+        "apps/web/src/lib/voice/finish-call.test.ts" \
+        "apps/web/src/lib/sms/alerts.test.ts" \
+        "packages/db/src/automation-log.ts" \
+        "apps/web/src/lib/voice/textback.ts" \
+        "apps/web/src/lib/voice/finish-call.ts" \
+        "apps/web/src/app/api/voice/texml/handoff-result/route.ts" \
+        "apps/web/src/lib/sms/alerts.ts" \
+        "apps/web/src/lib/automations/passes/release-held.ts" \
+        "apps/web/src/lib/automations/log-titles.ts"
+git commit -m "feat(voice): the text-back and the call alert through the send gate; the text-back waits for the hours"
+```
+
+---
+
+### Task 12: The text composer: refused by the gate, closed on render with one line
+
+**Owner:** bis-comms. **Lane:** B (Phase 3). **Depends on:** Task 8; Task 6 (the `compose.*` lines); Task 7 (the contact page arrives on `e164Of`).
+
+Spec §6, "The conversation composer": the Text tab is closed, with one line, when the recipient's texts are stopped, held or the number is unconfirmed, decided on RENDER from the same two facts the gate reads; and the action, going through the gate (`staff.composer_sms`, any hour), says the same line after an attempt from a stale tab (G10).
+
+**Files:**
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts` (31 → 35 tests)
+- Create: `apps/web/src/lib/consent/composer-state.test.ts` (6 tests)
+- Create: `apps/web/src/lib/consent/recipient-state.test.ts` (6 tests)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts` (3 → 6 tests) (an intermediate state; a later task finishes it)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts`
+- Create: `apps/web/src/lib/consent/composer-state.ts`
+- Create: `apps/web/src/lib/consent/recipient-state.ts`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx` (an intermediate state; a later task finishes it)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.tsx`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/message-composer.tsx`
+
+**Interfaces:**
+- Produces: `type SmsRecipientState = ok | stopped { since } | held { since } | unconfirmed_number | unknown`, `composerStateLine(state, zone): string | null`, `composerBlockedLine(reason)` (`lib/consent/composer-state.ts`, pure, client-safe); `smsRecipientState(db, accountId, contact): Promise<SmsRecipientState>` (`lib/consent/recipient-state.ts`, server, never throws).
+- `ActivityTimeline` and `MessageComposer` gain `smsBlockedLine: string | null`.
+
+**Mock factories changed** (Global Constraints, `vi.mock("@bis/db")`): `conversations/actions.test.ts` gains the gate's four reads (the composer uses the REAL gate); `[contactId]/page.test.ts` mocks `@/lib/consent/recipient-state` and captures `ActivityTimeline`'s props.
+
+- [ ] **Step 1: Write the failing tests**
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts` (against the task's parent commit):
+
+```diff
+@@ -127,12 +127,22 @@ vi.mock("@bis/db", () => ({
+     return svc.db;
+   },
+   recordUsage: vi.fn(),
++  // The send gate's reads (lib/consent/gate.ts): the composer goes through
++  // the REAL gate, so its ledger and country-flag reads are mocked here,
++  // allowed by default.
++  readConsentState: vi.fn(async () => ({ state: "allowed" })),
++  readPhoneCountryFlag: vi.fn(async () => false),
++  readAccountTimezone: vi.fn(async () => "America/Chicago"),
++  recordCarrierBlock: vi.fn(),
+ }));
+ 
+ import { sendEmailAction, sendSmsAction, markConversationReadAction } from "./actions";
+ import {
+   createMessage, updateMessageStatus, recordUsage, getContact, ensureConversation, clearUnreadCount,
++  readConsentState, readPhoneCountryFlag,
+ } from "@bis/db";
++import { m } from "@/lib/messages";
++import { isSendRejected, sendRejectedReason } from "./send-errors";
+ 
+ const createMessageMock = vi.mocked(createMessage);
+ const updateMessageStatusMock = vi.mocked(updateMessageStatus);
+@@ -293,14 +303,16 @@ describe("sendSmsAction — the from number comes from the gate and nowhere else
+     expect(smsSendMock).toHaveBeenCalledWith(expect.objectContaining({ from: "+19565550001" }));
+   });
+ 
+-  it("reads the gate on the request client, not the service client (mutation: resolveSmsSender(serviceDb()) -> FAILS)", async () => {
++  it("the send gate runs on the SERVICE client, and only after the contact was read on the request client, the read that authorises it (mutation: read the contact on the service client -> FAILS)", async () => {
+     await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+ 
+-    expect(gateMock.mock.calls[0]![0]).toBe(req.db);
++    expect(vi.mocked(getContact).mock.calls[0]![0]).toBe(req.db);
++    expect(gateMock.mock.calls[0]![0]).toBe(svc.db);
++    expect(vi.mocked(getContact).mock.invocationCallOrder[0]!).toBeLessThan(gateMock.mock.invocationCallOrder[0]!);
+   });
+ });
+ 
+-describe("sendSmsAction — the contact's phone must survive toE164 before anything is written", () => {
++describe("sendSmsAction — the contact's phone must survive normalisation (F-009) before anything is written", () => {
+   it("rejects an unnormalizable phone before any row is written", async () => {
+     contactRow.phone = "not a phone";
+ 
+@@ -519,3 +531,45 @@ describe("0053 — every write-path action requires access before touching anyth
+     expect(vi.mocked(clearUnreadCount)).not.toHaveBeenCalled();
+   });
+ });
++
++/**
++ * Consent chain PR-1 (spec §6): the composer goes through the send gate as
++ * `staff.composer_sms`. A refusal after an attempt (a stale tab, or a stop
++ * that landed since the page rendered) says the SAME line the composer shows
++ * on render (lib/consent/composer-state.ts); an unreadable ledger is a
++ * failure, never worded as the customer's choice.
++ */
++describe("sendSmsAction — the consent gate's refusals", () => {
++  const send = () => sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" })).catch((e: unknown) => e);
++
++  it("a stopped number: rejected with the composer's own stopped line; nothing written, nothing sent (mutation: rethrow the raw reason → FAILS)", async () => {
++    vi.mocked(readConsentState).mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T15:00:00Z", method: "keyword", eventId: "e1" });
++    expect(sendRejectedReason(await send())).toBe(m["compose.smsStoppedUndated"]);
++    expect(createMessageMock).not.toHaveBeenCalled();
++    expect(smsSendMock).not.toHaveBeenCalled();
++  });
++
++  it("held, and a number that could be Mexican or US, each say their own line (mutation: swap the two lines → FAILS)", async () => {
++    vi.mocked(readConsentState).mockResolvedValueOnce({ state: "held", since: "2026-10-03T15:00:00Z", method: "free_text", eventId: "e2" });
++    expect(sendRejectedReason(await send())).toBe(m["compose.smsHeld"]);
++    vi.mocked(readPhoneCountryFlag).mockResolvedValueOnce(true);
++    expect(sendRejectedReason(await send())).toBe(m["compose.smsCheckNumber"]);
++    expect(smsSendMock).not.toHaveBeenCalled();
++  });
++
++  it("an unreadable ledger is a FAILURE, not a rejection worded as the customer's choice (mutation: map it to the stopped line → FAILS)", async () => {
++    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
++    vi.mocked(readConsentState).mockRejectedValueOnce(new Error("permission denied for table consent_events"));
++    const e = await send();
++    expect(isSendRejected(e)).toBe(false);
++    expect(String(e)).toContain("the consent ledger could not be read");
++    expect(smsSendMock).not.toHaveBeenCalled();
++    spy.mockRestore();
++  });
++
++  it("the ledger is read for THIS account, sms, on the contact's NORMALISED number (mutation: pass the stored phone as typed → FAILS)", async () => {
++    contactRow.phone = "(956) 292-1696";
++    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
++    expect(vi.mocked(readConsentState)).toHaveBeenCalledWith(svc.db, "acct_1", "sms", "+19562921696");
++  });
++});
+```
+
+Create `apps/web/src/lib/consent/composer-state.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { m } from "@/lib/messages";
+import { composerBlockedLine, composerStateLine } from "./composer-state";
+
+/**
+ * The text composer's one line (consent chain spec §6). The render-time line
+ * and the after-attempt line come from this one module, so the two can never
+ * say different things.
+ */
+describe("composerStateLine", () => {
+  it("ok is null: the form shows", () => {
+    expect(composerStateLine({ kind: "ok" }, "America/Chicago")).toBeNull();
+  });
+
+  it("stopped: the spec's sentence with the stop's calendar day IN THE ZONE (mutation: format in UTC → 'Oct 4', FAILS)", () => {
+    const line = composerStateLine({ kind: "stopped", since: "2026-10-04T02:30:00.000Z" }, "America/Chicago");
+    expect(line).toMatch(/^They stopped texts on Oct 3, 2026\. You can't text this number until they text START\.$/);
+  });
+
+  it("stopped with a date that will not format: the undated line, never a throw inside a render", () => {
+    expect(composerStateLine({ kind: "stopped", since: "not a date" }, "America/Chicago")).toBe(m["compose.smsStoppedUndated"]);
+  });
+
+  it("held, unconfirmed and unknown each say their own line (mutation: swap held and unconfirmed → FAILS)", () => {
+    expect(composerStateLine({ kind: "held", since: "2026-10-03T00:00:00Z" }, "UTC")).toBe(m["compose.smsHeld"]);
+    expect(composerStateLine({ kind: "unconfirmed_number" }, "UTC")).toBe(m["compose.smsCheckNumber"]);
+    expect(composerStateLine({ kind: "unknown" }, "UTC")).toBe(m["compose.smsStateUnknown"]);
+  });
+});
+
+describe("composerBlockedLine — what the action says after a refused attempt", () => {
+  it("says the same thing the render would, undated (the action has no date to hand)", () => {
+    expect(composerBlockedLine("stopped")).toBe(m["compose.smsStoppedUndated"]);
+    expect(composerBlockedLine("held")).toBe(m["compose.smsHeld"]);
+    expect(composerBlockedLine("unconfirmed_number")).toBe(m["compose.smsCheckNumber"]);
+  });
+
+  it("the spec's §6 example sentence, verbatim, is the dated line's shape", () => {
+    expect(m["compose.smsStopped"]).toBe("They stopped texts on {date}. You can't text this number until they text START.");
+  });
+});
+```
+
+Create `apps/web/src/lib/consent/recipient-state.test.ts`:
+
+```ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const readConsentState = vi.fn();
+vi.mock("@bis/db", () => ({ readConsentState: (...a: unknown[]) => readConsentState(...a) }));
+
+const { smsRecipientState } = await import("./recipient-state");
+const DB = {} as never;
+
+/**
+ * The contact page's read for the text composer: the same two facts the
+ * send gate checks (gate.ts steps 4 and 5). Never throws.
+ */
+describe("smsRecipientState", () => {
+  beforeEach(() => {
+    readConsentState.mockReset().mockResolvedValue({ state: "allowed" });
+  });
+
+  it("reads the ledger on the NORMALISED number, sms channel (mutation: pass the raw phone → FAILS)", async () => {
+    await smsRecipientState(DB, "a1", { phone: "(956) 292-1696", phone_country_unconfirmed: false });
+    expect(readConsentState).toHaveBeenCalledWith(DB, "a1", "sms", "+19562921696");
+  });
+
+  it("stopped and held carry the deciding row's time", async () => {
+    readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T15:00:00Z", method: "keyword", eventId: "e1" });
+    expect(await smsRecipientState(DB, "a1", { phone: "+19562921696" }))
+      .toEqual({ kind: "stopped", since: "2026-10-03T15:00:00Z" });
+    readConsentState.mockResolvedValueOnce({ state: "held", since: "2026-10-03T16:00:00Z", method: "keyword_ambiguous", eventId: "e2" });
+    expect(await smsRecipientState(DB, "a1", { phone: "+19562921696" }))
+      .toEqual({ kind: "held", since: "2026-10-03T16:00:00Z" });
+  });
+
+  it("a stop outranks an unconfirmed number: the stop is the fact the operator needs (mutation: check the flag first → FAILS)", async () => {
+    readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T15:00:00Z", method: "keyword", eventId: "e1" });
+    expect((await smsRecipientState(DB, "a1", { phone: "+15512345678", phone_country_unconfirmed: true })).kind).toBe("stopped");
+  });
+
+  it("the flag, OR a stored number that reads both ways, is unconfirmed (mutation: drop either half → FAILS)", async () => {
+    expect((await smsRecipientState(DB, "a1", { phone: "+15512345678", phone_country_unconfirmed: true })).kind).toBe("unconfirmed_number");
+    expect((await smsRecipientState(DB, "a1", { phone: "55 1234 5678", phone_country_unconfirmed: false })).kind).toBe("unconfirmed_number");
+  });
+
+  it("a read that fails is 'unknown', logged without the number, never thrown (it fails closed)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    readConsentState.mockRejectedValueOnce(new Error("permission denied for table consent_events"));
+    expect(await smsRecipientState(DB, "a1", { phone: "+19562921696" })).toEqual({ kind: "unknown" });
+    expect(err.mock.calls.flat().join(" ")).not.toContain("9562921696");
+    err.mockRestore();
+  });
+
+  it("no textable number is 'ok' with no read: the composer's no-phone line already covers it", async () => {
+    expect(await smsRecipientState(DB, "a1", { phone: null })).toEqual({ kind: "ok" });
+    expect(await smsRecipientState(DB, "a1", { phone: "12" })).toEqual({ kind: "ok" });
+    expect(readConsentState).not.toHaveBeenCalled();
+  });
+});
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts` (against the task's parent commit):
+
+```diff
+@@ -63,8 +63,17 @@ vi.mock("./actions", () => ({
+ vi.mock("../actions", () => ({
+   updateContactFieldAction: async () => ({ ok: true }), setMarketingEmailOptOutAction: async () => ({ ok: true }),
+ }));
+-// The timeline is not what this pins, and it pulls in the message composer.
+-vi.mock("./activity-timeline", () => ({ ActivityTimeline: () => null }));
++// The timeline pulls in the message composer; only its props are pinned.
++const timelineProps = vi.fn();
++vi.mock("./activity-timeline", () => ({
++  ActivityTimeline: (props: Record<string, unknown>) => { timelineProps(props); return null; },
++}));
++// Consent chain PR-1: the composer's recipient read, stubbed per test.
++const recipientState = vi.fn();
++vi.mock("@/lib/consent/recipient-state", () => ({
++  smsRecipientState: (...a: unknown[]) => recipientState(...a),
++}));
++
+ 
+ /** The switch's props, as the REAL panel hands them down — so this proves the
+  *  zone reaches the switch, not merely the panel. */
+@@ -82,6 +91,8 @@ vi.mock("next/navigation", () => ({
+ }));
+ 
+ const { default: ContactDetailPage } = await import("./page");
++const { m } = await import("@/lib/messages");
++const { formatDateInZone } = await import("@/lib/format");
+ 
+ const CONTACT = {
+   id: "ct1", first_name: "Ana", last_name: "Reyes", email: "ana@example.com", phone: null,
+@@ -100,6 +111,7 @@ describe("ContactDetailPage: the zone the opt-out's date is printed in", () => {
+     switchProps.mockClear();
+     renderZone.mockClear();
+     accountsEq.mockClear();
++    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+   });
+ 
+   it("the account's own timezone reaches the switch (mutation: renderZone(undefined) -> FAILS)", async () => {
+@@ -136,3 +148,37 @@ describe("ContactDetailPage: the zone the opt-out's date is printed in", () => {
+     expect(switchProps).not.toHaveBeenCalled();
+   });
+ });
++
++/**
++ * Consent chain PR-1 (spec §6): the composer is closed, with one line, when
++ * the recipient's texts are stopped, held or the number is unconfirmed.
++ */
++describe("ContactDetailPage: the recipient's texts state", () => {
++  beforeEach(() => {
++    getContactMock.mockReset().mockResolvedValue(CONTACT);
++    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
++    timelineProps.mockClear();
++  });
++
++  it("a stopped number: the composer's line carries the stop date in the ACCOUNT's zone (mutation: format the date in UTC → 'Oct 4', FAILS)", async () => {
++    // 02:30Z on the 4th is still the 3rd in Chicago: a UTC date would say 4.
++    recipientState.mockResolvedValue({ kind: "stopped", since: "2026-10-04T02:30:00.000Z" });
++    await render();
++    expect(recipientState).toHaveBeenCalledWith(expect.anything(), "acct1", CONTACT);
++    expect(timelineProps.mock.calls[0]![0]).toMatchObject({
++      smsBlockedLine: m["compose.smsStopped"].replace("{date}", formatDateInZone("2026-10-04T02:30:00.000Z", "America/Chicago")),
++    });
++    expect(String(timelineProps.mock.calls[0]![0].smsBlockedLine)).toContain("Oct 3");
++  });
++
++  it("an ok recipient: no line, the form shows (mutation: always pass the held line → FAILS)", async () => {
++    await render();
++    expect(timelineProps.mock.calls[0]![0]).toMatchObject({ smsBlockedLine: null });
++  });
++
++  it("an unreadable state closes the composer with the error line, never an open form", async () => {
++    recipientState.mockResolvedValue({ kind: "unknown" });
++    await render();
++    expect(timelineProps.mock.calls[0]![0]).toMatchObject({ smsBlockedLine: m["compose.smsStateUnknown"] });
++  });
++});
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts" src/lib/consent/composer-state.test.ts src/lib/consent/recipient-state.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts"
+```
+
+Expected (the staged replay's RED run):
+- `src/lib/consent/composer-state.test.ts`: **fails to load** (6 tests once it loads): `Cannot find module './composer-state' imported from apps/web/src/lib/consent/composer-state.test.ts`
+- `src/lib/consent/recipient-state.test.ts`: **fails to load** (6 tests once it loads): `Cannot find module '/src/lib/consent/recipient-state' imported from apps/web/src/lib/consent/recipient-state.test.ts`
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts`: **5 failing** that Step 4 turns green; 30 already pass:
+  - sendSmsAction — the from number comes from the gate and nowhere else the send gate runs on the SERVICE client, and only after the contact was read on the request client, the read that authorises it (mutation: read the contact on the service client -> FAILS)
+  - sendSmsAction — the consent gate's refusals a stopped number: rejected with the composer's own stopped line; nothing written, nothing sent (mutation: rethrow the raw reason → FAILS)
+  - sendSmsAction — the consent gate's refusals held, and a number that could be Mexican or US, each say their own line (mutation: swap the two lines → FAILS)
+  - sendSmsAction — the consent gate's refusals an unreadable ledger is a FAILURE, not a rejection worded as the customer's choice (mutation: map it to the stopped line → FAILS)
+  - sendSmsAction — the consent gate's refusals the ledger is read for THIS account, sms, on the contact's NORMALISED number (mutation: pass the stored phone as typed → FAILS)
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts`: **3 failing** that Step 4 turns green; 3 already pass:
+  - ContactDetailPage: the recipient's texts state a stopped number: the composer's line carries the stop date in the ACCOUNT's zone (mutation: format the date in UTC → 'Oct 4', FAILS)
+  - ContactDetailPage: the recipient's texts state an ok recipient: no line, the form shows (mutation: always pass the held line → FAILS)
+  - ContactDetailPage: the recipient's texts state an unreadable state closes the composer with the error line, never an open form
+
+- [ ] **Step 3: Implement**
+
+Replace the whole file `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts` with:
+
+```ts
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { requireAccountAccess } from "@/lib/auth";
+import { dbForRequest } from "@/lib/db";
+import {
+  getContact, ensureConversation, createMessage, updateMessageStatus,
+  clearUnreadCount, serviceDb,
+} from "@bis/db";
+import { getEmailProvider } from "@/lib/email";
+import { normalizeReplyTo } from "@/lib/email/reply-to";
+import { emailBrand } from "@/lib/email/templates/shell";
+import { outboundEmail } from "@/lib/email/templates/outbound";
+import { sendSms } from "@/lib/consent/gate";
+import { composerBlockedLine } from "@/lib/consent/composer-state";
+import { recordUsageSafely } from "@/lib/billing/usage";
+import { m } from "@/lib/messages";
+// A prefix on `.message` rather than an Error subclass: thrown Errors are
+// serialized across the server-action boundary and do not keep a custom
+// prototype chain on the way back to the client. Lives in its own module
+// because a "use server" file may only export async functions.
+import { sendRejected as rejectSend } from "./send-errors";
+
+export async function sendEmailAction(accountId: string, formData: FormData): Promise<void> {
+  const { userId } = await requireAccountAccess(accountId);
+  const contactId = String(formData.get("contactId") ?? "");
+  const subject = String(formData.get("subject") ?? "").trim();
+  const body = String(formData.get("body") ?? "").trim();
+  if (!contactId || !body) rejectSend("contactId and body required");
+
+  const db = await dbForRequest();
+  const contact = await getContact(db, accountId, contactId);
+  if (!contact) rejectSend("contact not in account");
+  if (!contact.email) rejectSend("contact has no email address");
+
+  // 0053: conversations and messages are written by server code only. The
+  // read above ran as the signed-in user under RLS, so `contact` is known to
+  // belong to THIS account; that is what authorises the writes below, which
+  // go through the service client scoped to the same accountId.
+  const writer = serviceDb();
+
+  const convo = await ensureConversation(writer, accountId, contactId, userId);
+
+  // Write-then-send: the row exists before anything leaves the building, so a
+  // provider failure is a visible `failed` message rather than a silent gap.
+  const { id: messageId } = await createMessage(writer, accountId, {
+    conversationId: convo.id, channel: "email", direction: "outbound",
+    subject: subject || undefined, body,
+  }, userId);
+
+  // One row, three jobs: the display name, the reply-to, and everything the
+  // template needs to wear the company's brand. getBranding() here would be a
+  // second round trip to a row this query already returns. `name` is NOT
+  // selected: that column is the agency's internal label and `emailBrand` has
+  // no parameter left to receive it.
+  const { data: account } = await db.from("accounts")
+    .select("reply_to_email, from_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
+    .eq("id", accountId).maybeSingle();
+
+  const brand = emailBrand({
+    brandName: account?.brand_name ?? null,
+    brandLogoPath: account?.brand_logo_path ?? null,
+    brandColor: account?.brand_color ?? null,
+    brandNeutral: account?.brand_neutral ?? null,
+    brandCorners: account?.brand_corners ?? null,
+    brandType: account?.brand_type ?? null,
+    brandMode: account?.brand_mode ?? null,
+    replyToEmail: account?.reply_to_email ?? null,
+  });
+
+  const { html, text } = outboundEmail({ brand, body });
+
+  // Only the send itself is guarded: once send() has succeeded the email is
+  // gone and irrevocably out the door, so a failure recording that (a rare
+  // DB error) must never be re-labeled "failed" here — that would tell the
+  // operator a delivered email didn't go out, and drop the provider message
+  // id the delivery webhook needs to correlate against.
+  let providerMessageId: string;
+  try {
+    ({ providerMessageId } = await getEmailProvider().send({
+      to: contact.email,
+      // The BRAND name. `accounts.name` is the agency's internal label for this
+      // company ("Rio Roofing — trial") and was reaching the customer's From
+      // line on every message.
+      fromName: brand.name,
+      // The client's own domain, when they have one. Undefined falls back to
+      // EMAIL_FROM inside the provider, which is every account until the agency
+      // sets one — and stays the behaviour for the lead alert always (spec §3).
+      fromAddress: account?.from_email ?? undefined,
+      subject: subject || "(no subject)",
+      body: text,
+      html,
+      // Where the customer's reply lands, and it depends on the line above.
+      // Unset, the reply follows the From address: the BIS mailbox while this
+      // account still sends from crm@bis-rgv.com, and the client's own
+      // sending domain once from_email is set — which for the send-only
+      // subdomain we recommend usually has no mailbox at all. Either way the
+      // company that wrote to them never sees it. Unset omits the header,
+      // which is what every account does until someone fills the field in.
+      replyTo: normalizeReplyTo(account?.reply_to_email),
+    }));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "unknown send failure";
+    await updateMessageStatus(writer, accountId, messageId, "failed", { error: message }, userId);
+    // The failed row must be visible without a manual reload — the toast
+    // that follows this throw says exactly that.
+    revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
+    revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+    throw e;
+  }
+
+  await updateMessageStatus(writer, accountId, messageId, "sent", { providerMessageId }, userId);
+
+  revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
+  revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+}
+
+export async function sendSmsAction(accountId: string, formData: FormData): Promise<void> {
+  const { userId } = await requireAccountAccess(accountId);
+  const contactId = String(formData.get("contactId") ?? "");
+  const body = String(formData.get("body") ?? "").trim();
+  if (!contactId || !body) rejectSend("contactId and body required");
+
+  // The contact is read as the signed-in user under RLS: that read is what
+  // proves the contact belongs to THIS account, and it authorises the
+  // service-client writes below (0053).
+  const db = await dbForRequest();
+  const contact = await getContact(db, accountId, contactId);
+  if (!contact) rejectSend("contact not in account");
+
+  // Since 0053, conversations and messages are written by server code only,
+  // in the service-after-requireAccountAccess shape. Built here, before any
+  // row exists, so a missing service key refuses the whole send rather than
+  // letting the text out with nothing recorded.
+  const writer = serviceDb();
+
+  // THE SEND GATE (consent chain PR-1, kind `staff.composer_sms`): the A2P
+  // sender, the ledger (a stopped or held number), the number's country, and
+  // no hours — a person replying in a thread may do so at any hour. It
+  // decides BEFORE `prepare` writes the conversation and the message row,
+  // so a refused text leaves nothing in the thread; the composer already
+  // shows the same reason on render (composer-state.ts), so reaching a
+  // refusal here means a stale tab. Every refusal maps to operator copy,
+  // never a raw reason code.
+  const row: { conversationId: string | null; messageId: string | null } = { conversationId: null, messageId: null };
+  const result = await sendSms(writer, {
+    accountId, kind: "staff.composer_sms", to: contact.phone, body, contactId,
+  }, {
+    prepare: async ({ body: sentBody }) => {
+      const convo = await ensureConversation(writer, accountId, contactId, userId);
+      row.conversationId = convo.id;
+      // WRITE THEN SEND: the row exists before anything leaves the building,
+      // so a provider failure is a visible `failed` message, not a gap.
+      row.messageId = (await createMessage(writer, accountId, {
+        conversationId: convo.id, channel: "sms", direction: "outbound", body: sentBody,
+      }, userId)).id;
+    },
+  });
+
+  if (result.kind === "blocked") {
+    switch (result.reason) {
+      case "a2p_not_approved": rejectSend(m["compose.smsBlockedA2p"]);
+      case "no_live_number": rejectSend(m["compose.smsBlockedNoNumber"]);
+      case "no_number": rejectSend(m["compose.noPhoneOnContact"]);
+      // Not a reason to show as if it were the customer's choice: a failure.
+      case "ledger_unavailable": throw new Error("the consent ledger could not be read");
+      default: rejectSend(composerBlockedLine(result.reason));
+    }
+  }
+  if (result.kind === "deferred") throw new Error("a staff text was deferred, which its kind never is");
+  if (result.kind === "failed") {
+    // A provider refusal after the row was written: mark it failed so the
+    // thread shows it, then throw so the toast says it failed.
+    if (row.messageId) {
+      await updateMessageStatus(writer, accountId, row.messageId, "failed", { error: result.error }, userId);
+    }
+    revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
+    revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+    throw new Error(result.error);
+  }
+  const messageId = row.messageId;
+  if (messageId === null) throw new Error("the gate sent without writing the message row");
+
+  // The `sent` write FIRST, straight after the send: it stores the provider
+  // id the delivery webhook correlates against. It is allowed to throw (the
+  // action rejects), so the usage write sits in its `finally`, where a
+  // delivered text still bills (on the service client: 0051 lets only
+  // service_role write usage_events).
+  try {
+    await updateMessageStatus(writer, accountId, messageId, "sent", { providerMessageId: result.providerMessageId }, userId);
+  } finally {
+    if (result.billable) {
+      await recordUsageSafely(writer, {
+        accountId, meter: "sms", quantity: result.segments,
+        occurredAt: new Date(), sourceRef: `message:${messageId}`,
+      }, `sendSmsAction ${messageId}`);
+    }
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+  revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
+}
+
+export async function markConversationReadAction(
+  accountId: string, conversationId: string,
+): Promise<void> {
+  await requireAccountAccess(accountId);
+  // 0053: conversations are server-written. clearUnreadCount matches on
+  // account_id AND id, and accountId is the one requireAccountAccess just
+  // authorised, so another account's conversation id matches no row
+  // (messaging.test.ts pins that with two real accounts).
+  await clearUnreadCount(serviceDb(), accountId, conversationId);
+  revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+}
+```
+
+Create `apps/web/src/lib/consent/composer-state.ts`:
+
+```ts
+import { m } from "@/lib/messages";
+import { formatDateInZone } from "@/lib/format";
+
+/**
+ * Whether the text composer may text this contact, and the one line it shows
+ * in place of the form when it may not (consent chain spec §6). PURE: the
+ * composer is a client component; the read that produces the state is
+ * recipient-state.ts, on the server.
+ *
+ * The line is decided on RENDER (the composer is disabled up front) AND the
+ * action says the same thing after an attempt (a stale tab, or a stop that
+ * landed since the page rendered): both come from here, so the two can never
+ * disagree. The action has no date to offer, so its stopped line is undated.
+ */
+export type SmsRecipientState =
+  | { kind: "ok" }
+  | { kind: "stopped"; since: string }
+  | { kind: "held"; since: string }
+  | { kind: "unconfirmed_number" }
+  | { kind: "unknown" };
+
+/** The line a refused send reports, from the action (no date to hand). */
+export function composerBlockedLine(reason: "stopped" | "held" | "unconfirmed_number" | "window_after_deadline"): string {
+  switch (reason) {
+    case "stopped": return m["compose.smsStoppedUndated"];
+    case "held": return m["compose.smsHeld"];
+    case "unconfirmed_number": return m["compose.smsCheckNumber"];
+    case "window_after_deadline": return m["compose.smsFailed"];
+  }
+}
+
+/**
+ * The line the composer shows instead of the text form, or null when the
+ * form shows. `zone` is the account's (the date is a calendar day there); a
+ * stop date that will not format falls back to the undated line rather than
+ * throwing inside a render.
+ */
+export function composerStateLine(state: SmsRecipientState, zone: string): string | null {
+  switch (state.kind) {
+    case "ok": return null;
+    case "stopped": {
+      let date: string | null = null;
+      try {
+        date = formatDateInZone(state.since, zone);
+      } catch {
+        date = null;
+      }
+      return date === null ? m["compose.smsStoppedUndated"] : m["compose.smsStopped"].replace("{date}", date);
+    }
+    case "held": return m["compose.smsHeld"];
+    case "unconfirmed_number": return m["compose.smsCheckNumber"];
+    case "unknown": return m["compose.smsStateUnknown"];
+  }
+}
+```
+
+Create `apps/web/src/lib/consent/recipient-state.ts`:
+
+```ts
+import { readConsentState, type SupabaseClient } from "@bis/db";
+import { normalisePhone } from "@bis/db/phone";
+import { loggableError } from "@/lib/loggable-error";
+import type { SmsRecipientState } from "./composer-state";
+
+/**
+ * The contact page's read for the text composer (spec §6): the ledger state
+ * of the contact's number and F-009's country flag — the same two facts the
+ * send gate checks (gate.ts steps 4 and 5), read under the caller's own
+ * client (consent_events grants `authenticated` SELECT under RLS). NEVER
+ * throws: a read that fails is `unknown`, which the composer shows as its
+ * error line rather than an open form (it fails closed, like the gate).
+ *
+ * A contact with no textable number is `ok` here: the composer's own "no
+ * phone" line already covers it, and a ledger has nothing to key on.
+ */
+export async function smsRecipientState(
+  db: SupabaseClient, accountId: string,
+  contact: { phone: string | null; phone_country_unconfirmed?: boolean | null },
+): Promise<SmsRecipientState> {
+  const number = normalisePhone(contact.phone);
+  if (!number) return { kind: "ok" };
+  try {
+    const state = await readConsentState(db, accountId, "sms", number.e164);
+    if (state.state === "stopped") return { kind: "stopped", since: state.since };
+    if (state.state === "held") return { kind: "held", since: state.since };
+  } catch (e) {
+    console.error(`composer: consent state unreadable for account ${accountId}: ${loggableError(e)}`);
+    return { kind: "unknown" };
+  }
+  if (contact.phone_country_unconfirmed === true || number.unconfirmed) return { kind: "unconfirmed_number" };
+  return { kind: "ok" };
+}
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx` (against the task's parent commit):
+
+```diff
+@@ -12,6 +12,8 @@ import { ActivityTimeline } from "./activity-timeline";
+ import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
+ import { resolveSmsSender } from "@/lib/sms/sender";
+ import { e164Of } from "@/lib/voice/phone-number";
++import { smsRecipientState } from "@/lib/consent/recipient-state";
++import { composerStateLine } from "@/lib/consent/composer-state";
+ import { renderZone } from "@/lib/zone";
+ 
+ export const dynamic = "force-dynamic";
+@@ -23,7 +25,7 @@ export default async function ContactDetailPage({
+   const db = await dbForRequest();
+   const contact = await getContact(db, accountId, contactId);
+   if (!contact) notFound();
+-  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate, account] = await Promise.all([
++  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate, account, smsRecipient] = await Promise.all([
+     listContactTags(db, accountId, contactId),
+     listNotes(db, accountId, contactId),
+     listContactTasks(db, accountId, contactId),
+@@ -36,6 +38,10 @@ export default async function ContactDetailPage({
+     resolveSmsSender(db, accountId),
+     // Only for the opt-out's "Off since" date, printed in the ACCOUNT's zone.
+     db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
++    // The ledger state and F-009's flag for the text composer (spec §6): the
++    // two facts the send gate checks, read under this request's RLS client.
++    // Never throws; a failed read is "unknown", which closes the form.
++    smsRecipientState(db, accountId, contact),
+   ]);
+   // Not a throw, the checklist page's reasoning: one cosmetic date line must
+   // not 500 the contact page. `undefined` makes `renderZone` fall back.
+@@ -65,6 +71,7 @@ export default async function ContactDetailPage({
+           // front, in place of the form, instead of only on submit.
+           contactHasPhone={Boolean(e164Of(contact.phone))}
+           smsGate={smsGate}
++          smsBlockedLine={composerStateLine(smsRecipient, zone.zone)}
+           notes={notes}
+           tasks={tasks}
+           opportunities={opps}
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.tsx` (against the task's parent commit):
+
+```diff
+@@ -47,6 +47,7 @@ export function ActivityTimeline({
+   contactHasEmail,
+   contactHasPhone,
+   smsGate,
++  smsBlockedLine,
+   notes,
+   tasks,
+   opportunities,
+@@ -65,6 +66,10 @@ export function ActivityTimeline({
+   // a plain prop — MessageComposer is a client component and must not query
+   // the database itself.
+   smsGate: SmsGate;
++  /** Consent chain spec §6: the one line the Text tab shows in place of the
++   *  form when the recipient's texts are stopped, held or the number is
++   *  unconfirmed (lib/consent/composer-state.ts); null when it may text. */
++  smsBlockedLine: string | null;
+   notes: Note[];
+   tasks: Task[];
+   opportunities: Opportunity[];
+@@ -203,6 +208,7 @@ export function ActivityTimeline({
+           contactHasEmail={contactHasEmail}
+           contactHasPhone={contactHasPhone}
+           smsGate={smsGate}
++          smsBlockedLine={smsBlockedLine}
+           noteAction={boundAddNote}
+           emailAction={emailAction}
+           smsAction={smsAction}
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/message-composer.tsx` (against the task's parent commit):
+
+```diff
+@@ -18,13 +18,14 @@ export function MessageComposer({
+   contactHasEmail,
+   contactHasPhone,
+   smsGate,
++  smsBlockedLine,
+   noteAction,
+   emailAction,
+   smsAction,
+ }: {
+   contactId: string;
+   contactHasEmail: boolean;
+-  // Mirrors contactHasEmail: whether toE164(contact.phone) resolves to a
++  // Mirrors contactHasEmail: whether e164Of(contact.phone) resolves to a
+   // usable number — the same notion sendSmsAction itself gates on. Without
+   // this, SMS let an operator compose an entire text to a phone-less
+   // contact and only fail on submit, where email already blocks up front.
+@@ -34,6 +35,11 @@ export function MessageComposer({
+   // query the database itself. `resolveSmsSender` is THE gate; nothing here
+   // re-derives it.
+   smsGate: SmsGate;
++  // The recipient's consent line (spec §6), decided on the server from the
++  // same two facts the send gate reads: texts stopped, on hold, or a number
++  // that could be Mexican or US. The form is not rendered while it is set;
++  // the action says the same line after an attempt from a stale tab.
++  smsBlockedLine: string | null;
+   noteAction: (formData: FormData) => Promise<void>;
+   emailAction: (formData: FormData) => Promise<void>;
+   smsAction: (formData: FormData) => Promise<void>;
+@@ -123,6 +129,8 @@ export function MessageComposer({
+         </p>
+       ) : isSms && !contactHasPhone ? (
+         <p className="text-xs text-muted-foreground">{m["compose.noPhoneOnContact"]}</p>
++      ) : isSms && smsBlockedLine ? (
++        <p className="text-xs text-muted-foreground" data-testid="composer-sms-blocked">{smsBlockedLine}</p>
+       ) : (
+         <form
+           key={mode}
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/conversations" src/lib/consent "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts"
+pnpm typecheck
+pnpm test
+```
+
+Expected (the staged replay's GREEN run):
+53 passed across the task's test files:
+- `src/lib/consent/composer-state.test.ts`: 6 passed
+- `src/lib/consent/recipient-state.test.ts`: 6 passed
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts`: 35 passed
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts`: 6 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4410 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+8 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **a stop shown as a failure** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts`: `      default: rejectSend(composerBlockedLine(result.reason));` → `      default: throw new Error(result.reason);`; turns red 2 tests:
+    - sendSmsAction — the consent gate's refusals a stopped number: rejected with the composer's own stopped line; nothing written, nothing sent (mutation: rethrow the raw reason → FAILS)
+    - sendSmsAction — the consent gate's refusals held, and a number that could be Mexican or US, each say their own line (mutation: swap the two lines → FAILS)
+2. **an unreadable ledger shown as a customer's choice** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts`: `      case "ledger_unavailable": throw new Error("the consent ledger could not be read");` → `      case "ledger_unavailable": rejectSend(composerBlockedLine("stopped"));`; turns red 1 test:
+    - sendSmsAction — the consent gate's refusals an unreadable ledger is a FAILURE, not a rejection worded as the customer's choice (mutation: map it to the stopped line → FAILS)
+3. **the raw phone to the ledger** — in `src/lib/consent/recipient-state.ts`: `const state = await readConsentState(db, accountId, "sms", number.e164);` → `const state = await readConsentState(db, accountId, "sms", String(contact.phone));`; turns red 1 test:
+    - smsRecipientState reads the ledger on the NORMALISED number, sms channel (mutation: pass the raw phone → FAILS)
+4. **flag before the stop** — in `src/lib/consent/recipient-state.ts`: `  const number = normalisePhone(contact.phone);⏎  if (!number) return { kind: "ok" };` → `  const number = normalisePhone(contact.phone);⏎  if (!number) return { kind: "ok" };⏎  if (contact.phone_country_unconfirmed === true) return { kind: "unconfirmed_number" };`; turns red 1 test:
+    - smsRecipientState a stop outranks an unconfirmed number: the stop is the fact the operator needs (mutation: check the flag first → FAILS)
+5. **fail open** — in `src/lib/consent/recipient-state.ts`: `    return { kind: "unknown" };` → `    return { kind: "ok" };`; turns red 1 test:
+    - smsRecipientState a read that fails is 'unknown', logged without the number, never thrown (it fails closed)
+6. **date in UTC** — in `src/lib/consent/composer-state.ts`: `date = formatDateInZone(state.since, zone);` → `date = formatDateInZone(state.since, "UTC");`; turns red 1 test:
+    - composerStateLine stopped: the spec's sentence with the stop's calendar day IN THE ZONE (mutation: format in UTC → 'Oct 4', FAILS)
+7. **held and unconfirmed swapped** — in `src/lib/consent/composer-state.ts`: `    case "held": return m["compose.smsHeld"];⏎    case "unconfirmed_number": return m["compose.smsCheckNumber"];⏎    case "unknown"` → `    case "held": return m["compose.smsCheckNumber"];⏎    case "unconfirmed_number": return m["compose.smsHeld"];⏎    case "unknown"`; turns red 1 test:
+    - composerStateLine held, unconfirmed and unknown each say their own line (mutation: swap held and unconfirmed → FAILS)
+8. **held and unconfirmed answered with the stopped line** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts`: `      default: rejectSend(composerBlockedLine(result.reason));` → `      default: rejectSend(composerBlockedLine("stopped"));`; turns red 1 test:
+    - sendSmsAction — the consent gate's refusals held, and a number that could be Mexican or US, each say their own line (mutation: swap the two lines → FAILS)
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts" \
+        "apps/web/src/lib/consent/composer-state.test.ts" \
+        "apps/web/src/lib/consent/recipient-state.test.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts" \
+        "apps/web/src/lib/consent/composer-state.ts" \
+        "apps/web/src/lib/consent/recipient-state.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.tsx" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/message-composer.tsx"
+git commit -m "feat(conversations): the text composer through the send gate, closed with one line when it may not text"
+```
+
+---
+
+### Task 13: The alert phone: a country beside the number, and its code through the gate
+
+**Owner:** bis-comms. **Lane:** B (Phase 3). **Depends on:** Tasks 2 (`phoneForCountry`), 6, 8.
+
+Spec §4.1 item 1 ("The alert-phone field gains a country choice … so it is never ambiguous") and §6 (Settings, alert phone). The code goes through the gate as `operator.alert_phone_code` (any hour); a phone that texted STOP to the business line gets no code and the agency reads the spec's line (G10).
+
+**Files:**
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts` (21 → 24 tests)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`
+- Modify: `apps/web/src/components/alert-phone-card.tsx`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/styleguide/settings-field-cards.tsx`
+
+**Interfaces:**
+- `startAlertPhoneVerificationAction(accountId, formData)` reads `alertPhoneCountry` (`"US"` | `"MX"`, default US) and answers `{ ok: true; phone: string } | { ok: false; error: string }` (the E.164 it texted, which the card holds for the confirm step).
+- `AlertPhoneCard` shows a two-option radio group, US (+1) / México (+52), beside the number.
+
+**Mock factories changed** (Global Constraints, `vi.mock("@bis/db")`): `settings/actions.test.ts` gains the gate's four reads (the code uses the REAL gate).
+
+- [ ] **Step 1: Write the failing tests**
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts` (against the task's parent commit):
+
+```diff
+@@ -13,6 +13,9 @@ const dbMocks = vi.hoisted(() => ({
+   verifyAlertPhoneCode: vi.fn(),
+   countRecentAlertPhoneVerifications: vi.fn(),
+   discardAlertPhoneVerification: vi.fn(),
++  // The send gate's reads (lib/consent/gate.ts): the code goes through the
++  // REAL gate, so its ledger and flag reads are mocked, allowed by default.
++  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
+ }));
+ vi.mock("@bis/db", async (importOriginal) => ({
+   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({ tag: "serviceDb" }),
+@@ -61,6 +64,8 @@ beforeEach(() => {
+   dbMocks.countRecentAlertPhoneVerifications.mockReset().mockResolvedValue(0);
+   dbMocks.discardAlertPhoneVerification.mockReset().mockResolvedValue(undefined);
+   sendMock.mockReset().mockResolvedValue({ providerMessageId: "msg_1" });
++  dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "allowed" });
++  dbMocks.readPhoneCountryFlag.mockReset().mockResolvedValue(false);
+   // Cleared/live by default — most tests care about one thing at a time, and
+   // an unmocked resolveSmsSender() would return undefined and crash the
+   // `gate.ok` read.
+@@ -98,8 +103,8 @@ describe("setAlertPhoneAction — a non-blank value can no longer write the numb
+   });
+ });
+ 
+-describe("startAlertPhoneVerificationAction — normalization is toE164's, not a second dialect", () => {
+-  it("refuses a value toE164 cannot parse, and never opens a verification (mutation: skip the refusal → FAILS)", async () => {
++describe("startAlertPhoneVerificationAction — normalization is F-009's (phoneForCountry), not a second dialect", () => {
++  it("refuses a value the normaliser cannot parse, and never opens a verification (mutation: skip the refusal → FAILS)", async () => {
+     expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "not a number" })))
+       .toEqual({ ok: false, error: m["settings.alertPhoneBad"] });
+     expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
+@@ -164,7 +169,7 @@ describe("startAlertPhoneVerificationAction — rate limiting the send", () => {
+   it("still sends under the cap", async () => {
+     dbMocks.countRecentAlertPhoneVerifications.mockResolvedValue(4);
+     expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+-      .toEqual({ ok: true });
++      .toEqual({ ok: true, phone: "+19565550001" });
+   });
+ });
+ 
+@@ -172,7 +177,7 @@ describe("startAlertPhoneVerificationAction — the happy path", () => {
+   it("opens a verification and texts the code to the claimed number, from the account's own resolved sender (mutation: send to gate.from instead of the claimed number → FAILS)", async () => {
+     dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_1", code: "482913" });
+     expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+-      .toEqual({ ok: true });
++      .toEqual({ ok: true, phone: "+19565550001" });
+     expect(dbMocks.startAlertPhoneVerification).toHaveBeenCalledWith(
+       { tag: "serviceDb" }, "acct_1", "+19565550001",
+     );
+@@ -241,3 +246,36 @@ describe("confirmAlertPhoneVerificationAction — the right code", () => {
+     expect(requireAgencyOnlyAccountAccessMock).toHaveBeenCalledWith("acct_1");
+   });
+ });
++
++/**
++ * Consent chain PR-1 (spec §4.1 item 1, §6): the alert phone carries its
++ * country, so it is never ambiguous, and its code goes through the send gate
++ * as `operator.alert_phone_code`.
++ */
++describe("startAlertPhoneVerificationAction — the country beside the number", () => {
++  it("ten digits under México (+52) are claimed and texted as +52 (mutation: ignore the country → +1, FAILS)", async () => {
++    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "55 1234 5678", alertPhoneCountry: "MX" })))
++      .toEqual({ ok: true, phone: "+525512345678" });
++    expect(dbMocks.startAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "acct_1", "+525512345678");
++    expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({ to: "+525512345678" }));
++  });
++
++  it("a typed +52 under US (+1) is refused as a bad number, never settled for the agency (mutation: keep whatever code was typed → FAILS)", async () => {
++    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+52 55 1234 5678", alertPhoneCountry: "US" })))
++      .toEqual({ ok: false, error: m["settings.alertPhoneBad"] });
++    expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
++  });
++});
++
++describe("startAlertPhoneVerificationAction — a phone that texted STOP gets no code", () => {
++  it("answers the spec's line, sends nothing, and gives the rate-limit slot back (mutation: report the generic send failure → FAILS)", async () => {
++    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
++    dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_stop", code: "482913" });
++    dbMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-03T15:00:00Z", method: "keyword", eventId: "e1" });
++    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
++      .toEqual({ ok: false, error: m["settings.alertPhoneStopped"] });
++    expect(sendMock).not.toHaveBeenCalled();
++    expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_stop");
++    spy.mockRestore();
++  });
++});
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts"
+```
+
+Expected (the staged replay's RED run):
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts`: **5 failing** that Step 4 turns green; 19 already pass:
+  - startAlertPhoneVerificationAction — rate limiting the send still sends under the cap
+  - startAlertPhoneVerificationAction — the happy path opens a verification and texts the code to the claimed number, from the account's own resolved sender (mutation: send to gate.from instead of the claimed number → FAILS)
+  - startAlertPhoneVerificationAction — the country beside the number ten digits under México (+52) are claimed and texted as +52 (mutation: ignore the country → +1, FAILS)
+  - startAlertPhoneVerificationAction — the country beside the number a typed +52 under US (+1) is refused as a bad number, never settled for the agency (mutation: keep whatever code was typed → FAILS)
+  - startAlertPhoneVerificationAction — a phone that texted STOP gets no code answers the spec's line, sends nothing, and gives the rate-limit slot back (mutation: report the generic send failure → FAILS)
+
+- [ ] **Step 3: Implement**
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts` (against the task's parent commit):
+
+```diff
+@@ -15,10 +15,10 @@ import { saveVerifiedFromAddress } from "@/lib/email/preflight";
+ // regex — the same reasoning branding/actions.ts records: one email regex
+ // that drifts from another is worse than one that is strict.
+ import { isValidEmail } from "@/lib/forms/guards";
+-import { toE164 } from "@/lib/voice/phone-number";
++import { normalisePhone, phoneForCountry, type PhoneCountry } from "@bis/db/phone";
+ import { resolveSmsSender, refusesAlertLoop } from "@/lib/sms/sender";
+ import { composeAlertPhoneVerificationSms } from "@/lib/sms/alerts";
+-import { getSmsProvider } from "@/lib/sms";
++import { sendSms } from "@/lib/consent/gate";
+ import { m } from "@/lib/messages";
+ 
+ export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
+@@ -300,11 +300,15 @@ export async function setAlertPhoneAction(
+  */
+ export async function startAlertPhoneVerificationAction(
+   accountId: string, formData: FormData,
+-): Promise<{ ok: true } | { ok: false; error: string }> {
++): Promise<{ ok: true; phone: string } | { ok: false; error: string }> {
+   await requireAgencyOnlyAccountAccess(accountId);
+ 
++  // The card sends the number AND its country (US +1 / México +52, spec §6),
++  // so an alert number is never ambiguous: a typed +52 under "US (+1)" is
++  // refused as a bad number rather than settled for the agency.
+   const raw = String(formData.get("alertPhone") ?? "").trim();
+-  const normalized = toE164(raw);
++  const country: PhoneCountry = formData.get("alertPhoneCountry") === "MX" ? "MX" : "US";
++  const normalized = phoneForCountry(raw, country);
+   if (!normalized) return { ok: false, error: m["settings.alertPhoneBad"] };
+ 
+   const db = serviceDb();
+@@ -320,20 +324,25 @@ export async function startAlertPhoneVerificationAction(
+   }
+ 
+   const { id, code } = await startAlertPhoneVerification(db, accountId, normalized);
+-  try {
+-    await getSmsProvider().send({
+-      to: normalized, from: gate.from, body: composeAlertPhoneVerificationSms(code),
+-    });
+-  } catch (e) {
+-    console.error(`alert phone verification send failed for account ${accountId}: ${String(e)}`);
++  // THROUGH THE SEND GATE (kind `operator.alert_phone_code`, no hours): a
++  // number that texted STOP to this business line gets no code (decision 2),
++  // and the agency is told how the owner turns texts back on (spec §6).
++  const result = await sendSms(db, {
++    accountId, kind: "operator.alert_phone_code", to: normalized, body: composeAlertPhoneVerificationSms(code),
++  });
++  if (result.kind !== "sent") {
+     // No text went out, so this row must not count toward
+-    // ALERT_CODE_MAX_SENDS_PER_HOUR — otherwise five carrier failures lock
+-    // the number out for an hour with nothing ever delivered, which is
+-    // exactly the cost that limit exists to bound.
++    // ALERT_CODE_MAX_SENDS_PER_HOUR — otherwise five failures lock the number
++    // out for an hour with nothing ever delivered.
+     await discardAlertPhoneVerification(db, id);
++    if (result.kind === "blocked" && result.reason === "stopped") {
++      return { ok: false, error: m["settings.alertPhoneStopped"] };
++    }
++    const why = result.kind === "blocked" ? result.reason : result.kind === "failed" ? result.error : "deferred";
++    console.error(`alert phone verification send failed for account ${accountId}: ${why}`);
+     return { ok: false, error: m["settings.alertPhoneSendFailed"] };
+   }
+-  return { ok: true };
++  return { ok: true, phone: normalized };
+ }
+ 
+ /**
+@@ -355,8 +364,10 @@ export async function confirmAlertPhoneVerificationAction(
+ ): Promise<{ ok: true } | { ok: false; error: string }> {
+   const { userId } = await requireAgencyOnlyAccountAccess(accountId);
+ 
++  // The E.164 the start action returned (the card echoes it back); kept as
++  // given, since it carries its country code.
+   const raw = String(formData.get("alertPhone") ?? "").trim();
+-  const normalized = toE164(raw);
++  const normalized = normalisePhone(raw)?.e164 ?? null;
+   if (!normalized) return { ok: false, error: m["settings.alertPhoneBad"] };
+   const code = String(formData.get("code") ?? "").trim();
+```
+
+Apply to `apps/web/src/components/alert-phone-card.tsx` (against the task's parent commit):
+
+```diff
+@@ -11,9 +11,10 @@ import { Notice } from "@/components/ui/notice";
+ import { NumberChip } from "@/app/(dashboard)/dashboard/accounts/[accountId]/setup/steps/step-shared";
+ import { m } from "@/lib/messages";
+ import { useFormSubmit } from "@/lib/forms/use-form-submit";
+-import { toE164 } from "@/lib/voice/phone-number";
+ 
+ export type AlertPhoneActionResult = { ok: true } | { ok: false; error: string };
++/** The start action's answer carries the E.164 it texted the code to. */
++export type AlertPhoneStartResult = { ok: true; phone: string } | { ok: false; error: string };
+ 
+ /**
+  * Where a text goes when work arrives — `accounts.alert_phone`
+@@ -107,7 +108,7 @@ export function AlertPhoneCard({
+   /** Opens a claim on a NEW number: draws a code, texts it, returns
+    *  `{ok:true}` with no code attached. Also used to RESEND, with the same
+    *  claimed number, from the pending phase. */
+-  startVerificationAction?: (formData: FormData) => Promise<AlertPhoneActionResult>;
++  startVerificationAction?: (formData: FormData) => Promise<AlertPhoneStartResult>;
+   /** Consumes a code against the claimed number and, only on a match, writes
+    *  `accounts.alert_phone`. */
+   confirmVerificationAction?: (formData: FormData) => Promise<AlertPhoneActionResult>;
+@@ -117,6 +118,9 @@ export function AlertPhoneCard({
+   // rendered with. Initialized from the server prop so an untouched field
+   // still shows the account's own number.
+   const [phone, setPhone] = useState(alertPhone ?? "");
++  // The country the typed number belongs to (spec §6: US (+1) / México (+52)),
++  // so an alert number is never ambiguous. Starts from the saved number's own.
++  const [country, setCountry] = useState<"US" | "MX">(alertPhone?.startsWith("+52") ? "MX" : "US");
+   const [phase, setPhase] = useState<"idle" | "pending">("idle");
+   const [pendingPhone, setPendingPhone] = useState("");
+   const [code, setCode] = useState("");
+@@ -142,7 +146,7 @@ export function AlertPhoneCard({
+     }
+ 
+     if (!startVerificationAction) return;
+-    let result: AlertPhoneActionResult;
++    let result: AlertPhoneStartResult;
+     try {
+       result = await startVerificationAction(formData);
+     } catch {
+@@ -154,10 +158,9 @@ export function AlertPhoneCard({
+       return;
+     }
+     toast.success(m["settings.alertPhoneCodeSent"]);
+-    // Displayed via NumberChip in the pending phase below — normalized the
+-    // same way the server just normalized it, for the same reason the
+-    // client branch never shows a raw, unformatted number.
+-    setPendingPhone(toE164(raw) ?? raw);
++    // Displayed via NumberChip in the pending phase below: the E.164 the
++    // SERVER normalised and texted, never a client-side guess at it.
++    setPendingPhone(result.phone);
+     setCode("");
+     setPhase("pending");
+   });
+@@ -189,6 +192,9 @@ export function AlertPhoneCard({
+     try {
+       const formData = new FormData();
+       formData.set("alertPhone", pendingPhone);
++      // The pending number carries its country code; the start action checks
++      // it against the country named, so name the matching one.
++      formData.set("alertPhoneCountry", pendingPhone.startsWith("+52") ? "MX" : "US");
+       const result = await startVerificationAction(formData);
+       if (!result.ok) {
+         toast.error(result.error);
+@@ -229,6 +235,22 @@ export function AlertPhoneCard({
+       <CardContent>
+         {isAgency && phase === "idle" ? (
+           <form onSubmit={onSendSubmit} className="flex flex-col gap-3">
++            <fieldset className="flex flex-wrap items-center gap-4">
++              <legend className="sr-only">{m["settings.alertPhoneCountry"]}</legend>
++              {(["US", "MX"] as const).map((c) => (
++                <label key={c} className="flex items-center gap-2 text-sm text-card-foreground">
++                  <input
++                    type="radio"
++                    name="alertPhoneCountry"
++                    value={c}
++                    checked={country === c}
++                    onChange={() => setCountry(c)}
++                    className="size-4 accent-[var(--accent)]"
++                  />
++                  {c === "US" ? m["settings.alertPhoneCountryUs"] : m["settings.alertPhoneCountryMx"]}
++                </label>
++              ))}
++            </fieldset>
+             <Label htmlFor="alertPhone" className="sr-only">{m["settings.alertPhone"]}</Label>
+             <Input
+               id="alertPhone"
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/styleguide/settings-field-cards.tsx` (against the task's parent commit):
+
+```diff
+@@ -36,6 +36,8 @@ import { m } from "@/lib/messages";
+  * clicking through is the only way to see the pending phase render at all.
+  */
+ const demoOk = async () => ({ ok: true as const });
++// The start action answers with the E.164 it texted (consent chain PR-1).
++const demoStartOk = async () => ({ ok: true as const, phone: "+19565550100" });
+ const demoSelfLoopRefusal = async () => ({ ok: false as const, error: m["settings.alertPhoneSelfWarning"] });
+ const demoWrongCode = async () => ({ ok: false as const, error: m["settings.alertPhoneWrongCode"] });
+ 
+@@ -69,14 +71,14 @@ export function SettingsFieldCards() {
+         <div onClickCapture={(e) => e.preventDefault()}>
+           <AlertPhoneCard
+             isAgency accountId="demo" alertPhone="+19562921696" smsNotReady
+-            clearAction={demoOk} startVerificationAction={demoOk} confirmVerificationAction={demoOk}
++            clearAction={demoOk} startVerificationAction={demoStartOk} confirmVerificationAction={demoOk}
+           />
+         </div>
+       </Demo>
+       <Demo label="Agency — verify a new number (type one, click Send code, then Confirm)">
+         <AlertPhoneCard
+           isAgency accountId="demo" alertPhone={null}
+-          clearAction={demoOk} startVerificationAction={demoOk} confirmVerificationAction={demoOk}
++          clearAction={demoOk} startVerificationAction={demoStartOk} confirmVerificationAction={demoOk}
+         />
+       </Demo>
+       <Demo label="Agency — sending a code is refused (the number is the account's own)">
+@@ -88,7 +90,7 @@ export function SettingsFieldCards() {
+       <Demo label="Agency — wrong code (send a real code, then type any 6 digits)">
+         <AlertPhoneCard
+           isAgency accountId="demo" alertPhone={null}
+-          clearAction={demoOk} startVerificationAction={demoOk} confirmVerificationAction={demoWrongCode}
++          clearAction={demoOk} startVerificationAction={demoStartOk} confirmVerificationAction={demoWrongCode}
+         />
+       </Demo>
+       <Demo label="Client — no alert number">
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/settings" "src/app/(dashboard)/dashboard/styleguide"
+pnpm typecheck
+pnpm test
+```
+
+Expected (the staged replay's GREEN run):
+24 passed across the task's test files:
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts`: 24 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4413 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites.
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+2 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **country ignored** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: `const normalized = phoneForCountry(raw, country);` → `const normalized = normalisePhone(raw)?.e164 ?? null;`; turns red 2 tests:
+    - startAlertPhoneVerificationAction — the country beside the number ten digits under México (+52) are claimed and texted as +52 (mutation: ignore the country → +1, FAILS)
+    - startAlertPhoneVerificationAction — the country beside the number a typed +52 under US (+1) is refused as a bad number, never settled for the agency (mutation: keep whatever code was typed → FAILS)
+2. **stopped shown as a send failure** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: delete `    if (result.kind === "blocked" && result.reason === "stopped") {⏎      return { ok: false, error: m["settings.alertPhoneStopped"] };⏎    }⏎`; turns red 1 test:
+    - startAlertPhoneVerificationAction — a phone that texted STOP gets no code answers the spec's line, sends nothing, and gives the rate-limit slot back (mutation: report the generic send failure → FAILS)
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts" \
+        "apps/web/src/components/alert-phone-card.tsx" \
+        "apps/web/src/app/(dashboard)/dashboard/styleguide/settings-field-cards.tsx"
+git commit -m "feat(settings): the alert phone's country, and its code through the send gate"
+```
+
+---
+
+### Task 14: The contact's Texts row, Check number state (F-009): pick the country, undo
+
+**Owner:** bis-crm (with bis-frontend reviewing the row against DESIGN.md). **Lane:** B (Phase 3). **Depends on:** Task 2 (`repickPhoneCountry`, `setContactPhoneCountry`); Task 6; Task 12 (the contact page and its test arrive with the composer wiring).
+
+Spec §6, the Messages block's Texts row, "Check number" state, which the §7 PR-1 row names as "the drawer's country control". PR-1 renders ONLY that state (the other states and the Email row are PR-2 and PR-3); in every other state the row renders nothing and the existing "No marketing emails" switch stays where it is (G14).
+
+**Files:**
+- Create: `apps/web/src/lib/contacts/phone-country.test.ts` (9 tests)
+- Modify: `apps/web/src/lib/contacts/summary.test.ts` (26 → 30 tests)
+- Modify: `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.test.ts` (7 → 10 tests)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts` (15 → 25 tests)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts` (9 tests)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts` (3 → 8 tests)
+- Create: `apps/web/src/lib/contacts/phone-country.ts`
+- Create: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/phone-country-row.tsx`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`
+- Modify: `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts`
+- Modify: `apps/web/src/lib/contacts/summary.ts`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/contact-fields-panel.tsx`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/styleguide/page.tsx`
+
+**Interfaces:**
+- Produces: `setPhoneCountryAction(accountId, contactId, country): Promise<PhoneCountryPickResult>` and `undoPhoneCountryAction(accountId, contactId, picked, previous): Promise<PhoneCountryUndoResult>` (`contacts/actions.ts`); `pickPhoneCountry(...)`, `PHONE_CHECK_TREATMENT` (`lib/contacts/phone-country.ts`, client-safe: type-only import of `@bis/db/phone`); `<PhoneCountryRow accountId contactId unconfirmed />`.
+- The summary API's body gains `phone_country_unconfirmed: boolean` (the flag OR the stored number reads both ways); the drawer's parser tolerates it missing (false).
+- `ContactFieldsPanel` gains `phoneUnconfirmed: boolean`, worked out on the server page.
+
+**Mock factories changed** (Global Constraints, `vi.mock("@bis/db")`): `contacts/actions.test.ts` gains `getContact` and `setContactPhoneCountry`; `[contactId]/page.test.ts` mocks `../phone-country-row`; the phone module is REAL everywhere.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `apps/web/src/lib/contacts/phone-country.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from "vitest";
+import { m } from "@/lib/messages";
+import type { OptOutToast } from "./marketing-optout";
+import {
+  PHONE_CHECK_TREATMENT, pickPhoneCountry,
+  type PhoneCountryPickResult, type PhoneCountryUndoResult, type PhoneCountryPrevious,
+} from "./phone-country";
+
+/**
+ * The Texts row's Check number state (consent chain spec §6, F-009), minus
+ * React: a pick runs at once, hides the row and offers Undo (DESIGN.md rule
+ * 6); Undo puts the previous phone and flag back and brings the row back.
+ */
+const PREVIOUS: PhoneCountryPrevious = { phone: "+15512345678", unconfirmed: true };
+
+function harness(o: {
+  pick?: Array<PhoneCountryPickResult | Error>;
+  undo?: Array<PhoneCountryUndoResult | Error>;
+} = {}) {
+  const picks = o.pick ?? [{ ok: true, phone: "+525512345678", previous: PREVIOUS }];
+  const undos = o.undo ?? [{ ok: true }];
+  const save = vi.fn(async (country: "US" | "MX") => {
+    void country;
+    const next = picks.shift()!;
+    if (next instanceof Error) throw next;
+    return next;
+  });
+  const undo = vi.fn(async (picked: string, previous: PhoneCountryPrevious) => {
+    void picked; void previous;
+    const next = undos.shift()!;
+    if (next instanceof Error) throw next;
+    return next;
+  });
+  const shown: boolean[] = [];
+  let undoClick: (() => unknown) | null = null;
+  const toast = {
+    success: vi.fn((...[, opts]: [string, { action: { label: string; onClick: () => void } }]) => {
+      undoClick = opts.action.onClick;
+    }),
+    error: vi.fn(),
+  } satisfies OptOutToast;
+  return { save, undo, shown, show: (v: boolean) => { shown.push(v); }, toast, click: () => undoClick };
+}
+
+describe("pickPhoneCountry", () => {
+  it("Mexico: saves MX, hides the row, toasts the Mexican line with an Undo (mutation: toast the US line for MX → FAILS)", async () => {
+    const h = harness();
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast);
+    expect(h.save).toHaveBeenCalledWith("MX");
+    expect(h.shown).toEqual([false]);
+    expect(h.toast.success).toHaveBeenCalledWith(
+      m["contact.phoneCountry.mxToast"],
+      expect.objectContaining({ action: expect.objectContaining({ label: m["common.undo"] }) }),
+    );
+  });
+
+  it("US toasts the US line", async () => {
+    const h = harness({ pick: [{ ok: true, phone: "+15512345678", previous: { phone: "5512345678", unconfirmed: false } }] });
+    await pickPhoneCountry("US", h.save, h.undo, h.show, h.toast);
+    expect(h.toast.success.mock.calls[0]?.[0]).toBe(m["contact.phoneCountry.usToast"]);
+  });
+
+  it("a refused pick leaves the row and says the server's reason, no Undo offered (mutation: show(false) before the save → FAILS)", async () => {
+    const h = harness({ pick: [{ ok: false, error: m["contact.phoneCountry.changed"] }] });
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast);
+    expect(h.shown).toEqual([]);
+    expect(h.toast.error).toHaveBeenCalledWith(m["contact.phoneCountry.changed"]);
+    expect(h.toast.success).not.toHaveBeenCalled();
+  });
+
+  it("a REJECTED pick (a stale tab's action id) is the crashed toast, never silence", async () => {
+    const h = harness({ pick: [new Error("Server Action not found")] });
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast);
+    expect(h.toast.error).toHaveBeenCalledWith(m["inline.crashed"]);
+    expect(h.shown).toEqual([]);
+  });
+
+  it("Undo hands back the phone the pick WROTE and the previous phone and flag, then shows the row again (mutation: pass previous.phone as picked → FAILS)", async () => {
+    const h = harness();
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast);
+    await h.click()!();
+    expect(h.undo).toHaveBeenCalledWith("+525512345678", PREVIOUS);
+    expect(h.shown).toEqual([false, true]);
+  });
+
+  it("a failed Undo says why and leaves the row hidden, as the server has it", async () => {
+    const h = harness({ undo: [{ ok: false, error: m["contact.phoneCountry.changed"] }] });
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast);
+    await h.click()!();
+    expect(h.toast.error).toHaveBeenCalledWith(m["contact.phoneCountry.changed"]);
+    expect(h.shown).toEqual([false]);
+  });
+
+  it("an Undo the guard refuses says so (the toast is already gone) and writes nothing (mutation: drop the ran === false branch → FAILS)", async () => {
+    const h = harness();
+    await pickPhoneCountry("MX", h.save, h.undo, h.show, h.toast, () => false);
+    h.click()!();
+    expect(h.toast.error).toHaveBeenCalledWith(m["contact.phoneCountry.undoBusy"]);
+    expect(h.undo).not.toHaveBeenCalled();
+  });
+});
+
+describe("PHONE_CHECK_TREATMENT", () => {
+  it("is a dot AND the word, in token classes only (rule 3; mutation: a hex colour → FAILS)", () => {
+    expect(PHONE_CHECK_TREATMENT.label).toBe("Check number");
+    expect(PHONE_CHECK_TREATMENT.dot).toBe("bg-warning");
+    expect(`${PHONE_CHECK_TREATMENT.dot} ${PHONE_CHECK_TREATMENT.chip}`).not.toMatch(/#|rgb|hsl|oklch|\[/);
+  });
+
+  it("the spec's words, verbatim (§6)", () => {
+    expect(m["contact.phoneCountry.line"]).toBe("This number could be Mexican or US.");
+    expect(m["contact.phoneCountry.mx"]).toBe("Mexico (+52)");
+    expect(m["contact.phoneCountry.us"]).toBe("US (+1)");
+  });
+});
+```
+
+Apply to `apps/web/src/lib/contacts/summary.test.ts` (against the task's parent commit):
+
+```diff
+@@ -24,6 +24,7 @@ function real(): ContactSummary {
+       { kind: "opportunity", label: "Deal: Deck build ($100)", at: "2026-08-28T00:00:00+00:00" },
+     ],
+     marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00",
++    phone_country_unconfirmed: true,
+     zone: { zone: "America/Chicago", guessed: false, label: "America/Chicago" },
+   };
+ }
+@@ -196,6 +197,28 @@ describe("parseContactSummary: zone is tolerated, never required", () => {
+   });
+ });
+ 
++describe("parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1)", () => {
++  it("carries true through, so the drawer's Check number row shows (mutation: drop the field from the return → FAILS)", () => {
++    expect(parseContactSummary(wire(real()))?.phone_country_unconfirmed).toBe(true);
++  });
++
++  it("carries false through", () => {
++    expect(parseContactSummary(wire({ ...real(), phone_country_unconfirmed: false }))?.phone_country_unconfirmed).toBe(false);
++  });
++
++  it("missing (a server from before PR-1) is false and the rest still loads (mutation: make it required → null, FAILS)", () => {
++    const parsed = parseContactSummary(without("phone_country_unconfirmed"));
++    expect(parsed).not.toBeNull();
++    expect(parsed?.phone_country_unconfirmed).toBe(false);
++  });
++
++  it("anything but the boolean true is false — never a truthy string (mutation: Boolean(v) → \"false\" shows the row, FAILS)", () => {
++    for (const v of ["true", "false", 1, {}, null]) {
++      expect(parseContactSummary(wire({ ...real(), phone_country_unconfirmed: v }))?.phone_country_unconfirmed).toBe(false);
++    }
++  });
++});
++
+ describe("summaryLoadFrom: the drawer's response handling", () => {
+   function res(ok: boolean, body: unknown) {
+     return { ok, json: vi.fn(async () => body) };
+```
+
+Apply to `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.test.ts` (against the task's parent commit):
+
+```diff
+@@ -110,6 +110,36 @@ describe("contact summary route", () => {
+       expect(body).toHaveProperty("marketing_email_opted_out_at", null);
+     });
+   });
++
++  // Consent chain PR-1 (spec §6, F-009): the drawer's Check number row.
++  describe("phone_country_unconfirmed", () => {
++    function emptySources() {
++      access.mockResolvedValue({ userId: "u1", isAgency: true });
++      for (const k of ["listContactTags", "listNotes", "listContactSubmissions",
++        "listContactMessages", "listContactOpportunities", "listContactCalls"] as const) {
++        dbMocks[k].mockResolvedValue([]);
++      }
++    }
++    const flagOf = async (contact: Record<string, unknown>) => {
++      emptySources();
++      dbMocks.getContact.mockResolvedValue({ id: "c1", marketing_email_opted_out_at: null, ...contact });
++      return (await (await GET(req(), ctx())).json()).phone_country_unconfirmed;
++    };
++
++    it("is true when the contact's flag is set (mutation: drop the flag half of the OR → FAILS)", async () => {
++      expect(await flagOf({ phone: "+15512345678", phone_country_unconfirmed: true })).toBe(true);
++    });
++
++    it("is true for a number saved before the backfill that reads both ways, flag still false (mutation: drop the normaliser half → FAILS)", async () => {
++      expect(await flagOf({ phone: "55 1234 5678", phone_country_unconfirmed: false })).toBe(true);
++    });
++
++    it("is false for a plainly US number, a plainly Mexican one, and no number", async () => {
++      expect(await flagOf({ phone: "(956) 292-1696", phone_country_unconfirmed: false })).toBe(false);
++      expect(await flagOf({ phone: "+528999221234", phone_country_unconfirmed: false })).toBe(false);
++      expect(await flagOf({ phone: null, phone_country_unconfirmed: false })).toBe(false);
++    });
++  });
+ });
+ 
+ /**
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts` (against the task's parent commit):
+
+```diff
+@@ -15,13 +15,15 @@ const dbMocks = {
+   // import throws. Read the file's import list and cover it.
+   createContact: vi.fn(),
+   setMarketingEmailOptOut: vi.fn(),
++  getContact: vi.fn(), setContactPhoneCountry: vi.fn(),
+ };
+ vi.mock("@bis/db", () => dbMocks);
+ 
+ const {
+   updateContactFieldAction, bulkDeleteContactsAction, bulkAddTagAction, bulkRemoveTagAction,
+-  setMarketingEmailOptOutAction,
++  setMarketingEmailOptOutAction, setPhoneCountryAction, undoPhoneCountryAction,
+ } = await import("./actions");
++const { m } = await import("@/lib/messages");
+ 
+ beforeEach(() => {
+   vi.clearAllMocks();
+@@ -147,3 +149,86 @@ describe("setMarketingEmailOptOutAction", () => {
+     expect(dbMocks.setMarketingEmailOptOut).not.toHaveBeenCalled();
+   });
+ });
++
++/**
++ * The Texts row's Check number pick and its undo (consent chain spec §6,
++ * F-009). The phone module is REAL (@bis/db/phone is not mocked), so the
++ * rewrite is the normaliser's own.
++ */
++describe("setPhoneCountryAction", () => {
++  const flagged = { id: "c1", phone: "+15512345678", phone_country_unconfirmed: true };
++
++  it("Mexico rewrites the SAME ten digits under +52, clears the flag, compare-and-set on the phone it read (mutation: expectedPhone = the new phone → FAILS)", async () => {
++    dbMocks.getContact.mockResolvedValue(flagged);
++    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
++    const r = await setPhoneCountryAction("a1", "c1", "MX");
++    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
++      {}, "a1", "c1", { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_1");
++    expect(r).toEqual({ ok: true, phone: "+525512345678", previous: { phone: "+15512345678", unconfirmed: true } });
++    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts/c1");
++  });
++
++  it("US keeps +1 and still clears the flag; a raw legacy number is read, not refused", async () => {
++    dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "55 1234 5678", phone_country_unconfirmed: false });
++    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
++    const r = await setPhoneCountryAction("a1", "c1", "US");
++    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
++      {}, "a1", "c1", { expectedPhone: "55 1234 5678", phone: "+15512345678", unconfirmed: false }, "user_1");
++    expect(r).toMatchObject({ ok: true, previous: { phone: "55 1234 5678", unconfirmed: false } });
++  });
++
++  it("a country off the wire that is not US or MX writes nothing (mutation: drop the COUNTRIES check → FAILS)", async () => {
++    const r = await setPhoneCountryAction("a1", "c1", "CA" as never);
++    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
++    expect(dbMocks.getContact).not.toHaveBeenCalled();
++  });
++
++  it("the number changed under the operator: 'changed', nothing revalidated", async () => {
++    dbMocks.getContact.mockResolvedValue(flagged);
++    dbMocks.setContactPhoneCountry.mockResolvedValue("changed");
++    expect(await setPhoneCountryAction("a1", "c1", "MX")).toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
++    expect(revalidatePath).not.toHaveBeenCalled();
++  });
++
++  it("a number that is not ten national digits is 'unreadable', never guessed", async () => {
++    dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "+44 20 7946 0958", phone_country_unconfirmed: true });
++    expect(await setPhoneCountryAction("a1", "c1", "MX")).toEqual({ ok: false, error: m["contact.phoneCountry.unreadable"] });
++    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
++  });
++
++  it("a db error is the failed line, logged, never thrown", async () => {
++    const err = vi.spyOn(console, "error").mockImplementation(() => {});
++    dbMocks.getContact.mockRejectedValue(new Error("boom"));
++    expect(await setPhoneCountryAction("a1", "c1", "MX")).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
++    expect(err.mock.calls[0]?.[0]).toContain("setPhoneCountryAction: account a1 contact c1");
++    err.mockRestore();
++  });
++});
++
++describe("undoPhoneCountryAction", () => {
++  it("puts back the previous phone and flag while the stored phone is the one the pick wrote", async () => {
++    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
++    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+15512345678", unconfirmed: true });
++    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
++      {}, "a1", "c1", { expectedPhone: "+525512345678", phone: "+15512345678", unconfirmed: true }, "user_1");
++    expect(r).toEqual({ ok: true });
++  });
++
++  it("refuses a 'previous' that is a DIFFERENT number: the undo is never a general phone write (mutation: drop the same-number check → FAILS)", async () => {
++    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+19562921696", unconfirmed: false });
++    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
++    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
++  });
++
++  it("refuses a flag that is not a real boolean", async () => {
++    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+15512345678", unconfirmed: "true" as never });
++    expect(r.ok).toBe(false);
++    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
++  });
++
++  it("the number changed since the pick: 'changed'", async () => {
++    dbMocks.setContactPhoneCountry.mockResolvedValue("changed");
++    expect(await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+15512345678", unconfirmed: true }))
++      .toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
++  });
++});
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts` (against the task's parent commit):
+
+```diff
+@@ -48,6 +48,7 @@ const GOOD = {
+   tags: [{ id: "t1", name: "vip" }],
+   recent: [{ kind: "note", label: "Note", at: "2026-09-01T10:00:00+00:00" }],
+   marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00",
++  phone_country_unconfirmed: false,
+   zone: { zone: "UTC", guessed: false, label: "UTC" },
+ };
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts` (against the task's parent commit):
+
+```diff
+@@ -73,7 +73,10 @@ const recipientState = vi.fn();
+ vi.mock("@/lib/consent/recipient-state", () => ({
+   smsRecipientState: (...a: unknown[]) => recipientState(...a),
+ }));
+-
++const phoneRowProps = vi.fn();
++vi.mock("../phone-country-row", () => ({
++  PhoneCountryRow: (props: Record<string, unknown>) => { phoneRowProps(props); return null; },
++}));
+ 
+ /** The switch's props, as the REAL panel hands them down — so this proves the
+  *  zone reaches the switch, not merely the panel. */
+@@ -151,13 +154,15 @@ describe("ContactDetailPage: the zone the opt-out's date is printed in", () => {
+ 
+ /**
+  * Consent chain PR-1 (spec §6): the composer is closed, with one line, when
+- * the recipient's texts are stopped, held or the number is unconfirmed.
++ * the recipient's texts are stopped, held or the number is unconfirmed; and
++ * the Check number row gets the flag worked out on the SERVER.
+  */
+ describe("ContactDetailPage: the recipient's texts state", () => {
+   beforeEach(() => {
+     getContactMock.mockReset().mockResolvedValue(CONTACT);
+     recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+     timelineProps.mockClear();
++    phoneRowProps.mockClear();
+   });
+ 
+   it("a stopped number: the composer's line carries the stop date in the ACCOUNT's zone (mutation: format the date in UTC → 'Oct 4', FAILS)", async () => {
+@@ -181,4 +186,16 @@ describe("ContactDetailPage: the recipient's texts state", () => {
+     await render();
+     expect(timelineProps.mock.calls[0]![0]).toMatchObject({ smsBlockedLine: m["compose.smsStateUnknown"] });
+   });
++
++  it("a stored number that reads both ways gets the Check number row, flag or not (mutation: pass the flag alone → FAILS)", async () => {
++    getContactMock.mockResolvedValue({ ...CONTACT, phone: "55 1234 5678", phone_country_unconfirmed: false });
++    await render();
++    expect(phoneRowProps.mock.calls[0]![0]).toMatchObject({ contactId: "ct1", unconfirmed: true });
++  });
++
++  it("a plainly US number does not", async () => {
++    getContactMock.mockResolvedValue({ ...CONTACT, phone: "(956) 292-1696", phone_country_unconfirmed: false });
++    await render();
++    expect(phoneRowProps.mock.calls[0]![0]).toMatchObject({ unconfirmed: false });
++  });
+ });
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/contacts "src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts"
+```
+
+Expected (the staged replay's RED run):
+- `src/lib/contacts/phone-country.test.ts`: **fails to load** (9 tests once it loads): `Cannot find module './phone-country' imported from apps/web/src/lib/contacts/phone-country.test.ts`
+- `src/lib/contacts/summary.test.ts`: **11 failing** that Step 4 turns green; 19 already pass:
+  - parseContactSummary: the route's own shape parses the route's current body, every one of the five kinds included
+  - parseContactSummary: the route's own shape parses a contact who may be emailed (stamp null, present)
+  - parseContactSummary: the route's own shape parses a contact with no tags and nothing recent
+  - parseContactSummary: the route's own shape ignores keys it does not know, and does not carry them through
+  - parseContactSummary: a recent item of a kind this bundle does not know is dropped drops that item and keeps the rest of the summary, in order
+  - parseContactSummary: a recent item of a kind this bundle does not know is dropped a body whose every recent item is unknown still loads, tags and stamp intact
+  - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) carries true through, so the drawer's Check number row shows (mutation: drop the field from the return → FAILS)
+  - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) carries false through
+  - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) missing (a server from before PR-1) is false and the rest still loads (mutation: make it required → null, FAILS)
+  - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) anything but the boolean true is false — never a truthy string (mutation: Boolean(v) → "false" shows the row, FAILS)
+  - summaryLoadFrom: the drawer's response handling a good body is ready, with the parsed summary and the caller's clock
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: **10 failing** that Step 4 turns green; 15 already pass:
+  - setPhoneCountryAction Mexico rewrites the SAME ten digits under +52, clears the flag, compare-and-set on the phone it read (mutation: expectedPhone = the new phone → FAILS)
+  - setPhoneCountryAction US keeps +1 and still clears the flag; a raw legacy number is read, not refused
+  - setPhoneCountryAction a country off the wire that is not US or MX writes nothing (mutation: drop the COUNTRIES check → FAILS)
+  - setPhoneCountryAction the number changed under the operator: 'changed', nothing revalidated
+  - setPhoneCountryAction a number that is not ten national digits is 'unreadable', never guessed
+  - setPhoneCountryAction a db error is the failed line, logged, never thrown
+  - undoPhoneCountryAction puts back the previous phone and flag while the stored phone is the one the pick wrote
+  - undoPhoneCountryAction refuses a 'previous' that is a DIFFERENT number: the undo is never a general phone write (mutation: drop the same-number check → FAILS)
+  - undoPhoneCountryAction refuses a flag that is not a real boolean
+  - undoPhoneCountryAction the number changed since the pick: 'changed'
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts`: **2 failing** that Step 4 turns green; 7 already pass:
+  - ContactDrawer: the summary body is parsed, not cast a good body stores the PARSED summary, extra keys dropped, with the clock read in the callback
+  - ContactDrawer: the summary body is parsed, not cast a recent item of a kind this bundle does not know is dropped, and the rest still loads
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts`: **2 failing** that Step 4 turns green; 6 already pass:
+  - ContactDetailPage: the recipient's texts state a stored number that reads both ways gets the Check number row, flag or not (mutation: pass the flag alone → FAILS)
+  - ContactDetailPage: the recipient's texts state a plainly US number does not
+- `src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.test.ts`: **3 failing** that Step 4 turns green; 7 already pass:
+  - contact summary route phone_country_unconfirmed is true when the contact's flag is set (mutation: drop the flag half of the OR → FAILS)
+  - contact summary route phone_country_unconfirmed is true for a number saved before the backfill that reads both ways, flag still false (mutation: drop the normaliser half → FAILS)
+  - contact summary route phone_country_unconfirmed is false for a plainly US number, a plainly Mexican one, and no number
+
+- [ ] **Step 3: Implement**
+
+Create `apps/web/src/lib/contacts/phone-country.ts`:
+
+```ts
+import type { PhoneCountry } from "@bis/db/phone";
+import { m } from "@/lib/messages";
+import type { OptOutToast } from "@/lib/contacts/marketing-optout";
+
+/**
+ * The Texts row's Check number state (consent chain spec §6, F-009): "This
+ * number could be Mexican or US." with ghost "Mexico (+52)" and "US (+1)",
+ * each run at once with an undo toast (DESIGN.md rule 6). This is the
+ * behaviour; phone-country-row.tsx is its shell. Type-only import of the
+ * normaliser's module: nothing of libphonenumber reaches the browser.
+ */
+
+/** Status dot + word (rule 3), in token classes only: a warning, because
+ *  it is the one texts state an operator must act on before anything sends. */
+export const PHONE_CHECK_TREATMENT = {
+  label: m["contact.phoneCountry.word"],
+  dot: "bg-warning",
+  chip: "border-warning/30 bg-warning/10 text-foreground",
+} as const;
+
+export type PhoneCountryPrevious = { phone: string; unconfirmed: boolean };
+export type PhoneCountryPickResult =
+  | { ok: true; phone: string; previous: PhoneCountryPrevious }
+  | { ok: false; error: string };
+export type PhoneCountryUndoResult = { ok: true } | { ok: false; error: string };
+
+export type PhoneCountrySave = (country: PhoneCountry) => Promise<PhoneCountryPickResult>;
+export type PhoneCountryUndo = (picked: string, previous: PhoneCountryPrevious) => Promise<PhoneCountryUndoResult>;
+
+/** One call, with a rejected promise (a stale tab's server-action id after
+ *  a redeploy) turned into the same "crashed" toast every inline edit uses. */
+async function attempt<T extends { ok: boolean }>(call: () => Promise<T>, toast: OptOutToast): Promise<T | null> {
+  try {
+    const result = await call();
+    if (!result.ok) toast.error((result as unknown as { error: string }).error);
+    return result.ok ? result : null;
+  } catch {
+    toast.error(m["inline.crashed"]);
+    return null;
+  }
+}
+
+/**
+ * Pick the country. On success the row goes (`show(false)`) and the toast
+ * offers Undo, which puts the previous phone and flag back and brings the
+ * row back (`show(true)`). A failed pick leaves the row as it was and says
+ * why. Undo runs through `run` — the row's own `runGuarded` — so it can
+ * never race a write still in flight; a refused Undo says so, because
+ * sonner has already dismissed the toast that carried it.
+ */
+export async function pickPhoneCountry(
+  country: PhoneCountry, save: PhoneCountrySave, undo: PhoneCountryUndo,
+  show: (checking: boolean) => void, toast: OptOutToast,
+  run: (work: () => Promise<void>) => boolean | Promise<void> = (work) => work(),
+): Promise<void> {
+  const picked = await attempt(() => save(country), toast);
+  if (!picked || !picked.ok) return;
+  show(false);
+  toast.success(m[country === "MX" ? "contact.phoneCountry.mxToast" : "contact.phoneCountry.usToast"], {
+    action: {
+      label: m["common.undo"],
+      onClick: () => {
+        const ran = run(async () => {
+          if (await attempt(() => undo(picked.phone, picked.previous), toast)) show(true);
+        });
+        if (ran === false) toast.error(m["contact.phoneCountry.undoBusy"]);
+        return ran;
+      },
+    },
+  });
+}
+```
+
+Create `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/phone-country-row.tsx`:
+
+```tsx
+"use client";
+
+import { useRef, useState, useTransition } from "react";
+import { toast } from "sonner";
+import type { PhoneCountry } from "@bis/db/phone";
+import { Button } from "@/components/ui/button";
+import { DotPill } from "@/components/dot-pill";
+import { m } from "@/lib/messages";
+import { runGuarded } from "@/lib/contacts/marketing-optout";
+import { PHONE_CHECK_TREATMENT, pickPhoneCountry } from "@/lib/contacts/phone-country";
+import { setPhoneCountryAction, undoPhoneCountryAction } from "./actions";
+
+/**
+ * The contact's Messages block, as PR-1 ships it: only the Texts row's Check
+ * number state (consent chain spec §6, F-009). Renders NOTHING unless the
+ * number could be Mexican or US; the other Texts states and the Email row
+ * land in PR-2 and PR-3. Rendered in the drawer AND on the full contact page;
+ * callers key it by contact so a different contact never inherits its state.
+ *
+ * The buttons are ghost (rule 8: nothing here is the view's primary), run at
+ * once, and offer Undo (rule 6). Loading and error are the drawer's own
+ * summary states: this row renders only from a loaded summary.
+ */
+export function PhoneCountryRow({ accountId, contactId, unconfirmed }: {
+  accountId: string;
+  contactId: string;
+  /** The number could be Mexican or US (the summary's, or the page's). */
+  unconfirmed: boolean;
+}) {
+  const [checking, setChecking] = useState(unconfirmed);
+  const [pending, startTransition] = useTransition();
+  const busy = useRef(false);
+
+  if (!checking) return null;
+
+  function run(work: () => Promise<void>): boolean {
+    return runGuarded(busy, startTransition, work);
+  }
+
+  function pick(country: PhoneCountry) {
+    if (pending || busy.current) return;
+    run(() => pickPhoneCountry(
+      country,
+      (c) => setPhoneCountryAction(accountId, contactId, c),
+      (picked, previous) => undoPhoneCountryAction(accountId, contactId, picked, previous),
+      setChecking,
+      toast,
+      run,
+    ));
+  }
+
+  return (
+    <div className="space-y-1.5" data-testid="phone-country-row">
+      <p className="text-muted-foreground font-mono text-[10px] tracking-[0.14em] uppercase">
+        {m["contact.messages.title"]}
+      </p>
+      <div className="flex items-center gap-2 text-sm">
+        <span>{m["contact.messages.texts"]}</span>
+        <DotPill {...PHONE_CHECK_TREATMENT} dense data-status="unconfirmed_number" />
+      </div>
+      <p className="text-muted-foreground text-xs">{m["contact.phoneCountry.line"]}</p>
+      <div className="flex gap-2">
+        <Button size="sm" variant="ghost" disabled={pending} onClick={() => pick("MX")}>
+          {m["contact.phoneCountry.mx"]}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={pending} onClick={() => pick("US")}>
+          {m["contact.phoneCountry.us"]}
+        </Button>
+      </div>
+    </div>
+  );
+}
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts` (against the task's parent commit):
+
+```diff
+@@ -4,7 +4,10 @@ import { revalidatePath } from "next/cache";
+ import { requireAccountAccess } from "@/lib/auth";
+ import { dbForRequest } from "@/lib/db";
+ import { createContact, deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
+-         setMarketingEmailOptOut } from "@bis/db";
++         setMarketingEmailOptOut, getContact, setContactPhoneCountry } from "@bis/db";
++import { repickPhoneCountry, type PhoneCountry } from "@bis/db/phone";
++import { loggableError } from "@/lib/loggable-error";
++import type { PhoneCountryPickResult, PhoneCountryUndoResult, PhoneCountryPrevious } from "@/lib/contacts/phone-country";
+ import { m } from "@/lib/messages";
+ import { EDITABLE_FIELDS, FIELD_TO_INPUT_KEY, normalizeFieldInput,
+          type EditableField } from "@/lib/contacts/field-input";
+@@ -117,3 +120,70 @@ export async function bulkDeleteContactsAction(
+     return { ok: false, error: "Delete failed — please try again." };
+   }
+ }
++
++const COUNTRIES: readonly PhoneCountry[] = ["US", "MX"];
++
++function revalidateContact(accountId: string, contactId: string): void {
++  revalidatePath(contactsPath(accountId));
++  revalidatePath(`${contactsPath(accountId)}/${contactId}`);
++}
++
++/**
++ * The Texts row's "Mexico (+52)" / "US (+1)" (consent chain spec §6, F-009):
++ * rewrites the stored number under the chosen country and clears
++ * `phone_country_unconfirmed`, through the request's RLS client (0054
++ * grants `authenticated` UPDATE on the flag by name, 0053's convention).
++ * Compare-and-set on the phone the action READ: an edit that lands between
++ * the read and the write wins, and the operator is told to reload.
++ *
++ * Answers the previous phone and flag, which the undo toast hands back.
++ */
++export async function setPhoneCountryAction(
++  accountId: string, contactId: string, country: PhoneCountry,
++): Promise<PhoneCountryPickResult> {
++  const { userId } = await requireAccountAccess(accountId);
++  if (!COUNTRIES.includes(country)) return { ok: false, error: m["contact.phoneCountry.failed"] };
++  try {
++    const db = await dbForRequest();
++    const contact = await getContact(db, accountId, contactId);
++    if (!contact?.phone) return { ok: false, error: m["contact.phoneCountry.changed"] };
++    const phone = repickPhoneCountry(contact.phone, country);
++    if (!phone) return { ok: false, error: m["contact.phoneCountry.unreadable"] };
++    const outcome = await setContactPhoneCountry(db, accountId, contactId,
++      { expectedPhone: contact.phone, phone, unconfirmed: false }, userId);
++    if (outcome === "changed") return { ok: false, error: m["contact.phoneCountry.changed"] };
++    revalidateContact(accountId, contactId);
++    return { ok: true, phone, previous: { phone: contact.phone, unconfirmed: contact.phone_country_unconfirmed === true } };
++  } catch (e) {
++    console.error(`setPhoneCountryAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
++    return { ok: false, error: m["contact.phoneCountry.failed"] };
++  }
++}
++
++/**
++ * The undo toast's write: puts back the phone and flag the pick replaced,
++ * while the stored phone is still the one the pick wrote. Its arguments come
++ * off the wire, so it only ever restores the SAME national number: a
++ * `previous` whose ten digits differ from `picked`'s is refused, and the
++ * undo can never become a way to write an arbitrary phone.
++ */
++export async function undoPhoneCountryAction(
++  accountId: string, contactId: string, picked: string, previous: PhoneCountryPrevious,
++): Promise<PhoneCountryUndoResult> {
++  const { userId } = await requireAccountAccess(accountId);
++  const sameNumber = typeof picked === "string" && typeof previous?.phone === "string"
++    && typeof previous.unconfirmed === "boolean"
++    && repickPhoneCountry(picked, "US") !== null
++    && repickPhoneCountry(picked, "US") === repickPhoneCountry(previous.phone, "US");
++  if (!sameNumber) return { ok: false, error: m["contact.phoneCountry.failed"] };
++  try {
++    const outcome = await setContactPhoneCountry(await dbForRequest(), accountId, contactId,
++      { expectedPhone: picked, phone: previous.phone, unconfirmed: previous.unconfirmed }, userId);
++    if (outcome === "changed") return { ok: false, error: m["contact.phoneCountry.changed"] };
++  } catch (e) {
++    console.error(`undoPhoneCountryAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
++    return { ok: false, error: m["contact.phoneCountry.failed"] };
++  }
++  revalidateContact(accountId, contactId);
++  return { ok: true };
++}
+```
+
+Apply to `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts` (against the task's parent commit):
+
+```diff
+@@ -3,6 +3,7 @@ import {
+   getContact, listContactTags, listNotes, listContactSubmissions,
+   listContactMessages, listContactOpportunities, listContactCalls,
+ } from "@bis/db";
++import { normalisePhone } from "@bis/db/phone";
+ import { apiAccountAccess } from "@/lib/auth";
+ import { dbForRequest } from "@/lib/db";
+ import { renderZone } from "@/lib/zone";
+@@ -24,6 +25,12 @@ export type ContactSummary = {
+    *  marketing emails" switch. Read here rather than off the list row because
+    *  a deep link to a contact on another page has only a stub row. */
+   marketing_email_opted_out_at: string | null;
++  /** F-009 (consent chain spec §6): the number could be Mexican or US, so
++   *  the drawer's Texts row asks which. True when the contact's flag is set
++   *  OR the stored number itself reads both ways — a number saved before the
++   *  backfill ran is still ambiguous, and the send gate refuses it either
++   *  way (gate.ts step 5), so the drawer must offer the fix either way. */
++  phone_country_unconfirmed: boolean;
+   /** The account's zone, resolved by `renderZone` like every other date
+    *  screen — the drawer prints the opt-out's "Off since" date in it, and
+    *  names the zone on that line when it was `guessed` (#123 m3). */
+@@ -101,6 +108,8 @@ export async function GET(
+     tags,
+     recent: items.slice(0, RECENT_LIMIT),
+     marketing_email_opted_out_at: contact.marketing_email_opted_out_at ?? null,
++    phone_country_unconfirmed:
++      contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true,
+     zone: { zone: zone.zone, guessed: zone.guessed, label: zone.label },
+   };
+   return NextResponse.json(body);
+```
+
+Apply to `apps/web/src/lib/contacts/summary.ts` (against the task's parent commit):
+
+```diff
+@@ -67,6 +67,10 @@ function parseZone(v: unknown): OptOutZone | undefined {
+  *   server. If the server adds a kind, refusing it would show "couldn't load"
+  *   in every open tab for each contact with such an item. The cost: the
+  *   dropped items are missing from that tab's "Recent" list until a reload.
++ * - `phone_country_unconfirmed` is TOLERATED: anything but `true` is
++ *   false, and the drawer shows no Check number row — what a server from
++ *   before consent chain PR-1 meant. The send gate still refuses an
++ *   ambiguous number, so a missing row loses a shortcut, never a guard.
+  * - `zone` is TOLERATED: missing or malformed (or a zone this browser cannot
+  *   format in) becomes undefined, and the switch leaves out its "Off since"
+  *   line (`optOutSinceLine`, #124).
+@@ -99,7 +103,11 @@ export function parseContactSummary(json: unknown): ParsedContactSummary | null
+   const stamp = json.marketing_email_opted_out_at;
+   if (stamp !== null && typeof stamp !== "string") return null;
+ 
+-  return { tags, recent, marketing_email_opted_out_at: stamp, zone: parseZone(json.zone) };
++  return {
++    tags, recent, marketing_email_opted_out_at: stamp,
++    phone_country_unconfirmed: json.phone_country_unconfirmed === true,
++    zone: parseZone(json.zone),
++  };
+ }
+ 
+ /** The drawer's load outcome for one contact. */
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx` (against the task's parent commit):
+
+```diff
+@@ -17,6 +17,7 @@ import { m } from "@/lib/messages";
+ import { useFormSubmit } from "@/lib/forms/use-form-submit";
+ import { updateContactFieldAction } from "./actions";
+ import { MarketingOptOutSwitch } from "./marketing-optout-switch";
++import { PhoneCountryRow } from "./phone-country-row";
+ import { addTagAction, removeTagAction } from "./[contactId]/actions";
+ import type { ContactRow } from "./contacts-table";
+ import { summaryLoadFrom, type ParsedContactSummary, type SummaryLoad } from "@/lib/contacts/summary";
+@@ -197,6 +198,15 @@ export function ContactDrawer({
+                       another page has only missingRow's all-null stub, which
+                       would show an opted-out contact as unticked. Keyed by
+                       contact so its local state never carries across. */}
++                  {/* The Texts row's Check number state (spec §6, F-009), from
++                      the summary for the same stub-row reason. Renders
++                      nothing for a number that is not ambiguous. */}
++                  <PhoneCountryRow
++                    key={`phone-${row.id}`}
++                    accountId={accountId}
++                    contactId={row.id}
++                    unconfirmed={load.summary.phone_country_unconfirmed}
++                  />
+                   <MarketingOptOutSwitch
+                     key={row.id}
+                     accountId={accountId}
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/contact-fields-panel.tsx` (against the task's parent commit):
+
+```diff
+@@ -23,6 +23,7 @@ import { updateContactAction, addTagAction, removeTagAction } from "./actions";
+ import { updateContactFieldAction } from "../actions";
+ import { FIELDS } from "../contact-drawer";
+ import { MarketingOptOutSwitch } from "../marketing-optout-switch";
++import { PhoneCountryRow } from "../phone-country-row";
+ import type { OptOutZone } from "@/lib/contacts/marketing-optout";
+ import { CLEAR_FIELD_SENTINEL } from "./constants";
+ 
+@@ -36,6 +37,7 @@ export function ContactFieldsPanel({
+   tags,
+   fieldDefs,
+   zone,
++  phoneUnconfirmed,
+ }: {
+   accountId: string;
+   contactId: string;
+@@ -44,6 +46,10 @@ export function ContactFieldsPanel({
+   fieldDefs: CustomFieldDef[];
+   /** The account's resolved zone (`renderZone`), for the opt-out's "Off since" date. */
+   zone: OptOutZone;
++  /** F-009: the number could be Mexican or US (the flag, or the stored
++   *  number reads both ways). Worked out on the server page, which has the
++   *  normaliser; the panel is a client component and must not ship it. */
++  phoneUnconfirmed: boolean;
+ }) {
+   const custom = (contact.custom ?? {}) as Record<string, unknown>;
+   const hidden = <input type="hidden" name="contactId" value={contactId} />;
+@@ -75,6 +81,13 @@ export function ContactFieldsPanel({
+             ))}
+           </dl>
+ 
++          <PhoneCountryRow
++            key={`phone-${contactId}`}
++            accountId={accountId}
++            contactId={contactId}
++            unconfirmed={phoneUnconfirmed}
++          />
++
+           <MarketingOptOutSwitch
+             key={contactId}
+             accountId={accountId}
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx` (against the task's parent commit):
+
+```diff
+@@ -12,6 +12,7 @@ import { ActivityTimeline } from "./activity-timeline";
+ import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
+ import { resolveSmsSender } from "@/lib/sms/sender";
+ import { e164Of } from "@/lib/voice/phone-number";
++import { normalisePhone } from "@bis/db/phone";
+ import { smsRecipientState } from "@/lib/consent/recipient-state";
+ import { composerStateLine } from "@/lib/consent/composer-state";
+ import { renderZone } from "@/lib/zone";
+@@ -61,6 +62,7 @@ export default async function ContactDetailPage({
+           tags={tags}
+           fieldDefs={fieldDefs}
+           zone={{ zone: zone.zone, guessed: zone.guessed, label: zone.label }}
++          phoneUnconfirmed={contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true}
+         />
+         <ActivityTimeline
+           accountId={accountId}
+```
+
+Apply to `apps/web/src/app/(dashboard)/dashboard/styleguide/page.tsx` (against the task's parent commit):
+
+```diff
+@@ -28,6 +28,7 @@ import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposa
+ import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
+ import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
+ import { DotPill } from "@/components/dot-pill";
++import { PHONE_CHECK_TREATMENT } from "@/lib/contacts/phone-country";
+ import { BillingBanner } from "@/components/billing-banner";
+ import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
+ import { PAYMENT_PROCESSING } from "../accounts/[accountId]/billing/client-status";
+@@ -171,6 +172,18 @@ export default async function StyleguidePage() {
+           <div className="flex flex-wrap gap-2" data-testid="styleguide-confirm-reply">
+             {(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)}
+           </div>
++          {/* The contact Messages block's Texts row (consent chain PR-1):
++              its one state so far, Check number, a warning because the
++              operator must pick the country before anything is texted.
++              Read off lib/contacts/phone-country.ts, so it cannot drift. */}
++          <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
++            …/contacts/phone-country-row.tsx · lib/contacts/phone-country.ts
++          </p>
++          <div className="flex flex-wrap items-center gap-2" data-testid="styleguide-texts-state">
++            <span className="text-sm">{m["contact.messages.texts"]}</span>
++            <DotPill {...PHONE_CHECK_TREATMENT} dense data-status="unconfirmed_number" />
++            <span className="text-xs text-muted-foreground">{m["contact.phoneCountry.line"]}</span>
++          </div>
+         </section>
+ 
+         <Section title="Meter" file="components/meter.tsx">
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/contacts "src/app/api/accounts/[accountId]/contacts" "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts" "src/app/(dashboard)/dashboard/styleguide"
+pnpm typecheck
+pnpm lint
+pnpm test
+```
+
+Expected (the staged replay's GREEN run):
+91 passed across the task's test files:
+- `src/lib/contacts/phone-country.test.ts`: 9 passed
+- `src/lib/contacts/summary.test.ts`: 30 passed
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: 25 passed
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts`: 9 passed
+- `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts`: 8 passed
+- `src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.test.ts`: 10 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4441 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites. `pnpm lint`: ✖ 2 problems (0 errors, 2 warnings).
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+20 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **toast US line for MX** — in `src/lib/contacts/phone-country.ts`: `m[country === "MX" ? "contact.phoneCountry.mxToast" : "contact.phoneCountry.usToast"]` → `m["contact.phoneCountry.usToast"]`; turns red 1 test:
+    - pickPhoneCountry Mexico: saves MX, hides the row, toasts the Mexican line with an Undo (mutation: toast the US line for MX → FAILS)
+2. **show(false) never** — in `src/lib/contacts/phone-country.ts`: `  if (!picked || !picked.ok) return;⏎  show(false);` → `  if (!picked || !picked.ok) return;`; turns red 3 tests:
+    - pickPhoneCountry Mexico: saves MX, hides the row, toasts the Mexican line with an Undo (mutation: toast the US line for MX → FAILS)
+    - pickPhoneCountry Undo hands back the phone the pick WROTE and the previous phone and flag, then shows the row again (mutation: pass previous.phone as picked → FAILS)
+    - pickPhoneCountry a failed Undo says why and leaves the row hidden, as the server has it
+3. **undo passes previous.phone as picked** — in `src/lib/contacts/phone-country.ts`: `undo(picked.phone, picked.previous)` → `undo(picked.previous.phone, picked.previous)`; turns red 1 test:
+    - pickPhoneCountry Undo hands back the phone the pick WROTE and the previous phone and flag, then shows the row again (mutation: pass previous.phone as picked → FAILS)
+4. **refused undo silent** — in `src/lib/contacts/phone-country.ts`: delete `if (ran === false) toast.error(m["contact.phoneCountry.undoBusy"]);`; turns red 1 test:
+    - pickPhoneCountry an Undo the guard refuses says so (the toast is already gone) and writes nothing (mutation: drop the ran === false branch → FAILS)
+5. **crash swallowed** — in `src/lib/contacts/phone-country.ts`: `    toast.error(m["inline.crashed"]);⏎    return null;` → `    return null;`; turns red 1 test:
+    - pickPhoneCountry a REJECTED pick (a stale tab's action id) is the crashed toast, never silence
+6. **undo success doesn't show row** — in `src/lib/contacts/phone-country.ts`: `toast)) show(true);` → `toast)) show(false);`; turns red 1 test:
+    - pickPhoneCountry Undo hands back the phone the pick WROTE and the previous phone and flag, then shows the row again (mutation: pass previous.phone as picked → FAILS)
+7. **treatment hex** — in `src/lib/contacts/phone-country.ts`: `dot: "bg-warning",` → `dot: "bg-[#f5a524]",`; turns red 1 test:
+    - PHONE_CHECK_TREATMENT is a dot AND the word, in token classes only (rule 3; mutation: a hex colour → FAILS)
+8. **expectedPhone is the new phone** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: `{ expectedPhone: contact.phone, phone, unconfirmed: false }` → `{ expectedPhone: phone, phone, unconfirmed: false }`; turns red 2 tests:
+    - setPhoneCountryAction Mexico rewrites the SAME ten digits under +52, clears the flag, compare-and-set on the phone it read (mutation: expectedPhone = the new phone → FAILS)
+    - setPhoneCountryAction US keeps +1 and still clears the flag; a raw legacy number is read, not refused
+9. **drop COUNTRIES check** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: delete `  if (!COUNTRIES.includes(country)) return { ok: false, error: m["contact.phoneCountry.failed"] };⏎`; turns red 1 test:
+    - setPhoneCountryAction a country off the wire that is not US or MX writes nothing (mutation: drop the COUNTRIES check → FAILS)
+10. **drop same-number check** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: `    && repickPhoneCountry(picked, "US") === repickPhoneCountry(previous.phone, "US");` → `;`; turns red 1 test:
+    - undoPhoneCountryAction refuses a 'previous' that is a DIFFERENT number: the undo is never a general phone write (mutation: drop the same-number check → FAILS)
+11. **flag typecheck dropped** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: delete `    && typeof previous.unconfirmed === "boolean"⏎`; turns red 1 test:
+    - undoPhoneCountryAction refuses a flag that is not a real boolean
+12. **changed treated as ok** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: `    if (outcome === "changed") return { ok: false, error: m["contact.phoneCountry.changed"] };⏎    revalidateContact(accountId, contactId);⏎    return { ok: true, phone,` → `    revalidateContact(accountId, contactId);⏎    return { ok: true, phone,`; turns red 1 test:
+    - setPhoneCountryAction the number changed under the operator: 'changed', nothing revalidated
+13. **previous flag forced false** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: `unconfirmed: contact.phone_country_unconfirmed === true } };` → `unconfirmed: false } };`; turns red 1 test:
+    - setPhoneCountryAction Mexico rewrites the SAME ten digits under +52, clears the flag, compare-and-set on the phone it read (mutation: expectedPhone = the new phone → FAILS)
+14. **drop flag half** — in `src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts`: `      contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true,` → `      normalisePhone(contact.phone)?.unconfirmed === true,`; turns red 1 test:
+    - contact summary route phone_country_unconfirmed is true when the contact's flag is set (mutation: drop the flag half of the OR → FAILS)
+15. **drop normaliser half** — in `src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts`: `      contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true,` → `      contact.phone_country_unconfirmed === true,`; turns red 1 test:
+    - contact summary route phone_country_unconfirmed is true for a number saved before the backfill that reads both ways, flag still false (mutation: drop the normaliser half → FAILS)
+16. **drop the field** — in `src/lib/contacts/summary.ts`: delete `    phone_country_unconfirmed: json.phone_country_unconfirmed === true,⏎`; turns red 13 tests:
+    - parseContactSummary: the route's own shape parses the route's current body, every one of the five kinds included
+    - parseContactSummary: the route's own shape parses a contact who may be emailed (stamp null, present)
+    - parseContactSummary: the route's own shape parses a contact with no tags and nothing recent
+    - parseContactSummary: the route's own shape ignores keys it does not know, and does not carry them through
+    - parseContactSummary: a recent item of a kind this bundle does not know is dropped drops that item and keeps the rest of the summary, in order
+    - parseContactSummary: a recent item of a kind this bundle does not know is dropped a body whose every recent item is unknown still loads, tags and stamp intact
+    - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) carries true through, so the drawer's Check number row shows (mutation: drop the field from the return → FAILS)
+    - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) carries false through
+    - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) missing (a server from before PR-1) is false and the rest still loads (mutation: make it required → null, FAILS)
+    - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) anything but the boolean true is false — never a truthy string (mutation: Boolean(v) → "false" shows the row, FAILS)
+    - summaryLoadFrom: the drawer's response handling a good body is ready, with the parsed summary and the caller's clock
+    - ContactDrawer: the summary body is parsed, not cast a good body stores the PARSED summary, extra keys dropped, with the clock read in the callback
+    - ContactDrawer: the summary body is parsed, not cast a recent item of a kind this bundle does not know is dropped, and the rest still loads
+17. **Boolean coercion** — in `src/lib/contacts/summary.ts`: `phone_country_unconfirmed: json.phone_country_unconfirmed === true,` → `phone_country_unconfirmed: Boolean(json.phone_country_unconfirmed),`; turns red 1 test:
+    - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) anything but the boolean true is false — never a truthy string (mutation: Boolean(v) → "false" shows the row, FAILS)
+18. **required** — in `src/lib/contacts/summary.ts`: `  const stamp = json.marketing_email_opted_out_at;` → `  if (typeof json.phone_country_unconfirmed !== "boolean") return null;⏎  const stamp = json.marketing_email_opted_out_at;`; turns red 2 tests:
+    - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) missing (a server from before PR-1) is false and the rest still loads (mutation: make it required → null, FAILS)
+    - parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1) anything but the boolean true is false — never a truthy string (mutation: Boolean(v) → "false" shows the row, FAILS)
+19. **the flag alone decides the row** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx`: `phoneUnconfirmed={contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true}` → `phoneUnconfirmed={contact.phone_country_unconfirmed === true}`; turns red 1 test:
+    - ContactDetailPage: the recipient's texts state a stored number that reads both ways gets the Check number row, flag or not (mutation: pass the flag alone → FAILS)
+20. **the composer line in UTC** — in `src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx`: `smsBlockedLine={composerStateLine(smsRecipient, zone.zone)}` → `smsBlockedLine={composerStateLine(smsRecipient, "UTC")}`; turns red 1 test:
+    - ContactDetailPage: the recipient's texts state a stopped number: the composer's line carries the stop date in the ACCOUNT's zone (mutation: format the date in UTC → 'Oct 4', FAILS)
+
+- [ ] **Step 6: DESIGN.md definition of done (bis-design-reviewer on the diff, with a running build if the lane has one).** Tokens only (`bg-warning`, `border-warning/30`, `bg-warning/10`, `text-foreground`, `text-muted-foreground`: `phone-country.test.ts` pins the treatment); dot + word (`DotPill`); both themes through `.dark` (the pill is the same `DotPill` the Activity and Billing pills use); the two buttons are ghost and keyboard-reachable; the row renders only from a LOADED summary, so the drawer's own skeleton and "Couldn't load" states cover loading and error, and there is no empty state (every contact has a state, spec §6); `/styleguide` shows the new pill.
+
+- [ ] **Step 7: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/lib/contacts/phone-country.test.ts" \
+        "apps/web/src/lib/contacts/summary.test.ts" \
+        "apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.test.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts" \
+        "apps/web/src/lib/contacts/phone-country.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/phone-country-row.tsx" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts" \
+        "apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts" \
+        "apps/web/src/lib/contacts/summary.ts" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/contact-fields-panel.tsx" \
+        "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx" \
+        "apps/web/src/app/(dashboard)/dashboard/styleguide/page.tsx"
+git commit -m "feat(contacts): the Texts row's Check number state — pick the country, undo (F-009)"
+```
+
+---
+
+### Task 15: The source scans
+
+**Owner:** bis-comms. **Lane:** single (Phase 4). **Depends on:** Tasks 1–14.
+
+Spec §8's source scans, shipped last because they assert the finished state (every SMS path through the gate, nothing reading the quiet settings). The task also deletes the `toE164` alias Task 7 left for the Phase 3 callers, which are all rewritten by now. Each scan has a positive control and a recorded mutation probe, so none can pass vacuously (G1 explains why scan 4 is not in PR-1).
+
+**Files:**
+- Create: `apps/web/src/lib/consent/scans.test.ts` (10 tests)
+- Modify: `apps/web/src/lib/voice/phone-number.ts`
+
+**Interfaces:**
+- Scans: (1) only `lib/consent/gate.ts` and the provider's own modules (`lib/sms/index.ts`, `telnyx.ts`, `fake.ts`, `types.ts`; `lib/sms/alerts.ts` is scanned like any other send path) reach `getSmsProvider`, `telnyxSmsProvider` or `fakeSmsProvider`; (2) every `kind:` literal handed to the gate is in `SMS_KINDS`, and every registry kind is used (positive control); (3) only `packages/db/src/consent.ts` names `consent_events` in code, and nothing updates, upserts or deletes it; (5) no source file names `automation_settings`, `quiet_enabled`/`quiet_start`/`quiet_end`, `readQuietSettings` or `saveQuietSettings` (control: 0046 does); plus `toE164` is gone and `fake-gate.ts` is imported only by tests.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `apps/web/src/lib/consent/scans.test.ts`:
+
+```ts
+import { describe, it, expect } from "vitest";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { SMS_KINDS } from "./classes";
+
+/**
+ * The consent chain's source scans (spec §8, "Source scans"), PR-1's share:
+ *   1. only the gate reaches an SMS provider;
+ *   2. every kind literal handed to the gate is in the registry;
+ *   3. only packages/db/src/consent.ts touches consent_events, and never with
+ *      an update, upsert or delete;
+ *   5. nothing reads the retired quiet-hours settings;
+ * plus two of this PR's own: `toE164` is gone for good (F-009's one rule),
+ * and the test-only fake gate is imported by tests alone.
+ * Scan 4 (the customer-initiated EMAIL kinds) is PR-3's, with the email kinds.
+ *
+ * Every scan reads CODE, never comments (the doc-comment-satisfies-the-guard
+ * shape, memory bis-vacuous-test-shapes), and each has a positive control
+ * proving it can see what it looks for — a scan that finds nothing because it
+ * reads nothing is the silent no-op this repo has shipped three times.
+ */
+const WEB_SRC = fileURLToPath(new URL("../../", import.meta.url));      // apps/web/src/
+const REPO = fileURLToPath(new URL("../../../../../", import.meta.url)); // repo root
+const DB_SRC = join(REPO, "packages", "db", "src");
+
+function walk(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) return name === "node_modules" ? [] : walk(full);
+    return /\.(ts|tsx)$/.test(name) ? [full] : [];
+  });
+}
+const isTest = (f: string) => /\.test\.tsx?$/.test(f);
+/** Forward slashes, relative to the repo, whatever the OS (Windows prints `\`). */
+const rel = (f: string) => relative(REPO, f).split(sep).join("/");
+/** A file's CODE: block comments, then line comments, stripped (a `//` after a `:` is a URL). */
+const code = (f: string) => readFileSync(f, "utf-8")
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+const webSources = () => walk(WEB_SRC).filter((f) => !isTest(f));
+const dbSources = () => walk(DB_SRC).filter((f) => !isTest(f));
+
+describe("scan 1: only the send gate reaches an SMS provider", () => {
+  // The provider's own modules, and the gate. alerts.ts is IN lib/sms but is
+  // one of the five send paths, so it is scanned like any other.
+  const PROVIDER_MODULES = new Set([
+    "apps/web/src/lib/sms/index.ts", "apps/web/src/lib/sms/telnyx.ts", "apps/web/src/lib/sms/fake.ts",
+    "apps/web/src/lib/sms/types.ts", "apps/web/src/lib/consent/gate.ts",
+  ]);
+  const REACHES_PROVIDER: readonly RegExp[] = [
+    /\bgetSmsProvider\b/,
+    /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/sms|(?:\.\.?\/)+sms|\.\/index|\.\.\/index)(?:\/index)?(?:\.[jt]s)?["']/,
+    /(?:from\s+|import\s*\(\s*)["'][^"']*\/telnyx["']/,
+    /\btelnyxSmsProvider\b|\bfakeSmsProvider\b/,
+  ];
+
+  it("no source file outside the provider's modules and the gate names the factory, the providers or lib/sms's index (mutation: import getSmsProvider back into alerts.ts or harness.ts → FAILS naming it)", () => {
+    const offenders = webSources()
+      .filter((f) => !PROVIDER_MODULES.has(rel(f)))
+      .filter((f) => {
+        const src = code(f);
+        // lib/sms/alerts.ts's own `./index` would be the factory; elsewhere
+        // `./index` is some other module, so that rule is only for lib/sms.
+        return REACHES_PROVIDER.some((r, i) => (i === 1 && !rel(f).startsWith("apps/web/src/lib/sms/")
+          ? /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/sms|(?:\.\.\/)+sms)(?:\/index)?(?:\.[jt]s)?["']/.test(src)
+          : r.test(src)));
+      })
+      .map(rel);
+    expect(offenders).toEqual([]);
+  });
+
+  it("the gate itself does reach the factory — the scan can see an import (the positive control)", () => {
+    expect(code(join(WEB_SRC, "lib", "consent", "gate.ts"))).toMatch(REACHES_PROVIDER[0]!);
+    expect(webSources().length).toBeGreaterThan(300);
+  });
+});
+
+describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
+  const KIND_LITERAL = /\bkind:\s*"((?:automation|voice|staff|operator|consent)\.[a-z_]+)"/g;
+  const GATE_CALLERS = /from\s+["'](?:@\/lib\/consent\/gate|\.\/gate|\.\.\/send-sms|\.\/send-sms)["']/;
+
+  function kindLiterals(): { file: string; kind: string }[] {
+    return webSources().filter((f) => GATE_CALLERS.test(code(f)))
+      .flatMap((f) => [...code(f).matchAll(KIND_LITERAL)].map((m) => ({ file: rel(f), kind: m[1]! })));
+  }
+
+  it("each kind literal in a file that sends through the gate is a registry key (mutation: a pass sends kind \"automation.review_requests\" → FAILS naming it)", () => {
+    expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS))).toEqual([]);
+  });
+
+  it("the scan reaches every send path's kind — none of the eleven is missing (the positive control)", () => {
+    const seen = new Set(kindLiterals().map(({ kind }) => kind));
+    expect([...seen].sort()).toEqual(Object.keys(SMS_KINDS).sort());
+  });
+});
+
+describe("scan 3: the ledger has one writer, and it only appends", () => {
+  const TOUCHES_LEDGER = /\.from\(\s*["']consent_events["']\s*\)/;
+
+  it("only packages/db/src/consent.ts names the consent_events table in code (mutation: an insert from apps/web → FAILS naming the file)", () => {
+    const touching = [...webSources(), ...dbSources()].filter((f) => TOUCHES_LEDGER.test(code(f))).map(rel);
+    expect(touching).toEqual(["packages/db/src/consent.ts"]);
+  });
+
+  it("consent.ts never updates, upserts or deletes on it (mutation: add .update( to a consent_events call → FAILS)", () => {
+    const src = code(join(DB_SRC, "consent.ts"));
+    const calls = [...src.matchAll(/\.from\(\s*["']consent_events["']\s*\)([\s\S]*?);/g)].map((m) => m[1]!);
+    expect(calls.length).toBeGreaterThanOrEqual(2);   // the read and the insert: the scan sees both
+    expect(calls.filter((c) => /\.(update|upsert|delete)\(/.test(c))).toEqual([]);
+  });
+});
+
+describe("scan 5: nothing reads the retired quiet-hours settings", () => {
+  const QUIET = /\bquiet_(enabled|start|end)\b|\bautomation_settings\b|\breadQuietSettings\b|\bsaveQuietSettings\b/;
+
+  it("no source file names automation_settings or its quiet_* columns (mutation: bring readQuietSettings back → FAILS naming it)", () => {
+    expect([...webSources(), ...dbSources()].filter((f) => QUIET.test(code(f))).map(rel)).toEqual([]);
+  });
+
+  it("the scan can see the column name where it still exists: the migrations (the positive control)", () => {
+    const migration = readFileSync(join(REPO, "packages", "db", "supabase", "migrations", "0046_automation_log.sql"), "utf-8");
+    expect(migration).toMatch(QUIET);
+  });
+});
+
+describe("F-009: toE164 is gone, and the fake gate stays in the tests", () => {
+  it("no source file defines or calls toE164 (mutation: re-add it to phone-number.ts → FAILS)", () => {
+    expect(webSources().filter((f) => /\btoE164\b/.test(code(f))).map(rel)).toEqual([]);
+  });
+
+  it("only test files import lib/consent/fake-gate (mutation: import it from a pass → FAILS naming it)", () => {
+    const importers = walk(WEB_SRC).filter((f) => /["']@\/lib\/consent\/fake-gate["']|["']\.\/fake-gate["']/.test(code(f)));
+    expect(importers.length).toBeGreaterThan(0);
+    expect(importers.filter((f) => !isTest(f)).map(rel)).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/consent/scans.test.ts
+```
+
+One test is red until Step 3 deletes the alias: `toE164` is still defined. The rest pass at once, because they assert what Tasks 1–14 built; what shows they can fail is the probe list below (each probe edits a SOURCE file and turns the named scan red).
+
+Expected (the staged replay's RED run):
+- `src/lib/consent/scans.test.ts`: **1 failing** that Step 4 turns green; 9 already pass:
+  - F-009: toE164 is gone, and the fake gate stays in the tests no source file defines or calls toE164 (mutation: re-add it to phone-number.ts → FAILS)
+
+- [ ] **Step 3: Implement**
+
+Apply to `apps/web/src/lib/voice/phone-number.ts` (against the task's parent commit):
+
+```diff
+@@ -31,11 +31,3 @@ export function isCallerIdNumber(
+ ): boolean {
+   return !!callerNumber && e164Of(stored) === callerNumber;
+ }
+-
+-/**
+- * @deprecated The old name, kept ONLY while Tasks 9, 12 and 13 move its last
+- * callers (the passes, the composer, the alert phone). It IS e164Of, so those
+- * callers already get F-009's rule. Task 15 deletes it, and its scan keeps it
+- * deleted.
+- */
+-export const toE164 = e164Of;
+```
+
+- [ ] **Step 4: Run them again; they pass**
+
+```bash
+cd apps/web
+pnpm exec vitest run src/lib/consent/scans.test.ts
+pnpm test
+```
+
+Expected (the staged replay's GREEN run):
+10 passed across the task's test files:
+- `src/lib/consent/scans.test.ts`: 10 passed
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4451 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites. `pnpm lint`: ✖ 2 problems (0 errors, 2 warnings).
+
+- [ ] **Step 5: Mutation probes** (apply each, run the Step 4 test command, see the named tests fail, restore)
+
+5 probes, each killed (⏎ marks a line break in the text to find or replace):
+
+1. **scan 1: a pass imports the provider** — in `src/lib/automations/passes/review-request.ts`: `import {⏎  listDueReviewRequests,` → `import { getSmsProvider } from "@/lib/sms";⏎void getSmsProvider;⏎import {⏎  listDueReviewRequests,`; turns red 1 test:
+    - scan 1: only the send gate reaches an SMS provider no source file outside the provider's modules and the gate names the factory, the providers or lib/sms's index (mutation: import getSmsProvider back into alerts.ts or harness.ts → FAILS naming it)
+2. **scan 5: a pass reads the old quiet window** — in `src/lib/automations/passes/review-request.ts`: `import {⏎  listDueReviewRequests,` → `const QUIET_COLUMNS = "quiet_start, quiet_end";⏎void QUIET_COLUMNS;⏎import {⏎  listDueReviewRequests,`; turns red 1 test:
+    - scan 5: nothing reads the retired quiet-hours settings no source file names automation_settings or its quiet_* columns (mutation: bring readQuietSettings back → FAILS naming it)
+3. **scan 2: a kind the registry lacks** — in `src/lib/sms/alerts.ts`: `kind: "operator.alert_sms",` → `kind: "operator.alert_sms_v2" as never,`; turns red 1 test:
+    - scan 2: every SMS kind handed to the gate is in the registry the scan reaches every send path's kind — none of the eleven is missing (the positive control)
+4. **scan 3: a web file writes the ledger** — in `src/lib/voice/textback.ts`: `export async function prepareTextback(` → `export async function tamper(db: VoiceDb) { await db.from("consent_events").delete().eq("id", "x"); }⏎export async function prepareTextback(`; turns red 1 test:
+    - scan 3: the ledger has one writer, and it only appends only packages/db/src/consent.ts names the consent_events table in code (mutation: an insert from apps/web → FAILS naming the file)
+5. **scan: fake gate imported by production code** — in `src/lib/voice/textback.ts`: `import { decideSms, deliverSms,` → `import { fakeSmsGate } from "@/lib/consent/fake-gate";⏎void fakeSmsGate;⏎import { decideSms, deliverSms,`; turns red 1 test:
+    - F-009: toE164 is gone, and the fake gate stays in the tests only test files import lib/consent/fake-gate (mutation: import it from a pass → FAILS naming it)
+
+- [ ] **Step 6: Commit (locally; never push)**
+
+```bash
+git add "apps/web/src/lib/consent/scans.test.ts" \
+        "apps/web/src/lib/voice/phone-number.ts"
+git commit -m "test(consent): the source scans — one gate, registered kinds, one ledger writer, no quiet settings"
+```
+
+---
+
+### Task 16: e2e: the Check number row on the fixture account
+
+**Owner:** bis-e2e-qa. **Lane:** single (Phase 4). **Depends on:** Task 14.
+
+Spec §8's e2e list is mostly PR-2's (stop, resume, inbound STOP) and PR-3's (`/u/{token}`); what PR-1 can prove in a browser is the Check number row and the read-only hours card (Task 10). This spec runs on the per-run fixture account only.
+
+**Files:**
+- Create: `apps/web/e2e/consent-phone-country.spec.ts` (CI only)
+
+**Interfaces:**
+- Uses `createContact` (so the contact is stored through F-009 for real) and `serviceDb` on the fixture account from `e2e/.auth/client-fixture.json`; deletes its own contact in `afterAll`.
+
+- [ ] **Step 1: Write the spec (it runs in CI's e2e job)**
+
+Create `apps/web/e2e/consent-phone-country.spec.ts`:
+
+```ts
+import { test, expect } from "@playwright/test";
+import { readFileSync, existsSync } from "node:fs";
+import { config as loadEnv } from "dotenv";
+import { serviceDb, createContact } from "@bis/db";
+import { m } from "../src/lib/messages";
+
+// Same two paths, same reason, as every spec that talks to Supabase from the
+// runner process rather than through a Next request.
+loadEnv({ path: "apps/web/.env.local" });
+loadEnv({ path: ".env.local" });
+
+/**
+ * Consent chain PR-1, F-009 (spec §6): the drawer's Texts row in its Check
+ * number state, end to end. The contact is created through `createContact`
+ * with a number that reads both ways, so this also proves the normalise-on-
+ * write path against the real table: stored +1, flagged.
+ *
+ * ON THE PER-RUN FIXTURE ACCOUNT ONLY ("E2E Client Co …", auth.setup.ts),
+ * never Test Client One (CLAUDE.md). Its own contact, deleted in afterAll.
+ *
+ * Not proven here: the composer's closed state. The fixture account has no
+ * approved A2P registration, so the Text tab shows the A2P line first
+ * (message-composer.tsx's order); the line itself is pinned in
+ * [contactId]/page.test.ts and lib/consent/composer-state.test.ts.
+ */
+test.describe.configure({ timeout: 120_000 });
+
+type ClientFixture = { accountId: string; clerkUserId: string };
+const FIXTURE_FILE = "e2e/.auth/client-fixture.json";
+const fixture = (): ClientFixture => {
+  if (!existsSync(FIXTURE_FILE)) throw new Error(`client fixture missing at ${FIXTURE_FILE} — run the full suite`);
+  return JSON.parse(readFileSync(FIXTURE_FILE, "utf-8")) as ClientFixture;
+};
+const ACTOR = "e2e-consent-phone-country";
+const STAMP = Date.now().toString();
+let contactId = "";
+
+async function stored(): Promise<{ phone: string | null; phone_country_unconfirmed: boolean }> {
+  const { data, error } = await serviceDb().from("contacts")
+    .select("phone, phone_country_unconfirmed").eq("id", contactId).single();
+  if (error) throw new Error(`consent-phone-country e2e: read failed: ${error.message}`);
+  return data as { phone: string | null; phone_country_unconfirmed: boolean };
+}
+
+test.beforeAll(async () => {
+  const { accountId } = fixture();
+  contactId = (await createContact(serviceDb(), accountId,
+    { firstName: "Check", lastName: `Number ${STAMP}`, phone: "55 1234 5678" }, ACTOR)).id;
+});
+
+test.afterAll(async () => {
+  if (!contactId) return;
+  const { error } = await serviceDb().from("contacts").delete().eq("id", contactId);
+  if (error) console.error(`consent-phone-country e2e: cleanup failed: ${error.message}`);
+});
+
+test("an ambiguous number: stored +1 and flagged; Mexico (+52) rewrites it, Undo puts it back", async ({ page }) => {
+  const { accountId } = fixture();
+  expect(await stored()).toEqual({ phone: "+15512345678", phone_country_unconfirmed: true });
+
+  await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${STAMP}`);
+  await page.getByRole("row").filter({ hasText: `Number ${STAMP}` }).first().click();
+  const row = page.getByRole("dialog").getByTestId("phone-country-row");
+  await expect(row).toContainText(m["contact.phoneCountry.word"]);
+  await expect(row).toContainText(m["contact.phoneCountry.line"]);
+
+  await row.getByRole("button", { name: m["contact.phoneCountry.mx"] }).click();
+  // The toast appears once the action has resolved, so the write has landed.
+  const toast = page.getByText(m["contact.phoneCountry.mxToast"]);
+  await expect(toast).toBeVisible();
+  await expect(row).toHaveCount(0);
+  expect(await stored()).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
+
+  await page.getByRole("button", { name: m["common.undo"] }).click();
+  await expect(page.getByRole("dialog").getByTestId("phone-country-row")).toBeVisible();
+  await expect.poll(stored).toEqual({ phone: "+15512345678", phone_country_unconfirmed: true });
+});
+
+test("a reload after a pick shows no Check number row: the server's answer, not the click's", async ({ page }) => {
+  const { accountId } = fixture();
+  await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${STAMP}`);
+  await page.getByRole("row").filter({ hasText: `Number ${STAMP}` }).first().click();
+  const row = page.getByRole("dialog").getByTestId("phone-country-row");
+  await row.getByRole("button", { name: m["contact.phoneCountry.us"] }).click();
+  await expect(page.getByText(m["contact.phoneCountry.usToast"])).toBeVisible();
+  expect(await stored()).toEqual({ phone: "+15512345678", phone_country_unconfirmed: false });
+
+  await expect(page).toHaveURL(/[?&]peek=/);
+  await page.reload();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByRole("dialog").getByText(m["drawer.recent"])).toBeVisible();
+  await expect(page.getByRole("dialog").getByTestId("phone-country-row")).toHaveCount(0);
+});
+```
+
+- [ ] **Step 2: Check it locally**
+
+```bash
+cd apps/web
+pnpm typecheck
+pnpm lint
+pnpm test
+```
+
+Locally the spec is type-checked and linted only: Playwright refuses to run against production, and the lane has no CI-project env (Global Constraints). It runs in CI's `e2e` job (Task 17 reads its result on the head SHA).
+
+Expected (the staged replay's GREEN run):
+- `pnpm typecheck` (`tsc --noEmit`): `apps/web` exit 0, `packages/db` exit 0.
+- `pnpm --filter web test` at this commit: 4451 passed, 0 failed, 31 skipped; the failing suites are exactly the two env suites. `pnpm lint`: ✖ 2 problems (0 errors, 2 warnings).
+
+- [ ] **Step 3: Commit (locally; never push)**
+
+```bash
+git add "apps/web/e2e/consent-phone-country.spec.ts"
+git commit -m "test(e2e): the Check number row on the fixture account — pick Mexico, undo, reload"
+```
+
+---
+
+### Task 17: Gates, 0054 to CI then production, parity, the backfill, handoff
+
+**Owner:** the orchestrator, with bis-e2e-qa for the gates. Nothing here is an implementer step. Every Supabase step is the orchestrator's, exactly once per project; every production READ needs danlo's explicit go first (Global Constraints). Record each step's result in the ledger (`.superpowers/sdd/progress.md` on the orchestrator's checkout).
+
+- [ ] **Step 1: The branch is complete.** On `feat/consent-pr1` after Checkpoint C and Tasks 15–16: `pnpm install --frozen-lockfile --prefer-offline`, both typechecks, `pnpm --filter web lint` (0 errors), `pnpm --filter web test` (the two env suites only, Global Constraints), and the db suite on the replica against `post` with Checkpoint A's pass→fail diff (no flips; the two CI-only files the only new failures). `git log --oneline main..feat/consent-pr1` then shows the spec commit (while `docs/consent-chain-spec` is not on `main`), this plan's commit, the merge of `main` (Prerequisite 1), and exactly one commit per Task 1–16, in order.
+
+- [ ] **Step 2: The `contacts.dnd` pre-flight** (choice 25: "checks both databases"; read only, counts only). This machine cannot run `ci:sql` against the CI project (its env files still name production, runbook §9, D7 not done; `assertCiTarget` refuses), and `ci-project-setup.yml` has no free-SQL step, so both reads go through the Supabase MCP's `execute_sql`, pasting `packages/db/supabase/backfills/0054-dnd-preflight.sql` exactly:
+  - **CI project** `odnobiodsftffphuuosz`, if the connector reaches the `bis-ci` organization (A6). If it does not, record "not run: connector has no access; the CI project holds only `ci:seed` and test fixtures" in the ledger and continue: a non-empty value there would be a seed bug, not a customer's request.
+  - **Production** `tlbkbmlrfafquucsmsmm`, only with danlo's go.
+
+  Zero rows: continue. Any row on production: STOP, report the counts to danlo (QUESTIONS 4), do not merge.
+
+- [ ] **Step 3: 0054 to the CI project** (runbook `docs/runbooks/ci-supabase-project.md` §6, steps 2–3). First push the branch (the first push of this PR; the pre-push hook runs), then:
+
+```bash
+gh workflow run ci-project-setup.yml --ref feat/consent-pr1 -f step=push-dry-run
+```
+
+Read the run's log: it must list exactly one migration, `0054_consent_ledger.sql`. Only then:
+
+```bash
+gh workflow run ci-project-setup.yml --ref feat/consent-pr1 -f step=push
+gh workflow run ci-project-setup.yml --ref feat/consent-pr1 -f step=migrations
+```
+
+`migrations` must list 0054 as applied. The post-apply check needs no md5 compare: 0054 has no backslash (its E.164 CHECK spells the plus as `[+]`). From here until the merge, `main`'s own CI runs see 0054 on the shared CI project, and four of `main`'s tests go red there (they pin the pre-0054 grants and source list): `schema-grants-guard.test.ts`, `server-only-writes-grants.test.ts`, `contacts-marketing-optout-schema.test.ts` (the `contacts` UPDATE grant list) and `automations-b-schema.test.ts` (the source catalogue). Keep that window short: steps 3 to 9 in one sitting.
+
+- [ ] **Step 4: CI green on the head SHA.** Re-run the branch's CI if it ran before step 3. Then read the check runs FOR THE HEAD SHA, never a re-run's exit code:
+
+```bash
+SHA=$(git rev-parse feat/consent-pr1)
+gh api "repos/{owner}/{repo}/commits/$SHA/check-runs" --jq '.check_runs[] | [.name, .status, .conclusion] | @tsv'
+```
+
+Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log: `consent-ledger-schema.test.ts` 15 passed, `consent-ledger-live.test.ts` 1 passed, `contacts-phone-live.test.ts` 3 passed, `phone-country-backfill.test.ts` 3 passed on the CI project (this settles A3), and the build step passed (A5; E8 built it locally). In `e2e`'s: `consent-phone-country.spec.ts` 2 passed and `activity.spec.ts`'s rewritten quiet-hours test passed.
+
+- [ ] **Step 5: The backfill pipeline is already proved on the CI project** by step 4: `phone-country-backfill.test.ts` runs the read file, `rowsToFlag`, the emitted UPDATE and a second run inside a rolled-back transaction there. The CI project holds no customer numbers, so no backfill is run on it. The script's own run is proved on production's read in step 8, which writes nothing until danlo says so.
+
+- [ ] **Step 6: 0054 to production, BEFORE the merge** (the merge deploys code that selects `phone_country_unconfirmed` and reads `consent_events` on its first request; 0054 is additive, so the build that is live now runs unchanged against it). With danlo's go, through the Supabase MCP on `tlbkbmlrfafquucsmsmm`:
+  1. Pre-flight read: `select to_regclass('public.consent_events') as ledger, (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'contacts' and column_name = 'phone_country_unconfirmed') as flag_column;` must return `null` and `0`. Anything else: STOP (it was applied already; never re-apply).
+  2. `apply_migration` with name `0054_consent_ledger` and the file's exact contents. Once.
+  3. Post-apply read: the same query returns `consent_events` and `1`; `select pg_get_constraintdef(oid) from pg_constraint where conname = 'automation_log_source_check';` ends in `'textback'::text])))`; `select grantee, privilege_type from information_schema.role_table_grants where table_schema = 'public' and table_name = 'consent_events' and grantee <> 'postgres' order by 1, 2;` is exactly `authenticated SELECT`, `service_role INSERT`, `service_role SELECT`.
+
+- [ ] **Step 7: Parity** (runbook §5): `-f step=fingerprint` and `-f step=migration-history` on the CI project; `packages/db/supabase/parity/fingerprint.sql` and `migration-history.sql` through `execute_sql` on production (read only). Diff. Only the runbook's allowed differences may remain. Ledger: `0054 APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
+
+- [ ] **Step 8: The backfill on production: count first, write only with danlo's go** (QUESTIONS 1).
+  1. Read: paste `packages/db/supabase/backfills/0054-phone-country-candidates.sql` into `execute_sql` on production. Copy the JSON array of rows out of the result (the connector wraps it in untrusted-data markers; take only the array) into `/tmp/candidates-prod.json`. The script refuses anything that is not an array of rows with uuid ids and ten-digit keys, so a bad copy fails loudly and writes nothing.
+  2. `pnpm --filter @bis/db backfill:phone-country /tmp/candidates-prod.json` prints "candidates read", "could be Mexican (to flag)" and a count per account (never a number). Report those counts to danlo.
+  3. Only on danlo's go: `--emit-sql /tmp/flag-prod.sql`, then paste that file into `execute_sql` on production (it has no backslash and no transaction control). Its `returning id` count must equal the "to flag" count; a smaller count means rows changed since the read, which is safe (they were skipped), and is reported.
+  4. Read again: the candidates the CLI would flag must now be none.
+
+- [ ] **Step 9: Merge.** Squash-merge the PR through GitHub only after steps 4–8 (the ruleset requires `verify` and `e2e` green on the head SHA; the policy is non-strict, so if `main` moved since step 4, merge `main` in, re-run, and re-read the head SHA's check runs). The deploy follows the merge.
+
+- [ ] **Step 10: After the deploy.** On production, as the agency: open any account's Automations page (the quiet-hours card reads "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone (…)" and has no Save); open a contact whose number was flagged in step 8, if any (the Texts row shows "Check number"); the cron's next tick JSON carries a `blocked` counter on every SMS pass. Then write the handoff: what shipped, the counts from steps 2 and 8, the head SHA and its check runs, and the Next plans below.
+
+---
+
+## Self-review (done while writing; recorded for the reviewer)
+
+**Spec coverage** (the §7 PR-1 row, item by item):
+- The ledger migration and RLS: Task 1 (§3's table, index, RLS, grants; G16, G17).
+- F-009: normalisation and `+52` (Task 2), the flag (Tasks 1, 2), its backfill (Tasks 3, 17; G4), the drawer's country control (Task 14; G14), the alert phone's country choice (Task 13), every typed number through the one function (Task 7).
+- The class registry and fixed hours: Task 5 (the §4.1 item 2 table, decision 4, choice 31) and Task 10 (the setting's retirement, §6's card).
+- The gate: Task 8 (§4.1 item 3, steps 1–9, fails closed; choice 21; G8, G12).
+- All five SMS paths through it: the harness and every pass (Task 9), the text-back and the call alert (Task 11), the composer (Task 12), the alert-phone code (Task 13).
+- The source scans: Task 15 (scans 1, 2, 3, 5; G1 for scan 4).
+- §8 tests for PR-1: `normalisePhone`'s table (Task 2), the reducer tables incl. a stop between a hold and its release (Task 1), hours at 20:59/21:00, Sunday 11:59/12:00, DST and choice 21 (Task 5), registry completeness (Task 5), the RLS / no-update-or-delete / cascade / note-check DB tests (Task 1), backfill idempotency (Task 3), e2e on the fixture account (Tasks 10, 16).
+- Not in PR-1, deliberately: keywords, holds, grants, staff Stop/Resume, the rest of the Messages block, To-do rows, `tasks.consent_event_id` (G2), the Telnyx reconciliation and backfill (PR-2); email kinds, the token, `/u`, the 0049 fold (PR-3).
+
+**Placeholder scan:** every code step is a complete file or a complete diff generated from the staged replay (E5); no "TBD", no "similar to Task N".
+
+**Type consistency:** the signatures in each Interfaces block were read off the finished files (`grep '^export'`); both typechecks exit 0 after every task in the replay, which is the stronger check.
+
+**Counts:** every test count, RED list and probe table is generated from the replay's and the probe run's JSON output, not typed. The 23 new copy keys are counted by `copy.test.ts` itself.
+
+**Probes that survived, and what was done about them:** the first probe run found seven survivors. Five were real gaps, and their tests were added before this plan was generated: the composer's refusal lines and its unreadable-ledger failure (Task 12, four tests), the alert phone's country and its stopped line (Task 13, three tests), and the text-back's unreadable-ledger `failed` row (Task 11, one test). Two more survivors were the probes' own fault, not the tests': one was dropped as an equivalent mutant (writing the composer's row with the typed body instead of the gate's body changes nothing for `staff.composer_sms`, whose footer is `none`), and one of Task 8's was rewritten because it could not change behaviour (it threw only past a segment count no test text reaches; the probe now works the usage out inside the send's `try`, and is killed).
+
+**Vacuity checks** (memory `bis-test-vacuity`, `bis-vacuous-test-shapes`): every scan reads code with comments stripped and carries a positive control; every test that goes through the real gate mocks `readConsentState` and `readPhoneCountryFlag` explicitly (an unmocked read fails closed and would turn every send into `ledger_unavailable`, passing any "nothing was sent" assertion vacuously; that shape was caught in the alert-phone tests while prototyping); the probe tables show every new assertion can fail.
+
+## QUESTIONS FOR DANLO
+
+1. **Production backfill of `phone_country_unconfirmed`: when may it write?**
+   - **Recommended: read and report the count first; write only after you see it** (Task 17, step 8).
+   - Read and write in one go, reporting after.
+   - Skip the backfill; the gate and the drawer still catch every number stored from now on.
+2. **Review requests, quote follow-ups and no-show nudges on marketing hours (9 a.m., Sunday noon) until counsel answers?**
+   - **Recommended: yes, ship the stricter classification now** (spec §4.1 item 2 proposes it; no customer can tell until A2P approval).
+   - Ship them on automated hours (8 a.m. every day) and move them if counsel says so.
+3. **Spec §8's scan 4 cannot hold for the SMS instant reply (G1). Where does it go?**
+   - **Recommended: PR-3, scoped to the email kinds it was written for.**
+   - Relabel the SMS instant reply `informational` now, and ship scan 4 in PR-1.
+4. **If the pre-flight finds any non-empty `contacts.dnd` value (Task 17, step 2):**
+   - **Recommended: hold the merge, and plan their conversion to staff-recorded stops first** (choice 25).
+   - Merge PR-1 anyway and convert them in PR-2.
+
+## Next plans
+
+- **PR-2 (consent chain):** the `consent.*` kinds and the gate's one exception for the stop confirmation (§4.2); `tasks.consent_event_id` with its grant (G2); the guarded `hold_released` write ("only when the state is held", §3); the inbound keywords, START, HELP, the phrase list and holds; grants; staff Stop/Resume with `actor_id`; the rest of the Texts row (Allowed, Stopped, On hold) with its two-row skeleton and error line; the To-do rows; the Telnyx reconciliation (§11's questions, and whether the `40300` status is a 4xx, A1) and backfill.
+- **PR-3 (consent chain):** email kinds in the registry, scan 4 for them (G1), the footer and headers, the token, `/u/[token]`, the one-click endpoint, the 0049 fold and backfill, the Email row replacing the "No marketing emails" switch.
+- **A migration that drops `automation_settings`'s quiet columns** (or the table), once both databases pass parity with PR-1 live and nothing reads them (scan 5 already proves the second).
+- **`bumpHeldForAccount`** (0046's re-date of held rows when the window changed) has no caller once the window is fixed; delete it with that migration.
+- **A per-contact time zone** (spec §9): the gate already takes `contactZone`, so the feature that records one needs no gate change.
+- **The alert phone of existing accounts:** a stored `+1` alert number that is valid in Mexico was written by the old `toE164` too. A read-only count on production (`accounts.alert_phone` through `couldBeMexican`) would say whether any needs re-verifying; nothing sends to it until A2P approval.
