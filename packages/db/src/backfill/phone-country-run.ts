@@ -10,7 +10,12 @@
  * silently. WRITES NOTHING unless `--emit-sql` names a file, and then it
  * writes that file, never a database. Running the emitted SQL is the
  * orchestrator's step, on production only after danlo has seen the counts.
- * Never prints a phone number.
+ * Never prints a dialed phone number; the emitted file (if any) DOES hold
+ * each flagged contact's bare digits (phone_key) and carries its own
+ * warning saying so — see flagSql. Any error is caught and only its
+ * message is printed (review I7): an uncaught exception's own text (a
+ * malformed row, a JSON syntax error) must never be trusted to be silent
+ * about a customer's number.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { byWriter, countByAccount, flagSql, parseCandidates, planBackfillArgs, rowsToFlag } from "./phone-country";
@@ -42,7 +47,12 @@ function main(): void {
     return;
   }
   writeFileSync(out, flagSql(flag));
-  console.log(`wrote ${out} (${flag.length} row(s)); it holds ids and keys only, never a phone number`);
+  console.log(`wrote ${out} (${flag.length} row(s)); it holds each contact's id and bare phone digits (phone_key) — do not commit, paste or share; delete it after running`);
 }
 
-main();
+try {
+  main();
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}

@@ -90,4 +90,54 @@ describe("the 0054 phone-country backfill (read file + deciding module + emitted
       const res = await c.query(flagSql(flag));
       expect(res.rows.map((r: { id: string }) => r.id)).toEqual([ids.legacy]);
     }));
+
+  it("lists a contact whose only message was OUTBOUND sms, one whose only inbound message was a FORM submission (not sms), and one whose number only called a DIFFERENT account (review I1: mutation P1, drop 'and m.channel = sms' → the form-only contact is wrongly excluded, FAILS; mutation P2, widen direction to inbound-or-outbound → the outbound-only contact is wrongly excluded, FAILS; mutation P3, drop 'k.account_id = c.account_id' from the calls check → the cross-account-caller contact is wrongly excluded, FAILS)", () =>
+    withRollback(async (c) => {
+      const { account, ids: seedIds } = await seed(c);
+      const contact = async (name: string, phone: string, acctId = account) => (await c.query<{ id: string }>(
+        "insert into contacts (account_id, first_name, phone) values ($1, $2, $3) returning id", [acctId, name, phone])).rows[0]!.id;
+
+      // (a) an OUTBOUND sms only: proves nothing about the number being reachable.
+      const outboundOnly = await contact("outbound sms only, could be Mexican", "+15512345690");
+      const { rows: [convOut] } = await c.query<{ id: string }>(
+        "insert into conversations (account_id, contact_id) values ($1, $2) returning id", [account, outboundOnly]);
+      await c.query("insert into messages (account_id, conversation_id, channel, direction, body) values ($1, $2, 'sms', 'outbound', 'reminder')", [account, convOut!.id]);
+
+      // (b) an inbound FORM submission only: not an sms reply, so not carrier proof.
+      const formOnly = await contact("inbound form only, could be Mexican", "+15512345691");
+      const { rows: [convForm] } = await c.query<{ id: string }>(
+        "insert into conversations (account_id, contact_id) values ($1, $2) returning id", [account, formOnly]);
+      await c.query("insert into messages (account_id, conversation_id, channel, direction, body) values ($1, $2, 'form', 'inbound', 'submitted')", [account, convForm!.id]);
+
+      // (c) a number that called a DIFFERENT account: must not leak across tenants.
+      const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
+      const { rows: [acct2] } = await c.query<{ id: string }>(
+        "insert into accounts (agency_id, clerk_org_id, name) values ($1, $2, 'Backfill Co (sibling)') returning id", [agency!.id, `org_BF2_${RUN}`]);
+      const crossAccountCaller = await contact("called a DIFFERENT account only, could be Mexican", "+15512345692");
+      const { rows: [num2] } = await c.query<{ id: string }>(
+        "insert into phone_numbers (account_id, e164) values ($1, $2) returning id",
+        [acct2!.id, `+1${Math.floor(2_000_000_000 + Math.random() * 7_000_000_000)}`]);
+      await c.query("insert into calls (account_id, phone_number_id, caller_e164) values ($1, $2, '+15512345692')", [acct2!.id, num2!.id]);
+
+      const listed = (await candidates(c, account)).map((r) => r.id);
+      expect(listed).toContain(outboundOnly);
+      expect(listed).toContain(formOnly);
+      expect(listed).toContain(crossAccountCaller);
+      // the original scenarios are untouched by these additions
+      expect(listed).toEqual(expect.arrayContaining([seedIds.plusOne, seedIds.legacy, seedIds.mcallen]));
+    }));
+
+  it("a contact rewritten (phone changed) after its newest inbound sms is listed again, because that old proof no longer covers the CURRENT number (review I4; mutation: drop 'm.created_at >= c.updated_at' → wrongly excluded forever, FAILS)", () =>
+    withRollback(async (c) => {
+      const { account } = await seed(c);
+      const contactId = (await c.query<{ id: string }>(
+        "insert into contacts (account_id, first_name, phone) values ($1, 'renamed texter', '+15512345693') returning id", [account])).rows[0]!.id;
+      const { rows: [conv] } = await c.query<{ id: string }>(
+        "insert into conversations (account_id, contact_id) values ($1, $2) returning id", [account, contactId]);
+      await c.query("insert into messages (account_id, conversation_id, channel, direction, body) values ($1, $2, 'sms', 'inbound', 'hola')", [account, conv!.id]);
+      // Phone changed AFTER the inbound text: updated_at moves past the message's created_at.
+      await c.query("update contacts set phone = '+15512345694', updated_at = now() + interval '1 minute' where id = $1", [contactId]);
+      const listed = (await candidates(c, account)).map((r) => r.id);
+      expect(listed).toContain(contactId);
+    }));
 });

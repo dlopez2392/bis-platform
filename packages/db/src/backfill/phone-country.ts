@@ -25,6 +25,16 @@ const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const COLUMNS = "id,account_id,phone,phone_key,last_written_at,created_at";
 /** The only shape the new build stores a number that parses in (`phoneFields`); a ten-digit key always parses. */
 const E164 = /^\+[1-9][0-9]{7,14}$/;
+/**
+ * The CLI's `--cutoff`'s own required shape (review I3): the same UTC-ISO
+ * instant `ISO` above requires, but with milliseconds optional (a person
+ * typing a cut-off by hand should not have to supply `.000`). Bare `new
+ * Date(str)` also accepts a year alone ("2026" → before 2026-01-01Z), a
+ * single digit ("1" → before 2001), and a zone-less instant (read in
+ * whatever zone the ORCHESTRATOR's machine happens to be in, not UTC) —
+ * each a silent, wrong cut-off rather than a refusal.
+ */
+const CUTOFF = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
 
 function checked(r: Record<string, unknown>, at: string): CandidateRow {
   const { id, account_id, phone, phone_key, last_written_at, created_at } = r;
@@ -46,7 +56,15 @@ export function parseCandidates(text: string): CandidateRow[] {
   const trimmed = text.trim();
   if (trimmed === "") return [];
   if (trimmed.startsWith("[")) {
-    const rows: unknown = JSON.parse(trimmed);
+    // Never let JSON.parse's own SyntaxError escape (review I7): V8's message
+    // for a malformed array embeds a snippet of the input around the error,
+    // which can be a customer's phone digits.
+    let rows: unknown;
+    try {
+      rows = JSON.parse(trimmed);
+    } catch {
+      throw new Error("candidates: not valid JSON");
+    }
     if (!Array.isArray(rows)) throw new Error("candidates: not an array");
     return rows.map((r, i) => {
       if (typeof r !== "object" || r === null) throw new Error(`row ${i + 1}: not an object`);
@@ -56,7 +74,10 @@ export function parseCandidates(text: string): CandidateRow[] {
   const [header, ...lines] = trimmed.split(/\r?\n/);
   const names = header!.split("\t");
   if (names.join(",") !== COLUMNS) {
-    throw new Error(`candidates: header is "${names.join(",")}", expected ${COLUMNS}`);
+    // Never echo the actual header/first line (review I7): if the input is a
+    // JSON object routed here by mistake, or a headerless TSV, that line IS
+    // the data — id, phone, phone_key and all.
+    throw new Error(`candidates: header does not match the read's columns (expected ${COLUMNS})`);
   }
   return lines.filter((l) => l.trim() !== "").map((l, i) => {
     const cells = l.split("\t");
@@ -132,13 +153,15 @@ export function planBackfillArgs(args: readonly string[]): BackfillArgsPlan {
   const emitAt = args.indexOf("--emit-sql");
   const cutAt = args.indexOf("--cutoff");
   const out = emitAt >= 0 ? args[emitAt + 1] : undefined;
-  const cutoff = cutAt >= 0 ? new Date(args[cutAt + 1] ?? "") : null;
+  const cutRaw = cutAt >= 0 ? args[cutAt + 1] : undefined;
+  const cutoff = cutRaw !== undefined && CUTOFF.test(cutRaw) ? new Date(cutRaw) : null;
   const input = args.find((a, i) =>
     !a.startsWith("--") && (emitAt < 0 || i !== emitAt + 1) && (cutAt < 0 || i !== cutAt + 1));
-  if (!input || (emitAt >= 0 && !out) || !cutoff || !Number.isFinite(cutoff.getTime())) {
+  const outOk = !out || (!out.startsWith("--") && out !== input);
+  if (!input || (emitAt >= 0 && !out) || !outOk || !cutoff || !Number.isFinite(cutoff.getTime())) {
     return {
       ok: false,
-      error: "usage: backfill:phone-country <candidates-file> --cutoff <ISO: the deploy's READY + skew max age> [--emit-sql <out.sql>]",
+      error: "usage: backfill:phone-country <candidates-file> --cutoff <ISO: the deploy's READY + skew max age, e.g. 2026-10-01T12:00:00Z> [--emit-sql <out.sql>]",
     };
   }
   return { ok: true, input, cutoff, out };
@@ -155,6 +178,7 @@ export function flagSql(rows: readonly CandidateRow[]): string {
   for (const [i, r] of rows.entries()) checked(r, `row ${i + 1}`);
   const values = rows.map((r) => `  ('${r.id}'::uuid, '${r.phone_key}')`).join(",\n");
   return [
+    "-- Holds customer phone digits. Do not commit, paste or share. Delete after running.",
     "-- Consent chain PR-1: the 0054 phone-country backfill's WRITE half,",
     "-- emitted by `pnpm --filter @bis/db backfill:phone-country --emit-sql`.",
     `-- ${rows.length} contact(s). Flags a row only while still unflagged and its`,

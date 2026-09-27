@@ -49,5 +49,6 @@ where c.phone is not null
       and v.contact_id = c.id
       and m.channel = 'sms'
       and m.direction = 'inbound'
+      and m.created_at >= c.updated_at
   )
 order by c.account_id, c.id;
