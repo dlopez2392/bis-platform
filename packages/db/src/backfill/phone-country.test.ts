@@ -23,7 +23,7 @@ describe("parseCandidates", () => {
   it("THROWS on a malformed row rather than half-reading it (mutation: skip bad rows → FAILS)", () => {
     expect(() => parseCandidates(JSON.stringify([{ ...row(3, "+15512345678", "5512345678"), id: "x'); drop table contacts; --" }])))
       .toThrow("row 1: id is not a uuid");
-    expect(() => parseCandidates(JSON.stringify([row(4, "+15512345678", "55123")]))).toThrow("phone_key is not ten digits");
+    expect(() => parseCandidates(JSON.stringify([row(4, "+15512345678", "55123")]))).toThrow("phone_key is not at least ten digits");
     expect(() => parseCandidates("id\tphone\n1\t2")).toThrow("header");
   });
 
@@ -157,8 +157,8 @@ describe("injection guard: the id and phone_key regex anchors (review I2)", () =
 
   it("refuses a phone_key that is a valid ten-digit key followed by a payload and a trailing newline, in BOTH parseCandidates and flagSql's own re-check (mutation: unanchor the KEY regex → FAILS)", () => {
     const bad = { ...row(1, "+15512345678", "5512345678"), phone_key: "5512345678') or (1=1) --\n" };
-    expect(() => parseCandidates(JSON.stringify([bad]))).toThrow("phone_key is not ten digits");
-    expect(() => flagSql([bad])).toThrow("phone_key is not ten digits");
+    expect(() => parseCandidates(JSON.stringify([bad]))).toThrow("phone_key is not at least ten digits");
+    expect(() => flagSql([bad])).toThrow("phone_key is not at least ten digits");
   });
 
   it("refuses an id that is a payload followed by a valid uuid at the END, in BOTH parseCandidates and flagSql's own re-check (re-re-review I2: the payload-AFTER cases above pin only the '$' anchor; this pins '^'; mutation: drop only '^' from the UUID regex (P4c) → FAILS)", () => {
@@ -169,8 +169,8 @@ describe("injection guard: the id and phone_key regex anchors (review I2)", () =
 
   it("refuses a phone_key that is a payload followed by a valid ten-digit key at the END, in BOTH parseCandidates and flagSql's own re-check (re-re-review I2: pins '^'; mutation: drop only '^' from the KEY regex (P5c) → FAILS; the reviewer's own crafted key, ending '...5512340001', would otherwise let the CLI write a SECOND statement that clears every account's flag)", () => {
     const bad = { ...row(1, "+15512345678", "5512345678"), phone_key: "5512340001') ) returning id; update public.contacts set phone_country_unconfirmed = false where (('a' <> '5512340001" };
-    expect(() => parseCandidates(JSON.stringify([bad]))).toThrow("phone_key is not ten digits");
-    expect(() => flagSql([bad])).toThrow("phone_key is not ten digits");
+    expect(() => parseCandidates(JSON.stringify([bad]))).toThrow("phone_key is not at least ten digits");
+    expect(() => flagSql([bad])).toThrow("phone_key is not at least ten digits");
   });
 });
 

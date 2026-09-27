@@ -34,7 +34,10 @@ where c.phone is not null
   and c.phone_country_unconfirmed = false
   and (
     c.phone_key ~ '^[0-9]{10}$'
-    or c.phone ~* '[[:space:],.-]*(ext[.]?|extension|[x#])[[:space:].:-]*[0-9]+[.]?[[:space:]]*$'
+    or (
+      c.phone_key ~ '^[0-9]{10,}$'
+      and c.phone ~* '[[:space:],.-]*(ext[.]?|extension|[x#])[[:space:].:-]*[0-9]+[.]?[[:space:]]*$'
+    )
   )
   and not exists (
     select 1

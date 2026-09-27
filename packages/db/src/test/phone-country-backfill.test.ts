@@ -173,4 +173,42 @@ describe("the 0054 phone-country backfill (read file + deciding module + emitted
       expect(written).toContain(extWord);
       expect(written).toContain(extX);
     }));
+
+  it("the extension branch is bounded to keys of at least ten digits, so junk phone text never aborts the whole run (re-review; three shapes, measured on the replica: a short key (8 digits), a non-phone with a false-positive marker (2 digits), and a real could-be-Mexican number with a long extension (21 digits); mutation: drop the new 'phone_key ~ ^[0-9]{10,}$' SQL clause → the first two are wrongly listed, FAILS; mutation: restore the parser's upper bound (KEY back to {10,20}) → the 21-digit one throws instead of being accepted, FAILS)", () =>
+    withRollback(async (c) => {
+      const { account } = await seed(c);
+      const contact = async (name: string, phone: string) => (await c.query<{ id: string }>(
+        "insert into contacts (account_id, first_name, phone) values ($1, $2, $3) returning id", [account, name, phone])).rows[0]!.id;
+
+      // Key 8 digits: "x5" is a real extension marker, but the base number
+      // isn't even ten digits — never a national number.
+      const shortKey = await contact("short key, not a number at all", "555-1234 x5");
+      // Key 2 digits: "Box" ends in a bare 'x', a false-positive marker match
+      // (review, re-review) — not a phone number in any sense.
+      const notAPhone = await contact("po box, false-positive marker", "PO Box 12");
+      // Key 21 digits: a REAL could-be-Mexican number wearing a long
+      // extension. The parser's OLD upper bound ({10,20}) would refuse this
+      // one too, aborting the whole run on a legitimate row.
+      const longExt = await contact("long extension, real could-be-Mexican number", "+1 551 234 5618 ext 1234567890");
+
+      const { rows: keyRows } = await c.query<{ id: string; phone_key: string }>(
+        "select id, phone_key from contacts where id in ($1, $2, $3)", [shortKey, notAPhone, longExt]);
+      expect(keyRows.find((r) => r.id === shortKey)?.phone_key).toHaveLength(8);
+      expect(keyRows.find((r) => r.id === notAPhone)?.phone_key).toHaveLength(2);
+      expect(keyRows.find((r) => r.id === longExt)?.phone_key).toHaveLength(21);
+
+      // The read must not choke on these mixed lengths, and must not list
+      // the two junk rows.
+      const rows = await candidates(c, account);
+      const listed = rows.map((r) => r.id);
+      expect(listed).not.toContain(shortKey);
+      expect(listed).not.toContain(notAPhone);
+      expect(listed).toContain(longExt);
+
+      const flag = rowsToFlag(rows);
+      expect(flag.map((r) => r.id)).toContain(longExt);
+
+      const res = await c.query(flagSql(flag));
+      expect(res.rows.map((r: { id: string }) => r.id)).toContain(longExt);
+    }));
 });

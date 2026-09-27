@@ -23,11 +23,15 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /**
  * `phone_key`'s shape: normally exactly ten digits, but an extension's own
  * digits fold IN (review I5) — "+1 551 234 5613 ext 12" keys at 13, "1 (551)
- * 234-5613 x2" at 12 — so this accepts any digit run the generated column
- * could actually produce, not just ten. Still anchored both ends (review I2):
- * a length range is not an excuse to drop `^`/`$`.
+ * 234-5613 x2" at 12, and a long extension can push it well past 20 (review,
+ * re-review: "+1 551 234 5618 ext 1234567890" keys at 21) — so this accepts
+ * any digit run of at least ten (the read's own `phone_key ~ '^[0-9]{10,}$'`
+ * is the matching bound: an upper cap here would abort the WHOLE run on one
+ * legitimate long-extension row, throwing before any output). No upper
+ * bound is not a safety loss: digits-only, still anchored both ends (review
+ * I2), is what keeps this injection-safe, not the length.
  */
-const KEY = /^[0-9]{10,20}$/;
+const KEY = /^[0-9]{10,}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const COLUMNS = "id,account_id,phone,phone_key,last_written_at,created_at";
 /** The only shape the new build stores a number that parses in (`phoneFields`); a ten-digit key always parses. */
@@ -64,7 +68,7 @@ function checked(r: Record<string, unknown>, at: string): CandidateRow {
   if (typeof id !== "string" || !UUID.test(id)) throw new Error(`${at}: id is not a uuid`);
   if (typeof account_id !== "string" || !UUID.test(account_id)) throw new Error(`${at}: account_id is not a uuid`);
   if (typeof phone !== "string") throw new Error(`${at}: phone is not text`);
-  if (typeof phone_key !== "string" || !KEY.test(phone_key)) throw new Error(`${at}: phone_key is not ten digits`);
+  if (typeof phone_key !== "string" || !KEY.test(phone_key)) throw new Error(`${at}: phone_key is not at least ten digits`);
   if (typeof last_written_at !== "string" || !ISO.test(last_written_at)) throw new Error(`${at}: last_written_at is not a UTC ISO instant`);
   if (typeof created_at !== "string" || !ISO.test(created_at)) throw new Error(`${at}: created_at is not a UTC ISO instant`);
   return { id, account_id, phone, phone_key, last_written_at, created_at };
