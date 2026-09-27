@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { normalizeFieldInput, type EditableField } from "@/lib/contacts/field-input";
+import { commitInlineUndo, type InlinePhoneUndo } from "@/lib/contacts/inline-phone-undo";
 
 type ValidateResult = { ok: true; value: string } | { ok: false; error: string };
 
@@ -63,9 +64,18 @@ export function InlineField(
     value: string | null;
     save: (value: string) => Promise<{ ok: true } | { ok: false; error: string }>;
     inputType?: "text" | "email" | "tel";
+    /** Phone field only (F-009 undo fix). The flag as currently known —
+     *  captured here at the moment this edit's undo toast is offered, since
+     *  a re-save through `save` cannot restore it (see
+     *  lib/contacts/inline-phone-undo.ts). Ignored for every other field. */
+    phoneUnconfirmed?: boolean;
+    /** Phone field only: the dedicated undo write. When absent (or the
+     *  field isn't phone), undo falls back to `save(prior)` exactly as
+     *  every other field's undo always has. */
+    undoPhone?: InlinePhoneUndo;
   },
 ) {
-  const { label, field, required, value, save, inputType = "text" } = props;
+  const { label, field, required, value, save, inputType = "text", phoneUnconfirmed, undoPhone } = props;
   // `field` is guaranteed defined whenever `required` is not — the union
   // above enforces that at every call site; this is what lets commit() and
   // the undo guard below share ONE rule instead of branching twice.
@@ -88,6 +98,9 @@ export function InlineField(
     setEditing(false);
     if (norm.value === committed.current) return; // no-op edit — no toast
     const prior = committed.current;
+    // Captured NOW, before this edit's write: the flag as of the moment
+    // editing began. For every field but phone this is unused.
+    const priorUnconfirmed = phoneUnconfirmed ?? false;
     setShown(norm.value);
     let result: { ok: true } | { ok: false; error: string };
     try {
@@ -113,7 +126,10 @@ export function InlineField(
         ? {
             label: m["common.undo"],
             onClick: () => {
-              void save(prior).then((r) => {
+              // Phone routes through the dedicated action, restoring the
+              // flag WITH the number; every other field still resubmits the
+              // prior text through `save` (commitInlineUndo).
+              void commitInlineUndo(field, prior, norm.value, priorUnconfirmed, save, undoPhone).then((r) => {
                 if (r.ok) { committed.current = prior; setShown(prior); }
                 else toast.error(r.error);
               });

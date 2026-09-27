@@ -12,6 +12,7 @@ import { ActivityTimeline } from "./activity-timeline";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { e164Of } from "@/lib/voice/phone-number";
+import { normalisePhone } from "@bis/db/phone";
 import { smsRecipientState } from "@/lib/consent/recipient-state";
 import { composerStateLine } from "@/lib/consent/composer-state";
 import { renderZone } from "@/lib/zone";
@@ -61,6 +62,7 @@ export default async function ContactDetailPage({
           tags={tags}
           fieldDefs={fieldDefs}
           zone={{ zone: zone.zone, guessed: zone.guessed, label: zone.label }}
+          phoneUnconfirmed={contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true}
         />
         <ActivityTimeline
           accountId={accountId}

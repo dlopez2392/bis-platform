@@ -73,6 +73,10 @@ const recipientState = vi.fn();
 vi.mock("@/lib/consent/recipient-state", () => ({
   smsRecipientState: (...a: unknown[]) => recipientState(...a),
 }));
+const phoneRowProps = vi.fn();
+vi.mock("../phone-country-row", () => ({
+  PhoneCountryRow: (props: Record<string, unknown>) => { phoneRowProps(props); return null; },
+}));
 
 /** The switch's props, as the REAL panel hands them down — so this proves the
  *  zone reaches the switch, not merely the panel. */
@@ -157,6 +161,7 @@ describe("ContactDetailPage: the recipient's texts state", () => {
     getContactMock.mockReset().mockResolvedValue(CONTACT);
     recipientState.mockReset().mockResolvedValue({ kind: "ok" });
     timelineProps.mockClear();
+    phoneRowProps.mockClear();
   });
 
   it("a stopped number: the composer's line carries the stop date in the ACCOUNT's zone (mutation: format the date in UTC → 'Oct 4', FAILS)", async () => {
@@ -179,5 +184,17 @@ describe("ContactDetailPage: the recipient's texts state", () => {
     recipientState.mockResolvedValue({ kind: "unknown" });
     await render();
     expect(timelineProps.mock.calls[0]![0]).toMatchObject({ smsBlockedLine: m["compose.smsStateUnknown"] });
+  });
+
+  it("a stored number that reads both ways gets the Check number row, flag or not (mutation: pass the flag alone → FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "55 1234 5678", phone_country_unconfirmed: false });
+    await render();
+    expect(phoneRowProps.mock.calls[0]![0]).toMatchObject({ contactId: "ct1", unconfirmed: true });
+  });
+
+  it("a plainly US number does not", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "(956) 292-1696", phone_country_unconfirmed: false });
+    await render();
+    expect(phoneRowProps.mock.calls[0]![0]).toMatchObject({ unconfirmed: false });
   });
 });

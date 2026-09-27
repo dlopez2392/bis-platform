@@ -15,8 +15,9 @@ import { relativeTime } from "@/lib/dashboard/relative-time";
 import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
-import { updateContactFieldAction } from "./actions";
+import { updateContactFieldAction, undoInlinePhoneEditAction } from "./actions";
 import { MarketingOptOutSwitch } from "./marketing-optout-switch";
+import { PhoneCountryRow } from "./phone-country-row";
 import { addTagAction, removeTagAction } from "./[contactId]/actions";
 import type { ContactRow } from "./contacts-table";
 import { summaryLoadFrom, type ParsedContactSummary, type SummaryLoad } from "@/lib/contacts/summary";
@@ -153,7 +154,20 @@ export function ContactDrawer({
                         field={field}
                         inputType={type}
                         value={(row[field] as string | null) ?? null}
-                        save={(v) => updateContactFieldAction(accountId, row.id, field, v)}
+                        save={async (v) => {
+                          const saved = await updateContactFieldAction(accountId, row.id, field, v);
+                          // A phone edit can make the number ambiguous, or
+                          // settle it: re-read the summary so the Check number
+                          // row follows (review R3-I2). Undo saves through
+                          // here too.
+                          if (field === "phone") setRetryNonce((n) => n + 1);
+                          return saved;
+                        }}
+                        {...(field === "phone" ? {
+                          phoneUnconfirmed: load.status === "ready" ? load.summary.phone_country_unconfirmed : false,
+                          undoPhone: (editedPhone: string, priorPhone: string, priorUnconfirmed: boolean) =>
+                            undoInlinePhoneEditAction(accountId, row.id, { editedPhone, priorPhone, priorUnconfirmed }),
+                        } : {})}
                       />
                     </dd>
                   </div>
@@ -191,6 +205,19 @@ export function ContactDrawer({
                     accountId={accountId}
                     contactId={row.id}
                     tags={load.summary.tags}
+                    onChanged={() => setRetryNonce((n) => n + 1)}
+                  />
+                  {/* The Texts row's Check number state (spec §6, F-009), from
+                      the summary for the same stub-row reason. Renders
+                      nothing for a number that is not ambiguous. */}
+                  <PhoneCountryRow
+                    // Keyed by the flag too (review R3-I2): a re-read summary
+                    // that settles or raises the question remounts the row
+                    // from it, never from a stale first render.
+                    key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`}
+                    accountId={accountId}
+                    contactId={row.id}
+                    unconfirmed={load.summary.phone_country_unconfirmed}
                     onChanged={() => setRetryNonce((n) => n + 1)}
                   />
                   {/* From the summary, not `row`: a `?peek=` of a contact on

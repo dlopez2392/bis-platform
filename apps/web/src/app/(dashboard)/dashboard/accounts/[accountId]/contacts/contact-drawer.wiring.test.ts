@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ContactRow } from "./contacts-table";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Pins the drawer's USE of the summary parser: what its fetch effect stores
@@ -48,6 +51,7 @@ const GOOD = {
   tags: [{ id: "t1", name: "vip" }],
   recent: [{ kind: "note", label: "Note", at: "2026-09-01T10:00:00+00:00" }],
   marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00",
+  phone_country_unconfirmed: false,
   zone: { zone: "UTC", guessed: false, label: "UTC" },
 };
 
@@ -169,5 +173,36 @@ describe("ContactDrawer: a fetch cleaned up while its body is still being read n
     settle.reject(new SyntaxError("Unexpected token < in JSON"));
     await flush();
     expect(set).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Review R3-I2: the Check number row must follow the number, not its first
+ * render. Source pins (no DOM renderer here); the e2e spec proves the
+ * behaviour in a browser.
+ */
+describe("the Check number row follows a phone edit", () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
+  const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
+
+  it("the drawer keys the row by the summary's flag (mutation: key by the contact alone → FAILS)", () => {
+    expect(drawer).toContain("key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`}");
+  });
+
+  it("the drawer re-reads its summary after a phone save (mutation: drop the nonce bump → FAILS)", () => {
+    expect(drawer).toMatch(/if \(field === "phone"\) setRetryNonce\(\(n\) => n \+ 1\);/);
+  });
+
+  it("the drawer re-reads its summary after a pick and after an Undo, and the row hands that on (re-review minor 1; mutation: drop the onChanged prop, or stop passing it to pickPhoneCountry → FAILS)", () => {
+    const row = strip(readFileSync(path.join(here, "phone-country-row.tsx"), "utf8"));
+    // Anchored on the row's own prop: TagsRow carries the same onChanged text.
+    expect(drawer).toMatch(/unconfirmed=\{load\.summary\.phone_country_unconfirmed\}\s*onChanged=\{\(\) => setRetryNonce\(\(n\) => n \+ 1\)\}/);
+    expect(row).toMatch(/run,\s*onChanged,\s*\)\);/);
+  });
+
+  it("the full page keys the row by the page's flag (mutation: key by the contact alone → FAILS)", () => {
+    expect(panel).toContain("key={`phone-${contactId}-${phoneUnconfirmed}`}");
   });
 });

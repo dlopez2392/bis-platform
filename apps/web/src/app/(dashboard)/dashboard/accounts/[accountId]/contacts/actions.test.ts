@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const requireAccountAccess = vi.fn<(accountId: string) => Promise<{ userId: string; isAgency: boolean }>>(async () => ({ userId: "user_1", isAgency: true }));
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
+  requireAccountAccess: (accountId: string) => requireAccountAccess(accountId),
 }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 const revalidatePath = vi.fn();
@@ -15,16 +16,20 @@ const dbMocks = {
   // import throws. Read the file's import list and cover it.
   createContact: vi.fn(),
   setMarketingEmailOptOut: vi.fn(),
+  getContact: vi.fn(), setContactPhoneCountry: vi.fn(),
 };
 vi.mock("@bis/db", () => dbMocks);
 
 const {
   updateContactFieldAction, bulkDeleteContactsAction, bulkAddTagAction, bulkRemoveTagAction,
-  setMarketingEmailOptOutAction,
+  setMarketingEmailOptOutAction, setPhoneCountryAction, undoPhoneCountryAction,
+  undoInlinePhoneEditAction,
 } = await import("./actions");
+const { m } = await import("@/lib/messages");
 
 beforeEach(() => {
   vi.clearAllMocks();
+  requireAccountAccess.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
 });
 
 describe("updateContactFieldAction", () => {
@@ -145,5 +150,153 @@ describe("setMarketingEmailOptOutAction", () => {
     const r = await setMarketingEmailOptOutAction("a1", "c1", "false" as never);
     expect(r.ok).toBe(false);
     expect(dbMocks.setMarketingEmailOptOut).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The Texts row's Check number pick and its undo (consent chain spec §6,
+ * F-009). The phone module is REAL (@bis/db/phone is not mocked), so the
+ * rewrite is the normaliser's own.
+ */
+describe("setPhoneCountryAction", () => {
+  const flagged = { id: "c1", phone: "+15512345678", phone_country_unconfirmed: true };
+
+  it("Mexico rewrites the SAME ten digits under +52, clears the flag, compare-and-set on the phone it read (mutation: expectedPhone = the new phone → FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue(flagged);
+    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
+    const r = await setPhoneCountryAction("a1", "c1", "MX");
+    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
+      {}, "a1", "c1", { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_1");
+    expect(r).toEqual({ ok: true, phone: "+525512345678", previous: { phone: "+15512345678", unconfirmed: true } });
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts/c1");
+  });
+
+  it("US keeps +1 and still clears the flag; a raw legacy number is read, not refused", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "55 1234 5678", phone_country_unconfirmed: false });
+    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
+    const r = await setPhoneCountryAction("a1", "c1", "US");
+    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
+      {}, "a1", "c1", { expectedPhone: "55 1234 5678", phone: "+15512345678", unconfirmed: false }, "user_1");
+    expect(r).toMatchObject({ ok: true, previous: { phone: "55 1234 5678", unconfirmed: false } });
+  });
+
+  it("a country off the wire that is not US or MX writes nothing (mutation: drop the COUNTRIES check → FAILS)", async () => {
+    const r = await setPhoneCountryAction("a1", "c1", "CA" as never);
+    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
+    expect(dbMocks.getContact).not.toHaveBeenCalled();
+  });
+
+  it("the number changed under the operator: 'changed', nothing revalidated", async () => {
+    dbMocks.getContact.mockResolvedValue(flagged);
+    dbMocks.setContactPhoneCountry.mockResolvedValue("changed");
+    expect(await setPhoneCountryAction("a1", "c1", "MX")).toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("a number that is not ten national digits is 'unreadable', never guessed", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "+44 20 7946 0958", phone_country_unconfirmed: true });
+    expect(await setPhoneCountryAction("a1", "c1", "MX")).toEqual({ ok: false, error: m["contact.phoneCountry.unreadable"] });
+    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
+  });
+
+  it("a db error is the failed line, logged, never thrown", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.getContact.mockRejectedValue(new Error("boom"));
+    expect(await setPhoneCountryAction("a1", "c1", "MX")).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
+    expect(err.mock.calls[0]?.[0]).toContain("setPhoneCountryAction: account a1 contact c1");
+    err.mockRestore();
+  });
+
+  it("a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529562921696 written, FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
+    expect(await setPhoneCountryAction("a1", "c1", "MX")).toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
+    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
+  });
+
+  it("refuses before any read when access is refused (review R3-M6; mutation: read the contact before the guard → FAILS)", async () => {
+    requireAccountAccess.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
+    await expect(setPhoneCountryAction("a1", "c1", "MX")).rejects.toThrow("NEXT_REDIRECT");
+    expect(requireAccountAccess).toHaveBeenCalledWith("a1");
+    expect(dbMocks.getContact).not.toHaveBeenCalled();
+    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
+  });
+});
+
+describe("undoPhoneCountryAction", () => {
+  it("puts back the previous phone and flag while the stored phone is the one the pick wrote", async () => {
+    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
+    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+15512345678", unconfirmed: true });
+    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
+      {}, "a1", "c1", { expectedPhone: "+525512345678", phone: "+15512345678", unconfirmed: true }, "user_1");
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("refuses a 'previous' that is a DIFFERENT number: the undo is never a general phone write (mutation: drop the same-number check → FAILS)", async () => {
+    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+19562921696", unconfirmed: false });
+    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
+    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
+  });
+
+  it("refuses a flag that is not a real boolean", async () => {
+    const r = await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+15512345678", unconfirmed: "true" as never });
+    expect(r.ok).toBe(false);
+    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
+  });
+
+  it("the number changed since the pick: 'changed'", async () => {
+    dbMocks.setContactPhoneCountry.mockResolvedValue("changed");
+    expect(await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+15512345678", unconfirmed: true }))
+      .toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
+  });
+
+  it("restores the normaliser's form, and keeps the flag for a number it still calls ambiguous, whatever the wire says (review R3-M12; mutation: write previous.phone and previous.unconfirmed as sent → FAILS)", async () => {
+    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
+    await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "55 1234 5678", unconfirmed: false });
+    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
+      {}, "a1", "c1", { expectedPhone: "+525512345678", phone: "+15512345678", unconfirmed: true }, "user_1");
+  });
+
+  it("refuses before any write when access is refused (review R3-M6; mutation: write before the guard → FAILS)", async () => {
+    requireAccountAccess.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
+    await expect(undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+15512345678", unconfirmed: true }))
+      .rejects.toThrow("NEXT_REDIRECT");
+    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The generic inline-edit undo's fix (Task 2's review I2, no other task in
+ * this plan owns it): the phone field's undo restores BOTH the number and
+ * the flag it had before this edit, through the same compare-and-set
+ * `setContactPhoneCountry` uses, rather than resubmitting the prior TEXT
+ * (which `updateContactFieldAction` would re-derive, and never re-flags a
+ * number already carrying a country code — packages/db/src/phone.ts's
+ * `international()` branch always answers `unconfirmed: false`).
+ */
+describe("undoInlinePhoneEditAction", () => {
+  it("undoing a phone edit restores the prior number AND its flag (mutation: restore the number only → the flag comes back false, FAILS)", async () => {
+    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
+    const r = await undoInlinePhoneEditAction("a1", "c1", {
+      editedPhone: "+14155551234", priorPhone: "+19565550100", priorUnconfirmed: true,
+    });
+    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
+      {}, "a1", "c1", { expectedPhone: "+14155551234", phone: "+19565550100", unconfirmed: true }, "user_1");
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("the phone undo refuses without account access (mutation: drop requireAccountAccess → FAILS)", async () => {
+    requireAccountAccess.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
+    await expect(undoInlinePhoneEditAction("a1", "c1", {
+      editedPhone: "+14155551234", priorPhone: "+19565550100", priorUnconfirmed: true,
+    })).rejects.toThrow("NEXT_REDIRECT");
+    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
+  });
+
+  it("a number that moved again since the edit is not overwritten by the undo (mutation: drop the compare-and-set → FAILS)", async () => {
+    dbMocks.setContactPhoneCountry.mockResolvedValue("changed");
+    const r = await undoInlinePhoneEditAction("a1", "c1", {
+      editedPhone: "+14155551234", priorPhone: "+19565550100", priorUnconfirmed: true,
+    });
+    expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
   });
 });
