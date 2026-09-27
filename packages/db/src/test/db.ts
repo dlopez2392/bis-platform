@@ -19,7 +19,7 @@ export async function withRollback(fn: (c: Client) => Promise<void>) {
 }
 
 /** Simulate an RLS caller. Claims mirror Clerk session-token custom claims. */
-export async function actAs(c: Client, claims: { org_id?: string; app_role?: string }) {
+export async function actAs(c: Client, claims: { org_id?: string; app_role?: string; sub?: string }) {
   await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify(claims)]);
   await c.query("set local role authenticated");
 }

@@ -213,7 +213,9 @@ describe("0036 alert_phone_verifications privileges", () => {
            from pg_class c where c.oid = 'public.alert_phone_verifications'::regclass`,
       );
       expect(rows[0]!.relrowsecurity).toBe(true);
-      // Every other table here carries a `_member_all` or `_tenant` policy.
+      // Most account-scoped tables carry a `_member_all` or `_tenant` policy;
+      // the ones server code writes carry a SELECT-only one instead
+      // (`_member_read`, `bookings_tenant_read`, `events_read`; 0053).
       // This one carries none, because there is no role left for a policy to
       // serve: service_role bypasses RLS and nobody else may reach the table
       // at all. If a later migration adds a policy here, it is because

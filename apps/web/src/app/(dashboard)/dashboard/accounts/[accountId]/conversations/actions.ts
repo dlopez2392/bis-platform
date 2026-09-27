@@ -36,11 +36,17 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
   if (!contact) rejectSend("contact not in account");
   if (!contact.email) rejectSend("contact has no email address");
 
-  const convo = await ensureConversation(db, accountId, contactId, userId);
+  // 0053: conversations and messages are written by server code only. The
+  // read above ran as the signed-in user under RLS, so `contact` is known to
+  // belong to THIS account; that is what authorises the writes below, which
+  // go through the service client scoped to the same accountId.
+  const writer = serviceDb();
+
+  const convo = await ensureConversation(writer, accountId, contactId, userId);
 
   // Write-then-send: the row exists before anything leaves the building, so a
   // provider failure is a visible `failed` message rather than a silent gap.
-  const { id: messageId } = await createMessage(db, accountId, {
+  const { id: messageId } = await createMessage(writer, accountId, {
     conversationId: convo.id, channel: "email", direction: "outbound",
     subject: subject || undefined, body,
   }, userId);
@@ -98,7 +104,7 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
     }));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
-    await updateMessageStatus(db, accountId, messageId, "failed", { error: message }, userId);
+    await updateMessageStatus(writer, accountId, messageId, "failed", { error: message }, userId);
     // The failed row must be visible without a manual reload — the toast
     // that follows this throw says exactly that.
     revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
@@ -106,7 +112,7 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
     throw e;
   }
 
-  await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
+  await updateMessageStatus(writer, accountId, messageId, "sent", { providerMessageId }, userId);
 
   revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
@@ -118,15 +124,17 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
   const body = String(formData.get("body") ?? "").trim();
   if (!contactId || !body) rejectSend("contactId and body required");
 
-  // dbForRequest(), not serviceDb(): every read this action needs is already
-  // granted to `authenticated` under RLS. 0013 only column-scoped UPDATE on
-  // accounts (0023's a2p_* columns were never added to that grant list, on
-  // purpose — an agency-only write, done elsewhere via serviceDb()), and
-  // never touched SELECT; 0019/0020 grant `authenticated` SELECT on
-  // phone_numbers with a tenant-scoped RLS policy. Both reads resolveSmsSender
-  // makes are covered, so this stays on the RLS-enforced client like
-  // sendEmailAction above, per lib/db.ts's own rule against serviceDb() on
-  // the in-account surface.
+  // dbForRequest(), not serviceDb(), for the gate and contact reads: every
+  // read this action needs is already granted to `authenticated` under RLS.
+  // 0013 only column-scoped UPDATE on accounts (0023's a2p_* columns were
+  // never added to that grant list, on purpose — an agency-only write, done
+  // elsewhere via serviceDb()), and never touched SELECT; 0019/0020 grant
+  // `authenticated` SELECT on phone_numbers with a tenant-scoped RLS policy.
+  // Both reads resolveSmsSender makes are covered.
+  //
+  // Since 0053, conversations and messages are written by server code only:
+  // the message rows below go through the service client, in the same
+  // service-after-requireAccountAccess shape as the usage write further down.
   const db = await dbForRequest();
 
   // THE gate, and the only one. Never re-derive this.
@@ -152,12 +160,20 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
   const to = toE164(contact.phone);
   if (!to) rejectSend(m["compose.noPhoneOnContact"]);
 
-  const convo = await ensureConversation(db, accountId, contactId, userId);
+  // 0053: conversations and messages are written by server code only. The
+  // gate and contact reads above ran as the signed-in user under RLS, so this
+  // is what authorises the writes below; the service client is scoped to the
+  // same accountId requireAccountAccess just checked, and is built here,
+  // before any row exists, so a missing service key refuses the whole send
+  // rather than letting the text out with nothing recorded.
+  const writer = serviceDb();
+
+  const convo = await ensureConversation(writer, accountId, contactId, userId);
 
   // WRITE THEN SEND: the row exists before anything leaves the building, so a
   // provider failure is a visible `failed` message rather than a silent gap.
   // Same ordering as sendEmailAction, same reason.
-  const { id: messageId } = await createMessage(db, accountId, {
+  const { id: messageId } = await createMessage(writer, accountId, {
     conversationId: convo.id, channel: "sms", direction: "outbound", body,
   }, userId);
 
@@ -174,7 +190,7 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
     ({ providerMessageId } = await provider.send({ to, from: gate.from, body }));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
-    await updateMessageStatus(db, accountId, messageId, "failed", { error: message }, userId);
+    await updateMessageStatus(writer, accountId, messageId, "failed", { error: message }, userId);
     revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
     revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
     throw e;
@@ -187,19 +203,19 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
   // sits in its `finally`, where a delivered text still bills.
   //
   // USAGE (client billing): the text is out the door to the customer, so its
-  // segments bill. On serviceDb(), not `db`: 0051 lets only service_role
-  // write usage_events (a client must not be able to write, or skip, its own
-  // bill), the same service-after-requireAccountAccess shape
+  // segments bill. On the service client, not `db`: 0051 lets only
+  // service_role write usage_events (a client must not be able to write, or
+  // skip, its own bill), the same service-after-requireAccountAccess shape
   // automations/actions.ts uses for its service-only table. The account is
   // the one requireAccountAccess passed above and the message id is the row
-  // this action just wrote. Passed as a GETTER so a missing service key is
-  // caught inside recordUsageSafely too; it never throws, so it cannot
-  // replace the `sent` write's error.
+  // this action just wrote. `writer` is passed directly, not as a getter:
+  // `writer` above already refused the whole send if the service key were
+  // missing, so there is nothing left here for a getter to guard against.
   try {
-    await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
+    await updateMessageStatus(writer, accountId, messageId, "sent", { providerMessageId }, userId);
   } finally {
     if (smsBillable(provider)) {
-      await recordUsageSafely(() => serviceDb(), {
+      await recordUsageSafely(writer, {
         accountId, meter: "sms", quantity: segmentsFor(body).segments,
         occurredAt: new Date(), sourceRef: `message:${messageId}`,
       }, `sendSmsAction ${messageId}`);
@@ -214,6 +230,10 @@ export async function markConversationReadAction(
   accountId: string, conversationId: string,
 ): Promise<void> {
   await requireAccountAccess(accountId);
-  await clearUnreadCount(await dbForRequest(), accountId, conversationId);
+  // 0053: conversations are server-written. clearUnreadCount matches on
+  // account_id AND id, and accountId is the one requireAccountAccess just
+  // authorised, so another account's conversation id matches no row
+  // (messaging.test.ts pins that with two real accounts).
+  await clearUnreadCount(serviceDb(), accountId, conversationId);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
 }

@@ -1,7 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
-vi.mock("@/lib/auth", () => ({ requireAccountAccess: async () => ({ userId: "user_1" }) }));
+
+// A vi.fn(), not a plain async function: since 0053 this call is the ONLY
+// authorisation on every write these actions make (RLS no longer backs the
+// composer's or mark-read's writes, which go through the service client) —
+// a test needs to assert it was called, with which account, and that a
+// rejection from it stops everything downstream. Its default resolved value
+// is set in beforeEach, same as gateMock below.
+const requireAccountAccessMock = vi.fn();
+vi.mock("@/lib/auth", () => ({
+  requireAccountAccess: (...a: unknown[]) => requireAccountAccessMock(...a),
+}));
 
 const sendMock = vi.fn();
 vi.mock("@/lib/email", () => ({
@@ -53,8 +63,15 @@ const accountRow: {
   brand_logo_path: null, brand_color: null, brand_neutral: null,
   brand_corners: null, brand_type: null, brand_mode: null,
 };
-vi.mock("@/lib/db", () => ({
-  dbForRequest: async () => ({
+// Hoisted and held so a test can assert IDENTITY: that a call reached this
+// exact client, not merely a same-shaped one. `dbForRequest` returns this
+// object every time, and never the service client below — that is the whole
+// boundary 0053 draws (reads on the request client, writes on the service
+// client).
+const req = vi.hoisted(() => ({ db: null as unknown }));
+
+vi.mock("@/lib/db", () => {
+  const fake = {
     from: () => ({
       /**
        * Projects to exactly the columns asked for, and that is load-bearing.
@@ -78,8 +95,10 @@ vi.mock("@/lib/db", () => ({
         }),
       }),
     }),
-  }),
-}));
+  };
+  req.db = fake;
+  return { dbForRequest: async () => req.db };
+});
 
 /**
  * The one contact row both actions read. sendEmailAction only ever looks at
@@ -93,8 +112,11 @@ const contactRow: { id: string; email: string | null; phone: string | null } = {
 
 vi.mock("@bis/db", () => ({
   brandLogoUrl: (path: string) => `https://cdn.test/${path}`,
-  getContact: async () => contactRow,
-  ensureConversation: async () => ({ id: "convo_1" }),
+  // vi.fn(), not a plain async function: 0053's tests assert which CLIENT
+  // (the request client vs. the service client) each call reached, and that
+  // needs a mock to inspect.
+  getContact: vi.fn(async () => contactRow),
+  ensureConversation: vi.fn(async () => ({ id: "convo_1" })),
   // vi.fn(), not a plain async function: the write-then-send ordering test
   // below needs invocationCallOrder against the SMS provider's send mock.
   createMessage: vi.fn(async () => ({ id: "msg_1" })),
@@ -107,8 +129,10 @@ vi.mock("@bis/db", () => ({
   recordUsage: vi.fn(),
 }));
 
-import { sendEmailAction, sendSmsAction } from "./actions";
-import { createMessage, updateMessageStatus, recordUsage } from "@bis/db";
+import { sendEmailAction, sendSmsAction, markConversationReadAction } from "./actions";
+import {
+  createMessage, updateMessageStatus, recordUsage, getContact, ensureConversation, clearUnreadCount,
+} from "@bis/db";
 
 const createMessageMock = vi.mocked(createMessage);
 const updateMessageStatusMock = vi.mocked(updateMessageStatus);
@@ -121,6 +145,7 @@ function fd(entries: Record<string, string>) {
 }
 
 beforeEach(() => {
+  requireAccountAccessMock.mockReset().mockResolvedValue({ userId: "user_1", isAgency: false });
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
   smsSendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
   gateMock.mockReset().mockResolvedValue({ ok: true, from: "+19565559999" });
@@ -128,6 +153,9 @@ beforeEach(() => {
   createMessageMock.mockResolvedValue({ id: "msg_1" });
   updateMessageStatusMock.mockClear();
   updateMessageStatusMock.mockResolvedValue(undefined);
+  vi.mocked(getContact).mockClear();
+  vi.mocked(ensureConversation).mockClear();
+  vi.mocked(clearUnreadCount).mockClear();
   accountRow.reply_to_email = null;
   accountRow.from_email = null;
   accountRow.brand_name = "Rio Roofing";
@@ -264,6 +292,12 @@ describe("sendSmsAction — the from number comes from the gate and nowhere else
 
     expect(smsSendMock).toHaveBeenCalledWith(expect.objectContaining({ from: "+19565550001" }));
   });
+
+  it("reads the gate on the request client, not the service client (mutation: resolveSmsSender(serviceDb()) -> FAILS)", async () => {
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+
+    expect(gateMock.mock.calls[0]![0]).toBe(req.db);
+  });
 });
 
 describe("sendSmsAction — the contact's phone must survive toE164 before anything is written", () => {
@@ -391,12 +425,97 @@ describe("sendSmsAction — usage (client billing)", () => {
     expect(recordUsageMock).toHaveBeenCalledTimes(1);
   });
 
-  it("a failing usage write, even a service client that cannot be built, leaves the action resolving and the row marked sent (mutation: remove the catch, or call serviceDb() outside it → rejects, FAILS)", async () => {
-    svc.throws = true;
-    await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))).resolves.toBeUndefined();
-    svc.throws = false;
+  // Split from a single test that used to also cover a service client that
+  // cannot be built at all: since 0053 the writer is built BEFORE any row is
+  // written, so with no service key the action refuses up front rather than
+  // resolving with the row still marked sent. See the next describe block.
+  it("a failing usage write leaves the action resolving and the row marked sent", async () => {
     recordUsageMock.mockRejectedValue(new Error("usage_events is down"));
     await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))).resolves.toBeUndefined();
-    expect(updateMessageStatusMock.mock.calls.map((c) => c[3])).toEqual(["sent", "sent"]);
+    expect(updateMessageStatusMock.mock.calls.map((c) => c[3])).toEqual(["sent"]);
+  });
+});
+
+describe("sendSmsAction — with no service client, the action refuses up front", () => {
+  it("with no service client the action refuses before any row is written or any text is sent (mutation: build the writer after the send -> FAILS)", async () => {
+    svc.throws = true;
+    await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" })))
+      .rejects.toThrow("SUPABASE_SERVICE_ROLE_KEY is missing");
+    expect(createMessageMock).not.toHaveBeenCalled();
+    expect(smsSendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("0053 — conversations and messages are written by server code", () => {
+  it("email: reads the contact as the signed-in user, writes conversation and message rows with the service client (mutation: pass the request client to createMessage -> FAILS)", async () => {
+    await sendEmailAction("acct_1", fd({ contactId: "contact_1", subject: "Hi", body: "Hello" }));
+    // IDENTITY, not structural equality: a same-shaped object that is not the
+    // exact mock would satisfy `toHaveBeenCalledWith`'s deep-equal and pass
+    // whichever client actually reached the call.
+    expect(vi.mocked(getContact).mock.calls[0]![0]).toBe(req.db);
+    expect(vi.mocked(getContact).mock.calls[0]!.slice(1)).toEqual(["acct_1", "contact_1"]);
+    expect(vi.mocked(ensureConversation).mock.calls[0]![0]).toBe(svc.db);
+    expect(vi.mocked(ensureConversation).mock.calls[0]!.slice(1)).toEqual(["acct_1", "contact_1", "user_1"]);
+    expect(createMessageMock.mock.calls[0]![0]).toBe(svc.db);
+    expect(updateMessageStatusMock.mock.calls.map((c) => c[0])).toEqual([svc.db]);
+  });
+
+  it("email: a provider failure marks the row failed on the SERVICE client, not the request client (mutation: the failure branch uses the request client -> FAILS)", async () => {
+    sendMock.mockRejectedValueOnce(new Error("provider down"));
+    await expect(sendEmailAction("acct_1", fd({ contactId: "contact_1", subject: "Hi", body: "Hello" })))
+      .rejects.toThrow("provider down");
+    expect(updateMessageStatusMock).toHaveBeenCalledWith(
+      svc.db, "acct_1", "msg_1", "failed", { error: "provider down" }, "user_1",
+    );
+  });
+
+  it("sms: same split, including the failed-send status write (mutation: the failure branch uses the request client -> FAILS)", async () => {
+    smsSendMock.mockRejectedValueOnce(new Error("carrier down"));
+    await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))).rejects.toThrow("carrier down");
+    expect(vi.mocked(getContact).mock.calls[0]![0]).toBe(req.db);
+    expect(vi.mocked(getContact).mock.calls[0]!.slice(1)).toEqual(["acct_1", "contact_1"]);
+    expect(vi.mocked(ensureConversation).mock.calls[0]![0]).toBe(svc.db);
+    expect(vi.mocked(ensureConversation).mock.calls[0]!.slice(1)).toEqual(["acct_1", "contact_1", "user_1"]);
+    expect(createMessageMock.mock.calls[0]![0]).toBe(svc.db);
+    expect(updateMessageStatusMock).toHaveBeenCalledWith(svc.db, "acct_1", "msg_1", "failed", { error: "carrier down" }, "user_1");
+  });
+
+  it("sms: a successful send marks the row sent on the SERVICE client, not the request client (mutation: the sent write uses the request client -> FAILS)", async () => {
+    await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+    expect(updateMessageStatusMock).toHaveBeenCalledWith(
+      svc.db, "acct_1", "msg_1", "sent", { providerMessageId: "pm_1" }, "user_1",
+    );
+  });
+
+  it("mark read: calls requireAccountAccess for the account, and clears the unread count with the service client (mutation: dbForRequest() -> FAILS)", async () => {
+    await markConversationReadAction("acct_1", "convo_9");
+    expect(requireAccountAccessMock).toHaveBeenCalledWith("acct_1");
+    expect(vi.mocked(clearUnreadCount)).toHaveBeenCalledWith(svc.db, "acct_1", "convo_9");
+  });
+});
+
+describe("0053 — every write-path action requires access before touching anything else", () => {
+  it("sendEmailAction: a rejected access check stops everything downstream (mutation: call it after getContact -> FAILS)", async () => {
+    requireAccountAccessMock.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
+    await expect(sendEmailAction("acct_1", fd({ contactId: "contact_1", subject: "Hi", body: "Hello" })))
+      .rejects.toThrow("NEXT_REDIRECT");
+    expect(vi.mocked(getContact)).not.toHaveBeenCalled();
+    expect(createMessageMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("sendSmsAction: a rejected access check stops everything downstream (mutation: call it after getContact -> FAILS)", async () => {
+    requireAccountAccessMock.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
+    await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" })))
+      .rejects.toThrow("NEXT_REDIRECT");
+    expect(vi.mocked(getContact)).not.toHaveBeenCalled();
+    expect(createMessageMock).not.toHaveBeenCalled();
+    expect(smsSendMock).not.toHaveBeenCalled();
+  });
+
+  it("markConversationReadAction: a rejected access check leaves clearUnreadCount untouched (mutation: remove the call, or move it after clearUnreadCount -> FAILS)", async () => {
+    requireAccountAccessMock.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
+    await expect(markConversationReadAction("acct_1", "convo_9")).rejects.toThrow("NEXT_REDIRECT");
+    expect(vi.mocked(clearUnreadCount)).not.toHaveBeenCalled();
   });
 });

@@ -6,7 +6,7 @@ import {
   updateMessageStatusByProviderId, findMessageByProviderId, hasRecentOutboundSms,
   listFailedOutboundSms,
   listConversations, listMessages,
-  incrementUnreadCount, sumUnreadCount, searchConversations,
+  incrementUnreadCount, clearUnreadCount, sumUnreadCount, searchConversations,
 } from "../messaging";
 
 /**
@@ -622,6 +622,39 @@ describe("messaging", () => {
     withTestAccount(async (db, accountId) => {
       expect(await sumUnreadCount(db, accountId)).toBe(0);
     }));
+
+  // clearUnreadCount is called by markConversationReadAction with a
+  // conversation id that comes straight off the browser. Since 0053 that
+  // call reaches a service-role write, so this .eq("account_id", …).eq("id",
+  // …) pair is the only thing standing between it and another account's row,
+  // or another conversation in the SAME account.
+  it("clearUnreadCount touches only the named account's conversation: another account's id changes nothing, and a second unread conversation in the SAME account is untouched (mutation: drop .eq(\"account_id\") -> the first read below stays 0 instead of 1 -> FAILS; drop .eq(\"id\") -> the second conversation reads 0 instead of 1 -> FAILS)", () =>
+    withTestAccount(async (db, accountA) =>
+      withTestAccount(async (_db, accountB) => {
+        const contactB = await createContact(db, accountB, { firstName: "Beto" }, "user_test");
+        const convoB = await ensureConversation(db, accountB, contactB.id, "user_test");
+        await incrementUnreadCount(db, accountB, convoB.id);
+
+        // A SECOND unread conversation in accountB. Without .eq("id", …),
+        // clearing convoB below would clear every conversation whose
+        // account_id matches — this one included — and the assertion on it
+        // near the bottom would read 0 instead of 1.
+        const contactB2 = await createContact(db, accountB, { firstName: "Cora" }, "user_test");
+        const convoB2 = await ensureConversation(db, accountB, contactB2.id, "user_test");
+        await incrementUnreadCount(db, accountB, convoB2.id);
+
+        await clearUnreadCount(db, accountA, convoB.id);
+        const { data } = await db.from("conversations").select("unread_count").eq("id", convoB.id).single();
+        expect(data).toEqual({ unread_count: 1 });
+        await clearUnreadCount(db, accountB, convoB.id);
+        const { data: after } = await db.from("conversations").select("unread_count").eq("id", convoB.id).single();
+        expect(after).toEqual({ unread_count: 0 });
+
+        // The second conversation is untouched: clearing convoB named ONLY
+        // convoB, never every unread row in accountB.
+        const { data: other } = await db.from("conversations").select("unread_count").eq("id", convoB2.id).single();
+        expect(other).toEqual({ unread_count: 1 });
+      })));
 
   it("updateMessageStatusByProviderId does not match inbound messages even when they carry a provider_message_id", () =>
     withTestAccount(async (db, accountId) => {
