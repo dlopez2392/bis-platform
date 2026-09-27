@@ -134,7 +134,9 @@ describe("automations accessors", () => {
       expect(row.brandName).toBe("Fixture Brand");
       expect(row).not.toHaveProperty("accountName");
       expect(row.contactEmail).toBe("rev@example.com");
-      expect(row.contactPhone).toBe("(956) 555-0101");   // raw; the pass normalises
+      // As STORED: since F-009 createContact stores E.164 (phoneFields), and the
+      // accessor returns the column untouched.
+      expect(row.contactPhone).toBe("+19565550101");
       expect(row.contactId).toBe(contactId);
       expect(new Date(row.endsAt).getTime()).toBe(new Date("2027-03-10T10:00:00Z").getTime());
       expect(row.followupSentAt).toBeNull();
@@ -328,7 +330,7 @@ describe("no-show nudge — data layer", () => {
       expect(row.calendarEnabled).toBe(false);            // the lazily created calendar starts disabled
       expect(row.contactId).toBe(contactId);
       expect(row.contactEmail).toBe("miss@example.com");
-      expect(row.contactPhone).toBe("(956) 555-0102");    // raw; the pass normalises
+      expect(row.contactPhone).toBe("+19565550102");    // as stored: E.164 since F-009
       expect(typeof row.accountTimezone).toBe("string");
       expect(row.fromEmail).toBeNull();
       expect(row.replyToEmail).toBeNull();
@@ -427,7 +429,7 @@ describe("sms reminder — data layer", () => {
       expect(new Date(row.startsAt).getTime()).toBe(now.getTime() + 2 * HOUR);
       expect(row.bookerTimezone).toBe("America/Los_Angeles");
       expect(row.contactId).toBe(contactId);
-      expect(row.contactPhone).toBe("(956) 555-0103");
+      expect(row.contactPhone).toBe("+19565550103");    // as stored: E.164 since F-009
       expect(typeof row.accountTimezone).toBe("string");
       expect(row.body).toBe("See you soon!");
       expect(row.smsFailedAt).toBeNull();
@@ -630,7 +632,7 @@ describe("appointment confirm — data layer", () => {
       expect(row).not.toHaveProperty("contactEmail");   // SMS only: no address it must not use
       expect(row).not.toHaveProperty("smsFailedAt");    // written, never read back
       expect(row.bookerTimezone).toBe("America/Los_Angeles");
-      expect(row.contactPhone).toBe("(956) 555-0107");
+      expect(row.contactPhone).toBe("+19565550107");    // as stored: E.164 since F-009
       expect(row.body).toBe("Any questions, just reply.");
     });
   });
@@ -862,7 +864,7 @@ describe("referral ask — data layer", () => {
       expect(row.config).toEqual({ channel: "sms" });
       expect(row.contactId).toBe(contactId);
       expect(row.contactEmail).toBe("ref@example.com");
-      expect(row.contactPhone).toBe("(956) 555-0112");
+      expect(row.contactPhone).toBe("+19565550112");    // as stored: E.164 since F-009
       // EVERY LADDER COLUMN BY VALUE, never `not.toBeNull()`: a column
       // dropped from REFERRAL_ASK_SELECT comes back `undefined`, and
       // `expect(undefined).not.toBeNull()` PASSES. Task 6's gate reads all

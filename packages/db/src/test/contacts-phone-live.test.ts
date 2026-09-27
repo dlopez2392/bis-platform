@@ -28,10 +28,26 @@ describe("F-009 on the contacts table (CI only: withTestAccount + serviceDb)", (
     });
   });
 
-  it("setContactPhoneCountry writes phone and flag together only while the phone is unchanged, and flags a twin (mutation: drop the expectedPhone guard → 'updated', FAILS)", async () => {
+  it("setContactPhoneCountry writes phone and flag together only while the phone is unchanged, and flags a twin (mutation: drop the expectedPhone guard → 'updated', FAILS; mutation: drop the pick's flagDuplicatePair → no flag, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const flagged = await createContact(db, accountId, { firstName: "Flag", phone: "55 1234 5678" }, "user_test");
-      const twin = await createContact(db, accountId, { firstName: "Twin", phone: "+525512345678" }, "user_test");
+      // The twin goes in DIRECTLY, not through createContact: createContact's
+      // own twin rule (findDuplicate's +52 fallback) finds "+15512345678" under
+      // the bare ten digits, reads it as +1, and flags the pair
+      // 'phone_country_twin' at creation — and the pair index is unique on
+      // (account_id, contact_a, contact_b), so the pick's flag would then be
+      // the designed 23505 no-op and this test could never see the pick write
+      // anything (the first CI run on #151 received 'phone_country_twin').
+      const { data: twinRow, error: twinErr } = await db.from("contacts")
+        .insert({ account_id: accountId, first_name: "Twin", phone: "+525512345678" }).select("id").single();
+      if (twinErr || !twinRow) throw new Error(`twin fixture insert failed: ${twinErr?.message}`);
+      const twin = { id: twinRow.id as string };
+      const [a, b] = [flagged.id, twin.id].sort();
+      const pairFlags = async () => (await db.from("contact_duplicate_flags").select("reason")
+        .eq("account_id", accountId).eq("contact_a", a).eq("contact_b", b)).data;
+      // Nothing flags the pair before the pick, so whatever is there after it,
+      // the pick wrote.
+      expect(await pairFlags()).toEqual([]);
 
       expect(await setContactPhoneCountry(db, accountId, flagged.id,
         { expectedPhone: "+19999999999", phone: "+525512345678", unconfirmed: false }, "user_test")).toBe("changed");
@@ -42,10 +58,7 @@ describe("F-009 on the contacts table (CI only: withTestAccount + serviceDb)", (
       const { data } = await db.from("contacts").select("phone, phone_country_unconfirmed").eq("id", flagged.id).single();
       expect(data).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
 
-      const [a, b] = [flagged.id, twin.id].sort();
-      const { data: flags } = await db.from("contact_duplicate_flags").select("reason")
-        .eq("account_id", accountId).eq("contact_a", a).eq("contact_b", b);
-      expect(flags).toEqual([{ reason: "phone_country_pick" }]);
+      expect(await pairFlags()).toEqual([{ reason: "phone_country_pick" }]);
     });
   });
 });
