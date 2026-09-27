@@ -1,8 +1,11 @@
 // sip_headers is an ARRAY of {name, value} (openai SDK RealtimeCallIncomingWebhookEvent.Data).
 // Values carry caller PII — sipHeaderNames exists so logs can prove shape without leaking.
-import { toE164 } from "./phone-number";
+import { e164Of } from "./phone-number";
 
-const NUMBER_RE = /(?:tel:|sip:)\+?([0-9]{7,15})/i;
+// The "+" is KEPT (consent chain PR-1 review): without it, F-009 reads an
+// international caller ID of ten digits as a national number, e.g. New
+// Zealand's +64 21 234 567 as Mexico's +52 642 123 4567.
+const NUMBER_RE = /(?:tel:|sip:)(\+?[0-9]{7,15})/i;
 
 type Header = { name?: unknown; value?: unknown };
 
@@ -17,18 +20,18 @@ function numberFromHeader(list: Header[], name: string): string | null {
   if (!hit || typeof hit.value !== "string") return null;
   // X-BIS-Called carries a bare E.164 we wrote ourselves; SIP URIs need the regex.
   if (name === "x-bis-called") {
-    return toE164(hit.value);
+    return e164Of(hit.value);
   }
   const match = hit.value.match(NUMBER_RE);
   if (!match) return null;
-  return toE164(match[1]!);
+  return e164Of(match[1]!);
 }
 
 /**
  * A header read VERBATIM — no phone-number coercion. `numberFromHeader` above
- * runs every value it touches through `toE164`, which is exactly right for a
+ * runs every value it touches through `e164Of`, which is exactly right for a
  * number and destroys anything else: a handoff token is 32 hex characters and
- * `toE164` would return null for it.
+ * `e164Of` would return null for it.
  */
 function rawHeader(list: Header[], name: string): string | null {
   const hit = list.find((h) => h && typeof h === "object" && String(h.name).toLowerCase() === name);

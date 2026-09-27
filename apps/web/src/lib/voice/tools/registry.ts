@@ -9,7 +9,7 @@ import {
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
 import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
-import { toE164, isCallerIdNumber } from "../phone-number";
+import { e164Of, isCallerIdNumber, spokenPhone } from "../phone-number";
 import { getEmailProvider } from "@/lib/email";
 import { getMeetingProvider } from "@/lib/meetings/provider";
 import { emailBrand } from "@/lib/email/templates/shell";
@@ -91,7 +91,7 @@ type BookingContact = {
  *       returned, never from anything the model passes; OR
  *   (b) the call shows a caller ID and the booking's contact's phone IS it.
  *       `contacts.phone` is stored as typed ("(956) 292-1696" from a web
- *       form), so it is normalized with `toE164` before the compare — a raw
+ *       form), so it is normalized with `e164Of` before the compare — a raw
  *       string compare would refuse the rightful caller.
  *
  * Checked before anything is looked up, written or sent. The contact is read
@@ -275,7 +275,7 @@ export async function runTool(
           + `Apologize, then ${nextStep(ctx)} so the team can help them.` } };
       }
       const recited = String(args?.phone ?? "").trim();
-      if (recited && toE164(recited) !== ctx.callerNumber) {
+      if (recited && e164Of(recited) !== ctx.callerNumber) {
         return { state, result: { found: false, verified: false, error:
           "Appointments can only be looked up for the number they are calling from, and that is not the number they gave. "
           + "Do not confirm, read out, change or cancel anything for another number. "
@@ -306,7 +306,7 @@ export async function runTool(
     case "take_message": {
       const body = String(args?.body ?? "").trim();
       if (!body) return { state, result: { ok: false, error: "message body required" } };
-      const callbackNumber = toE164(String(args?.callbackNumber ?? "")) ?? ctx.callerNumber ?? undefined;
+      const callbackNumber = e164Of(String(args?.callbackNumber ?? "")) ?? ctx.callerNumber ?? undefined;
       return {
         state: withMessage(state, { body, callbackNumber, at: now.toISOString() }),
         result: { ok: true },
@@ -330,14 +330,16 @@ export async function runTool(
       // "need a phone or email" — those are different problems for the model
       // to voice differently.
       const rawPhone = String(args?.phone ?? "").trim();
-      if (rawPhone && !toE164(rawPhone)) {
+      if (rawPhone && !e164Of(rawPhone)) {
         return {
           state,
           result: { ok: false, error: "That phone number doesn't look complete — could you give it to me again?" },
         };
       }
 
-      const phone = toE164(String(args?.phone ?? "")) ?? ctx.callerNumber;
+      // As said, or the caller ID (review R2-C1): the contact write judges
+      // it. An e164Of here would store "55 1234 5678" as a confirmed +1.
+      const phone = spokenPhone(String(args?.phone ?? ""), ctx.callerNumber);
       const email = String(args?.email ?? "").trim() || null;
       if (!phone && !email) {
         return { state, result: { ok: false, error: "need a phone number or an email to book" } };

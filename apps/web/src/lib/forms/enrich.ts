@@ -10,7 +10,7 @@ import { emailBrand } from "@/lib/email/templates/shell";
 import { leadAlertEmail } from "@/lib/email/templates/lead-alert";
 import { leadReceiptEmail, leadReceiptSubject } from "@/lib/email/templates/lead-receipt";
 import { isValidEmail } from "@/lib/forms/guards";
-import { toE164 } from "@/lib/voice/phone-number";
+import { e164Of } from "@/lib/voice/phone-number";
 import { sendInstantReply } from "@/lib/automations/instant-reply";
 
 /**
@@ -80,15 +80,15 @@ export async function enrich(
     // stay obviously in lockstep rather than drift into two implementations
     // of the same normalization.
     const rawPhone = byKind.get("core.phone") || "";
-    phoneE164 = rawPhone ? toE164(rawPhone) : null;
+    phoneE164 = rawPhone ? e164Of(rawPhone) : null;
     const created = await createContact(db, accountId, {
       firstName: byKind.get("core.first_name") || undefined,
       lastName: byKind.get("core.last_name") || undefined,
       email: byKind.get("core.email") || undefined,
-      // Voice stores E.164; storing web input as-typed made the same person
-      // two contacts and hid web submissions from find_my_booking. Parseable →
-      // E.164, unparseable → as typed (never mangled, never rejected here).
-      phone: rawPhone ? (phoneE164 ?? rawPhone) : undefined,
+      // AS TYPED (review R2-C1): createContact's phoneFields stores the
+      // E.164 when it parses, as typed when it does not, and flags ten digits
+      // that could be Mexican or US. Pre-normalising would hide that question.
+      phone: rawPhone || undefined,
       companyName: byKind.get("core.company_name") || undefined,
       source: `form: ${form.name}`,
       custom,
@@ -226,7 +226,8 @@ async function fillBlanks(
     ["firstName", "first_name", byKind.get("core.first_name") ?? ""],
     ["lastName", "last_name", byKind.get("core.last_name") ?? ""],
     ["email", "email", byKind.get("core.email") ?? ""],
-    ["phone", "phone", rawPhone ? (toE164(rawPhone) ?? rawPhone) : ""],
+    // As typed: fillContactBlanks judges it through phoneFields (R2-C1).
+    ["phone", "phone", rawPhone],
     ["companyName", "company_name", byKind.get("core.company_name") ?? ""],
   ];
   for (const [input, column, incoming] of pairs) {

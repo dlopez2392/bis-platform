@@ -9,6 +9,9 @@ describe("extractCallerNumber", () => {
     expect(extractCallerNumber(ev([{ name: "From", value: '"Ana Ruiz" <sip:+19565550100@c.example>;tag=x' }]))).toBe("+19565550100");
     expect(extractCallerNumber(ev([{ name: "from", value: "<sip:9565550100@x>" }]))).toBe("+19565550100");
     expect(extractCallerNumber(ev([{ name: "From", value: "<sip:19565550100@x>" }]))).toBe("+19565550100");
+    // An international caller ID keeps its own code (review R2 minor; mutation:
+    // capture the digits without the "+" → "+526421234567", a Mexican number, FAILS).
+    expect(extractCallerNumber(ev([{ name: "From", value: "<sip:+6421234567@x>" }]))).toBe("+6421234567");
   });
   it("anonymous and malformed → null", () => {
     expect(extractCallerNumber(ev([{ name: "From", value: '"Anonymous" <sip:anonymous@anonymous.invalid>' }]))).toBeNull();

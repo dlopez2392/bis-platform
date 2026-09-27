@@ -269,6 +269,13 @@ describe("book_appointment", () => {
     expect(state.contactId).toBe("ct1");
   });
 
+  it("stores the number the caller SAID as said, never pre-read as +1, so the contact write can flag it (review R2-C1; mutation: phone = e164Of(args.phone) → \"+15512345678\", FAILS)", async () => {
+    await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true, phone: "+1 55 1234 5678" });
+    expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ phone: "5512345678" }), "voice", "ai");
+  });
+
   it("refuses a time that was never offered", async () => {
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T03:00:00.000Z", name: "Ana", emailDeclined: true });

@@ -19,7 +19,6 @@ import {
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
   verifyRenderToken, hashIp, isValidEmail, isValidPhone, parseAttribution,
 } from "@/lib/forms/guards";
-import { toE164 } from "@/lib/voice/phone-number";
 // The SAME helper the sibling public-form action uses, not a re-implementation
 // (I3) — see its docstring in that file for why it is exported.
 import { setAttribution } from "@/lib/forms/enrich";
@@ -289,10 +288,11 @@ export async function submitBookingAction(publicId: string, formData: FormData):
 
     const created = await createContact(db, calendar.account_id, {
       firstName, lastName: lastName || undefined, email,
-      // Voice stores E.164; storing web input as-typed made the same person
-      // two contacts and hid web bookings from find_my_booking. Parseable →
-      // E.164, unparseable → as typed (never mangled, never rejected here).
-      phone: phone ? (toE164(phone) ?? phone) : undefined,
+      // AS TYPED (review R2-C1): createContact's phoneFields stores the
+      // E.164 when it parses, as typed when it does not, and flags ten digits
+      // that could be Mexican or US. Pre-normalising here would store
+      // "55 1234 5678" as a confirmed +1 and the gate would text it.
+      phone: phone || undefined,
       source: "booking",
     }, ACTOR_ID, ACTOR_TYPE);
     const contactId = created.id;

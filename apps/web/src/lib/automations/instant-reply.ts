@@ -54,7 +54,7 @@ export type InstantReplyInput = {
    *  (account, contact), so a returning contact's second submission lands in
    *  the same thread the hold reads. */
   conversationId: string;
-  /** `toE164(rawPhone)`: null when the person typed nothing, or something the
+  /** `e164Of(rawPhone)`: null when the person typed nothing, or something the
    *  parser could not read. A number stored as typed is NOT textable. */
   phoneE164: string | null;
   /** The submission's normalized locale — the language the person filled the

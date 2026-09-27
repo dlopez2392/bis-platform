@@ -400,13 +400,11 @@ describe("submitFormAction — the lead notification replies to the customer", (
  * Both assertions below were impossible before: there was no html part, and
  * the link was a bare path that no email client renders as a link.
  */
-describe("submitFormAction — phone normalized to E.164 at the boundary (create path)", () => {
-  // Voice stores phones as E.164; web previously stored whatever the visitor
-  // typed, so the same person became two contacts and `find_my_booking`
-  // couldn't see web submissions. A parseable number must reach
-  // `createContact` already in E.164 (mutation: drop the `toE164` call →
-  // FAILS, sees the raw "956-555-1234").
-  it("a parseable US number reaches createContact as E.164", async () => {
+describe("submitFormAction — the phone reaches createContact AS TYPED (create path; consent chain F-009)", () => {
+  // createContact's phoneFields stores the E.164 when it parses and flags ten
+  // digits that could be Mexican or US; a pre-normalised "+1…" would read as
+  // confirmed and the send gate would text it (review R2-C1).
+  it("the number reaches createContact as typed (mutation: phone: e164Of(rawPhone) → \"+19565551234\", FAILS)", async () => {
     getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
       fields: [{ key: "phone", kind: "core.phone", label: "Phone", required: false }],
     }));
@@ -417,7 +415,7 @@ describe("submitFormAction — phone normalized to E.164 at the boundary (create
     }));
 
     expect(result.status).toBe("success");
-    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "+19565551234" });
+    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "956-555-1234" });
   });
 
   // `isValidPhone` (apps/web/src/lib/forms/guards.ts) accepts a bare 7-digit

@@ -15,7 +15,7 @@ import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
 import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
-import { toE164, isCallerIdNumber } from "./phone-number";
+import { isCallerIdNumber, spokenPhone } from "./phone-number";
 // STATIC, not the lazy `await import(...)` this repo otherwise reaches for
 // near route handlers: the documented page-data trap (a module-scope DB
 // import breaking `next build`'s page-data collection) doesn't apply to a
@@ -283,7 +283,9 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
     const created = await createContact(ctx.db, ctx.accountId, {
       firstName: firstName || "Caller",
       lastName,
-      phone: toE164(fields.callbackNumber) ?? ctx.callerNumber ?? undefined,
+      // As said, or the caller ID (review R2-C1): phoneFields flags a
+      // number that could be Mexican or US; an e164Of here would not.
+      phone: spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? undefined,
       email: fields.email,
       source: "voice",
     }, ACTOR_ID, ACTOR_TYPE);

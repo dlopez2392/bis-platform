@@ -2,7 +2,7 @@ import { insertProposal, type CallOutcome, type TranscriptEvent, type serviceDb 
 import { groundedEvidence } from "./grounding";
 import { callIsEligible } from "./eligibility";
 import { isValidEmail } from "@/lib/forms/guards";
-import { toE164 } from "@/lib/voice/phone-number";
+import { spokenPhone } from "@/lib/voice/phone-number";
 
 /**
  * At most three per call — a per-call BUDGET SHARED ACROSS KINDS, not three
@@ -381,9 +381,12 @@ export async function generateProposals(input: {
         // worth nothing to a reviewer either way.
         let storedValue = value;
         if (field === "phone") {
-          const normalizedPhone = toE164(value);
-          if (!normalizedPhone) continue;
-          storedValue = normalizedPhone;
+          // Stored AS SAID once it parses (review R2-C1): the accept-time
+          // fillContactBlanks judges it through phoneFields, which flags a
+          // number that could be Mexican or US. Its E.164 would not.
+          const said = spokenPhone(value, null);
+          if (!said) continue;
+          storedValue = said;
         } else if (field === "email") {
           if (!isValidEmail(value)) continue;
           // Fix-wave Minor: `fillContactBlanks` (the accept-time write,

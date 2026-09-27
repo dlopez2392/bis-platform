@@ -95,3 +95,16 @@ describe("toolSchemas", () => {
     expect(check.description).toMatch(/say/i);
   });
 });
+
+describe("phone parameters say how to write a number (review R1-I4)", () => {
+  it("book_appointment.phone and take_message.callbackNumber ask for the digits as spoken, with no country code the caller did not say (mutation: drop either description → FAILS)", () => {
+    for (const mt of ["in_person", "phone", "video"] as const) {
+      const tools = toolSchemas(true, mt, false) as unknown as Tool[];
+      const book = tools.find((t) => t.name === "book_appointment")!;
+      expect(book.parameters.properties.phone!.description).toBe("Digits as spoken; no country code unless the caller said one.");
+      const msg = tools.find((t) => t.name === "take_message")!;
+      expect(msg.parameters.properties.callbackNumber!.description).toBe("Digits as spoken; no country code unless the caller said one.");
+      expect(tools.find((t) => t.name === "capture_lead")!.description).toMatch(/no country code unless the caller said one/);
+    }
+  });
+});

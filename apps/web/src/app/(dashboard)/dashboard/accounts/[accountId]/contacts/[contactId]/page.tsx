@@ -11,7 +11,7 @@ import { ContactFieldsPanel } from "./contact-fields-panel";
 import { ActivityTimeline } from "./activity-timeline";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
 import { resolveSmsSender } from "@/lib/sms/sender";
-import { toE164 } from "@/lib/voice/phone-number";
+import { e164Of } from "@/lib/voice/phone-number";
 import { renderZone } from "@/lib/zone";
 
 export const dynamic = "force-dynamic";
@@ -60,10 +60,10 @@ export default async function ContactDetailPage({
           accountId={accountId}
           contactId={contactId}
           contactHasEmail={Boolean(contact.email)}
-          // Same toE164-based notion of "usable" sendSmsAction itself gates
+          // Same e164Of-based notion of "usable" sendSmsAction itself gates
           // on (actions.ts) — mirrors contactHasEmail above so SMS fails up
           // front, in place of the form, instead of only on submit.
-          contactHasPhone={Boolean(toE164(contact.phone))}
+          contactHasPhone={Boolean(e164Of(contact.phone))}
           smsGate={smsGate}
           notes={notes}
           tasks={tasks}

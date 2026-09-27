@@ -431,7 +431,7 @@ describe("generateProposals", () => {
   // The positive twin: a real 10-digit number is NORMALISED to E.164 before
   // it reaches the database, not stored as the digits the model happened to
   // return (mutation target: storing `value` raw instead of `toE164(value)`).
-  it("normalizes a valid phone value to E.164 before it reaches the database (mutation: store the raw value instead of toE164(value) -> FAILS)", async () => {
+  it("stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → \"+19562921696\", FAILS)", async () => {
     const db = fakeDb();
     const n = await generateProposals({
       ...base, db, contactId: "c1", blankFields: ["phone"],
@@ -441,7 +441,7 @@ describe("generateProposals", () => {
       }),
     });
     expect(n).toBe(1);
-    expect(db.rows[0].payload).toEqual({ field: "phone", value: "+19562921696" });
+    expect(db.rows[0].payload).toEqual({ field: "phone", value: "9562921696" });
   });
 
   // Fix-wave Minor: `fillContactBlanks` (the accept-time write) lowercases

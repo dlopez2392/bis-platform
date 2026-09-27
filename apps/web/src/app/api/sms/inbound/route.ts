@@ -31,7 +31,7 @@ import {
   type MessageStatus, type SupabaseClient,
 } from "@bis/db";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
-import { toE164 } from "@/lib/voice/phone-number";
+import { e164Of } from "@/lib/voice/phone-number";
 
 // A webhook, not a user action: there is no session, no operator, no AI
 // persona — "system" is the actor for every write this route makes.
@@ -73,7 +73,7 @@ type TelnyxWebhookBody = {
 };
 
 async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefined): Promise<void> {
-  const calledNumber = toE164(payload?.to?.[0]?.phone_number ?? null);
+  const calledNumber = e164Of(payload?.to?.[0]?.phone_number ?? null);
   if (!calledNumber) {
     log("inbound message with no resolvable called (to) number");
     return;
@@ -111,7 +111,7 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
   // record of the operator as their own lead. Recognised and dropped here,
   // BEFORE the retry-dedupe check: there is no message worth deduping
   // against, only a sender worth never filing.
-  const fromNumber = toE164(payload?.from?.phone_number ?? null);
+  const fromNumber = e164Of(payload?.from?.phone_number ?? null);
   // Contained on purpose: getAlertPhone is a plain accounts.alert_phone
   // SELECT, and a transient read failure here (a DB blip, not a real
   // "the operator texted their own line" case) must never escape into the

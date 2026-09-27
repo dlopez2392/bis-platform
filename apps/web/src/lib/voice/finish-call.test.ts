@@ -196,6 +196,17 @@ beforeEach(() => {
 });
 
 describe("finishCall", () => {
+  it("a lead's callback number is stored AS SAID so the contact write can flag it; the caller ID repeated stays the caller ID (review R2-C1; mutation: phone: e164Of(callbackNumber) → \"+15512345678\", FAILS)", async () => {
+    const said = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "55 1234 5678" } });
+    await finishCall(said, ctx, meta);
+    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ phone: "55 1234 5678" }), "voice", "ai");
+    const repeated = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "956 292 1696" } });
+    await finishCall(repeated, ctx, meta);
+    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ phone: "+19562921696" }), "voice", "ai");
+  });
+
   it("a lead call runs the full treatment: contact → conversation → message(voice) → unread → alert → row", async () => {
     const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
       { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
