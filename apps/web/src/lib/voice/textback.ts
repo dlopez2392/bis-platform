@@ -130,6 +130,9 @@ export async function contactForCallerId(
     firstName: "Caller", phone: callerNumber, source: "voice",
   }, ACTOR_ID, ACTOR_TYPE);
   if (created.existing) {
+    // Safe as it stands: this dedupes on the caller ID ALONE, so a match IS
+    // the caller's own contact and the phone fill is a no-op. Never add an
+    // email or name here without checking the match's phone is the caller ID.
     try {
       await fillContactBlanks(db, accountId, created.id, { phone: callerNumber }, ACTOR_ID, ACTOR_TYPE);
     } catch (e) {

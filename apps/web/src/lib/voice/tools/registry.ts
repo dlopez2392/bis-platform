@@ -5,14 +5,18 @@ import {
   createContact, fillContactBlanks, getContact,
   createBooking, SlotTakenError, setBookingStatus, getBookingById,
   markHandoffRequested,
+  ensureConversation, createMessage, incrementUnreadCount,
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
 import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
-import { toE164 } from "../phone-number";
+import { toE164, isCallerIdNumber } from "../phone-number";
 import { getEmailProvider } from "@/lib/email";
 import { getMeetingProvider } from "@/lib/meetings/provider";
 import { emailBrand } from "@/lib/email/templates/shell";
-import { bookingConfirmationEmail, bookingRescheduledEmail } from "@/lib/email/templates/booking";
+import {
+  bookingConfirmationEmail, bookingRescheduledEmail,
+  bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject,
+} from "@/lib/email/templates/booking";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { isValidEmail } from "@/lib/forms/guards";
 import { formatWhen } from "@/lib/booking/time";
@@ -20,6 +24,7 @@ import {
   type CallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled,
   withServed, withTransferred,
 } from "../call-state";
+import { detectSpokenLanguage } from "../language";
 import type { HandoffTarget } from "../handoff";
 
 export type ToolName =
@@ -57,6 +62,177 @@ export interface ToolContext {
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const REQUIRED_LEAD_FIELDS = ["fullName", "need"] as const;
 
+/**
+ * What a refused booking lookup or change offers the caller instead: a person
+ * when this call has somewhere to send them, otherwise a message. The same
+ * `handoffTarget.available` decides whether `transfer_to_human` is on the
+ * session at all (`toolSchemas`), so a refusal never names a tool the model
+ * was not given.
+ */
+function nextStep(ctx: ToolContext): string {
+  return ctx.handoffTarget.available
+    ? "offer to put them through to someone on the team with transfer_to_human"
+    : "offer to take a message with take_message";
+}
+
+/** The contact fields the booking tools read. `getContact` is untyped. */
+type BookingContact = {
+  first_name: string | null; last_name: string | null;
+  email: string | null; phone: string | null;
+};
+
+/**
+ * Booking tools are bound to the caller ID — what the carrier presents on
+ * the call. Nothing here reads a STIR/SHAKEN attestation, so it is not
+ * authentication; it is simply the only identity a call carries. A booking
+ * may be moved or cancelled on this call only when EITHER
+ *   (a) it was made on this call — `state.bookings` is written only by
+ *       book_appointment and reschedule_appointment, from ids the database
+ *       returned, never from anything the model passes; OR
+ *   (b) the call shows a caller ID and the booking's contact's phone IS it.
+ *       `contacts.phone` is stored as typed ("(956) 292-1696" from a web
+ *       form), so it is normalized with `toE164` before the compare — a raw
+ *       string compare would refuse the rightful caller.
+ *
+ * Checked before anything is looked up, written or sent. The contact is read
+ * ONCE, here, and handed back for the notifications that follow a change. A
+ * read that fails fails CLOSED: nothing changes on a booking we could not
+ * check. Logged by booking id only.
+ */
+async function checkCallerOwnsBooking(
+  state: CallState, ctx: ToolContext, tool: "cancel" | "reschedule",
+  bookingId: string, contactId: string,
+): Promise<{ owned: true; contact: BookingContact | null } | { owned: false; error: string }> {
+  let contact: BookingContact | null;
+  try {
+    contact = (await getContact(ctx.db, ctx.accountId, contactId)) as BookingContact | null;
+  } catch (e) {
+    console.error(`voice ${tool} ${bookingId}: contact lookup failed, nothing changed: ${String(e)}`);
+    return { owned: false, error:
+      "The appointment couldn't be checked right now, so nothing was changed. "
+      + `Apologize, then ${nextStep(ctx)} so the team can help.` };
+  }
+  const bookedThisCall = state.bookings.some((b) => b.id === bookingId);
+  const callerIdMatches = isCallerIdNumber(contact?.phone, ctx.callerNumber);
+  if (!bookedThisCall && !callerIdMatches) {
+    return { owned: false, error:
+      "This appointment isn't under the number they're calling from, so it can't be changed on this call. "
+      + "Do not share any of its details. "
+      + `Apologize, then ${nextStep(ctx)} so the team can confirm who they are and help.` };
+  }
+  return { owned: true, contact };
+}
+
+// ─── Telling the business about a change made by phone ─────────────────────
+//
+// A cancel-only call classifies `abandoned`, so finishCall alerts nobody, and
+// a customer whose booking was cancelled on a call used to hear nothing
+// either. After every successful phone cancel or reschedule, three
+// independent legs run: a staff alert, a line in the contact's thread (the
+// in-app signal that exists even with no notify emails), and the customer's
+// own email. All best-effort — the change is already committed — and none of
+// them logs the caller's number, a name, a URL, or an address on success.
+
+// Same attribution finishCall uses: every write here is the AI's, never a
+// signed-in user's.
+const ACTOR_ID = "voice";
+const ACTOR_TYPE = "ai";
+
+/** What changed. `oldStartsAt` is the booking row's own start. */
+type PhoneChange =
+  | { kind: "cancelled"; oldStartsAt: string }
+  | { kind: "moved"; oldStartsAt: string; newStartsAt: Date };
+
+function contactDisplayName(contact: BookingContact | null): string {
+  return [contact?.first_name, contact?.last_name].filter(Boolean).join(" ").trim() || "Someone";
+}
+
+/** The caller's language for the customer email; an unset profile is English. */
+function spokenLocale(state: CallState, ctx: ToolContext): "en" | "es" {
+  return detectSpokenLanguage(state.transcript, ctx.profile.languages) === "es" ? "es" : "en";
+}
+
+/**
+ * The legs run side by side and are all awaited before the tool answers: the
+ * caller is waiting on the line, so serial sends are dead air, and an
+ * un-awaited promise is a notification lost when the call ends. Each leg
+ * catches and logs its own failure; this is the net for anything that
+ * escapes one anyway.
+ */
+async function settleLegs<T extends readonly unknown[] | []>(
+  tool: "cancel" | "reschedule", bookingId: string, legs: T,
+): Promise<{ -readonly [P in keyof T]: PromiseSettledResult<Awaited<T[P]>> }> {
+  const settled = await Promise.allSettled(legs);
+  for (const s of settled as PromiseSettledResult<unknown>[]) {
+    if (s.status === "rejected") {
+      console.error(`voice ${tool} ${bookingId}: a notification step failed unexpectedly: ${String(s.reason)}`);
+    }
+  }
+  return settled;
+}
+
+/**
+ * One staff alert per notify address. `ctx.calendar` IS the booking's
+ * calendar: one calendar per account is schema (`calendars_one_per_account`).
+ */
+async function alertStaffOfPhoneChange(
+  ctx: ToolContext, tool: "cancel" | "reschedule", bookingId: string, contactId: string,
+  change: PhoneChange, contact: BookingContact | null,
+): Promise<void> {
+  const recipients = ctx.calendar.notify_emails ?? [];
+  if (recipients.length === 0) return;
+  try {
+    const brand = emailBrand(ctx.branding);
+    const { subject, html, text } = bookingPhoneChangeAlertEmail({
+      brand, kind: change.kind,
+      whenCompanyZone: formatWhen(new Date(change.oldStartsAt), ctx.timezone),
+      newWhenCompanyZone: change.kind === "moved" ? formatWhen(change.newStartsAt, ctx.timezone) : undefined,
+      contactName: contactDisplayName(contact),
+      callerNumber: ctx.callerNumber,
+      contactUrl: `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`,
+    });
+    // Throws synchronously when mail config is missing — inside this try.
+    const provider = getEmailProvider();
+    const failures: string[] = [];
+    await Promise.all(recipients.map(async (to) => {
+      try {
+        // No fromAddress: this goes to the client's OWN staff, and a
+        // client-domain-to-client-domain send through a third-party sender
+        // reads as spoofing to corporate filters. Platform From only.
+        await provider.send({ to, fromName: brand.name, subject, body: text, html });
+      } catch (e) {
+        failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);
+      }
+    }));
+    if (failures.length > 0) {
+      console.error(`voice ${tool} ${bookingId}: staff alert failed for ${failures.join(", ")}`);
+    }
+  } catch (e) {
+    console.error(`voice ${tool} ${bookingId}: staff alert setup failed: ${String(e)}`);
+  }
+}
+
+/** The line in the contact's thread, mirroring the public cancel link's. */
+async function recordPhoneChangeInThread(
+  ctx: ToolContext, tool: "cancel" | "reschedule", bookingId: string, contactId: string,
+  change: PhoneChange,
+): Promise<void> {
+  try {
+    const oldWhen = formatWhen(new Date(change.oldStartsAt), ctx.timezone);
+    const subject = change.kind === "moved" ? "Booking moved by phone" : "Booking cancelled by phone";
+    const body = change.kind === "moved"
+      ? `Moved their booking from ${oldWhen} to ${formatWhen(change.newStartsAt, ctx.timezone)}`
+      : `Cancelled their ${oldWhen} booking`;
+    const convo = await ensureConversation(ctx.db, ctx.accountId, contactId, ACTOR_ID, ACTOR_TYPE);
+    await createMessage(ctx.db, ctx.accountId, {
+      conversationId: convo.id, channel: "voice", direction: "inbound", subject, body,
+    }, ACTOR_ID, ACTOR_TYPE);
+    await incrementUnreadCount(ctx.db, ctx.accountId, convo.id);
+  } catch (e) {
+    console.error(`voice ${tool} ${bookingId}: conversation trail failed: ${String(e)}`);
+  }
+}
+
 export async function runTool(
   state: CallState, ctx: ToolContext, name: ToolName, args: Record<string, unknown>,
 ): Promise<{ state: CallState; result: unknown }> {
@@ -86,10 +262,26 @@ export async function runTool(
       return { state, result: { slots } };
     }
 
+    // Booking tools are bound to the caller ID: it is the only identity a
+    // call carries (presented, not authenticated). A number the caller
+    // recites is never looked up — the schema no longer declares one, and a
+    // stray `phone` arg (models do send undeclared args) that is not the
+    // caller ID is refused, not queried.
+    // Every refusal leaves `state` untouched: nothing was found for anyone.
     case "find_my_booking": {
-      const phone = toE164(String(args?.phone ?? "")) ?? ctx.callerNumber;
-      if (!phone) return { state, result: { found: false } };
-      const hit = await findUpcomingBookingForPhone(ctx.db, ctx.accountId, phone, now.toISOString());
+      if (!ctx.callerNumber) {
+        return { state, result: { found: false, verified: false, error:
+          "This call has no visible caller number, so appointments can't be looked up on it — not by a number the caller says, either. "
+          + `Apologize, then ${nextStep(ctx)} so the team can help them.` } };
+      }
+      const recited = String(args?.phone ?? "").trim();
+      if (recited && toE164(recited) !== ctx.callerNumber) {
+        return { state, result: { found: false, verified: false, error:
+          "Appointments can only be looked up for the number they are calling from, and that is not the number they gave. "
+          + "Do not confirm, read out, change or cancel anything for another number. "
+          + `Tell them they can call back from the phone the appointment is under, or ${nextStep(ctx)} so the team can help them.` } };
+      }
+      const hit = await findUpcomingBookingForPhone(ctx.db, ctx.accountId, ctx.callerNumber, now.toISOString());
       // `found: false` is NOT served: we looked and told the caller we had
       // nothing for them, which is the same empty-handed ending the text-back
       // exists for. Only a lookup that actually produced their appointment
@@ -205,14 +397,23 @@ export async function runTool(
           { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice" },
           "voice", "ai");
         contactId = created.id;
-        if (created.existing) {
-          // Dedupe returns the existing row untouched — backfill blanks so a
-          // repeat caller stops being "Caller" with no email (the unsendable-
-          // reminder casualty). Failure here must NEVER fail the booking.
+        // Dedupe returns the existing row untouched — backfill blanks so a
+        // repeat caller stops being "Caller" with no email (the unsendable-
+        // reminder casualty). ONLY on the caller's own contact: the dedupe
+        // matches email first, then phone, and either can be something the
+        // caller merely said, so the match may be someone else's record. The
+        // booking still lands on it; nothing of this caller's is written
+        // onto it. `phone` is never passed — on the caller's own contact it
+        // already is the caller ID. A withheld caller ID fills nothing.
+        // Failure here (the read or the fill) must NEVER fail the booking.
+        if (created.existing && ctx.callerNumber) {
           try {
-            await fillContactBlanks(ctx.db, ctx.accountId, contactId,
-              { firstName, lastName, email: email ?? undefined, phone: phone ?? undefined },
-              "voice", "ai");
+            const existing = (await getContact(ctx.db, ctx.accountId, contactId)) as BookingContact | null;
+            if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
+              await fillContactBlanks(ctx.db, ctx.accountId, contactId,
+                { firstName, lastName, email: email ?? undefined },
+                "voice", "ai");
+            }
           } catch (e) {
             console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
           }
@@ -293,6 +494,10 @@ export async function runTool(
       if (!old || old.status !== "booked") {
         return { state, result: { ok: false, error: "no such booking — use find_my_booking first" } };
       }
+      // Ownership BEFORE the slot lookup, the room and both writes.
+      const owner = await checkCallerOwnsBooking(state, ctx, "reschedule", bookingId, old.contact_id);
+      if (!owner.owned) return { state, result: { ok: false, error: owner.error } };
+
       const wanted = String(args?.startsAt ?? "");
       const all = await computeAllSlots(ctx.db, ctx.calendar, ctx.timezone, now);
       const slot = all.find((s) => s.startsAt.toISOString() === new Date(wanted).toISOString());
@@ -329,30 +534,24 @@ export async function runTool(
         if (e instanceof SlotTakenError) return { state, result: { ok: false, slotTaken: true, error: "that time was just taken" } };
         throw e;
       }
-      await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice");
+      await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice", "ai");
 
       // 2026-08-29 (final-review Important): this used to end here, silently —
       // a same-day VIDEO reschedule left the customer holding the OLD
       // confirmation's link to a room nobody would be in, with the new link
       // existing nowhere a customer could see it. The contact's email isn't in
-      // call state (find_my_booking matched by phone), so it's read from the
-      // contact row. Everything below is best-effort with the same invariant
-      // as book_appointment's send: the reschedule is already committed, so
-      // email trouble is a soft `emailFailed` flag for the model to voice,
-      // never a hard `ok:false` on a booking the caller now holds.
-      let emailFailed = false;
-      let contactEmail: string | null = null;
-      try {
-        const contact = await getContact(ctx.db, ctx.accountId, old.contact_id);
-        contactEmail = (contact?.email ?? "").trim() || null;
-      } catch (e) {
-        // Can't tell whether an email was on file, so flag rather than stay
-        // silent — for a video caller this is exactly the "your new link
-        // never arrived" case the flag exists to voice.
-        emailFailed = true;
-        console.error(`voice reschedule ${newId}: contact lookup failed: ${String(e)}`);
-      }
-      if (contactEmail) {
+      // call state (find_my_booking matched by phone); it comes from the
+      // contact row the ownership check above already read. Everything below
+      // is best-effort with the same invariant as book_appointment's send: the
+      // reschedule is already committed, so email trouble is a soft
+      // `emailFailed` flag for the model to voice, never a hard `ok:false` on
+      // a booking the caller now holds. ONLY the customer's email sets it: the
+      // staff alert and the thread line are for the business, not something
+      // the model tells the caller.
+      const contactEmail = (owner.contact?.email ?? "").trim() || null;
+      const change = { kind: "moved" as const, oldStartsAt: old.starts_at, newStartsAt: slot.startsAt };
+      const emailCustomer = async (): Promise<boolean> => {
+        if (!contactEmail) return false;
         try {
           const brand = emailBrand(ctx.branding);
           const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone);
@@ -367,11 +566,18 @@ export async function runTool(
             replyTo: normalizeReplyTo(ctx.branding.replyToEmail),
             subject: "Your booking has been moved", body: text, html,
           });
+          return false;
         } catch (e) {
-          emailFailed = true;
           console.error(`voice reschedule ${newId}: confirmation email failed: ${String(e)}`);
+          return true;
         }
-      }
+      };
+      const [, , customer] = await settleLegs("reschedule", bookingId, [
+        alertStaffOfPhoneChange(ctx, "reschedule", bookingId, old.contact_id, change, owner.contact),
+        recordPhoneChangeInThread(ctx, "reschedule", bookingId, old.contact_id, change),
+        emailCustomer(),
+      ]);
+      const emailFailed = customer.status === "rejected" || customer.value;
 
       // `withServed` is belt-and-braces here: the mirrored booking below
       // already classifies this call `booked`, so it never reaches the
@@ -395,7 +601,39 @@ export async function runTool(
       if (!row || row.status !== "booked") {
         return { state, result: { ok: false, error: "no such booking — use find_my_booking first" } };
       }
-      await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice");
+      const owner = await checkCallerOwnsBooking(state, ctx, "cancel", bookingId, row.contact_id);
+      if (!owner.owned) return { state, result: { ok: false, error: owner.error } };
+
+      await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice", "ai");
+
+      // Committed: now tell the business and the customer, best-effort. A
+      // cancel's result stays exactly `{ ok: true }` — a failed customer
+      // email is logged, never surfaced to the model.
+      const contactEmail = (owner.contact?.email ?? "").trim() || null;
+      const change = { kind: "cancelled" as const, oldStartsAt: row.starts_at };
+      const emailCustomer = async (): Promise<void> => {
+        if (!contactEmail) return;
+        try {
+          const locale = spokenLocale(state, ctx);
+          const brand = emailBrand(ctx.branding);
+          const { html, text } = bookingCancelledEmail({
+            brand, locale, whenCompanyZone: formatWhen(new Date(row.starts_at), ctx.timezone, locale),
+          });
+          await getEmailProvider().send({
+            to: contactEmail, fromName: brand.name, fromAddress: ctx.fromEmail ?? undefined,
+            replyTo: normalizeReplyTo(ctx.branding.replyToEmail),
+            subject: bookingCancelledSubject(locale), body: text, html,
+          });
+        } catch (e) {
+          console.error(`voice cancel ${bookingId}: cancellation email failed: ${String(e)}`);
+        }
+      };
+      await settleLegs("cancel", bookingId, [
+        alertStaffOfPhoneChange(ctx, "cancel", bookingId, row.contact_id, change, owner.contact),
+        recordPhoneChangeInThread(ctx, "cancel", bookingId, row.contact_id, change),
+        emailCustomer(),
+      ]);
+
       // `withBookingCancelled` alone is not enough to remember this happened:
       // it maps over `state.bookings`, which is EMPTY when the booking was
       // made on an earlier call — the ordinary case for a cancellation. The
