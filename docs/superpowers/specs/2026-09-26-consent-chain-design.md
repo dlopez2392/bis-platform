@@ -6,6 +6,12 @@ of the CRM plan (#145, `docs/crm-features.md` §4.2, "The legal-date chain", :11
 (F-009), step 3 (F-066 part), step 4 (S-05 and F-065 part) and step 5 (F-133 part), and it adds email. It ships in
 three PRs (§7), and each PR gets its own implementation plan. Repo facts are cited against `main` at `61e7f113`.
 
+Corrected on 2026-09-26 from the PR-1 plan review (three reviewers) and danlo's answers of that day. The corrections
+are made in place: §1.3 choice 25; §3 (the actor column, the contact reference, the grants, the second index, the
+state's tie-break, `hold_released` until PR-2); §4.1 items 1, 3 and 4; §4.2 (the alert phone's STOP and START); §5
+(fails closed, go-live item 6); §6 (the quiet-hours sentence, the Messages block's states, the Check number row,
+"Mexico (+52)", the alert code's refusals); §8 (the hours tests, scans 1 to 4); §11 (Telnyx's code, verified).
+
 ## 1. Decisions
 
 ### 1.1 Owner decisions (danlo, 2026-09-26; binding)
@@ -46,7 +52,7 @@ three PRs (§7), and each PR gets its own implementation plan. Repo facts are ci
 | 22 | A **staff-typed email** to a contact who unsubscribed still sends. The composer shows a notice | Decision 7 covers *automated* email. A person replying about the customer's own matter is not automated |
 | 23 | **Operator mail** (email BIS sends to the business's own people or the agency: alerts, reports, billing, the sending-address check) passes the gate but is **not** subject to the customer ledger | The ledger holds customers' choices about a business's customer mail. Operator mail never carries the unsubscribe link and has its own switches (the weekly report's recipients field, DESIGN.md "The weekly report") |
 | 24 | Folding 0049 **widens** each opt-out: a contact marked "No marketing emails" stops *all* automated email, reminders included | Decision 7 gives an email stop one meaning. 0049 promised "Quotes and appointment emails still go" (`apps/web/src/lib/messages.ts:443`), so the backfill's count is reported to danlo before production runs it (§5) |
-| 25 | The gate does **not** read `contacts.dnd` | It is `jsonb not null default '{}'` (`packages/db/supabase/migrations/0003_crm_core.sql:13`), and no code reads or writes it (`packages/db/src/automations.ts:1293`, `0049_contacts_marketing_email_optout.sql:41–48`). Two sources of truth would be worse. PR-1 checks both databases for any non-empty value; if one exists, its implementation plan converts it into staff-recorded stops. This departs from `crm-features.md:1181` |
+| 25 | The gate does **not** read `contacts.dnd` | It is `jsonb not null default '{}'` (`packages/db/supabase/migrations/0003_crm_core.sql:13`), and no code reads or writes it (`packages/db/src/automations.ts:1293`, `0049_contacts_marketing_email_optout.sql:41–48`). Two sources of truth would be worse. PR-1 checks both databases for any non-empty value; if one exists, its implementation plan converts it into staff-recorded stops. This departs from `crm-features.md:1181`. **Checked 2026-09-26: 0 rows on production and on the CI project**, so there is nothing to convert |
 | 26 | Keyword matching ignores spaces too, so STOP ALL (a Telnyx default, `crm-features.md:1099`), OPT OUT and NO MAS match as well as their one-word forms | Customers type both |
 | 27 | Opening the `/u/[token]` page records the revoke at once. The page offers a ghost "Resubscribe" | Decision 6 says "at once". The button undoes a mis-tap, or a revoke caused by a link-scanning mail filter opening the page (§5) |
 | 28 | A **grant never lifts a stop**. Only `resubscribed` does (START, the page's Resubscribe, or staff Resume with a note) | A customer who texted STOP and later books online with their phone has not asked for texts again |
@@ -125,22 +131,24 @@ parity (CLAUDE.md; `docs/runbooks/ci-supabase-project.md`).
 | `address` | text not null | For SMS, E.164 (check `^\+[1-9][0-9]{7,14}$`). For email, trimmed and lowercased (check `address = lower(address)`) |
 | `action` | text not null | `granted`, `revoked`, `held`, `hold_released`, `resubscribed` |
 | `method` | text not null | `keyword`, `start_keyword`, `free_text`, `staff`, `staff_undo`, `carrier_block`, `unsubscribe_link`, `one_click`, `unsubscribe_page`, `form`, `booking`, `inbound_text`, `backfill_0049`, `backfill_telnyx` |
-| `contact_id` | uuid null | FK `contacts`, on delete set null. The contact it concerned at the time, so the evidence outlives a merge or a delete |
-| `actor_user_id` | uuid null | FK `users`. The staff member, for `staff` and `staff_undo` |
+| `contact_id` | uuid null | The contact it concerned at the time, so the evidence outlives a merge or a delete. The reference is **composite**: `(account_id, contact_id)` → `contacts(account_id, id)`, `on delete set null (contact_id)` (0050's pattern), so a row can never name another account's contact |
+| `actor_id` | text null | The staff member's Clerk user id (`user_…`), for `staff` and `staff_undo`, where a check requires it non-blank. It is text, not a uuid FK to `users`: the id staff actions carry is Clerk's, as `events.actor_id` stores it |
 | `note` | text null | Required, and must not be blank, when `method = 'staff'` and `action = 'resubscribed'` (a check constraint) |
 | `source_ref` | text null | The inbound message, form submission or booking id |
 | `evidence` | jsonb not null default `'{}'` | The keyword or phrase matched, a message excerpt of at most 160 characters, the consent label shown, or the token's issue time |
 | `occurred_at` | timestamptz not null default `now()` | For backfills, the original time |
 | `created_at` | timestamptz not null default `now()` | |
 
-- **Index** on `(account_id, channel, address, occurred_at desc, id desc)`.
-- **RLS**, following `0051_billing_core.sql:214–218`: a select policy for `authenticated` (the agency, or the row's own account); `revoke all` from anon and authenticated; `grant select` to authenticated.
+- **Indexes** on `(account_id, channel, address, occurred_at desc, id desc)` (the state read), and on
+  `(account_id, contact_id) where contact_id is not null` (the contact reference's set-null on a contact delete).
+- **RLS**, following `0051_billing_core.sql:214–218`: a select policy for `authenticated` (the agency, or the row's own account); `revoke all` from anon, authenticated **and service_role** (the default privileges hand all three everything, `MAINTAIN` included); then `grant select` to authenticated and `grant select, insert` to service_role.
 - **Writes** go only through `packages/db/src/consent.ts`, using the service role behind `requireAccountAccess` for staff actions.
-- **Append-only by grants.** No role, `service_role` included, holds `update` or `delete`. Account deletion still cascades, because referential actions run as the table owner (an assumption, proved by a DB test, §8).
+- **Append-only by grants.** No role, `service_role` included, holds `update`, `delete`, `truncate` or `maintain`. Account deletion still cascades, and a contact delete still nulls `contact_id`, because referential actions run as the table owner (proved by a DB test on a PG18 replica, §8).
 
 **State of an address.** The state comes from the newest row whose action is `revoked`, `held`, `hold_released` or
-`resubscribed`, ordered by `occurred_at` then `id`. `granted` rows are evidence and never change the state
-(choice 28).
+`resubscribed`, ordered by `occurred_at`. On an `occurred_at` tie the **more restrictive** row wins (`revoked`, then
+`held`, then `hold_released` and `resubscribed`), and only then the larger `id`, because a uuid's order is random.
+`granted` rows are evidence and never change the state (choice 28).
 
 | Newest deciding row | State | The gate |
 |---|---|---|
@@ -150,7 +158,7 @@ parity (CLAUDE.md; `docs/runbooks/ci-supabase-project.md`).
 
 - A `held` row is written only when the state is allowed, or as the undo of a hold's resolution (§4.2), which
   returns the row to On hold.
-- A `hold_released` row is written only when the state is held. The server function checks this inside the insert statement, so a keyword stop that lands in between cannot be undone by a stale click.
+- A `hold_released` row is written only when the state is held. The server function checks this inside the insert statement, so a keyword stop that lands in between cannot be undone by a stale click. Until PR-2 builds that guarded write, PR-1's `appendConsentEvent` refuses `hold_released` outright.
 
 **Other changes**
 - `contacts.phone_country_unconfirmed boolean not null default false`: F-009's ambiguous flag (§4.1).
@@ -167,16 +175,30 @@ parity (CLAUDE.md; `docs/runbooks/ci-supabase-project.md`).
    edits, and the alert phone.
    - A number with a country code (`+1`, `+52`, `00 52`, `011 52`) is kept as given. The retired Mexican mobile `1`
      after `52` is dropped.
+   - Mexico's retired trunk prefixes `01`, `044` and `045` before ten digits are dropped and the rest judged as a
+     Mexican number. Any other leading `0` is refused, never stored as `+0…`.
    - A 10-digit number that is valid only as a US number becomes `+1`, and one valid only as a Mexican number becomes
      `+52` (choice 30).
    - A number valid as both, or valid as neither, is stored as `+1` (today's reading, so its `phone_key` does not
      move) and flagged `phone_country_unconfirmed`.
-   - Numbers that arrive from the carrier (an inbound call's caller number, an inbound text's sender) are already
-     E.164 and are never flagged.
-   - The alert-phone field gains a country choice (US +1 / México +52), so it is never ambiguous.
+   - **Every contact write passes the number as the person typed or said it**, never a pre-normalised `+1…`: a `+1`
+     reads as a country code the person gave, so a pre-normalised ambiguous number would be stored confirmed and
+     texted. For Sofía's tools, a leading `1` the model adds to ten digits is dropped, and a number that is the
+     caller ID is taken from the carrier. The instant reply texts the number as typed.
+   - Numbers that arrive from the carrier (an inbound call's caller number, an inbound text's sender) keep their own
+     `+` and code and are never flagged. The gate does not hold a text to the caller ID on the contact's stored
+     flag, which is about a number a person typed.
+   - **Dedupe.** A new `+52` number whose key misses also looks up the bare ten digits: a contact stored as those bare
+     digits is the same contact, and one stored as `+1` with them is recorded in `contact_duplicate_flags`
+     (`phone_country_twin`) for the merge queue.
+   - The alert-phone field gains a country choice (US (+1) / Mexico (+52)), so it is never ambiguous. Only a bare ten
+     digits take the chosen country; a country code typed without `+` (`1` + ten, `52` + ten, `521` + ten) is a code,
+     and one that disagrees with the choice is refused with its own line, never re-coded.
    - **Backfill:** flag every stored `+1` number that is also a valid Mexican number, unless the same account has
-     seen it as the caller or sender of an inbound call or text.
-   - A flagged number is **held** by the gate (decision 3) until staff pick the country in the drawer (§6).
+     seen it as the caller or sender of an inbound call or text. It runs **after** the build that normalises on write
+     is live, and only on rows last written before that deploy: until then the old build keeps storing `+1…`.
+   - A flagged number is **held** by the gate (decision 3) until staff pick the country in the drawer (§6). The pick
+     is refused if the stored number is no longer ambiguous.
 2. **The message-class registry** (`apps/web/src/lib/consent/classes.ts`) gives every send a stable `kind`, and each
    kind has a channel, a class, an hours rule and a footer. The classes are `customer_initiated`, `informational`,
    `marketing`, `staff_typed`, `operator` and `consent_reply`. The SMS kinds are:
@@ -214,15 +236,18 @@ parity (CLAUDE.md; `docs/runbooks/ci-supabase-project.md`).
    2. normalises `to`;
    3. runs `resolveSmsSender` (A2P, a live number), so every path gets it;
    4. reads the ledger state: stopped → `blocked: stopped`, held → `blocked: held`;
-   5. refuses a contact whose `phone_country_unconfirmed` is set (`blocked: unconfirmed_number`);
+   5. refuses a contact whose `phone_country_unconfirmed` is set (`blocked: unconfirmed_number`), unless `to` came
+      from the carrier (the text-back's caller ID);
    6. applies the kind's hours: outside them → `deferred` until the window opens, unless choice 21 applies
       (→ `blocked: window_after_deadline`);
    7. adds the kind's footer;
    8. sends through the provider;
-   9. if the carrier refuses because the number is opted out, appends `revoked` with method `carrier_block`
-      (§11 names the error code as unverified).
+   9. if the carrier refuses because the number is opted out (Telnyx code `40300`, §11), appends `revoked` with method
+      `carrier_block`.
 
-   If the ledger cannot be read, the gate **fails closed** (`blocked: ledger_unavailable`).
+   If the ledger, the flag or the account's zone cannot be read, the gate **fails closed**
+   (`blocked: ledger_unavailable`). A zone that was read but cannot be resolved still takes the fallback zone; an
+   outage is not a zone.
 4. **Routing the five paths.**
    - The harness's `ctx.sms()` becomes the gate's `sendSms`, and `imports.test.ts` stops allowing `harness.ts` to
      import the SMS factory.
@@ -230,11 +255,20 @@ parity (CLAUDE.md; `docs/runbooks/ci-supabase-project.md`).
    - `holdOrSend` takes its window from the gate: a `deferred` result becomes its `held` row, and the quiet-hours
      settings are no longer read.
    - The text-back joins that held-row mechanism with its own kind, so a call missed at 10 p.m. gets its text at
-     8 a.m.
-   - A `blocked` automation is logged in `automation_log` with the gate's reason, so "What went out" can say why.
+     8 a.m. At release it is **skipped** if that number has called, or texted, since the missed call, and a held
+     text-back's default wording drops "just now" (danlo, 2026-09-26).
+   - `ledger_unavailable` on an automation or the text-back is a **15-minute re-hold**, not a failure: a released
+     reminder, the instant reply and the text-back have no later pass to retry them.
+   - A `blocked` automation is logged in `automation_log` with the gate's reason, so "What went out" can say why. A
+     refused row gives back its place under the per-tick and per-day caps, so refusals cannot starve other sends.
    - The composer and the code show the reason inline (§6).
 
 ### 4.2 PR-2: stop words, holds, grants, staff controls
+
+**The alert phone first.** The route drops texts from the alert phone before anything else (`route.ts:130`), but the
+gate records `carrier_block` for operator kinds too, and choice 19 forbids staff Resume of a carrier stop. So STOP and
+START from the alert phone are handled (steps 1–3 below) **before** that drop; otherwise a carrier block on the alert
+phone could never be lifted.
 
 **The inbound route**, after it files the message (`route.ts:161`), so that staff always see what was written:
 
@@ -391,9 +425,10 @@ ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` k
 
 ## 5. Safety, failures, rollout
 
-- **Fails closed.** A ledger read error blocks the send, the error is logged through `loggableError` (`apps/web/src/lib/billing/billing-link.ts:74`), and
-  the caller's normal retry applies: the next pass for automations, or an error line in the composer. A ledger write
-  error on an inbound stop returns a 5xx so Telnyx retries.
+- **Fails closed.** A ledger, flag or zone read error blocks the send, the error is logged through `loggableError` (`apps/web/src/lib/billing/billing-link.ts:74`), and
+  the send is retried: an automation, a released hold, the instant reply and the text-back are re-held for 15 minutes
+  (§4.1 item 4); the composer and the alert code show an error line. A ledger write error on an inbound stop returns
+  a 5xx so Telnyx retries.
 - **One confirmation.** At most one BIS confirmation per `revoked` row, only within five minutes, never for an address
   that was already stopped, and none when Telnyx has already replied (decision 12, §11).
 - **Mail scanners.** A corporate mail filter that opens `/u/[token]` records a revoke nobody asked for. That errs
@@ -427,6 +462,8 @@ ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` k
 4. **The two hardening-sprint preconditions** (F-114, tracked outside the repo, `crm-features.md:1174`, :1186–1188):
    **danlo to name.**
 5. **A2P 10DLC approval** for each texting account (`crm-features.md:1098`).
+6. **PR-2 merged.** Until it is, BIS records no START, so a carrier stop (`carrier_block`, recorded from PR-1 on)
+   can never lift.
 
 ## 6. Screens (DESIGN.md: tokens only, both themes, loaded/empty/error, plain copy)
 
@@ -450,7 +487,11 @@ ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` k
   - **Check number:** "This number could be Mexican or US." Ghost "Mexico (+52)" and "US (+1)", each at once with an
     undo toast.
   - **Loading** is a two-row skeleton. **Error:** "Couldn't load their message settings. Try again." There is no empty
-    state, because every contact has a state.
+    state, because every contact has a state. These two states apply **from PR-2**, when the block has rows to load.
+    PR-1's Check number row renders only from the drawer's loaded summary, and uses the drawer's own skeleton and
+    error.
+  - The Check number row follows the number: a phone edit re-reads the summary, so a number made ambiguous shows the
+    row, and one corrected hides it, without a reload.
 - **The conversation composer.** When texts are stopped, held or the number is unconfirmed, the text composer is
   disabled with one line, e.g. "They stopped texts on 3 Oct. You can't text this number until they text START." When
   email is unsubscribed, the email composer stays usable with the notice "They unsubscribed from your emails on 3 Oct.
@@ -466,10 +507,12 @@ ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` k
     quería cancelar su cita del {date}."
 - **Automations page, quiet hours.** The switch and the time pickers become read-only text: "Automated texts and
   emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on
-  Sundays until noon. Anything due overnight goes out when the window opens."
-- **Settings, alert phone.** A country choice, US (+1) / México (+52), beside the number. When the code is blocked by
-  a stop: "This number has stopped texts from your business line. Text START to it from that phone to turn them back
-  on."
+  Sundays until noon. Anything due overnight goes out when the window opens, unless it's a reminder that would arrive
+  after the appointment." (Corrected: the first wording promised the late reminder that choice 21 skips.)
+- **Settings, alert phone.** A country choice, US (+1) / Mexico (+52), beside the number (spelled as the drawer spells
+  it). When the code is blocked by a stop, including the FIRST attempt, which the carrier refuses (`40300`) before
+  the ledger knows: "This number has stopped texts from your business line. Text START to it from that phone to turn
+  them back on." A number typed with a country code that disagrees with the choice gets its own line and no code.
 - **`/u/[token]`** is branded with the client's logo and brand colour (rule 9). It shows English and Spanish stacked,
   because the token carries no language.
   - **Loaded:** "You're unsubscribed. {Business} won't send you any more automated emails. You'll still get a
@@ -515,19 +558,27 @@ Of that, 6–7 is counted in §4.2 and S-05's 2–3 in the first release (:1266�
     spaces. Non-matches too: "stop by at 3", "Cancel my appointment please", and "No".
   - The phrase list: each phrase in context, plus a fixed negative set.
   - The state reducer: tables of event sequences, including a keyword stop landing between a hold and its release.
-  - Hours: 20:59 and 21:00, Sunday 11:59 and 12:00 for marketing, DST changeover days, and choice 21's expiry.
+  - Hours: 20:59 and 21:00, Sunday 11:59 and 12:00 for marketing, DST changeover days (in a zone whose clocks jump
+    at midnight, such as Havana, and a Pacific zone, not only the test machine's own), and choice 21's expiry.
   - The token: sign and verify, a tampered payload, a wrong secret, and the previous secret.
   - Registry completeness.
 - **Inbound route tests** use signed fixtures: each keyword branch; `autoresponse_type` present versus absent (one
   confirmation, never two); an already-stopped address; CANCEL with a booking; YES/NO unchanged; the free-text hold;
   the first-text grant; and a 5xx when the ledger write fails.
 - **Source scans**, built on `lib/automations/imports.test.ts:18–48` and `send-sms.test.ts:189–220`:
-  1. Outside `lib/sms/` and `lib/email/` themselves, only `lib/consent/gate.ts` imports `getSmsProvider`,
-     `getEmailProvider`, the Telnyx or Resend modules or the `resend` package (PR-1 for SMS, PR-3 for email).
-  2. Every `kind` literal passed to the gate exists in the registry.
-  3. Only `packages/db/src/consent.ts` inserts into `consent_events`, and nothing updates or deletes it.
-  4. The kinds flagged `customer_initiated` are used only in `app/b/[publicId]/actions.ts`, `lib/forms/enrich.ts` and
-     `lib/voice/tools/registry.ts`, and never under `lib/automations/`.
+  1. Outside the provider's own modules (`lib/sms/index.ts`, `telnyx.ts`, `fake.ts`; for email, PR-3's equivalents),
+     only `lib/consent/gate.ts` imports `getSmsProvider`, `getEmailProvider`, the Telnyx or Resend modules or the
+     `resend` package (PR-1 for SMS, PR-3 for email). The rest of `lib/sms/` is NOT exempt: `alerts.ts` is a send
+     path, and `types.ts` could re-export the factory. Only `telnyx.ts` names Telnyx's messages endpoint, so no raw
+     `fetch` goes around the gate.
+  2. Every `kind` literal passed to the gate exists in the registry (any quoted string that starts like a kind, so a
+     kind held in a constant is seen too).
+  3. Only `packages/db/src/consent.ts` names the `consent_events` table (as any string literal), and nothing updates
+     or deletes it.
+  4. **PR-3, with the email kinds:** the EMAIL kinds flagged `customer_initiated` are used only in
+     `app/b/[publicId]/actions.ts`, `lib/forms/enrich.ts` and `lib/voice/tools/registry.ts`, and never under
+     `lib/automations/`. (For SMS the class changes only the hours; `automation.instant_reply` is
+     `customer_initiated` and lives under `lib/automations/`, so the scan cannot apply to SMS kinds.)
   5. After PR-3, nothing reads `marketing_email_opted_out_at`, and after PR-1 nothing reads `quiet_enabled`.
 
   Each scan ships with a recorded mutation probe that makes it fail, so none of them can pass vacuously.
@@ -584,7 +635,9 @@ re-read it.
   - whether the auto-reply text is configurable per profile, and in which language it is sent (the plan says per
     sender country only, `crm-features.md:1172`);
   - whether a profile-level block also stops BIS's own confirmation;
-  - the error code for a send to an opted-out number (for `carrier_block`);
+  - ~~the error code for a send to an opted-out number (for `carrier_block`)~~ **VERIFIED 2026-09-26:** `40300`,
+    "Blocked due to STOP message" (developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out). Block rules
+    are per messaging profile. The HTTP status of that refusal is still an assumption; the gate keys on the code;
   - whether an API lists a profile's opted-out numbers (for the backfill);
   - whether Telnyx retries an inbound webhook that gets a 5xx.
 - **Resend:** the send call accepts custom `headers`.
