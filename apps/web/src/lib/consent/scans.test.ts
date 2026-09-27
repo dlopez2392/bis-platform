@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,12 +28,24 @@ const WEB_SRC = fileURLToPath(new URL("../../", import.meta.url));      // apps/
 const REPO = fileURLToPath(new URL("../../../../../", import.meta.url)); // repo root
 const DB_SRC = join(REPO, "packages", "db", "src");
 
-function walk(dir: string): string[] {
+// Every scan reads every source file. Under the full suite's parallel load
+// the first scans to print the tree ran past vitest's 5 s default (the
+// integration head, a6e323e2), so the file gets room, and each file is
+// walked, read and printed ONCE for the whole test file (the two Maps).
+vi.setConfig({ testTimeout: 60_000 });
+
+function walkDir(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const full = join(dir, name);
-    if (statSync(full).isDirectory()) return name === "node_modules" ? [] : walk(full);
+    if (statSync(full).isDirectory()) return name === "node_modules" ? [] : walkDir(full);
     return /\.(ts|tsx)$/.test(name) ? [full] : [];
   });
+}
+const walked = new Map<string, readonly string[]>();
+/** The .ts/.tsx files under `dir`, walked once per test file. */
+function walk(dir: string): readonly string[] {
+  if (!walked.has(dir)) walked.set(dir, walkDir(dir));
+  return walked.get(dir)!;
 }
 const isTest = (f: string) => /\.test\.tsx?$/.test(f);
 /** Forward slashes, relative to the repo, whatever the OS (Windows prints `\`). */
@@ -42,6 +54,7 @@ const rel = (f: string) => relative(REPO, f).split(sep).join("/");
 const parse = (f: string, text: string) =>
   ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true, f.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
 const printer = ts.createPrinter({ removeComments: true });
+/** Each file's printed code, by path: parsed and printed once for the whole test file. */
 const printed = new Map<string, string>();
 /** A file's CODE: TypeScript's own printer with the comments removed. Regexes
  *  cannot do it: stripping block comments first let a `// …/dashboard/*` line
