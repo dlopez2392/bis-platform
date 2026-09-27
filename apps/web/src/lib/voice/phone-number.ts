@@ -65,11 +65,3 @@ export function isCallerIdNumber(
 ): boolean {
   return !!callerNumber && e164Of(stored) === callerNumber;
 }
-
-/**
- * @deprecated The old name, kept ONLY while Tasks 9, 12 and 13 move its last
- * callers (the passes, the composer, the alert phone). It IS e164Of, so those
- * callers already get F-009's rule. Task 15 deletes it, and its scan keeps it
- * deleted.
- */
-export const toE164 = e164Of;
