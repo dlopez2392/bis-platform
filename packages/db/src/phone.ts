@@ -80,8 +80,13 @@ function validUnder(tenDigits: string, country: PhoneCountry): boolean {
  * I1). Without this, "(415) 555-0100 x2" or "(956) 292-1696 ext 12" read
  * their extension digits as PART of the phone number, turning a US number
  * with an extension into a confirmed Swiss or Myanmar one.
+ *
+ * Exported (consent chain PR-1, Task 7 review I1) so `spokenPhone`
+ * (apps/web's `lib/voice/phone-number.ts`) can strip an extension BEFORE its
+ * own digit-count-based national/caller-ID logic runs — without this, an
+ * extension's digits padded the count and hid the model's own leading `1`.
  */
-function stripExtension(raw: string): string {
+export function stripExtension(raw: string): string {
   return raw.replace(/[\s,.-]*(?:ext\.?|extension|[x#])[\s.:-]*\d+\.?\s*$/i, "").trim();
 }
 

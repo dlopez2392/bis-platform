@@ -88,6 +88,7 @@ vi.mock("@bis/db", () => ({
 }));
 
 import { headers } from "next/headers";
+import { getContact, updateContact } from "@bis/db";
 import { submitFormAction } from "./actions";
 import {
   signRenderToken, MAX_TOKEN_AGE_MS, MIN_FILL_MS, RENDER_TOKEN_FIELD,
@@ -419,12 +420,12 @@ describe("submitFormAction — the phone reaches createContact AS TYPED (create 
   });
 
   // `isValidPhone` (apps/web/src/lib/forms/guards.ts) accepts a bare 7-digit
-  // string ("5551234" clears its digit-count>=7 floor and PHONE_RE), but
-  // `toE164` (apps/web/src/lib/voice/phone-number.ts) returns null for
-  // anything under 8 digits — so this input genuinely reaches the `?? rawPhone`
-  // fallback rather than exercising unreachable code (mutation: mangle the
-  // fallback into `?? ""` or reject it outright → FAILS).
-  it("a 7-digit number isValidPhone accepts but toE164 cannot parse passes through unchanged, never rejected", async () => {
+  // string ("5551234" clears its digit-count>=7 floor and PHONE_RE) — the
+  // ONLY gate on this path (review R2-C1): the value reaches `createContact`
+  // exactly as typed, whether or not it could ever parse as a real number
+  // (mutation: reject it, or blank it out, instead of passing it through →
+  // FAILS).
+  it("a 7-digit number isValidPhone accepts, but no number, passes through unchanged, never rejected", async () => {
     getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
       fields: [{ key: "phone", kind: "core.phone", label: "Phone", required: false }],
     }));
@@ -650,6 +651,19 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
     createContactMock.mockResolvedValue({ id: "contact_1", existing: true });
     await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
     expect(instantReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a returning contact's blank phone is filled AS TYPED, never pre-read as +1 (review M3/C1; mutation: [\"phone\",\"phone\", rawPhone ? (e164Of(rawPhone) ?? rawPhone) : \"\"] → \"+15512345678\", FAILS)", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
+    createContactMock.mockResolvedValue({ id: "contact_1", existing: true });
+    vi.mocked(getContact).mockResolvedValueOnce({
+      id: "contact_1", first_name: "Someone", last_name: null, email: null, phone: null, custom: {},
+    } as never);
+    vi.mocked(updateContact).mockClear();
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: "55 1234 5678" }));
+    expect(updateContact).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "contact_1",
+      expect.objectContaining({ phone: "55 1234 5678" }), "form", "system");
   });
 
   it("a THROWING instant reply never fails the submission, but IS recorded as processing_error — a crash must be as visible as a refusal (mutation: drop the errors.push in the catch → FAILS)", async () => {

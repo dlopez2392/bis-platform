@@ -428,9 +428,9 @@ describe("generateProposals", () => {
     expect(db.rows).toEqual([]);
   });
 
-  // The positive twin: a real 10-digit number is NORMALISED to E.164 before
-  // it reaches the database, not stored as the digits the model happened to
-  // return (mutation target: storing `value` raw instead of `toE164(value)`).
+  // The positive twin: a real 10-digit number is stored AS SAID once it
+  // parses (review R2-C1) — never its E.164, which would read as a country
+  // code the caller gave and store an ambiguous number confirmed.
   it("stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → \"+19562921696\", FAILS)", async () => {
     const db = fakeDb();
     const n = await generateProposals({

@@ -1,4 +1,4 @@
-import { normalisePhone } from "@bis/db/phone";
+import { normalisePhone, stripExtension } from "@bis/db/phone";
 
 /**
  * E.164 or nothing, by F-009's one rule (packages/db/src/phone.ts,
@@ -32,7 +32,11 @@ export function e164Of(raw: string | null | undefined): string | null {
  * Null when there is nothing to store.
  */
 export function spokenPhone(said: string | null | undefined, callerNumber: string | null | undefined): string | null {
-  const text = String(said ?? "").trim();
+  // Stripped BEFORE the digit count below (review I1): an extension's own
+  // digits were padding that count, so an 11-digit "+1 … ext 2" never read
+  // as eleven digits starting with 1 and the model's own country code was
+  // never dropped — the number reached the contact write CONFIRMED.
+  const text = stripExtension(String(said ?? "").trim());
   const caller = callerNumber ?? null;
   const digits = text.replace(/[^0-9]/g, "");
   const national = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : null;

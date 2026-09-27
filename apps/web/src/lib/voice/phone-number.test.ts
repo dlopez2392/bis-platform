@@ -68,4 +68,14 @@ describe("spokenPhone — the number a voice contact write stores", () => {
     expect(spokenPhone("899 922 1234", "+5218999221234")).toBe("+5218999221234");
     expect(spokenPhone("55 1234 5679", "+525512345678")).toBe("55 1234 5679");
   });
+
+  // Review I1: an extension's own digits were padding the count spokenPhone
+  // uses to spot an 11-digit leading "1", so the model's own country code
+  // never got dropped when an extension was said, and the number reached the
+  // contact write with its "+1" still attached — CONFIRMED, never flagged.
+  it("an extension is stripped before the model's leading 1 is judged, so it never hides a confirmed +1 (review I1; mutation: read said/callerNumber's digits without stripExtension first → keeps \"+1\"/misses the caller ID, FAILS)", () => {
+    expect(spokenPhone("+1 55 1234 5678 ext 2", "+19565550100")).toBe("5512345678");
+    expect(spokenPhone("1 551 234 5678 x2", "+19565550100")).toBe("5512345678");
+    expect(spokenPhone("55 1234 5678, extension 2", "+525512345678")).toBe("+525512345678");
+  });
 });

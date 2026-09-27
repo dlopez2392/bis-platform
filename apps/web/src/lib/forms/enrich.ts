@@ -75,10 +75,11 @@ export async function enrich(
     // contact's own timeline with form provenance, visible to the operator,
     // and nothing here is ever read back to the submitter. Do not "fix" this
     // by requiring verification of either field without re-opening that review.
-    // Hoisted: `fillBlanks` below applies the identical rule to its own read
-    // of `byKind.get("core.phone")` for a returning contact, so both sites
-    // stay obviously in lockstep rather than drift into two implementations
-    // of the same normalization.
+    // Hoisted: `fillBlanks` below reads the identical `byKind.get("core.phone")`
+    // for a returning contact — both sites pass the raw value AS TYPED
+    // (review R2-C1), so neither can drift into pre-normalising ahead of the
+    // contact write's own `phoneFields` judgment. `phoneE164` here is used
+    // only by the instant reply below, which DOES need a parsed E.164 to dial.
     const rawPhone = byKind.get("core.phone") || "";
     phoneE164 = rawPhone ? e164Of(rawPhone) : null;
     const created = await createContact(db, accountId, {
@@ -216,17 +217,17 @@ async function fillBlanks(
   const current = await getContact(db, accountId, contactId);
   if (!current) return;
 
-  // Same E.164-at-the-boundary rule the create path applies (see its comment
-  // in `enrich`) — a blank existing phone getting filled from a later
-  // submission must land normalized too, or the same person ends up with
-  // differently-formatted numbers depending on which submission filled it.
+  // Same AS-TYPED rule the create path applies (see its comment in `enrich`)
+  // — a blank existing phone getting filled from a later submission passes
+  // through unmodified too, so `updateContact`'s own `phoneFields` judges
+  // every write to this column the same way, whichever submission filled it.
   const rawPhone = byKind.get("core.phone") ?? "";
   const patch: Record<string, string> = {};
   const pairs: [string, keyof typeof current, string][] = [
     ["firstName", "first_name", byKind.get("core.first_name") ?? ""],
     ["lastName", "last_name", byKind.get("core.last_name") ?? ""],
     ["email", "email", byKind.get("core.email") ?? ""],
-    // As typed: fillContactBlanks judges it through phoneFields (R2-C1).
+    // As typed: updateContact's own phoneFields judges it (R2-C1).
     ["phone", "phone", rawPhone],
     ["companyName", "company_name", byKind.get("core.company_name") ?? ""],
   ];

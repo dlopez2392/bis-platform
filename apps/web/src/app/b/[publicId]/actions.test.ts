@@ -674,12 +674,12 @@ describe("submitBookingAction — the phone reaches createContact AS TYPED (cons
   });
 
   // `isValidPhone` (apps/web/src/lib/forms/guards.ts) accepts a bare 7-digit
-  // string ("5551234" clears its digit-count>=7 floor and PHONE_RE), but
-  // `toE164` (apps/web/src/lib/voice/phone-number.ts) returns null for
-  // anything under 8 digits — so this input genuinely reaches the `?? phone`
-  // fallback rather than exercising unreachable code (mutation: mangle the
-  // fallback into `?? ""` or reject it outright → FAILS).
-  it("a 7-digit number isValidPhone accepts but toE164 cannot parse passes through unchanged, never rejected", async () => {
+  // string ("5551234" clears its digit-count>=7 floor and PHONE_RE) — the
+  // ONLY gate on this path (review R2-C1): the value reaches `createContact`
+  // exactly as typed, whether or not it could ever parse as a real number
+  // (mutation: reject it, or blank it out, instead of passing it through →
+  // FAILS).
+  it("a 7-digit number isValidPhone accepts, but no number, passes through unchanged, never rejected", async () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ phone: "5551234" }));
 
     expect(result.ok).toBe(true);

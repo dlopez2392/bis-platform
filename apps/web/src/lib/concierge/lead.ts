@@ -25,6 +25,7 @@
 import type { serviceDb as serviceDbType } from "@bis/db";
 import { isValidEmail, isValidPhone } from "@/lib/forms/guards";
 import { splitName } from "@/lib/concierge/prompt";
+import { spokenPhone } from "@/lib/voice/phone-number";
 
 // Same private type route.ts still declares for its own use (`serviceDb() as
 // Db` at the top of the handler) — duplicated on purpose rather than
@@ -83,7 +84,12 @@ export async function fileLead(ctx: {
       // values, but "was told" is not a guarantee, and this value reaches the
       // contact dedupe lookup.
       : kind === "core.email" ? (isValidEmail(lead.email) ? lead.email : "")
-      : kind === "core.phone" ? (isValidPhone(lead.phone) ? lead.phone : "")
+      // AS SAID (review I3): the phone is written by a MODEL from what the
+      // visitor typed, not typed by a human directly, so it can carry a
+      // country code the model added rather than one the visitor gave —
+      // `spokenPhone` drops that leading 1, the same treatment Sofía's own
+      // capture_lead gets, so the contact write can judge it (phoneFields).
+      : kind === "core.phone" ? (isValidPhone(lead.phone) ? (spokenPhone(lead.phone, null) ?? "") : "")
       : kind === "message" ? lead.need : "";
     const answers = form.fields
       .map((f) => ({ key: f.key, label: f.label, value: value(f.kind) }))

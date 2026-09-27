@@ -328,9 +328,15 @@ export async function runTool(
       // Checked before the phone/email refusal below: a caller who DID give a
       // phone number but garbled it deserves "say that again", not the generic
       // "need a phone or email" — those are different problems for the model
-      // to voice differently.
+      // to voice differently. Judged by `spokenPhone`'s OWN reading (against
+      // no caller ID, review m2), not `e164Of`: e164Of reads any eleven
+      // digits starting with 1 as a NANP trunk prefix "kept as given" with no
+      // validation of the trailing ten — so "1 055 123 4567" passed this
+      // check while spokenPhone's stricter national-digit read refused it,
+      // and the caller's garbled number was silently swapped for the caller
+      // ID instead of the model being told to ask again.
       const rawPhone = String(args?.phone ?? "").trim();
-      if (rawPhone && !e164Of(rawPhone)) {
+      if (rawPhone && !spokenPhone(rawPhone, null)) {
         return {
           state,
           result: { ok: false, error: "That phone number doesn't look complete — could you give it to me again?" },

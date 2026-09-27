@@ -19,7 +19,7 @@ describe("extractCallerNumber", () => {
       expect(extractCallerNumber(bad)).toBeNull();
     }
   });
-  it("7-digit local number rejects (toE164 enforces 8+ digits)", () => {
+  it("7-digit local number rejects (e164Of enforces 8+ digits)", () => {
     expect(extractCallerNumber(ev([{ name: "From", value: "<sip:5551234@x>" }]))).toBeNull();
   });
 });

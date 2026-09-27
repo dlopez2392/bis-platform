@@ -27,7 +27,7 @@ export const CAPTURE_LEAD_TOOL = {
       properties: {
         fullName: { type: "string", description: "The visitor's name, as they gave it." },
         email: { type: "string", description: "Their email address, if they gave one." },
-        phone: { type: "string", description: "Their phone number, if they gave one." },
+        phone: { type: "string", description: "Their phone number, if they gave one. Digits as the visitor typed them; no country code unless they gave one." },
         need: { type: "string", description: "One sentence on what they are asking for." },
       },
       required: ["fullName", "need"],

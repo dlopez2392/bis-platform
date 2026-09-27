@@ -276,6 +276,20 @@ describe("book_appointment", () => {
       expect.objectContaining({ phone: "5512345678" }), "voice", "ai");
   });
 
+  // Review m2: e164Of("1 055 123 4567") reads it as an 11-digit NANP trunk
+  // number ("kept as given", no validation of the trailing 10 digits) and
+  // passes the precheck, but spokenPhone's OWN judgment of the same text
+  // strips the leading 1 and refuses "0551234567" (a leading 0 is never a
+  // real national number) — so the two disagreed, and the caller's garbled
+  // number was silently swapped for the caller ID instead of the model
+  // being told to ask again.
+  it("the garbled-number precheck agrees with spokenPhone, not e164Of's lenient 11-digit rule (mutation: precheck via e164Of(rawPhone) → passes \"1 055 123 4567\" through, silently swapped for the caller ID, FAILS)", async () => {
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true, phone: "1 055 123 4567" });
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("give it to me again") });
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+  });
+
   it("refuses a time that was never offered", async () => {
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T03:00:00.000Z", name: "Ana", emailDeclined: true });

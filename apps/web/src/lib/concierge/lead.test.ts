@@ -89,6 +89,18 @@ const CONSENT_FORM = {
   ],
 };
 
+// A THIRD fixture carrying a phone field — LEAD_FORM has none, and every
+// existing test's `lead.phone` is "" (filtered out by `answers.filter(a =>
+// a.value !== "")`), so no test before this one ever exercised the phone
+// value at all.
+const PHONE_FORM = {
+  ...LEAD_FORM,
+  fields: [
+    ...LEAD_FORM.fields,
+    { key: "p", kind: "core.phone" as const, label: "Phone", required: false },
+  ],
+};
+
 beforeEach(() => {
   for (const fn of Object.values(dbFns)) fn.mockReset();
   enrichMock.mockReset();
@@ -188,5 +200,16 @@ describe("fileLead", () => {
     expect(input.consent).toEqual([
       { key: "c", given: false, text: "I agree to be texted about my request", at: expect.any(String) },
     ]);
+  });
+
+  it("M8: the model's own leading 1 is dropped from a spoken-shaped phone, so it reaches enrich as said, not confirmed by a country code the visitor never gave (mutation: value(kind) = e164Of(lead.phone) for phone → \"+15512345678\", FAILS)", async () => {
+    dbFns.getForm.mockResolvedValue(PHONE_FORM);
+    const { db } = fakeDb();
+    await fileLead({ db, ...CTX, lead: { ...CTX.lead, phone: "+1 55 1234 5678" } });
+    const [, , , input] = dbFns.createSubmission.mock.calls[0]! as [
+      unknown, unknown, unknown, { answers: { key: string; label: string; value: string }[] },
+    ];
+    const phone = input.answers.find((a) => a.key === "p");
+    expect(phone?.value).toBe("5512345678");
   });
 });

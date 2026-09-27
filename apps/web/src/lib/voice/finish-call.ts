@@ -268,8 +268,8 @@ async function resolveOpenOpportunity(
  *
  * `state.contactId` wins outright — set by an in-call booking or an explicit
  * lookup, it is never second-guessed here. Absent that, a captured lead's
- * fields build a real contact (name split, phone normalized, source
- * "voice"). Absent even a lead, a caller ID still deserves a contact record
+ * fields build a real contact (name split, phone as said via `spokenPhone`,
+ * source "voice"). Absent even a lead, a caller ID still deserves a contact record
  * for the message that follows — that gets the minimal shape, `firstName:
  * "Caller"` plus the number, rather than leaving the conversation orphaned.
  */
