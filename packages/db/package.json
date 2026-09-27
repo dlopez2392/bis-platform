@@ -15,7 +15,8 @@
     "db:migrations:ci": "tsx src/ci/push-run.ts list",
     "ci:sql": "tsx src/ci/sql-run.ts",
     "ci:seed": "tsx src/ci-seed/run.ts",
-    "db:seed-demo": "tsx src/demo/run.ts"
+    "db:seed-demo": "tsx src/demo/run.ts",
+    "backfill:phone-country": "tsx src/backfill/phone-country-run.ts"
   },
   "devDependencies": {
     "@types/pg": "^8.20.0",
