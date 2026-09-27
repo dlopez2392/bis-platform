@@ -1,51 +1,35 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { QuietSettings } from "@bis/db";
 import { renderedText } from "@/lib/rendered-text";
 import { m } from "@/lib/messages";
 import { QuietHoursCard } from "./quiet-hours-card";
-import type { ActionResult } from "./actions";
 
-const SETTINGS: QuietSettings = { enabled: true, start: "22:30", end: "06:15" };
-const saveAction = vi.fn(async (): Promise<ActionResult> => ({ ok: true }));
-
-function render(settings: QuietSettings | null) {
-  return renderToStaticMarkup(
-    createElement(QuietHoursCard, { settings, zoneLabel: "America/Chicago", saveAction }),
-  );
-}
-
-// Anchored on `type="submit"`, the one submit button on this card, with a
-// leading space before `disabled=""` so the lookahead cannot match inside a
-// neighbouring `data-disabled=""` attribute (voice-settings.test.ts's own
-// precedent for a Radix/shadcn control's attribute-order independence).
-const DISABLED_SAVE_BUTTON = /<button\b(?=[^>]*\btype="submit")(?=[^>]* disabled="")[^>]*>/;
+const render = (zoneLabel: string) => renderToStaticMarkup(createElement(QuietHoursCard, { zoneLabel }));
 
 /**
- * Branch-fix wave item 3: a `null` `settings` means the page's own read
- * failed. Rendering `DEFAULT_QUIET_SETTINGS` as though they were the saved
- * window and leaving the form live would let an agency press Save and
- * silently overwrite a client's real 22:30–06:15 with the platform default
- * (9:00 PM–8:00 AM) — so the null case gets a Notice and a form nobody can
- * submit, instead.
+ * The sending hours are FIXED (consent chain spec decision 4), so the card
+ * that used to hold a form now states them, read-only (spec §6).
  */
-describe("QuietHoursCard — a degraded read must not look editable or saved", () => {
-  it("a normal read shows no notice and a live, submittable form", () => {
-    // Mutation: force `readFailed` to `true` unconditionally → FAILS (the
-    // notice appears and the Save button carries `disabled=""` even here).
-    const html = render(SETTINGS);
-    const text = renderedText(html);
-    expect(text).not.toContain(m["automations.quiet.readFailed"]);
-    expect(html).not.toMatch(DISABLED_SAVE_BUTTON);
+describe("QuietHoursCard — the fixed hours, said once, never a setting", () => {
+  it("states the spec's sentence with the account's own zone (mutation: drop the zone replace → '{zone}' shows, FAILS)", () => {
+    const text = renderedText(render("America/Chicago"));
+    expect(text).toContain(m["automations.quiet.fixed"].replace("{zone}", "America/Chicago"));
+    expect(text).not.toContain("{zone}");
   });
 
-  it("a failed read (settings: null) shows the crit notice and disables the Save button", () => {
-    // Mutation: drop the `disabled={readFailed}` prop from SubmitButton →
-    // FAILS (the notice still renders, but the button is submittable).
-    const html = render(null);
-    const text = renderedText(html);
-    expect(text).toContain(m["automations.quiet.readFailed"]);
-    expect(html).toMatch(DISABLED_SAVE_BUTTON);
+  it("names the zone it was given, not a default (mutation: hardcode America/Chicago → FAILS)", () => {
+    expect(renderedText(render("America/Los_Angeles"))).toContain("(America/Los_Angeles)");
+  });
+
+  it("has no form, no input and no button: nothing to switch off (mutation: leave the old Save form in → FAILS)", () => {
+    const html = render("America/Chicago");
+    expect(html).not.toMatch(/<form\b|<input\b|<button\b/);
+  });
+
+  it("keeps the #quiet-hours anchor and its test id", () => {
+    const html = render("America/Chicago");
+    expect(html).toContain('id="quiet-hours"');
+    expect(html).toContain('data-testid="quiet-hours-card"');
   });
 });

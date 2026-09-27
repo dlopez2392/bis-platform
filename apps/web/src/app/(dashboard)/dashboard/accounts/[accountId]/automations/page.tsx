@@ -1,9 +1,9 @@
 import { headers } from "next/headers";
 import Link from "next/link";
 import {
-  serviceDb, getAutomation, getBranding, getCalendarForAccount, readQuietSettings, listPipelinesWithStages,
+  serviceDb, getAutomation, getBranding, getCalendarForAccount, listPipelinesWithStages,
   getMailingAddress,
-  type AutomationRow, type CalendarRow, type QuietSettings,
+  type AutomationRow, type CalendarRow,
 } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
@@ -26,7 +26,7 @@ import {
   saveReviewRequestAction, saveReferralAskAction, saveReactivationAction, saveNoShowNudgeAction, saveSmsReminderAction,
   saveQuoteFollowupAction,
   saveAppointmentConfirmAction,
-  saveInstantReplyAction, saveQuietHoursAction,
+  saveInstantReplyAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -53,7 +53,7 @@ export default async function AutomationsPage({
   // these can no longer 500 the whole agency page; only the one card that
   // lost its read shows the degraded state, and the log line carries the
   // account id so the hiccup is still visible.
-  const [review, referralAsk, reactivation, noShow, smsReminder, appointmentConfirm, quoteFollowup, instantReply, account, smsGate, calendar, origin, quiet, stages, mailingAddress] = await Promise.all([
+  const [review, referralAsk, reactivation, noShow, smsReminder, appointmentConfirm, quoteFollowup, instantReply, account, smsGate, calendar, origin, stages, mailingAddress] = await Promise.all([
     getAutomation(db, accountId, "review_request").catch((e): AutomationRow | null => {
       console.error(`automations: review_request read failed for ${accountId}: ${String(e)}`);
       return null;
@@ -142,17 +142,6 @@ export default async function AutomationsPage({
     headers().then((h) => originFrom(h)).catch((e): string => {
       console.error(`automations: origin lookup failed for ${accountId}: ${String(e)}`);
       return "";
-    }),
-    // Part C. UNLIKE the account read beside it, this degrade must not show a
-    // plausible-but-wrong window: rendering `DEFAULT_QUIET_SETTINGS` as if it
-    // were the saved one and letting Save fire would silently overwrite the
-    // client's real hours with the platform default. So a failed read
-    // degrades to `null` — the card renders a Notice and a disabled form
-    // (the agency reloads to fix it, rather than pressing Save on a guess) —
-    // and one log line.
-    readQuietSettings(db, accountId).catch((e): QuietSettings | null => {
-      console.error(`automations: quiet-hours read failed for ${accountId}: ${String(e)}`);
-      return null;
     }),
     // The quote follow-up card's stage list. Flattened across pipelines and
     // prefixed with the pipeline's name only when there is more than one, so
@@ -273,7 +262,7 @@ export default async function AutomationsPage({
           />
         </Group>
         <Group id="automations-group-rules" title={m["automations.group.rules"]}>
-          <QuietHoursCard settings={quiet} zoneLabel={account.timezone} saveAction={saveQuietHoursAction.bind(null, accountId)} />
+          <QuietHoursCard zoneLabel={account.timezone} />
         </Group>
       </div>
     </>

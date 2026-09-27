@@ -1460,16 +1460,6 @@ export const m = {
 
   // Part C — the Quiet hours card (agency, on the Automations page).
   "automations.quiet.title": "Quiet hours",
-  "automations.quiet.body": "No automated texts or emails go to your customers between these hours. Anything due overnight waits and goes at the end. Your phone and website assistant still answer.",
-  "automations.quiet.enabled": "Use quiet hours",
-  "automations.quiet.from": "From",
-  "automations.quiet.to": "Until",
-  "automations.quiet.zone": "Times are in {zone}",
-  "automations.quiet.save": "Save quiet hours",
-  "automations.quiet.saved": "Quiet hours saved",
-  "automations.quiet.saveFailed": "Could not save quiet hours.",
-  "automations.quiet.invalidTime": "Enter both times as hours and minutes, like 9:00 PM.",
-  "automations.quiet.readFailed": "Couldn't load the current quiet hours. Reload the page before changing them.",
   // Spec §6, verbatim: the fixed sending hours, read-only (decision 4).
   "automations.quiet.fixed": "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens, unless it's a reminder that would arrive after the appointment.",
   // Consent chain PR-1: the Activity page's reasons this PR adds. REASONS in
