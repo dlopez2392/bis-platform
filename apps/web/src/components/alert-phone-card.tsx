@@ -106,8 +106,8 @@ export function AlertPhoneCard({
    *  card's own doc comment. Present only on the agency's editable card. */
   clearAction?: (formData: FormData) => Promise<AlertPhoneActionResult>;
   /** Opens a claim on a NEW number: draws a code, texts it, returns
-   *  `{ok:true}` with no code attached. Also used to RESEND, with the same
-   *  claimed number, from the pending phase. */
+   *  `{ok:true, phone}` (the E.164 it texted) with no code attached. Also
+   *  used to RESEND, with the same claimed number, from the pending phase. */
   startVerificationAction?: (formData: FormData) => Promise<AlertPhoneStartResult>;
   /** Consumes a code against the claimed number and, only on a match, writes
    *  `accounts.alert_phone`. */
@@ -118,7 +118,7 @@ export function AlertPhoneCard({
   // rendered with. Initialized from the server prop so an untouched field
   // still shows the account's own number.
   const [phone, setPhone] = useState(alertPhone ?? "");
-  // The country the typed number belongs to (spec §6: US (+1) / México (+52)),
+  // The country the typed number belongs to (spec §6: US (+1) / Mexico (+52)),
   // so an alert number is never ambiguous. Starts from the saved number's own.
   const [country, setCountry] = useState<"US" | "MX">(alertPhone?.startsWith("+52") ? "MX" : "US");
   const [phase, setPhase] = useState<"idle" | "pending">("idle");

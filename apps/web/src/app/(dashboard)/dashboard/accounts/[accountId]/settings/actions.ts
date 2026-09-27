@@ -19,6 +19,7 @@ import { normalisePhone, phoneForCountry, type PhoneCountry } from "@bis/db/phon
 import { resolveSmsSender, refusesAlertLoop } from "@/lib/sms/sender";
 import { composeAlertPhoneVerificationSms } from "@/lib/sms/alerts";
 import { sendSms } from "@/lib/consent/gate";
+import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
@@ -304,10 +305,17 @@ export async function startAlertPhoneVerificationAction(
   await requireAgencyOnlyAccountAccess(accountId);
 
   // The card sends the number AND its country (US +1 / Mexico +52, spec §6),
-  // so an alert number is never ambiguous: a typed +52 under "US (+1)" is
-  // refused as a bad number rather than settled for the agency.
+  // so an alert number is never ambiguous: a missing or unrecognised country
+  // is refused outright rather than assumed as US (review: fail closed) —
+  // an assumed US would text a Mexican number's own code to a stranger in
+  // the NANP plan — and a typed +52 under "US (+1)" gets the mismatch line
+  // (below) rather than being settled for the agency.
   const raw = String(formData.get("alertPhone") ?? "").trim();
-  const country: PhoneCountry = formData.get("alertPhoneCountry") === "MX" ? "MX" : "US";
+  const countryField = formData.get("alertPhoneCountry");
+  if (countryField !== "US" && countryField !== "MX") {
+    return { ok: false, error: m["settings.alertPhoneBad"] };
+  }
+  const country: PhoneCountry = countryField;
   const normalized = phoneForCountry(raw, country);
   if (!normalized) {
     // A number that reads under the OTHER country carries its own code, and
@@ -340,9 +348,10 @@ export async function startAlertPhoneVerificationAction(
     });
   } catch (e) {
     // A throw here would otherwise keep the row and spend a rate-limit slot
-    // with nothing sent (review R3-M3).
+    // with nothing sent (review R3-M3). Logged BEFORE the discard: a
+    // throwing discard must not swallow the original error (review).
+    console.error(`alert phone verification send threw for account ${accountId}: ${loggableError(e)}`);
     await discardAlertPhoneVerification(db, id);
-    console.error(`alert phone verification send threw for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["settings.alertPhoneSendFailed"] };
   }
   if (result.kind !== "sent") {

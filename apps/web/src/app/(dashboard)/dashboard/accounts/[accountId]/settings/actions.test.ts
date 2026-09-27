@@ -112,7 +112,7 @@ describe("startAlertPhoneVerificationAction — normalization is F-009's (phoneF
   });
 
   it("normalizes a human-typed number before opening a verification (mutation: pass the raw string through → FAILS)", async () => {
-    await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "(956) 292-1696" }));
+    await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "(956) 292-1696", alertPhoneCountry: "US" }));
     expect(dbMocks.startAlertPhoneVerification).toHaveBeenCalledWith(
       { tag: "serviceDb" }, "acct_1", "+19562921696",
     );
@@ -121,7 +121,7 @@ describe("startAlertPhoneVerificationAction — normalization is F-009's (phoneF
 
 describe("startAlertPhoneVerificationAction — agency-gated", () => {
   it("calls requireAgencyOnlyAccountAccess for this account (mutation: drop the guard call → FAILS)", async () => {
-    await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" }));
+    await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" }));
     expect(requireAgencyOnlyAccountAccessMock).toHaveBeenCalledWith("acct_1");
   });
 });
@@ -129,7 +129,7 @@ describe("startAlertPhoneVerificationAction — agency-gated", () => {
 describe("startAlertPhoneVerificationAction — nothing to send on", () => {
   it("refuses when texting isn't cleared to send at all, and never opens a verification (mutation: ignore gate.ok → FAILS)", async () => {
     resolveSmsSenderMock.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneNotClearedToSend"] });
     expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
   });
@@ -144,7 +144,7 @@ describe("startAlertPhoneVerificationAction — the self-text loop is refused ou
     resolveSmsSenderMock.mockResolvedValue({
       ok: true, from: "+19565550001", ownedNumbers: ["+19565550001"],
     });
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneSelfWarning"] });
     expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
@@ -154,7 +154,7 @@ describe("startAlertPhoneVerificationAction — the self-text loop is refused ou
     resolveSmsSenderMock.mockResolvedValue({
       ok: true, from: "+19565550001", ownedNumbers: ["+19565550001", "+19565550002"],
     });
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550002" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550002", alertPhoneCountry: "US" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneSelfWarning"] });
   });
 });
@@ -162,14 +162,14 @@ describe("startAlertPhoneVerificationAction — the self-text loop is refused ou
 describe("startAlertPhoneVerificationAction — rate limiting the send", () => {
   it("refuses once the hourly cap is reached, and never opens another verification (mutation: drop the count check → FAILS)", async () => {
     dbMocks.countRecentAlertPhoneVerifications.mockResolvedValue(5);
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneTooManyCodes"] });
     expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
   });
 
   it("still sends under the cap", async () => {
     dbMocks.countRecentAlertPhoneVerifications.mockResolvedValue(4);
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
       .toEqual({ ok: true, phone: "+19565550001" });
   });
 });
@@ -177,7 +177,7 @@ describe("startAlertPhoneVerificationAction — rate limiting the send", () => {
 describe("startAlertPhoneVerificationAction — the happy path", () => {
   it("opens a verification and texts the code to the claimed number, from the account's own resolved sender (mutation: send to gate.from instead of the claimed number → FAILS)", async () => {
     dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_1", code: "482913" });
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
       .toEqual({ ok: true, phone: "+19565550001" });
     expect(dbMocks.startAlertPhoneVerification).toHaveBeenCalledWith(
       { tag: "serviceDb" }, "acct_1", "+19565550001",
@@ -190,7 +190,7 @@ describe("startAlertPhoneVerificationAction — the happy path", () => {
   it("reports failure, and never claims success, when the provider send throws (mutation: swallow the error and return ok → FAILS)", async () => {
     sendMock.mockRejectedValue(new Error("telnyx down"));
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneSendFailed"] });
     spy.mockRestore();
   });
@@ -199,7 +199,7 @@ describe("startAlertPhoneVerificationAction — the happy path", () => {
     dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_failed", code: "482913" });
     sendMock.mockRejectedValue(new Error("telnyx down"));
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneSendFailed"] });
     expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith(
       { tag: "serviceDb" }, "ver_failed",
@@ -291,7 +291,7 @@ describe("startAlertPhoneVerificationAction — a phone that texted STOP gets no
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_stop", code: "482913" });
     dbMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-03T15:00:00Z", method: "keyword", eventId: "e1" });
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneStopped"] });
     expect(sendMock).not.toHaveBeenCalled();
     expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_stop");
@@ -302,7 +302,7 @@ describe("startAlertPhoneVerificationAction — a phone that texted STOP gets no
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_40300", code: "482913" });
     sendMock.mockRejectedValue(new SmsProviderError('telnyx send failed (400): {"errors":[{"code":"40300"}]}', 400, ["40300"]));
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneStopped"] });
     expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_40300");
     spy.mockRestore();
@@ -313,9 +313,65 @@ describe("startAlertPhoneVerificationAction — a phone that texted STOP gets no
     dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_throw", code: "482913" });
     resolveSmsSenderMock.mockResolvedValueOnce({ ok: true, from: "+19565559999", ownedNumbers: ["+19565559999"] })
       .mockRejectedValueOnce(new Error("fetch failed"));
-    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneSendFailed"] });
     expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_throw");
     spy.mockRestore();
+  });
+
+  it("logs the sendSms error BEFORE discarding the row, so a throwing discard can't swallow it (mutation: discard before logging → the original error never reaches console.error, FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_dbl", code: "482913" });
+    resolveSmsSenderMock.mockResolvedValueOnce({ ok: true, from: "+19565559999", ownedNumbers: ["+19565559999"] })
+      .mockRejectedValueOnce(new Error("gate exploded"));
+    dbMocks.discardAlertPhoneVerification.mockRejectedValueOnce(new Error("discard also failed"));
+    await expect(
+      startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })),
+    ).rejects.toThrow("discard also failed");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("gate exploded"));
+    spy.mockRestore();
+  });
+});
+
+describe("startAlertPhoneVerificationAction — the country is required, never assumed (fail closed)", () => {
+  it("refuses a missing alertPhoneCountry, and never opens a verification (mutation: default to US → FAILS)", async () => {
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+      .toEqual({ ok: false, error: m["settings.alertPhoneBad"] });
+    expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unrecognised alertPhoneCountry value, and never opens a verification (mutation: default to US → FAILS)", async () => {
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "CA" })))
+      .toEqual({ ok: false, error: m["settings.alertPhoneBad"] });
+    expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("startAlertPhoneVerificationAction — a ledger outage keeps the generic send-failed line (review: S1 dropped the \"stopped\" reason check)", () => {
+  it("a ledger read failure gets the generic send-failed line, never the stopped one, and gives the rate-limit slot back (mutation: (result.kind === \"blocked\") in place of the stopped check → answers alertPhoneStopped for every blocked reason, FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_ledger", code: "482913" });
+    dbMocks.readConsentState.mockRejectedValue(new Error("ledger down"));
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", alertPhoneCountry: "US" })))
+      .toEqual({ ok: false, error: m["settings.alertPhoneSendFailed"] });
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_ledger");
+    spy.mockRestore();
+  });
+});
+
+describe("startAlertPhoneVerificationAction → confirmAlertPhoneVerificationAction — a Mexican number round-trips (review: S5, confirm reading phoneForCountry(raw, \"US\"))", () => {
+  it("starts under Mexico (+52) and confirms the SAME E.164 the start action returned (mutation: confirm reading phoneForCountry(raw, \"US\") → no Mexican number can ever be confirmed, FAILS)", async () => {
+    dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_mx", code: "482913" });
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "55 1234 5678", alertPhoneCountry: "MX" })))
+      .toEqual({ ok: true, phone: "+525512345678" });
+    dbMocks.verifyAlertPhoneCode.mockResolvedValue("verified");
+    expect(await confirmAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+525512345678", code: "482913" })))
+      .toEqual({ ok: true });
+    expect(dbMocks.verifyAlertPhoneCode).toHaveBeenCalledWith(
+      { tag: "serviceDb" }, "acct_1", "+525512345678", "482913", "user_1",
+    );
   });
 });

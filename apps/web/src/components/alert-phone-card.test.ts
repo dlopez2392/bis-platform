@@ -224,3 +224,14 @@ describe("AlertPhoneCard — Resend names the pending number's own country (revi
     expect(codeOnly).toContain('formData.set("alertPhoneCountry", pendingPhone.startsWith("+52") ? "MX" : "US")');
   });
 });
+
+describe("AlertPhoneCard — the country control's wiring (review: two silent mutations would text a stranger)", () => {
+  it("the radio posts under the name the server reads, carrying its own picked value (mutation: rename the input's name to anything else → the server defaults to US, FAILS)", () => {
+    expect(agencyRegion).toContain('name="alertPhoneCountry"');
+    expect(agencyRegion).toContain("value={c}");
+  });
+
+  it("the pending number is the SERVER's echoed E.164, never the raw typed text (mutation: setPendingPhone(raw) → resend sends the raw text under a hard-coded country, FAILS)", () => {
+    expect(agencyRegion).toContain("setPendingPhone(result.phone)");
+  });
+});
