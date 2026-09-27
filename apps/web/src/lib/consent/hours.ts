@@ -82,9 +82,15 @@ export function nextOpening(rule: HoursRule, now: Date, zone: string | null | un
 /**
  * Choice 21: a send whose purpose has passed before its window opens is not
  * sent at all. `deadline` at or before the opening → true. A send inside
- * its window, or with no deadline, never expires here.
+ * its window, or with no deadline, never expires here. An unreadable
+ * deadline (an Invalid Date) is treated as ALREADY passed — held rather
+ * than sent — the same fail-closed direction `nextOpening` takes on an
+ * invalid `now`: a stale send is a missed one either way, but only one
+ * direction is silent.
  */
 export function expiresBeforeOpening(opening: Date | null, deadline: Date | null | undefined): boolean {
   if (opening === null || !deadline) return false;
-  return deadline.getTime() <= opening.getTime();
+  const deadlineMs = deadline.getTime();
+  if (!Number.isFinite(deadlineMs)) return true;
+  return deadlineMs <= opening.getTime();
 }

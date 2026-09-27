@@ -23,18 +23,14 @@ const SPEC_TABLE: Record<string, [string, string, string]> = {
 };
 
 describe("SMS_KINDS — the spec's table, row for row", () => {
-  it("has exactly the spec's eleven PR-1 kinds (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the spec's eleven PR-1 kinds, no more and no fewer — which also proves the consent.* kinds are NOT here yet (PR-2 is the first code to send them): a set equal to SPEC_TABLE's eleven names has no room for a twelfth (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(SMS_KINDS).sort()).toEqual(Object.keys(SPEC_TABLE).sort());
     expect(Object.keys(SMS_KINDS)).toHaveLength(11);
   });
 
-  it.each(Object.entries(SPEC_TABLE))("%s is %j (mutation: move a marketing kind to automated hours → FAILS)", (kind, [cls, hours, footer]) => {
+  it.each(Object.entries(SPEC_TABLE))("%s is %j — its own class, hours and footer, none borrowed from another row (mutation: change any one of this row's three fields → FAILS)", (kind, [cls, hours, footer]) => {
     const spec = SMS_KINDS[kind as keyof typeof SMS_KINDS];
     expect([spec.class, spec.hours, spec.footer]).toEqual([cls, hours, footer]);
-  });
-
-  it("the consent.* kinds are NOT here yet: PR-2 is the first code to send them", () => {
-    expect(Object.keys(SMS_KINDS).filter((k) => k.startsWith("consent."))).toEqual([]);
   });
 });
 
