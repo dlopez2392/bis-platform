@@ -6,23 +6,34 @@ import { parsePhoneNumberFromString } from "libphonenumber-js/max";
  * `toE164`, which turned ANY ten digits into `+1`, so a Reynosa or Matamoros
  * number a caller spoke was stored as a US number and texted as one.
  *
+ * A trailing extension ("x2", "ext. 12", "#4"), any case, is stripped before
+ * anything below reads the string — including the `+` branch (review I1):
+ * an extension's digits are never part of the number.
+ *
  * The rules, in order:
  *   1. A number that carries a country code is kept as given: `+…`, or the
  *      international prefixes `011` (dialled from the US) and `00` (from
  *      Mexico). `+52 1 …` (the retired Mexican mobile `1`) drops the `1`.
  *   2. Eleven digits starting with `1` is the NANP trunk prefix a person
  *      types: `+1…`, kept as given.
- *   3. Ten digits: valid ONLY under +1 (the NANP plan: the US, Canada,
- *      Puerto Rico, the Caribbean) → `+1`; valid ONLY under +52 → `+52`;
- *      valid under both, or under neither → `+1` (today's reading, so the
- *      stored `phone_key` does not move) AND `unconfirmed`, so the send gate
- *      holds it until a person picks the country (decision 3).
+ *   3. Ten digits: a leading 0 is refused outright (review m1 — never a
+ *      country code, never a real national number). Otherwise: valid ONLY
+ *      under +1 (the NANP plan: the US, Canada, Puerto Rico, the Caribbean)
+ *      → `+1`; valid ONLY under +52 → `+52`; valid under both, or under
+ *      neither → `+1` (today's reading, so the stored `phone_key` does not
+ *      move) AND `unconfirmed`, so the send gate holds it until a person
+ *      picks the country (decision 3).
  *   4. Mexico's retired trunk prefixes: `01` + ten digits, `044`/`045` + ten
  *      digits → `+52` and the ten, when they are a valid Mexican number
  *      (review R1-M1).
- *   5. Any other 8–15 digits not starting with 0 → `+` and the digits, as
- *      `toE164` did. A leading 0 is never a country code, so it is refused.
- *   6. Anything else → null: nothing we can text.
+ *   5. Without a `+`, `00` or `011`, ONLY the other code forms the spec
+ *      names: twelve digits starting `52`, thirteen starting `521` → kept
+ *      as given. The old rule 5 ("any other 8-15 digits") is NOT in the
+ *      spec and is gone (review I1): it read an extension's or a trailing
+ *      digit group's digits as part of the number, confirming a US number
+ *      with an extension as Swiss, Myanmar or Moroccan.
+ *   6. Anything else → null: nothing we can text. The text is then kept as
+ *      typed (`phoneFields`), and the gate refuses it as no number.
  *
  * Validity comes from libphonenumber-js's MAX metadata. The default MIN
  * metadata validates by LENGTH only, so every ten digits is "valid" as a
@@ -63,8 +74,19 @@ function validUnder(tenDigits: string, country: PhoneCountry): boolean {
   return parsePhoneNumberFromString(tenDigits, country)?.isValid() === true;
 }
 
+/**
+ * A trailing extension ("x2", "ext 12", "ext. 3", "#4"), any case, stripped
+ * before anything else reads the string — including the `+` branch (review
+ * I1). Without this, "(415) 555-0100 x2" or "(956) 292-1696 ext 12" read
+ * their extension digits as PART of the phone number, turning a US number
+ * with an extension into a confirmed Swiss or Myanmar one.
+ */
+function stripExtension(raw: string): string {
+  return raw.replace(/[\s,.-]*(?:ext\.?|extension|[x#])[\s.:-]*\d+\.?\s*$/i, "").trim();
+}
+
 export function normalisePhone(raw: string | null | undefined): NormalisedPhone | null {
-  const text = String(raw ?? "").trim();
+  const text = stripExtension(String(raw ?? "").trim());
   if (!text) return null;
   const digits = digitsOf(text);
   if (text.startsWith("+")) return international(digits);
@@ -72,6 +94,11 @@ export function normalisePhone(raw: string | null | undefined): NormalisedPhone 
   if (digits.startsWith("00")) return international(digits.slice(2));
   if (digits.length === 11 && digits.startsWith("1")) return { e164: `+${digits}`, unconfirmed: false };
   if (digits.length === 10) {
+    // A leading 0 in a bare ten digits is never a country code and never a
+    // real NANP/MX national number — refuse it before judging validity
+    // (review m1), rather than falling through to "+10…", a number nobody
+    // could dial.
+    if (digits.startsWith("0")) return null;
     const us = validUnder(digits, "US");
     const mx = validUnder(digits, "MX");
     if (mx && !us) return { e164: `+52${digits}`, unconfirmed: false };
@@ -79,9 +106,16 @@ export function normalisePhone(raw: string | null | undefined): NormalisedPhone 
   }
   const trunk = /^(?:01|044|045)(\d{10})$/.exec(digits);
   if (trunk) return validUnder(trunk[1]!, "MX") ? { e164: `+52${trunk[1]}`, unconfirmed: false } : null;
-  if (digits.length >= 8 && digits.length <= 15 && !digits.startsWith("0")) {
-    return { e164: dropRetiredMexicanOne(`+${digits}`), unconfirmed: false };
-  }
+  // Without a +, 00 or 011, ONLY the code forms the spec names are accepted:
+  // twelve digits starting 52, thirteen starting 521 (review I1). The old
+  // rule 5 ("any other 8-15 digits") is NOT in the spec, and let an
+  // extension or a trailing digit group ("212-555-0100 ext 3", once its
+  // digits leaked in) or a stray "after 5" read as a confirmed number in
+  // Switzerland, Myanmar or Morocco. Anything else without a prefix returns
+  // null: the text is then kept as typed (phoneFields), and the gate
+  // refuses it as no number.
+  if (digits.length === 12 && digits.startsWith("52")) return international(digits);
+  if (digits.length === 13 && digits.startsWith("521")) return international(digits);
   return null;
 }
 
@@ -91,10 +125,18 @@ export function normalisePhone(raw: string | null | undefined): NormalisedPhone 
  * ten digits, with or without separators. Null for anything else.
  */
 function nationalTen(raw: string): string | null {
-  let digits = digitsOf(raw);
+  const text = raw.trim();
+  // A `+` carries an explicit country code, so its remaining digits must be
+  // EXACTLY a recognised code + ten national digits — never just "however
+  // many digits happen to total ten". Without this, "+52 1234 5678" (an
+  // 8-digit number wearing a `+52` as padding) counted its whole 10-digit
+  // total as a bare national number and returned "+5212345678" as if it
+  // were valid (review m2).
+  const hadPrefix = text.startsWith("+");
+  let digits = digitsOf(text);
   if (digits.startsWith("011")) digits = digits.slice(3);
   else if (digits.startsWith("00")) digits = digits.slice(2);
-  if (digits.length === 10) return digits;
+  if (digits.length === 10 && !hadPrefix) return digits;
   if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
   if (digits.length === 12 && digits.startsWith("52")) return digits.slice(2);
   if (digits.length === 13 && digits.startsWith("521")) return digits.slice(3);

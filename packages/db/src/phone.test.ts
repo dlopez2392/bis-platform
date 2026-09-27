@@ -75,6 +75,11 @@ describe("phoneForCountry: a number typed beside a country choice", () => {
     expect(phoneForCountry("", "US")).toBeNull();
     expect(phoneForCountry("12345", "MX")).toBeNull();
   });
+
+  it("a typed + number must carry exactly ten national digits after its country code, or it is refused (review m2; mutation: count nationalTen's bare-ten branch even behind a + → an 8- or 9-digit number reported as valid, FAILS)", () => {
+    expect(phoneForCountry("+52 1234 5678", "MX")).toBeNull();
+    expect(phoneForCountry("+1 234567890", "US")).toBeNull();
+  });
 });
 
 describe("repickPhoneCountry: the drawer's country pick re-reads the stored digits", () => {
@@ -120,5 +125,34 @@ describe("normalisePhone: Mexico's retired trunk prefixes, and leading zeros", (
     expect(normalisePhone("0 8123 4567")).toBeNull();
     expect(normalisePhone("0 81 8123 4567 89")).toBeNull();
     expect(normalisePhone("01 956 123 4567")).toBeNull();
+  });
+
+  it("a bare ten digits with a leading 0 is refused, never stored as +10… (review m1; mutation: drop the leading-zero guard inside the ten-digit branch → a +10 number, FAILS)", () => {
+    expect(normalisePhone("0562921696")).toBeNull();
+  });
+});
+
+describe("normalisePhone: an extension never becomes another country's number (review I1)", () => {
+  it.each([
+    // [label, input, e164, unconfirmed]
+    ["(415) 555-0100 x2 (mutation: don't strip the extension → +41555501002, Switzerland, FAILS)", "(415) 555-0100 x2", "+14155550100", true],
+    ["(956) 292-1696 ext 12 (mutation: don't strip the extension → +956292169612, Myanmar, FAILS)", "(956) 292-1696 ext 12", "+19562921696", false],
+    ["212-555-0100 ext 3 (mutation: don't strip the extension → +21255501003, Morocco, FAILS)", "212-555-0100 ext 3", "+12125550100", false],
+  ])("%s", (_label, input, e164, unconfirmed) => {
+    expect(normalisePhone(input)).toEqual({ e164, unconfirmed });
+  });
+
+  it("a trailing digit group that is NOT an extension marker is refused, kept as typed (mutation: strip any trailing digits → +95629216965, Myanmar, FAILS)", () => {
+    expect(normalisePhone("956-292-1696 after 5")).toBeNull();
+  });
+
+  it("the old broad rule ('any other 8-15 digits') is gone: a bare number that is not a recognised code form is refused, not accepted as international (mutation: restore rule 5 → FAILS)", () => {
+    expect(normalisePhone("212555010099")).toBeNull(); // 12 digits, not starting "52"
+    expect(normalisePhone("9999999999999")).toBeNull(); // 13 digits, not starting "521"
+  });
+
+  it("bare digits that DO match a spec code form still work without a + (unaffected by the I1 fix)", () => {
+    expect(normalisePhone("52 899 922 1234")).toEqual({ e164: "+528999221234", unconfirmed: false });
+    expect(normalisePhone("52 1 899 922 1234")).toEqual({ e164: "+528999221234", unconfirmed: false });
   });
 });

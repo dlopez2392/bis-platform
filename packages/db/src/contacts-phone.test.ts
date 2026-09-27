@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { phoneFields, phoneKeyOf, createContact, phoneDigits } from "./contacts";
+import { phoneFields, phoneKeyOf, createContact, updateContact, fillContactBlanks,
+         setContactPhoneCountry, phoneDigits } from "./contacts";
+import { applyImportBatch, type MatchIndex } from "./contact-import";
 
 /**
  * F-009 on write (consent chain spec §4.1 item 1): every contact write
@@ -48,27 +50,59 @@ describe("phoneKeyOf — the dedupe key of the number as it will be stored", () 
 });
 
 /**
- * Review R1-I3: 0033's phone_key is the stored DIGITS, so a contact saved
- * before F-009 as "899 922 1234" keys 8999221234 while its +52 reading keys
- * 528999221234. An in-memory PostgREST stand-in (select/eq/limit, insert)
- * is enough to drive createContact's dedupe; the live path is
- * test/contacts-phone-live.test.ts (CI).
+ * Review R1-I3 / spec clarification / m3 / m4: 0033's phone_key is the
+ * stored DIGITS, so a contact saved before F-009 as "899 922 1234" keys
+ * 8999221234 while its +52 reading keys 528999221234, and one stored as
+ * "+52 1 899 922 1234" keys 5218999221234 (the retired-mobile prefix, still
+ * present because pre-F-009 writes never normalised anything). An in-memory
+ * PostgREST stand-in is enough to drive createContact/updateContact/
+ * fillContactBlanks/setContactPhoneCountry's dedupe and write paths; the
+ * live path is test/contacts-phone-live.test.ts (CI).
  */
 type Row = Record<string, unknown>;
+
+// Every test that spies on console.error restores it here regardless of
+// pass/fail — an assertion failure throws BEFORE a test's own
+// `errSpy.mockRestore()` line runs, and vi.spyOn on an already-spied method
+// reuses the same mock, so a failing probe's leftover spy would otherwise
+// keep recording calls into whichever test runs next.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function rowMatches(row: Row, filters: [string, unknown][]): boolean {
+  return filters.every(([k, v]) => {
+    if (k.startsWith("!")) return row[k.slice(1)] !== v;
+    if (Array.isArray(v)) return v.includes(row[k]);
+    return row[k] === v;
+  });
+}
+
 function memoryDb(contacts: Row[]) {
-  const tables: { contacts: Row[]; contact_duplicate_flags: Row[]; events: Row[] } & Record<string, Row[]> = { contacts, contact_duplicate_flags: [], events: [] };
+  const tables: { contacts: Row[]; contact_duplicate_flags: Row[]; events: Row[]; tags: Row[] } & Record<string, Row[]> =
+    { contacts, contact_duplicate_flags: [], events: [], tags: [] };
   let nextId = 1;
-  /** Every read, as the filters it was asked for: what a lookup must NOT ask is testable. */
+  /** Every READ, as the filters it was asked for: what a lookup must NOT ask is testable. */
   const reads: [string, unknown][][] = [];
   const db = {
     from(table: string) {
       const filters: [string, unknown][] = [];
+      const readTerminal = (limitN?: number) => {
+        reads.push([...filters]);
+        const rows = tables[table]!.filter((r) => rowMatches(r, filters));
+        return Promise.resolve({ data: limitN === undefined ? rows : rows.slice(0, limitN), error: null });
+      };
       const q = {
         select: () => q,
         eq: (k: string, v: unknown) => { filters.push([k, v]); return q; },
-        limit: (n: number) => {
+        neq: (k: string, v: unknown) => { filters.push([`!${k}`, v]); return q; },
+        in: (k: string, vals: unknown[]) => { filters.push([k, vals]); return q; },
+        order: () => readTerminal(),
+        limit: (n: number) => readTerminal(n),
+        maybeSingle: () => {
           reads.push([...filters]);
-          return Promise.resolve({ data: tables[table]!.filter((r) => filters.every(([k, v]) => r[k] === v)).slice(0, n), error: null });
+          const rows = tables[table]!.filter((r) => rowMatches(r, filters));
+          return Promise.resolve({ data: rows[0] ?? null, error: null });
         },
         insert: (row: Row) => {
           const stored: Row = { ...row, id: `new-${nextId++}` };
@@ -76,6 +110,34 @@ function memoryDb(contacts: Row[]) {
           tables[table]!.push(stored);
           const done = Promise.resolve({ data: null, error: null });
           return Object.assign(done, { select: () => ({ single: () => Promise.resolve({ data: { id: stored.id }, error: null }) }) });
+        },
+        // A thenable: `await` alone (no `.select()`) resolves it directly —
+        // both `updateContact` and `fillContactBlanks` do this — while
+        // `.select(cols)` (setContactPhoneCountry) computes and returns the
+        // matched ids instead. Either path applies the patch exactly once,
+        // lazily, once every `.eq()`/`.neq()` has already run (they run
+        // synchronously before anyone awaits this).
+        update: (patch: Row) => {
+          const uFilters: [string, unknown][] = [];
+          const apply = () => {
+            const rows = tables[table]!.filter((r) => rowMatches(r, uFilters));
+            for (const r of rows) Object.assign(r, patch);
+            return rows;
+          };
+          const chain: {
+            eq: (k: string, v: unknown) => typeof chain;
+            neq: (k: string, v: unknown) => typeof chain;
+            select: (cols: string) => Promise<{ data: { id: unknown }[]; error: null }>;
+            then: (resolve: (v: { data: null; error: null }) => void, reject?: (e: unknown) => void) => Promise<void>;
+          } = {
+            eq: (k, v) => { uFilters.push([k, v]); return chain; },
+            neq: (k, v) => { uFilters.push([`!${k}`, v]); return chain; },
+            select: (_cols: string) => Promise.resolve({ data: apply().map((r) => ({ id: r.id })), error: null }),
+            then: (resolve, reject) => Promise.resolve({ data: null, error: null } as const)
+              .then(() => { apply(); return { data: null, error: null } as const; })
+              .then(resolve, reject),
+          };
+          return chain;
         },
       };
       return q;
@@ -123,5 +185,181 @@ describe("createContact: a +52 number meets the contact stored before F-009 (rev
     expect(m.tables.contact_duplicate_flags).toEqual([expect.objectContaining({
       contact_a: "c-email", contact_b: "c-us", reason: "phone_country_twin",
     })]);
+  });
+
+  it("an email match that is also its own country twin is never flagged against itself (review m6; mutation: drop the countryTwin !== winner guard → a self-pair, FAILS)", async () => {
+    const m = memoryDb([
+      { id: "c1", account_id: "a1", email_key: "x@example.com", phone: "+18999221234", phone_key: "8999221234" },
+    ]);
+    const created = await createContact(m.db, "a1", { email: "x@example.com", phone: "899 922 1234" }, "user_test");
+    expect(created).toEqual({ id: "c1", existing: true, flagged: false });
+    expect(m.tables.contact_duplicate_flags).toHaveLength(0);
+  });
+});
+
+describe("findDuplicate's fallback: spec clarification (bare-stored is the SAME contact, however its digits read today), m3 and m4", () => {
+  it("an AMBIGUOUS bare-stored number is the SAME contact once a +52 read of it arrives — a behaviour change from the plan's original reading, which flagged it as a twin (mutation: keep the old normalisePhone(hit.phone) e164 equality check → a twin instead of a merge, FAILS)", async () => {
+    // Stored bare, pre-F-009: "55 1234 5678" alone reads as ambiguous (+1,
+    // unconfirmed) — but the spec says a BARE stored number is this contact
+    // regardless of how it reads today; it just hasn't been told its
+    // country yet.
+    const m = memoryDb([{ id: "c-bare", account_id: "a1", phone: "55 1234 5678", phone_key: "5512345678" }]);
+    const result = await createContact(m.db, "a1", { phone: "+52 55 1234 5678" }, "user_test");
+    expect(result).toEqual({ id: "c-bare", existing: true, flagged: false });
+    expect(m.tables.contacts).toHaveLength(1);
+  });
+
+  it("with a bare contact and a +1 contact sharing the same ten digits, the bare (same) contact wins regardless of read order (review m3; mutation: limit(1) with no preference → a third contact when the +1 row is fetched first, FAILS)", async () => {
+    // The +1-stored row is seeded FIRST specifically to prove order doesn't
+    // decide the outcome: only whether a row carries an explicit "+" does.
+    const m = memoryDb([
+      { id: "c-us-first", account_id: "a1", phone: "+18999221234", phone_key: "8999221234" },
+      { id: "c-bare-second", account_id: "a1", phone: "899 922 1234", phone_key: "8999221234" },
+    ]);
+    const result = await createContact(m.db, "a1", { phone: "899 922 1234" }, "user_test");
+    expect(result).toEqual({ id: "c-bare-second", existing: true, flagged: false });
+    expect(m.tables.contacts).toHaveLength(2); // no third contact minted
+  });
+
+  it("a contact stored as the retired-mobile-prefixed form (521…) is found by the 521 key too — previously a SILENT duplicate, found by neither the primary nor the bare-ten lookup (review m4; mutation: look up only the bare ten-digit key → a duplicate is inserted, FAILS)", async () => {
+    const m = memoryDb([{ id: "c-521", account_id: "a1", phone: "52 1 899 922 1234", phone_key: "5218999221234" }]);
+    const result = await createContact(m.db, "a1", { phone: "899 922 1234" }, "user_test");
+    expect(result).toEqual({ id: "c-521", existing: true, flagged: false });
+    expect(m.tables.contacts).toHaveLength(1);
+  });
+
+  it("every dedupe read is scoped to the account — a foreign account's contact never matches (review I4; mutation: drop `.eq('account_id', …)` from any dedupe read → a cross-account contact leaks in, FAILS)", async () => {
+    const m = memoryDb([
+      { id: "c-a2-bare", account_id: "a2", phone: "899 922 1234", phone_key: "8999221234" },
+    ]);
+    const result = await createContact(m.db, "a1", { phone: "899 922 1234" }, "user_test");
+    expect(result.existing).toBe(false); // a1 must NOT match a2's contact
+    for (const read of m.reads) {
+      expect(read).toEqual(expect.arrayContaining([["account_id", "a1"]]));
+    }
+  });
+});
+
+describe("updateContact: an unchanged number keeps its flag (review C1)", () => {
+  it("re-writing the SAME E.164 leaves phone_country_unconfirmed untouched (mutation: drop the currentPhone comparison in toRow → the flag is cleared, FAILS)", async () => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
+    await updateContact(m.db, "a1", "c1", { phone: "+15512345678" }, "user_test");
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
+  });
+
+  it("the SAME number typed differently ALSO keeps the flag (mutation: compare raw strings instead of normalised E.164 → a fresh recompute clobbers a false flag back to true, FAILS)", async () => {
+    // The seeded flag (false) deliberately disagrees with what a FRESH
+    // read of "(551) 234-5678" would compute (true, since 551/CDMX-55 is
+    // ambiguous) — the only way this test can tell "preserved" apart from
+    // "recomputed from scratch" is to seed a value fresh computation would
+    // never itself produce.
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: false }]);
+    await updateContact(m.db, "a1", "c1", { phone: "(551) 234-5678" }, "user_test");
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: false });
+  });
+
+  it("a GENUINELY different number recomputes the flag from its own reading (mutation: always keep the old flag → FAILS)", async () => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
+    await updateContact(m.db, "a1", "c1", { phone: "(956) 292-1696" }, "user_test");
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "+19562921696", phone_country_unconfirmed: false });
+  });
+});
+
+describe("applyImportBatch: a CSV re-import of a flagged contact's own exported row keeps the flag (review C1)", () => {
+  it("re-importing the unchanged exported phone does not clear phone_country_unconfirmed (mutation: revert updateContact's currentPhone check → the flag is cleared, FAILS)", async () => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
+    const index: MatchIndex = { byEmail: new Map(), byPhone: new Map([["5512345678", "c1"]]) };
+    const result = await applyImportBatch(m.db, "a1", [{ input: { phone: "+15512345678" }, tags: [] }], index, "user_test", { createTags: false });
+    expect(result).toEqual({ created: 0, updated: 1, flagged: 0 });
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
+  });
+});
+
+describe("fillContactBlanks: the phone fill carries its own flag, reported and emitted (review I3, m7)", () => {
+  it("fills a blank phone with its normalised reading AND sets the flag, and reports/emits phone_country_unconfirmed alongside phone (mutation: const written = patch; → FAILS)", async () => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", first_name: "Amb", last_name: null, email: null, phone: null }]);
+    const filled = await fillContactBlanks(m.db, "a1", "c1", { phone: "55 1234 5678" }, "user_test");
+    expect(filled).toEqual(["phone", "phone_country_unconfirmed"]);
+    expect(m.tables.contacts[0]).toMatchObject({ phone: "+15512345678", phone_country_unconfirmed: true });
+    expect(m.tables.events[0]).toMatchObject({ type: "contact.updated", payload: { fields: ["phone", "phone_country_unconfirmed"] } });
+  });
+});
+
+describe("setContactPhoneCountry: fails closed on the twin check without ever undoing a successful pick (review m5)", () => {
+  it("a phone-country pick never reports failure once the write succeeds, even when the twin check errors afterward (mutation: throw on the twin-lookup error instead of logging → FAILS)", async () => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
+    // Break the twin lookup specifically by making its `.limit()` throw via
+    // a poisoned filter value that the mock cannot satisfy safely — instead,
+    // simplest: monkey-patch `from` for just the second call.
+    let call = 0;
+    const realFrom = (m.db as unknown as { from: (t: string) => unknown }).from.bind(m.db);
+    (m.db as unknown as { from: (t: string) => unknown }).from = (table: string) => {
+      if (table === "contacts") {
+        call++;
+        if (call === 2) {
+          return {
+            select: () => ({
+              eq: () => ({ eq: () => ({ neq: () => ({ limit: () => Promise.resolve({ data: null, error: { code: "53300", message: "too many connections" } }) }) }) }),
+            }),
+          };
+        }
+      }
+      return realFrom(table);
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await setContactPhoneCountry(m.db, "a1", "c1",
+      { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test");
+    expect(result).toBe("updated");
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    errSpy.mockRestore();
+  });
+
+  it("the twin-check failure log carries only the Postgres error CODE, never the message (review m5, minor 12; mutation: log the message too → FAILS)", async () => {
+    const m = memoryDb([{ id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true }]);
+    let call = 0;
+    const realFrom = (m.db as unknown as { from: (t: string) => unknown }).from.bind(m.db);
+    (m.db as unknown as { from: (t: string) => unknown }).from = (table: string) => {
+      if (table === "contacts") {
+        call++;
+        if (call === 2) {
+          return {
+            select: () => ({
+              eq: () => ({ eq: () => ({ neq: () => ({ limit: () => Promise.resolve({ data: null, error: { code: "42P01", message: "a customer's private detail that must never be logged" } }) }) }) }),
+            }),
+          };
+        }
+      }
+      return realFrom(table);
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await setContactPhoneCountry(m.db, "a1", "c1",
+      { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test");
+    const [line] = errSpy.mock.calls[0]!;
+    expect(String(line)).toContain("42P01");
+    expect(String(line)).not.toContain("a customer's private detail");
+    errSpy.mockRestore();
+  });
+
+  it("a repeat duplicate-flag insert (23505) is a silent, designed no-op — never thrown, never logged (review m5; mutation: treat 23505 like any other error → FAILS)", async () => {
+    const m = memoryDb([
+      { id: "c1", account_id: "a1", phone: "+15512345678", phone_key: "5512345678", phone_country_unconfirmed: true },
+      { id: "c2", account_id: "a1", phone: "+525512345678", phone_key: "525512345678" },
+    ]);
+    let call = 0;
+    const realFrom = (m.db as unknown as { from: (t: string) => unknown }).from.bind(m.db);
+    (m.db as unknown as { from: (t: string) => unknown }).from = (table: string) => {
+      if (table === "contact_duplicate_flags") {
+        call++;
+        return { insert: () => Promise.resolve({ error: { code: "23505", message: "duplicate key value violates unique constraint" } }) };
+      }
+      return realFrom(table);
+    };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await setContactPhoneCountry(m.db, "a1", "c1",
+      { expectedPhone: "+15512345678", phone: "+525512345678", unconfirmed: false }, "user_test");
+    expect(result).toBe("updated");
+    expect(call).toBe(1); // the flag insert really was attempted
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 });

@@ -43,12 +43,28 @@ export function phoneKeyOf(raw: string | null | undefined): string {
   return phone ? phoneDigits(phone) : "";
 }
 
-function toRow(input: Partial<ContactInput>) {
+/**
+ * `currentPhone`, when passed, is the row's phone BEFORE this write (omitted
+ * entirely for a brand-new insert, where there is nothing to compare
+ * against). An unchanged number keeps whatever flag it already had: a CSV
+ * export writes the stored phone as-is, so re-importing an unedited row for
+ * a flagged contact must not silently clear a flag nobody has actually
+ * resolved by picking a country — the send gate would then text the wrong
+ * reading with no one having confirmed it (review C1). Only a genuinely
+ * DIFFERENT number recomputes the flag fresh; the explicit country pick
+ * (`setContactPhoneCountry`) is the other, deliberate way it changes.
+ */
+function toRow(input: Partial<ContactInput>, currentPhone?: string | null) {
   const row: Record<string, unknown> = {};
   if (input.firstName !== undefined) row.first_name = input.firstName;
   if (input.lastName !== undefined) row.last_name = input.lastName;
   if (input.email !== undefined) row.email = input.email?.trim() || null;
-  if (input.phone !== undefined) Object.assign(row, phoneFields(input.phone));
+  if (input.phone !== undefined) {
+    const fields = phoneFields(input.phone);
+    Object.assign(row, currentPhone !== undefined && fields.phone !== null && fields.phone === currentPhone
+      ? { phone: fields.phone }
+      : fields);
+  }
   if (input.companyName !== undefined) row.company_name = input.companyName;
   if (input.source !== undefined) row.source = input.source;
   if (input.custom !== undefined) row.custom = input.custom;
@@ -171,15 +187,35 @@ async function findDuplicate(
     // 0033's phone_key is the stored DIGITS, so a contact saved before F-009
     // as "899 922 1234" keys 8999221234 while its +52 reading keys
     // 528999221234 (review R1-I3). On a miss for a +52 ten-digit number, look
-    // up the bare ten: a contact whose stored phone reads as this same +52
-    // number IS this contact; one that reads as +1 is its country twin.
+    // up BOTH legacy shapes those same ten digits could have been keyed
+    // under: the bare ten (pKey.slice(2)) and the retired-mobile-prefixed
+    // "521" + ten (review m4 — a contact stored as "+52 1 899…" keys
+    // "521…" and was missed entirely by the bare-only lookup, a SILENT
+    // duplicate rather than even a flagged twin).
+    //
+    // Per the spec (orchestrator decision, superseding the reading this
+    // lookup shipped with): a contact stored WITHOUT its own "+" — however
+    // its bare digits would normalise TODAY, ambiguous or not — is not a
+    // separate person who happens to share a number; it is THIS contact,
+    // just not yet told which country it's in. Merge into it. A contact
+    // stored WITH an explicit "+" is a genuine country TWIN: the +1 the old
+    // buggy toE164 gave every ten digits is a firm (if wrong) claim, and
+    // that contact is left alone, flagged for a human to resolve.
+    //
+    // No `.limit(1)`: with a bare-stored contact and a +1-stored contact
+    // both keyed under the same bare ten digits, taking only whichever
+    // Postgres returns first could hand back the +1 one and miss the bare
+    // (same) contact entirely, minting a THIRD contact (review m3). Fetch
+    // every candidate and prefer the bare one.
     if (!result.phoneMatch && /^52\d{10}$/.test(pKey)) {
+      const tenDigits = pKey.slice(2);
       const { data: bare, error: bareErr } = await db.from("contacts").select("id, phone")
-        .eq("account_id", accountId).eq("phone_key", pKey.slice(2)).limit(1);
+        .eq("account_id", accountId).in("phone_key", [tenDigits, `521${tenDigits}`]).limit(10);
       if (bareErr) throw new Error(`contact dedupe failed: ${bareErr.message}`);
-      const hit = (bare ?? [])[0] as { id: string; phone: string | null } | undefined;
-      if (hit && normalisePhone(hit.phone)?.e164 === `+${pKey}`) result.phoneMatch = hit.id;
-      else if (hit) result.countryTwin = hit.id;
+      const hits = (bare ?? []) as { id: string; phone: string | null }[];
+      const bareHit = hits.find((h) => h.phone !== null && !h.phone.trim().startsWith("+"));
+      if (bareHit) result.phoneMatch = bareHit.id;
+      else if (hits[0]) result.countryTwin = hits[0].id;
     }
   }
 
@@ -262,8 +298,19 @@ export async function updateContact(
   input: Partial<ContactInput>, actorId: string,
   actorType: ActorType = "user",
 ): Promise<void> {
+  // Read the phone as it stands BEFORE this write, so toRow can tell an
+  // unchanged number (keep the flag) from a genuinely different one
+  // (recompute it) — review C1. Only fetched when a phone is actually being
+  // written; every other update stays a single round trip, as before.
+  let currentPhone: string | null | undefined;
+  if (input.phone !== undefined) {
+    const { data, error: readError } = await db.from("contacts").select("phone")
+      .eq("account_id", accountId).eq("id", contactId).maybeSingle();
+    if (readError) throw new Error(`updateContact phone read failed: ${readError.message}`);
+    currentPhone = (data as { phone: string | null } | null)?.phone ?? null;
+  }
   const { error } = await db.from("contacts")
-    .update({ ...toRow(input), updated_at: new Date().toISOString() })
+    .update({ ...toRow(input, currentPhone), updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", contactId);
   if (error) throw new Error(`updateContact failed: ${error.message}`);
   await emit(db, accountId, "contact.updated", actorId, { contactId, fields: Object.keys(input) },
@@ -319,15 +366,18 @@ export async function fillContactBlanks(
 
   const filled = Object.keys(patch);
   if (filled.length === 0) return [];
-  // The phone is stored as every write stores it, with its country flag.
+  // The phone is stored as every write stores it, with its country flag —
+  // and that flag is a column this call actually writes, so it belongs in
+  // the reported/emitted field list too (review m7), not just in `written`.
   const written = "phone" in patch ? { ...patch, ...phoneFields(String(patch.phone)) } : patch;
+  const reportedFields = "phone" in patch ? [...filled, "phone_country_unconfirmed"] : filled;
 
   const { error } = await db.from("contacts")
     .update({ ...written, updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", contactId);
   if (error) throw new Error(`fillContactBlanks failed: ${error.message}`);
-  await emit(db, accountId, "contact.updated", actorId, { contactId, fields: filled }, actorType);
-  return filled;
+  await emit(db, accountId, "contact.updated", actorId, { contactId, fields: reportedFields }, actorType);
+  return reportedFields;
 }
 
 /** The three columns the contacts list can be sorted by, and the two
