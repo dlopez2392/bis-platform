@@ -22,6 +22,7 @@ import { addTagAction, removeTagAction } from "./[contactId]/actions";
 import type { ContactRow } from "./contacts-table";
 import { summaryLoadFrom, type ParsedContactSummary, type SummaryLoad } from "@/lib/contacts/summary";
 import type { EditableField } from "@/lib/contacts/field-input";
+import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 
 // `nowMs` travels WITH the ready result, read inside the fetch's own
 // `.then()` (an allowed impure read — react-hooks/purity flags Date.now()
@@ -158,15 +159,18 @@ export function ContactDrawer({
                           const saved = await updateContactFieldAction(accountId, row.id, field, v);
                           // A phone edit can make the number ambiguous, or
                           // settle it: re-read the summary so the Check number
-                          // row follows (review R3-I2). Undo saves through
-                          // here too.
+                          // row follows (review R3-I2).
                           if (field === "phone") setRetryNonce((n) => n + 1);
                           return saved;
                         }}
                         {...(field === "phone" ? {
-                          phoneUnconfirmed: load.status === "ready" ? load.summary.phone_country_unconfirmed : false,
-                          undoPhone: (editedPhone: string, priorPhone: string, priorUnconfirmed: boolean) =>
-                            undoInlinePhoneEditAction(accountId, row.id, { editedPhone, priorPhone, priorUnconfirmed }),
+                          undoPhone: async (undo: PhoneInlineUndo) => {
+                            const r = await undoInlinePhoneEditAction(accountId, row.id, undo);
+                            // Same reason as the save above: the undo can
+                            // move the flag too, so the row must re-read.
+                            if (r.ok) setRetryNonce((n) => n + 1);
+                            return r;
+                          },
                         } : {})}
                       />
                     </dd>
@@ -217,6 +221,9 @@ export function ContactDrawer({
                     key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`}
                     accountId={accountId}
                     contactId={row.id}
+                    // The phone as RENDERED (review I3): the pick is judged
+                    // against this, not merely the phone the server re-reads.
+                    phone={row.phone ?? ""}
                     unconfirmed={load.summary.phone_country_unconfirmed}
                     onChanged={() => setRetryNonce((n) => n + 1)}
                   />

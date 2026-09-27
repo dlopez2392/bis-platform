@@ -21,11 +21,17 @@ import { setPhoneCountryAction, undoPhoneCountryAction } from "./actions";
  * once, and offer Undo (rule 6). Loading and error are the drawer's own
  * summary states: this row renders only from a loaded summary.
  */
-export function PhoneCountryRow({ accountId, contactId, unconfirmed, onChanged = () => {} }: {
+export function PhoneCountryRow({ accountId, contactId, unconfirmed, phone, onChanged = () => {} }: {
   accountId: string;
   contactId: string;
   /** The number could be Mexican or US (the summary's, or the page's). */
   unconfirmed: boolean;
+  /** The phone AS RENDERED (review I3): the pick's compare-and-set is
+   *  judged against this, the number the operator SAW, not merely the one
+   *  the server re-reads at pick time — so a number someone else changed to
+   *  another ambiguous number between render and click is never re-coded
+   *  unseen. */
+  phone: string;
   /** Called after a pick and after an Undo the server took, so the host can
    *  re-read the summary — the row is keyed by the flag, and a stale key
    *  otherwise never remounts it for the NEXT ambiguous number (re-review
@@ -46,7 +52,7 @@ export function PhoneCountryRow({ accountId, contactId, unconfirmed, onChanged =
     if (pending || busy.current) return;
     run(() => pickPhoneCountry(
       country,
-      (c) => setPhoneCountryAction(accountId, contactId, c),
+      (c) => setPhoneCountryAction(accountId, contactId, c, phone),
       (picked, previous) => undoPhoneCountryAction(accountId, contactId, picked, previous),
       setChecking,
       toast,

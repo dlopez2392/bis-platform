@@ -206,3 +206,31 @@ describe("the Check number row follows a phone edit", () => {
     expect(panel).toContain("key={`phone-${contactId}-${phoneUnconfirmed}`}");
   });
 });
+
+/**
+ * Coordinator review of the first version (I1/C1): the inline phone Undo is
+ * server-authoritative — the SAVE hands back what the server itself read and
+ * wrote (`PhoneInlineUndo`), never a value the client captures. Source pins
+ * for the three wiring sites and the post-Undo nonce bump.
+ */
+describe("the inline phone Undo is server-authoritative", () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const inlineField = strip(readFileSync(path.join(here, "..", "..", "..", "..", "..", "..", "components", "inline-field.tsx"), "utf8"));
+  const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
+  const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
+
+  it("inline-field.tsx hands the SAVE's own undo payload to commitInlineUndo, never a client-captured flag (mutation: capture phoneUnconfirmed client-side again → FAILS)", () => {
+    expect(inlineField).toContain("const phoneUndo = result.undo;");
+    expect(inlineField).toMatch(/commitInlineUndo\(field, prior, phoneUndo, save, undoPhone\)/);
+    expect(inlineField).not.toMatch(/phoneUnconfirmed/);
+  });
+
+  it("the drawer's phone Undo calls the dedicated action and bumps retryNonce on success (mutation: drop the nonce bump after Undo → FAILS)", () => {
+    expect(drawer).toMatch(/undoPhone: async \(undo: PhoneInlineUndo\) => \{\s*const r = await undoInlinePhoneEditAction\(accountId, row\.id, undo\);\s*[\s\S]*?if \(r\.ok\) setRetryNonce\(\(n\) => n \+ 1\);\s*return r;\s*\}/);
+  });
+
+  it("the panel's phone Undo calls the dedicated action too", () => {
+    expect(panel).toMatch(/undoPhone: \(undo: PhoneInlineUndo\) => undoInlinePhoneEditAction\(accountId, contactId, undo\)/);
+  });
+});

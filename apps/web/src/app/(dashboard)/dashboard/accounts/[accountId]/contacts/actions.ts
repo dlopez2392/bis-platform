@@ -8,6 +8,7 @@ import { createContact, deleteContacts, addTagToContacts, removeTagFromContacts,
 import { normalisePhone, repickPhoneCountry, type PhoneCountry } from "@bis/db/phone";
 import { loggableError } from "@/lib/loggable-error";
 import type { PhoneCountryPickResult, PhoneCountryUndoResult, PhoneCountryPrevious } from "@/lib/contacts/phone-country";
+import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { m } from "@/lib/messages";
 import { EDITABLE_FIELDS, FIELD_TO_INPUT_KEY, normalizeFieldInput,
          type EditableField } from "@/lib/contacts/field-input";
@@ -24,22 +25,48 @@ export async function createContactAction(accountId: string, formData: FormData)
 
 const contactsPath = (accountId: string) => `/dashboard/accounts/${accountId}/contacts`;
 
+/**
+ * For the PHONE field only: `undo` carries what the server itself read and
+ * wrote, so the inline Undo restores exactly that — never a value the
+ * client captured (review C1: the drawer's own summary can be stale, or
+ * defaulted `false` while loading or on a failed fetch, because an inline
+ * edit never bumps `retryNonce`) and never `norm.value`, the TYPED text
+ * (review I1: the stored column is rarely equal to it — `phoneFields`
+ * normalises to E.164, so "(956) 292-1696" is stored as "+19562921696").
+ * `undefined` when there was no PRIOR real number to restore (a first fill
+ * from empty): Undo then falls back to the ordinary `save("")`, which has
+ * no ambiguity to get wrong.
+ */
 export async function updateContactFieldAction(
   accountId: string, contactId: string, field: EditableField, value: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; undo?: PhoneInlineUndo } | { ok: false; error: string }> {
   const { userId } = await requireAccountAccess(accountId);
   if (!EDITABLE_FIELDS.includes(field)) return { ok: false, error: "Unknown field." };
   const norm = normalizeFieldInput(field, value);
   if (!norm.ok) return norm;
+  let undo: PhoneInlineUndo | undefined;
   try {
-    await updateContact(await dbForRequest(), accountId, contactId,
-      { [FIELD_TO_INPUT_KEY[field]]: norm.value }, userId);
+    const db = await dbForRequest();
+    if (field === "phone") {
+      const before = await getContact(db, accountId, contactId);
+      await updateContact(db, accountId, contactId, { phone: norm.value }, userId);
+      const after = await getContact(db, accountId, contactId);
+      if (typeof before?.phone === "string" && typeof after?.phone === "string") {
+        undo = {
+          priorPhone: before.phone,
+          priorUnconfirmed: before.phone_country_unconfirmed === true,
+          editedPhone: after.phone,
+        };
+      }
+    } else {
+      await updateContact(db, accountId, contactId, { [FIELD_TO_INPUT_KEY[field]]: norm.value }, userId);
+    }
   } catch {
     return { ok: false, error: "Save failed — please try again." };
   }
   revalidatePath(contactsPath(accountId));
   revalidatePath(`${contactsPath(accountId)}/${contactId}`);
-  return { ok: true };
+  return undo ? { ok: true, undo } : { ok: true };
 }
 
 /**
@@ -143,9 +170,15 @@ function revalidateContact(accountId: string, contactId: string): void {
  * "changed", and nothing is written.
  *
  * Answers the previous phone and flag, which the undo toast hands back.
+ *
+ * `seenPhone` (review I3) is the phone the ROW RENDERED WITH, not merely
+ * the one this call re-reads: the compare-and-set below is judged against
+ * it, so a number someone else changed to another AMBIGUOUS number, between
+ * this row's render and the operator's click, answers "changed" rather than
+ * being re-coded unseen.
  */
 export async function setPhoneCountryAction(
-  accountId: string, contactId: string, country: PhoneCountry,
+  accountId: string, contactId: string, country: PhoneCountry, seenPhone: string,
 ): Promise<PhoneCountryPickResult> {
   const { userId } = await requireAccountAccess(accountId);
   if (!COUNTRIES.includes(country)) return { ok: false, error: m["contact.phoneCountry.failed"] };
@@ -153,6 +186,14 @@ export async function setPhoneCountryAction(
     const db = await dbForRequest();
     const contact = await getContact(db, accountId, contactId);
     if (!contact?.phone) return { ok: false, error: m["contact.phoneCountry.changed"] };
+    // Only gates when the SEEN phone itself reads as a ten-digit-based
+    // number — every row that renders the Check number state got there
+    // because ITS phone read that way, so a `seenPhone` that does not is
+    // not this check's job; the "unreadable" branch below still catches it.
+    const seenReads = repickPhoneCountry(seenPhone, "US");
+    if (seenReads !== null && repickPhoneCountry(contact.phone, "US") !== seenReads) {
+      return { ok: false, error: m["contact.phoneCountry.changed"] };
+    }
     if (contact.phone_country_unconfirmed !== true && normalisePhone(contact.phone)?.unconfirmed !== true) {
       return { ok: false, error: m["contact.phoneCountry.changed"] };
     }
@@ -207,28 +248,41 @@ export async function undoPhoneCountryAction(
 /**
  * The generic inline field edit's undo (`components/inline-field.tsx`)
  * resubmits the PRIOR text through `updateContactFieldAction` for every
- * field — fine for four of them, wrong for phone once the field has since
- * been edited to a DIFFERENT number: a number already carrying a country
- * code is "kept as given" by the normaliser (F-009,
+ * field — fine for four of them, wrong for phone: a number already carrying
+ * a country code is "kept as given" by the normaliser (F-009,
  * `packages/db/src/phone.ts`'s `international()` branch, which always
  * answers `unconfirmed: false`) and is never re-flagged from its text
- * alone, so restoring a flagged "+1…" number's prior text through the
- * ordinary write always came back CONFIRMED.
+ * alone, so restoring a flagged "+1…" number's prior TEXT through the
+ * ordinary write can come back CONFIRMED.
  *
- * This is the phone field's dedicated undo: a compare-and-set on the number
- * the EDIT wrote, restoring BOTH the prior phone and its prior flag
- * together, never re-derived from text.
+ * Server-authoritative (fixes a first version's I1/C1): every field of
+ * `undo` is exactly what `updateContactFieldAction` itself read and wrote
+ * for THIS save — never a value the client captured — so this is a
+ * compare-and-set on the number the edit ACTUALLY wrote (`editedPhone`, the
+ * stored column, not the typed text), restoring the prior phone and its
+ * prior flag together, never re-derived from text.
  */
 export async function undoInlinePhoneEditAction(
-  accountId: string, contactId: string,
-  input: { editedPhone: string; priorPhone: string; priorUnconfirmed: boolean },
+  accountId: string, contactId: string, undo: PhoneInlineUndo,
 ): Promise<PhoneCountryUndoResult> {
   const { userId } = await requireAccountAccess(accountId);
-  if (typeof input.priorUnconfirmed !== "boolean") return { ok: false, error: m["contact.phoneCountry.failed"] };
+  if (
+    typeof undo?.editedPhone !== "string" ||
+    typeof undo.priorPhone !== "string" ||
+    typeof undo.priorUnconfirmed !== "boolean"
+  ) {
+    return { ok: false, error: m["contact.phoneCountry.failed"] };
+  }
+  // R3-M12 floor: restore the NORMALISER's own form of the prior text, and
+  // never a flag cleared for a number the normaliser still calls ambiguous,
+  // whatever the caller says.
+  const restored = normalisePhone(undo.priorPhone);
+  const phone = restored?.e164 ?? undo.priorPhone;
+  const unconfirmed = undo.priorUnconfirmed || restored?.unconfirmed === true;
   try {
     const outcome = await setContactPhoneCountry(await dbForRequest(), accountId, contactId,
-      { expectedPhone: input.editedPhone, phone: input.priorPhone, unconfirmed: input.priorUnconfirmed }, userId);
-    if (outcome === "changed") return { ok: false, error: m["contact.phoneCountry.changed"] };
+      { expectedPhone: undo.editedPhone, phone, unconfirmed }, userId);
+    if (outcome === "changed") return { ok: false, error: m["contact.phoneCountry.inlineChanged"] };
   } catch (e) {
     console.error(`undoInlinePhoneEditAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
     return { ok: false, error: m["contact.phoneCountry.failed"] };

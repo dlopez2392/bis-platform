@@ -25,6 +25,7 @@ import { FIELDS } from "../contact-drawer";
 import { MarketingOptOutSwitch } from "../marketing-optout-switch";
 import { PhoneCountryRow } from "../phone-country-row";
 import type { OptOutZone } from "@/lib/contacts/marketing-optout";
+import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
@@ -76,9 +77,7 @@ export function ContactFieldsPanel({
                     value={(contact[field] as string | null) ?? null}
                     save={(v) => updateContactFieldAction(accountId, contactId, field, v)}
                     {...(field === "phone" ? {
-                      phoneUnconfirmed,
-                      undoPhone: (editedPhone: string, priorPhone: string, priorUnconfirmed: boolean) =>
-                        undoInlinePhoneEditAction(accountId, contactId, { editedPhone, priorPhone, priorUnconfirmed }),
+                      undoPhone: (undo: PhoneInlineUndo) => undoInlinePhoneEditAction(accountId, contactId, undo),
                     } : {})}
                   />
                 </dd>
@@ -93,6 +92,7 @@ export function ContactFieldsPanel({
             accountId={accountId}
             contactId={contactId}
             unconfirmed={phoneUnconfirmed}
+            phone={contact.phone ?? ""}
           />
 
           <MarketingOptOutSwitch

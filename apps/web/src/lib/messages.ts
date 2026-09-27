@@ -473,6 +473,7 @@ export const m = {
   "contact.phoneCountry.changed": "Their number changed while you were choosing. Reload to see it.",
   "contact.phoneCountry.unreadable": "That number can't be read as a US or Mexican number. Edit it instead.",
   "contact.phoneCountry.undoBusy": "Your last change is still saving. Edit the number itself to change it back.",
+  "contact.phoneCountry.inlineChanged": "Their number changed since your edit. Reload to see it.",
 
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
