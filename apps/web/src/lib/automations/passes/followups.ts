@@ -43,6 +43,7 @@ export async function processFollowups(
   let failed = 0;
   let unstamped = 0;
   let held = 0;
+  let blocked = 0;
   let skippedNoEmail = 0;
   let waitingForMorning = 0;
   let unresolvableTimezone = 0;
@@ -141,6 +142,10 @@ export async function processFollowups(
           );
         }
       });
+      if (outcome === "skipped") {
+        blocked++;
+        continue;
+      }
       if (outcome === "held") {
         held++;
         continue;
@@ -152,7 +157,7 @@ export async function processFollowups(
     }
   }
 
-  return { sent, failed, unstamped, held, skippedNoEmail, waitingForMorning, unresolvableTimezone };
+  return { sent, failed, unstamped, held, blocked, skippedNoEmail, waitingForMorning, unresolvableTimezone };
 }
 
 /**

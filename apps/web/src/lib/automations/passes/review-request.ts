@@ -6,7 +6,7 @@ import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { reviewRequestEmail } from "@/lib/email/templates/review-request";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
-import { toE164 } from "@/lib/voice/phone-number";
+import { normalisePhone } from "@bis/db/phone";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { laterOf } from "../anchor";
@@ -20,7 +20,7 @@ import {
 import type { Pass, PassContext } from "../context";
 
 type Target =
-  | { channel: "sms"; to: string; from: string }
+  | { channel: "sms"; to: string }
   | { channel: "email"; to: string };
 
 /**
@@ -34,7 +34,7 @@ type Target =
  *   gate refused (NO fallback to email) → SMS cooldown → caps → send →
  *   STAMP → (sms) mark the message row sent.
  *
- * Nothing new sends: `ctx.email` and `ctx.sms()` come from the harness.
+ * Nothing new sends: `ctx.email` and `ctx.sms` (the send gate) come from the harness.
  * The SMS path is sendAutomationSms — write the message row, then send,
  * mark failed and write the attempt marker on a provider error — so a
  * review text shows up in the customer's conversation like any other
@@ -61,7 +61,7 @@ export async function processReviewRequests(
   ctx: PassContext, due: DueReviewRequest[], opts: ProcessOptions,
 ) {
   const c = {
-    sent: 0, failed: 0, unstamped: 0, held: 0,
+    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
     skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
     waitingForMorning: 0, unresolvableTimezone: 0,
   };
@@ -90,7 +90,7 @@ export async function processReviewRequests(
     // is the CONFIGURED one, never a guess.
     const subject: HoldSubject = {
       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "review_request",
-      channel: config.channel, subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
+      channel: config.channel, smsKind: "automation.review_request", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
     };
 
     // RULE 0, before the gate, same as the follow-up pass: no resolvable
@@ -132,11 +132,12 @@ export async function processReviewRequests(
     }
 
     // The deliverable address for the CHOSEN channel. SMS: contacts.phone
-    // is free-form and toE164 is what every number leaving this app goes
-    // through (null = nothing we can text). Email: the address or nothing.
+    // is free-form and normalisePhone (F-009) is the one rule every number
+    // leaving this app goes through (null = nothing we can text); the send
+    // gate reads the stored number again itself. Email: the address or nothing.
     let target: Target;
     if (config.channel === "sms") {
-      const to = toE164(row.contactPhone);
+      const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
       if (!to) {
         c.skippedNoAddress++;
         console.error(`review request skipped, no textable phone on file for booking ${row.bookingId}`);
@@ -185,7 +186,7 @@ export async function processReviewRequests(
         if (opts.released) await logSkipped(ctx, subject, REASONS.smsCooldown);
         continue;
       }
-      target = { channel: "sms", to, from: gate.from };
+      target = { channel: "sms", to };
     } else {
       if (!row.contactEmail) {
         c.skippedNoAddress++;
@@ -233,7 +234,8 @@ export async function processReviewRequests(
       const outcome = await holdOrSend(ctx, subject, async () => {
         if (target.channel === "sms") {
           smsRow = await sendAutomationSms(ctx, {
-            accountId: row.accountId, contactId: row.contactId, to: target.to, from: target.from,
+            accountId: row.accountId, contactId: row.contactId, to: target.to,
+            kind: "automation.review_request", accountTimezone: row.accountTimezone,
             body: composeReviewRequestSms(body, config.reviewUrl),
             onProviderFailure: () => stampReviewRequestSmsFailed(ctx.db, row.bookingId),
           });
@@ -258,6 +260,16 @@ export async function processReviewRequests(
 
         if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "review request");
       });
+      if (outcome === "skipped") {
+        // The gate refused it and nothing was sent: give back the tick slot and
+        // today's count taken above (review R2-I2). Otherwise ten refused rows at
+        // the head of the list use up AUTOMATION_TICK_CAP, which is ONE counter
+        // across every account, and starve everyone behind them.
+        attemptsThisTick--;
+        sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1);
+        c.blocked++;
+        continue;
+      }
       if (outcome === "held") {
         c.held++;
         continue;

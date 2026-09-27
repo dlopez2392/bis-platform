@@ -604,7 +604,7 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
   const token = () => signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
   const PHONE = "956-555-0101";
 
-  it("runs LAST — after the receipt — with the E.164 phone, the page's locale, the contact, the thread and the consent flag", async () => {
+  it("runs LAST — after the receipt — with the E.164 phone, the phone AS TYPED, the page's locale, the contact, the thread and the consent flag (review R2-C1; mutation: drop phoneAsTyped → FAILS)", async () => {
     // Mutation: call it before the receipt, or pass the raw phone.
     getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
     const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
@@ -615,7 +615,7 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
     const arg = instantReplyMock.mock.calls[0]![0];
     expect(arg).toMatchObject({
       accountId: "acct_1", submissionId: "sub_1", contactId: "contact_1", conversationId: "convo_1",
-      phoneE164: "+19565550101", locale: "es", consentWithheld: false,
+      phoneE164: "+19565550101", phoneAsTyped: PHONE, locale: "es", consentWithheld: false,
     });
     expect(arg.now).toBeInstanceOf(Date);
     // The receipt is sendMock's only call here (no alert addresses), and the

@@ -3,7 +3,7 @@ import {
   type DueSmsReminder,
 } from "@bis/db";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
-import { toE164 } from "@/lib/voice/phone-number";
+import { normalisePhone } from "@bis/db/phone";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { composeSmsReminder, defaultSmsReminderBody } from "../sms-reminder-copy";
@@ -47,10 +47,10 @@ import type { Pass, PassContext } from "../context";
  * for. Due ~2h before the appointment, a text for a 07:30 job is due at
  * 05:30 — inside the default window — and holding it to 08:00 would text
  * someone about a job that already started. So the subject's `deadline` is
- * the appointment: at or before the window's end, it sends now. A job AFTER
- * the window's end (08:30, due 06:30) is held and released at 08:00 — thirty
- * minutes' notice instead of two hours, which is the trade the client made
- * when they set quiet hours. On release, an appointment that has already
+ * the appointment: if the hours open only at or after it, the text is NOT
+ * sent and the row says why (consent chain choice 21). A job AFTER 08:00
+ * (08:30, due 06:30) is held and released at 08:00: thirty minutes' notice
+ * instead of two hours, the price of the fixed hours. On release, an appointment that has already
  * started is skipped with its reason, never texted.
  *
  * The time is rendered in the BOOKER's zone (safeZone, the email
@@ -65,23 +65,23 @@ export const smsReminderPass: Pass = {
 };
 
 export type SmsReminderCounters = {
-  sent: number; failed: number; unstamped: number; held: number; skippedNoAddress: number; skippedSmsGate: number;
+  sent: number; failed: number; unstamped: number; held: number; blocked: number; skippedNoAddress: number; skippedSmsGate: number;
 };
 
 function subjectFor(r: DueSmsReminder): HoldSubject {
   return {
-    accountId: r.accountId, accountTimezone: r.accountTimezone, source: "sms_reminder", channel: "sms",
+    accountId: r.accountId, accountTimezone: r.accountTimezone, source: "sms_reminder", channel: "sms", smsKind: "automation.sms_reminder",
     subjectKey: `booking:${r.bookingId}`, contactId: r.contactId, deadline: new Date(r.startsAt),
   };
 }
 
 export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[]): Promise<SmsReminderCounters> {
-  const c: SmsReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
+  const c: SmsReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
   const smsGates = new Map<string, SmsGate>();
 
   for (const row of due) {
     const subject = subjectFor(row);
-    const to = toE164(row.contactPhone);
+    const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
     if (!to) {
       c.skippedNoAddress++;
       await logSkipped(ctx, subject, REASONS.noPhone);
@@ -107,8 +107,6 @@ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[
       );
       continue;
     }
-    const from = gate.from;
-
     // Inside the per-row try: a junk ACCOUNT zone makes formatWhen throw,
     // and that is this row's failure, not the pass's.
     try {
@@ -117,7 +115,8 @@ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[
         row.brandName, formatWhen(new Date(row.startsAt), zone), row.body.trim() || defaultSmsReminderBody());
       const outcome = await holdOrSend(ctx, subject, async () => {
         const smsRow = await sendAutomationSms(ctx, {
-          accountId: row.accountId, contactId: row.contactId, to, from, body,
+          accountId: row.accountId, contactId: row.contactId, to, body,
+          kind: "automation.sms_reminder", accountTimezone: row.accountTimezone,
           onProviderFailure: () => stampSmsReminderFailed(ctx.db, row.bookingId),
         });
 
@@ -132,6 +131,10 @@ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[
         }
         await markAutomationSmsSent(ctx, row.accountId, smsRow, "text reminder");
       });
+      if (outcome === "skipped") {
+        c.blocked++;
+        continue;
+      }
       if (outcome === "held") {
         c.held++;
         continue;

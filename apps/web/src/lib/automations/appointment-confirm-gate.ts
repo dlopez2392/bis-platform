@@ -8,11 +8,11 @@ import { APPOINTMENT_CONFIRM_MIN_LEAD_MS } from "@bis/db";
  * left is the far end.
  *
  * `appointmentConfirmDeadline` is handed to `holdOrSend` as the subject's
- * `deadline`, which sends rather than holds past usefulness. It is reachable
- * only under a quiet window nearly 23 hours long — the ask is due two days
- * out and the deadline is 24h15m out, so the two rarely meet — and it is
- * declared anyway because the RULE is "never hold something past the point it
- * helps", not "this fires often".
+ * `deadline`: if the sending hours open only at or after it, the ask is NOT
+ * sent and the row says "Not sent: quiet hours ran past the appointment"
+ * (consent chain choice 21). With the fixed 21:00-08:00 night and an ask due
+ * two days out, the two rarely meet; it is declared because the RULE is
+ * "never send something past the point it helps".
  *
  * `tooCloseToAsk` is what actually bites, in `releaseAppointmentConfirm`: a
  * row held through a long window and released inside the email reminder's own

@@ -30,7 +30,8 @@ import type { Pass, PassContext } from "../context";
  * brings it back when the window ends, because the 75-minute due window
  * will have closed by then and `listDueReminders` would never see it again.
  * The `deadline` is the appointment itself: a reminder for a job that starts
- * before the window ends goes out now.
+ * before the sending hours open is NOT sent ("Not sent: quiet hours ran past
+ * the appointment", consent chain choice 21).
  */
 export const remindersPass: Pass = {
   key: "reminders",
@@ -39,7 +40,7 @@ export const remindersPass: Pass = {
   },
 };
 
-export type ReminderCounters = { sent: number; failed: number; unstamped: number; held: number };
+export type ReminderCounters = { sent: number; failed: number; unstamped: number; held: number; blocked: number };
 
 function subjectFor(r: DueReminder): HoldSubject {
   return {
@@ -50,7 +51,7 @@ function subjectFor(r: DueReminder): HoldSubject {
 
 /** The per-row path, shared by the tick (every due row) and the release (one held row). */
 export async function processReminders(ctx: PassContext, reminders: DueReminder[]): Promise<ReminderCounters> {
-  const c: ReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0 };
+  const c: ReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0 };
 
   for (const reminder of reminders) {
     const subject = subjectFor(reminder);
@@ -102,6 +103,10 @@ export async function processReminders(ctx: PassContext, reminders: DueReminder[
           );
         }
       });
+      if (outcome === "skipped") {
+        c.blocked++;
+        continue;
+      }
       if (outcome === "held") {
         c.held++;
         continue;

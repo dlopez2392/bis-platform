@@ -179,7 +179,7 @@ export async function enrich(
     try {
       const outcome = await sendInstantReply({
         db, now: new Date(), accountId, submissionId, contactId, conversationId,
-        phoneE164, locale, consentWithheld,
+        phoneE164, phoneAsTyped: byKind.get("core.phone") || null, locale, consentWithheld,
       });
       if (outcome.kind === "failed") errors.push(`instant reply: ${outcome.error}`);
     } catch (e) {

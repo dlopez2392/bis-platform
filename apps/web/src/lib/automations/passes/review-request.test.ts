@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { DueReviewRequest, AutomationLogRow, QuietSettings } from "@bis/db";
+import type { DueReviewRequest, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listDueReviewRequests: vi.fn(), stampReviewRequested: vi.fn(), countReviewRequestsSince: vi.fn(),
@@ -15,6 +15,7 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => send
 
 import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
 import { reviewRequestPass, releaseReviewRequest } from "./review-request";
 import { remindersPass } from "./reminders";
@@ -47,17 +48,15 @@ function row(overrides: Partial<DueReviewRequest> = {}): DueReviewRequest {
 
 const emailSend = vi.fn();
 const smsSend = vi.fn();
-const QUIET_OFF: QuietSettings = { enabled: false, start: "21:00", end: "08:00" };
-function ctx(now: Date = TICK, quiet: QuietSettings = QUIET_OFF): PassContext {
+function ctx(now: Date = TICK): PassContext {
   return {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
-    quiet: async () => quiet,
+    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
   };
 }
 const EMPTY = {
-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
 };
 
@@ -172,8 +171,10 @@ describe("review-request pass — SMS channel, the sendSmsAction discipline", ()
   });
 
   it("constructs the SMS provider BEFORE writing the message row, so a throwing factory leaves no failed text in the inbox", async () => {
-    // Review finding: ctx.sms() is lazy and throws in production when
-    // TELNYX_API_KEY is unset. Mutation: move `ctx.sms()` back below createMessage.
+    // Review finding: the provider throws in production when TELNYX_API_KEY
+    // is unset. Since consent PR-1 the send gate takes it BEFORE its `prepare`
+    // writes the row (gate.test.ts pins that order); here the gate itself
+    // throws outright, and still nothing reaches the inbox.
     dbMocks.listDueReviewRequests.mockResolvedValue([sms()]);
     const c: PassContext = { ...ctx(), sms: () => { throw new Error("TELNYX_API_KEY is required in production"); } };
     expect(await reviewRequestPass.run(c)).toEqual({ ...EMPTY, failed: 1 });
@@ -284,7 +285,7 @@ describe("caps — recipe passes only", () => {
         brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
       fromEmail: null, meetingUrl: null,
     })));
-    expect(await remindersPass.run(ctx())).toEqual({ sent: 30, failed: 0, unstamped: 0, held: 0 });
+    expect(await remindersPass.run(ctx())).toEqual({ sent: 30, failed: 0, unstamped: 0, held: 0, blocked: 0 });
   });
 });
 
@@ -356,21 +357,17 @@ describe("review-request pass — the completion clock (0026)", () => {
 });
 
 describe("review request — quiet hours and release", () => {
-  const UNTIL_NOON = { enabled: true, start: "21:00", end: "12:00" };
-  // TICK is 10:00 America/New_York; a 21:00→12:00 window entered the
-  // previous evening ends at 12:00 THAT SAME New York day — 2026-09-09
-  // 16:00Z, not the followups.test.ts fixture's Sept-22/Chicago NOON.
-  // Verified against quietWindowEnd(TICK, "America/New_York", UNTIL_NOON)
-  // directly (see the task report).
+  // The gate defers the text to noon, as it does a marketing text on a
+  // Sunday morning (lib/consent/hours.ts); the band and the hours compose.
   const NOON = new Date("2026-09-09T16:00:00Z");
   const heldRow = (channel: "sms" | "email"): AutomationLogRow => ({
     id: "log_r", account_id: "acct_1", source: "review_request", channel, contact_id: "ct_1",
     subject_key: "booking:bk_r1", status: "held", reason: "Held until 12:00 PM — quiet hours", held_until: NOON.toISOString(), payload: {}, occurred_at: TICK.toISOString(),
   });
 
-  it("in the band, inside a window ending at noon: held, not sent, not stamped, no message row (mutation: bypass holdOrSend → FAILS)", async () => {
+  it("in the band, the gate defers the text to noon: held, not sent, not stamped, no message row (mutation: bypass holdOrSend → FAILS)", async () => {
     dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } })]);   // the file's default row is EMAIL and its id is bk_r1; this test needs the SMS channel
-    const result = await reviewRequestPass.run(ctx(TICK, UNTIL_NOON));
+    const result = await reviewRequestPass.run({ ...ctx(TICK), sms: fakeSmsGate({ decide: () => ({ kind: "deferred", until: NOON, zone: "America/Chicago" }) }) });
     expect(result.held).toBe(1);
     expect(result.sent).toBe(0);
     expect(smsSend).not.toHaveBeenCalled();
@@ -383,7 +380,7 @@ describe("review request — quiet hours and release", () => {
 
   it("release at noon skips the band and sends through the same path — stamp included (mutation: gate on release → FAILS)", async () => {
     dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({ config: { channel: "sms", reviewUrl: URL } }) });
-    expect(await releaseReviewRequest(ctx(NOON, UNTIL_NOON), heldRow("sms"))).toBe("sent");
+    expect(await releaseReviewRequest(ctx(NOON), heldRow("sms"))).toBe("sent");
     expect(smsSend).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampReviewRequested).toHaveBeenCalledWith(expect.anything(), "bk_r1");
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
@@ -399,7 +396,7 @@ describe("review request — quiet hours and release", () => {
       config: { channel: "sms", reviewUrl: URL },
       followupSentAt: "2026-09-09T12:30:00.000Z",   // NY Wed 08:30, the same local day as NOON
     }) });
-    expect(await releaseReviewRequest(ctx(NOON, UNTIL_NOON), heldRow("sms"))).toBe("skipped");
+    expect(await releaseReviewRequest(ctx(NOON), heldRow("sms"))).toBe("skipped");
     expect(smsSend).not.toHaveBeenCalled();
     expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
     // ONE row, replacing the held one on the same (account, source, subject):
@@ -463,5 +460,40 @@ describe("review request — quiet hours and release", () => {
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
       accountId: "acct_2", status: "skipped", reason: "No longer due",
     }));
+  });
+});
+
+/**
+ * Review R2-I2: a text the gate refuses sends nothing, so it must not use up
+ * AUTOMATION_TICK_CAP (one counter across EVERY account) or the account's
+ * daily count. Refused rows are never stamped and come back every tick; without
+ * the give-back ten flagged contacts at the head of the list starve everyone.
+ */
+describe("reviewRequestPass: a refusal gives back its tick slot and its daily count", () => {
+  const refuseFirst = (n: number) => {
+    let seen = 0;
+    return fakeSmsGate({ send: (m) => smsSend(m), decide: () => (seen++ < n ? { kind: "blocked", reason: "stopped" } : null) });
+  };
+
+  it("ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ config: { channel: "sms", reviewUrl: URL }, bookingId: `bk_${i}`, contactId: `ct_${i}` })));
+    const result = await reviewRequestPass.run({ ...ctx(), sms: refuseFirst(AUTOMATION_TICK_CAP) });
+    expect(result).toEqual({ ...EMPTY, blocked: AUTOMATION_TICK_CAP, sent: 1 });
+  });
+
+  it("one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)", async () => {
+    dbMocks.countReviewRequestsSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
+    dbMocks.listDueReviewRequests.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ config: { channel: "sms", reviewUrl: URL }, bookingId: `bk_${i}`, contactId: `ct_${i}` })));
+    const result = await reviewRequestPass.run({ ...ctx(), sms: refuseFirst(1) });
+    expect(result).toEqual({ ...EMPTY, blocked: 1, sent: 1 });
+  });
+});
+
+describe("reviewRequestPass hands the gate its own kind (review R2 minor)", () => {
+  it("the gate is asked for automation.review_request, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } })]);
+    const gate = fakeSmsGate();
+    await reviewRequestPass.run({ ...ctx(), sms: gate });
+    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.review_request"]);
   });
 });

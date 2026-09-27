@@ -14,10 +14,6 @@ import { followupsPass, releaseFollowup } from "./followups";
 const MORNING = new Date("2026-09-22T14:00:00Z");
 // 03:00 CDT on Sept 22 — NOT in the band, and inside the default quiet window.
 const SMALL_HOURS = new Date("2026-09-22T08:00:00Z");
-const ON = { enabled: true, start: "21:00", end: "08:00" };
-const OFF = { ...ON, enabled: false };
-// A window ending at NOON: the band (08–11) is entirely inside it, so a follow-up due at 09:00 is held until 12:00.
-const UNTIL_NOON = { enabled: true, start: "21:00", end: "12:00" };
 const NOON = new Date("2026-09-22T17:00:00Z");
 
 function row(overrides: Partial<DueFollowup> = {}): DueFollowup {
@@ -35,14 +31,14 @@ const heldRow = (): AutomationLogRow => ({
   subject_key: "booking:bk_f1", status: "held", reason: "Held until 12:00 PM — quiet hours", held_until: NOON.toISOString(), payload: {}, occurred_at: MORNING.toISOString(),
 });
 const emailSend = vi.fn();
-function ctx(now: Date, quiet = OFF): PassContext {
+function ctx(now: Date): PassContext {
   return {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
-    sms: () => { throw new Error("follow-ups never text"); }, quiet: async () => quiet,
+    sms: async () => { throw new Error("follow-ups never text"); },
   };
 }
-const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0 };
+const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0 };
 const logCalls = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
 
 beforeEach(() => {
@@ -57,7 +53,7 @@ beforeEach(() => {
 });
 
 describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN IT GOES", () => {
-  it("in the band, quiet off: sent and stamped, one sent row", async () => {
+  it("in the band: sent and stamped, one sent row", async () => {
     dbMocks.listDueFollowups.mockResolvedValue([row()]);
     expect(await followupsPass.run(ctx(MORNING))).toEqual({ ...EMPTY, sent: 1 });
     expect(dbMocks.stampFollowupSent).toHaveBeenCalledWith(expect.anything(), "bk_f1");
@@ -66,21 +62,13 @@ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN I
 
   it("outside the band the gate still waits — no row, no send, whatever the window says (mutation: skip the gate on the normal tick → FAILS)", async () => {
     dbMocks.listDueFollowups.mockResolvedValue([row()]);
-    expect(await followupsPass.run(ctx(SMALL_HOURS, OFF))).toEqual({ ...EMPTY, waitingForMorning: 1 });
+    expect(await followupsPass.run(ctx(SMALL_HOURS))).toEqual({ ...EMPTY, waitingForMorning: 1 });
     expect(logCalls()).toEqual([]);
-  });
-
-  it("in the band but inside a window that ends at noon: HELD until 12:00 (the band and the window compose; mutation: bypass holdOrSend → FAILS)", async () => {
-    dbMocks.listDueFollowups.mockResolvedValue([row()]);
-    expect(await followupsPass.run(ctx(MORNING, UNTIL_NOON))).toEqual({ ...EMPTY, held: 1 });
-    expect(emailSend).not.toHaveBeenCalled();
-    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
-    expect(logCalls()).toEqual([expect.objectContaining({ status: "held", heldUntil: NOON.toISOString(), reason: "Held until 12:00 PM — quiet hours" })]);
   });
 
   it("release at noon: the band is CLOSED, and the release sends anyway because the band was satisfied at hold time (mutation: apply the gate on release → FAILS)", async () => {
     dbMocks.getDueFollowupById.mockResolvedValue({ due: row() });
-    expect(await releaseFollowup(ctx(NOON, UNTIL_NOON), heldRow())).toBe("sent");
+    expect(await releaseFollowup(ctx(NOON), heldRow())).toBe("sent");
     expect(emailSend).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampFollowupSent).toHaveBeenCalledWith(expect.anything(), "bk_f1");
   });
@@ -92,7 +80,7 @@ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN I
     dbMocks.getDueFollowupById.mockResolvedValue({ due: row({
       startsAt: "2026-09-20T19:00:00.000Z", endsAt: "2026-09-20T20:00:00.000Z",   // 45h before NOON
     }) });
-    expect(await releaseFollowup(ctx(NOON, UNTIL_NOON), heldRow())).toBe("skipped");
+    expect(await releaseFollowup(ctx(NOON), heldRow())).toBe("skipped");
     expect(emailSend).not.toHaveBeenCalled();
     expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
     // ONE row, replacing the held one on the same (account, source, subject):

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { DueReactivation, AutomationLogRow, QuietSettings } from "@bis/db";
+import type { DueReactivation, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listDueReactivations: vi.fn(), getDueReactivationById: vi.fn(),
@@ -73,17 +73,15 @@ const smsSend = vi.fn();
 /** The LAZY getter itself is the spy, not just the provider's send: this
  *  recipe must never so much as ASK for an SMS provider. */
 const smsFactory = vi.fn(() => ({ isFake: true as const, send: (...a: unknown[]) => smsSend(...a) }));
-const QUIET_OFF: QuietSettings = { enabled: false, start: "21:00", end: "08:00" };
-function ctx(now: Date = TICK, quiet: QuietSettings = QUIET_OFF): PassContext {
+function ctx(now: Date = TICK): PassContext {
   return {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: smsFactory as unknown as PassContext["sms"],
-    quiet: async () => quiet,
   };
 }
 const EMPTY = {
-  sent: 0, failed: 0, unstamped: 0, held: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
   skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
   skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
 };
@@ -216,30 +214,17 @@ describe("the reactivation check-in's own daily cap", () => {
   });
 });
 
-describe("the reactivation check-in and quiet hours", () => {
-  // 21:00 → 12:00 puts the whole morning band inside the window, which a
-  // window ending at 08:00 cannot do: the band OPENS at 08:00, so a
-  // band-gated recipe never meets the default window at all.
-  const UNTIL_NOON: QuietSettings = { enabled: true, start: "21:00", end: "12:00" };
+describe("the reactivation check-in and its held rows", () => {
+  // The band (08:00-11:00) lies inside the fixed automated hours an EMAIL
+  // keeps (choice 31), so a normal tick cannot hold a check-in any more; a
+  // row held before the fixed hours shipped is still released like this.
   const NOON = new Date("2027-09-24T17:00:00.000Z");   // 12:00 CDT the same day
-
-  it("inside the window it HOLDS: no send, no stamp, one held row ending at noon", async () => {
-    // Mutation: bypass holdOrSend and call ctx.email.send directly → this reds.
-    dbMocks.listDueReactivations.mockResolvedValue([row()]);
-    expect(await reactivationPass.run(ctx(TICK, UNTIL_NOON))).toEqual({ ...EMPTY, held: 1 });
-    expect(emailSend).not.toHaveBeenCalled();
-    expect(dbMocks.stampReactivationSent).not.toHaveBeenCalled();
-    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      source: "reactivation", channel: "email", subjectKey: "contact:ct_1", status: "held",
-      heldUntil: NOON.toISOString(),
-    }));
-  });
 
   it("released at noon it skips the band and sends through the same path, stamp included", async () => {
     // Mutation: apply the morning-band gate on a release → this reds, and
     // every row held overnight would wait a whole extra day.
     dbMocks.getDueReactivationById.mockResolvedValue({ due: row() });
-    expect(await releaseReactivation(ctx(NOON, UNTIL_NOON), heldRow())).toBe("sent");
+    expect(await releaseReactivation(ctx(NOON), heldRow())).toBe("sent");
     expect(emailSend).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampReactivationSent).toHaveBeenCalledWith(expect.anything(), "ct_1");
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(),
