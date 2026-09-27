@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { telnyxSmsProvider } from "./telnyx";
+import { telnyxSmsProvider, errorCodes } from "./telnyx";
+import { SmsProviderError } from "./types";
 
 /**
  * The one module in this feature that spends money, and until now it was
@@ -129,5 +130,44 @@ describe("telnyxSmsProvider", () => {
 
     await expect(telnyxSmsProvider("super_secret_key").send(INPUT))
       .rejects.toThrow(expect.not.stringContaining("super_secret_key") as unknown as RegExp);
+  });
+});
+
+/**
+ * Consent chain PR-1, gate step 9: a refusal carries Telnyx's own codes, so
+ * the gate can tell "this number texted STOP" (40300, VERIFIED against
+ * developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out on
+ * 2026-09-26) from every other failure.
+ */
+describe("telnyxSmsProvider: a refusal carries the provider's codes", () => {
+  const STOP_BODY = JSON.stringify({ errors: [{ code: "40300", title: "Blocked due to STOP message",
+    detail: "Messages cannot be sent from '+19565061545' to '+15551112222' due to an existing block rule." }] });
+
+  it("a STOP block is an SmsProviderError with status and code 40300, message unchanged (mutation: throw a plain Error → FAILS)", async () => {
+    stubFetch(() => Promise.resolve(new Response(STOP_BODY, { status: 400 })));
+    const err = await telnyxSmsProvider("k").send(INPUT).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SmsProviderError);
+    expect((err as SmsProviderError).status).toBe(400);
+    expect((err as SmsProviderError).codes).toEqual(["40300"]);
+    expect((err as Error).message).toBe(`telnyx send failed (400): ${STOP_BODY}`);
+  });
+
+  it("a body that is not Telnyx's error shape carries no codes and still throws the old message", async () => {
+    stubFetch(() => Promise.resolve(new Response("number not owned", { status: 422 })));
+    const err = await telnyxSmsProvider("k").send(INPUT).catch((e: unknown) => e);
+    expect((err as SmsProviderError).codes).toEqual([]);
+  });
+});
+
+describe("errorCodes", () => {
+  it("reads every errors[].code, numbers as strings (mutation: read only the first → FAILS)", () => {
+    expect(errorCodes(JSON.stringify({ errors: [{ code: "40300" }, { code: 10007 }] }))).toEqual(["40300", "10007"]);
+  });
+
+  it("never throws: not JSON, no errors array, codes of the wrong type (mutation: drop the try → FAILS)", () => {
+    expect(errorCodes("<html>")).toEqual([]);
+    expect(errorCodes(JSON.stringify({ errors: "x" }))).toEqual([]);
+    expect(errorCodes(JSON.stringify({ errors: [null, { code: { a: 1 } }, {}] }))).toEqual([]);
+    expect(errorCodes("null")).toEqual([]);
   });
 });
