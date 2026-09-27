@@ -212,4 +212,22 @@ describe("fileLead", () => {
     const phone = input.answers.find((a) => a.key === "p");
     expect(phone?.value).toBe("5512345678");
   });
+
+  it("a number spokenPhone can't read is kept AS TYPED, never dropped (mutation: spokenPhone(lead.phone, null) ?? \"\" → \"\", FAILS)", async () => {
+    dbFns.getForm.mockResolvedValue(PHONE_FORM);
+    const { db } = fakeDb();
+
+    await fileLead({ db, ...CTX, lead: { ...CTX.lead, phone: "555-1234" } });
+    const [, , , sevenDigit] = dbFns.createSubmission.mock.calls[0]! as [
+      unknown, unknown, unknown, { answers: { key: string; label: string; value: string }[] },
+    ];
+    expect(sevenDigit.answers.find((a) => a.key === "p")?.value).toBe("555-1234");
+
+    dbFns.createSubmission.mockClear();
+    await fileLead({ db, ...CTX, lead: { ...CTX.lead, phone: "44 20 7946 0958" } });
+    const [, , , uk] = dbFns.createSubmission.mock.calls[0]! as [
+      unknown, unknown, unknown, { answers: { key: string; label: string; value: string }[] },
+    ];
+    expect(uk.answers.find((a) => a.key === "p")?.value).toBe("44 20 7946 0958");
+  });
 });

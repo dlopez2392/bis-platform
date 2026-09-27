@@ -89,7 +89,15 @@ export async function fileLead(ctx: {
       // country code the model added rather than one the visitor gave —
       // `spokenPhone` drops that leading 1, the same treatment Sofía's own
       // capture_lead gets, so the contact write can judge it (phoneFields).
-      : kind === "core.phone" ? (isValidPhone(lead.phone) ? (spokenPhone(lead.phone, null) ?? "") : "")
+      // `?? lead.phone`, NOT `?? ""` (review, new Important): spokenPhone
+      // returns null for anything it cannot read as a number at all (a bare
+      // 7-digit local number, "44 20 7946 0958" with no leading +) — falling
+      // back to "" DROPPED the answer outright (filtered by the `!== ""`
+      // below), and a visitor who left only a phone number lost their one
+      // contact method. The booking page and forms keep such a number "as
+      // typed, never rejected" (isValidPhone's own gate above); this path
+      // must match, not silently blank what it cannot parse.
+      : kind === "core.phone" ? (isValidPhone(lead.phone) ? (spokenPhone(lead.phone, null) ?? lead.phone) : "")
       : kind === "message" ? lead.need : "";
     const answers = form.fields
       .map((f) => ({ key: f.key, label: f.label, value: value(f.kind) }))
