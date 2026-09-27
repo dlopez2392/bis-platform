@@ -498,6 +498,11 @@ describe("F-009: every contact write gets the number as typed or as said", () =>
       "a transcribed number stored as said; the accept's fillContactBlanks judges it",
     "apps/web/src/lib/concierge/lead.ts: spokenPhone(lead.phone, null)":
       "a model-written number as said, which the form path's createContact judges",
+  };
+  /** Allowed under a `phone` key or binding ONLY, never into a contact write:
+   *  each goes to setContactPhoneCountry, which writes the flag beside it. The
+   *  same number handed to createContact or updateContact loses its flag. */
+  const PHONE_KEY_ONLY: Record<string, string> = {
     "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts: repickPhoneCountry(contact.phone, country)":
       "the drawer's country pick: staff chose the country explicitly, and the flag is written alongside (setContactPhoneCountry, unconfirmed: false)",
     "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts: normalisePhone(previous.phone)":
@@ -512,17 +517,19 @@ describe("F-009: every contact write gets the number as typed or as said", () =>
   /** packages/db is not in it: phoneFields IS the one place a number is normalised for a write. */
   const intoPhones = () => webSources().flatMap((f) => normalisedPhones(scanned(f)).map((c) => `${rel(f)}: ${c}`));
 
-  it("no production file hands a contact write a normaliser's number, directly, through a local, or from a builder, beyond the allow-listed carrier and spoken numbers (mutation: the booking page writes phone: e164Of(phone) → FAILS naming it)", () => {
+  it("no production file hands a contact write a normaliser's number, directly, through a local, or from a builder, beyond the allow-listed carrier and spoken numbers (mutation: the booking page writes phone: e164Of(phone), or the country pick's Undo writes through updateContact → FAILS naming it)", () => {
     expect(intoWrites().filter((h) => !(h in ALLOWED))).toEqual([]);
   });
 
   it("no production file under apps/web/src puts a normaliser's number under a phone key or into a phone binding, whatever the write, beyond the allow-list (review of 884220c2; mutation: a same-file helper returns { phone: e164Of(raw) } → FAILS naming it)", () => {
-    expect(intoPhones().filter((h) => !(h in ALLOWED))).toEqual([]);
+    expect(intoPhones().filter((h) => !(h in ALLOWED) && !(h in PHONE_KEY_ONLY))).toEqual([]);
   });
 
   it("every allow-listed number is still found where it is named: the scan follows a local to the write (the positive control; mutation: the inbound route writes the raw sender → its entry goes stale and FAILS)", () => {
     const hits = new Set([...intoWrites(), ...intoPhones()]);
     expect(Object.keys(ALLOWED).filter((h) => !hits.has(h))).toEqual([]);
+    const phoneHits = new Set(intoPhones());
+    expect(Object.keys(PHONE_KEY_ONLY).filter((h) => !phoneHits.has(h))).toEqual([]);
   });
 
   it("each BUILDERS path exists, so a renamed builder cannot drop out of the scan unseen (mutation: point a BUILDERS entry at a missing path → FAILS naming it)", () => {
