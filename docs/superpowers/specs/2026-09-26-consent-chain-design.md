@@ -10,7 +10,9 @@ Corrected on 2026-09-26 from the PR-1 plan review (three reviewers) and danlo's 
 are made in place: §1.3 choice 25; §3 (the actor column, the contact reference, the grants, the second index, the
 state's tie-break, `hold_released` until PR-2); §4.1 items 1, 3 and 4; §4.2 (the alert phone's STOP and START); §5
 (fails closed, go-live item 6); §6 (the quiet-hours sentence, the Messages block's states, the Check number row,
-"Mexico (+52)", the alert code's refusals); §8 (the hours tests, scans 1 to 4); §11 (Telnyx's code, verified).
+"Mexico (+52)", the alert code's refusals); §8 (the hours tests, scans 1 to 4); §11 (Telnyx's code, verified). A
+re-review of the corrected plan added: §4.1 item 1 (who wrote a number, for the backfill) and item 4 and §5 (the
+re-hold at delivery, and the re-hold age cap).
 
 ## 1. Decisions
 
@@ -196,7 +198,12 @@ parity (CLAUDE.md; `docs/runbooks/ci-supabase-project.md`).
      and one that disagrees with the choice is refused with its own line, never re-coded.
    - **Backfill:** flag every stored `+1` number that is also a valid Mexican number, unless the same account has
      seen it as the caller or sender of an inbound call or text. It runs **after** the build that normalises on write
-     is live, and only on rows last written before that deploy: until then the old build keeps storing `+1…`.
+     is live (until then the old build keeps storing `+1…`), and it decides who wrote each number from what can be
+     known, never from `updated_at`, which any field's edit moves: a contact created before the deploy's cut-off, or
+     a number not stored as E.164 (the new build stores every number that parses as E.164), was the old build's and
+     is flagged; one created after it and stored as E.164 is the new build's own reading, not flagged, and listed in
+     the report. Nothing is dropped silently. The cut-off is the deploy's READY instant plus Skew Protection's maximum
+     age if it is on.
    - A flagged number is **held** by the gate (decision 3) until staff pick the country in the drawer (§6). The pick
      is refused if the stored number is no longer ambiguous.
 2. **The message-class registry** (`apps/web/src/lib/consent/classes.ts`) gives every send a stable `kind`, and each
@@ -257,8 +264,13 @@ parity (CLAUDE.md; `docs/runbooks/ci-supabase-project.md`).
    - The text-back joins that held-row mechanism with its own kind, so a call missed at 10 p.m. gets its text at
      8 a.m. At release it is **skipped** if that number has called, or texted, since the missed call, and a held
      text-back's default wording drops "just now" (danlo, 2026-09-26).
-   - `ledger_unavailable` on an automation or the text-back is a **15-minute re-hold**, not a failure: a released
-     reminder, the instant reply and the text-back have no later pass to retry them.
+   - `ledger_unavailable` on an automation or the text-back is a **15-minute re-hold**, not a failure, whether the
+     gate meets it deciding or delivering: a released reminder, the instant reply and the text-back have no later
+     pass to retry them.
+   - **The re-hold age cap** (orchestrator, 2026-09-26): an instant reply or a text-back released more than 24 hours
+     after what triggered it (the form submission, the call's end) is not sent and not held again. It is logged
+     skipped, "Not sent: too long after they wrote in" / "Not sent: too long after the call", so an outage never
+     answers days later.
    - A `blocked` automation is logged in `automation_log` with the gate's reason, so "What went out" can say why. A
      refused row gives back its place under the per-tick and per-day caps, so refusals cannot starve other sends.
    - The composer and the code show the reason inline (§6).
@@ -427,7 +439,8 @@ ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` k
 
 - **Fails closed.** A ledger, flag or zone read error blocks the send, the error is logged through `loggableError` (`apps/web/src/lib/billing/billing-link.ts:74`), and
   the send is retried: an automation, a released hold, the instant reply and the text-back are re-held for 15 minutes
-  (§4.1 item 4); the composer and the alert code show an error line. A ledger write error on an inbound stop returns
+  (§4.1 item 4), the last two for at most 24 hours after their trigger (the age cap); the composer and the alert code
+  show an error line. A ledger write error on an inbound stop returns
   a 5xx so Telnyx retries.
 - **One confirmation.** At most one BIS confirmation per `revoked` row, only within five minutes, never for an address
   that was already stopped, and none when Telnyx has already replied (decision 12, §11).
