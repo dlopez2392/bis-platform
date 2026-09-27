@@ -13,10 +13,11 @@
 ## Global Constraints
 
 - Tier: **HIGH (legal)** (spec §8). Every new assertion names, in its title, the mutation that turns it red, and every task records its probes with the tests they turned red (measured on the finished tree, 2026-09-26). The reviewer re-applies them.
-- **One gate.** After this PR nothing but `apps/web/src/lib/consent/gate.ts` and the provider's own modules (`lib/sms/index.ts`, `telnyx.ts`, `fake.ts`, `types.ts`) reaches an SMS provider (Task 15, scan 1). The gate **fails closed**: a ledger or flag read error is `blocked: ledger_unavailable`, logged through `loggableError`, never a send (spec §4.1 item 3, §5).
-- **The ledger is append-only by grants** (spec §3): no role, `service_role` included, holds `UPDATE`, `DELETE`, `TRUNCATE` or `MAINTAIN` on `consent_events`; only `packages/db/src/consent.ts` touches it (scan 3). State = the newest row whose action is `revoked`, `held`, `hold_released` or `resubscribed`, by `occurred_at` then `id`; `granted` never decides (choice 28).
+- **One gate.** After this PR nothing but `apps/web/src/lib/consent/gate.ts` and the provider's own modules (`lib/sms/index.ts`, `telnyx.ts`, `fake.ts`) reaches an SMS provider (Task 15, scan 1; `types.ts` holds types and the error class and is scanned like any other file, review R3-M1). The gate **fails closed**: a ledger, flag or zone read error is `blocked: ledger_unavailable`, logged through `loggableError`, never a send (spec §4.1 item 3, §5); an automation or text-back that meets it is re-held for 15 minutes (G3).
+- **The ledger is append-only by grants** (spec §3): no role, `service_role` included, holds `UPDATE`, `DELETE`, `TRUNCATE` or `MAINTAIN` on `consent_events`; only `packages/db/src/consent.ts` touches it (scan 3). State = the newest row whose action is `revoked`, `held`, `hold_released` or `resubscribed`, by `occurred_at`, then the MORE RESTRICTIVE action on a tie, then `id` (review R1-M2); `granted` never decides (choice 28).
+- **Each task's Review corrections block overrides its code.** The plan review of 71ab882d (three reviewers, `.superpowers/sdd/consent-pr1-plan-review.md`) put a "Review corrections (binding; they override the code below)" block at the top of Tasks 1, 2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15 and 16. An implementer applies the task's code as written, then the block's diffs, then runs the block's tests and probes. Where the block and the code below disagree, the block wins; where a count or a RED/GREEN list below is superseded, the block says so.
 - **The hours are FIXED** (decision 4, choices 18, 21, 31), verbatim: automated texts "only 8 a.m.–9 p.m. in the recipient's zone (the contact's zone if known, otherwise the account's)"; marketing texts "not before 9 a.m., on Sunday not before noon, and until 9 p.m."; "Staff-typed conversation replies, staff alerts and alert-phone codes may go at any hour"; "Automations are **rescheduled** into the window, not dropped"; except choice 21: a text or email whose purpose has passed before the window opens is not sent, logged "Not sent: quiet hours ran past the appointment". Automated email is on the same automated window (choice 31). BIS stores no per-contact zone (spec §4.1 item 2), so every recipient uses `accounts.timezone`, falling back to America/Chicago (0001's default) when it cannot be resolved.
-- **F-009** (spec §4.1 item 1, choice 30): a number with a country code is kept as given (the retired Mexican mobile `1` after `52` dropped); ten digits valid only as US → `+1`, only as Mexican → `+52`; valid as both or neither → `+1` AND `phone_country_unconfirmed`; numbers from the carrier are never flagged. A flagged number is held by the gate until staff pick the country (decision 3).
+- **F-009** (spec §4.1 item 1, choice 30): a number with a country code is kept as given (the retired Mexican mobile `1` after `52` dropped); ten digits valid only as US → `+1`, only as Mexican → `+52`; valid as both or neither → `+1` AND `phone_country_unconfirmed`; numbers from the carrier are never flagged. A flagged number is held by the gate until staff pick the country (decision 3). Every contact write hands the number over AS TYPED or AS SAID, never a pre-normalised `+1…` (review R2-C1, Task 7), and a caller ID keeps the carrier's `+` (Task 7).
 - **Copy** lives in `apps/web/src/lib/messages.ts`, in plain language (DESIGN.md "Voice"; `messages.test.ts` scans every key). Where §6 gives words, they are used verbatim and pinned by `copy.test.ts`; every other line is this plan's (G15).
 - **UI** follows DESIGN.md: tokens only; both themes through `.dark`; status is a dot and a word (`DotPill`); loaded/empty/error states; one primary per view (rule 8: the Check number buttons are ghost); reversible actions run at once with an undo toast (rule 6); new variants get a `/dashboard/styleguide` specimen.
 - **Supabase: never write to either project, never read production.** The orchestrator applies 0054 exactly once per project (Task 17); a production READ needs danlo's explicit go. Local env files point at PRODUCTION, so the db suite, Playwright and `pnpm check` REFUSE to run locally (#135, by design). **Never work around that.**
@@ -80,7 +81,7 @@ Verified on 2026-09-26:
   - MIN metadata validates by LENGTH only: every ten digits is "valid" as a Mexican number, so every US number would read as ambiguous. MAX (and mobile) tell them apart. The plan imports `libphonenumber-js/max`.
   - Under max: `956 292 1696` (McAllen) is valid as US only; `899 922 1234` (Reynosa), `81 8123 4567` (Monterrey), `656 123 4567` (Juárez) as Mexican only; `868 812 3456` (Matamoros) is valid under +52 and INVALID under +1 (868 is Trinidad in the NANP, and this number is not valid there); `55 1234 5678` is valid under both (CDMX 55; New Jersey 551); `956 123 4567` is valid under neither.
   - `+52 1 …` (the retired mobile `1`) is INVALID until the `1` is dropped. With a default country of US, the library mis-parses `00 52 …`, so `phone.ts` strips `00` and `011` itself before asking.
-- **E2. It stays on the server.** Only `packages/db/src/phone.ts` imports the library. In `apps/web` no `"use client"` module imports `@bis/db/phone` or `lib/voice/phone-number` at run time; `phone-country-row.tsx` and `lib/contacts/phone-country.ts` import the `PhoneCountry` TYPE only (erased at compile). Checked by grep over every `"use client"` file on the finished tree.
+- **E2. It stays on the server.** Only `packages/db/src/phone.ts` imports the library. In `apps/web` no `"use client"` module imports `@bis/db/phone` or `lib/voice/phone-number` at run time; `phone-country-row.tsx` and `lib/contacts/phone-country.ts` import the `PhoneCountry` TYPE only (erased at compile). Checked by grep over every `"use client"` file on the finished tree. **Imprecise, as the review found (R1-M7):** `packages/db/src/contacts.ts` imports `./phone`, so the `@bis/db` BARREL reaches libphonenumber, and four `"use client"` files import runtime values from that barrel (`quote-followup-card.tsx`, `reactivation-card.tsx`, `plan-dialog.tsx`, `quiet-hours-card.tsx`). Only tree-shaking keeps it out of the browser today (E8 measured it: 0 files under `.next/static`). Task 17 step 1 re-measures it on the branch head, so a regression is caught before merge.
 - **E3. Telnyx's refusal for a number that texted STOP** (developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out, read 2026-09-26): code `40300`, title "Blocked due to STOP message", body `{"errors":[{"code":"40300","title":"Blocked due to STOP message","detail":"Messages cannot be sent from '{from}' to '{to}' due to an existing block rule."}]}`. The same page: "block rules operate at the **messaging profile level**. If a user opts out from one number on your profile, they're opted out from all numbers on that profile" (the reason spec §5 makes one profile per texting account a go-live precondition).
 - **E4. Postgres referential actions run as the table's owner.** On the PG18 replica, `consent-ledger-schema.test.ts` proves that a `service_role` delete of a contact nulls `consent_events.contact_id` and keeps the row, and that deleting the account removes its ledger rows, although neither role holds `UPDATE` or `DELETE` on the table.
 - **E5. The stage replay.** Every task below was replayed in order on a clean checkout of the base (main + #149 + #150): its tests first (the RED lists are that run's output), then its implementation (the GREEN lists), then `tsc --noEmit` for `apps/web` and `packages/db` (exit 0 after every task), each task committed. Counts in this plan are read off those runs, not typed.
@@ -92,31 +93,31 @@ Assumptions (not verified; each names what settles it):
 - **A1.** Telnyx answers the `40300` refusal with a non-2xx HTTP status (the docs give the body, not the status). The code never depends on the status: `SmsProviderError` is thrown for every non-2xx and the gate keys on the CODE. Settled the first time a real send to an opted-out number fails (PR-2's reconciliation checks it).
 - **A2.** Tex. Bus. & Com. Code §301.051's hours reach texts (danlo's reading; spec §10). The code applies them to the four marketing kinds either way. Counsel settles it (spec §5, go-live item 3).
 - **A3.** The CI project (Postgres 17) runs referential actions as the owner exactly as the PG18 replica does (E4). Task 17 settles it: `consent-ledger-schema.test.ts` runs in CI's `verify` job against the CI project once 0054 is there.
-- **A4.** The production contact rows the backfill will flag are few (no account has texted a customer, spec §5 "Rollout"). Settled by Task 17's count, which danlo sees before any write.
+- **A4. SETTLED (small), 2026-09-26.** The orchestrator read production (counts only): 26 candidates across 4 accounts (956 Woodworks 1, Bespoke Intelligent Solutions 4, Resaca 19, Test Client One 2); none is a valid Mexican number (a regex built from libphonenumber-js@1.13.14's max metadata for MX, which matched `isValidPhoneNumber(n, "MX")` on 300,000 random numbers with 0 mismatches); of all production contacts with a ten-digit `phone_key`, 46 are stored with `+` and 5 bare. So the backfill can flag at most 5 contacts, likely 0. Task 17 still reads after the deploy and writes only after danlo sees the count.
 - **A5.** `pnpm install --frozen-lockfile --prefer-offline` succeeds on a clean runner with Task 2's lock change (it did on this machine after the change; CI's `verify` settles it).
-- **A6.** The Supabase MCP connector can read the CI project (`odnobiodsftffphuuosz`, organization `bis-ci`) as well as production. Only Task 17 step 2's CI-side pre-flight depends on it, and that step says what to do if it cannot. Settled the first time the orchestrator tries it.
+- **A6. SETTLED, 2026-09-26.** The Supabase MCP connector reaches the CI project read-only (the orchestrator ran the `dnd` count there: 0 rows).
 
 ## Spec gaps resolved here (the reviewer should confirm or overrule)
 
-- **G1. Scan 4 is not in PR-1.** Spec §8 scan 4 pins `customer_initiated` kinds to three files "and never under `lib/automations/`", but spec §4.1 item 2 classes `automation.instant_reply` (sent from `lib/automations/instant-reply.ts`) as `customer_initiated`. The two cannot both hold. Scan 4 is about the EMAIL class of §4.3 (its four conditions include "no cron pass sends it", and a held instant reply IS released by the cron), so it ships with the email kinds in PR-3. For SMS the class changes nothing but the hours (a stop blocks every SMS kind, decision 2), and the instant reply's hours are `automated` per the spec's own table. Recorded in `scans.test.ts`'s header.
+- **G1. Scan 4 is not in PR-1** (orchestrator, 2026-09-26: G1 stands; spec §8 is corrected to say so). Spec §8 scan 4 pins `customer_initiated` kinds to three files "and never under `lib/automations/`", but spec §4.1 item 2 classes `automation.instant_reply` (sent from `lib/automations/instant-reply.ts`) as `customer_initiated`. The two cannot both hold. Scan 4 is about the EMAIL class of §4.3 (its four conditions include "no cron pass sends it", and a held instant reply IS released by the cron), so it ships with the email kinds in PR-3. For SMS the class changes nothing but the hours (a stop blocks every SMS kind, decision 2), and the instant reply's hours are `automated` per the spec's own table. Recorded in `scans.test.ts`'s header.
 - **G2. `tasks.consent_event_id` waits for PR-2.** Spec §3 lists it under "Other changes", but nothing in PR-1 writes or reads a To-do row about consent (holds and their To-dos are PR-2, §4.2). Adding an unread FK column now would also force a grant decision under 0053's convention with no reader to justify it. PR-2's migration adds it with the code that writes it.
-- **G3. A blocked automation.** Spec §4.1 item 4: "A `blocked` automation is logged in `automation_log` with the gate's reason". `automation_log.status` stays `sent | held | skipped | failed` (no migration): a gate refusal is `skipped` with the reason in words (`BLOCK_REASONS` in `hold-or-send.ts`: "They stopped texts from this business", "Texts to them are on hold", "Their number could be Mexican or US. Pick its country on their contact", and the existing "No phone number we can text" / "Texting isn't set up for this company yet"), and every SMS-capable pass counts it in a new `blocked` counter. `ledger_unavailable` is NOT a refusal: it is `failed`, so the next tick retries (spec §5, "the caller's normal retry applies").
-- **G4. The backfill** (spec §4.1 item 1): the orchestrator's, never a migration, because "could be Mexican" needs libphonenumber's metadata. The read (`0054-phone-country-candidates.sql`) lists unflagged contacts whose `phone_key` has ten digits and whose number the SAME account has never seen inbound (not a `calls.caller_e164`, folded like `phone_key`; not the contact of an inbound SMS, because the inbound route files a text under the contact its sender matched). The decision (`couldBeMexican`): a stored `+1`/`1`+ten-digit number whose ten digits are valid under +52 (what the old `toE164` did to a Reynosa number), or a bare ten-digit number a write today would flag. A bare Mexican-only number is not flagged: the gate already reads it as `+52`. The write (`flagSql`) flags a row only while it is still unflagged AND its `phone_key` is the one read, so a re-run is a no-op and a number edited in between is left alone (proved on the replica, Task 3). **Count first; write only with the flag; production needs danlo's go** (Task 17, QUESTIONS 1).
-- **G5. `contacts.dnd`** (choice 25): `0054-dnd-preflight.sql` counts non-empty values per account (no value printed). Task 17 runs it on both projects before 0054 reaches production. Zero rows on both: nothing to do. Any row: the orchestrator stops before the merge and asks danlo (QUESTIONS 4); converting them to staff-recorded stops is its own plan.
-- **G6. The text-back's 08:00 re-send.** The text-back joins the held-row queue (spec §4.1 item 4) with its own `automation_log` source, `'textback'` (0054 widens 0047's CHECK; `AUTOMATION_LOG_SOURCES`, `SOURCE_TITLES` "Missed-call text-back" and `RELEASERS` follow in Task 11). The held row's subject is `call:<calls.id>`, its payload the caller number, contact, conversation and language (`TextbackPayload`, parsed, never cast). `releaseTextback` re-runs the whole decision through the gate at release time, so a stop that landed overnight wins. The call's own `endedAt` (not a fresh clock) is what the hours are judged at. A call with no row cannot be held (no subject); it is logged "outside the sending hours, and a call with no row cannot be held" and not sent.
+- **G3. A blocked automation.** Spec §4.1 item 4: "A `blocked` automation is logged in `automation_log` with the gate's reason". `automation_log.status` stays `sent | held | skipped | failed` (no migration): a gate refusal is `skipped` with the reason in words (`BLOCK_REASONS` in `hold-or-send.ts`: "They stopped texts from this business", "Texts to them are on hold", "Their number could be Mexican or US. Pick its country on their contact", and the existing "No phone number we can text" / "Texting isn't set up for this company yet"), and every SMS-capable pass counts it in a new `blocked` counter. A cron pass's refusal is not final: nothing is stamped, so the next tick decides again; and a refused row gives back its place under the tick cap and the daily cap, so ten refusals at the head of a list cannot starve every other account (review R2-I2). **`ledger_unavailable` is neither a refusal nor a failure (review R2-I4):** `holdOrSend` re-holds the row for 15 minutes (`LEDGER_RETRY_MS`, reason "Waiting a few minutes: couldn't check whether they can get texts"), and the text-back does the same. A `failed` row would leave the queue for good: a released reminder is past its listing window, and the instant reply and the text-back have no later pass.
+- **G4. The backfill** (spec §4.1 item 1): the orchestrator's, never a migration, because "could be Mexican" needs libphonenumber's metadata. The read (`0054-phone-country-candidates.sql`) lists unflagged contacts whose `phone_key` has ten digits and whose number the SAME account has never seen inbound (not a `calls.caller_e164`, folded like `phone_key`; not the contact of an inbound SMS, because the inbound route files a text under the contact its sender matched), each with `last_written_at` (`updated_at`, which every writer bumps). The decision (`couldBeMexican`): a stored `+1`/`1`+ten-digit number whose ten digits are valid under +52 (what the old `toE164` did to a Reynosa number), or a bare ten-digit number a write today would flag. A bare Mexican-only number is not flagged: the gate already reads it as `+52`. The write (`flagSql`) flags a row only while it is still unflagged AND its `phone_key` is the one read, so a re-run is a no-op and a number edited in between is left alone (proved on the replica, Task 3). **When (review R1-I1, orchestrator 2026-09-26):** AFTER the merge deploy, because until then the live build stores `toE164(phone)` from the booking page and forms, and a number booked between an earlier read and the deploy would be stored `+1` and unflagged; the CLI requires `--written-before <cut-off>` and flags only rows the OLD build last wrote. **Count first; write only after danlo sees the count** (danlo, 2026-09-26, (b); Task 17 step 10). Production's read of 2026-09-26: at most 5 contacts, likely 0 (A4).
+- **G5. `contacts.dnd`** (choice 25): `0054-dnd-preflight.sql` counts non-empty values per account (no value printed). **Run 2026-09-26 by the orchestrator through the MCP: 0 rows on production and 0 on the CI project.** Choice 25 needs no conversion, and the former QUESTIONS 4 is dropped. A re-run at rollout is optional (Task 17 step 2 is a record).
+- **G6. The text-back's 08:00 re-send.** The text-back joins the held-row queue (spec §4.1 item 4) with its own `automation_log` source, `'textback'` (0054 widens 0047's CHECK; `AUTOMATION_LOG_SOURCES`, `SOURCE_TITLES` "Missed-call text-back" and `RELEASERS` follow in Task 11). The held row's subject is `call:<calls.id>`, its payload the caller number, contact, conversation, language and `missedAt` (the call's end) (`TextbackPayload`, parsed, never cast). `releaseTextback` re-runs the whole decision through the gate at release time, so a stop that landed overnight wins. The call's own `endedAt` (not a fresh clock) is what the hours are judged at. **At release (danlo, 2026-09-26)** the text-back is skipped, "They've been in touch since", when the same number has STARTED a call, or sent an inbound text in the conversation, after `missedAt` (`callerInTouchSince`; a read error re-holds it 15 minutes), and a held text-back's default body drops "just now". The gate is told the number came from the carrier (`numberFromCarrier`), so the contact's stored flag does not hold a text to the caller ID. An unreadable consent state or zone is a 15-minute re-hold (G3); a hold write that fails keeps the call row's contact and conversation, and the loss is logged. A call with no row cannot be held (no subject); it is logged "outside the sending hours, and a call with no row cannot be held" and not sent. That drops a text-back, against decision 4's "rescheduled, not dropped"; it is rare (the row is written when the call starts) and noted here (review R1-M10).
 - **G7. Choice 21's deadlines.** Only the three passes that already carried a deadline keep one: the email reminder and the SMS reminder (`startsAt`) and the appointment confirmation (`appointmentConfirmDeadline`). A deadline at or before the window's opening → `skipped`, "Not sent: quiet hours ran past the appointment" (`hold-or-send.ts:184`'s "deadline sends now" branch is gone). Everything else is rescheduled. Nothing new gets a deadline: a review ask or a text-back at 08:00 is still useful.
-- **G8. Telnyx's opted-out code** is `40300` (E3). The gate records `revoked` / `carrier_block` only when the provider is NOT redirected to a developer's phone (a redirected refusal is about THAT phone), and only if the address is not already stopped (idempotent, like §4.3's rule). A failure to record is logged, never thrown over the send's own result.
+- **G8. Telnyx's opted-out code** is `40300` (E3; spec §11 now records it as verified). The gate records `revoked` / `carrier_block` only when the provider is NOT redirected to a developer's phone (a redirected refusal is about THAT phone), and only if the address is not already stopped (idempotent, like §4.3's rule). A failure to record is logged, never thrown over the send's own result. In PR-1 this is how the ledger learns of a stop, so the FIRST send to a stopped number is `failed` with `carrierBlocked`, and both screens that can meet it answer the stopped line on that first attempt (G10).
 - **G9. libphonenumber:** `libphonenumber-js@1.13.14` (exact), `max` metadata (E1), in `packages/db/package.json` `dependencies` (the package whose code imports it), reached by the web app only through `@bis/db/phone` (a new subpath export), never in a browser bundle (E2). Licence MIT (choice 30).
 - **G10. Composer and alert-code refusals: when, and in what words.**
-  - The composer is closed **on render** (spec §6: "the text composer is disabled with one line") by `smsRecipientState` (the ledger state of the contact's normalised number, and the flag), read on the server page; the line is `composerStateLine`. A refusal **after an attempt** (a stale tab, or a stop that landed since the page rendered) answers the same words through `composerBlockedLine`, from the same module, so the two cannot disagree. Stopped (spec §6, verbatim): "They stopped texts on {date}. You can't text this number until they text START." (the date in the account's zone; undated after an attempt, which has no date to hand). Held, unconfirmed and unreadable are this plan's lines (G15). An unreadable state closes the form ("Couldn't check whether they can get texts. Reload the page to try again."): it fails closed, like the gate.
-  - The alert-phone code is refused **after the attempt** only: the card cannot know the state of a number before it is typed. A stopped number reads spec §6's line verbatim: "This number has stopped texts from your business line. Text START to it from that phone to turn them back on." Any other refusal keeps today's "couldn't be sent" line.
-- **G11. Where `normalisePhone` lives, and `phone_key` on a `+52` pick.** `packages/db/src/phone.ts`, because the contact write path (`createContact`, `updateContact`, `fillContactBlanks`, the CSV import's dedupe key) must store what it says and lives in `packages/db`; the web app's `e164Of` wraps it. Dedupe keys the number AS IT WILL BE STORED (`phoneKeyOf`), so a Reynosa number no longer collides with its mis-stored `+1` copy. A drawer pick that moves a number onto another contact's key still writes (the operator's answer is the truth about that row; `phone_key` is not unique) and records the pair in `contact_duplicate_flags` with reason `phone_country_pick`, the queue a merge tool reads (0033); a repeat is a no-op (23505). Undo restores the phone and the flag; the duplicate flag stays for the merge tool to re-check.
+  - The composer is closed **on render** (spec §6: "the text composer is disabled with one line") by `smsRecipientState` (the ledger state of the contact's normalised number, and the flag), read on the server page; the line is `composerStateLine`. A refusal **after an attempt** (a stale tab, or a stop that landed since the page rendered) answers the same words through `composerBlockedLine`, from the same module, so the two cannot disagree. Stopped (spec §6, verbatim): "They stopped texts on {date}. You can't text this number until they text START." (the date in the account's zone; undated after an attempt, which has no date to hand). Held, unconfirmed and unreadable are this plan's lines (G15). An unreadable state closes the form ("Couldn't check whether they can get texts. Reload the page to try again."): it fails closed, like the gate; after an attempt, `ledger_unavailable` answers that same line, never a thrown error (review R3-M2). A carrier refusal `40300` (the FIRST attempt to a stopped number in PR-1) marks the row failed and answers the stopped line (review R3-I3).
+  - The alert-phone code is refused **after the attempt** only: the card cannot know the state of a number before it is typed. A stopped number reads spec §6's line verbatim, on the carrier's first refusal too (R3-I3): "This number has stopped texts from your business line. Text START to it from that phone to turn them back on." A number typed with a country code that disagrees with the country picked gets "That number starts with a different country code than the one picked. Pick the matching country, or type just the ten digits." and no code (R3-M4). A gate that throws gives the verification row back (R3-M3). Any other refusal keeps today's "couldn't be sent" line.
+- **G11. Where `normalisePhone` lives, and `phone_key` on a `+52` pick.** `packages/db/src/phone.ts`, because the contact write path (`createContact`, `updateContact`, `fillContactBlanks`, the CSV import's dedupe key) must store what it says and lives in `packages/db`; the web app's `e164Of` wraps it. Every contact write passes the number AS TYPED or AS SAID, never `e164Of`'s output (review R2-C1: a pre-read `+1` reads as a code the person gave, so an ambiguous number was stored confirmed). Dedupe keys the number AS IT WILL BE STORED (`phoneKeyOf`), so a Reynosa number no longer collides with its mis-stored `+1` copy; and when a `+52` ten-digit key misses, it also looks up the bare ten digits: a contact stored as those bare digits is the same contact, and a `+1` contact with them is recorded as a pair, reason `phone_country_twin` (review R1-I3). A drawer pick that moves a number onto another contact's key still writes (the operator's answer is the truth about that row; `phone_key` is not unique) and records the pair in `contact_duplicate_flags` with reason `phone_country_pick`, the queue a merge tool reads (0033); a repeat is a no-op (23505, the unique `contact_duplicate_flags_pair` index). A flag that cannot be written after the pick's write is logged, never reported as a failed pick (R3-M11). Undo restores the phone and the flag; the duplicate flag stays for the merge tool to re-check.
 - **G12. The A2P read.** Spec §4.1 item 3 step 3 runs `resolveSmsSender` in the gate. Its own read error THROWS, as it always has, into each caller's existing catch (a failed tick, an error line in the composer); only the ledger and flag reads become `blocked: ledger_unavailable`. That keeps every caller's current handling of an A2P outage unchanged.
 - **G13. Retiring the quiet-hours form.** The switch, the two pickers, `saveQuietHoursAction`, `readQuietSettings`/`saveQuietSettings`/`DEFAULT_QUIET_SETTINGS`/`isClock` and the ten form lines go (Task 10). The card stays at `#quiet-hours`, read-only, in the spec's words (§6). `automation_settings` and its columns stay until a later migration drops them after parity (spec §3); nothing reads them (scan 5).
-- **G14. The drawer in PR-1.** The Messages block "lands in parts" (spec §6); PR-1 ships the Texts row's Check number state only. So the row renders NOTHING unless the number could be Mexican or US, sits above the existing "No marketing emails" switch (which PR-3 replaces), and uses the drawer's own summary states for loading (the skeleton) and error ("Couldn't load"). It renders in the drawer and on the full contact page, like the switch. The summary API reports `phone_country_unconfirmed` as the flag OR "the stored number reads both ways" (a number saved before the backfill ran is ambiguous too, and the gate refuses it either way); the drawer's parser tolerates the field missing (a server from before this PR). The pick rewrites the stored number's ten digits under the chosen country and clears the flag (spec §4.2, "The number's country"), compare-and-set on the phone the action read; the undo only ever restores the SAME ten digits (its arguments come off the wire).
-- **G15. Copy the spec does not give** (the voice rule applies; each is pinned where it renders): the row's word "Check number" (§6 names the state) and label "Texts" under "Messages"; toasts "Saved as a Mexican number" / "Saved as a US number" with Undo; "Their number changed while you were choosing. Reload to see it."; "That number can't be read as a US or Mexican number. Edit it instead."; the composer's held, unconfirmed and unreadable lines (G10); the alert phone's legend "Country of this number"; the Activity source title "Missed-call text-back"; the three new automation-log reasons (G3). The drawer says "Mexico (+52)" (§6, verbatim) and Settings "México (+52)" (§6, verbatim): the spec spells them differently and both are kept as written.
-- **G16. The ledger's actor column.** Spec §3 names `actor_user_id uuid` FK `users`. Staff actions know the Clerk user id (`requireAccountAccess` → `userId`, a string like `user_…`), which is what `events.actor_id` already stores; a uuid FK would need a lookup and would fail for the ids this codebase actually carries. 0054 has `actor_id text`, required (non-blank) for `staff` and `staff_undo` by a CHECK. PR-2 writes it.
-- **G17. Grants.** Spec §3 says "revoke all from anon and authenticated; grant select to authenticated" AND "No role, `service_role` included, holds update or delete". 0054 revokes ALL from `anon`, `authenticated` AND `service_role` (the default ACL hands all three ALL, `MAINTAIN` included), then grants `SELECT` to `authenticated` and `SELECT, INSERT` to `service_role`. The contact reference is composite (`(account_id, contact_id)` → `contacts(account_id, id)`, 0050's pattern), `on delete set null (contact_id)`, so a row can never name another account's contact.
+- **G14. The drawer in PR-1.** The Messages block "lands in parts" (spec §6); PR-1 ships the Texts row's Check number state only. So the row renders NOTHING unless the number could be Mexican or US, sits above the existing "No marketing emails" switch (which PR-3 replaces), and uses the drawer's own summary states for loading (the skeleton) and error ("Couldn't load"); the block's own two-row skeleton and error line apply from PR-2 (spec §6, corrected). It renders in the drawer and on the full contact page, like the switch. The summary API reports `phone_country_unconfirmed` as the flag OR "the stored number reads both ways" (a number saved before the backfill ran is ambiguous too, and the gate refuses it either way); the drawer's parser tolerates the field missing (a server from before this PR). The pick rewrites the stored number's ten digits under the chosen country and clears the flag (spec §4.2, "The number's country"), compare-and-set on the phone the action read, and ONLY while the stored number is still ambiguous (flagged, or reading both ways): the row that asked may be stale, so a corrected `+19562921696` must not be re-coded `+529562921696` (review R3-I2). The row is keyed by the contact and the flag it was built from, and the drawer re-reads its summary after a phone save, so a number edited into an ambiguous one shows the row, and one corrected hides it, without a reload. The undo only ever restores the SAME ten digits (its arguments come off the wire), in the normaliser's form, and never clears the flag for a number the normaliser still calls ambiguous (R3-M12).
+- **G15. Copy the spec does not give** (the voice rule applies; each is pinned where it renders): the row's word "Check number" (§6 names the state) and label "Texts" under "Messages"; toasts "Saved as a Mexican number" / "Saved as a US number" with Undo; "Their number changed while you were choosing. Reload to see it."; "That number can't be read as a US or Mexican number. Edit it instead."; the composer's held, unconfirmed and unreadable lines (G10); the alert phone's legend "Country of this number" and its country-mismatch line (G10); the Activity source title "Missed-call text-back"; the automation-log reasons (G3, including the 15-minute retry); the held text-back's default bodies without "just now" (G6). **Both places say "Mexico (+52)"** (orchestrator, 2026-09-26; spec §6 and §4.1 corrected at the source; `copy.test.ts` pins both, equal). The quiet card's last sentence is "Anything due overnight goes out when the window opens, unless it's a reminder that would arrive after the appointment." (the spec's first wording promised the late reminder choice 21 skips; corrected in spec §6 and pinned).
+- **G16. The ledger's actor column.** Spec §3 named `actor_user_id uuid` FK `users` (now corrected to `actor_id text`). Staff actions know the Clerk user id (`requireAccountAccess` → `userId`, a string like `user_…`), which is what `events.actor_id` already stores; a uuid FK would need a lookup and would fail for the ids this codebase actually carries. 0054 has `actor_id text`, required (non-blank) for `staff` and `staff_undo` by a CHECK. PR-2 writes it.
+- **G17. Grants.** Spec §3 said "revoke all from anon and authenticated; grant select to authenticated" AND "No role, `service_role` included, holds update or delete" (now corrected to the following). 0054 revokes ALL from `anon`, `authenticated` AND `service_role` (the default ACL hands all three ALL, `MAINTAIN` included), then grants `SELECT` to `authenticated` and `SELECT, INSERT` to `service_role`. The contact reference is composite (`(account_id, contact_id)` → `contacts(account_id, id)`, 0050's pattern), `on delete set null (contact_id)`, so a row can never name another account's contact; the set-null finds rows through `consent_events_contact_idx` (review R1-M5).
 - **G18. `phone_country_unconfirmed` is client-updatable** (`grant update (phone_country_unconfirmed) … to authenticated`), by name, under 0053's rule. The operator's inline phone edit (`updateContactFieldAction`) runs on the request's RLS client and writes the flag in the same statement as the phone (`phoneFields`); without the grant every phone edit would fail. It is a guard against the platform's own misreading, not a consent record.
 - **G19. The registry's footer column.** Spec §4.1 item 2 says "Each kind keeps today's footer". The registry records it: `stop_line` (`withOptOut`) for the seven automation kinds and the text-back, `none` for the composer, the alert and the code, exactly as each path sent before. The gate applies it (step 7) BEFORE a caller's `prepare` writes its message row, so the thread shows the text as sent.
 - **G20. Spec line numbers** are cited at `61e7f113`; #149 and #150 moved some (`finish-call.ts`, `registry.ts`, `conversations/actions.ts`). Tasks name functions, not lines.
@@ -124,7 +125,7 @@ Assumptions (not verified; each names what settles it):
 
 ## File Structure
 
-33 files created, 103 modified (136 total), across 16 implementation tasks. Test counts are read off the staged replay (E5); a modified test file shows before → after.
+33 files created, 103 modified (136 total), across 16 implementation tasks. **The review corrections add 14 modified files (150 total; 33 created, 117 modified):** Task 7 `app/b/[publicId]/actions.test.ts`, `app/f/[publicId]/actions.test.ts` (Task 9 adds a hunk), `lib/proposals/generate.test.ts`, `lib/voice/sip-headers.test.ts`, `lib/voice/tools/registry.test.ts`, `lib/voice/tools/schemas.ts` and its test; Task 9 `lib/automations/appointment-confirm-gate.ts` (a comment); Task 11 `lib/voice/textback-body.ts` and its test, `app/api/voice/texml/handoff-result/route.test.ts`, `packages/db/src/voice.ts`, `packages/db/src/test/voice.test.ts`; Task 13 `components/alert-phone-card.test.ts`. The lists below are the replay's; each task's Review corrections block names every file it changes. Test counts are read off the staged replay (E5); a modified test file shows before → after.
 
 **packages/db**
 
@@ -310,6 +311,8 @@ Dependencies, in full:
 - Task 12: Tasks 6, 7, 8. Task 13: Tasks 2, 6, 8. Task 14: Tasks 2, 6, 12.
 - Task 15: Tasks 1–14. Task 16: Task 14. Task 17: everything.
 
+**Review corrections and the lanes (2026-09-26).** The corrections add files to some tasks but move no task and share no file between two lanes of one phase: Task 6 carries every new copy line (the country-mismatch line, the held text-back bodies, "Mexico (+52)", the quiet sentence); Task 7 also edits `lib/voice/tools/schemas.ts` and `lib/voice/sip-headers.ts` (and their tests); Task 9 (Lane A) also edits `lib/forms/enrich.ts` and `app/f/[publicId]/actions.test.ts` (Task 7 edited both earlier, in Phase 2) and `app/api/cron/reminders/route.test.ts`; Task 11 (Lane A) also edits `packages/db/src/voice.ts` and `packages/db/src/test/voice.test.ts`, while Lane B stays in `apps/web`; Task 13 also edits `components/alert-phone-card.test.ts`; Task 14 also edits `contact-drawer.wiring.test.ts`. Checkpoints A–C are unchanged; Checkpoint C's db-suite diff now also carries Task 11's two `voice.test.ts` tests, which are CI only (they fail to connect locally, like the other `withTestAccount` tests).
+
 Commands run from the lane's worktree root (Git Bash), unless a step says otherwise.
 
 **How to read each task.** Step 1 writes the tests, as complete files or as diffs against the task's parent commit. Step 2 runs them, and "Expected" is the RED output of the staged replay (E5), by name. Step 3 writes the implementation. Step 4 runs again; "Expected" is the GREEN output. Step 5's probes were applied to the finished tree one at a time; each row names the tests it turned red. A code block titled "Replace the whole file" is the complete new file; one titled "Apply" is a unified diff against the parent commit.
@@ -318,6 +321,241 @@ Commands run from the lane's worktree root (Git Bash), unless a step says otherw
 ---
 
 ### Task 1: Migration 0054 (the ledger, the flag, the textback source) and the ledger module
+
+#### Review corrections (binding; they override the code below)
+
+Findings: R1-M2, R1-M3, R1-M4, R1-M5 (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** consent.test.ts and consent-ledger-schema.test.ts on the replica's `post` (rebuilt with the new 0054): 32 passed; `packages/db` typecheck exit 0.
+
+- **R1-M2, the tie-break.** On an `occurred_at` tie the MORE RESTRICTIVE row wins (`revoked` 3 > `held` 2 > `hold_released` / `resubscribed` 1), and only then the larger `id` (a uuid's order is random). The database still orders `occurred_at desc, id desc`, but `readConsentState` takes the newest `NEWEST_ROWS = 20` deciding rows and the reducer sorts them in code, so every row at the newest instant is seen. Spec §3 is corrected to match.
+- **R1-M3.** `appendConsentEvent` THROWS on `hold_released` ("needs PR-2's guarded write (only while the state is held)"): with no guard, a release could lift a stop. PR-2 adds the single `INSERT … SELECT` that writes it only while the state is held.
+- **R1-M4.** A read with agency claims sees every account's rows (the policy's `app.is_agency() or` half had no test).
+- **R1-M5.** 0054 adds `consent_events_contact_idx on (account_id, contact_id) where contact_id is not null`: the composite reference's `on delete set null (contact_id)` finds rows by it on every contact delete. The index test lists all three indexes.
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `packages/db/src/consent.test.ts`: the same instant: the more restrictive row wins, whatever the ids (mutation: tie-break on id only → allowed, FAILS)
+- `packages/db/src/consent.test.ts`: the same instant and the same action: the larger id decides, deterministically
+- `packages/db/src/consent.test.ts`: asks for the newest deciding rows of that address, newest first, and takes 20 so every row at the newest instant reaches the tie-break (review R1-M2; mutation: .limit(1) → FAILS)
+- `packages/db/src/consent.test.ts`: refuses hold_released until PR-2's guarded write exists, and writes nothing (mutation: drop the refusal → the insert runs, FAILS)
+- `packages/db/src/test/consent-ledger-schema.test.ts`: the agency reads every account's rows (mutation: drop `app.is_agency() or` from the policy → only none, FAILS)
+- `packages/db/src/test/consent-ledger-schema.test.ts`: the address read and the contact FK's set-null are both indexed (mutation: drop consent_events_contact_idx → FAILS)
+
+**Counts this block supersedes** (read off the corrected tree's runs): `packages/db/src/consent.test.ts` 13 → 15 tests; `packages/db/src/test/consent-ledger-schema.test.ts` 15 → 17 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **tie: no restrictiveness order** in `packages/db/src/consent.ts`: `` const r = RESTRICTIVENESS[b.action as DecidingAction] - RESTRICTIVENESS[a.action as DecidingAction]; `` → `` const r = 0; ``. KILLED, red: "consentStateOf — spec §3's table the same instant: the more restrictive row wins, whatever the ids (mutation: tie-break on id only → allowed, FAILS)".
+- **read one row again** in `packages/db/src/consent.ts`: `` .limit(NEWEST_ROWS); `` → `` .limit(1); ``. KILLED, red: "readConsentState asks for the newest deciding rows of that address, newest first, and takes 20 so every row at the newest instant reaches the tie-break (review R1-M2; mutation: .limit(1) → FAILS)".
+- **let hold_released through** in `packages/db/src/consent.ts`: `` if (e.action === "hold_released") { `` → `` if (false) { ``. KILLED, red: "appendConsentEvent refuses hold_released until PR-2's guarded write exists, and writes nothing (mutation: drop the refusal → the insert runs, FAILS)".
+- drop `consent_events_contact_idx` on the replica's `post` → KILLED: `the address read and the contact FK's set-null are both indexed` (applied with psql, restored, 17/17 green after).
+- `alter policy consent_events_read … using (account_id = app.current_account_id())` on `post` → KILLED: `the agency reads every account's rows` (restored).
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/packages/db/src/consent.ts b/packages/db/src/consent.ts
+index a2123139..3042a7a5 100644
+--- a/packages/db/src/consent.ts
++++ b/packages/db/src/consent.ts
+@@ -19,6 +19,16 @@ export type ConsentMethod = (typeof CONSENT_METHODS)[number];
+ /** The rows that decide the state. `granted` is evidence only and never does (choice 28). */
+ export const DECIDING_ACTIONS = ["revoked", "held", "hold_released", "resubscribed"] as const satisfies readonly ConsentAction[];
+ 
++type DecidingAction = (typeof DECIDING_ACTIONS)[number];
++
++/** On an `occurred_at` tie the more restrictive row wins: a stop outranks a
++ *  hold, a hold outranks a lift. Never the uuid's accident (review R1-M2). */
++const RESTRICTIVENESS: Record<DecidingAction, number> = { revoked: 3, held: 2, hold_released: 1, resubscribed: 1 };
++
++/** How many of an address's newest deciding rows a read takes: every row that
++ *  shares the newest instant, with room to spare. */
++const NEWEST_ROWS = 20;
++
+ export type ConsentRow = {
+   id: string; action: ConsentAction; method: ConsentMethod; occurred_at: string;
+ };
+@@ -29,8 +39,9 @@ export type ConsentState =
+   | { state: "held"; since: string; method: ConsentMethod; eventId: string };
+ 
+ /**
+- * Spec §3's table, pure. The newest DECIDING row, by `occurred_at` then `id`
+- * (both descending), decides: none / `hold_released` / `resubscribed` →
++ * Spec §3's table, pure. The newest DECIDING row decides; on an
++ * `occurred_at` tie the most restrictive one (revoked, then held, then a
++ * lift), and only then the larger `id`: none / `hold_released` / `resubscribed` →
+  * allowed; `revoked` → stopped; `held` → held. `granted` rows are skipped
+  * wherever they sort. Compared as instants, never as strings: PostgREST and
+  * a backfill can spell the same moment differently.
+@@ -39,7 +50,9 @@ export function consentStateOf(rows: readonly ConsentRow[]): ConsentState {
+   const deciding = rows.filter((r) => (DECIDING_ACTIONS as readonly string[]).includes(r.action));
+   deciding.sort((a, b) => {
+     const t = Date.parse(b.occurred_at) - Date.parse(a.occurred_at);
+-    return t !== 0 ? t : b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
++    if (t !== 0) return t;
++    const r = RESTRICTIVENESS[b.action as DecidingAction] - RESTRICTIVENESS[a.action as DecidingAction];
++    return r !== 0 ? r : b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+   });
+   const newest = deciding[0];
+   if (!newest || newest.action === "hold_released" || newest.action === "resubscribed") return { state: "allowed" };
+@@ -50,8 +63,9 @@ export function consentStateOf(rows: readonly ConsentRow[]): ConsentState {
+ }
+ 
+ /**
+- * One address's state. Reads only the newest deciding row (the index
+- * `consent_events_address_idx` serves it). THROWS on a read error: the send
++ * One address's state. Reads the address's newest deciding rows (the index
++ * `consent_events_address_idx` serves it) and lets `consentStateOf` decide,
++ * so an `occurred_at` tie is broken by restrictiveness, not by the uuid. THROWS on a read error: the send
+  * gate turns that into `blocked: ledger_unavailable` (fails closed, §4.1).
+  */
+ export async function readConsentState(
+@@ -62,7 +76,7 @@ export async function readConsentState(
+     .eq("account_id", accountId).eq("channel", channel).eq("address", address)
+     .in("action", [...DECIDING_ACTIONS])
+     .order("occurred_at", { ascending: false }).order("id", { ascending: false })
+-    .limit(1);
++    .limit(NEWEST_ROWS);
+   if (error) throw new Error(`readConsentState failed: ${error.message}`);
+   return consentStateOf((data ?? []) as ConsentRow[]);
+ }
+@@ -83,6 +97,12 @@ export type ConsentEventInput = {
+ 
+ /** The one INSERT into the ledger. The table's CHECKs refuse a bad shape. */
+ export async function appendConsentEvent(db: SupabaseClient, e: ConsentEventInput): Promise<{ id: string }> {
++  // Spec §3: "A hold_released row is written only when the state is held",
++  // checked inside the insert. That guarded write is PR-2's; until it exists
++  // nothing may append one (a plain insert could lift a stop, review R1-M3).
++  if (e.action === "hold_released") {
++    throw new Error("appendConsentEvent: hold_released needs PR-2's guarded write (only while the state is held)");
++  }
+   const { data, error } = await db.from("consent_events").insert({
+     account_id: e.accountId, channel: e.channel, address: e.address,
+     action: e.action, method: e.method,
+```
+
+```diff
+diff --git a/packages/db/src/consent.test.ts b/packages/db/src/consent.test.ts
+index 61c2e0d7..9b3f7e19 100644
+--- a/packages/db/src/consent.test.ts
++++ b/packages/db/src/consent.test.ts
+@@ -56,11 +56,21 @@ describe("consentStateOf — spec §3's table", () => {
+     expect(consentStateOf([earlier, later]).state).toBe("allowed");
+   });
+ 
+-  it("the same instant: the larger id wins (mutation: drop the id tiebreak → order-dependent, FAILS one way)", () => {
++  it("the same instant: the more restrictive row wins, whatever the ids (mutation: tie-break on id only → allowed, FAILS)", () => {
++    const stop = row("revoked", "2026-10-03T15:00:00Z", "keyword", "00000000-0000-0000-0000-00000000000a");
++    const start = row("resubscribed", "2026-10-03T15:00:00Z", "start_keyword", "00000000-0000-0000-0000-00000000000b");
++    expect(consentStateOf([stop, start]).state).toBe("stopped");
++    expect(consentStateOf([start, stop]).state).toBe("stopped");
++    const hold = row("held", "2026-10-03T16:00:00Z", "free_text", "00000000-0000-0000-0000-00000000000c");
++    const release = row("hold_released", "2026-10-03T16:00:00Z", "staff", "00000000-0000-0000-0000-00000000000d");
++    expect(consentStateOf([hold, release]).state).toBe("held");
++  });
++
++  it("the same instant and the same action: the larger id decides, deterministically", () => {
+     const a = row("revoked", "2026-10-03T15:00:00Z", "keyword", "00000000-0000-0000-0000-00000000000a");
+-    const b = row("resubscribed", "2026-10-03T15:00:00Z", "start_keyword", "00000000-0000-0000-0000-00000000000b");
+-    expect(consentStateOf([a, b]).state).toBe("allowed");
+-    expect(consentStateOf([b, a]).state).toBe("allowed");
++    const b = row("revoked", "2026-10-03T15:00:00Z", "carrier_block", "00000000-0000-0000-0000-00000000000b");
++    expect(consentStateOf([a, b])).toMatchObject({ method: "carrier_block", eventId: b.id });
++    expect(consentStateOf([b, a])).toMatchObject({ method: "carrier_block", eventId: b.id });
+   });
+ });
+ 
+@@ -78,7 +88,7 @@ function fakeDb(o: { read?: { data: unknown; error: unknown }; insert?: { data:
+ }
+ 
+ describe("readConsentState", () => {
+-  it("asks for the newest deciding row of that address, newest first by time then id, one row", async () => {
++  it("asks for the newest deciding rows of that address, newest first, and takes 20 so every row at the newest instant reaches the tie-break (review R1-M2; mutation: .limit(1) → FAILS)", async () => {
+     const f = fakeDb({ read: { data: [], error: null } });
+     expect(await readConsentState(f.db, "a1", "sms", "+19562921696")).toEqual({ state: "allowed" });
+     expect(f.calls).toEqual(expect.arrayContaining([
+@@ -86,7 +96,7 @@ describe("readConsentState", () => {
+       ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19562921696"],
+       ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]],
+       ["order", "occurred_at", { ascending: false }], ["order", "id", { ascending: false }],
+-      ["limit", 1],
++      ["limit", 20],
+     ]));
+   });
+ 
+@@ -113,6 +123,13 @@ describe("recordCarrierBlock", () => {
+ });
+ 
+ describe("appendConsentEvent", () => {
++  it("refuses hold_released until PR-2's guarded write exists, and writes nothing (mutation: drop the refusal → the insert runs, FAILS)", async () => {
++    const f = fakeDb({});
++    await expect(appendConsentEvent(f.db, { accountId: "a1", channel: "sms", address: "+19565550100", action: "hold_released", method: "staff", actorId: "user_1" }))
++      .rejects.toThrow("hold_released needs PR-2's guarded write");
++    expect(f.calls.some((c) => c[0] === "insert")).toBe(false);
++  });
++
+   it("throws when the insert is refused — a CHECK violation is never swallowed", async () => {
+     const f = fakeDb({ insert: { data: null, error: { message: "violates check constraint" } } });
+     await expect(appendConsentEvent(f.db, { accountId: "a1", channel: "sms", address: "bad", action: "revoked", method: "staff" }))
+```
+
+```diff
+diff --git a/packages/db/src/test/consent-ledger-schema.test.ts b/packages/db/src/test/consent-ledger-schema.test.ts
+index f5f22dad..14408f8c 100644
+--- a/packages/db/src/test/consent-ledger-schema.test.ts
++++ b/packages/db/src/test/consent-ledger-schema.test.ts
+@@ -102,6 +102,16 @@ describe("0054 consent_events: append-only by grants, RLS on, SELECT for the acc
+       expect(rows.map((r) => r.id)).toEqual([own]);
+     }));
+ 
++  it("the agency reads every account's rows (mutation: drop `app.is_agency() or` from the policy → only none, FAILS)", () =>
++    withRollback(async (c) => {
++      const s = await seed(c);
++      const a = (await c.query<{ id: string }>(INSERT, params({ account: s.a }))).rows[0]!.id;
++      const b = (await c.query<{ id: string }>(INSERT, params({ account: s.b }))).rows[0]!.id;
++      await actAs(c, { app_role: "agency_admin", sub: "user_consent_agency" });
++      const { rows } = await c.query<{ id: string }>("select id from consent_events where account_id in ($1, $2) order by id", [s.a, s.b]);
++      expect(rows.map((r) => r.id)).toEqual([a, b].sort());
++    }));
++
+   it("a client cannot insert, even into its own account (42501 on the grant) (mutation: grant insert to authenticated → FAILS)", () =>
+     withRollback(async (c) => {
+       const s = await seed(c);
+@@ -191,6 +201,17 @@ describe("0054 consent_events: deletes, as the roles that make them", () => {
+     }));
+ });
+ 
++describe("0054 consent_events: indexes", () => {
++  it("the address read and the contact FK's set-null are both indexed (mutation: drop consent_events_contact_idx → FAILS)", () =>
++    withRollback(async (c) => {
++      const { rows } = await c.query<{ indexname: string; indexdef: string }>(
++        "select indexname, indexdef from pg_indexes where schemaname = 'public' and tablename = 'consent_events' order by indexname");
++      expect(rows.map((r) => r.indexname)).toEqual(["consent_events_address_idx", "consent_events_contact_idx", "consent_events_pkey"]);
++      expect(rows.find((r) => r.indexname === "consent_events_contact_idx")!.indexdef)
++        .toMatch(/\(account_id, contact_id\) WHERE \(contact_id IS NOT NULL\)/);
++    }));
++});
++
+ describe("0054 contacts.phone_country_unconfirmed and the textback source", () => {
+   it("the flag is boolean, not null, default false, and client-updatable by name (mutation: drop the grant → the client update is 42501, FAILS)", () =>
+     withRollback(async (c) => {
+```
+
+```diff
+diff --git a/packages/db/supabase/migrations/0054_consent_ledger.sql b/packages/db/supabase/migrations/0054_consent_ledger.sql
+index b09550b1..92677dbd 100644
+--- a/packages/db/supabase/migrations/0054_consent_ledger.sql
++++ b/packages/db/supabase/migrations/0054_consent_ledger.sql
+@@ -90,6 +90,10 @@ comment on column public.consent_events.actor_id is
+ 
+ create index consent_events_address_idx
+   on public.consent_events (account_id, channel, address, occurred_at desc, id desc);
++-- The contact reference's ON DELETE SET NULL finds rows by (account_id,
++-- contact_id); without this every contact delete scans the ledger.
++create index consent_events_contact_idx
++  on public.consent_events (account_id, contact_id) where contact_id is not null;
+ 
+ alter table public.consent_events enable row level security;
+ create policy consent_events_read on public.consent_events for select to authenticated
+```
+
 
 **Owner:** bis-db-schema. Writes the migration and its proof; **never applies it** (Task 17 does, once per project). **Lane:** A (Phase 1). **Depends on:** Prerequisite 1 (#150 merged: 0053's grant convention and the grant-pinning tests it created).
 
@@ -1212,6 +1450,324 @@ git commit -m "feat(db): 0054 — the consent ledger, the phone-country flag, th
 
 ### Task 2: F-009: `normalisePhone`, and the contacts write path stores E.164 and the flag
 
+#### Review corrections (binding; they override the code below)
+
+Findings: R3-I1, R1-M1, R1-I3, R3-M11 (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** phone.test.ts 53 passed, contacts-phone.test.ts 11 passed; `packages/db` typecheck exit 0.
+
+- **R3-I1, `phoneForCountry`.** Only a BARE ten digits take the chosen country. A number with `+`, `00` or `011`, and the no-plus code forms `1`+ten, `52`+ten and `521`+ten, carries its own code; if that code is not the chosen country's, the answer is null (Task 13 turns that into its own line). The old `nationalTen` path stripped a typed `52` and added `+1`: "52 55 1234 5678" under US became `+15512345678`, a New Jersey stranger.
+- **R1-M1, leading zeros.** `01`, `044` or `045` before ten digits are Mexico's retired trunk prefixes: dropped, and the ten digits judged as Mexican (`+52` if valid there, else null). Any other leading `0` is refused, never stored as `+0…`.
+- **R1-I3, dedupe across the key change.** 0033's key for a contact stored as bare `899 922 1234` is `8999221234`; a new write keys `528999221234`. When a `+52` ten-digit key misses, `findDuplicate` also looks up `phone_key = <the ten digits>`: a hit whose stored phone normalises to the same `+52` is the SAME contact; any other hit (a `+1` number with those digits) is a `countryTwin`, and `createContact` records the pair in `contact_duplicate_flags` with reason `phone_country_twin` after the insert (`flagDuplicatePair`: a repeat is 23505, a no-op; any other error is logged, never thrown; `flagged` reports it).
+- **R3-M11.** `setContactPhoneCountry` no longer reports a failed pick after a successful write: the twin read and the `phone_country_pick` flag go through the same logging `flagDuplicatePair`.
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `packages/db/src/phone.test.ts`: digits that begin with a country code are that country's, never re-read under the other (mutation: strip 52/1 and take the chosen country → a stranger's number, FAILS)
+- `packages/db/src/phone.test.ts`: 01, 044 and 045 before ten digits are Mexican (mutation: drop the trunk rule → a +0 number, FAILS)
+- `packages/db/src/phone.test.ts`: any other leading 0 is refused, never stored as +0… (mutation: let rule 5 take a leading 0 → FAILS)
+- `packages/db/src/contacts-phone.test.ts`: a contact stored as bare "899 922 1234" IS the new +52 write: no second contact (mutation: drop the bare-ten fallback → a duplicate is inserted, FAILS)
+- `packages/db/src/contacts-phone.test.ts`: the same ten digits stored as +1 are a country TWIN: a new contact, and the pair queued for the merge tool (mutation: treat the twin as the same contact → FAILS)
+- `packages/db/src/contacts-phone.test.ts`: a +52 contact already stored as +52 is found by its own key, and a +1 number never looks for a +52 twin
+
+**Counts this block supersedes** (read off the corrected tree's runs): `packages/db/src/phone.test.ts` 42 → 45 tests; `packages/db/src/contacts-phone.test.ts` 8 → 11 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **no trunk rule** in `packages/db/src/phone.ts`: `` if (trunk) return validUnder(trunk[1]!, "MX") ? { e164: `+52${trunk[1]}`, unconfirmed: false } : null; `` → (nothing). KILLED, red: "normalisePhone: Mexico's retired trunk prefixes, and leading zeros 01, 044 and 045 before ten digits are Mexican (mutation: drop the trunk rule → a +0 number, FAILS)".
+- **a leading zero accepted** in `packages/db/src/phone.ts`: ``  && !digits.startsWith("0") `` → (nothing). KILLED, red: "normalisePhone: Mexico's retired trunk prefixes, and leading zeros any other leading 0 is refused, never stored as +0… (mutation: let rule 5 take a leading 0 → FAILS)".
+- **phoneForCountry: back to nationalTen** in `packages/db/src/phone.ts`: `` return digits.length === 10 ? `+${CODE[country]}${digits}` : null; `` → `` return nationalTen(text) === null ? null : `+${CODE[country]}${nationalTen(text)}`; ``. SURVIVED.
+- **no bare-key fallback** in `packages/db/src/contacts.ts`: `` if (!result.phoneMatch && /^52\d{10}$/.test(pKey)) { `` → `` if (false) { ``. KILLED, red: "createContact: a +52 number meets the contact stored before F-009 (review R1-I3) a contact stored as bare "899 922 1234" IS the new +52 write: no second contact (mutation: drop the bare-ten fallback → a duplicate is inserted, FAILS)"; "createContact: a +52 number meets the contact stored before F-009 (review R1-I3) the same ten digits stored as +1 are a country TWIN: a new contact, and the pair queued for the merge tool (mutation: treat the twin as the same contact → FAILS)".
+- **a +1 twin is the same contact** in `packages/db/src/contacts.ts`: `` if (hit && normalisePhone(hit.phone)?.e164 === `+${pKey}`) result.phoneMatch = hit.id; `` → `` if (hit) result.phoneMatch = hit.id; ``. KILLED, red: "createContact: a +52 number meets the contact stored before F-009 (review R1-I3) the same ten digits stored as +1 are a country TWIN: a new contact, and the pair queued for the merge tool (mutation: treat the twin as the same contact → FAILS)".
+- **the twin is not flagged** in `packages/db/src/contacts.ts`: `` && await flagDuplicatePair(db, accountId, data.id, match.countryTwin, "phone_country_twin"); `` → `` && false; ``. KILLED, red: "createContact: a +52 number meets the contact stored before F-009 (review R1-I3) the same ten digits stored as +1 are a country TWIN: a new contact, and the pair queued for the merge tool (mutation: treat the twin as the same contact → FAILS)".
+- **R3-I1: the old reading (no-plus codes stripped, the picked country added)** in `packages/db/src/phone.ts`: ``     : (digits.length === 11 && digits.startsWith("1")) ⏎       || (digits.length === 12 && digits.startsWith("52")) ⏎       || (digits.length === 13 && digits.startsWith("521")) ? digits ⏎     : null; ⏎   if (explicit !== null) { ⏎     const e164 = international(explicit)?.e164 ?? null; ⏎     if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null; ⏎     return nationalTen(e164) === null ? null : e164; ⏎   } ⏎   return digits.length === 10 ? `+${CODE[country]}${digits}` : null; `` → ``     : null; ⏎   if (explicit !== null) { ⏎     const e164 = international(explicit)?.e164 ?? null; ⏎     if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null; ⏎     return nationalTen(e164) === null ? null : e164; ⏎   } ⏎   const n = nationalTen(text); ⏎   return n === null ? null : `+${CODE[country]}${n}`; ``. KILLED, red: "phoneForCountry: a number typed beside a country choice digits that begin with a country code are that country's, never re-read under the other (mutation: strip 52/1 and take the chosen country → a stranger's number, FAILS)".
+- The single-line swap back to `nationalTen` SURVIVED because it is EQUIVALENT: the explicit branch now catches every form `nationalTen` would strip, so the final line only ever sees ten bare digits. The real regression needs both halves, and that combined probe ("R3-I1: the old reading") is KILLED above, and again at the alert phone in Task 13.
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/packages/db/src/phone.ts b/packages/db/src/phone.ts
+index 469a19a2..db992b62 100644
+--- a/packages/db/src/phone.ts
++++ b/packages/db/src/phone.ts
+@@ -17,8 +17,12 @@ import { parsePhoneNumberFromString } from "libphonenumber-js/max";
+  *      valid under both, or under neither → `+1` (today's reading, so the
+  *      stored `phone_key` does not move) AND `unconfirmed`, so the send gate
+  *      holds it until a person picks the country (decision 3).
+- *   4. Any other 8–15 digits → `+` and the digits, as `toE164` did.
+- *   5. Anything else → null: nothing we can text.
++ *   4. Mexico's retired trunk prefixes: `01` + ten digits, `044`/`045` + ten
++ *      digits → `+52` and the ten, when they are a valid Mexican number
++ *      (review R1-M1).
++ *   5. Any other 8–15 digits not starting with 0 → `+` and the digits, as
++ *      `toE164` did. A leading 0 is never a country code, so it is refused.
++ *   6. Anything else → null: nothing we can text.
+  *
+  * Validity comes from libphonenumber-js's MAX metadata. The default MIN
+  * metadata validates by LENGTH only, so every ten digits is "valid" as a
+@@ -73,7 +77,9 @@ export function normalisePhone(raw: string | null | undefined): NormalisedPhone
+     if (mx && !us) return { e164: `+52${digits}`, unconfirmed: false };
+     return { e164: `+1${digits}`, unconfirmed: us === mx };
+   }
+-  if (digits.length >= 8 && digits.length <= 15) {
++  const trunk = /^(?:01|044|045)(\d{10})$/.exec(digits);
++  if (trunk) return validUnder(trunk[1]!, "MX") ? { e164: `+52${trunk[1]}`, unconfirmed: false } : null;
++  if (digits.length >= 8 && digits.length <= 15 && !digits.startsWith("0")) {
+     return { e164: dropRetiredMexicanOne(`+${digits}`), unconfirmed: false };
+   }
+   return null;
+@@ -97,10 +103,12 @@ function nationalTen(raw: string): string | null {
+ 
+ /**
+  * A number TYPED beside a country control (the alert phone, spec §6).
+- * Without a country code, its ten national digits take the chosen country.
+- * WITH one (`+`, `00`, `011`), that code must be the chosen country's, or the
+- * answer is null: a typed `+52` under "US (+1)" is a contradiction to show
+- * the person, not one to settle for them.
++ * Only BARE ten digits take the chosen country. Anything carrying a country
++ * code (`+`, `00`, `011`, or digits that begin with one: eleven starting
++ * `1`, twelve starting `52`, thirteen starting `521`) must name the chosen
++ * country, or the answer is null: "52 55 1234 5678" under "US (+1)" is a
++ * contradiction to show the person, never a New Jersey number to text a code
++ * to (review R3-I1).
+  */
+ export function phoneForCountry(raw: string | null | undefined, country: PhoneCountry): string | null {
+   const text = String(raw ?? "").trim();
+@@ -109,14 +117,16 @@ export function phoneForCountry(raw: string | null | undefined, country: PhoneCo
+   const explicit = text.startsWith("+") ? digits
+     : digits.startsWith("011") ? digits.slice(3)
+     : digits.startsWith("00") ? digits.slice(2)
++    : (digits.length === 11 && digits.startsWith("1"))
++      || (digits.length === 12 && digits.startsWith("52"))
++      || (digits.length === 13 && digits.startsWith("521")) ? digits
+     : null;
+   if (explicit !== null) {
+     const e164 = international(explicit)?.e164 ?? null;
+     if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null;
+     return nationalTen(e164) === null ? null : e164;
+   }
+-  const national = nationalTen(text);
+-  return national === null ? null : `+${CODE[country]}${national}`;
++  return digits.length === 10 ? `+${CODE[country]}${digits}` : null;
+ }
+ 
+ /**
+```
+
+```diff
+diff --git a/packages/db/src/phone.test.ts b/packages/db/src/phone.test.ts
+index e7d2e49b..08d3cb27 100644
+--- a/packages/db/src/phone.test.ts
++++ b/packages/db/src/phone.test.ts
+@@ -56,6 +56,13 @@ describe("phoneForCountry: a number typed beside a country choice", () => {
+     expect(phoneForCountry("52 1 899 922 1234", "MX")).toBe("+528999221234");
+   });
+ 
++  it("digits that begin with a country code are that country's, never re-read under the other (mutation: strip 52/1 and take the chosen country → a stranger's number, FAILS)", () => {
++    expect(phoneForCountry("52 55 1234 5678", "US")).toBeNull();
++    expect(phoneForCountry("52 899 922 1234", "US")).toBeNull();
++    expect(phoneForCountry("1 956 292 1696", "MX")).toBeNull();
++    expect(phoneForCountry("52 55 1234 5678", "MX")).toBe("+525512345678");
++  });
++
+   it("a typed country code must agree with the choice (mutation: return the typed E.164 regardless → FAILS)", () => {
+     expect(phoneForCountry("+52 899 922 1234", "MX")).toBe("+528999221234");
+     expect(phoneForCountry("+52 899 922 1234", "US")).toBeNull();
+@@ -101,3 +108,17 @@ describe("couldBeMexican: the 0054 backfill's test", () => {
+     expect(couldBeMexican(stored)).toBe(flagged);
+   });
+ });
++
++describe("normalisePhone: Mexico's retired trunk prefixes, and leading zeros", () => {
++  it("01, 044 and 045 before ten digits are Mexican (mutation: drop the trunk rule → a +0 number, FAILS)", () => {
++    expect(normalisePhone("01 81 8123 4567")).toEqual({ e164: "+528181234567", unconfirmed: false });
++    expect(normalisePhone("044 81 8123 4567")).toEqual({ e164: "+528181234567", unconfirmed: false });
++    expect(normalisePhone("045 899 922 1234")).toEqual({ e164: "+528999221234", unconfirmed: false });
++  });
++
++  it("any other leading 0 is refused, never stored as +0… (mutation: let rule 5 take a leading 0 → FAILS)", () => {
++    expect(normalisePhone("0 8123 4567")).toBeNull();
++    expect(normalisePhone("0 81 8123 4567 89")).toBeNull();
++    expect(normalisePhone("01 956 123 4567")).toBeNull();
++  });
++});
+```
+
+```diff
+diff --git a/packages/db/src/contacts.ts b/packages/db/src/contacts.ts
+index 5b921682..e6efe03b 100644
+--- a/packages/db/src/contacts.ts
++++ b/packages/db/src/contacts.ts
+@@ -106,7 +106,10 @@ export function emailKey(value: string): string {
+     .replace(/\+[^@]*@/, "@");
+ }
+ 
+-type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null };
++/** `countryTwin`: a contact holding the same ten digits under +1 when the
++ *  new number is their +52 reading (review R1-I3). Not the same person for
++ *  sure, so it is recorded for the merge queue, never merged. */
++type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null; countryTwin: string | null };
+ 
+ /**
+  * Both lookups ALWAYS run, and that is the change. The old version returned on
+@@ -148,7 +151,7 @@ type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null };
+ async function findDuplicate(
+   db: SupabaseClient, accountId: string, email?: string, phone?: string,
+ ): Promise<DuplicateMatch> {
+-  const result: DuplicateMatch = { emailMatch: null, phoneMatch: null };
++  const result: DuplicateMatch = { emailMatch: null, phoneMatch: null, countryTwin: null };
+ 
+   const eKey = email ? emailKey(email) : "";
+   if (eKey) {
+@@ -164,11 +167,42 @@ async function findDuplicate(
+       .eq("account_id", accountId).eq("phone_key", pKey).limit(1);
+     if (error) throw new Error(`contact dedupe failed: ${error.message}`);
+     if (data && data.length > 0) result.phoneMatch = data[0]!.id as string;
++
++    // 0033's phone_key is the stored DIGITS, so a contact saved before F-009
++    // as "899 922 1234" keys 8999221234 while its +52 reading keys
++    // 528999221234 (review R1-I3). On a miss for a +52 ten-digit number, look
++    // up the bare ten: a contact whose stored phone reads as this same +52
++    // number IS this contact; one that reads as +1 is its country twin.
++    if (!result.phoneMatch && /^52\d{10}$/.test(pKey)) {
++      const { data: bare, error: bareErr } = await db.from("contacts").select("id, phone")
++        .eq("account_id", accountId).eq("phone_key", pKey.slice(2)).limit(1);
++      if (bareErr) throw new Error(`contact dedupe failed: ${bareErr.message}`);
++      const hit = (bare ?? [])[0] as { id: string; phone: string | null } | undefined;
++      if (hit && normalisePhone(hit.phone)?.e164 === `+${pKey}`) result.phoneMatch = hit.id;
++      else if (hit) result.countryTwin = hit.id;
++    }
+   }
+ 
+   return result;
+ }
+ 
++/** One pair onto contact_duplicate_flags (0033), for the merge queue. A
++ *  repeat (23505) is the designed no-op. Called AFTER the write it is about
++ *  has succeeded, so a failure here is logged, never thrown: throwing would
++ *  report a failure for a write that happened (review R3-M11). */
++async function flagDuplicatePair(
++  db: SupabaseClient, accountId: string, one: string, other: string, reason: string,
++): Promise<boolean> {
++  const [contactA, contactB] = [one, other].sort();
++  const { error } = await db.from("contact_duplicate_flags")
++    .insert({ account_id: accountId, contact_a: contactA, contact_b: contactB, reason });
++  if (error && error.code !== "23505") {
++    console.error(`contact duplicate flag (${reason}) for account ${accountId} not recorded: ${error.message}`);
++    return false;
++  }
++  return true;
++}
++
+ export async function createContact(
+   db: SupabaseClient, accountId: string, input: ContactInput, actorId: string,
+   actorType: ActorType = "user",
+@@ -210,7 +244,9 @@ export async function createContact(
+   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
+   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
+     actorType);
+-  return { id: data.id, existing: false, flagged: false };
++  const twinFlagged = match.countryTwin !== null
++    && await flagDuplicatePair(db, accountId, data.id, match.countryTwin, "phone_country_twin");
++  return { id: data.id, existing: false, flagged: twinFlagged };
+ }
+ 
+ export async function updateContact(
+@@ -616,14 +652,11 @@ export async function setContactPhoneCountry(
+ 
+   const { data: twins, error: twinErr } = await db.from("contacts").select("id")
+     .eq("account_id", accountId).eq("phone_key", phoneDigits(input.phone)).neq("id", contactId).limit(1);
+-  if (twinErr) throw new Error(`setContactPhoneCountry duplicate check failed: ${twinErr.message}`);
+-  const twin = (twins ?? [])[0] as { id: string } | undefined;
+-  if (twin) {
+-    const [contactA, contactB] = [contactId, twin.id].sort();
+-    const { error: flagErr } = await db.from("contact_duplicate_flags")
+-      .insert({ account_id: accountId, contact_a: contactA, contact_b: contactB, reason: "phone_country_pick" });
+-    if (flagErr && flagErr.code !== "23505") throw new Error(`contact duplicate flag failed: ${flagErr.message}`);
+-  }
++  // The phone is written: a failure from here on is logged, never thrown
++  // (a throw would report a failed pick that succeeded; review R3-M11).
++  const twin = twinErr ? undefined : (twins ?? [])[0] as { id: string } | undefined;
++  if (twinErr) console.error(`setContactPhoneCountry: duplicate check for account ${accountId} failed after the write: ${twinErr.message}`);
++  if (twin) await flagDuplicatePair(db, accountId, contactId, twin.id, "phone_country_pick");
+   await emit(db, accountId, "contact.updated", actorId,
+     { contactId, fields: ["phone", "phone_country_unconfirmed"] }, actorType);
+   return "updated";
+```
+
+```diff
+diff --git a/packages/db/src/contacts-phone.test.ts b/packages/db/src/contacts-phone.test.ts
+index 8aa91901..b1e7c5f0 100644
+--- a/packages/db/src/contacts-phone.test.ts
++++ b/packages/db/src/contacts-phone.test.ts
+@@ -1,5 +1,6 @@
+ import { describe, it, expect } from "vitest";
+-import { phoneFields, phoneKeyOf } from "./contacts";
++import type { SupabaseClient } from "@supabase/supabase-js";
++import { phoneFields, phoneKeyOf, createContact, phoneDigits } from "./contacts";
+ 
+ /**
+  * F-009 on write (consent chain spec §4.1 item 1): every contact write
+@@ -45,3 +46,60 @@ describe("phoneKeyOf — the dedupe key of the number as it will be stored", ()
+     expect(phoneKeyOf(undefined)).toBe("");
+   });
+ });
++
++/**
++ * Review R1-I3: 0033's phone_key is the stored DIGITS, so a contact saved
++ * before F-009 as "899 922 1234" keys 8999221234 while its +52 reading keys
++ * 528999221234. An in-memory PostgREST stand-in (select/eq/limit, insert)
++ * is enough to drive createContact's dedupe; the live path is
++ * test/contacts-phone-live.test.ts (CI).
++ */
++type Row = Record<string, unknown>;
++function memoryDb(contacts: Row[]) {
++  const tables: { contacts: Row[]; contact_duplicate_flags: Row[]; events: Row[] } & Record<string, Row[]> = { contacts, contact_duplicate_flags: [], events: [] };
++  let nextId = 1;
++  const db = {
++    from(table: string) {
++      const filters: [string, unknown][] = [];
++      const q = {
++        select: () => q,
++        eq: (k: string, v: unknown) => { filters.push([k, v]); return q; },
++        limit: (n: number) => Promise.resolve({ data: tables[table]!.filter((r) => filters.every(([k, v]) => r[k] === v)).slice(0, n), error: null }),
++        insert: (row: Row) => {
++          const stored: Row = { ...row, id: `new-${nextId++}` };
++          if (table === "contacts") stored.phone_key = stored.phone ? phoneDigits(String(stored.phone)) : null;
++          tables[table]!.push(stored);
++          const done = Promise.resolve({ data: null, error: null });
++          return Object.assign(done, { select: () => ({ single: () => Promise.resolve({ data: { id: stored.id }, error: null }) }) });
++        },
++      };
++      return q;
++    },
++  };
++  return { db: db as unknown as SupabaseClient, tables };
++}
++
++describe("createContact: a +52 number meets the contact stored before F-009 (review R1-I3)", () => {
++  it("a contact stored as bare \"899 922 1234\" IS the new +52 write: no second contact (mutation: drop the bare-ten fallback → a duplicate is inserted, FAILS)", async () => {
++    const m = memoryDb([{ id: "c-old", account_id: "a1", phone: "899 922 1234", phone_key: "8999221234" }]);
++    expect(await createContact(m.db, "a1", { phone: "899-922-1234" }, "user_test")).toEqual({ id: "c-old", existing: true, flagged: false });
++    expect(m.tables.contacts).toHaveLength(1);
++  });
++
++  it("the same ten digits stored as +1 are a country TWIN: a new contact, and the pair queued for the merge tool (mutation: treat the twin as the same contact → FAILS)", async () => {
++    const m = memoryDb([{ id: "c-us", account_id: "a1", phone: "+18999221234", phone_key: "8999221234" }]);
++    const created = await createContact(m.db, "a1", { phone: "899 922 1234" }, "user_test");
++    expect(created).toMatchObject({ existing: false, flagged: true });
++    expect(m.tables.contacts.find((r) => r.id === created.id)).toMatchObject({ phone: "+528999221234", phone_country_unconfirmed: false });
++    expect(m.tables.contact_duplicate_flags).toEqual([expect.objectContaining({
++      account_id: "a1", contact_a: [created.id, "c-us"].sort()[0], contact_b: [created.id, "c-us"].sort()[1], reason: "phone_country_twin",
++    })]);
++  });
++
++  it("a +52 contact already stored as +52 is found by its own key, and a +1 number never looks for a +52 twin", async () => {
++    const m = memoryDb([{ id: "c-mx", account_id: "a1", phone: "+528999221234", phone_key: "528999221234" }]);
++    expect(await createContact(m.db, "a1", { phone: "899 922 1234" }, "user_test")).toMatchObject({ id: "c-mx", existing: true });
++    const n = memoryDb([{ id: "c-mx", account_id: "a1", phone: "+528999221234", phone_key: "528999221234" }]);
++    expect(await createContact(n.db, "a1", { phone: "(956) 292-1696" }, "user_test")).toMatchObject({ existing: false, flagged: false });
++  });
++});
+```
+
+
 **Owner:** bis-crm. **Lane:** A (Phase 1). **Depends on:** None in code (the new column is read only at run time, so this compiles and unit-tests without Task 1). Lane A order puts it after Task 1.
 
 F-009 (spec §4.1 item 1). One function decides what every typed or spoken number becomes, and it lives in `packages/db` because the contact write path (`createContact`, `updateContact`, `fillContactBlanks`, the CSV import's dedupe key) is there; the web app reaches it as `@bis/db/phone`, a server-only subpath, so libphonenumber's metadata never ships to a browser (Task 14's client code imports its TYPE only).
@@ -2003,6 +2559,276 @@ git commit -m "feat(db): F-009 — normalisePhone (+52, the unconfirmed flag) an
 ---
 
 ### Task 3: The phone-country backfill and the `dnd` pre-flight: two read files, the deciding module, the CLI
+
+#### Review corrections (binding; they override the code below)
+
+Findings: R1-I1 (code half; Task 17 carries the order) (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** phone-country.test.ts and phone-country-backfill.test.ts (replica `post`): 53 passed; typecheck exit 0.
+
+- **R1-I1.** The backfill reads AFTER the merge deploy (Task 17), because the live build stores `toE164(phone)` from the booking page and forms until then. The candidates read adds `last_written_at` (`contacts.updated_at` in UTC ISO; the column is `not null default now()`, 0003, and every writer bumps it, `fillContactBlanks` included). `CandidateRow` carries it, `parseCandidates` requires a UTC ISO instant in it (the CSV header is five cells), and `writtenBefore(rows, cutoff)` keeps only rows the OLD build last wrote. The CLI refuses to run without `--written-before <ISO instant>` and prints "last written before …" beside the other counts. A row written after the cut-off is the new build's, already normalised on write.
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `packages/db/src/backfill/phone-country.test.ts`: keeps rows last written strictly before the deploy's instant (mutation: <= → the row written AT the deploy is judged, FAILS)
+- `packages/db/src/backfill/phone-country.test.ts`: a row without a readable last write is refused at parse time, never guessed old (mutation: drop the ISO check → FAILS)
+- `packages/db/src/backfill/phone-country.test.ts`: an unreadable cut-off throws rather than keeping everything
+- `packages/db/src/test/phone-country-backfill.test.ts`: each row reports its last write as UTC ISO text the parser accepts, and the cut-off leaves a newer row alone (mutation: select updated_at raw → the parser refuses the row, FAILS)
+
+**Counts this block supersedes** (read off the corrected tree's runs): `packages/db/src/backfill/phone-country.test.ts` 12 → 15 tests; `packages/db/src/test/phone-country-backfill.test.ts` 3 → 4 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **no cut-off** in `packages/db/src/backfill/phone-country.ts`: `` return rows.filter((r) => Date.parse(r.last_written_at) < cutoff.getTime()); `` → `` return [...rows]; ``. KILLED, red: "writtenBefore: only the old build's rows are judged (review R1-I1) keeps rows last written strictly before the deploy's instant (mutation: <= → the row written AT the deploy is judged, FAILS)"; "the 0054 phone-country backfill (read file + deciding module + emitted UPDATE) each row reports its last write as UTC ISO text the parser accepts, and the cut-off leaves a newer row alone (mutation: select updated_at raw → the parser refuses the row, FAILS)".
+- **the cut-off reads created_at** in `packages/db/supabase/backfills/0054-phone-country-candidates.sql`: `` to_char(c.updated_at at time zone 'UTC' `` → `` to_char(c.created_at at time zone 'UTC' ``. KILLED, red: "the 0054 phone-country backfill (read file + deciding module + emitted UPDATE) each row reports its last write as UTC ISO text the parser accepts, and the cut-off leaves a newer row alone (mutation: select updated_at raw → the parser refuses the row, FAILS)".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/packages/db/src/backfill/phone-country.ts b/packages/db/src/backfill/phone-country.ts
+index 90348f1b..a935fd3b 100644
+--- a/packages/db/src/backfill/phone-country.ts
++++ b/packages/db/src/backfill/phone-country.ts
+@@ -11,18 +11,21 @@ import { couldBeMexican } from "../phone";
+  * edited between the read and the write is left alone (the next write of it
+  * flags it through `phoneFields` if it is still ambiguous).
+  */
+-export type CandidateRow = { id: string; account_id: string; phone: string; phone_key: string };
++export type CandidateRow = { id: string; account_id: string; phone: string; phone_key: string; last_written_at: string };
+ 
+ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+ const KEY = /^[0-9]{10}$/;
++const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
++const COLUMNS = "id,account_id,phone,phone_key,last_written_at";
+ 
+ function checked(r: Record<string, unknown>, at: string): CandidateRow {
+-  const { id, account_id, phone, phone_key } = r;
++  const { id, account_id, phone, phone_key, last_written_at } = r;
+   if (typeof id !== "string" || !UUID.test(id)) throw new Error(`${at}: id is not a uuid`);
+   if (typeof account_id !== "string" || !UUID.test(account_id)) throw new Error(`${at}: account_id is not a uuid`);
+   if (typeof phone !== "string") throw new Error(`${at}: phone is not text`);
+   if (typeof phone_key !== "string" || !KEY.test(phone_key)) throw new Error(`${at}: phone_key is not ten digits`);
+-  return { id, account_id, phone, phone_key };
++  if (typeof last_written_at !== "string" || !ISO.test(last_written_at)) throw new Error(`${at}: last_written_at is not a UTC ISO instant`);
++  return { id, account_id, phone, phone_key, last_written_at };
+ }
+ 
+ /**
+@@ -43,16 +46,27 @@ export function parseCandidates(text: string): CandidateRow[] {
+   }
+   const [header, ...lines] = trimmed.split(/\r?\n/);
+   const names = header!.split("\t");
+-  if (names.join(",") !== "id,account_id,phone,phone_key") {
+-    throw new Error(`candidates: header is "${names.join(",")}", expected id,account_id,phone,phone_key`);
++  if (names.join(",") !== COLUMNS) {
++    throw new Error(`candidates: header is "${names.join(",")}", expected ${COLUMNS}`);
+   }
+   return lines.filter((l) => l.trim() !== "").map((l, i) => {
+     const cells = l.split("\t");
+-    if (cells.length !== 4) throw new Error(`line ${i + 2}: ${cells.length} cells, expected 4`);
+-    return checked({ id: cells[0], account_id: cells[1], phone: cells[2], phone_key: cells[3] }, `line ${i + 2}`);
++    if (cells.length !== 5) throw new Error(`line ${i + 2}: ${cells.length} cells, expected 5`);
++    return checked({ id: cells[0], account_id: cells[1], phone: cells[2], phone_key: cells[3], last_written_at: cells[4] }, `line ${i + 2}`);
+   });
+ }
+ 
++/**
++ * The rows the OLD build last wrote: strictly before `cutoff`, the merge
++ * deploy's instant. A row written since was stored by the new build, which
++ * judges a ten-digit number itself (an explicit +1 there is a person's own
++ * answer), so the backfill must not second-guess it.
++ */
++export function writtenBefore(rows: readonly CandidateRow[], cutoff: Date): CandidateRow[] {
++  if (!Number.isFinite(cutoff.getTime())) throw new Error("writtenBefore: the cut-off is not a date");
++  return rows.filter((r) => Date.parse(r.last_written_at) < cutoff.getTime());
++}
++
+ /** The rows whose number could be Mexican: the ones to flag. */
+ export function rowsToFlag(rows: readonly CandidateRow[]): CandidateRow[] {
+   return rows.filter((r) => couldBeMexican(r.phone));
+```
+
+```diff
+diff --git a/packages/db/src/backfill/phone-country-run.ts b/packages/db/src/backfill/phone-country-run.ts
+index 270730db..3a6e1df8 100644
+--- a/packages/db/src/backfill/phone-country-run.ts
++++ b/packages/db/src/backfill/phone-country-run.ts
+@@ -1,8 +1,10 @@
+ /**
+- * `pnpm --filter @bis/db backfill:phone-country <candidates-file> [--emit-sql <out.sql>]`
++ * `pnpm --filter @bis/db backfill:phone-country <candidates-file> --written-before <ISO> [--emit-sql <out.sql>]`
+  *
+  * Reads the output of supabase/backfills/0054-phone-country-candidates.sql
+- * (execute_sql's JSON, or ci:sql's tab-separated text), prints how many
++ * (execute_sql's JSON, or ci:sql's tab-separated text), keeps only the rows
++ * last written before `--written-before` (the merge deploy's instant; the
++ * old build's rows, review R1-I1), prints how many
+  * candidates could be Mexican, per account, and WRITES NOTHING unless
+  * `--emit-sql` names a file — and then it writes that file, never a
+  * database. Running the emitted SQL is the orchestrator's step, on the CI
+@@ -10,20 +12,24 @@
+  * task). Never prints a phone number.
+  */
+ import { readFileSync, writeFileSync } from "node:fs";
+-import { countByAccount, flagSql, parseCandidates, rowsToFlag } from "./phone-country";
++import { countByAccount, flagSql, parseCandidates, rowsToFlag, writtenBefore } from "./phone-country";
+ 
+ function main(): void {
+   const args = process.argv.slice(2);
+   const emitAt = args.indexOf("--emit-sql");
++  const cutAt = args.indexOf("--written-before");
+   const out = emitAt >= 0 ? args[emitAt + 1] : undefined;
+-  const input = args.find((a, i) => !a.startsWith("--") && i !== emitAt + 1);
+-  if (!input || (emitAt >= 0 && !out)) {
+-    console.error("usage: backfill:phone-country <candidates-file> [--emit-sql <out.sql>]");
++  const cutoff = cutAt >= 0 ? new Date(args[cutAt + 1] ?? "") : null;
++  const input = args.find((a, i) => !a.startsWith("--") && i !== emitAt + 1 && i !== cutAt + 1);
++  if (!input || (emitAt >= 0 && !out) || !cutoff || !Number.isFinite(cutoff.getTime())) {
++    console.error("usage: backfill:phone-country <candidates-file> --written-before <ISO instant of the merge deploy> [--emit-sql <out.sql>]");
+     process.exit(2);
+   }
+   const candidates = parseCandidates(readFileSync(input, "utf8"));
+-  const flag = rowsToFlag(candidates);
++  const old = writtenBefore(candidates, cutoff);
++  const flag = rowsToFlag(old);
+   console.log(`candidates read: ${candidates.length}`);
++  console.log(`last written before ${cutoff.toISOString()} (the old build's): ${old.length}`);
+   console.log(`could be Mexican (to flag): ${flag.length}`);
+   for (const [account, n] of countByAccount(flag)) console.log(`  account ${account}: ${n}`);
+   if (!out) {
+@@ -35,7 +41,7 @@ function main(): void {
+     return;
+   }
+   writeFileSync(out, flagSql(flag));
+-  console.log(`wrote ${out} (${flag.length} row(s)); run it with ci:sql --allow-write on the CI project first`);
++  console.log(`wrote ${out} (${flag.length} row(s)); it holds ids and keys only, never a phone number`);
+ }
+ 
+ main();
+```
+
+```diff
+diff --git a/packages/db/src/backfill/phone-country.test.ts b/packages/db/src/backfill/phone-country.test.ts
+index 740c6b4d..9571da11 100644
+--- a/packages/db/src/backfill/phone-country.test.ts
++++ b/packages/db/src/backfill/phone-country.test.ts
+@@ -2,12 +2,12 @@ import { describe, it, expect } from "vitest";
+ import { readFileSync } from "node:fs";
+ import { fileURLToPath } from "node:url";
+ import { sqlRefusals } from "../ci/sql";
+-import { countByAccount, flagSql, parseCandidates, rowsToFlag, type CandidateRow } from "./phone-country";
++import { countByAccount, flagSql, parseCandidates, rowsToFlag, writtenBefore, type CandidateRow } from "./phone-country";
+ 
+ const A = "11111111-1111-4111-8111-111111111111";
+ const B = "22222222-2222-4222-8222-222222222222";
+-const row = (n: number, phone: string, phone_key: string, account = A): CandidateRow =>
+-  ({ id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`, account_id: account, phone, phone_key });
++const row = (n: number, phone: string, phone_key: string, account = A, last_written_at = "2026-10-01T12:00:00.000Z"): CandidateRow =>
++  ({ id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`, account_id: account, phone, phone_key, last_written_at });
+ 
+ describe("parseCandidates", () => {
+   it("reads execute_sql's JSON array", () => {
+@@ -17,7 +17,7 @@ describe("parseCandidates", () => {
+ 
+   it("reads ci:sql's tab-separated text with its header", () => {
+     const r = row(2, "55 1234 5678", "5512345678");
+-    expect(parseCandidates(`id\taccount_id\tphone\tphone_key\n${r.id}\t${r.account_id}\t${r.phone}\t${r.phone_key}\n`)).toEqual([r]);
++    expect(parseCandidates(`id\taccount_id\tphone\tphone_key\tlast_written_at\n${r.id}\t${r.account_id}\t${r.phone}\t${r.phone_key}\t${r.last_written_at}\n`)).toEqual([r]);
+   });
+ 
+   it("THROWS on a malformed row rather than half-reading it (mutation: skip bad rows → FAILS)", () => {
+@@ -81,7 +81,7 @@ describe("flagSql", () => {
+ describe("the read file", () => {
+   const text = readFileSync(fileURLToPath(new URL("../../supabase/backfills/0054-phone-country-candidates.sql", import.meta.url)), "utf8");
+   it("selects exactly the four columns the parser reads, in order", () => {
+-    expect(text).toMatch(/select c\.id, c\.account_id, c\.phone, c\.phone_key\s/);
++    expect(text).toMatch(/select c\.id, c\.account_id, c\.phone, c\.phone_key,\s+to_char\(c\.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS\.MS"Z"'\) as last_written_at\s/);
+   });
+   it("skips numbers already flagged and numbers the account has seen inbound (mutation: drop either NOT EXISTS → FAILS)", () => {
+     expect(text).toContain("c.phone_country_unconfirmed = false");
+@@ -89,3 +89,21 @@ describe("the read file", () => {
+     expect(text).toContain("m.direction = 'inbound'");
+   });
+ });
++
++describe("writtenBefore: only the old build's rows are judged (review R1-I1)", () => {
++  it("keeps rows last written strictly before the deploy's instant (mutation: <= → the row written AT the deploy is judged, FAILS)", () => {
++    const old = row(1, "+15512345678", "5512345678", A, "2026-10-01T11:59:59.999Z");
++    const at = row(2, "+15512345679", "5512345679", A, "2026-10-01T12:00:00.000Z");
++    const later = row(3, "+15512345670", "5512345670", A, "2026-10-01T12:00:00.001Z");
++    expect(writtenBefore([old, at, later], new Date("2026-10-01T12:00:00.000Z"))).toEqual([old]);
++  });
++
++  it("a row without a readable last write is refused at parse time, never guessed old (mutation: drop the ISO check → FAILS)", () => {
++    expect(() => parseCandidates(JSON.stringify([{ ...row(1, "+15512345678", "5512345678"), last_written_at: "2026-10-01 12:00:00+00" }])))
++      .toThrow("last_written_at is not a UTC ISO instant");
++  });
++
++  it("an unreadable cut-off throws rather than keeping everything", () => {
++    expect(() => writtenBefore([row(1, "+15512345678", "5512345678")], new Date("not a date"))).toThrow("the cut-off is not a date");
++  });
++});
+```
+
+```diff
+diff --git a/packages/db/src/test/phone-country-backfill.test.ts b/packages/db/src/test/phone-country-backfill.test.ts
+index addd7a1c..2293034b 100644
+--- a/packages/db/src/test/phone-country-backfill.test.ts
++++ b/packages/db/src/test/phone-country-backfill.test.ts
+@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
+ import { fileURLToPath } from "node:url";
+ import type { Client } from "pg";
+ import { withRollback } from "./db";
+-import { parseCandidates, rowsToFlag, flagSql } from "../backfill/phone-country";
++import { parseCandidates, rowsToFlag, flagSql, writtenBefore } from "../backfill/phone-country";
+ 
+ /**
+  * The 0054 phone-country backfill end to end, in a rolled-back transaction
+@@ -44,6 +44,17 @@ async function candidates(c: Client, account: string) {
+ }
+ 
+ describe("the 0054 phone-country backfill (read file + deciding module + emitted UPDATE)", () => {
++  it("each row reports its last write as UTC ISO text the parser accepts, and the cut-off leaves a newer row alone (mutation: select updated_at raw → the parser refuses the row, FAILS)", () =>
++    withRollback(async (c) => {
++      const { account, ids } = await seed(c);
++      await c.query("update contacts set updated_at = '2030-01-01T00:00:00Z' where id = $1", [ids.legacy]);
++      const rows = await candidates(c, account);
++      expect(rows.every((r) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(r.last_written_at))).toBe(true);
++      const judged = writtenBefore(rows, new Date("2029-01-01T00:00:00Z")).map((r) => r.id);
++      expect(judged).toContain(ids.plusOne);
++      expect(judged).not.toContain(ids.legacy);
++    }));
++
+   it("lists only unflagged ten-digit numbers the account has not seen inbound (mutation: drop the calls NOT EXISTS → 'called in' listed, FAILS)", () =>
+     withRollback(async (c) => {
+       const { account, ids } = await seed(c);
+```
+
+```diff
+diff --git a/packages/db/supabase/backfills/0054-phone-country-candidates.sql b/packages/db/supabase/backfills/0054-phone-country-candidates.sql
+index 4c1c1e94..accf11ee 100644
+--- a/packages/db/supabase/backfills/0054-phone-country-candidates.sql
++++ b/packages/db/supabase/backfills/0054-phone-country-candidates.sql
+@@ -1,6 +1,10 @@
+ -- Consent chain PR-1, the 0054 phone-country backfill: the READ half.
+ --
+--- READ ONLY. It lists every contact whose stored number is a ten-digit
++-- READ ONLY. Run AFTER the merge deploy (review R1-I1): each row carries its
++-- last write (updated_at, not null since 0003) as UTC ISO text, and the CLI
++-- judges only rows written BEFORE the deploy's instant, because the old
++-- build stored any ten digits as +1 and the new one judges them itself.
++-- It lists every contact whose stored number is a ten-digit
+ -- reading (a +1 number or bare ten digits: phone_key has ten digits) that is
+ -- not flagged yet, and that the SAME account has never seen inbound: not the
+ -- caller of a call (calls.caller_e164, folded the way phone_key folds), and
+@@ -17,7 +21,8 @@
+ --
+ -- ASCII only, no backslash (memory bis-mcp-sql-escapes); ci:sql's read gate
+ -- passes it (src/ci/sql-files.test.ts).
+-select c.id, c.account_id, c.phone, c.phone_key
++select c.id, c.account_id, c.phone, c.phone_key,
++       to_char(c.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as last_written_at
+ from public.contacts c
+ where c.phone is not null
+   and c.phone_country_unconfirmed = false
+```
+
 
 **Owner:** bis-db-schema. **Lane:** A (Phase 1). **Depends on:** Task 2 (`couldBeMexican`).
 
@@ -2819,6 +3645,59 @@ git commit -m "feat(sms): the provider's refusal codes (SmsProviderError); logga
 
 ### Task 5: The message-class registry and the fixed sending hours
 
+#### Review corrections (binding; they override the code below)
+
+Findings: R1-M6 (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** hours.test.ts 17 passed.
+
+- **R1-M6.** Every DST test ran in America/Chicago, the machine's own zone, so a leak of the process zone passed them. Three tests added: Havana (its clocks jump AT midnight, 2026-03-08), Los Angeles spring forward (automated 15:00Z, marketing on that Sunday 19:00Z) and fall back (16:00Z). No code changes.
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `lib/consent/hours.test.ts`: Havana springs forward AT midnight (2026-03-08, 00:00 CST → 01:00 CDT): at 22:00 the day before, the opening is 08:00 CDT, 12:00Z (mutation: open on the local 08:00 of the pre-shift offset → 13:00Z, FAILS)
+- `lib/consent/hours.test.ts`: Los Angeles, spring forward (2026-03-08, 02:00 PST → 03:00 PDT): 01:00 PST waits for 08:00 PDT, 15:00Z; marketing on that Sunday waits for noon, 19:00Z
+- `lib/consent/hours.test.ts`: Los Angeles, fall back (2026-11-01, 02:00 PDT → 01:00 PST): at the first 01:30 the opening is 08:00 PST, 16:00Z
+
+**Counts this block supersedes** (read off the corrected tree's runs): `lib/consent/hours.test.ts` 14 → 17 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **the opening in the machine's zone** in `apps/web/src/lib/consent/hours.ts`: `` if (wall.minutes < open) return wallInstant(wall.year, wall.month, wall.day, open, z); `` → `` if (wall.minutes < open) return new Date(wall.year, wall.month - 1, wall.day, 0, open); ``. KILLED, red: "nextOpening: automated hours, 08:00-21:00 every day the recipient's zone decides: one instant, two zones, two answers (mutation: ignore `zone` → FAILS)"; "nextOpening: DST away from the machine's zone Havana springs forward AT midnight (2026-03-08, 00:00 CST → 01:00 CDT): at 22:00 the day before, the opening is 08:00 CDT, 12:00Z (mutation: open on the local 08:00 of the pre-shift offset → 13:00Z, FAILS)"; "nextOpening: DST away from the machine's zone Los Angeles, spring forward (2026-03-08, 02:00 PST → 03:00 PDT): 01:00 PST waits for 08:00 PDT, 15:00Z; marketing on that Sunday waits for noon, 19:00Z"; "nextOpening: DST away from the machine's zone Los Angeles, fall back (2026-11-01, 02:00 PDT → 01:00 PST): at the first 01:30 the opening is 08:00 PST, 16:00Z".
+- **the wall read in Chicago** in `apps/web/src/lib/consent/hours.ts`: `` const wall = wallOf(now, z); `` → `` const wall = wallOf(now, "America/Chicago"); ``. KILLED, red: "nextOpening: automated hours, 08:00-21:00 every day the recipient's zone decides: one instant, two zones, two answers (mutation: ignore `zone` → FAILS)"; "nextOpening: automated hours, 08:00-21:00 every day an unresolvable zone reads as America/Chicago, never as no window and never as UTC (mutation: fall back to UTC → FAILS)".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/src/lib/consent/hours.test.ts b/apps/web/src/lib/consent/hours.test.ts
+index b11d4420..35110c90 100644
+--- a/apps/web/src/lib/consent/hours.test.ts
++++ b/apps/web/src/lib/consent/hours.test.ts
+@@ -87,3 +87,25 @@ describe("expiresBeforeOpening: choice 21", () => {
+     expect(expiresBeforeOpening(opening, null)).toBe(false);
+   });
+ });
++
++/**
++ * Review R1-M6: the tests above run in America/Chicago, the machine's own
++ * zone, so a leak of the process zone could pass them. These use zones
++ * whose clocks jump at MIDNIGHT (Havana) and a Pacific zone.
++ */
++describe("nextOpening: DST away from the machine's zone", () => {
++  it("Havana springs forward AT midnight (2026-03-08, 00:00 CST → 01:00 CDT): at 22:00 the day before, the opening is 08:00 CDT, 12:00Z (mutation: open on the local 08:00 of the pre-shift offset → 13:00Z, FAILS)", () => {
++    expect(iso(nextOpening("automated", at("2026-03-08T03:00:00Z"), "America/Havana"))).toBe("2026-03-08T12:00:00.000Z");
++    // 01:30 CDT, just after the missing hour: still the same 08:00.
++    expect(iso(nextOpening("automated", at("2026-03-08T05:30:00Z"), "America/Havana"))).toBe("2026-03-08T12:00:00.000Z");
++  });
++
++  it("Los Angeles, spring forward (2026-03-08, 02:00 PST → 03:00 PDT): 01:00 PST waits for 08:00 PDT, 15:00Z; marketing on that Sunday waits for noon, 19:00Z", () => {
++    expect(iso(nextOpening("automated", at("2026-03-08T09:00:00Z"), "America/Los_Angeles"))).toBe("2026-03-08T15:00:00.000Z");
++    expect(iso(nextOpening("marketing", at("2026-03-08T09:00:00Z"), "America/Los_Angeles"))).toBe("2026-03-08T19:00:00.000Z");
++  });
++
++  it("Los Angeles, fall back (2026-11-01, 02:00 PDT → 01:00 PST): at the first 01:30 the opening is 08:00 PST, 16:00Z", () => {
++    expect(iso(nextOpening("automated", at("2026-11-01T08:30:00Z"), "America/Los_Angeles"))).toBe("2026-11-01T16:00:00.000Z");
++  });
++});
+```
+
+
 **Owner:** bis-comms. **Lane:** B (Phase 1). **Depends on:** None (`wallInstant` already exists in `lib/automations/quiet-hours.ts`; Task 10 keeps it).
 
 Spec §4.1 item 2 and decision 4. The registry is the one place a kind's class, hours and footer live; the hours module is the one place the fixed window is computed (the gate uses it, and so does `holdOrSend`, so a held row's time and the gate's deferral can never disagree).
@@ -3211,6 +4090,118 @@ git commit -m "feat(consent): the SMS kind registry and the fixed sending hours"
 
 ### Task 6: The copy: every new PR-1 line, added in one place
 
+#### Review corrections (binding; they override the code below)
+
+Findings: orchestrator copy rulings (R3 copy, R2 spec correction), danlo (a), R3-M4 (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** copy.test.ts, quiet-hours-card.test.ts, the settings tests and alert-phone-card.test.ts: 221 passed.
+
+Every new line of the review lands here, so the Phase 3 lanes still never edit `messages.ts`:
+- **"Mexico (+52)" in both places** (orchestrator, 2026-09-26): `settings.alertPhoneCountryMx` is "Mexico (+52)", the drawer's spelling; spec §6 and §4.1 are corrected at the source. `copy.test.ts` pins both and pins them EQUAL. Step 5's probe 2 below ("México without the accent") is replaced by this block's "México again in Settings".
+- **The quiet card** (`automations.quiet.fixed`) ends "Anything due overnight goes out when the window opens, unless it's a reminder that would arrive after the appointment." (the first wording promised what choice 21 skips). Pinned.
+- **New keys:** `settings.alertPhoneCountryMismatch` (Task 13, R3-M4) and `voice.textback.defaultBodyHeldEn` / `defaultBodyHeldNoNameEn` (Task 11, danlo (a)). The census test counts 26 PR-1 lines (was 23).
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `lib/consent/copy.test.ts`: the fixed sending hours, with the account's zone as {zone}, and the overnight rule that does not promise a late reminder (orchestrator 2026-09-26, choice 21; mutation: '8 a.m.' → '8am' FAILS; drop the 'unless' clause → FAILS)
+- `lib/consent/copy.test.ts`: a text-back held overnight does not say "just now" (danlo, 2026-09-26)
+
+**Counts this block supersedes** (read off the corrected tree's runs): `lib/consent/copy.test.ts` 5 → 6 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **the quiet card promises a late reminder** in `apps/web/src/lib/messages.ts`: `` , unless it's a reminder that would arrive after the appointment.", `` → `` .", ``. KILLED, red: "the spec's own words (§6) the fixed sending hours, with the account's zone as {zone}, and the overnight rule that does not promise a late reminder (orchestrator 2026-09-26, choice 21; mutation: '8 a.m.' → '8am' FAILS; drop the 'unless' clause → FAILS)".
+- **México again in Settings** in `apps/web/src/lib/messages.ts`: `` "settings.alertPhoneCountryMx": "Mexico (+52)", `` → `` "settings.alertPhoneCountryMx": "México (+52)", ``. KILLED, red: "the spec's own words (§6) the alert phone's country choice and its stopped line".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/src/lib/messages.ts b/apps/web/src/lib/messages.ts
+index 8524b7d0..ff05fad0 100644
+--- a/apps/web/src/lib/messages.ts
++++ b/apps/web/src/lib/messages.ts
+@@ -601,7 +601,10 @@ export const m = {
+   // The alert phone's country (consent chain PR-1, F-009): never ambiguous.
+   "settings.alertPhoneCountry": "Country of this number",
+   "settings.alertPhoneCountryUs": "US (+1)",
+-  "settings.alertPhoneCountryMx": "México (+52)",
++  "settings.alertPhoneCountryMx": "Mexico (+52)",
++  // A number typed WITH a country code that is not the country picked
++  // (review R3-M4): never texted, never silently re-coded.
++  "settings.alertPhoneCountryMismatch": "That number starts with a different country code than the one picked. Pick the matching country, or type just the ten digits.",
+   // Spec §6, verbatim: the code could not go because that phone texted STOP.
+   "settings.alertPhoneStopped": "This number has stopped texts from your business line. Text START to it from that phone to turn them back on.",
+   "settings.alertPhoneSendFailed": "The verification code couldn't be sent. Try again in a moment.",
+@@ -1016,6 +1019,11 @@ export const m = {
+ 
+   "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
+   "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
++  // A text-back HELD overnight and sent at 08:00 (consent chain PR-1, danlo
++  // 2026-09-26): "just now" would be false the next morning. Spanish needs no
++  // variant; its default never said "just now".
++  "voice.textback.defaultBodyHeldEn": "Hi, this is {name}. Sorry we missed your call, reply here and we'll help.",
++  "voice.textback.defaultBodyHeldNoNameEn": "Sorry we missed your call, reply here and we'll help.",
+   "voice.textback.defaultBodyEs": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+   "voice.textback.defaultBodyNoNameEs": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
+   // Same class of note as `automations.optOutCounted` (the count above
+@@ -1453,7 +1461,7 @@ export const m = {
+   // Part C — the Quiet hours card (agency, on the Automations page).
+   "automations.quiet.title": "Quiet hours",
+   // Spec §6, verbatim: the fixed sending hours, read-only (decision 4).
+-  "automations.quiet.fixed": "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens.",
++  "automations.quiet.fixed": "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens, unless it's a reminder that would arrive after the appointment.",
+   "automations.activityLink": "See what went out",
+   // The page's four group headings, in the order the customer lives it; the
+   // last group is the one rule that holds every automation back.
+```
+
+```diff
+diff --git a/apps/web/src/lib/consent/copy.test.ts b/apps/web/src/lib/consent/copy.test.ts
+index 86e0fce5..9a905b5d 100644
+--- a/apps/web/src/lib/consent/copy.test.ts
++++ b/apps/web/src/lib/consent/copy.test.ts
+@@ -9,9 +9,14 @@ import { m } from "@/lib/messages";
+  * pinned where it renders.
+  */
+ describe("the spec's own words (§6)", () => {
+-  it("the fixed sending hours, with the account's zone as {zone} (mutation: '8 a.m.' → '8am' FAILS)", () => {
++  it("the fixed sending hours, with the account's zone as {zone}, and the overnight rule that does not promise a late reminder (orchestrator 2026-09-26, choice 21; mutation: '8 a.m.' → '8am' FAILS; drop the 'unless' clause → FAILS)", () => {
+     expect(m["automations.quiet.fixed"]).toBe(
+-      "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens.");
++      "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens, unless it's a reminder that would arrive after the appointment.");
++  });
++
++  it("a text-back held overnight does not say \"just now\" (danlo, 2026-09-26)", () => {
++    expect(m["voice.textback.defaultBodyHeldEn"]).toBe("Hi, this is {name}. Sorry we missed your call, reply here and we'll help.");
++    expect(m["voice.textback.defaultBodyHeldNoNameEn"]).toBe("Sorry we missed your call, reply here and we'll help.");
+   });
+ 
+   it("the Texts row's Check number state", () => {
+@@ -26,16 +31,20 @@ describe("the spec's own words (§6)", () => {
+ 
+   it("the alert phone's country choice and its stopped line", () => {
+     expect(m["settings.alertPhoneCountryUs"]).toBe("US (+1)");
+-    expect(m["settings.alertPhoneCountryMx"]).toBe("México (+52)");
++    // One spelling in both places (orchestrator, 2026-09-26): the drawer's.
++    expect(m["settings.alertPhoneCountryMx"]).toBe("Mexico (+52)");
++    expect(m["settings.alertPhoneCountryMx"]).toBe(m["contact.phoneCountry.mx"]);
+     expect(m["settings.alertPhoneStopped"]).toBe(
+       "This number has stopped texts from your business line. Text START to it from that phone to turn them back on.");
+   });
+ 
+   it("no PR-1 line exposes a code, a kind or template syntax other than its own placeholder (DESIGN.md voice)", () => {
+-    const keys = Object.keys(m).filter((k) => /^(contact\.phoneCountry|contact\.messages|compose\.sms(Stopped|StoppedUndated|Held|CheckNumber|StateUnknown)|settings\.alertPhone(Country|Stopped)|automations\.quiet\.fixed|activity\.source\.textback)/.test(k));
+-    // 23, read off messages.ts: 10 contact.phoneCountry, 2 contact.messages,
+-    // 5 compose, 4 settings.alertPhone, the hours sentence, the textback title.
+-    expect(keys.length).toBe(23);
++    const keys = Object.keys(m).filter((k) => /^(contact\.phoneCountry|contact\.messages|compose\.sms(Stopped|StoppedUndated|Held|CheckNumber|StateUnknown)|settings\.alertPhone(Country|Stopped)|automations\.quiet\.fixed|activity\.source\.textback|voice\.textback\.defaultBodyHeld)/.test(k));
++    // 26, read off messages.ts: 10 contact.phoneCountry, 2 contact.messages,
++    // 5 compose, 5 settings.alertPhone (Country, CountryUs, CountryMx,
++    // CountryMismatch, Stopped), the hours sentence, the textback title, and
++    // the 2 held text-back bodies.
++    expect(keys.length).toBe(26);
+     for (const k of keys) {
+       const text = m[k as keyof typeof m];
+       expect(text).not.toMatch(/\{\{|40300|unconfirmed_number|ledger|automation\./);
+```
+
+
 **Owner:** bis-frontend (the copy catalogue). **Lane:** B (Phase 1). **Depends on:** None.
 
 Every new line of PR-1 copy lands in `messages.ts` in ONE commit, so the two Phase 3 lanes never edit the same file. The retired quiet-hours lines are removed later, by Task 10, with the form that uses them. The spec's verbatim sentences are pinned by `copy.test.ts`; the rest are this plan's words (Spec gaps resolved here, G15).
@@ -3397,6 +4388,510 @@ git commit -m "feat(copy): consent chain PR-1's lines (Check number, the compose
 ---
 
 ### Task 7: `e164Of`: one normaliser behind every typed or spoken number
+
+#### Review corrections (binding; they override the code below)
+
+Findings: R2-C1 (CRITICAL), R1-I4, R2 minor (sip-headers) (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** voice, `app/b`, `app/f`, forms and proposals tests: 814 passed; sip-headers 38 with the cron route test; web typecheck exit 0.
+
+**R2-C1: every contact write passes the number AS TYPED or AS SAID.** `e164Of` drops `unconfirmed`, and `phoneFields` reads a leading `+1` as a code the person gave, so "55 1234 5678" pre-normalised to `+15512345678` was stored UNFLAGGED and the gate texted it. "Every call site changes by name only" was exactly the mistake. The rule now: a site that writes a contact hands `createContact` / `fillContactBlanks` the raw string, and `phoneFields` stores "E.164 if it parses, as typed if not", flagging what reads both ways.
+- **The booking page** (`app/b/[publicId]/actions.ts`): `phone: phone || undefined` (the raw field); the `e164Of` import goes.
+- **Forms, intake, the concierge** (`lib/forms/enrich.ts`): create passes `rawPhone || undefined`; `fillBlanks` passes `rawPhone`. (The instant reply's number is Task 9's.)
+- **Sofía** (R1-I4 folded in): new `spokenPhone(said, callerNumber)` in `lib/voice/phone-number.ts`. It returns the caller ID when nothing usable was said, or when what was said IS the caller ID (the carrier's number wins); otherwise the digits as said, with a leading `1` the model added to ten digits dropped (a `+52` is kept). `finishCall`'s lead contact uses `spokenPhone(fields.callbackNumber, ctx.callerNumber)`; `book_appointment` uses `spokenPhone(String(args?.phone ?? ""), ctx.callerNumber)`.
+- **Call proposals** (`lib/proposals/generate.ts`): `const said = spokenPhone(value, null); if (!said) continue; storedValue = said;` (stored once it parses, as said).
+- **Tool schemas** (`lib/voice/tools/schemas.ts`): `book_appointment.phone` and `take_message.callbackNumber` gain "Digits as spoken; no country code unless the caller said one." (R1-I4; the model's behaviour is an ASSUMPTION, which is why `spokenPhone` strips the `1` anyway).
+- **R2 minor, verified real: `sip-headers.ts` stripped the `+`.** `NUMBER_RE` captured the digits after an optional `+`, so a New Zealand caller ID `sip:+6421234567` became "6421234567", which F-009 reads as a valid Mexican number: `+526421234567` (measured: `normalisePhone("6421234567")` → `{"e164":"+526421234567","unconfirmed":false}`). The capture now keeps the `+`.
+- Tests that pinned pre-normalisation are rewritten "AS TYPED" (`app/b/[publicId]/actions.test.ts`, `app/f/[publicId]/actions.test.ts`, proposals).
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `app/b/[publicId]/actions.test.ts`: an ambiguous number reaches createContact as typed, never pre-read as +1 (mutation: phone: e164Of(phone) → "+15512345678", FAILS)
+- `app/b/[publicId]/actions.test.ts`: a plainly US number reaches it as typed too: the one normaliser is the contact write's
+- `app/f/[publicId]/actions.test.ts`: the number reaches createContact as typed (mutation: phone: e164Of(rawPhone) → "+19565551234", FAILS)
+- `lib/proposals/generate.test.ts`: stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → "+19562921696", FAILS)
+- `lib/voice/finish-call.test.ts`: a lead's callback number is stored AS SAID so the contact write can flag it; the caller ID repeated stays the caller ID (review R2-C1; mutation: phone: e164Of(callbackNumber) → "+15512345678", FAILS)
+- `lib/voice/phone-number.test.ts`: a number said as ten digits is stored as said, never pre-read as +1 (mutation: return e164Of(said) → a confirmed +1, FAILS)
+- `lib/voice/phone-number.test.ts`: a leading 1 or +1 the model added is dropped, so the ten digits are judged (mutation: keep the +1 → FAILS)
+- `lib/voice/phone-number.test.ts`: the caller ID repeated, or nothing usable said, is the caller ID as the carrier gave it (mutation: strip the caller ID's +1 too → it reads as ambiguous, FAILS)
+- `lib/voice/tools/registry.test.ts`: stores the number the caller SAID as said, never pre-read as +1, so the contact write can flag it (review R2-C1; mutation: phone = e164Of(args.phone) → "+15512345678", FAILS)
+- `lib/voice/tools/schemas.test.ts`: book_appointment.phone and take_message.callbackNumber ask for the digits as spoken, with no country code the caller did not say (mutation: drop either description → FAILS)
+
+**Counts this block supersedes** (read off the corrected tree's runs): `app/b/[publicId]/actions.test.ts` 45 → 46 tests; `lib/voice/phone-number.test.ts` 19 → 22 tests; `lib/voice/tools/registry.test.ts` 82 → 83 tests; `lib/voice/tools/schemas.test.ts` 9 → 10 tests; `lib/voice/finish-call.test.ts` 98 → 100 tests (one here, one in Task 11).
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **keep the model's leading 1** in `apps/web/src/lib/voice/phone-number.ts`: `` const national = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : null; `` → `` const national: string | null = null; ``. KILLED, red: "spokenPhone — the number a voice contact write stores a leading 1 or +1 the model added is dropped, so the ten digits are judged (mutation: keep the +1 → FAILS)"; "book_appointment stores the number the caller SAID as said, never pre-read as +1, so the contact write can flag it (review R2-C1; mutation: phone = e164Of(args.phone) → "+15512345678", FAILS)".
+- **never prefer the caller ID** in `apps/web/src/lib/voice/phone-number.ts`: `` if (caller && (digits === callerDigits || (national ?? digits) === callerNational)) return caller; `` → (nothing). KILLED, red: "finishCall a lead's callback number is stored AS SAID so the contact write can flag it; the caller ID repeated stays the caller ID (review R2-C1; mutation: phone: e164Of(callbackNumber) → "+15512345678", FAILS)"; "finishCall a lead call runs the full treatment: contact → conversation → message(voice) → unread → alert → row"; "spokenPhone — the number a voice contact write stores the caller ID repeated, or nothing usable said, is the caller ID as the carrier gave it (mutation: strip the caller ID's +1 too → it reads as ambiguous, FAILS)".
+- **the booking page pre-normalises to +1** in `apps/web/src/app/b/[publicId]/actions.ts`: ``       phone: phone || undefined, `` → ``       phone: phone ? phone.replace(/\D/g, "").replace(/^(\d{10})$/, "+1$1") : undefined, ``. KILLED, red: "submitBookingAction — the phone reaches createContact AS TYPED (consent chain F-009) an ambiguous number reaches createContact as typed, never pre-read as +1 (mutation: phone: e164Of(phone) → "+15512345678", FAILS)"; "submitBookingAction — the phone reaches createContact AS TYPED (consent chain F-009) a plainly US number reaches it as typed too: the one normaliser is the contact write's".
+- **a form pre-normalises to +1** in `apps/web/src/lib/forms/enrich.ts`: ``       phone: rawPhone || undefined, `` → ``       phone: rawPhone ? (e164Of(rawPhone) ?? rawPhone) : undefined, ``. KILLED, red: "submitFormAction — the phone reaches createContact AS TYPED (create path; consent chain F-009) the number reaches createContact as typed (mutation: phone: e164Of(rawPhone) → "+19565551234", FAILS)".
+- **Sofia's lead pre-normalised** in `apps/web/src/lib/voice/finish-call.ts`: `` phone: spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? undefined, `` → `` phone: (spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? "").replace(/\D/g, "").replace(/^(\d{10})$/, "+1$1") || undefined, ``. KILLED, red: "finishCall a lead's callback number is stored AS SAID so the contact write can flag it; the caller ID repeated stays the caller ID (review R2-C1; mutation: phone: e164Of(callbackNumber) → "+15512345678", FAILS)"; "finishCall a lead call runs the full treatment: contact → conversation → message(voice) → unread → alert → row".
+- **book_appointment keeps the model's +1** in `apps/web/src/lib/voice/tools/registry.ts`: `` const phone = spokenPhone(String(args?.phone ?? ""), ctx.callerNumber); `` → `` const phone = String(args?.phone ?? "") || ctx.callerNumber; ``. KILLED, red: "book_appointment stores the number the caller SAID as said, never pre-read as +1, so the contact write can flag it (review R2-C1; mutation: phone = e164Of(args.phone) → "+15512345678", FAILS)".
+- **a proposal stores +1** in `apps/web/src/lib/proposals/generate.ts`: ``           storedValue = said; `` → ``           storedValue = said.replace(/\D/g, "").replace(/^(\d{10})$/, "+1$1"); ``. KILLED, red: "generateProposals stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → "+19562921696", FAILS)".
+- **no format instruction on callbackNumber** in `apps/web/src/lib/voice/tools/schemas.ts`: `` callbackNumber: { type: "string", description: "Digits as spoken; no country code unless the caller said one." } `` → `` callbackNumber: { type: "string" } ``. KILLED, red: "phone parameters say how to write a number (review R1-I4) book_appointment.phone and take_message.callbackNumber ask for the digits as spoken, with no country code the caller did not say (mutation: drop either description → FAILS)".
+- **strip the carrier's +** in `apps/web/src/lib/voice/sip-headers.ts`: `` const NUMBER_RE = /(?:tel:|sip:)(\+?[0-9]{7,15})/i; `` → `` const NUMBER_RE = /(?:tel:|sip:)\+?([0-9]{7,15})/i; ``. KILLED, red: "extractCallerNumber parses tel:, sip:, display names, bare 10/11 digits".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/src/app/b/[publicId]/actions.ts b/apps/web/src/app/b/[publicId]/actions.ts
+index 68fcf699..5544d87c 100644
+--- a/apps/web/src/app/b/[publicId]/actions.ts
++++ b/apps/web/src/app/b/[publicId]/actions.ts
+@@ -19,7 +19,6 @@ import {
+   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
+   verifyRenderToken, hashIp, isValidEmail, isValidPhone, parseAttribution,
+ } from "@/lib/forms/guards";
+-import { e164Of } from "@/lib/voice/phone-number";
+ // The SAME helper the sibling public-form action uses, not a re-implementation
+ // (I3) — see its docstring in that file for why it is exported.
+ import { setAttribution } from "@/lib/forms/enrich";
+@@ -289,10 +288,11 @@ export async function submitBookingAction(publicId: string, formData: FormData):
+ 
+     const created = await createContact(db, calendar.account_id, {
+       firstName, lastName: lastName || undefined, email,
+-      // Voice stores E.164; storing web input as-typed made the same person
+-      // two contacts and hid web bookings from find_my_booking. Parseable →
+-      // E.164, unparseable → as typed (never mangled, never rejected here).
+-      phone: phone ? (e164Of(phone) ?? phone) : undefined,
++      // AS TYPED (review R2-C1): createContact's phoneFields stores the
++      // E.164 when it parses, as typed when it does not, and flags ten digits
++      // that could be Mexican or US. Pre-normalising here would store
++      // "55 1234 5678" as a confirmed +1 and the gate would text it.
++      phone: phone || undefined,
+       source: "booking",
+     }, ACTOR_ID, ACTOR_TYPE);
+     const contactId = created.id;
+```
+
+```diff
+diff --git a/apps/web/src/app/b/[publicId]/actions.test.ts b/apps/web/src/app/b/[publicId]/actions.test.ts
+index bf696da9..da44c3ba 100644
+--- a/apps/web/src/app/b/[publicId]/actions.test.ts
++++ b/apps/web/src/app/b/[publicId]/actions.test.ts
+@@ -656,16 +656,21 @@ describe("submitBookingAction — the booking alert text, alongside the email (d
+   });
+ });
+ 
+-describe("submitBookingAction — phone normalized to E.164 at the boundary", () => {
+-  // Voice stores phones as E.164; web previously stored whatever the booker
+-  // typed, so the same person became two contacts and `find_my_booking`
+-  // couldn't see web bookings. A parseable number must reach `createContact`
+-  // already in E.164 (mutation: drop the `toE164` call → FAILS, sees the raw
+-  // "(956) 555-1234").
+-  it("a parseable US number reaches createContact as E.164", async () => {
++describe("submitBookingAction — the phone reaches createContact AS TYPED (consent chain F-009)", () => {
++  // createContact's phoneFields stores the E.164 when it parses and flags ten
++  // digits that could be Mexican or US. Pre-normalising here (the old
++  // `toE164`, or `e164Of`) stored "55 1234 5678" as a CONFIRMED +1 and the
++  // send gate texted it (review R2-C1).
++  it("an ambiguous number reaches createContact as typed, never pre-read as +1 (mutation: phone: e164Of(phone) → \"+15512345678\", FAILS)", async () => {
++    await submitBookingAction(PUBLIC_ID, validFormData({ phone: "55 1234 5678" }));
++
++    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "55 1234 5678" });
++  });
++
++  it("a plainly US number reaches it as typed too: the one normaliser is the contact write's", async () => {
+     await submitBookingAction(PUBLIC_ID, validFormData({ phone: "(956) 555-1234" }));
+ 
+-    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "+19565551234" });
++    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "(956) 555-1234" });
+   });
+ 
+   // `isValidPhone` (apps/web/src/lib/forms/guards.ts) accepts a bare 7-digit
+```
+
+```diff
+diff --git a/apps/web/src/app/f/[publicId]/actions.test.ts b/apps/web/src/app/f/[publicId]/actions.test.ts
+index e0e0d0f9..7459ee88 100644
+--- a/apps/web/src/app/f/[publicId]/actions.test.ts
++++ b/apps/web/src/app/f/[publicId]/actions.test.ts
+@@ -400,13 +400,11 @@ describe("submitFormAction — the lead notification replies to the customer", (
+  * Both assertions below were impossible before: there was no html part, and
+  * the link was a bare path that no email client renders as a link.
+  */
+-describe("submitFormAction — phone normalized to E.164 at the boundary (create path)", () => {
+-  // Voice stores phones as E.164; web previously stored whatever the visitor
+-  // typed, so the same person became two contacts and `find_my_booking`
+-  // couldn't see web submissions. A parseable number must reach
+-  // `createContact` already in E.164 (mutation: drop the `toE164` call →
+-  // FAILS, sees the raw "956-555-1234").
+-  it("a parseable US number reaches createContact as E.164", async () => {
++describe("submitFormAction — the phone reaches createContact AS TYPED (create path; consent chain F-009)", () => {
++  // createContact's phoneFields stores the E.164 when it parses and flags ten
++  // digits that could be Mexican or US; a pre-normalised "+1…" would read as
++  // confirmed and the send gate would text it (review R2-C1).
++  it("the number reaches createContact as typed (mutation: phone: e164Of(rawPhone) → \"+19565551234\", FAILS)", async () => {
+     getPublishedFormByPublicIdMock.mockResolvedValue(formRow({
+       fields: [{ key: "phone", kind: "core.phone", label: "Phone", required: false }],
+     }));
+@@ -417,7 +415,7 @@ describe("submitFormAction — phone normalized to E.164 at the boundary (create
+     }));
+ 
+     expect(result.status).toBe("success");
+-    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "+19565551234" });
++    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "956-555-1234" });
+   });
+ 
+   // `isValidPhone` (apps/web/src/lib/forms/guards.ts) accepts a bare 7-digit
+```
+
+```diff
+diff --git a/apps/web/src/lib/forms/enrich.ts b/apps/web/src/lib/forms/enrich.ts
+index 7ac90a8c..ee46170b 100644
+--- a/apps/web/src/lib/forms/enrich.ts
++++ b/apps/web/src/lib/forms/enrich.ts
+@@ -85,10 +85,10 @@ export async function enrich(
+       firstName: byKind.get("core.first_name") || undefined,
+       lastName: byKind.get("core.last_name") || undefined,
+       email: byKind.get("core.email") || undefined,
+-      // Voice stores E.164; storing web input as-typed made the same person
+-      // two contacts and hid web submissions from find_my_booking. Parseable →
+-      // E.164, unparseable → as typed (never mangled, never rejected here).
+-      phone: rawPhone ? (phoneE164 ?? rawPhone) : undefined,
++      // AS TYPED (review R2-C1): createContact's phoneFields stores the
++      // E.164 when it parses, as typed when it does not, and flags ten digits
++      // that could be Mexican or US. Pre-normalising would hide that question.
++      phone: rawPhone || undefined,
+       companyName: byKind.get("core.company_name") || undefined,
+       source: `form: ${form.name}`,
+       custom,
+@@ -226,7 +226,8 @@ async function fillBlanks(
+     ["firstName", "first_name", byKind.get("core.first_name") ?? ""],
+     ["lastName", "last_name", byKind.get("core.last_name") ?? ""],
+     ["email", "email", byKind.get("core.email") ?? ""],
+-    ["phone", "phone", rawPhone ? (e164Of(rawPhone) ?? rawPhone) : ""],
++    // As typed: fillContactBlanks judges it through phoneFields (R2-C1).
++    ["phone", "phone", rawPhone],
+     ["companyName", "company_name", byKind.get("core.company_name") ?? ""],
+   ];
+   for (const [input, column, incoming] of pairs) {
+```
+
+```diff
+diff --git a/apps/web/src/lib/proposals/generate.ts b/apps/web/src/lib/proposals/generate.ts
+index de42bb6d..6b66dac3 100644
+--- a/apps/web/src/lib/proposals/generate.ts
++++ b/apps/web/src/lib/proposals/generate.ts
+@@ -2,7 +2,7 @@ import { insertProposal, type CallOutcome, type TranscriptEvent, type serviceDb
+ import { groundedEvidence } from "./grounding";
+ import { callIsEligible } from "./eligibility";
+ import { isValidEmail } from "@/lib/forms/guards";
+-import { e164Of } from "@/lib/voice/phone-number";
++import { spokenPhone } from "@/lib/voice/phone-number";
+ 
+ /**
+  * At most three per call — a per-call BUDGET SHARED ACROSS KINDS, not three
+@@ -381,9 +381,12 @@ export async function generateProposals(input: {
+         // worth nothing to a reviewer either way.
+         let storedValue = value;
+         if (field === "phone") {
+-          const normalizedPhone = e164Of(value);
+-          if (!normalizedPhone) continue;
+-          storedValue = normalizedPhone;
++          // Stored AS SAID once it parses (review R2-C1): the accept-time
++          // fillContactBlanks judges it through phoneFields, which flags a
++          // number that could be Mexican or US. Its E.164 would not.
++          const said = spokenPhone(value, null);
++          if (!said) continue;
++          storedValue = said;
+         } else if (field === "email") {
+           if (!isValidEmail(value)) continue;
+           // Fix-wave Minor: `fillContactBlanks` (the accept-time write,
+```
+
+```diff
+diff --git a/apps/web/src/lib/proposals/generate.test.ts b/apps/web/src/lib/proposals/generate.test.ts
+index c51bf5c9..fcfe929c 100644
+--- a/apps/web/src/lib/proposals/generate.test.ts
++++ b/apps/web/src/lib/proposals/generate.test.ts
+@@ -431,7 +431,7 @@ describe("generateProposals", () => {
+   // The positive twin: a real 10-digit number is NORMALISED to E.164 before
+   // it reaches the database, not stored as the digits the model happened to
+   // return (mutation target: storing `value` raw instead of `toE164(value)`).
+-  it("normalizes a valid phone value to E.164 before it reaches the database (mutation: store the raw value instead of toE164(value) -> FAILS)", async () => {
++  it("stores a valid phone AS SAID, for the accept-time write to judge (review R2-C1; mutation: store e164Of(value) → \"+19562921696\", FAILS)", async () => {
+     const db = fakeDb();
+     const n = await generateProposals({
+       ...base, db, contactId: "c1", blankFields: ["phone"],
+@@ -441,7 +441,7 @@ describe("generateProposals", () => {
+       }),
+     });
+     expect(n).toBe(1);
+-    expect(db.rows[0].payload).toEqual({ field: "phone", value: "+19562921696" });
++    expect(db.rows[0].payload).toEqual({ field: "phone", value: "9562921696" });
+   });
+ 
+   // Fix-wave Minor: `fillContactBlanks` (the accept-time write) lowercases
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/finish-call.ts b/apps/web/src/lib/voice/finish-call.ts
+index fbb14421..14fe5a16 100644
+--- a/apps/web/src/lib/voice/finish-call.ts
++++ b/apps/web/src/lib/voice/finish-call.ts
+@@ -15,7 +15,7 @@ import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
+ import { detectSpokenLanguage } from "./language";
+ import { generateSummary } from "./summary-service";
+ import { summaryFactLine } from "./summarize";
+-import { e164Of, isCallerIdNumber } from "./phone-number";
++import { isCallerIdNumber, spokenPhone } from "./phone-number";
+ // STATIC, not the lazy `await import(...)` this repo otherwise reaches for
+ // near route handlers: the documented page-data trap (a module-scope DB
+ // import breaking `next build`'s page-data collection) doesn't apply to a
+@@ -283,7 +283,9 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
+     const created = await createContact(ctx.db, ctx.accountId, {
+       firstName: firstName || "Caller",
+       lastName,
+-      phone: e164Of(fields.callbackNumber) ?? ctx.callerNumber ?? undefined,
++      // As said, or the caller ID (review R2-C1): phoneFields flags a
++      // number that could be Mexican or US; an e164Of here would not.
++      phone: spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? undefined,
+       email: fields.email,
+       source: "voice",
+     }, ACTOR_ID, ACTOR_TYPE);
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/finish-call.test.ts b/apps/web/src/lib/voice/finish-call.test.ts
+index 6215c082..a1bff8f3 100644
+--- a/apps/web/src/lib/voice/finish-call.test.ts
++++ b/apps/web/src/lib/voice/finish-call.test.ts
+@@ -205,6 +205,17 @@ beforeEach(() => {
+ });
+ 
+ describe("finishCall", () => {
++  it("a lead's callback number is stored AS SAID so the contact write can flag it; the caller ID repeated stays the caller ID (review R2-C1; mutation: phone: e164Of(callbackNumber) → \"+15512345678\", FAILS)", async () => {
++    const said = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
++      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "55 1234 5678" } });
++    await finishCall(said, ctx, meta);
++    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ phone: "55 1234 5678" }), "voice", "ai");
++    const repeated = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
++      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "956 292 1696" } });
++    await finishCall(repeated, ctx, meta);
++    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ phone: "+19562921696" }), "voice", "ai");
++  });
++
+   it("a lead call runs the full treatment: contact → conversation → message(voice) → unread → alert → row", async () => {
+     const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+       { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/phone-number.ts b/apps/web/src/lib/voice/phone-number.ts
+index ae71859c..a08a9ca9 100644
+--- a/apps/web/src/lib/voice/phone-number.ts
++++ b/apps/web/src/lib/voice/phone-number.ts
+@@ -26,6 +26,30 @@ export function e164Of(raw: string | null | undefined): string | null {
+  * voice tools act on a contact only when it is this number. A withheld caller
+  * ID matches nothing, not even a blank stored phone.
+  */
++/**
++ * The number to STORE for a caller, from what the model wrote down (review
++ * R2-C1, R1-I4). A contact write must get the number as said, never its
++ * E.164: `phoneFields` (packages/db) stores the E.164 AND flags a number
++ * that could be Mexican or US, while an E.164 "+1…" reads as confirmed.
++ *   - Nothing usable said, or the caller ID repeated → the caller ID, which
++ *     the carrier supplied and which says its own country.
++ *   - Otherwise the words as said, with a leading 1 before ten digits dropped
++ *     first. ASSUMPTION (not verified): the model adds +1 to a number the
++ *     caller never gave a country for, and that +1 would hide the question.
++ * Null when there is nothing to store.
++ */
++export function spokenPhone(said: string | null | undefined, callerNumber: string | null | undefined): string | null {
++  const text = String(said ?? "").trim();
++  const caller = callerNumber ?? null;
++  const digits = text.replace(/[^0-9]/g, "");
++  const national = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : null;
++  const callerDigits = (caller ?? "").replace(/[^0-9]/g, "");
++  const callerNational = callerDigits.length === 11 && callerDigits.startsWith("1") ? callerDigits.slice(1) : callerDigits;
++  if (!text || !e164Of(national ?? text)) return caller;
++  if (caller && (digits === callerDigits || (national ?? digits) === callerNational)) return caller;
++  return national ?? text;
++}
++
+ export function isCallerIdNumber(
+   stored: string | null | undefined, callerNumber: string | null | undefined,
+ ): boolean {
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/phone-number.test.ts b/apps/web/src/lib/voice/phone-number.test.ts
+index 81279425..7efc8423 100644
+--- a/apps/web/src/lib/voice/phone-number.test.ts
++++ b/apps/web/src/lib/voice/phone-number.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, it, expect } from "vitest";
+-import { e164Of, isCallerIdNumber } from "./phone-number";
++import { e164Of, isCallerIdNumber, spokenPhone } from "./phone-number";
+ 
+ describe("e164Of — normalisePhone's E.164 (F-009)", () => {
+   it.each([
+@@ -38,3 +38,28 @@ describe("isCallerIdNumber", () => {
+     expect(isCallerIdNumber("+19562921696", null)).toBe(false);
+   });
+ });
++
++/**
++ * Review R2-C1 / R1-I4: what Sofía's contact writes store. The contact write
++ * judges the number (phoneFields); this only decides WHICH text it judges.
++ */
++describe("spokenPhone — the number a voice contact write stores", () => {
++  it("a number said as ten digits is stored as said, never pre-read as +1 (mutation: return e164Of(said) → a confirmed +1, FAILS)", () => {
++    expect(spokenPhone("55 1234 5678", "+19565550100")).toBe("55 1234 5678");
++    expect(spokenPhone("899-922-1234", null)).toBe("899-922-1234");
++  });
++
++  it("a leading 1 or +1 the model added is dropped, so the ten digits are judged (mutation: keep the +1 → FAILS)", () => {
++    expect(spokenPhone("+1 551 234 5678", "+19565550100")).toBe("5512345678");
++    expect(spokenPhone("15512345678", null)).toBe("5512345678");
++    expect(spokenPhone("+52 55 1234 5678", null)).toBe("+52 55 1234 5678");
++  });
++
++  it("the caller ID repeated, or nothing usable said, is the caller ID as the carrier gave it (mutation: strip the caller ID's +1 too → it reads as ambiguous, FAILS)", () => {
++    expect(spokenPhone("956 555 0100", "+19565550100")).toBe("+19565550100");
++    expect(spokenPhone("+1 (956) 555-0100", "+19565550100")).toBe("+19565550100");
++    expect(spokenPhone("", "+19565550100")).toBe("+19565550100");
++    expect(spokenPhone("five five five", "+19565550100")).toBe("+19565550100");
++    expect(spokenPhone("", null)).toBeNull();
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/sip-headers.ts b/apps/web/src/lib/voice/sip-headers.ts
+index c733157e..b3e10253 100644
+--- a/apps/web/src/lib/voice/sip-headers.ts
++++ b/apps/web/src/lib/voice/sip-headers.ts
+@@ -2,7 +2,10 @@
+ // Values carry caller PII — sipHeaderNames exists so logs can prove shape without leaking.
+ import { e164Of } from "./phone-number";
+ 
+-const NUMBER_RE = /(?:tel:|sip:)\+?([0-9]{7,15})/i;
++// The "+" is KEPT (consent chain PR-1 review): without it, F-009 reads an
++// international caller ID of ten digits as a national number, e.g. New
++// Zealand's +64 21 234 567 as Mexico's +52 642 123 4567.
++const NUMBER_RE = /(?:tel:|sip:)(\+?[0-9]{7,15})/i;
+ 
+ type Header = { name?: unknown; value?: unknown };
+ 
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/sip-headers.test.ts b/apps/web/src/lib/voice/sip-headers.test.ts
+index 4047c526..b36c83d8 100644
+--- a/apps/web/src/lib/voice/sip-headers.test.ts
++++ b/apps/web/src/lib/voice/sip-headers.test.ts
+@@ -9,6 +9,9 @@ describe("extractCallerNumber", () => {
+     expect(extractCallerNumber(ev([{ name: "From", value: '"Ana Ruiz" <sip:+19565550100@c.example>;tag=x' }]))).toBe("+19565550100");
+     expect(extractCallerNumber(ev([{ name: "from", value: "<sip:9565550100@x>" }]))).toBe("+19565550100");
+     expect(extractCallerNumber(ev([{ name: "From", value: "<sip:19565550100@x>" }]))).toBe("+19565550100");
++    // An international caller ID keeps its own code (review R2 minor; mutation:
++    // capture the digits without the "+" → "+526421234567", a Mexican number, FAILS).
++    expect(extractCallerNumber(ev([{ name: "From", value: "<sip:+6421234567@x>" }]))).toBe("+6421234567");
+   });
+   it("anonymous and malformed → null", () => {
+     expect(extractCallerNumber(ev([{ name: "From", value: '"Anonymous" <sip:anonymous@anonymous.invalid>' }]))).toBeNull();
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/tools/registry.ts b/apps/web/src/lib/voice/tools/registry.ts
+index 1d4ae4db..4c803eaf 100644
+--- a/apps/web/src/lib/voice/tools/registry.ts
++++ b/apps/web/src/lib/voice/tools/registry.ts
+@@ -9,7 +9,7 @@ import {
+   type CalendarRow, type VoiceProfileRow, type Branding,
+ } from "@bis/db";
+ import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
+-import { e164Of, isCallerIdNumber } from "../phone-number";
++import { e164Of, isCallerIdNumber, spokenPhone } from "../phone-number";
+ import { getEmailProvider } from "@/lib/email";
+ import { getMeetingProvider } from "@/lib/meetings/provider";
+ import { emailBrand } from "@/lib/email/templates/shell";
+@@ -337,7 +337,9 @@ export async function runTool(
+         };
+       }
+ 
+-      const phone = e164Of(String(args?.phone ?? "")) ?? ctx.callerNumber;
++      // As said, or the caller ID (review R2-C1): the contact write judges
++      // it. An e164Of here would store "55 1234 5678" as a confirmed +1.
++      const phone = spokenPhone(String(args?.phone ?? ""), ctx.callerNumber);
+       const email = String(args?.email ?? "").trim() || null;
+       if (!phone && !email) {
+         return { state, result: { ok: false, error: "need a phone number or an email to book" } };
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/tools/registry.test.ts b/apps/web/src/lib/voice/tools/registry.test.ts
+index af2ab6ce..1081df4f 100644
+--- a/apps/web/src/lib/voice/tools/registry.test.ts
++++ b/apps/web/src/lib/voice/tools/registry.test.ts
+@@ -269,6 +269,13 @@ describe("book_appointment", () => {
+     expect(state.contactId).toBe("ct1");
+   });
+ 
++  it("stores the number the caller SAID as said, never pre-read as +1, so the contact write can flag it (review R2-C1; mutation: phone = e164Of(args.phone) → \"+15512345678\", FAILS)", async () => {
++    await runTool(emptyCallState(), ctx, "book_appointment",
++      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true, phone: "+1 55 1234 5678" });
++    expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
++      expect.objectContaining({ phone: "5512345678" }), "voice", "ai");
++  });
++
+   it("refuses a time that was never offered", async () => {
+     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+       { startsAt: "2027-06-01T03:00:00.000Z", name: "Ana", emailDeclined: true });
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/tools/schemas.ts b/apps/web/src/lib/voice/tools/schemas.ts
+index a34eccdf..5a501e18 100644
+--- a/apps/web/src/lib/voice/tools/schemas.ts
++++ b/apps/web/src/lib/voice/tools/schemas.ts
+@@ -8,7 +8,7 @@ const BOOKING_TOOLS = [
+     parameters: { type: "object", properties: { date: { type: "string", description: "YYYY-MM-DD in the business's timezone" } }, required: ["date"] } },
+   { type: "function", name: "book_appointment",
+     description: "Book an appointment at an available ISO start time. Requires the caller's name and a phone number (their caller ID is used if they don't give one). You MUST first ask whether they would like an email confirmation: pass their email, or emailDeclined: true if they said no. The tool refuses to book without one of the two.",
+-    parameters: { type: "object", properties: { startsAt: { type: "string" }, name: { type: "string" }, email: { type: "string" }, emailDeclined: { type: "boolean", description: "true ONLY after you asked whether they want an email confirmation and they declined or could not give one" }, phone: { type: "string" }, notes: { type: "string" } }, required: ["startsAt", "name"] } },
++    parameters: { type: "object", properties: { startsAt: { type: "string" }, name: { type: "string" }, email: { type: "string" }, emailDeclined: { type: "boolean", description: "true ONLY after you asked whether they want an email confirmation and they declined or could not give one" }, phone: { type: "string", description: "Digits as spoken; no country code unless the caller said one." }, notes: { type: "string" } }, required: ["startsAt", "name"] } },
+   // Booking tools are bound to the caller ID (registry.ts): the two
+   // below refuse a booking that is neither under the caller ID nor made on
+   // this call, and find_my_booking takes no number at all — the contract
+@@ -26,11 +26,11 @@ const BOOKING_TOOLS = [
+ 
+ const CORE_TOOLS = [
+   { type: "function", name: "capture_lead",
+-    description: "Record who the caller is and what they need.",
++    description: "Record who the caller is and what they need. For callbackNumber, write the digits as spoken, with no country code unless the caller said one.",
+     parameters: { type: "object", properties: { fields: { type: "object", additionalProperties: { type: "string" } } }, required: ["fields"] } },
+   { type: "function", name: "take_message",
+     description: "Leave a message for a human callback.",
+-    parameters: { type: "object", properties: { body: { type: "string" }, callbackNumber: { type: "string" } }, required: ["body"] } },
++    parameters: { type: "object", properties: { body: { type: "string" }, callbackNumber: { type: "string", description: "Digits as spoken; no country code unless the caller said one." } }, required: ["body"] } },
+   { type: "function", name: "log_transcript",
+     description: "Log a spoken turn for staff review.",
+     parameters: { type: "object", properties: { role: { type: "string", enum: ["caller", "assistant"] }, text: { type: "string" } }, required: ["role", "text"] } },
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/tools/schemas.test.ts b/apps/web/src/lib/voice/tools/schemas.test.ts
+index 13bed485..92d860d2 100644
+--- a/apps/web/src/lib/voice/tools/schemas.test.ts
++++ b/apps/web/src/lib/voice/tools/schemas.test.ts
+@@ -95,3 +95,16 @@ describe("toolSchemas", () => {
+     expect(check.description).toMatch(/say/i);
+   });
+ });
++
++describe("phone parameters say how to write a number (review R1-I4)", () => {
++  it("book_appointment.phone and take_message.callbackNumber ask for the digits as spoken, with no country code the caller did not say (mutation: drop either description → FAILS)", () => {
++    for (const mt of ["in_person", "phone", "video"] as const) {
++      const tools = toolSchemas(true, mt, false) as unknown as Tool[];
++      const book = tools.find((t) => t.name === "book_appointment")!;
++      expect(book.parameters.properties.phone!.description).toBe("Digits as spoken; no country code unless the caller said one.");
++      const msg = tools.find((t) => t.name === "take_message")!;
++      expect(msg.parameters.properties.callbackNumber!.description).toBe("Digits as spoken; no country code unless the caller said one.");
++      expect(tools.find((t) => t.name === "capture_lead")!.description).toMatch(/no country code unless the caller said one/);
++    }
++  });
++});
+```
+
 
 **Owner:** bis-voice (owns `lib/voice/phone-number.ts`). **Lane:** single (Phase 2). **Depends on:** Task 2; Prerequisite 1 (#149 changes `phone-number.ts`, `registry.ts`, `finish-call.ts` and `textback.ts`).
 
@@ -3949,6 +5444,180 @@ git commit -m "refactor(phone): e164Of — every typed or spoken number through 
 ---
 
 ### Task 8: The send gate
+
+#### Review corrections (binding; they override the code below)
+
+Findings: R1-I2, R2 minor (the carrier's number and the stored flag) (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** gate.test.ts 35 passed; web typecheck exit 0.
+
+- **R1-I2: a zone READ error fails closed.** `readAccountTimezone` throwing used to fall back to America/Chicago, and 08:00 there is 1–5 hours early for a Pacific, Mountain, Alaska or Hawaii account. It now returns `{ kind: "blocked", reason: "ledger_unavailable" }` (logged through `loggableError`), which every caller re-holds or reports (Tasks 9, 11). The fallback stays ONLY for a zone that was read but cannot be resolved (`hoursZone`).
+- **R2 minor: `numberFromCarrier`.** `SmsRequest` gains `numberFromCarrier?: boolean`, carried on `ClearedSms` so `deliverSms`'s re-check agrees. When true, step 5 skips the contact's stored `phone_country_unconfirmed`: that flag is about a number a person typed, and the text-back's `to` is the caller ID. The number's own reading (step 2) still applies.
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `lib/consent/gate.test.ts`: a number from the CARRIER is not held on the contact's stored flag, at decide or at deliver (mutation: check the flag anyway → unconfirmed_number, FAILS)
+- `lib/consent/gate.test.ts`: a zone READ error blocks as ledger_unavailable, never Chicago's hours: nothing is sent (mutation: fall back to the fallback zone → deferred or clear, FAILS)
+- `lib/consent/gate.test.ts`: a zone that was read but cannot be resolved still takes the fallback, America/Chicago
+
+**Counts this block supersedes** (read off the corrected tree's runs): `lib/consent/gate.test.ts` 32 → 35 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **a zone read error takes the fallback** in `apps/web/src/lib/consent/gate.ts`: ``         return { kind: "blocked", reason: "ledger_unavailable" }; ⏎       } ⏎     } `` → ``         zone = null; ⏎       } ⏎     } ``. KILLED, red: "decideSms: step 6, the kind's hours a zone READ error blocks as ledger_unavailable, never Chicago's hours: nothing is sent (mutation: fall back to the fallback zone → deferred or clear, FAILS)".
+- **the carrier's number held on the stored flag** in `apps/web/src/lib/consent/gate.ts`: `` if (contactId && !numberFromCarrier && await readPhoneCountryFlag( `` → `` if (contactId && await readPhoneCountryFlag( ``. KILLED, red: "decideSms: steps 4-5, the ledger and the flag a number from the CARRIER is not held on the contact's stored flag, at decide or at deliver (mutation: check the flag anyway → unconfirmed_number, FAILS)"; "prepareTextback: the send gate decides before any row the caller ID is texted even when the contact's STORED number is flagged: the carrier's number says its own country (review R2 minor; mutation: drop numberFromCarrier → blocked, FAILS)".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/src/lib/consent/gate.ts b/apps/web/src/lib/consent/gate.ts
+index 1985d9fe..63f0ea5d 100644
+--- a/apps/web/src/lib/consent/gate.ts
++++ b/apps/web/src/lib/consent/gate.ts
+@@ -29,7 +29,8 @@ import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
+  *      each caller's existing catch);
+  *   4. the ledger: stopped → blocked `stopped`, held → blocked `held`;
+  *   5. an unconfirmed number (the normalisation said so, or the contact's
+- *      `phone_country_unconfirmed`) → blocked `unconfirmed_number`;
++ *      `phone_country_unconfirmed`, unless the number came from the carrier)
++ *      → blocked `unconfirmed_number`;
+  *   6. the kind's hours: outside them → `deferred` until they open, unless
+  *      the deadline falls first (choice 21) → blocked `window_after_deadline`;
+  *   7. the kind's footer;
+@@ -39,8 +40,10 @@ import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
+  *      `carrier_block` to the ledger — never for a provider redirected to a
+  *      developer's phone, whose refusal is about THAT number.
+  *
+- * FAILS CLOSED: a ledger (or flag) read error is blocked
+- * `ledger_unavailable`, logged through `loggableError`, never a send.
++ * FAILS CLOSED: a ledger, flag or ZONE read error is blocked
++ * `ledger_unavailable`, logged through `loggableError`, never a send. (A
++ * zone that was read but cannot be resolved still takes the fallback zone:
++ * that is the account's data, not an outage.)
+  */
+ export type SmsRequest = {
+   accountId: string;
+@@ -60,6 +63,11 @@ export type SmsRequest = {
+   accountZone?: string | null;
+   /** The instant the hours are judged at. Passes hand in their tick's `now`. */
+   now?: Date;
++  /** `to` came from the carrier (a caller ID), not from a person: it is
++   *  already E.164 and says its own country, so the contact's stored
++   *  `phone_country_unconfirmed` (about the phone a person TYPED) does not
++   *  hold it. The text-back sets this. */
++  numberFromCarrier?: boolean;
+ };
+ 
+ export type SmsBlockReason =
+@@ -78,6 +86,7 @@ export type ClearedSms = {
+   /** The body exactly as it will be sent, footer included. */
+   readonly body: string;
+   readonly contactId: string | null;
++  readonly numberFromCarrier: boolean;
+ };
+ 
+ export type SmsDecision =
+@@ -107,12 +116,13 @@ export type SmsSender = (req: SmsRequest, opts?: SmsSendOptions) => Promise<SmsS
+ /** Steps 4 and 5's reads. Null = allowed; a reason = blocked. */
+ async function consentBlock(
+   db: SupabaseClient, accountId: string, kind: SmsKind, address: string, contactId: string | null,
++  numberFromCarrier: boolean,
+ ): Promise<SmsBlockReason | null> {
+   try {
+     const state = await readConsentState(db, accountId, "sms", address);
+     if (state.state === "stopped") return "stopped";
+     if (state.state === "held") return "held";
+-    if (contactId && await readPhoneCountryFlag(db, accountId, contactId)) return "unconfirmed_number";
++    if (contactId && !numberFromCarrier && await readPhoneCountryFlag(db, accountId, contactId)) return "unconfirmed_number";
+     return null;
+   } catch (e) {
+     console.error(`consent gate: ${kind} for account ${accountId} blocked, consent state unreadable: ${loggableError(e)}`);
+@@ -130,7 +140,8 @@ export async function decideSms(db: SupabaseClient, req: SmsRequest): Promise<Sm
+   if (!sender.ok) return { kind: "blocked", reason: sender.reason };
+ 
+   const contactId = req.contactId ?? null;
+-  const blocked = await consentBlock(db, req.accountId, req.kind, number.e164, contactId);
++  const fromCarrier = req.numberFromCarrier === true;
++  const blocked = await consentBlock(db, req.accountId, req.kind, number.e164, contactId, fromCarrier);
+   if (blocked) return { kind: "blocked", reason: blocked };
+   if (number.unconfirmed) return { kind: "blocked", reason: "unconfirmed_number" };
+ 
+@@ -140,9 +151,11 @@ export async function decideSms(db: SupabaseClient, req: SmsRequest): Promise<Sm
+       try {
+         zone = req.accountZone !== undefined ? req.accountZone : await readAccountTimezone(db, req.accountId);
+       } catch (e) {
+-        // The fallback zone still applies (hours.ts): an unread zone narrows
+-        // nothing and never opens the window.
+-        console.error(`consent gate: account ${req.accountId}'s zone unreadable, using the fallback: ${loggableError(e)}`);
++        // FAILS CLOSED (review R1-I2): the fallback zone is America/Chicago,
++        // and 08:00 there is 1-5 hours early for a Pacific, Mountain, Alaska
++        // or Hawaii account. An outage is not a zone.
++        console.error(`consent gate: ${req.kind} for account ${req.accountId} blocked, zone unreadable: ${loggableError(e)}`);
++        return { kind: "blocked", reason: "ledger_unavailable" };
+       }
+     }
+     const opening = nextOpening(spec.hours, req.now ?? new Date(), zone);
+@@ -153,7 +166,7 @@ export async function decideSms(db: SupabaseClient, req: SmsRequest): Promise<Sm
+   const body = spec.footer === "stop_line" ? withOptOut(req.body, req.language) : req.body;
+   return {
+     kind: "clear",
+-    send: { [CLEARED]: true, accountId: req.accountId, kind: req.kind, to: number.e164, from: sender.from, body, contactId },
++    send: { [CLEARED]: true, accountId: req.accountId, kind: req.kind, to: number.e164, from: sender.from, body, contactId, numberFromCarrier: fromCarrier },
+   };
+ }
+ 
+@@ -161,7 +174,7 @@ async function deliver(
+   db: SupabaseClient, cleared: ClearedSms, opts: SmsSendOptions, recheck: boolean,
+ ): Promise<SmsSendResult> {
+   if (recheck) {
+-    const blocked = await consentBlock(db, cleared.accountId, cleared.kind, cleared.to, cleared.contactId);
++    const blocked = await consentBlock(db, cleared.accountId, cleared.kind, cleared.to, cleared.contactId, cleared.numberFromCarrier);
+     if (blocked) return { kind: "blocked", reason: blocked };
+   }
+   let provider: SmsProvider;
+```
+
+```diff
+diff --git a/apps/web/src/lib/consent/gate.test.ts b/apps/web/src/lib/consent/gate.test.ts
+index ad4d5e79..051c0089 100644
+--- a/apps/web/src/lib/consent/gate.test.ts
++++ b/apps/web/src/lib/consent/gate.test.ts
+@@ -87,6 +87,17 @@ describe("decideSms: steps 4-5, the ledger and the flag", () => {
+     expect(db.readPhoneCountryFlag).not.toHaveBeenCalled();
+   });
+ 
++  it("a number from the CARRIER is not held on the contact's stored flag, at decide or at deliver (mutation: check the flag anyway → unconfirmed_number, FAILS)", async () => {
++    db.readPhoneCountryFlag.mockResolvedValue(true);
++    const d = await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696", numberFromCarrier: true }));
++    expect(d.kind).toBe("clear");
++    expect(db.readPhoneCountryFlag).not.toHaveBeenCalled();
++    if (d.kind !== "clear") throw new Error("expected clear");
++    expect((await deliverSms(DB, d.send)).kind).toBe("sent");
++    expect(db.readPhoneCountryFlag).not.toHaveBeenCalled();
++    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696" }))).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
++  });
++
+   it("a bare ten-digit number valid as both +1 and +52 is blocked even with no flag stored (mutation: ignore normalisePhone's unconfirmed → clear, FAILS)", async () => {
+     expect(await decideSms(DB, base({ to: "55 1234 5678", contactId: null }))).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
+   });
+@@ -109,6 +120,19 @@ describe("decideSms: step 6, the kind's hours", () => {
+     }
+   });
+ 
++  it("a zone READ error blocks as ledger_unavailable, never Chicago's hours: nothing is sent (mutation: fall back to the fallback zone → deferred or clear, FAILS)", async () => {
++    db.readAccountTimezone.mockRejectedValue(new Error("fetch failed"));
++    expect(await decideSms(DB, base({ accountZone: undefined }))).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
++    expect(await sendSms(DB, base({ accountZone: undefined }))).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
++    expect(send).not.toHaveBeenCalled();
++  });
++
++  it("a zone that was read but cannot be resolved still takes the fallback, America/Chicago", async () => {
++    const t = new Date("2026-10-06T12:00:00Z"); // 07:00 Chicago
++    expect(await decideSms(DB, base({ now: t, accountZone: "America/Nowhere" })))
++      .toEqual({ kind: "deferred", until: new Date("2026-10-06T13:00:00Z"), zone: "America/Chicago" });
++  });
++
+   it("the zone passed wins, and with none passed the account's is read (mutation: ignore accountZone → the LA case clears, FAILS)", async () => {
+     const t = new Date("2026-10-06T13:30:00Z"); // 08:30 Chicago, 06:30 Los Angeles
+     expect(await decideSms(DB, base({ now: t, accountZone: "America/Los_Angeles" })))
+```
+
 
 **Owner:** bis-comms. **Lane:** single (Phase 2). **Depends on:** Tasks 1, 2, 4, 5.
 
@@ -4585,6 +6254,843 @@ git commit -m "feat(consent): the send gate (decideSms, deliverSms, sendSms) and
 ---
 
 ### Task 9: Every automation text through the gate (the kinds, the fixed hours, `blocked`)
+
+#### Review corrections (binding; they override the code below)
+
+Findings: R2-C1 (the instant reply), R2-I2, R2-I4, R2 minors (stale comments, the throw after a send, the marketing kind, the cron route mock) (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** automations, forms and cron tests: 597 passed (automations alone 479 after the kind tests; appointment-confirm 16); web typecheck exit 0.
+
+- **R2-I4: `ledger_unavailable` is a 15-minute re-hold, not a failure.** A failed row leaves the queue: a released reminder is past its listing window, and the instant reply has no pass, so one ledger outage during the 08:00 release burst dropped everything it touched. `send-sms.ts` exports `LEDGER_RETRY_MS = 15 * 60_000`; `SmsDeferred` gains `why: "hours" | "ledger_unavailable"` (named `why`, not `cause`, which would shadow `Error.cause`); on `ledger_unavailable` `sendAutomationSms` throws `new SmsDeferred(new Date(ctx.now.getTime() + LEDGER_RETRY_MS), "ledger_unavailable")`. `holdOrSend` writes the held row with `REASONS.ledgerRetry` ("Waiting a few minutes: couldn't check whether they can get texts") instead of the quiet-hours line (`writeHeld` takes an optional reason).
+- **R2-I2: a refusal gives back its slot.** In each CAPPED pass (review-request, no-show-nudge, quote-followup, referral-ask) the `skipped` branch is:
+  ```ts
+  if (outcome === "skipped") { attemptsThisTick--; sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1); c.blocked++; continue; }
+  ```
+  Each gets "ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1}" and "one short of the daily cap: a refused row, then an allowed one, still sends". `appointment-confirm` is not capped, but its `skipped` branch had no test: added. (Reactivation is email-only: unchanged.)
+- **R2-C1, the instant reply.** It texted `phoneE164`, the typed number pre-read as `+1`, so an ambiguous number was never held. `SendInstantReplyInput` and its held payload gain `phoneAsTyped?: string | null` (parsed, optional, so a payload from before is still read); the send goes to `input.phoneAsTyped || to`, and the gate normalises and flags it. `lib/forms/enrich.ts` passes `phoneAsTyped: byKind.get("core.phone") || null`; the form action's wiring test pins it.
+- **R2 minor: no throw after a real send.** A `sent` result whose message row is null is logged and returns `messageId: ""`; `markAutomationSmsSent` returns early on it (a throw there made the caller retry and text the customer twice).
+- **R2 minor: the kind.** Each of the six SMS passes and the instant reply gets "hands the gate its own kind" (the kind picks the class, the hours and the footer).
+- **R2 minor: stale comments** describing the removed "deadline sends now" branch are corrected in `appointment-confirm-gate.ts`, `appointment-confirm.ts`, `reminders.ts` and `sms-reminder.ts`.
+- **R2 minor: the cron route test's `@bis/db` mock** (Global Constraints, "vi.mock factories"). Verified: every SMS pass's list is `async () => []` there (`route.test.ts:43–115`), so no send reached the gate and nothing passed vacuously. The five reads are added anyway, throwing "no text is due" (the file's own convention); `callerInTouchSince` is Task 11's and harmless before it lands.
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `lib/automations/send-sms.test.ts`: an unreadable ledger is a 15-minute re-hold, never a refusal and never a failed row that leaves the queue (review R2-I4; mutation: throw a plain Error again → FAILS)
+- `lib/automations/send-sms.test.ts`: a text that LEFT is reported sent even if the gate wrote no row: logged, never thrown into a re-send (review R2 minor; mutation: throw when the row id is missing → FAILS)
+- `lib/automations/hold-or-send.test.ts`: SmsDeferred for an unreadable ledger is a held row with its own reason, not "quiet hours" (review R2-I4; mutation: always write the quiet-hours reason → FAILS)
+- `lib/automations/instant-reply.test.ts`: "55 1234 5678" typed on the form is refused unconfirmed_number, never texted as +1 (mutation: text phoneE164 → sent, FAILS)
+- `lib/automations/instant-reply.test.ts`: the typed number rides the held row's payload, and an old payload without it still parses
+- `lib/automations/instant-reply.test.ts`: the gate is asked for automation.instant_reply (mutation: pass another automation kind → FAILS)
+- `lib/automations/passes/review-request.test.ts`: ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)
+- `lib/automations/passes/review-request.test.ts`: one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)
+- `lib/automations/passes/review-request.test.ts`: the gate is asked for automation.review_request, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)
+- `lib/automations/passes/no-show-nudge.test.ts`: ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)
+- `lib/automations/passes/no-show-nudge.test.ts`: one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)
+- `lib/automations/passes/no-show-nudge.test.ts`: the gate is asked for automation.no_show_nudge, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)
+- `lib/automations/passes/quote-followup.test.ts`: ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)
+- `lib/automations/passes/quote-followup.test.ts`: one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)
+- `lib/automations/passes/quote-followup.test.ts`: the gate is asked for automation.quote_followup, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)
+- `lib/automations/passes/referral-ask.test.ts`: ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)
+- `lib/automations/passes/referral-ask.test.ts`: one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)
+- `lib/automations/passes/referral-ask.test.ts`: the gate is asked for automation.referral_ask, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)
+- `lib/automations/passes/appointment-confirm.test.ts`: the gate is asked for automation.appointment_confirm, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)
+- `lib/automations/passes/appointment-confirm.test.ts`: a stopped number: {blocked: 1}, nothing texted, nothing stamped (mutation: delete the skipped branch → sent: 1, FAILS)
+- `lib/automations/passes/sms-reminder.test.ts`: the gate is asked for automation.sms_reminder, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)
+- `app/f/[publicId]/actions.test.ts`: runs LAST — after the receipt — with the E.164 phone, the phone AS TYPED, the page's locale, the contact, the thread and the consent flag (review R2-C1; mutation: drop phoneAsTyped → FAILS)
+
+**Counts this block supersedes** (read off the corrected tree's runs): `lib/automations/send-sms.test.ts` 17 → 18 tests; `lib/automations/hold-or-send.test.ts` 26 → 27 tests; `lib/automations/instant-reply.test.ts` 26 → 29 tests; `lib/automations/passes/appointment-confirm.test.ts` 14 → 16 tests; `lib/automations/passes/no-show-nudge.test.ts` 29 → 32 tests; `lib/automations/passes/quote-followup.test.ts` 20 → 23 tests; `lib/automations/passes/referral-ask.test.ts` 25 → 28 tests; `lib/automations/passes/review-request.test.ts` 37 → 40 tests; `lib/automations/passes/sms-reminder.test.ts` 19 → 20 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **the instant reply loses the typed number** in `apps/web/src/lib/forms/enrich.ts`: `` phoneAsTyped: byKind.get("core.phone") || null, `` → `` phoneAsTyped: null, ``. KILLED, red: "submitFormAction — the instant reply to the person who wrote in (Milestone C) runs LAST — after the receipt — with the E.164 phone, the phone AS TYPED, the page's locale, the contact, the thread and the consent flag (review R2-C1; mutation: drop phoneAsTyped → FAILS)".
+- **an unreadable ledger fails the row** in `apps/web/src/lib/automations/send-sms.ts`: `` throw new SmsDeferred(new Date(ctx.now.getTime() + LEDGER_RETRY_MS), "ledger_unavailable"); `` → `` throw new Error("automation sms not sent: the consent ledger could not be read"); ``. KILLED, red: "sendAutomationSms — through the send gate, write then send an unreadable ledger is a 15-minute re-hold, never a refusal and never a failed row that leaves the queue (review R2-I4; mutation: throw a plain Error again → FAILS)".
+- **sent without a row throws** in `apps/web/src/lib/automations/send-sms.ts`: ``       if (row.id === null) { ⏎  `` → ``       if (row.id === null) { ⏎         throw new Error("automation sms: the gate sent without writing the message row"); ⏎  ``. KILLED, red: "sendAutomationSms — through the send gate, write then send a text that LEFT is reported sent even if the gate wrote no row: logged, never thrown into a re-send (review R2 minor; mutation: throw when the row id is missing → FAILS)".
+- **the retry says quiet hours** in `apps/web/src/lib/automations/hold-or-send.ts`: `` e.why === "ledger_unavailable" ? REASONS.ledgerRetry : undefined `` → `` undefined ``. KILLED, red: "holdOrSend: what the send gate answers SmsDeferred for an unreadable ledger is a held row with its own reason, not "quiet hours" (review R2-I4; mutation: always write the quiet-hours reason → FAILS)".
+- **no tick give-back** in `apps/web/src/lib/automations/passes/review-request.ts`: ``         attemptsThisTick--; ⏎  `` → (nothing). KILLED, red: "reviewRequestPass: a refusal gives back its tick slot and its daily count ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)".
+- **no daily give-back** in `apps/web/src/lib/automations/passes/review-request.ts`: ``         sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1); ⏎  `` → (nothing). KILLED, red: "reviewRequestPass: a refusal gives back its tick slot and its daily count one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)".
+- **another kind** in `apps/web/src/lib/automations/passes/review-request.ts`: `` kind: "automation.review_request", accountTimezone `` → `` kind: "automation.no_show_nudge", accountTimezone ``. KILLED, red: "reviewRequestPass hands the gate its own kind (review R2 minor) the gate is asked for automation.review_request, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)".
+- **no tick give-back** in `apps/web/src/lib/automations/passes/no-show-nudge.ts`: ``         attemptsThisTick--; ⏎  `` → (nothing). KILLED, red: "noShowNudgePass: a refusal gives back its tick slot and its daily count ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)".
+- **no daily give-back** in `apps/web/src/lib/automations/passes/no-show-nudge.ts`: ``         sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1); ⏎  `` → (nothing). KILLED, red: "noShowNudgePass: a refusal gives back its tick slot and its daily count one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)".
+- **another kind** in `apps/web/src/lib/automations/passes/no-show-nudge.ts`: `` kind: "automation.no_show_nudge", accountTimezone `` → `` kind: "automation.review_request", accountTimezone ``. KILLED, red: "noShowNudgePass hands the gate its own kind (review R2 minor) the gate is asked for automation.no_show_nudge, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)".
+- **no tick give-back** in `apps/web/src/lib/automations/passes/quote-followup.ts`: ``         attemptsThisTick--; ⏎  `` → (nothing). KILLED, red: "quoteFollowupPass: a refusal gives back its tick slot and its daily count ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)".
+- **no daily give-back** in `apps/web/src/lib/automations/passes/quote-followup.ts`: ``         sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1); ⏎  `` → (nothing). KILLED, red: "quoteFollowupPass: a refusal gives back its tick slot and its daily count one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)".
+- **another kind** in `apps/web/src/lib/automations/passes/quote-followup.ts`: `` kind: "automation.quote_followup", accountTimezone `` → `` kind: "automation.review_request", accountTimezone ``. KILLED, red: "quoteFollowupPass hands the gate its own kind (review R2 minor) the gate is asked for automation.quote_followup, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)".
+- **no tick give-back** in `apps/web/src/lib/automations/passes/referral-ask.ts`: ``         attemptsThisTick--; ⏎  `` → (nothing). KILLED, red: "referralAskPass: a refusal gives back its tick slot and its daily count ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)".
+- **no daily give-back** in `apps/web/src/lib/automations/passes/referral-ask.ts`: ``         sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1); ⏎  `` → (nothing). KILLED, red: "referralAskPass: a refusal gives back its tick slot and its daily count one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)".
+- **another kind** in `apps/web/src/lib/automations/passes/referral-ask.ts`: `` kind: "automation.referral_ask", accountTimezone `` → `` kind: "automation.review_request", accountTimezone ``. KILLED, red: "referralAskPass hands the gate its own kind (review R2 minor) the gate is asked for automation.referral_ask, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)".
+- **a refusal counted as sent** in `apps/web/src/lib/automations/passes/appointment-confirm.ts`: ``       if (outcome === "skipped") { ⏎         c.blocked++; ⏎         continue; ⏎       } ⏎  `` → (nothing). KILLED, red: "appointmentConfirmPass: a refusal is counted as blocked, never as sent (review R2-I2) a stopped number: {blocked: 1}, nothing texted, nothing stamped (mutation: delete the skipped branch → sent: 1, FAILS)".
+- **another kind** in `apps/web/src/lib/automations/passes/appointment-confirm.ts`: `` kind: "automation.appointment_confirm", accountTimezone `` → `` kind: "automation.sms_reminder", accountTimezone ``. KILLED, red: "appointmentConfirmPass hands the gate its own kind (review R2 minor) the gate is asked for automation.appointment_confirm, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)".
+- **another kind** in `apps/web/src/lib/automations/passes/sms-reminder.ts`: `` kind: "automation.sms_reminder", accountTimezone `` → `` kind: "automation.appointment_confirm", accountTimezone ``. KILLED, red: "smsReminderPass hands the gate its own kind (review R2 minor) the gate is asked for automation.sms_reminder, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)".
+- **texts the normalised number** in `apps/web/src/lib/automations/instant-reply.ts`: `` to: input.phoneAsTyped || to, body, `` → `` to, body, ``. KILLED, red: "sendInstantReply: the number as typed is what the gate judges "55 1234 5678" typed on the form is refused unconfirmed_number, never texted as +1 (mutation: text phoneE164 → sent, FAILS)".
+- **another kind** in `apps/web/src/lib/automations/instant-reply.ts`: `` kind: "automation.instant_reply", accountTimezone `` → `` kind: "automation.review_request", accountTimezone ``. KILLED, red: "releaseInstantReply — from the held row's payload re-runs every check and sends: the text goes, the submission is stamped, the row flips to sent (mutation: skip the stamp on release → FAILS)"; "sendInstantReply hands the gate its own kind (review R2 minor) the gate is asked for automation.instant_reply (mutation: pass another automation kind → FAILS)".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/src/lib/automations/send-sms.ts b/apps/web/src/lib/automations/send-sms.ts
+index 13775ce0..ecbf4e00 100644
+--- a/apps/web/src/lib/automations/send-sms.ts
++++ b/apps/web/src/lib/automations/send-sms.ts
+@@ -57,17 +57,25 @@ export type SentSms = {
+   usage: { segments: number; sentAt: Date } | null;
+ };
+ 
+-/** The gate said "not yet": holdOrSend writes the held row for `until`. */
++/** How long a send waits when the consent state could not be read (review
++ *  R2-I4). A failed row would leave the held queue for good (a released
++ *  reminder is past its due window and is never listed again), so an outage
++ *  is a short re-hold instead, and the release pass tries again. */
++export const LEDGER_RETRY_MS = 15 * 60_000;
++
++/** The gate said "not yet": holdOrSend writes the held row for `until`.
++ *  `why` picks the row's reason: the sending hours, or an unreadable
++ *  consent state being retried. */
+ export class SmsDeferred extends Error {
+-  constructor(readonly until: Date) {
+-    super(`automation sms deferred until ${until.toISOString()}`);
++  constructor(readonly until: Date, readonly why: "hours" | "ledger_unavailable" = "hours") {
++    super(`automation sms deferred until ${until.toISOString()} (${why})`);
+     this.name = "SmsDeferred";
+   }
+ }
+ 
+ /** The gate said "not to this number": holdOrSend logs the row `skipped`
+- *  with the reason. `ledger_unavailable` is never one of these: an
+- *  unreadable ledger is a FAILURE, so the pass retries next tick. */
++ *  with the reason. `ledger_unavailable` is never one of these: it is an
++ *  outage, re-held for LEDGER_RETRY_MS (SmsDeferred). */
+ export type AutomationBlockReason = Exclude<SmsBlockReason, "ledger_unavailable">;
+ export class SmsBlocked extends Error {
+   constructor(readonly reason: AutomationBlockReason) {
+@@ -116,16 +124,21 @@ export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSm
+   });
+   switch (result.kind) {
+     case "sent":
+-      if (row.id === null) throw new Error("automation sms: the gate sent without writing the message row");
++      // The text has LEFT. Throwing now would count it failed, leave it
++      // unstamped and send it again next tick (review R2 minor), so a
++      // missing row is logged and the send is reported as the send it was.
++      if (row.id === null) {
++        console.error(`automation sms for account ${input.accountId}: sent, but the gate never wrote the message row`);
++      }
+       return {
+-        messageId: row.id, providerMessageId: result.providerMessageId,
++        messageId: row.id ?? "", providerMessageId: result.providerMessageId,
+         usage: result.billable ? { segments: result.segments, sentAt: new Date() } : null,
+       };
+     case "deferred":
+       throw new SmsDeferred(result.until);
+     case "blocked":
+       if (result.reason === "ledger_unavailable") {
+-        throw new Error("automation sms not sent: the consent ledger could not be read");
++        throw new SmsDeferred(new Date(ctx.now.getTime() + LEDGER_RETRY_MS), "ledger_unavailable");
+       }
+       throw new SmsBlocked(result.reason);
+     case "failed":
+@@ -162,6 +175,7 @@ export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSm
+ export async function markAutomationSmsSent(
+   ctx: SmsSendContext, accountId: string, sent: SentSms, what: string,
+ ): Promise<void> {
++  if (!sent.messageId) return;   // no row to mark or to bill against (logged at the send)
+   try {
+     await updateMessageStatus(ctx.db, accountId, sent.messageId, "sent",
+       { providerMessageId: sent.providerMessageId }, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/send-sms.test.ts b/apps/web/src/lib/automations/send-sms.test.ts
+index c3df91ea..bb42feba 100644
+--- a/apps/web/src/lib/automations/send-sms.test.ts
++++ b/apps/web/src/lib/automations/send-sms.test.ts
+@@ -8,7 +8,7 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
+ import { SMS_RETRY_COOLDOWN_MS } from "./caps";
+ import type { PassContext } from "./context";
+ import {
+-  sendAutomationSms, markAutomationSmsSent, smsCooldownActive, SmsBlocked, SmsDeferred, type AutomationSmsInput,
++  sendAutomationSms, markAutomationSmsSent, smsCooldownActive, SmsBlocked, SmsDeferred, LEDGER_RETRY_MS, type AutomationSmsInput,
+ } from "./send-sms";
+ import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import { readdirSync, readFileSync, statSync } from "node:fs";
+@@ -102,12 +102,25 @@ describe("sendAutomationSms — through the send gate, write then send", () => {
+     expect(dbMocks.createMessage).not.toHaveBeenCalled();
+   });
+ 
+-  it("an unreadable ledger is a FAILURE, not a refusal: the pass counts it failed and retries next tick (mutation: throw SmsBlocked for ledger_unavailable → FAILS)", async () => {
++  it("an unreadable ledger is a 15-minute re-hold, never a refusal and never a failed row that leaves the queue (review R2-I4; mutation: throw a plain Error again → FAILS)", async () => {
+     const down = fakeSmsGate({ decide: () => ({ kind: "blocked", reason: "ledger_unavailable" }) });
+     const e = await sendAutomationSms(ctx({ sms: down }), input()).catch((x: unknown) => x);
+-    expect(e).toBeInstanceOf(Error);
+-    expect(e).not.toBeInstanceOf(SmsBlocked);
+-    expect(String((e as Error).message)).toMatch(/consent ledger could not be read/);
++    expect(e).toBeInstanceOf(SmsDeferred);
++    expect((e as SmsDeferred).why).toBe("ledger_unavailable");
++    expect((e as SmsDeferred).until.getTime()).toBe(NOW.getTime() + LEDGER_RETRY_MS);
++    expect(LEDGER_RETRY_MS).toBe(15 * 60_000);
++    expect(dbMocks.createMessage).not.toHaveBeenCalled();
++  });
++
++  it("a text that LEFT is reported sent even if the gate wrote no row: logged, never thrown into a re-send (review R2 minor; mutation: throw when the row id is missing → FAILS)", async () => {
++    const noRow = fakeSmsGate({ decide: () => ({ kind: "sent", providerMessageId: "p_9", to: "+19565550101", from: "+19565550000", body: "hi", billable: false, segments: 1 }) });
++    const err = vi.spyOn(console, "error").mockImplementation(() => {});
++    const sent = await sendAutomationSms(ctx({ sms: noRow }), input());
++    expect(sent).toMatchObject({ messageId: "", providerMessageId: "p_9" });
++    expect(err.mock.calls.flat().join(" ")).toContain("never wrote the message row");
++    await markAutomationSmsSent(ctx(), "acct_1", sent, "test");
++    expect(dbMocks.updateMessageStatus).not.toHaveBeenCalled();
++    err.mockRestore();
+   });
+ 
+   it("on a provider failure: marks the row failed, THEN runs the marker, then rethrows the provider's error (mutation: swap the order, or swallow the throw → FAILS)", async () => {
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/hold-or-send.ts b/apps/web/src/lib/automations/hold-or-send.ts
+index 3641546b..8954ccc9 100644
+--- a/apps/web/src/lib/automations/hold-or-send.ts
++++ b/apps/web/src/lib/automations/hold-or-send.ts
+@@ -77,6 +77,9 @@ export const REASONS = {
+   quietHours: (endsAt: Date, zone: string) => `Held until ${formatInstantClock(endsAt, zone)} — quiet hours`,
+   /** Choice 21: the hours opened only after the thing this send was for. */
+   windowAfterDeadline: "Not sent: quiet hours ran past the appointment",
++  /** Review R2-I4: the consent state could not be read, so the send waits
++   *  LEDGER_RETRY_MS and the release pass tries again. */
++  ledgerRetry: "Waiting a few minutes: couldn't check whether they can get texts",
+   /** The consent gate's refusals (lib/consent/gate.ts), in the words the
+    *  client reads on the Activity page. */
+   textsStopped: "They stopped texts from this business",
+@@ -210,6 +213,7 @@ function hoursRuleOf(s: HoldSubject): HoursRule {
+  */
+ export async function writeHeld(
+   ctx: Pick<PassContext, "db">, s: LogSubject, until: Date, zone: string,
++  reason: string = REASONS.quietHours(until, zone),
+ ): Promise<void> {
+   const existing = await getAutomationLogEntry(ctx.db, s.accountId, s.source, s.subjectKey);
+   const unchanged = existing?.status === "held"
+@@ -218,7 +222,7 @@ export async function writeHeld(
+   if (unchanged) return;
+   try {
+     await recordAutomationLog(ctx.db, {
+-      ...writeOf(s), status: "held", heldUntil: until.toISOString(), reason: REASONS.quietHours(until, zone),
++      ...writeOf(s), status: "held", heldUntil: until.toISOString(), reason,
+     });
+   } catch (e) {
+     console.error(
+@@ -253,7 +257,7 @@ export async function holdOrSend(
+     await send();
+   } catch (e) {
+     if (e instanceof SmsDeferred) {
+-      await writeHeld(ctx, s, e.until, zone);
++      await writeHeld(ctx, s, e.until, zone, e.why === "ledger_unavailable" ? REASONS.ledgerRetry : undefined);
+       return "held";
+     }
+     if (e instanceof SmsBlocked) {
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/hold-or-send.test.ts b/apps/web/src/lib/automations/hold-or-send.test.ts
+index 35c2ad0d..99dcc100 100644
+--- a/apps/web/src/lib/automations/hold-or-send.test.ts
++++ b/apps/web/src/lib/automations/hold-or-send.test.ts
+@@ -98,6 +98,14 @@ describe("holdOrSend: what the send gate answers", () => {
+     expect(logWrites()).toEqual([expect.objectContaining({ status: "held", heldUntil: until.toISOString() })]);
+   });
+ 
++  it("SmsDeferred for an unreadable ledger is a held row with its own reason, not \"quiet hours\" (review R2-I4; mutation: always write the quiet-hours reason → FAILS)", async () => {
++    const until = new Date(NOON.getTime() + 15 * 60_000);
++    expect(await holdOrSend(ctx(NOON), subject(), async () => { throw new SmsDeferred(until, "ledger_unavailable"); })).toBe("held");
++    expect(logWrites()).toEqual([expect.objectContaining({
++      status: "held", heldUntil: until.toISOString(), reason: "Waiting a few minutes: couldn't check whether they can get texts",
++    })]);
++  });
++
+   it.each<[AutomationBlockReason, string]>([
+     ["stopped", "They stopped texts from this business"],
+     ["held", "Texts to them are on hold"],
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/instant-reply.ts b/apps/web/src/lib/automations/instant-reply.ts
+index 963404aa..170f477e 100644
+--- a/apps/web/src/lib/automations/instant-reply.ts
++++ b/apps/web/src/lib/automations/instant-reply.ts
+@@ -57,6 +57,12 @@ export type InstantReplyInput = {
+   /** `e164Of(rawPhone)`: null when the person typed nothing, or something the
+    *  parser could not read. A number stored as typed is NOT textable. */
+   phoneE164: string | null;
++  /** The number as the person TYPED it (review R2-C1). This is what is
++   *  texted, so the gate judges the ten digits itself and holds a number
++   *  that could be Mexican or US; `phoneE164` would claim a confirmed +1.
++   *  `phoneE164` still decides "no phone" and the region check. Absent on a
++   *  payload held before PR-1, where `phoneE164` is texted as before. */
++  phoneAsTyped?: string | null;
+   /** The submission's normalized locale — the language the person filled the
+    *  form in, the receipt email's own signal. Picks the body. */
+   locale: "en" | "es";
+@@ -79,7 +85,7 @@ export type InstantReplyOutcome =
+ /** What the release needs and the submission row cannot cheaply re-derive.
+  *  Written into the held row's `payload`; parsed back, never trusted. */
+ export type InstantReplyPayload = {
+-  contactId: string; conversationId: string; phoneE164: string; locale: "en" | "es"; consentWithheld: boolean;
++  contactId: string; conversationId: string; phoneE164: string; phoneAsTyped?: string; locale: "en" | "es"; consentWithheld: boolean;
+ };
+ 
+ export function parseInstantReplyPayload(raw: unknown): InstantReplyPayload | null {
+@@ -88,7 +94,8 @@ export function parseInstantReplyPayload(raw: unknown): InstantReplyPayload | nu
+   if (typeof p.contactId !== "string" || typeof p.conversationId !== "string" || typeof p.phoneE164 !== "string") return null;
+   if (p.locale !== "en" && p.locale !== "es") return null;
+   if (typeof p.consentWithheld !== "boolean") return null;
+-  return { contactId: p.contactId, conversationId: p.conversationId, phoneE164: p.phoneE164, locale: p.locale, consentWithheld: p.consentWithheld };
++  const phoneAsTyped = typeof p.phoneAsTyped === "string" && p.phoneAsTyped.trim() ? p.phoneAsTyped : undefined;
++  return { contactId: p.contactId, conversationId: p.conversationId, phoneE164: p.phoneE164, ...(phoneAsTyped ? { phoneAsTyped } : {}), locale: p.locale, consentWithheld: p.consentWithheld };
+ }
+ 
+ const WHAT = "instant reply";
+@@ -168,6 +175,7 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
+     accountTimezone: await readAccountTimezone(db, accountId),
+     payload: {
+       contactId: input.contactId, conversationId: input.conversationId, phoneE164: to,
++      ...(input.phoneAsTyped ? { phoneAsTyped: input.phoneAsTyped } : {}),
+       locale: input.locale, consentWithheld: input.consentWithheld,
+     } satisfies InstantReplyPayload,
+   };
+@@ -177,7 +185,7 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
+   try {
+     outcome = await holdOrSend({ db, now }, subject, async () => {
+       sent = await sendAutomationSms(ctx, {
+-        accountId, contactId: input.contactId, to, body,
++        accountId, contactId: input.contactId, to: input.phoneAsTyped || to, body,
+         kind: "automation.instant_reply", accountTimezone: subject.accountTimezone,
+         // The same locale that picked the body picks the opt-out
+         // disclosure's language. Sending a Spanish reply that ends in
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/instant-reply.test.ts b/apps/web/src/lib/automations/instant-reply.test.ts
+index 77344225..304575d8 100644
+--- a/apps/web/src/lib/automations/instant-reply.test.ts
++++ b/apps/web/src/lib/automations/instant-reply.test.ts
+@@ -348,3 +348,33 @@ describe("releaseInstantReply — from the held row's payload", () => {
+     expect(parseInstantReplyPayload(null)).toBeNull();
+   });
+ });
++
++/**
++ * Review R2-C1: the instant reply texts the number AS TYPED, so the gate
++ * judges ten digits that could be Mexican or US and holds them, instead of
++ * texting the confirmed-looking +1 that phoneE164 carries.
++ */
++describe("sendInstantReply: the number as typed is what the gate judges", () => {
++  it("\"55 1234 5678\" typed on the form is refused unconfirmed_number, never texted as +1 (mutation: text phoneE164 → sent, FAILS)", async () => {
++    const out = await sendInstantReply(input({ phoneE164: "+15512345678", phoneAsTyped: "55 1234 5678" }));
++    expect(out.kind).toBe("blocked");
++    expect(smsSend).not.toHaveBeenCalled();
++  });
++
++  it("the typed number rides the held row's payload, and an old payload without it still parses", async () => {
++    expect(await sendInstantReply(input({ phoneAsTyped: "(956) 555-0101" }))).toEqual({ kind: "sent", unstamped: false });
++    expect(smsSend).toHaveBeenCalledWith(expect.objectContaining({ to: "+19565550101" }));
++  });
++});
++
++describe("sendInstantReply hands the gate its own kind (review R2 minor)", () => {
++  it("the gate is asked for automation.instant_reply (mutation: pass another automation kind → FAILS)", async () => {
++    const seen: string[] = [];
++    dbMocks.readConsentState.mockImplementation(async () => { return { state: "allowed" }; });
++    const spy = vi.spyOn(await import("@/lib/consent/gate"), "smsSenderFor");
++    spy.mockImplementation(() => (async (req) => { seen.push(req.kind); return { kind: "blocked", reason: "stopped" }; }));
++    await sendInstantReply(input());
++    expect(seen).toEqual(["automation.instant_reply"]);
++    spy.mockRestore();
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/review-request.ts b/apps/web/src/lib/automations/passes/review-request.ts
+index 11009a66..0d4d8579 100644
+--- a/apps/web/src/lib/automations/passes/review-request.ts
++++ b/apps/web/src/lib/automations/passes/review-request.ts
+@@ -260,6 +260,12 @@ export async function processReviewRequests(
+         if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "review request");
+       });
+       if (outcome === "skipped") {
++        // The gate refused it and nothing was sent: give back the tick slot and
++        // today's count taken above (review R2-I2). Otherwise ten refused rows at
++        // the head of the list use up AUTOMATION_TICK_CAP, which is ONE counter
++        // across every account, and starve everyone behind them.
++        attemptsThisTick--;
++        sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1);
+         c.blocked++;
+         continue;
+       }
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/review-request.test.ts b/apps/web/src/lib/automations/passes/review-request.test.ts
+index 3b7fb218..6f1ebd70 100644
+--- a/apps/web/src/lib/automations/passes/review-request.test.ts
++++ b/apps/web/src/lib/automations/passes/review-request.test.ts
+@@ -460,3 +460,38 @@ describe("review request — quiet hours and release", () => {
+     }));
+   });
+ });
++
++/**
++ * Review R2-I2: a text the gate refuses sends nothing, so it must not use up
++ * AUTOMATION_TICK_CAP (one counter across EVERY account) or the account's
++ * daily count. Refused rows are never stamped and come back every tick; without
++ * the give-back ten flagged contacts at the head of the list starve everyone.
++ */
++describe("reviewRequestPass: a refusal gives back its tick slot and its daily count", () => {
++  const refuseFirst = (n: number) => {
++    let seen = 0;
++    return fakeSmsGate({ send: (m) => smsSend(m), decide: () => (seen++ < n ? { kind: "blocked", reason: "stopped" } : null) });
++  };
++
++  it("ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
++    dbMocks.listDueReviewRequests.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ config: { channel: "sms", reviewUrl: URL }, bookingId: `bk_${i}`, contactId: `ct_${i}` })));
++    const result = await reviewRequestPass.run({ ...ctx(), sms: refuseFirst(AUTOMATION_TICK_CAP) });
++    expect(result).toEqual({ ...EMPTY, blocked: AUTOMATION_TICK_CAP, sent: 1 });
++  });
++
++  it("one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)", async () => {
++    dbMocks.countReviewRequestsSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
++    dbMocks.listDueReviewRequests.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ config: { channel: "sms", reviewUrl: URL }, bookingId: `bk_${i}`, contactId: `ct_${i}` })));
++    const result = await reviewRequestPass.run({ ...ctx(), sms: refuseFirst(1) });
++    expect(result).toEqual({ ...EMPTY, blocked: 1, sent: 1 });
++  });
++});
++
++describe("reviewRequestPass hands the gate its own kind (review R2 minor)", () => {
++  it("the gate is asked for automation.review_request, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
++    dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } })]);
++    const gate = fakeSmsGate();
++    await reviewRequestPass.run({ ...ctx(), sms: gate });
++    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.review_request"]);
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/no-show-nudge.ts b/apps/web/src/lib/automations/passes/no-show-nudge.ts
+index 495acd41..f67c9474 100644
+--- a/apps/web/src/lib/automations/passes/no-show-nudge.ts
++++ b/apps/web/src/lib/automations/passes/no-show-nudge.ts
+@@ -239,6 +239,12 @@ export async function processNoShowNudges(
+         if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "no-show nudge");
+       });
+       if (outcome === "skipped") {
++        // The gate refused it and nothing was sent: give back the tick slot and
++        // today's count taken above (review R2-I2). Otherwise ten refused rows at
++        // the head of the list use up AUTOMATION_TICK_CAP, which is ONE counter
++        // across every account, and starve everyone behind them.
++        attemptsThisTick--;
++        sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1);
+         c.blocked++;
+         continue;
+       }
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/no-show-nudge.test.ts b/apps/web/src/lib/automations/passes/no-show-nudge.test.ts
+index cbb3933b..6323e1f5 100644
+--- a/apps/web/src/lib/automations/passes/no-show-nudge.test.ts
++++ b/apps/web/src/lib/automations/passes/no-show-nudge.test.ts
+@@ -375,3 +375,38 @@ describe("no-show nudge — quiet hours and release", () => {
+     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "skipped", reason: "The booking page is switched off" }));
+   });
+ });
++
++/**
++ * Review R2-I2: a text the gate refuses sends nothing, so it must not use up
++ * AUTOMATION_TICK_CAP (one counter across EVERY account) or the account's
++ * daily count. Refused rows are never stamped and come back every tick; without
++ * the give-back ten flagged contacts at the head of the list starve everyone.
++ */
++describe("noShowNudgePass: a refusal gives back its tick slot and its daily count", () => {
++  const refuseFirst = (n: number) => {
++    let seen = 0;
++    return fakeSmsGate({ send: (m) => smsSend(m), decide: () => (seen++ < n ? { kind: "blocked", reason: "stopped" } : null) });
++  };
++
++  it("ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
++    dbMocks.listDueNoShowNudges.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => sms({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
++    const result = await noShowNudgePass.run({ ...ctx(), sms: refuseFirst(AUTOMATION_TICK_CAP) });
++    expect(result).toEqual({ ...EMPTY, blocked: AUTOMATION_TICK_CAP, sent: 1 });
++  });
++
++  it("one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)", async () => {
++    dbMocks.countNoShowNudgesSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
++    dbMocks.listDueNoShowNudges.mockResolvedValue(Array.from({ length: 2 }, (_, i) => sms({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
++    const result = await noShowNudgePass.run({ ...ctx(), sms: refuseFirst(1) });
++    expect(result).toEqual({ ...EMPTY, blocked: 1, sent: 1 });
++  });
++});
++
++describe("noShowNudgePass hands the gate its own kind (review R2 minor)", () => {
++  it("the gate is asked for automation.no_show_nudge, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
++    dbMocks.listDueNoShowNudges.mockResolvedValue([sms()]);
++    const gate = fakeSmsGate();
++    await noShowNudgePass.run({ ...ctx(), sms: gate });
++    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.no_show_nudge"]);
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/quote-followup.ts b/apps/web/src/lib/automations/passes/quote-followup.ts
+index 7aa4d313..ed092671 100644
+--- a/apps/web/src/lib/automations/passes/quote-followup.ts
++++ b/apps/web/src/lib/automations/passes/quote-followup.ts
+@@ -227,6 +227,12 @@ export async function processQuoteFollowups(
+         if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "quote follow-up");
+       });
+       if (outcome === "skipped") {
++        // The gate refused it and nothing was sent: give back the tick slot and
++        // today's count taken above (review R2-I2). Otherwise ten refused rows at
++        // the head of the list use up AUTOMATION_TICK_CAP, which is ONE counter
++        // across every account, and starve everyone behind them.
++        attemptsThisTick--;
++        sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1);
+         c.blocked++;
+         continue;
+       }
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/quote-followup.test.ts b/apps/web/src/lib/automations/passes/quote-followup.test.ts
+index 3ce2da5c..71842081 100644
+--- a/apps/web/src/lib/automations/passes/quote-followup.test.ts
++++ b/apps/web/src/lib/automations/passes/quote-followup.test.ts
+@@ -16,7 +16,7 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
+ const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
+ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => senderMock.resolveSmsSender(...a) }));
+ 
+-import { AUTOMATION_DAILY_CAP } from "../caps";
++import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
+ import { defaultQuoteFollowupBody } from "../quote-followup-copy";
+ import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import type { PassContext } from "../context";
+@@ -375,3 +375,38 @@ describe("releasing a held quote follow-up", () => {
+     expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+   });
+ });
++
++/**
++ * Review R2-I2: a text the gate refuses sends nothing, so it must not use up
++ * AUTOMATION_TICK_CAP (one counter across EVERY account) or the account's
++ * daily count. Refused rows are never stamped and come back every tick; without
++ * the give-back ten flagged contacts at the head of the list starve everyone.
++ */
++describe("quoteFollowupPass: a refusal gives back its tick slot and its daily count", () => {
++  const refuseFirst = (n: number) => {
++    let seen = 0;
++    return fakeSmsGate({ send: (m) => smsSend(m), decide: () => (seen++ < n ? { kind: "blocked", reason: "stopped" } : null) });
++  };
++
++  it("ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
++    dbMocks.listDueQuoteFollowups.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ opportunityId: `opp_${i}`, contactId: `ct_${i}` })));
++    const result = await quoteFollowupPass.run({ ...ctx(), sms: refuseFirst(AUTOMATION_TICK_CAP) });
++    expect(result).toEqual({ ...EMPTY, blocked: AUTOMATION_TICK_CAP, sent: 1 });
++  });
++
++  it("one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)", async () => {
++    dbMocks.countQuoteFollowupsSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
++    dbMocks.listDueQuoteFollowups.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ opportunityId: `opp_${i}`, contactId: `ct_${i}` })));
++    const result = await quoteFollowupPass.run({ ...ctx(), sms: refuseFirst(1) });
++    expect(result).toEqual({ ...EMPTY, blocked: 1, sent: 1 });
++  });
++});
++
++describe("quoteFollowupPass hands the gate its own kind (review R2 minor)", () => {
++  it("the gate is asked for automation.quote_followup, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
++    dbMocks.listDueQuoteFollowups.mockResolvedValue([row()]);
++    const gate = fakeSmsGate();
++    await quoteFollowupPass.run({ ...ctx(), sms: gate });
++    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.quote_followup"]);
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/referral-ask.ts b/apps/web/src/lib/automations/passes/referral-ask.ts
+index 82c624c8..fb6180dd 100644
+--- a/apps/web/src/lib/automations/passes/referral-ask.ts
++++ b/apps/web/src/lib/automations/passes/referral-ask.ts
+@@ -287,6 +287,12 @@ export async function processReferralAsks(
+         if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "referral ask");
+       });
+       if (outcome === "skipped") {
++        // The gate refused it and nothing was sent: give back the tick slot and
++        // today's count taken above (review R2-I2). Otherwise ten refused rows at
++        // the head of the list use up AUTOMATION_TICK_CAP, which is ONE counter
++        // across every account, and starve everyone behind them.
++        attemptsThisTick--;
++        sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1);
+         c.blocked++;
+         continue;
+       }
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/referral-ask.test.ts b/apps/web/src/lib/automations/passes/referral-ask.test.ts
+index 8e9d3433..04776aec 100644
+--- a/apps/web/src/lib/automations/passes/referral-ask.test.ts
++++ b/apps/web/src/lib/automations/passes/referral-ask.test.ts
+@@ -16,7 +16,7 @@ const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
+ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => senderMock.resolveSmsSender(...a) }));
+ 
+ import { m } from "@/lib/messages";
+-import { AUTOMATION_DAILY_CAP } from "../caps";
++import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
+ import { fakeSmsGate } from "@/lib/consent/fake-gate";
+ import type { PassContext } from "../context";
+ import { referralAskPass, releaseReferralAsk } from "./referral-ask";
+@@ -483,3 +483,38 @@ describe("releasing a held referral ask", () => {
+     expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+   });
+ });
++
++/**
++ * Review R2-I2: a text the gate refuses sends nothing, so it must not use up
++ * AUTOMATION_TICK_CAP (one counter across EVERY account) or the account's
++ * daily count. Refused rows are never stamped and come back every tick; without
++ * the give-back ten flagged contacts at the head of the list starve everyone.
++ */
++describe("referralAskPass: a refusal gives back its tick slot and its daily count", () => {
++  const refuseFirst = (n: number) => {
++    let seen = 0;
++    return fakeSmsGate({ send: (m) => smsSend(m), decide: () => (seen++ < n ? { kind: "blocked", reason: "stopped" } : null) });
++  };
++
++  it("ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
++    dbMocks.listDueReferralAsks.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
++    const result = await referralAskPass.run({ ...ctx(), sms: refuseFirst(AUTOMATION_TICK_CAP) });
++    expect(result).toEqual({ ...EMPTY, blocked: AUTOMATION_TICK_CAP, sent: 1 });
++  });
++
++  it("one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)", async () => {
++    dbMocks.countReferralAsksSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
++    dbMocks.listDueReferralAsks.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
++    const result = await referralAskPass.run({ ...ctx(), sms: refuseFirst(1) });
++    expect(result).toEqual({ ...EMPTY, blocked: 1, sent: 1 });
++  });
++});
++
++describe("referralAskPass hands the gate its own kind (review R2 minor)", () => {
++  it("the gate is asked for automation.referral_ask, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
++    dbMocks.listDueReferralAsks.mockResolvedValue([row()]);
++    const gate = fakeSmsGate();
++    await referralAskPass.run({ ...ctx(), sms: gate });
++    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.referral_ask"]);
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/appointment-confirm.ts b/apps/web/src/lib/automations/passes/appointment-confirm.ts
+index 973ecd08..72b2f48e 100644
+--- a/apps/web/src/lib/automations/passes/appointment-confirm.ts
++++ b/apps/web/src/lib/automations/passes/appointment-confirm.ts
+@@ -39,15 +39,15 @@ import type { Pass, PassContext } from "../context";
+  * marker is still written, so the operator can see it; this pass never reads
+  * it back.
+  *
+- * THE DEADLINE. The subject carries `starts_at − 24h15m`: at or before the
+- * quiet window's end, holdOrSend sends now rather than holding past
+- * usefulness. 24h15m and not a flat 24h because that is the instant the
++ * THE DEADLINE. The subject carries `starts_at − 24h15m`: when the sending
++ * hours open only at or after it, holdOrSend does NOT send and logs "Not
++ * sent: quiet hours ran past the appointment" (consent chain choice 21). 24h15m and not a flat 24h because that is the instant the
+  * EMAIL reminder becomes eligible (REMINDER_WINDOW_END_MS, booking.ts:384)
+  * — the collision is one text and one email, not two texts; the SMS
+- * reminder's own window is 90–135 minutes and never meets this. The deadline
+- * is reachable only under a quiet window of nearly 23 hours (the ask is due
+- * two days out), and it is declared because the rule is "never hold
+- * something past the point it helps". What actually bites is
++ * reminder's own window is 90–135 minutes and never meets this. With the
++ * fixed night (21:00-08:00) and an ask due two days out it rarely bites; it
++ * is declared because the rule is "never send something past the point it
++ * helps". What actually bites is
+  * `releaseAppointmentConfirm`'s own `tooCloseToAsk` re-check.
+  *
+  * The time is rendered in the BOOKER's zone (safeZone, the email reminder's
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/appointment-confirm.test.ts b/apps/web/src/lib/automations/passes/appointment-confirm.test.ts
+index 2e015d2c..636b2e99 100644
+--- a/apps/web/src/lib/automations/passes/appointment-confirm.test.ts
++++ b/apps/web/src/lib/automations/passes/appointment-confirm.test.ts
+@@ -291,3 +291,23 @@ describe("releasing a held confirmation ask", () => {
+     // Mutation: swap the ternary's arms → this case AND the one above red.
+   });
+ });
++
++describe("appointmentConfirmPass hands the gate its own kind (review R2 minor)", () => {
++  it("the gate is asked for automation.appointment_confirm, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
++    dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
++    const gate = fakeSmsGate();
++    await appointmentConfirmPass.run({ ...ctx(), sms: gate });
++    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.appointment_confirm"]);
++  });
++});
++
++describe("appointmentConfirmPass: a refusal is counted as blocked, never as sent (review R2-I2)", () => {
++  it("a stopped number: {blocked: 1}, nothing texted, nothing stamped (mutation: delete the skipped branch → sent: 1, FAILS)", async () => {
++    dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
++    send.mockClear();
++    const c = await appointmentConfirmPass.run(ctx({ sms: fakeSmsGate({ send, decide: () => ({ kind: "blocked", reason: "stopped" }) }) }));
++    expect(c).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 1, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
++    expect(send).not.toHaveBeenCalled();
++    expect(dbMocks.stampAppointmentConfirmAsked).not.toHaveBeenCalled();
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/sms-reminder.ts b/apps/web/src/lib/automations/passes/sms-reminder.ts
+index 71718a46..c0e88a57 100644
+--- a/apps/web/src/lib/automations/passes/sms-reminder.ts
++++ b/apps/web/src/lib/automations/passes/sms-reminder.ts
+@@ -47,10 +47,10 @@ import type { Pass, PassContext } from "../context";
+  * for. Due ~2h before the appointment, a text for a 07:30 job is due at
+  * 05:30 — inside the default window — and holding it to 08:00 would text
+  * someone about a job that already started. So the subject's `deadline` is
+- * the appointment: at or before the window's end, it sends now. A job AFTER
+- * the window's end (08:30, due 06:30) is held and released at 08:00 — thirty
+- * minutes' notice instead of two hours, which is the trade the client made
+- * when they set quiet hours. On release, an appointment that has already
++ * the appointment: if the hours open only at or after it, the text is NOT
++ * sent and the row says why (consent chain choice 21). A job AFTER 08:00
++ * (08:30, due 06:30) is held and released at 08:00: thirty minutes' notice
++ * instead of two hours, the price of the fixed hours. On release, an appointment that has already
+  * started is skipped with its reason, never texted.
+  *
+  * The time is rendered in the BOOKER's zone (safeZone, the email
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/sms-reminder.test.ts b/apps/web/src/lib/automations/passes/sms-reminder.test.ts
+index bb1915af..e4571d01 100644
+--- a/apps/web/src/lib/automations/passes/sms-reminder.test.ts
++++ b/apps/web/src/lib/automations/passes/sms-reminder.test.ts
+@@ -252,3 +252,12 @@ describe("sms reminder pass — the fixed automated hours (08:00-21:00)", () =>
+     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This automation was turned off" }));
+   });
+ });
++
++describe("smsReminderPass hands the gate its own kind (review R2 minor)", () => {
++  it("the gate is asked for automation.sms_reminder, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
++    dbMocks.listDueSmsReminders.mockResolvedValue([row()]);
++    const gate = fakeSmsGate();
++    await smsReminderPass.run({ ...ctx(), sms: gate });
++    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.sms_reminder"]);
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/passes/reminders.ts b/apps/web/src/lib/automations/passes/reminders.ts
+index d8e46e5c..aa524420 100644
+--- a/apps/web/src/lib/automations/passes/reminders.ts
++++ b/apps/web/src/lib/automations/passes/reminders.ts
+@@ -30,7 +30,8 @@ import type { Pass, PassContext } from "../context";
+  * brings it back when the window ends, because the 75-minute due window
+  * will have closed by then and `listDueReminders` would never see it again.
+  * The `deadline` is the appointment itself: a reminder for a job that starts
+- * before the window ends goes out now.
++ * before the sending hours open is NOT sent ("Not sent: quiet hours ran past
++ * the appointment", consent chain choice 21).
+  */
+ export const remindersPass: Pass = {
+   key: "reminders",
+```
+
+```diff
+diff --git a/apps/web/src/lib/automations/appointment-confirm-gate.ts b/apps/web/src/lib/automations/appointment-confirm-gate.ts
+index 654f02f9..4f173a9d 100644
+--- a/apps/web/src/lib/automations/appointment-confirm-gate.ts
++++ b/apps/web/src/lib/automations/appointment-confirm-gate.ts
+@@ -8,11 +8,11 @@ import { APPOINTMENT_CONFIRM_MIN_LEAD_MS } from "@bis/db";
+  * left is the far end.
+  *
+  * `appointmentConfirmDeadline` is handed to `holdOrSend` as the subject's
+- * `deadline`, which sends rather than holds past usefulness. It is reachable
+- * only under a quiet window nearly 23 hours long — the ask is due two days
+- * out and the deadline is 24h15m out, so the two rarely meet — and it is
+- * declared anyway because the RULE is "never hold something past the point it
+- * helps", not "this fires often".
++ * `deadline`: if the sending hours open only at or after it, the ask is NOT
++ * sent and the row says "Not sent: quiet hours ran past the appointment"
++ * (consent chain choice 21). With the fixed 21:00-08:00 night and an ask due
++ * two days out, the two rarely meet; it is declared because the RULE is
++ * "never send something past the point it helps".
+  *
+  * `tooCloseToAsk` is what actually bites, in `releaseAppointmentConfirm`: a
+  * row held through a long window and released inside the email reminder's own
+```
+
+```diff
+diff --git a/apps/web/src/lib/forms/enrich.ts b/apps/web/src/lib/forms/enrich.ts
+index 7ac90a8c..ee46170b 100644
+--- a/apps/web/src/lib/forms/enrich.ts
++++ b/apps/web/src/lib/forms/enrich.ts
+@@ -178,7 +178,7 @@ export async function enrich(
+     try {
+       const outcome = await sendInstantReply({
+         db, now: new Date(), accountId, submissionId, contactId, conversationId,
+-        phoneE164, locale, consentWithheld,
++        phoneE164, phoneAsTyped: byKind.get("core.phone") || null, locale, consentWithheld,
+       });
+       if (outcome.kind === "failed") errors.push(`instant reply: ${outcome.error}`);
+     } catch (e) {
+```
+
+```diff
+diff --git a/apps/web/src/app/f/[publicId]/actions.test.ts b/apps/web/src/app/f/[publicId]/actions.test.ts
+index e0e0d0f9..7459ee88 100644
+--- a/apps/web/src/app/f/[publicId]/actions.test.ts
++++ b/apps/web/src/app/f/[publicId]/actions.test.ts
+@@ -605,7 +603,7 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
+   const token = () => signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+   const PHONE = "956-555-0101";
+ 
+-  it("runs LAST — after the receipt — with the E.164 phone, the page's locale, the contact, the thread and the consent flag", async () => {
++  it("runs LAST — after the receipt — with the E.164 phone, the phone AS TYPED, the page's locale, the contact, the thread and the consent flag (review R2-C1; mutation: drop phoneAsTyped → FAILS)", async () => {
+     // Mutation: call it before the receipt, or pass the raw phone.
+     getPublishedFormByPublicIdMock.mockResolvedValue(withPhone());
+     const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+@@ -616,7 +614,7 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
+     const arg = instantReplyMock.mock.calls[0]![0];
+     expect(arg).toMatchObject({
+       accountId: "acct_1", submissionId: "sub_1", contactId: "contact_1", conversationId: "convo_1",
+-      phoneE164: "+19565550101", locale: "es", consentWithheld: false,
++      phoneE164: "+19565550101", phoneAsTyped: PHONE, locale: "es", consentWithheld: false,
+     });
+     expect(arg.now).toBeInstanceOf(Date);
+     // The receipt is sendMock's only call here (no alert addresses), and the
+```
+
+```diff
+diff --git a/apps/web/src/app/api/cron/reminders/route.test.ts b/apps/web/src/app/api/cron/reminders/route.test.ts
+index 2c8afb11..d0cc7ecc 100644
+--- a/apps/web/src/app/api/cron/reminders/route.test.ts
++++ b/apps/web/src/app/api/cron/reminders/route.test.ts
+@@ -124,6 +124,15 @@ vi.mock("@bis/db", () => ({
+   // The release pass (Part C, Task 6): first in the registry, every tick.
+   // Nothing is ever held in this suite's fixtures, so its queue is empty.
+   listReleasableHolds: async () => [],
++  // Consent chain PR-1: the send gate's reads and the text-back release's
++  // (Global Constraint "vi.mock factories"). No text is due and nothing is
++  // held in this suite, so none is ever asked; one that were would fail
++  // closed and change the exact counts below.
++  readConsentState: async () => { throw new Error("route.test: no text is due"); },
++  readPhoneCountryFlag: async () => { throw new Error("route.test: no text is due"); },
++  readAccountTimezone: async () => { throw new Error("route.test: no text is due"); },
++  recordCarrierBlock: async () => { throw new Error("route.test: no text is due"); },
++  callerInTouchSince: async () => { throw new Error("route.test: nothing is held"); },
+   // The usage report (client billing), LAST in the registry. No account is
+   // billed in this suite, so it reads account_billing once and returns its
+   // idle counters. The rest THROW, this file's convention for a thing that
+```
+
 
 **Owner:** bis-automations. **Lane:** A (Phase 3). **Depends on:** Task 8 (and, through it, 1, 2, 4, 5); Task 7 (`instant-reply.ts` arrives here already on `e164Of`).
 
@@ -8766,6 +11272,498 @@ git commit -m "feat(automations): the quiet hours are fixed — the card states 
 
 ### Task 11: The call's two texts through the gate: the missed-call text-back (held, released) and the call alert
 
+#### Review corrections (binding; they override the code below)
+
+Findings: R2-I3, R2-I4 (the text-back), R2 minors (#149's sentence, the carrier flag, the hold write), danlo (a) (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** voice and api/voice tests: 829 passed; typechecks exit 0. `voice.test.ts`'s two `callerInTouchSince` tests are `withTestAccount` (CI only): NOT replayed; the five columns they read (`calls.caller_e164`, `calls.started_at`, `messages.conversation_id`, `channel`, `direction`, `created_at`) were checked on the replica.
+
+- **danlo (a), 2026-09-26: a text-back held overnight is skipped on release when that number has called or texted since.** `TextbackPayload` gains `missedAt` (the call's end, `r.now`; parsed optional). New `callerInTouchSince(db, accountId, callerE164, conversationId, sinceIso)` in `packages/db/src/voice.ts`: true when a call from that `caller_e164` STARTED after `sinceIso`, or an inbound SMS in the conversation was created after it (the missed call started before its own end, and its voice message is not a text, so neither counts); it THROWS on a read error. `releaseTextback` checks it first (since = `payload.missedAt ?? row.occurred_at`): true → skipped, "They've been in touch since"; a read error → re-held for `LEDGER_RETRY_MS`, `REASONS.ledgerRetry`, returns "held".
+- **danlo (a): a held send drops "just now".** `defaultTextbackBody(brandName, language, held = false)`; the release passes `held: true` through `TextbackRequest.held`. English: "Hi, this is {name}. Sorry we missed your call, reply here and we'll help." / "Sorry we missed your call, reply here and we'll help." (one GSM-7 segment with the STOP line). Spanish never said it.
+- **R2-I4.** `prepareTextback`: a `blocked: ledger_unavailable` decision is held for `LEDGER_RETRY_MS` like a deferral (zone "UTC", `REASONS.ledgerRetry`), never a failed row that drops the text-back.
+- **R2 minors.** The decision passes `numberFromCarrier: true` (Task 8); a `writeHeld` that throws is caught: the call row keeps its contact and conversation, and the outcome is `notSent: "unheld"`, logged; #149's sentence is restored ("Never add an email or name here without checking the match's phone is the caller ID.").
+- **R2-I3: the two callers are pinned.** A finish-call case that ENDS at 22:00 CDT asserts the held row (`textback`, `call:call1`, until 2027-06-02T13:00Z) and no SMS message row; the handoff route's test asserts `callId: "c1"` and `now: expect.any(Date)`.
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `lib/voice/textback.test.ts`: an unreadable ledger is a 15-minute re-hold, never a failed row that drops the text-back (review R2-I4; mutation: log it failed again → FAILS)
+- `lib/voice/textback.test.ts`: the caller ID is texted even when the contact's STORED number is flagged: the carrier's number says its own country (review R2 minor; mutation: drop numberFromCarrier → blocked, FAILS)
+- `lib/voice/textback.test.ts`: a hold write that fails keeps the call's contact and conversation, and says the text-back is lost (review R2 minor; mutation: let the throw escape → rejects, FAILS)
+- `lib/voice/textback.test.ts`: a caller who called or texted since the missed call is not texted: skipped "They've been in touch since" (mutation: drop the in-touch check → sent, FAILS)
+- `lib/voice/textback.test.ts`: the default sent at 08:00 does not say "just now" (mutation: prepare without held → "just now", FAILS)
+- `lib/voice/textback.test.ts`: the in-touch read failing re-holds for 15 minutes rather than guessing either way (mutation: treat a read error as not in touch → sent, FAILS)
+- `lib/voice/textback-body.test.ts`: drops "just now", names the company, and stays ONE GSM-7 segment with the STOP line (mutation: ignore `held` → "just now", FAILS)
+- `packages/db/src/test/voice.test.ts`: the missed call and an outbound text do not count; an inbound TEXT after it does (mutation: drop .eq("direction", "inbound") → the text-back's own outbound counts, FAILS)
+- `packages/db/src/test/voice.test.ts`: a later call from the SAME number counts; one from another number does not (mutation: drop .eq("caller_e164", …) → FAILS)
+- `lib/voice/finish-call.test.ts`: a call that ENDS at 22:00 CDT is held until 08:00 on the call's own row, and no message row is written (review R2-I3; mutation: callId: null → nothing held, FAILS; now: new Date() → judged at test time, FAILS)
+
+**Counts this block supersedes** (read off the corrected tree's runs): `lib/voice/textback.test.ts` 16 → 21 tests; `lib/voice/textback-body.test.ts` 10 → 11 tests; `packages/db/src/test/voice.test.ts` 28 → 30 tests (the two new ones CI only); `lib/voice/finish-call.test.ts` 98 → 100 tests (one here, one in Task 7).
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **no in-touch skip** in `apps/web/src/lib/voice/textback.ts`: ``   if (inTouch) { `` → ``   if (false) { ``. KILLED, red: "releaseTextback — the caller may have been served since a caller who called or texted since the missed call is not texted: skipped "They've been in touch since" (mutation: drop the in-touch check → sent, FAILS)".
+- **a read error reads as not in touch** in `apps/web/src/lib/voice/textback.ts`: ``     await writeHeld(ctx, subjectOf(row), new Date(ctx.now.getTime() + LEDGER_RETRY_MS), "UTC", REASONS.ledgerRetry); ⏎     return "held"; `` → ``     inTouch = false; ``. KILLED, red: "releaseTextback — the caller may have been served since the in-touch read failing re-holds for 15 minutes rather than guessing either way (mutation: treat a read error as not in touch → sent, FAILS)".
+- **release without held** in `apps/web/src/lib/voice/textback.ts`: `` label, callId: match[1]!, now: ctx.now, held: true, `` → `` label, callId: match[1]!, now: ctx.now, ``. KILLED, red: "releaseTextback — the caller may have been served since the default sent at 08:00 does not say "just now" (mutation: prepare without held → "just now", FAILS)".
+- **an unreadable ledger drops the text-back** in `apps/web/src/lib/voice/textback.ts`: `` const retry = decision.kind === "blocked" && decision.reason === "ledger_unavailable"; `` → `` const retry = false; ``. KILLED, red: "prepareTextback: the send gate decides before any row an unreadable ledger is a 15-minute re-hold, never a failed row that drops the text-back (review R2-I4; mutation: log it failed again → FAILS)".
+- **the carrier's number judged on the stored flag** in `apps/web/src/lib/voice/textback.ts`: ``     numberFromCarrier: true, ⏎  `` → (nothing). KILLED, red: "prepareTextback: the send gate decides before any row the caller ID is texted even when the contact's STORED number is flagged: the carrier's number says its own country (review R2 minor; mutation: drop numberFromCarrier → blocked, FAILS)".
+- **a failed hold write escapes** in `apps/web/src/lib/voice/textback.ts`: `` console.error(`${r.label}: text-back NOT held, the hold write failed: ${String(e)}`); `` → `` throw e; ``. KILLED, red: "prepareTextback: the send gate decides before any row a hold write that fails keeps the call's contact and conversation, and says the text-back is lost (review R2 minor; mutation: let the throw escape → rejects, FAILS)".
+- **no missedAt** in `apps/web/src/lib/voice/textback.ts`: `` , missedAt: r.now.toISOString() } satisfies TextbackPayload `` → ``  } satisfies TextbackPayload ``. KILLED, red: "prepareTextback: the send gate decides before any row a call missed at 22:00 is HELD until 08:00 on the automation log — source textback, subject call:<id>, with what a release needs — and nothing else is written (mutation: send at night → FAILS)".
+- **held ignored** in `apps/web/src/lib/voice/textback-body.ts`: `` m[held ? "voice.textback.defaultBodyHeldEn" : "voice.textback.defaultBodyEn"] `` → `` m["voice.textback.defaultBodyEn"] ``. KILLED, red: "defaultTextbackBody — a text-back held overnight (danlo, 2026-09-26) drops "just now", names the company, and stays ONE GSM-7 segment with the STOP line (mutation: ignore `held` → "just now", FAILS)".
+- **no call row for the hold** in `apps/web/src/lib/voice/finish-call.ts`: ``         callId: meta.callRowId, ⏎         now: meta.endedAt, `` → ``         callId: null, ⏎         now: meta.endedAt, ``. KILLED, red: "finishCall — missed-call text-back a call that ENDS at 22:00 CDT is held until 08:00 on the call's own row, and no message row is written (review R2-I3; mutation: callId: null → nothing held, FAILS; now: new Date() → judged at test time, FAILS)".
+- **judged at test time** in `apps/web/src/lib/voice/finish-call.ts`: ``         callId: meta.callRowId, ⏎         now: meta.endedAt, `` → ``         callId: meta.callRowId, ⏎         now: new Date(), ``. KILLED, red: "finishCall — missed-call text-back a call that ENDS at 22:00 CDT is held until 08:00 on the call's own row, and no message row is written (review R2-I3; mutation: callId: null → nothing held, FAILS; now: new Date() → judged at test time, FAILS)"; "finishCall — missed-call text-back texts back an ABANDONED caller when the toggle is on, and creates the contact"; "finishCall — missed-call text-back signs with the BRAND name — the context has no agency label left to sign with"; "finishCall — missed-call text-back sends the NAMELESS default when the company has no brand name"; "finishCall — missed-call text-back an operator's own body is sent verbatim; the default is only the empty-body fallback"; "finishCall — missed-call text-back answers a Spanish-speaking caller in Spanish"; "finishCall — missed-call text-back answers an English-speaking caller on the same bilingual line in English"; "finishCall — missed-call text-back an es-only profile texts Spanish without the caller having to prove it"; "finishCall — missed-call text-back never translates the operator's OWN body — they wrote it for their customers"; "finishCall — missed-call text-back STILL texts the ordinary abandoned caller — the served gate is not a blanket off switch"; "finishCall — missed-call text-back writes the durable call row BEFORE handing anything to the carrier"; "finishCall — missed-call text-back a carrier that never answers cannot cost the call its row"; "finishCall — missed-call text-back a text-back failure does not take down the rest of finishCall, and marks the row failed"; "finishCall — missed-call text-back a failing `failed`-status write does not swallow the real send error"; "finishCall — missed-call text-back a status-write failure AFTER a successful send never relabels the text failed"; "finishCall — text-back cooldown DOES text when the window is clear — the suppression above is not the default"; "finishCall — usage: the minutes of a call Sofía talked to (client billing) records voice minutes only AFTER both carrier sends, the staff alert SMS and the text-back, so a stalled ledger write never holds up a waiting person (mutation: move the leg back above the sends → call order FAILS)"; "finishCall — usage: the minutes of a call Sofía talked to (client billing) a failing usage write changes nothing: same result, the text-back still sent, the activity event still emitted (mutation: remove recordUsageSafely's catch → finishCall rejects, FAILS)".
+- **no call row** in `apps/web/src/app/api/voice/texml/handoff-result/route.ts`: ``           label: `handoff-result ${callId}`, ⏎           callId, `` → ``           label: `handoff-result ${callId}`, ⏎           callId: null, ``. KILLED, red: "voice texml handoff-result route a transfer that reached nobody texts the caller back — the lead is not lost".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/src/lib/voice/textback.ts b/apps/web/src/lib/voice/textback.ts
+index e5711300..ffa4ff51 100644
+--- a/apps/web/src/lib/voice/textback.ts
++++ b/apps/web/src/lib/voice/textback.ts
+@@ -26,10 +26,12 @@ import type { serviceDb, AutomationLogRow } from "@bis/db";
+ import {
+   createContact, fillContactBlanks, ensureConversation, createMessage,
+   updateMessageStatus, hasRecentOutboundSms, recordAutomationLog, getVoiceProfile, getBranding,
++  callerInTouchSince,
+ } from "@bis/db";
+ import { resolveSmsSender } from "@/lib/sms/sender";
+ import { decideSms, deliverSms, type ClearedSms, type SmsBlockReason } from "@/lib/consent/gate";
+ import { writeHeld, logSkipped, subjectOf, REASONS, BLOCK_REASONS, type LogSubject, type Releaser } from "@/lib/automations/hold-or-send";
++import { LEDGER_RETRY_MS } from "@/lib/automations/send-sms";
+ import { brandDisplayName } from "@/lib/email/templates/shell";
+ import { defaultTextbackBody } from "./textback-body";
+ import { recordUsageSafely } from "@/lib/billing/usage";
+@@ -85,11 +87,16 @@ export interface TextbackRequest {
+   /** The instant the hours are judged at. finishCall passes the call's own
+    *  end; the release pass its tick; the handoff route the present. */
+   now: Date;
++  /** True on the 08:00 release of a text-back held overnight: the default
++   *  body drops "just now" (danlo, 2026-09-26). */
++  held?: boolean;
+ }
+ 
+-/** What a release needs that the call row cannot cheaply re-derive. */
++/** What a release needs that the call row cannot cheaply re-derive.
++ *  `missedAt`: the call's own end, the instant "in touch since" is judged
++ *  from (absent on a payload written before it existed). */
+ export type TextbackPayload = {
+-  callerNumber: string; contactId: string; conversationId: string; language: "en" | "es";
++  callerNumber: string; contactId: string; conversationId: string; language: "en" | "es"; missedAt?: string;
+ };
+ 
+ export function parseTextbackPayload(raw: unknown): TextbackPayload | null {
+@@ -97,7 +104,8 @@ export function parseTextbackPayload(raw: unknown): TextbackPayload | null {
+   const p = raw as Record<string, unknown>;
+   if (typeof p.callerNumber !== "string" || typeof p.contactId !== "string" || typeof p.conversationId !== "string") return null;
+   if (p.language !== "en" && p.language !== "es") return null;
+-  return { callerNumber: p.callerNumber, contactId: p.contactId, conversationId: p.conversationId, language: p.language };
++  const missedAt = typeof p.missedAt === "string" && Number.isFinite(Date.parse(p.missedAt)) ? p.missedAt : undefined;
++  return { callerNumber: p.callerNumber, contactId: p.contactId, conversationId: p.conversationId, language: p.language, ...(missedAt ? { missedAt } : {}) };
+ }
+ 
+ /**
+@@ -138,7 +146,8 @@ export async function contactForCallerId(
+   }, ACTOR_ID, ACTOR_TYPE);
+   if (created.existing) {
+     // Safe as it stands: this dedupes on the caller ID ALONE, so a match IS
+-    // the caller's own contact and the phone fill is a no-op.
++    // the caller's own contact and the phone fill is a no-op. Never add an
++    // email or name here without checking the match's phone is the caller ID.
+     try {
+       await fillContactBlanks(db, accountId, created.id, { phone: callerNumber }, ACTOR_ID, ACTOR_TYPE);
+     } catch (e) {
+@@ -183,7 +192,7 @@ export async function prepareTextback(
+   // The operator's own body is never translated: they chose those words for
+   // their own customers. Only the DEFAULT follows the caller's language. The
+   // STOP line is the gate's to add (the registry's footer for voice.textback).
+-  const body = r.textbackBody.trim() || defaultTextbackBody(r.brandName, r.language);
++  const body = r.textbackBody.trim() || defaultTextbackBody(r.brandName, r.language, r.held === true);
+ 
+   const contactId = r.contactId
+     ?? (r.resolveContact ? await r.resolveContact() : await contactForCallerId(db, accountId, r.callerNumber));
+@@ -204,17 +213,32 @@ export async function prepareTextback(
+ 
+   const subject: LogSubject | null = r.callId === null ? null : {
+     accountId, source: "textback", channel: "sms", subjectKey: `call:${r.callId}`, contactId,
+-    payload: { callerNumber: r.callerNumber, contactId, conversationId, language: r.language } satisfies TextbackPayload,
++    payload: { callerNumber: r.callerNumber, contactId, conversationId, language: r.language, missedAt: r.now.toISOString() } satisfies TextbackPayload,
+   };
+   const decision = await decideSms(db, {
+     accountId, kind: "voice.textback", to: r.callerNumber, body, contactId, language: r.language, now: r.now,
++    // The caller ID, from the carrier: not held on the contact's stored
++    // phone_country_unconfirmed, which is about a number a person typed.
++    numberFromCarrier: true,
+   });
+-  if (decision.kind === "deferred") {
++  // An unreadable consent state (or zone) is an outage, not an answer: hold
++  // it LEDGER_RETRY_MS and let the release try again (review R2-I4). A
++  // failed row would leave the queue, and a text-back has no pass to retry.
++  const retry = decision.kind === "blocked" && decision.reason === "ledger_unavailable";
++  if (decision.kind === "deferred" || retry) {
+     if (!subject) {
+-      console.error(`${r.label}: text-back NOT sent — outside the sending hours, and a call with no row cannot be held`);
++      console.error(`${r.label}: text-back NOT sent — ${retry ? "consent state unreadable" : "outside the sending hours"}, and a call with no row cannot be held`);
++      return { contactId, conversationId, pending: null, notSent: "unheld" };
++    }
++    // The call row still gets its contact and conversation if the hold write
++    // fails: logged, and this call's text-back is lost (review R2 minor).
++    try {
++      if (decision.kind === "deferred") await writeHeld({ db }, subject, decision.until, decision.zone);
++      else await writeHeld({ db }, subject, new Date(r.now.getTime() + LEDGER_RETRY_MS), "UTC", REASONS.ledgerRetry);
++    } catch (e) {
++      console.error(`${r.label}: text-back NOT held, the hold write failed: ${String(e)}`);
+       return { contactId, conversationId, pending: null, notSent: "unheld" };
+     }
+-    await writeHeld({ db }, subject, decision.until, decision.zone);
+     return { contactId, conversationId, pending: null, notSent: "held" };
+   }
+   if (decision.kind === "blocked") {
+@@ -326,12 +350,28 @@ export const releaseTextback: Releaser = async (ctx, row: AutomationLogRow) => {
+     await logSkipped(ctx, subjectOf(row), REASONS.recipeOff);
+     return "skipped";
+   }
+-  const branding = await getBranding(db, row.account_id);
+   const label = `release textback call ${match[1]}`;
++  // danlo, 2026-09-26: a caller who has called or texted since the missed call
++  // has been served; the 08:00 text would talk over them.
++  const missedAt = payload.missedAt ?? row.occurred_at;
++  let inTouch: boolean;
++  try {
++    inTouch = await callerInTouchSince(db, row.account_id, payload.callerNumber, payload.conversationId, missedAt);
++  } catch (e) {
++    // An outage, not an answer: try again in LEDGER_RETRY_MS (review R2-I4).
++    console.error(`${label}: could not check whether the caller has been in touch; held again: ${String(e)}`);
++    await writeHeld(ctx, subjectOf(row), new Date(ctx.now.getTime() + LEDGER_RETRY_MS), "UTC", REASONS.ledgerRetry);
++    return "held";
++  }
++  if (inTouch) {
++    await logSkipped(ctx, subjectOf(row), REASONS.heardBack);
++    return "skipped";
++  }
++  const branding = await getBranding(db, row.account_id);
+   const outcome = await prepareTextback(db, row.account_id, {
+     callerNumber: payload.callerNumber, contactId: payload.contactId, language: payload.language,
+     brandName: brandDisplayName(branding), textbackBody: profile.textback_body ?? "",
+-    label, callId: match[1]!, now: ctx.now,
++    label, callId: match[1]!, now: ctx.now, held: true,
+   });
+   if (outcome.pending) return deliverTextback(db, row.account_id, outcome.pending, label);
+   switch (outcome.notSent) {
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/textback.test.ts b/apps/web/src/lib/voice/textback.test.ts
+index d5f71736..f47c57a2 100644
+--- a/apps/web/src/lib/voice/textback.test.ts
++++ b/apps/web/src/lib/voice/textback.test.ts
+@@ -6,6 +6,8 @@ const dbMocks = vi.hoisted(() => ({
+   recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(), getVoiceProfile: vi.fn(), getBranding: vi.fn(),
+   // The send gate's reads: the text-back goes through the REAL gate.
+   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(),
++  // The release's "has this caller been in touch since?" read (danlo, 2026-09-26).
++  callerInTouchSince: vi.fn(),
+ }));
+ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
+ const senderMocks = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
+@@ -55,6 +57,7 @@ beforeEach(() => {
+   dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
+   dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
+   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
++  dbMocks.callerInTouchSince.mockResolvedValue(false);
+   sms.isFake = false;
+   sms.redirectTo = undefined;
+   sms.send.mockReset().mockResolvedValue({ providerMessageId: "sm1" });
+@@ -83,7 +86,7 @@ describe("prepareTextback: the send gate decides before any row", () => {
+     expect(dbMocks.createMessage).not.toHaveBeenCalled();
+     expect(logWrites()).toEqual([{
+       accountId: "a1", source: "textback", channel: "sms", subjectKey: "call:call1", contactId: "ct_1",
+-      payload: { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "es" },
++      payload: { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "es", missedAt: TEN_PM.toISOString() },
+       status: "held", heldUntil: EIGHT_AM, reason: "Held until 8:00 AM — quiet hours",
+     }]);
+   });
+@@ -106,16 +109,31 @@ describe("prepareTextback: the send gate decides before any row", () => {
+     })]);
+   });
+ 
+-  it("an unreadable ledger is a FAILED row, not a skipped one, so it is not read as the customer's choice (mutation: log it skipped → FAILS)", async () => {
++  it("an unreadable ledger is a 15-minute re-hold, never a failed row that drops the text-back (review R2-I4; mutation: log it failed again → FAILS)", async () => {
+     dbMocks.readConsentState.mockRejectedValue(new Error("permission denied for table consent_events"));
+     const outcome = await prepareTextback(DB, "a1", request());
+-    expect(outcome.notSent).toBe("blocked");
++    expect(outcome).toMatchObject({ contactId: "ct_1", conversationId: "cv1", notSent: "held" });
+     expect(dbMocks.createMessage).not.toHaveBeenCalled();
+     expect(logWrites()).toEqual([expect.objectContaining({
+-      source: "textback", subjectKey: "call:call1", status: "failed", reason: "Couldn't be delivered",
++      source: "textback", subjectKey: "call:call1", status: "held",
++      heldUntil: new Date(NOON.getTime() + 15 * 60_000).toISOString(),
++      reason: "Waiting a few minutes: couldn't check whether they can get texts",
+     })]);
+   });
+ 
++  it("the caller ID is texted even when the contact's STORED number is flagged: the carrier's number says its own country (review R2 minor; mutation: drop numberFromCarrier → blocked, FAILS)", async () => {
++    dbMocks.readPhoneCountryFlag.mockResolvedValue(true);
++    const outcome = await prepareTextback(DB, "a1", request());
++    expect(outcome.pending).not.toBeNull();
++    expect(dbMocks.readPhoneCountryFlag).not.toHaveBeenCalled();
++  });
++
++  it("a hold write that fails keeps the call's contact and conversation, and says the text-back is lost (review R2 minor; mutation: let the throw escape → rejects, FAILS)", async () => {
++    dbMocks.recordAutomationLog.mockRejectedValue(new Error("db down"));
++    const outcome = await prepareTextback(DB, "a1", request({ now: TEN_PM }));
++    expect(outcome).toEqual({ contactId: "ct_1", conversationId: "cv1", pending: null, notSent: "unheld" });
++  });
++
+   it("an account not cleared to text writes NOTHING, not even a contact (mutation: resolve the contact first → FAILS)", async () => {
+     senderMocks.resolveSmsSender.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+     const resolveContact = vi.fn(async () => "ct_9");
+@@ -220,3 +238,46 @@ describe("releaseTextback — the 08:00 send of a call missed overnight", () =>
+     expect(sms.send).not.toHaveBeenCalled();
+   });
+ });
++
++/**
++ * danlo, 2026-09-26: a text-back held overnight is skipped at release when
++ * the caller has called or texted since the missed call, and the default it
++ * sends at 08:00 no longer says "just now".
++ */
++describe("releaseTextback — the caller may have been served since", () => {
++  const PAYLOAD = { callerNumber: "+19562921696", contactId: "ct_1", conversationId: "cv1", language: "en", missedAt: TEN_PM.toISOString() };
++  const held = (): AutomationLogRow => ({
++    id: "log_tb", account_id: "a1", source: "textback", channel: "sms", contact_id: "ct_1",
++    subject_key: "call:call1", status: "held", reason: "Held until 8:00 AM — quiet hours", held_until: EIGHT_AM,
++    payload: PAYLOAD, occurred_at: TEN_PM.toISOString(),
++  });
++  const ctx = (): PassContext => ({
++    db: DB as never, now: new Date(EIGHT_AM), origin: "", email: { isFake: true, send: vi.fn() }, sms: fakeSmsGate(),
++  });
++  beforeEach(() => {
++    dbMocks.getVoiceProfile.mockResolvedValue({ textback_enabled: true, textback_body: "" });
++    dbMocks.getBranding.mockResolvedValue({ brandName: "Rio Roofing" });
++  });
++
++  it("a caller who called or texted since the missed call is not texted: skipped \"They've been in touch since\" (mutation: drop the in-touch check → sent, FAILS)", async () => {
++    dbMocks.callerInTouchSince.mockResolvedValue(true);
++    expect(await releaseTextback(ctx(), held())).toBe("skipped");
++    expect(sms.send).not.toHaveBeenCalled();
++    expect(dbMocks.callerInTouchSince).toHaveBeenCalledWith(DB, "a1", "+19562921696", "cv1", TEN_PM.toISOString());
++    expect(logWrites().at(-1)).toMatchObject({ status: "skipped", reason: "They've been in touch since" });
++  });
++
++  it("the default sent at 08:00 does not say \"just now\" (mutation: prepare without held → \"just now\", FAILS)", async () => {
++    expect(await releaseTextback(ctx(), held())).toBe("sent");
++    const body = String(sms.send.mock.calls[0]![0].body);
++    expect(body).toContain("Sorry we missed your call");
++    expect(body).not.toContain("just now");
++  });
++
++  it("the in-touch read failing re-holds for 15 minutes rather than guessing either way (mutation: treat a read error as not in touch → sent, FAILS)", async () => {
++    dbMocks.callerInTouchSince.mockRejectedValue(new Error("fetch failed"));
++    expect(await releaseTextback(ctx(), held())).toBe("held");
++    expect(sms.send).not.toHaveBeenCalled();
++    expect(logWrites().at(-1)).toMatchObject({ status: "held", reason: "Waiting a few minutes: couldn't check whether they can get texts" });
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/textback-body.ts b/apps/web/src/lib/voice/textback-body.ts
+index 64dc6458..63d010d8 100644
+--- a/apps/web/src/lib/voice/textback-body.ts
++++ b/apps/web/src/lib/voice/textback-body.ts
+@@ -68,15 +68,16 @@ import { m } from "@/lib/messages";
+  * mensaje" says the same thing in one. Measured, not assumed — pinned in
+  * textback-body.test.ts.
+  */
+-export function defaultTextbackBody(brandName: string, language: "en" | "es"): string {
++export function defaultTextbackBody(brandName: string, language: "en" | "es", held = false): string {
++  // `held`: sent at 08:00 for a call missed overnight, so no "just now".
+   if (!brandName.trim()) {
+     return language === "es"
+       ? m["voice.textback.defaultBodyNoNameEs"]
+-      : m["voice.textback.defaultBodyNoNameEn"];
++      : m[held ? "voice.textback.defaultBodyHeldNoNameEn" : "voice.textback.defaultBodyNoNameEn"];
+   }
+   const template = language === "es"
+     ? m["voice.textback.defaultBodyEs"]
+-    : m["voice.textback.defaultBodyEn"];
++    : m[held ? "voice.textback.defaultBodyHeldEn" : "voice.textback.defaultBodyEn"];
+   // Function replacement, not a plain string: a company name containing `$&`
+   // or `$'` would otherwise be re-interpreted by String.replace as a
+   // substitution pattern and mangle the message.
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/textback-body.test.ts b/apps/web/src/lib/voice/textback-body.test.ts
+index 500205fe..9709866f 100644
+--- a/apps/web/src/lib/voice/textback-body.test.ts
++++ b/apps/web/src/lib/voice/textback-body.test.ts
+@@ -1,6 +1,7 @@
+ import { describe, it, expect } from "vitest";
+ import { segmentsFor } from "@/lib/sms/segments";
+ import { defaultTextbackBody } from "./textback-body";
++import { withOptOut } from "@/lib/sms/opt-out";
+ 
+ describe("defaultTextbackBody", () => {
+   it("the default text-back is one GSM-7 segment", () => {
+@@ -110,3 +111,13 @@ describe("defaultTextbackBody — Spanish", () => {
+     }
+   });
+ });
++
++describe("defaultTextbackBody — a text-back held overnight (danlo, 2026-09-26)", () => {
++  it("drops \"just now\", names the company, and stays ONE GSM-7 segment with the STOP line (mutation: ignore `held` → \"just now\", FAILS)", () => {
++    const body = defaultTextbackBody("Rio Roofing", "en", true);
++    expect(body).toBe("Hi, this is Rio Roofing. Sorry we missed your call, reply here and we'll help.");
++    expect(defaultTextbackBody("", "en", true)).toBe("Sorry we missed your call, reply here and we'll help.");
++    expect(segmentsFor(withOptOut(body, "en")).segments).toBe(1);
++    expect(defaultTextbackBody("Rio Roofing", "es", true)).toBe(defaultTextbackBody("Rio Roofing", "es"));
++  });
++});
+```
+
+```diff
+diff --git a/packages/db/src/voice.ts b/packages/db/src/voice.ts
+index 772b0ccc..92eb2989 100644
+--- a/packages/db/src/voice.ts
++++ b/packages/db/src/voice.ts
+@@ -714,3 +714,27 @@ export async function searchCalls(
+   if (error) throw new Error(`searchCalls failed: ${error.message}`);
+   return (data ?? []) as unknown as CallListRow[];
+ }
++
++/**
++ * Consent chain PR-1 (danlo, 2026-09-26): a text-back held overnight is not
++ * sent at 08:00 if the caller has been back in touch since the missed call:
++ * a call from the same number that STARTED after `sinceIso`, or an inbound
++ * TEXT in the conversation after it. The missed call itself started before
++ * `sinceIso` (its end), and its own voice message is not a text, so neither
++ * counts. THROWS on a read error; the release turns that into a re-hold.
++ */
++export async function callerInTouchSince(
++  db: SupabaseClient, accountId: string, callerE164: string, conversationId: string, sinceIso: string,
++): Promise<boolean> {
++  const { count: calls, error } = await db.from("calls")
++    .select("id", { count: "exact", head: true })
++    .eq("account_id", accountId).eq("caller_e164", callerE164).gt("started_at", sinceIso);
++  if (error) throw new Error(`callerInTouchSince calls read failed: ${error.message}`);
++  if ((calls ?? 0) > 0) return true;
++  const { count: texts, error: mErr } = await db.from("messages")
++    .select("id", { count: "exact", head: true })
++    .eq("account_id", accountId).eq("conversation_id", conversationId)
++    .eq("channel", "sms").eq("direction", "inbound").gt("created_at", sinceIso);
++  if (mErr) throw new Error(`callerInTouchSince messages read failed: ${mErr.message}`);
++  return (texts ?? 0) > 0;
++}
+```
+
+```diff
+diff --git a/packages/db/src/test/voice.test.ts b/packages/db/src/test/voice.test.ts
+index 06062b34..89203995 100644
+--- a/packages/db/src/test/voice.test.ts
++++ b/packages/db/src/test/voice.test.ts
+@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
+ import type { SupabaseClient } from "@supabase/supabase-js";
+ import { withTestAccount, testPhoneNumber } from "./fixtures";
+ import { createContact } from "../contacts";
+-import { ensureConversation } from "../messaging";
++import { ensureConversation, createMessage } from "../messaging";
+ import { getOrCreateCalendar, createBooking, setBookingStatus, getCalendarForAccount } from "../booking";
+ import {
+   assignPhoneNumber, getPhoneNumberByE164, setPhoneNumberStatus,
+@@ -15,6 +15,7 @@ import {
+   listCalls, getCall, listCallStartsBetween, listCallOutcomesBetween,
+   listContactCalls, searchCalls,
+   markHandoffRequested, getCallByHandoffToken, setCallOutcome,
++  callerInTouchSince,
+   type CallOutcome,
+ } from "../voice";
+ 
+@@ -709,3 +710,43 @@ describe("call handoff accessors", () => {
+     });
+   });
+ });
++
++/**
++ * Consent chain PR-1 (danlo, 2026-09-26): a text-back held overnight is
++ * skipped at 08:00 when the caller has been back in touch since the missed
++ * call. The instant is the database's own `started_at`, so no clock skew.
++ */
++describe("callerInTouchSince", () => {
++  it("the missed call and an outbound text do not count; an inbound TEXT after it does (mutation: drop .eq(\"direction\", \"inbound\") → the text-back's own outbound counts, FAILS)", async () => {
++    await withTestAccount(async (db, accountId) => {
++      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
++      const caller = "+19565550401";
++      const contact = await createContact(db, accountId, { firstName: "Ana", phone: caller }, "user_test");
++      const convo = await ensureConversation(db, accountId, contact.id, "user_test");
++      const missed = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
++      const { data } = await db.from("calls").select("started_at").eq("id", missed.id).single();
++      const since = (data as { started_at: string }).started_at;
++      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
++      await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "outbound", body: "Sorry we missed your call" }, "user_test");
++      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
++      await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "inbound", body: "still need a quote" }, "user_test");
++      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(true);
++    });
++  });
++
++  it("a later call from the SAME number counts; one from another number does not (mutation: drop .eq(\"caller_e164\", …) → FAILS)", async () => {
++    await withTestAccount(async (db, accountId) => {
++      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
++      const caller = "+19565550402";
++      const contact = await createContact(db, accountId, { firstName: "Luis", phone: caller }, "user_test");
++      const convo = await ensureConversation(db, accountId, contact.id, "user_test");
++      const missed = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
++      const { data } = await db.from("calls").select("started_at").eq("id", missed.id).single();
++      const since = (data as { started_at: string }).started_at;
++      await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550499" });
++      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
++      await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
++      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(true);
++    });
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/lib/voice/finish-call.test.ts b/apps/web/src/lib/voice/finish-call.test.ts
+index 6215c082..a1bff8f3 100644
+--- a/apps/web/src/lib/voice/finish-call.test.ts
++++ b/apps/web/src/lib/voice/finish-call.test.ts
+@@ -363,6 +374,16 @@ describe("finishCall", () => {
+ });
+ 
+ describe("finishCall — missed-call text-back", () => {
++  it("a call that ENDS at 22:00 CDT is held until 08:00 on the call's own row, and no message row is written (review R2-I3; mutation: callId: null → nothing held, FAILS; now: new Date() → judged at test time, FAILS)", async () => {
++    const night = { callRowId: "call1", startedAt: new Date("2027-06-02T02:58:00Z"), endedAt: new Date("2027-06-02T03:00:00Z") };
++    await finishCall(abandonedState(), textbackCtx, night);
++    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith({}, expect.objectContaining({
++      source: "textback", subjectKey: "call:call1", status: "held", heldUntil: "2027-06-02T13:00:00.000Z",
++    }));
++    expect(dbMocks.createMessage).not.toHaveBeenCalledWith({}, "a1", expect.objectContaining({ channel: "sms" }), "voice", "ai");
++    expect(smsRefs.send).not.toHaveBeenCalled();
++  });
++
+   it("texts back an ABANDONED caller when the toggle is on, and creates the contact", async () => {
+     // abandoned = the caller SPOKE but produced no booking, lead or message
+     // (call-state.ts:31). That is the follow-up target.
+```
+
+```diff
+diff --git a/apps/web/src/app/api/voice/texml/handoff-result/route.test.ts b/apps/web/src/app/api/voice/texml/handoff-result/route.test.ts
+index bf2d3763..d905de9b 100644
+--- a/apps/web/src/app/api/voice/texml/handoff-result/route.test.ts
++++ b/apps/web/src/app/api/voice/texml/handoff-result/route.test.ts
+@@ -241,6 +241,10 @@ describe("voice texml handoff-result route", () => {
+     expect(prepareTextbackMock.mock.calls[0]![1]).toBe("acct1");
+     expect(prepareTextbackMock.mock.calls[0]![2]).toMatchObject({
+       callerNumber: "+19562921696",
++      // The call's row: the held row's subject when this lands overnight
++      // (review R2-I3; mutation: callId: null → FAILS).
++      callId: "c1",
++      now: expect.any(Date),
+     });
+     expect(deliverTextbackMock).toHaveBeenCalledOnce();
+   });
+```
+
+
 **Owner:** bis-voice. **Lane:** A (Phase 3). **Depends on:** Tasks 8 and 9 (`writeHeld`, `BLOCK_REASONS`, the release queue); Task 1 (the `'textback'` source in the CHECK); Task 6 (`activity.source.textback`).
 
 Spec §4.1 item 4: the text-back and the call alert through the gate. The text-back is `voice.textback` (informational, automated hours): outside the hours it is HELD on `automation_log` (source `'textback'`, subject `call:<callId>`) and the release pass re-runs it through the gate at 08:00 (G6); a refusal is logged `skipped` with the gate's reason. The alert is `operator.alert_sms` (any hour; a stopped alert phone gets nothing, decision 2).
@@ -9716,6 +12714,101 @@ git commit -m "feat(voice): the text-back and the call alert through the send ga
 
 ### Task 12: The text composer: refused by the gate, closed on render with one line
 
+#### Review corrections (binding; they override the code below)
+
+Findings: R3-I3 (the composer half), R3-M2 (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** conversations and consent tests: 129 passed; typecheck exit 0.
+
+- **R3-I3.** In PR-1 the ledger learns of a stop only from the carrier's `40300`, so the FIRST attempt to a stopped number is `failed` with `carrierBlocked`, and the composer threw the provider's raw error. After marking its row failed it now answers `rejectSend(composerBlockedLine("stopped"))` (the gate has already recorded the stop).
+- **R3-M2.** After an attempt, `ledger_unavailable` answers `rejectSend(m["compose.smsStateUnknown"])`, the render's own line, never a thrown error and never worded as the customer's choice.
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts`: an unreadable state answers the render's own line, never the customer's choice (review R3-M2; mutation: map it to the stopped line → FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts`: a carrier refusal for a number that texted STOP says the stopped line on the FIRST attempt, and the row is marked failed (review R3-I3; mutation: throw the provider's error → FAILS)
+
+**Counts this block supersedes** (read off the corrected tree's runs): `conversations/actions.test.ts` 35 → 36 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **an unreadable state throws** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts`: `` case "ledger_unavailable": rejectSend(m["compose.smsStateUnknown"]); `` → `` case "ledger_unavailable": rejectSend(composerBlockedLine("stopped")); ``. KILLED, red: "sendSmsAction — the consent gate's refusals an unreadable state answers the render's own line, never the customer's choice (review R3-M2; mutation: map it to the stopped line → FAILS)".
+- **the first carrier refusal throws the provider's error** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts`: ``     if (result.carrierBlocked) rejectSend(composerBlockedLine("stopped")); ⏎  `` → (nothing). KILLED, red: "sendSmsAction — the consent gate's refusals a carrier refusal for a number that texted STOP says the stopped line on the FIRST attempt, and the row is marked failed (review R3-I3; mutation: throw the provider's error → FAILS)".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts
+index 3081c5c0..c9dfde9a 100644
+--- a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts
++++ b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts
+@@ -162,8 +162,9 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
+       case "a2p_not_approved": rejectSend(m["compose.smsBlockedA2p"]);
+       case "no_live_number": rejectSend(m["compose.smsBlockedNoNumber"]);
+       case "no_number": rejectSend(m["compose.noPhoneOnContact"]);
+-      // Not a reason to show as if it were the customer's choice: a failure.
+-      case "ledger_unavailable": throw new Error("the consent ledger could not be read");
++      // The render's own words for an unreadable state (review R3-M2): never
++      // worded as the customer's choice, and never an open form.
++      case "ledger_unavailable": rejectSend(m["compose.smsStateUnknown"]);
+       default: rejectSend(composerBlockedLine(result.reason));
+     }
+   }
+@@ -176,6 +177,11 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
+     }
+     revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
+     revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
++    // In PR-1 the ledger learns of a STOP from the carrier's refusal (40300),
++    // so the FIRST attempt to a stopped number lands here, not as blocked:
++    // say the stopped line now, not on the retry (review R3-I3). The gate
++    // has already recorded the stop.
++    if (result.carrierBlocked) rejectSend(composerBlockedLine("stopped"));
+     throw new Error(result.error);
+   }
+   const messageId = row.messageId;
+```
+
+```diff
+diff --git a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts
+index 9e1fd4c1..066aeb3b 100644
+--- a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts
++++ b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts
+@@ -142,7 +142,8 @@ import {
+   readConsentState, readPhoneCountryFlag,
+ } from "@bis/db";
+ import { m } from "@/lib/messages";
+-import { isSendRejected, sendRejectedReason } from "./send-errors";
++import { sendRejectedReason } from "./send-errors";
++import { SmsProviderError } from "@/lib/sms/types";
+ 
+ const createMessageMock = vi.mocked(createMessage);
+ const updateMessageStatusMock = vi.mocked(updateMessageStatus);
+@@ -557,16 +558,22 @@ describe("sendSmsAction — the consent gate's refusals", () => {
+     expect(smsSendMock).not.toHaveBeenCalled();
+   });
+ 
+-  it("an unreadable ledger is a FAILURE, not a rejection worded as the customer's choice (mutation: map it to the stopped line → FAILS)", async () => {
++  it("an unreadable state answers the render's own line, never the customer's choice (review R3-M2; mutation: map it to the stopped line → FAILS)", async () => {
+     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+     vi.mocked(readConsentState).mockRejectedValueOnce(new Error("permission denied for table consent_events"));
+-    const e = await send();
+-    expect(isSendRejected(e)).toBe(false);
+-    expect(String(e)).toContain("the consent ledger could not be read");
++    expect(sendRejectedReason(await send())).toBe(m["compose.smsStateUnknown"]);
+     expect(smsSendMock).not.toHaveBeenCalled();
+     spy.mockRestore();
+   });
+ 
++  it("a carrier refusal for a number that texted STOP says the stopped line on the FIRST attempt, and the row is marked failed (review R3-I3; mutation: throw the provider's error → FAILS)", async () => {
++    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
++    smsSendMock.mockRejectedValueOnce(new SmsProviderError('telnyx send failed (400): {"errors":[{"code":"40300"}]}', 400, ["40300"]));
++    expect(sendRejectedReason(await send())).toBe(m["compose.smsStoppedUndated"]);
++    expect(updateMessageStatusMock).toHaveBeenCalledWith(svc.db, "acct_1", "msg_1", "failed", expect.anything(), "user_1");
++    spy.mockRestore();
++  });
++
+   it("the ledger is read for THIS account, sms, on the contact's NORMALISED number (mutation: pass the stored phone as typed → FAILS)", async () => {
+     contactRow.phone = "(956) 292-1696";
+     await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
+```
+
+
 **Owner:** bis-comms. **Lane:** B (Phase 3). **Depends on:** Task 8; Task 6 (the `compose.*` lines); Task 7 (the contact page arrives on `e164Of`).
 
 Spec §6, "The conversation composer": the Text tab is closed, with one line, when the recipient's texts are stopped, held or the number is unconfirmed, decided on RENDER from the same two facts the gate reads; and the action, going through the gate (`staff.composer_sms`, any hour), says the same line after an attempt from a stale tab (G10).
@@ -10535,6 +13628,197 @@ git commit -m "feat(conversations): the text composer through the send gate, clo
 
 ### Task 13: The alert phone: a country beside the number, and its code through the gate
 
+#### Review corrections (binding; they override the code below)
+
+Findings: R3-I1 (the three rows), R3-I3 (the code half), R3-M3, R3-M4, R3-M6 (the resend country) (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** settings, alert-phone-card and consent tests: 221 passed (with Task 6's copy); typecheck exit 0.
+
+- **R3-I3.** `(result.kind === "blocked" && result.reason === "stopped") || (result.kind === "failed" && result.carrierBlocked)` → spec §6's stopped line, on the FIRST attempt too.
+- **R3-M3.** `sendSms` is wrapped: a throw discards the verification row (the rate-limit slot comes back), is logged, and answers the send-failed line.
+- **R3-M4.** When `phoneForCountry` refuses the number, the action asks the OTHER country: if the number reads there, it carried its own code and the answer is `settings.alertPhoneCountryMismatch` ("That number starts with a different country code than the one picked. Pick the matching country, or type just the ten digits."); otherwise `settings.alertPhoneBad`.
+- **R3-I1's three rows** as tests: "52 55 1234 5678" under US, "52 899 922 1234" under US, "1 956 292 1696" under MX → the mismatch line, no verification opened, nothing sent. "+44 20 7946 0958" under US stays the bad-number line.
+- **R3-M6.** The card's Resend names the pending number's own country (`pendingPhone.startsWith("+52") ? "MX" : "US"`): pinned by source (this card has no render harness).
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts`: ten digits under Mexico (+52) are claimed and texted as +52 (mutation: ignore the country → +1, FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts`: a typed +52 under US (+1) is refused with the mismatch line, never settled for the agency (review R3-M4; mutation: answer alertPhoneBad → FAILS; keep whatever code was typed → FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts`: %s under %s is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts`: a number that reads under neither country is still the bad-number line (mutation: always answer the mismatch line → FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts`: the FIRST attempt, refused by the carrier with 40300, already says the stopped line (review R3-I3; mutation: only blocked:stopped maps → alertPhoneSendFailed, FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts`: a gate that THROWS still gives the rate-limit slot back (review R3-M3; mutation: drop the try/catch → rejects, FAILS)
+- `components/alert-phone-card.test.ts`: a +52 pending number is resent under MX, anything else under US (mutation: always "US" → the start action answers the mismatch line on every Mexican resend, FAILS)
+
+**Counts this block supersedes** (read off the corrected tree's runs): `settings/actions.test.ts` 24 → 30 tests; `components/alert-phone-card.test.ts` 26 → 27 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **the mismatch reads as a bad number** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: `` m[phoneForCountry(raw, other) ? "settings.alertPhoneCountryMismatch" : "settings.alertPhoneBad"] `` → `` m["settings.alertPhoneBad"] ``. KILLED, red: "startAlertPhoneVerificationAction — the country beside the number a typed +52 under US (+1) is refused with the mismatch line, never settled for the agency (review R3-M4; mutation: answer alertPhoneBad → FAILS; keep whatever code was typed → FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 52 55 1234 5678 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 52 899 922 1234 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 1 956 292 1696 under MX is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)".
+- **always the mismatch line** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: `` m[phoneForCountry(raw, other) ? "settings.alertPhoneCountryMismatch" : "settings.alertPhoneBad"] `` → `` m["settings.alertPhoneCountryMismatch"] ``. KILLED, red: "startAlertPhoneVerificationAction — normalization is F-009's (phoneForCountry), not a second dialect refuses a value the normaliser cannot parse, and never opens a verification (mutation: skip the refusal → FAILS)"; "startAlertPhoneVerificationAction — the country beside the number a number that reads under neither country is still the bad-number line (mutation: always answer the mismatch line → FAILS)".
+- **only blocked:stopped maps** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: ``  || (result.kind === "failed" && result.carrierBlocked) `` → (nothing). KILLED, red: "startAlertPhoneVerificationAction — a phone that texted STOP gets no code the FIRST attempt, refused by the carrier with 40300, already says the stopped line (review R3-I3; mutation: only blocked:stopped maps → alertPhoneSendFailed, FAILS)".
+- **a throwing gate keeps the row** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts`: ``     await discardAlertPhoneVerification(db, id); ⏎     console.error(`alert phone verification send threw `` → ``     throw e; ⏎     console.error(`alert phone verification send threw ``. KILLED, red: "startAlertPhoneVerificationAction — a phone that texted STOP gets no code a gate that THROWS still gives the rate-limit slot back (review R3-M3; mutation: drop the try/catch → rejects, FAILS)".
+- **resend always US** in `apps/web/src/components/alert-phone-card.tsx`: `` pendingPhone.startsWith("+52") ? "MX" : "US" `` → `` "US" ``. KILLED, red: "AlertPhoneCard — Resend names the pending number's own country (review R3-M6) a +52 pending number is resent under MX, anything else under US (mutation: always "US" → the start action answers the mismatch line on every Mexican resend, FAILS)".
+- **R3-I1 at the alert phone: the old reading** in `packages/db/src/phone.ts`: ``     : (digits.length === 11 && digits.startsWith("1")) ⏎       || (digits.length === 12 && digits.startsWith("52")) ⏎       || (digits.length === 13 && digits.startsWith("521")) ? digits ⏎     : null; ⏎   if (explicit !== null) { ⏎     const e164 = international(explicit)?.e164 ?? null; ⏎     if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null; ⏎     return nationalTen(e164) === null ? null : e164; ⏎   } ⏎   return digits.length === 10 ? `+${CODE[country]}${digits}` : null; `` → ``     : null; ⏎   if (explicit !== null) { ⏎     const e164 = international(explicit)?.e164 ?? null; ⏎     if (e164 === null || !e164.startsWith(`+${CODE[country]}`)) return null; ⏎     return nationalTen(e164) === null ? null : e164; ⏎   } ⏎   const n = nationalTen(text); ⏎   return n === null ? null : `+${CODE[country]}${n}`; ``. KILLED, red: "startAlertPhoneVerificationAction — the country beside the number 52 55 1234 5678 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 52 899 922 1234 under US is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)"; "startAlertPhoneVerificationAction — the country beside the number 1 956 292 1696 under MX is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts
+index a899e955..e4a85208 100644
+--- a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts
++++ b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts
+@@ -303,13 +303,19 @@ export async function startAlertPhoneVerificationAction(
+ ): Promise<{ ok: true; phone: string } | { ok: false; error: string }> {
+   await requireAgencyOnlyAccountAccess(accountId);
+ 
+-  // The card sends the number AND its country (US +1 / México +52, spec §6),
++  // The card sends the number AND its country (US +1 / Mexico +52, spec §6),
+   // so an alert number is never ambiguous: a typed +52 under "US (+1)" is
+   // refused as a bad number rather than settled for the agency.
+   const raw = String(formData.get("alertPhone") ?? "").trim();
+   const country: PhoneCountry = formData.get("alertPhoneCountry") === "MX" ? "MX" : "US";
+   const normalized = phoneForCountry(raw, country);
+-  if (!normalized) return { ok: false, error: m["settings.alertPhoneBad"] };
++  if (!normalized) {
++    // A number that reads under the OTHER country carries its own code, and
++    // it disagrees with the pick: say so, rather than "enter a phone number"
++    // (review R3-M4).
++    const other: PhoneCountry = country === "MX" ? "US" : "MX";
++    return { ok: false, error: m[phoneForCountry(raw, other) ? "settings.alertPhoneCountryMismatch" : "settings.alertPhoneBad"] };
++  }
+ 
+   const db = serviceDb();
+   const gate = await resolveSmsSender(db, accountId);
+@@ -327,15 +333,27 @@ export async function startAlertPhoneVerificationAction(
+   // THROUGH THE SEND GATE (kind `operator.alert_phone_code`, no hours): a
+   // number that texted STOP to this business line gets no code (decision 2),
+   // and the agency is told how the owner turns texts back on (spec §6).
+-  const result = await sendSms(db, {
+-    accountId, kind: "operator.alert_phone_code", to: normalized, body: composeAlertPhoneVerificationSms(code),
+-  });
++  let result: Awaited<ReturnType<typeof sendSms>>;
++  try {
++    result = await sendSms(db, {
++      accountId, kind: "operator.alert_phone_code", to: normalized, body: composeAlertPhoneVerificationSms(code),
++    });
++  } catch (e) {
++    // A throw here would otherwise keep the row and spend a rate-limit slot
++    // with nothing sent (review R3-M3).
++    await discardAlertPhoneVerification(db, id);
++    console.error(`alert phone verification send threw for account ${accountId}: ${String(e)}`);
++    return { ok: false, error: m["settings.alertPhoneSendFailed"] };
++  }
+   if (result.kind !== "sent") {
+     // No text went out, so this row must not count toward
+     // ALERT_CODE_MAX_SENDS_PER_HOUR — otherwise five failures lock the number
+     // out for an hour with nothing ever delivered.
+     await discardAlertPhoneVerification(db, id);
+-    if (result.kind === "blocked" && result.reason === "stopped") {
++    // In PR-1 the ledger learns of a stop from the carrier's refusal (40300),
++    // so the FIRST attempt to a stopped phone is failed + carrierBlocked, not
++    // blocked: it gets the same line (review R3-I3).
++    if ((result.kind === "blocked" && result.reason === "stopped") || (result.kind === "failed" && result.carrierBlocked)) {
+       return { ok: false, error: m["settings.alertPhoneStopped"] };
+     }
+     const why = result.kind === "blocked" ? result.reason : result.kind === "failed" ? result.error : "deferred";
+```
+
+```diff
+diff --git a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts
+index 39bb67f5..6f27007f 100644
+--- a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts
++++ b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.test.ts
+@@ -46,6 +46,7 @@ const getSmsProviderMock = vi.fn(() => ({ isFake: true, send: sendMock }));
+ vi.mock("@/lib/sms", () => ({ getSmsProvider: () => getSmsProviderMock() }));
+ 
+ import { m } from "@/lib/messages";
++import { SmsProviderError } from "@/lib/sms/types";
+ import {
+   setAlertPhoneAction, startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction,
+ } from "./actions";
+@@ -253,18 +254,36 @@ describe("confirmAlertPhoneVerificationAction — the right code", () => {
+  * as `operator.alert_phone_code`.
+  */
+ describe("startAlertPhoneVerificationAction — the country beside the number", () => {
+-  it("ten digits under México (+52) are claimed and texted as +52 (mutation: ignore the country → +1, FAILS)", async () => {
++  it("ten digits under Mexico (+52) are claimed and texted as +52 (mutation: ignore the country → +1, FAILS)", async () => {
+     expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "55 1234 5678", alertPhoneCountry: "MX" })))
+       .toEqual({ ok: true, phone: "+525512345678" });
+     expect(dbMocks.startAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "acct_1", "+525512345678");
+     expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({ to: "+525512345678" }));
+   });
+ 
+-  it("a typed +52 under US (+1) is refused as a bad number, never settled for the agency (mutation: keep whatever code was typed → FAILS)", async () => {
++  it("a typed +52 under US (+1) is refused with the mismatch line, never settled for the agency (review R3-M4; mutation: answer alertPhoneBad → FAILS; keep whatever code was typed → FAILS)", async () => {
+     expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+52 55 1234 5678", alertPhoneCountry: "US" })))
+-      .toEqual({ ok: false, error: m["settings.alertPhoneBad"] });
++      .toEqual({ ok: false, error: m["settings.alertPhoneCountryMismatch"] });
+     expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
+   });
++
++  // Review R3-I1: a country code typed WITHOUT "+" is still an explicit code.
++  // The old nationalTen stripped it and texted a stranger in the other country.
++  it.each([
++    ["52 55 1234 5678", "US"],
++    ["52 899 922 1234", "US"],
++    ["1 956 292 1696", "MX"],
++  ])("%s under %s is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)", async (typed, country) => {
++    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: typed, alertPhoneCountry: country })))
++      .toEqual({ ok: false, error: m["settings.alertPhoneCountryMismatch"] });
++    expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
++    expect(sendMock).not.toHaveBeenCalled();
++  });
++
++  it("a number that reads under neither country is still the bad-number line (mutation: always answer the mismatch line → FAILS)", async () => {
++    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+44 20 7946 0958", alertPhoneCountry: "US" })))
++      .toEqual({ ok: false, error: m["settings.alertPhoneBad"] });
++  });
+ });
+ 
+ describe("startAlertPhoneVerificationAction — a phone that texted STOP gets no code", () => {
+@@ -278,4 +297,25 @@ describe("startAlertPhoneVerificationAction — a phone that texted STOP gets no
+     expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_stop");
+     spy.mockRestore();
+   });
++
++  it("the FIRST attempt, refused by the carrier with 40300, already says the stopped line (review R3-I3; mutation: only blocked:stopped maps → alertPhoneSendFailed, FAILS)", async () => {
++    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
++    dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_40300", code: "482913" });
++    sendMock.mockRejectedValue(new SmsProviderError('telnyx send failed (400): {"errors":[{"code":"40300"}]}', 400, ["40300"]));
++    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
++      .toEqual({ ok: false, error: m["settings.alertPhoneStopped"] });
++    expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_40300");
++    spy.mockRestore();
++  });
++
++  it("a gate that THROWS still gives the rate-limit slot back (review R3-M3; mutation: drop the try/catch → rejects, FAILS)", async () => {
++    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
++    dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_throw", code: "482913" });
++    resolveSmsSenderMock.mockResolvedValueOnce({ ok: true, from: "+19565559999", ownedNumbers: ["+19565559999"] })
++      .mockRejectedValueOnce(new Error("fetch failed"));
++    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
++      .toEqual({ ok: false, error: m["settings.alertPhoneSendFailed"] });
++    expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_throw");
++    spy.mockRestore();
++  });
+ });
+```
+
+```diff
+diff --git a/apps/web/src/components/alert-phone-card.test.ts b/apps/web/src/components/alert-phone-card.test.ts
+index bd70fb23..f92b47ec 100644
+--- a/apps/web/src/components/alert-phone-card.test.ts
++++ b/apps/web/src/components/alert-phone-card.test.ts
+@@ -218,3 +218,9 @@ describe("AlertPhoneCard — copy", () => {
+     expect(m["settings.alertPhoneTooManyCodes"]).toMatch(/hour/i);
+   });
+ });
++
++describe("AlertPhoneCard — Resend names the pending number's own country (review R3-M6)", () => {
++  it("a +52 pending number is resent under MX, anything else under US (mutation: always \"US\" → the start action answers the mismatch line on every Mexican resend, FAILS)", () => {
++    expect(codeOnly).toContain('formData.set("alertPhoneCountry", pendingPhone.startsWith("+52") ? "MX" : "US")');
++  });
++});
+```
+
+
 **Owner:** bis-comms. **Lane:** B (Phase 3). **Depends on:** Tasks 2 (`phoneForCountry`), 6, 8.
 
 Spec §4.1 item 1 ("The alert-phone field gains a country choice … so it is never ambiguous") and §6 (Settings, alert phone). The code goes through the gate as `operator.alert_phone_code` (any hour); a phone that texted STOP to the business line gets no code and the agency reads the spec's line (G10).
@@ -10913,6 +14197,241 @@ git commit -m "feat(settings): the alert phone's country, and its code through t
 ---
 
 ### Task 14: The contact's Texts row, Check number state (F-009): pick the country, undo
+
+#### Review corrections (binding; they override the code below)
+
+Findings: R3-I2, R3-M6 (access), R3-M12 (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** contacts tests: 110 passed; typecheck exit 0. The drawer behaviour itself is proved only by Task 16's new e2e test (not replayed).
+
+- **R3-I2, the server.** `setPhoneCountryAction` answers `contact.phoneCountry.changed` and writes nothing unless the stored number is still ambiguous: `contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true`. A stale row can no longer re-code a corrected `+19562921696` as `+529562921696`.
+- **R3-I2, the row.** It is keyed by the contact AND the flag it was built from: the drawer `` key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`} ``, the full page `` key={`phone-${contactId}-${phoneUnconfirmed}`} ``. The drawer's phone save bumps `retryNonce` (`if (field === "phone") setRetryNonce((n) => n + 1);`), so the summary is re-read and the row follows: a number edited into an ambiguous one shows it, one corrected hides it. The full page re-renders with the new flag after `revalidatePath`. Keying by the flag, not `row.phone`, matters in the drawer: the pick itself changes `row.phone` while the summary still says "ambiguous", and a phone key would bring the row straight back.
+- **R3-M12.** The undo writes `normalisePhone(previous.phone)?.e164 ?? previous.phone` and `previous.unconfirmed || normalisePhone(previous.phone)?.unconfirmed === true`: the normaliser's form, and never a flag cleared off the wire for a number it still calls ambiguous.
+- **R3-M6.** Both actions refuse (the guard throws) before any read or write when access is refused.
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529562921696 written, FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: refuses before any read when access is refused (review R3-M6; mutation: read the contact before the guard → FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: restores the normaliser's form, and keeps the flag for a number it still calls ambiguous, whatever the wire says (review R3-M12; mutation: write previous.phone and previous.unconfirmed as sent → FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts`: refuses before any write when access is refused (review R3-M6; mutation: write before the guard → FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts`: the drawer keys the row by the summary's flag (mutation: key by the contact alone → FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts`: the drawer re-reads its summary after a phone save (mutation: drop the nonce bump → FAILS)
+- `app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts`: the full page keys the row by the page's flag (mutation: key by the contact alone → FAILS)
+
+**Counts this block supersedes** (read off the corrected tree's runs): `contacts/actions.test.ts` 25 → 29 tests; `contacts/contact-drawer.wiring.test.ts` 9 → 12 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **no still-ambiguous check** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: `` if (contact.phone_country_unconfirmed !== true && normalisePhone(contact.phone)?.unconfirmed !== true) { `` → `` if (false) { ``. KILLED, red: "setPhoneCountryAction a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529562921696 written, FAILS)".
+- **undo writes the wire as sent** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: `` { expectedPhone: picked, phone, unconfirmed } `` → `` { expectedPhone: picked, phone: previous.phone, unconfirmed: previous.unconfirmed } ``. KILLED, red: "undoPhoneCountryAction restores the normaliser's form, and keeps the flag for a number it still calls ambiguous, whatever the wire says (review R3-M12; mutation: write previous.phone and previous.unconfirmed as sent → FAILS)".
+- **pick without the guard** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: ``   const { userId } = await requireAccountAccess(accountId); ⏎   if (!COUNTRIES.includes(country)) `` → ``   const { userId } = { userId: "user_1" }; ⏎   if (!COUNTRIES.includes(country)) ``. KILLED, red: "setPhoneCountryAction refuses before any read when access is refused (review R3-M6; mutation: read the contact before the guard → FAILS)"; "undoPhoneCountryAction puts back the previous phone and flag while the stored phone is the one the pick wrote".
+- **undo without the guard** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts`: ``   const { userId } = await requireAccountAccess(accountId); ⏎   const sameNumber `` → ``   const { userId } = { userId: "user_1" }; ⏎   const sameNumber ``. KILLED, red: "undoPhoneCountryAction refuses before any write when access is refused (review R3-M6; mutation: write before the guard → FAILS)".
+- **key by the contact alone** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx`: `` key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`} `` → `` key={`phone-${row.id}`} ``. KILLED, red: "the Check number row follows a phone edit the drawer keys the row by the summary's flag (mutation: key by the contact alone → FAILS)".
+- **no re-read after a phone save** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx`: ``                           if (field === "phone") setRetryNonce((n) => n + 1); ⏎  `` → (nothing). KILLED, red: "the Check number row follows a phone edit the drawer re-reads its summary after a phone save (mutation: drop the nonce bump → FAILS)".
+- **key by the contact alone** in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/contact-fields-panel.tsx`: `` key={`phone-${contactId}-${phoneUnconfirmed}`} `` → `` key={`phone-${contactId}`} ``. KILLED, red: "the Check number row follows a phone edit the full page keys the row by the page's flag (mutation: key by the contact alone → FAILS)".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts
+index 741f93a7..3cbb4246 100644
+--- a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts
++++ b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts
+@@ -5,7 +5,7 @@ import { requireAccountAccess } from "@/lib/auth";
+ import { dbForRequest } from "@/lib/db";
+ import { createContact, deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
+          setMarketingEmailOptOut, getContact, setContactPhoneCountry } from "@bis/db";
+-import { repickPhoneCountry, type PhoneCountry } from "@bis/db/phone";
++import { normalisePhone, repickPhoneCountry, type PhoneCountry } from "@bis/db/phone";
+ import { loggableError } from "@/lib/loggable-error";
+ import type { PhoneCountryPickResult, PhoneCountryUndoResult, PhoneCountryPrevious } from "@/lib/contacts/phone-country";
+ import { m } from "@/lib/messages";
+@@ -147,6 +147,12 @@ export async function setPhoneCountryAction(
+     const db = await dbForRequest();
+     const contact = await getContact(db, accountId, contactId);
+     if (!contact?.phone) return { ok: false, error: m["contact.phoneCountry.changed"] };
++    // The row that asked may be stale (review R3-I2): only a number that is
++    // STILL ambiguous is re-coded. A number since corrected to a plainly US
++    // or Mexican one answers "changed", and nothing is written.
++    if (contact.phone_country_unconfirmed !== true && normalisePhone(contact.phone)?.unconfirmed !== true) {
++      return { ok: false, error: m["contact.phoneCountry.changed"] };
++    }
+     const phone = repickPhoneCountry(contact.phone, country);
+     if (!phone) return { ok: false, error: m["contact.phoneCountry.unreadable"] };
+     const outcome = await setContactPhoneCountry(db, accountId, contactId,
+@@ -176,9 +182,14 @@ export async function undoPhoneCountryAction(
+     && repickPhoneCountry(picked, "US") !== null
+     && repickPhoneCountry(picked, "US") === repickPhoneCountry(previous.phone, "US");
+   if (!sameNumber) return { ok: false, error: m["contact.phoneCountry.failed"] };
++  // Off the wire: restore the normaliser's form, and never a flag cleared
++  // for a number the normaliser still calls ambiguous (review R3-M12).
++  const restored = normalisePhone(previous.phone);
++  const phone = restored?.e164 ?? previous.phone;
++  const unconfirmed = previous.unconfirmed || restored?.unconfirmed === true;
+   try {
+     const outcome = await setContactPhoneCountry(await dbForRequest(), accountId, contactId,
+-      { expectedPhone: picked, phone: previous.phone, unconfirmed: previous.unconfirmed }, userId);
++      { expectedPhone: picked, phone, unconfirmed }, userId);
+     if (outcome === "changed") return { ok: false, error: m["contact.phoneCountry.changed"] };
+   } catch (e) {
+     console.error(`undoPhoneCountryAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
+```
+
+```diff
+diff --git a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts
+index 88d96911..ed0281d3 100644
+--- a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts
++++ b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts
+@@ -1,7 +1,8 @@
+ import { describe, it, expect, vi, beforeEach } from "vitest";
+ 
++const requireAccountAccess = vi.fn<(accountId: string) => Promise<{ userId: string; isAgency: boolean }>>(async () => ({ userId: "user_1", isAgency: true }));
+ vi.mock("@/lib/auth", () => ({
+-  requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
++  requireAccountAccess: (accountId: string) => requireAccountAccess(accountId),
+ }));
+ vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
+ const revalidatePath = vi.fn();
+@@ -196,6 +197,20 @@ describe("setPhoneCountryAction", () => {
+     expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
+   });
+ 
++  it("a number no longer ambiguous is not re-coded: a stale row's pick answers 'changed' and writes nothing (review R3-I2; mutation: drop the still-ambiguous check → +529562921696 written, FAILS)", async () => {
++    dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
++    expect(await setPhoneCountryAction("a1", "c1", "MX")).toEqual({ ok: false, error: m["contact.phoneCountry.changed"] });
++    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
++  });
++
++  it("refuses before any read when access is refused (review R3-M6; mutation: read the contact before the guard → FAILS)", async () => {
++    requireAccountAccess.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
++    await expect(setPhoneCountryAction("a1", "c1", "MX")).rejects.toThrow("NEXT_REDIRECT");
++    expect(requireAccountAccess).toHaveBeenCalledWith("a1");
++    expect(dbMocks.getContact).not.toHaveBeenCalled();
++    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
++  });
++
+   it("a db error is the failed line, logged, never thrown", async () => {
+     const err = vi.spyOn(console, "error").mockImplementation(() => {});
+     dbMocks.getContact.mockRejectedValue(new Error("boom"));
+@@ -226,6 +241,20 @@ describe("undoPhoneCountryAction", () => {
+     expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
+   });
+ 
++  it("restores the normaliser's form, and keeps the flag for a number it still calls ambiguous, whatever the wire says (review R3-M12; mutation: write previous.phone and previous.unconfirmed as sent → FAILS)", async () => {
++    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
++    await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "55 1234 5678", unconfirmed: false });
++    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
++      {}, "a1", "c1", { expectedPhone: "+525512345678", phone: "+15512345678", unconfirmed: true }, "user_1");
++  });
++
++  it("refuses before any write when access is refused (review R3-M6; mutation: write before the guard → FAILS)", async () => {
++    requireAccountAccess.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
++    await expect(undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+15512345678", unconfirmed: true }))
++      .rejects.toThrow("NEXT_REDIRECT");
++    expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();
++  });
++
+   it("the number changed since the pick: 'changed'", async () => {
+     dbMocks.setContactPhoneCountry.mockResolvedValue("changed");
+     expect(await undoPhoneCountryAction("a1", "c1", "+525512345678", { phone: "+15512345678", unconfirmed: true }))
+```
+
+```diff
+diff --git a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx
+index 7b7c9899..863d73de 100644
+--- a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx
++++ b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx
+@@ -154,7 +154,15 @@ export function ContactDrawer({
+                         field={field}
+                         inputType={type}
+                         value={(row[field] as string | null) ?? null}
+-                        save={(v) => updateContactFieldAction(accountId, row.id, field, v)}
++                        save={async (v) => {
++                          const saved = await updateContactFieldAction(accountId, row.id, field, v);
++                          // A phone edit can make the number ambiguous, or
++                          // settle it: re-read the summary so the Check number
++                          // row follows (review R3-I2). Undo saves through
++                          // here too.
++                          if (field === "phone") setRetryNonce((n) => n + 1);
++                          return saved;
++                        }}
+                       />
+                     </dd>
+                   </div>
+@@ -202,7 +210,10 @@ export function ContactDrawer({
+                       the summary for the same stub-row reason. Renders
+                       nothing for a number that is not ambiguous. */}
+                   <PhoneCountryRow
+-                    key={`phone-${row.id}`}
++                    // Keyed by the flag too (review R3-I2): a re-read summary
++                    // that settles or raises the question remounts the row
++                    // from it, never from a stale first render.
++                    key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`}
+                     accountId={accountId}
+                     contactId={row.id}
+                     unconfirmed={load.summary.phone_country_unconfirmed}
+```
+
+```diff
+diff --git a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts
+index 0b547a3c..e73d087c 100644
+--- a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts
++++ b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts
+@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+ import { createElement } from "react";
+ import { renderToStaticMarkup } from "react-dom/server";
+ import type { ContactRow } from "./contacts-table";
++import { readFileSync } from "node:fs";
++import path from "node:path";
++import { fileURLToPath } from "node:url";
+ 
+ /**
+  * Pins the drawer's USE of the summary parser: what its fetch effect stores
+@@ -172,3 +175,27 @@ describe("ContactDrawer: a fetch cleaned up while its body is still being read n
+     expect(set).not.toHaveBeenCalled();
+   });
+ });
++
++/**
++ * Review R3-I2: the Check number row must follow the number, not its first
++ * render. Source pins (no DOM renderer here); the e2e spec proves the
++ * behaviour in a browser.
++ */
++describe("the Check number row follows a phone edit", () => {
++  const here = path.dirname(fileURLToPath(import.meta.url));
++  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
++  const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
++  const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
++
++  it("the drawer keys the row by the summary's flag (mutation: key by the contact alone → FAILS)", () => {
++    expect(drawer).toContain("key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`}");
++  });
++
++  it("the drawer re-reads its summary after a phone save (mutation: drop the nonce bump → FAILS)", () => {
++    expect(drawer).toMatch(/if \(field === "phone"\) setRetryNonce\(\(n\) => n \+ 1\);/);
++  });
++
++  it("the full page keys the row by the page's flag (mutation: key by the contact alone → FAILS)", () => {
++    expect(panel).toContain("key={`phone-${contactId}-${phoneUnconfirmed}`}");
++  });
++});
+```
+
+```diff
+diff --git a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/contact-fields-panel.tsx b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/contact-fields-panel.tsx
+index 68cc4d1a..0e001b2c 100644
+--- a/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/contact-fields-panel.tsx
++++ b/apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/contact-fields-panel.tsx
+@@ -82,7 +82,9 @@ export function ContactFieldsPanel({
+           </dl>
+ 
+           <PhoneCountryRow
+-            key={`phone-${contactId}`}
++            // Keyed by the flag too (review R3-I2): the page re-renders after
++            // a phone edit, and the row must follow the new answer.
++            key={`phone-${contactId}-${phoneUnconfirmed}`}
+             accountId={accountId}
+             contactId={contactId}
+             unconfirmed={phoneUnconfirmed}
+```
+
 
 **Owner:** bis-crm (with bis-frontend reviewing the row against DESIGN.md). **Lane:** B (Phase 3). **Depends on:** Task 2 (`repickPhoneCountry`, `setContactPhoneCountry`); Task 6; Task 12 (the contact page and its test arrive with the composer wiring).
 
@@ -11907,6 +15426,87 @@ git commit -m "feat(contacts): the Texts row's Check number state — pick the c
 
 ### Task 15: The source scans
 
+#### Review corrections (binding; they override the code below)
+
+Findings: R3-I4, R3-M1 (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** scans.test.ts 11 passed.
+
+- **R3-I4.** Scan 2's `KIND_LITERAL` is `` /["'`]((?:automation|voice|staff|operator|consent)\.[^"'`]+)["'`]/g ``: any quoted string that starts like a kind, in any quote, digits included, with or without `kind:` in front (a kind held in a constant). The recorded mutation is against the MAIN test: `lib/sms/alerts.ts` sends `"operator.alert_sms_v2"` → "each kind literal in a file that sends through the gate is a registry key" FAILS (probe table).
+- **R3-M1.** Scan 1: `types.ts` is no longer exempt (it could re-export the factory); a relative `"./sms"` import counts outside `lib/sms/`; and a new test: only `lib/sms/telnyx.ts` names Telnyx's `/v2/messages` endpoint in code, so no raw `fetch` goes around the gate (its list holding `telnyx.ts` is its positive control). Scan 3 matches the table's NAME as any string literal, so `.from("consent_events" as never)` and a name in a constant count.
+
+**Tests added or rewritten** (each title names the mutation that turns it red):
+- `lib/consent/scans.test.ts`: only the Telnyx provider names the messages endpoint: no raw fetch around the gate (review R3-M1; mutation: fetch https://api.telnyx.com/v2/messages from a pass → FAILS naming it; the list holding telnyx.ts is the positive control)
+
+**Counts this block supersedes** (read off the corrected tree's runs): `lib/consent/scans.test.ts` 10 → 11 tests.
+
+**Probes** (applied to the corrected tree one at a time, the block's tests run, restored; ⏎ marks a line break):
+- **operator.alert_sms_v2** in `apps/web/src/lib/sms/alerts.ts`: `` kind: "operator.alert_sms", to: pending.to `` → `` kind: "operator.alert_sms_v2", to: pending.to ``. KILLED, red: "scan 2: every SMS kind handed to the gate is in the registry each kind literal in a file that sends through the gate is a registry key (mutation: a pass sends kind "automation.review_requests" → FAILS naming it)"; "scan 2: every SMS kind handed to the gate is in the registry the scan reaches every send path's kind — none of the eleven is missing (the positive control)".
+- **a raw Telnyx fetch** in `apps/web/src/lib/automations/passes/review-request.ts`: `` export const reviewRequestPass `` → `` export const rawSend = () => fetch("https://api.telnyx.com/v2/messages"); ⏎ export const reviewRequestPass ``. KILLED, red: "scan 1: only the send gate reaches an SMS provider only the Telnyx provider names the messages endpoint: no raw fetch around the gate (review R3-M1; mutation: fetch https://api.telnyx.com/v2/messages from a pass → FAILS naming it; the list holding telnyx.ts is the positive control)".
+- **types.ts re-exports the factory** in `apps/web/src/lib/sms/types.ts`: `` export class SmsProviderError extends Error { `` → `` export { getSmsProvider } from "./index"; ⏎ export class SmsProviderError extends Error { ``. KILLED, red: "scan 1: only the send gate reaches an SMS provider no source file outside the provider's modules and the gate names the factory, the providers or lib/sms's index (mutation: import getSmsProvider back into alerts.ts or harness.ts → FAILS naming it)".
+- **a relative ./sms import** in `apps/web/src/lib/messages.ts`: `` export const m = { `` → `` import * as smsIndex from "./sms"; ⏎ export const smsProbe = smsIndex; ⏎ export const m = { ``. KILLED, red: "scan 1: only the send gate reaches an SMS provider no source file outside the provider's modules and the gate names the factory, the providers or lib/sms's index (mutation: import getSmsProvider back into alerts.ts or harness.ts → FAILS naming it)".
+- **the table name in a constant** in `packages/db/src/contacts.ts`: `` type DuplicateMatch = { `` → `` export const LEDGER_TABLE = "consent_events"; ⏎ type DuplicateMatch = { ``. KILLED, red: "scan 3: the ledger has one writer, and it only appends only packages/db/src/consent.ts names the consent_events table in code (mutation: an insert from apps/web → FAILS naming the file)".
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/src/lib/consent/scans.test.ts b/apps/web/src/lib/consent/scans.test.ts
+index f3778b38..dde5414d 100644
+--- a/apps/web/src/lib/consent/scans.test.ts
++++ b/apps/web/src/lib/consent/scans.test.ts
+@@ -45,9 +45,11 @@ const dbSources = () => walk(DB_SRC).filter((f) => !isTest(f));
+ describe("scan 1: only the send gate reaches an SMS provider", () => {
+   // The provider's own modules, and the gate. alerts.ts is IN lib/sms but is
+   // one of the five send paths, so it is scanned like any other.
++  // types.ts is NOT exempt (review R3-M1): it holds types and the error
++  // class only, and an exemption would let it re-export the factory.
+   const PROVIDER_MODULES = new Set([
+     "apps/web/src/lib/sms/index.ts", "apps/web/src/lib/sms/telnyx.ts", "apps/web/src/lib/sms/fake.ts",
+-    "apps/web/src/lib/sms/types.ts", "apps/web/src/lib/consent/gate.ts",
++    "apps/web/src/lib/consent/gate.ts",
+   ]);
+   const REACHES_PROVIDER: readonly RegExp[] = [
+     /\bgetSmsProvider\b/,
+@@ -64,7 +66,7 @@ describe("scan 1: only the send gate reaches an SMS provider", () => {
+         // lib/sms/alerts.ts's own `./index` would be the factory; elsewhere
+         // `./index` is some other module, so that rule is only for lib/sms.
+         return REACHES_PROVIDER.some((r, i) => (i === 1 && !rel(f).startsWith("apps/web/src/lib/sms/")
+-          ? /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/sms|(?:\.\.\/)+sms)(?:\/index)?(?:\.[jt]s)?["']/.test(src)
++          ? /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/sms|(?:\.\.\/)+sms|\.\/sms)(?:\/index)?(?:\.[jt]s)?["']/.test(src)
+           : r.test(src)));
+       })
+       .map(rel);
+@@ -75,10 +77,17 @@ describe("scan 1: only the send gate reaches an SMS provider", () => {
+     expect(code(join(WEB_SRC, "lib", "consent", "gate.ts"))).toMatch(REACHES_PROVIDER[0]!);
+     expect(webSources().length).toBeGreaterThan(300);
+   });
++
++  it("only the Telnyx provider names the messages endpoint: no raw fetch around the gate (review R3-M1; mutation: fetch https://api.telnyx.com/v2/messages from a pass → FAILS naming it; the list holding telnyx.ts is the positive control)", () => {
++    expect(webSources().filter((f) => /\/v2\/messages\b/.test(code(f))).map(rel)).toEqual(["apps/web/src/lib/sms/telnyx.ts"]);
++  });
+ });
+ 
+ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
+-  const KIND_LITERAL = /\bkind:\s*"((?:automation|voice|staff|operator|consent)\.[a-z_]+)"/g;
++  // Any quoted string that starts like a kind, in any quote, digits and all
++  // (review R3-I4: `[a-z_]+` could not see "operator.alert_sms_v2", and a
++  // kind held in a constant has no `kind:` in front of it).
++  const KIND_LITERAL = /["'`]((?:automation|voice|staff|operator|consent)\.[^"'`]+)["'`]/g;
+   const GATE_CALLERS = /from\s+["'](?:@\/lib\/consent\/gate|\.\/gate|\.\.\/send-sms|\.\/send-sms)["']/;
+ 
+   function kindLiterals(): { file: string; kind: string }[] {
+@@ -97,7 +106,9 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
+ });
+ 
+ describe("scan 3: the ledger has one writer, and it only appends", () => {
+-  const TOUCHES_LEDGER = /\.from\(\s*["']consent_events["']\s*\)/;
++  // The table's name as a string literal, anywhere in code (review R3-M1):
++  // `.from("consent_events" as never)` and a name held in a constant both count.
++  const TOUCHES_LEDGER = /["'`]consent_events["'`]/;
+ 
+   it("only packages/db/src/consent.ts names the consent_events table in code (mutation: an insert from apps/web → FAILS naming the file)", () => {
+     const touching = [...webSources(), ...dbSources()].filter((f) => TOUCHES_LEDGER.test(code(f))).map(rel);
+```
+
+
 **Owner:** bis-comms. **Lane:** single (Phase 4). **Depends on:** Tasks 1–14.
 
 Spec §8's source scans, shipped last because they assert the finished state (every SMS path through the gate, nothing reading the quiet settings). The task also deletes the `toE164` alias Task 7 left for the Phase 3 callers, which are all rewritten by now. Each scan has a positive control and a recorded mutation probe, so none can pass vacuously (G1 explains why scan 4 is not in PR-1).
@@ -12136,6 +15736,57 @@ git commit -m "test(consent): the source scans — one gate, registered kinds, o
 
 ### Task 16: e2e: the Check number row on the fixture account
 
+#### Review corrections (binding; they override the code below)
+
+Findings: R3-M5, R3-I2 (the browser proof) (the plan review of 71ab882d, `.superpowers/sdd/consent-pr1-plan-review.md`). **Replayed:** NOT replayed: Playwright refuses production locally (#135); CI's `e2e` job runs it (Task 17 step 4 expects 3 passed).
+
+- **R3-M5.** `await toast.hover()` right after the toast is visible: hovering pauses Sonner's 4 s timer, so the DB read before the Undo click cannot outlast the button.
+- **R3-I2.** A third test: after the second test settled the number as US, a phone edit in the drawer to "55 1234 5679" must show the Check number row WITHOUT a reload, and the stored row must be `+15512345679`, flagged.
+
+**Counts this block supersedes** (read off the corrected tree's runs): `e2e/consent-phone-country.spec.ts` 2 → 3 tests (not run locally).
+
+**Code** (unified diffs against the replay's finished tree, 27cdbdeb; apply after this task's own code. Where a later task also edits a file, apply the hunk by its content, not its line numbers):
+
+```diff
+diff --git a/apps/web/e2e/consent-phone-country.spec.ts b/apps/web/e2e/consent-phone-country.spec.ts
+index ee677ac9..54d85693 100644
+--- a/apps/web/e2e/consent-phone-country.spec.ts
++++ b/apps/web/e2e/consent-phone-country.spec.ts
+@@ -68,6 +68,9 @@ test("an ambiguous number: stored +1 and flagged; Mexico (+52) rewrites it, Undo
+   // The toast appears once the action has resolved, so the write has landed.
+   const toast = page.getByText(m["contact.phoneCountry.mxToast"]);
+   await expect(toast).toBeVisible();
++  // Hovering pauses Sonner's 4 s timer, so the DB read below cannot outlast
++  // the Undo button (review R3-M5).
++  await toast.hover();
+   await expect(row).toHaveCount(0);
+   expect(await stored()).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
+ 
+@@ -91,3 +94,21 @@ test("a reload after a pick shows no Check number row: the server's answer, not
+   await expect(page.getByRole("dialog").getByText(m["drawer.recent"])).toBeVisible();
+   await expect(page.getByRole("dialog").getByTestId("phone-country-row")).toHaveCount(0);
+ });
++
++test("a phone edited in the drawer into one that reads both ways raises the Check number row, no reload (review R3-I2)", async ({ page }) => {
++  const { accountId } = fixture();
++  await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${STAMP}`);
++  await page.getByRole("row").filter({ hasText: `Number ${STAMP}` }).first().click();
++  const drawer = page.getByRole("dialog");
++  await expect(drawer.getByText(m["drawer.recent"])).toBeVisible();
++  // The test above settled it as US: no row.
++  await expect(drawer.getByTestId("phone-country-row")).toHaveCount(0);
++
++  await drawer.getByRole("button", { name: /edit phone/i }).click();
++  await drawer.getByLabel(m["contacts.phone"], { exact: true }).fill("55 1234 5679");
++  await page.keyboard.press("Enter");
++  // The drawer re-reads its summary after a phone save; without that the row
++  // would stay hidden until a reload.
++  await expect(drawer.getByTestId("phone-country-row")).toBeVisible();
++  expect(await stored()).toEqual({ phone: "+15512345679", phone_country_unconfirmed: true });
++});
+```
+
+
 **Owner:** bis-e2e-qa. **Lane:** single (Phase 4). **Depends on:** Task 14.
 
 Spec §8's e2e list is mostly PR-2's (stop, resume, inbound STOP) and PR-3's (`/u/{token}`); what PR-1 can prove in a browser is the Check number row and the read-only hours card (Task 10). This spec runs on the per-run fixture account only.
@@ -12270,17 +15921,15 @@ git commit -m "test(e2e): the Check number row on the fixture account — pick M
 
 ---
 
-### Task 17: Gates, 0054 to CI then production, parity, the backfill, handoff
+### Task 17: Gates, 0054 to CI then production, parity, merge, the backfill, handoff
 
 **Owner:** the orchestrator, with bis-e2e-qa for the gates. Nothing here is an implementer step. Every Supabase step is the orchestrator's, exactly once per project; every production READ needs danlo's explicit go first (Global Constraints). Record each step's result in the ledger (`.superpowers/sdd/progress.md` on the orchestrator's checkout).
 
-- [ ] **Step 1: The branch is complete.** On `feat/consent-pr1` after Checkpoint C and Tasks 15–16: `pnpm install --frozen-lockfile --prefer-offline`, both typechecks, `pnpm --filter web lint` (0 errors), `pnpm --filter web test` (the two env suites only, Global Constraints), and the db suite on the replica against `post` with Checkpoint A's pass→fail diff (no flips; the two CI-only files the only new failures). `git log --oneline main..feat/consent-pr1` then shows the spec commit (while `docs/consent-chain-spec` is not on `main`), this plan's commit, the merge of `main` (Prerequisite 1), and exactly one commit per Task 1–16, in order.
+**The order (review R1-I1, orchestrator 2026-09-26):** CI apply → green head → production 0054 → parity → merge → deploy check → backfill count → backfill write, the write only after danlo sees the count. **danlo's go (2026-09-26, (b)):** one go covers the 0054 apply to production AND the merge (steps 6–8); the backfill writes only after danlo sees its count (step 10).
 
-- [ ] **Step 2: The `contacts.dnd` pre-flight** (choice 25: "checks both databases"; read only, counts only). This machine cannot run `ci:sql` against the CI project (its env files still name production, runbook §9, D7 not done; `assertCiTarget` refuses), and `ci-project-setup.yml` has no free-SQL step, so both reads go through the Supabase MCP's `execute_sql`, pasting `packages/db/supabase/backfills/0054-dnd-preflight.sql` exactly:
-  - **CI project** `odnobiodsftffphuuosz`, if the connector reaches the `bis-ci` organization (A6). If it does not, record "not run: connector has no access; the CI project holds only `ci:seed` and test fixtures" in the ledger and continue: a non-empty value there would be a seed bug, not a customer's request.
-  - **Production** `tlbkbmlrfafquucsmsmm`, only with danlo's go.
+- [ ] **Step 1: The branch is complete.** On `feat/consent-pr1` after Checkpoint C and Tasks 15–16: `pnpm install --frozen-lockfile --prefer-offline`, both typechecks, `pnpm --filter web lint` (0 errors), `pnpm --filter web test` (the two env suites only, Global Constraints), and the db suite on the replica against `post` with Checkpoint A's pass→fail diff (no flips; the CI-only files the only new failures). Then the browser-bundle check (review R1-M7, E2): `pnpm --filter web build`, then `grep -rl country_calling_codes apps/web/.next/static | wc -l` must print `0` (libphonenumber's metadata never reaches a browser, though four `"use client"` files import runtime values from the `@bis/db` barrel). `git log --oneline main..feat/consent-pr1` then shows the spec commits (while `docs/consent-chain-spec` is not on `main`), this plan's commits, the merge of `main` (Prerequisite 1), and exactly one commit per Task 1–16, in order.
 
-  Zero rows: continue. Any row on production: STOP, report the counts to danlo (QUESTIONS 4), do not merge.
+- [ ] **Step 2: The `contacts.dnd` pre-flight: DONE, a record only.** Run 2026-09-26 by the orchestrator through the Supabase MCP (`execute_sql`, `packages/db/supabase/backfills/0054-dnd-preflight.sql` exactly): **0 rows on production (`tlbkbmlrfafquucsmsmm`) and 0 on the CI project (`odnobiodsftffphuuosz`)**; the connector reaches the CI project read-only (A6). Choice 25 needs no conversion (G5). A re-run at rollout is optional; any row then: STOP and ask danlo.
 
 - [ ] **Step 3: 0054 to the CI project** (runbook `docs/runbooks/ci-supabase-project.md` §6, steps 2–3). First push the branch (the first push of this PR; the pre-push hook runs), then:
 
@@ -12295,7 +15944,7 @@ gh workflow run ci-project-setup.yml --ref feat/consent-pr1 -f step=push
 gh workflow run ci-project-setup.yml --ref feat/consent-pr1 -f step=migrations
 ```
 
-`migrations` must list 0054 as applied. The post-apply check needs no md5 compare: 0054 has no backslash (its E.164 CHECK spells the plus as `[+]`). From here until the merge, `main`'s own CI runs see 0054 on the shared CI project, and four of `main`'s tests go red there (they pin the pre-0054 grants and source list): `schema-grants-guard.test.ts`, `server-only-writes-grants.test.ts`, `contacts-marketing-optout-schema.test.ts` (the `contacts` UPDATE grant list) and `automations-b-schema.test.ts` (the source catalogue). Keep that window short: steps 3 to 9 in one sitting.
+`migrations` must list 0054 as applied. The post-apply check needs no md5 compare: 0054 has no backslash (its E.164 CHECK spells the plus as `[+]`). From here until the merge, `main`'s own CI runs see 0054 on the shared CI project, and four of `main`'s tests go red there (they pin the pre-0054 grants and source list): `schema-grants-guard.test.ts`, `server-only-writes-grants.test.ts`, `contacts-marketing-optout-schema.test.ts` (the `contacts` UPDATE grant list) and `automations-b-schema.test.ts` (the source catalogue). Keep that window short: steps 3 to 8 in one sitting.
 
 - [ ] **Step 4: CI green on the head SHA.** Re-run the branch's CI if it ran before step 3. Then read the check runs FOR THE HEAD SHA, never a re-run's exit code:
 
@@ -12304,72 +15953,89 @@ SHA=$(git rev-parse feat/consent-pr1)
 gh api "repos/{owner}/{repo}/commits/$SHA/check-runs" --jq '.check_runs[] | [.name, .status, .conclusion] | @tsv'
 ```
 
-Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log: `consent-ledger-schema.test.ts` 15 passed, `consent-ledger-live.test.ts` 1 passed, `contacts-phone-live.test.ts` 3 passed, `phone-country-backfill.test.ts` 3 passed on the CI project (this settles A3), and the build step passed (A5; E8 built it locally). In `e2e`'s: `consent-phone-country.spec.ts` 2 passed and `activity.spec.ts`'s rewritten quiet-hours test passed.
+Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log: `consent-ledger-schema.test.ts` 17 passed (15 + the agency read and the index test), `consent-ledger-live.test.ts` 1 passed, `contacts-phone-live.test.ts` 3 passed, `phone-country-backfill.test.ts` 4 passed (3 + the cut-off test), `voice.test.ts`'s two `callerInTouchSince` tests passed, all on the CI project (this settles A3), and the build step passed (A5). In `e2e`'s: `consent-phone-country.spec.ts` 3 passed (2 + the phone-edit test, which is the only proof of R3-I2's drawer re-read) and `activity.spec.ts`'s rewritten quiet-hours test passed.
 
-- [ ] **Step 5: The backfill pipeline is already proved on the CI project** by step 4: `phone-country-backfill.test.ts` runs the read file, `rowsToFlag`, the emitted UPDATE and a second run inside a rolled-back transaction there. The CI project holds no customer numbers, so no backfill is run on it. The script's own run is proved on production's read in step 8, which writes nothing until danlo says so.
+- [ ] **Step 5: The backfill pipeline is already proved on the CI project** by step 4: `phone-country-backfill.test.ts` runs the read file, `writtenBefore`, `rowsToFlag`, the emitted UPDATE and a second run inside a rolled-back transaction there. The CI project holds no customer numbers, so no backfill is run on it. The script's own run is proved on production's read in step 10, which writes nothing until danlo says so.
 
-- [ ] **Step 6: 0054 to production, BEFORE the merge** (the merge deploys code that selects `phone_country_unconfirmed` and reads `consent_events` on its first request; 0054 is additive, so the build that is live now runs unchanged against it). With danlo's go, through the Supabase MCP on `tlbkbmlrfafquucsmsmm`:
+- [ ] **Step 6: 0054 to production, BEFORE the merge** (the merge deploys code that selects `phone_country_unconfirmed` and reads `consent_events` on its first request; 0054 is additive, so the build that is live now runs unchanged against it). Under danlo's one go for steps 6–8, through the Supabase MCP on `tlbkbmlrfafquucsmsmm`:
   1. Pre-flight read: `select to_regclass('public.consent_events') as ledger, (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'contacts' and column_name = 'phone_country_unconfirmed') as flag_column;` must return `null` and `0`. Anything else: STOP (it was applied already; never re-apply).
   2. `apply_migration` with name `0054_consent_ledger` and the file's exact contents. Once.
-  3. Post-apply read: the same query returns `consent_events` and `1`; `select pg_get_constraintdef(oid) from pg_constraint where conname = 'automation_log_source_check';` ends in `'textback'::text])))`; `select grantee, privilege_type from information_schema.role_table_grants where table_schema = 'public' and table_name = 'consent_events' and grantee <> 'postgres' order by 1, 2;` is exactly `authenticated SELECT`, `service_role INSERT`, `service_role SELECT`.
+  3. Post-apply reads: the same query returns `consent_events` and `1`; `select pg_get_constraintdef(oid) from pg_constraint where conname = 'automation_log_source_check';` ends in `'textback'::text])))`; `select indexname from pg_indexes where tablename = 'consent_events' order by 1;` is `consent_events_address_idx`, `consent_events_contact_idx`, `consent_events_pkey`; and the grants through `has_table_privilege`, which (unlike `information_schema`) sees `MAINTAIN` (review R1-M9; the schema test's own query shape):
+
+```sql
+select r, p from unnest(array['anon','authenticated','service_role']) r
+  cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p
+ where has_table_privilege(r, 'public.consent_events', p)
+ order by 1, 2;
+```
+
+  It must return exactly `authenticated SELECT`, `service_role INSERT`, `service_role SELECT`.
 
 - [ ] **Step 7: Parity** (runbook §5): `-f step=fingerprint` and `-f step=migration-history` on the CI project; `packages/db/supabase/parity/fingerprint.sql` and `migration-history.sql` through `execute_sql` on production (read only). Diff. Only the runbook's allowed differences may remain. Ledger: `0054 APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY`.
 
-- [ ] **Step 8: The backfill on production: count first, write only with danlo's go** (QUESTIONS 1).
-  1. Read: paste `packages/db/supabase/backfills/0054-phone-country-candidates.sql` into `execute_sql` on production. Copy the JSON array of rows out of the result (the connector wraps it in untrusted-data markers; take only the array) into `/tmp/candidates-prod.json`. The script refuses anything that is not an array of rows with uuid ids and ten-digit keys, so a bad copy fails loudly and writes nothing.
-  2. `pnpm --filter @bis/db backfill:phone-country /tmp/candidates-prod.json` prints "candidates read", "could be Mexican (to flag)" and a count per account (never a number). Report those counts to danlo.
-  3. Only on danlo's go: `--emit-sql /tmp/flag-prod.sql`, then paste that file into `execute_sql` on production (it has no backslash and no transaction control). Its `returning id` count must equal the "to flag" count; a smaller count means rows changed since the read, which is safe (they were skipped), and is reported.
+- [ ] **Step 8: Merge, under danlo's go** (review R1-M11: the merge deploys production and moves live automated email onto the fixed window; the go of step 6 covers it). Squash-merge the PR through GitHub only after steps 4–7 (the ruleset requires `verify` and `e2e` green on the head SHA; the policy is non-strict, so if `main` moved since step 4, merge `main` in, re-run, and re-read the head SHA's check runs). The deploy follows the merge.
+
+- [ ] **Step 9: After the deploy; the backfill's cut-off.** Record the production deployment's READY instant (the Vercel dashboard, or the Vercel MCP's `get_deployment`), in UTC ISO. The cut-off is that instant plus 10 minutes, for requests the old build was still serving; a row the new build wrote in that tail can only be a number typed with an explicit `+1` that also reads as Mexican, which the flag merely asks staff to confirm. Then, on production as the agency: open any account's Automations page (the quiet-hours card reads "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone (…)" and has no Save); the cron's next tick JSON carries a `blocked` counter on every SMS pass.
+
+- [ ] **Step 10: The backfill on production: count first, write only after danlo sees it** (danlo, 2026-09-26, (b); G4). Not before the cut-off has passed.
+  1. Read: paste `packages/db/supabase/backfills/0054-phone-country-candidates.sql` into `execute_sql` on production. Copy the JSON array of rows out of the result (the connector wraps it in untrusted-data markers; take only the array) into `/tmp/candidates-prod.json`. Cross-check its length against a count (review R1-M8: a truncated or hand-trimmed result still parses): run the same file again with its final `order by …;` replaced by `) q;` and `select count(*) from (` put before its `select`, and the count must equal the CLI's "candidates read" below. The script refuses anything that is not an array of rows with uuid ids, ten-digit keys and UTC ISO `last_written_at`, so a bad copy fails loudly and writes nothing.
+  2. `pnpm --filter @bis/db backfill:phone-country /tmp/candidates-prod.json --written-before <cut-off>` prints "candidates read", "last written before …", "could be Mexican (to flag)" and a count per account (never a number). Report those counts to danlo. Expected from the 2026-09-26 read: at most 5, likely 0 (A4).
+  3. Only after danlo has seen the count and says go: `--emit-sql /tmp/flag-prod.sql` (same `--written-before`), then paste that file into `execute_sql` on production (it has no backslash and no transaction control). Its `returning id` count must equal the "to flag" count; a smaller count means rows changed since the read, which is safe (they were skipped), and is reported. Zero to flag: nothing to write, and that is the answer.
   4. Read again: the candidates the CLI would flag must now be none.
+  5. Delete `/tmp/candidates-prod.json` and `/tmp/flag-prod.sql` (review R1-M8: the first holds every unflagged customer number of production), and say so in the ledger.
 
-- [ ] **Step 9: Merge.** Squash-merge the PR through GitHub only after steps 4–8 (the ruleset requires `verify` and `e2e` green on the head SHA; the policy is non-strict, so if `main` moved since step 4, merge `main` in, re-run, and re-read the head SHA's check runs). The deploy follows the merge.
-
-- [ ] **Step 10: After the deploy.** On production, as the agency: open any account's Automations page (the quiet-hours card reads "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone (…)" and has no Save); open a contact whose number was flagged in step 8, if any (the Texts row shows "Check number"); the cron's next tick JSON carries a `blocked` counter on every SMS pass. Then write the handoff: what shipped, the counts from steps 2 and 8, the head SHA and its check runs, and the Next plans below.
+- [ ] **Step 11: Handoff.** Open a contact flagged in step 10, if any (the Texts row shows "Check number"). Then write the handoff: what shipped, the counts from steps 2 and 10, the head SHA and its check runs, and the Next plans below.
 
 ---
 
 ## Self-review (done while writing; recorded for the reviewer)
 
 **Spec coverage** (the §7 PR-1 row, item by item):
-- The ledger migration and RLS: Task 1 (§3's table, index, RLS, grants; G16, G17).
-- F-009: normalisation and `+52` (Task 2), the flag (Tasks 1, 2), its backfill (Tasks 3, 17; G4), the drawer's country control (Task 14; G14), the alert phone's country choice (Task 13), every typed number through the one function (Task 7).
+- The ledger migration and RLS: Task 1 (§3's table, indexes, RLS, grants; G16, G17).
+- F-009: normalisation and `+52` (Task 2), the flag (Tasks 1, 2), its backfill (Tasks 3, 17; G4), the drawer's country control (Task 14; G14), the alert phone's country choice (Task 13), every typed number through the one function and every contact write AS TYPED (Task 7, Task 9's instant reply; G11).
 - The class registry and fixed hours: Task 5 (the §4.1 item 2 table, decision 4, choice 31) and Task 10 (the setting's retirement, §6's card).
-- The gate: Task 8 (§4.1 item 3, steps 1–9, fails closed; choice 21; G8, G12).
+- The gate: Task 8 (§4.1 item 3, steps 1–9, fails closed incl. the zone; choice 21; G8, G12).
 - All five SMS paths through it: the harness and every pass (Task 9), the text-back and the call alert (Task 11), the composer (Task 12), the alert-phone code (Task 13).
 - The source scans: Task 15 (scans 1, 2, 3, 5; G1 for scan 4).
-- §8 tests for PR-1: `normalisePhone`'s table (Task 2), the reducer tables incl. a stop between a hold and its release (Task 1), hours at 20:59/21:00, Sunday 11:59/12:00, DST and choice 21 (Task 5), registry completeness (Task 5), the RLS / no-update-or-delete / cascade / note-check DB tests (Task 1), backfill idempotency (Task 3), e2e on the fixture account (Tasks 10, 16).
+- §8 tests for PR-1: `normalisePhone`'s table (Task 2), the reducer tables incl. a stop between a hold and its release and a same-instant tie (Task 1), hours at 20:59/21:00, Sunday 11:59/12:00, DST in three zones and choice 21 (Task 5), registry completeness (Task 5), the RLS / no-update-or-delete / cascade / note-check DB tests (Task 1), backfill idempotency and its cut-off (Task 3), e2e on the fixture account (Tasks 10, 16).
 - Not in PR-1, deliberately: keywords, holds, grants, staff Stop/Resume, the rest of the Messages block, To-do rows, `tasks.consent_event_id` (G2), the Telnyx reconciliation and backfill (PR-2); email kinds, the token, `/u`, the 0049 fold (PR-3).
 
-**Placeholder scan:** every code step is a complete file or a complete diff generated from the staged replay (E5); no "TBD", no "similar to Task N".
+**Placeholder scan:** every code step is a complete file or a complete diff generated from the staged replay (E5), or, for the review's corrections, a diff generated from the corrected tree (below); no "TBD", no "similar to Task N".
 
-**Type consistency:** the signatures in each Interfaces block were read off the finished files (`grep '^export'`); both typechecks exit 0 after every task in the replay, which is the stronger check.
+**Type consistency:** the signatures in each Interfaces block were read off the finished files (`grep '^export'`); both typechecks exit 0 after every task in the replay, which is the stronger check. The corrected tree typechecks too (below). Interfaces the corrections change: `SmsRequest.numberFromCarrier`, `SmsDeferred(until, why)`, `LEDGER_RETRY_MS`, `writeHeld(…, reason?)`, `REASONS.ledgerRetry`, `TextbackRequest.held`, `TextbackPayload.missedAt`, `defaultTextbackBody(…, held?)`, `SendInstantReplyInput.phoneAsTyped`, `spokenPhone`, `callerInTouchSince`, `writtenBefore`, `CandidateRow.last_written_at`, `DuplicateMatch.countryTwin`.
 
-**Counts:** every test count, RED list and probe table is generated from the replay's and the probe run's JSON output, not typed. The 23 new copy keys are counted by `copy.test.ts` itself.
+**Counts:** every test count, RED list and probe table in the task bodies is generated from the replay's and the probe run's JSON output, not typed. The corrections' counts are read off the scratch runs named in each block. The new copy keys are counted by `copy.test.ts` itself: 26 (was 23).
 
-**Probes that survived, and what was done about them:** the first probe run found seven survivors. Five were real gaps, and their tests were added before this plan was generated: the composer's refusal lines and its unreadable-ledger failure (Task 12, four tests), the alert phone's country and its stopped line (Task 13, three tests), and the text-back's unreadable-ledger `failed` row (Task 11, one test). Two more survivors were the probes' own fault, not the tests': one was dropped as an equivalent mutant (writing the composer's row with the typed body instead of the gate's body changes nothing for `staff.composer_sms`, whose footer is `none`), and one of Task 8's was rewritten because it could not change behaviour (it threw only past a segment count no test text reaches; the probe now works the usage out inside the send's `try`, and is killed).
+**Probes that survived, and what was done about them:** the first probe run found seven survivors. Five were real gaps, and their tests were added before this plan was generated: the composer's refusal lines and its unreadable-ledger failure (Task 12, four tests), the alert phone's country and its stopped line (Task 13, three tests), and the text-back's unreadable-ledger `failed` row (Task 11, one test; the review replaced that behaviour with a re-hold). Two more survivors were the probes' own fault, not the tests': one was dropped as an equivalent mutant (writing the composer's row with the typed body instead of the gate's body changes nothing for `staff.composer_sms`, whose footer is `none`), and one of Task 8's was rewritten because it could not change behaviour.
 
-**Vacuity checks** (memory `bis-test-vacuity`, `bis-vacuous-test-shapes`): every scan reads code with comments stripped and carries a positive control; every test that goes through the real gate mocks `readConsentState` and `readPhoneCountryFlag` explicitly (an unmocked read fails closed and would turn every send into `ledger_unavailable`, passing any "nothing was sent" assertion vacuously; that shape was caught in the alert-phone tests while prototyping); the probe tables show every new assertion can fail.
+**The review fix round (2026-09-26).** Three reviewers read 71ab882d: 1 Critical, 12 Important, about 30 Minor. Every finding was checked against the code before it was applied; the corrections were applied to a scratch worktree of the replay's finished tree (27cdbdeb), and each block's diffs are generated from it. On that corrected tree: `apps/web` and `packages/db` typecheck exit 0; `pnpm --filter web lint` 0 errors (the base's 2 warnings; two new warnings the corrections caused were fixed); the full web suite 4,508 passed (was 4,451 on the replay's finished tree), 0 failed tests, the same two env suites failing before they run, and no test going from passed to failed (12 tests renamed or rewritten); the db suite on the replica's `post`, 824 passed (was 810), no pass-to-fail flip, the only new failures the two CI-only `callerInTouchSince` tests (2 tests renamed). Each block lists its new tests by name and its probes with the tests they turned red; every probe was killed except where a block says otherwise. Not replayed: Task 16's e2e (Playwright refuses production locally, #135) and Task 11's two `withTestAccount` tests (CI only).
+
+**Vacuity checks** (memory `bis-test-vacuity`, `bis-vacuous-test-shapes`): every scan reads code with comments stripped and carries a positive control; scan 2's main test is now killed by its own named mutation, not only by its control (R3-I4); every test that goes through the real gate mocks `readConsentState` and `readPhoneCountryFlag` explicitly (an unmocked read fails closed and would turn every send into `ledger_unavailable`, passing any "nothing was sent" assertion vacuously); the probe tables show every new assertion can fail.
+
+## Deferred to whole-branch review
+
+Each is real, and none is cheap enough and clearly right enough to change the plan now:
+- **R2-I2's last line: re-logging the same refusal every tick.** A blocked row is never stamped, so it writes a `skipped` row on every band tick for its whole window (review requests 61 h, quote follow-ups 30 days). With the give-back it no longer starves anything (fixed), but the log grows. The fix needs a rule for "the same subject, the same reason, already logged" across every pass's writer; it is a design choice, not a correctness gap.
+- **R3-M6's e2e probe for `PhoneCountryRow`** (swap the two buttons). An e2e probe needs a CI run with the mutation, which this round cannot make locally; the unit layer already pins each button's country (`phone-country.test.ts`). The whole-branch reviewer runs it once in CI.
+- **R3-M7: move `OptOutToast`/`runGuarded` out of `marketing-optout`** (PR-3 retires that module) into a neutral one, and shape the row as one state of a Texts row. A refactor with no behaviour change, best done by PR-2 when it adds the row's other states.
+- **R3-M8: the call page's "Send it now" is not closed on render** (the post-click toast is right). Noted: closing it needs the recipient-state read on the call page, which PR-2's Texts row brings.
+- **R3-M9: keyboard focus is lost when the Check number row unmounts after a pick.** Needs a focus-target decision (the Texts heading, or the next control) that belongs with the rest of the Messages block's keyboard design in PR-2.
 
 ## QUESTIONS FOR DANLO
 
-1. **Production backfill of `phone_country_unconfirmed`: when may it write?**
-   - **Recommended: read and report the count first; write only after you see it** (Task 17, step 8).
-   - Read and write in one go, reporting after.
-   - Skip the backfill; the gate and the drawer still catch every number stored from now on.
-2. **Review requests, quote follow-ups and no-show nudges on marketing hours (9 a.m., Sunday noon) until counsel answers?**
-   - **Recommended: yes, ship the stricter classification now** (spec §4.1 item 2 proposes it; no customer can tell until A2P approval).
-   - Ship them on automated hours (8 a.m. every day) and move them if counsel says so.
-3. **Spec §8's scan 4 cannot hold for the SMS instant reply (G1). Where does it go?**
-   - **Recommended: PR-3, scoped to the email kinds it was written for.**
-   - Relabel the SMS instant reply `informational` now, and ship scan 4 in PR-1.
-4. **If the pre-flight finds any non-empty `contacts.dnd` value (Task 17, step 2):**
-   - **Recommended: hold the merge, and plan their conversion to staff-recorded stops first** (choice 25).
-   - Merge PR-1 anyway and convert them in PR-2.
+None open (2026-09-26). The answers, for the record:
+- **The production backfill** (former Q1): the read runs now (done: at most 5, likely 0, A4); at rollout it runs after the merge deploy, and it writes only after you see its count (danlo, (b); Task 17 step 10). One go covers the 0054 apply and the merge.
+- **Marketing hours for review requests, quote follow-ups and no-show nudges** (former Q2): dropped; the approved spec settles it (decision 4, §4.1 item 2).
+- **Scan 4** (former Q3): dropped; G1 stands, scan 4 goes to PR-3 with the email kinds.
+- **`contacts.dnd`** (former Q4): dropped; 0 rows on both projects (G5).
+- **A text-back held overnight** (the review's question): skipped on release when that number has called or texted since, and a held send drops "just now" (danlo, (a); Task 11).
 
 ## Next plans
 
-- **PR-2 (consent chain):** the `consent.*` kinds and the gate's one exception for the stop confirmation (§4.2); `tasks.consent_event_id` with its grant (G2); the guarded `hold_released` write ("only when the state is held", §3); the inbound keywords, START, HELP, the phrase list and holds; grants; staff Stop/Resume with `actor_id`; the rest of the Texts row (Allowed, Stopped, On hold) with its two-row skeleton and error line; the To-do rows; the Telnyx reconciliation (§11's questions, and whether the `40300` status is a 4xx, A1) and backfill.
+- **PR-2 (consent chain):** the `consent.*` kinds and the gate's one exception for the stop confirmation (§4.2); `tasks.consent_event_id` with its grant (G2); the guarded `hold_released` write ("only when the state is held", §3; `appendConsentEvent` refuses it until then); the inbound keywords, START, HELP, the phrase list and holds; **STOP and START from the alert phone handled BEFORE the route drops the alert phone's texts** (review R2-I5; spec §4.2 corrected: the gate records `carrier_block` for operator kinds too, and choice 19 forbids staff Resume of a carrier stop, so without this a carrier block on the alert phone could never be lifted); grants; staff Stop/Resume with `actor_id`; the rest of the Texts row (Allowed, Stopped, On hold) with its two-row skeleton and error line; the To-do rows; the Telnyx reconciliation (§11's questions, and whether the `40300` status is a 4xx, A1) and backfill; the deferred R3-M7/M8/M9 above.
+- **Go-live, not merge: PR-2 merged** (spec §5, item 6, added by the review): until PR-2 records START, a carrier stop recorded by PR-1 can never lift, so texting stays off until PR-2 is in.
 - **PR-3 (consent chain):** email kinds in the registry, scan 4 for them (G1), the footer and headers, the token, `/u/[token]`, the one-click endpoint, the 0049 fold and backfill, the Email row replacing the "No marketing emails" switch.
 - **A migration that drops `automation_settings`'s quiet columns** (or the table), once both databases pass parity with PR-1 live and nothing reads them (scan 5 already proves the second).
 - **`bumpHeldForAccount`** (0046's re-date of held rows when the window changed) has no caller once the window is fixed; delete it with that migration.
 - **A per-contact time zone** (spec §9): the gate already takes `contactZone`, so the feature that records one needs no gate change.
-- **The alert phone of existing accounts:** a stored `+1` alert number that is valid in Mexico was written by the old `toE164` too. A read-only count on production (`accounts.alert_phone` through `couldBeMexican`) would say whether any needs re-verifying; nothing sends to it until A2P approval.
+- (The alert-phone item is gone: the orchestrator's read of 2026-09-26 found no account with a stored `accounts.alert_phone`, so review R3-M10's count is 0.)
