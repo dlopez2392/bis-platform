@@ -9,7 +9,7 @@ vi.mock("@/lib/sms/sender", () => sender);
 const factory = vi.hoisted(() => ({ getSmsProvider: vi.fn() }));
 vi.mock("@/lib/sms", () => factory);
 
-import { decideSms, deliverSms, sendSms, type SmsRequest } from "./gate";
+import { decideSms, deliverSms, sendSms, type SmsRequest, type ClearedSms } from "./gate";
 import { SMS_KINDS, type SmsKind } from "./classes";
 import { SmsProviderError } from "@/lib/sms/types";
 import { m } from "@/lib/messages";
@@ -34,7 +34,13 @@ beforeEach(() => {
   db.recordCarrierBlock.mockResolvedValue("appended");
   factory.getSmsProvider.mockReturnValue(provider());
   send.mockResolvedValue({ providerMessageId: "p_1" });
+  // m2: vi.spyOn on an already-spied console.error does NOT reset its
+  // .mock.calls (vitest keeps the one spy and only re-applies the
+  // implementation), so calls accumulate across tests in this file unless
+  // cleared here. Without this, `mock.calls[0]` in a later test can be a
+  // PREVIOUS test's log line.
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.mocked(console.error).mockClear();
 });
 
 describe("decideSms: steps 1-3", () => {
@@ -53,6 +59,13 @@ describe("decideSms: steps 1-3", () => {
     sender.resolveSmsSender.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
     expect(await decideSms(DB, base({ kind: "staff.composer_sms" }))).toEqual({ kind: "blocked", reason: "a2p_not_approved" });
     expect(db.readConsentState).not.toHaveBeenCalled();
+  });
+
+  it("resolveSmsSender's OWN read error THROWS, as it always has, into decideSms's and sendSms's callers; send never runs (mutation M15: swallow it as a2p_not_approved → FAILS)", async () => {
+    sender.resolveSmsSender.mockRejectedValue(new Error("resolveSmsSender failed: fetch failed"));
+    await expect(decideSms(DB, base())).rejects.toThrow(/resolveSmsSender failed/);
+    await expect(sendSms(DB, base())).rejects.toThrow(/resolveSmsSender failed/);
+    expect(send).not.toHaveBeenCalled();
   });
 });
 
@@ -78,6 +91,13 @@ describe("decideSms: steps 4-5, the ledger and the flag", () => {
     expect(line).not.toMatch(/956/);
   });
 
+  it("a flag READ error FAILS CLOSED too: decideSms and sendSms both block ledger_unavailable, send never runs (mutation M7: readPhoneCountryFlag(...).catch(() => false) → FAILS)", async () => {
+    db.readPhoneCountryFlag.mockRejectedValue(new Error("readPhoneCountryFlag failed: timeout"));
+    expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    expect(await sendSms(DB, base())).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("a contact whose country is unconfirmed is blocked; with no contact the flag is never read (mutation: skip the flag → clear, FAILS)", async () => {
     db.readPhoneCountryFlag.mockResolvedValue(true);
     expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
@@ -98,8 +118,32 @@ describe("decideSms: steps 4-5, the ledger and the flag", () => {
     expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696" }))).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
   });
 
+  it("a stop or hold still blocks the carrier-number path at decide AND at deliver — the carrier bypass is the STORED FLAG only, never the ledger (mutation M8: numberFromCarrier skips readConsentState entirely → FAILS)", async () => {
+    db.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-01T00:00:00Z", method: "carrier_block", eventId: "e5" });
+    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696", numberFromCarrier: true })))
+      .toEqual({ kind: "blocked", reason: "stopped" });
+    expect(send).not.toHaveBeenCalled();
+
+    db.readConsentState.mockResolvedValue({ state: "held", since: "2026-10-01T00:00:00Z", method: "free_text", eventId: "e6" });
+    expect(await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696", numberFromCarrier: true })))
+      .toEqual({ kind: "blocked", reason: "held" });
+    expect(send).not.toHaveBeenCalled();
+
+    db.readConsentState.mockResolvedValue({ state: "allowed" });
+    const cleared = await decideSms(DB, base({ kind: "voice.textback", to: "+19562921696", numberFromCarrier: true }));
+    if (cleared.kind !== "clear") throw new Error("expected clear");
+    db.readConsentState.mockResolvedValue({ state: "held", since: "2026-10-06T20:00:02Z", method: "staff", eventId: "e7" });
+    expect(await deliverSms(DB, cleared.send)).toEqual({ kind: "blocked", reason: "held" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("a bare ten-digit number valid as both +1 and +52 is blocked even with no flag stored (mutation: ignore normalisePhone's unconfirmed → clear, FAILS)", async () => {
     expect(await decideSms(DB, base({ to: "55 1234 5678", contactId: null }))).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
+  });
+
+  it("the carrier flag skips only the STORED flag, never step 2's own reading of an ambiguous number (mutation M11: number.unconfirmed && !fromCarrier → FAILS)", async () => {
+    expect(await decideSms(DB, base({ to: "55 1234 5678", numberFromCarrier: true })))
+      .toEqual({ kind: "blocked", reason: "unconfirmed_number" });
   });
 });
 
@@ -120,11 +164,14 @@ describe("decideSms: step 6, the kind's hours", () => {
     }
   });
 
-  it("a zone READ error blocks as ledger_unavailable, never Chicago's hours: nothing is sent (mutation: fall back to the fallback zone → deferred or clear, FAILS)", async () => {
+  it("a zone READ error blocks as ledger_unavailable, never Chicago's hours: nothing is sent, and the log names the account without the phone number (mutation: fall back to the fallback zone → deferred or clear, FAILS; mutation M14: drop the zone-unreadable log line → FAILS)", async () => {
     db.readAccountTimezone.mockRejectedValue(new Error("fetch failed"));
     expect(await decideSms(DB, base({ accountZone: undefined }))).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
     expect(await sendSms(DB, base({ accountZone: undefined }))).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
     expect(send).not.toHaveBeenCalled();
+    const line = String(vi.mocked(console.error).mock.calls[0]?.[0]);
+    expect(line).toMatch(/zone unreadable/);
+    expect(line).not.toMatch(/956/);
   });
 
   it("a zone that was read but cannot be resolved still takes the fallback, America/Chicago (mutation: block an unresolvable zone as ledger_unavailable → FAILS)", async () => {
@@ -149,6 +196,12 @@ describe("decideSms: step 6, the kind's hours", () => {
       .toEqual({ kind: "blocked", reason: "window_after_deadline" });
     expect(await decideSms(DB, base({ now: at6, deadline: new Date("2026-10-06T13:30:00Z") })))
       .toEqual({ kind: "deferred", until: new Date("2026-10-06T13:00:00Z"), zone: "America/Chicago" });
+  });
+
+  it("choice 21: an Invalid Date deadline is treated as already passed too — blocked, never deferred (mutation M9: an Invalid Date deadline cleaned to null → deferred, FAILS)", async () => {
+    const at6 = new Date("2026-10-06T11:00:00Z"); // 06:00 Chicago
+    expect(await decideSms(DB, base({ now: at6, deadline: new Date("not a date") })))
+      .toEqual({ kind: "blocked", reason: "window_after_deadline" });
   });
 });
 
@@ -206,10 +259,13 @@ describe("sendSms: steps 8-9", () => {
     expect(db.recordCarrierBlock).not.toHaveBeenCalled();
   });
 
-  it("a carrier block that cannot be recorded is logged and the result is still the failure (mutation: let the write throw → rejects, FAILS)", async () => {
+  it("a carrier block that cannot be recorded is logged (without the phone number) and the result is still the failure (mutation: let the write throw → rejects, FAILS; mutation M10: drop the not-recorded log line → FAILS)", async () => {
     send.mockRejectedValue(new SmsProviderError("x", 403, ["40300"]));
     db.recordCarrierBlock.mockRejectedValue(new Error("insert failed"));
     await expect(sendSms(DB, base())).resolves.toMatchObject({ kind: "failed", carrierBlocked: true });
+    const line = String(vi.mocked(console.error).mock.calls[0]?.[0]);
+    expect(line).toMatch(/not recorded/);
+    expect(line).not.toMatch(/956/);
   });
 });
 
@@ -232,6 +288,40 @@ describe("deliverSms: the split callers", () => {
     if (d.kind !== "clear") throw new Error("expected clear");
     db.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-06T20:00:01Z", method: "keyword", eventId: "e3" });
     expect(await deliverSms(DB, d.send)).toEqual({ kind: "blocked", reason: "stopped" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("the re-check honours a hold too, not only a stop (mutation M4: if (blocked === \"stopped\") return → FAILS)", async () => {
+    const d = await decideSms(DB, base());
+    if (d.kind !== "clear") throw new Error("expected clear");
+    db.readConsentState.mockResolvedValue({ state: "held", since: "2026-10-06T20:00:01Z", method: "staff", eventId: "e4" });
+    expect(await deliverSms(DB, d.send)).toEqual({ kind: "blocked", reason: "held" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("the re-check re-reads the phone-country flag too, not only the ledger (mutation M5: the recheck forces numberFromCarrier true → FAILS)", async () => {
+    const d = await decideSms(DB, base());
+    if (d.kind !== "clear") throw new Error("expected clear");
+    db.readPhoneCountryFlag.mockResolvedValue(true);
+    expect(await deliverSms(DB, d.send)).toEqual({ kind: "blocked", reason: "unconfirmed_number" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("the re-check FAILS CLOSED too: a ledger read error at deliver blocks, never allowed (mutation M6: the recheck maps ledger_unavailable to null → FAILS)", async () => {
+    const d = await decideSms(DB, base());
+    if (d.kind !== "clear") throw new Error("expected clear");
+    db.readConsentState.mockRejectedValue(new Error("readConsentState failed: timeout"));
+    expect(await deliverSms(DB, d.send)).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a forged ClearedSms without the gate's own brand is refused before any read (mutation: drop the CLEARED brand check → FAILS)", async () => {
+    const forged = {
+      accountId: "acct_1", kind: "automation.sms_reminder", to: "+19562921696", from: FROM,
+      body: "See you at 3", contactId: null, numberFromCarrier: false,
+    } as unknown as ClearedSms;
+    await expect(deliverSms(DB, forged)).rejects.toThrow(/not a decision the gate cleared/);
+    expect(db.readConsentState).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
   });
 });

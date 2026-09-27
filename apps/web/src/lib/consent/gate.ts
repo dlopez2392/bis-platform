@@ -173,6 +173,10 @@ export async function decideSms(db: SupabaseClient, req: SmsRequest): Promise<Sm
 async function deliver(
   db: SupabaseClient, cleared: ClearedSms, opts: SmsSendOptions, recheck: boolean,
 ): Promise<SmsSendResult> {
+  // The CLEARED brand is never checked at runtime otherwise, so a forged
+  // `{...} as unknown as ClearedSms` would skip A2P, the ledger, the hours
+  // and the footer entirely — only `decideSms` may mint one.
+  if (cleared?.[CLEARED] !== true) throw new Error("deliverSms: not a decision the gate cleared");
   if (recheck) {
     const blocked = await consentBlock(db, cleared.accountId, cleared.kind, cleared.to, cleared.contactId, cleared.numberFromCarrier);
     if (blocked) return { kind: "blocked", reason: blocked };
