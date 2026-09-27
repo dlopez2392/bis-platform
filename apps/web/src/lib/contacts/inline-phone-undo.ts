@@ -18,7 +18,10 @@ import { m } from "@/lib/messages";
  * cleared column reads back as `null`, never a string.
  */
 export type PhoneInlineUndo = {
-  priorPhone: string;
+  /** `null` for a FIRST fill (there was no prior real number) — round 4,
+   *  DESIGN.md rule 6: a phone typed into an empty field is reversible too,
+   *  and its Undo restores null, not merely being denied a button. */
+  priorPhone: string | null;
   priorUnconfirmed: boolean;
   editedPhone: string | null;
 };

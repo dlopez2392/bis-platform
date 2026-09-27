@@ -4,7 +4,8 @@ const requireAccountAccess = vi.fn<(accountId: string) => Promise<{ userId: stri
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: (accountId: string) => requireAccountAccess(accountId),
 }));
-vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
+const dbForRequest = vi.fn(async () => ({}));
+vi.mock("@/lib/db", () => ({ dbForRequest: () => dbForRequest() }));
 const revalidatePath = vi.fn();
 vi.mock("next/cache", () => ({ revalidatePath }));
 
@@ -30,6 +31,7 @@ const { m } = await import("@/lib/messages");
 beforeEach(() => {
   vi.clearAllMocks();
   requireAccountAccess.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
+  dbForRequest.mockReset().mockResolvedValue({});
 });
 
 describe("updateContactFieldAction", () => {
@@ -68,12 +70,28 @@ describe("updateContactFieldAction", () => {
     });
   });
 
-  it("a first fill from empty (no prior real number) answers no `undo`: nothing to restore through the dedicated path, and never reads the row back (mutation: read-back unconditionally → the leftover mock value pollutes the next test, FAILS)", async () => {
-    dbMocks.getContact.mockResolvedValueOnce({ id: "c1", phone: null, phone_country_unconfirmed: false });
+  // Round 4 (DESIGN.md rule 6): a first fill from empty is REVERSIBLE too —
+  // it now gets a real `undo` (priorPhone: null), not a silent no-Undo save.
+  // m4: a throw fetching the db client is a FAILED SAVE, not the "crashed"
+  // toast (that is inline-field.tsx's own handling of a REJECTED server
+  // action — a stale action id after a redeploy — never this).
+  it("a throw getting the db client is 'Save failed', never left to reject the whole action (mutation: dbForRequest() outside the try → FAILS)", async () => {
+    dbForRequest.mockRejectedValueOnce(new Error("no connection"));
+    const r = await updateContactFieldAction("a1", "c1", "phone", "5551234567");
+    expect(r).toEqual({ ok: false, error: "Save failed — please try again." });
+    expect(dbMocks.updateContact).not.toHaveBeenCalled();
+  });
+
+  it("a first fill from empty (no prior real number) still answers an `undo`, restoring to null (mutation: skip the read-back for a null prior → FAILS)", async () => {
+    dbMocks.getContact
+      .mockResolvedValueOnce({ id: "c1", phone: null, phone_country_unconfirmed: false })
+      .mockResolvedValueOnce({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
     dbMocks.updateContact.mockResolvedValue(undefined);
     const r = await updateContactFieldAction("a1", "c1", "phone", "(956) 292-1696");
-    expect(r).toEqual({ ok: true });
-    expect(dbMocks.getContact).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({
+      ok: true,
+      undo: { priorPhone: null, priorUnconfirmed: false, editedPhone: "+19562921696" },
+    });
   });
 });
 
@@ -338,6 +356,18 @@ describe("undoPhoneCountryAction", () => {
  * `international()` branch always answers `unconfirmed: false`).
  */
 describe("undoInlinePhoneEditAction", () => {
+  // Round 4 (DESIGN.md rule 6): the twin of the first-fill save above — its
+  // Undo restores null (there was never a prior real number).
+  it("undoes a first fill by restoring null (mutation: refuse a null priorPhone → FAILS)", async () => {
+    dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
+    const r = await undoInlinePhoneEditAction("a1", "c1", {
+      editedPhone: "+19562921696", priorPhone: null, priorUnconfirmed: false,
+    });
+    expect(dbMocks.setContactPhoneCountry).toHaveBeenCalledWith(
+      {}, "a1", "c1", { expectedPhone: "+19562921696", phone: null, unconfirmed: false }, "user_1");
+    expect(r).toEqual({ ok: true });
+  });
+
   it("undoing a phone edit restores the prior number AND its flag (mutation: restore the number only → the flag comes back false, FAILS)", async () => {
     dbMocks.setContactPhoneCountry.mockResolvedValue("updated");
     const r = await undoInlinePhoneEditAction("a1", "c1", {
@@ -364,9 +394,11 @@ describe("undoInlinePhoneEditAction", () => {
     expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.inlineChanged"] });
   });
 
-  it("a crafted priorPhone: null is refused, never written (mutation: drop the typeof priorPhone check → FAILS)", async () => {
+  // Round 4: null is now a VALID priorPhone (the first-fill case above).
+  // A numeric (not null, not string) priorPhone is still refused.
+  it("a numeric (not null, not string) priorPhone is refused, never written (mutation: drop the typeof priorPhone check → FAILS)", async () => {
     const r = await undoInlinePhoneEditAction("a1", "c1", {
-      editedPhone: "+14155551234", priorPhone: null as never, priorUnconfirmed: true,
+      editedPhone: "+14155551234", priorPhone: 12345 as never, priorUnconfirmed: true,
     });
     expect(r).toEqual({ ok: false, error: m["contact.phoneCountry.failed"] });
     expect(dbMocks.setContactPhoneCountry).not.toHaveBeenCalled();

@@ -227,6 +227,14 @@ describe("the inline phone Undo is server-authoritative", () => {
     expect(inlineField).not.toMatch(/phoneUnconfirmed/);
   });
 
+  /** #9: the phone field's `undoable` is "did the save hand back a
+   *  payload", never the generic "does the prior value pass validation" —
+   *  offering Undo without a payload is offering a button whose only
+   *  possible outcome is commitInlineUndo's own "failed" refusal. */
+  it("inline-field.tsx's phone undoable check is 'has a payload', never the generic prior-validates check (mutation: undoable = normalize(prior).ok for phone too → FAILS)", () => {
+    expect(inlineField).toContain('const undoable = field === "phone" ? phoneUndo !== undefined : normalize(prior).ok;');
+  });
+
   it("the drawer's phone Undo calls the dedicated action and bumps retryNonce on success (mutation: drop the nonce bump after Undo → FAILS)", () => {
     expect(drawer).toMatch(/undoPhone: async \(undo: PhoneInlineUndo\) => \{\s*const r = await undoInlinePhoneEditAction\(accountId, row\.id, undo\);\s*[\s\S]*?if \(r\.ok\) setRetryNonce\(\(n\) => n \+ 1\);\s*return r;\s*\}/);
   });
@@ -248,5 +256,33 @@ describe("the inline phone Undo is server-authoritative", () => {
 
   it("the panel attaches undoPhone to InlineField ONLY when field is phone (mutation: field === \"phone\" → false → FAILS)", () => {
     expect(panel).toMatch(/\{\.\.\.\(field === "phone" \? \{\s*undoPhone: \(undo: PhoneInlineUndo\)/);
+  });
+});
+
+/**
+ * Round 4, review I3: the wiring that gets `seenPhone` to the pick at all —
+ * three probes (the row sending `""`, the drawer sending `row.phone` or
+ * `""`, the panel sending `""`) survived round 3's runtime tests because
+ * none of them exercise the ROW itself with a real `phone` prop distinct
+ * from `""`/`row.phone`. Source pins close that gap.
+ */
+describe("the pick is judged against the phone the operator SAW (review I3, round 4)", () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const row = strip(readFileSync(path.join(here, "phone-country-row.tsx"), "utf8"));
+  const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
+  const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
+
+  it("the row passes ITS OWN phone prop to setPhoneCountryAction, never a literal \"\" (mutation: setPhoneCountryAction(accountId, contactId, c) → FAILS)", () => {
+    expect(row).toContain("setPhoneCountryAction(accountId, contactId, c, phone)");
+  });
+
+  it("the drawer's phone prop comes from the SUMMARY, never row.phone (the peek stub) or a literal \"\" (mutation: phone={row.phone ?? \"\"} → FAILS)", () => {
+    expect(drawer).toContain('phone={load.summary.phone ?? ""}');
+    expect(drawer).not.toMatch(/<PhoneCountryRow[\s\S]{0,400}?phone=\{row\.phone/);
+  });
+
+  it("the panel's phone prop comes from the real contact record, never a literal \"\" (mutation: phone={\"\"} → FAILS)", () => {
+    expect(panel).toContain('phone={contact.phone ?? ""}');
   });
 });

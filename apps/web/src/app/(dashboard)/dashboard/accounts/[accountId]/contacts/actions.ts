@@ -44,16 +44,21 @@ export async function updateContactFieldAction(
   if (!EDITABLE_FIELDS.includes(field)) return { ok: false, error: "Unknown field." };
   const norm = normalizeFieldInput(field, value);
   if (!norm.ok) return norm;
-  const db = await dbForRequest();
-  let priorPhone: string | undefined;
+  // Round 4 (m4): `dbForRequest()` moves back INSIDE the try — a throw here
+  // is a failed save (the operator typed something and nothing happened),
+  // never the "crashed" toast, which is for a stale server-action id.
+  let db: Awaited<ReturnType<typeof dbForRequest>>;
+  // `null` (round 4, DESIGN.md rule 6): a FIRST fill from empty still gets
+  // a real prior to restore — "no prior real number" is `null`, not "skip
+  // this field entirely". `undefined` alone means "not the phone field".
+  let priorPhone: string | null | undefined;
   let priorUnconfirmed = false;
   try {
+    db = await dbForRequest();
     if (field === "phone") {
       const before = await getContact(db, accountId, contactId);
-      if (typeof before?.phone === "string") {
-        priorPhone = before.phone;
-        priorUnconfirmed = before.phone_country_unconfirmed === true;
-      }
+      priorPhone = typeof before?.phone === "string" ? before.phone : null;
+      priorUnconfirmed = before?.phone_country_unconfirmed === true;
     }
     await updateContact(db, accountId, contactId, { [FIELD_TO_INPUT_KEY[field]]: norm.value }, userId);
   } catch {
@@ -277,16 +282,17 @@ export async function undoInlinePhoneEditAction(
   const { userId } = await requireAccountAccess(accountId);
   if (
     (undo?.editedPhone !== null && typeof undo?.editedPhone !== "string") ||
-    typeof undo?.priorPhone !== "string" ||
-    typeof undo.priorUnconfirmed !== "boolean"
+    (undo?.priorPhone !== null && typeof undo?.priorPhone !== "string") ||
+    typeof undo?.priorUnconfirmed !== "boolean"
   ) {
     return { ok: false, error: m["contact.phoneCountry.failed"] };
   }
   // R3-M12 floor: restore the NORMALISER's own form of the prior text, and
   // never a flag cleared for a number the normaliser still calls ambiguous,
-  // whatever the caller says.
-  const restored = normalisePhone(undo.priorPhone);
-  const phone = restored?.e164 ?? undo.priorPhone;
+  // whatever the caller says. `priorPhone: null` (round 4, DESIGN.md rule
+  // 6, a first fill undone) restores null — nothing to normalise.
+  const restored = undo.priorPhone === null ? null : normalisePhone(undo.priorPhone);
+  const phone = undo.priorPhone === null ? null : (restored?.e164 ?? undo.priorPhone);
   const unconfirmed = undo.priorUnconfirmed || restored?.unconfirmed === true;
   try {
     const outcome = await setContactPhoneCountry(await dbForRequest(), accountId, contactId,

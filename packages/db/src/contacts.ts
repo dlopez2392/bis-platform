@@ -748,7 +748,7 @@ export async function readPhoneCountryFlag(db: SupabaseClient, accountId: string
  */
 export async function setContactPhoneCountry(
   db: SupabaseClient, accountId: string, contactId: string,
-  input: { expectedPhone: string | null; phone: string; unconfirmed: boolean },
+  input: { expectedPhone: string | null; phone: string | null; unconfirmed: boolean },
   actorId: string, actorType: ActorType = "user",
 ): Promise<"updated" | "changed"> {
   // `expectedPhone: null` (the inline Undo restoring a number a CLEAR wiped)
@@ -761,13 +761,17 @@ export async function setContactPhoneCountry(
   if (error) throw new Error(`setContactPhoneCountry failed: ${error.message}`);
   if (!data?.length) return "changed";
 
-  const { data: twins, error: twinErr } = await db.from("contacts").select("id")
-    .eq("account_id", accountId).eq("phone_key", phoneDigits(input.phone)).neq("id", contactId).limit(1);
-  // The phone is written: a failure from here on is logged, never thrown
-  // (a throw would report a failed pick that succeeded; review R3-M11).
-  const twin = twinErr ? undefined : (twins ?? [])[0] as { id: string } | undefined;
-  if (twinErr) console.error(`setContactPhoneCountry: duplicate check for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
-  if (twin) await flagDuplicatePair(db, accountId, contactId, twin.id, "phone_country_pick");
+  // Nothing to dedupe a CLEARED number against (round 4: the inline Undo
+  // can restore a null phone — the first-fill case, undone).
+  if (input.phone !== null) {
+    const { data: twins, error: twinErr } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("phone_key", phoneDigits(input.phone)).neq("id", contactId).limit(1);
+    // The phone is written: a failure from here on is logged, never thrown
+    // (a throw would report a failed pick that succeeded; review R3-M11).
+    const twin = twinErr ? undefined : (twins ?? [])[0] as { id: string } | undefined;
+    if (twinErr) console.error(`setContactPhoneCountry: duplicate check for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
+    if (twin) await flagDuplicatePair(db, accountId, contactId, twin.id, "phone_country_pick");
+  }
   await emit(db, accountId, "contact.updated", actorId,
     { contactId, fields: ["phone", "phone_country_unconfirmed"] }, actorType);
   return "updated";
