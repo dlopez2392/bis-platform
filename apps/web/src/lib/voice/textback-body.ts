@@ -68,15 +68,16 @@ import { m } from "@/lib/messages";
  * mensaje" says the same thing in one. Measured, not assumed — pinned in
  * textback-body.test.ts.
  */
-export function defaultTextbackBody(brandName: string, language: "en" | "es"): string {
+export function defaultTextbackBody(brandName: string, language: "en" | "es", held = false): string {
+  // `held`: sent at 08:00 for a call missed overnight, so no "just now".
   if (!brandName.trim()) {
     return language === "es"
       ? m["voice.textback.defaultBodyNoNameEs"]
-      : m["voice.textback.defaultBodyNoNameEn"];
+      : m[held ? "voice.textback.defaultBodyHeldNoNameEn" : "voice.textback.defaultBodyNoNameEn"];
   }
   const template = language === "es"
     ? m["voice.textback.defaultBodyEs"]
-    : m["voice.textback.defaultBodyEn"];
+    : m[held ? "voice.textback.defaultBodyHeldEn" : "voice.textback.defaultBodyEn"];
   // Function replacement, not a plain string: a company name containing `$&`
   // or `$'` would otherwise be re-interpreted by String.replace as a
   // substitution pattern and mangle the message.

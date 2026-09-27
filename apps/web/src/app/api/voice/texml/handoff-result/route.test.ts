@@ -241,6 +241,10 @@ describe("voice texml handoff-result route", () => {
     expect(prepareTextbackMock.mock.calls[0]![1]).toBe("acct1");
     expect(prepareTextbackMock.mock.calls[0]![2]).toMatchObject({
       callerNumber: "+19562921696",
+      // The call's row: the held row's subject when this lands overnight
+      // (review R2-I3; mutation: callId: null → FAILS).
+      callId: "c1",
+      now: expect.any(Date),
     });
     expect(deliverTextbackMock).toHaveBeenCalledOnce();
   });

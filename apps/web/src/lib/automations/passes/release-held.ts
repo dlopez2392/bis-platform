@@ -11,6 +11,7 @@ import { releaseReferralAsk } from "./referral-ask";
 import { releaseReactivation } from "./reactivation";
 import { releaseQuoteFollowup } from "./quote-followup";
 import { releaseInstantReply } from "../instant-reply";
+import { releaseTextback } from "@/lib/voice/textback";
 
 /**
  * The queue's consumer (spec §1, amendment 1). FIRST in the registry on
@@ -80,6 +81,7 @@ export const RELEASERS: Record<AutomationLogSource, Releaser | null> = {
   referral_ask: releaseReferralAsk,
   reactivation: releaseReactivation,
   quote_followup: releaseQuoteFollowup,
+  textback: releaseTextback,
   weekly_report: null,
   concierge: null,
   voice: null,

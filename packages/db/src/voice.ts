@@ -714,3 +714,27 @@ export async function searchCalls(
   if (error) throw new Error(`searchCalls failed: ${error.message}`);
   return (data ?? []) as unknown as CallListRow[];
 }
+
+/**
+ * Consent chain PR-1 (danlo, 2026-09-26): a text-back held overnight is not
+ * sent at 08:00 if the caller has been back in touch since the missed call:
+ * a call from the same number that STARTED after `sinceIso`, or an inbound
+ * TEXT in the conversation after it. The missed call itself started before
+ * `sinceIso` (its end), and its own voice message is not a text, so neither
+ * counts. THROWS on a read error; the release turns that into a re-hold.
+ */
+export async function callerInTouchSince(
+  db: SupabaseClient, accountId: string, callerE164: string, conversationId: string, sinceIso: string,
+): Promise<boolean> {
+  const { count: calls, error } = await db.from("calls")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).eq("caller_e164", callerE164).gt("started_at", sinceIso);
+  if (error) throw new Error(`callerInTouchSince calls read failed: ${error.message}`);
+  if ((calls ?? 0) > 0) return true;
+  const { count: texts, error: mErr } = await db.from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).eq("conversation_id", conversationId)
+    .eq("channel", "sms").eq("direction", "inbound").gt("created_at", sinceIso);
+  if (mErr) throw new Error(`callerInTouchSince messages read failed: ${mErr.message}`);
+  return (texts ?? 0) > 0;
+}

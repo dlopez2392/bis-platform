@@ -548,6 +548,10 @@ export async function finishCall(
         brandName: brandDisplayName(ctx.branding),
         textbackBody: ctx.textbackBody,
         label: `finishCall ${meta.callRowId ?? "(no row)"}`,
+        // The call's own row and instant: the held row's subject, and the
+        // clock the sending hours are judged at (never a freshly-read one).
+        callId: meta.callRowId,
+        now: meta.endedAt,
       });
       // Assigned to the OUTER ids rather than shadowed: the call row below
       // points at the contact and conversation the text lives in, and a
@@ -616,7 +620,7 @@ export async function finishCall(
   // defense-in-depth every other leg in this function carries.
   if (pendingAlertSms) {
     try {
-      await deliverAlertSms(ctx.accountId, pendingAlertSms);
+      await deliverAlertSms(ctx.db, ctx.accountId, pendingAlertSms);
     } catch (e) {
       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS deliver failed: ${String(e)}`);
     }

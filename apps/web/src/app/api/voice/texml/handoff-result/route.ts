@@ -289,6 +289,8 @@ async function decide(token: string, status: string): Promise<string> {
           brandName: brandDisplayName(branding),
           textbackBody,
           label: `handoff-result ${callId}`,
+          callId,
+          now: new Date(),
         });
         if (outcome.pending) {
           await deliverTextback(db, accountId, outcome.pending, `handoff-result ${callId}`);

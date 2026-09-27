@@ -7,6 +7,11 @@ vi.mock("./sender", async () => {
   return { ...actual, resolveSmsSender: (...a: unknown[]) => resolveSmsSenderMock(...a) };
 });
 
+const consentMocks = vi.hoisted(() => ({
+  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
+}));
+vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...consentMocks }));
+
 const sendMock = vi.fn();
 const getSmsProviderMock = vi.fn(() => ({ isFake: true, send: sendMock }));
 vi.mock("./index", () => ({ getSmsProvider: (...a: unknown[]) => getSmsProviderMock() }));
@@ -24,6 +29,8 @@ const SECOND_OWNED_NUMBER = "+19565550100"; // e.g. a second row still `testing`
 beforeEach(() => {
   vi.clearAllMocks();
   sendMock.mockResolvedValue({ providerMessageId: "msg_1" });
+  consentMocks.readConsentState.mockResolvedValue({ state: "allowed" });
+  consentMocks.readPhoneCountryFlag.mockResolvedValue(false);
   resolveSmsSenderMock.mockResolvedValue({
     ok: true, from: SENDING_NUMBER, ownedNumbers: [SENDING_NUMBER, SECOND_OWNED_NUMBER],
   });
@@ -198,7 +205,7 @@ describe("prepareAlertSms / deliverAlertSms (the finish-call ordering split)", (
   });
 
   it("deliverAlertSms performs the actual provider send from a prepared payload", async () => {
-    await deliverAlertSms(ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
+    await deliverAlertSms({} as never, ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
     expect(sendMock).toHaveBeenCalledWith({ to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
   });
 
@@ -206,7 +213,7 @@ describe("prepareAlertSms / deliverAlertSms (the finish-call ordering split)", (
     sendMock.mockRejectedValue(new Error("telnyx down"));
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(
-      deliverAlertSms(ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "x" }),
+      deliverAlertSms({} as never, ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "x" }),
     ).resolves.toBeUndefined();
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
@@ -220,7 +227,7 @@ describe("prepareAlertSms / deliverAlertSms (the finish-call ordering split)", (
   // callback by hand.
   it("logs the providerMessageId and destination on a successful send (mutation: drop the success log → FAILS)", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    await deliverAlertSms(ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
+    await deliverAlertSms({} as never, ACCOUNT_ID, { to: ALERT_PHONE, from: SENDING_NUMBER, body: "New booking: now - Test." });
     const logged = spy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(logged).toContain("msg_1");
     expect(logged).toContain(ALERT_PHONE);

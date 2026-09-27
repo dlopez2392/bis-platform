@@ -5,6 +5,9 @@ const dbMocks = vi.hoisted(() => ({
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
   fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(), hasRecentOutboundSms: vi.fn(),
   getAlertPhone: vi.fn(), getContact: vi.fn(), recordAutomationLog: vi.fn(), recordUsage: vi.fn(),
+  // The send gate's reads (lib/consent/gate.ts): the text-back and the staff
+  // alert go through the REAL gate, allowed by default.
+  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -156,7 +159,9 @@ const textbackCtx: FinishContext = { ...ctx, textbackEnabled: true };
 /** A caller who SPOKE and got nothing — classifyOutcome's "abandoned". */
 const abandonedState = () => withTranscript(emptyCallState(), { role: "caller", text: "uh", at: "t" });
 
-const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T12:00:00Z"), endedAt: new Date("2027-06-01T12:02:00Z") };
+// 12:00-12:02 in Chicago (CDT): inside the text-back's sending hours
+// (08:00-21:00), so the ordinary abandoned call is texted at once.
+const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T17:00:00Z"), endedAt: new Date("2027-06-01T17:02:00Z") };
 
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
@@ -183,6 +188,10 @@ beforeEach(() => {
   dbMocks.getAlertPhone.mockResolvedValue(null);
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
   dbMocks.recordUsage.mockResolvedValue("recorded");
+  dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
+  dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
+  dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   // The ordinary case: a contact with all four allow-listed columns already
   // filled, so `blankFields` computes to `[]` unless a test deliberately
   // leaves one of these blank to exercise the propagation.
@@ -365,6 +374,16 @@ describe("finishCall", () => {
 });
 
 describe("finishCall — missed-call text-back", () => {
+  it("a call that ENDS at 22:00 CDT is held until 08:00 on the call's own row, and no message row is written (review R2-I3; mutation: callId: null → nothing held, FAILS; now: new Date() → judged at test time, FAILS)", async () => {
+    const night = { callRowId: "call1", startedAt: new Date("2027-06-02T02:58:00Z"), endedAt: new Date("2027-06-02T03:00:00Z") };
+    await finishCall(abandonedState(), textbackCtx, night);
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith({}, expect.objectContaining({
+      source: "textback", subjectKey: "call:call1", status: "held", heldUntil: "2027-06-02T13:00:00.000Z",
+    }));
+    expect(dbMocks.createMessage).not.toHaveBeenCalledWith({}, "a1", expect.objectContaining({ channel: "sms" }), "voice", "ai");
+    expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
   it("texts back an ABANDONED caller when the toggle is on, and creates the contact", async () => {
     // abandoned = the caller SPOKE but produced no booking, lead or message
     // (call-state.ts:31). That is the follow-up target.
