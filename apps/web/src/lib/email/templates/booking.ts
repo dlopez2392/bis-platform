@@ -286,3 +286,136 @@ export function bookingReminderEmail(input: BookingReminderInput):
 
   return { html, text };
 }
+
+/** Same subject-injection guard the public booking and cancel actions keep:
+ *  a customer-supplied name must never be able to start a new header line. */
+function stripSubjectControlChars(value: string): string {
+  return value.replace(/[\r\n\t]+/g, " ");
+}
+
+export type BookingPhoneChangeAlertInput = {
+  brand: EmailBrand;
+  kind: "cancelled" | "moved";
+  /** The booking's time BEFORE the change, pre-formatted in the company zone. */
+  whenCompanyZone: string;
+  /** The new time, pre-formatted in the company zone. `moved` only. */
+  newWhenCompanyZone?: string;
+  /** From the contact row — customer-supplied (a booking page or a call). */
+  contactName: string;
+  /** The number the call came from, or null when it was withheld. */
+  callerNumber: string | null;
+  /** Absolute, or null. NEVER relative. */
+  contactUrl: string | null;
+};
+
+/**
+ * The email a client gets when the phone receptionist cancels or moves one of
+ * their bookings on a call.
+ *
+ * Operator-facing, like `bookingAlertEmail`, and English like every staff
+ * alert. It returns its own subject because the subject carries the
+ * customer-supplied name and has to be made header-safe in one place.
+ */
+export function bookingPhoneChangeAlertEmail(input: BookingPhoneChangeAlertInput):
+  { subject: string; html: string; text: string } {
+  const moved = input.kind === "moved";
+  const newWhen = input.newWhenCompanyZone ?? "";
+  const heading = moved ? "Booking moved by phone" : "Booking cancelled by phone";
+  const sentence = moved
+    ? `${input.contactName} moved their booking by phone.`
+    : `${input.contactName} cancelled their booking by phone.`;
+  const callerDisplay = input.callerNumber ?? "Number not shown";
+
+  // Words, never an arrow between the two times: an arrow says nothing to a
+  // screen reader or in the text part.
+  const subject = moved
+    ? `${heading}: ${stripSubjectControlChars(input.whenCompanyZone)} to `
+      + `${stripSubjectControlChars(newWhen)} — ${stripSubjectControlChars(input.contactName)}`
+    : `${heading}: ${stripSubjectControlChars(input.whenCompanyZone)}`
+      + ` — ${stripSubjectControlChars(input.contactName)}`;
+
+  const row = (label: string, value: string) => `<tr>
+      <td style="${ROW_LABEL_STYLE}">${label}</td>
+      <td style="${ROW_VALUE_STYLE}">${escapeHtml(value)}</td>
+    </tr>`;
+  const rows = [
+    ...(moved
+      ? [row("Was", input.whenCompanyZone), row("Now", newWhen)]
+      : [row("When", input.whenCompanyZone)]),
+    row("Who", input.contactName),
+    row("Called from", callerDisplay),
+  ].join("\n");
+
+  const html = shell(input.brand, `
+    <p style="margin:0 0 12px;font-size:17px;font-weight:600;">${heading}</p>
+    <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(sentence)}</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">${rows}</table>
+    ${input.contactUrl ? button(input.brand, input.contactUrl, "Open this contact") : ""}
+  `);
+
+  // Composed, never derived by stripping tags.
+  const text = [
+    `${heading}.`,
+    sentence,
+    "",
+    ...(moved
+      ? [`Was: ${input.whenCompanyZone}`, `Now: ${newWhen}`]
+      : [`When: ${input.whenCompanyZone}`]),
+    `Who: ${input.contactName}`,
+    `Called from: ${callerDisplay}`,
+    ...(input.contactUrl ? ["", `Open this contact: ${input.contactUrl}`] : []),
+  ].join("\n");
+
+  return { subject, html, text };
+}
+
+/**
+ * The customer's copy of a phone cancellation. Bilingual like the
+ * confirmation, because the person who reads it is the same stranger.
+ */
+const CANCELLED_COPY = {
+  en: {
+    subject: "Your booking has been cancelled",
+    title: "Your booking has been cancelled.",
+    notYou: "If you didn't ask for this, please contact us right away.",
+  },
+  es: {
+    subject: "Tu cita fue cancelada",
+    title: "Tu cita fue cancelada.",
+    notYou: "Si no pediste esta cancelación, comunícate con nosotros cuanto antes.",
+  },
+} as const;
+
+export function bookingCancelledSubject(locale: PublicLocale = "en"): string {
+  return CANCELLED_COPY[locale].subject;
+}
+
+export type BookingCancelledInput = {
+  brand: EmailBrand;
+  /** English when absent. `whenCompanyZone` is expected in the same language. */
+  locale?: PublicLocale;
+  /** The cancelled booking's time, pre-formatted in the company's zone. */
+  whenCompanyZone: string;
+};
+
+/**
+ * The email a customer gets after their booking is cancelled by phone.
+ *
+ * Same customer-facing restraint as `bookingConfirmationEmail`: brand header,
+ * plain paragraphs, nothing to click. The last line is the point — a phone
+ * cancellation is the one change a customer may hear about only from this
+ * email, so it tells them what to do if it was not them.
+ */
+export function bookingCancelledEmail(input: BookingCancelledInput): { html: string; text: string } {
+  const copy = CANCELLED_COPY[input.locale ?? "en"];
+
+  const html = shell(input.brand, `
+    <p style="margin:0 0 12px;">${escapeHtml(copy.title)}</p>
+    <p style="margin:0 0 16px;font-size:16px;">${escapeHtml(input.whenCompanyZone)}</p>
+    <p style="margin:0;color:#71717a;">${escapeHtml(copy.notYou)}</p>
+  `);
+
+  const text = [copy.title, "", input.whenCompanyZone, "", copy.notYou].join("\n");
+
+  return { html, text };
+}
