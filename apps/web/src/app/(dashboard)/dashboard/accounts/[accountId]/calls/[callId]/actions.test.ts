@@ -21,25 +21,48 @@ const dbForRequestMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({ dbForRequest: dbForRequestMock }));
 
 /**
- * Deliberately NOT mocking `@bis/db` (contrast with `tasks/actions.test.ts`,
- * which mocks it entirely). This suite proves the boundary where a proposal
- * becomes a real CRM record — the CAS in `markProposalDecided`, the trusted
- * write paths' own event emission, the blank-check in `fillContactBlanks` —
- * none of which a mock of those functions could exercise. `dbForRequest` is
- * mocked only because it needs a live Clerk request to resolve for real; it
- * resolves to `serviceDb()` instead, which is why every test here proves
- * BEHAVIOUR against a real throwaway account, not the RLS/grants boundary a
- * signed-in browser session would be subject to. That boundary is out of
- * scope for this file (see the report).
+ * The action's WRITER. Since 0053 call_proposals is written by server code,
+ * so the action decides (and reverts) a proposal with `serviceDb()`, not with
+ * the request client. That one export is routed through `serviceDbImpl` so a
+ * test can choose the client those writes travel on; `beforeEach` points it
+ * at the real service client, and the two revert-race tests below swap in a
+ * racing wrapper for exactly one call.
+ */
+const serviceDbImpl = vi.hoisted(() => vi.fn());
+vi.mock("@bis/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@bis/db")>();
+  return { ...actual, serviceDb: () => serviceDbImpl() };
+});
+
+/**
+ * Only `serviceDb` is replaced in `@bis/db` (contrast with
+ * `tasks/actions.test.ts`, which mocks it entirely), and only to choose which
+ * client the action writes call_proposals with. This suite proves the
+ * boundary where a proposal becomes a real CRM record — the CAS in
+ * `markProposalDecided`, the trusted write paths' own event emission, the
+ * blank-check in `fillContactBlanks` — none of which a mock of those
+ * functions could exercise, so every one of them stays real. `dbForRequest`
+ * is mocked only because it needs a live Clerk request to resolve for real;
+ * it resolves to the real service client instead, which is why most tests
+ * here prove BEHAVIOUR against a real throwaway account, not the RLS/grants
+ * boundary a signed-in browser session would be subject to. The describe
+ * "0053: call_proposals is written by server code" models that boundary's
+ * one rule for this action: the request client reads proposals and never
+ * writes them.
  */
 import {
-  serviceDb, createAccount, createContact, getContact,
+  createAccount, createContact, getContact,
   insertProposal, getProposal, markProposalDecided,
   ensureDefaultPipeline, createOpportunity, listBoard, moveOpportunityToStage,
   setOpportunityStatus, deleteAccountCascade, ACCOUNT_OWNED_TABLES,
 } from "@bis/db";
 import { acceptProposal, dismissProposal } from "./actions";
 import { m } from "@/lib/messages";
+
+// The real service client, never swapped: fixtures, the request client and
+// the races themselves all use this, so only the action's own writer can be
+// the one a test replaces.
+const { serviceDb: realServiceDb } = await vi.importActual<typeof import("@bis/db")>("@bis/db");
 
 // This suite runs against the LIVE shared Supabase project and each test
 // makes three or more round trips. On vitest's 5s default it went red FOUR
@@ -57,7 +80,7 @@ vi.setConfig({ testTimeout: 30_000 });
 // test/build time via pnpm's hoisting. `lib/proposals/generate.ts` hits the
 // same boundary and solves it the same way: alias the type off the one
 // function whose declared return type IS `SupabaseClient`.
-type Db = ReturnType<typeof serviceDb>;
+type Db = ReturnType<typeof realServiceDb>;
 
 beforeAll(() => {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -67,7 +90,11 @@ beforeAll(() => {
 });
 
 beforeEach(async () => {
-  dbForRequestMock.mockImplementation(async () => serviceDb());
+  dbForRequestMock.mockImplementation(async () => realServiceDb());
+  // Reset, not just re-pointed: a queued `mockImplementationOnce` that a
+  // mutated action never consumed must not leak into the next test's writer.
+  serviceDbImpl.mockReset();
+  serviceDbImpl.mockImplementation(() => realServiceDb());
   // `revalidatePath` is ONE `vi.fn()` shared by the whole file (the mock
   // factory above runs once). Without a reset, a test that queues a
   // `mockImplementationOnce` throw but then — because of the very mutation
@@ -111,7 +138,7 @@ it("the shared cascade still covers every table this fixture needs deleted by ac
  *  what this file writes (pinned above), so nothing is lost by deferring to
  *  it. Must never go near the seeded "Test Client One" account. */
 async function withTestAccount(fn: (db: Db, accountId: string) => Promise<void>) {
-  const db = serviceDb();
+  const db = realServiceDb();
   const orgId = `org_test_${Math.random().toString(36).slice(2, 10)}`;
   const { id: accountId } = await createAccount(
     db, { clerkOrgId: orgId, name: "Fixture Co (call proposals)", actorId: "user_test" });
@@ -157,6 +184,10 @@ function dbWithFailingEventsInsert(real: Db): Db {
  * between this accept's own compare-and-swap and its compensating revert,
  * a gap nothing in the source closes atomically. Reads and every other
  * table pass straight through untouched.
+ *
+ * Installed as the action's WRITER (`serviceDbImpl`), not its request
+ * client: since 0053 the revert runs on the service client, so a race
+ * injected into the request client would never fire.
  */
 function dbWithRaceBeforeRevert(real: Db, race: () => Promise<void>): Db {
   return {
@@ -179,6 +210,54 @@ function dbWithRaceBeforeRevert(real: Db, race: () => Promise<void>): Db {
           return chain;
         },
       };
+    },
+  } as unknown as Db;
+}
+
+/**
+ * The request client as 0053 shapes it for call_proposals: the signed-in
+ * client role reads proposals and holds no UPDATE on them, so every UPDATE
+ * comes back refused exactly as PostgREST refuses it (42501, permission
+ * denied). Reads of call_proposals, and every other table, pass straight
+ * through to the real client.
+ */
+function dbWithServerWrittenProposals(real: Db): Db {
+  const refusal = {
+    data: null,
+    error: { code: "42501", message: "permission denied for table call_proposals" },
+  };
+  return {
+    from: (table: string) => {
+      if (table !== "call_proposals") return real.from(table as never);
+      return {
+        select: (cols: string) => real.from("call_proposals").select(cols),
+        update: () => {
+          const chain = {
+            eq: () => { return chain; },
+            select: async () => refusal,
+          };
+          return chain;
+        },
+      };
+    },
+  } as unknown as Db;
+}
+
+/**
+ * `dbWithServerWrittenProposals`, plus a contacts READ that throws. In
+ * `acceptProposal` that read is `getContact`, the first call after the
+ * compare-and-swap on a `contact_field` proposal and outside the write
+ * helper's own try, so its failure reaches the outer catch with the proposal
+ * decided and nothing written: the one path to that catch's revert.
+ */
+function dbWithFailingContactRead(real: Db): Db {
+  const base = dbWithServerWrittenProposals(real);
+  return {
+    from: (table: string) => {
+      if (table === "contacts") {
+        return { select: () => { throw new Error("injected: contacts read failed"); } };
+      }
+      return base.from(table as never);
     },
   } as unknown as Db;
 }
@@ -586,7 +665,7 @@ describe("acceptProposal", () => {
         // real `tasks` INSERT, then `emit`'s own INSERT into `events`. This
         // makes only the SECOND one fail — for real, no `@bis/db` mocking —
         // so the task row lands but the call reporting success does not.
-        dbForRequestMock.mockImplementationOnce(async () => dbWithFailingEventsInsert(serviceDb()));
+        dbForRequestMock.mockImplementationOnce(async () => dbWithFailingEventsInsert(realServiceDb()));
 
         const r = await acceptProposal(accountId, callId, proposal!.id);
         expect(r).toEqual({ ok: false, error: m["proposals.maybeFailed"] });
@@ -626,10 +705,10 @@ describe("acceptProposal", () => {
         });
         expect(proposal).not.toBeNull();
 
-        dbForRequestMock.mockImplementationOnce(async () => dbWithRaceBeforeRevert(serviceDb(), async () => {
+        serviceDbImpl.mockImplementationOnce(() => dbWithRaceBeforeRevert(realServiceDb(), async () => {
           // Simulates a legitimate second decision landing in the gap
           // between this accept's own CAS and its compensating revert.
-          const { error } = await serviceDb().from("call_proposals")
+          const { error } = await realServiceDb().from("call_proposals")
             .update({ decided_by: "user_other" }).eq("id", proposal!.id);
           if (error) throw new Error(error.message);
         }));
@@ -658,11 +737,11 @@ describe("acceptProposal", () => {
         });
         expect(proposal).not.toBeNull();
 
-        dbForRequestMock.mockImplementationOnce(async () => dbWithRaceBeforeRevert(serviceDb(), async () => {
+        serviceDbImpl.mockImplementationOnce(() => dbWithRaceBeforeRevert(realServiceDb(), async () => {
           // Simulates the SAME decider's stamp having already moved on
           // (dismissed through some other path) by the time the revert
           // would run.
-          const { error } = await serviceDb().from("call_proposals")
+          const { error } = await realServiceDb().from("call_proposals")
             .update({ status: "dismissed" }).eq("id", proposal!.id);
           if (error) throw new Error(error.message);
         }));
@@ -927,6 +1006,138 @@ describe("dismissProposal", () => {
 
         const after = await getProposal(db, accountId, proposal!.id);
         expect(after!.status).toBe("dismissed");
+      });
+    },
+  );
+});
+
+describe("0053: call_proposals is written by server code; the request client only reads it", () => {
+  // The request client refuses every call_proposals UPDATE, as the client
+  // role's grants do since 0053; its proposal reads and every CRM write still
+  // reach the real database. So each test below goes green only when the
+  // decision (and any revert of it) travels on the action's service client.
+  beforeEach(() => {
+    dbForRequestMock.mockImplementation(async () => dbWithServerWrittenProposals(realServiceDb()));
+  });
+
+  it(
+    "accept: the decision is written by the service client, stamped with the signed-in user, and exactly one " +
+    "task lands (mutation: pass the request client to markProposalDecided -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const proposal = await insertProposal(db, accountId, {
+          callId, kind: "task", evidence: "the caller asked to be called back",
+          payload: { title: "Call back (server-written decision)", dueAt: null },
+        });
+        expect(proposal).not.toBeNull();
+
+        const r = await acceptProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: true });
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("accepted");
+        expect(after!.decidedBy).toBe("user_test");
+        expect(after!.decidedAt).not.toBeNull();
+
+        const { data: tasks, error: tErr } = await db.from("tasks").select("id")
+          .eq("account_id", accountId).eq("title", "Call back (server-written decision)");
+        expect(tErr).toBeNull();
+        expect(tasks).toHaveLength(1);
+      });
+    },
+  );
+
+  it(
+    "dismiss: the decision is written by the service client and names its decider " +
+    "(mutation: pass the request client to dismiss's markProposalDecided -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const proposal = await insertProposal(db, accountId, {
+          callId, kind: "task", evidence: "the caller asked to be called back",
+          payload: { title: "Call back", dueAt: null },
+        });
+        expect(proposal).not.toBeNull();
+
+        const r = await dismissProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: true });
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("dismissed");
+        expect(after!.decidedBy).toBe("user_test");
+        expect(after!.decidedAt).not.toBeNull();
+      });
+    },
+  );
+
+  it(
+    "revert: an accept whose contact field is already filled gives the proposal back to pending through the " +
+    "service client (mutation: run revertToPending on the request client -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const { id: contactId } = await createContact(
+          db, accountId, { firstName: "Lead", email: "hand-typed@example.com" }, "user_test");
+        const proposal = await insertProposal(db, accountId, {
+          callId, contactId, kind: "contact_field",
+          evidence: "the caller spelled her email out loud",
+          payload: { field: "email", value: "different@example.com" },
+        });
+        expect(proposal).not.toBeNull();
+
+        // `contactFilled` is returned only AFTER the compare-and-swap has
+        // landed, so this result proves the proposal WAS decided; the reads
+        // below then prove the revert undid it.
+        const r = await acceptProposal(accountId, callId, proposal!.id);
+        expect(r).toEqual({ ok: false, error: m["proposals.contactFilled"] });
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("pending");
+        expect(after!.decidedAt).toBeNull();
+        expect(after!.decidedBy).toBeNull();
+
+        const contact = await getContact(db, accountId, contactId);
+        expect(contact!.email).toBe("hand-typed@example.com");
+      });
+    },
+  );
+
+  it(
+    "a failure after the decision and before any CRM write gives the proposal back to pending through the " +
+    "service client (mutation: run the outer catch's revertToPending on the request client -> FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        const callId = await seedCall(db, accountId);
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Lead" }, "user_test");
+        const proposal = await insertProposal(db, accountId, {
+          callId, contactId, kind: "contact_field",
+          evidence: "the caller spelled her email out loud",
+          payload: { field: "email", value: "lead@example.com" },
+        });
+        expect(proposal).not.toBeNull();
+
+        dbForRequestMock.mockImplementationOnce(async () => dbWithFailingContactRead(realServiceDb()));
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const r = await acceptProposal(accountId, callId, proposal!.id);
+          expect(r).toEqual({ ok: false, error: m["proposals.failed"] });
+          // The outer catch's own line. Its `decided=true` is what shows the
+          // compare-and-swap DID land before the failure, so the pending row
+          // below was put back by the revert, not simply never decided.
+          expect(logged.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("decided=true, written=false")))
+            .toHaveLength(1);
+        } finally {
+          logged.mockRestore();
+        }
+
+        const after = await getProposal(db, accountId, proposal!.id);
+        expect(after!.status).toBe("pending");
+        expect(after!.decidedAt).toBeNull();
+        expect(after!.decidedBy).toBeNull();
+
+        const contact = await getContact(db, accountId, contactId);
+        expect(contact!.email).toBeNull();
       });
     },
   );

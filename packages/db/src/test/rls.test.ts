@@ -27,7 +27,10 @@ describe("RLS tenant isolation", () => {
       expect(rows.map((r: any) => r.clerk_org_id)).toEqual(["org_A"]);
     }));
 
-  it("account member sees only their own events; cannot insert into other tenant", () =>
+  // 0053: the client role appends events only through public.record_event
+  // (record-event.test.ts), so a direct INSERT is refused at the GRANT, for
+  // any account. 42501 AND the privilege message: an RLS refusal is 42501 too.
+  it("account member sees only their own events; cannot insert into events at all (0053: record_event is the only path)", () =>
     withRollback(async (c) => {
       const { b } = await seedTwoAccounts(c);
       await actAs(c, { org_id: "org_A" });
@@ -35,7 +38,7 @@ describe("RLS tenant isolation", () => {
       expect(new Set(rows.map((r: any) => r.account_id)).size).toBe(1);
       await expect(
         c.query("insert into events (account_id, type, actor_type) values ($1,'x','user')", [b])
-      ).rejects.toThrow(/row-level security/);
+      ).rejects.toMatchObject({ code: "42501", message: expect.stringMatching(/permission denied for table events/) });
     }));
 
   it("forged/absent claims see nothing and cannot write", () =>

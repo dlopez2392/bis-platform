@@ -84,15 +84,19 @@ function describeError(e: unknown): string {
  * lost; PR-4's nightly reconciliation is where a missing row gets noticed
  * against Stripe.
  *
- * `db` may be a getter, so a caller on the RLS surface (the composer) builds
- * the service client INSIDE this try: `serviceDb()` throws when its key is
- * missing, and that throw must not escape either. `input` may likewise be a
- * thunk, for a caller whose fields are read off a value that could itself be
- * null or throw while being read (e.g. a row looked up moments earlier) — it
- * is built INSIDE this same try, not by the caller before this function is
- * ever entered, for the same reason. The write itself races
- * `USAGE_WRITE_TIMEOUT_MS`, so a stalled `usage_events` insert is abandoned
- * and logged rather than left open forever.
+ * `db` may be a getter, for a caller that has not yet built its client and
+ * wants a throw from doing so (e.g. `serviceDb()` with no key) caught inside
+ * this same try rather than escaping before this function is ever entered.
+ * No caller in this codebase currently needs that form — since 0053 every
+ * write-path action builds its service client BEFORE any row exists, so a
+ * missing key already refuses the whole action earlier — but the contract
+ * still accepts one, and this file's own tests exercise it directly.
+ * `input` may likewise be a thunk, for a caller whose fields are read off a
+ * value that could itself be null or throw while being read (e.g. a row
+ * looked up moments earlier) — it is built INSIDE this same try, not by the
+ * caller before this function is ever entered, for the same reason. The
+ * write itself races `USAGE_WRITE_TIMEOUT_MS`, so a stalled `usage_events`
+ * insert is abandoned and logged rather than left open forever.
  */
 export async function recordUsageSafely(
   db: SupabaseClient | (() => SupabaseClient),

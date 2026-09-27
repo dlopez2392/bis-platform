@@ -9,26 +9,28 @@ import { withRollback } from "./db";
  * What the file proves, and what it cannot:
  *   - the column's shape (nullable timestamptz, NO default: every contact
  *     starts "may receive"), read from the catalogue;
- *   - that the client role can write it, which on this table comes from the
- *     TABLE-level grant (0049's header), not from any column grant;
- *   - that the grant surface did not move: `sort_name` (0030's no-op) is still
- *     the ONLY contacts column with an ACL of its own;
- *   - that the comment stored live is the comment in the repo file, so the
- *     file is a statement about production (0048's lesson: its first apply
- *     stored something other than the file).
+ *   - that the client role can write it, which since 0053 comes from the
+ *     column UPDATE grant on contacts (0053, section 5);
+ *   - the contacts column ACLs, exactly: the twelve client-updatable columns
+ *     0053 grants by name, plus `sort_name` (0030's no-op SELECT grant);
+ *   - that the comment stored live is the comment in the LATEST migration
+ *     that sets it (0053 re-comments the column), so the file is a statement
+ *     about production (0048's lesson: its first apply stored something other
+ *     than the file).
  *
- * RED BEFORE APPLY could not be shown for this file: 0049 was applied at the
- * migration's STOP POINT, before this test was written. The live-vs-file case
- * is the one whose red is demonstrable after the fact, by mutating the file.
+ * RED BEFORE APPLY could not be shown for 0049's cases: 0049 was applied at
+ * the migration's STOP POINT, before this test was written. The live-vs-file
+ * case is the one whose red is demonstrable after the fact, by mutating the
+ * file.
  */
 
 const MIGRATION = fs.readFileSync(
-  path.join(__dirname, "..", "..", "supabase", "migrations", "0049_contacts_marketing_email_optout.sql"), "utf8");
+  path.join(__dirname, "..", "..", "supabase", "migrations", "0053_server_only_writes.sql"), "utf8");
 
 /** The `comment on column ... is '...'` literal, un-doubled. */
 const FILE_COMMENT = (() => {
   const m = MIGRATION.match(/comment on column public\.contacts\.marketing_email_opted_out_at is\s*'((?:[^']|'')*)';/);
-  if (!m) throw new Error("0049: no column comment found in the migration file");
+  if (!m) throw new Error("0053: no column comment found in the migration file");
   return m[1]!.replace(/''/g, "'");
 })();
 
@@ -44,28 +46,33 @@ describe("0049 contacts.marketing_email_opted_out_at", () => {
     });
   });
 
-  it("is writable by the client role through the table-level grant, and the grant surface did not move", async () => {
+  it("is writable by the client role through 0053's column grant", async () => {
     await withRollback(async (c) => {
       const privs = async (col: string) => (await c.query<{ p: string }>(
         `select privilege_type as p from information_schema.column_privileges
           where grantee = 'authenticated' and table_schema = 'public'
             and table_name = 'contacts' and column_name = $1 order by privilege_type`,
         [col])).rows.map((r) => r.p);
-      const FOUR = ["INSERT", "REFERENCES", "SELECT", "UPDATE"];
+      const OPERATOR_FIELD = ["INSERT", "SELECT", "UPDATE"];
       // The control first, as a literal: two empty sets are also equal.
-      expect(await privs("first_name"), "contacts.first_name (the control)").toEqual(FOUR);
-      expect(await privs("marketing_email_opted_out_at")).toEqual(FOUR);
+      expect(await privs("first_name"), "contacts.first_name (the control)").toEqual(OPERATOR_FIELD);
+      expect(await privs("marketing_email_opted_out_at")).toEqual(OPERATOR_FIELD);
 
+      // `attname` is type name, which always sorts in the C collation, so
+      // this order does not depend on the database's locale.
       const { rows } = await c.query<{ attname: string }>(
         `select attname from pg_attribute
           where attrelid = 'public.contacts'::regclass and attnum > 0
             and not attisdropped and attacl is not null
           order by attname`);
-      expect(rows.map((r) => r.attname)).toEqual(["sort_name"]);
+      expect(rows.map((r) => r.attname)).toEqual([
+        "assigned_to", "attribution", "company_name", "custom", "dnd", "email", "first_name", "last_name",
+        "marketing_email_opted_out_at", "phone", "sort_name", "source", "updated_at",
+      ]);
     });
   });
 
-  it("stores the file's column comment live, byte for byte", async () => {
+  it("stores the LATEST migration's column comment live (0053)", async () => {
     await withRollback(async (c) => {
       const { rows } = await c.query<{ d: string | null }>(
         `select col_description('public.contacts'::regclass, a.attnum) as d

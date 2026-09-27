@@ -39,8 +39,12 @@ Both have already happened once on this project, and both are recorded.
 and `0008_client_access.sql:13`). Those are **customized** claims, not Clerk
 defaults. A fresh instance issues a default token, and then:
 
-- `app_role` is absent → `is_agency()` is false → you are redirected to `/`
-  and locked out of the agency side.
+- `app_role` is absent → `is_agency()` is NULL, not false (it evaluates
+  `NULL = 'agency_admin'`) → you are redirected to `/` and locked out of the
+  agency side. A policy treats that NULL as a refusal; a plpgsql
+  `IF NOT (...)` does not (`NOT NULL` is NULL, and `IF` acts only on true),
+  which is why `public.record_event` (0053) wraps its account check in
+  `coalesce(..., false)`.
 - `org_id` is absent → `current_account_id()` returns NULL → RLS matches
   nothing → **every query succeeds and returns zero rows.**
 
