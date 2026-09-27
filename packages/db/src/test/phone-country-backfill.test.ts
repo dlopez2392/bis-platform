@@ -140,4 +140,37 @@ describe("the 0054 phone-country backfill (read file + deciding module + emitted
       const listed = (await candidates(c, account)).map((r) => r.id);
       expect(listed).toContain(contactId);
     }));
+
+  it("sees a legacy number stored WITH AN EXTENSION, whatever its phone_key length, and flags it when it could be Mexican (review I5: Task 2's stripExtension means the gate reads these as confirmed +1 forever unless this backfill can flag them; mutation: drop the extension-marker OR from the read's WHERE → neither listed, FAILS; mutation: cap KEY back at exactly ten digits → parseCandidates throws on their longer phone_key, FAILS)", () =>
+    withRollback(async (c) => {
+      const { account } = await seed(c);
+      const contact = async (name: string, phone: string) => (await c.query<{ id: string }>(
+        "insert into contacts (account_id, first_name, phone) values ($1, $2, $3) returning id", [account, name, phone])).rows[0]!.id;
+      // "ext 12": phone_key folds every digit, extension included, to 13
+      // digits (never 10) — the OLD read never lists it at all.
+      const extWord = await contact("legacy, 'ext' marker, could be Mexican", "+1 551 234 5613 ext 12");
+      // "x2": phone_key folds to 12 digits.
+      const extX = await contact("legacy, 'x' marker, could be Mexican", "1 (551) 234-5613 x2");
+
+      const { rows: keyRows } = await c.query<{ id: string; phone_key: string }>(
+        "select id, phone_key from contacts where id in ($1, $2)", [extWord, extX]);
+      expect(keyRows.find((r) => r.id === extWord)?.phone_key).not.toHaveLength(10);
+      expect(keyRows.find((r) => r.id === extX)?.phone_key).not.toHaveLength(10);
+
+      const rows = await candidates(c, account);
+      const listed = rows.map((r) => r.id);
+      expect(listed).toContain(extWord);
+      expect(listed).toContain(extX);
+
+      const flag = rowsToFlag(rows);
+      const flaggedIds = flag.map((r) => r.id);
+      expect(flaggedIds).toContain(extWord);
+      expect(flaggedIds).toContain(extX);
+
+      // flagSql's compare-and-set still keys on the STORED (extension-corrupted) key.
+      const res = await c.query(flagSql(flag));
+      const written = res.rows.map((r: { id: string }) => r.id);
+      expect(written).toContain(extWord);
+      expect(written).toContain(extX);
+    }));
 });

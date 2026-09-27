@@ -195,7 +195,12 @@ export function repickPhoneCountry(stored: string | null | undefined, country: P
  * Whether the account has SEEN the number inbound is the SQL's half.
  */
 export function couldBeMexican(stored: string | null | undefined): boolean {
-  const text = String(stored ?? "").trim();
+  // Same extension strip as normalisePhone (review I5, the 0054 backfill's
+  // gap): without it, "+1 551 234 5613 ext 12"'s digits include the
+  // extension's own ("...561312"), landing at 13 digits instead of 11 and
+  // always reading as "not a bare +1", so an ambiguous legacy number wearing
+  // an extension was never flagged.
+  const text = stripExtension(String(stored ?? "").trim());
   const digits = digitsOf(text);
   const plusOne = digits.length === 11 && digits.startsWith("1");
   if (text.startsWith("+") || plusOne) return plusOne && validUnder(digits.slice(1), "MX");

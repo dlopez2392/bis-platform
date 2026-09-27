@@ -20,7 +20,14 @@ export type CandidateRow = {
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const KEY = /^[0-9]{10}$/;
+/**
+ * `phone_key`'s shape: normally exactly ten digits, but an extension's own
+ * digits fold IN (review I5) — "+1 551 234 5613 ext 12" keys at 13, "1 (551)
+ * 234-5613 x2" at 12 — so this accepts any digit run the generated column
+ * could actually produce, not just ten. Still anchored both ends (review I2):
+ * a length range is not an excuse to drop `^`/`$`.
+ */
+const KEY = /^[0-9]{10,20}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const COLUMNS = "id,account_id,phone,phone_key,last_written_at,created_at";
 /** The only shape the new build stores a number that parses in (`phoneFields`); a ten-digit key always parses. */
@@ -35,6 +42,22 @@ const E164 = /^\+[1-9][0-9]{7,14}$/;
  * each a silent, wrong cut-off rather than a refusal.
  */
 const CUTOFF = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
+
+/**
+ * `CUTOFF`'s shape alone still lets an IMPOSSIBLE calendar date through
+ * (coordinator item 2): `new Date("2026-02-30T12:00:00Z")` does not throw or
+ * go NaN — V8 rolls it forward to March 2nd, silently. The only way to catch
+ * that is to read the date back and compare: `toISOString()` always emits
+ * milliseconds, so the input is normalised the same way first (stripping a
+ * trailing literal `.000Z` back to `Z`) before the two are compared as text.
+ */
+function validCutoff(raw: string): Date | null {
+  if (!CUTOFF.test(raw)) return null;
+  const d = new Date(raw);
+  if (!Number.isFinite(d.getTime())) return null;
+  const strip000 = (s: string) => s.replace(/\.000Z$/, "Z");
+  return strip000(d.toISOString()) === strip000(raw) ? d : null;
+}
 
 function checked(r: Record<string, unknown>, at: string): CandidateRow {
   const { id, account_id, phone, phone_key, last_written_at, created_at } = r;
@@ -154,7 +177,7 @@ export function planBackfillArgs(args: readonly string[]): BackfillArgsPlan {
   const cutAt = args.indexOf("--cutoff");
   const out = emitAt >= 0 ? args[emitAt + 1] : undefined;
   const cutRaw = cutAt >= 0 ? args[cutAt + 1] : undefined;
-  const cutoff = cutRaw !== undefined && CUTOFF.test(cutRaw) ? new Date(cutRaw) : null;
+  const cutoff = cutRaw !== undefined ? validCutoff(cutRaw) : null;
   const input = args.find((a, i) =>
     !a.startsWith("--") && (emitAt < 0 || i !== emitAt + 1) && (cutAt < 0 || i !== cutAt + 1));
   const outOk = !out || (!out.startsWith("--") && out !== input);

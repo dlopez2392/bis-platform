@@ -160,6 +160,18 @@ describe("injection guard: the id and phone_key regex anchors (review I2)", () =
     expect(() => parseCandidates(JSON.stringify([bad]))).toThrow("phone_key is not ten digits");
     expect(() => flagSql([bad])).toThrow("phone_key is not ten digits");
   });
+
+  it("refuses an id that is a payload followed by a valid uuid at the END, in BOTH parseCandidates and flagSql's own re-check (re-re-review I2: the payload-AFTER cases above pin only the '$' anchor; this pins '^'; mutation: drop only '^' from the UUID regex (P4c) → FAILS)", () => {
+    const bad = { ...row(1, "+15512345678", "5512345678"), id: "x'); update contacts set phone_country_unconfirmed=false; --11111111-1111-4111-8111-111111111111" };
+    expect(() => parseCandidates(JSON.stringify([bad]))).toThrow("id is not a uuid");
+    expect(() => flagSql([bad])).toThrow("id is not a uuid");
+  });
+
+  it("refuses a phone_key that is a payload followed by a valid ten-digit key at the END, in BOTH parseCandidates and flagSql's own re-check (re-re-review I2: pins '^'; mutation: drop only '^' from the KEY regex (P5c) → FAILS; the reviewer's own crafted key, ending '...5512340001', would otherwise let the CLI write a SECOND statement that clears every account's flag)", () => {
+    const bad = { ...row(1, "+15512345678", "5512345678"), phone_key: "5512340001') ) returning id; update public.contacts set phone_country_unconfirmed = false where (('a' <> '5512340001" };
+    expect(() => parseCandidates(JSON.stringify([bad]))).toThrow("phone_key is not ten digits");
+    expect(() => flagSql([bad])).toThrow("phone_key is not ten digits");
+  });
 });
 
 describe("planBackfillArgs: the CLI's own usage line, `<candidates-file> --cutoff <ISO> [--emit-sql <out.sql>]` (found live via the required replica proof, not in the brief)", () => {
@@ -216,6 +228,16 @@ describe("planBackfillArgs: the CLI's own usage line, `<candidates-file> --cutof
 
   it("refuses a date-only --cutoff, '2026-10-01' (review I3; mutation: accept anything new Date parses → FAILS)", () => {
     const plan = planBackfillArgs(["candidates.tsv", "--cutoff", "2026-10-01"]);
+    expect(plan.ok).toBe(false);
+  });
+
+  it("refuses an IMPOSSIBLE calendar date, '2026-02-30T12:00:00Z' (review coordinator item 2: the regex shape passes it, and V8 silently rolls Feb 30 to March 2; mutation: skip the round-trip check → FAILS)", () => {
+    const plan = planBackfillArgs(["candidates.tsv", "--cutoff", "2026-02-30T12:00:00Z"]);
+    expect(plan.ok).toBe(false);
+  });
+
+  it("refuses an impossible calendar date even WITH milliseconds, '2026-02-30T12:00:00.000Z' (same rollover, other shape)", () => {
+    const plan = planBackfillArgs(["candidates.tsv", "--cutoff", "2026-02-30T12:00:00.000Z"]);
     expect(plan.ok).toBe(false);
   });
 
