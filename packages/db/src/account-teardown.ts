@@ -30,7 +30,10 @@ export const ACCOUNT_OWNED_TABLES = [
 /**
  * ⚠️ `alert_phone_verifications` (0036) is DELIBERATELY not on that list,
  * neither is `contact_duplicate_flags` (0033), neither is `screened_calls`
- * (0039).
+ * (0039), neither is `consent_events` (0054: `account_id … on delete
+ * cascade`, and its contact reference is `on delete set null (contact_id)`,
+ * so deleting `contacts` above keeps each ledger row until the account's own
+ * deletion carries it away; consent-ledger-schema.test.ts proves both).
  *
  * All three carry `account_id … on delete cascade` rather than `restrict`,
  * so the account's own deletion below carries their rows away — they are

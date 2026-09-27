@@ -165,7 +165,7 @@ describe("0047 - the nine columns exist and carry their constraints", () => {
  * own transaction.
  */
 describe("0047 - the catalogue, read directly", () => {
-  it("both CHECKs list every value, eight keys and thirteen sources, in one read", async () => {
+  it("both CHECKs list every value, eight keys and fourteen sources (0054 added textback), in one read", async () => {
     // The insert cases above prove one value at a time and cannot see a value
     // that was DROPPED and never re-added unless someone thought to test it.
     // This sees the whole list at once. `pg_get_constraintdef` renders an
@@ -183,7 +183,7 @@ describe("0047 - the catalogue, read directly", () => {
         "CHECK ((source = ANY (ARRAY['reminders'::text, 'followups'::text, 'review_request'::text, "
         + "'no_show_nudge'::text, 'sms_reminder'::text, 'instant_reply'::text, 'weekly_report'::text, "
         + "'concierge'::text, 'voice'::text, 'appointment_confirm'::text, 'referral_ask'::text, "
-        + "'reactivation'::text, 'quote_followup'::text])))");
+        + "'reactivation'::text, 'quote_followup'::text, 'textback'::text])))");
       expect(rows[1]!.def).toBe(
         "CHECK ((recipe_key = ANY (ARRAY['review_request'::text, 'no_show_nudge'::text, "
         + "'sms_reminder'::text, 'instant_reply'::text, 'appointment_confirm'::text, "

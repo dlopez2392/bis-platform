@@ -18,6 +18,10 @@ export { createContact, updateContact, listContacts, getContact,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
 export { setMarketingEmailOptOut } from "./contacts";
+export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
+         CONSENT_METHODS, DECIDING_ACTIONS,
+         type ConsentChannel, type ConsentAction, type ConsentMethod, type ConsentRow,
+         type ConsentState, type ConsentEventInput } from "./consent";
 export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
 export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask } from "./activities";

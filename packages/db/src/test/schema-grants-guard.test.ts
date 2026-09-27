@@ -75,7 +75,7 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   "authenticated contact_tags": IUD,
   "authenticated contacts": insertDeleteAndUpdate([
     "assigned_to", "attribution", "company_name", "custom", "dnd", "email", "first_name", "last_name",
-    "marketing_email_opted_out_at", "phone", "source", "updated_at",
+    "marketing_email_opted_out_at", "phone", "phone_country_unconfirmed", "source", "updated_at",
   ]),
   "authenticated custom_fields": IUD,
   "authenticated custom_values": IUD,

@@ -67,7 +67,7 @@ describe("0049 contacts.marketing_email_opted_out_at", () => {
           order by attname`);
       expect(rows.map((r) => r.attname)).toEqual([
         "assigned_to", "attribution", "company_name", "custom", "dnd", "email", "first_name", "last_name",
-        "marketing_email_opted_out_at", "phone", "sort_name", "source", "updated_at",
+        "marketing_email_opted_out_at", "phone", "phone_country_unconfirmed", "sort_name", "source", "updated_at",
       ]);
     });
   });
