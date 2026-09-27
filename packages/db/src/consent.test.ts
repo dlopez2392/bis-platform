@@ -12,7 +12,7 @@ const row = (action: ConsentRow["action"], occurred_at: string, method: ConsentR
   ({ id: id ?? `00000000-0000-0000-0000-${String(++seq).padStart(12, "0")}`, action, method, occurred_at });
 
 describe("consentStateOf — spec §3's table", () => {
-  it("no rows is allowed", () => {
+  it("no rows is allowed (mutation: drop the `!newest` guard → deciding[0] is undefined and newest.action throws, FAILS)", () => {
     expect(consentStateOf([])).toEqual({ state: "allowed" });
   });
 
@@ -21,8 +21,15 @@ describe("consentStateOf — spec §3's table", () => {
     expect(consentStateOf([r])).toEqual({ state: "stopped", since: r.occurred_at, method: "keyword", eventId: r.id });
   });
 
-  it("held is held", () => {
+  it("held is held (mutation: collapse the ternary to always 'stopped' → FAILS)", () => {
     expect(consentStateOf([row("held", "2026-10-03T15:00:00Z", "free_text")]).state).toBe("held");
+  });
+
+  it("the same instant: revoked outranks held even when the held row has the LARGER id — a stop is never demoted by a later, restrictiveness-losing rank (review I1; mutation: rank held with or above revoked → held, FAILS)", () => {
+    const stop = row("revoked", "2026-10-03T15:00:00Z", "keyword", "00000000-0000-0000-0000-00000000000a");
+    const hold = row("held", "2026-10-03T15:00:00Z", "free_text", "00000000-0000-0000-0000-00000000000z");
+    expect(consentStateOf([stop, hold]).state).toBe("stopped");
+    expect(consentStateOf([hold, stop]).state).toBe("stopped");
   });
 
   it("resubscribed after revoked is allowed; revoked after resubscribed is stopped (mutation: sort ascending → FAILS)", () => {
@@ -104,10 +111,36 @@ describe("readConsentState", () => {
     const f = fakeDb({ read: { data: null, error: { message: "permission denied" } } });
     await expect(readConsentState(f.db, "a1", "sms", "+19562921696")).rejects.toThrow("readConsentState failed: permission denied");
   });
+
+  it("orders by occurred_at BEFORE id, both descending, in exactly that sequence (review I2a: `arrayContaining` above ignores call order, so a swap would survive it; mutation: swap the two .order() calls → FAILS)", async () => {
+    const f = fakeDb({ read: { data: [], error: null } });
+    await readConsentState(f.db, "a1", "sms", "+19562921696");
+    const orderCalls = f.calls.filter((c) => c[0] === "order");
+    expect(orderCalls).toEqual([
+      ["order", "occurred_at", { ascending: false }],
+      ["order", "id", { ascending: false }],
+    ]);
+  });
+
+  it("guards consent-ledger-live.test.ts's premise, since that test is CI-only and cannot run here: a 20-row window truncates from whichever end the read is sorted from, and only the newest-first end keeps the deciding row that a wrong 21st-oldest row would otherwise roll off (mutation: order ascending in readConsentState — modeled here by reading the OLDEST 20 of 21 rows instead of the newest 20 — → 'stopped' instead of 'allowed', FAILS)", () => {
+    const older = Array.from({ length: 20 }, (_, i) =>
+      row("revoked", `2026-01-${String(i + 1).padStart(2, "0")}T10:00:00Z`, "carrier_block"));
+    const newest = row("resubscribed", "2026-09-01T10:00:00Z", "start_keyword");
+    // The real query: newest-first, limit 20. Of the 21 rows, this window
+    // is `newest` plus the 19 newest of `older` (the single oldest one
+    // rolls off) — `newest` is the deciding row and it decides: allowed.
+    const newestFirstWindow = [newest, ...older.slice(1)];
+    expect(consentStateOf(newestFirstWindow).state).toBe("allowed");
+    // The mutated query: oldest-first, limit 20. Of the same 21 rows, this
+    // window is all 20 of `older` — `newest` is the 21st and oldest-last,
+    // so it rolls off, and every row left is `revoked`: stopped.
+    const oldestFirstWindow = older;
+    expect(consentStateOf(oldestFirstWindow).state).toBe("stopped");
+  });
 });
 
 describe("recordCarrierBlock", () => {
-  it("appends revoked / carrier_block with the kind as evidence", async () => {
+  it("appends revoked / carrier_block with the kind as evidence (mutation: drop `evidence: { kind: input.kind }` → evidence mismatches, FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
     expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: "c1", kind: "voice.textback" })).toBe("appended");
     const insert = f.calls.find((c) => c[0] === "insert")?.[1];
@@ -119,6 +152,12 @@ describe("recordCarrierBlock", () => {
     const f = fakeDb({ read: { data: [row("revoked", "2026-10-03T15:00:00Z")], error: null } });
     expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: null, kind: "voice.textback" })).toBe("already_stopped");
     expect(f.calls.some((c) => c[0] === "insert")).toBe(false);
+  });
+
+  it("a HELD address still gets a new revoked row: only 'stopped' short-circuits, never 'held' (review m3; mutation: skip whenever state !== 'allowed' → also skips 'held', FAILS)", async () => {
+    const f = fakeDb({ read: { data: [row("held", "2026-10-03T15:00:00Z", "free_text")], error: null } });
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: null, kind: "voice.textback" })).toBe("appended");
+    expect(f.calls.some((c) => c[0] === "insert")).toBe(true);
   });
 });
 
@@ -134,5 +173,12 @@ describe("appendConsentEvent", () => {
     const f = fakeDb({ insert: { data: null, error: { message: "violates check constraint" } } });
     await expect(appendConsentEvent(f.db, { accountId: "a1", channel: "sms", address: "bad", action: "revoked", method: "staff" }))
       .rejects.toThrow("violates check constraint");
+  });
+
+  it("refuses an occurredAt that does not parse to a finite date, without writing (orchestrator decision; mutation: drop the parse-guard → the insert runs, FAILS)", async () => {
+    const f = fakeDb({});
+    await expect(appendConsentEvent(f.db, { accountId: "a1", channel: "sms", address: "+19565550100", action: "revoked", method: "carrier_block", occurredAt: "infinity" }))
+      .rejects.toThrow("occurredAt does not parse to a finite date");
+    expect(f.calls.some((c) => c[0] === "insert")).toBe(false);
   });
 });

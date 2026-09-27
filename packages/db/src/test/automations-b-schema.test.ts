@@ -56,7 +56,7 @@ describe("0047 - the recipe catalogue is eight keys", () => {
   });
 });
 
-describe("0047 - the log accepts thirteen sources and no more", () => {
+describe("0047 - the log accepts these thirteen sources (0054 added a fourteenth, 'textback', proved in consent-ledger-schema.test.ts)", () => {
   it("accepts each of the four new sources", async () => {
     await withTestAccount(async (db, accountId) => {
       for (const source of ["appointment_confirm", "referral_ask", "reactivation", "quote_followup"] as const) {

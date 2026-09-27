@@ -45,6 +45,13 @@ export type ConsentState =
  * allowed; `revoked` → stopped; `held` → held. `granted` rows are skipped
  * wherever they sort. Compared as instants, never as strings: PostgREST and
  * a backfill can spell the same moment differently.
+ *
+ * `Date.parse` compares at millisecond precision; Postgres orders
+ * `timestamptz` at microsecond precision. A tie this reducer sees (same
+ * millisecond) that the database would still break by the extra digits
+ * falls through to the restrictiveness rule below, never to the id by
+ * accident — the safe direction, since restrictiveness never makes a stop
+ * easier to lose.
  */
 export function consentStateOf(rows: readonly ConsentRow[]): ConsentState {
   const deciding = rows.filter((r) => (DECIDING_ACTIONS as readonly string[]).includes(r.action));
@@ -102,6 +109,12 @@ export async function appendConsentEvent(db: SupabaseClient, e: ConsentEventInpu
   // nothing may append one (a plain insert could lift a stop, review R1-M3).
   if (e.action === "hold_released") {
     throw new Error("appendConsentEvent: hold_released needs PR-2's guarded write (only while the state is held)");
+  }
+  // The table's own CHECK (consent_events_occurred_at_sane) refuses a future
+  // or infinite occurred_at too, but only after a round trip; refuse here,
+  // without writing, the moment it cannot even parse to a finite instant.
+  if (e.occurredAt !== undefined && !Number.isFinite(Date.parse(e.occurredAt))) {
+    throw new Error(`appendConsentEvent: occurredAt does not parse to a finite date: ${e.occurredAt}`);
   }
   const { data, error } = await db.from("consent_events").insert({
     account_id: e.accountId, channel: e.channel, address: e.address,

@@ -30,15 +30,13 @@ export const ACCOUNT_OWNED_TABLES = [
 /**
  * ⚠️ `alert_phone_verifications` (0036) is DELIBERATELY not on that list,
  * neither is `contact_duplicate_flags` (0033), neither is `screened_calls`
- * (0039), neither is `consent_events` (0054: `account_id … on delete
- * cascade`, and its contact reference is `on delete set null (contact_id)`,
- * so deleting `contacts` above keeps each ledger row until the account's own
- * deletion carries it away; consent-ledger-schema.test.ts proves both).
+ * (0039), neither is `consent_events` (0054) — four tables now, not three,
+ * each for its own reason (m4 correction).
  *
- * All three carry `account_id … on delete cascade` rather than `restrict`,
- * so the account's own deletion below carries their rows away — they are
- * derived or scratch state, not the lead-bearing rows 0017 made restrict to
- * protect. 0036 argues the case in its own comments;
+ * The FIRST THREE carry `account_id … on delete cascade` rather than
+ * `restrict`, so the account's own deletion below carries their rows away —
+ * they are derived or scratch state, not the lead-bearing rows 0017 made
+ * restrict to protect. 0036 argues the case in its own comments;
  * `alert-phone-verification-grants.test.ts` proves the cascade instead of
  * assuming it, by inserting a row, letting `withTestAccount` tear the account
  * down, and then asserting nothing is left.
@@ -62,6 +60,20 @@ export const ACCOUNT_OWNED_TABLES = [
  * `accounts` delete (e.g. from the Studio UI), not the mechanism this
  * function exercises. `call-proposals-grants.test.ts` proves the row is gone
  * after teardown without assuming which FK did it.
+ *
+ * `consent_events` (0054) is off this list for a DIFFERENT, load-bearing
+ * reason: it is NOT derived or scratch state — it is the append-only
+ * consent ledger, and a row in it is legal evidence — but `service_role`
+ * holds no DELETE on it at all (0054's grants are SELECT and INSERT only,
+ * by design: the whole table is append-only). Listing it in the loop above
+ * would make `.delete().eq("account_id", accountId)` throw 42501 on EVERY
+ * account's teardown, aborting before `contacts` or `accounts` itself ever
+ * ran. Its rows still leave, just not through this loop: deleting
+ * `contacts` above only nulls `contact_id` (the composite FK's `on delete
+ * set null (contact_id)`), and it is the `accounts` delete at the very end
+ * of this function that actually carries each ledger row away
+ * (`account_id … on delete cascade`); `consent-ledger-schema.test.ts`
+ * proves both halves.
  *
  * A table added with the usual `restrict` and left off the list is a different
  * story and still a bug: it surfaces as "cleanup failed on accounts" here, or

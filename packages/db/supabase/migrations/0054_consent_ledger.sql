@@ -75,6 +75,12 @@ create table public.consent_events (
     method <> 'staff' or action <> 'resubscribed' or (note is not null and btrim(note) <> '')),
   constraint consent_events_actor_check check (
     method not in ('staff', 'staff_undo') or (actor_id is not null and btrim(actor_id) <> '')),
+  -- Backfills write PAST times, so that stays legal. A future time (beyond
+  -- 5 minutes of clock skew) or `infinity` is refused: today both would be
+  -- accepted, and a future `resubscribed` could outrank a real STOP, while
+  -- `infinity` makes JS `Date.parse` return NaN (review, m1).
+  constraint consent_events_occurred_at_sane check (
+    isfinite(occurred_at) and occurred_at <= created_at + interval '5 minutes'),
   -- The contact is the row's OWN account's (0050's pattern, onto
   -- contacts_account_id_id_key). A deleted contact nulls only contact_id;
   -- the row keeps its account and its address, so the evidence outlives a

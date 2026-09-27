@@ -130,6 +130,9 @@ describe("0054 consent_events: shape", () => {
       expect(await refused(c, INSERT, params({ account: s.a, address: "+09565550100" }))).toMatchObject(bad);
       expect(await refused(c, INSERT, params({ account: s.a, channel: "email", address: "Ana@Example.com" }))).toMatchObject(bad);
       expect(await refused(c, INSERT, params({ account: s.a, channel: "email", address: " ana@example.com" }))).toMatchObject(bad);
+      // m2: the SMS upper bound and the email @ rule, which nothing above exercised.
+      expect(await refused(c, INSERT, params({ account: s.a, address: "+9876543210987654" }))).toMatchObject(bad);
+      expect(await refused(c, INSERT, params({ account: s.a, channel: "email", address: "notanemail.com" }))).toMatchObject(bad);
       // The near-misses that must pass: the controls.
       await c.query(INSERT, params({ account: s.a, address: "+528999221234" }));
       await c.query(INSERT, params({ account: s.a, channel: "email", address: "ana@example.com" }));
@@ -154,7 +157,7 @@ describe("0054 consent_events: shape", () => {
         .toMatchObject({ code: "23514", constraint: "consent_events_actor_check" });
     }));
 
-  it("the closed lists refuse an unknown action or method, and evidence is an object with an excerpt of at most 160 characters", () =>
+  it("the closed lists refuse an unknown action or method, and evidence is an object with an excerpt of at most 160 characters (mutation: drop consent_events_action_check, or consent_events_method_check, or consent_events_evidence_check → any one FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       expect(await refused(c, INSERT, params({ account: s.a, action: "paused" })))
@@ -209,6 +212,23 @@ describe("0054 consent_events: indexes", () => {
       expect(rows.map((r) => r.indexname)).toEqual(["consent_events_address_idx", "consent_events_contact_idx", "consent_events_pkey"]);
       expect(rows.find((r) => r.indexname === "consent_events_contact_idx")!.indexdef)
         .toMatch(/\(account_id, contact_id\) WHERE \(contact_id IS NOT NULL\)/);
+    }));
+});
+
+describe("0054 consent_events: occurred_at must be sane (orchestrator decision)", () => {
+  const INSERT_AT = `insert into consent_events (account_id, channel, address, action, method, occurred_at)
+    values ($1, 'sms', '+19565550100', 'revoked', 'carrier_block', $2) returning id`;
+
+  it("a future occurred_at (beyond 5 minutes of clock skew) is refused; an 'infinity' occurred_at is refused; a past time is accepted (mutation: drop consent_events_occurred_at_sane → FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const bad = { code: "23514", constraint: "consent_events_occurred_at_sane" };
+      const wellBeyondSkew = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour ahead
+      expect(await refused(c, INSERT_AT, [s.a, wellBeyondSkew])).toMatchObject(bad);
+      expect(await refused(c, INSERT_AT, [s.a, "infinity"])).toMatchObject(bad);
+      // The control: a plainly past time is accepted (this is what every
+      // backfill writes).
+      await c.query(INSERT_AT, [s.a, "2026-01-01T10:00:00Z"]);
     }));
 });
 
