@@ -15,7 +15,7 @@ import { composeNoShowNudgeSms, defaultNoShowNudgeBody } from "../no-show-nudge-
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
 import { sendAutomationSms, markAutomationSmsSent, smsCooldownActive, type SentSms } from "../send-sms";
 import {
-  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
+  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type SmsHoldSubject, type Releaser,
 } from "../hold-or-send";
 import type { Pass, PassContext } from "../context";
 
@@ -84,7 +84,7 @@ export async function processNoShowNudges(
 
     // Built only once the channel is known: the log subject's channel field
     // is the CONFIGURED one, never a guess.
-    const subject: HoldSubject = {
+    const subject: SmsHoldSubject = {
       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "no_show_nudge",
       channel: config.channel, smsKind: "automation.no_show_nudge", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
     };
@@ -200,11 +200,11 @@ export async function processNoShowNudges(
       await logSkipped(ctx, subject, REASONS.dailyCap);
       continue;
     }
-    // The cap accounting runs BEFORE the send below, so a row that ends up
-    // HELD (quiet hours) still consumed a tick slot tonight — harmless: it
-    // is simply held again next tick. The DAILY cap stays exact regardless,
-    // because it is re-read from stamps (countNoShowNudgesSince) every
-    // tick, never carried forward from this in-memory counter.
+    // The cap accounting runs BEFORE the send below; a row the gate refuses
+    // gives back both, and a row it HOLDS gives back its tick slot (below).
+    // The DAILY cap stays exact regardless, because it is re-read from
+    // stamps (countNoShowNudgesSince) every tick, never carried forward
+    // from this in-memory counter.
     attemptsThisTick++;
     sentToday.set(row.accountId, today + 1);
 
@@ -217,7 +217,7 @@ export async function processNoShowNudges(
         if (target.channel === "sms") {
           smsRow = await sendAutomationSms(ctx, {
             accountId: row.accountId, contactId: row.contactId, to: target.to,
-            kind: "automation.no_show_nudge", accountTimezone: row.accountTimezone,
+            kind: subject.smsKind, accountTimezone: row.accountTimezone,
             body: composeNoShowNudgeSms(body, bookingUrl),
             onProviderFailure: () => stampNoShowNudgeSmsFailed(ctx.db, row.bookingId),
           });
@@ -249,6 +249,12 @@ export async function processNoShowNudges(
         continue;
       }
       if (outcome === "held") {
+        // Nothing went this tick, so the tick slot taken above goes back (the
+        // Task 9 review, concern 1): ten accounts' texts held until noon on a
+        // Sunday must not use up AUTOMATION_TICK_CAP, ONE counter across every
+        // account, while another account's could go now. Today's count stays
+        // taken: a held row IS that day's send.
+        attemptsThisTick--;
         c.held++;
         continue;
       }

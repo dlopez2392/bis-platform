@@ -9,7 +9,7 @@ import {
 import { smsSenderFor } from "@/lib/consent/gate";
 import { sendAutomationSms, markAutomationSmsSent, type SentSms, type SmsSendContext, pastRetryAge } from "./send-sms";
 import {
-  holdOrSend, logSkipped, subjectOf, REASONS, type HoldSubject, type LogSubject, type Releaser,
+  holdOrSend, logSkipped, subjectOf, REASONS, type SmsHoldSubject, type LogSubject, type Releaser,
 } from "./hold-or-send";
 
 /**
@@ -180,7 +180,7 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
   // THE SENDING HOURS: the one inline send goes through the same seam as
   // every pass. Held → the row carries the payload, and releaseInstantReply
   // below re-runs this whole function from it when the hours open.
-  const subject: HoldSubject = {
+  const subject: SmsHoldSubject = {
     ...logSubject,
     smsKind: "automation.instant_reply",
     accountTimezone: await readAccountTimezone(db, accountId),
@@ -198,7 +198,7 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
     outcome = await holdOrSend({ db, now }, subject, async () => {
       sent = await sendAutomationSms(ctx, {
         accountId, contactId: input.contactId, to: input.phoneAsTyped || to, body,
-        kind: "automation.instant_reply", accountTimezone: subject.accountTimezone,
+        kind: subject.smsKind, accountTimezone: subject.accountTimezone,
         // The same locale that picked the body picks the opt-out
         // disclosure's language. Sending a Spanish reply that ends in
         // "Reply STOP to opt out." would undo the whole point of having a

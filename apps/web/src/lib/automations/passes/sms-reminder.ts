@@ -9,7 +9,7 @@ import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { composeSmsReminder, defaultSmsReminderBody } from "../sms-reminder-copy";
 import { sendAutomationSms, markAutomationSmsSent } from "../send-sms";
 import {
-  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
+  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type SmsHoldSubject, type Releaser,
 } from "../hold-or-send";
 import type { Pass, PassContext } from "../context";
 
@@ -68,7 +68,7 @@ export type SmsReminderCounters = {
   sent: number; failed: number; unstamped: number; held: number; blocked: number; skippedNoAddress: number; skippedSmsGate: number;
 };
 
-function subjectFor(r: DueSmsReminder): HoldSubject {
+function subjectFor(r: DueSmsReminder): SmsHoldSubject {
   return {
     accountId: r.accountId, accountTimezone: r.accountTimezone, source: "sms_reminder", channel: "sms", smsKind: "automation.sms_reminder",
     subjectKey: `booking:${r.bookingId}`, contactId: r.contactId, deadline: new Date(r.startsAt),
@@ -116,7 +116,7 @@ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[
       const outcome = await holdOrSend(ctx, subject, async () => {
         const smsRow = await sendAutomationSms(ctx, {
           accountId: row.accountId, contactId: row.contactId, to, body,
-          kind: "automation.sms_reminder", accountTimezone: row.accountTimezone,
+          kind: subject.smsKind, accountTimezone: row.accountTimezone,
           onProviderFailure: () => stampSmsReminderFailed(ctx.db, row.bookingId),
         });
 

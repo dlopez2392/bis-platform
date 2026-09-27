@@ -16,7 +16,7 @@ import { marketingFooterReason } from "../marketing-copy";
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
 import { sendAutomationSms, markAutomationSmsSent, smsCooldownActive, type SentSms } from "../send-sms";
 import {
-  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
+  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type SmsHoldSubject, type Releaser,
 } from "../hold-or-send";
 import type { Pass, PassContext } from "../context";
 
@@ -95,7 +95,7 @@ export async function processReferralAsks(
       continue;
     }
 
-    const subject: HoldSubject = {
+    const subject: SmsHoldSubject = {
       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "referral_ask",
       channel: config.channel, smsKind: "automation.referral_ask", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
     };
@@ -268,7 +268,7 @@ export async function processReferralAsks(
           // never a rating, and there is nowhere for a link to point.
           smsRow = await sendAutomationSms(ctx, {
             accountId: row.accountId, contactId: row.contactId, to: target.to,
-            kind: "automation.referral_ask", accountTimezone: row.accountTimezone,
+            kind: subject.smsKind, accountTimezone: row.accountTimezone,
             body,
             onProviderFailure: () => stampReferralAskSmsFailed(ctx.db, row.bookingId),
           });
@@ -297,6 +297,12 @@ export async function processReferralAsks(
         continue;
       }
       if (outcome === "held") {
+        // Nothing went this tick, so the tick slot taken above goes back (the
+        // Task 9 review, concern 1): ten accounts' texts held until noon on a
+        // Sunday must not use up AUTOMATION_TICK_CAP, ONE counter across every
+        // account, while another account's could go now. Today's count stays
+        // taken: a held row IS that day's send.
+        attemptsThisTick--;
         c.held++;
         continue;
       }

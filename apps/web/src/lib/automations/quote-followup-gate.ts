@@ -17,9 +17,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  *
  * `skipBand` is THE RELEASE PATH, and it skips the BAND ALONE (the spec's
  * release contract, line 16, and amendment B16). A held row passed the band
- * once, at the hour it was held; it is released at the quiet window's end,
- * which is by definition not a morning-band hour, so re-applying the band
- * would park every overnight hold for a whole extra day. Everything ELSE in
+ * once, at the hour it was held; it is released when its sending hours
+ * open (noon on a Sunday for a marketing text) or, after a 15-minute
+ * re-hold, whenever the consent state can be read again. Neither need be a
+ * morning-band hour, so re-applying the band would park such a hold for a
+ * whole extra day. Everything ELSE in
  * here is re-applied, because the operator's own `quietDays` and the 30-day
  * staleness cap live NOWHERE else: a deal dragged out of the watched stage
  * and back into it during the hold has a brand-new `stage_changed_at`, and

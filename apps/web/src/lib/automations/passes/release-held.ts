@@ -18,7 +18,8 @@ import { releaseInstantReply } from "../instant-reply";
  * to its source, which re-reads the subject, re-checks it, and sends
  * through the same per-row path the normal tick uses — so the held row
  * flips to `sent`, `skipped` or `failed` by the same write the pass would
- * have made, or is re-held if the agency lengthened the window.
+ * have made, or is re-held if its hours are still closed or the consent
+ * state could not be read (a 15-minute re-hold).
  *
  * Runs BEFORE the domain passes so a subject released here is stamped
  * before its own pass's due-list runs; the sequential harness is what makes

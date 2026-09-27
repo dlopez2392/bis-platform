@@ -113,7 +113,7 @@ describe("releaseReminder — the held row is the queue", () => {
     expect(logCalls()).toEqual([expect.objectContaining({ status: "sent", subjectKey: "booking:bk_1" })]);
   });
 
-  it("released while STILL inside the window (the agency lengthened it): re-held, not sent", async () => {
+  it("released while the fixed hours are still closed (23:00): re-held, not sent", async () => {
     dbMocks.getDueReminderById.mockResolvedValue({ due: row() });
     expect(await releaseReminder(ctx(NIGHT), held())).toBe("held");
     expect(emailSend).not.toHaveBeenCalled();

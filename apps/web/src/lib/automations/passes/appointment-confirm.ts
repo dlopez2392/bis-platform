@@ -12,7 +12,7 @@ import { appointmentConfirmDeadline, tooCloseToAsk } from "../appointment-confir
 import { composeAppointmentConfirm } from "../appointment-confirm-copy";
 import { sendAutomationSms, markAutomationSmsSent } from "../send-sms";
 import {
-  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
+  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type SmsHoldSubject, type Releaser,
 } from "../hold-or-send";
 import type { Pass, PassContext } from "../context";
 
@@ -67,7 +67,7 @@ export type AppointmentConfirmCounters = {
 
 /** No `ProcessOptions`: this recipe has no morning band, so a release has
  *  nothing to skip. `releaseSmsReminder` is the precedent. */
-function subjectFor(r: DueAppointmentConfirm): HoldSubject {
+function subjectFor(r: DueAppointmentConfirm): SmsHoldSubject {
   return {
     accountId: r.accountId, accountTimezone: r.accountTimezone,
     source: "appointment_confirm", channel: "sms", smsKind: "automation.appointment_confirm",
@@ -154,7 +154,7 @@ export async function processAppointmentConfirms(
       const outcome = await holdOrSend(ctx, subject, async () => {
         const smsRow = await sendAutomationSms(ctx, {
           accountId: row.accountId, contactId: row.contactId, to, body,
-          kind: "automation.appointment_confirm", accountTimezone: row.accountTimezone,
+          kind: subject.smsKind, accountTimezone: row.accountTimezone,
           onProviderFailure: () => stampAppointmentConfirmSmsFailed(ctx.db, row.bookingId),
         });
         // SEND-THEN-STAMP; the stamp before the row's status, as everywhere.

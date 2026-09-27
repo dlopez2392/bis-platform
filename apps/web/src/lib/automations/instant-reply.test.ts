@@ -430,3 +430,27 @@ describe("releaseInstantReply — the re-hold age cap", () => {
     expect(await releaseInstantReply(ctx("2026-09-30T14:00:00.000Z"), heldRow(old))).toBe("sent");
   });
 });
+
+/**
+ * Task 9 review, minor 1: the gate refusing a RELEASED instant reply is the
+ * verdict "skipped". releaseHeldPass counts `c[verdict]++`, and a verdict of
+ * "blocked" is no counter there (NaN in the tick's JSON).
+ */
+describe("releaseInstantReply — the gate refuses at release", () => {
+  it("a number that stopped texts while the reply was held: verdict \"skipped\", nothing sent, one skipped row (mutation: delete the release's `blocked` → \"skipped\" line → \"blocked\", FAILS)", async () => {
+    dbMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-09-22T05:00:00Z", method: "carrier_block", eventId: "ev_1" });
+    const held: AutomationLogRow = {
+      id: "log_i", account_id: "acct_1", source: "instant_reply", channel: "sms", contact_id: "ct_1",
+      subject_key: "submission:sub_1", status: "held", reason: "x", held_until: "2026-09-22T13:00:00.000Z",
+      payload: { contactId: "ct_1", conversationId: "convo_1", phoneE164: "+19565550101", locale: "en", consentWithheld: false },
+      occurred_at: "2026-09-22T04:00:00.000Z",
+    };
+    const ctx = { db: {} as never, now: new Date("2026-09-22T15:00:00Z"), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate() };
+    expect(await releaseInstantReply(ctx, held)).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampInstantReplySent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "submission:sub_1", status: "skipped", reason: "They stopped texts from this business",
+    }));
+  });
+});

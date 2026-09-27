@@ -410,3 +410,34 @@ describe("quoteFollowupPass hands the gate its own kind (review R2 minor)", () =
     expect(gate.calls.map((r) => r.kind)).toEqual(["automation.quote_followup"]);
   });
 });
+
+/**
+ * Task 9 review, concern 1 (orchestrator, 2026-09-27): a HELD text sends
+ * nothing this tick, so it gives back its TICK slot; its DAILY count stays
+ * taken, because a held row is that day's send. On a Sunday morning ten
+ * accounts' marketing texts held until noon must not use up
+ * AUTOMATION_TICK_CAP (one counter across EVERY account) while another
+ * account's could go now.
+ */
+describe("quoteFollowupPass: a hold gives back its tick slot, never its daily count", () => {
+  const holdFirst = (n: number) => {
+    let seen = 0;
+    return fakeSmsGate({
+      send: (m) => smsSend(m),
+      decide: () => (seen++ < n ? { kind: "deferred", until: new Date("2030-01-06T18:00:00.000Z"), zone: "America/Chicago" } : null),
+    });
+  };
+
+  it("ten rows HELD by the gate, then one sendable: {held: 10, sent: 1} (mutation: drop the held branch's `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
+    dbMocks.listDueQuoteFollowups.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ opportunityId: `opp_${i}`, contactId: `ct_${i}` })));
+    const result = await quoteFollowupPass.run({ ...ctx(), sms: holdFirst(AUTOMATION_TICK_CAP) });
+    expect(result).toEqual({ ...EMPTY, held: AUTOMATION_TICK_CAP, sent: 1 });
+  });
+
+  it("one short of the daily cap: a HELD row keeps today's count, so the next row is capped (mutation: give the daily count back on a hold → it sends, FAILS)", async () => {
+    dbMocks.countQuoteFollowupsSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
+    dbMocks.listDueQuoteFollowups.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ opportunityId: `opp_${i}`, contactId: `ct_${i}` })));
+    const result = await quoteFollowupPass.run({ ...ctx(), sms: holdFirst(1) });
+    expect(result).toEqual({ ...EMPTY, held: 1, skippedCap: 1 });
+  });
+});

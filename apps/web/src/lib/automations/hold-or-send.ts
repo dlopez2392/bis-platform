@@ -73,6 +73,12 @@ export type HoldSubject = LogSubject & {
   smsKind?: AutomationSmsKind;
 };
 
+/** A subject that texts. Its `smsKind` is the ONE literal that decides both
+ *  the hours holdOrSend reads and the kind the gate is asked for: a sender
+ *  passes `kind: subject.smsKind`, never a second literal that could
+ *  disagree (the Task 9 review, minor 2). */
+export type SmsHoldSubject = HoldSubject & { smsKind: AutomationSmsKind };
+
 /** Client-readable, every one of them: a business owner reads these on the Activity page. */
 export const REASONS = {
   quietHours: (endsAt: Date, zone: string) => `Held until ${formatInstantClock(endsAt, zone)} — quiet hours`,
