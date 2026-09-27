@@ -218,3 +218,9 @@ describe("AlertPhoneCard — copy", () => {
     expect(m["settings.alertPhoneTooManyCodes"]).toMatch(/hour/i);
   });
 });
+
+describe("AlertPhoneCard — Resend names the pending number's own country (review R3-M6)", () => {
+  it("a +52 pending number is resent under MX, anything else under US (mutation: always \"US\" → the start action answers the mismatch line on every Mexican resend, FAILS)", () => {
+    expect(codeOnly).toContain('formData.set("alertPhoneCountry", pendingPhone.startsWith("+52") ? "MX" : "US")');
+  });
+});

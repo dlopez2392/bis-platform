@@ -36,6 +36,8 @@ import { m } from "@/lib/messages";
  * clicking through is the only way to see the pending phase render at all.
  */
 const demoOk = async () => ({ ok: true as const });
+// The start action answers with the E.164 it texted (consent chain PR-1).
+const demoStartOk = async () => ({ ok: true as const, phone: "+19565550100" });
 const demoSelfLoopRefusal = async () => ({ ok: false as const, error: m["settings.alertPhoneSelfWarning"] });
 const demoWrongCode = async () => ({ ok: false as const, error: m["settings.alertPhoneWrongCode"] });
 
@@ -69,14 +71,14 @@ export function SettingsFieldCards() {
         <div onClickCapture={(e) => e.preventDefault()}>
           <AlertPhoneCard
             isAgency accountId="demo" alertPhone="+19562921696" smsNotReady
-            clearAction={demoOk} startVerificationAction={demoOk} confirmVerificationAction={demoOk}
+            clearAction={demoOk} startVerificationAction={demoStartOk} confirmVerificationAction={demoOk}
           />
         </div>
       </Demo>
       <Demo label="Agency — verify a new number (type one, click Send code, then Confirm)">
         <AlertPhoneCard
           isAgency accountId="demo" alertPhone={null}
-          clearAction={demoOk} startVerificationAction={demoOk} confirmVerificationAction={demoOk}
+          clearAction={demoOk} startVerificationAction={demoStartOk} confirmVerificationAction={demoOk}
         />
       </Demo>
       <Demo label="Agency — sending a code is refused (the number is the account's own)">
@@ -88,7 +90,7 @@ export function SettingsFieldCards() {
       <Demo label="Agency — wrong code (send a real code, then type any 6 digits)">
         <AlertPhoneCard
           isAgency accountId="demo" alertPhone={null}
-          clearAction={demoOk} startVerificationAction={demoOk} confirmVerificationAction={demoWrongCode}
+          clearAction={demoOk} startVerificationAction={demoStartOk} confirmVerificationAction={demoWrongCode}
         />
       </Demo>
       <Demo label="Client — no alert number">

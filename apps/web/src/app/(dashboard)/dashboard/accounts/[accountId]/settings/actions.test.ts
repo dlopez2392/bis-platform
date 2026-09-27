@@ -13,6 +13,9 @@ const dbMocks = vi.hoisted(() => ({
   verifyAlertPhoneCode: vi.fn(),
   countRecentAlertPhoneVerifications: vi.fn(),
   discardAlertPhoneVerification: vi.fn(),
+  // The send gate's reads (lib/consent/gate.ts): the code goes through the
+  // REAL gate, so its ledger and flag reads are mocked, allowed by default.
+  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({ tag: "serviceDb" }),
@@ -43,6 +46,7 @@ const getSmsProviderMock = vi.fn(() => ({ isFake: true, send: sendMock }));
 vi.mock("@/lib/sms", () => ({ getSmsProvider: () => getSmsProviderMock() }));
 
 import { m } from "@/lib/messages";
+import { SmsProviderError } from "@/lib/sms/types";
 import {
   setAlertPhoneAction, startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction,
 } from "./actions";
@@ -61,6 +65,8 @@ beforeEach(() => {
   dbMocks.countRecentAlertPhoneVerifications.mockReset().mockResolvedValue(0);
   dbMocks.discardAlertPhoneVerification.mockReset().mockResolvedValue(undefined);
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "msg_1" });
+  dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "allowed" });
+  dbMocks.readPhoneCountryFlag.mockReset().mockResolvedValue(false);
   // Cleared/live by default — most tests care about one thing at a time, and
   // an unmocked resolveSmsSender() would return undefined and crash the
   // `gate.ok` read.
@@ -98,8 +104,8 @@ describe("setAlertPhoneAction — a non-blank value can no longer write the numb
   });
 });
 
-describe("startAlertPhoneVerificationAction — normalization is toE164's, not a second dialect", () => {
-  it("refuses a value toE164 cannot parse, and never opens a verification (mutation: skip the refusal → FAILS)", async () => {
+describe("startAlertPhoneVerificationAction — normalization is F-009's (phoneForCountry), not a second dialect", () => {
+  it("refuses a value the normaliser cannot parse, and never opens a verification (mutation: skip the refusal → FAILS)", async () => {
     expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "not a number" })))
       .toEqual({ ok: false, error: m["settings.alertPhoneBad"] });
     expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
@@ -164,7 +170,7 @@ describe("startAlertPhoneVerificationAction — rate limiting the send", () => {
   it("still sends under the cap", async () => {
     dbMocks.countRecentAlertPhoneVerifications.mockResolvedValue(4);
     expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
-      .toEqual({ ok: true });
+      .toEqual({ ok: true, phone: "+19565550001" });
   });
 });
 
@@ -172,7 +178,7 @@ describe("startAlertPhoneVerificationAction — the happy path", () => {
   it("opens a verification and texts the code to the claimed number, from the account's own resolved sender (mutation: send to gate.from instead of the claimed number → FAILS)", async () => {
     dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_1", code: "482913" });
     expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
-      .toEqual({ ok: true });
+      .toEqual({ ok: true, phone: "+19565550001" });
     expect(dbMocks.startAlertPhoneVerification).toHaveBeenCalledWith(
       { tag: "serviceDb" }, "acct_1", "+19565550001",
     );
@@ -239,5 +245,77 @@ describe("confirmAlertPhoneVerificationAction — the right code", () => {
   it("calls requireAgencyOnlyAccountAccess for this account (mutation: drop the guard call → FAILS)", async () => {
     await confirmAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001", code: "482913" }));
     expect(requireAgencyOnlyAccountAccessMock).toHaveBeenCalledWith("acct_1");
+  });
+});
+
+/**
+ * Consent chain PR-1 (spec §4.1 item 1, §6): the alert phone carries its
+ * country, so it is never ambiguous, and its code goes through the send gate
+ * as `operator.alert_phone_code`.
+ */
+describe("startAlertPhoneVerificationAction — the country beside the number", () => {
+  it("ten digits under Mexico (+52) are claimed and texted as +52 (mutation: ignore the country → +1, FAILS)", async () => {
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "55 1234 5678", alertPhoneCountry: "MX" })))
+      .toEqual({ ok: true, phone: "+525512345678" });
+    expect(dbMocks.startAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "acct_1", "+525512345678");
+    expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({ to: "+525512345678" }));
+  });
+
+  it("a typed +52 under US (+1) is refused with the mismatch line, never settled for the agency (review R3-M4; mutation: answer alertPhoneBad → FAILS; keep whatever code was typed → FAILS)", async () => {
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+52 55 1234 5678", alertPhoneCountry: "US" })))
+      .toEqual({ ok: false, error: m["settings.alertPhoneCountryMismatch"] });
+    expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
+  });
+
+  // Review R3-I1: a country code typed WITHOUT "+" is still an explicit code.
+  // The old nationalTen stripped it and texted a stranger in the other country.
+  it.each([
+    ["52 55 1234 5678", "US"],
+    ["52 899 922 1234", "US"],
+    ["1 956 292 1696", "MX"],
+  ])("%s under %s is a mismatch, and no code goes anywhere (review R3-I1; mutation: strip the typed code and add the picked one → +15512345678 texted, FAILS)", async (typed, country) => {
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: typed, alertPhoneCountry: country })))
+      .toEqual({ ok: false, error: m["settings.alertPhoneCountryMismatch"] });
+    expect(dbMocks.startAlertPhoneVerification).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("a number that reads under neither country is still the bad-number line (mutation: always answer the mismatch line → FAILS)", async () => {
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+44 20 7946 0958", alertPhoneCountry: "US" })))
+      .toEqual({ ok: false, error: m["settings.alertPhoneBad"] });
+  });
+});
+
+describe("startAlertPhoneVerificationAction — a phone that texted STOP gets no code", () => {
+  it("answers the spec's line, sends nothing, and gives the rate-limit slot back (mutation: report the generic send failure → FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_stop", code: "482913" });
+    dbMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-03T15:00:00Z", method: "keyword", eventId: "e1" });
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+      .toEqual({ ok: false, error: m["settings.alertPhoneStopped"] });
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_stop");
+    spy.mockRestore();
+  });
+
+  it("the FIRST attempt, refused by the carrier with 40300, already says the stopped line (review R3-I3; mutation: only blocked:stopped maps → alertPhoneSendFailed, FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_40300", code: "482913" });
+    sendMock.mockRejectedValue(new SmsProviderError('telnyx send failed (400): {"errors":[{"code":"40300"}]}', 400, ["40300"]));
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+      .toEqual({ ok: false, error: m["settings.alertPhoneStopped"] });
+    expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_40300");
+    spy.mockRestore();
+  });
+
+  it("a gate that THROWS still gives the rate-limit slot back (review R3-M3; mutation: drop the try/catch → rejects, FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.startAlertPhoneVerification.mockResolvedValue({ id: "ver_throw", code: "482913" });
+    resolveSmsSenderMock.mockResolvedValueOnce({ ok: true, from: "+19565559999", ownedNumbers: ["+19565559999"] })
+      .mockRejectedValueOnce(new Error("fetch failed"));
+    expect(await startAlertPhoneVerificationAction("acct_1", fd({ alertPhone: "+19565550001" })))
+      .toEqual({ ok: false, error: m["settings.alertPhoneSendFailed"] });
+    expect(dbMocks.discardAlertPhoneVerification).toHaveBeenCalledWith({ tag: "serviceDb" }, "ver_throw");
+    spy.mockRestore();
   });
 });
