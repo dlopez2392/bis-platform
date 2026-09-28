@@ -14,6 +14,12 @@ state's tie-break, `hold_released` until PR-2); §4.1 items 1, 3 and 4; §4.2 (t
 re-review of the corrected plan added: §4.1 item 1 (who wrote a number, for the backfill) and item 4 and §5 (the
 re-hold at delivery, and the re-hold age cap).
 
+Corrected on 2026-09-28 from the PR-2 plan's Telnyx research
+(`docs/superpowers/plans/2026-09-28-consent-pr2-keywords-holds-controls.md`, "Spec gaps resolved", S1–S6). The
+corrections are made in place: decisions 12 and 16 (verified); §4.2 step 5 (a phrase can be one word), the retry
+paragraph (the dedupe returns early) and the Telnyx backfill (verified); §5 go-live step 0 (START and UNSTOP are
+Telnyx defaults; AI opt-out detection stays off); §11 (Telnyx's answers).
+
 ## 1. Decisions
 
 ### 1.1 Owner decisions (danlo, 2026-09-26; binding)
@@ -36,11 +42,11 @@ re-hold at delivery, and the re-hold age cap).
 |---|---|
 | 10 | BIS handles the stop, start and help keywords in the inbound SMS webhook and sends the single confirmation itself. A keyword matches only the **whole message**, ignoring case and accents. **Stop, English:** STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, QUIT, REVOKE, OPT OUT, OPTOUT. **Stop, Spanish:** PARAR, DETENER, ALTO, CANCELAR, BAJA, NO MAS / NO MÁS |
 | 11 | START and UNSTOP re-grant. HELP and AYUDA reply with the business name and how to stop |
-| 12 | Telnyx's own keyword handling stays on as a **backstop**, and the Spanish words are registered on the profile. How Telnyx's auto-reply interacts with BIS's confirmation, so that no customer gets two, is an **assumption**. It must be checked against Telnyx's docs or support before the PR-2 implementation plan is written. The setting the plan names is the `autoresponse_type` field on the inbound message webhook (`crm-features.md:1176`). It is **unverified** (§11) |
+| 12 | Telnyx's own keyword handling stays on as a **backstop**, and the Spanish words are registered on the profile. How Telnyx's auto-reply interacts with BIS's confirmation, so that no customer gets two, is an **assumption**. It must be checked against Telnyx's docs or support before the PR-2 implementation plan is written. The setting the plan names is the `autoresponse_type` field on the inbound message webhook (`crm-features.md:1176`). It is **verified 2026-09-28** (PR-2 plan F1–F4): Telnyx answers a keyword it knows before BIS sees the text, the webhook then carries `autoresponse_type`, and Telnyx's block also refuses BIS's own send, so BIS confirms only when `autoresponse_type` is absent |
 | 13 | The YES/NO appointment confirmation keeps working. Its precedence against the keywords is defined in §4.2 |
 | 14 | Staff can record an opt-out, and it takes effect at once. Resuming requires a note saying the customer asked |
 | 15 | The contact drawer shows "Texts: allowed / stopped (date, how)" and the same for email, with Stop and Resume controls. It follows DESIGN.md: dot + word, tokens only, and the reversible-with-undo and confirm rules. A free-text hold creates a To-do row |
-| 16 | A backfill brings in 0049's email opt-outs and, if its API allows (**unverified**), Telnyx's existing opt-out list. 0049's readers switch to the ledger |
+| 16 | A backfill brings in 0049's email opt-outs and, since its API allows it (**verified 2026-09-28**, `GET /v2/messaging_optouts`, PR-2 plan F6), Telnyx's existing opt-out list. 0049's readers switch to the ledger |
 | 17 | The "ten business days" duty is met by **acting immediately**. There is **no clock setting**: every revoke and every hold blocks the very next send, so nothing waits on a clock. The plan's proposed setting (`crm-features.md:1176`) is therefore not needed |
 
 ### 1.3 Choices this spec makes (for danlo's review)
@@ -298,15 +304,19 @@ phone could never be lifted.
 4. **HELP or AYUDA.** If the address is allowed, send `consent.help` in that language, unless Telnyx auto-replied. A
    stopped or held address gets nothing from BIS (decision 2, and the gate's block on held addresses).
 5. **Otherwise**, the YES/NO confirmation runs exactly as today (`route.ts:201`). Then the free-text detector runs.
-   - Every phrase has two or more words, and YES/NO matches only a whole one-word message (§2), so the two can never
-     both fire.
+   - No phrase matches a YES/NO word, and YES/NO matches only a whole one-word message (§2), so the two can never
+     both fire. (Corrected 2026-09-28: not every phrase has two words, `borrenme` is one; the PR-2 plan tests that no
+     phrase matches a YES/NO word.)
    - If a phrase matches and the address is allowed, append `held` (method `free_text`, with the phrase and an
      excerpt in the evidence) and add the To-do. No text is sent (choice 20).
 6. **Grant from texting first.** If the account's ledger has no row at all for this address, a `granted` row (method
    `inbound_text`) is appended first, before steps 2–5.
 
 **Replies are written after the ledger.** If the ledger write fails, the route returns a 5xx so that Telnyx retries.
-The existing provider-id dedupe (`route.ts:143–150`) stops a retry from filing the message twice.
+The existing provider-id dedupe (`route.ts:143–150`) RETURNS before anything else runs, so as it stands a retry would
+never reach the ledger (corrected 2026-09-28, PR-2 plan S1). On a retry the dedupe skips only the filing and the YES/NO
+step; the consent steps run again, every consent write is idempotent on the message id (one ledger row per source,
+one To-do per ledger row), and a reply is sent only by the attempt that wrote the row it answers.
 
 **The only send allowed to a stopped address.** The gate lets `consent.stop_confirmation` through a stopped address
 only when the caller passes the id of the `revoked` row it answers, and that row is the newest and under five
@@ -351,9 +361,10 @@ can still record a stop by hand.
   either one appends `held` (method `staff_undo`), which puts the contact back On hold.
 - **The number's country** (Mexico +52 / US +1) rewrites the contact's phone and clears the flag. Undo restores both.
 
-**Telnyx backfill.** If Telnyx's API lists a messaging profile's opted-out numbers (**unverified**, §11), a one-off
-script appends `revoked` (method `backfill_telnyx`) for each number in the account that owns the profile. If it does
-not, the step is dropped and noted in the PR. Because no account has texted a customer (§2), the list is expected to
+**Telnyx backfill.** Telnyx's API lists a messaging profile's opted-out numbers (**verified 2026-09-28**,
+`GET /v2/messaging_optouts`, PR-2 plan F6 and F10: each row's `from` is the business's number and `to` the
+customer's), so a one-off script appends `revoked` (method `backfill_telnyx`) for each `to`, in the account that owns
+the `from` number. danlo sees the count first. Because no account has texted a customer (§2), the list is expected to
 be short.
 
 ### 4.3 PR-3: email
@@ -465,9 +476,13 @@ ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` k
 
 **Blocking go-live, not merge** (texting stays off for every account until all of these hold, `crm-features.md:1098`):
 1. **Step 0:** the Telnyx profile keyword configuration.
-   - The Spanish words and NO MÁS, plus REVOKE, OPT OUT and OPTOUT, are registered as opt-out keywords.
-   - START and UNSTOP are registered as opt-in keywords.
-   - The profile's auto-reply wording is set to the bilingual stop line of §4.2.
+   - Every stop word of decision 10 (Telnyx's defaults with the Spanish words, NO MAS and NO MÁS, REVOKE, OPT OUT
+     and OPTOUT) is listed in ONE opt-out config per sender country (US and MX), whose reply is the bilingual stop
+     line of §4.2.
+   - START and UNSTOP are Telnyx defaults, reserved and always active: nothing to register (corrected 2026-09-28,
+     PR-2 plan S2). The start and help replies, and AYUDA beside HELP, follow the PR-2 plan's Q1.
+   - Telnyx's AI opt-out detection stays OFF on every profile: it would turn a free-text message into a carrier block
+     that only the customer's START lifts, against choice 20 and decision 5 (PR-2 plan F8).
    - Done per account profile (`crm-features.md:1099`, :1172).
 2. **The Telnyx answers** listed in §11 are confirmed, and PR-2's reconciliation is adjusted to them.
 3. **Step 6:** counsel reads the adopted FCC order against this design, in the week it is published
@@ -641,18 +656,26 @@ re-read it.
 
 ## 11. External assumptions to verify at build time (not repo facts)
 
-- **Telnyx** (before the PR-2 implementation plan):
-  - that the inbound message webhook carries `autoresponse_type` when Telnyx has auto-replied to a keyword, and what
-    its values are;
-  - whether custom Spanish opt-out keywords, and START and UNSTOP as opt-in, can be registered per profile;
-  - whether the auto-reply text is configurable per profile, and in which language it is sent (the plan says per
-    sender country only, `crm-features.md:1172`);
-  - whether a profile-level block also stops BIS's own confirmation;
+- **Telnyx** (before the PR-2 implementation plan; answered 2026-09-28 from Telnyx's documentation, PR-2 plan F1–F11):
+  - ~~that the inbound message webhook carries `autoresponse_type` when Telnyx has auto-replied to a keyword, and what
+    its values are~~ **VERIFIED:** it does, on `message.received`, absent when no keyword matched; documented values
+    START, STOP, HELP;
+  - ~~whether custom Spanish opt-out keywords, and START and UNSTOP as opt-in, can be registered per profile~~
+    **VERIFIED:** custom keywords are added per profile (at most 20 per config); START and UNSTOP are defaults,
+    always active;
+  - ~~whether the auto-reply text is configurable per profile, and in which language it is sent~~ **VERIFIED:** per
+    profile and per sender country, one reply per config; two replies in two languages for ONE country is **NOT
+    FOUND** in Telnyx's docs;
+  - ~~whether a profile-level block also stops BIS's own confirmation~~ **VERIFIED:** it does; there is no exemption;
   - ~~the error code for a send to an opted-out number (for `carrier_block`)~~ **VERIFIED 2026-09-26:** `40300`,
     "Blocked due to STOP message" (developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out). Block rules
     are per messaging profile. The HTTP status of that refusal is still an assumption; the gate keys on the code;
-  - whether an API lists a profile's opted-out numbers (for the backfill);
-  - whether Telnyx retries an inbound webhook that gets a 5xx.
+  - ~~whether an API lists a profile's opted-out numbers (for the backfill)~~ **VERIFIED:** `GET /v2/messaging_optouts`;
+  - ~~whether Telnyx retries an inbound webhook that gets a 5xx~~ **VERIFIED:** any non-2xx is retried, up to 3
+    attempts per URL and then the failover URL; Telnyx expects an answer within 2 seconds;
+  - **new, VERIFIED:** Telnyx offers per-profile AI opt-out detection; it stays off (§5 step 0);
+  - still **NOT FOUND:** the HTTP status of the `40300` refusal (the gate keys on the code), and whether Telnyx's
+    keyword match ignores punctuation, accents or inner spaces (checked live at go-live).
 - **Resend:** the send call accepts custom `headers`.
 - **`libphonenumber-js`:** its metadata tells US from Mexican 10-digit numbers as §4.1 needs. Tests pin the border area
   codes.
