@@ -88,11 +88,20 @@ describe("interactOutsideExemptingToaster", () => {
 // really-broken `SheetContent`/`DialogContent` stayed green 10/10. This walk
 // is scoped to the function declaration the `it.each` row names (the one
 // actually under test), not the whole file, so a decoy anywhere else — under
-// any other name, however many of them — is never even visited. Every
-// `*.Content` match found WITHIN that function is collected (not
-// overwritten), so a second one appearing inside the same function is
-// ambiguous rather than silently picked, and the test requires there be
-// EXACTLY ONE, whose `onInteractOutside` initializer is EXACTLY a call to
+// any other name, however many of them — is never even visited.
+//
+// Review of a7f73364 (mutations S2, S3): the walk used to push one `hits`
+// entry per onInteractOutside ATTRIBUTE it found on a `*.Content` element, so
+// a second `*.Content` element in the same function with NO such attribute
+// contributed nothing and vanished from the count — a correctly-wired real
+// element plus an unwired second one (S2), or a BROKEN real element (its
+// attribute removed) plus a hidden second element carrying the correct call
+// (S3), both still produced exactly one hit and stayed green. Now every
+// matched `*.Content` element contributes EXACTLY ONE `hits` entry — its
+// `onInteractOutside` initializer's printed text if the attribute is there,
+// or the literal placeholder `"<no onInteractOutside>"` if it is not — so an
+// element can no longer hide by omitting the attribute, and the test requires
+// there be EXACTLY ONE element, whose entry is EXACTLY a call to
 // `interactOutsideExemptingToaster` with the sole argument `onInteractOutside`
 // — printed back out (comments stripped) and compared to that literal text.
 function contentOnInteractOutsideTexts(file: string, functionName: string): string[] {
@@ -114,17 +123,13 @@ function contentOnInteractOutsideTexts(file: string, functionName: string): stri
   const hits: string[] = [];
   function visit(node: ts.Node) {
     if (ts.isJsxOpeningLikeElement(node) && /\.Content$/.test(node.tagName.getText(sourceFile))) {
-      for (const prop of node.attributes.properties) {
-        if (
-          ts.isJsxAttribute(prop) &&
-          prop.name.getText(sourceFile) === "onInteractOutside" &&
-          prop.initializer &&
-          ts.isJsxExpression(prop.initializer) &&
-          prop.initializer.expression
-        ) {
-          hits.push(printer.printNode(ts.EmitHint.Unspecified, prop.initializer.expression, sourceFile));
-        }
-      }
+      const attr = node.attributes.properties.find(
+        (prop): prop is ts.JsxAttribute =>
+          ts.isJsxAttribute(prop) && prop.name.getText(sourceFile) === "onInteractOutside"
+      );
+      const expr =
+        attr?.initializer && ts.isJsxExpression(attr.initializer) ? attr.initializer.expression : undefined;
+      hits.push(expr ? printer.printNode(ts.EmitHint.Unspecified, expr, sourceFile) : "<no onInteractOutside>");
     }
     ts.forEachChild(node, visit);
   }
