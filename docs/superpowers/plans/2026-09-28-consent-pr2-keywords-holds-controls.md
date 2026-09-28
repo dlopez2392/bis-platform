@@ -8505,7 +8505,7 @@ Expected (predicted; not replayed): all pass; `tsc` exit 0; eslint 0 errors (if 
 | 15 | texts-row.tsx: drop `data-testid="phone-country-row"` | "Check number keeps PR-1's own test id on the WHOLE state …" and the PR-1 e2e |
 | 15b | texts-row.tsx: move the test id onto the line-and-buttons div only (the status outside it) | "Check number keeps PR-1's own test id on the WHOLE state …" (the word check) |
 | 15b2 | texts-row.tsx: give Check number a wrapper of its own and render the status line bare in the other states (the shape before review R3-N2) | "the status line is the first child of ONE wrapper in every ready state …" |
-| 15e | activity-timeline.tsx: render Done for every open task (drop the `item.holdOpen` branch) | activity-timeline.hold.test "a To-do whose number is still on hold shows the decide-first hint INSTEAD of Done …" |
+| 15e | activity-timeline.tsx: render Done for every open task (drop the `item.holdOpen` branch) | activity-timeline.hold.test "a To-do whose number is still on hold shows the timeline hint … INSTEAD of Done …" |
 | 15f | page.tsx: `holdOpen = []` in the catch | page.test "the timeline is told which open To-dos are a hold still undecided …" |
 | 15c | texts-row.tsx: after a pick render `<Block state="check_number">{null}</Block>` again (no status line) | e2e `consent-phone-country.spec.ts` test 1's `toBeFocused()` (review R3-I4; e2e only: a static render cannot press a button) |
 | 15d | consent-phone-country.spec.ts: delete the two `data-state` waits, and make the drawer's texts fetch slow (a 2 s `await` in the texts route) | the two count-0 assertions still PASS without the waits — the reason the waits exist; with them the tests wait for the loaded row (run once to see the difference, then revert) |
