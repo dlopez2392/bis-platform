@@ -366,12 +366,18 @@ R2-I5, R2-N1 and the delta review's I2) and extended only with tests, it has fou
 - **Spanish verb forms, ONLY ABOUT MESSAGES** (danlo): no me manden / mande / mandes / envien / envie / envies /
   escriban / escriba / escribas; dejen / deje / deja de mandar(me) / enviar(me) / escribir(me); no quiero recibir —
   each counts only followed by a message object: mensajes, textos, nada or mas ("No me mande más mensajes", "Deje de
-  mandarme mensajes", "No me manden nada"). A bare form does not hold, even as the whole message ("No me mande la
-  factura", "Deje de mandar a Juan", "Dejen de escribirme"). "mensajes de voz" (voicemail) and "lista de espera" (a
-  waiting list) do not count: "No me mande mensajes de voz, mejor texto" asks for texts, not against them.
-- **Whole-message phrases:** "please stop", "stop please", "borrenme", "borreme" and "borrame" count ONLY when they
-  are the whole message, punctuation aside: "Please stop!!" and "¡Bórreme!" hold; "Please stop by Thursday" and
-  "Bórreme la cita del lunes" do not (danlo). Longer requests are the sentence phrases' job.
+  mandarme mensajes", "No me manden nada"). A bare mandar or enviar form does not hold, even as the whole message
+  ("No me mande la factura", "Deje de mandar a Juan", "Dejen de mandarme"): "mandar" can mean a crew or an invoice.
+  "mensajes de voz" (voicemail) and "lista de espera" (a waiting list) do not count: "No me mande mensajes de voz,
+  mejor texto" asks for texts, not against them.
+- **Whole-message phrases:** "please stop", "stop please", "borrenme", "borreme", "borrame", and the six ESCRIBIR
+  forms "dejen de escribirme", "deje de escribirme", "deja de escribirme", "no me escriban", "no me escriba", "no me
+  escribas" count ONLY when they are the whole message, punctuation aside (no "por favor" or "ya" wrapper): "Please
+  stop!!", "¡Bórreme!" and "No me escriba" hold; "Please stop by Thursday", "Bórreme la cita del lunes" and "No me
+  escriba el martes, mejor llámeme" do not (danlo). "escribir" is always about messages — writing to the customer is
+  texting them — and a missed stop is worse than a false hold (decision 27), so its bare forms hold as the whole
+  message while mandar and enviar stay object-only (corrected 2026-09-28, an orchestrator call under danlo's rule;
+  PR-2 plan S9). Longer requests are the sentence phrases' job.
 - **A stop word repeated as the whole message:** "stop stop", "parar parar", "alto alto", "baja baja", any number of
   repeats (English also with one "please" at either end: "Stop stop please"); one word on its own is a keyword
   (decision 10), not a phrase.
