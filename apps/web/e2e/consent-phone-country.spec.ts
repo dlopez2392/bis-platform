@@ -77,6 +77,8 @@ test("an ambiguous number: stored +1 and flagged; Mexico (+52) rewrites it, Undo
   // onInteractOutside exemption in interact-outside.ts) rather than forcing
   // past the check here, since `force` is exactly what let the bug through.
   await toast.hover();
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: m["contact.phoneCountry.mxToast"] }))
+    .toHaveAttribute("data-expanded", "true");
   await expect(row).toHaveCount(0);
   expect(await stored()).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { isToasterTarget, interactOutsideExemptingToaster } from "./interact-outside";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -73,15 +74,50 @@ describe("interactOutsideExemptingToaster", () => {
 
 // Mutation (4)'s catch: the predicate/composition tests above call the
 // shared factory directly and cannot see whether either component actually
-// wires it in. Reading the source (the same technique button.test.ts uses)
-// closes that gap — wiring only one of the two primitives to the shared
-// factory must fail one of these.
-describe("both SheetContent and DialogContent are wired to the shared factory", () => {
+// wires it in. A source-TEXT `toContain("interactOutsideExemptingToaster(")`
+// check (the prior version of this test) stays green when the call only
+// appears in a comment next to the raw prop, or is made and its result
+// thrown away (review of f9789e94, m1) — so this reads the parsed AST
+// instead: comments are trivia the parser drops before an expression node
+// ever exists, so they cannot satisfy this. On the `*.Content` JSX element,
+// the `onInteractOutside` attribute's initializer must be EXACTLY a call to
+// `interactOutsideExemptingToaster` whose sole argument is the identifier
+// `onInteractOutside` — printed back out (comments stripped, so a fake
+// alongside the real prop can't leak in) and compared to that literal text.
+function onInteractOutsideInitializerText(file: string): string | undefined {
+  const filePath = path.join(here, file);
+  const src = readFileSync(filePath, "utf8");
+  const sourceFile = ts.createSourceFile(filePath, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let found: ts.Expression | undefined;
+  function visit(node: ts.Node) {
+    if (ts.isJsxOpeningLikeElement(node) && /\.Content$/.test(node.tagName.getText(sourceFile))) {
+      for (const prop of node.attributes.properties) {
+        if (
+          ts.isJsxAttribute(prop) &&
+          prop.name.getText(sourceFile) === "onInteractOutside" &&
+          prop.initializer &&
+          ts.isJsxExpression(prop.initializer) &&
+          prop.initializer.expression
+        ) {
+          found = prop.initializer.expression;
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  if (!found) return undefined;
+  return ts.createPrinter({ removeComments: true }).printNode(ts.EmitHint.Unspecified, found, sourceFile);
+}
+
+describe("both SheetContent and DialogContent are wired to the shared factory, read from the AST", () => {
   it.each([
     ["sheet.tsx", "SheetContent"],
     ["dialog.tsx", "DialogContent"],
-  ])("%s's %s composes onInteractOutside through interactOutsideExemptingToaster", (file) => {
-    const src = readFileSync(path.join(here, file), "utf8");
-    expect(src).toContain("interactOutsideExemptingToaster(");
-  });
+  ])(
+    "%s's %s passes onInteractOutside={interactOutsideExemptingToaster(onInteractOutside)} exactly (mutation: a raw prop, a comment-only fake, or a discarded call → FAILS)",
+    (file) => {
+      expect(onInteractOutsideInitializerText(file)).toBe("interactOutsideExemptingToaster(onInteractOutside)");
+    }
+  );
 });
