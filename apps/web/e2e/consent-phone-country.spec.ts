@@ -23,7 +23,12 @@ loadEnv({ path: ".env.local" });
  * (message-composer.tsx's order); the line itself is pinned in
  * [contactId]/page.test.ts and lib/consent/composer-state.test.ts.
  */
-test.describe.configure({ timeout: 120_000 });
+// serial: test 3 depends on test 2 having settled the number as US on the
+// SAME contact (STAMP is module-level, one beforeAll for the file) — a
+// worker restart between them would re-run beforeAll with a fresh STAMP and
+// silently swap in a brand-new, still-ambiguous contact (precedent:
+// contacts-data.spec.ts:32).
+test.describe.configure({ mode: "serial", timeout: 120_000 });
 
 type ClientFixture = { accountId: string; clerkUserId: string };
 const FIXTURE_FILE = "e2e/.auth/client-fixture.json";
@@ -99,7 +104,11 @@ test("a reload after a pick shows no Check number row: the server's answer, not 
   await expect(page).toHaveURL(/[?&]peek=/);
   await page.reload();
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByRole("dialog").getByText(m["drawer.recent"])).toBeVisible();
+  // exact: true — the drawer's sr-only description ("Contact details, tags,
+  // and recent activity.") also contains "recent", and the substring match
+  // resolves both; the exact heading only exists once the summary has
+  // loaded, so the row assertion below reads loaded data, not a race.
+  await expect(page.getByRole("dialog").getByText(m["drawer.recent"], { exact: true })).toBeVisible();
   await expect(page.getByRole("dialog").getByTestId("phone-country-row")).toHaveCount(0);
 });
 
@@ -108,7 +117,10 @@ test("a phone edited in the drawer into one that reads both ways raises the Chec
   await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${STAMP}`);
   await page.getByRole("row").filter({ hasText: `Number ${STAMP}` }).first().click();
   const drawer = page.getByRole("dialog");
-  await expect(drawer.getByText(m["drawer.recent"])).toBeVisible();
+  // exact: true — the drawer's sr-only description also contains "recent",
+  // and the exact heading only exists once the summary has loaded, so the
+  // row assertion below reads loaded data, not a race.
+  await expect(drawer.getByText(m["drawer.recent"], { exact: true })).toBeVisible();
   // The test above settled it as US: no row.
   await expect(drawer.getByTestId("phone-country-row")).toHaveCount(0);
 
