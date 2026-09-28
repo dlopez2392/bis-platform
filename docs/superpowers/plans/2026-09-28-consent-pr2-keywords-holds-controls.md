@@ -8,7 +8,7 @@
 
 **Tech Stack:** Next.js 16 (App Router, server actions, `after`), Supabase Postgres 17 (plpgsql, RLS; the local replica is PG18), `@supabase/supabase-js` (`.rpc`), vitest 4, Playwright, Tailwind 4 with the repo's tokens.
 
-**Spec:** `docs/superpowers/specs/2026-09-26-consent-chain-design.md` at `76c6acfb`, corrected by this branch's four spec commits (Spec gaps resolved: S1–S6; S7–S12 after the plan review; S8's wording and S9's phrase list after the re-review; the Spanish rule after the delta review — all on 2026-09-28, with danlo's decisions). §1.1 decisions 1–9 are binding; §1.2 defaults 10–17 stand, decision 10 as amended by S7; §1.3 choices 18–31 are approved. This plan covers §3's PR-2 schema (`tasks.consent_event_id`, the guarded `hold_released`), §4.2 in full, the PR-2 parts of §5, §6 (the Texts row's Allowed, Stopped and On hold states, its skeleton and error, the To-do rows, the composer's closed state already shipped by PR-1), §8's PR-2 tests, and the PR-2 row of §7. It does NOT cover email (PR-3): the Email row, the token, `/u/[token]`, the one-click endpoint, the 0049 fold, scan 4.
+**Spec:** `docs/superpowers/specs/2026-09-26-consent-chain-design.md` at `76c6acfb`, corrected by this branch's six spec commits (Spec gaps resolved: S1–S6; S7–S12 after the plan review; S8's wording and S9's phrase list after the re-review; the Spanish rule after the delta review; the escribir forms; the verification round's rules — all on 2026-09-28, with danlo's decisions and the orchestrator's calls under them; review m3). §1.1 decisions 1–9 are binding; §1.2 defaults 10–17 stand, decision 10 as amended by S7; §1.3 choices 18–31 are approved. This plan covers §3's PR-2 schema (`tasks.consent_event_id`, the guarded `hold_released`), §4.2 in full, the PR-2 parts of §5, §6 (the Texts row's Allowed, Stopped and On hold states, its skeleton and error, the To-do rows, the composer's closed state already shipped by PR-1), §8's PR-2 tests, and the PR-2 row of §7. It does NOT cover email (PR-3): the Email row, the token, `/u/[token]`, the one-click endpoint, the 0049 fold, scan 4.
 
 **Telnyx facts:** `.superpowers/sdd/consent-pr2/telnyx-facts.md` (researched 2026-09-28, with the orchestrator's correction at its top), carried forward verdict for verdict in "External facts" below, plus four facts this plan's writer read on Telnyx's own pages on 2026-09-28 (F8–F11).
 
@@ -88,7 +88,7 @@ FYIs for danlo (not questions; recorded so they are seen):
 
 ## Spec gaps resolved here (the reviewer should confirm or overrule)
 
-S1–S12 are corrections applied to the spec itself, in this branch's four spec commits (S1–S6 with the plan; S7–S12 after the plan review; S8 and S9 refined after the re-review and again after the delta review, with danlo's decisions of 2026-09-28), so the spec and the plan agree; the G-list is this plan's choices where the spec is silent.
+S1–S12 are corrections applied to the spec itself, in this branch's six spec commits (S1–S6 with the plan; S7–S12 after the plan review; S8 and S9 refined in the four review rounds after it, with danlo's decisions of 2026-09-28 and the orchestrator's calls under them), so the spec and the plan agree; the G-list is this plan's choices where the spec is silent.
 
 - **S1. The retry dedupe.** Spec §4.2: "The existing provider-id dedupe (`route.ts:143–150`) stops a retry from filing the message twice." True, but that dedupe RETURNS, so a retry after a 5xx would never write the ledger (R2). Corrected: a retry skips only the filing and YES/NO; the consent step runs again and is idempotent (G1). The second spec commit adds (review R2-I1a): the attempt that writes the row owes the reply and schedules it the moment the row is written, even if a later step (the CANCEL To-do) fails and answers 503.
 - **S2. Go-live step 0.** Spec §5 item 1: "START and UNSTOP are registered as opt-in keywords." They are Telnyx's defaults, reserved and always active (F2); nothing to register. Corrected to: every stop word BIS knows is listed in ONE stop config per country (US and MX; S11 adds CA) so each gets the business-named reply; START / UNSTOP and HELP / AYUDA get their own configs (danlo's decision 1); Telnyx's AI opt-out detection stays off (F8).
@@ -98,11 +98,11 @@ S1–S12 are corrections applied to the spec itself, in this branch's four spec 
 - **S6. Decision 12's "unverified"** becomes "verified 2026-09-28 (plan F1–F4)". The first spec commit's message called this "status only"; it was not — it also added a behavioural sentence to decision 12 ("…so BIS confirms only when `autoresponse_type` is absent"), the split G4 describes (review R1-I4). S7 makes decision 10 say the same.
 - **S7. Decision 10 amended** (a §1.2 orchestrator default, so the orchestrator may amend it; FYI to danlo, review R1-I4): BIS handles the keywords in the webhook and sends the one confirmation itself only when `autoresponse_type` is absent; when Telnyx answered, its configured reply, set to the spec's own line, is the one confirmation.
 - **S8. §4.2 step 2: a customer's STOP over a staff stop** (danlo, 2026-09-28; review R2-I3): the keyword stop is refused only when the newest deciding row is a `revoked` whose method is the customer's own (keyword, carrier_block, backfill_telnyx, unsubscribe_link, one_click) (wording, review R1-N5); over a staff stop or a confirmed free-text stop it is RECORDED, with no confirmation (the texts were already off), and from then on only the customer can lift it. The same for the Telnyx backfill (0055's `unless_customer_stopped`). §4.3's email rule ("an address already stopped gets no second row") is not the same principle; PR-3 decides whether email follows S8, and the spec now says so.
-- **S9. §4.2's phrase list extended** (danlo, 2026-09-28; reviews R2-I5, R2-N1, delta I2), in four kinds, each a hold that staff confirm:
-  - **sentence phrases, anywhere in the message:** English adds "no more texting", "do not contact me", "dont contact me" (17 in all); Spanish keeps the phrases that are about messages on their own — "no quiero mas mensajes", "no quiero mensajes", "no mas mensajes", "no mas textos", "numero equivocado" — and the list requests "quitenme / quiteme / quitame / saquenme / saqueme / sacame de su / la lista" (17 in all);
-  - **Spanish verb forms ONLY ABOUT MESSAGES** (danlo, delta review I2): "no me manden / mande / mandes / envien / envie / envies / escriban / escriba / escribas", "dejen / deje / deja de mandar(me) / enviar(me) / escribir(me)" and "no quiero recibir" count only when followed by a message object — "mensajes", "textos", "nada" or "mas" (28 forms × 4 objects = 112 phrases). A bare form does not hold ("No me mande la factura", "Deje de mandar a Juan", "Dejen de mandarme") — except that the six ESCRIBIR forms hold as the WHOLE message (next bullet), because writing to the customer IS messaging and a missed stop is worse than a false hold (orchestrator, under danlo's rule; decision 27); "No me escriba el martes, mejor llámeme" still does not. "mensajes de voz" (voicemail) and "lista de espera" (a waiting list) do not count as messages or the texting list: "No me mande mensajes de voz, mejor texto" asks for TEXTS, so holding them would do the opposite of what the customer asked;
-  - **whole-message phrases:** "please stop", "stop please", "borrenme", "borreme", "borrame", and the escribir forms "dejen de escribirme", "deje de escribirme", "deja de escribirme", "no me escriban", "no me escriba", "no me escribas" count ONLY when they are the whole message, punctuation aside (no "por favor" or "ya" wrapper, as "please stop" has none): "Please stop!!", "¡Bórreme!" and "No me escriba" hold; "Please stop by Thursday", "Bórreme la cita del lunes" and "No me escriba el martes, mejor llámeme" do not;
-  - **a stop word repeated as the whole message:** "stop stop", "parar parar", "alto alto", "baja baja" (any number of repeats; English also with one "please" at either end, "Stop stop please"); one word on its own is a keyword, not a phrase.
+- **S9. §4.2's phrase list extended** (danlo, 2026-09-28, four decisions; the orchestrator's calls under them; reviews R2-I5, R2-N1, delta I2, verification V1/V2), in four kinds, each a hold that staff confirm. Where a false hold and a missed stop conflict, the rule holds: staff clear a false hold in one click.
+  - **sentence phrases, anywhere in the message:** English adds "no more texting", "do not contact me", "dont contact me" (17 in all); Spanish keeps the phrases that are about messages on their own — "no quiero mas mensajes", "no quiero mensajes", "no mas mensajes", "no mas textos", "numero equivocado" — and the list requests "quitenme / quiteme / quitame / saquenme / saqueme / sacame de su / la lista" (17 in all). Any "… de la lista …" holds, even "Quítame de la lista del sábado y ponme el domingo" (danlo's accepted list form); only "lista de espera" (a waiting list) is excluded.
+  - **Spanish verb forms ONLY ABOUT MESSAGES** (danlo): "no me manden / mande / mandes / envien / envie / envies / escriban / escriba / escribas", "dejen / deje / deja de mandar(me) / enviar(me) / escribir(me)", "no quiero recibir", and "no me vuelvan / vuelva / vuelvas a mandar / enviar" (34 forms) count only with a message object: a MESSAGE WORD right after the form, anywhere in the message — "mensajes", "textos", "sms", "msjs", "mensajitos", "ningun mensaje", "sus mensajes" — or "mas" / "nada" (also "nada mas", "nunca mas") only at the END of the message, courtesy words aside, or right before a message word. "No me manden más", "No me mande nada, gracias" and "No me mande más mensajes" hold; "No me manden más a Pedro", "No me mande más de dos trabajadores", "No me mande nada por correo" and a bare "No me mande la factura" / "Dejen de mandarme" do not. "mensajes de voz" counts as messages (orchestrator, V1): "No me mande mensajes de voz, mejor texto" is a false hold staff clear in one click, and excluding it missed "no me manden mensajes de voz ni textos";
+  - **whole-message phrases:** "please stop", "stop please" (English, exact), and in Spanish "borrenme", "borreme", "borrame", the escribir forms "dejen / deje / deja de escribirme", "no me escriban / escriba / escribas", and "no me vuelvan / vuelva / vuelvas a escribir" (14 in all) count ONLY when they are the whole message, punctuation aside — the Spanish ones may carry ONE leading "ya" / "por favor" / "porfa" / "porfavor" and ONE trailing "por favor" / "porfa" / "porfavor" / "gracias" / "ya" (orchestrator, V2): "Ya no me escriban", "No me escriban, gracias" and "Ya bórrenme" hold; "No me escriba el martes, mejor llámeme", "Ya no me escriba, yo le llamo" and "Bórreme la cita del lunes" do not;
+  - **a stop word repeated as the whole message:** "stop stop", "parar parar", "alto alto", "baja baja" (any number of repeats; English also with one "please" at either end, Spanish with the courtesy words); one word on its own is a keyword, not a phrase.
   No sentence phrase contains another, so their order never changes whether a text holds. Pinned in Task 4 by test-local literals.
 - **S10. §3: a `source_ref` names one delivery or event, never a reusable channel** (review R1-I3): a message id, a form submission, a booking, one Telnyx opt-out at its own time. A reusable source (a token, an address) would read as a retry forever and drop a second real stop as a duplicate. The backfill's source includes the opt-out's time.
 - **S11. §5 go-live step 0**, beyond S2: one bilingual config per operation for sender countries US, MX **and CA** (danlo's decision 1); the help reply carries the contact sentence (decision 2, S12); Telnyx's AI opt-out detection is read, a `true` stops the rollout, turning it off is a Telnyx write under danlo's go with a read-back, and an absent field is unknown, not off (review R1-I6); and Telnyx's existing opt-outs are imported before any number moves (decision 4, A5).
@@ -127,7 +127,7 @@ S1–S12 are corrections applied to the spec itself, in this branch's four spec 
 - **G18. The Texts row's precedence** is the gate's order: Stopped, then On hold, then Check number, then Allowed. A contact with no textable number renders no row (as in PR-1).
 - **G19. The "since" line** is "Since {date} · {how}", the date in the account's zone (`renderZone`), the drawer's other date rule.
 - **G20. An Undo is an Undo, not a note-free Resume** (review R3-I6): both Undos (of "Stop texts", of Confirm stop / Not a stop) are accepted only for the SAME staff member's row, under `UNDO_WINDOW_MS` (two minutes) old; past that, or for someone else's row, staff use Stop texts or Resume texts (with its note). Enforced on the server (Task 11).
-- **G21. A hold's To-do is never closed without deciding the hold, and never left open once it is decided** (reviews R3-I1, R3-N1, R3-N3): `completeTask` refuses it while its NUMBER is still on hold — the newest deciding row a hold, the To-do's own or a later one (Task 2) — and no screen offers a Done that would be refused (the To-do page shows the two buttons; the contact timeline shows the decide-first hint, Task 12). A STOP or START on the held number closes the To-dos of every hold on it (Task 8); Confirm stop / Not a stop close them (Task 11); a click once the contact's number is no longer on hold closes the To-do (Task 13). The agency Work queue has no action buttons (its rows are read-only links), so nothing changes there.
+- **G21. A hold's To-do is never closed without deciding the hold, and never left open once it is decided** (reviews R3-I1, R3-N1, R3-N3): `completeTask` refuses it while its NUMBER is still on hold — the newest deciding row a hold, the To-do's own or a later one (Task 2) — and no screen offers a Done that would be refused (the To-do page shows the two buttons; the contact timeline shows its hint instead, "Close this one from the To do page." — `todo.consent.timelineHint`, Task 12). A STOP or START on the held number closes the To-dos of every hold on it (Task 8); Confirm stop / Not a stop close them (Task 11); a click once the contact's number is no longer on hold closes the To-do (Task 13). The agency Work queue has no action buttons (its rows are read-only links), so nothing changes there.
 
 ## File Structure
 
@@ -2315,7 +2315,7 @@ git commit -m "feat(consent): the Telnyx opt-out backfill — owners read, plan 
 - Produces:
   - `type KeywordKind = "stop" | "start" | "help"`; `type KeywordLanguage = "en" | "es"`; `type KeywordMatch = { kind: KeywordKind; word: string; language: KeywordLanguage }`
   - `normaliseKeyword(text: string): string`; `matchKeyword(text: string): KeywordMatch | null`; `keywordDisplay(word: string): string`; `CANCEL_WORDS: ReadonlySet<string>` (`CANCEL`, `CANCELAR`)
-  - `type PhraseMatch = { phrase: string; language: "en" | "es" }`; `PHRASES_EN`, `PHRASES_ES: readonly string[]` (sentence phrases, found anywhere); `ES_VERB_FORMS`, `ES_MESSAGE_OBJECTS: readonly string[]` and `ES_VERB_PHRASES` (every form with every object: a Spanish verb form counts only with a message object, danlo 2026-09-28); `WHOLE_MESSAGE_PHRASES: readonly PhraseMatch[]` and `REPEATED_KEYWORDS: readonly { word; language }[]` (only as the whole message); `NOT_FOLLOWED_BY` ("mensajes de voz", "lista de espera"); `normalisePhraseText(text: string): string`; `matchPhrase(text: string): PhraseMatch | null`
+  - `type PhraseMatch = { phrase: string; language: "en" | "es" }`; `PHRASES_EN`, `PHRASES_ES: readonly string[]` (sentence phrases, found anywhere); `ES_VERB_FORMS`, `ES_MESSAGE_WORDS`, `ES_END_OBJECTS: readonly string[]` (a Spanish verb form counts only with a message object: a message word right after it, or "mas" / "nada" only at the end or right before a message word — danlo 2026-09-28); `WHOLE_MESSAGE_PHRASES: readonly PhraseMatch[]` and `REPEATED_KEYWORDS: readonly { word; language }[]` (only as the whole message; the Spanish ones with one courtesy word each side); `ES_COURTESY_LEAD`, `ES_COURTESY_TRAIL`; `withoutCourtesy(whole: string): string`; `NOT_FOLLOWED_BY` ("lista de espera"); `normalisePhraseText(text: string): string`; `matchPhrase(text: string): PhraseMatch | null`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2398,20 +2398,21 @@ Create `apps/web/src/lib/consent/phrases.test.ts`:
 import { describe, it, expect } from "vitest";
 import { matchConfirmationReply } from "@bis/db";
 import {
-  matchPhrase, normalisePhraseText, PHRASES_EN, PHRASES_ES, ES_VERB_FORMS, ES_MESSAGE_OBJECTS, ES_VERB_PHRASES,
-  WHOLE_MESSAGE_PHRASES, REPEATED_KEYWORDS, NOT_FOLLOWED_BY,
+  matchPhrase, normalisePhraseText, withoutCourtesy, PHRASES_EN, PHRASES_ES, ES_VERB_FORMS, ES_MESSAGE_WORDS,
+  ES_END_OBJECTS, WHOLE_MESSAGE_PHRASES, REPEATED_KEYWORDS, ES_COURTESY_LEAD, ES_COURTESY_TRAIL, NOT_FOLLOWED_BY,
 } from "./phrases";
 import { matchKeyword } from "./keywords";
 
 /**
- * Spec §4.2's phrase list as corrected (S9: danlo's 2026-09-28 decisions),
- * matched ignoring case, accents and punctuation (apostrophes dropped, so
- * "don't text" is "dont text"). A false match only holds texts; a missed
- * sentence is the risk, which is why staff can still stop texts by hand.
+ * Spec §4.2's phrase list as corrected (S9: danlo's 2026-09-28 decisions and
+ * the orchestrator's calls under them), matched ignoring case, accents and
+ * punctuation (apostrophes dropped, so "don't text" is "dont text"). A false
+ * hold only pauses texts and staff clear it in one click; a missed stop is
+ * the risk, which is why staff can still stop texts by hand.
  *
  * The expected lists are LITERALS here, not the module's own arrays: a test
- * that iterates the implementation's list cannot notice a phrase dropped from
- * it (review R2-I5).
+ * that iterates the implementation's list cannot notice an entry dropped
+ * from it (review R2-I5).
  */
 const EXPECTED_EN = [
   "stop texting", "stop sending", "stop messaging", "stop contacting", "dont text", "do not text",
@@ -2433,27 +2434,49 @@ const EXPECTED_VERB_FORMS = [
   "dejen de mandar", "deje de mandar", "deja de mandar", "dejen de enviar", "deje de enviar", "deja de enviar",
   "dejen de escribir", "deje de escribir", "deja de escribir",
   "no quiero recibir",
+  "no me vuelvan a mandar", "no me vuelva a mandar", "no me vuelvas a mandar",
+  "no me vuelvan a enviar", "no me vuelva a enviar", "no me vuelvas a enviar",
 ];
-const EXPECTED_OBJECTS = ["mensajes", "textos", "nada", "mas"];
-const EXPECTED_VERB_PHRASES = EXPECTED_VERB_FORMS.flatMap((v) => EXPECTED_OBJECTS.map((o) => `${v} ${o}`));
+const EXPECTED_MESSAGE_WORDS = ["mensajes", "textos", "sms", "msjs", "mensajitos", "ningun mensaje", "sus mensajes"];
+const EXPECTED_END_OBJECTS = ["mas", "nada", "nada mas", "nunca mas"];
 const EXPECTED_WHOLE = [
   { phrase: "please stop", language: "en" }, { phrase: "stop please", language: "en" },
   { phrase: "borrenme", language: "es" }, { phrase: "borreme", language: "es" }, { phrase: "borrame", language: "es" },
   { phrase: "dejen de escribirme", language: "es" }, { phrase: "deje de escribirme", language: "es" },
   { phrase: "deja de escribirme", language: "es" }, { phrase: "no me escriban", language: "es" },
   { phrase: "no me escriba", language: "es" }, { phrase: "no me escribas", language: "es" },
+  { phrase: "no me vuelvan a escribir", language: "es" }, { phrase: "no me vuelva a escribir", language: "es" },
+  { phrase: "no me vuelvas a escribir", language: "es" },
 ];
 const EXPECTED_REPEATED = [
   { word: "stop", language: "en" }, { word: "parar", language: "es" }, { word: "alto", language: "es" }, { word: "baja", language: "es" },
 ];
+const VERB_WITH_WORD = EXPECTED_VERB_FORMS.flatMap((v) => EXPECTED_MESSAGE_WORDS.map((w) => `${v} ${w}`));
+const VERB_WITH_END = EXPECTED_VERB_FORMS.flatMap((v) => EXPECTED_END_OBJECTS.map((e) => `${v} ${e}`));
+const SPANISH_WHOLE = EXPECTED_WHOLE.filter((w) => w.language === "es").map((w) => w.phrase);
 
 describe("matchPhrase — every sentence phrase, in a real sentence", () => {
   it.each(EXPECTED_EN)("English %j matches inside a sentence (mutation: drop the phrase from PHRASES_EN → FAILS)", (phrase) => {
     expect(matchPhrase(`Hi, please ${phrase} ok? Thanks`)).toEqual({ phrase, language: "en" });
   });
 
-  it.each([...EXPECTED_ES, ...EXPECTED_VERB_PHRASES])("Spanish %j matches inside a sentence (mutation: drop the phrase, a verb form or an object → FAILS)", (phrase) => {
+  it.each(EXPECTED_ES)("Spanish %j matches inside a sentence (mutation: drop the phrase from PHRASES_ES → FAILS)", (phrase) => {
     expect(matchPhrase(`Hola, por favor ${phrase} ya, gracias`)).toEqual({ phrase, language: "es" });
+  });
+
+  it.each(VERB_WITH_WORD)("Spanish verb form + message word %j matches anywhere (mutation: drop a verb form or a message word → FAILS)", (phrase) => {
+    expect(matchPhrase(`Hola, por favor ${phrase} ya, gracias`)).toEqual({ phrase, language: "es" });
+  });
+
+  it.each(VERB_WITH_END)("Spanish verb form + %j matches at the END, courtesy words aside (danlo: \"mas\" / \"nada\" only at the end; mutation: drop an end object → FAILS)", (phrase) => {
+    expect(matchPhrase(phrase)).toEqual({ phrase, language: "es" });
+    expect(matchPhrase(`Por favor ${phrase}, gracias`)).toEqual({ phrase, language: "es" });
+  });
+
+  it.each(SPANISH_WHOLE)("Spanish whole-message %j holds bare and with one courtesy word each side (review V2; mutation: compare without withoutCourtesy → the wrapped forms are missed, FAILS)", (phrase) => {
+    expect(matchPhrase(phrase)).toEqual({ phrase, language: "es" });
+    expect(matchPhrase(`Ya ${phrase}`)).toEqual({ phrase, language: "es" });
+    expect(matchPhrase(`Por favor ${phrase}, gracias`)).toEqual({ phrase, language: "es" });
   });
 });
 
@@ -2466,78 +2489,95 @@ describe("matchPhrase — how people actually write", () => {
     expect(matchPhrase("Don't contact me again")?.phrase).toBe("dont contact me");
   });
 
-  it("Spanish about MESSAGES holds — a verb form with its message object, the list, the other message phrases (danlo 2026-09-28; mutation: drop \"mas\" from the objects → \"No me manden más\" is missed, FAILS)", () => {
+  it("Spanish about MESSAGES holds — a verb form with a message word, \"mas\" or \"nada\" at the end or before a message word, the list, the new message words (danlo 2026-09-28; mutation: drop \"sms\" from the message words → FAILS)", () => {
     expect(matchPhrase("Dejen de mandarme mensajes")?.phrase).toBe("dejen de mandarme mensajes");
-    expect(matchPhrase("Dejen de enviarme mensajes")?.phrase).toBe("dejen de enviarme mensajes");
     expect(matchPhrase("Deje de mandarme mensajes")?.phrase).toBe("deje de mandarme mensajes");
-    expect(matchPhrase("No me mande más mensajes")?.phrase).toBe("no me mande mas");
     expect(matchPhrase("No me envíe mensajes")?.phrase).toBe("no me envie mensajes");
     expect(matchPhrase("No me mandes mensajes")?.phrase).toBe("no me mandes mensajes");
-    expect(matchPhrase("No me manden más")?.phrase).toBe("no me manden mas");
-    expect(matchPhrase("Ya no me mande nada")?.phrase).toBe("no me mande nada");
     expect(matchPhrase("Ya no me manden mensajes")?.phrase).toBe("no me manden mensajes");
     expect(matchPhrase("No me mande mensajes de texto")?.phrase).toBe("no me mande mensajes");
+    expect(matchPhrase("No me manden más")?.phrase).toBe("no me manden mas");
+    expect(matchPhrase("No me mande nada, gracias")?.phrase).toBe("no me mande nada");
+    expect(matchPhrase("no me mande más mensajes")?.phrase).toBe("no me mande mas mensajes");
+    expect(matchPhrase("Ya no me mande nada")?.phrase).toBe("no me mande nada");
+    expect(matchPhrase("No me escriban nunca más")?.phrase).toBe("no me escriban nunca mas");
+    expect(matchPhrase("No me escriba más, gracias")?.phrase).toBe("no me escriba mas");
+    expect(matchPhrase("No quiero recibir más mensajes")?.phrase).toBe("no quiero recibir mas mensajes");
+    expect(matchPhrase("No me manden SMS")?.phrase).toBe("no me manden sms");
+    expect(matchPhrase("No me manden msjs")?.phrase).toBe("no me manden msjs");
+    expect(matchPhrase("No me manden mensajitos")?.phrase).toBe("no me manden mensajitos");
+    expect(matchPhrase("No me envíen ningún mensaje")?.phrase).toBe("no me envien ningun mensaje");
+    expect(matchPhrase("No me manden ningún mensaje más")?.phrase).toBe("no me manden ningun mensaje");
+    expect(matchPhrase("Ya no me manden sus mensajes")?.phrase).toBe("no me manden sus mensajes");
+    expect(matchPhrase("No me vuelvan a mandar mensajes")?.phrase).toBe("no me vuelvan a mandar mensajes");
+    expect(matchPhrase("No me vuelva a enviar mensajes, por favor")?.phrase).toBe("no me vuelva a enviar mensajes");
     expect(matchPhrase("Quíteme de la lista")?.phrase).toBe("quiteme de la lista");
-    expect(matchPhrase("Quítenme de su lista por favor")?.phrase).toBe("quitenme de su lista");
     expect(matchPhrase("Sáquenme de su lista")?.phrase).toBe("saquenme de su lista");
     expect(matchPhrase("Sácame de la lista")?.phrase).toBe("sacame de la lista");
     expect(matchPhrase("No más textos")?.phrase).toBe("no mas textos");
     expect(matchPhrase("No quiero más mensajes")?.phrase).toBe("no quiero mas mensajes");
+    // danlo's accepted list form: any "quítame de la lista …" holds, even this one.
+    expect(matchPhrase("Quítame de la lista del sábado y ponme el domingo")?.phrase).toBe("quitame de la lista");
   });
 
-  it("Spanish NOT about messages does not hold: a bare verb form, a list that is not the texting list, a cita, voicemail (danlo 2026-09-28; mutation: let a bare verb form count → \"No me mande la factura\" holds, FAILS)", () => {
+  it("\"mensajes de voz\" is MESSAGES too: a false hold staff clear in one click beats a missed stop like \"no me manden mensajes de voz ni textos\" (orchestrator, review V1; mutation: exclude \"mensajes de voz\" again → FAILS)", () => {
+    expect(matchPhrase("No me mande mensajes de voz, mejor texto")?.phrase).toBe("no me mande mensajes");
+    expect(matchPhrase("no me manden mensajes de voz ni textos")?.phrase).toBe("no me manden mensajes");
+    expect(matchPhrase("No me mande más mensajes de voz ni textos")?.phrase).toBe("no me mande mas mensajes");
+  });
+
+  it("Spanish NOT about messages does not hold: a bare verb form, \"mas\" / \"nada\" in the middle of the message, a list that is not the texting list, a cita (danlo 2026-09-28; mutation: let \"mas\" count anywhere → \"No me manden más a Pedro\" holds, FAILS)", () => {
     for (const text of [
       "No me mande a nadie mañana, va a llover", "No me mande la factura", "No me envíe el recibo, ya pagué",
       "Deje de mandar a Juan", "Quíteme de las 3 y póngame a las 5", "Quítame de la cita del martes",
       "Bórreme la cita del lunes", "Ya no me mande al muchacho ese, corta mal", "No me mandes la foto todavía",
       "No quiero recibir la factura en papel", "Si no me manda la dirección no puedo ir", "quiteme la cita",
+      "No me manden más a Pedro, no sabe podar", "No me mande más de dos trabajadores", "Deje de mandar más muchachos",
+      "No me mande nada por correo, mándelo por texto", "No quiero recibir nada por correo", "No me envíe nada, yo paso a recoger",
+      "Quíteme de la lista de espera", "Dejen de mandarme", "No me envíe",
     ]) expect(matchPhrase(text), text).toBeNull();
-  });
-
-  it("\"No me mande mensajes de voz, mejor texto\" does NOT hold, and \"Quíteme de la lista de espera\" does NOT hold: voicemail and a waiting list are not the texting list — the first one even asks for texts (plan decision on danlo's rule; mutation: drop NOT_FOLLOWED_BY → both hold, FAILS)", () => {
-    expect(matchPhrase("No me mande mensajes de voz, mejor texto")).toBeNull();
-    expect(matchPhrase("Quíteme de la lista de espera")).toBeNull();
-    // …while a second, real occurrence in the same text still counts:
-    expect(matchPhrase("No me mande mensajes de voz. No me mande mensajes, punto")?.phrase).toBe("no me mande mensajes");
-  });
-
-  it("an ESCRIBIR form holds as the WHOLE message — writing to the customer IS messaging, and a missed stop is worse than a false hold (orchestrator, under danlo's rule; decision 27; mutation: drop the six from WHOLE_MESSAGE_PHRASES → FAILS)", () => {
-    expect(matchPhrase("Dejen de escribirme")).toEqual({ phrase: "dejen de escribirme", language: "es" });
-    expect(matchPhrase("Deje de escribirme.")).toEqual({ phrase: "deje de escribirme", language: "es" });
-    expect(matchPhrase("¡Deja de escribirme!")).toEqual({ phrase: "deja de escribirme", language: "es" });
-    expect(matchPhrase("No me escriban")).toEqual({ phrase: "no me escriban", language: "es" });
-    expect(matchPhrase("No me escriba")).toEqual({ phrase: "no me escriba", language: "es" });
-    expect(matchPhrase("No me escribas!!")).toEqual({ phrase: "no me escribas", language: "es" });
-  });
-
-  it("…but only as the whole message, and the MANDAR / ENVIAR forms stay object-only (\"mandar\" can mean a crew or an invoice): \"No me escriba el martes, mejor llámeme\" and \"Dejen de mandarme\" do NOT hold (mutation: match the escribir forms anywhere → the first holds, FAILS; mutation: make \"dejen de mandarme\" whole-message too → the second holds, FAILS)", () => {
-    expect(matchPhrase("No me escriba el martes, mejor llámeme")).toBeNull();
-    expect(matchPhrase("Dejen de mandarme")).toBeNull();
-    expect(matchPhrase("No me envíe")).toBeNull();
   });
 });
 
-describe("matchPhrase — whole-message phrases and a repeated stop word (danlo, 2026-09-28)", () => {
-  it("\"please stop\", \"stop please\" and \"Bórreme\" hold only as the WHOLE message, punctuation aside (mutation: drop the whole-message list → FAILS)", () => {
+describe("matchPhrase — whole-message phrases, the courtesy words, a repeated stop word", () => {
+  it("\"please stop\", \"stop please\", \"Bórreme\" and the ESCRIBIR forms hold as the WHOLE message, punctuation aside (danlo; the escribir forms because writing to the customer IS messaging; mutation: drop the whole-message list → FAILS)", () => {
     expect(matchPhrase("Please stop!!")).toEqual({ phrase: "please stop", language: "en" });
     expect(matchPhrase("Stop, please.")).toEqual({ phrase: "stop please", language: "en" });
     expect(matchPhrase("¡Bórreme!")).toEqual({ phrase: "borreme", language: "es" });
-    expect(matchPhrase("Bórrenme")).toEqual({ phrase: "borrenme", language: "es" });
+    expect(matchPhrase("Dejen de escribirme")).toEqual({ phrase: "dejen de escribirme", language: "es" });
+    expect(matchPhrase("¡Deja de escribirme!")).toEqual({ phrase: "deja de escribirme", language: "es" });
+    expect(matchPhrase("No me escriba")).toEqual({ phrase: "no me escriba", language: "es" });
+    expect(matchPhrase("No me vuelvan a escribir")).toEqual({ phrase: "no me vuelvan a escribir", language: "es" });
   });
 
-  it("\"Please stop by Thursday\" does NOT hold: a whole-message phrase inside a longer text is not a stop request (danlo, 2026-09-28; mutation: match the whole-message phrases anywhere → FAILS)", () => {
-    expect(matchPhrase("Please stop by Thursday")).toBeNull();
-    expect(matchPhrase("Can you stop please at the store")).toBeNull();
-    expect(matchPhrase("Bórreme la cita del lunes")).toBeNull();
+  it("the eleven courtesy-wrapped Spanish stops the verifier found all hold — one leading \"ya\" / \"por favor\" / \"porfa\" / \"porfavor\", one trailing \"por favor\" / \"porfa\" / \"porfavor\" / \"gracias\" / \"ya\" (review V2; mutation: drop withoutCourtesy → FAILS)", () => {
+    for (const [text, phrase] of [
+      ["Ya no me escriban", "no me escriban"], ["Ya no me escriba", "no me escriba"], ["Por favor no me escriba", "no me escriba"],
+      ["No me escriba por favor", "no me escriba"], ["Deje de escribirme por favor", "deje de escribirme"],
+      ["Por favor dejen de escribirme", "dejen de escribirme"], ["Dejen de escribirme ya", "dejen de escribirme"],
+      ["No me escriban, gracias", "no me escriban"], ["Ya no me escribas porfa", "no me escribas"],
+      ["Ya bórrenme", "borrenme"], ["Bórrenme por favor", "borrenme"],
+    ] as const) expect(matchPhrase(text), text).toEqual({ phrase, language: "es" });
   });
 
-  it("a stop word repeated as the whole message holds, in either language, however many times, English allowing one \"please\" at either end (review M2; mutation: drop the repeated-word rule → FAILS; drop the please allowance → \"Stop stop please\" is missed, FAILS)", () => {
+  it("…but a whole-message form inside a longer text does not hold, courtesy words or not (review V2; mutation: strip every courtesy word anywhere → \"Ya no me escriba, yo le llamo\" holds, FAILS; mutation: match the escribir forms anywhere → FAILS)", () => {
+    for (const text of ["No me escriba el martes, mejor llámeme", "Ya no me escriba, yo le llamo", "No me escriba mañana",
+      "Bórreme la cita del lunes", "Please stop by Thursday", "Can you stop please at the store"]) expect(matchPhrase(text), text).toBeNull();
+  });
+
+  it("the courtesy words come off ONE at each end, no more (mutation: loop until none is left → \"ya ya no me escriba\" holds, FAILS)", () => {
+    expect(withoutCourtesy("ya no me escriba gracias")).toBe("no me escriba");
+    expect(withoutCourtesy("por favor no me escriba por favor")).toBe("no me escriba");
+    expect(matchPhrase("Ya ya no me escriba")).toBeNull();
+  });
+
+  it("a stop word repeated as the whole message holds, however many times — English with one \"please\" at either end, Spanish with the courtesy words (mutation: drop the repeated-word rule → FAILS)", () => {
     expect(matchPhrase("STOP STOP")).toEqual({ phrase: "stop stop", language: "en" });
     expect(matchPhrase("Stop. Stop. Stop.")).toEqual({ phrase: "stop stop", language: "en" });
     expect(matchPhrase("Stop stop please")).toEqual({ phrase: "stop stop", language: "en" });
     expect(matchPhrase("Please stop stop")).toEqual({ phrase: "stop stop", language: "en" });
     expect(matchPhrase("Parar parar")).toEqual({ phrase: "parar parar", language: "es" });
-    expect(matchPhrase("PARAR PARAR")).toEqual({ phrase: "parar parar", language: "es" });
+    expect(matchPhrase("PARAR PARAR por favor")).toEqual({ phrase: "parar parar", language: "es" });
     expect(matchPhrase("Alto alto")).toEqual({ phrase: "alto alto", language: "es" });
     expect(matchPhrase("¡Baja, baja!")).toEqual({ phrase: "baja baja", language: "es" });
   });
@@ -2559,18 +2599,21 @@ describe("matchPhrase — the fixed negative set", () => {
 });
 
 describe("the lists themselves", () => {
-  it("every phrase is already in the matcher's own form, or it could never match (mutation: add a phrase with an accent or a capital → FAILS naming it)", () => {
-    for (const p of [...PHRASES_EN, ...PHRASES_ES, ...ES_VERB_PHRASES, ...WHOLE_MESSAGE_PHRASES.map((w) => w.phrase)]) expect(normalisePhraseText(p), p).toBe(p);
-    for (const r of REPEATED_KEYWORDS) expect(normalisePhraseText(r.word), r.word).toBe(r.word);
+  it("every entry is already in the matcher's own form, or it could never match (mutation: add an entry with an accent or a capital → FAILS naming it)", () => {
+    for (const p of [...PHRASES_EN, ...PHRASES_ES, ...ES_VERB_FORMS, ...ES_MESSAGE_WORDS, ...ES_END_OBJECTS,
+      ...WHOLE_MESSAGE_PHRASES.map((w) => w.phrase), ...REPEATED_KEYWORDS.map((r) => r.word), ...ES_COURTESY_LEAD, ...ES_COURTESY_TRAIL]) {
+      expect(normalisePhraseText(p), p).toBe(p);
+    }
   });
 
-  it("no sentence phrase contains another as whole words, so their order never changes WHETHER a text holds (review M1; mutation: add \"ya no me mande mensajes\" → it contains \"no me mande mensajes\", FAILS)", () => {
-    const all = [...PHRASES_EN, ...PHRASES_ES, ...ES_VERB_PHRASES];
+  it("no sentence phrase contains another as whole words, so their order never changes WHETHER a text holds (review M1; mutation: add \"ya no me mande\" to ES_VERB_FORMS → \"ya no me mande mensajes\" contains \"no me mande mensajes\", FAILS)", () => {
+    const verbPhrases = ES_VERB_FORMS.flatMap((v) => ES_MESSAGE_WORDS.map((w) => `${v} ${w}`));
+    const all = [...PHRASES_EN, ...PHRASES_ES, ...verbPhrases];
     for (const p of all) for (const q of all) if (p !== q) expect(` ${p} `.includes(` ${q} `), `${p} ⊃ ${q}`).toBe(false);
   });
 
   it("no phrase is a keyword, and no phrase is itself a YES/NO answer as the automation engine reads one, so YES/NO and a phrase can never both fire on one text (spec §4.2 step 5, corrected S5; the engine's own exported matcher — review R2-m14; mutation: add 'no' to PHRASES_ES → FAILS)", () => {
-    const all = [...PHRASES_EN, ...PHRASES_ES, ...ES_VERB_PHRASES, ...WHOLE_MESSAGE_PHRASES.map((w) => w.phrase),
+    const all = [...PHRASES_EN, ...PHRASES_ES, ...VERB_WITH_WORD, ...VERB_WITH_END, ...WHOLE_MESSAGE_PHRASES.map((w) => w.phrase),
       ...REPEATED_KEYWORDS.map((r) => `${r.word} ${r.word}`)];
     for (const p of all) {
       expect(matchKeyword(p), p).toBeNull();
@@ -2584,11 +2627,13 @@ describe("the lists themselves", () => {
     expect(PHRASES_EN).toEqual(EXPECTED_EN);
     expect(PHRASES_ES).toEqual(EXPECTED_ES);
     expect(ES_VERB_FORMS).toEqual(EXPECTED_VERB_FORMS);
-    expect(ES_MESSAGE_OBJECTS).toEqual(EXPECTED_OBJECTS);
-    expect(ES_VERB_PHRASES).toEqual(EXPECTED_VERB_PHRASES);
+    expect(ES_MESSAGE_WORDS).toEqual(EXPECTED_MESSAGE_WORDS);
+    expect(ES_END_OBJECTS).toEqual(EXPECTED_END_OBJECTS);
     expect(WHOLE_MESSAGE_PHRASES).toEqual(EXPECTED_WHOLE);
     expect(REPEATED_KEYWORDS).toEqual(EXPECTED_REPEATED);
-    expect(NOT_FOLLOWED_BY).toEqual([{ last: "mensajes", next: "de voz" }, { last: "lista", next: "de espera" }]);
+    expect(ES_COURTESY_LEAD).toEqual(["ya", "por favor", "porfa", "porfavor"]);
+    expect(ES_COURTESY_TRAIL).toEqual(["por favor", "porfa", "porfavor", "gracias", "ya"]);
+    expect(NOT_FOLLOWED_BY).toEqual([{ last: "lista", next: "de espera" }]);
   });
 });
 ```
@@ -2667,26 +2712,30 @@ Create `apps/web/src/lib/consent/phrases.ts`:
  * against the message with accents removed, lowercased, apostrophes dropped
  * and every other non-letter a space. A match holds texts and asks staff (a
  * To-do); it never replies (choice 20). Reviewed in PR-2 (danlo, 2026-09-28;
- * spec S9) and extended only with tests. Four kinds:
+ * spec S9) and extended only with tests. A false hold staff clear in one
+ * click beats a missed stop, so where the two conflict the rule holds.
  *
  * 1. SENTENCE phrases, found as whole words anywhere in the message.
- * 2. SPANISH VERB FORMS, which count ONLY WITH A MESSAGE OBJECT (danlo): "no
- *    me mande mensajes / textos / nada / mas", "deje de mandarme mensajes" …
- *    A bare form ("No me mande la factura", "Deje de mandar a Juan") is not
- *    about messages and does not hold, even as the whole message — except
- *    the ESCRIBIR forms, which ARE about messages and hold as the whole
- *    message (kind 3: "Dejen de escribirme", "No me escriba").
+ * 2. SPANISH VERB FORMS, which count ONLY WITH A MESSAGE OBJECT (danlo): a
+ *    message word right after the form, anywhere in the message ("no me
+ *    mande mensajes", "no me envien ningun mensaje"), or "mas" / "nada" only
+ *    at the END of the message or right before a message word ("No me manden
+ *    más", "No me mande más mensajes"; not "No me manden más a Pedro"). A
+ *    bare mandar or enviar form ("No me mande la factura") is not about
+ *    messages and does not hold.
  * 3. WHOLE-MESSAGE phrases, which count only when they ARE the message:
- *    "Please stop!!" holds, "Please stop by Thursday" does not; "Bórreme"
- *    holds, "Bórreme la cita del lunes" does not.
- * 4. A stop word REPEATED as the whole message ("STOP STOP", "Parar parar"),
- *    English allowing one "please" at either end ("Stop stop please"); one
- *    word on its own is a keyword (keywords.ts), not a phrase.
+ *    "Please stop!!" holds, "Please stop by Thursday" does not. The Spanish
+ *    ones — "borreme", the ESCRIBIR forms ("No me escriba": writing to the
+ *    customer IS messaging), "no me vuelva a escribir" — may carry one
+ *    courtesy word before and one after ("Ya no me escriban", "No me escriba,
+ *    gracias"); "No me escriba el martes" still does not hold.
+ * 4. A stop word REPEATED as the whole message ("STOP STOP", "Parar parar"):
+ *    English with one "please" at either end, Spanish with the courtesy
+ *    words; one word on its own is a keyword (keywords.ts), not a phrase.
  *
  * No sentence phrase contains another (a test pins it), so their order never
- * changes WHETHER a text holds. Two continuations are not what they look
- * like and do not count: "mensajes de voz" (voicemail) and "lista de espera"
- * (a waiting list).
+ * changes WHETHER a text holds. One continuation is not what it looks like:
+ * "lista de espera" is a waiting list, not the texting list.
  */
 export type PhraseMatch = { phrase: string; language: "en" | "es" };
 
@@ -2705,7 +2754,7 @@ export const PHRASES_ES: readonly string[] = [
   "saqueme de su lista", "saqueme de la lista", "sacame de su lista", "sacame de la lista",
 ];
 
-/** Spanish verb forms: each counts only followed by one of ES_MESSAGE_OBJECTS (danlo, 2026-09-28). */
+/** Spanish verb forms: each counts only with a message object (danlo, 2026-09-28). */
 export const ES_VERB_FORMS: readonly string[] = [
   "no me manden", "no me mande", "no me mandes", "no me envien", "no me envie", "no me envies",
   "no me escriban", "no me escriba", "no me escribas",
@@ -2714,12 +2763,17 @@ export const ES_VERB_FORMS: readonly string[] = [
   "dejen de mandar", "deje de mandar", "deja de mandar", "dejen de enviar", "deje de enviar", "deja de enviar",
   "dejen de escribir", "deje de escribir", "deja de escribir",
   "no quiero recibir",
+  "no me vuelvan a mandar", "no me vuelva a mandar", "no me vuelvas a mandar",
+  "no me vuelvan a enviar", "no me vuelva a enviar", "no me vuelvas a enviar",
 ];
-export const ES_MESSAGE_OBJECTS: readonly string[] = ["mensajes", "textos", "nada", "mas"];
-/** Every verb form with every object: the sentence phrases the Spanish verb forms become. */
-export const ES_VERB_PHRASES: readonly string[] = ES_VERB_FORMS.flatMap((v) => ES_MESSAGE_OBJECTS.map((o) => `${v} ${o}`));
+/** Message words: right after a verb form, anywhere in the message. */
+export const ES_MESSAGE_WORDS: readonly string[] = [
+  "mensajes", "textos", "sms", "msjs", "mensajitos", "ningun mensaje", "sus mensajes",
+];
+/** "mas" and "nada": objects only at the END of the message (courtesy words aside) or right before a message word. */
+export const ES_END_OBJECTS: readonly string[] = ["mas", "nada", "nada mas", "nunca mas"];
 
-/** Only when they ARE the whole message (danlo, 2026-09-28). */
+/** Only when they ARE the whole message; the Spanish ones may carry the courtesy words (ES_COURTESY_*). */
 export const WHOLE_MESSAGE_PHRASES: readonly PhraseMatch[] = [
   { phrase: "please stop", language: "en" }, { phrase: "stop please", language: "en" },
   { phrase: "borrenme", language: "es" }, { phrase: "borreme", language: "es" }, { phrase: "borrame", language: "es" },
@@ -2729,6 +2783,8 @@ export const WHOLE_MESSAGE_PHRASES: readonly PhraseMatch[] = [
   { phrase: "dejen de escribirme", language: "es" }, { phrase: "deje de escribirme", language: "es" },
   { phrase: "deja de escribirme", language: "es" }, { phrase: "no me escriban", language: "es" },
   { phrase: "no me escriba", language: "es" }, { phrase: "no me escribas", language: "es" },
+  { phrase: "no me vuelvan a escribir", language: "es" }, { phrase: "no me vuelva a escribir", language: "es" },
+  { phrase: "no me vuelvas a escribir", language: "es" },
 ];
 
 /** A stop word repeated as the whole message, any number of times. */
@@ -2736,10 +2792,12 @@ export const REPEATED_KEYWORDS: readonly { word: string; language: "en" | "es" }
   { word: "stop", language: "en" }, { word: "parar", language: "es" }, { word: "alto", language: "es" }, { word: "baja", language: "es" },
 ];
 
-/** "mensajes de voz" is voicemail and "lista de espera" a waiting list: a phrase ending in the first word, followed by the rest, does not count. */
-export const NOT_FOLLOWED_BY: readonly { last: string; next: string }[] = [
-  { last: "mensajes", next: "de voz" }, { last: "lista", next: "de espera" },
-];
+/** One courtesy word the Spanish whole-message forms may carry before, and one after (orchestrator, review V2). */
+export const ES_COURTESY_LEAD: readonly string[] = ["ya", "por favor", "porfa", "porfavor"];
+export const ES_COURTESY_TRAIL: readonly string[] = ["por favor", "porfa", "porfavor", "gracias", "ya"];
+
+/** "lista de espera" is a waiting list: a list phrase followed by "de espera" does not count. */
+export const NOT_FOLLOWED_BY: readonly { last: string; next: string }[] = [{ last: "lista", next: "de espera" }];
 
 export function normalisePhraseText(text: string): string {
   return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
@@ -2748,7 +2806,17 @@ export function normalisePhraseText(text: string): string {
     .trim();
 }
 
-/** Does the phrase occur, as whole words, at least once in a way that counts? */
+/** The message without ONE leading and ONE trailing courtesy word. */
+export function withoutCourtesy(whole: string): string {
+  let s = ` ${whole} `;
+  const lead = ES_COURTESY_LEAD.find((w) => s.startsWith(` ${w} `));
+  if (lead) s = s.slice(lead.length + 1);
+  const trail = ES_COURTESY_TRAIL.find((w) => s.endsWith(` ${w} `));
+  if (trail) s = s.slice(0, s.length - trail.length - 1);
+  return s.trim();
+}
+
+/** Does the sentence phrase occur, as whole words, at least once in a way that counts? */
 function occurs(hay: string, phrase: string): boolean {
   const needle = ` ${phrase} `;
   const last = phrase.slice(phrase.lastIndexOf(" ") + 1);
@@ -2759,21 +2827,44 @@ function occurs(hay: string, phrase: string): boolean {
   return false;
 }
 
+/** A Spanish verb form with its message object, in the message without its courtesy words. */
+function verbWithObject(core: string): string | null {
+  const hay = ` ${core} `;
+  for (const form of ES_VERB_FORMS) {
+    const needle = ` ${form} `;
+    for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + 1)) {
+      const rest = hay.slice(at + needle.length);   // the words after the form, ending in a space
+      const word = ES_MESSAGE_WORDS.find((w) => rest.startsWith(`${w} `));
+      if (word) return `${form} ${word}`;
+      const end = ES_END_OBJECTS.find((e) => rest === `${e} `);
+      if (end) return `${form} ${end}`;
+      for (const x of ["mas", "nada"]) {
+        const before = ES_MESSAGE_WORDS.find((w) => rest.startsWith(`${x} ${w} `));
+        if (before) return `${form} ${x} ${before}`;
+      }
+    }
+  }
+  return null;
+}
+
 export function matchPhrase(text: string): PhraseMatch | null {
   const whole = normalisePhraseText(text);
-  const exact = WHOLE_MESSAGE_PHRASES.find((w) => w.phrase === whole);
-  if (exact) return { phrase: exact.phrase, language: exact.language };
-  const words = whole.split(" ");
+  const core = withoutCourtesy(whole);
+  for (const w of WHOLE_MESSAGE_PHRASES) {
+    if (w.phrase === whole || (w.language === "es" && w.phrase === core)) return { phrase: w.phrase, language: w.language };
+  }
   for (const r of REPEATED_KEYWORDS) {
+    const words = (r.language === "es" ? core : whole).split(" ");
     // English allows one "please" at either end: "Stop stop please", "Please stop stop".
-    const core = r.language === "en" && words[0] === "please" ? words.slice(1)
+    const repeat = r.language === "en" && words[0] === "please" ? words.slice(1)
       : r.language === "en" && words[words.length - 1] === "please" ? words.slice(0, -1) : words;
-    if (core.length >= 2 && core.every((w) => w === r.word)) return { phrase: `${r.word} ${r.word}`, language: r.language };
+    if (repeat.length >= 2 && repeat.every((w) => w === r.word)) return { phrase: `${r.word} ${r.word}`, language: r.language };
   }
   const hay = ` ${whole} `;
   for (const phrase of PHRASES_EN) if (occurs(hay, phrase)) return { phrase, language: "en" };
-  for (const phrase of [...PHRASES_ES, ...ES_VERB_PHRASES]) if (occurs(hay, phrase)) return { phrase, language: "es" };
-  return null;
+  for (const phrase of PHRASES_ES) if (occurs(hay, phrase)) return { phrase, language: "es" };
+  const verb = verbWithObject(core);
+  return verb ? { phrase: verb, language: "es" } : null;
 }
 ```
 
@@ -2800,20 +2891,26 @@ Expected (predicted; not replayed): all pass; `tsc` exit 0.
 | 7 | `matchKeyword` tests `text.toUpperCase().includes(key)` for each key | the "is not a keyword" table |
 | 8 | phrases: drop the apostrophe removal | "apostrophes, curly or straight …" |
 | 9 | `hay.includes(phrase)` (no spaces around) | the fixed negative set ('remove meat', 'texture') |
-| 10 | add `"ya no me mande mensajes"` to `PHRASES_ES` | "no sentence phrase contains another …" and "are exactly the corrected spec lists" |
+| 10 | add `"ya no me mande"` to `ES_VERB_FORMS` | "no sentence phrase contains another …" and "are exactly the corrected spec lists" |
 | 11 | add `"no"` to `PHRASES_ES` | "no phrase is a keyword, and no phrase is itself a YES/NO answer …" and "are exactly the corrected spec lists" |
-| 12 | delete `"dejen de mandarme"` from `ES_VERB_FORMS` | "Spanish \"dejen de mandarme mensajes\" matches inside a sentence" (and its three siblings), "Spanish about MESSAGES holds …" and "are exactly the corrected spec lists" |
-| 13 | let a bare verb form count: match `ES_VERB_FORMS` themselves as sentence phrases | "Spanish NOT about messages does not hold …" and "…but only as the whole message, and the MANDAR / ENVIAR forms stay object-only …" |
-| 13b | delete `"no me escriba"` from `WHOLE_MESSAGE_PHRASES` | "an ESCRIBIR form holds as the WHOLE message …" and "are exactly the corrected spec lists" |
-| 14 | delete `"borreme"` from `WHOLE_MESSAGE_PHRASES` | "\"please stop\", \"stop please\" and \"Bórreme\" hold only as the WHOLE message …" and "are exactly the corrected spec lists" |
-| 15 | match the whole-message phrases anywhere (append `"please stop"`, `"stop please"` to `PHRASES_EN` and the three `borr…me` to `PHRASES_ES`) | "\"Please stop by Thursday\" does NOT hold …", the negative set, and "are exactly the corrected spec lists" |
+| 12 | delete `"dejen de mandarme"` from `ES_VERB_FORMS` | its per-form sentence and end cases, "Spanish about MESSAGES holds …" and "are exactly the corrected spec lists" |
+| 13 | let a bare verb form count (`verbWithObject` returns `form` when nothing follows) | "Spanish NOT about messages does not hold …" (`"Dejen de mandarme"`, `"No me envíe"`) |
+| 13b | delete `"no me escriba"` from `WHOLE_MESSAGE_PHRASES` | its per-phrase whole-message case, "the eleven courtesy-wrapped …" and "are exactly the corrected spec lists" |
+| 14 | delete `"borreme"` from `WHOLE_MESSAGE_PHRASES` | "\"please stop\", … \"Bórreme\" and the ESCRIBIR forms hold …" and "are exactly the corrected spec lists" |
+| 15 | match the whole-message phrases anywhere | "…but a whole-message form inside a longer text does not hold …", the negative set (simulated: 76 tests red) |
 | 16 | drop the repeated-word loop | "a stop word repeated as the whole message holds …" |
-| 17 | `core.length >= 1` in the repeated-word loop | "…but not one word on its own …" (`"alto"`) |
-| 18 | the repeated-word loop tests `core.some(…)` | "…but not one word on its own, and not inside a longer text" (`"stop stop by later"`) |
-| 19 | drop the `NOT_FOLLOWED_BY` check from `occurs` (return true on the first occurrence) | "\"No me mande mensajes de voz, mejor texto\" does NOT hold …" |
-| 20 | delete `"mas"` from `ES_MESSAGE_OBJECTS` | "Spanish about MESSAGES holds …" (`"No me manden más"`) and "are exactly the corrected spec lists" |
-| 21 | drop the English `please` allowance (`core = words`) | "a stop word repeated … English allowing one \"please\" …" (`"Stop stop please"`) |
-| 22 | delete `{ word: "parar", … }` from `REPEATED_KEYWORDS` | "a stop word repeated …" (`"Parar parar"`) and "are exactly the corrected spec lists" |
+| 17 | `repeat.length >= 1` in the repeated-word loop | "…but not one word on its own …" (`"alto"`) |
+| 18 | the repeated-word loop tests `repeat.some(…)` | "…but not one word on its own, and not inside a longer text" (`"stop stop by later"`) |
+| 19 | exclude "mensajes de voz" again (`{ last: "mensajes", next: "de voz" }` in `NOT_FOLLOWED_BY`) | "\"mensajes de voz\" is MESSAGES too …" (simulated: red) |
+| 20 | `mas` / `nada` count anywhere after a form (`rest.startsWith(`${e} `)` for the end objects) | "Spanish NOT about messages does not hold …" (`"No me manden más a Pedro"` …) and "a phrase … at the END" (simulated: 37 tests red) |
+| 21 | drop the English `please` allowance | "a stop word repeated … English with one \"please\" …" (`"Stop stop please"`) |
+| 22 | delete `{ word: "parar", … }` from `REPEATED_KEYWORDS` | "a stop word repeated …" (`"PARAR PARAR por favor"`) and "are exactly the corrected spec lists" (simulated: red) |
+| 23 | compare the Spanish whole-message forms without `withoutCourtesy` (`core = whole`) | every per-phrase whole-message case, "the eleven courtesy-wrapped …" (simulated: 151 tests red) |
+| 24 | strip courtesy words until none is left | "the courtesy words come off ONE at each end …" (`"Ya ya no me escriba"`; simulated: red) |
+| 25 | delete `"sms"` from `ES_MESSAGE_WORDS` | its per-form cases and "Spanish about MESSAGES holds …" (simulated: 36 tests red) |
+| 26 | drop the "`mas` / `nada` right before a message word" branch | "Spanish about MESSAGES holds …" (`"no me mande más mensajes"`) and the voicemail test (simulated: red) |
+| 27 | delete `"no me vuelvan a escribir"` from `WHOLE_MESSAGE_PHRASES` | its per-phrase whole-message case and "\"please stop\", … hold …" (simulated: red) |
+| 28 | drop the "lista de espera" exclusion (`NOT_FOLLOWED_BY = []`) | "Spanish NOT about messages does not hold …" (`"Quíteme de la lista de espera"`; simulated: red) |
 
 - [ ] **Step 6: Commit**
 
@@ -6263,8 +6360,8 @@ describe("textsViewOf — spec §6's Texts row, in the gate's order (plan G18)",
 
   it("a staff stop and a confirmed free-text stop may be resumed; a carrier stop may not (mutation: add carrier_block to RESUMABLE_METHODS → FAILS)", () => {
     expect((textsViewOf([row("revoked", "staff", "2026-10-03T15:00:00Z")], OK) as { canResume: boolean }).canResume).toBe(true);
-    const confirmed = row("revoked", "free_text", "2026-10-03T15:00:00Z", { excerpt: "ya no me manden", actorName: "Ana" });
-    expect(textsViewOf([confirmed], OK)).toMatchObject({ how: { kind: "free_text", excerpt: "ya no me manden", by: "Ana" }, canResume: true });
+    const confirmed = row("revoked", "free_text", "2026-10-03T15:00:00Z", { excerpt: "ya no me manden mensajes", actorName: "Ana" });
+    expect(textsViewOf([confirmed], OK)).toMatchObject({ how: { kind: "free_text", excerpt: "ya no me manden mensajes", by: "Ana" }, canResume: true });
     expect(textsViewOf([row("revoked", "carrier_block", "2026-10-03T15:00:00Z")], OK)).toMatchObject({ how: { kind: "carrier" }, canResume: false });
     expect([...RESUMABLE_METHODS].sort()).toEqual(["backfill_0049", "free_text", "staff"]);
   });
@@ -6458,10 +6555,10 @@ describe("resumeTexts (choice 19)", () => {
 
 describe("confirmStop / notAStop / their undo", () => {
   it("Confirm stop turns the hold into revoked / free_text carrying what they wrote, and completes the hold's To-dos (mutation: drop the evidence copy → FAILS)", async () => {
-    const hold = row("held", "free_text", { phrase: "ya no me manden", excerpt: "Ya no me manden mensajes" });
+    const hold = row("held", "free_text", { phrase: "no me manden mensajes", excerpt: "Ya no me manden mensajes" });
     db.readConsentHistory.mockResolvedValue([hold]);
     const r = await confirmStop(ctx, hold.id);
-    expect(eventOf()).toMatchObject({ action: "revoked", method: "free_text", evidence: { confirms: hold.id, phrase: "ya no me manden", excerpt: "Ya no me manden mensajes", actorName: "Ana" } });
+    expect(eventOf()).toMatchObject({ action: "revoked", method: "free_text", evidence: { confirms: hold.id, phrase: "no me manden mensajes", excerpt: "Ya no me manden mensajes", actorName: "Ana" } });
     expect(guardOf()).toEqual({ ifNewest: hold.id });
     expect(db.completeTasksForConsentEvents).toHaveBeenCalledWith(READER, "a1", [hold.id], "user_1");
     expect(r).toMatchObject({ ok: true, undo: { kind: "decision", eventId: "new_1", reopenTaskIds: ["task_1"] } });
@@ -6494,7 +6591,7 @@ describe("confirmStop / notAStop / their undo", () => {
   });
 
   it("the Undo of a hold decision is bound the same way: another user's, or an old one, is refused (review R3-I6; mutation: drop the bound from undoHoldDecision → a confirmed stop is lifted back to a hold with no note, FAILS)", async () => {
-    const base = { ...row("revoked", "free_text", { excerpt: "ya no me manden" }), id: "ev_conf", address: "+19562921696", channel: "sms", contact_id: "c1" };
+    const base = { ...row("revoked", "free_text", { excerpt: "ya no me manden mensajes" }), id: "ev_conf", address: "+19562921696", channel: "sms", contact_id: "c1" };
     db.readConsentEvent.mockResolvedValue({ ...base, actor_id: "user_2", occurred_at: FRESH });
     expect(await undoHoldDecision(ctx, "ev_conf", [])).toEqual({ ok: false, error: m["contact.texts.undoExpired"] });
     db.readConsentEvent.mockResolvedValue({ ...base, actor_id: "user_1", occurred_at: "2026-10-06T19:00:00Z" });
@@ -7203,8 +7300,8 @@ describe("the Texts row's lines (spec §6)", () => {
   });
 
   it("each how in plain words, a free-text stop naming who confirmed it (mutation: drop the name branch → FAILS)", () => {
-    expect(howLine({ kind: "free_text", excerpt: "ya no me manden", by: "Ana" })).toBe("they wrote “ya no me manden”, confirmed by Ana");
-    expect(howLine({ kind: "free_text", excerpt: "ya no me manden", by: null })).toBe("they wrote “ya no me manden”, confirmed by your team");
+    expect(howLine({ kind: "free_text", excerpt: "ya no me manden mensajes", by: "Ana" })).toBe("they wrote “ya no me manden mensajes”, confirmed by Ana");
+    expect(howLine({ kind: "free_text", excerpt: "ya no me manden mensajes", by: null })).toBe("they wrote “ya no me manden mensajes”, confirmed by your team");
     expect(howLine({ kind: "staff" })).toBe(m["contact.texts.how.staff"]);
     expect(howLine({ kind: "carrier" })).toBe(m["contact.texts.how.carrier"]);
     expect(howLine({ kind: "unsubscribe_link" })).toBe(m["contact.texts.how.unsubscribeLink"]);
@@ -8300,7 +8397,7 @@ const html = (holdOpenTaskIds: string[]) => renderToStaticMarkup(createElement(A
 const doneButtons = (markup: string) => (markup.match(new RegExp(`>${m["contact.done"]}<`, "g")) ?? []).length;
 
 describe("the contact timeline and a hold's To-do (review R3-N1, G21)", () => {
-  it("a To-do whose number is still on hold shows the decide-first hint INSTEAD of Done; a plain To-do keeps its Done (mutation: render Done for every open task → two Done buttons, FAILS)", () => {
+  it("a To-do whose number is still on hold shows the timeline hint (\"Close this one from the To do page.\") INSTEAD of Done; a plain To-do keeps its Done (mutation: render Done for every open task → two Done buttons, FAILS)", () => {
     const out = html(["t_hold"]);
     expect(renderedText(out)).toContain(m["todo.consent.timelineHint"]);
     expect(doneButtons(out)).toBe(1);
@@ -8543,7 +8640,7 @@ import { completeTaskAction } from "./actions";
 const form = (taskId: string) => { const f = new FormData(); f.set("contactId", "c1"); f.set("taskId", taskId); return f; };
 
 describe("completeTaskAction — the timeline's 'complete' (review R3-I1)", () => {
-  it("a stale page's Done on a hold's undecided To-do is refused without an error page: the page re-renders, and the timeline then shows the decide-first hint in its place (mutation: let HoldUndecidedError propagate → rejects, FAILS)", async () => {
+  it("a stale page's Done on a hold's undecided To-do is refused without an error page: the page re-renders, and the timeline then shows its hint in place of Done (mutation: let HoldUndecidedError propagate → rejects, FAILS)", async () => {
     completeTask.mockRejectedValueOnce(new HoldUndecidedError());
     await expect(completeTaskAction("a1", form("t1"))).resolves.toBeUndefined();
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts/c1");
@@ -9573,7 +9670,7 @@ This settles A1, A3 and A4, and F3's per-language question does not arise with t
 **Spec coverage** (the §7 PR-2 row, item by item, and what PR-1 handed on):
 - Inbound keywords, START and HELP: Task 4 (the matcher, decision 10/11, choice 26 as G9 extends it), Task 8 (what each means), Task 9 (the route).
 - The confirmation and the Telnyx reconciliation: Task 5 (§4.2's six lines, the help lines with S12's contact sentence), Task 6 (the three kinds, choice 18's any hour, the gate's one exception), Task 8 (BIS replies only when `autoresponse_type` is absent, whatever its spelling: G4; the reply owed the moment the row is written: G1), Task 9 (after the response: G3), Task 16 step 10 (Telnyx's own replies and keywords for US, MX and CA, with a read-back) and step 11 (the live one-reply check, word for word).
-- The phrase list and holds: Task 4 (§4.2's phrases as S9 extends them: 17 English and 17 Spanish sentence phrases, 28 Spanish verb forms × 4 message objects, 11 whole-message phrases and 4 repeated stop words, pinned by literals), Task 8 (held, the To-do, choice 20's no reply), Tasks 11–13 (Confirm stop, Not a stop, their bounded Undo, the To-do's own buttons, G20, G21).
+- The phrase list and holds: Task 4 (§4.2's phrases as S9 extends them: 17 English and 17 Spanish sentence phrases; 34 Spanish verb forms with 7 message words and 4 end objects; 14 whole-message phrases, the Spanish ones with the courtesy words; 4 repeated stop words — all pinned by literals), Task 8 (held, the To-do, choice 20's no reply), Tasks 11–13 (Confirm stop, Not a stop, their bounded Undo, the To-do's own buttons, G20, G21).
 - Grants: Task 8 (texting first, spec step 6), Task 10 (form, booking).
 - The drawer's Messages block, Texts row, and the To-do rows: Tasks 11, 12, 13 (§6's Allowed, Stopped, On hold, Check number; the two-row skeleton and the error line; "Since {date} · {how}"; Resume's required note; To-do lines from `messages.ts`).
 - The Telnyx backfill: Task 3 and Task 16 steps 7–8 (count first, write after danlo sees it, both before any number changes profile: A5, S11).
@@ -9588,7 +9685,7 @@ This settles A1, A3 and A4, and F3's per-language question does not arise with t
 
 **Type consistency** (names a later task uses, checked against the task that defines them): `appendConsentEventGuarded` / `ConsentGuard` (with `unless_customer_stopped`) / `{ ifNewest }` / `ConsentAppend.outcome` / `CUSTOMER_STOP_METHODS` (Task 1 → 3, 8, 10, 11); `readConsentHistory`, `readConsentEvent`, `readConsentActions`, `newestDecidingRow` (Task 1 → 2, 11, 13); `ensureConsentTask`, `completeTasksForConsentEvents`, `reopenTasks`, `nextBookedStart`, `WorkRow.consent` (Task 2 → 8, 11, 13); `matchKeyword`, `keywordDisplay`, `CANCEL_WORDS`, `matchPhrase` (Task 4 → 8, 11); `ReplyKind`, `consentReplyBody`, `telnyxReplyText`, `TELNYX_KEYWORDS`, the `sms.consentReply.*` keys (Task 5 → 8, 16); `SmsRequest.answersEventId`, `stop_confirmation_stale` (Task 6 → 8); `classifyInbound`, `parseAutoresponse` (`Autoresponse` with `OTHER`), `recordInboundConsent` (with its `owe` callback), `CHANGES_CONSENT`, `ConsentReplyPlan`, `sendConsentReply` (Task 8 → 9); `TextsView`, `TextsActionResult`, `TextsUndo`, `TextsContext` (with `now`), `UNDO_WINDOW_MS`, `textsContextFor`, the six `…Action`s, `TextsResponse` (Task 11 → 12, 13); `TextsLoad`, `runTextsAction`, `TEXTS_TREATMENT` (Task 12 → 13); `HoldUndecidedError`, `holdOpenTaskIds`, `listContactTasks`'s `consent_event_id` (Task 2 → 12, 13); `matchPhrase`, `WHOLE_MESSAGE_PHRASES`, `REPEATED_KEYWORDS` (Task 4 → 8); `readTaskContact` (returning the link, Task 13). NOT checked by a compiler: nothing was run (see Replay status).
 
-**Counts** (read off this file): 16 tasks; 3 checkpoints; 2 migrations (0055, 0056); 52 new copy keys (Task 5, counted off its two blocks: 12 + 30 + 10) plus 5 A2P keys (Task 7); nine Telnyx autoresp configs per profile (Task 16 step 10.2: 3 operations × 3 countries); 17 stop keywords in the stop config (Task 5's `TELNYX_KEYWORDS.stop`, ≤ Telnyx's 20); 161 phrase entries (Task 4: 17 English and 17 Spanish sentence phrases, 112 Spanish verb phrases from 28 forms × 4 objects, 11 whole-message phrases, 4 repeated stop words), plus 2 `NOT_FOLLOWED_BY` exclusions.
+**Counts** (read off this file): 16 tasks; 3 checkpoints; 2 migrations (0055, 0056); 52 new copy keys (Task 5, counted off its two blocks: 12 + 30 + 10) plus 5 A2P keys (Task 7); nine Telnyx autoresp configs per profile (Task 16 step 10.2: 3 operations × 3 countries); 17 stop keywords in the stop config (Task 5's `TELNYX_KEYWORDS.stop`, ≤ Telnyx's 20); Task 4's lists: 17 English and 17 Spanish sentence phrases, 34 Spanish verb forms, 7 message words, 4 end objects, 14 whole-message phrases, 4 repeated stop words, 4 leading and 5 trailing courtesy words, 1 `NOT_FOLLOWED_BY` exclusion.
 
 **Vacuity checks applied while writing** (memories `bis-vacuous-test-shapes`, `bis-test-vacuity`):
 - Every `vi.mock("@bis/db")` factory that a changed module reaches gains the new exports (route.test.ts and route.consent.test.ts gain `completeTasksForConsentEvents`; the call page test; the tasks actions test), and where a test needs a real pure function or class beside the mocks (`newestDecidingRow`, `HoldUndecidedError`), the factory spreads `importOriginal`.
@@ -9614,7 +9711,7 @@ This settles A1, A3 and A4, and F3's per-language question does not arise with t
 - A stop whose append COMMITS but whose answer is lost on the network gets no reply: the route answers 503, and Telnyx's retry finds the row `duplicate`, which owes nothing (review R2-m-e). The ledger is right; only the confirmation is missing.
 - The To-do's Undo carries task ids from the client; `reopenTasks` is bounded to the account (and RLS), so the worst case is a staff member reopening their own account's tasks.
 
-**Not replayed:** every step. The machine never had the 1.5 GB the brief requires for even one targeted test file, while this plan was written or while its review fixes were made. One pure module was SIMULATED instead, outside vitest: Task 4's `phrases.ts`, extracted from this file and run through Node's own type stripping, answered every assertion of its planned test as the test expects (review M7's count, recomputed for the final list): 50 named assertions (every held, not-held, whole-message and repeated-word case), 146 per-phrase sentences (17 English, 129 Spanish), 24 negative texts, all 21,170 ordered pairs of the containment test, and 157 normal-form checks — 21,547 checks, none failing. That is evidence about the logic, not a replay of the test file.
+**Not replayed:** every step. The machine never had the 1.5 GB the brief requires for even one targeted test file, while this plan was written or while its review fixes were made. One pure module was run instead, outside vitest: Task 4's `keywords.ts`, `phrases.ts` and `phrases.test.ts`, extracted verbatim from this file and run under Node's own type stripping with the verifier's vitest shim, passed all 446 tests and 75,791 checks, none failing; ten of Task 4's probes applied to that copy (rows 15, 19, 20, 22–28) each turned the test red; and the verifier's 67 real-world texts (`real.ts`) came out as the decisions say. That is evidence about the logic, not a vitest run.
 
 ## Deferred to whole-branch review
 
@@ -9656,7 +9753,7 @@ This settles A1, A3 and A4, and F3's per-language question does not arise with t
 1. **Consent replies are not billed** (G11). A stop, start or help reply is not an automation, a composer reply or a missed-call text-back, so the M7a rule does not bill it, and Task 14 pins that no consent reply records usage. Yours to change if it should.
 2. **An accented business name makes every reply longer.** "Jardinería López" puts most of BIS's replies at 2 segments and Telnyx's bilingual ones at 3 (Task 5's measurement). The spec's own words stay unaccented; the name is the business's.
 3. **Decision 10 was amended** (S7). It is one of the orchestrator's technical defaults, not one of your binding decisions: BIS now sends its own confirmation only when Telnyx did not already answer, which is what decision 12 and §4.2 already said.
-4. **The phrase list follows your two decisions of 2026-09-28.** English: "please stop", "stop please" and a repeated "stop" hold only as the WHOLE message ("Please stop!!" holds; "Please stop by Thursday" does not). Spanish: the verb forms hold only about messages ("No me mande más mensajes" holds; "No me mande la factura" does not), "Bórreme" only as the whole message, and "PARAR PARAR" as a repeated stop word. Two refinements, so you are not surprised: a bare ESCRIBIR request holds as the whole message ("Dejen de escribirme", "No me escriba" — writing to the customer is messaging, and a missed stop is worse than a false hold), while the bare MANDAR / ENVIAR forms still need a message object ("Dejen de mandarme" alone does not hold: "mandar" can mean a crew or an invoice); and "No me mande mensajes de voz, mejor texto" does NOT hold, by the plan's choice, because it asks for texts rather than against them (the same for "Quíteme de la lista de espera", a waiting list). Tests pin every one of these.
+4. **The phrase list follows your four decisions of 2026-09-28, and the orchestrator's calls under them.** English: "please stop", "stop please" and a repeated "stop" hold only as the WHOLE message ("Please stop!!" holds; "Please stop by Thursday" does not). Spanish: the verb forms hold only about messages — a message word ("mensajes", "textos", "sms", "msjs", "mensajitos", "ningún mensaje", "sus mensajes") or "más" / "nada" at the end ("No me manden más" holds; "No me manden más a Pedro" does not); "Bórreme", the escribir forms ("No me escriba") and "No me vuelvan a escribir" hold as the whole message, with one "ya" / "por favor" / "gracias" around them ("Ya no me escriban" holds; "No me escriba el martes" does not); "PARAR PARAR" is a repeated stop word. Three things you may notice: "No me mande mensajes de voz, mejor texto" now HOLDS (the orchestrator dropped its exception — it hid real stops like "no me manden mensajes de voz ni textos", and a false hold is one click to clear); any "quíteme de la lista …" holds, even "Quítame de la lista del sábado y ponme el domingo" (your list form; only "lista de espera" is excluded); and some plain stops still do not hold ("No quiero sus mensajes", "Borren mi número") — staff read them in the thread, and the list can grow with tests. Tests pin every held and not-held case named here except those last two, which are recorded misses, not decisions.
 5. **Leave the shared messaging profile alone until Task 16 step 8 is done** (review R1-N8): do not delete it or clear its opt-out list during this week's A2P work. Its list is what step 7 imports, and moving a number off it may leave that number's opt-outs behind (A5).
 
 ## Next plans
