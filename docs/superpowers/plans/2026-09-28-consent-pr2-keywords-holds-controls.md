@@ -97,8 +97,12 @@ S1–S12 are corrections applied to the spec itself, in this branch's two spec c
 - **S5. "Every phrase has two or more words"** (spec §4.2, step 5) is false for `borrenme`. What the "never both fire" claim needs is that no phrase matches a YES/NO word, which Task 4 tests.
 - **S6. Decision 12's "unverified"** becomes "verified 2026-09-28 (plan F1–F4)". The first spec commit's message called this "status only"; it was not — it also added a behavioural sentence to decision 12 ("…so BIS confirms only when `autoresponse_type` is absent"), the split G4 describes (review R1-I4). S7 makes decision 10 say the same.
 - **S7. Decision 10 amended** (a §1.2 orchestrator default, so the orchestrator may amend it; FYI to danlo, review R1-I4): BIS handles the keywords in the webhook and sends the one confirmation itself only when `autoresponse_type` is absent; when Telnyx answered, its configured reply, set to the spec's own line, is the one confirmation.
-- **S8. §4.2 step 2: a customer's STOP over a staff stop** (danlo, 2026-09-28; review R2-I3): the keyword stop is refused only when the newest `revoked` row is already the customer's own (keyword, carrier_block, backfill_telnyx, unsubscribe_link, one_click); over a staff stop or a confirmed free-text stop it is RECORDED, with no confirmation (the texts were already off), and from then on only the customer can lift it. The same for the Telnyx backfill (0055's `unless_customer_stopped`).
-- **S9. §4.2's phrase list extended** (danlo, 2026-09-28; review R2-I5): "please stop", "stop please", "no more texting", "do not contact me", "dont contact me", "stop stop" (a repeated keyword), and the singular Spanish forms "no me mande mensajes", "no mas mensajes", "no quiero mas mensajes", "quiteme de su lista", "borreme"; each a free-text phrase (a hold, staff confirm). The list is pinned in Task 4 by a test-local literal.
+- **S8. §4.2 step 2: a customer's STOP over a staff stop** (danlo, 2026-09-28; review R2-I3): the keyword stop is refused only when the newest deciding row is a `revoked` whose method is the customer's own (keyword, carrier_block, backfill_telnyx, unsubscribe_link, one_click) (wording, review R1-N5); over a staff stop or a confirmed free-text stop it is RECORDED, with no confirmation (the texts were already off), and from then on only the customer can lift it. The same for the Telnyx backfill (0055's `unless_customer_stopped`). §4.3's email rule ("an address already stopped gets no second row") is not the same principle; PR-3 decides whether email follows S8, and the spec now says so.
+- **S9. §4.2's phrase list extended** (danlo, 2026-09-28; reviews R2-I5, R2-N1), in three kinds, each a hold that staff confirm:
+  - **sentence phrases, anywhere in the message:** English adds "no more texting", "do not contact me", "dont contact me" (17 in all); Spanish is now a CLASS — each plural (ustedes) phrase with its usted and tú mirrors ("ya no me mande", "no me mandes", "deje de enviar", "quiteme de", "borrame" …), the pronoun-attached infinitives Spanish writes as one word ("dejen de mandarme", "deje de enviarme", "deja de escribirme" …), "no quiero mas mensajes", "no mas mensajes", "no mas textos" (48 in all);
+  - **whole-message phrases:** "please stop" and "stop please" count ONLY when they are the whole message, punctuation aside (danlo): "Please stop!!" holds, "Please stop by Thursday" does not; longer requests are the sentence phrases' job ("stop texting");
+  - **a stop word repeated as the whole message:** "stop stop", "alto alto", "baja baja" (any number of repeats), the same whole-message rule; one word on its own is a keyword, not a phrase.
+  Pinned in Task 4 by test-local literals.
 - **S10. §3: a `source_ref` names one delivery or event, never a reusable channel** (review R1-I3): a message id, a form submission, a booking, one Telnyx opt-out at its own time. A reusable source (a token, an address) would read as a retry forever and drop a second real stop as a duplicate. The backfill's source includes the opt-out's time.
 - **S11. §5 go-live step 0**, beyond S2: one bilingual config per operation for sender countries US, MX **and CA** (danlo's decision 1); the help reply carries the contact sentence (decision 2, S12); Telnyx's AI opt-out detection is read, a `true` stops the rollout, turning it off is a Telnyx write under danlo's go with a read-back, and an absent field is unknown, not off (review R1-I6); and Telnyx's existing opt-outs are imported before any number moves (decision 4, A5).
 - **S12. §4.2's help lines gain the contact sentence** the A2P campaign promises (`a2p-registration.md:197-199`; danlo's decision 2): "Call or text this number for help." / "Llame o escriba a este numero para recibir ayuda." — unaccented, because "número" would push BIS's Spanish help from one GSM-7 segment to two UCS-2 segments (measured, Task 5).
@@ -122,11 +126,11 @@ S1–S12 are corrections applied to the spec itself, in this branch's two spec c
 - **G18. The Texts row's precedence** is the gate's order: Stopped, then On hold, then Check number, then Allowed. A contact with no textable number renders no row (as in PR-1).
 - **G19. The "since" line** is "Since {date} · {how}", the date in the account's zone (`renderZone`), the drawer's other date rule.
 - **G20. An Undo is an Undo, not a note-free Resume** (review R3-I6): both Undos (of "Stop texts", of Confirm stop / Not a stop) are accepted only for the SAME staff member's row, under `UNDO_WINDOW_MS` (two minutes) old; past that, or for someone else's row, staff use Stop texts or Resume texts (with its note). Enforced on the server (Task 11).
-- **G21. A hold's To-do is never closed without deciding the hold, and never left open once it is decided** (review R3-I1): `completeTask` refuses it while its hold is undecided (every "Done" path); a STOP or START on the held number closes it (Task 8); Confirm stop / Not a stop close it (Task 11); a click once the number is no longer on hold closes it (Task 13). The agency Work queue has no action buttons (its rows are read-only links), so nothing changes there.
+- **G21. A hold's To-do is never closed without deciding the hold, and never left open once it is decided** (reviews R3-I1, R3-N1, R3-N3): `completeTask` refuses it while its NUMBER is still on hold — the newest deciding row a hold, the To-do's own or a later one (Task 2) — and no screen offers a Done that would be refused (the To-do page shows the two buttons; the contact timeline shows the decide-first hint, Task 12). A STOP or START on the held number closes the To-dos of every hold on it (Task 8); Confirm stop / Not a stop close them (Task 11); a click once the contact's number is no longer on hold closes the To-do (Task 13). The agency Work queue has no action buttons (its rows are read-only links), so nothing changes there.
 
 ## File Structure
 
-Read off the Files block of each task below (each task's block is the authority). **44 files created, 54 modified, 1 deleted** across 15 implementation tasks (Task 7 runs: danlo's decision 3). Test counts are left to each task's own test code: nothing was run to count them (Replay status).
+Read off the Files block of each task below (each task's block is the authority). **45 files created, 55 modified, 1 deleted** across 15 implementation tasks (Task 7 runs: danlo's decision 3). Test counts are left to each task's own test code: nothing was run to count them (Replay status).
 
 **packages/db**
 
@@ -154,7 +158,7 @@ Created:
 - `src/lib/ui/guarded-run.ts` (Tasks 11, 12), `src/lib/ui/guarded-run.test.ts` — Task 11
 - `src/lib/consent/texts-view.ts`, `texts-view.test.ts`, `actor.ts`, `actor.test.ts`, `staff-actions.ts`, `staff-actions.test.ts`, `texts-context.ts` — Task 11
 - `…/contacts/texts-actions.ts`, `src/app/api/accounts/[accountId]/contacts/[contactId]/texts/route.ts`, `route.test.ts` — Task 11
-- `src/lib/consent/texts-row.ts`, `texts-row.test.ts`, `…/contacts/texts-row.tsx`, `…/contacts/texts-row.test.ts` — Task 12
+- `src/lib/consent/texts-row.ts`, `texts-row.test.ts`, `…/contacts/texts-row.tsx`, `…/contacts/texts-row.test.ts`, `…/contacts/[contactId]/activity-timeline.hold.test.ts` — Task 12
 - `…/tasks/consent-hold-actions.tsx`, `…/tasks/work-list.consent.test.ts`, `…/contacts/[contactId]/actions.test.ts` — Task 13
 - `…/checklist/actions.test.ts` — Task 7
 - `e2e/consent-texts.spec.ts` — Task 15
@@ -168,7 +172,7 @@ Modified:
 - `src/lib/contacts/marketing-optout.ts`, `marketing-optout.test.ts`, `src/lib/contacts/phone-country.ts` (Tasks 11, 12), `phone-country.test.ts`, `…/contacts/marketing-optout-switch.tsx` — Task 11 (R3-M7)
 - `…/contacts/contact-drawer.tsx`, `contact-drawer.wiring.test.ts`, `…/contacts/[contactId]/contact-fields-panel.tsx`, `…/contacts/[contactId]/page.tsx`, `…/contacts/[contactId]/page.test.ts`, `src/app/(dashboard)/dashboard/styleguide/page.tsx` — Task 12
 - `…/tasks/actions.ts`, `…/tasks/actions.test.ts`, `…/tasks/work-list.tsx`, `…/calls/[callId]/page.tsx`, `…/calls/[callId]/page.test.ts`, `…/contacts/[contactId]/actions.ts` — Task 13
-- `e2e/consent-phone-country.spec.ts` (PR-1's e2e, on #152's version) — Task 12
+- `e2e/consent-phone-country.spec.ts` (PR-1's e2e, on #152's version), `…/contacts/[contactId]/activity-timeline.tsx` — Task 12
 - `src/lib/consent/scans.test.ts` — Task 14
 
 Deleted:
@@ -194,6 +198,7 @@ Modified:
 - **Lane A** (the inbound route): Task 8 → Task 9.
 - **Lane B** (grants and the Texts actions): Task 10 → Task 11.
 - **Lane C**: Task 7 (danlo's decision 3).
+- Lanes B and C are cut from Checkpoint A's head, so they INHERIT scan 2's predicted red (Task 6 Step 4) until Lane A's Task 8 lands at Checkpoint B; their full-suite runs expect it, and it is not theirs to fix (review R3-N4).
 
 **Checkpoint B.** Cherry-pick Tasks 7–11; the same checks, plus `pnpm --filter web lint`.
 
@@ -366,6 +371,10 @@ describe("0055 append_consent_event: the guards", () => {
       const b = await account(c, "ib");
       await append(c, { account: b, action: "revoked", method: "keyword" });
       expect((await append(c, { account: b, action: "held", method: "free_text", guard: "if_allowed" })).outcome).toBe("refused");
+      // `held` has a state rule of its own that refuses the same priors, which
+      // would mask the guard (review R1-N2). An action with NO state rule
+      // leaves only the guard to refuse it:
+      expect((await append(c, { account: b, action: "granted", method: "form", guard: "if_allowed" })).outcome).toBe("refused");
     }));
 
   it("if_stopped_or_held: START lifts a stop or a hold, and an allowed address with NO rows is refused, not appended — the plpgsql NULL guard (memory bis-plpgsql-null-guard; mutation: `if not v_ok` without coalesce → NULL is not taken and the insert runs, FAILS)", () =>
@@ -386,14 +395,18 @@ describe("0055 append_consent_event: the guards", () => {
   it("if_newest: the expected id must still be the newest deciding row, and null means 'there is none' (mutation: `v_prior_id is not distinct from p_expect_id` → `p_expect_id is null or v_prior_id = p_expect_id` → the stale null appends, FAILS)", () =>
     withRollback(async (c) => {
       const a = await account(c, "in");
-      const first = await append(c, { account: a, action: "revoked", method: "staff", actor: "user_1", guard: "if_newest", expect: null });
-      expect(first.outcome).toBe("appended");
-      // A stale "no row yet" click, after the stop landed:
+      // The customer's STOP then START: the address is allowed again, so a staff
+      // stop is permitted by choice 19's state rule, and only the compare-and-set
+      // can refuse a stale one (review R1-N1: over a stop, the state rule would
+      // refuse it anyway and mask the mutation).
+      await append(c, { account: a, action: "revoked", method: "keyword" });
+      const start = await append(c, { account: a, action: "resubscribed", method: "start_keyword" });
+      // A stale "no row yet" click, made before the STOP and the START landed:
       expect((await append(c, { account: a, action: "revoked", method: "staff", actor: "user_1", guard: "if_newest", expect: null })).outcome).toBe("refused");
       // The right id:
-      expect((await append(c, { account: a, action: "resubscribed", method: "staff_undo", actor: "user_1", guard: "if_newest", expect: first.event_id })).outcome).toBe("appended");
-      // The same id again, now stale:
-      expect((await append(c, { account: a, action: "resubscribed", method: "staff_undo", actor: "user_1", guard: "if_newest", expect: first.event_id })).outcome).toBe("refused");
+      expect((await append(c, { account: a, action: "revoked", method: "staff", actor: "user_1", guard: "if_newest", expect: start.event_id })).outcome).toBe("appended");
+      // The same id again, now stale — asked with an action no state rule touches, so only the compare-and-set answers:
+      expect((await append(c, { account: a, action: "granted", method: "form", guard: "if_newest", expect: start.event_id })).outcome).toBe("refused");
     }));
 
   it("an unknown guard raises 22023 and writes nothing (mutation: drop the guard check → the CASE yields NULL and the call silently refuses, FAILS on the code)", () =>
@@ -1347,7 +1360,7 @@ Expected (predicted; not replayed): `consent.test.ts` all pass (the unchanged co
 | 4 | 0055: `when 'if_newest' then p_expect_id is null or v_prior_id = p_expect_id` | "if_newest: …" |
 | 5 | 0055: delete the `if p_action = 'hold_released'` branch | "hold_released lands only on a held address" |
 | 6 | 0055: drop `and v_prior_method = 'free_text'` | "held lands only on an allowed address …" |
-| 7 | 0055: `coalesce(p_occurred_at, now())` | "rows written one after another …" |
+| 7 | 0055: `coalesce(p_occurred_at, now())` | "rows written 2 ms apart in ONE transaction are ordered as written …" |
 | 8 | 0055: `order by e.occurred_at desc, …` (no date_trunc) | "the newest row is judged to the MILLISECOND" |
 | 9 | 0055: delete the `if p_source_ref is not null` block | "a second write from the same source is 'duplicate'" |
 | 10 | 0055: drop `consent_events_source_once` | "consent_events_source_once also refuses …" and the index-list test |
@@ -1395,18 +1408,28 @@ git commit -m "feat(consent): 0055, the ledger's one guarded write (per-address 
   - `reopenTasks(db, accountId, ids: readonly string[], actorId: string, actorType?: ActorType): Promise<void>`
   - `nextBookedStart(db, accountId, contactId, nowIso: string): Promise<string | null>`
   - `WorkRow.consent?: { eventId: string; action: ConsentAction } | null` (set on task rows that link a ledger row)
+  - `HoldUndecidedError`; `completeTask` now THROWS it for a To-do whose linked number is still on hold (its newest deciding row is a hold), so no "Done" anywhere closes a hold without deciding it (review R3-I1, R3-N3; G21)
+  - `holdOpenTaskIds(db, accountId, tasks: readonly { id: string; completed_at: string | null; consent_event_id?: string | null }[]): Promise<string[]>` — the open To-dos whose number is still on hold (the contact timeline shows a hint in place of their Done, review R3-N1)
+  - `listContactTasks` also selects `consent_event_id`
 
 - [ ] **Step 1: Write the failing tests**
 
 Create `packages/db/src/consent-tasks.test.ts`:
 
 ```ts
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 vi.mock("./events", () => ({ emit: vi.fn(async () => undefined) }));
 import { emit } from "./events";
-import { ensureConsentTask, completeTasksForConsentEvents, reopenTasks } from "./activities";
+// The two ledger reads the hold guard makes; the reducer (newestDecidingRow) stays real.
+vi.mock("./consent", async (importOriginal) => ({
+  ...(await importOriginal<object>()), readConsentEvent: vi.fn(), readConsentHistory: vi.fn(),
+}));
+import { readConsentEvent, readConsentHistory } from "./consent";
+import {
+  ensureConsentTask, completeTasksForConsentEvents, reopenTasks, completeTask, holdOpenTaskIds, HoldUndecidedError,
+} from "./activities";
 import { nextBookedStart } from "./booking";
 
 /**
@@ -1494,6 +1517,66 @@ describe("nextBookedStart — for the CANCEL To-do", () => {
   it("none is null, and a read error throws (mutation: return null on error → FAILS)", async () => {
     expect(await nextBookedStart(fakeDb([{ data: [], error: null }]).db, "a1", "c1", "2026-10-06T00:00:00Z")).toBeNull();
     await expect(nextBookedStart(fakeDb([{ data: null, error: { message: "boom" } }]).db, "a1", "c1", "x")).rejects.toThrow("boom");
+  });
+});
+
+/** A hold on the contact's number, as readConsentEvent answers it. */
+const HOLD = { id: "h1", action: "held", method: "free_text", channel: "sms", address: "+19562921696", contact_id: "c1",
+  occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: null };
+
+describe("completeTask — a hold's To-do closes by deciding the hold, never by Done (review R3-I1, R3-N3; G21)", () => {
+  beforeEach(() => {
+    vi.mocked(readConsentEvent).mockReset().mockResolvedValue(HOLD as never);
+    vi.mocked(readConsentHistory).mockReset();
+  });
+
+  it("refuses while the NUMBER is still on hold — its newest deciding row a hold, the To-do's own or a later one — and writes nothing (mutation: drop the guard → the update runs, FAILS; mutation: ask only whether the To-do's OWN hold is newest → the H2 case completes, FAILS)", async () => {
+    vi.mocked(readConsentHistory).mockResolvedValue([HOLD] as never);
+    const f = fakeDb([{ data: { consent_event_id: "h1" }, error: null }]);
+    await expect(completeTask(f.db, "a1", "t1", "user_1")).rejects.toBeInstanceOf(HoldUndecidedError);
+    expect(f.calls.some((c) => c[0] === "update")).toBe(false);
+    // Not a stop, then its Undo: a NEW hold (H2) is newest, and the reopened To-do T1 still links H1.
+    vi.mocked(readConsentHistory).mockResolvedValue([
+      { ...HOLD, id: "h2", method: "staff_undo", occurred_at: "2026-10-05T12:00:00Z" },
+      { ...HOLD, id: "r1", action: "hold_released", method: "staff", occurred_at: "2026-10-05T11:00:00Z" }, HOLD,
+    ] as never);
+    const g = fakeDb([{ data: { consent_event_id: "h1" }, error: null }]);
+    await expect(completeTask(g.db, "a1", "t1", "user_1")).rejects.toBeInstanceOf(HoldUndecidedError);
+  });
+
+  it("completes once the hold is decided, and a task with no consent link exactly as before (mutation: refuse every linked task → FAILS)", async () => {
+    vi.mocked(readConsentHistory).mockResolvedValue([
+      { ...HOLD, id: "r1", action: "hold_released", method: "staff", occurred_at: "2026-10-05T11:00:00Z" }, HOLD,
+    ] as never);
+    const f = fakeDb([{ data: { consent_event_id: "h1" }, error: null }, { data: null, error: null }]);
+    await completeTask(f.db, "a1", "t1", "user_1");
+    expect(f.calls.some((c) => c[0] === "update")).toBe(true);
+    const g = fakeDb([{ data: { consent_event_id: null }, error: null }, { data: null, error: null }]);
+    await completeTask(g.db, "a1", "t2", "user_1");
+    expect(g.calls.some((c) => c[0] === "update")).toBe(true);
+    expect(readConsentEvent).toHaveBeenCalledTimes(1);   // the plain task read no ledger
+  });
+});
+
+describe("holdOpenTaskIds — the open To-dos the contact timeline shows a hint for, in place of a Done that would be refused (review R3-N1)", () => {
+  beforeEach(() => {
+    vi.mocked(readConsentEvent).mockReset().mockResolvedValue(HOLD as never);
+    vi.mocked(readConsentHistory).mockReset().mockResolvedValue([HOLD] as never);
+  });
+
+  it("only OPEN tasks linked to a number that is still on hold (mutation: drop the open-task condition → the done one is listed, FAILS)", async () => {
+    expect(await holdOpenTaskIds({} as never, "a1", [
+      { id: "t_open", completed_at: null, consent_event_id: "h1" },
+      { id: "t_done", completed_at: "2026-10-05T12:00:00Z", consent_event_id: "h1" },
+      { id: "t_plain", completed_at: null, consent_event_id: null },
+    ])).toEqual(["t_open"]);
+  });
+
+  it("a number no longer on hold offers Done again (mutation: hint for every linked task → FAILS)", async () => {
+    vi.mocked(readConsentHistory).mockResolvedValue([
+      { ...HOLD, id: "r1", action: "hold_released", method: "staff", occurred_at: "2026-10-05T11:00:00Z" }, HOLD,
+    ] as never);
+    expect(await holdOpenTaskIds({} as never, "a1", [{ id: "t_open", completed_at: null, consent_event_id: "h1" }])).toEqual([]);
   });
 });
 ```
@@ -1702,6 +1785,84 @@ Replace with:
   });
 ```
 
+Edit `packages/db/src/activities.ts` again — the hold To-do's guard (review R3-I1, R3-N3, R3-N1; plan G21). Add to its imports:
+
+```ts
+import { readConsentEvent, readConsentHistory, newestDecidingRow } from "./consent";
+```
+
+and append:
+
+```ts
+/** A hold's To-do is closed by deciding the hold (Confirm stop / Not a stop), never by "Done" (review R3-I1). */
+export class HoldUndecidedError extends Error {
+  constructor() {
+    super("this To-do asks about a hold that is still undecided");
+    this.name = "HoldUndecidedError";
+  }
+}
+
+/**
+ * Is the NUMBER this ledger row is about still on hold — its newest deciding
+ * row a hold, this one or a later one (review R3-N3: after Not a stop and its
+ * Undo, the new hold H2 is newest while the reopened To-do still links H1)?
+ */
+async function holdStillOpen(db: SupabaseClient, accountId: string, eventId: string): Promise<boolean> {
+  const ev = await readConsentEvent(db, accountId, eventId);
+  if (!ev || ev.action !== "held") return false;
+  return newestDecidingRow(await readConsentHistory(db, accountId, ev.channel, ev.address))?.action === "held";
+}
+
+/** The open To-dos whose linked number is still on hold: the contact timeline shows a hint in place of their Done (review R3-N1). */
+export async function holdOpenTaskIds(
+  db: SupabaseClient, accountId: string,
+  tasks: readonly { id: string; completed_at: string | null; consent_event_id?: string | null }[],
+): Promise<string[]> {
+  const open: string[] = [];
+  for (const t of tasks) {
+    if (!t.completed_at && t.consent_event_id && await holdStillOpen(db, accountId, t.consent_event_id)) open.push(t.id);
+  }
+  return open;
+}
+```
+
+And in the same file, `completeTask` gains the guard (every "Done" path meets it: the per-account list, the contact page's timeline):
+
+Find:
+```ts
+export async function completeTask(
+  db: SupabaseClient, accountId: string, taskId: string, actorId: string,
+  actorType: ActorType = "user",
+): Promise<void> {
+  const { error } = await db.from("tasks")
+```
+Replace with:
+```ts
+export async function completeTask(
+  db: SupabaseClient, accountId: string, taskId: string, actorId: string,
+  actorType: ActorType = "user",
+): Promise<void> {
+  const { data: linked, error: readError } = await db.from("tasks")
+    .select("consent_event_id").eq("account_id", accountId).eq("id", taskId).maybeSingle();
+  if (readError) throw new Error(readError.message);
+  const eventId = (linked as { consent_event_id: string | null } | null)?.consent_event_id ?? null;
+  if (eventId && await holdStillOpen(db, accountId, eventId)) throw new HoldUndecidedError();
+  const { error } = await db.from("tasks")
+```
+
+And `listContactTasks` returns the link, for the timeline (Task 12):
+
+Find:
+```ts
+    .select("id, title, due_at, completed_at, created_at")
+    .eq("account_id", accountId).eq("contact_id", contactId)
+```
+Replace with:
+```ts
+    .select("id, title, due_at, completed_at, created_at, consent_event_id")
+    .eq("account_id", accountId).eq("contact_id", contactId)
+```
+
 Edit `packages/db/src/index.ts`:
 
 Find:
@@ -1711,7 +1872,8 @@ export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask
 Replace with:
 ```ts
 export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask,
-         ensureConsentTask, completeTasksForConsentEvents, reopenTasks } from "./activities";
+         ensureConsentTask, completeTasksForConsentEvents, reopenTasks,
+         HoldUndecidedError, holdOpenTaskIds } from "./activities";
 ```
 
 Find the line in `packages/db/src/index.ts` that exports from `./booking` and contains `listUpcomingBookings`, and add `nextBookedStart` to its name list (keep every other name exactly as it is).
@@ -1725,7 +1887,7 @@ pnpm exec tsc --noEmit
 SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/test/work-queue.test.ts
 ```
 
-Expected (predicted; not replayed): the new file passes (8 tests); `tsc` exit 0; `work-queue.test.ts`'s `withRollback` tests pass unchanged on `post` (its `withTestAccount` tests fail to connect locally, as on `main`). Then the full web suite: `WorkRow.consent` is optional, so no web fixture changes; `apps/web` tests that mock `@bis/db` and build work rows are unaffected.
+Expected (predicted; not replayed): the new file passes (12 tests); `tsc` exit 0; `work-queue.test.ts`'s `withRollback` tests pass unchanged on `post` (its `withTestAccount` tests fail to connect locally, as on `main`). Then the full web suite: `WorkRow.consent` is optional, so no web fixture changes; `apps/web` tests that mock `@bis/db` and build work rows are unaffected.
 
 - [ ] **Step 5: Probes**
 
@@ -1739,6 +1901,10 @@ Expected (predicted; not replayed): the new file passes (8 tests); `tsc` exit 0;
 | 6 | `reopenTasks`: drop `.eq("account_id", accountId)` | "reopens exactly the tasks the undo carries, in this account" |
 | 7 | `nextBookedStart`: drop `.eq("status", "booked")` | "the soonest BOOKED appointment" |
 | 8 | `openTasks`: drop `consent_event_id` from the select | `consent-tasks-live.test.ts` (CI) |
+| 9 | `completeTask`: drop the `holdStillOpen` guard | "refuses while the NUMBER is still on hold …" |
+| 10 | `holdStillOpen`: `?.id === eventId` (only the To-do's OWN hold counts, review R3-N3) | "refuses while the NUMBER is still on hold …" (the H2 case) |
+| 11 | `holdStillOpen`: return true for any linked row | "completes once the hold is decided …" and "a number no longer on hold offers Done again" |
+| 12 | `holdOpenTaskIds`: drop the `!t.completed_at` condition | "only OPEN tasks linked to a number that is still on hold" |
 
 - [ ] **Step 6: Commit**
 
@@ -2150,7 +2316,7 @@ git commit -m "feat(consent): the Telnyx opt-out backfill — owners read, plan 
 - Produces:
   - `type KeywordKind = "stop" | "start" | "help"`; `type KeywordLanguage = "en" | "es"`; `type KeywordMatch = { kind: KeywordKind; word: string; language: KeywordLanguage }`
   - `normaliseKeyword(text: string): string`; `matchKeyword(text: string): KeywordMatch | null`; `keywordDisplay(word: string): string`; `CANCEL_WORDS: ReadonlySet<string>` (`CANCEL`, `CANCELAR`)
-  - `type PhraseMatch = { phrase: string; language: "en" | "es" }`; `PHRASES_EN`, `PHRASES_ES: readonly string[]`; `normalisePhraseText(text: string): string`; `matchPhrase(text: string): PhraseMatch | null`
+  - `type PhraseMatch = { phrase: string; language: "en" | "es" }`; `PHRASES_EN`, `PHRASES_ES: readonly string[]` (sentence phrases, found anywhere); `WHOLE_MESSAGE_PHRASES: readonly PhraseMatch[]` and `REPEATED_KEYWORDS: readonly { word; language }[]` (only as the whole message, danlo 2026-09-28); `normalisePhraseText(text: string): string`; `matchPhrase(text: string): PhraseMatch | null`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2232,15 +2398,22 @@ Create `apps/web/src/lib/consent/phrases.test.ts`:
 ```ts
 import { describe, it, expect } from "vitest";
 import { matchConfirmationReply } from "@bis/db";
-import { matchPhrase, normalisePhraseText, PHRASES_EN, PHRASES_ES } from "./phrases";
+import {
+  matchPhrase, normalisePhraseText, PHRASES_EN, PHRASES_ES, WHOLE_MESSAGE_PHRASES, REPEATED_KEYWORDS,
+} from "./phrases";
 import { matchKeyword } from "./keywords";
 
 /**
- * Spec §4.2's phrase list as corrected (S9: danlo's 2026-09-28 extension),
- * matched on whole words anywhere in the message, ignoring case, accents and
- * punctuation (apostrophes dropped, so "don't text" is "dont text"). A false
- * match only holds texts; a missed sentence is the risk, which is why staff
- * can still stop texts by hand.
+ * Spec §4.2's phrase list as corrected (S9: danlo's 2026-09-28 decisions),
+ * matched ignoring case, accents and punctuation (apostrophes dropped, so
+ * "don't text" is "dont text"). Two kinds:
+ * - SENTENCE phrases, found as whole words anywhere in the message;
+ * - WHOLE-MESSAGE phrases ("please stop", "stop please") and a REPEATED stop
+ *   word ("stop stop", "alto alto", "baja baja"), which count only when they
+ *   ARE the message: "Please stop!!" holds, "Please stop by Thursday" does not
+ *   (danlo). Longer requests are the sentence phrases' job ("stop texting").
+ * A false match only holds texts; a missed sentence is the risk, which is why
+ * staff can still stop texts by hand.
  *
  * The expected lists are LITERALS here, not the module's own arrays: a test
  * that iterates the implementation's list cannot notice a phrase dropped from
@@ -2251,16 +2424,32 @@ const EXPECTED_EN = [
   "stop texting", "stop sending", "stop messaging", "stop contacting", "dont text", "do not text",
   "dont message", "do not message", "no more texts", "no more messages", "remove me", "take me off",
   "unsubscribe me", "wrong number",
-  "no more texting", "do not contact me", "dont contact me", "stop stop", "stop please", "please stop",
+  "no more texting", "do not contact me", "dont contact me",
 ];
+/** The Spanish CLASS (review R2-N1): every plural (ustedes) phrase with its usted and tú mirrors, the pronoun-attached infinitives, and the rest. */
 const EXPECTED_ES = [
-  "ya no me manden", "ya no me envien", "ya no me escriban", "no me manden", "no me envien", "no me escriban",
-  "dejen de mandar", "dejen de enviar", "dejen de escribir", "no quiero mensajes", "no quiero recibir",
-  "quitenme de", "borrenme", "numero equivocado",
-  "no me mande mensajes", "no quiero mas mensajes", "no mas mensajes", "quiteme de su lista", "borreme",
+  "ya no me manden", "ya no me envien", "ya no me escriban",
+  "ya no me mande", "ya no me envie", "ya no me escriba",
+  "ya no me mandes", "ya no me envies", "ya no me escribas",
+  "no me manden", "no me envien", "no me escriban",
+  "no me mande", "no me envie", "no me escriba",
+  "no me mandes", "no me envies", "no me escribas",
+  "dejen de mandarme", "dejen de enviarme", "dejen de escribirme",
+  "deje de mandarme", "deje de enviarme", "deje de escribirme",
+  "deja de mandarme", "deja de enviarme", "deja de escribirme",
+  "dejen de mandar", "dejen de enviar", "dejen de escribir",
+  "deje de mandar", "deje de enviar", "deje de escribir",
+  "deja de mandar", "deja de enviar", "deja de escribir",
+  "no quiero mas mensajes", "no quiero mensajes", "no quiero recibir",
+  "no mas mensajes", "no mas textos",
+  "quitenme de", "quiteme de", "quitame de",
+  "borrenme", "borreme", "borrame",
+  "numero equivocado",
 ];
+const EXPECTED_WHOLE = [{ phrase: "please stop", language: "en" }, { phrase: "stop please", language: "en" }];
+const EXPECTED_REPEATED = [{ word: "stop", language: "en" }, { word: "alto", language: "es" }, { word: "baja", language: "es" }];
 
-describe("matchPhrase — every phrase, in a real sentence", () => {
+describe("matchPhrase — every sentence phrase, in a real sentence", () => {
   it.each(EXPECTED_EN)("English %j matches inside a sentence (mutation: drop the phrase from PHRASES_EN → FAILS)", (phrase) => {
     expect(matchPhrase(`Hi, please ${phrase} ok? Thanks`)).toEqual({ phrase, language: "en" });
   });
@@ -2278,31 +2467,52 @@ describe("matchPhrase — how people actually write", () => {
     expect(matchPhrase("Número equivocado")?.phrase).toBe("numero equivocado");
     expect(matchPhrase("Quítenme de su lista por favor")?.phrase).toBe("quitenme de");
     expect(matchPhrase("Bórrenme")?.phrase).toBe("borrenme");
-    // danlo's 2026-09-28 extension, as customers type it:
-    expect(matchPhrase("Please stop")?.phrase).toBe("please stop");
-    expect(matchPhrase("Stop, please!")?.phrase).toBe("stop please");
-    expect(matchPhrase("STOP STOP")?.phrase).toBe("stop stop");
-    expect(matchPhrase("Stop. Stop. Stop.")?.phrase).toBe("stop stop");
     expect(matchPhrase("Don't contact me again")?.phrase).toBe("dont contact me");
-    expect(matchPhrase("No me mande mensajes")?.phrase).toBe("no me mande mensajes");
-    expect(matchPhrase("No más mensajes por favor")?.phrase).toBe("no mas mensajes");
+  });
+
+  it("the Spanish a customer actually sends — singular, tú, a pronoun on the verb — the misses review R2-N1 listed (mutation: drop the class mirrors → FAILS)", () => {
+    expect(matchPhrase("Dejen de mandarme mensajes")?.phrase).toBe("dejen de mandarme");
+    expect(matchPhrase("Dejen de enviarme mensajes")?.phrase).toBe("dejen de enviarme");
+    expect(matchPhrase("Dejen de escribirme")?.phrase).toBe("dejen de escribirme");
+    expect(matchPhrase("Deje de mandarme mensajes")?.phrase).toBe("deje de mandarme");
+    expect(matchPhrase("No me mande más mensajes")?.phrase).toBe("no me mande");
+    expect(matchPhrase("No me envíe mensajes")?.phrase).toBe("no me envie");
+    expect(matchPhrase("No me escriba")?.phrase).toBe("no me escriba");
+    expect(matchPhrase("No me mandes mensajes")?.phrase).toBe("no me mandes");
+    expect(matchPhrase("Quíteme de la lista")?.phrase).toBe("quiteme de");
+    expect(matchPhrase("No más textos")?.phrase).toBe("no mas textos");
     expect(matchPhrase("No quiero más mensajes")?.phrase).toBe("no quiero mas mensajes");
-    expect(matchPhrase("Quíteme de su lista")?.phrase).toBe("quiteme de su lista");
     expect(matchPhrase("Bórreme")?.phrase).toBe("borreme");
   });
 
-  it("'please stop' also holds 'Please stop by at 3' — the accepted cost of the phrase: a false match only puts texts ON HOLD and staff lift it in one click (danlo 2026-09-28; pins the behaviour, so a later narrowing is a decision, not an accident)", () => {
-    expect(matchPhrase("Please stop by at 3")?.phrase).toBe("please stop");
-  });
-
-  it("a phrase that contains another is listed first (\"stop stop\" and \"stop please\" before \"please stop\"; \"no quiero mas mensajes\" before \"no mas mensajes\") (mutation: move \"please stop\" to the front of PHRASES_EN → \"Hi, please stop texting\" reads as \"please stop\", FAILS)", () => {
-    expect(matchPhrase("Hi, please stop texting")?.phrase).toBe("stop texting");
-    expect(matchPhrase("please stop stop")?.phrase).toBe("stop stop");
+  it("a phrase that contains another is listed first (\"ya no me mande\" before \"no me mande\"; \"no quiero mas mensajes\" before \"no mas mensajes\") (mutation: move \"no me mande\" above \"ya no me mande\" → FAILS)", () => {
+    expect(matchPhrase("ya no me mande nada")?.phrase).toBe("ya no me mande");
+    expect(matchPhrase("ya no me manden mensajes")?.phrase).toBe("ya no me manden");
     expect(matchPhrase("no quiero mas mensajes")?.phrase).toBe("no quiero mas mensajes");
   });
+});
 
-  it("the longer Spanish phrase wins over the one it contains (\"ya no me manden\" before \"no me manden\") (mutation: reverse the Spanish list → FAILS)", () => {
-    expect(matchPhrase("ya no me manden mensajes")?.phrase).toBe("ya no me manden");
+describe("matchPhrase — the whole-message phrases and a repeated stop word (danlo, 2026-09-28)", () => {
+  it("\"please stop\" and \"stop please\" hold only as the WHOLE message, punctuation aside (mutation: drop the whole-message list → FAILS)", () => {
+    expect(matchPhrase("Please stop!!")).toEqual({ phrase: "please stop", language: "en" });
+    expect(matchPhrase("Stop, please.")).toEqual({ phrase: "stop please", language: "en" });
+  });
+
+  it("\"Please stop by Thursday\" does NOT hold: a whole-message phrase inside a longer text is not a stop request (danlo, 2026-09-28; mutation: match the whole-message phrases anywhere → FAILS)", () => {
+    expect(matchPhrase("Please stop by Thursday")).toBeNull();
+    expect(matchPhrase("Can you stop please at the store")).toBeNull();
+  });
+
+  it("a stop word repeated as the whole message holds, in either language, however many times (mutation: drop the repeated-word rule → FAILS)", () => {
+    expect(matchPhrase("STOP STOP")).toEqual({ phrase: "stop stop", language: "en" });
+    expect(matchPhrase("Stop. Stop. Stop.")).toEqual({ phrase: "stop stop", language: "en" });
+    expect(matchPhrase("Alto alto")).toEqual({ phrase: "alto alto", language: "es" });
+    expect(matchPhrase("¡Baja, baja!")).toEqual({ phrase: "baja baja", language: "es" });
+  });
+
+  it("…but not one word on its own (that is a keyword, keywords.ts), and not inside a longer text (mutation: accept a single word → \"alto\" holds, FAILS; mutation: find the repeat anywhere → FAILS)", () => {
+    expect(matchPhrase("alto")).toBeNull();
+    expect(matchPhrase("stop stop by later")).toBeNull();
   });
 });
 
@@ -2310,19 +2520,21 @@ describe("matchPhrase — the fixed negative set", () => {
   it.each([
     "Can you stop by at 3?", "I'll text you the address", "Cancel my appointment please", "No", "Yes",
     "Remove the old gutters", "Take me to the shop", "That texture looks great", "Is the number right?",
-    "remove meat from the order", "don't texture the wall",
+    "remove meat from the order", "don't texture the wall", "Please stop by Thursday",
   ])("%j is not a stop request (mutation: substring match without word edges → 'remove meat' or 'texture' matches, FAILS)", (text) => {
     expect(matchPhrase(text)).toBeNull();
   });
 });
 
-describe("the list itself", () => {
+describe("the lists themselves", () => {
   it("every phrase is already in the matcher's own form, or it could never match (mutation: add a phrase with an accent or a capital → FAILS naming it)", () => {
-    for (const p of [...PHRASES_EN, ...PHRASES_ES]) expect(normalisePhraseText(p), p).toBe(p);
+    for (const p of [...PHRASES_EN, ...PHRASES_ES, ...WHOLE_MESSAGE_PHRASES.map((w) => w.phrase)]) expect(normalisePhraseText(p), p).toBe(p);
+    for (const r of REPEATED_KEYWORDS) expect(normalisePhraseText(r.word), r.word).toBe(r.word);
   });
 
   it("no phrase is a keyword, and no phrase is itself a YES/NO answer as the automation engine reads one, so YES/NO and a phrase can never both fire on one text (spec §4.2 step 5, corrected S5; the engine's own exported matcher, not a hand-typed word list — review R2-m14; mutation: add 'no' to PHRASES_ES → FAILS)", () => {
-    for (const p of [...PHRASES_EN, ...PHRASES_ES]) {
+    const all = [...PHRASES_EN, ...PHRASES_ES, ...WHOLE_MESSAGE_PHRASES.map((w) => w.phrase), ...REPEATED_KEYWORDS.map((r) => `${r.word} ${r.word}`)];
+    for (const p of all) {
       expect(matchKeyword(p), p).toBeNull();
       // YES/NO matches only a whole one-word message, so a text fires both only if it IS a phrase:
       expect(matchConfirmationReply(p), p).toBeNull();
@@ -2330,9 +2542,11 @@ describe("the list itself", () => {
     }
   });
 
-  it("is exactly the corrected spec list, in order (spec §4.2 as corrected by S9; mutation: drop, add or reorder a phrase → FAILS)", () => {
+  it("are exactly the corrected spec lists, in order (spec §4.2 as corrected by S9; mutation: drop, add or reorder a phrase → FAILS)", () => {
     expect(PHRASES_EN).toEqual(EXPECTED_EN);
     expect(PHRASES_ES).toEqual(EXPECTED_ES);
+    expect(WHOLE_MESSAGE_PHRASES).toEqual(EXPECTED_WHOLE);
+    expect(REPEATED_KEYWORDS).toEqual(EXPECTED_REPEATED);
   });
 });
 ```
@@ -2409,15 +2623,24 @@ Create `apps/web/src/lib/consent/phrases.ts`:
 /**
  * The free-text stop phrases (consent chain spec §4.2, decision 5): matched
  * against the message with accents removed, lowercased, apostrophes dropped
- * and every other non-letter a space, as whole words anywhere in it. A match
- * holds texts and asks staff (a To-do); it never replies (choice 20). The
- * list was reviewed in PR-2 (danlo, 2026-09-28: the spec's fourteen and
- * fourteen, plus the everyday forms below) and is extended only with tests.
+ * and every other non-letter a space. A match holds texts and asks staff (a
+ * To-do); it never replies (choice 20). Reviewed in PR-2 (danlo, 2026-09-28;
+ * spec S9) and extended only with tests. Three kinds:
  *
- * ORDER MATTERS: the first phrase found wins, so a phrase that contains
- * another comes first ("stop stop" and "stop please" before "please stop",
- * which a sentence like "please stop texting" also contains; "no quiero mas
- * mensajes" before "no mas mensajes"; "ya no me manden" before "no me manden").
+ * 1. SENTENCE phrases, found as whole words anywhere in the message. The
+ *    Spanish list is a CLASS (review R2-N1): each plural (ustedes) phrase with
+ *    its usted and tú mirrors, and the pronoun-attached infinitives Spanish
+ *    writes as one word ("dejen de mandarme" does not contain "dejen de
+ *    mandar" as whole words).
+ * 2. WHOLE-MESSAGE phrases, which count only when they ARE the message
+ *    (danlo): "Please stop!!" holds, "Please stop by Thursday" does not.
+ * 3. A stop word REPEATED as the whole message ("STOP STOP", "Alto alto",
+ *    "¡Baja, baja!"), the same whole-message rule; one word on its own is a
+ *    keyword (keywords.ts), not a phrase.
+ *
+ * ORDER MATTERS in the sentence lists: the first phrase found wins, so a
+ * phrase that contains another comes first ("ya no me mande" before "no me
+ * mande"; "no quiero mas mensajes" before "no mas mensajes").
  */
 export type PhraseMatch = { phrase: string; language: "en" | "es" };
 
@@ -2425,14 +2648,37 @@ export const PHRASES_EN: readonly string[] = [
   "stop texting", "stop sending", "stop messaging", "stop contacting", "dont text", "do not text",
   "dont message", "do not message", "no more texts", "no more messages", "remove me", "take me off",
   "unsubscribe me", "wrong number",
-  "no more texting", "do not contact me", "dont contact me", "stop stop", "stop please", "please stop",
+  "no more texting", "do not contact me", "dont contact me",
 ];
 
 export const PHRASES_ES: readonly string[] = [
-  "ya no me manden", "ya no me envien", "ya no me escriban", "no me manden", "no me envien", "no me escriban",
-  "dejen de mandar", "dejen de enviar", "dejen de escribir", "no quiero mensajes", "no quiero recibir",
-  "quitenme de", "borrenme", "numero equivocado",
-  "no me mande mensajes", "no quiero mas mensajes", "no mas mensajes", "quiteme de su lista", "borreme",
+  "ya no me manden", "ya no me envien", "ya no me escriban",
+  "ya no me mande", "ya no me envie", "ya no me escriba",
+  "ya no me mandes", "ya no me envies", "ya no me escribas",
+  "no me manden", "no me envien", "no me escriban",
+  "no me mande", "no me envie", "no me escriba",
+  "no me mandes", "no me envies", "no me escribas",
+  "dejen de mandarme", "dejen de enviarme", "dejen de escribirme",
+  "deje de mandarme", "deje de enviarme", "deje de escribirme",
+  "deja de mandarme", "deja de enviarme", "deja de escribirme",
+  "dejen de mandar", "dejen de enviar", "dejen de escribir",
+  "deje de mandar", "deje de enviar", "deje de escribir",
+  "deja de mandar", "deja de enviar", "deja de escribir",
+  "no quiero mas mensajes", "no quiero mensajes", "no quiero recibir",
+  "no mas mensajes", "no mas textos",
+  "quitenme de", "quiteme de", "quitame de",
+  "borrenme", "borreme", "borrame",
+  "numero equivocado",
+];
+
+/** Only when they ARE the whole message (danlo, 2026-09-28). */
+export const WHOLE_MESSAGE_PHRASES: readonly PhraseMatch[] = [
+  { phrase: "please stop", language: "en" }, { phrase: "stop please", language: "en" },
+];
+
+/** A stop word repeated as the whole message: "stop stop", "alto alto", "baja baja" (any number of times). */
+export const REPEATED_KEYWORDS: readonly { word: string; language: "en" | "es" }[] = [
+  { word: "stop", language: "en" }, { word: "alto", language: "es" }, { word: "baja", language: "es" },
 ];
 
 export function normalisePhraseText(text: string): string {
@@ -2443,7 +2689,13 @@ export function normalisePhraseText(text: string): string {
 }
 
 export function matchPhrase(text: string): PhraseMatch | null {
-  const hay = ` ${normalisePhraseText(text)} `;
+  const whole = normalisePhraseText(text);
+  const exact = WHOLE_MESSAGE_PHRASES.find((w) => w.phrase === whole);
+  if (exact) return { phrase: exact.phrase, language: exact.language };
+  const words = whole.split(" ");
+  const repeated = words.length >= 2 ? REPEATED_KEYWORDS.find((r) => words.every((w) => w === r.word)) : undefined;
+  if (repeated) return { phrase: `${repeated.word} ${repeated.word}`, language: repeated.language };
+  const hay = ` ${whole} `;
   for (const phrase of PHRASES_EN) if (hay.includes(` ${phrase} `)) return { phrase, language: "en" };
   for (const phrase of PHRASES_ES) if (hay.includes(` ${phrase} `)) return { phrase, language: "es" };
   return null;
@@ -2473,11 +2725,15 @@ Expected (predicted; not replayed): all pass; `tsc` exit 0.
 | 7 | `matchKeyword` tests `text.toUpperCase().includes(key)` for each key | the "is not a keyword" table |
 | 8 | phrases: drop the apostrophe removal | "apostrophes, curly or straight …" |
 | 9 | `hay.includes(phrase)` (no spaces around) | the fixed negative set ('remove meat', 'texture') |
-| 10 | reverse `PHRASES_ES` | "the longer Spanish phrase wins …" |
-| 11 | add `"no"` to `PHRASES_ES` | "no phrase is a keyword, and no phrase is itself a YES/NO answer …" and "is exactly the corrected spec list" |
-| 12 | delete `"please stop"` from `PHRASES_EN` | "English \"please stop\" matches inside a sentence", "is exactly the corrected spec list", the extension line in "apostrophes, curly or straight …" |
-| 13 | move `"please stop"` to the front of `PHRASES_EN` | "a phrase that contains another is listed first …" |
-| 14 | delete `"borreme"` from `PHRASES_ES` | "Spanish \"borreme\" matches inside a sentence" and "is exactly the corrected spec list" |
+| 10 | reverse `PHRASES_ES` | "a phrase that contains another is listed first …" |
+| 11 | add `"no"` to `PHRASES_ES` | "no phrase is a keyword, and no phrase is itself a YES/NO answer …" and "are exactly the corrected spec lists" |
+| 12 | delete `"dejen de mandarme"` from `PHRASES_ES` | "Spanish \"dejen de mandarme\" matches inside a sentence", "the Spanish a customer actually sends …" and "are exactly the corrected spec lists" |
+| 13 | move `"no me mande"` above `"ya no me mande"` | "a phrase that contains another is listed first …" |
+| 14 | delete `"borreme"` from `PHRASES_ES` | "Spanish \"borreme\" matches inside a sentence" and "are exactly the corrected spec lists" |
+| 15 | match the whole-message phrases anywhere (append `"please stop"`, `"stop please"` to `PHRASES_EN`) | "\"Please stop by Thursday\" does NOT hold …", the negative set, and "are exactly the corrected spec lists" |
+| 16 | drop the repeated-word branch | "a stop word repeated as the whole message holds …" |
+| 17 | `words.length >= 1` for the repeated-word branch | "…but not one word on its own …" (`"alto"`) |
+| 18 | the repeated-word branch tests `words.some(…)` | "…but not one word on its own, and not inside a longer text" (`"stop stop by later"`) |
 
 - [ ] **Step 6: Commit**
 
@@ -3860,7 +4116,7 @@ git commit -m "feat(a2p): each business's own Telnyx messaging profile on the A2
 - Modify: `apps/web/src/lib/consent/replies.ts`, `apps/web/src/lib/consent/replies.test.ts` (Task 5 created both)
 
 **Interfaces:**
-- Consumes: Task 1 `appendConsentEventGuarded`; Task 2 `ensureConsentTask`, `nextBookedStart`, `completeTasksForConsentEvents`; Task 4 `matchKeyword`, `matchPhrase`, `keywordDisplay`, `CANCEL_WORDS`; Task 5 `consentReplyBody`, `ReplyKind`; Task 6's kinds and `SmsRequest.answersEventId`.
+- Consumes: Task 1 `appendConsentEventGuarded`, `readConsentHistory`; Task 2 `ensureConsentTask`, `nextBookedStart`, `completeTasksForConsentEvents`; Task 4 `matchKeyword`, `matchPhrase`, `keywordDisplay`, `CANCEL_WORDS`; Task 5 `consentReplyBody`, `ReplyKind`; Task 6's kinds and `SmsRequest.answersEventId`.
 - Produces:
   - `type Autoresponse = "STOP" | "START" | "HELP" | "OTHER"`; `parseAutoresponse(v: unknown): Autoresponse | null` — ANY non-blank value means Telnyx replied (review R2-I2 / R1-I7): `INFO` (the OpenAPI's name for help, F11) reads as `HELP`, an unknown value as `OTHER`; only a missing or blank value is `null`
   - `type InboundClass = { kind: "stop"; keyword: KeywordMatch | null } | { kind: "start"; keyword: KeywordMatch } | { kind: "help"; keyword: KeywordMatch } | { kind: "telnyx_only"; autoresponse: "START" | "HELP" | "OTHER" } | { kind: "phrase"; phrase: PhraseMatch } | { kind: "none" }`; `classifyInbound(text: string, autoresponse: Autoresponse | null): InboundClass`
@@ -3880,7 +4136,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const db = vi.hoisted(() => ({
   appendConsentEventGuarded: vi.fn(), ensureConsentTask: vi.fn(), nextBookedStart: vi.fn(),
-  readAccountTimezone: vi.fn(), getContact: vi.fn(), completeTasksForConsentEvents: vi.fn(),
+  readAccountTimezone: vi.fn(), getContact: vi.fn(), completeTasksForConsentEvents: vi.fn(), readConsentHistory: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 
@@ -3915,6 +4171,7 @@ beforeEach(() => {
   db.readAccountTimezone.mockResolvedValue("America/Los_Angeles");
   db.getContact.mockResolvedValue({ id: "ct_1", first_name: "Ana", last_name: "Ruiz" });
   db.completeTasksForConsentEvents.mockResolvedValue([]);
+  db.readConsentHistory.mockResolvedValue([]);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -3930,6 +4187,11 @@ describe("parseAutoresponse and classifyInbound (plan G4)", () => {
   it("only Telnyx's STOP makes a stop on its own; an OTHER or INFO it sent on a text BIS does not recognise is telnyx_only, recorded nowhere (review R2-I2: only STOP records carrier_block; mutation: treat OTHER as a stop → FAILS)", () => {
     expect(classifyInbound("hola?", "OTHER")).toEqual({ kind: "telnyx_only", autoresponse: "OTHER" });
     expect(classifyInbound("info please", "HELP")).toEqual({ kind: "telnyx_only", autoresponse: "HELP" });
+  });
+
+  it("a stop SENTENCE is held even when Telnyx answered something else — the hold is the safe direction (review R2-m-b; mutation: return telnyx_only before reading the phrase list → FAILS)", () => {
+    expect(classifyInbound("please stop texting me", "OTHER")).toMatchObject({ kind: "phrase", phrase: { phrase: "stop texting" } });
+    expect(classifyInbound("ya no me manden nada", "HELP")).toMatchObject({ kind: "phrase" });
   });
 
   it("a keyword decides the kind; Telnyx's STOP makes it a stop even when BIS's list does not match (mutation: ignore autoresponse STOP → none, FAILS)", () => {
@@ -3995,14 +4257,20 @@ describe("recordInboundConsent — a stop", () => {
     expect(owed).toEqual([{ kind: "consent.stop_confirmation", language: "en", answersEventId: "ev_revoked" }]);
   });
 
-  it("a STOP or a START that lands on a HELD address closes that hold's To-do, so no row is left with two dead buttons (review R3-I1; mutation: skip the close → FAILS)", async () => {
+  it("a STOP or a START that lands on a HELD address closes the To-dos of EVERY hold on that number — the reopened one of an Undo included — so no row is left with two dead buttons (review R3-I1, R3-N3; mutation: skip the close → FAILS; mutation: close only the prior row's To-dos → FAILS)", async () => {
     db.appendConsentEventGuarded.mockImplementation(async (_d: unknown, e: { action: string }) =>
-      e.action === "granted" ? { outcome: "refused", prior: null } : appended(`ev_${e.action}`, { id: "ev_hold", action: "held", method: "free_text", evidence: {} }));
+      e.action === "granted" ? { outcome: "refused", prior: null } : appended(`ev_${e.action}`, { id: "ev_hold", action: "held", method: "staff_undo", evidence: {} }));
+    // Not a stop, then its Undo: H0 released, then H (the Undo's new hold); T0 was reopened and still links H0.
+    db.readConsentHistory.mockResolvedValue([
+      { id: "ev_hold", action: "held", method: "staff_undo", occurred_at: "2026-10-05T12:00:00Z", evidence: {}, note: null, actor_id: "u" },
+      { id: "ev_rel", action: "hold_released", method: "staff", occurred_at: "2026-10-05T11:00:00Z", evidence: {}, note: null, actor_id: "u" },
+      { id: "ev_hold_0", action: "held", method: "free_text", occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: null },
+    ]);
     await run(input({ text: "STOP" }), classifyInbound("STOP", null));
-    expect(db.completeTasksForConsentEvents).toHaveBeenCalledWith(DB, "acct_1", ["ev_hold"], "sms-inbound", "system");
+    expect(db.completeTasksForConsentEvents).toHaveBeenCalledWith(DB, "acct_1", ["ev_hold", "ev_hold_0"], "sms-inbound", "system");
     db.completeTasksForConsentEvents.mockClear();
     await run(input({ text: "START", providerMessageId: "msg_2" }), classifyInbound("START", null));
-    expect(db.completeTasksForConsentEvents).toHaveBeenCalledWith(DB, "acct_1", ["ev_hold"], "sms-inbound", "system");
+    expect(db.completeTasksForConsentEvents).toHaveBeenCalledWith(DB, "acct_1", ["ev_hold", "ev_hold_0"], "sms-inbound", "system");
     // Closing is cleanup: its failure is logged, and the stop still stands and is still confirmed.
     db.completeTasksForConsentEvents.mockRejectedValue(new Error("tasks update failed"));
     const r = await run(input({ text: "STOP", providerMessageId: "msg_3" }), classifyInbound("STOP", null));
@@ -4078,7 +4346,7 @@ describe("recordInboundConsent — START and HELP", () => {
   });
 
   it("AYUDA that Telnyx marked INFO or with a value BIS does not know gets NO BIS reply — one reply, never two (review R2-I2; mutation: reply when autoresponse is OTHER → FAILS)", async () => {
-    expect((await run(input({ text: "Ayuda", autoresponse: "HELP" }), classifyInbound("Ayuda", parseAutoresponse("INFO")))).reply).toBeNull();
+    expect((await run(input({ text: "Ayuda", autoresponse: parseAutoresponse("INFO") }), classifyInbound("Ayuda", parseAutoresponse("INFO")))).reply).toBeNull();
     expect((await run(input({ text: "Ayuda", autoresponse: "OTHER" }), classifyInbound("Ayuda", "OTHER"))).reply).toBeNull();
     expect((await run(input({ text: "baja", autoresponse: "OTHER" }), classifyInbound("baja", "OTHER"))).reply).toBeNull();
     expect(calls()).toContainEqual(["revoked", "keyword", "unless_customer_stopped"]);   // the stop is still recorded
@@ -4238,7 +4506,7 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
   it("a 40300 on a START confirmation is logged naming the carrier block the gate recorded — the START-then-blocked trace (review R2-I1c; mutation: fall through to the generic 'failed provider' line → FAILS)", async () => {
     gate.sendSms.mockResolvedValue({ kind: "failed", stage: "provider", error: "telnyx send failed (403): …", carrierBlocked: true });
     await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: null, conversationId: null, reply: { kind: "consent.start_confirmation", language: "en" } });
-    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toMatch(/consent\.start_confirmation .* the carrier refused it \(40300\); the gate recorded carrier_block/);
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toMatch(/consent\.start_confirmation .* the carrier refused it \(40300\): Telnyx still blocks this number/);
   });
 
   it("a provider failure after filing marks the filed row failed (mutation: leave it queued → FAILS)", async () => {
@@ -4268,7 +4536,7 @@ Create `apps/web/src/lib/consent/inbound.ts`:
 ```ts
 import {
   appendConsentEventGuarded, ensureConsentTask, getContact, nextBookedStart, readAccountTimezone,
-  completeTasksForConsentEvents,
+  completeTasksForConsentEvents, readConsentHistory,
   type ConsentAppend, type SupabaseClient,
 } from "@bis/db";
 import { m } from "@/lib/messages";
@@ -4327,21 +4595,26 @@ export function classifyInbound(text: string, autoresponse: Autoresponse | null)
   }
   if (keyword?.kind === "start") return { kind: "start", keyword };
   if (keyword?.kind === "help") return { kind: "help", keyword };
-  if (autoresponse !== null) return { kind: "telnyx_only", autoresponse };
+  // A stop SENTENCE is held even when Telnyx answered something else: the
+  // hold is the safe direction (review R2-m-b).
   const phrase = matchPhrase(text);
-  return phrase ? { kind: "phrase", phrase } : { kind: "none" };
+  if (phrase) return { kind: "phrase", phrase };
+  return autoresponse !== null ? { kind: "telnyx_only", autoresponse } : { kind: "none" };
 }
 
 /**
- * A stop or a START that lands on a HELD address decides that hold: its
- * To-do is closed so it never sits open with two buttons that can only say
+ * A stop or a START that lands on a HELD address decides the hold: the
+ * To-dos of EVERY hold on that number are closed (review R3-N3: after Not a
+ * stop and its Undo, the reopened To-do links the older hold, not the one
+ * this row replaced), so none sits open with two buttons that can only say
  * "already decided" (review R3-I1). Cleanup, so contained: the ledger row is
  * what matters, and the To-do's own buttons close a stale row on a click.
  */
 async function closeHoldTodo(db: SupabaseClient, i: InboundConsentInput, r: ConsentAppend): Promise<void> {
   if (r.outcome !== "appended" || r.prior?.action !== "held") return;
   try {
-    await completeTasksForConsentEvents(db, i.accountId, [r.prior.id], ACTOR, "system");
+    const holds = (await readConsentHistory(db, i.accountId, "sms", i.address)).filter((row) => row.action === "held").map((row) => row.id);
+    await completeTasksForConsentEvents(db, i.accountId, holds, ACTOR, "system");
   } catch (e) {
     console.error(`inbound consent: the hold To-do for account ${i.accountId} was not closed: ${loggableError(e)}`);
   }
@@ -4561,7 +4834,9 @@ export async function sendConsentReply(
       // confirmation with 40300, and the gate has just recorded carrier_block
       // again. The ledger is right (the number IS blocked); the customer has
       // no reply and stays blocked until they send a START Telnyx matches.
-      console.error(`consent reply ${r.reply.kind} for account ${r.accountId} not sent: the carrier refused it (40300); the gate recorded carrier_block, and the number stays blocked until the customer texts a START Telnyx itself recognises`);
+      // Worded for both outcomes of the gate's write (review R2-m-d): it
+      // appends carrier_block, or finds the customer's own stop already there.
+      console.error(`consent reply ${r.reply.kind} for account ${r.accountId} not sent: the carrier refused it (40300): Telnyx still blocks this number, the gate records it as stopped (carrier_block, unless the customer's own stop already stands), and it stays blocked until the customer texts a START Telnyx itself recognises`);
       return;
     }
     const why = result.kind === "blocked" ? `blocked ${result.reason}` : result.kind === "failed" ? `failed ${result.stage}` : result.kind;
@@ -4588,7 +4863,7 @@ Expected (predicted; not replayed): all pass; `tsc` exit 0. Then the full web su
 
 | # | Mutation | Must fail |
 |---|---|---|
-| 1 | `parseAutoresponse` returns `up` for any string | "reads Telnyx's field in any case and nothing else" |
+| 1 | `parseAutoresponse` returns `up` for any non-blank string (no INFO mapping, no OTHER) | "ANY non-blank value means Telnyx replied …" |
 | 2 | `classifyInbound`: drop `autoresponse === "STOP" ||` | "a keyword decides the kind; Telnyx's STOP …" and "a Telnyx STOP BIS's list does not match …" |
 | 3 | `classifyInbound`: return `start` for `telnyx_only` START | "a Telnyx START or HELP BIS does not recognise is telnyx_only …" |
 | 4 | stop: drop `sourceRef` from `base` | "appends revoked / keyword … sourced to the message" |
@@ -4597,7 +4872,7 @@ Expected (predicted; not replayed): all pass; `tsc` exit 0. Then the full web su
 | 7 | stop: owe when `r.outcome === "duplicate"` too | "a retry of the same message (duplicate) sends nothing …" |
 | 8 | `cancelTodo`: `formatDateInZone(startsAt, "UTC")` | "CANCEL with an upcoming booking adds the To-do in the account's own zone …" |
 | 9 | stop: `CANCEL_WORDS.has` → `true` | "END is a stop, not a CANCEL …" |
-| 10 | wrap the stop write in try/catch returning `{ reply: null }` | "a ledger write that fails THROWS …" |
+| 10 | wrap the stop write in try/catch and `return` (swallowing the error) | "a ledger write that fails THROWS …" |
 | 11 | start: `language: "en"` always | "START lifts a stop, and the confirmation speaks the language of the stop it lifts" |
 | 12 | help: drop `!i.firstFiling` | "AYUDA gets BIS's Spanish help, once …" |
 | 13 | phrase: `ensureConsentTask` also on refused | "a phrase on an address that is not allowed …" |
@@ -4613,6 +4888,8 @@ Expected (predicted; not replayed): all pass; `tsc` exit 0. Then the full web su
 | 23 | stop: move the `owe(…)` below `cancelTodo(…)` | "a CANCEL whose To-do fails still owes its confirmation …" |
 | 24 | delete both `await closeHoldTodo(db, i, r)` calls | "a STOP or a START that lands on a HELD address closes that hold's To-do" |
 | 25 | `closeHoldTodo`: no try/catch | same test (its last part: the stop is still confirmed) |
+| 25b | `closeHoldTodo`: complete `[r.prior.id]` only | same test (the reopened To-do of the older hold stays open) |
+| 25c | `classifyInbound`: return `telnyx_only` before `matchPhrase` | "a stop SENTENCE is held even when Telnyx answered something else" |
 | 26 | `sendConsentReply`: no try/catch inside `prepare` | "a filing that fails does not stop the reply" |
 | 27 | `sendConsentReply`: one try around the send and the `sent` write, logging "not sent" | "a 'sent' status write that fails AFTER the send …" |
 | 28 | `sendConsentReply`: delete the `carrierBlocked` branch | "a 40300 on a START confirmation is logged naming the carrier block …" |
@@ -4662,7 +4939,7 @@ const db = vi.hoisted(() => ({
   createContact: vi.fn(), ensureConversation: vi.fn(), createMessage: vi.fn(), incrementUnreadCount: vi.fn(),
   applyConfirmationReply: vi.fn(), updateMessageStatusByProviderId: vi.fn(),
   appendConsentEventGuarded: vi.fn(), ensureConsentTask: vi.fn(), nextBookedStart: vi.fn(),
-  readAccountTimezone: vi.fn(), getContact: vi.fn(), completeTasksForConsentEvents: vi.fn(),
+  readAccountTimezone: vi.fn(), getContact: vi.fn(), completeTasksForConsentEvents: vi.fn(), readConsentHistory: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const sendReply = vi.hoisted(() => vi.fn());
@@ -4714,6 +4991,7 @@ beforeEach(() => {
   db.readAccountTimezone.mockResolvedValue("America/Chicago");
   db.getContact.mockResolvedValue({ id: "ct_1", first_name: "Ana", last_name: null });
   db.completeTasksForConsentEvents.mockResolvedValue([]);
+  db.readConsentHistory.mockResolvedValue([]);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -4916,6 +5194,7 @@ Replace with:
   readAccountTimezone: vi.fn(),
   getContact: vi.fn(),
   completeTasksForConsentEvents: vi.fn(),
+  readConsentHistory: vi.fn(),
 }));
 vi.mock("@/lib/voice/telnyx-signature", () => ({ verifyTelnyxSignature: verify }));
 vi.mock("@bis/db", () => dbMocks);
@@ -6806,9 +7085,10 @@ git commit -m "feat(consent): the Texts row's data — the view, the staff contr
 - Modify: `apps/web/src/lib/ui/guarded-run.ts` (`ToastLike.success`'s options become optional: a success with nothing to undo)
 - Modify: `apps/web/src/lib/contacts/phone-country.ts` (two comments still name the deleted row, review R3-m7)
 - Modify: `apps/web/e2e/consent-phone-country.spec.ts` (PR-1's e2e, on top of #152's version at `76c6acfb`: each "no Check number row" waits for the Texts row to have loaded, and a pick leaves focus on the row's status; review R3-I3, R3-I4)
+- Modify: `…/contacts/[contactId]/activity-timeline.tsx`; Create: `…/contacts/[contactId]/activity-timeline.hold.test.ts` (a hold's To-do shows a hint in place of a Done that would be refused; review R3-N1, G21)
 
 **Interfaces:**
-- Consumes: Task 11 (`TextsView`, `TextsActionResult`, `TextsUndo`, the six actions, `TextsResponse`, `runGuarded`, `ToastLike`); PR-1's `pickPhoneCountry`, `PHONE_CHECK_TREATMENT`, `setPhoneCountryAction`, `undoPhoneCountryAction`.
+- Consumes: Task 2 (`holdOpenTaskIds`, `listContactTasks`'s `consent_event_id`); Task 11 (`TextsView`, `TextsActionResult`, `TextsUndo`, the six actions, `TextsResponse`, `runGuarded`, `ToastLike`); PR-1's `pickPhoneCountry`, `PHONE_CHECK_TREATMENT`, `setPhoneCountryAction`, `undoPhoneCountryAction`.
 - Produces: `type TextsLoad = { status: "loading" } | { status: "error" } | { status: "ready"; view: TextsView; zone: string; phone: string | null }`; `TEXTS_TREATMENT`; `howLine(how)`; `textsLine(view, zone)`; `parseTextsResponse(json)`; `textsLoadFrom(res)`; `runTextsAction(act, show, toast, opts): Promise<boolean>`; `<TextsRow accountId contactId load onChanged? onRetry? />`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -7019,6 +7299,14 @@ describe("TextsRow — every state of spec §6", () => {
     expect(button(block, m["contact.phoneCountry.us"])).not.toBeNull();
   });
 
+  it("the status line is the first child of ONE wrapper in every ready state, Check number included, so React keeps the same node — and its focus — when the state changes (review R3-N2; mutation: a wrapper of its own for Check number, the bare status line elsewhere → FAILS)", () => {
+    const sameShape = /<div class="space-y-1\.5"( data-testid="phone-country-row")?><div[^>]*data-testid="texts-row-status"/;
+    for (const view of [{ kind: "allowed", newestId: null }, { kind: "check_number" },
+      { kind: "held", eventId: "h", since: "2026-10-04T02:30:00Z", excerpt: "remove me" }] as const) {
+      expect(html(ready(view)), view.kind).toMatch(sameShape);
+    }
+  });
+
   it("the status is a focus target, so an action keeps the keyboard in the row (review R3-M9; mutation: drop tabIndex → FAILS)", () => {
     expect(html(ready({ kind: "allowed", newestId: null }))).toMatch(/data-testid="texts-row-status"[^>]*tabindex="-1"|tabindex="-1"[^>]*data-testid="texts-row-status"/);
   });
@@ -7118,7 +7406,32 @@ Replace the two cases titled "a stored number that reads both ways gets the Chec
     await render();
     expect(textsRowProps.mock.calls[0]![0]).toMatchObject({ load: { status: "error" } });
   });
+
+  it("the timeline is told which open To-dos are a hold still undecided, and an unreadable ledger hints every linked one — never a Done that would be refused (review R3-N1; mutation: pass [] on failure → FAILS)", async () => {
+    listContactTasksMock.mockResolvedValue([
+      { id: "t_hold", title: "Ana may have asked …", completed_at: null, consent_event_id: "h1" },
+      { id: "t_plain", title: "Call back", completed_at: null, consent_event_id: null },
+    ]);
+    holdOpenTaskIdsMock.mockResolvedValue(["t_hold"]);
+    await render();
+    expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({ holdOpenTaskIds: ["t_hold"] });
+    holdOpenTaskIdsMock.mockRejectedValue(new Error("readConsentEvent failed: timeout"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await render();
+    expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({ holdOpenTaskIds: ["t_hold"] });
+  });
 ```
+
+And in the same file's `@bis/db` mock factory (`page.test.ts:36-45` on `76c6acfb`), find:
+```ts
+  listContactTasks: async () => [],
+```
+Replace with:
+```ts
+  listContactTasks: (...args: unknown[]) => listContactTasksMock(...args),
+  holdOpenTaskIds: (...args: unknown[]) => holdOpenTaskIdsMock(...args),
+```
+and declare, just above that `vi.mock("@bis/db", …)` call, `const listContactTasksMock = vi.fn(async () => [] as unknown[]);` and `const holdOpenTaskIdsMock = vi.fn(async () => [] as string[]);` (reset both to those defaults in the file's `beforeEach`).
 
 (`render`, `CONTACT` and the zone the file's other cases resolve are the file's own; if its `beforeEach` clears `phoneRowProps`, change that line to `textsRowProps.mockClear(); readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });`.)
 
@@ -7128,10 +7441,11 @@ Replace the two cases titled "a stored number that reads both ways gets the Chec
 cd apps/web
 pnpm exec vitest run src/lib/consent/texts-row.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/texts-row.test.ts" \
   "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts" \
-  "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts"
+  "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts" \
+  "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.hold.test.ts"
 ```
 
-Expected (predicted; not replayed): the two new files fail to import; the wiring test's retargeted cases fail (no `texts-row.tsx`, no `<TextsRow`); the page test's two new cases fail.
+Expected (predicted; not replayed): the two new files fail to import; the wiring test's retargeted cases fail (no `texts-row.tsx`, no `<TextsRow`); the page test's three new cases fail; the timeline test's hint case fails (no `holdOpenTaskIds` prop yet), and its discriminator passes.
 
 - [ ] **Step 3: Implement**
 
@@ -7431,29 +7745,33 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
     : view.kind === "stopped" ? TEXTS_TREATMENT.stopped
     : view.kind === "held" ? TEXTS_TREATMENT.held
     : PHONE_CHECK_TREATMENT;
-  // The SAME element in every ready state (first child of the block), so
-  // React keeps it — and its focus — when the state changes under it.
-  const statusLine = (
-    <div ref={status} tabIndex={-1} data-testid="texts-row-status"
-      className="flex items-center gap-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
-      <span>{m["contact.messages.texts"]}</span>
-      {picked ? null : <DotPill {...pill} dense data-status={view.kind} />}
-    </div>
-  );
+  const checkNumber = view.kind === "check_number" && !picked;
 
   return (
     <Block state={view.kind}>
-      {view.kind === "check_number" && !picked ? (
-        // PR-1's test id wraps the WHOLE state, word included (review R3-I2).
-        <div className="space-y-1.5" data-testid="phone-country-row">
-          {statusLine}
-          <p className="text-muted-foreground text-xs">{m["contact.phoneCountry.line"]}</p>
-          <div className="flex gap-2">
-            <Button size="sm" variant="ghost" disabled={pending} onClick={() => pick("MX")}>{m["contact.phoneCountry.mx"]}</Button>
-            <Button size="sm" variant="ghost" disabled={pending} onClick={() => pick("US")}>{m["contact.phoneCountry.us"]}</Button>
-          </div>
+      {/* ONE wrapper in every ready state — right after the Messages label —
+          with the status line as ITS first child, so React keeps the same
+          status node (its focus, its tabindex) when the state changes under
+          it, INTO Check number as well as out of it (review R3-N2: an Undo of
+          a pick, a phone edit to an ambiguous number). PR-1's test id sits on
+          the wrapper only in the Check number state, where it wraps the whole
+          state, word included (review R3-I2). */}
+      <div className="space-y-1.5" data-testid={checkNumber ? "phone-country-row" : undefined}>
+        <div ref={status} tabIndex={-1} data-testid="texts-row-status"
+          className="flex items-center gap-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <span>{m["contact.messages.texts"]}</span>
+          {picked ? null : <DotPill {...pill} dense data-status={view.kind} />}
         </div>
-      ) : statusLine}
+        {checkNumber ? (
+          <>
+            <p className="text-muted-foreground text-xs">{m["contact.phoneCountry.line"]}</p>
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" disabled={pending} onClick={() => pick("MX")}>{m["contact.phoneCountry.mx"]}</Button>
+              <Button size="sm" variant="ghost" disabled={pending} onClick={() => pick("US")}>{m["contact.phoneCountry.us"]}</Button>
+            </div>
+          </>
+        ) : null}
+      </div>
       {line ? <p className="text-muted-foreground text-xs">{line}</p> : null}
 
       {view.kind === "allowed" ? (
@@ -7760,6 +8078,145 @@ Replace with:
     console.error(`contact page: Texts row unreadable for contact ${contactId}: ${loggableError(e)}`);
     texts = { status: "error" };
   }
+
+  // Review R3-N1 (G21): a To-do whose number is still on hold is closed by
+  // deciding the hold, never by "Done", so the timeline shows a hint in its
+  // place. A failed read fails CLOSED: every open linked To-do gets the hint.
+  let holdOpen: string[];
+  try {
+    holdOpen = await holdOpenTaskIds(db, accountId, tasks);
+  } catch (e) {
+    console.error(`contact page: hold To-dos unreadable for contact ${contactId}: ${loggableError(e)}`);
+    holdOpen = tasks.filter((t) => !t.completed_at && t.consent_event_id).map((t) => t.id);
+  }
+```
+
+Find:
+```ts
+import { getContact, listContactTags, listNotes, listContactTasks,
+```
+Replace with:
+```ts
+import { getContact, listContactTags, listNotes, listContactTasks, holdOpenTaskIds,
+```
+
+Find:
+```tsx
+          tasks={tasks}
+          opportunities={opps}
+```
+Replace with:
+```tsx
+          tasks={tasks}
+          holdOpenTaskIds={holdOpen}
+          opportunities={opps}
+```
+
+Edit `…/contacts/[contactId]/activity-timeline.tsx` (review R3-N1):
+
+Find:
+```tsx
+  | { kind: "task"; id: string; at: string; title: string; dueAt: string | null; completedAt: string | null }
+```
+Replace with:
+```tsx
+  | { kind: "task"; id: string; at: string; title: string; dueAt: string | null; completedAt: string | null; holdOpen: boolean }
+```
+
+Find:
+```tsx
+  notes,
+  tasks,
+  opportunities,
+```
+Replace with:
+```tsx
+  notes,
+  tasks,
+  holdOpenTaskIds,
+  opportunities,
+```
+
+Find:
+```tsx
+  notes: Note[];
+  tasks: Task[];
+```
+Replace with:
+```tsx
+  notes: Note[];
+  tasks: Task[];
+  /** Open To-dos whose number is still on hold (consent chain PR-2, G21):
+   *  decided with Confirm stop / Not a stop, so a hint stands in for Done. */
+  holdOpenTaskIds: string[];
+```
+
+Find:
+```tsx
+        completedAt: t.completed_at,
+      }),
+```
+Replace with:
+```tsx
+        completedAt: t.completed_at,
+        holdOpen: holdOpenTaskIds.includes(t.id),
+      }),
+```
+
+Find:
+```tsx
+        {!done ? (
+          <form action={completeAction} className="shrink-0">
+```
+Replace with:
+```tsx
+        {!done && item.holdOpen ? (
+          <p className="shrink-0 text-xs text-muted-foreground" data-testid="task-decide-first">
+            {m["todo.consent.decideFirst"]}
+          </p>
+        ) : !done ? (
+          <form action={completeAction} className="shrink-0">
+```
+
+Create `…/contacts/[contactId]/activity-timeline.hold.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { m } from "@/lib/messages";
+import { renderedText } from "@/lib/rendered-text";
+
+// "use server" actions and the client composer are not rendered here; only the task rows are read.
+vi.mock("./actions", () => ({ addNoteAction: vi.fn(), addTaskAction: vi.fn(), completeTaskAction: vi.fn() }));
+vi.mock("./message-composer", () => ({ MessageComposer: () => null }));
+
+const { ActivityTimeline } = await import("./activity-timeline");
+
+const task = (id: string, title: string, consent_event_id: string | null) =>
+  ({ id, title, due_at: null, completed_at: null, created_at: "2026-10-05T10:00:00Z", consent_event_id });
+const html = (holdOpenTaskIds: string[]) => renderToStaticMarkup(createElement(ActivityTimeline, {
+  accountId: "a1", contactId: "c1", contactHasEmail: false, contactHasPhone: false,
+  smsGate: { ok: false, reason: "a2p_not_approved" }, smsBlockedLine: null,
+  notes: [], tasks: [task("t_hold", "Ana may have asked to stop texts", "h1"), task("t_plain", "Call back", null)],
+  holdOpenTaskIds, opportunities: [], submissions: [], messages: [],
+  emailAction: async () => {}, smsAction: async () => {},
+} as never));
+const doneButtons = (markup: string) => (markup.match(new RegExp(`>${m["contact.done"]}<`, "g")) ?? []).length;
+
+describe("the contact timeline and a hold's To-do (review R3-N1, G21)", () => {
+  it("a To-do whose number is still on hold shows the decide-first hint INSTEAD of Done; a plain To-do keeps its Done (mutation: render Done for every open task → two Done buttons, FAILS)", () => {
+    const out = html(["t_hold"]);
+    expect(renderedText(out)).toContain(m["todo.consent.decideFirst"]);
+    expect(doneButtons(out)).toBe(1);
+  });
+
+  it("once the hold is decided the same To-do offers Done again (the discriminator; mutation: hint for every linked task → FAILS)", () => {
+    const out = html([]);
+    expect(renderedText(out)).not.toContain(m["todo.consent.decideFirst"]);
+    expect(doneButtons(out)).toBe(2);
+  });
+});
 ```
 
 Find:
@@ -7824,7 +8281,8 @@ Replace with:
 cd apps/web
 pnpm exec vitest run src/lib/consent/texts-row.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/texts-row.test.ts" \
   "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.wiring.test.ts" \
-  "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts" src/lib/contacts
+  "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts" src/lib/contacts \
+  "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.hold.test.ts"
 pnpm exec tsc --noEmit
 pnpm exec eslint "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts" src/lib/consent src/lib/ui
 grep -rn "phone-country-row\|PhoneCountryRow" src e2e
@@ -7854,6 +8312,9 @@ Expected (predicted; not replayed): all pass; `tsc` exit 0; eslint 0 errors (if 
 | 14 | texts-row.tsx: drop `tabIndex={-1}` | "the status is a focus target …" |
 | 15 | texts-row.tsx: drop `data-testid="phone-country-row"` | "Check number keeps PR-1's own test id on the WHOLE state …" and the PR-1 e2e |
 | 15b | texts-row.tsx: move the test id onto the line-and-buttons div only (the status outside it) | "Check number keeps PR-1's own test id on the WHOLE state …" (the word check) |
+| 15b2 | texts-row.tsx: give Check number a wrapper of its own and render the status line bare in the other states (the shape before review R3-N2) | "the status line is the first child of ONE wrapper in every ready state …" |
+| 15e | activity-timeline.tsx: render Done for every open task (drop the `item.holdOpen` branch) | activity-timeline.hold.test "a To-do whose number is still on hold shows the decide-first hint INSTEAD of Done …" |
+| 15f | page.tsx: `holdOpen = []` in the catch | page.test "the timeline is told which open To-dos are a hold still undecided …" |
 | 15c | texts-row.tsx: after a pick render `<Block state="check_number">{null}</Block>` again (no status line) | e2e `consent-phone-country.spec.ts` test 1's `toBeFocused()` (review R3-I4; e2e only: a static render cannot press a button) |
 | 15d | consent-phone-country.spec.ts: delete the two `data-state` waits, and make the drawer's texts fetch slow (a 2 s `await` in the texts route) | the two count-0 assertions still PASS without the waits — the reason the waits exist; with them the tests wait for the loaded row (run once to see the difference, then revert) |
 | 16 | drawer: texts effect deps without `retryNonce` | wiring "the drawer reads the Texts row on its own, again on every summary re-read" |
@@ -7871,6 +8332,8 @@ git add apps/web/src/lib/consent/texts-row.ts apps/web/src/lib/consent/texts-row
   "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/contact-fields-panel.tsx" \
   "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx" \
   "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.test.ts" \
+  "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.tsx" \
+  "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.hold.test.ts" \
   "apps/web/src/app/(dashboard)/dashboard/styleguide/page.tsx" \n  apps/web/src/lib/contacts/phone-country.ts apps/web/e2e/consent-phone-country.spec.ts
 git commit -m "feat(consent): the Texts row — Allowed, Stopped, On hold, Check number — with Stop, Resume, Confirm stop and Not a stop, focus kept in the row (R3-M9)"
 ```
@@ -7889,13 +8352,13 @@ git commit -m "feat(consent): the Texts row — Allowed, Stopped, On hold, Check
 - Modify: `…/contacts/[contactId]/actions.ts` (the timeline's "complete" meets the same rule); Create: `…/contacts/[contactId]/actions.test.ts`
 
 **Interfaces:**
-- Consumes: Task 2 (`WorkRow.consent`, `completeTasksForConsentEvents`), Task 1 (`readConsentEvent`, `readConsentHistory`, `newestDecidingRow`), Task 11 (`textsContextFor`, `confirmStop`, `notAStop`, `undoHoldDecision`, `TextsActionResult`), Task 12 (`runTextsAction`), PR-1 (`smsRecipientState`, `composerStateLine`).
-- Produces: `readTaskContact(db, accountId, taskId): Promise<{ contactId: string | null; consentEventId: string | null } | null>` (`@bis/db`); `HoldUndecidedError` (`@bis/db`), which `completeTask` now throws for a To-do whose hold is still undecided; `confirmStopFromTask(accountId, taskId)`, `notAStopFromTask(accountId, taskId)`, `undoHoldDecisionFromTask(accountId, contactId, eventId, reopenTaskIds)` (server actions, `Promise<TextsActionResult>`); `<ConsentHoldActions />`.
+- Consumes: Task 2 (`WorkRow.consent`, `completeTasksForConsentEvents`, `HoldUndecidedError`), Task 1 (`readConsentEvent`, `readConsentHistory`, `newestDecidingRow`), Task 11 (`textsContextFor`, `confirmStop`, `notAStop`, `undoHoldDecision`, `TextsActionResult`), Task 12 (`runTextsAction`), PR-1 (`smsRecipientState`, `composerStateLine`).
+- Produces: `readTaskContact(db, accountId, taskId): Promise<{ contactId: string | null; consentEventId: string | null } | null>` (`@bis/db`); (`HoldUndecidedError`, which `completeTask` throws for a To-do whose number is still on hold, is Task 2's); `confirmStopFromTask(accountId, taskId)`, `notAStopFromTask(accountId, taskId)`, `undoHoldDecisionFromTask(accountId, contactId, eventId, reopenTaskIds)` (server actions, `Promise<TextsActionResult>`); `<ConsentHoldActions />`.
 
 **The rule (plan G8, spec §6):** a To-do linked to a HOLD shows the hold line (its `tasks.title`) with ghost "Confirm stop" and "Not a stop" in place of "Done"; either decides the contact's CURRENT hold (a To-do made for an earlier hold of the same number still resolves the one on the number now) and completes the hold's To-dos, with Undo. A To-do linked to a CANCEL stop keeps "Done": staff check the appointment, then close it.
 
 **A hold's To-do is never closed without deciding the hold, and never left open once it is decided** (review R3-I1, with the deferred agency Work-queue item):
-- **Done cannot close it.** `completeTask` itself refuses a To-do whose linked hold is still the newest deciding row of its number (`HoldUndecidedError`), so every path meets the rule: the per-account list shows the two buttons instead of Done (a stale tab's Done is refused with "decide first"), and the contact page's timeline "complete" is refused the same way (the Texts row above it carries the two buttons). The agency Work queue has no action buttons at all — its rows are read-only links into the account (`work/agency-work-list.tsx:22-27` on `76c6acfb`) — so the deferred item that assumed a "Done" there was wrong, and nothing changes on that screen.
+- **Done cannot close it, and no screen offers a Done that would be refused.** `completeTask` itself refuses a To-do whose linked NUMBER is still on hold — its newest deciding row a hold, the To-do's own or a later one (Task 2's `HoldUndecidedError`; review R3-N3) — so every path meets the rule. The per-account list shows the two buttons instead of Done (a stale tab's Done is refused with "decide first"). The contact page's timeline shows a one-line hint (`todo.consent.decideFirst`) in place of Done for such a To-do (Task 12; review R3-N1), and `completeTaskAction` still refuses a stale page's Done without an error page. The decision itself is made with the To-do page's two buttons, or the Texts row's while the contact's current number is the one on hold; after a phone correction it is not, and the To-do page's buttons then close the To-do, because the contact's number is no longer on hold (below). The agency Work queue has no action buttons at all — its rows are read-only links into the account (`work/agency-work-list.tsx:22-27` on `76c6acfb`) — so the deferred item that assumed a "Done" there was wrong, and nothing changes on that screen.
 - **It closes itself** when the hold is decided anywhere: Confirm stop / Not a stop (Task 11 completes the hold's To-dos); a STOP or START landing on the held number (Task 8's `closeHoldTodo`); and, as the last net, a click on either button once the contact's number is no longer on hold (a decision in another tab, a new number) closes the To-do and says it was already decided.
 
 - [ ] **Step 1: Write the failing tests**
@@ -7911,47 +8374,7 @@ describe("readTaskContact — the To-do's contact and the ledger row it asks abo
     expect(await readTaskContact(fakeDb([{ data: null, error: null }]).db, "a1", "t1")).toBeNull();
   });
 });
-
-describe("completeTask — a hold's To-do closes by deciding the hold, never by Done (review R3-I1)", () => {
-  const HOLD = { id: "h1", action: "held", method: "free_text", channel: "sms", address: "+19562921696", contact_id: "c1",
-    occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: null };
-  beforeEach(() => {
-    vi.mocked(readConsentEvent).mockReset().mockResolvedValue(HOLD as never);
-    vi.mocked(readConsentHistory).mockReset();
-  });
-
-  it("refuses while the linked hold is still its number's newest deciding row, and writes nothing (mutation: drop the guard → the update runs, FAILS)", async () => {
-    vi.mocked(readConsentHistory).mockResolvedValue([HOLD] as never);
-    const f = fakeDb([{ data: { consent_event_id: "h1" }, error: null }]);
-    await expect(completeTask(f.db, "a1", "t1", "user_1")).rejects.toBeInstanceOf(HoldUndecidedError);
-    expect(f.calls.some((c) => c[0] === "update")).toBe(false);
-  });
-
-  it("completes once the hold is decided, and a task with no consent link exactly as before (mutation: refuse every linked task → FAILS)", async () => {
-    vi.mocked(readConsentHistory).mockResolvedValue([
-      { ...HOLD, id: "r1", action: "hold_released", method: "staff", occurred_at: "2026-10-05T11:00:00Z" }, HOLD,
-    ] as never);
-    const f = fakeDb([{ data: { consent_event_id: "h1" }, error: null }, { data: null, error: null }]);
-    await completeTask(f.db, "a1", "t1", "user_1");
-    expect(f.calls.some((c) => c[0] === "update")).toBe(true);
-    const g = fakeDb([{ data: { consent_event_id: null }, error: null }, { data: null, error: null }]);
-    await completeTask(g.db, "a1", "t2", "user_1");
-    expect(g.calls.some((c) => c[0] === "update")).toBe(true);
-    expect(readConsentEvent).toHaveBeenCalledTimes(1);   // the plain task read no ledger
-  });
-});
 ```
-
-And add, directly under the file's `vi.mock("./events", …)` line (Task 2), a mock of the two ledger reads the guard makes (the reducer, `newestDecidingRow`, stays real):
-
-```ts
-vi.mock("./consent", async (importOriginal) => ({
-  ...(await importOriginal<object>()), readConsentEvent: vi.fn(), readConsentHistory: vi.fn(),
-}));
-import { readConsentEvent, readConsentHistory } from "./consent";
-```
-
-and add `completeTask` and `HoldUndecidedError` to its `./activities` import, and `beforeEach` to its `vitest` import.
 
 Edit `…/tasks/actions.test.ts` — add, beside its other `vi.mock(...)` calls:
 
@@ -8025,7 +8448,7 @@ import { completeTaskAction } from "./actions";
 const form = (taskId: string) => { const f = new FormData(); f.set("contactId", "c1"); f.set("taskId", taskId); return f; };
 
 describe("completeTaskAction — the timeline's 'complete' (review R3-I1)", () => {
-  it("a hold's undecided To-do is refused without an error page: the page re-renders and the Texts row above carries the decision (mutation: let HoldUndecidedError propagate → rejects, FAILS)", async () => {
+  it("a stale page's Done on a hold's undecided To-do is refused without an error page: the page re-renders, and the timeline then shows the decide-first hint in its place (mutation: let HoldUndecidedError propagate → rejects, FAILS)", async () => {
     completeTask.mockRejectedValueOnce(new HoldUndecidedError());
     await expect(completeTaskAction("a1", form("t1"))).resolves.toBeUndefined();
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts/c1");
@@ -8169,50 +8592,9 @@ export async function readTaskContact(
   const row = data as { contact_id: string | null; consent_event_id: string | null } | null;
   return row ? { contactId: row.contact_id, consentEventId: row.consent_event_id } : null;
 }
-
-/** A hold's To-do is closed by deciding the hold (Confirm stop / Not a stop), never by "Done" (review R3-I1). */
-export class HoldUndecidedError extends Error {
-  constructor() {
-    super("this To-do asks about a hold that is still undecided");
-    this.name = "HoldUndecidedError";
-  }
-}
-
-/** Is this ledger row a hold that is still its number's newest deciding row? */
-async function holdStillOpen(db: SupabaseClient, accountId: string, eventId: string): Promise<boolean> {
-  const ev = await readConsentEvent(db, accountId, eventId);
-  if (!ev || ev.action !== "held") return false;
-  return newestDecidingRow(await readConsentHistory(db, accountId, ev.channel, ev.address))?.id === eventId;
-}
 ```
 
-And in the same file, `completeTask` gains the guard (every "Done" path meets it: the per-account list, the contact page's timeline):
-
-Find:
-```ts
-export async function completeTask(
-  db: SupabaseClient, accountId: string, taskId: string, actorId: string,
-  actorType: ActorType = "user",
-): Promise<void> {
-  const { error } = await db.from("tasks")
-```
-Replace with:
-```ts
-export async function completeTask(
-  db: SupabaseClient, accountId: string, taskId: string, actorId: string,
-  actorType: ActorType = "user",
-): Promise<void> {
-  const { data: linked, error: readError } = await db.from("tasks")
-    .select("consent_event_id").eq("account_id", accountId).eq("id", taskId).maybeSingle();
-  if (readError) throw new Error(readError.message);
-  const eventId = (linked as { consent_event_id: string | null } | null)?.consent_event_id ?? null;
-  if (eventId && await holdStillOpen(db, accountId, eventId)) throw new HoldUndecidedError();
-  const { error } = await db.from("tasks")
-```
-
-(`activities.ts` imports `readConsentEvent`, `readConsentHistory` and `newestDecidingRow` from `./consent` for this.)
-
-Edit `packages/db/src/index.ts` — in the `./activities` export line Task 2 wrote, add `readTaskContact` and `HoldUndecidedError`.
+Edit `packages/db/src/index.ts` — in the `./activities` export line Task 2 wrote, add `readTaskContact` (`HoldUndecidedError` is Task 2's).
 
 Edit `…/tasks/actions.ts`:
 
@@ -8273,9 +8655,11 @@ Replace with:
   try {
     await completeTask(await dbForRequest(), accountId, String(formData.get("taskId")), userId);
   } catch (e) {
-    // Review R3-I1: a hold's To-do is closed by deciding the hold — the
-    // Texts row on this same page carries Confirm stop and Not a stop — so
-    // the page re-renders with the To-do still open instead of an error page.
+    // Review R3-I1, R3-N1: a hold's To-do is closed by deciding the hold,
+    // and the timeline shows a hint instead of Done for one (Task 12), so
+    // this is a stale page. Re-render (the hint appears) rather than show an
+    // error page. The decision is on the To-do page, and in the Texts row
+    // while the contact's current number is the one on hold.
     if (!(e instanceof HoldUndecidedError)) throw e;
   }
   revalidatePath(path);
@@ -8586,8 +8970,6 @@ Expected (predicted; not replayed): all pass, including the existing call-page r
 | 2 | `decideFromTask`: `decide(ctx, task.consentEventId!)` (the task's own linked event) instead of `newest.id` | "Confirm stop decides the contact's CURRENT hold …" (expressible now that `readTaskContact` returns the link, review R3-m6) |
 | 3 | `decideFromTask`: drop `newest.action !== "held"` | "a To-do whose number is no longer on hold says it was already decided …" |
 | 3b | `decideFromTask`: return "decided" without `completeTasksForConsentEvents` | "…and that To-do closes itself, through its own ledger link …" |
-| 3c | activities.ts: `completeTask` without the `holdStillOpen` guard | consent-tasks.test "refuses while the linked hold is still its number's newest deciding row …" |
-| 3d | activities.ts: `holdStillOpen` returns true for any linked row | consent-tasks.test "completes once the hold is decided …" |
 | 3e | tasks/actions.ts: `completeWorkTask` without the `HoldUndecidedError` branch | "a Done on a hold's To-do while the hold is undecided … decide-first line" |
 | 3f | contacts/[contactId]/actions.ts: `completeTaskAction` without its catch | "a hold's undecided To-do is refused without an error page …" |
 | 4 | work-list: render `WorkRowActions` for every row | "a hold's To-do offers Confirm stop and Not a stop … and no Done" |
@@ -9042,13 +9424,13 @@ Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log, on
 
 - [ ] **Step 6: Parity** (runbook §5): `-f step=fingerprint` and `-f step=migration-history` on the CI project; `packages/db/supabase/parity/fingerprint.sql` and `migration-history.sql` through `execute_sql` on production (read only); diff; only the runbook's allowed differences may remain. Then PR-1's `.superpowers/sdd/consent-pr1/parity-0054.sql` on both (still identical), plus the function md5 of step 5.3 on both (identical). Ledger: `0055 APPLIED — CI odnobiodsftffphuuosz (db push) <date> — PROD tlbkbmlrfafquucsmsmm (MCP) <date> — NEVER RE-APPLY` (and the same line for 0056).
 
-- [ ] **Step 7: The Telnyx opt-out import, the count — BEFORE any number changes profile** (Task 3; danlo's decision 4, review R1-C1; danlo's go for the Telnyx read and the production read). Today every BIS number is on one shared messaging profile (`crm-features.md:1099`), and whether a number's opt-outs follow it to a new profile is NOT FOUND (A5; inferred from F4 that they do not). So this runs now, right after parity, while the shared profile's list still covers every business, and step 10 does not start until step 8 is done or danlo has seen a zero.
+- [ ] **Step 7: The Telnyx opt-out import, the count — BEFORE any number changes profile** (Task 3; danlo's decision 4, review R1-C1; danlo's go for the Telnyx read and the production read). Today every BIS number is on one shared messaging profile (`crm-features.md:1099`), and whether a number's opt-outs follow it to a new profile is NOT FOUND (A5; inferred from F4 that they do not). So this runs now, right after parity, while the shared profile's list still covers every business, and step 10 does not start until step 8 is done or danlo has seen a zero. **It also runs before the MERGE** (review R1-N9): the build live before the merge has no Stop texts, no hold and no staff decision, so no staff stop or hold can exist on production yet. A backfill row is dated at the opt-out's own, PAST time; written after staff had stopped or held the same number, it would sit OLDER than that staff row, leave the staff stop the newest (and so staff-resumable), and quietly break choice 19. **Precondition, told to danlo (review R1-N8):** nobody deletes the shared messaging profile or clears its opt-out list before step 8 is done — the A2P work this week must leave both alone.
   1. `GET /v2/messaging_optouts?redaction_enabled=false&page[size]=250&page[number]=N` — UNFILTERED by profile, so the shared profile and any other are all read (assumption: the list without `filter[messaging_profile_id]` covers every profile on the Telnyx account; F6 verified the filter exists, not what its absence returns — so also run it once WITH the shared profile's id and check that its count is not larger than the unfiltered one) — every page appended to one JSON array in `/tmp/optouts.json` (it holds customer numbers: never commit it). `TELNYX_API_KEY` is exported by danlo in the shell for the session, never echoed or written to a file (memory `bis-env-secret-reads`).
   2. The owners: paste `packages/db/supabase/backfills/0055-telnyx-optout-owners.sql` into `execute_sql` on production; take only the JSON array of rows into `/tmp/owners.json`.
   3. `pnpm --filter @bis/db backfill:telnyx-optouts /tmp/optouts.json /tmp/owners.json` prints "opt-outs read", "to write" per account and in total, business numbers with no owner (numbers on the Telnyx account that are not BIS's: counted, never written), and "opt-outs whose customer number is one of ours (expected 0)". A non-zero last line means the `from`/`to` orientation (F10) was misread: STOP. Report all of it to danlo.
   4. Expected: small or zero (no account has texted a customer, spec §4.2). Zero to write: nothing to write, and that is the answer; delete the temp files and go on.
 
-- [ ] **Step 8: The import write, only after danlo has seen step 7's count and says go — still before any number moves.** `pnpm --filter @bis/db backfill:telnyx-optouts /tmp/optouts.json /tmp/owners.json --emit-sql /tmp/telnyx-backfill.sql`, then paste that file into `execute_sql` on production (no backslash: `consentAppendSql` refuses one; no transaction control). It is ONE statement (review R1-M3: `execute_sql` shows only the last statement's result) and it answers one row per outcome — `appended`, `duplicate`, `refused` (the customer's own stop already stood) — whose counts add up to "to write, total". Run it a second time: one row, `duplicate`, with the same total (one row per source). Then delete `/tmp/optouts.json`, `/tmp/owners.json` and `/tmp/telnyx-backfill.sql`, and say so in the ledger. The customer numbers left this machine only inside that pasted statement.
+- [ ] **Step 8: The import write, only after danlo has seen step 7's count and says go — still before any number moves.** `pnpm --filter @bis/db backfill:telnyx-optouts /tmp/optouts.json /tmp/owners.json --emit-sql /tmp/telnyx-backfill.sql`, then paste that file into `execute_sql` on production (no backslash: `consentAppendSql` refuses one; no transaction control). It is ONE statement (review R1-M3: `execute_sql` shows only the last statement's result) and it answers one row per outcome — `appended`, `duplicate`, `refused` (the customer's own stop already stood) — whose counts add up to "to write, total". Run it a second time: every row the first run `appended` now answers `duplicate`, every `refused` stays `refused` (no row was written for it), any `duplicate` stays `duplicate`, and the total is unchanged (review R1-N6; one row per source). Then delete `/tmp/optouts.json`, `/tmp/owners.json` and `/tmp/telnyx-backfill.sql`, and say so in the ledger. The customer numbers left this machine only inside that pasted statement.
 
 - [ ] **Step 9: Merge, under danlo's go.** Squash-merge through GitHub only after steps 4–6 (the ruleset requires `verify` and `e2e` green on the head SHA; the policy is non-strict, so if `main` moved since step 4, merge `main` in, re-run, and re-read the head SHA's check runs). After the deploy: the Vercel deployment is READY and error-free; open any contact on production as the agency (the Texts row reads Allowed for a textable number); the cron's next tick is 200.
 
@@ -9063,11 +9445,29 @@ Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log, on
      - `op: "start"`, `keywords`: `START, UNSTOP`, `resp_text`: `{Business}: You'll get our texts again. Reply STOP to stop them. Listo, le enviaremos mensajes de nuevo. Responda PARAR para dejarlos.`
      - `op: "help"` (F11: if Telnyx refuses `help`, use `info`, and use the same op in the read-back, review R1-M5), `keywords`: `HELP, AYUDA`, `resp_text`: `{Business}: Reply STOP to stop texts from us. Call or text this number for help. Responda PARAR para dejar de recibir mensajes. Llame o escriba a este numero para recibir ayuda.` (danlo's decision 2; two GSM-7 segments, measured in Task 5.)
      Either danlo enters them in the portal (Messaging → keywords management) or the orchestrator POSTs each to `POST /v2/messaging_profiles/{id}/autoresp_configs`. If a config for the same `op` and `country_code` already exists, PATCH/PUT it (`/autoresp_configs/{autoresp_cfg_id}`) rather than adding a second.
+     **Assumption (review R1-N11):** Telnyx accepts its own reserved default words (STOP, STOPALL, STOP ALL, UNSUBSCRIBE, CANCEL, END, QUIT, START, UNSTOP, HELP) inside a custom config's `keywords`. If a POST is refused for that, drop ONLY the default words from that config's `keywords` (F2: the defaults stay active whatever the list says), post the rest, compare the read-back against the list as posted, and let step 11's rows 1, 5 and 6 confirm that the defaults answer with the custom `resp_text`. Record which way it went.
   3. **Read back** `GET …/autoresp_configs` and compare, as sorted JSON, against the nine bodies (`jq -S '[.data[] | {op, keywords: (.keywords | sort), resp_text, country_code}] | sort_by(.country_code, .op)'` on both sides; `op` as it was posted, `help` or `info`). Read `GET /v2/messaging_profiles/{id}` again: `features.ai_opt_out_detection_enabled` is `false` (review R1-I6). Any difference: STOP and report. Record in the ledger: the profile id, the nine config ids, the AI-detection value, the date.
   4. Record the profile id on the account's A2P card (Task 7; the agency's own screen). The app refuses texting for an approved account until it is there.
   5. A business rename (its `brand_name`) makes these replies stale: redo 10.2–10.3 (noted in the runbook by Task 9's edit; add it there if it is missing).
 
-- [ ] **Step 11: The go-live check — after A2P approval, NOT a merge gate** (spec §5, items 1, 2 and 6 now met). On BIS's own line, from danlo's own phone: text `STOP`, `START`, `HELP`, `PARAR`, `AYUDA`, `Stop.` (a punctuated form Telnyx may not match, A1), then `Start!` and `Cancel.` (review R2-I1c: a START or a CANCEL Telnyx does not recognise), each once, and write down what comes back, WORD FOR WORD. Expected: exactly ONE reply each, whose text is character for character the configured `resp_text` of step 10.2 for the words Telnyx handles, or BIS's own line (Task 5) for any it does not (review R1-M5: a reply that differs means the wrong config answered); the drawer's Texts row follows each; `consent_events` holds one row per text (read through the MCP, BIS's own account only). `Start!` after a Telnyx-blocked `STOP` is the one expected exception: if Telnyx does not recognise it, BIS lifts its own ledger, its confirmation is refused with 40300, the ledger returns to `carrier_block`, and NO reply arrives — the trace A1 documents; the customer's plain `START` then works. This settles A1, A3 and A4, and F3's per-language question does not arise with the bilingual configs. Two replies to one text, or none (outside that trace): STOP texting on every account (`outbound_suppressed`) and report.
+- [ ] **Step 11: The go-live check — after A2P approval, NOT a merge gate** (spec §5, items 1, 2 and 6 now met). On BIS's own line, from danlo's own phone, one text at a time, each from a KNOWN state (review R2-N2: a text sent to an address that is already stopped tests nothing), and for each the reply written down WORD FOR WORD and compared character for character with the line the table names (review R1-M5: a reply that differs means the wrong config, or the wrong sender, answered). After each: the drawer's Texts row, and `consent_events` for the address (read through the MCP, BIS's own account only). Before row 1 the Texts row must read Allowed; if it does not, text `START` and wait for its reply.
+
+| # | Text | State before | Expected answerer — and what BIS writes |
+|---|---|---|---|
+| 1 | `HELP` | Allowed | **Telnyx's** help line (step 10.2). BIS: nothing (`autoresponse_type` set). |
+| 2 | `AYUDA` | Allowed | **Telnyx's** help line (AYUDA is in the help config). BIS: nothing. |
+| 3 | `s t o p` | Allowed | **BIS's own** stop confirmation, English (Task 5), answering the new `revoked` / `keyword` row. The one word here only BIS's matcher reads as a stop (spaces are ignored, choice 26; Telnyx matches the whole message, A1), so BIS's own reply path is exercised live. If Telnyx answers it instead, record that: A1 is then wider than assumed, and BIS correctly sent nothing. |
+| 4 | `START` | Stopped by BIS only (Telnyx never saw a STOP) | Exactly ONE start reply: **Telnyx's** start line if Telnyx answers START on a number it never blocked, otherwise **BIS's own** start confirmation (English). Which one is NOT FOUND in Telnyx's docs; record it. BIS writes `resubscribed` either way. |
+| 5 | `STOP` | Allowed | **Telnyx's** stop line. BIS writes `revoked` / `keyword`, sends nothing. |
+| 6 | `START` | Stopped by Telnyx | **Telnyx's** start line. BIS writes `resubscribed`, sends nothing. |
+| 7 | `PARAR` | Allowed | **Telnyx's** stop line (PARAR is in the stop config). BIS writes `revoked` / `keyword`. |
+| 8 | `START` | Stopped by Telnyx | **Telnyx's** start line. |
+| 9 | `Stop.` | Allowed | **Telnyx's** stop line if Telnyx ignores the full stop, otherwise **BIS's own** stop confirmation (A1). Record which. Then `START` from the state it left (row 4 or row 6 applies). |
+| 10 | `STOP`, then `Start!` | Allowed, then stopped by Telnyx | `STOP`: **Telnyx's** stop line. `Start!`: **Telnyx's** start line if Telnyx recognises it; otherwise **NOBODY, by design** — BIS lifts its ledger, its start confirmation is refused with 40300, the gate records the block again, and the log names it (A1's trace, review R2-I1c). Then a plain `START`: **Telnyx's** start line. |
+| 11 | `Cancel.` | Allowed | **Telnyx's** stop line if Telnyx ignores the full stop, otherwise **BIS's own** stop confirmation. Then `START` from the state it left. |
+| 12 | `please stop texting me` | Allowed | **NOBODY, by design** (choice 20): the Texts row reads On hold and a To-do appears. Then Not a stop in the drawer, which leaves the number Allowed. |
+
+This settles A1, A3 and A4, and F3's per-language question does not arise with the bilingual configs. Two replies to one text, or none where the table names an answerer: STOP texting on every account (`outbound_suppressed`) and report.
 
 - [ ] **Step 12: Handoff.** The ledger lines above; the head SHA and its check runs; the counts from steps 2, 7 and 8; the Telnyx config ids and AI-detection readings from step 10; and the Next plans below.
 
@@ -9078,7 +9478,7 @@ Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log, on
 **Spec coverage** (the §7 PR-2 row, item by item, and what PR-1 handed on):
 - Inbound keywords, START and HELP: Task 4 (the matcher, decision 10/11, choice 26 as G9 extends it), Task 8 (what each means), Task 9 (the route).
 - The confirmation and the Telnyx reconciliation: Task 5 (§4.2's six lines, the help lines with S12's contact sentence), Task 6 (the three kinds, choice 18's any hour, the gate's one exception), Task 8 (BIS replies only when `autoresponse_type` is absent, whatever its spelling: G4; the reply owed the moment the row is written: G1), Task 9 (after the response: G3), Task 16 step 10 (Telnyx's own replies and keywords for US, MX and CA, with a read-back) and step 11 (the live one-reply check, word for word).
-- The phrase list and holds: Task 4 (§4.2's phrases as S9 extends them, twenty English and nineteen Spanish, pinned by a literal), Task 8 (held, the To-do, choice 20's no reply), Tasks 11–13 (Confirm stop, Not a stop, their bounded Undo, the To-do's own buttons, G20, G21).
+- The phrase list and holds: Task 4 (§4.2's phrases as S9 extends them: 17 English and 48 Spanish sentence phrases, 2 whole-message phrases and 3 repeated stop words, pinned by literals), Task 8 (held, the To-do, choice 20's no reply), Tasks 11–13 (Confirm stop, Not a stop, their bounded Undo, the To-do's own buttons, G20, G21).
 - Grants: Task 8 (texting first, spec step 6), Task 10 (form, booking).
 - The drawer's Messages block, Texts row, and the To-do rows: Tasks 11, 12, 13 (§6's Allowed, Stopped, On hold, Check number; the two-row skeleton and the error line; "Since {date} · {how}"; Resume's required note; To-do lines from `messages.ts`).
 - The Telnyx backfill: Task 3 and Task 16 steps 7–8 (count first, write after danlo sees it, both before any number changes profile: A5, S11).
@@ -9091,16 +9491,16 @@ Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log, on
 
 **Placeholder scan:** `grep -nE "TBD|TODO|implement later|fill in|similar to Task"` over this file returns this line and the two uses of Task 8's constant `TODO_EXCERPT` (an identifier, not a placeholder). Three edits say "the file's own" helper names (`render`, `CONTACT`, the `@bis/db` mock factory of `tasks/actions.test.ts`) instead of quoting them, because those files are long and the helper is used as-is; each such edit names the exact grep that finds it.
 
-**Type consistency** (names a later task uses, checked against the task that defines them): `appendConsentEventGuarded` / `ConsentGuard` (with `unless_customer_stopped`) / `{ ifNewest }` / `ConsentAppend.outcome` / `CUSTOMER_STOP_METHODS` (Task 1 → 3, 8, 10, 11); `readConsentHistory`, `readConsentEvent`, `readConsentActions`, `newestDecidingRow` (Task 1 → 2, 11, 13); `ensureConsentTask`, `completeTasksForConsentEvents`, `reopenTasks`, `nextBookedStart`, `WorkRow.consent` (Task 2 → 8, 11, 13); `matchKeyword`, `keywordDisplay`, `CANCEL_WORDS`, `matchPhrase` (Task 4 → 8, 11); `ReplyKind`, `consentReplyBody`, `telnyxReplyText`, `TELNYX_KEYWORDS`, the `sms.consentReply.*` keys (Task 5 → 8, 16); `SmsRequest.answersEventId`, `stop_confirmation_stale` (Task 6 → 8); `classifyInbound`, `parseAutoresponse` (`Autoresponse` with `OTHER`), `recordInboundConsent` (with its `owe` callback), `CHANGES_CONSENT`, `ConsentReplyPlan`, `sendConsentReply` (Task 8 → 9); `TextsView`, `TextsActionResult`, `TextsUndo`, `TextsContext` (with `now`), `UNDO_WINDOW_MS`, `textsContextFor`, the six `…Action`s, `TextsResponse` (Task 11 → 12, 13); `TextsLoad`, `runTextsAction`, `TEXTS_TREATMENT` (Task 12 → 13); `readTaskContact` (returning the link), `HoldUndecidedError` (Task 13). NOT checked by a compiler: nothing was run (see Replay status).
+**Type consistency** (names a later task uses, checked against the task that defines them): `appendConsentEventGuarded` / `ConsentGuard` (with `unless_customer_stopped`) / `{ ifNewest }` / `ConsentAppend.outcome` / `CUSTOMER_STOP_METHODS` (Task 1 → 3, 8, 10, 11); `readConsentHistory`, `readConsentEvent`, `readConsentActions`, `newestDecidingRow` (Task 1 → 2, 11, 13); `ensureConsentTask`, `completeTasksForConsentEvents`, `reopenTasks`, `nextBookedStart`, `WorkRow.consent` (Task 2 → 8, 11, 13); `matchKeyword`, `keywordDisplay`, `CANCEL_WORDS`, `matchPhrase` (Task 4 → 8, 11); `ReplyKind`, `consentReplyBody`, `telnyxReplyText`, `TELNYX_KEYWORDS`, the `sms.consentReply.*` keys (Task 5 → 8, 16); `SmsRequest.answersEventId`, `stop_confirmation_stale` (Task 6 → 8); `classifyInbound`, `parseAutoresponse` (`Autoresponse` with `OTHER`), `recordInboundConsent` (with its `owe` callback), `CHANGES_CONSENT`, `ConsentReplyPlan`, `sendConsentReply` (Task 8 → 9); `TextsView`, `TextsActionResult`, `TextsUndo`, `TextsContext` (with `now`), `UNDO_WINDOW_MS`, `textsContextFor`, the six `…Action`s, `TextsResponse` (Task 11 → 12, 13); `TextsLoad`, `runTextsAction`, `TEXTS_TREATMENT` (Task 12 → 13); `HoldUndecidedError`, `holdOpenTaskIds`, `listContactTasks`'s `consent_event_id` (Task 2 → 12, 13); `matchPhrase`, `WHOLE_MESSAGE_PHRASES`, `REPEATED_KEYWORDS` (Task 4 → 8); `readTaskContact` (returning the link, Task 13). NOT checked by a compiler: nothing was run (see Replay status).
 
-**Counts** (read off this file): 16 tasks; 3 checkpoints; 2 migrations (0055, 0056); 51 new copy keys (Task 5, counted off its two blocks: 12 + 30 + 9) plus 5 A2P keys (Task 7); nine Telnyx autoresp configs per profile (Task 16 step 10.2: 3 operations × 3 countries); 17 stop keywords in the stop config (Task 5's `TELNYX_KEYWORDS.stop`, ≤ Telnyx's 20); 39 phrases (Task 4: 20 English, 19 Spanish).
+**Counts** (read off this file): 16 tasks; 3 checkpoints; 2 migrations (0055, 0056); 51 new copy keys (Task 5, counted off its two blocks: 12 + 30 + 9) plus 5 A2P keys (Task 7); nine Telnyx autoresp configs per profile (Task 16 step 10.2: 3 operations × 3 countries); 17 stop keywords in the stop config (Task 5's `TELNYX_KEYWORDS.stop`, ≤ Telnyx's 20); 70 phrase entries (Task 4: 17 English and 48 Spanish sentence phrases, 2 whole-message phrases, 3 repeated stop words).
 
 **Vacuity checks applied while writing** (memories `bis-vacuous-test-shapes`, `bis-test-vacuity`):
 - Every `vi.mock("@bis/db")` factory that a changed module reaches gains the new exports (route.test.ts and route.consent.test.ts gain `completeTasksForConsentEvents`; the call page test; the tasks actions test), and where a test needs a real pure function or class beside the mocks (`newestDecidingRow`, `HoldUndecidedError`), the factory spreads `importOriginal`.
 - A time bomb found and fixed while writing: the gate's deliver re-check judges the five minutes at the real clock, so Task 6's re-check case pins the clock with `vi.useFakeTimers({ toFake: ["Date"] })`; without it the case turns red on its own after 2026-10-06. The Undo window uses the context's own `now`, never the real clock.
 - Two zones where a zone matters (the CANCEL To-do's date in Los Angeles vs UTC; the stopped line in Chicago vs UTC).
 - The copy assertions that meet an apostrophe in rendered HTML read the WHOLE line through `renderedText` (review R3-m2 removed the `.split("'")[0]` that kept only "Couldn").
-- A near-miss negative for every phrase-list edge ("remove meat", "don't texture", "Take me to the shop"), and for the keyword table ("Stops", "stopp", "end it"); the one accepted false positive ("Please stop by at 3") is pinned as a decision, not left to chance.
+- A near-miss negative for every phrase-list edge ("remove meat", "don't texture", "Take me to the shop"), and for the keyword table ("Stops", "stopp", "end it"); the whole-message rule is pinned from both sides ("Please stop!!" holds, "Please stop by Thursday" does not, danlo's decision), so a later widening is a decision, not an accident.
 - A list pinned against a LITERAL in the test, never the implementation's own array (the phrase list, review R2-I5).
 - A mock that must echo its input where identity matters (the retry test's `duplicate` carries the FIRST id, and the To-do is asserted against that id, not the new one).
 - A guard that masks a probe is taken out of the probe's way (review R1-I2: the backfill re-run test puts the customer's START between the runs, so only the source can stop the second stop).
@@ -9116,9 +9516,10 @@ Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log, on
 - A keyword only BIS knows (`Stop.`, `¡Alto!`) is lost if all six of Telnyx's attempts fail (F7); nothing else retries a webhook (review R2-m12).
 - A hold whose To-do cannot be written on any of the six attempts stays held with no To-do; the drawer's Texts row still shows it On hold with its two buttons (review R2-m12).
 - A reply lost after the response — `after()` cut short, or the provider failing — is logged and not retried (review R2-I1, R2-m12); the ledger row stands either way.
+- A stop whose append COMMITS but whose answer is lost on the network gets no reply: the route answers 503, and Telnyx's retry finds the row `duplicate`, which owes nothing (review R2-m-e). The ledger is right; only the confirmation is missing.
 - The To-do's Undo carries task ids from the client; `reopenTasks` is bounded to the account (and RLS), so the worst case is a staff member reopening their own account's tasks.
 
-**Not replayed:** every step. The machine never had the 1.5 GB the brief requires for even one targeted test file, while this plan was written or while its review fixes were made.
+**Not replayed:** every step. The machine never had the 1.5 GB the brief requires for even one targeted test file, while this plan was written or while its review fixes were made. One pure module was SIMULATED instead, outside vitest: Task 4's `phrases.ts`, extracted from this file and run through Node's own type stripping, answered all 48 assertions of its planned test (every per-phrase sentence, every whole-message, repeated-word, misses-list and negative case) as the test expects. That is evidence about the logic, not a replay of the test file.
 
 ## Deferred to whole-branch review
 
@@ -9147,6 +9548,10 @@ Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log, on
   - R3-m10 — the route scan misses a send reached through `lib/voice/textback` or a transitive import (scan 1 still catches a provider bypass).
   - R3-m12 — the To-do buttons call `router.refresh()` twice; focus is lost when the row leaves the list.
   - R3-I7's aside — `textsContextFor` has no unit test of its own.
+  - R1-N4 — `CUSTOMER_STOP_METHODS` and 0055's list, and `RESUMABLE_METHODS` and 0055's Resume list, are tied by no test (only `keyword` is used as a prior row); a loop test over each method as the prior row would tie them.
+  - R1-N7 — the import write takes one advisory lock per row until its single statement commits; if "to write, total" is above about 1,000, split it into batches.
+  - R1-N10 — choice 28 ("a grant never lifts a stop") is enforced only by callers: a `resubscribed` with a method other than `start_keyword`, `staff`, `staff_undo` or `unsubscribe_page` has no state rule; an allow-list rule in 0055 would close it.
+  - R2-m-a — a non-blank sentinel `autoresponse_type` (say "none") on ordinary texts would silence BIS-only replies; low risk, and Task 16 step 11's row 3 (a word only BIS matches) would show it.
   - Review corrections not yet made: G15 should say why §8's "the composer is disabled" e2e line was dropped (the A2P line shows first on the fixture account); G12's "Stop texts takes no note" should either be written into spec §4.2 ("optional note") and §6's example, or reversed.
 
 ## QUESTIONS FOR DANLO
@@ -9156,7 +9561,8 @@ Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log, on
 1. **Consent replies are not billed** (G11). A stop, start or help reply is not an automation, a composer reply or a missed-call text-back, so the M7a rule does not bill it, and Task 14 pins that no consent reply records usage. Yours to change if it should.
 2. **An accented business name makes every reply longer.** "Jardinería López" puts most of BIS's replies at 2 segments and Telnyx's bilingual ones at 3 (Task 5's measurement). The spec's own words stay unaccented; the name is the business's.
 3. **Decision 10 was amended** (S7). It is one of the orchestrator's technical defaults, not one of your binding decisions: BIS now sends its own confirmation only when Telnyx did not already answer, which is what decision 12 and §4.2 already said.
-4. **"Please stop" holds "Please stop by at 3"** too. That is the accepted cost of adding "please stop" (a false match only puts texts on hold, and staff lift it in one click); the test pins it so any narrowing later is a decision.
+4. **"Please stop", "stop please" and a repeated "stop" hold only as the WHOLE message** (your decision of 2026-09-28): "Please stop!!" holds; "Please stop by Thursday" does not, and a test pins that. Longer requests are covered by "stop texting", "stop sending", "stop messaging" and "stop contacting".
+5. **Leave the shared messaging profile alone until Task 16 step 8 is done** (review R1-N8): do not delete it or clear its opt-out list during this week's A2P work. Its list is what step 7 imports, and moving a number off it may leave that number's opt-outs behind (A5).
 
 ## Next plans
 
