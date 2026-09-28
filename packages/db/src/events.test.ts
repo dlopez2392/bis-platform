@@ -50,12 +50,12 @@ describe("emit", () => {
       { account_id: "acct_1", type: "call.recorded", actor_type: "system", actor_id: "system", payload: { callId: "k1" } });
   });
 
-  it("TEMPORARY: a user client on a database without record_event (PGRST202) falls back to the direct insert (mutation: remove the fallback -> FAILS; mutation: skip the rpc and insert directly -> FAILS)", async () => {
+  it("a user client whose rpc fails with PGRST202 (no record_event on this database) throws and inserts nothing — 0053 is on production, so there is no fallback left (mutation: restore the PGRST202 fallback -> FAILS)", async () => {
     const f = fakeClient({ user: true, rpcError: { code: "PGRST202", message: "Could not find the function" } });
-    await emit(f.db, "acct_1", "note.added", "user_1", {});
+    await expect(emit(f.db, "acct_1", "note.added", "user_1", {}))
+      .rejects.toThrow("event emit failed: Could not find the function");
     expect(f.rpc).toHaveBeenCalledTimes(1);
-    expect(f.insert).toHaveBeenCalledWith(
-      { account_id: "acct_1", type: "note.added", actor_type: "user", actor_id: "user_1", payload: {} });
+    expect(f.from).not.toHaveBeenCalled();
   });
 
   it("a user client asked for a non-user actor throws before any write (mutation: drop the actorType check -> FAILS)", async () => {
