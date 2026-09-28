@@ -299,10 +299,12 @@ phone could never be lifted.
 
 1. **Normalise.** Unicode NFD with the accents removed, uppercase, trailing punctuation removed, and every space
    removed (choice 26).
-2. **Stop keyword** (decision 10). Unless the customer's OWN stop already stands (the newest `revoked` row's method is
-   `keyword`, `carrier_block`, `backfill_telnyx`, `unsubscribe_link` or `one_click`), append `revoked` (method
-   `keyword`, with the word in the evidence). Over a staff stop or a confirmed free-text stop it IS appended, so from
-   then on only the customer can lift it (choice 19; corrected 2026-09-28 by danlo's decision, PR-2 plan S8).
+2. **Stop keyword** (decision 10). Unless the customer's OWN stop already stands — the newest deciding row is a
+   `revoked` whose method is `keyword`, `carrier_block`, `backfill_telnyx`, `unsubscribe_link` or `one_click` — append
+   `revoked` (method `keyword`, with the word in the evidence). Over a staff stop or a confirmed free-text stop it IS
+   appended, so from then on only the customer can lift it (choice 19; corrected 2026-09-28 by danlo's decision, PR-2
+   plan S8). §4.3's email rule below ("an address that is already stopped gets no second row") is a different
+   principle; PR-3 decides whether email follows this one.
    - Then send **one** `consent.stop_confirmation` in the keyword's language, unless the webhook shows Telnyx already
      auto-replied (decision 12), and only when the address was not already stopped: a stop over a staff stop gets no
      confirmation (the texts were already off). An address the customer had already stopped gets nothing.
@@ -350,19 +352,27 @@ Spanish help from one GSM-7 segment to two UCS-2 segments.
 
 The start confirmation uses the language of the stop it lifts, and English otherwise.
 
-**The phrase list** (`apps/web/src/lib/consent/phrases.ts`) is matched against the normalised text with the spaces
-kept, as whole words anywhere in the message. The set, reviewed in PR-2 (danlo, 2026-09-28: the starting set plus
-the everyday forms marked "added"; PR-2 plan S9) and extended only with tests, is:
+**The phrase list** (`apps/web/src/lib/consent/phrases.ts`) is matched against the normalised text (accents, case,
+apostrophes and punctuation ignored). Reviewed in PR-2 (danlo, 2026-09-28; PR-2 plan S9, reviews R2-I5 and R2-N1) and
+extended only with tests, it has three kinds:
 
-- **English:** stop texting, stop sending, stop messaging, stop contacting, dont text, do not text, dont message, do
-  not message, no more texts, no more messages, remove me, take me off, unsubscribe me, wrong number; added: no more
-  texting, do not contact me, dont contact me, stop stop (a repeated keyword), stop please, please stop.
-- **Spanish:** ya no me manden, ya no me envien, ya no me escriban, no me manden, no me envien, no me escriban, dejen
-  de mandar, dejen de enviar, dejen de escribir, no quiero mensajes, no quiero recibir, quitenme de, borrenme, numero
-  equivocado; added: no me mande mensajes, no quiero mas mensajes, no mas mensajes, quiteme de su lista, borreme.
-- A phrase that contains another comes first in its list ("stop stop" and "stop please" before "please stop"; "no
-  quiero mas mensajes" before "no mas mensajes"), because the first match wins. "please stop" also holds "Please stop
-  by at 3": the accepted cost.
+- **Sentence phrases, as whole words anywhere in the message.**
+  - **English:** stop texting, stop sending, stop messaging, stop contacting, dont text, do not text, dont message, do
+    not message, no more texts, no more messages, remove me, take me off, unsubscribe me, wrong number, no more
+    texting, do not contact me, dont contact me.
+  - **Spanish, as a class:** each plural (ustedes) phrase with its usted and tú mirrors — ya no me manden / mande /
+    mandes, ya no me envien / envie / envies, ya no me escriban / escriba / escribas; the same three verbs after "no
+    me"; dejen / deje / deja de mandar, enviar, escribir; and the pronoun-attached infinitives Spanish writes as one
+    word, dejen / deje / deja de mandarme, enviarme, escribirme — then no quiero mas mensajes, no quiero mensajes, no
+    quiero recibir, no mas mensajes, no mas textos, quitenme / quiteme / quitame de, borrenme / borreme / borrame,
+    numero equivocado.
+- **Whole-message phrases:** "please stop" and "stop please" count ONLY when they are the whole message, punctuation
+  aside: "Please stop!!" holds, "Please stop by Thursday" does not (danlo). Longer requests are the sentence phrases'
+  job ("stop texting", "stop sending" …).
+- **A stop word repeated as the whole message:** "stop stop", "alto alto", "baja baja", any number of repeats, under
+  the same whole-message rule; one word on its own is a keyword (decision 10), not a phrase.
+- A sentence phrase that contains another comes first in its list ("ya no me mande" before "no me mande"; "no quiero
+  mas mensajes" before "no mas mensajes"), because the first match wins.
 
 A false match only holds messages, and staff undo it in one click. A missed sentence is the risk, which is why staff
 can still record a stop by hand.
