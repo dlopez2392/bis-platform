@@ -79,16 +79,39 @@ describe("interactOutsideExemptingToaster", () => {
 // appears in a comment next to the raw prop, or is made and its result
 // thrown away (review of f9789e94, m1) — so this reads the parsed AST
 // instead: comments are trivia the parser drops before an expression node
-// ever exists, so they cannot satisfy this. On the `*.Content` JSX element,
-// the `onInteractOutside` attribute's initializer must be EXACTLY a call to
-// `interactOutsideExemptingToaster` whose sole argument is the identifier
-// `onInteractOutside` — printed back out (comments stripped, so a fake
-// alongside the real prop can't leak in) and compared to that literal text.
-function onInteractOutsideInitializerText(file: string): string | undefined {
+// ever exists, so they cannot satisfy this.
+//
+// Review of 2c868ca4 (mutation P1): an earlier version of this walk kept a
+// single `found` variable, overwritten on every `*.Content` match across the
+// WHOLE FILE — so it actually read whichever such element came LAST in
+// document order. A decoy `*.Content` wired correctly and placed after a
+// really-broken `SheetContent`/`DialogContent` stayed green 10/10. This walk
+// is scoped to the function declaration the `it.each` row names (the one
+// actually under test), not the whole file, so a decoy anywhere else — under
+// any other name, however many of them — is never even visited. Every
+// `*.Content` match found WITHIN that function is collected (not
+// overwritten), so a second one appearing inside the same function is
+// ambiguous rather than silently picked, and the test requires there be
+// EXACTLY ONE, whose `onInteractOutside` initializer is EXACTLY a call to
+// `interactOutsideExemptingToaster` with the sole argument `onInteractOutside`
+// — printed back out (comments stripped) and compared to that literal text.
+function contentOnInteractOutsideTexts(file: string, functionName: string): string[] {
   const filePath = path.join(here, file);
   const src = readFileSync(filePath, "utf8");
   const sourceFile = ts.createSourceFile(filePath, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let found: ts.Expression | undefined;
+  const printer = ts.createPrinter({ removeComments: true });
+
+  let scope: ts.Node | undefined;
+  function findScope(node: ts.Node) {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === functionName) {
+      scope = node;
+      return;
+    }
+    ts.forEachChild(node, findScope);
+  }
+  findScope(sourceFile);
+
+  const hits: string[] = [];
   function visit(node: ts.Node) {
     if (ts.isJsxOpeningLikeElement(node) && /\.Content$/.test(node.tagName.getText(sourceFile))) {
       for (const prop of node.attributes.properties) {
@@ -99,15 +122,17 @@ function onInteractOutsideInitializerText(file: string): string | undefined {
           ts.isJsxExpression(prop.initializer) &&
           prop.initializer.expression
         ) {
-          found = prop.initializer.expression;
+          hits.push(printer.printNode(ts.EmitHint.Unspecified, prop.initializer.expression, sourceFile));
         }
       }
     }
     ts.forEachChild(node, visit);
   }
-  visit(sourceFile);
-  if (!found) return undefined;
-  return ts.createPrinter({ removeComments: true }).printNode(ts.EmitHint.Unspecified, found, sourceFile);
+  // scope undefined (the named function is gone or renamed) leaves hits
+  // empty, which fails the exactly-one check below just as a missing
+  // attribute would — this fails closed either way.
+  if (scope) visit(scope);
+  return hits;
 }
 
 describe("both SheetContent and DialogContent are wired to the shared factory, read from the AST", () => {
@@ -115,9 +140,11 @@ describe("both SheetContent and DialogContent are wired to the shared factory, r
     ["sheet.tsx", "SheetContent"],
     ["dialog.tsx", "DialogContent"],
   ])(
-    "%s's %s passes onInteractOutside={interactOutsideExemptingToaster(onInteractOutside)} exactly (mutation: a raw prop, a comment-only fake, or a discarded call → FAILS)",
-    (file) => {
-      expect(onInteractOutsideInitializerText(file)).toBe("interactOutsideExemptingToaster(onInteractOutside)");
+    "%s's %s passes onInteractOutside={interactOutsideExemptingToaster(onInteractOutside)} exactly, and only once (mutation: a raw prop, a comment-only fake, a discarded call, or a correctly-wired decoy elsewhere in the file → FAILS)",
+    (file, functionName) => {
+      expect(contentOnInteractOutsideTexts(file, functionName)).toEqual([
+        "interactOutsideExemptingToaster(onInteractOutside)",
+      ]);
     }
   );
 });
