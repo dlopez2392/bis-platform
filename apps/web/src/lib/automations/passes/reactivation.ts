@@ -63,7 +63,7 @@ export async function processReactivations(
   ctx: PassContext, due: DueReactivation[], opts: ProcessOptions,
 ) {
   const c = {
-    sent: 0, failed: 0, unstamped: 0, held: 0,
+    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
     skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
     skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
   };
@@ -210,6 +210,10 @@ export async function processReactivations(
           );
         }
       });
+      if (outcome === "skipped") {
+        c.blocked++;
+        continue;
+      }
       if (outcome === "held") {
         c.held++;
         continue;

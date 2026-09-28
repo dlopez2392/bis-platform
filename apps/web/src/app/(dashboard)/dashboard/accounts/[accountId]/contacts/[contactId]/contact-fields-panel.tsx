@@ -20,10 +20,12 @@ import { InlineField } from "@/components/inline-field";
 import { m } from "@/lib/messages";
 import { SubmitButton } from "../../../submit-button";
 import { updateContactAction, addTagAction, removeTagAction } from "./actions";
-import { updateContactFieldAction } from "../actions";
+import { updateContactFieldAction, undoInlinePhoneEditAction } from "../actions";
 import { FIELDS } from "../contact-drawer";
 import { MarketingOptOutSwitch } from "../marketing-optout-switch";
+import { PhoneCountryRow } from "../phone-country-row";
 import type { OptOutZone } from "@/lib/contacts/marketing-optout";
+import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
@@ -36,6 +38,7 @@ export function ContactFieldsPanel({
   tags,
   fieldDefs,
   zone,
+  phoneUnconfirmed,
 }: {
   accountId: string;
   contactId: string;
@@ -44,6 +47,10 @@ export function ContactFieldsPanel({
   fieldDefs: CustomFieldDef[];
   /** The account's resolved zone (`renderZone`), for the opt-out's "Off since" date. */
   zone: OptOutZone;
+  /** F-009: the number could be Mexican or US (the flag, or the stored
+   *  number reads both ways). Worked out on the server page, which has the
+   *  normaliser; the panel is a client component and must not ship it. */
+  phoneUnconfirmed: boolean;
 }) {
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
@@ -69,11 +76,24 @@ export function ContactFieldsPanel({
                     inputType={type}
                     value={(contact[field] as string | null) ?? null}
                     save={(v) => updateContactFieldAction(accountId, contactId, field, v)}
+                    {...(field === "phone" ? {
+                      undoPhone: (undo: PhoneInlineUndo) => undoInlinePhoneEditAction(accountId, contactId, undo),
+                    } : {})}
                   />
                 </dd>
               </div>
             ))}
           </dl>
+
+          <PhoneCountryRow
+            // Keyed by the flag too (review R3-I2): the page re-renders after
+            // a phone edit, and the row must follow the new answer.
+            key={`phone-${contactId}-${phoneUnconfirmed}`}
+            accountId={accountId}
+            contactId={contactId}
+            unconfirmed={phoneUnconfirmed}
+            phone={contact.phone ?? ""}
+          />
 
           <MarketingOptOutSwitch
             key={contactId}

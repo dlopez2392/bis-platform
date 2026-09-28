@@ -36,7 +36,8 @@ const dbMocks = vi.hoisted(() => ({
   getAgencyReportTarget: vi.fn(), stampAgencyReportSent: vi.fn(), listAccountsForWeeklyRollup: vi.fn(),
   recordAutomationLog: vi.fn(),
   // Part C: the inline instant reply reads the window and the zone; the held path reads the existing row.
-  readQuietSettings: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
+  readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
+  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), recordCarrierBlock: vi.fn(),
   // The release pass's own queue read — first in the registry, every tick.
   listReleasableHolds: vi.fn(),
   // The usage report, last in the registry: no account is billed here.
@@ -44,8 +45,9 @@ const dbMocks = vi.hoisted(() => ({
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: true, from: "+19565550000" }) }));
-// The inline recipe reaches its provider through harness.ts's lazySmsProvider,
-// i.e. through this factory; the registered passes get theirs on ctx.
+// The inline recipe reaches its provider through the send gate, which takes
+// it from this factory once a send is cleared; the registered passes get the
+// gate on ctx.
 const inlineSmsSend = vi.fn(async () => ({ providerMessageId: "s-inline" }));
 vi.mock("@/lib/sms", () => ({ getSmsProvider: () => ({ isFake: true, send: inlineSmsSend }) }));
 vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }) }));
@@ -55,6 +57,7 @@ import type {
 } from "@bis/db";
 import { runPasses } from "./harness";
 import { PASSES } from "./registry";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "./context";
 import { sendInstantReply, type InstantReplyInput } from "./instant-reply";
 
@@ -198,7 +201,9 @@ beforeEach(() => {
   // RUN under the sentinel, not error out of the harness: a pass that quietly
   // fails is a pass the scan never looked at (the withBookingCancelled lesson).
   dbMocks.listSitesToSync.mockResolvedValue([]);
-  dbMocks.readQuietSettings.mockResolvedValue({ enabled: false, start: "21:00", end: "08:00" });
+  dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
+  dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
+  dbMocks.recordCarrierBlock.mockResolvedValue("appended");   // explicit: the gate reaches it only on a carrier stop (phase 3 rule)
   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
   dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   dbMocks.listReleasableHolds.mockResolvedValue([]);
@@ -223,8 +228,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     const smsSend = vi.fn(async () => ({ providerMessageId: "s" }));
     const ctx: PassContext = {
       db: {} as never, now: TICK, origin: "https://app.example.com",
-      email: { isFake: true, send: emailSend }, sms: () => ({ isFake: true, send: smsSend }),
-      quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
+      email: { isFake: true, send: emailSend }, sms: fakeSmsGate({ send: smsSend }),
     };
 
     const results = await runPasses(PASSES, ctx);

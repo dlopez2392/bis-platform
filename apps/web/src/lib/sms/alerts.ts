@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@bis/db";
 import { ALERT_CODE_TTL_MINUTES } from "@bis/db";
 import { segmentsFor } from "./segments";
 import { resolveSmsSender, refusesAlertLoop } from "./sender";
-import { getSmsProvider } from "./index";
+import { sendSms } from "@/lib/consent/gate";
 
 /**
  * Business-side alert texts — the SMS twin of `bookingAlertEmail`/
@@ -162,27 +162,30 @@ export async function prepareAlertSms(
 }
 
 /**
- * Phase 2: the actual provider POST, and the only half with a carrier round
- * trip in it. NEVER throws — a failure is logged and swallowed here so it
- * can never cost the booking/call write it rides beside, same contract
- * `sendAlertSms` always had.
+ * Phase 2: the send, through the SEND GATE (consent chain PR-1, kind
+ * `operator.alert_sms`), and the only half with a carrier round trip in it.
+ * The gate re-checks the sender, and the ledger too: a business owner who
+ * texted STOP to their own business line gets no alerts from it (decision
+ * 2). An alert keeps no hours. `pending.from` is the number prepare saw; the
+ * gate resolves its own. NEVER throws — a failure is logged and swallowed
+ * here so it can never cost the booking/call write it rides beside.
  *
  * Logs the provider message id AND the destination on SUCCESS too, not only
- * on failure (alert-send-report follow-up review, finding 5: a failed alert
- * had no symptom anywhere — no message row exists for this send, 0035's own
- * decision 3 is why there must never be one, so the provider's delivery
- * callback had nothing to correlate against and nothing else in this path
- * ever logged a success at all). This is the cheap end of that finding, not
- * the thorough one: a durable, agency-visible send record would need a
- * product decision about where an agency would see it, which is outside a
- * bug-fix pass — recorded as a deferred item, not silently dropped.
+ * on failure (alert-send-report follow-up review, finding 5): no message row
+ * exists for this send (0035's decision 3), so the console is its only record.
  */
-export async function deliverAlertSms(accountId: string, pending: PendingAlertSms): Promise<void> {
+export async function deliverAlertSms(
+  db: SupabaseClient, accountId: string, pending: PendingAlertSms,
+): Promise<void> {
   try {
-    const { providerMessageId } = await getSmsProvider().send(pending);
-    console.error(
-      `alert SMS sent for account ${accountId}: to ${pending.to} providerMessageId ${providerMessageId}`,
-    );
+    const result = await sendSms(db, { accountId, kind: "operator.alert_sms", to: pending.to, body: pending.body });
+    if (result.kind === "sent") {
+      console.error(`alert SMS sent for account ${accountId}: to ${result.to} providerMessageId ${result.providerMessageId}`);
+      return;
+    }
+    const why = result.kind === "blocked" ? `not sent (${result.reason})`
+      : result.kind === "failed" ? result.error : "deferred";
+    console.error(`alert SMS send failed for account ${accountId}: ${why}`);
   } catch (e) {
     console.error(`alert SMS send failed for account ${accountId}: ${String(e)}`);
   }
@@ -210,7 +213,7 @@ export async function sendAlertSms(
   try {
     const pending = await prepareAlertSms(db, accountId, alertPhone, body);
     if (!pending) return;
-    await deliverAlertSms(accountId, pending);
+    await deliverAlertSms(db, accountId, pending);
   } catch (e) {
     console.error(`alert SMS send failed for account ${accountId}: ${String(e)}`);
   }

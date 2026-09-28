@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { normalizeFieldInput, type EditableField } from "@/lib/contacts/field-input";
+import { commitInlineUndo, type PhoneInlineUndo, type InlinePhoneUndoWrite } from "@/lib/contacts/inline-phone-undo";
 
 type ValidateResult = { ok: true; value: string } | { ok: false; error: string };
 
@@ -61,11 +62,21 @@ export function InlineField(
   ) & {
     label: string;
     value: string | null;
-    save: (value: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+    /** Phone field only: the save may hand back `undo`, the server's OWN
+     *  record of the prior phone and flag AND the value it actually stored
+     *  (`lib/contacts/inline-phone-undo.ts`'s `PhoneInlineUndo`) — never a
+     *  value this component captures itself. Every other field's `save`
+     *  never returns one, and none is expected. */
+    save: (value: string) => Promise<{ ok: true; undo?: PhoneInlineUndo } | { ok: false; error: string }>;
     inputType?: "text" | "email" | "tel";
+    /** Phone field only: the dedicated undo write, given exactly the
+     *  `PhoneInlineUndo` the save returned. When absent (or the field isn't
+     *  phone, or the save returned no `undo`), undo falls back to
+     *  `save(prior)` exactly as every other field's undo always has. */
+    undoPhone?: InlinePhoneUndoWrite;
   },
 ) {
-  const { label, field, required, value, save, inputType = "text" } = props;
+  const { label, field, required, value, save, inputType = "text", undoPhone } = props;
   // `field` is guaranteed defined whenever `required` is not — the union
   // above enforces that at every call site; this is what lets commit() and
   // the undo guard below share ONE rule instead of branching twice.
@@ -89,7 +100,7 @@ export function InlineField(
     if (norm.value === committed.current) return; // no-op edit — no toast
     const prior = committed.current;
     setShown(norm.value);
-    let result: { ok: true } | { ok: false; error: string };
+    let result: { ok: true; undo?: PhoneInlineUndo } | { ok: false; error: string };
     try {
       result = await save(norm.value);
     } catch {
@@ -101,19 +112,35 @@ export function InlineField(
       return;
     }
     committed.current = norm.value;
+    // The phone field's OWN undo payload, straight off THIS save's result —
+    // never captured client-side (review C1: the drawer's summary can be
+    // stale, or defaulted false while loading or on error).
+    const phoneUndo = result.undo;
     // Undo re-runs `save` with the PRIOR value, straight past commit()'s
     // validation — so offering it for a prior this field's own rule rejects
     // is offering a button whose only possible outcome is a server error
     // toast. For a `required` field first filled in from empty that is EVERY
     // first save. Asked of the exact value undo would send, with the exact
     // rule the server will apply to it.
-    const undoable = normalize(prior).ok;
+    //
+    // Phone is different (round 3, CRITICAL): it is undoable exactly when
+    // the save handed back a payload to restore, never `normalize(prior).ok`
+    // — that would offer Undo for a phone edit with no payload (a prior
+    // getContact read that raced or failed) and commitInlineUndo would then
+    // have nothing to route to but `save(prior)`, the exact re-derive-the-
+    // flag-from-text bug this whole fix exists to close. No payload means no
+    // Undo button for phone, full stop.
+    const undoable = field === "phone" ? phoneUndo !== undefined : normalize(prior).ok;
     toast.success(m["inline.saved"].replace("{label}", label), {
       action: undoable
         ? {
             label: m["common.undo"],
             onClick: () => {
-              void save(prior).then((r) => {
+              // Phone routes the SERVER's own undo payload to the dedicated
+              // action, restoring the flag WITH the number; every other
+              // field still resubmits the prior text through `save`
+              // (commitInlineUndo).
+              void commitInlineUndo(field, prior, phoneUndo, save, undoPhone).then((r) => {
                 if (r.ok) { committed.current = prior; setShown(prior); }
                 else toast.error(r.error);
               });

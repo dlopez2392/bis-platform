@@ -458,6 +458,23 @@ export const m = {
   // `flipMarketingOptOut`, so the box is always named by what it says.
   "contact.marketingOptOut.undoBusy": "Your last change is still saving. Use the “{label}” box to change it back.",
 
+  // The contact's "Messages" block (consent chain spec §6). PR-1 ships only
+  // the Texts row's Check number state (F-009); the rest lands in PR-2/PR-3.
+  // "line", "mx" and "us" are the spec's words, verbatim.
+  "contact.messages.title": "Messages",
+  "contact.messages.texts": "Texts",
+  "contact.phoneCountry.word": "Check number",
+  "contact.phoneCountry.line": "This number could be Mexican or US.",
+  "contact.phoneCountry.mx": "Mexico (+52)",
+  "contact.phoneCountry.us": "US (+1)",
+  "contact.phoneCountry.mxToast": "Saved as a Mexican number",
+  "contact.phoneCountry.usToast": "Saved as a US number",
+  "contact.phoneCountry.failed": "Couldn't save that — please try again.",
+  "contact.phoneCountry.changed": "Their number changed while you were choosing. Reload to see it.",
+  "contact.phoneCountry.unreadable": "That number can't be read as a US or Mexican number. Edit it instead.",
+  "contact.phoneCountry.undoBusy": "Your last change is still saving. Edit the number itself to change it back.",
+  "contact.phoneCountry.inlineChanged": "Their number changed since your edit. Reload to see it.",
+
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
   // {placeholder} convention (see setup.progress above) — the route
@@ -582,6 +599,15 @@ export const m = {
   // FROM yet.
   "settings.alertPhoneNotClearedToSend": "Texting isn't turned on for this account yet, so no verification code can go out. See the Checklist page.",
   "settings.alertPhoneTooManyCodes": "Too many codes have been requested for this number in the last hour. Try again in about an hour.",
+  // The alert phone's country (consent chain PR-1, F-009): never ambiguous.
+  "settings.alertPhoneCountry": "Country of this number",
+  "settings.alertPhoneCountryUs": "US (+1)",
+  "settings.alertPhoneCountryMx": "Mexico (+52)",
+  // A number typed WITH a country code that is not the country picked
+  // (review R3-M4): never texted, never silently re-coded.
+  "settings.alertPhoneCountryMismatch": "That number starts with a different country code than the one picked. Pick the matching country, or type just the ten digits.",
+  // Spec §6, verbatim: the code could not go because that phone texted STOP.
+  "settings.alertPhoneStopped": "This number has stopped texts from your business line. Text START to it from that phone to turn them back on.",
   "settings.alertPhoneSendFailed": "The verification code couldn't be sent. Try again in a moment.",
   "settings.alertPhoneCodeSent": "Code sent — check that phone for a text.",
   // Deliberately does not say the number was right or wrong — only that
@@ -640,6 +666,13 @@ export const m = {
   // Says WHO is holding it up and what unblocks it, rather than "unavailable".
   "compose.smsBlockedA2p": "Texting is off until this company's A2P registration is approved",
   "compose.smsBlockedNoNumber": "Texting needs a live phone number on this company",
+  // The consent gate (lib/consent/composer-state.ts): the one line the text
+  // composer shows in place of its form, and the toast a refused send gives.
+  "compose.smsStopped": "They stopped texts on {date}. You can't text this number until they text START.",
+  "compose.smsStoppedUndated": "They stopped texts from you. You can't text this number until they text START.",
+  "compose.smsHeld": "Texts to them are on hold while you check whether they asked to stop.",
+  "compose.smsCheckNumber": "This number could be Mexican or US. Pick its country on their contact before you text it.",
+  "compose.smsStateUnknown": "Couldn't check whether they can get texts. Reload the page to try again.",
   // {n} segments — SMS bills per segment, and a single non-GSM character
   // (an accent, a curly apostrophe) drops the whole message to 70 per segment.
   "compose.smsSegments": "{chars} characters · {segments} message(s)",
@@ -987,6 +1020,11 @@ export const m = {
 
   "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
   "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
+  // A text-back HELD overnight and sent at 08:00 (consent chain PR-1, danlo
+  // 2026-09-26): "just now" would be false the next morning. Spanish needs no
+  // variant; its default never said "just now".
+  "voice.textback.defaultBodyHeldEn": "Hi, this is {name}. Sorry we missed your call, reply here and we'll help.",
+  "voice.textback.defaultBodyHeldNoNameEn": "Sorry we missed your call, reply here and we'll help.",
   "voice.textback.defaultBodyEs": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   "voice.textback.defaultBodyNoNameEs": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   // Same class of note as `automations.optOutCounted` (the count above
@@ -1423,16 +1461,19 @@ export const m = {
 
   // Part C — the Quiet hours card (agency, on the Automations page).
   "automations.quiet.title": "Quiet hours",
-  "automations.quiet.body": "No automated texts or emails go to your customers between these hours. Anything due overnight waits and goes at the end. Your phone and website assistant still answer.",
-  "automations.quiet.enabled": "Use quiet hours",
-  "automations.quiet.from": "From",
-  "automations.quiet.to": "Until",
-  "automations.quiet.zone": "Times are in {zone}",
-  "automations.quiet.save": "Save quiet hours",
-  "automations.quiet.saved": "Quiet hours saved",
-  "automations.quiet.saveFailed": "Could not save quiet hours.",
-  "automations.quiet.invalidTime": "Enter both times as hours and minutes, like 9:00 PM.",
-  "automations.quiet.readFailed": "Couldn't load the current quiet hours. Reload the page before changing them.",
+  // Spec §6, verbatim: the fixed sending hours, read-only (decision 4).
+  "automations.quiet.fixed": "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens, unless it's a reminder that would arrive after the appointment.",
+  // Consent chain PR-1: the Activity page's reasons this PR adds. REASONS in
+  // lib/automations/hold-or-send.ts points at these; its older lines stay
+  // there (the automation engine's precedent, Global Constraints).
+  "automations.reason.ledgerRetry": "Waiting a few minutes: couldn't check whether they can get texts",
+  "automations.reason.textsStopped": "They stopped texts from this business",
+  "automations.reason.textsHeld": "Texts to them are on hold",
+  "automations.reason.numberUnconfirmed": "Their number could be Mexican or US. Pick its country on their contact",
+  // The re-hold age cap (orchestrator, 2026-09-26): an outage never produces
+  // "Sorry we missed your call" days later.
+  "automations.reason.tooLongAfterCall": "Not sent: too long after the call",
+  "automations.reason.tooLongAfterWriteIn": "Not sent: too long after they wrote in",
   "automations.activityLink": "See what went out",
   // The page's four group headings, in the order the customer lives it; the
   // last group is the one rule that holds every automation back.
@@ -1485,6 +1526,7 @@ export const m = {
   "activity.source.weekly_report": "Weekly report",
   "activity.source.concierge": "Website assistant",
   "activity.source.voice": "Phone assistant",
+  "activity.source.textback": "Missed-call text-back",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the

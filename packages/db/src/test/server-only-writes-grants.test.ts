@@ -104,7 +104,7 @@ describe("0053: server-only tables, at the catalogue", () => {
           order by column_name`, [table])).rows.map((r) => r.column_name);
       expect(await cols("contacts")).toEqual([
         "assigned_to", "attribution", "company_name", "custom", "dnd", "email", "first_name", "last_name",
-        "marketing_email_opted_out_at", "phone", "source", "updated_at",
+        "marketing_email_opted_out_at", "phone", "phone_country_unconfirmed", "source", "updated_at",
       ]);
       expect(await cols("opportunities")).toEqual([
         "assigned_to", "contact_id", "custom", "monetary_value", "name", "pipeline_id", "stage_changed_at", "stage_id",

@@ -6,7 +6,6 @@ import {
   recordAutomationLog, listReleasableHolds, bumpHeldForAccount, listAutomationLog, countAutomationUsage,
   getAutomationLogEntry,
 } from "../automation-log";
-import { readQuietSettings, saveQuietSettings } from "../automation-settings";
 import { createContact } from "../contacts";
 
 /**
@@ -321,29 +320,6 @@ describe("0046 accessors, live (serviceDb under withTestAccount)", () => {
     });
   });
 
-  it("readQuietSettings returns the defaults for an account with no row, and the saved window after a save", async () => {
-    await withTestAccount(async (db, accountId) => {
-      // The literal, not DEFAULT_QUIET_SETTINGS: comparing the accessor's
-      // output to the same constant it reads internally would pass even if
-      // both drifted from the migration's actual column defaults together.
-      expect(await readQuietSettings(db, accountId)).toEqual({ enabled: true, start: "21:00", end: "08:00" });
-      // "WITHOUT writing one" — asserted, not assumed: no row exists yet.
-      const before = await db.from("automation_settings").select("account_id").eq("account_id", accountId);
-      expect(before.error).toBeNull();
-      expect(before.data).toEqual([]);
-      await saveQuietSettings(db, accountId, { enabled: true, start: "22:30", end: "06:15" }, "user_test");
-      expect(await readQuietSettings(db, accountId)).toEqual({ enabled: true, start: "22:30", end: "06:15" });
-      const { data: ev, error: evErr } = await db.from("events").select("type").eq("account_id", accountId).eq("type", "automation_settings.updated");
-      expect(evErr).toBeNull();
-      expect(ev).toHaveLength(1);
-    });
-  });
-
-  it("saveQuietSettings refuses a clock that is not HH:MM before writing", async () => {
-    await expect(saveQuietSettings(serviceDb(), "00000000-0000-0000-0000-000000000000", { enabled: true, start: "9pm", end: "08:00" }, "user_test"))
-      .rejects.toThrow(/HH:MM/);
-  });
-
   for (const table of TABLES) {
     it(`${table} is carried off by the account's own deletion, so it needs no line in the teardown list`, async () => {
       let accountId = "";
@@ -352,7 +328,11 @@ describe("0046 accessors, live (serviceDb under withTestAccount)", () => {
         if (table === "automation_log") {
           await recordAutomationLog(db, { accountId: id, source: "voice", channel: "ai", contactId: null, subjectKey: "call:c", status: "sent" });
         } else {
-          await saveQuietSettings(db, id, { enabled: false, start: "21:00", end: "08:00" }, "user_test");
+          // The quiet-hours accessors are retired (consent chain PR-1); the
+          // table stays until a later migration drops it, so its cascade is
+          // still proven, with a plain insert.
+          const { error } = await db.from("automation_settings").insert({ account_id: id });
+          expect(error).toBeNull();
         }
       });
       // withTestAccount's finally has run deleteAccountCascade, which does NOT

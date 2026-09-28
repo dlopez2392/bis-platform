@@ -3,44 +3,50 @@ import {
   type AutomationLogRow, type AutomationLogSource, type AutomationLogChannel, type AutomationLogWrite,
 } from "@bis/db";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
-import { inQuietWindow, quietWindowEnd, formatInstantClock } from "./quiet-hours";
+import { SMS_KINDS, type AutomationSmsKind } from "@/lib/consent/classes";
+import { nextOpening, expiresBeforeOpening, hoursZone, type HoursRule } from "@/lib/consent/hours";
+import { formatInstantClock } from "./quiet-hours";
+import { SmsDeferred, SmsBlocked, type AutomationBlockReason } from "./send-sms";
 import type { PassContext } from "./context";
+import { m } from "@/lib/messages";
 
 /**
- * The one place a customer-facing send meets the quiet-hours window and the
- * automation log (spec §1, §2, amendments 1 and 4).
+ * The one place an automated customer send meets its sending hours and the
+ * automation log (automation engine part C; consent chain spec §4.1 item 4).
  *
  *   holdOrSend(ctx, subject, send)
- *     inside the window → write (or re-write) the held row, held_until =
- *                         the window's end, return "held". The pass does NOT
+ *     outside the hours → write (or re-write) the held row, held_until = the
+ *                         instant they open, return "held". The pass does NOT
  *                         stamp; the release pass brings the subject back.
+ *     past its deadline → a subject whose deadline falls at or before that
+ *                         opening is logged skipped ("Not sent: quiet hours
+ *                         ran past the appointment", choice 21) and never
+ *                         sent: a reminder after the appointment is worse
+ *                         than none. The old "a deadline sends now, inside
+ *                         the window" exemption is gone (decision 4).
  *     otherwise         → send(); write `sent`; return "sent".
- *                         send() throwing → write `failed`, rethrow.
- *     the exemption     → a `deadline` (a reminder's starts_at) at or before
- *                         the window's end sends now: the 6:45 text for the
- *                         7:30 job.
+ *                         send() throwing SmsDeferred → held, as above;
+ *                         SmsBlocked → skipped with the gate's reason;
+ *                         anything else → write `failed`, rethrow.
+ *
+ * THE HOURS ARE FIXED and come from the gate's own module (lib/consent/
+ * hours.ts): an SMS subject uses its kind's rule from the registry
+ * (automated 08:00-21:00; marketing 09:00-21:00, Sunday from noon), and an
+ * EMAIL subject the automated rule (choice 31). Nothing reads the old
+ * per-account quiet-hours settings. The gate checks the hours again for SMS,
+ * at the same instant (`ctx.now`), so the two never disagree; if they ever
+ * did, its SmsDeferred lands here as a hold all the same.
  *
  * The `sent`/`failed`/`skipped` log writes are an isolated leg (`record`):
- * losing one loses a history line, not a send, so a failure is one
- * console.error and nothing more. The `held` write is NOT isolated — it is
- * the enqueue. If it is lost, `holdOrSend` still returns "held", the pass
- * does not stamp, and the row simply vanishes: no error, no retry, and if
- * the appointment's own 75-minute reminder band closes while the account is
- * still in its quiet window, nothing ever sends it. So the held write is
- * made DIRECTLY (not through `record`) and a failure REJECTS the call, so
- * the pass counts `failed` and the tick's own retry-next-time behaviour
- * (the row is still unstamped) is what saves it — true of the five CRON
- * passes. The one exception: the inline instant reply (`instant-reply.ts`,
- * fired once per form submission — no due-list, no tick) has no next tick to
- * retry it. There, the enqueue failure surfaces as this call's own rejection,
- * which `sendInstantReply` turns into a `{ kind: "failed" }` outcome, and its
- * caller (`enrich.ts`) records that into the submission's `processing_error`
- * instead — the operator's "somebody was not told about this lead" signal,
- * since a lost text would otherwise be invisible past one console line. The
- * settings READ has the same shape for the same reason: a rejected read
- * rejects the call.
+ * losing one loses a history line, not a send. The `held` write is NOT
+ * isolated: it is the enqueue. If it is lost, the row simply vanishes, so it
+ * is made DIRECTLY and a failure REJECTS the call; the pass counts `failed`
+ * and its own retry-next-tick behaviour (the row is still unstamped) saves
+ * it. The inline instant reply has no next tick: there the rejection becomes
+ * `{ kind: "failed" }`, which enrich.ts records into the submission's
+ * `processing_error`.
  */
-export type HoldContext = Pick<PassContext, "db" | "now" | "quiet">;
+export type HoldContext = Pick<PassContext, "db" | "now">;
 
 export type LogSubject = {
   accountId: string;
@@ -58,13 +64,37 @@ export type LogSubject = {
 
 export type HoldSubject = LogSubject & {
   accountTimezone: string | null;
-  /** The latest instant this send is still useful. At or before the window's end → send now. */
+  /** The latest instant this send is still useful. At or before the hours'
+   *  opening → not sent at all (choice 21). */
   deadline?: Date | null;
+  /** REQUIRED on the sms channel: the kind decides the hours (a marketing
+   *  text waits for 09:00, and for noon on Sunday). holdOrSend throws
+   *  without it rather than guess the weaker rule. */
+  smsKind?: AutomationSmsKind;
 };
+
+/** A subject that texts. Its `smsKind` is the ONE literal that decides both
+ *  the hours holdOrSend reads and the kind the gate is asked for: a sender
+ *  passes `kind: subject.smsKind`, never a second literal that could
+ *  disagree (the Task 9 review, minor 2). */
+export type SmsHoldSubject = HoldSubject & { smsKind: AutomationSmsKind };
 
 /** Client-readable, every one of them: a business owner reads these on the Activity page. */
 export const REASONS = {
   quietHours: (endsAt: Date, zone: string) => `Held until ${formatInstantClock(endsAt, zone)} — quiet hours`,
+  /** Choice 21: the hours opened only after the thing this send was for. */
+  windowAfterDeadline: "Not sent: quiet hours ran past the appointment",
+  /** Review R2-I4: the consent state could not be read, so the send waits
+   *  LEDGER_RETRY_MS and the release pass tries again. */
+  ledgerRetry: m["automations.reason.ledgerRetry"],
+  /** The re-hold age cap (orchestrator, 2026-09-26; RETRY_MAX_AGE_MS). */
+  tooLongAfterCall: m["automations.reason.tooLongAfterCall"],
+  tooLongAfterWriteIn: m["automations.reason.tooLongAfterWriteIn"],
+  /** The consent gate's refusals (lib/consent/gate.ts), in the words the
+   *  client reads on the Activity page. */
+  textsStopped: m["automations.reason.textsStopped"],
+  textsHeld: m["automations.reason.textsHeld"],
+  numberUnconfirmed: m["automations.reason.numberUnconfirmed"],
   noEmail: "No email address on file",
   noPhone: "No phone number we can text",
   smsGate: "Texting isn't set up for this company yet",
@@ -166,49 +196,84 @@ export async function logSkipped(ctx: Pick<PassContext, "db">, s: LogSubject, re
   await record(ctx.db, { ...writeOf(s), status: "skipped", reason });
 }
 
+/** Every refusal the gate can hand an automation, as the Activity page says it. */
+export const BLOCK_REASONS: Record<AutomationBlockReason, string> = {
+  no_number: REASONS.noPhone,
+  a2p_not_approved: REASONS.smsGate,
+  no_live_number: REASONS.smsGate,
+  stopped: REASONS.textsStopped,
+  held: REASONS.textsHeld,
+  unconfirmed_number: REASONS.numberUnconfirmed,
+  window_after_deadline: REASONS.windowAfterDeadline,
+};
+
+function hoursRuleOf(s: HoldSubject): HoursRule {
+  if (s.channel !== "sms") return "automated";
+  if (!s.smsKind) throw new Error(`holdOrSend: sms subject ${s.source} ${s.subjectKey} has no smsKind`);
+  return SMS_KINDS[s.smsKind].hours;
+}
+
+/**
+ * The held write, shared with the missed-call text-back (lib/voice/
+ * textback.ts), which is not a pass but holds through the same queue.
+ * Re-holding under the SAME held_until does not re-stamp `occurred_at` (a
+ * subject seen on every 15-minute tick overnight would otherwise re-sort to
+ * the top of the history every time); a DIFFERENT held_until still writes.
+ * REJECTS on a failed write: this is the enqueue.
+ */
+export async function writeHeld(
+  ctx: Pick<PassContext, "db">, s: LogSubject, until: Date, zone: string,
+  reason: string = REASONS.quietHours(until, zone),
+): Promise<void> {
+  const existing = await getAutomationLogEntry(ctx.db, s.accountId, s.source, s.subjectKey);
+  const unchanged = existing?.status === "held"
+    && existing.held_until !== null
+    && new Date(existing.held_until).getTime() === until.getTime();
+  if (unchanged) return;
+  try {
+    await recordAutomationLog(ctx.db, {
+      ...writeOf(s), status: "held", heldUntil: until.toISOString(), reason,
+    });
+  } catch (e) {
+    console.error(
+      `sending hours: could not enqueue ${s.source} ${s.subjectKey} for account ${s.accountId} — `
+      + `the row stays unstamped and is due again next tick: ${String(e)}`,
+    );
+    throw e;
+  }
+}
+
 export async function holdOrSend(
   ctx: HoldContext, s: HoldSubject, send: () => Promise<void>,
-): Promise<"sent" | "held"> {
-  const zone = resolveAccountZone(s.accountTimezone);
-  let quietEnd: Date | null = null;
-  if (zone === null) {
+): Promise<"sent" | "held" | "skipped"> {
+  if (resolveAccountZone(s.accountTimezone) === null) {
     console.error(
-      `quiet hours: account ${s.accountId}'s timezone ${JSON.stringify(s.accountTimezone)} cannot be resolved — `
-      + `sending ${s.source} ${s.subjectKey} without a window; fix the account's timezone`,
+      `sending hours: account ${s.accountId}'s timezone ${JSON.stringify(s.accountTimezone)} cannot be resolved — `
+      + `${s.source} ${s.subjectKey} keeps the fallback zone's hours; fix the account's timezone`,
     );
-  } else {
-    const settings = await ctx.quiet(s.accountId);
-    if (inQuietWindow(ctx.now, zone, settings)) quietEnd = quietWindowEnd(ctx.now, zone, settings);
   }
-
-  if (quietEnd !== null && !(s.deadline && s.deadline.getTime() <= quietEnd.getTime())) {
-    // Re-holding under the SAME window must not re-stamp `occurred_at` (a
-    // subject seen on every 15-minute tick while quiet hours stay in
-    // effect would otherwise re-sort to the top of the history every time).
-    // A DIFFERENT held_until — the window changed — still writes.
-    const existing = await getAutomationLogEntry(ctx.db, s.accountId, s.source, s.subjectKey);
-    const unchanged = existing?.status === "held"
-      && existing.held_until !== null
-      && new Date(existing.held_until).getTime() === quietEnd.getTime();
-    if (!unchanged) {
-      try {
-        await recordAutomationLog(ctx.db, {
-          ...writeOf(s), status: "held", heldUntil: quietEnd.toISOString(), reason: REASONS.quietHours(quietEnd, zone!),
-        });
-      } catch (e) {
-        console.error(
-          `quiet hours: could not enqueue ${s.source} ${s.subjectKey} for account ${s.accountId} — `
-          + `the row stays unstamped and is due again next tick: ${String(e)}`,
-        );
-        throw e;
-      }
-    }
+  const zone = hoursZone(s.accountTimezone);
+  const opening = nextOpening(hoursRuleOf(s), ctx.now, zone);
+  if (expiresBeforeOpening(opening, s.deadline)) {
+    await logSkipped(ctx, s, REASONS.windowAfterDeadline);
+    return "skipped";
+  }
+  if (opening) {
+    await writeHeld(ctx, s, opening, zone);
     return "held";
   }
 
   try {
     await send();
   } catch (e) {
+    if (e instanceof SmsDeferred) {
+      await writeHeld(ctx, s, e.until, zone, e.why === "ledger_unavailable" ? REASONS.ledgerRetry : undefined);
+      return "held";
+    }
+    if (e instanceof SmsBlocked) {
+      await logSkipped(ctx, s, BLOCK_REASONS[e.reason]);
+      return "skipped";
+    }
     await record(ctx.db, { ...writeOf(s), status: "failed", reason: REASONS.failed });
     throw e;
   }

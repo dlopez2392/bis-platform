@@ -11,7 +11,10 @@ import { ContactFieldsPanel } from "./contact-fields-panel";
 import { ActivityTimeline } from "./activity-timeline";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
 import { resolveSmsSender } from "@/lib/sms/sender";
-import { toE164 } from "@/lib/voice/phone-number";
+import { e164Of } from "@/lib/voice/phone-number";
+import { normalisePhone } from "@bis/db/phone";
+import { smsRecipientState } from "@/lib/consent/recipient-state";
+import { composerStateLine } from "@/lib/consent/composer-state";
 import { renderZone } from "@/lib/zone";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +26,7 @@ export default async function ContactDetailPage({
   const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) notFound();
-  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate, account] = await Promise.all([
+  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate, account, smsRecipient] = await Promise.all([
     listContactTags(db, accountId, contactId),
     listNotes(db, accountId, contactId),
     listContactTasks(db, accountId, contactId),
@@ -36,6 +39,10 @@ export default async function ContactDetailPage({
     resolveSmsSender(db, accountId),
     // Only for the opt-out's "Off since" date, printed in the ACCOUNT's zone.
     db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
+    // The ledger state and F-009's flag for the text composer (spec §6): the
+    // two facts the send gate checks, read under this request's RLS client.
+    // Never throws; a failed read is "unknown", which closes the form.
+    smsRecipientState(db, accountId, contact),
   ]);
   // Not a throw, the checklist page's reasoning: one cosmetic date line must
   // not 500 the contact page. `undefined` makes `renderZone` fall back.
@@ -55,16 +62,18 @@ export default async function ContactDetailPage({
           tags={tags}
           fieldDefs={fieldDefs}
           zone={{ zone: zone.zone, guessed: zone.guessed, label: zone.label }}
+          phoneUnconfirmed={contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true}
         />
         <ActivityTimeline
           accountId={accountId}
           contactId={contactId}
           contactHasEmail={Boolean(contact.email)}
-          // Same toE164-based notion of "usable" sendSmsAction itself gates
+          // Same e164Of-based notion of "usable" sendSmsAction itself gates
           // on (actions.ts) — mirrors contactHasEmail above so SMS fails up
           // front, in place of the form, instead of only on submit.
-          contactHasPhone={Boolean(toE164(contact.phone))}
+          contactHasPhone={Boolean(e164Of(contact.phone))}
           smsGate={smsGate}
+          smsBlockedLine={composerStateLine(smsRecipient, zone.zone)}
           notes={notes}
           tasks={tasks}
           opportunities={opps}

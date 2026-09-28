@@ -15,7 +15,7 @@ import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
 import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
-import { toE164, isCallerIdNumber } from "./phone-number";
+import { isCallerIdNumber, spokenPhone } from "./phone-number";
 // STATIC, not the lazy `await import(...)` this repo otherwise reaches for
 // near route handlers: the documented page-data trap (a module-scope DB
 // import breaking `next build`'s page-data collection) doesn't apply to a
@@ -268,8 +268,8 @@ async function resolveOpenOpportunity(
  *
  * `state.contactId` wins outright — set by an in-call booking or an explicit
  * lookup, it is never second-guessed here. Absent that, a captured lead's
- * fields build a real contact (name split, phone normalized, source
- * "voice"). Absent even a lead, a caller ID still deserves a contact record
+ * fields build a real contact (name split, phone as said via `spokenPhone`,
+ * source "voice"). Absent even a lead, a caller ID still deserves a contact record
  * for the message that follows — that gets the minimal shape, `firstName:
  * "Caller"` plus the number, rather than leaving the conversation orphaned.
  */
@@ -283,7 +283,9 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
     const created = await createContact(ctx.db, ctx.accountId, {
       firstName: firstName || "Caller",
       lastName,
-      phone: toE164(fields.callbackNumber) ?? ctx.callerNumber ?? undefined,
+      // As said, or the caller ID (review R2-C1): phoneFields flags a
+      // number that could be Mexican or US; an e164Of here would not.
+      phone: spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? undefined,
       email: fields.email,
       source: "voice",
     }, ACTOR_ID, ACTOR_TYPE);
@@ -546,6 +548,10 @@ export async function finishCall(
         brandName: brandDisplayName(ctx.branding),
         textbackBody: ctx.textbackBody,
         label: `finishCall ${meta.callRowId ?? "(no row)"}`,
+        // The call's own row and instant: the held row's subject, and the
+        // clock the sending hours are judged at (never a freshly-read one).
+        callId: meta.callRowId,
+        now: meta.endedAt,
       });
       // Assigned to the OUTER ids rather than shadowed: the call row below
       // points at the contact and conversation the text lives in, and a
@@ -614,7 +620,7 @@ export async function finishCall(
   // defense-in-depth every other leg in this function carries.
   if (pendingAlertSms) {
     try {
-      await deliverAlertSms(ctx.accountId, pendingAlertSms);
+      await deliverAlertSms(ctx.db, ctx.accountId, pendingAlertSms);
     } catch (e) {
       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS deliver failed: ${String(e)}`);
     }

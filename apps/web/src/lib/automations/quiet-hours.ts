@@ -1,42 +1,12 @@
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 
 /**
- * Quiet hours, the pure half (spec §2). One window per account, on the
- * ACCOUNT's wall clock, evaluated against an instant the caller supplies —
- * never `Date.now()` — so one tick has one "now" and a test can put the
- * clock anywhere.
- *
- * Two rules and a spelling:
- *   - a window that crosses midnight (the default, 21:00–08:00) is the
- *     normal case: quiet when `t >= start || t < end`;
- *   - a window inside one day (13:00–15:00): quiet when `start <= t < end`;
- *   - `start === end` means disabled, as does `enabled: false`.
- *
- * FAILS CLOSED, and "closed" here means NOT QUIET: an unresolvable zone, an
- * invalid instant or a junk clock string yields `false` from `inQuietWindow`
- * and `null` from `quietWindowEnd`. A reminder that never sends is a
- * no-show; a text at 11 PM is a complaint; a reminder held forever against a
- * misconfigured zone would be the first, silently. The pass logs the zone
- * problem (hold-or-send.ts) so it is visible rather than guessed at.
- *
- * `QuietSettings` is declared here rather than imported from `@bis/db` so
- * this module stays free of the package (imports.test.ts's spirit: a pure
- * module owns no I/O). It is structurally identical to the db's, and
- * hold-or-send.ts hands the db's straight in. The db accessor
- * (`readQuietSettings`) normalises Postgres's `HH:MM:SS` to `HH:MM` before
- * it reaches here; this module never sees seconds.
+ * Wall-clock arithmetic, the pure half of what was the quiet-hours module.
+ * The per-account window itself is retired (consent chain spec decision 4):
+ * the fixed sending hours are lib/consent/hours.ts, which uses `wallInstant`
+ * from here, as does lib/reports/month-window.ts. `formatInstantClock` words
+ * a held row's "Held until 8:00 AM".
  */
-export type QuietSettings = { enabled: boolean; start: string; end: string };
-
-const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
-
-/** "21:00" → 1260 (minutes since local midnight); anything else → null. */
-export function clockMinutes(hhmm: string): number | null {
-  const m = HHMM.exec(hhmm);
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
-
 type Wall = { year: number; month: number; day: number; minutes: number };
 
 /**
@@ -131,49 +101,6 @@ export function wallInstant(year: number, month: number, day: number, minutes: n
     return firstWallReadingAtOrAfter(requestedKey, ts, zone);
   }
   return new Date(ts);
-}
-
-function nextDay(w: Wall): { year: number; month: number; day: number } {
-  const t = new Date(Date.UTC(w.year, w.month - 1, w.day + 1));
-  return { year: t.getUTCFullYear(), month: t.getUTCMonth() + 1, day: t.getUTCDate() };
-}
-
-function evaluateWindow(now: Date, zone: string, s: QuietSettings) {
-  if (!s.enabled) return null;
-  const start = clockMinutes(s.start);
-  const end = clockMinutes(s.end);
-  if (start === null || end === null || start === end) return null;
-  const resolvedZone = resolveAccountZone(zone);
-  if (resolvedZone === null || !Number.isFinite(now.getTime())) return null;
-  const wall = wallOf(now, resolvedZone);
-  const quiet = start < end ? wall.minutes >= start && wall.minutes < end : wall.minutes >= start || wall.minutes < end;
-  return { quiet, end, zone: resolvedZone, wall };
-}
-
-export function inQuietWindow(now: Date, zone: string, s: QuietSettings): boolean {
-  return evaluateWindow(now, zone, s)?.quiet ?? false;
-}
-
-/**
- * The next instant the CURRENT window ends, or null when `now` is not
- * inside one. If the wall clock has not yet reached `end` today (the
- * morning half of a crossing window, or any non-crossing window), that is
- * today's `end`; otherwise tomorrow's. Resolved through the wall-time fixed
- * point, so a 08:00 end is 08:00 on the clock on both sides of a DST change.
- */
-export function quietWindowEnd(now: Date, zone: string, s: QuietSettings): Date | null {
-  const r = evaluateWindow(now, zone, s);
-  if (!r || !r.quiet) return null;
-  const day = r.wall.minutes < r.end ? r.wall : nextDay(r.wall);
-  return wallInstant(day.year, day.month, day.day, r.end, r.zone);
-}
-
-/** "21:00" → "9:00 PM". A string that is not a clock comes back unchanged. */
-export function formatClock(hhmm: string): string {
-  const minutes = clockMinutes(hhmm);
-  if (minutes === null) return hhmm;
-  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "UTC" })
-    .format(new Date(Date.UTC(2000, 0, 1, Math.floor(minutes / 60), minutes % 60)));
 }
 
 /**

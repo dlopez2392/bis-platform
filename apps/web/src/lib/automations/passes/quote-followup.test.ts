@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { DueQuoteFollowup, AutomationLogRow, QuietSettings } from "@bis/db";
+import type { DueQuoteFollowup, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listDueQuoteFollowups: vi.fn(), getDueQuoteFollowupById: vi.fn(),
@@ -16,8 +16,9 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => senderMock.resolveSmsSender(...a) }));
 
-import { AUTOMATION_DAILY_CAP } from "../caps";
+import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
 import { defaultQuoteFollowupBody } from "../quote-followup-copy";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
 import { quoteFollowupPass, releaseQuoteFollowup } from "./quote-followup";
 
@@ -64,17 +65,15 @@ function heldRow(over: Partial<AutomationLogRow> = {}): AutomationLogRow {
 
 const emailSend = vi.fn();
 const smsSend = vi.fn();
-const QUIET_OFF: QuietSettings = { enabled: false, start: "21:00", end: "08:00" };
-function ctx(now: Date = TICK, quiet: QuietSettings = QUIET_OFF): PassContext {
+function ctx(now: Date = TICK): PassContext {
   return {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
-    quiet: async () => quiet,
+    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
   };
 }
 const EMPTY = {
-  sent: 0, failed: 0, unstamped: 0, held: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
   skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
   waitingForMorning: 0, unresolvableTimezone: 0,
 };
@@ -225,16 +224,14 @@ describe("the quote follow-up's morning band, caps and cooldown", () => {
 });
 
 describe("the quote follow-up and quiet hours", () => {
-  // 21:00 -> 12:00 puts the whole morning band inside the window, which a
-  // window ending at 08:00 cannot do: the band OPENS at 08:00, so a
-  // band-gated recipe never meets the default window at all.
-  const UNTIL_NOON: QuietSettings = { enabled: true, start: "21:00", end: "12:00" };
+  // The gate defers the text to noon, as it does a marketing text on a
+  // Sunday morning (lib/consent/hours.ts); the band and the hours compose.
   const NOON = new Date("2027-10-20T17:00:00.000Z");   // 12:00 CDT the same day
 
-  it("inside the window it HOLDS: no send, no stamp, one held row ending at noon", async () => {
+  it("when the gate defers the text to noon it HOLDS: no send, no stamp, one held row ending at noon", async () => {
     // Mutation: bypass holdOrSend and send directly -> this reds.
     dbMocks.listDueQuoteFollowups.mockResolvedValue([row()]);
-    expect(await quoteFollowupPass.run(ctx(TICK, UNTIL_NOON))).toEqual({ ...EMPTY, held: 1 });
+    expect(await quoteFollowupPass.run({ ...ctx(TICK), sms: fakeSmsGate({ decide: () => ({ kind: "deferred", until: NOON, zone: "America/Chicago" }) }) })).toEqual({ ...EMPTY, held: 1 });
     expect(smsSend).not.toHaveBeenCalled();
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
     expect(dbMocks.stampQuoteFollowupSent).not.toHaveBeenCalled();
@@ -248,7 +245,7 @@ describe("the quote follow-up and quiet hours", () => {
     // Mutation: apply the morning-band gate on a release -> this reds, and
     // every row held overnight would wait a whole extra day.
     dbMocks.getDueQuoteFollowupById.mockResolvedValue({ due: row() });
-    expect(await releaseQuoteFollowup(ctx(NOON, UNTIL_NOON), heldRow())).toBe("sent");
+    expect(await releaseQuoteFollowup(ctx(NOON), heldRow())).toBe("sent");
     expect(smsSend).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampQuoteFollowupSent).toHaveBeenCalledWith(expect.anything(), "opp_q1");
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(),
@@ -320,7 +317,7 @@ describe("releasing a held quote follow-up", () => {
     // band, which is the whole point of `released`.
     const noon = new Date("2027-10-20T17:00:00.000Z");
     expect(await releaseQuoteFollowup(
-      ctx(noon, { enabled: true, start: "21:00", end: "12:00" }), heldRow())).toBe("skipped");
+      ctx(noon), heldRow())).toBe("skipped");
     expect(smsSend).not.toHaveBeenCalled();
     expect(dbMocks.stampQuoteFollowupSent).not.toHaveBeenCalled();
     // A REAL row, never left untouched: an untouched released row keeps its
@@ -376,5 +373,71 @@ describe("releasing a held quote follow-up", () => {
     dbMocks.getDueQuoteFollowupById.mockResolvedValue({ due: row({ config: null }) });
     expect(await releaseQuoteFollowup(ctx(), heldRow())).toBe("skipped");
     expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Review R2-I2: a text the gate refuses sends nothing, so it must not use up
+ * AUTOMATION_TICK_CAP (one counter across EVERY account) or the account's
+ * daily count. Refused rows are never stamped and come back every tick; without
+ * the give-back ten flagged contacts at the head of the list starve everyone.
+ */
+describe("quoteFollowupPass: a refusal gives back its tick slot and its daily count", () => {
+  const refuseFirst = (n: number) => {
+    let seen = 0;
+    return fakeSmsGate({ send: (m) => smsSend(m), decide: () => (seen++ < n ? { kind: "blocked", reason: "stopped" } : null) });
+  };
+
+  it("ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
+    dbMocks.listDueQuoteFollowups.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ opportunityId: `opp_${i}`, contactId: `ct_${i}` })));
+    const result = await quoteFollowupPass.run({ ...ctx(), sms: refuseFirst(AUTOMATION_TICK_CAP) });
+    expect(result).toEqual({ ...EMPTY, blocked: AUTOMATION_TICK_CAP, sent: 1 });
+  });
+
+  it("one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)", async () => {
+    dbMocks.countQuoteFollowupsSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
+    dbMocks.listDueQuoteFollowups.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ opportunityId: `opp_${i}`, contactId: `ct_${i}` })));
+    const result = await quoteFollowupPass.run({ ...ctx(), sms: refuseFirst(1) });
+    expect(result).toEqual({ ...EMPTY, blocked: 1, sent: 1 });
+  });
+});
+
+describe("quoteFollowupPass hands the gate its own kind (review R2 minor)", () => {
+  it("the gate is asked for automation.quote_followup, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
+    dbMocks.listDueQuoteFollowups.mockResolvedValue([row()]);
+    const gate = fakeSmsGate();
+    await quoteFollowupPass.run({ ...ctx(), sms: gate });
+    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.quote_followup"]);
+  });
+});
+
+/**
+ * Task 9 review, concern 1 (orchestrator, 2026-09-27): a HELD text sends
+ * nothing this tick, so it gives back its TICK slot; its DAILY count stays
+ * taken, because a held row is that day's send. On a Sunday morning ten
+ * accounts' marketing texts held until noon must not use up
+ * AUTOMATION_TICK_CAP (one counter across EVERY account) while another
+ * account's could go now.
+ */
+describe("quoteFollowupPass: a hold gives back its tick slot, never its daily count", () => {
+  const holdFirst = (n: number) => {
+    let seen = 0;
+    return fakeSmsGate({
+      send: (m) => smsSend(m),
+      decide: () => (seen++ < n ? { kind: "deferred", until: new Date("2030-01-06T18:00:00.000Z"), zone: "America/Chicago" } : null),
+    });
+  };
+
+  it("ten rows HELD by the gate, then one sendable: {held: 10, sent: 1} (mutation: drop the held branch's `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
+    dbMocks.listDueQuoteFollowups.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ opportunityId: `opp_${i}`, contactId: `ct_${i}` })));
+    const result = await quoteFollowupPass.run({ ...ctx(), sms: holdFirst(AUTOMATION_TICK_CAP) });
+    expect(result).toEqual({ ...EMPTY, held: AUTOMATION_TICK_CAP, sent: 1 });
+  });
+
+  it("one short of the daily cap: a HELD row keeps today's count, so the next row is capped (mutation: give the daily count back on a hold → it sends, FAILS)", async () => {
+    dbMocks.countQuoteFollowupsSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
+    dbMocks.listDueQuoteFollowups.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ opportunityId: `opp_${i}`, contactId: `ct_${i}` })));
+    const result = await quoteFollowupPass.run({ ...ctx(), sms: holdFirst(1) });
+    expect(result).toEqual({ ...EMPTY, held: 1, skippedCap: 1 });
   });
 });

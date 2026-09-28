@@ -23,7 +23,7 @@ const dbFixture = vi.hoisted(() => ({
   replyToEmail: "owner@rioroofing.com" as string | null,
 }));
 const dbMock = vi.hoisted(() => ({
-  getAutomation: vi.fn(), getBranding: vi.fn(), getCalendarForAccount: vi.fn(), readQuietSettings: vi.fn(),
+  getAutomation: vi.fn(), getBranding: vi.fn(), getCalendarForAccount: vi.fn(),
   listPipelinesWithStages: vi.fn(), getMailingAddress: vi.fn(),
 }));
 vi.mock("@bis/db", async () => ({
@@ -43,10 +43,8 @@ vi.mock("@bis/db", async () => ({
   getAutomation: (...a: unknown[]) => dbMock.getAutomation(...a),
   getBranding: (...a: unknown[]) => dbMock.getBranding(...a),
   getCalendarForAccount: (...a: unknown[]) => dbMock.getCalendarForAccount(...a),
-  readQuietSettings: (...a: unknown[]) => dbMock.readQuietSettings(...a),
   listPipelinesWithStages: (...a: unknown[]) => dbMock.listPipelinesWithStages(...a),
   getMailingAddress: (...a: unknown[]) => dbMock.getMailingAddress(...a),
-  DEFAULT_QUIET_SETTINGS: { enabled: true, start: "21:00", end: "08:00" },
 }));
 const smsMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
 vi.mock("@/lib/sms/sender", () => ({
@@ -147,7 +145,6 @@ beforeEach(() => {
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: dbFixture.replyToEmail,
   }));
   dbMock.getCalendarForAccount.mockReset().mockResolvedValue({ id: "cal_1", public_id: "cal_pub_1", enabled: true });
-  dbMock.readQuietSettings.mockReset().mockResolvedValue({ enabled: true, start: "22:30", end: "06:15" });
   dbMock.listPipelinesWithStages.mockReset().mockResolvedValue([
     { id: "pl_1", name: "Sales", stages: [{ id: STAGE_ID, name: "Quoted", position: 2 }] },
   ]);
@@ -416,28 +413,15 @@ describe("automations page — no calendar yet", () => {
 });
 
 describe("the Quiet hours card", () => {
-  it("receives the STORED window (not the defaults) and the account's zone, and links to Activity (mutation: pass DEFAULT_QUIET_SETTINGS → FAILS)", async () => {
+  it("is handed the account's zone and nothing to save: the hours are fixed (mutation: pass a saveAction or settings again → FAILS)", async () => {
     const { quiet } = await render();
-    expect(quiet).toMatchObject({ settings: { enabled: true, start: "22:30", end: "06:15" }, zoneLabel: "America/Chicago" });
-    expect(dbMock.readQuietSettings).toHaveBeenCalledWith(expect.anything(), "a1");
+    expect(quiet).toEqual({ zoneLabel: "America/Chicago" });
   });
   it("the page links to What went out", async () => {
     // `render()` captures props only; render the page's markup once for the link.
     const html = renderToStaticMarkup(await AutomationsPage({ params: Promise.resolve({ accountId: "a1" }) }));
     expect(html).toContain('href="/dashboard/accounts/a1/activity"');
     expect(html).toContain("See what went out");
-  });
-  it("a failed settings read degrades to null — never the defaults, which would look like a saved window — and says so in the log, never a blank page", async () => {
-    // Mutation: fall back to DEFAULT_QUIET_SETTINGS instead of null → FAILS.
-    // Rendering the defaults as though they were the client's stored window
-    // would let an agency press Save and silently overwrite a real
-    // 22:30–06:15 with the platform default.
-    dbMock.readQuietSettings.mockRejectedValue(new Error("down"));
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { quiet } = await render();
-    expect(quiet).toMatchObject({ settings: null });
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("a1"));
-    spy.mockRestore();
   });
 });
 

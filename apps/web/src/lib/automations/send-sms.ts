@@ -1,19 +1,18 @@
 import { ensureConversation, createMessage, updateMessageStatus } from "@bis/db";
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
-import { withOptOut } from "@/lib/sms/opt-out";
-import { segmentsFor } from "@/lib/sms/segments";
-import { recordUsageSafely, smsBillable } from "@/lib/billing/usage";
-import type { SmsProvider } from "@/lib/sms/types";
+import { recordUsageSafely } from "@/lib/billing/usage";
+import type { AutomationSmsKind } from "@/lib/consent/classes";
+import type { SmsBlockReason } from "@/lib/consent/gate";
 import type { PassContext } from "./context";
 
 /**
- * What the two helpers below actually need: the client and the LAZY SMS
- * getter — not the whole cron context. A full PassContext satisfies this
- * (it is a Pick), so every pass keeps handing over `ctx` unchanged; the
- * inline instant reply (instant-reply.ts, Milestone C) builds exactly these
- * two fields and never constructs the email provider it has no use for.
+ * What the two helpers below actually need: the client, the send gate and
+ * the tick's instant — not the whole cron context. A full PassContext
+ * satisfies this (it is a Pick), so every pass keeps handing over `ctx`
+ * unchanged; the inline instant reply (instant-reply.ts) builds exactly these
+ * three fields and never constructs the email provider it has no use for.
  */
-export type SmsSendContext = Pick<PassContext, "db" | "sms">;
+export type SmsSendContext = Pick<PassContext, "db" | "sms" | "now">;
 
 /** The messages rows automations write are the platform's, not a person's —
  *  the same actor shape the voice text-back uses ("voice"/"ai"). */
@@ -23,19 +22,21 @@ export const AUTOMATION_ACTOR_TYPE = "system" as const;
 export type AutomationSmsInput = {
   accountId: string;
   contactId: string;
-  /** E.164, already through toE164. */
+  /** Which automation this is (lib/consent/classes.ts): it decides the
+   *  hours and the footer, never the caller. */
+  kind: AutomationSmsKind;
+  /** The number as the contact row holds it. The gate normalises it, and a
+   *  ten-digit number whose country is unknown is held there (F-009). */
   to: string;
-  /** The account's live number, from resolveSmsSender. */
-  from: string;
   body: string;
   /** The language THIS message is written in, which decides the language of
-   *  the opt-out disclosure appended to it. Optional and defaulting to "en"
-   *  because most passes have no locale to offer — the scheduled recipes
-   *  (reminders, review requests, no-show nudges) compose English copy end to
-   *  end. The form instant reply is the exception and passes the submission's
-   *  own locale, so a person who filled the form in Spanish is not told how
-   *  to opt out in English. */
+   *  the opt-out disclosure the gate appends to it. Optional and defaulting
+   *  to "en" because most passes have no locale to offer — the scheduled
+   *  recipes compose English copy end to end. The form instant reply is the
+   *  exception and passes the submission's own locale. */
   language?: "en" | "es";
+  /** The account's zone, off the due row, so the gate does not re-read it. */
+  accountTimezone: string | null;
   /** Runs on a PROVIDER failure, after the message row is marked failed: the
    *  recipe's own attempt marker (`*_sms_failed_at`) goes here. Best effort —
    *  its own failure is logged, never thrown, and never re-raised over the
@@ -49,94 +50,125 @@ export type SentSms = {
   /**
    * What this text bills (client billing), or null when the provider put
    * nothing in front of the customer: the fake provider, or a real one
-   * redirected to a developer's phone (`smsBillable`). Segments are counted
-   * on the body AS SENT, the opt-out disclosure included, because that is
-   * what the carrier bills. Recorded by markAutomationSmsSent, never here.
+   * redirected to a developer's phone. Segments are counted on the body AS
+   * SENT, the opt-out disclosure included, because that is what the carrier
+   * bills. Recorded by markAutomationSmsSent, never here.
    */
   usage: { segments: number; sentAt: Date } | null;
 };
 
-/**
- * WRITE THEN SEND — sendSmsAction's discipline, shared by every SMS-capable
- * pass so the ordering below is written once (the review-request tests are
- * the proof it did not change when it moved here):
- *   1. the provider FIRST: `ctx.sms()` is lazy and throws in production while
- *      TELNYX_API_KEY is unset; constructing it after the row would leave a
- *      failed text in the customer's conversation on every tick for a
- *      misconfiguration that has nothing to do with the customer;
- *   2. the conversation and the message row, so a provider failure is a
- *      visible failed text in the inbox, not a silent gap;
- *   3. the send;
- *   4. on failure: mark the row failed, write the recipe's attempt marker
- *      (the 24h cooldown's input for the morning-band recipes; the text
- *      reminder writes it and never reads it, the instant reply writes
- *      none), rethrow so the caller counts `failed` and stamps nothing.
- * The caller stamps its dedupe column and THEN calls markAutomationSmsSent.
- */
-export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSmsInput): Promise<SentSms> {
-  const sms = ctx.sms();
-  // THE choke point for every unprompted text this platform sends on a
-  // schedule — reminders, review requests, no-show nudges, and the inline
-  // form instant reply, which routes through here too. Putting the opt-out
-  // disclosure at this one line is what makes "every programme message says
-  // how to stop it" a property of the system rather than a rule each pass has
-  // to remember; a new pass gets it by calling this function.
-  //
-  // Computed ONCE, above the row write, and the same string is both stored
-  // and sent. Appending it at the send call instead would leave the operator
-  // reading a shorter message in the conversation than the customer received.
-  //
-  // The language comes from the caller, defaulting to English — see the field
-  // comment on `language`. The default is for the scheduled passes, which
-  // compose English copy and have no locale to offer; the instant reply
-  // already picks a body by locale and hands that same locale over, so its
-  // Spanish reply does not end in an English sentence. When a scheduled pass
-  // learns a locale, thread it through here rather than leaving it defaulting
-  // quietly.
-  const body = withOptOut(input.body, input.language);
-  const convo = await ensureConversation(
-    ctx.db, input.accountId, input.contactId, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
-  const { id: messageId } = await createMessage(ctx.db, input.accountId, {
-    conversationId: convo.id, channel: "sms", direction: "outbound", body,
-  }, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
-  let providerMessageId: string;
-  try {
-    ({ providerMessageId } = await sms.send({ to: input.to, from: input.from, body }));
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "unknown send failure";
-    try {
-      await updateMessageStatus(ctx.db, input.accountId, messageId, "failed", { error: message },
-        AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
-    } catch (statusErr) {
-      console.error(`automation sms: could not mark message ${messageId} failed: ${String(statusErr)}`);
-    }
-    try {
-      await input.onProviderFailure();
-    } catch (markErr) {
-      console.error(`automation sms: could not record the failed attempt for message ${messageId}: ${String(markErr)}`);
-    }
-    throw e;
+/** How long a send waits when the consent state could not be read (review
+ *  R2-I4). A failed row would leave the held queue for good (a released
+ *  reminder is past its due window and is never listed again), so an outage
+ *  is a short re-hold instead, and the release pass tries again. */
+export const LEDGER_RETRY_MS = 15 * 60_000;
+
+/** The re-hold age cap (orchestrator, 2026-09-26): an instant reply or a
+ *  missed-call text-back released more than this long after the thing that
+ *  triggered it (the form submission, the call's end) is skipped, not sent
+ *  and not held again, so an outage never sends "Sorry we missed your call"
+ *  days later. */
+export const RETRY_MAX_AGE_MS = 24 * 60 * 60_000;
+
+/** True when `now` is more than RETRY_MAX_AGE_MS after `trigger`. */
+export function pastRetryAge(trigger: Date, now: Date): boolean {
+  return now.getTime() - trigger.getTime() > RETRY_MAX_AGE_MS;
+}
+
+/** The gate said "not yet": holdOrSend writes the held row for `until`.
+ *  `why` picks the row's reason: the sending hours, or an unreadable
+ *  consent state being retried. */
+export class SmsDeferred extends Error {
+  constructor(readonly until: Date, readonly why: "hours" | "ledger_unavailable" = "hours") {
+    super(`automation sms deferred until ${until.toISOString()} (${why})`);
+    this.name = "SmsDeferred";
   }
-  // AFTER the send's try, never inside it: the text is delivered, and
-  // nothing about its usage may reach the catch above (which marks the row
-  // failed) or reject this function (the caller would then never stamp, and
-  // re-send the text next tick). billedUsage never throws.
-  return { messageId, providerMessageId, usage: billedUsage(sms, body, messageId) };
+}
+
+/** The gate said "not to this number": holdOrSend logs the row `skipped`
+ *  with the reason. `ledger_unavailable` is never one of these: it is an
+ *  outage, re-held for LEDGER_RETRY_MS (SmsDeferred). */
+export type AutomationBlockReason = Exclude<SmsBlockReason, "ledger_unavailable">;
+export class SmsBlocked extends Error {
+  constructor(readonly reason: AutomationBlockReason) {
+    super(`automation sms not sent: ${reason}`);
+    this.name = "SmsBlocked";
+  }
 }
 
 /**
- * What a delivered automation text bills, or null. NEVER throws: a failure
- * here (a provider whose shape changed, a counting bug) loses one text's
- * usage, logged, rather than the text's `sent` status or its dedupe stamp.
+ * WRITE THEN SEND — sendSmsAction's discipline, shared by every SMS-capable
+ * pass, now through the send gate (consent chain PR-1):
+ *   1. the gate decides (registry, number, A2P sender, ledger, the
+ *      number's country, the kind's hours, the footer) BEFORE any row, so
+ *      a text that must not go leaves nothing in the customer's thread;
+ *   2. the gate takes the provider FIRST: it throws in production while
+ *      TELNYX_API_KEY is unset, and a row written before it would leave a
+ *      failed text in the thread on every tick for a misconfiguration;
+ *   3. `prepare`: the conversation and the message row, with the body
+ *      exactly as it will be sent, footer included;
+ *   4. the send;
+ *   5. on a provider failure: mark the row failed, write the recipe's
+ *      attempt marker, rethrow so the caller counts `failed` and stamps
+ *      nothing.
+ * A deferral throws SmsDeferred and a refusal throws SmsBlocked; holdOrSend
+ * (hold-or-send.ts) turns each into its log row. The caller stamps its dedupe
+ * column and THEN calls markAutomationSmsSent.
  */
-function billedUsage(
-  sms: Pick<SmsProvider, "isFake" | "redirectTo">, body: string, messageId: string,
-): SentSms["usage"] {
-  try {
-    return smsBillable(sms) ? { segments: segmentsFor(body).segments, sentAt: new Date() } : null;
-  } catch (e) {
-    console.error(`automation sms: usage not worked out for message ${messageId}, so it will not bill: ${String(e)}`);
-    return null;
+export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSmsInput): Promise<SentSms> {
+  // THE choke point for every unprompted text this platform sends on a
+  // schedule: every pass and the inline instant reply come through here, and
+  // from here through the send gate, so a new pass gets the gate's checks,
+  // hours and footer by calling this function.
+  // A holder, not a `let`: the row id is written inside the gate's callback.
+  const row: { id: string | null } = { id: null };
+  const result = await ctx.sms({
+    accountId: input.accountId, kind: input.kind, to: input.to, body: input.body,
+    contactId: input.contactId, language: input.language, accountZone: input.accountTimezone, now: ctx.now,
+  }, {
+    prepare: async ({ body }) => {
+      const convo = await ensureConversation(
+        ctx.db, input.accountId, input.contactId, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
+      row.id = (await createMessage(ctx.db, input.accountId, {
+        conversationId: convo.id, channel: "sms", direction: "outbound", body,
+      }, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE)).id;
+    },
+  });
+  switch (result.kind) {
+    case "sent":
+      // The text has LEFT. Throwing now would count it failed, leave it
+      // unstamped and send it again next tick (review R2 minor), so a
+      // missing row is logged and the send is reported as the send it was.
+      if (row.id === null) {
+        console.error(`automation sms for account ${input.accountId}: sent, but the gate never wrote the message row`);
+      }
+      return {
+        messageId: row.id ?? "", providerMessageId: result.providerMessageId,
+        usage: result.billable ? { segments: result.segments, sentAt: new Date() } : null,
+      };
+    case "deferred":
+      throw new SmsDeferred(result.until);
+    case "blocked":
+      if (result.reason === "ledger_unavailable") {
+        throw new SmsDeferred(new Date(ctx.now.getTime() + LEDGER_RETRY_MS), "ledger_unavailable");
+      }
+      throw new SmsBlocked(result.reason);
+    case "failed":
+      if (result.stage === "provider" && row.id !== null) {
+        const messageId = row.id;
+        try {
+          await updateMessageStatus(ctx.db, input.accountId, messageId, "failed", { error: result.error },
+            AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);
+        } catch (statusErr) {
+          console.error(`automation sms: could not mark message ${messageId} failed: ${String(statusErr)}`);
+        }
+        try {
+          await input.onProviderFailure();
+        } catch (markErr) {
+          console.error(`automation sms: could not record the failed attempt for message ${messageId}: ${String(markErr)}`);
+        }
+      }
+      throw new Error(result.error);
   }
 }
 
@@ -155,6 +187,7 @@ function billedUsage(
 export async function markAutomationSmsSent(
   ctx: SmsSendContext, accountId: string, sent: SentSms, what: string,
 ): Promise<void> {
+  if (!sent.messageId) return;   // no row to mark or to bill against (logged at the send)
   try {
     await updateMessageStatus(ctx.db, accountId, sent.messageId, "sent",
       { providerMessageId: sent.providerMessageId }, AUTOMATION_ACTOR_ID, AUTOMATION_ACTOR_TYPE);

@@ -656,25 +656,30 @@ describe("submitBookingAction — the booking alert text, alongside the email (d
   });
 });
 
-describe("submitBookingAction — phone normalized to E.164 at the boundary", () => {
-  // Voice stores phones as E.164; web previously stored whatever the booker
-  // typed, so the same person became two contacts and `find_my_booking`
-  // couldn't see web bookings. A parseable number must reach `createContact`
-  // already in E.164 (mutation: drop the `toE164` call → FAILS, sees the raw
-  // "(956) 555-1234").
-  it("a parseable US number reaches createContact as E.164", async () => {
+describe("submitBookingAction — the phone reaches createContact AS TYPED (consent chain F-009)", () => {
+  // createContact's phoneFields stores the E.164 when it parses and flags ten
+  // digits that could be Mexican or US. Pre-normalising here (the old
+  // `toE164`, or `e164Of`) stored "55 1234 5678" as a CONFIRMED +1 and the
+  // send gate texted it (review R2-C1).
+  it("an ambiguous number reaches createContact as typed, never pre-read as +1 (mutation: phone: e164Of(phone) → \"+15512345678\", FAILS)", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData({ phone: "55 1234 5678" }));
+
+    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "55 1234 5678" });
+  });
+
+  it("a plainly US number reaches it as typed too: the one normaliser is the contact write's", async () => {
     await submitBookingAction(PUBLIC_ID, validFormData({ phone: "(956) 555-1234" }));
 
-    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "+19565551234" });
+    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ phone: "(956) 555-1234" });
   });
 
   // `isValidPhone` (apps/web/src/lib/forms/guards.ts) accepts a bare 7-digit
-  // string ("5551234" clears its digit-count>=7 floor and PHONE_RE), but
-  // `toE164` (apps/web/src/lib/voice/phone-number.ts) returns null for
-  // anything under 8 digits — so this input genuinely reaches the `?? phone`
-  // fallback rather than exercising unreachable code (mutation: mangle the
-  // fallback into `?? ""` or reject it outright → FAILS).
-  it("a 7-digit number isValidPhone accepts but toE164 cannot parse passes through unchanged, never rejected", async () => {
+  // string ("5551234" clears its digit-count>=7 floor and PHONE_RE) — the
+  // ONLY gate on this path (review R2-C1): the value reaches `createContact`
+  // exactly as typed, whether or not it could ever parse as a real number
+  // (mutation: reject it, or blank it out, instead of passing it through →
+  // FAILS).
+  it("a 7-digit number isValidPhone accepts, but no number, passes through unchanged, never rejected", async () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ phone: "5551234" }));
 
     expect(result.ok).toBe(true);

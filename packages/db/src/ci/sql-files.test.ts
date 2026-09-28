@@ -24,8 +24,10 @@ const FILES = [
   "parity/fingerprint.sql",
   "parity/fingerprint-detail.sql",
   "parity/migration-history.sql",
+  "backfills/0054-phone-country-candidates.sql",
+  "backfills/0054-dnd-preflight.sql",
 ];
-const READS = FILES.filter((f) => f.startsWith("parity/"));
+const READS = FILES.filter((f) => f.startsWith("parity/") || f.startsWith("backfills/"));
 
 const oneLine = (s: string) => s.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 

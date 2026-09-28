@@ -57,9 +57,10 @@ export function reviewRequestStillOwed(
  *
  * `skipBand` is THE RELEASE PATH, and it skips rule 2 ALONE (the spec's
  * release contract, line 16, and amendment B16). A held row passed the band
- * once, at the hour it was held, and is released at the quiet window's end —
- * by definition not a band hour — so re-applying rule 2 would park every
- * overnight hold for a whole extra day. Rules 1, 3, 4 and 5 ARE re-applied,
+ * once, at the hour it was held, and is released when its sending hours
+ * open (noon on a Sunday for a marketing text) or after a 15-minute re-hold —
+ * neither need be a band hour — so re-applying rule 2 would park such a
+ * hold for a whole extra day. Rules 1, 3, 4 and 5 ARE re-applied,
  * because rule 4 lives NOWHERE else: two rows held inside the same quiet
  * window (the review request's, written first, then the referral's) release
  * on the same tick, and without rule 4 on the release path the customer gets

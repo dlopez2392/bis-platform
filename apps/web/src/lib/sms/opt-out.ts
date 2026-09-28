@@ -19,17 +19,20 @@ import { m } from "@/lib/messages";
  * carriers the LANGUAGE and nothing else. Do not "finish the job" by adding
  * keyword handling to the inbound webhook.
  *
- * WHERE IT IS APPLIED — the two places a message goes out unprompted:
- * `sendAutomationSms` (reminders, review requests, no-show nudges, the form
- * instant reply) and the missed-call text-back. Deliberately NOT applied to
+ * WHERE IT IS APPLIED — by the send gate (lib/consent/gate.ts, step 7), for
+ * every kind whose registry row says `footer: "stop_line"`
+ * (lib/consent/classes.ts): the automation kinds and the missed-call
+ * text-back, exactly the two places that appended it before the registry
+ * existed. Deliberately NOT applied to
  * an operator's own typed reply in Conversations — that is a human in a
  * thread the customer opened, and CTIA asks for the disclosure on programme
  * messages, not on every line of a conversation — nor to the lead alert or
  * the alert-phone verification code, which go to the BUSINESS OWNER about
  * their own account and are not a marketing programme they can leave.
  *
- * Applied where the body is BUILT, not at the provider call, so the message
- * row written to the conversation is the text that was actually sent. An
+ * Applied by the gate BEFORE a caller's `prepare` writes its message row,
+ * and handed to it, so the row written to the conversation is the text that
+ * was actually sent. An
  * operator reading the thread must not see a shorter message than the
  * customer got.
  *

@@ -11,6 +11,7 @@ import { releaseReferralAsk } from "./referral-ask";
 import { releaseReactivation } from "./reactivation";
 import { releaseQuoteFollowup } from "./quote-followup";
 import { releaseInstantReply } from "../instant-reply";
+import { releaseTextback } from "@/lib/voice/textback";
 
 /**
  * The queue's consumer (spec §1, amendment 1). FIRST in the registry on
@@ -18,7 +19,8 @@ import { releaseInstantReply } from "../instant-reply";
  * to its source, which re-reads the subject, re-checks it, and sends
  * through the same per-row path the normal tick uses — so the held row
  * flips to `sent`, `skipped` or `failed` by the same write the pass would
- * have made, or is re-held if the agency lengthened the window.
+ * have made, or is re-held if its hours are still closed or the consent
+ * state could not be read (a 15-minute re-hold).
  *
  * Runs BEFORE the domain passes so a subject released here is stamped
  * before its own pass's due-list runs; the sequential harness is what makes
@@ -79,6 +81,7 @@ export const RELEASERS: Record<AutomationLogSource, Releaser | null> = {
   referral_ask: releaseReferralAsk,
   reactivation: releaseReactivation,
   quote_followup: releaseQuoteFollowup,
+  textback: releaseTextback,
   weekly_report: null,
   concierge: null,
   voice: null,

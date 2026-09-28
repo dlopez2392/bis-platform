@@ -33,7 +33,7 @@
 // hears the SAME sentence as any other refusal; only the log line names the
 // reason.
 import { NextResponse, after } from "next/server";
-import { toE164 } from "@/lib/voice/phone-number";
+import { e164Of } from "@/lib/voice/phone-number";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 import { newHandoffToken } from "@/lib/voice/handoff";
@@ -240,7 +240,7 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
  * owned number on the outbound leg, and the caller's own number is not one.
  */
 export function forwardTarget(env: NodeJS.ProcessEnv = process.env): string | null {
-  return toE164(env.VOICE_FORWARD_TO);
+  return e164Of(env.VOICE_FORWARD_TO);
 }
 
 export function forwardXml(to: string, callerId: string | null): string {
@@ -375,7 +375,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     return new NextResponse(null, { status: 405 });
   }
   const params = new URL(req.url).searchParams;
-  return respond(toE164(params.get("To")), toE164(params.get("From")), actionOrigin(req));
+  return respond(e164Of(params.get("To")), e164Of(params.get("From")), actionOrigin(req));
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -404,14 +404,14 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (publicKey) {
     const timestamp = req.headers.get("telnyx-timestamp");
     const signatureB64 = req.headers.get("telnyx-signature-ed25519");
-    // Sanitized through toE164 before logging — claimedTo/claimedFrom are
+    // Sanitized through e164Of before logging — claimedTo/claimedFrom are
     // still unauthenticated at this point (that's the whole reason we're
     // rejecting), so raw interpolation would let a prober inject newlines or
     // control characters into the log stream and forge fake decline lines of
-    // unbounded length. toE164 collapses anything that isn't a real phone
+    // unbounded length. e164Of collapses anything that isn't a real phone
     // number to null, logged as "none".
-    const safeTo = toE164(claimedTo) ?? "none";
-    const safeFrom = toE164(claimedFrom) ?? "none";
+    const safeTo = e164Of(claimedTo) ?? "none";
+    const safeFrom = e164Of(claimedFrom) ?? "none";
     if (!timestamp || !signatureB64) {
       console.error(`texml: rejected request (missing-headers), claimedTo ${safeTo}, claimedFrom ${safeFrom}`);
       return new NextResponse(null, { status: 403 });
@@ -422,5 +422,5 @@ export async function POST(req: Request): Promise<NextResponse> {
       return new NextResponse(null, { status: 403 });
     }
   }
-  return respond(toE164(claimedTo), toE164(claimedFrom), actionOrigin(req));
+  return respond(e164Of(claimedTo), e164Of(claimedFrom), actionOrigin(req));
 }

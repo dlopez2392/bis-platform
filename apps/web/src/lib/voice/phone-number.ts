@@ -1,12 +1,55 @@
-// E.164 or nothing. Live-verified 2026-07-26 in the reception demo: external
-// APIs reject "9562921696", "(956) 292-1696", "956-292-1696", "19562921696";
-// only "+19562921696" passes. Every number leaving this app goes through here.
-export function toE164(raw: string | null | undefined): string | null {
-  const digits = String(raw ?? "").replace(/[^0-9]/g, "");
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  if (digits.length >= 8 && digits.length <= 15) return `+${digits}`;
-  return null;
+import { normalisePhone, stripExtension } from "@bis/db/phone";
+
+/**
+ * E.164 or nothing, by F-009's one rule (packages/db/src/phone.ts,
+ * `normalisePhone`): a number with a country code is kept as given, and ten
+ * digits become +1 or +52 by which country's plan they are valid in. It
+ * replaced `toE164`, which made ANY ten digits into `+1` — so a Reynosa
+ * number a caller spoke was stored as a US one. External APIs accept only
+ * E.164 (live-verified 2026-07-26: "9562921696", "(956) 292-1696" and
+ * "19562921696" are refused; "+19562921696" passes).
+ *
+ * A number valid as both a US and a Mexican one comes back as `+1` here;
+ * whether its country is CONFIRMED is `normalisePhone`'s `unconfirmed`,
+ * which the contact row stores and the send gate reads. Use normalisePhone
+ * directly wherever that matters.
+ */
+export function e164Of(raw: string | null | undefined): string | null {
+  return normalisePhone(raw)?.e164 ?? null;
+}
+
+/**
+ * The number to STORE for a caller, from what the model wrote down (review
+ * R2-C1, R1-I4). A contact write must get the number as said, never its
+ * E.164: `phoneFields` (packages/db) stores the E.164 AND flags a number
+ * that could be Mexican or US, while an E.164 "+1…" reads as confirmed.
+ *   - Nothing usable said, or the caller ID repeated (its ten digits, from
+ *     a +1 or a +52 caller ID) → the caller ID, which the carrier supplied
+ *     and which says its own country.
+ *   - Otherwise the words as said, with a leading 1 before ten digits dropped
+ *     first. ASSUMPTION (not verified): the model adds +1 to a number the
+ *     caller never gave a country for, and that +1 would hide the question.
+ * Null when there is nothing to store.
+ */
+export function spokenPhone(said: string | null | undefined, callerNumber: string | null | undefined): string | null {
+  // Stripped BEFORE the digit count below (review I1): an extension's own
+  // digits were padding that count, so an 11-digit "+1 … ext 2" never read
+  // as eleven digits starting with 1 and the model's own country code was
+  // never dropped — the number reached the contact write CONFIRMED.
+  const text = stripExtension(String(said ?? "").trim());
+  const caller = callerNumber ?? null;
+  const digits = text.replace(/[^0-9]/g, "");
+  const national = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : null;
+  const callerDigits = (caller ?? "").replace(/[^0-9]/g, "");
+  // A Mexican caller ID too (re-review minor 4): a caller reciting their own
+  // ten digits is the caller, never a second, +1-flagged contact.
+  const callerNational = callerDigits.length === 11 && callerDigits.startsWith("1") ? callerDigits.slice(1)
+    : callerDigits.length === 12 && callerDigits.startsWith("52") ? callerDigits.slice(2)
+    : callerDigits.length === 13 && callerDigits.startsWith("521") ? callerDigits.slice(3)
+    : callerDigits;
+  if (!text || !e164Of(national ?? text)) return caller;
+  if (caller && (digits === callerDigits || (national ?? digits) === callerNational)) return caller;
+  return national ?? text;
 }
 
 /**
@@ -20,5 +63,5 @@ export function toE164(raw: string | null | undefined): string | null {
 export function isCallerIdNumber(
   stored: string | null | undefined, callerNumber: string | null | undefined,
 ): boolean {
-  return !!callerNumber && toE164(stored) === callerNumber;
+  return !!callerNumber && e164Of(stored) === callerNumber;
 }

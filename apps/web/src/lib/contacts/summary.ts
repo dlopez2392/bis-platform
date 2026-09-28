@@ -99,7 +99,21 @@ export function parseContactSummary(json: unknown): ParsedContactSummary | null 
   const stamp = json.marketing_email_opted_out_at;
   if (stamp !== null && typeof stamp !== "string") return null;
 
-  return { tags, recent, marketing_email_opted_out_at: stamp, zone: parseZone(json.zone) };
+  return {
+    tags, recent, marketing_email_opted_out_at: stamp,
+    // Consent chain PR-1 (F-009): TOLERATED, never required — anything but
+    // the literal boolean true is false, and a server from before this PR
+    // sends none at all, which must still load (no Check number row, not a
+    // refused summary). The send gate still refuses an ambiguous number
+    // either way; a missing/false row loses a shortcut, never a guard.
+    phone_country_unconfirmed: json.phone_country_unconfirmed === true,
+    // TOLERATED like the flag above: missing, or anything but a string, is
+    // null — a server from before round 3 sends none, and the drawer's
+    // Check number row then has nothing to pass as `seenPhone` (its pick
+    // fails closed rather than trusting a stub).
+    phone: typeof json.phone === "string" ? json.phone : null,
+    zone: parseZone(json.zone),
+  };
 }
 
 /** The drawer's load outcome for one contact. */

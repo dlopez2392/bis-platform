@@ -5,6 +5,7 @@ import { XIcon } from "lucide-react"
 import { Dialog as SheetPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
+import { interactOutsideExemptingToaster } from "./interact-outside"
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />
@@ -49,6 +50,7 @@ function SheetContent({
   children,
   side = "right",
   showCloseButton = true,
+  onInteractOutside,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
@@ -59,6 +61,10 @@ function SheetContent({
       <SheetOverlay />
       <SheetPrimitive.Content
         data-slot="sheet-content"
+        // A toast drawn over an open sheet (Sonner's toaster sits above
+        // every overlay) is not an "outside" interaction — see
+        // interact-outside.ts.
+        onInteractOutside={interactOutsideExemptingToaster(onInteractOutside)}
         className={cn(
           "fixed z-50 flex flex-col gap-4 glass-overlay border-[var(--line-strong)] transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:animate-in data-[state=open]:duration-500",
           side === "right" &&

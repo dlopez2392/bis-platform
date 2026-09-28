@@ -10,7 +10,7 @@ import { emailBrand } from "@/lib/email/templates/shell";
 import { leadAlertEmail } from "@/lib/email/templates/lead-alert";
 import { leadReceiptEmail, leadReceiptSubject } from "@/lib/email/templates/lead-receipt";
 import { isValidEmail } from "@/lib/forms/guards";
-import { toE164 } from "@/lib/voice/phone-number";
+import { e164Of } from "@/lib/voice/phone-number";
 import { sendInstantReply } from "@/lib/automations/instant-reply";
 
 /**
@@ -75,20 +75,21 @@ export async function enrich(
     // contact's own timeline with form provenance, visible to the operator,
     // and nothing here is ever read back to the submitter. Do not "fix" this
     // by requiring verification of either field without re-opening that review.
-    // Hoisted: `fillBlanks` below applies the identical rule to its own read
-    // of `byKind.get("core.phone")` for a returning contact, so both sites
-    // stay obviously in lockstep rather than drift into two implementations
-    // of the same normalization.
+    // Hoisted: `fillBlanks` below reads the identical `byKind.get("core.phone")`
+    // for a returning contact — both sites pass the raw value AS TYPED
+    // (review R2-C1), so neither can drift into pre-normalising ahead of the
+    // contact write's own `phoneFields` judgment. `phoneE164` here is used
+    // only by the instant reply below, which DOES need a parsed E.164 to dial.
     const rawPhone = byKind.get("core.phone") || "";
-    phoneE164 = rawPhone ? toE164(rawPhone) : null;
+    phoneE164 = rawPhone ? e164Of(rawPhone) : null;
     const created = await createContact(db, accountId, {
       firstName: byKind.get("core.first_name") || undefined,
       lastName: byKind.get("core.last_name") || undefined,
       email: byKind.get("core.email") || undefined,
-      // Voice stores E.164; storing web input as-typed made the same person
-      // two contacts and hid web submissions from find_my_booking. Parseable →
-      // E.164, unparseable → as typed (never mangled, never rejected here).
-      phone: rawPhone ? (phoneE164 ?? rawPhone) : undefined,
+      // AS TYPED (review R2-C1): createContact's phoneFields stores the
+      // E.164 when it parses, as typed when it does not, and flags ten digits
+      // that could be Mexican or US. Pre-normalising would hide that question.
+      phone: rawPhone || undefined,
       companyName: byKind.get("core.company_name") || undefined,
       source: `form: ${form.name}`,
       custom,
@@ -178,7 +179,7 @@ export async function enrich(
     try {
       const outcome = await sendInstantReply({
         db, now: new Date(), accountId, submissionId, contactId, conversationId,
-        phoneE164, locale, consentWithheld,
+        phoneE164, phoneAsTyped: byKind.get("core.phone") || null, locale, consentWithheld,
       });
       if (outcome.kind === "failed") errors.push(`instant reply: ${outcome.error}`);
     } catch (e) {
@@ -216,17 +217,18 @@ async function fillBlanks(
   const current = await getContact(db, accountId, contactId);
   if (!current) return;
 
-  // Same E.164-at-the-boundary rule the create path applies (see its comment
-  // in `enrich`) — a blank existing phone getting filled from a later
-  // submission must land normalized too, or the same person ends up with
-  // differently-formatted numbers depending on which submission filled it.
+  // Same AS-TYPED rule the create path applies (see its comment in `enrich`)
+  // — a blank existing phone getting filled from a later submission passes
+  // through unmodified too, so `updateContact`'s own `phoneFields` judges
+  // every write to this column the same way, whichever submission filled it.
   const rawPhone = byKind.get("core.phone") ?? "";
   const patch: Record<string, string> = {};
   const pairs: [string, keyof typeof current, string][] = [
     ["firstName", "first_name", byKind.get("core.first_name") ?? ""],
     ["lastName", "last_name", byKind.get("core.last_name") ?? ""],
     ["email", "email", byKind.get("core.email") ?? ""],
-    ["phone", "phone", rawPhone ? (toE164(rawPhone) ?? rawPhone) : ""],
+    // As typed: updateContact's own phoneFields judges it (R2-C1).
+    ["phone", "phone", rawPhone],
     ["companyName", "company_name", byKind.get("core.company_name") ?? ""],
   ];
   for (const [input, column, incoming] of pairs) {

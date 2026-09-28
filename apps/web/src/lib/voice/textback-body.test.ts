@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { segmentsFor } from "@/lib/sms/segments";
 import { defaultTextbackBody } from "./textback-body";
+import { withOptOut } from "@/lib/sms/opt-out";
 
 describe("defaultTextbackBody", () => {
   it("the default text-back is one GSM-7 segment", () => {
@@ -108,5 +109,15 @@ describe("defaultTextbackBody — Spanish", () => {
       expect(body).not.toMatch(/[áíóú]/);
       expect(segmentsFor(body).encoding).toBe("gsm7");
     }
+  });
+});
+
+describe("defaultTextbackBody — a text-back held overnight (danlo, 2026-09-26)", () => {
+  it("drops \"just now\", names the company, and stays ONE GSM-7 segment with the STOP line (mutation: ignore `held` → \"just now\", FAILS)", () => {
+    const body = defaultTextbackBody("Rio Roofing", "en", true);
+    expect(body).toBe("Hi, this is Rio Roofing. Sorry we missed your call, reply here and we'll help.");
+    expect(defaultTextbackBody("", "en", true)).toBe("Sorry we missed your call, reply here and we'll help.");
+    expect(segmentsFor(withOptOut(body, "en")).segments).toBe(1);
+    expect(defaultTextbackBody("Rio Roofing", "es", true)).toBe(defaultTextbackBody("Rio Roofing", "es"));
   });
 });

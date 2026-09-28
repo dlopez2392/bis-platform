@@ -32,8 +32,7 @@ const SECS = 1790344800;   // 2026-09-25T14:00:00Z in seconds
 
 const ctx = (): PassContext => ({
   db: {} as never, now: TICK, origin: "https://app.example.com",
-  email: { isFake: true, send: vi.fn() }, sms: () => ({ isFake: true, send: vi.fn() }),
-  quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
+  email: { isFake: true, send: vi.fn() }, sms: vi.fn(),
 });
 const EMPTY = {
   reported: 0, alreadyAtStripe: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,

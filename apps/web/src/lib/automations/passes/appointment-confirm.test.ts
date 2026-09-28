@@ -17,13 +17,14 @@ const gate = vi.fn(async () => ({ ok: true as const, from: "+19565550000" }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => gate(...(a as [])) }));
 
 import type { PassContext } from "../context";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { formatWhen } from "@/lib/booking/time";
 import { appointmentConfirmPass, releaseAppointmentConfirm } from "./appointment-confirm";
 
-const TICK = new Date("2027-04-12T12:00:00.000Z");
-const ON = { enabled: true, start: "21:00", end: "08:00" };
-const OFF = { enabled: false, start: "21:00", end: "08:00" };
+// 09:00 CDT: inside the fixed automated hours (08:00-21:00), so the default
+// tick sends. The quiet-hours case below moves the clock to 02:00 itself.
+const TICK = new Date("2027-04-12T14:00:00.000Z");
 // The ARGUMENT is typed, not just the return: the plan's `vi.fn(async () =>
 // …)` gives `mock.calls` an empty tuple, so `calls[0]![0].body` is TS2493
 // ("tuple of length 0 has no element at index 0") and `pnpm --filter web
@@ -36,13 +37,12 @@ function ctx(over: Partial<PassContext> = {}): PassContext {
   return {
     db: {} as PassContext["db"], now: TICK, origin: "https://app.example",
     email: { isFake: true, send: vi.fn() } as unknown as PassContext["email"],
-    sms: () => ({ isFake: true, send }) as unknown as ReturnType<PassContext["sms"]>,
-    quiet: async () => OFF,
+    sms: fakeSmsGate({ send }),
     ...over,
   };
 }
 
-const STARTS = new Date(TICK.getTime() + 47 * 3600_000).toISOString();   // 04:00 PDT · 06:00 CDT, Apr 14
+const STARTS = new Date(TICK.getTime() + 47 * 3600_000).toISOString();   // 06:00 PDT · 08:00 CDT, Apr 14
 
 /** Distinctive, complete fixture. Booker in Los Angeles, account in Chicago
  *  (spec amendment B13, and the `sms-reminder.test.ts:23-35` model): the two
@@ -84,7 +84,7 @@ describe("the confirmation ask sends", () => {
   it("texts, stamps, and writes ONE sent log row", async () => {
     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
     const c = await appointmentConfirmPass.run(ctx());
-    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
+    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
     expect(send).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampAppointmentConfirmAsked).toHaveBeenCalledWith(expect.anything(), "bk_1");
     const body = send.mock.calls[0]![0].body as string;
@@ -127,7 +127,7 @@ describe("the confirmation ask sends", () => {
     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
     send.mockRejectedValueOnce(new Error("carrier timeout"));
     const c = await appointmentConfirmPass.run(ctx());
-    expect(c).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
+    expect(c).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
     expect(dbMocks.stampAppointmentConfirmSmsFailed).toHaveBeenCalledWith(expect.anything(), "bk_1");
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       source: "appointment_confirm", subjectKey: "booking:bk_1", status: "failed", reason: "Couldn't be delivered",
@@ -146,7 +146,7 @@ describe("the confirmation ask sends", () => {
     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
     dbMocks.stampAppointmentConfirmAsked.mockRejectedValue(new Error("PostgREST 503"));
     const c = await appointmentConfirmPass.run(ctx());
-    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
+    expect(c).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
     expect(send).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampAppointmentConfirmAsked).toHaveBeenCalledTimes(STAMP_RETRY_DELAYS_MS.length + 1);
     // The log row still says `sent`, because it was: the log is what went out,
@@ -190,7 +190,7 @@ describe("the confirmation ask sends", () => {
     ]);
     const c = await appointmentConfirmPass.run(ctx());
     expect(c).toEqual({
-      sent: 0, failed: 0, unstamped: 0, held: 0,
+      sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
       skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 1,
     });
     expect(send).not.toHaveBeenCalled();
@@ -213,9 +213,9 @@ describe("the confirmation ask sends", () => {
 describe("the confirmation ask and quiet hours", () => {
   it("inside the window it HOLDS: no send, no stamp, one held row with the window's end", async () => {
     dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
-    // 02:00 Chicago on the tick date — inside the default 21:00–08:00 window.
+    // 02:00 Chicago on the tick date: before the fixed hours open at 08:00.
     const night = new Date("2027-04-12T07:00:00.000Z");
-    const c = await appointmentConfirmPass.run(ctx({ now: night, quiet: async () => ON }));
+    const c = await appointmentConfirmPass.run(ctx({ now: night }));
     expect(c.held).toBe(1);
     expect(c.sent).toBe(0);
     expect(send).not.toHaveBeenCalled();                          // Mutation: bypass holdOrSend → this reds
@@ -289,5 +289,25 @@ describe("releasing a held confirmation ask", () => {
       status: "skipped", reason: "No longer due",
     }));
     // Mutation: swap the ternary's arms → this case AND the one above red.
+  });
+});
+
+describe("appointmentConfirmPass hands the gate its own kind (review R2 minor)", () => {
+  it("the gate is asked for automation.appointment_confirm, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
+    dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
+    const gate = fakeSmsGate();
+    await appointmentConfirmPass.run({ ...ctx(), sms: gate });
+    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.appointment_confirm"]);
+  });
+});
+
+describe("appointmentConfirmPass: a refusal is counted as blocked, never as sent (review R2-I2)", () => {
+  it("a stopped number: {blocked: 1}, nothing texted, nothing stamped (mutation: delete the skipped branch → sent: 1, FAILS)", async () => {
+    dbMocks.listDueAppointmentConfirms.mockResolvedValue([row()]);
+    send.mockClear();
+    const c = await appointmentConfirmPass.run(ctx({ sms: fakeSmsGate({ send, decide: () => ({ kind: "blocked", reason: "stopped" }) }) }));
+    expect(c).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 1, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
+    expect(send).not.toHaveBeenCalled();
+    expect(dbMocks.stampAppointmentConfirmAsked).not.toHaveBeenCalled();
   });
 });
