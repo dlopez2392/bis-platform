@@ -353,26 +353,29 @@ Spanish help from one GSM-7 segment to two UCS-2 segments.
 The start confirmation uses the language of the stop it lifts, and English otherwise.
 
 **The phrase list** (`apps/web/src/lib/consent/phrases.ts`) is matched against the normalised text (accents, case,
-apostrophes and punctuation ignored). Reviewed in PR-2 (danlo, 2026-09-28; PR-2 plan S9, reviews R2-I5 and R2-N1) and
-extended only with tests, it has three kinds:
+apostrophes and punctuation ignored). Reviewed in PR-2 (danlo, 2026-09-28, two decisions; PR-2 plan S9, reviews
+R2-I5, R2-N1 and the delta review's I2) and extended only with tests, it has four kinds:
 
 - **Sentence phrases, as whole words anywhere in the message.**
   - **English:** stop texting, stop sending, stop messaging, stop contacting, dont text, do not text, dont message, do
     not message, no more texts, no more messages, remove me, take me off, unsubscribe me, wrong number, no more
     texting, do not contact me, dont contact me.
-  - **Spanish, as a class:** each plural (ustedes) phrase with its usted and tú mirrors — ya no me manden / mande /
-    mandes, ya no me envien / envie / envies, ya no me escriban / escriba / escribas; the same three verbs after "no
-    me"; dejen / deje / deja de mandar, enviar, escribir; and the pronoun-attached infinitives Spanish writes as one
-    word, dejen / deje / deja de mandarme, enviarme, escribirme — then no quiero mas mensajes, no quiero mensajes, no
-    quiero recibir, no mas mensajes, no mas textos, quitenme / quiteme / quitame de, borrenme / borreme / borrame,
-    numero equivocado.
-- **Whole-message phrases:** "please stop" and "stop please" count ONLY when they are the whole message, punctuation
-  aside: "Please stop!!" holds, "Please stop by Thursday" does not (danlo). Longer requests are the sentence phrases'
-  job ("stop texting", "stop sending" …).
-- **A stop word repeated as the whole message:** "stop stop", "alto alto", "baja baja", any number of repeats, under
-  the same whole-message rule; one word on its own is a keyword (decision 10), not a phrase.
-- A sentence phrase that contains another comes first in its list ("ya no me mande" before "no me mande"; "no quiero
-  mas mensajes" before "no mas mensajes"), because the first match wins.
+  - **Spanish, about messages on their own:** no quiero mas mensajes, no quiero mensajes, no mas mensajes, no mas
+    textos, numero equivocado; and quitenme / quiteme / quitame / saquenme / saqueme / sacame de su lista or de la
+    lista.
+- **Spanish verb forms, ONLY ABOUT MESSAGES** (danlo): no me manden / mande / mandes / envien / envie / envies /
+  escriban / escriba / escribas; dejen / deje / deja de mandar(me) / enviar(me) / escribir(me); no quiero recibir —
+  each counts only followed by a message object: mensajes, textos, nada or mas ("No me mande más mensajes", "Deje de
+  mandarme mensajes", "No me manden nada"). A bare form does not hold, even as the whole message ("No me mande la
+  factura", "Deje de mandar a Juan", "Dejen de escribirme"). "mensajes de voz" (voicemail) and "lista de espera" (a
+  waiting list) do not count: "No me mande mensajes de voz, mejor texto" asks for texts, not against them.
+- **Whole-message phrases:** "please stop", "stop please", "borrenme", "borreme" and "borrame" count ONLY when they
+  are the whole message, punctuation aside: "Please stop!!" and "¡Bórreme!" hold; "Please stop by Thursday" and
+  "Bórreme la cita del lunes" do not (danlo). Longer requests are the sentence phrases' job.
+- **A stop word repeated as the whole message:** "stop stop", "parar parar", "alto alto", "baja baja", any number of
+  repeats (English also with one "please" at either end: "Stop stop please"); one word on its own is a keyword
+  (decision 10), not a phrase.
+- No sentence phrase contains another, so the order of the lists never changes whether a text holds.
 
 A false match only holds messages, and staff undo it in one click. A missed sentence is the risk, which is why staff
 can still record a stop by hand.
