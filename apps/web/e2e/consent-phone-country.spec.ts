@@ -69,8 +69,10 @@ test("an ambiguous number: stored +1 and flagged; Mexico (+52) rewrites it, Undo
   const toast = page.getByText(m["contact.phoneCountry.mxToast"]);
   await expect(toast).toBeVisible();
   // Hovering pauses Sonner's 4 s timer, so the DB read below cannot outlast
-  // the Undo button (review R3-M5).
-  await toast.hover();
+  // the Undo button (review R3-M5). `force` skips Playwright's "stable" check:
+  // Sonner's toast keeps animating, and a plain hover timed out in CI (#151)
+  // though the mouse still has to land on it for the pause to hold.
+  await toast.hover({ force: true });
   await expect(row).toHaveCount(0);
   expect(await stored()).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
 
