@@ -30,12 +30,8 @@ export async function emit(
     }
     const { error } = await db.rpc("record_event",
       { p_account_id: accountId, p_type: type, p_payload: payload });
-    if (!error) return;
-    // TEMPORARY - remove once 0053 is on production. Until then production
-    // has no record_event, so this build falls back to the direct insert
-    // there. PGRST202 is PostgREST's "no such function"; every other error
-    // is real and throws.
-    if (error.code !== "PGRST202") throw new Error(`event emit failed: ${error.message}`);
+    if (error) throw new Error(`event emit failed: ${error.message}`);
+    return;
   }
   const { error } = await db.from("events").insert({
     account_id: accountId, type, actor_type: actorType, actor_id: actorId, payload });

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { isToasterTarget, interactOutsideExemptingToaster } from "./interact-outside";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -73,15 +74,82 @@ describe("interactOutsideExemptingToaster", () => {
 
 // Mutation (4)'s catch: the predicate/composition tests above call the
 // shared factory directly and cannot see whether either component actually
-// wires it in. Reading the source (the same technique button.test.ts uses)
-// closes that gap — wiring only one of the two primitives to the shared
-// factory must fail one of these.
-describe("both SheetContent and DialogContent are wired to the shared factory", () => {
+// wires it in. A source-TEXT `toContain("interactOutsideExemptingToaster(")`
+// check (the prior version of this test) stays green when the call only
+// appears in a comment next to the raw prop, or is made and its result
+// thrown away (review of f9789e94, m1) — so this reads the parsed AST
+// instead: comments are trivia the parser drops before an expression node
+// ever exists, so they cannot satisfy this.
+//
+// Review of 2c868ca4 (mutation P1): an earlier version of this walk kept a
+// single `found` variable, overwritten on every `*.Content` match across the
+// WHOLE FILE — so it actually read whichever such element came LAST in
+// document order. A decoy `*.Content` wired correctly and placed after a
+// really-broken `SheetContent`/`DialogContent` stayed green 10/10. This walk
+// is scoped to the function declaration the `it.each` row names (the one
+// actually under test), not the whole file, so a decoy anywhere else — under
+// any other name, however many of them — is never even visited.
+//
+// Review of a7f73364 (mutations S2, S3): the walk used to push one `hits`
+// entry per onInteractOutside ATTRIBUTE it found on a `*.Content` element, so
+// a second `*.Content` element in the same function with NO such attribute
+// contributed nothing and vanished from the count — a correctly-wired real
+// element plus an unwired second one (S2), or a BROKEN real element (its
+// attribute removed) plus a hidden second element carrying the correct call
+// (S3), both still produced exactly one hit and stayed green. Now every
+// matched `*.Content` element contributes EXACTLY ONE `hits` entry — its
+// `onInteractOutside` initializer's printed text if the attribute is there,
+// or the literal placeholder `"<no onInteractOutside>"` if it is not — so an
+// element can no longer hide by omitting the attribute, and the test requires
+// there be EXACTLY ONE element, whose entry is EXACTLY a call to
+// `interactOutsideExemptingToaster` with the sole argument `onInteractOutside`
+// — printed back out (comments stripped) and compared to that literal text.
+function contentOnInteractOutsideTexts(file: string, functionName: string): string[] {
+  const filePath = path.join(here, file);
+  const src = readFileSync(filePath, "utf8");
+  const sourceFile = ts.createSourceFile(filePath, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const printer = ts.createPrinter({ removeComments: true });
+
+  let scope: ts.Node | undefined;
+  function findScope(node: ts.Node) {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === functionName) {
+      scope = node;
+      return;
+    }
+    ts.forEachChild(node, findScope);
+  }
+  findScope(sourceFile);
+
+  const hits: string[] = [];
+  function visit(node: ts.Node) {
+    if (ts.isJsxOpeningLikeElement(node) && /\.Content$/.test(node.tagName.getText(sourceFile))) {
+      const attr = node.attributes.properties.find(
+        (prop): prop is ts.JsxAttribute =>
+          ts.isJsxAttribute(prop) && prop.name.getText(sourceFile) === "onInteractOutside"
+      );
+      const expr =
+        attr?.initializer && ts.isJsxExpression(attr.initializer) ? attr.initializer.expression : undefined;
+      hits.push(expr ? printer.printNode(ts.EmitHint.Unspecified, expr, sourceFile) : "<no onInteractOutside>");
+    }
+    ts.forEachChild(node, visit);
+  }
+  // scope undefined (the named function is gone or renamed) leaves hits
+  // empty, which fails the exactly-one check below just as a missing
+  // attribute would — this fails closed either way.
+  if (scope) visit(scope);
+  return hits;
+}
+
+describe("both SheetContent and DialogContent are wired to the shared factory, read from the AST", () => {
   it.each([
     ["sheet.tsx", "SheetContent"],
     ["dialog.tsx", "DialogContent"],
-  ])("%s's %s composes onInteractOutside through interactOutsideExemptingToaster", (file) => {
-    const src = readFileSync(path.join(here, file), "utf8");
-    expect(src).toContain("interactOutsideExemptingToaster(");
-  });
+  ])(
+    "%s's %s passes onInteractOutside={interactOutsideExemptingToaster(onInteractOutside)} exactly, and only once (mutation: a raw prop, a comment-only fake, a discarded call, or a correctly-wired decoy elsewhere in the file → FAILS)",
+    (file, functionName) => {
+      expect(contentOnInteractOutsideTexts(file, functionName)).toEqual([
+        "interactOutsideExemptingToaster(onInteractOutside)",
+      ]);
+    }
+  );
 });
