@@ -8,7 +8,7 @@
 
 **Tech Stack:** Next.js 16 (App Router, server actions, `after`), Supabase Postgres 17 (plpgsql, RLS; the local replica is PG18), `@supabase/supabase-js` (`.rpc`), vitest 4, Playwright, Tailwind 4 with the repo's tokens.
 
-**Spec:** `docs/superpowers/specs/2026-09-26-consent-chain-design.md` at `76c6acfb`, corrected by this branch's two spec commits (Spec gaps resolved: S1–S6, then S7–S12 after the plan review and danlo's decisions of 2026-09-28). §1.1 decisions 1–9 are binding; §1.2 defaults 10–17 stand, decision 10 as amended by S7; §1.3 choices 18–31 are approved. This plan covers §3's PR-2 schema (`tasks.consent_event_id`, the guarded `hold_released`), §4.2 in full, the PR-2 parts of §5, §6 (the Texts row's Allowed, Stopped and On hold states, its skeleton and error, the To-do rows, the composer's closed state already shipped by PR-1), §8's PR-2 tests, and the PR-2 row of §7. It does NOT cover email (PR-3): the Email row, the token, `/u/[token]`, the one-click endpoint, the 0049 fold, scan 4.
+**Spec:** `docs/superpowers/specs/2026-09-26-consent-chain-design.md` at `76c6acfb`, corrected by this branch's four spec commits (Spec gaps resolved: S1–S6; S7–S12 after the plan review; S8's wording and S9's phrase list after the re-review; the Spanish rule after the delta review — all on 2026-09-28, with danlo's decisions). §1.1 decisions 1–9 are binding; §1.2 defaults 10–17 stand, decision 10 as amended by S7; §1.3 choices 18–31 are approved. This plan covers §3's PR-2 schema (`tasks.consent_event_id`, the guarded `hold_released`), §4.2 in full, the PR-2 parts of §5, §6 (the Texts row's Allowed, Stopped and On hold states, its skeleton and error, the To-do rows, the composer's closed state already shipped by PR-1), §8's PR-2 tests, and the PR-2 row of §7. It does NOT cover email (PR-3): the Email row, the token, `/u/[token]`, the one-click endpoint, the 0049 fold, scan 4.
 
 **Telnyx facts:** `.superpowers/sdd/consent-pr2/telnyx-facts.md` (researched 2026-09-28, with the orchestrator's correction at its top), carried forward verdict for verdict in "External facts" below, plus four facts this plan's writer read on Telnyx's own pages on 2026-09-28 (F8–F11).
 
@@ -88,7 +88,7 @@ FYIs for danlo (not questions; recorded so they are seen):
 
 ## Spec gaps resolved here (the reviewer should confirm or overrule)
 
-S1–S12 are corrections applied to the spec itself, in this branch's two spec commits (S1–S6 with the plan; S7–S12 after the plan review and danlo's decisions of 2026-09-28), so the spec and the plan agree; the G-list is this plan's choices where the spec is silent.
+S1–S12 are corrections applied to the spec itself, in this branch's four spec commits (S1–S6 with the plan; S7–S12 after the plan review; S8 and S9 refined after the re-review and again after the delta review, with danlo's decisions of 2026-09-28), so the spec and the plan agree; the G-list is this plan's choices where the spec is silent.
 
 - **S1. The retry dedupe.** Spec §4.2: "The existing provider-id dedupe (`route.ts:143–150`) stops a retry from filing the message twice." True, but that dedupe RETURNS, so a retry after a 5xx would never write the ledger (R2). Corrected: a retry skips only the filing and YES/NO; the consent step runs again and is idempotent (G1). The second spec commit adds (review R2-I1a): the attempt that writes the row owes the reply and schedules it the moment the row is written, even if a later step (the CANCEL To-do) fails and answers 503.
 - **S2. Go-live step 0.** Spec §5 item 1: "START and UNSTOP are registered as opt-in keywords." They are Telnyx's defaults, reserved and always active (F2); nothing to register. Corrected to: every stop word BIS knows is listed in ONE stop config per country (US and MX; S11 adds CA) so each gets the business-named reply; START / UNSTOP and HELP / AYUDA get their own configs (danlo's decision 1); Telnyx's AI opt-out detection stays off (F8).
@@ -98,11 +98,12 @@ S1–S12 are corrections applied to the spec itself, in this branch's two spec c
 - **S6. Decision 12's "unverified"** becomes "verified 2026-09-28 (plan F1–F4)". The first spec commit's message called this "status only"; it was not — it also added a behavioural sentence to decision 12 ("…so BIS confirms only when `autoresponse_type` is absent"), the split G4 describes (review R1-I4). S7 makes decision 10 say the same.
 - **S7. Decision 10 amended** (a §1.2 orchestrator default, so the orchestrator may amend it; FYI to danlo, review R1-I4): BIS handles the keywords in the webhook and sends the one confirmation itself only when `autoresponse_type` is absent; when Telnyx answered, its configured reply, set to the spec's own line, is the one confirmation.
 - **S8. §4.2 step 2: a customer's STOP over a staff stop** (danlo, 2026-09-28; review R2-I3): the keyword stop is refused only when the newest deciding row is a `revoked` whose method is the customer's own (keyword, carrier_block, backfill_telnyx, unsubscribe_link, one_click) (wording, review R1-N5); over a staff stop or a confirmed free-text stop it is RECORDED, with no confirmation (the texts were already off), and from then on only the customer can lift it. The same for the Telnyx backfill (0055's `unless_customer_stopped`). §4.3's email rule ("an address already stopped gets no second row") is not the same principle; PR-3 decides whether email follows S8, and the spec now says so.
-- **S9. §4.2's phrase list extended** (danlo, 2026-09-28; reviews R2-I5, R2-N1), in three kinds, each a hold that staff confirm:
-  - **sentence phrases, anywhere in the message:** English adds "no more texting", "do not contact me", "dont contact me" (17 in all); Spanish is now a CLASS — each plural (ustedes) phrase with its usted and tú mirrors ("ya no me mande", "no me mandes", "deje de enviar", "quiteme de", "borrame" …), the pronoun-attached infinitives Spanish writes as one word ("dejen de mandarme", "deje de enviarme", "deja de escribirme" …), "no quiero mas mensajes", "no mas mensajes", "no mas textos" (48 in all);
-  - **whole-message phrases:** "please stop" and "stop please" count ONLY when they are the whole message, punctuation aside (danlo): "Please stop!!" holds, "Please stop by Thursday" does not; longer requests are the sentence phrases' job ("stop texting");
-  - **a stop word repeated as the whole message:** "stop stop", "alto alto", "baja baja" (any number of repeats), the same whole-message rule; one word on its own is a keyword, not a phrase.
-  Pinned in Task 4 by test-local literals.
+- **S9. §4.2's phrase list extended** (danlo, 2026-09-28; reviews R2-I5, R2-N1, delta I2), in four kinds, each a hold that staff confirm:
+  - **sentence phrases, anywhere in the message:** English adds "no more texting", "do not contact me", "dont contact me" (17 in all); Spanish keeps the phrases that are about messages on their own — "no quiero mas mensajes", "no quiero mensajes", "no mas mensajes", "no mas textos", "numero equivocado" — and the list requests "quitenme / quiteme / quitame / saquenme / saqueme / sacame de su / la lista" (17 in all);
+  - **Spanish verb forms ONLY ABOUT MESSAGES** (danlo, delta review I2): "no me manden / mande / mandes / envien / envie / envies / escriban / escriba / escribas", "dejen / deje / deja de mandar(me) / enviar(me) / escribir(me)" and "no quiero recibir" count only when followed by a message object — "mensajes", "textos", "nada" or "mas" (28 forms × 4 objects = 112 phrases). A bare form does not hold, even as the whole message: "No me mande la factura", "Deje de mandar a Juan", "Dejen de escribirme". "mensajes de voz" (voicemail) and "lista de espera" (a waiting list) do not count as messages or the texting list: "No me mande mensajes de voz, mejor texto" asks for TEXTS, so holding them would do the opposite of what the customer asked;
+  - **whole-message phrases:** "please stop", "stop please", "borrenme", "borreme", "borrame" count ONLY when they are the whole message, punctuation aside: "Please stop!!" and "¡Bórreme!" hold; "Please stop by Thursday" and "Bórreme la cita del lunes" do not;
+  - **a stop word repeated as the whole message:** "stop stop", "parar parar", "alto alto", "baja baja" (any number of repeats; English also with one "please" at either end, "Stop stop please"); one word on its own is a keyword, not a phrase.
+  No sentence phrase contains another, so their order never changes whether a text holds. Pinned in Task 4 by test-local literals.
 - **S10. §3: a `source_ref` names one delivery or event, never a reusable channel** (review R1-I3): a message id, a form submission, a booking, one Telnyx opt-out at its own time. A reusable source (a token, an address) would read as a retry forever and drop a second real stop as a duplicate. The backfill's source includes the opt-out's time.
 - **S11. §5 go-live step 0**, beyond S2: one bilingual config per operation for sender countries US, MX **and CA** (danlo's decision 1); the help reply carries the contact sentence (decision 2, S12); Telnyx's AI opt-out detection is read, a `true` stops the rollout, turning it off is a Telnyx write under danlo's go with a read-back, and an absent field is unknown, not off (review R1-I6); and Telnyx's existing opt-outs are imported before any number moves (decision 4, A5).
 - **S12. §4.2's help lines gain the contact sentence** the A2P campaign promises (`a2p-registration.md:197-199`; danlo's decision 2): "Call or text this number for help." / "Llame o escriba a este numero para recibir ayuda." — unaccented, because "número" would push BIS's Spanish help from one GSM-7 segment to two UCS-2 segments (measured, Task 5).
@@ -202,21 +203,19 @@ Modified:
 
 **Checkpoint B.** Cherry-pick Tasks 7–11; the same checks, plus `pnpm --filter web lint`.
 
-**Phase 3** (two lanes, no shared file):
-- **Lane A** (the Texts row): Task 12.
-- **Lane B** (To-do rows and the call page): Task 13.
+**Phase 3** (ONE lane, review I1): Task 12 → Task 13. Task 13's `consent-hold-actions.tsx` imports `runTextsAction` from Task 12's `lib/consent/texts-row.ts`, so Task 13 cannot start before Task 12 has landed. A second lane cut from Task 12's commit would start at the same moment the single lane does, and would only add a cherry-pick; one lane is the honest shape.
 
-**Checkpoint C.** Cherry-pick Tasks 12–13; the same checks.
+**Checkpoint C.** Cherry-pick Tasks 12 and 13 (one lane, in order); the same checks.
 
 **Phase 4** (the integration branch itself, in order): Task 14 (scans) → Task 15 (e2e) → Task 16 (gates, 0055 and 0056 to CI then production, parity, the Telnyx opt-out import before any number moves, merge, Telnyx step 0, handoff).
 
 Dependencies, in full:
-- Task 1: none. Task 2: Task 1 (the `readConsentActions` read). Task 3: Task 1 (`consentAppendSql`).
+- Task 1: none. Task 2: Task 1 (`readConsentActions`, `readConsentEvent`, `readConsentHistory`, `newestDecidingRow`; review M6). Task 3: Task 1 (`consentAppendSql`).
 - Tasks 4, 5: none. Task 6: none (it names the three kinds itself).
 - Task 7: none in code (Phase 2 only because it edits `messages.ts`, which Task 5 owns in Phase 1).
 - Task 8: Tasks 1, 2, 4, 5, 6. Task 9: Task 8.
 - Task 10: Task 1. Task 11: Tasks 1, 2, 4, 5.
-- Task 12: Tasks 5, 11. Task 13: Tasks 1, 2, 5, 11.
+- Task 12: Tasks 2, 5, 11 (Task 2's `holdOpenTaskIds`). Task 13: Tasks 1, 2, 5, 11, 12 (Task 12's `runTextsAction`; review I1).
 - Task 14: Tasks 1–13. Task 15: Tasks 9, 11, 12, 13. Task 16: everything.
 
 Commands run from the lane's worktree root (Git Bash) unless a step says otherwise. **How to read each task.** Step 1 writes the tests (complete files, or exact find-and-replace edits against the task's parent commit). Step 2 runs them; "Expected" is the predicted RED. Step 3 writes the implementation. Step 4 runs again; "Expected" is the predicted GREEN. Step 5's probes are applied to the finished task one at a time. A block titled "Create" is a complete new file; "Replace the whole file" is a complete new file for an existing path; "Edit" gives the exact current text to find and its replacement.
@@ -1401,7 +1400,7 @@ git commit -m "feat(consent): 0055, the ledger's one guarded write (per-address 
 - Create: `packages/db/src/test/consent-tasks-live.test.ts` (CI only)
 
 **Interfaces:**
-- Consumes: Task 1's `readConsentActions`, `tasks.consent_event_id`, `tasks_consent_event_once`.
+- Consumes: Task 1's `readConsentActions`, `readConsentEvent`, `readConsentHistory`, `newestDecidingRow` (the hold guard), `tasks.consent_event_id`, `tasks_consent_event_once`.
 - Produces (exported from `@bis/db`):
   - `ensureConsentTask(db, accountId, input: { contactId: string; consentEventId: string; title: string }, actorId: string, actorType?: ActorType): Promise<{ id: string; created: boolean }>`
   - `completeTasksForConsentEvents(db, accountId, eventIds: readonly string[], actorId: string, actorType?: ActorType): Promise<string[]>` (the ids it completed)
@@ -2316,7 +2315,7 @@ git commit -m "feat(consent): the Telnyx opt-out backfill — owners read, plan 
 - Produces:
   - `type KeywordKind = "stop" | "start" | "help"`; `type KeywordLanguage = "en" | "es"`; `type KeywordMatch = { kind: KeywordKind; word: string; language: KeywordLanguage }`
   - `normaliseKeyword(text: string): string`; `matchKeyword(text: string): KeywordMatch | null`; `keywordDisplay(word: string): string`; `CANCEL_WORDS: ReadonlySet<string>` (`CANCEL`, `CANCELAR`)
-  - `type PhraseMatch = { phrase: string; language: "en" | "es" }`; `PHRASES_EN`, `PHRASES_ES: readonly string[]` (sentence phrases, found anywhere); `WHOLE_MESSAGE_PHRASES: readonly PhraseMatch[]` and `REPEATED_KEYWORDS: readonly { word; language }[]` (only as the whole message, danlo 2026-09-28); `normalisePhraseText(text: string): string`; `matchPhrase(text: string): PhraseMatch | null`
+  - `type PhraseMatch = { phrase: string; language: "en" | "es" }`; `PHRASES_EN`, `PHRASES_ES: readonly string[]` (sentence phrases, found anywhere); `ES_VERB_FORMS`, `ES_MESSAGE_OBJECTS: readonly string[]` and `ES_VERB_PHRASES` (every form with every object: a Spanish verb form counts only with a message object, danlo 2026-09-28); `WHOLE_MESSAGE_PHRASES: readonly PhraseMatch[]` and `REPEATED_KEYWORDS: readonly { word; language }[]` (only as the whole message); `NOT_FOLLOWED_BY` ("mensajes de voz", "lista de espera"); `normalisePhraseText(text: string): string`; `matchPhrase(text: string): PhraseMatch | null`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2399,26 +2398,20 @@ Create `apps/web/src/lib/consent/phrases.test.ts`:
 import { describe, it, expect } from "vitest";
 import { matchConfirmationReply } from "@bis/db";
 import {
-  matchPhrase, normalisePhraseText, PHRASES_EN, PHRASES_ES, WHOLE_MESSAGE_PHRASES, REPEATED_KEYWORDS,
+  matchPhrase, normalisePhraseText, PHRASES_EN, PHRASES_ES, ES_VERB_FORMS, ES_MESSAGE_OBJECTS, ES_VERB_PHRASES,
+  WHOLE_MESSAGE_PHRASES, REPEATED_KEYWORDS, NOT_FOLLOWED_BY,
 } from "./phrases";
 import { matchKeyword } from "./keywords";
 
 /**
  * Spec §4.2's phrase list as corrected (S9: danlo's 2026-09-28 decisions),
  * matched ignoring case, accents and punctuation (apostrophes dropped, so
- * "don't text" is "dont text"). Two kinds:
- * - SENTENCE phrases, found as whole words anywhere in the message;
- * - WHOLE-MESSAGE phrases ("please stop", "stop please") and a REPEATED stop
- *   word ("stop stop", "alto alto", "baja baja"), which count only when they
- *   ARE the message: "Please stop!!" holds, "Please stop by Thursday" does not
- *   (danlo). Longer requests are the sentence phrases' job ("stop texting").
- * A false match only holds texts; a missed sentence is the risk, which is why
- * staff can still stop texts by hand.
+ * "don't text" is "dont text"). A false match only holds texts; a missed
+ * sentence is the risk, which is why staff can still stop texts by hand.
  *
  * The expected lists are LITERALS here, not the module's own arrays: a test
  * that iterates the implementation's list cannot notice a phrase dropped from
- * it (review R2-I5). The order is part of the contract (a phrase that
- * contains another comes first).
+ * it (review R2-I5).
  */
 const EXPECTED_EN = [
   "stop texting", "stop sending", "stop messaging", "stop contacting", "dont text", "do not text",
@@ -2426,35 +2419,37 @@ const EXPECTED_EN = [
   "unsubscribe me", "wrong number",
   "no more texting", "do not contact me", "dont contact me",
 ];
-/** The Spanish CLASS (review R2-N1): every plural (ustedes) phrase with its usted and tú mirrors, the pronoun-attached infinitives, and the rest. */
 const EXPECTED_ES = [
-  "ya no me manden", "ya no me envien", "ya no me escriban",
-  "ya no me mande", "ya no me envie", "ya no me escriba",
-  "ya no me mandes", "ya no me envies", "ya no me escribas",
-  "no me manden", "no me envien", "no me escriban",
-  "no me mande", "no me envie", "no me escriba",
-  "no me mandes", "no me envies", "no me escribas",
-  "dejen de mandarme", "dejen de enviarme", "dejen de escribirme",
-  "deje de mandarme", "deje de enviarme", "deje de escribirme",
-  "deja de mandarme", "deja de enviarme", "deja de escribirme",
-  "dejen de mandar", "dejen de enviar", "dejen de escribir",
-  "deje de mandar", "deje de enviar", "deje de escribir",
-  "deja de mandar", "deja de enviar", "deja de escribir",
-  "no quiero mas mensajes", "no quiero mensajes", "no quiero recibir",
-  "no mas mensajes", "no mas textos",
-  "quitenme de", "quiteme de", "quitame de",
-  "borrenme", "borreme", "borrame",
-  "numero equivocado",
+  "no quiero mas mensajes", "no quiero mensajes", "no mas mensajes", "no mas textos", "numero equivocado",
+  "quitenme de su lista", "quitenme de la lista", "quiteme de su lista", "quiteme de la lista",
+  "quitame de su lista", "quitame de la lista", "saquenme de su lista", "saquenme de la lista",
+  "saqueme de su lista", "saqueme de la lista", "sacame de su lista", "sacame de la lista",
 ];
-const EXPECTED_WHOLE = [{ phrase: "please stop", language: "en" }, { phrase: "stop please", language: "en" }];
-const EXPECTED_REPEATED = [{ word: "stop", language: "en" }, { word: "alto", language: "es" }, { word: "baja", language: "es" }];
+const EXPECTED_VERB_FORMS = [
+  "no me manden", "no me mande", "no me mandes", "no me envien", "no me envie", "no me envies",
+  "no me escriban", "no me escriba", "no me escribas",
+  "dejen de mandarme", "deje de mandarme", "deja de mandarme", "dejen de enviarme", "deje de enviarme",
+  "deja de enviarme", "dejen de escribirme", "deje de escribirme", "deja de escribirme",
+  "dejen de mandar", "deje de mandar", "deja de mandar", "dejen de enviar", "deje de enviar", "deja de enviar",
+  "dejen de escribir", "deje de escribir", "deja de escribir",
+  "no quiero recibir",
+];
+const EXPECTED_OBJECTS = ["mensajes", "textos", "nada", "mas"];
+const EXPECTED_VERB_PHRASES = EXPECTED_VERB_FORMS.flatMap((v) => EXPECTED_OBJECTS.map((o) => `${v} ${o}`));
+const EXPECTED_WHOLE = [
+  { phrase: "please stop", language: "en" }, { phrase: "stop please", language: "en" },
+  { phrase: "borrenme", language: "es" }, { phrase: "borreme", language: "es" }, { phrase: "borrame", language: "es" },
+];
+const EXPECTED_REPEATED = [
+  { word: "stop", language: "en" }, { word: "parar", language: "es" }, { word: "alto", language: "es" }, { word: "baja", language: "es" },
+];
 
 describe("matchPhrase — every sentence phrase, in a real sentence", () => {
   it.each(EXPECTED_EN)("English %j matches inside a sentence (mutation: drop the phrase from PHRASES_EN → FAILS)", (phrase) => {
     expect(matchPhrase(`Hi, please ${phrase} ok? Thanks`)).toEqual({ phrase, language: "en" });
   });
 
-  it.each(EXPECTED_ES)("Spanish %j matches inside a sentence (mutation: drop the phrase from PHRASES_ES → FAILS)", (phrase) => {
+  it.each([...EXPECTED_ES, ...EXPECTED_VERB_PHRASES])("Spanish %j matches inside a sentence (mutation: drop the phrase, a verb form or an object → FAILS)", (phrase) => {
     expect(matchPhrase(`Hola, por favor ${phrase} ya, gracias`)).toEqual({ phrase, language: "es" });
   });
 });
@@ -2465,47 +2460,71 @@ describe("matchPhrase — how people actually write", () => {
     expect(matchPhrase("don’t message me!!")?.phrase).toBe("dont message");
     expect(matchPhrase("STOP TEXTING ME.")?.phrase).toBe("stop texting");
     expect(matchPhrase("Número equivocado")?.phrase).toBe("numero equivocado");
-    expect(matchPhrase("Quítenme de su lista por favor")?.phrase).toBe("quitenme de");
-    expect(matchPhrase("Bórrenme")?.phrase).toBe("borrenme");
     expect(matchPhrase("Don't contact me again")?.phrase).toBe("dont contact me");
   });
 
-  it("the Spanish a customer actually sends — singular, tú, a pronoun on the verb — the misses review R2-N1 listed (mutation: drop the class mirrors → FAILS)", () => {
-    expect(matchPhrase("Dejen de mandarme mensajes")?.phrase).toBe("dejen de mandarme");
-    expect(matchPhrase("Dejen de enviarme mensajes")?.phrase).toBe("dejen de enviarme");
-    expect(matchPhrase("Dejen de escribirme")?.phrase).toBe("dejen de escribirme");
-    expect(matchPhrase("Deje de mandarme mensajes")?.phrase).toBe("deje de mandarme");
-    expect(matchPhrase("No me mande más mensajes")?.phrase).toBe("no me mande");
-    expect(matchPhrase("No me envíe mensajes")?.phrase).toBe("no me envie");
-    expect(matchPhrase("No me escriba")?.phrase).toBe("no me escriba");
-    expect(matchPhrase("No me mandes mensajes")?.phrase).toBe("no me mandes");
-    expect(matchPhrase("Quíteme de la lista")?.phrase).toBe("quiteme de");
+  it("Spanish about MESSAGES holds — a verb form with its message object, the list, the other message phrases (danlo 2026-09-28; mutation: drop \"mas\" from the objects → \"No me manden más\" is missed, FAILS)", () => {
+    expect(matchPhrase("Dejen de mandarme mensajes")?.phrase).toBe("dejen de mandarme mensajes");
+    expect(matchPhrase("Dejen de enviarme mensajes")?.phrase).toBe("dejen de enviarme mensajes");
+    expect(matchPhrase("Deje de mandarme mensajes")?.phrase).toBe("deje de mandarme mensajes");
+    expect(matchPhrase("No me mande más mensajes")?.phrase).toBe("no me mande mas");
+    expect(matchPhrase("No me envíe mensajes")?.phrase).toBe("no me envie mensajes");
+    expect(matchPhrase("No me mandes mensajes")?.phrase).toBe("no me mandes mensajes");
+    expect(matchPhrase("No me manden más")?.phrase).toBe("no me manden mas");
+    expect(matchPhrase("Ya no me mande nada")?.phrase).toBe("no me mande nada");
+    expect(matchPhrase("Ya no me manden mensajes")?.phrase).toBe("no me manden mensajes");
+    expect(matchPhrase("No me mande mensajes de texto")?.phrase).toBe("no me mande mensajes");
+    expect(matchPhrase("Quíteme de la lista")?.phrase).toBe("quiteme de la lista");
+    expect(matchPhrase("Quítenme de su lista por favor")?.phrase).toBe("quitenme de su lista");
+    expect(matchPhrase("Sáquenme de su lista")?.phrase).toBe("saquenme de su lista");
+    expect(matchPhrase("Sácame de la lista")?.phrase).toBe("sacame de la lista");
     expect(matchPhrase("No más textos")?.phrase).toBe("no mas textos");
     expect(matchPhrase("No quiero más mensajes")?.phrase).toBe("no quiero mas mensajes");
-    expect(matchPhrase("Bórreme")?.phrase).toBe("borreme");
   });
 
-  it("a phrase that contains another is listed first (\"ya no me mande\" before \"no me mande\"; \"no quiero mas mensajes\" before \"no mas mensajes\") (mutation: move \"no me mande\" above \"ya no me mande\" → FAILS)", () => {
-    expect(matchPhrase("ya no me mande nada")?.phrase).toBe("ya no me mande");
-    expect(matchPhrase("ya no me manden mensajes")?.phrase).toBe("ya no me manden");
-    expect(matchPhrase("no quiero mas mensajes")?.phrase).toBe("no quiero mas mensajes");
+  it("Spanish NOT about messages does not hold: a bare verb form, a list that is not the texting list, a cita, voicemail (danlo 2026-09-28; mutation: let a bare verb form count → \"No me mande la factura\" holds, FAILS)", () => {
+    for (const text of [
+      "No me mande a nadie mañana, va a llover", "No me mande la factura", "No me envíe el recibo, ya pagué",
+      "Deje de mandar a Juan", "Quíteme de las 3 y póngame a las 5", "Quítame de la cita del martes",
+      "Bórreme la cita del lunes", "Ya no me mande al muchacho ese, corta mal", "No me mandes la foto todavía",
+      "No quiero recibir la factura en papel", "Si no me manda la dirección no puedo ir", "quiteme la cita",
+    ]) expect(matchPhrase(text), text).toBeNull();
+  });
+
+  it("\"No me mande mensajes de voz, mejor texto\" does NOT hold, and \"Quíteme de la lista de espera\" does NOT hold: voicemail and a waiting list are not the texting list — the first one even asks for texts (plan decision on danlo's rule; mutation: drop NOT_FOLLOWED_BY → both hold, FAILS)", () => {
+    expect(matchPhrase("No me mande mensajes de voz, mejor texto")).toBeNull();
+    expect(matchPhrase("Quíteme de la lista de espera")).toBeNull();
+    // …while a second, real occurrence in the same text still counts:
+    expect(matchPhrase("No me mande mensajes de voz. No me mande mensajes, punto")?.phrase).toBe("no me mande mensajes");
+  });
+
+  it("the price of the rule: a bare verb form does not hold even as the WHOLE message (\"Dejen de escribirme\", \"No me escriba\"); staff still read the text in the thread (danlo 2026-09-28; mutation: a whole-message exception for bare forms → FAILS)", () => {
+    expect(matchPhrase("Dejen de escribirme")).toBeNull();
+    expect(matchPhrase("No me escriba")).toBeNull();
   });
 });
 
-describe("matchPhrase — the whole-message phrases and a repeated stop word (danlo, 2026-09-28)", () => {
-  it("\"please stop\" and \"stop please\" hold only as the WHOLE message, punctuation aside (mutation: drop the whole-message list → FAILS)", () => {
+describe("matchPhrase — whole-message phrases and a repeated stop word (danlo, 2026-09-28)", () => {
+  it("\"please stop\", \"stop please\" and \"Bórreme\" hold only as the WHOLE message, punctuation aside (mutation: drop the whole-message list → FAILS)", () => {
     expect(matchPhrase("Please stop!!")).toEqual({ phrase: "please stop", language: "en" });
     expect(matchPhrase("Stop, please.")).toEqual({ phrase: "stop please", language: "en" });
+    expect(matchPhrase("¡Bórreme!")).toEqual({ phrase: "borreme", language: "es" });
+    expect(matchPhrase("Bórrenme")).toEqual({ phrase: "borrenme", language: "es" });
   });
 
   it("\"Please stop by Thursday\" does NOT hold: a whole-message phrase inside a longer text is not a stop request (danlo, 2026-09-28; mutation: match the whole-message phrases anywhere → FAILS)", () => {
     expect(matchPhrase("Please stop by Thursday")).toBeNull();
     expect(matchPhrase("Can you stop please at the store")).toBeNull();
+    expect(matchPhrase("Bórreme la cita del lunes")).toBeNull();
   });
 
-  it("a stop word repeated as the whole message holds, in either language, however many times (mutation: drop the repeated-word rule → FAILS)", () => {
+  it("a stop word repeated as the whole message holds, in either language, however many times, English allowing one \"please\" at either end (review M2; mutation: drop the repeated-word rule → FAILS; drop the please allowance → \"Stop stop please\" is missed, FAILS)", () => {
     expect(matchPhrase("STOP STOP")).toEqual({ phrase: "stop stop", language: "en" });
     expect(matchPhrase("Stop. Stop. Stop.")).toEqual({ phrase: "stop stop", language: "en" });
+    expect(matchPhrase("Stop stop please")).toEqual({ phrase: "stop stop", language: "en" });
+    expect(matchPhrase("Please stop stop")).toEqual({ phrase: "stop stop", language: "en" });
+    expect(matchPhrase("Parar parar")).toEqual({ phrase: "parar parar", language: "es" });
+    expect(matchPhrase("PARAR PARAR")).toEqual({ phrase: "parar parar", language: "es" });
     expect(matchPhrase("Alto alto")).toEqual({ phrase: "alto alto", language: "es" });
     expect(matchPhrase("¡Baja, baja!")).toEqual({ phrase: "baja baja", language: "es" });
   });
@@ -2528,12 +2547,18 @@ describe("matchPhrase — the fixed negative set", () => {
 
 describe("the lists themselves", () => {
   it("every phrase is already in the matcher's own form, or it could never match (mutation: add a phrase with an accent or a capital → FAILS naming it)", () => {
-    for (const p of [...PHRASES_EN, ...PHRASES_ES, ...WHOLE_MESSAGE_PHRASES.map((w) => w.phrase)]) expect(normalisePhraseText(p), p).toBe(p);
+    for (const p of [...PHRASES_EN, ...PHRASES_ES, ...ES_VERB_PHRASES, ...WHOLE_MESSAGE_PHRASES.map((w) => w.phrase)]) expect(normalisePhraseText(p), p).toBe(p);
     for (const r of REPEATED_KEYWORDS) expect(normalisePhraseText(r.word), r.word).toBe(r.word);
   });
 
-  it("no phrase is a keyword, and no phrase is itself a YES/NO answer as the automation engine reads one, so YES/NO and a phrase can never both fire on one text (spec §4.2 step 5, corrected S5; the engine's own exported matcher, not a hand-typed word list — review R2-m14; mutation: add 'no' to PHRASES_ES → FAILS)", () => {
-    const all = [...PHRASES_EN, ...PHRASES_ES, ...WHOLE_MESSAGE_PHRASES.map((w) => w.phrase), ...REPEATED_KEYWORDS.map((r) => `${r.word} ${r.word}`)];
+  it("no sentence phrase contains another as whole words, so their order never changes WHETHER a text holds (review M1; mutation: add \"ya no me mande mensajes\" → it contains \"no me mande mensajes\", FAILS)", () => {
+    const all = [...PHRASES_EN, ...PHRASES_ES, ...ES_VERB_PHRASES];
+    for (const p of all) for (const q of all) if (p !== q) expect(` ${p} `.includes(` ${q} `), `${p} ⊃ ${q}`).toBe(false);
+  });
+
+  it("no phrase is a keyword, and no phrase is itself a YES/NO answer as the automation engine reads one, so YES/NO and a phrase can never both fire on one text (spec §4.2 step 5, corrected S5; the engine's own exported matcher — review R2-m14; mutation: add 'no' to PHRASES_ES → FAILS)", () => {
+    const all = [...PHRASES_EN, ...PHRASES_ES, ...ES_VERB_PHRASES, ...WHOLE_MESSAGE_PHRASES.map((w) => w.phrase),
+      ...REPEATED_KEYWORDS.map((r) => `${r.word} ${r.word}`)];
     for (const p of all) {
       expect(matchKeyword(p), p).toBeNull();
       // YES/NO matches only a whole one-word message, so a text fires both only if it IS a phrase:
@@ -2542,11 +2567,15 @@ describe("the lists themselves", () => {
     }
   });
 
-  it("are exactly the corrected spec lists, in order (spec §4.2 as corrected by S9; mutation: drop, add or reorder a phrase → FAILS)", () => {
+  it("are exactly the corrected spec lists (spec §4.2 as corrected by S9; mutation: drop, add or reorder an entry → FAILS)", () => {
     expect(PHRASES_EN).toEqual(EXPECTED_EN);
     expect(PHRASES_ES).toEqual(EXPECTED_ES);
+    expect(ES_VERB_FORMS).toEqual(EXPECTED_VERB_FORMS);
+    expect(ES_MESSAGE_OBJECTS).toEqual(EXPECTED_OBJECTS);
+    expect(ES_VERB_PHRASES).toEqual(EXPECTED_VERB_PHRASES);
     expect(WHOLE_MESSAGE_PHRASES).toEqual(EXPECTED_WHOLE);
     expect(REPEATED_KEYWORDS).toEqual(EXPECTED_REPEATED);
+    expect(NOT_FOLLOWED_BY).toEqual([{ last: "mensajes", next: "de voz" }, { last: "lista", next: "de espera" }]);
   });
 });
 ```
@@ -2625,22 +2654,24 @@ Create `apps/web/src/lib/consent/phrases.ts`:
  * against the message with accents removed, lowercased, apostrophes dropped
  * and every other non-letter a space. A match holds texts and asks staff (a
  * To-do); it never replies (choice 20). Reviewed in PR-2 (danlo, 2026-09-28;
- * spec S9) and extended only with tests. Three kinds:
+ * spec S9) and extended only with tests. Four kinds:
  *
- * 1. SENTENCE phrases, found as whole words anywhere in the message. The
- *    Spanish list is a CLASS (review R2-N1): each plural (ustedes) phrase with
- *    its usted and tú mirrors, and the pronoun-attached infinitives Spanish
- *    writes as one word ("dejen de mandarme" does not contain "dejen de
- *    mandar" as whole words).
- * 2. WHOLE-MESSAGE phrases, which count only when they ARE the message
- *    (danlo): "Please stop!!" holds, "Please stop by Thursday" does not.
- * 3. A stop word REPEATED as the whole message ("STOP STOP", "Alto alto",
- *    "¡Baja, baja!"), the same whole-message rule; one word on its own is a
- *    keyword (keywords.ts), not a phrase.
+ * 1. SENTENCE phrases, found as whole words anywhere in the message.
+ * 2. SPANISH VERB FORMS, which count ONLY WITH A MESSAGE OBJECT (danlo): "no
+ *    me mande mensajes / textos / nada / mas", "deje de mandarme mensajes" …
+ *    A bare form ("No me mande la factura", "Deje de mandar a Juan") is not
+ *    about messages and does not hold, even as the whole message.
+ * 3. WHOLE-MESSAGE phrases, which count only when they ARE the message:
+ *    "Please stop!!" holds, "Please stop by Thursday" does not; "Bórreme"
+ *    holds, "Bórreme la cita del lunes" does not.
+ * 4. A stop word REPEATED as the whole message ("STOP STOP", "Parar parar"),
+ *    English allowing one "please" at either end ("Stop stop please"); one
+ *    word on its own is a keyword (keywords.ts), not a phrase.
  *
- * ORDER MATTERS in the sentence lists: the first phrase found wins, so a
- * phrase that contains another comes first ("ya no me mande" before "no me
- * mande"; "no quiero mas mensajes" before "no mas mensajes").
+ * No sentence phrase contains another (a test pins it), so their order never
+ * changes WHETHER a text holds. Two continuations are not what they look
+ * like and do not count: "mensajes de voz" (voicemail) and "lista de espera"
+ * (a waiting list).
  */
 export type PhraseMatch = { phrase: string; language: "en" | "es" };
 
@@ -2651,34 +2682,42 @@ export const PHRASES_EN: readonly string[] = [
   "no more texting", "do not contact me", "dont contact me",
 ];
 
+/** Spanish sentence phrases that are about messages on their own. */
 export const PHRASES_ES: readonly string[] = [
-  "ya no me manden", "ya no me envien", "ya no me escriban",
-  "ya no me mande", "ya no me envie", "ya no me escriba",
-  "ya no me mandes", "ya no me envies", "ya no me escribas",
-  "no me manden", "no me envien", "no me escriban",
-  "no me mande", "no me envie", "no me escriba",
-  "no me mandes", "no me envies", "no me escribas",
-  "dejen de mandarme", "dejen de enviarme", "dejen de escribirme",
-  "deje de mandarme", "deje de enviarme", "deje de escribirme",
-  "deja de mandarme", "deja de enviarme", "deja de escribirme",
-  "dejen de mandar", "dejen de enviar", "dejen de escribir",
-  "deje de mandar", "deje de enviar", "deje de escribir",
-  "deja de mandar", "deja de enviar", "deja de escribir",
-  "no quiero mas mensajes", "no quiero mensajes", "no quiero recibir",
-  "no mas mensajes", "no mas textos",
-  "quitenme de", "quiteme de", "quitame de",
-  "borrenme", "borreme", "borrame",
-  "numero equivocado",
+  "no quiero mas mensajes", "no quiero mensajes", "no mas mensajes", "no mas textos", "numero equivocado",
+  "quitenme de su lista", "quitenme de la lista", "quiteme de su lista", "quiteme de la lista",
+  "quitame de su lista", "quitame de la lista", "saquenme de su lista", "saquenme de la lista",
+  "saqueme de su lista", "saqueme de la lista", "sacame de su lista", "sacame de la lista",
 ];
+
+/** Spanish verb forms: each counts only followed by one of ES_MESSAGE_OBJECTS (danlo, 2026-09-28). */
+export const ES_VERB_FORMS: readonly string[] = [
+  "no me manden", "no me mande", "no me mandes", "no me envien", "no me envie", "no me envies",
+  "no me escriban", "no me escriba", "no me escribas",
+  "dejen de mandarme", "deje de mandarme", "deja de mandarme", "dejen de enviarme", "deje de enviarme",
+  "deja de enviarme", "dejen de escribirme", "deje de escribirme", "deja de escribirme",
+  "dejen de mandar", "deje de mandar", "deja de mandar", "dejen de enviar", "deje de enviar", "deja de enviar",
+  "dejen de escribir", "deje de escribir", "deja de escribir",
+  "no quiero recibir",
+];
+export const ES_MESSAGE_OBJECTS: readonly string[] = ["mensajes", "textos", "nada", "mas"];
+/** Every verb form with every object: the sentence phrases the Spanish verb forms become. */
+export const ES_VERB_PHRASES: readonly string[] = ES_VERB_FORMS.flatMap((v) => ES_MESSAGE_OBJECTS.map((o) => `${v} ${o}`));
 
 /** Only when they ARE the whole message (danlo, 2026-09-28). */
 export const WHOLE_MESSAGE_PHRASES: readonly PhraseMatch[] = [
   { phrase: "please stop", language: "en" }, { phrase: "stop please", language: "en" },
+  { phrase: "borrenme", language: "es" }, { phrase: "borreme", language: "es" }, { phrase: "borrame", language: "es" },
 ];
 
-/** A stop word repeated as the whole message: "stop stop", "alto alto", "baja baja" (any number of times). */
+/** A stop word repeated as the whole message, any number of times. */
 export const REPEATED_KEYWORDS: readonly { word: string; language: "en" | "es" }[] = [
-  { word: "stop", language: "en" }, { word: "alto", language: "es" }, { word: "baja", language: "es" },
+  { word: "stop", language: "en" }, { word: "parar", language: "es" }, { word: "alto", language: "es" }, { word: "baja", language: "es" },
+];
+
+/** "mensajes de voz" is voicemail and "lista de espera" a waiting list: a phrase ending in the first word, followed by the rest, does not count. */
+export const NOT_FOLLOWED_BY: readonly { last: string; next: string }[] = [
+  { last: "mensajes", next: "de voz" }, { last: "lista", next: "de espera" },
 ];
 
 export function normalisePhraseText(text: string): string {
@@ -2688,16 +2727,31 @@ export function normalisePhraseText(text: string): string {
     .trim();
 }
 
+/** Does the phrase occur, as whole words, at least once in a way that counts? */
+function occurs(hay: string, phrase: string): boolean {
+  const needle = ` ${phrase} `;
+  const last = phrase.slice(phrase.lastIndexOf(" ") + 1);
+  for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + 1)) {
+    const rest = hay.slice(at + needle.length);
+    if (!NOT_FOLLOWED_BY.some((x) => x.last === last && rest.startsWith(`${x.next} `))) return true;
+  }
+  return false;
+}
+
 export function matchPhrase(text: string): PhraseMatch | null {
   const whole = normalisePhraseText(text);
   const exact = WHOLE_MESSAGE_PHRASES.find((w) => w.phrase === whole);
   if (exact) return { phrase: exact.phrase, language: exact.language };
   const words = whole.split(" ");
-  const repeated = words.length >= 2 ? REPEATED_KEYWORDS.find((r) => words.every((w) => w === r.word)) : undefined;
-  if (repeated) return { phrase: `${repeated.word} ${repeated.word}`, language: repeated.language };
+  for (const r of REPEATED_KEYWORDS) {
+    // English allows one "please" at either end: "Stop stop please", "Please stop stop".
+    const core = r.language === "en" && words[0] === "please" ? words.slice(1)
+      : r.language === "en" && words[words.length - 1] === "please" ? words.slice(0, -1) : words;
+    if (core.length >= 2 && core.every((w) => w === r.word)) return { phrase: `${r.word} ${r.word}`, language: r.language };
+  }
   const hay = ` ${whole} `;
-  for (const phrase of PHRASES_EN) if (hay.includes(` ${phrase} `)) return { phrase, language: "en" };
-  for (const phrase of PHRASES_ES) if (hay.includes(` ${phrase} `)) return { phrase, language: "es" };
+  for (const phrase of PHRASES_EN) if (occurs(hay, phrase)) return { phrase, language: "en" };
+  for (const phrase of [...PHRASES_ES, ...ES_VERB_PHRASES]) if (occurs(hay, phrase)) return { phrase, language: "es" };
   return null;
 }
 ```
@@ -2725,15 +2779,19 @@ Expected (predicted; not replayed): all pass; `tsc` exit 0.
 | 7 | `matchKeyword` tests `text.toUpperCase().includes(key)` for each key | the "is not a keyword" table |
 | 8 | phrases: drop the apostrophe removal | "apostrophes, curly or straight …" |
 | 9 | `hay.includes(phrase)` (no spaces around) | the fixed negative set ('remove meat', 'texture') |
-| 10 | reverse `PHRASES_ES` | "a phrase that contains another is listed first …" |
+| 10 | add `"ya no me mande mensajes"` to `PHRASES_ES` | "no sentence phrase contains another …" and "are exactly the corrected spec lists" |
 | 11 | add `"no"` to `PHRASES_ES` | "no phrase is a keyword, and no phrase is itself a YES/NO answer …" and "are exactly the corrected spec lists" |
-| 12 | delete `"dejen de mandarme"` from `PHRASES_ES` | "Spanish \"dejen de mandarme\" matches inside a sentence", "the Spanish a customer actually sends …" and "are exactly the corrected spec lists" |
-| 13 | move `"no me mande"` above `"ya no me mande"` | "a phrase that contains another is listed first …" |
-| 14 | delete `"borreme"` from `PHRASES_ES` | "Spanish \"borreme\" matches inside a sentence" and "are exactly the corrected spec lists" |
-| 15 | match the whole-message phrases anywhere (append `"please stop"`, `"stop please"` to `PHRASES_EN`) | "\"Please stop by Thursday\" does NOT hold …", the negative set, and "are exactly the corrected spec lists" |
-| 16 | drop the repeated-word branch | "a stop word repeated as the whole message holds …" |
-| 17 | `words.length >= 1` for the repeated-word branch | "…but not one word on its own …" (`"alto"`) |
-| 18 | the repeated-word branch tests `words.some(…)` | "…but not one word on its own, and not inside a longer text" (`"stop stop by later"`) |
+| 12 | delete `"dejen de mandarme"` from `ES_VERB_FORMS` | "Spanish \"dejen de mandarme mensajes\" matches inside a sentence" (and its three siblings), "Spanish about MESSAGES holds …" and "are exactly the corrected spec lists" |
+| 13 | let a bare verb form count: match `ES_VERB_FORMS` themselves as sentence phrases | "Spanish NOT about messages does not hold …" and "the price of the rule …" |
+| 14 | delete `"borreme"` from `WHOLE_MESSAGE_PHRASES` | "\"please stop\", \"stop please\" and \"Bórreme\" hold only as the WHOLE message …" and "are exactly the corrected spec lists" |
+| 15 | match the whole-message phrases anywhere (append `"please stop"`, `"stop please"` to `PHRASES_EN` and the three `borr…me` to `PHRASES_ES`) | "\"Please stop by Thursday\" does NOT hold …", the negative set, and "are exactly the corrected spec lists" |
+| 16 | drop the repeated-word loop | "a stop word repeated as the whole message holds …" |
+| 17 | `core.length >= 1` in the repeated-word loop | "…but not one word on its own …" (`"alto"`) |
+| 18 | the repeated-word loop tests `core.some(…)` | "…but not one word on its own, and not inside a longer text" (`"stop stop by later"`) |
+| 19 | drop the `NOT_FOLLOWED_BY` check from `occurs` (return true on the first occurrence) | "\"No me mande mensajes de voz, mejor texto\" does NOT hold …" |
+| 20 | delete `"mas"` from `ES_MESSAGE_OBJECTS` | "Spanish about MESSAGES holds …" (`"No me manden más"`) and "are exactly the corrected spec lists" |
+| 21 | drop the English `please` allowance (`core = words`) | "a stop word repeated … English allowing one \"please\" …" (`"Stop stop please"`) |
+| 22 | delete `{ word: "parar", … }` from `REPEATED_KEYWORDS` | "a stop word repeated …" (`"Parar parar"`) and "are exactly the corrected spec lists" |
 
 - [ ] **Step 6: Commit**
 
@@ -2769,7 +2827,7 @@ Every one of BIS's own replies is one GSM-7 segment for a 20-character name (the
 - Create: `apps/web/src/lib/consent/replies.ts`, `apps/web/src/lib/consent/replies.test.ts` (Task 8 adds `sendConsentReply` to both)
 
 **Interfaces:**
-- Produces: the 51 keys below; `type ReplyKind = "consent.stop_confirmation" | "consent.start_confirmation" | "consent.help"`; `consentReplyBody(kind: ReplyKind, language: "en" | "es", brandName: string): string`; `telnyxReplyText(op: "stop" | "start" | "help", brandName: string): string`; `TELNYX_KEYWORDS: Readonly<Record<"stop" | "start" | "help", readonly string[]>>`.
+- Produces: the 52 keys below; `type ReplyKind = "consent.stop_confirmation" | "consent.start_confirmation" | "consent.help"`; `consentReplyBody(kind: ReplyKind, language: "en" | "es", brandName: string): string`; `telnyxReplyText(op: "stop" | "start" | "help", brandName: string): string`; `TELNYX_KEYWORDS: Readonly<Record<"stop" | "start" | "help", readonly string[]>>`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2817,9 +2875,9 @@ describe("PR-2: the spec's own words (§4.2 and §6), verbatim", () => {
     expect(m["todo.consent.cancel.es"]).toBe("{name} envió {word} y sus mensajes quedaron suspendidos. Revise si también quería cancelar su cita del {date}.");
   });
 
-  it("no PR-2 line exposes a code, a kind, a method or template syntax beyond its own placeholders (DESIGN.md voice; 51 keys, read off messages.ts; mutation: add a line naming 'carrier_block' → FAILS)", () => {
+  it("no PR-2 line exposes a code, a kind, a method or template syntax beyond its own placeholders (DESIGN.md voice; 52 keys, read off messages.ts; mutation: add a line naming 'carrier_block' → FAILS)", () => {
     const keys = Object.keys(m).filter((k) => /^(sms\.consentReply|contact\.texts|todo\.consent)\./.test(k));
-    expect(keys.length).toBe(51);
+    expect(keys.length).toBe(52);
     for (const k of keys) {
       const text = m[k as keyof typeof m];
       expect(text, k).not.toMatch(/\{\{|40300|carrier_block|free_text|backfill|ledger|consent\.|automation\./);
@@ -2967,6 +3025,12 @@ Replace with (the line itself, then the Texts row's lines):
   "todo.consent.cancel.es": "{name} envió {word} y sus mensajes quedaron suspendidos. Revise si también quería cancelar su cita del {date}.",
   "todo.consent.decided": "This one was already decided. Open the contact to see where their texts stand.",
   "todo.consent.decideFirst": "Decide this one with Confirm stop or Not a stop.",
+  // The contact timeline's line in place of Done for an open To-do whose
+  // number is still on hold (review R3-N1). It points at the To do page, the
+  // one place that can always close it: after a phone correction the Texts
+  // row no longer shows the old number's hold (review M3), and a CANCEL
+  // To-do the fail-closed read marks keeps its Done there (review M4).
+  "todo.consent.timelineHint": "Close this one from the To do page.",
   "todo.consent.failed": "Couldn't save that — please try again.",
 ```
 
@@ -3001,7 +3065,7 @@ Replace with (the two lines, then the consent replies):
   "sms.consentReply.help.noName.es": "Responda PARAR para dejar de recibir mensajes. Llame o escriba a este numero para recibir ayuda.",
 ```
 
-Key count (the copy test's 51, counted off the two blocks above): `sms.consentReply.*` 12; `contact.texts.*` 30; `todo.consent.*` 9.
+Key count (the copy test's 52, counted off the two blocks above): `sms.consentReply.*` 12; `contact.texts.*` 30; `todo.consent.*` 10.
 
 Create `apps/web/src/lib/consent/replies.ts`:
 
@@ -4203,7 +4267,7 @@ describe("parseAutoresponse and classifyInbound (plan G4)", () => {
 
   it("a Telnyx START or HELP BIS does not recognise is telnyx_only; a sentence is a phrase; the rest is none (mutation: treat telnyx_only START as a start → FAILS)", () => {
     expect(classifyInbound("join", "START")).toEqual({ kind: "telnyx_only", autoresponse: "START" });
-    expect(classifyInbound("ya no me manden nada", null)).toMatchObject({ kind: "phrase", phrase: { phrase: "ya no me manden" } });
+    expect(classifyInbound("ya no me manden nada", null)).toMatchObject({ kind: "phrase", phrase: { phrase: "no me manden nada" } });
     expect(classifyInbound("see you Tuesday", null)).toEqual({ kind: "none" });
   });
 
@@ -4267,6 +4331,7 @@ describe("recordInboundConsent — a stop", () => {
       { id: "ev_hold_0", action: "held", method: "free_text", occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: null },
     ]);
     await run(input({ text: "STOP" }), classifyInbound("STOP", null));
+    expect(db.readConsentHistory).toHaveBeenCalledWith(DB, "acct_1", "sms", "+19562921696");   // this number's holds, not another's (review M8)
     expect(db.completeTasksForConsentEvents).toHaveBeenCalledWith(DB, "acct_1", ["ev_hold", "ev_hold_0"], "sms-inbound", "system");
     db.completeTasksForConsentEvents.mockClear();
     await run(input({ text: "START", providerMessageId: "msg_2" }), classifyInbound("START", null));
@@ -4366,7 +4431,7 @@ describe("recordInboundConsent — a phrase, the grant, the alert phone", () => 
     const r = await run(input({ text }), classifyInbound(text, null));
     expect(calls()).toContainEqual(["held", "free_text", "if_allowed"]);
     expect(db.appendConsentEventGuarded.mock.calls.find((c) => c[1].action === "held")![1].evidence)
-      .toEqual({ phrase: "ya no me manden", language: "es", excerpt: text });
+      .toEqual({ phrase: "no me manden mensajes", language: "es", excerpt: text });
     expect(db.ensureConsentTask).toHaveBeenCalledWith(DB, "acct_1", {
       contactId: "ct_1", consentEventId: "ev_held",
       title: m["todo.consent.hold.en"].replace("{name}", "Ana Ruiz").replace("{excerpt}", excerptOf(text, 60)),
@@ -4560,7 +4625,9 @@ import type { ReplyKind } from "./replies";
  * the OpenAPI's help, and the facts file's caveat that a custom word may be
  * reported as itself). BIS replies only when it is absent. Only the value
  * STOP is read as the carrier's block when BIS's list does not match; a
- * START, HELP or unknown value BIS does not match is logged and not recorded.
+ * START, HELP or unknown value BIS does not match is logged and not recorded
+ * — unless the text is a stop SENTENCE, which is held all the same (review
+ * R2-m-b: the hold is the safe direction).
  *
  * RETRIES (plan G1). Every write is sourced to the message id, so a retried
  * webhook appends nothing new (0055) and finds the To-do it already made; a
@@ -4587,7 +4654,7 @@ export type InboundClass =
   | { kind: "phrase"; phrase: PhraseMatch }
   | { kind: "none" };
 
-/** Pure. A stop wins over everything, Telnyx's included; then START, HELP; a sentence only when nothing else matched. */
+/** Pure. A stop wins over everything, Telnyx's included; then START, HELP; then a stop sentence, even when Telnyx answered something else (review R2-m-b); telnyx_only or none last. */
 export function classifyInbound(text: string, autoresponse: Autoresponse | null): InboundClass {
   const keyword = matchKeyword(text);
   if (autoresponse === "STOP" || keyword?.kind === "stop") {
@@ -7407,14 +7474,18 @@ Replace the two cases titled "a stored number that reads both ways gets the Chec
     expect(textsRowProps.mock.calls[0]![0]).toMatchObject({ load: { status: "error" } });
   });
 
-  it("the timeline is told which open To-dos are a hold still undecided, and an unreadable ledger hints every linked one — never a Done that would be refused (review R3-N1; mutation: pass [] on failure → FAILS)", async () => {
+  it("the timeline is told exactly what holdOpenTaskIds answered for the page's own tasks, and an unreadable ledger hints every open linked one — never a Done that would be refused (review R3-N1, I4; mutation: pass [] on failure → FAILS; mutation: pass the fallback always → the first case FAILS)", async () => {
     listContactTasksMock.mockResolvedValue([
       { id: "t_hold", title: "Ana may have asked …", completed_at: null, consent_event_id: "h1" },
       { id: "t_plain", title: "Call back", completed_at: null, consent_event_id: null },
     ]);
-    holdOpenTaskIdsMock.mockResolvedValue(["t_hold"]);
+    // The hold was decided since: the read answers none, and the page passes none (not its own fallback).
+    holdOpenTaskIdsMock.mockResolvedValue([]);
     await render();
-    expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({ holdOpenTaskIds: ["t_hold"] });
+    expect(holdOpenTaskIdsMock).toHaveBeenCalledWith(expect.anything(), "acct1", [
+      expect.objectContaining({ id: "t_hold", consent_event_id: "h1" }), expect.objectContaining({ id: "t_plain", consent_event_id: null }),
+    ]);
+    expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({ holdOpenTaskIds: [] });
     holdOpenTaskIdsMock.mockRejectedValue(new Error("readConsentEvent failed: timeout"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     await render();
@@ -8081,7 +8152,9 @@ Replace with:
 
   // Review R3-N1 (G21): a To-do whose number is still on hold is closed by
   // deciding the hold, never by "Done", so the timeline shows a hint in its
-  // place. A failed read fails CLOSED: every open linked To-do gets the hint.
+  // place. A failed read fails CLOSED: every open linked To-do gets the hint
+  // — a CANCEL To-do too (review M4), which is why the hint names the To do
+  // page, where that To-do keeps its Done.
   let holdOpen: string[];
   try {
     holdOpen = await holdOpenTaskIds(db, accountId, tasks);
@@ -8172,7 +8245,7 @@ Replace with:
 ```tsx
         {!done && item.holdOpen ? (
           <p className="shrink-0 text-xs text-muted-foreground" data-testid="task-decide-first">
-            {m["todo.consent.decideFirst"]}
+            {m["todo.consent.timelineHint"]}
           </p>
         ) : !done ? (
           <form action={completeAction} className="shrink-0">
@@ -8207,13 +8280,13 @@ const doneButtons = (markup: string) => (markup.match(new RegExp(`>${m["contact.
 describe("the contact timeline and a hold's To-do (review R3-N1, G21)", () => {
   it("a To-do whose number is still on hold shows the decide-first hint INSTEAD of Done; a plain To-do keeps its Done (mutation: render Done for every open task → two Done buttons, FAILS)", () => {
     const out = html(["t_hold"]);
-    expect(renderedText(out)).toContain(m["todo.consent.decideFirst"]);
+    expect(renderedText(out)).toContain(m["todo.consent.timelineHint"]);
     expect(doneButtons(out)).toBe(1);
   });
 
   it("once the hold is decided the same To-do offers Done again (the discriminator; mutation: hint for every linked task → FAILS)", () => {
     const out = html([]);
-    expect(renderedText(out)).not.toContain(m["todo.consent.decideFirst"]);
+    expect(renderedText(out)).not.toContain(m["todo.consent.timelineHint"]);
     expect(doneButtons(out)).toBe(2);
   });
 });
@@ -8358,7 +8431,7 @@ git commit -m "feat(consent): the Texts row — Allowed, Stopped, On hold, Check
 **The rule (plan G8, spec §6):** a To-do linked to a HOLD shows the hold line (its `tasks.title`) with ghost "Confirm stop" and "Not a stop" in place of "Done"; either decides the contact's CURRENT hold (a To-do made for an earlier hold of the same number still resolves the one on the number now) and completes the hold's To-dos, with Undo. A To-do linked to a CANCEL stop keeps "Done": staff check the appointment, then close it.
 
 **A hold's To-do is never closed without deciding the hold, and never left open once it is decided** (review R3-I1, with the deferred agency Work-queue item):
-- **Done cannot close it, and no screen offers a Done that would be refused.** `completeTask` itself refuses a To-do whose linked NUMBER is still on hold — its newest deciding row a hold, the To-do's own or a later one (Task 2's `HoldUndecidedError`; review R3-N3) — so every path meets the rule. The per-account list shows the two buttons instead of Done (a stale tab's Done is refused with "decide first"). The contact page's timeline shows a one-line hint (`todo.consent.decideFirst`) in place of Done for such a To-do (Task 12; review R3-N1), and `completeTaskAction` still refuses a stale page's Done without an error page. The decision itself is made with the To-do page's two buttons, or the Texts row's while the contact's current number is the one on hold; after a phone correction it is not, and the To-do page's buttons then close the To-do, because the contact's number is no longer on hold (below). The agency Work queue has no action buttons at all — its rows are read-only links into the account (`work/agency-work-list.tsx:22-27` on `76c6acfb`) — so the deferred item that assumed a "Done" there was wrong, and nothing changes on that screen.
+- **Done cannot close it, and no screen offers a Done that would be refused.** `completeTask` itself refuses a To-do whose linked NUMBER is still on hold — its newest deciding row a hold, the To-do's own or a later one (Task 2's `HoldUndecidedError`; review R3-N3) — so every path meets the rule. The per-account list shows the two buttons instead of Done (a stale tab's Done is refused with "decide first"). The contact page's timeline shows a one-line hint in place of Done for such a To-do, "Close this one from the To do page." (`todo.consent.timelineHint`; Task 12; reviews R3-N1, M3), and `completeTaskAction` still refuses a stale page's Done without an error page. The decision itself is made with the To-do page's two buttons, or the Texts row's while the contact's current number is the one on hold; after a phone correction it is not, and the To-do page's buttons then close the To-do, because the contact's number is no longer on hold (below). The agency Work queue has no action buttons at all — its rows are read-only links into the account (`work/agency-work-list.tsx:22-27` on `76c6acfb`) — so the deferred item that assumed a "Done" there was wrong, and nothing changes on that screen.
 - **It closes itself** when the hold is decided anywhere: Confirm stop / Not a stop (Task 11 completes the hold's To-dos); a STOP or START landing on the held number (Task 8's `closeHoldTodo`); and, as the last net, a click on either button once the contact's number is no longer on hold (a decision in another tab, a new number) closes the To-do and says it was already decided.
 
 - [ ] **Step 1: Write the failing tests**
@@ -9411,7 +9484,7 @@ gh api "repos/{owner}/{repo}/commits/$SHA/check-runs" --jq '.check_runs[] | [.na
 
 Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log, on the CI project: `consent-writes-schema.test.ts` all passed (including the two-connection lock test: A2), `consent-writes-live.test.ts` 1 passed (the RPC through PostgREST), `consent-tasks-live.test.ts` 1 passed, `telnyx-backfill.test.ts` 1 passed, `messaging-profile-schema.test.ts` 3 passed. In `e2e`'s: `consent-texts.spec.ts` 3 passed, `consent-phone-country.spec.ts` green in its Task 12 version (the test id wraps the whole Check number state, review R3-I2; each "no row" waits for the Texts row's `data-state`, R3-I3; a pick keeps focus in the row, R3-I4), `blueprints.spec.ts` green (Task 7's profile field).
 
-- [ ] **Step 5: 0055, then 0056, to production, BEFORE the merge** (the merge deploys code that calls the function on its first inbound text; 0055 is additive, so the live build runs unchanged against it). Under danlo's one go for steps 5, 6 and 9, through the Supabase MCP on `tlbkbmlrfafquucsmsmm`:
+- [ ] **Step 5: 0055, then 0056, to production, BEFORE the merge** (the merge deploys code that calls the function on its first inbound text, and a contact page whose task read selects `tasks.consent_event_id` — Task 2's `listContactTasks`, review M9 — so without 0055 every contact page would fail; 0055 is additive, so the live build runs unchanged against it). Under danlo's one go for steps 5, 6 and 9, through the Supabase MCP on `tlbkbmlrfafquucsmsmm`:
   1. Pre-flight read: `select to_regprocedure('public.append_consent_event(uuid, text, text, text, text, text, uuid, uuid, text, text, text, jsonb, timestamptz)') as fn, (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'tasks' and column_name = 'consent_event_id') as col;` must return `null` and `0`. Anything else: STOP (never re-apply).
   2. `apply_migration`, name `0055_consent_writes`, the file's exact contents. Once. Then `notify pgrst, 'reload schema';` (the 0053 precedent: the new function must be in PostgREST's cache before the first call).
   3. Post-apply reads, all of which must match:
@@ -9450,21 +9523,21 @@ Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log, on
   4. Record the profile id on the account's A2P card (Task 7; the agency's own screen). The app refuses texting for an approved account until it is there.
   5. A business rename (its `brand_name`) makes these replies stale: redo 10.2–10.3 (noted in the runbook by Task 9's edit; add it there if it is missing).
 
-- [ ] **Step 11: The go-live check — after A2P approval, NOT a merge gate** (spec §5, items 1, 2 and 6 now met). On BIS's own line, from danlo's own phone, one text at a time, each from a KNOWN state (review R2-N2: a text sent to an address that is already stopped tests nothing), and for each the reply written down WORD FOR WORD and compared character for character with the line the table names (review R1-M5: a reply that differs means the wrong config, or the wrong sender, answered). After each: the drawer's Texts row, and `consent_events` for the address (read through the MCP, BIS's own account only). Before row 1 the Texts row must read Allowed; if it does not, text `START` and wait for its reply.
+- [ ] **Step 11: The go-live check — after A2P approval, NOT a merge gate** (spec §5, items 1, 2 and 6 now met). On BIS's own line, from danlo's own phone, one text at a time, each from a KNOWN state (review R2-N2: a text sent to an address that is already stopped tests nothing), and for each the reply written down WORD FOR WORD and compared character for character with the line the table names (review R1-M5: a reply that differs means the wrong config, or the wrong sender, answered). After each: the drawer's Texts row, and `consent_events` for the address (read through the MCP, BIS's own account only). Before row 1 the Texts row must read Allowed; if it does not, text `START` and wait for its reply. **Precondition (review M5a):** danlo's phone is NOT the alert phone of the account that owns BIS's line — the route drops the alert phone's HELP and phrases and never files its texts (G10), so every row below would read wrong. **One reply may arrive in two or three parts** (the bilingual lines are 2 GSM-7 segments or more, Task 5's measurement): that is still ONE reply; compare the joined text (review M5d).
 
 | # | Text | State before | Expected answerer — and what BIS writes |
 |---|---|---|---|
-| 1 | `HELP` | Allowed | **Telnyx's** help line (step 10.2). BIS: nothing (`autoresponse_type` set). |
+| 1 | `HELP` | Allowed | **Telnyx's** help line (step 10.2). BIS sends nothing (`autoresponse_type` set); it writes at most the first-text grant (`granted` / `inbound_text`, only if the number has no ledger row yet; review M5b). |
 | 2 | `AYUDA` | Allowed | **Telnyx's** help line (AYUDA is in the help config). BIS: nothing. |
 | 3 | `s t o p` | Allowed | **BIS's own** stop confirmation, English (Task 5), answering the new `revoked` / `keyword` row. The one word here only BIS's matcher reads as a stop (spaces are ignored, choice 26; Telnyx matches the whole message, A1), so BIS's own reply path is exercised live. If Telnyx answers it instead, record that: A1 is then wider than assumed, and BIS correctly sent nothing. |
-| 4 | `START` | Stopped by BIS only (Telnyx never saw a STOP) | Exactly ONE start reply: **Telnyx's** start line if Telnyx answers START on a number it never blocked, otherwise **BIS's own** start confirmation (English). Which one is NOT FOUND in Telnyx's docs; record it. BIS writes `resubscribed` either way. |
+| 4 | `START` | Stopped by BIS only (Telnyx never saw a STOP) | Exactly ONE start reply: **Telnyx's** start line if Telnyx answers START on a number it never blocked, otherwise **BIS's own** start confirmation (English). Which one is NOT FOUND in Telnyx's docs; record it — later rows name it "row 4's answerer". BIS writes `resubscribed` either way. If Telnyx answered row 3 itself, the number is Telnyx-blocked and this row is row 6 (review M5c). |
 | 5 | `STOP` | Allowed | **Telnyx's** stop line. BIS writes `revoked` / `keyword`, sends nothing. |
 | 6 | `START` | Stopped by Telnyx | **Telnyx's** start line. BIS writes `resubscribed`, sends nothing. |
 | 7 | `PARAR` | Allowed | **Telnyx's** stop line (PARAR is in the stop config). BIS writes `revoked` / `keyword`. |
 | 8 | `START` | Stopped by Telnyx | **Telnyx's** start line. |
-| 9 | `Stop.` | Allowed | **Telnyx's** stop line if Telnyx ignores the full stop, otherwise **BIS's own** stop confirmation (A1). Record which. Then `START` from the state it left (row 4 or row 6 applies). |
-| 10 | `STOP`, then `Start!` | Allowed, then stopped by Telnyx | `STOP`: **Telnyx's** stop line. `Start!`: **Telnyx's** start line if Telnyx recognises it; otherwise **NOBODY, by design** — BIS lifts its ledger, its start confirmation is refused with 40300, the gate records the block again, and the log names it (A1's trace, review R2-I1c). Then a plain `START`: **Telnyx's** start line. |
-| 11 | `Cancel.` | Allowed | **Telnyx's** stop line if Telnyx ignores the full stop, otherwise **BIS's own** stop confirmation. Then `START` from the state it left. |
+| 9 | `Stop.` | Allowed | **Telnyx's** stop line if Telnyx ignores the full stop, otherwise **BIS's own** stop confirmation (A1). Record which. Then `START`: **Telnyx's** start line if Telnyx answered `Stop.` (row 6), otherwise **row 4's answerer**. |
+| 10 | `STOP`, then `Start!` | Allowed, then stopped by Telnyx | `STOP`: **Telnyx's** stop line. `Start!`: **Telnyx's** start line if Telnyx recognises it; otherwise **NOBODY, by design** — BIS lifts its ledger, its start confirmation is refused with 40300, the gate records the block again, and the log names it (A1's trace, review R2-I1c). **Then look at the Texts row (review I3):** only if it reads Stopped, send a plain `START`: **Telnyx's** start line. If it reads Allowed, Telnyx recognised `Start!` and the number is allowed on both sides: send nothing more (a START there could fairly get no answer, which is not a fault). |
+| 11 | `Cancel.` | Allowed | **Telnyx's** stop line if Telnyx ignores the full stop, otherwise **BIS's own** stop confirmation. Then `START`: **Telnyx's** start line if Telnyx answered `Cancel.`, otherwise **row 4's answerer**. |
 | 12 | `please stop texting me` | Allowed | **NOBODY, by design** (choice 20): the Texts row reads On hold and a To-do appears. Then Not a stop in the drawer, which leaves the number Allowed. |
 
 This settles A1, A3 and A4, and F3's per-language question does not arise with the bilingual configs. Two replies to one text, or none where the table names an answerer: STOP texting on every account (`outbound_suppressed`) and report.
@@ -9478,7 +9551,7 @@ This settles A1, A3 and A4, and F3's per-language question does not arise with t
 **Spec coverage** (the §7 PR-2 row, item by item, and what PR-1 handed on):
 - Inbound keywords, START and HELP: Task 4 (the matcher, decision 10/11, choice 26 as G9 extends it), Task 8 (what each means), Task 9 (the route).
 - The confirmation and the Telnyx reconciliation: Task 5 (§4.2's six lines, the help lines with S12's contact sentence), Task 6 (the three kinds, choice 18's any hour, the gate's one exception), Task 8 (BIS replies only when `autoresponse_type` is absent, whatever its spelling: G4; the reply owed the moment the row is written: G1), Task 9 (after the response: G3), Task 16 step 10 (Telnyx's own replies and keywords for US, MX and CA, with a read-back) and step 11 (the live one-reply check, word for word).
-- The phrase list and holds: Task 4 (§4.2's phrases as S9 extends them: 17 English and 48 Spanish sentence phrases, 2 whole-message phrases and 3 repeated stop words, pinned by literals), Task 8 (held, the To-do, choice 20's no reply), Tasks 11–13 (Confirm stop, Not a stop, their bounded Undo, the To-do's own buttons, G20, G21).
+- The phrase list and holds: Task 4 (§4.2's phrases as S9 extends them: 17 English and 17 Spanish sentence phrases, 28 Spanish verb forms × 4 message objects, 5 whole-message phrases and 4 repeated stop words, pinned by literals), Task 8 (held, the To-do, choice 20's no reply), Tasks 11–13 (Confirm stop, Not a stop, their bounded Undo, the To-do's own buttons, G20, G21).
 - Grants: Task 8 (texting first, spec step 6), Task 10 (form, booking).
 - The drawer's Messages block, Texts row, and the To-do rows: Tasks 11, 12, 13 (§6's Allowed, Stopped, On hold, Check number; the two-row skeleton and the error line; "Since {date} · {how}"; Resume's required note; To-do lines from `messages.ts`).
 - The Telnyx backfill: Task 3 and Task 16 steps 7–8 (count first, write after danlo sees it, both before any number changes profile: A5, S11).
@@ -9493,7 +9566,7 @@ This settles A1, A3 and A4, and F3's per-language question does not arise with t
 
 **Type consistency** (names a later task uses, checked against the task that defines them): `appendConsentEventGuarded` / `ConsentGuard` (with `unless_customer_stopped`) / `{ ifNewest }` / `ConsentAppend.outcome` / `CUSTOMER_STOP_METHODS` (Task 1 → 3, 8, 10, 11); `readConsentHistory`, `readConsentEvent`, `readConsentActions`, `newestDecidingRow` (Task 1 → 2, 11, 13); `ensureConsentTask`, `completeTasksForConsentEvents`, `reopenTasks`, `nextBookedStart`, `WorkRow.consent` (Task 2 → 8, 11, 13); `matchKeyword`, `keywordDisplay`, `CANCEL_WORDS`, `matchPhrase` (Task 4 → 8, 11); `ReplyKind`, `consentReplyBody`, `telnyxReplyText`, `TELNYX_KEYWORDS`, the `sms.consentReply.*` keys (Task 5 → 8, 16); `SmsRequest.answersEventId`, `stop_confirmation_stale` (Task 6 → 8); `classifyInbound`, `parseAutoresponse` (`Autoresponse` with `OTHER`), `recordInboundConsent` (with its `owe` callback), `CHANGES_CONSENT`, `ConsentReplyPlan`, `sendConsentReply` (Task 8 → 9); `TextsView`, `TextsActionResult`, `TextsUndo`, `TextsContext` (with `now`), `UNDO_WINDOW_MS`, `textsContextFor`, the six `…Action`s, `TextsResponse` (Task 11 → 12, 13); `TextsLoad`, `runTextsAction`, `TEXTS_TREATMENT` (Task 12 → 13); `HoldUndecidedError`, `holdOpenTaskIds`, `listContactTasks`'s `consent_event_id` (Task 2 → 12, 13); `matchPhrase`, `WHOLE_MESSAGE_PHRASES`, `REPEATED_KEYWORDS` (Task 4 → 8); `readTaskContact` (returning the link, Task 13). NOT checked by a compiler: nothing was run (see Replay status).
 
-**Counts** (read off this file): 16 tasks; 3 checkpoints; 2 migrations (0055, 0056); 51 new copy keys (Task 5, counted off its two blocks: 12 + 30 + 9) plus 5 A2P keys (Task 7); nine Telnyx autoresp configs per profile (Task 16 step 10.2: 3 operations × 3 countries); 17 stop keywords in the stop config (Task 5's `TELNYX_KEYWORDS.stop`, ≤ Telnyx's 20); 70 phrase entries (Task 4: 17 English and 48 Spanish sentence phrases, 2 whole-message phrases, 3 repeated stop words).
+**Counts** (read off this file): 16 tasks; 3 checkpoints; 2 migrations (0055, 0056); 52 new copy keys (Task 5, counted off its two blocks: 12 + 30 + 10) plus 5 A2P keys (Task 7); nine Telnyx autoresp configs per profile (Task 16 step 10.2: 3 operations × 3 countries); 17 stop keywords in the stop config (Task 5's `TELNYX_KEYWORDS.stop`, ≤ Telnyx's 20); 155 phrase entries (Task 4: 17 English and 17 Spanish sentence phrases, 112 Spanish verb phrases from 28 forms × 4 objects, 5 whole-message phrases, 4 repeated stop words), plus 2 `NOT_FOLLOWED_BY` exclusions.
 
 **Vacuity checks applied while writing** (memories `bis-vacuous-test-shapes`, `bis-test-vacuity`):
 - Every `vi.mock("@bis/db")` factory that a changed module reaches gains the new exports (route.test.ts and route.consent.test.ts gain `completeTasksForConsentEvents`; the call page test; the tasks actions test), and where a test needs a real pure function or class beside the mocks (`newestDecidingRow`, `HoldUndecidedError`), the factory spreads `importOriginal`.
@@ -9519,7 +9592,7 @@ This settles A1, A3 and A4, and F3's per-language question does not arise with t
 - A stop whose append COMMITS but whose answer is lost on the network gets no reply: the route answers 503, and Telnyx's retry finds the row `duplicate`, which owes nothing (review R2-m-e). The ledger is right; only the confirmation is missing.
 - The To-do's Undo carries task ids from the client; `reopenTasks` is bounded to the account (and RLS), so the worst case is a staff member reopening their own account's tasks.
 
-**Not replayed:** every step. The machine never had the 1.5 GB the brief requires for even one targeted test file, while this plan was written or while its review fixes were made. One pure module was SIMULATED instead, outside vitest: Task 4's `phrases.ts`, extracted from this file and run through Node's own type stripping, answered all 48 assertions of its planned test (every per-phrase sentence, every whole-message, repeated-word, misses-list and negative case) as the test expects. That is evidence about the logic, not a replay of the test file.
+**Not replayed:** every step. The machine never had the 1.5 GB the brief requires for even one targeted test file, while this plan was written or while its review fixes were made. One pure module was SIMULATED instead, outside vitest: Task 4's `phrases.ts`, extracted from this file and run through Node's own type stripping, answered every assertion of its planned test as the test expects (review M7's count, recomputed for the final list): 43 named assertions (every held, not-held, whole-message and repeated-word case), 146 per-phrase sentences (17 English, 129 Spanish), 24 negative texts, all 21,170 ordered pairs of the containment test, and 151 normal-form checks. That is evidence about the logic, not a replay of the test file.
 
 ## Deferred to whole-branch review
 
@@ -9561,7 +9634,7 @@ This settles A1, A3 and A4, and F3's per-language question does not arise with t
 1. **Consent replies are not billed** (G11). A stop, start or help reply is not an automation, a composer reply or a missed-call text-back, so the M7a rule does not bill it, and Task 14 pins that no consent reply records usage. Yours to change if it should.
 2. **An accented business name makes every reply longer.** "Jardinería López" puts most of BIS's replies at 2 segments and Telnyx's bilingual ones at 3 (Task 5's measurement). The spec's own words stay unaccented; the name is the business's.
 3. **Decision 10 was amended** (S7). It is one of the orchestrator's technical defaults, not one of your binding decisions: BIS now sends its own confirmation only when Telnyx did not already answer, which is what decision 12 and §4.2 already said.
-4. **"Please stop", "stop please" and a repeated "stop" hold only as the WHOLE message** (your decision of 2026-09-28): "Please stop!!" holds; "Please stop by Thursday" does not, and a test pins that. Longer requests are covered by "stop texting", "stop sending", "stop messaging" and "stop contacting".
+4. **The phrase list follows your two decisions of 2026-09-28.** English: "please stop", "stop please" and a repeated "stop" hold only as the WHOLE message ("Please stop!!" holds; "Please stop by Thursday" does not). Spanish: the verb forms hold only about messages ("No me mande más mensajes" holds; "No me mande la factura" does not), "Bórreme" only as the whole message, and "PARAR PARAR" as a repeated stop word. Two things the rule implies, so you are not surprised: a bare request with no object ("Dejen de escribirme", "No me escriba") does NOT hold — staff still read it in the thread; and "No me mande mensajes de voz, mejor texto" does NOT hold either, by the plan's choice, because it asks for texts rather than against them (the same for "Quíteme de la lista de espera", a waiting list). Tests pin every one of these.
 5. **Leave the shared messaging profile alone until Task 16 step 8 is done** (review R1-N8): do not delete it or clear its opt-out list during this week's A2P work. Its list is what step 7 imports, and moving a number off it may leave that number's opt-outs behind (A5).
 
 ## Next plans
