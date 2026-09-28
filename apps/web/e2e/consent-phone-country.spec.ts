@@ -69,10 +69,14 @@ test("an ambiguous number: stored +1 and flagged; Mexico (+52) rewrites it, Undo
   const toast = page.getByText(m["contact.phoneCountry.mxToast"]);
   await expect(toast).toBeVisible();
   // Hovering pauses Sonner's 4 s timer, so the DB read below cannot outlast
-  // the Undo button (review R3-M5). `force` skips Playwright's "stable" check:
-  // Sonner's toast keeps animating, and a plain hover timed out in CI (#151)
-  // though the mouse still has to land on it for the pause to hold.
-  await toast.hover({ force: true });
+  // the Undo button (review R3-M5). #151: a plain hover failed CI's hit-target
+  // check twice — the drawer's own subtree was intercepting pointer events
+  // (Radix sets `body{pointer-events:none}` while it's open, and the toaster
+  // had no override), so the mouse never actually reached the toast. Fixed at
+  // the source (sonner.tsx's pointer-events-auto + Sheet/Dialog's
+  // onInteractOutside exemption in interact-outside.ts) rather than forcing
+  // past the check here, since `force` is exactly what let the bug through.
+  await toast.hover();
   await expect(row).toHaveCount(0);
   expect(await stored()).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
 
