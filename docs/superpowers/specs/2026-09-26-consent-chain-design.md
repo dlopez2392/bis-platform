@@ -353,8 +353,9 @@ Spanish help from one GSM-7 segment to two UCS-2 segments.
 The start confirmation uses the language of the stop it lifts, and English otherwise.
 
 **The phrase list** (`apps/web/src/lib/consent/phrases.ts`) is matched against the normalised text (accents, case,
-apostrophes and punctuation ignored). Reviewed in PR-2 (danlo, 2026-09-28, two decisions; PR-2 plan S9, reviews
-R2-I5, R2-N1 and the delta review's I2) and extended only with tests, it has four kinds:
+apostrophes and punctuation ignored). Reviewed in PR-2 (danlo, 2026-09-28, four decisions, and the orchestrator's calls
+under them; PR-2 plan S9) and extended only with tests, it has four kinds. Where a false hold and a missed stop
+conflict, it holds: staff clear a false hold in one click.
 
 - **Sentence phrases, as whole words anywhere in the message.**
   - **English:** stop texting, stop sending, stop messaging, stop contacting, dont text, do not text, dont message, do
@@ -362,25 +363,31 @@ R2-I5, R2-N1 and the delta review's I2) and extended only with tests, it has fou
     texting, do not contact me, dont contact me.
   - **Spanish, about messages on their own:** no quiero mas mensajes, no quiero mensajes, no mas mensajes, no mas
     textos, numero equivocado; and quitenme / quiteme / quitame / saquenme / saqueme / sacame de su lista or de la
-    lista.
+    lista. Any "… de la lista …" holds, "Quítame de la lista del sábado y ponme el domingo" included (danlo's list
+    form); only "lista de espera" (a waiting list) does not.
 - **Spanish verb forms, ONLY ABOUT MESSAGES** (danlo): no me manden / mande / mandes / envien / envie / envies /
-  escriban / escriba / escribas; dejen / deje / deja de mandar(me) / enviar(me) / escribir(me); no quiero recibir —
-  each counts only followed by a message object: mensajes, textos, nada or mas ("No me mande más mensajes", "Deje de
-  mandarme mensajes", "No me manden nada"). A bare mandar or enviar form does not hold, even as the whole message
-  ("No me mande la factura", "Deje de mandar a Juan", "Dejen de mandarme"): "mandar" can mean a crew or an invoice.
-  "mensajes de voz" (voicemail) and "lista de espera" (a waiting list) do not count: "No me mande mensajes de voz,
-  mejor texto" asks for texts, not against them.
-- **Whole-message phrases:** "please stop", "stop please", "borrenme", "borreme", "borrame", and the six ESCRIBIR
-  forms "dejen de escribirme", "deje de escribirme", "deja de escribirme", "no me escriban", "no me escriba", "no me
-  escribas" count ONLY when they are the whole message, punctuation aside (no "por favor" or "ya" wrapper): "Please
-  stop!!", "¡Bórreme!" and "No me escriba" hold; "Please stop by Thursday", "Bórreme la cita del lunes" and "No me
-  escriba el martes, mejor llámeme" do not (danlo). "escribir" is always about messages — writing to the customer is
-  texting them — and a missed stop is worse than a false hold (decision 27), so its bare forms hold as the whole
-  message while mandar and enviar stay object-only (corrected 2026-09-28, an orchestrator call under danlo's rule;
-  PR-2 plan S9). Longer requests are the sentence phrases' job.
+  escriban / escriba / escribas; dejen / deje / deja de mandar(me) / enviar(me) / escribir(me); no quiero recibir; no
+  me vuelvan / vuelva / vuelvas a mandar / enviar. Each counts only with a message object:
+  - a **message word** right after the form, anywhere in the message: mensajes, textos, sms, msjs, mensajitos, ningun
+    mensaje, sus mensajes ("No me envíen ningún mensaje", "No me vuelvan a mandar mensajes");
+  - or **"mas" / "nada"** (also "nada mas", "nunca mas") only at the END of the message, courtesy words aside, or right
+    before a message word: "No me manden más", "No me mande nada, gracias" and "No me mande más mensajes" hold; "No me
+    manden más a Pedro", "No me mande más de dos trabajadores" and "No me mande nada por correo" do not.
+  A bare mandar or enviar form does not hold ("No me mande la factura", "Dejen de mandarme"): "mandar" can mean a crew
+  or an invoice. "mensajes de voz" counts as messages: "No me mande mensajes de voz, mejor texto" is a false hold staff
+  clear in one click, and excluding it missed "no me manden mensajes de voz ni textos" (orchestrator).
+- **Whole-message phrases:** "please stop" and "stop please" (English, exact); in Spanish "borrenme", "borreme",
+  "borrame", the escribir forms "dejen / deje / deja de escribirme" and "no me escriban / escriba / escribas", and "no
+  me vuelvan / vuelva / vuelvas a escribir". They count ONLY when they are the whole message, punctuation aside; the
+  Spanish ones may carry ONE leading "ya" / "por favor" / "porfa" / "porfavor" and ONE trailing "por favor" / "porfa" /
+  "porfavor" / "gracias" / "ya" (orchestrator). "Please stop!!", "¡Bórreme!", "Ya no me escriban" and "No me escriban,
+  gracias" hold; "Please stop by Thursday", "Bórreme la cita del lunes", "No me escriba el martes, mejor llámeme" and
+  "Ya no me escriba, yo le llamo" do not. "escribir" is always about messages — writing to the customer is texting
+  them — and a missed stop is worse than a false hold (decision 27), so its bare forms hold as the whole message while
+  mandar and enviar stay object-only.
 - **A stop word repeated as the whole message:** "stop stop", "parar parar", "alto alto", "baja baja", any number of
-  repeats (English also with one "please" at either end: "Stop stop please"); one word on its own is a keyword
-  (decision 10), not a phrase.
+  repeats (English also with one "please" at either end, Spanish with the courtesy words); one word on its own is a
+  keyword (decision 10), not a phrase.
 - No sentence phrase contains another, so the order of the lists never changes whether a text holds.
 
 A false match only holds messages, and staff undo it in one click. A missed sentence is the risk, which is why staff
