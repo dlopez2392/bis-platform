@@ -34,14 +34,17 @@
  * does not cover WHOLE_MESSAGE_PHRASES). One continuation is not what it
  * looks like: "lista de espera" is a waiting list, not the texting list.
  *
- * 5. A SINGLE STOP WORD with ONE courtesy word (danlo, 2026-09-28, D1) is a
- *    whole-message HOLD, not a keyword stop: "Baja por favor", "Stop thanks".
- *    The bare word alone is a keyword (keywords.ts matches it first — this
- *    module never claims it); a longer text is neither ("Alto, por favor
- *    mañana a las 3" holds nothing). The qualifying words are every STOP-kind
- *    keyword from keywords.ts (English and Spanish), plus "no mas" — the
- *    two-word spelling of NOMAS, which this module's normaliser does not
- *    collapse the way keywords.ts's does (SINGLE_WORD_STOPS).
+ * 5. A SINGLE STOP WORD with ONE courtesy word at EACH end (danlo, 2026-09-28,
+ *    D1) is a whole-message HOLD, not a keyword stop: "Baja por favor", "Stop
+ *    thanks". The bare word alone is a keyword (keywords.ts matches it first
+ *    — this module never claims it); a longer text is neither ("Alto, por
+ *    favor mañana a las 3" holds nothing). The qualifying words are every
+ *    STOP-kind keyword from keywords.ts, plus the spaced spellings "no mas",
+ *    "opt out" and "stop all" (this module's normaliser does not collapse
+ *    inner spaces the way keywords.ts's does — SINGLE_WORD_STOPS) — EXCEPT
+ *    CANCEL and CANCELAR (orchestrator, fix round 2): "Cancel please" reads
+ *    as an appointment cancellation, not a stop, so holding it as a phrase
+ *    would lose the appointment To-do; the bare keyword is unaffected.
  */
 export type PhraseMatch = { phrase: string; language: "en" | "es" };
 
@@ -52,6 +55,8 @@ export const PHRASES_EN: readonly string[] = [
   "no more texting", "do not contact me", "dont contact me",
   // danlo, 2026-09-28 (D2):
   "opt me out", "quit texting me", "leave me alone", "i dont want these texts", "i do not want these texts",
+  // orchestrator, 2026-09-28, fix round 2:
+  "i dont want texts", "i dont want your texts", "i do not want texts",
 ];
 
 /** Spanish sentence phrases that are about messages on their own. */
@@ -67,6 +72,12 @@ export const PHRASES_ES: readonly string[] = [
   // alone is not a verb form, so this needs its own literal (unlike "no quiero mensajes").
   "borrenme de su lista", "borrenme de la lista", "borreme de su lista", "borreme de la lista",
   "borrame de su lista", "borrame de la lista", "no quiero promociones",
+  // orchestrator, 2026-09-28, fix round 2: kept as their own literals, not a general "no quiero"
+  // verb form (which would also newly hold bare "no quiero mas"/"no quiero nada" — unrequested).
+  "no quiero mas promociones", "no quiero sus promociones", "no quiero ofertas", "no quiero mas ofertas",
+  "no quiero publicidad", "no quiero mas publicidad",
+  // same class as "numero equivocado":
+  "este no es mi numero", "se equivocaron de numero",
 ];
 
 /** Spanish verb forms: each counts only with a message object (danlo, 2026-09-28). */
@@ -126,26 +137,32 @@ export const REPEATED_KEYWORDS: readonly { word: string; language: "en" | "es" }
 ];
 
 /** One courtesy word the Spanish whole-message forms may carry before, and one after (orchestrator, review V2). */
-export const ES_COURTESY_LEAD: readonly string[] = ["ya", "por favor", "porfa", "porfavor"];
+export const ES_COURTESY_LEAD: readonly string[] = ["ya", "por favor", "porfa", "porfavor", "gracias"];
 export const ES_COURTESY_TRAIL: readonly string[] = ["por favor", "porfa", "porfavor", "gracias", "ya"];
 /** The English courtesy words D1's single-stop-word rule allows (one lead, one trail). */
-export const EN_COURTESY_LEAD: readonly string[] = ["please"];
+export const EN_COURTESY_LEAD: readonly string[] = ["please", "thanks"];
 export const EN_COURTESY_TRAIL: readonly string[] = ["please", "thanks", "thank you"];
 
 /**
- * Every STOP-kind keyword (keywords.ts) plus "no mas" — the two-word spelling
- * of NOMAS that this module's normaliser (unlike keywords.ts's) does not
- * collapse. Each holds as a phrase ONLY with exactly one courtesy word from
- * its own language (D1): the bare word alone is a keyword (matched first,
- * elsewhere), never a phrase.
+ * Every STOP-kind keyword (keywords.ts) plus its spaced spellings ("no mas",
+ * "opt out", "stop all" — this module's normaliser, unlike keywords.ts's,
+ * does not collapse inner spaces). Each holds as a phrase ONLY with exactly
+ * one courtesy word at each end (D1), from its own language: the bare word
+ * alone is a keyword (matched first, elsewhere), never a phrase.
+ *
+ * CANCEL and CANCELAR are deliberately EXCLUDED (orchestrator, 2026-09-28,
+ * fix round 2): "Cancel please" / "Cancelar por favor" are almost always an
+ * appointment cancellation, not a request to stop texting — holding them as
+ * a phrase would lose Task 8's appointment To-do and block the reschedule.
+ * The bare keyword CANCEL/CANCELAR is unchanged: it still stops texts AND
+ * raises the appointment To-do (keywords.ts's CANCEL_WORDS, Task 8).
  */
 export const SINGLE_WORD_STOPS: readonly { word: string; language: "en" | "es" }[] = [
   { word: "stop", language: "en" }, { word: "stopall", language: "en" }, { word: "unsubscribe", language: "en" },
-  { word: "cancel", language: "en" }, { word: "end", language: "en" }, { word: "quit", language: "en" },
-  { word: "revoke", language: "en" }, { word: "optout", language: "en" },
+  { word: "end", language: "en" }, { word: "quit", language: "en" }, { word: "revoke", language: "en" },
+  { word: "optout", language: "en" }, { word: "opt out", language: "en" }, { word: "stop all", language: "en" },
   { word: "parar", language: "es" }, { word: "detener", language: "es" }, { word: "alto", language: "es" },
-  { word: "cancelar", language: "es" }, { word: "baja", language: "es" }, { word: "nomas", language: "es" },
-  { word: "no mas", language: "es" },
+  { word: "baja", language: "es" }, { word: "nomas", language: "es" }, { word: "no mas", language: "es" },
 ];
 
 /** "lista de espera" is a waiting list: a list phrase followed by "de espera" does not count. */

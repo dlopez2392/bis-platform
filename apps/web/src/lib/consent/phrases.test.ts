@@ -28,6 +28,8 @@ const EXPECTED_EN = [
   "no more texting", "do not contact me", "dont contact me",
   // danlo, 2026-09-28 (D2):
   "opt me out", "quit texting me", "leave me alone", "i dont want these texts", "i do not want these texts",
+  // orchestrator, 2026-09-28, fix round 2:
+  "i dont want texts", "i dont want your texts", "i do not want texts",
 ];
 const EXPECTED_ES = [
   "no quiero mas mensajes", "no quiero mensajes", "no mas mensajes", "no mas textos", "numero equivocado",
@@ -39,6 +41,9 @@ const EXPECTED_ES = [
   // danlo, 2026-09-28 (D2):
   "borrenme de su lista", "borrenme de la lista", "borreme de su lista", "borreme de la lista",
   "borrame de su lista", "borrame de la lista", "no quiero promociones",
+  // orchestrator, 2026-09-28, fix round 2:
+  "no quiero mas promociones", "no quiero sus promociones", "no quiero ofertas", "no quiero mas ofertas",
+  "no quiero publicidad", "no quiero mas publicidad", "este no es mi numero", "se equivocaron de numero",
 ];
 const EXPECTED_VERB_FORMS = [
   "no me manden", "no me mande", "no me mandes", "no me envien", "no me envie", "no me envies",
@@ -78,15 +83,16 @@ const EXPECTED_WHOLE = [
 const EXPECTED_REPEATED = [
   { word: "stop", language: "en" }, { word: "parar", language: "es" }, { word: "alto", language: "es" }, { word: "baja", language: "es" },
 ];
-// danlo, 2026-09-28 (D1): every STOP-kind keyword from keywords.ts, plus "no mas" (the two-word
-// spelling of NOMAS, since this module's normaliser does not collapse inner spaces).
+// danlo, 2026-09-28 (D1): every STOP-kind keyword from keywords.ts, plus the spaced spellings
+// "no mas", "opt out", "stop all" (this module's normaliser does not collapse inner spaces) —
+// EXCEPT cancel/cancelar (orchestrator, fix round 2: "Cancel please" reads as an appointment
+// cancellation, not a stop; the bare keyword still stops texts AND raises the To-do, unchanged).
 const EXPECTED_SINGLE_WORD_STOPS = [
   { word: "stop", language: "en" }, { word: "stopall", language: "en" }, { word: "unsubscribe", language: "en" },
-  { word: "cancel", language: "en" }, { word: "end", language: "en" }, { word: "quit", language: "en" },
-  { word: "revoke", language: "en" }, { word: "optout", language: "en" },
+  { word: "end", language: "en" }, { word: "quit", language: "en" }, { word: "revoke", language: "en" },
+  { word: "optout", language: "en" }, { word: "opt out", language: "en" }, { word: "stop all", language: "en" },
   { word: "parar", language: "es" }, { word: "detener", language: "es" }, { word: "alto", language: "es" },
-  { word: "cancelar", language: "es" }, { word: "baja", language: "es" }, { word: "nomas", language: "es" },
-  { word: "no mas", language: "es" },
+  { word: "baja", language: "es" }, { word: "nomas", language: "es" }, { word: "no mas", language: "es" },
 ];
 const VERB_WITH_WORD = EXPECTED_VERB_FORMS.flatMap((v) => EXPECTED_MESSAGE_WORDS.map((w) => `${v} ${w}`));
 const VERB_WITH_END = EXPECTED_VERB_FORMS.flatMap((v) => EXPECTED_END_OBJECTS.map((e) => `${v} ${e}`));
@@ -250,9 +256,15 @@ describe("matchPhrase — the orchestrator amendment (2026-09-28, dispatch-task-
     expect(matchPhrase("Borren mi número de la cita")).toBeNull();
   });
 
-  it("no whole-message phrase equals or contains another as whole words — the pairwise sentence/verb check above does not cover WHOLE_MESSAGE_PHRASES (mutation: add 'mi numero' alone to WHOLE_MESSAGE_PHRASES → it is contained in 'borren mi numero', FAILS)", () => {
+  it("no whole-message phrase equals or contains another as whole words — the pairwise sentence/verb check above does not cover WHOLE_MESSAGE_PHRASES (mutation: add 'mi numero' alone to WHOLE_MESSAGE_PHRASES → it is contained in 'borren mi numero', FAILS naming the pair)", () => {
+    // Offenders collected in plain JS and asserted ONCE (review perf fix, fix round 2):
+    // one `expect` per pair times out on a growing list (O(n²) `expect` calls, each with
+    // vitest's own diffing overhead, is much slower than the same O(n²) comparisons in a
+    // plain loop) — see the sentence-phrase version of this test below for the measured cost.
     const phrases = WHOLE_MESSAGE_PHRASES.map((w) => w.phrase);
-    for (const p of phrases) for (const q of phrases) if (p !== q) expect(` ${p} `.includes(` ${q} `), `${p} ⊃ ${q}`).toBe(false);
+    const offenders: string[] = [];
+    for (const p of phrases) for (const q of phrases) if (p !== q && ` ${p} `.includes(` ${q} `)) offenders.push(`${p} ⊃ ${q}`);
+    expect(offenders).toEqual([]);
   });
 });
 
@@ -282,7 +294,7 @@ describe("matchPhrase — D1 (danlo, 2026-09-28): a single stop word with ONE co
     expect(matchPhrase("Por favor alto mañana")).toBeNull();
   });
 
-  it("none of the single-word-stop + courtesy combos is a keyword or a YES/NO answer (mutation: add a courtesy word that collides, e.g. reusing a YES/NO word → FAILS)", () => {
+  it("none of the single-word-stop + courtesy combos is a keyword or a YES/NO answer (mutation: add 'all' to EN_COURTESY_TRAIL → 'stop' + 'all' = 'stop all' collides with the STOPALL keyword, FAILS)", () => {
     const combos = SINGLE_WORD_STOPS.flatMap((s) => {
       const lead = s.language === "en" ? EN_COURTESY_LEAD : ES_COURTESY_LEAD;
       const trail = s.language === "en" ? EN_COURTESY_TRAIL : ES_COURTESY_TRAIL;
@@ -292,6 +304,38 @@ describe("matchPhrase — D1 (danlo, 2026-09-28): a single stop word with ONE co
       expect(matchKeyword(p), p).toBeNull();
       expect(matchConfirmationReply(p), p).toBeNull();
     }
+  });
+
+  it.each(["Opt out please", "Please opt out", "Opt-out please", "Stop all please"] as const)(
+    "%j holds — the spaced spellings of OPTOUT and STOPALL count too (mutation: drop 'opt out'/'stop all' from SINGLE_WORD_STOPS → FAILS)",
+    (text) => {
+      expect(matchPhrase(text)?.language).toBe("en");
+      expect(matchPhrase(text)?.phrase).toMatch(/^opt out$|^stop all$/);
+    },
+  );
+
+  it.each(["Cancel please", "Please cancel", "Cancelar por favor", "Ya cancelar"] as const)(
+    "%j does NOT hold — cancel/cancelar are excluded from SINGLE_WORD_STOPS (orchestrator, fix round 2: an appointment cancellation, not a stop; mutation: re-add cancel/cancelar to SINGLE_WORD_STOPS → FAILS)",
+    (text) => {
+      expect(matchPhrase(text)).toBeNull();
+    },
+  );
+
+  it("leading 'gracias' (Spanish) and leading 'thanks' (English) are courtesy words too (orchestrator, fix round 2; mutation: drop 'gracias' from ES_COURTESY_LEAD or 'thanks' from EN_COURTESY_LEAD → FAILS)", () => {
+    expect(matchPhrase("Gracias, no me escriban")).toEqual({ phrase: "no me escriban", language: "es" });
+    expect(matchPhrase("Thanks, stop")).toEqual({ phrase: "stop", language: "en" });
+  });
+
+  it("every SINGLE_WORD_STOPS entry, spaces removed, is a stop per matchKeyword (mutation: add a non-stop word to SINGLE_WORD_STOPS → FAILS naming it)", () => {
+    for (const s of SINGLE_WORD_STOPS) expect(matchKeyword(s.word)?.kind, s.word).toBe("stop");
+  });
+
+  it("every STOP-kind keyword except CANCEL/CANCELAR is present in SINGLE_WORD_STOPS, and cancel/cancelar are absent (decision 4; mutation: remove 'baja' from SINGLE_WORD_STOPS → FAILS)", () => {
+    for (const w of ["stop", "stopall", "unsubscribe", "end", "quit", "revoke", "optout", "parar", "detener", "alto", "baja", "nomas"]) {
+      expect(SINGLE_WORD_STOPS.some((s) => s.word === w), w).toBe(true);
+    }
+    expect(SINGLE_WORD_STOPS.some((s) => s.word === "cancel")).toBe(false);
+    expect(SINGLE_WORD_STOPS.some((s) => s.word === "cancelar")).toBe(false);
   });
 });
 
@@ -353,10 +397,19 @@ describe("the lists themselves", () => {
     }
   });
 
-  it("no sentence phrase contains another as whole words, so their order never changes WHETHER a text holds (review M1; mutation: add \"ya no me mande\" to ES_VERB_FORMS → \"ya no me mande mensajes\" contains \"no me mande mensajes\", FAILS)", () => {
+  it("no sentence phrase contains another as whole words, so their order never changes WHETHER a text holds (review M1; mutation: add \"ya no me mande\" to ES_VERB_FORMS → \"ya no me mande mensajes\" contains \"no me mande mensajes\", FAILS naming the pair)", () => {
+    // Offenders collected in plain JS and asserted ONCE (review perf fix, fix round 2): with
+    // one `expect` call per pair, this test's ~465*465 ≈ 216k pairs (37 verb forms * 11 message
+    // words = 407 generated phrases, plus the sentence lists) took 3.8-4.4s and sometimes hit
+    // vitest's 5s per-test timeout (STACK_TRACE_ERROR, no assertion) — the O(n²) `expect` calls'
+    // own diffing/tracking overhead, not the O(n²) comparisons themselves, which are fast in a
+    // plain loop. Collecting into an array and asserting once names every offending pair while
+    // running in milliseconds. Do NOT raise the timeout — fix the assertion shape instead.
     const verbPhrases = ES_VERB_FORMS.flatMap((v) => ES_MESSAGE_WORDS.map((w) => `${v} ${w}`));
     const all = [...PHRASES_EN, ...PHRASES_ES, ...verbPhrases];
-    for (const p of all) for (const q of all) if (p !== q) expect(` ${p} `.includes(` ${q} `), `${p} ⊃ ${q}`).toBe(false);
+    const offenders: string[] = [];
+    for (const p of all) for (const q of all) if (p !== q && ` ${p} `.includes(` ${q} `)) offenders.push(`${p} ⊃ ${q}`);
+    expect(offenders).toEqual([]);
   });
 
   it("no phrase is a keyword, and no phrase is itself a YES/NO answer as the automation engine reads one, so YES/NO and a phrase can never both fire on one text (spec §4.2 step 5, corrected S5; the engine's own exported matcher — review R2-m14; mutation: add 'no' to PHRASES_ES → FAILS)", () => {
@@ -378,10 +431,10 @@ describe("the lists themselves", () => {
     expect(ES_END_OBJECTS).toEqual(EXPECTED_END_OBJECTS);
     expect(WHOLE_MESSAGE_PHRASES).toEqual(EXPECTED_WHOLE);
     expect(REPEATED_KEYWORDS).toEqual(EXPECTED_REPEATED);
-    expect(ES_COURTESY_LEAD).toEqual(["ya", "por favor", "porfa", "porfavor"]);
+    expect(ES_COURTESY_LEAD).toEqual(["ya", "por favor", "porfa", "porfavor", "gracias"]);
     expect(ES_COURTESY_TRAIL).toEqual(["por favor", "porfa", "porfavor", "gracias", "ya"]);
     expect(NOT_FOLLOWED_BY).toEqual([{ last: "lista", next: "de espera" }]);
-    expect(EN_COURTESY_LEAD).toEqual(["please"]);
+    expect(EN_COURTESY_LEAD).toEqual(["please", "thanks"]);
     expect(EN_COURTESY_TRAIL).toEqual(["please", "thanks", "thank you"]);
     expect(SINGLE_WORD_STOPS).toEqual(EXPECTED_SINGLE_WORD_STOPS);
   });

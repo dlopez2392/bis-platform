@@ -361,14 +361,20 @@ conflict, it holds: staff clear a false hold in one click.
   - **English:** stop texting, stop sending, stop messaging, stop contacting, dont text, do not text, dont message, do
     not message, no more texts, no more messages, remove me, take me off, unsubscribe me, wrong number, no more
     texting, do not contact me, dont contact me, opt me out, quit texting me, leave me alone, i dont want these texts,
-    i do not want these texts (the last five, danlo, 2026-09-28, D2).
+    i do not want these texts (the last five, danlo, 2026-09-28, D2), i dont want texts, i dont want your texts, i do
+    not want texts (orchestrator, fix round 2).
   - **Spanish, about messages on their own:** no quiero mas mensajes, no quiero mensajes, no quiero sus mensajes, no
-    mas mensajes, no mas textos, numero equivocado, no quiero promociones; and quitenme / quiteme / quitame / saquenme
-    / saqueme / sacame / borrenme / borreme / borrame de su lista or de la lista. Any "… de la lista …" holds, "Quítame
-    de la lista del sábado y ponme el domingo" included (danlo's list form); only "lista de espera" (a waiting list)
-    does not. ("no quiero sus mensajes" added by the orchestrator, 2026-09-28, dispatch-task-4: it holds anywhere,
-    like "no quiero mensajes". "borrenme / borreme / borrame de su/la lista" and "no quiero promociones" added by
-    danlo, 2026-09-28, D2.)
+    mas mensajes, no mas textos, numero equivocado, este no es mi numero, se equivocaron de numero, no quiero
+    promociones, no quiero mas promociones, no quiero sus promociones, no quiero ofertas, no quiero mas ofertas, no
+    quiero publicidad, no quiero mas publicidad; and quitenme / quiteme / quitame / saquenme / saqueme / sacame /
+    borrenme / borreme / borrame de su lista or de la lista. Any "… de la lista …" holds, "Quítame de la lista del
+    sábado y ponme el domingo" included (danlo's list form); only "lista de espera" (a waiting list) does not. ("no
+    quiero sus mensajes" added by the orchestrator, 2026-09-28, dispatch-task-4: it holds anywhere, like "no quiero
+    mensajes". "borrenme / borreme / borrame de su/la lista" and "no quiero promociones" added by danlo, 2026-09-28,
+    D2. "este no es mi numero" / "se equivocaron de numero" — same class as "numero equivocado" — and the six "no
+    quiero … promociones/ofertas/publicidad" literals, added by the orchestrator, fix round 2; kept as their own
+    literals rather than a general "no quiero" verb form, which would also have newly held bare "no quiero mas" /
+    "no quiero nada" — unrequested.)
 - **Spanish verb forms, ONLY ABOUT MESSAGES** (danlo): no me manden / mande / mandes / envien / envie / envies /
   escriban / escriba / escribas; dejen / deje / deja de mandar(me) / enviar(me) / escribir(me); no quiero recibir; no
   me vuelvan / vuelva / vuelvas a mandar / enviar; no quiero que me manden / envien / escriban (D2, the subjunctive
@@ -390,8 +396,9 @@ conflict, it holds: staff clear a false hold in one click.
   escriban / escriba / escribas", "no me vuelvan / vuelva / vuelvas a escribir", and "no quiero que me escriban" (D2,
   the bare subjunctive form — escribir is always about messages, so it holds bare like the other escribir forms).
   They count ONLY when they are the
-  whole message, punctuation aside; the Spanish ones may carry ONE leading "ya" / "por favor" / "porfa" / "porfavor"
-  and ONE trailing "por favor" / "porfa" / "porfavor" / "gracias" / "ya" (orchestrator). "Please stop!!", "¡Bórreme!",
+  whole message, punctuation aside; the Spanish ones may carry ONE leading "ya" / "por favor" / "porfa" / "porfavor" /
+  "gracias" (the last one added in fix round 2, e.g. "Gracias, no me escriban") and ONE trailing "por favor" /
+  "porfa" / "porfavor" / "gracias" / "ya" (orchestrator). "Please stop!!", "¡Bórreme!",
   "Ya no me escriban", "No me escriban, gracias", "Borren mi número" and "Por favor borre mi número" hold; "Please
   stop by Thursday", "Bórreme la cita del lunes", "No me escriba el martes, mejor llámeme", "Ya no me escriba, yo le
   llamo", "Borre mi número viejo, use el nuevo" (a number change) and "Borren mi número de la cita" (an appointment
@@ -402,13 +409,19 @@ conflict, it holds: staff clear a false hold in one click.
 - **A stop word repeated as the whole message:** "stop stop", "parar parar", "alto alto", "baja baja", any number of
   repeats (English also with one "please" at either end, Spanish with the courtesy words); one word on its own is a
   keyword (decision 10), not a phrase.
-- **A single stop word with ONE courtesy word** (danlo, 2026-09-28, D1) is a whole-message hold, not a keyword stop:
-  every STOP-kind keyword (decision 10) plus "no mas" (the two-word spelling of NOMAS, since the phrase matcher's
-  normaliser — unlike the keyword matcher's — does not collapse inner spaces), each with one Spanish courtesy word
-  above or, in English, one leading "please" / one trailing "please", "thanks" or "thank you". "Baja por favor",
-  "Alto, por favor", "Parar porfa", "Ya baja", "No más, gracias", "Ya no más", "No más por favor", "Detener gracias",
-  "Stop thanks" and "Stop thank you" hold; the bare word alone is a keyword (matched first, elsewhere — this rule
-  never claims it), and a longer text is neither ("Alto, por favor mañana a las 3" holds nothing).
+- **A single stop word with ONE courtesy word at EACH end** (danlo, 2026-09-28, D1) is a whole-message hold, not a
+  keyword stop: every STOP-kind keyword (decision 10) plus the spaced spellings "no mas" (NOMAS), "opt out" (OPTOUT)
+  and "stop all" (STOPALL) — the phrase matcher's normaliser, unlike the keyword matcher's, does not collapse inner
+  spaces — EXCEPT cancel and cancelar (orchestrator, fix round 2: "Cancel please" / "Cancelar por favor" almost
+  always mean an appointment cancellation, not a stop; holding them as a phrase would lose the appointment To-do and
+  block the reschedule — the bare keyword CANCEL/CANCELAR is unaffected, still a stop AND the To-do, decision in
+  step 2 above). Each qualifying word holds with one Spanish courtesy word above (now including leading "gracias")
+  or, in English, one leading "please" / "thanks" or one trailing "please", "thanks" or "thank you". "Baja por
+  favor", "Alto, por favor", "Parar porfa", "Ya baja", "No más, gracias", "Ya no más", "No más por favor", "Detener
+  gracias", "Stop thanks", "Stop thank you", "Opt out please", "Please opt out", "Opt-out please" and "Stop all
+  please" hold; "Cancel please", "Please cancel", "Cancelar por favor" and "Ya cancelar" do NOT; the bare word alone
+  is a keyword (matched first, elsewhere — this rule never claims it), and a longer text is neither ("Alto, por
+  favor mañana a las 3" holds nothing).
 - No sentence phrase contains another, so the order of the lists never changes whether a text holds; nor does any
   whole-message phrase contain another (checked separately — that pairwise check does not cover them).
 
