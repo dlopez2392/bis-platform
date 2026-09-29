@@ -5,7 +5,8 @@ import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { m } from "@/lib/messages";
-import { flipMarketingOptOut, optOutSinceLine, runGuarded, type OptOutZone } from "@/lib/contacts/marketing-optout";
+import { flipMarketingOptOut, optOutSinceLine, type OptOutZone } from "@/lib/contacts/marketing-optout";
+import { runGuarded } from "@/lib/ui/guarded-run";
 import { setMarketingEmailOptOutAction } from "./actions";
 
 /**

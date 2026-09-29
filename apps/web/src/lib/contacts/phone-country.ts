@@ -1,6 +1,6 @@
 import type { PhoneCountry } from "@bis/db/phone";
 import { m } from "@/lib/messages";
-import type { OptOutToast } from "@/lib/contacts/marketing-optout";
+import type { ToastLike as OptOutToast } from "@/lib/ui/guarded-run";
 
 /**
  * The Texts row's Check number state (consent chain spec §6, F-009): "This

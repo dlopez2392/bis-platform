@@ -6,7 +6,7 @@ import type { PhoneCountry } from "@bis/db/phone";
 import { Button } from "@/components/ui/button";
 import { DotPill } from "@/components/dot-pill";
 import { m } from "@/lib/messages";
-import { runGuarded } from "@/lib/contacts/marketing-optout";
+import { runGuarded } from "@/lib/ui/guarded-run";
 import { PHONE_CHECK_TREATMENT, pickPhoneCountry } from "@/lib/contacts/phone-country";
 import { setPhoneCountryAction, undoPhoneCountryAction } from "./actions";
 

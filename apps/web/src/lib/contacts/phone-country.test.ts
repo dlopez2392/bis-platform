@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { m } from "@/lib/messages";
-import type { OptOutToast } from "./marketing-optout";
+import type { ToastLike as OptOutToast } from "@/lib/ui/guarded-run";
 import {
   PHONE_CHECK_TREATMENT, pickPhoneCountry,
   type PhoneCountryPickResult, type PhoneCountryUndoResult, type PhoneCountryPrevious,
