@@ -27,7 +27,10 @@ import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
  *   3. `resolveSmsSender`: A2P approved and a live number, else blocked
  *      with its reason (its own read error THROWS, as it always has, into
  *      each caller's existing catch);
- *   4. the ledger: stopped → blocked `stopped`, held → blocked `held`;
+ *   4. the ledger: stopped → blocked `stopped`, held → blocked `held` —
+ *      except `consent.stop_confirmation`, the one send let through a
+ *      stopped address, and only when it answers the newest `revoked` row
+ *      and that row is under five minutes old (`answersStop`);
  *   5. an unconfirmed number (the normalisation said so, or the contact's
  *      `phone_country_unconfirmed`, unless the number came from the carrier)
  *      → blocked `unconfirmed_number`;
@@ -87,13 +90,21 @@ export type SmsBlockReason =
  *  minutes is consented, choice 18). */
 export const STOP_CONFIRMATION_WINDOW_MS = 5 * 60 * 1000;
 
+/** How far into the future `since` may read and still count as "now-ish":
+ *  ordinary clock skew between whatever wrote the ledger row and this
+ *  process, not a sign the row is lying about when the stop happened. A
+ *  `since` further ahead than this is wrong data, not skew, and must not
+ *  read as freshly answered (review, fix round 1). */
+const CLOCK_SKEW_ALLOWANCE_MS = 60_000;
+
 /** Does a stop confirmation answer THIS stop: the newest row, still young? Pure. */
 export function answersStop(
   state: { eventId: string; since: string }, answersEventId: string | null, now: Date,
 ): boolean {
   if (answersEventId === null || state.eventId !== answersEventId) return false;
   const age = now.getTime() - Date.parse(state.since);
-  return Number.isFinite(age) && age < STOP_CONFIRMATION_WINDOW_MS;
+  if (!Number.isFinite(age)) return false;
+  return age >= -CLOCK_SKEW_ALLOWANCE_MS && age < STOP_CONFIRMATION_WINDOW_MS;
 }
 
 const CLEARED: unique symbol = Symbol("cleared-sms");

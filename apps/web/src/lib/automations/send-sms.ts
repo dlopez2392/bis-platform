@@ -85,12 +85,13 @@ export class SmsDeferred extends Error {
   }
 }
 
-/** The gate said "not to this number": holdOrSend logs the row `skipped`
- *  with the reason. `ledger_unavailable` is never one of these: it is an
- *  outage, re-held for LEDGER_RETRY_MS (SmsDeferred). */
 /** An automation never sends a consent reply, so the stop confirmation's own
  *  refusal is not one of its reasons (hold-or-send.ts's BLOCK_REASONS). */
 export type AutomationBlockReason = Exclude<SmsBlockReason, "ledger_unavailable" | "stop_confirmation_stale">;
+
+/** The gate said "not to this number": holdOrSend logs the row `skipped`
+ *  with the reason. `ledger_unavailable` is never one of these: it is an
+ *  outage, re-held for LEDGER_RETRY_MS (SmsDeferred). */
 export class SmsBlocked extends Error {
   constructor(readonly reason: AutomationBlockReason) {
     super(`automation sms not sent: ${reason}`);

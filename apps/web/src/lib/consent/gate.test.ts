@@ -390,15 +390,47 @@ describe("the stop confirmation: the only send to a stopped address (spec §4.2,
     }
   });
 
-  it("the consent kinds go at 03:00 (choice 18) and carry no footer (mutation: give consent.help automated hours → deferred, FAILS)", async () => {
+  it("the consent kinds go at 03:00 (choice 18) and carry no footer (mutation: give consent.help automated hours → deferred, FAILS; mutation: give consent.help footer stop_line → the opt-out disclosure is appended, FAILS)", async () => {
+    // No "STOP" instruction in this body (unlike the other cases in this
+    // describe block): withOptOut's hasOptOutInstruction guard would treat a
+    // body that already reads as an opt-out instruction as already carrying
+    // the disclosure, making a wrong footer: "stop_line" invisible here.
     const night = new Date("2026-10-07T08:00:00Z"); // 03:00 in Chicago
-    const d = await decideSms(DB, base({ kind: "consent.help", body: "956 Woodworks: Reply STOP to stop texts from us.", now: night }));
-    expect(d.kind === "clear" && d.send.body).toBe("956 Woodworks: Reply STOP to stop texts from us.");
+    const d = await decideSms(DB, base({ kind: "consent.help", body: "956 Woodworks: Call or text this number for help.", now: night }));
+    expect(d.kind === "clear" && d.send.body).toBe("956 Woodworks: Call or text this number for help.");
   });
 
   it("answersStop, pure: an unparseable 'since' is never within the window (mutation: treat NaN as 0 → true, FAILS)", () => {
     expect(answersStop({ eventId: "e", since: "not a date" }, "e", DAY)).toBe(false);
     expect(answersStop({ eventId: "e", since: DAY.toISOString() }, "e", DAY)).toBe(true);
     expect(answersStop({ eventId: "e", since: DAY.toISOString() }, null, DAY)).toBe(false);
+  });
+
+  it("answersStop, pure: a 'since' from the future is refused past a small clock-skew allowance, never read as freshly answered (mutation: drop the skew floor → an hour in the future reads as answered, FAILS)", () => {
+    const anHourAhead = new Date(DAY.getTime() + 60 * 60_000).toISOString();
+    const thirtySecondsAhead = new Date(DAY.getTime() + 30_000).toISOString();
+    expect(answersStop({ eventId: "e", since: anHourAhead }, "e", DAY)).toBe(false);
+    expect(answersStop({ eventId: "e", since: thirtySecondsAhead }, "e", DAY)).toBe(true);
+  });
+
+  it("the deliver re-check judges the five minutes at the REAL clock at delivery, never a fixed or earlier one (mutation: re-check at a fixed or earlier clock → sent, FAILS)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(DAY);
+    try {
+      // Stopped 2 minutes before DAY: still fresh when decideSms clears it
+      // (decideSms judges against req.now, pinned to DAY by `base`/`confirm`).
+      db.readConsentState.mockResolvedValue(stopped("rev_1", new Date(DAY.getTime() - 2 * 60_000).toISOString()));
+      const d = await decideSms(DB, confirm());
+      if (d.kind !== "clear") throw new Error(`expected clear, got ${d.kind}`);
+      // Advance the wall clock past the five-minute window (the stop is now
+      // 5:01 old): deliverSms's re-check calls `new Date()` directly, so if
+      // it judged against a fixed or earlier instant instead, this would
+      // still read as fresh and the text would go.
+      vi.setSystemTime(new Date(DAY.getTime() + 3 * 60_000 + 1_000));
+      expect(await deliverSms(DB, d.send)).toEqual({ kind: "blocked", reason: "stopped" });
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
