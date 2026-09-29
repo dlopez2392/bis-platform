@@ -33,14 +33,19 @@
 --    the id of a customer's own STOP could stop over it and then undo its
 --    own stop (plan review R3-C1). A 'resubscribed' row is refused outright
 --    for any method outside {start_keyword, staff, staff_undo,
---    unsubscribe_page} — the first is the customer's own START, the last is
+--    unsubscribe_page} - the first is the customer's own START, the last is
 --    reserved for PR-3's one-click email resubscribe (choice 28); without
 --    this a stray method such as 'form' under guard 'none' could lift a
 --    stop no grant is allowed to lift (review m1, B2; review R1-N10). A
---    future-dated p_occurred_at (beyond the table's own 5-minute skew
---    allowance) is refused too, so a backfill can never outrank a real event
---    that has not happened yet (review m2, B11) — only a backfill supplies
---    this argument, and it always writes a past time.
+--    p_occurred_at later than clock_timestamp() RAISES (errcode 22023, review
+--    m2, F3) rather than being refused quietly, so a bad backfill fails
+--    loudly instead of silently skipping an opt-out the caller believed it
+--    recorded; 0054's own consent_events_occurred_at_sane CHECK allows up to
+--    created_at + 5 minutes of clock skew, which is exactly why this rule
+--    exists (a stop dated now+4 minutes would pass THAT check yet still
+--    outrank a real START that lands a minute from now, review m2, B11).
+--    Only a backfill supplies this argument, and it always writes a past
+--    time.
 --    The guard unless_customer_stopped refuses only while the newest deciding
 --    row is the customer's OWN stop (keyword, carrier_block, backfill_telnyx,
 --    unsubscribe_link, one_click): a customer's STOP over a staff stop is
@@ -118,6 +123,20 @@ begin
     raise exception 'append_consent_event: unknown guard %', coalesce(p_guard, 'null') using errcode = '22023';
   end if;
 
+  -- m2 (review, F3): a future p_occurred_at RAISES rather than answering
+  -- 'refused', so a bad backfill fails loudly instead of silently skipping an
+  -- opt-out the caller believed it recorded. This refuses ANY time after
+  -- clock_timestamp(), not merely one beyond 0054's own
+  -- consent_events_occurred_at_sane CHECK (that CHECK allows up to
+  -- created_at + 5 minutes of clock skew, which is exactly why this rule
+  -- exists: a stop dated now+4 minutes would pass THAT check yet still
+  -- outrank a real START that lands a minute from now, review m2, B11).
+  -- Only a backfill supplies this argument, and it always writes a past
+  -- time.
+  if p_occurred_at is not null and p_occurred_at > pg_catalog.clock_timestamp() then
+    raise exception 'append_consent_event: p_occurred_at is in the future' using errcode = '22023';
+  end if;
+
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(p_account_id::text || '|' || p_channel || '|' || p_address, 0));
 
@@ -154,15 +173,6 @@ begin
     when 'if_newest' then v_prior_id is not distinct from p_expect_id
   end;
 
-  -- m2 (review): a future-dated write must never outrank a real event that
-  -- happens between now and then (a stop dated now+4 minutes would sort
-  -- ahead of a START that lands a minute from now). Only a backfill supplies
-  -- p_occurred_at, and it always writes a PAST time (0054's own
-  -- consent_events_occurred_at_sane CHECK already refuses a future one at
-  -- the table level; this refuses it here too, before the lock's write,
-  -- naming it in the same 'refused' shape as every other rule below).
-  v_ok := v_ok and (p_occurred_at is null or p_occurred_at <= pg_catalog.clock_timestamp());
-
   if p_action = 'hold_released' then
     v_ok := v_ok and v_prior_action = 'held';
   elsif p_action = 'held' then
@@ -187,7 +197,7 @@ begin
     v_ok := v_ok and v_prior_action = 'revoked' and v_prior_method = 'staff';
   elsif p_action = 'resubscribed' and p_method not in ('start_keyword', 'unsubscribe_page') then
     -- m1 (review, B2; review R1-N10 already named this gap): a resubscribed
-    -- row is written for exactly four methods — start_keyword (a customer's
+    -- row is written for exactly four methods - start_keyword (a customer's
     -- own START), staff and staff_undo (both gated above by their own
     -- rules), and unsubscribe_page (reserved for PR-3's one-click email
     -- resubscribe, choice 28). Reaching this branch means p_method is none

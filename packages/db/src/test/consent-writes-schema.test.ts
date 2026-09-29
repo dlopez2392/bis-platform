@@ -170,13 +170,13 @@ describe("0055 append_consent_event: the guards", () => {
         if (method === "free_text") {
           // free_text's own state rule needs a hold to land on, whatever the guard:
           const hold = await append(c, { account: a, action: "held", method: "free_text", guard: "if_allowed" });
-          await append(c, { account: a, action: "revoked", method, actor, guard: "if_newest", expect: hold.event_id });
+          expect((await append(c, { account: a, action: "revoked", method, actor, guard: "if_newest", expect: hold.event_id })).outcome).toBe("appended");
         } else {
           // Every other method's first write lands on a fresh (allowed) address under guard 'none':
           // 'staff' and 'backfill_0049' each require this to be true anyway (their own state rule),
           // and every other method has no state rule at all for 'revoked', so 'none' is the only way
           // to land the row this test needs regardless of which methods CUSTOMER_STOP_METHODS names.
-          await append(c, { account: a, action: "revoked", method, actor, guard: "none" });
+          expect((await append(c, { account: a, action: "revoked", method, actor, guard: "none" })).outcome).toBe("appended");
         }
         const again = await append(c, { account: a, action: "revoked", method: "keyword", guard: "unless_customer_stopped" });
         expect(again.outcome).toBe(CUSTOMER_STOP_METHODS.includes(method) ? "refused" : "appended");
@@ -265,11 +265,16 @@ describe("0055 append_consent_event: m1/m2 (review, orchestrator fixes made dire
       expect((await append(c, { account: b, action: "resubscribed", method: "unsubscribe_page", guard: "if_stopped_or_held" })).outcome).toBe("appended");
     }));
 
-  it("a future p_occurred_at is refused outright, whatever the guard — a stop dated ahead of now can never outrank a real event that has not happened yet; a past time (every real backfill's own shape) still works (review m2, B11: a stop dated now+4 min would otherwise outrank a real START; mutation: drop `v_ok := v_ok and (p_occurred_at is null or p_occurred_at <= clock_timestamp())` → the future stop appends, FAILS)", () =>
+  it("a p_occurred_at after clock_timestamp() RAISES 22023 rather than answering 'refused', so a bad backfill fails loudly instead of silently skipping the opt-out it names; a past time (every real backfill's own shape) still appends (review m2, F3, B11: a stop dated now+4 min would otherwise outrank a real START; mutation: drop the `if p_occurred_at is not null and p_occurred_at > clock_timestamp() then raise …` block → the future stop appends instead of raising, FAILS)", () =>
     withRollback(async (c) => {
       const a = await account(c, "b11");
       const future = new Date(Date.now() + 4 * 60 * 1000).toISOString();
-      expect((await append(c, { account: a, action: "revoked", method: "backfill_telnyx", guard: "none", at: future })).outcome).toBe("refused");
+      await c.query("set local role service_role");
+      const e = await refusedWith(c,
+        "select * from public.append_consent_event($1, 'sms', $2, 'revoked', 'backfill_telnyx', 'none', null, null, null, null, null, '{}'::jsonb, $3)",
+        [a, ADDR, future]);
+      await c.query("reset role");
+      expect(e).toMatchObject({ code: "22023", message: expect.stringMatching(/p_occurred_at is in the future/) });
       expect((await append(c, { account: a, action: "revoked", method: "backfill_telnyx", guard: "none", at: "2026-01-01T10:00:00Z" })).outcome).toBe("appended");
     }));
 });

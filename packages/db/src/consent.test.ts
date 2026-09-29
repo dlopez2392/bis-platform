@@ -224,6 +224,11 @@ describe("appendConsentEventGuarded — the one write", () => {
     await expect(appendConsentEventGuarded(fakeDb({ rpc: { data: null, error: { message: "timeout" } } }).db, e, "none")).rejects.toThrow("append_consent_event failed: timeout");
     await expect(appendConsentEventGuarded(fakeDb({ rpc: { data: [], error: null } }).db, e, "none")).rejects.toThrow("returned no row");
     await expect(appendConsentEventGuarded(fakeDb({ rpc: { data: [{ outcome: "maybe" }], error: null } }).db, e, "none")).rejects.toThrow("unexpected answer");
+    // review F3: 0055's future-occurred_at RAISE (errcode 22023) is a PostgREST error like any
+    // other — it must surface as a THROWN error here too, never as a swallowed 'refused':
+    await expect(appendConsentEventGuarded(
+      fakeDb({ rpc: { data: null, error: { message: "p_occurred_at is in the future", code: "22023" } } }).db, e, "none",
+    )).rejects.toThrow("append_consent_event failed: p_occurred_at is in the future");
   });
 
   it("refuses an occurredAt that does not parse to a finite date, without writing (mutation: drop the parse-guard → the rpc runs, FAILS)", async () => {
