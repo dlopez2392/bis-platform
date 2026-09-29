@@ -85,6 +85,8 @@ test("an ambiguous number: stored +1 and flagged; Mexico (+52) rewrites it, Undo
   await expect(page.locator("[data-sonner-toast]").filter({ hasText: m["contact.phoneCountry.mxToast"] }))
     .toHaveAttribute("data-expanded", "true");
   await expect(row).toHaveCount(0);
+  // Review R3-I4: the pressed button is gone; the row's status line keeps the keyboard.
+  await expect(page.getByRole("dialog").getByTestId("texts-row-status")).toBeFocused();
   expect(await stored()).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
 
   await page.getByRole("button", { name: m["common.undo"] }).click();
@@ -109,6 +111,9 @@ test("a reload after a pick shows no Check number row: the server's answer, not 
   // resolves both; the exact heading only exists once the summary has
   // loaded, so the row assertion below reads loaded data, not a race.
   await expect(page.getByRole("dialog").getByText(m["drawer.recent"], { exact: true })).toBeVisible();
+  // The Texts row is its own read (consent chain PR-2): wait for it to have
+  // LOADED — a data-state — or the count below passes against its skeleton.
+  await expect(page.getByRole("dialog").getByTestId("texts-row")).toHaveAttribute("data-state", /.+/);
   await expect(page.getByRole("dialog").getByTestId("phone-country-row")).toHaveCount(0);
 });
 
@@ -121,7 +126,9 @@ test("a phone edited in the drawer into one that reads both ways raises the Chec
   // and the exact heading only exists once the summary has loaded, so the
   // row assertion below reads loaded data, not a race.
   await expect(drawer.getByText(m["drawer.recent"], { exact: true })).toBeVisible();
-  // The test above settled it as US: no row.
+  // The test above settled it as US: no row — once the Texts row has loaded
+  // (its own read since consent chain PR-2; the skeleton has no data-state).
+  await expect(drawer.getByTestId("texts-row")).toHaveAttribute("data-state", /.+/);
   await expect(drawer.getByTestId("phone-country-row")).toHaveCount(0);
 
   await drawer.getByRole("button", { name: /edit phone/i }).click();

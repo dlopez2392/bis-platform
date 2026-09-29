@@ -19,8 +19,8 @@ function harness(saveResults: Array<{ ok: true } | { ok: false; error: string } 
   const show = (checked: boolean) => { shown.push(checked); };
   let undo: (() => void) | null = null;
   const toast = {
-    success: vi.fn((...[, opts]: [string, { action: { label: string; onClick: () => void } }]) => {
-      undo = opts.action.onClick;
+    success: vi.fn((...[, opts]: [string, { action: { label: string; onClick: () => void } }?]) => {
+      undo = opts?.action.onClick ?? null;
     }),
     error: vi.fn(),
   } satisfies OptOutToast;

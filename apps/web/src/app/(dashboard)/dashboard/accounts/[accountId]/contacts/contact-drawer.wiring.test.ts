@@ -73,7 +73,10 @@ async function load(body: unknown, ok = true): Promise<unknown> {
   // starts at 0) — found by starting value, not hook order.
   const fetched = states.filter((s) => s.initial === null);
   expect(fetched).toHaveLength(1);
-  expect(effects).toHaveLength(1);
+  // Two effects since consent chain PR-2: the summary fetch (declared first,
+  // effects[0], the one this helper drives) and the Texts row's own fetch
+  // (effects[1], untouched here — its own tests drive it directly).
+  expect(effects).toHaveLength(2);
   effects[0]!();
   await vi.waitFor(() => expect(fetched[0]!.set).toHaveBeenCalled());
   expect(fetched[0]!.set).toHaveBeenCalledTimes(1);
@@ -138,7 +141,8 @@ describe("ContactDrawer: a fetch cleaned up while its body is still being read n
     renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
     const fetched = states.filter((s) => s.initial === null);
     expect(fetched).toHaveLength(1);
-    expect(effects).toHaveLength(1);
+    // Two effects since consent chain PR-2 (see `load()`'s own comment above).
+    expect(effects).toHaveLength(2);
     const cleanup = effects[0]!();
     expect(typeof cleanup).toBe("function");
     await vi.waitFor(() => expect(json).toHaveBeenCalledTimes(1));
@@ -182,29 +186,29 @@ describe("ContactDrawer: a fetch cleaned up while its body is still being read n
  * render. Source pins (no DOM renderer here); the e2e spec proves the
  * behaviour in a browser.
  */
-describe("the Check number row follows a phone edit", () => {
+describe("the Texts row follows the contact (consent chain PR-2)", () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
   const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
+  const row = strip(readFileSync(path.join(here, "texts-row.tsx"), "utf8"));
 
-  it("the drawer keys the row by the summary's flag (mutation: key by the contact alone → FAILS)", () => {
-    expect(drawer).toContain("key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`}");
+  it("the drawer reads the Texts row on its own, again on every summary re-read: a phone save, a pick, an Undo (mutation: drop retryNonce from the texts effect's deps → FAILS)", () => {
+    expect(drawer).toMatch(/\/texts`\)[\s\S]{0,900}?\}, \[accountId, contactId, retryNonce\]\);/);
   });
 
   it("the drawer re-reads its summary after a phone save (mutation: drop the nonce bump → FAILS)", () => {
     expect(drawer).toMatch(/if \(field === "phone"\) setRetryNonce\(\(n\) => n \+ 1\);/);
   });
 
-  it("the drawer re-reads its summary after a pick and after an Undo, and the row hands that on (re-review minor 1; mutation: drop the onChanged prop, or stop passing it to pickPhoneCountry → FAILS)", () => {
-    const row = strip(readFileSync(path.join(here, "phone-country-row.tsx"), "utf8"));
-    // Anchored on the row's own prop: TagsRow carries the same onChanged text.
-    expect(drawer).toMatch(/unconfirmed=\{load\.summary\.phone_country_unconfirmed\}\s*onChanged=\{\(\) => setRetryNonce\(\(n\) => n \+ 1\)\}/);
+  it("a row action or a pick makes the drawer re-read, and the row hands onChanged to the pick (re-review minor 1; mutation: drop the onChanged prop, or stop passing it to pickPhoneCountry → FAILS)", () => {
+    expect(drawer).toMatch(/<TextsRow[\s\S]{0,400}?onChanged=\{\(\) => setRetryNonce\(\(n\) => n \+ 1\)\}/);
     expect(row).toMatch(/run,\s*onChanged,\s*\)\);/);
   });
 
-  it("the full page keys the row by the page's flag (mutation: key by the contact alone → FAILS)", () => {
-    expect(panel).toContain("key={`phone-${contactId}-${phoneUnconfirmed}`}");
+  it("the full page hands the row the page's own Texts load and refreshes on change (mutation: pass a constant load → FAILS)", () => {
+    expect(panel).toMatch(/<TextsRow[\s\S]{0,300}?load=\{texts\}/);
+    expect(panel).toMatch(/onChanged=\{\(\) => router\.refresh\(\)\}/);
   });
 });
 
@@ -269,20 +273,20 @@ describe("the inline phone Undo is server-authoritative", () => {
 describe("the pick is judged against the phone the operator SAW (review I3, round 4)", () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const row = strip(readFileSync(path.join(here, "phone-country-row.tsx"), "utf8"));
+  const row = strip(readFileSync(path.join(here, "texts-row.tsx"), "utf8"));
   const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
-  const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
+  const page = strip(readFileSync(path.join(here, "[contactId]", "page.tsx"), "utf8"));
 
-  it("the row passes ITS OWN phone prop to setPhoneCountryAction, never a literal \"\" (mutation: setPhoneCountryAction(accountId, contactId, c) → FAILS)", () => {
+  it("the row passes ITS OWN phone to setPhoneCountryAction, never a literal \"\" (mutation: setPhoneCountryAction(accountId, contactId, c) → FAILS)", () => {
     expect(row).toContain("setPhoneCountryAction(accountId, contactId, c, phone)");
   });
 
-  it("the drawer's phone prop comes from the SUMMARY, never row.phone (the peek stub) or a literal \"\" (mutation: phone={row.phone ?? \"\"} → FAILS)", () => {
-    expect(drawer).toContain('phone={load.summary.phone ?? ""}');
-    expect(drawer).not.toMatch(/<PhoneCountryRow[\s\S]{0,400}?phone=\{row\.phone/);
+  it("that phone is the one the server read with the view (the Texts load), never the peek stub row.phone (mutation: phone={row.phone ?? \"\"} → FAILS)", () => {
+    expect(row).toContain('const phone = load.phone ?? "";');
+    expect(drawer).not.toMatch(/<TextsRow[\s\S]{0,400}?row\.phone/);
   });
 
-  it("the panel's phone prop comes from the real contact record, never a literal \"\" (mutation: phone={\"\"} → FAILS)", () => {
-    expect(panel).toContain('phone={contact.phone ?? ""}');
+  it("the full page's load carries the real contact record's phone (mutation: phone: null → FAILS)", () => {
+    expect(page).toContain("phone: contact.phone ?? null");
   });
 });

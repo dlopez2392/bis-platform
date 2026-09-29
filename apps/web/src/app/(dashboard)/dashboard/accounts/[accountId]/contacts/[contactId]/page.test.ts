@@ -32,12 +32,15 @@ vi.mock("@/lib/db", () => ({
   }),
 }));
 
+const listContactTasksMock = vi.fn(async (..._args: unknown[]) => [] as unknown[]);
+const holdOpenTaskIdsMock = vi.fn(async (..._args: unknown[]) => [] as string[]);
 const getContactMock = vi.fn();
 vi.mock("@bis/db", () => ({
   getContact: (...args: unknown[]) => getContactMock(...args),
   listContactTags: async () => [],
   listNotes: async () => [],
-  listContactTasks: async () => [],
+  listContactTasks: (...args: unknown[]) => listContactTasksMock(...args),
+  holdOpenTaskIds: (...args: unknown[]) => holdOpenTaskIdsMock(...args),
   listCustomFields: async () => [],
   listContactOpportunities: async () => [],
   listContactSubmissions: async () => [],
@@ -73,10 +76,13 @@ const recipientState = vi.fn();
 vi.mock("@/lib/consent/recipient-state", () => ({
   smsRecipientState: (...a: unknown[]) => recipientState(...a),
 }));
-const phoneRowProps = vi.fn();
-vi.mock("../phone-country-row", () => ({
-  PhoneCountryRow: (props: Record<string, unknown>) => { phoneRowProps(props); return null; },
+const textsRowProps = vi.fn();
+vi.mock("../texts-row", () => ({
+  TextsRow: (props: Record<string, unknown>) => { textsRowProps(props); return null; },
 }));
+// Consent chain PR-2: the Texts row's read, stubbed per test.
+const readTextsView = vi.fn();
+vi.mock("@/lib/consent/texts-view", () => ({ readTextsView: (...a: unknown[]) => readTextsView(...a) }));
 
 /** The switch's props, as the REAL panel hands them down — so this proves the
  *  zone reaches the switch, not merely the panel. */
@@ -161,7 +167,10 @@ describe("ContactDetailPage: the recipient's texts state", () => {
     getContactMock.mockReset().mockResolvedValue(CONTACT);
     recipientState.mockReset().mockResolvedValue({ kind: "ok" });
     timelineProps.mockClear();
-    phoneRowProps.mockClear();
+    textsRowProps.mockClear();
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    listContactTasksMock.mockReset().mockResolvedValue([]);
+    holdOpenTaskIdsMock.mockReset().mockResolvedValue([]);
   });
 
   it("a stopped number: the composer's line carries the stop date in the ACCOUNT's zone (mutation: format the date in UTC → 'Oct 4', FAILS)", async () => {
@@ -186,15 +195,37 @@ describe("ContactDetailPage: the recipient's texts state", () => {
     expect(timelineProps.mock.calls[0]![0]).toMatchObject({ smsBlockedLine: m["compose.smsStateUnknown"] });
   });
 
-  it("a stored number that reads both ways gets the Check number row, flag or not (mutation: pass the flag alone → FAILS)", async () => {
-    getContactMock.mockResolvedValue({ ...CONTACT, phone: "55 1234 5678", phone_country_unconfirmed: false });
+  it("the page hands the Texts row what the server read, the account's zone and the stored phone (spec §6; mutation: pass no load → FAILS)", async () => {
+    readTextsView.mockResolvedValue({ kind: "check_number" });
     await render();
-    expect(phoneRowProps.mock.calls[0]![0]).toMatchObject({ contactId: "ct1", unconfirmed: true });
+    expect(readTextsView).toHaveBeenCalledWith(expect.anything(), "acct1", expect.objectContaining({ id: "ct1" }));
+    expect(textsRowProps.mock.calls[0]![0]).toMatchObject({
+      contactId: "ct1", load: { status: "ready", view: { kind: "check_number" }, zone: "America/Chicago", phone: CONTACT.phone ?? null },
+    });
   });
 
-  it("a plainly US number does not", async () => {
-    getContactMock.mockResolvedValue({ ...CONTACT, phone: "(956) 292-1696", phone_country_unconfirmed: false });
+  it("an unreadable ledger gives the row its error state, never a thrown page (fails closed; mutation: let it throw → FAILS)", async () => {
+    readTextsView.mockRejectedValue(new Error("readConsentHistory failed: timeout"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
     await render();
-    expect(phoneRowProps.mock.calls[0]![0]).toMatchObject({ unconfirmed: false });
+    expect(textsRowProps.mock.calls[0]![0]).toMatchObject({ load: { status: "error" } });
+  });
+
+  it("the timeline is told exactly what holdOpenTaskIds answered for the page's own tasks, and an unreadable ledger hints every open linked one — never a Done that would be refused (review R3-N1, I4; mutation: pass [] on failure → FAILS; mutation: pass the fallback always → the first case FAILS)", async () => {
+    listContactTasksMock.mockResolvedValue([
+      { id: "t_hold", title: "Ana may have asked …", completed_at: null, consent_event_id: "h1" },
+      { id: "t_plain", title: "Call back", completed_at: null, consent_event_id: null },
+    ]);
+    // The hold was decided since: the read answers none, and the page passes none (not its own fallback).
+    holdOpenTaskIdsMock.mockResolvedValue([]);
+    await render();
+    expect(holdOpenTaskIdsMock).toHaveBeenCalledWith(expect.anything(), "acct1", [
+      expect.objectContaining({ id: "t_hold", consent_event_id: "h1" }), expect.objectContaining({ id: "t_plain", consent_event_id: null }),
+    ]);
+    expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({ holdOpenTaskIds: [] });
+    holdOpenTaskIdsMock.mockRejectedValue(new Error("readConsentEvent failed: timeout"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await render();
+    expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({ holdOpenTaskIds: ["t_hold"] });
   });
 });

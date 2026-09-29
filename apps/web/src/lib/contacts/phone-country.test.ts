@@ -34,8 +34,8 @@ function harness(o: {
   const shown: boolean[] = [];
   let undoClick: (() => unknown) | null = null;
   const toast = {
-    success: vi.fn((...[, opts]: [string, { action: { label: string; onClick: () => void } }]) => {
-      undoClick = opts.action.onClick;
+    success: vi.fn((...[, opts]: [string, { action: { label: string; onClick: () => void } }?]) => {
+      undoClick = opts?.action.onClick ?? null;
     }),
     error: vi.fn(),
   } satisfies OptOutToast;

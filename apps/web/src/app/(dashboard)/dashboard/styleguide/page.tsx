@@ -29,6 +29,7 @@ import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill"
 import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
 import { PHONE_CHECK_TREATMENT } from "@/lib/contacts/phone-country";
+import { TEXTS_TREATMENT } from "@/lib/consent/texts-row";
 import { BillingBanner } from "@/components/billing-banner";
 import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
 import { PAYMENT_PROCESSING } from "../accounts/[accountId]/billing/client-status";
@@ -172,17 +173,19 @@ export default async function StyleguidePage() {
           <div className="flex flex-wrap gap-2" data-testid="styleguide-confirm-reply">
             {(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)}
           </div>
-          {/* The contact Messages block's Texts row (consent chain PR-1):
-              its one state so far, Check number, a warning because the
-              operator must pick the country before anything is texted.
-              Read off lib/contacts/phone-country.ts, so it cannot drift. */}
+          {/* The contact Messages block's Texts row (consent chain PR-1 and
+              PR-2): its four states, each a dot + word. Allowed, Stopped and
+              On hold are read off lib/consent/texts-row.ts; Check number off
+              lib/contacts/phone-country.ts, so none can drift. */}
           <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-            …/contacts/phone-country-row.tsx · lib/contacts/phone-country.ts
+            …/contacts/texts-row.tsx · lib/consent/texts-row.ts · lib/contacts/phone-country.ts
           </p>
           <div className="flex flex-wrap items-center gap-2" data-testid="styleguide-texts-state">
             <span className="text-sm">{m["contact.messages.texts"]}</span>
+            <DotPill {...TEXTS_TREATMENT.allowed} dense data-status="allowed" />
+            <DotPill {...TEXTS_TREATMENT.stopped} dense data-status="stopped" />
+            <DotPill {...TEXTS_TREATMENT.held} dense data-status="held" />
             <DotPill {...PHONE_CHECK_TREATMENT} dense data-status="unconfirmed_number" />
-            <span className="text-xs text-muted-foreground">{m["contact.phoneCountry.line"]}</span>
           </div>
         </section>
 

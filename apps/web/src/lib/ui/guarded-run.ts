@@ -12,7 +12,7 @@
  * Undo turns into a word to the operator.
  */
 export type ToastLike = {
-  success: (message: string, opts: { action: { label: string; onClick: () => void } }) => unknown;
+  success: (message: string, opts?: { action: { label: string; onClick: () => void } }) => unknown;
   error: (message: string) => unknown;
 };
 
