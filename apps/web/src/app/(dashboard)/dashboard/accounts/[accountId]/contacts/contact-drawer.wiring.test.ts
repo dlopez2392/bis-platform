@@ -75,7 +75,7 @@ async function load(body: unknown, ok = true): Promise<unknown> {
   expect(fetched).toHaveLength(1);
   // Two effects since consent chain PR-2: the summary fetch (declared first,
   // effects[0], the one this helper drives) and the Texts row's own fetch
-  // (effects[1], untouched here — its own tests drive it directly).
+  // (effects[1], driven by its own describe block below).
   expect(effects).toHaveLength(2);
   effects[0]!();
   await vi.waitFor(() => expect(fetched[0]!.set).toHaveBeenCalled());
@@ -178,6 +178,69 @@ describe("ContactDrawer: a fetch cleaned up while its body is still being read n
     settle.reject(new SyntaxError("Unexpected token < in JSON"));
     await flush();
     expect(set).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Fix round 1 #5: `effects[1]` — the Texts row's own fetch effect, added by
+ * consent chain PR-2 alongside the summary's — driven directly, the same
+ * shape as `load()` above but against the state shaped
+ * `{ contactId, load: { status } }` rather than the summary's `null`.
+ */
+describe("ContactDrawer: the Texts row's own fetch effect (effects[1])", () => {
+  const LOADING_SHAPE = JSON.stringify({ contactId: "", load: { status: "loading" } });
+  const GOOD_TEXTS = { view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+15512345678" };
+
+  /** Mounts the drawer and runs ITS texts effect against `body`; answers
+   *  what it stored on the one state shaped like `{ contactId, load }`. */
+  async function loadTexts(body: unknown, ok = true): Promise<unknown> {
+    effects.length = 0;
+    states.length = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok, json: async () => body })));
+    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
+    const texts = states.filter((s) => JSON.stringify(s.initial) === LOADING_SHAPE);
+    expect(texts).toHaveLength(1);
+    expect(effects).toHaveLength(2);
+    effects[1]!();
+    await vi.waitFor(() => expect(texts[0]!.set).toHaveBeenCalled());
+    expect(texts[0]!.set).toHaveBeenCalledTimes(1);
+    return texts[0]!.set.mock.calls[0]![0];
+  }
+
+  it("a good body stores the ready state", async () => {
+    expect(await loadTexts(GOOD_TEXTS)).toEqual({ contactId: "c1", load: { status: "ready", ...GOOD_TEXTS } });
+  });
+
+  it("a non-OK response stores the error state, even with a body that would parse", async () => {
+    expect(await loadTexts(GOOD_TEXTS, false)).toEqual({ contactId: "c1", load: { status: "error" } });
+  });
+
+  it("a rejected fetch (network failure) stores the error state too (mutation: swallow the catch → the answer never arrives, FAILS)", async () => {
+    effects.length = 0;
+    states.length = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network down"); }));
+    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
+    const texts = states.filter((s) => JSON.stringify(s.initial) === LOADING_SHAPE);
+    effects[1]!();
+    await vi.waitFor(() => expect(texts[0]!.set).toHaveBeenCalled());
+    expect(texts[0]!.set).toHaveBeenCalledWith({ contactId: "c1", load: { status: "error" } });
+  });
+
+  it("a stale answer (cleanup ran first) is ignored, never written", async () => {
+    effects.length = 0;
+    states.length = 0;
+    let settle!: (v: unknown) => void;
+    const json = vi.fn(() => new Promise<unknown>((resolve) => { settle = resolve; }));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json })));
+    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
+    const texts = states.filter((s) => JSON.stringify(s.initial) === LOADING_SHAPE);
+    const cleanup = effects[1]!();
+    expect(typeof cleanup).toBe("function");
+    await vi.waitFor(() => expect(json).toHaveBeenCalledTimes(1));
+    (cleanup as () => void)();
+    settle(GOOD_TEXTS);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(texts[0]!.set).not.toHaveBeenCalled();
   });
 });
 

@@ -62,6 +62,12 @@ describe("TextsRow — every state of spec §6", () => {
     expect(renderedText(out)).toContain("Allowed");
     expect(out).toMatch(/<span class="[^"]*bg-success[^"]*" aria-hidden/);
     expect(button(out, m["contact.texts.stopTexts"])).toContain('data-variant="ghost"');
+    // Fix round 1 #3: Allowed has no OTHER state's controls (mutation: show
+    // Stop texts in every state → this negative check turns red elsewhere,
+    // never here, since Allowed is the one state Stop texts belongs to).
+    expect(button(out, m["contact.texts.resume"])).toBeNull();
+    expect(button(out, m["contact.texts.confirmStop"])).toBeNull();
+    expect(button(out, m["contact.texts.notAStop"])).toBeNull();
   });
 
   it("Stopped by the customer: since and how, the START line, and NO Resume (choice 19; mutation: offer Resume for every stop → FAILS)", () => {
@@ -70,12 +76,21 @@ describe("TextsRow — every state of spec §6", () => {
     expect(text).toContain("Since Oct 3, 2026 · they texted STOP");
     expect(text).toContain(m["contact.texts.customerOnly"]);
     expect(button(out, m["contact.texts.resume"])).toBeNull();
+    // Fix round 1 #3: no Allowed or On-hold control leaks into Stopped
+    // (mutation: show Stop texts in every state → FAILS).
+    expect(button(out, m["contact.texts.stopTexts"])).toBeNull();
+    expect(button(out, m["contact.texts.confirmStop"])).toBeNull();
+    expect(button(out, m["contact.texts.notAStop"])).toBeNull();
   });
 
   it("Stopped by staff: a ghost 'Resume texts…' and no START line (mutation: invert canResume → FAILS)", () => {
     const out = html(ready({ kind: "stopped", eventId: "e", since: "2026-10-04T02:30:00Z", how: { kind: "staff" }, canResume: true }));
     expect(button(out, m["contact.texts.resume"])).toContain('data-variant="ghost"');
     expect(renderedText(out)).not.toContain(m["contact.texts.customerOnly"]);
+    // Fix round 1 #3 (mutation: show Stop texts in every state → FAILS).
+    expect(button(out, m["contact.texts.stopTexts"])).toBeNull();
+    expect(button(out, m["contact.texts.confirmStop"])).toBeNull();
+    expect(button(out, m["contact.texts.notAStop"])).toBeNull();
   });
 
   it("On hold: what they wrote, and two ghost buttons, Confirm stop and Not a stop (mutation: drop Not a stop → FAILS)", () => {
@@ -83,15 +98,26 @@ describe("TextsRow — every state of spec §6", () => {
     expect(renderedText(out)).toContain("They wrote “remove me”. Texts are on hold.");
     expect(button(out, m["contact.texts.confirmStop"])).toContain('data-variant="ghost"');
     expect(button(out, m["contact.texts.notAStop"])).toContain('data-variant="ghost"');
+    // Fix round 1 #3: On hold has neither Stop texts nor Resume (mutation:
+    // show Stop texts in every state → FAILS).
+    expect(button(out, m["contact.texts.stopTexts"])).toBeNull();
+    expect(button(out, m["contact.texts.resume"])).toBeNull();
   });
 
   it("Check number keeps PR-1's own test id on the WHOLE state — the status word, the line and both country buttons inside it — because PR-1's e2e reads the word through it (review R3-I2; mutation: wrap only the line and the buttons → the word falls outside, FAILS)", () => {
-    const block = inside(html(ready({ kind: "check_number" })), "phone-country-row");
+    const out = html(ready({ kind: "check_number" }));
+    const block = inside(out, "phone-country-row");
     expect(renderedText(block)).toContain(m["contact.phoneCountry.word"]);
     expect(renderedText(block)).toContain(m["contact.phoneCountry.line"]);
     expect(block).toContain('data-testid="texts-row-status"');
     expect(button(block, m["contact.phoneCountry.mx"])).not.toBeNull();
     expect(button(block, m["contact.phoneCountry.us"])).not.toBeNull();
+    // Fix round 1 #3: Check number carries none of the OTHER states'
+    // controls (mutation: show Stop texts in every state → FAILS).
+    expect(button(out, m["contact.texts.stopTexts"])).toBeNull();
+    expect(button(out, m["contact.texts.resume"])).toBeNull();
+    expect(button(out, m["contact.texts.confirmStop"])).toBeNull();
+    expect(button(out, m["contact.texts.notAStop"])).toBeNull();
   });
 
   it("the status line is the first child of ONE wrapper in every ready state, Check number included, so React keeps the same node — and its focus — when the state changes (review R3-N2; mutation: a wrapper of its own for Check number, the bare status line elsewhere → FAILS)", () => {

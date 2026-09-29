@@ -103,6 +103,10 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
   const show = (next: TextsView) => {
     setView(next);
     setResuming(false);
+    // Fix round 1 #1: a successful action (a resume among them) never leaves
+    // the PREVIOUS reason sitting in the field — the next Stop → Resume must
+    // open blank, not pre-filled with stale required evidence.
+    setNote("");
     queueMicrotask(() => status.current?.focus());
   };
   const undo = (u: TextsUndo): Promise<TextsActionResult> => u.kind === "stop"
@@ -181,7 +185,12 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
         <p className="text-muted-foreground text-xs">{m["contact.texts.customerOnly"]}</p>
       ) : null}
       {view.kind === "stopped" && view.canResume && !resuming ? (
-        <Button size="sm" variant="ghost" disabled={pending} onClick={() => setResuming(true)}>
+        <Button size="sm" variant="ghost" disabled={pending} onClick={() => {
+          // Fix round 1 #1: opening the form fresh — for THIS stop or a later
+          // one — never inherits a reason typed for an earlier stop.
+          setNote("");
+          setResuming(true);
+        }}>
           {m["contact.texts.resume"]}
         </Button>
       ) : null}
@@ -191,10 +200,13 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
           act(() => resumeTextsAction(accountId, contactId, view.eventId, note), m["contact.texts.resumedToast"], false);
         }}>
           <Label htmlFor={`texts-resume-${contactId}`}>{m["contact.texts.resumeNoteLabel"]}</Label>
-          <Input id={`texts-resume-${contactId}`} name="note" value={note} aria-required="true" autoFocus
+          <Input id={`texts-resume-${contactId}`} name="note" value={note} required aria-required="true" autoFocus
             onChange={(e) => setNote(e.target.value)} />
           <div className="flex gap-2">
-            <Button type="submit" size="sm" disabled={pending}>{m["contact.texts.resumeSubmit"]}</Button>
+            {/* Fix round 1 #4: the server refusal (resumeTexts's own
+                `!text` check) stays the backstop; disabling here just keeps
+                an empty-note submit from ever leaving this row. */}
+            <Button type="submit" size="sm" disabled={pending || !note.trim()}>{m["contact.texts.resumeSubmit"]}</Button>
             <Button type="button" size="sm" variant="ghost" onClick={() => {
               setResuming(false);
               queueMicrotask(() => status.current?.focus());

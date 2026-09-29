@@ -224,8 +224,14 @@ describe("ContactDetailPage: the recipient's texts state", () => {
     ]);
     expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({ holdOpenTaskIds: [] });
     holdOpenTaskIdsMock.mockRejectedValue(new Error("readConsentEvent failed: timeout"));
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    await render();
-    expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({ holdOpenTaskIds: ["t_hold"] });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await render();
+      expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({ holdOpenTaskIds: ["t_hold"] });
+      // Fix round 1 #2 (carry-forward 1): the fail-closed path is LOGGED, not silent.
+      expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("hold To-dos unreadable");
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
