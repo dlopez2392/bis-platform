@@ -205,11 +205,14 @@ describe("0054 consent_events: deletes, as the roles that make them", () => {
 });
 
 describe("0054 consent_events: indexes", () => {
-  it("the address read and the contact FK's set-null are both indexed (mutation: drop consent_events_contact_idx → FAILS)", () =>
+  it("the address read and the contact FK's set-null are both indexed, and 0055 adds the composite key tasks point at and one-row-per-source (mutation: drop consent_events_contact_idx → FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ indexname: string; indexdef: string }>(
         "select indexname, indexdef from pg_indexes where schemaname = 'public' and tablename = 'consent_events' order by indexname");
-      expect(rows.map((r) => r.indexname)).toEqual(["consent_events_address_idx", "consent_events_contact_idx", "consent_events_pkey"]);
+      expect(rows.map((r) => r.indexname)).toEqual([
+        "consent_events_account_id_id_key", "consent_events_address_idx", "consent_events_contact_idx",
+        "consent_events_pkey", "consent_events_source_once",
+      ]);
       expect(rows.find((r) => r.indexname === "consent_events_contact_idx")!.indexdef)
         .toMatch(/\(account_id, contact_id\) WHERE \(contact_id IS NOT NULL\)/);
     }));

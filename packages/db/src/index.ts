@@ -19,9 +19,12 @@ export { createContact, updateContact, listContacts, getContact,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
 export { setMarketingEmailOptOut, readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
 export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
-         CONSENT_METHODS, DECIDING_ACTIONS,
+         appendConsentEventGuarded, newestDecidingRow, readConsentHistory, readConsentEvent,
+         readConsentActions, consentWriteArgs, consentAppendSql,
+         CONSENT_METHODS, DECIDING_ACTIONS, CUSTOMER_STOP_METHODS,
          type ConsentChannel, type ConsentAction, type ConsentMethod, type ConsentRow,
-         type ConsentState, type ConsentEventInput } from "./consent";
+         type ConsentState, type ConsentEventInput, type ConsentGuard, type ConsentAppend,
+         type PriorDecidingRow, type ConsentHistoryRow, type ConsentEventRow } from "./consent";
 export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
 export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask } from "./activities";

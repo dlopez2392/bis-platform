@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { consentStateOf, readConsentState, recordCarrierBlock, appendConsentEvent, type ConsentRow } from "./consent";
+import {
+  consentStateOf, readConsentState, recordCarrierBlock, appendConsentEvent, appendConsentEventGuarded,
+  newestDecidingRow, readConsentHistory, readConsentEvent, readConsentActions, consentWriteArgs, consentAppendSql,
+  CUSTOMER_STOP_METHODS, type ConsentRow,
+} from "./consent";
 
 /**
  * Spec §3's state table, pure (no database): the newest DECIDING row wins,
@@ -81,18 +85,29 @@ describe("consentStateOf — spec §3's table", () => {
   });
 });
 
-/** A PostgREST-shaped chain that records what it was asked. */
-function fakeDb(o: { read?: { data: unknown; error: unknown }; insert?: { data: unknown; error: unknown } }) {
+/** A PostgREST-shaped chain that records what it was asked; `rpc` answers the write function. */
+function fakeDb(o: {
+  read?: { data: unknown; error: unknown };
+  single?: { data: unknown; error: unknown };
+  rpc?: { data: unknown; error: unknown };
+} = {}) {
   const calls: Array<[string, ...unknown[]]> = [];
   const chain: Record<string, (...a: unknown[]) => unknown> = {};
-  for (const k of ["select", "eq", "in", "order", "insert"]) {
+  for (const k of ["select", "eq", "in", "order"]) {
     chain[k] = (...a: unknown[]) => { calls.push([k, ...a]); return chain; };
   }
   chain.limit = (...a: unknown[]) => { calls.push(["limit", ...a]); return Promise.resolve(o.read ?? { data: [], error: null }); };
-  chain.single = () => Promise.resolve(o.insert ?? { data: { id: "e1" }, error: null });
-  const db = { from: (t: string) => { calls.push(["from", t]); return chain; } } as unknown as SupabaseClient;
+  chain.maybeSingle = () => { calls.push(["maybeSingle"]); return Promise.resolve(o.single ?? { data: null, error: null }); };
+  // readConsentActions ends at `.in(...)`: make the chain awaitable there.
+  (chain as { then?: unknown }).then = (res: (v: unknown) => unknown) => res(o.read ?? { data: [], error: null });
+  const appended = { data: [{ outcome: "appended", event_id: "e1", prior_id: null, prior_action: null, prior_method: null, prior_evidence: null }], error: null };
+  const db = {
+    from: (t: string) => { calls.push(["from", t]); return chain; },
+    rpc: (fn: string, args: unknown) => { calls.push(["rpc", fn, args]); return Promise.resolve(o.rpc ?? appended); },
+  } as unknown as SupabaseClient;
   return { db, calls };
 }
+const rpcArgs = (calls: Array<[string, ...unknown[]]>) => calls.find((c) => c[0] === "rpc")?.[2] as Record<string, unknown> | undefined;
 
 describe("readConsentState", () => {
   it("asks for the newest deciding rows of that address, newest first, and takes 20 so every row at the newest instant reaches the tie-break (review R1-M2; mutation: .limit(1) → FAILS)", async () => {
@@ -112,57 +127,150 @@ describe("readConsentState", () => {
     await expect(readConsentState(f.db, "a1", "sms", "+19562921696")).rejects.toThrow("readConsentState failed: permission denied");
   });
 
-  it("orders by occurred_at BEFORE id, both descending, in exactly that sequence (review I2a: `arrayContaining` above ignores call order, so a swap would survive it; mutation: swap the two .order() calls → FAILS)", async () => {
+  it("orders by occurred_at BEFORE id, both descending, in exactly that sequence (review I2a; mutation: swap the two .order() calls → FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
     await readConsentState(f.db, "a1", "sms", "+19562921696");
-    const orderCalls = f.calls.filter((c) => c[0] === "order");
-    expect(orderCalls).toEqual([
+    expect(f.calls.filter((c) => c[0] === "order")).toEqual([
       ["order", "occurred_at", { ascending: false }],
       ["order", "id", { ascending: false }],
     ]);
   });
 });
 
-describe("recordCarrierBlock", () => {
-  it("appends revoked / carrier_block with the kind as evidence (mutation: drop `evidence: { kind: input.kind }` → evidence mismatches, FAILS)", async () => {
-    const f = fakeDb({ read: { data: [], error: null } });
-    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: "c1", kind: "voice.textback" })).toBe("appended");
-    const insert = f.calls.find((c) => c[0] === "insert")?.[1];
-    expect(insert).toMatchObject({ account_id: "a1", channel: "sms", address: "+19562921696", action: "revoked",
-      method: "carrier_block", contact_id: "c1", evidence: { kind: "voice.textback" } });
-  });
-
-  it("an address already stopped gets NO second row (spec §4.3 idempotency; mutation: always append → FAILS)", async () => {
-    const f = fakeDb({ read: { data: [row("revoked", "2026-10-03T15:00:00Z")], error: null } });
-    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: null, kind: "voice.textback" })).toBe("already_stopped");
-    expect(f.calls.some((c) => c[0] === "insert")).toBe(false);
-  });
-
-  it("a HELD address still gets a new revoked row: only 'stopped' short-circuits, never 'held' (review m3; mutation: skip whenever state !== 'allowed' → also skips 'held', FAILS)", async () => {
-    const f = fakeDb({ read: { data: [row("held", "2026-10-03T15:00:00Z", "free_text")], error: null } });
-    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: null, kind: "voice.textback" })).toBe("appended");
-    expect(f.calls.some((c) => c[0] === "insert")).toBe(true);
+describe("newestDecidingRow — consentStateOf's own order, exported for the Texts row's CAS", () => {
+  it("skips grants, takes the newest instant, then the more restrictive action (mutation: return rows[0] → the older revoked row wins, FAILS)", () => {
+    const stop = row("revoked", "2026-10-03T15:00:00Z", "keyword", "00000000-0000-0000-0000-00000000000a");
+    const lift = row("resubscribed", "2026-10-04T15:00:00Z", "start_keyword", "00000000-0000-0000-0000-00000000000b");
+    const grant = row("granted", "2026-10-05T15:00:00Z", "form", "00000000-0000-0000-0000-00000000000c");
+    expect(newestDecidingRow([stop, lift, grant])?.id).toBe(lift.id);
+    expect(newestDecidingRow([grant])).toBeNull();
   });
 });
 
-describe("appendConsentEvent", () => {
-  it("refuses hold_released until PR-2's guarded write exists, and writes nothing (mutation: drop the refusal → the insert runs, FAILS)", async () => {
-    const f = fakeDb({});
-    await expect(appendConsentEvent(f.db, { accountId: "a1", channel: "sms", address: "+19565550100", action: "hold_released", method: "staff", actorId: "user_1" }))
-      .rejects.toThrow("hold_released needs PR-2's guarded write");
-    expect(f.calls.some((c) => c[0] === "insert")).toBe(false);
+describe("readConsentHistory / readConsentEvent / readConsentActions", () => {
+  it("history reads the same 20 newest deciding rows WITH evidence, note and actor (mutation: drop evidence from the select → FAILS)", async () => {
+    const f = fakeDb({ read: { data: [], error: null } });
+    await readConsentHistory(f.db, "a1", "sms", "+19562921696");
+    expect(f.calls).toEqual(expect.arrayContaining([
+      ["select", "id, action, method, occurred_at, evidence, note, actor_id"],
+      ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]], ["limit", 20],
+    ]));
   });
 
-  it("throws when the insert is refused — a CHECK violation is never swallowed", async () => {
-    const f = fakeDb({ insert: { data: null, error: { message: "violates check constraint" } } });
-    await expect(appendConsentEvent(f.db, { accountId: "a1", channel: "sms", address: "bad", action: "revoked", method: "staff" }))
-      .rejects.toThrow("violates check constraint");
+  it("one event is read by account AND id, so another account's id reads nothing (mutation: drop the account filter → FAILS)", async () => {
+    const f = fakeDb({ single: { data: null, error: null } });
+    expect(await readConsentEvent(f.db, "a1", "e9")).toBeNull();
+    expect(f.calls).toEqual(expect.arrayContaining([["eq", "account_id", "a1"], ["eq", "id", "e9"]]));
   });
 
-  it("refuses an occurredAt that does not parse to a finite date, without writing (orchestrator decision; mutation: drop the parse-guard → the insert runs, FAILS)", async () => {
-    const f = fakeDb({});
-    await expect(appendConsentEvent(f.db, { accountId: "a1", channel: "sms", address: "+19565550100", action: "revoked", method: "carrier_block", occurredAt: "infinity" }))
+  it("actions by id: no ids is no read at all; a read error throws (mutation: read with an empty list → the chain is asked, FAILS)", async () => {
+    const f = fakeDb();
+    expect(await readConsentActions(f.db, "a1", [])).toEqual(new Map());
+    expect(f.calls).toEqual([]);
+    const g = fakeDb({ read: { data: [{ id: "e1", action: "held" }], error: null } });
+    expect(await readConsentActions(g.db, "a1", ["e1"])).toEqual(new Map([["e1", "held"]]));
+  });
+});
+
+describe("appendConsentEventGuarded — the one write", () => {
+  it("names the function and passes all thirteen arguments; a string guard has no expected id, { ifNewest } is `if_newest` with it (mutation: send { ifNewest } as its own string → FAILS)", async () => {
+    expect(consentWriteArgs({ accountId: "a1", channel: "sms", address: "+19565550100", action: "revoked", method: "keyword" }, "unless_customer_stopped")).toEqual({
+      p_account_id: "a1", p_channel: "sms", p_address: "+19565550100", p_action: "revoked", p_method: "keyword",
+      p_guard: "unless_customer_stopped", p_expect_id: null, p_contact_id: null, p_actor_id: null, p_note: null,
+      p_source_ref: null, p_evidence: {}, p_occurred_at: null,
+    });
+    expect(consentWriteArgs({ accountId: "a1", channel: "sms", address: "+1", action: "held", method: "staff_undo", actorId: "u" }, { ifNewest: "e7" }))
+      .toMatchObject({ p_guard: "if_newest", p_expect_id: "e7", p_actor_id: "u" });
+    expect(consentWriteArgs({ accountId: "a1", channel: "sms", address: "+1", action: "revoked", method: "staff" }, { ifNewest: null }))
+      .toMatchObject({ p_guard: "if_newest", p_expect_id: null });
+    const f = fakeDb();
+    await appendConsentEventGuarded(f.db, { accountId: "a1", channel: "sms", address: "+19565550100", action: "revoked", method: "keyword" }, "unless_customer_stopped");
+    expect(f.calls[0]?.[0]).toBe("rpc");
+    expect(f.calls[0]?.[1]).toBe("append_consent_event");
+  });
+
+  it("maps each answer: appended carries the prior row, duplicate the first id, refused no id (mutation: map duplicate to appended → FAILS)", async () => {
+    const prior = { prior_id: "p1", prior_action: "revoked", prior_method: "keyword", prior_evidence: { language: "es" } };
+    const ok = fakeDb({ rpc: { data: [{ outcome: "appended", event_id: "e2", ...prior }], error: null } });
+    expect(await appendConsentEventGuarded(ok.db, { accountId: "a", channel: "sms", address: "+1", action: "resubscribed", method: "start_keyword" }, "if_stopped_or_held"))
+      .toEqual({ outcome: "appended", id: "e2", prior: { id: "p1", action: "revoked", method: "keyword", evidence: { language: "es" } } });
+    const dup = fakeDb({ rpc: { data: [{ outcome: "duplicate", event_id: "e1", prior_id: null, prior_action: null, prior_method: null, prior_evidence: null }], error: null } });
+    expect(await appendConsentEventGuarded(dup.db, { accountId: "a", channel: "sms", address: "+1", action: "revoked", method: "keyword" }, "none"))
+      .toEqual({ outcome: "duplicate", id: "e1" });
+    const no = fakeDb({ rpc: { data: [{ outcome: "refused", event_id: null, prior_id: null, prior_action: null, prior_method: null, prior_evidence: null }], error: null } });
+    expect(await appendConsentEventGuarded(no.db, { accountId: "a", channel: "sms", address: "+1", action: "held", method: "free_text" }, "if_allowed"))
+      .toEqual({ outcome: "refused", prior: null });
+  });
+
+  it("an RPC error, no row, or an unknown answer THROWS — a write is never assumed (mutation: return refused on error → FAILS)", async () => {
+    const e = { accountId: "a", channel: "sms" as const, address: "+1", action: "revoked" as const, method: "keyword" as const };
+    await expect(appendConsentEventGuarded(fakeDb({ rpc: { data: null, error: { message: "timeout" } } }).db, e, "none")).rejects.toThrow("append_consent_event failed: timeout");
+    await expect(appendConsentEventGuarded(fakeDb({ rpc: { data: [], error: null } }).db, e, "none")).rejects.toThrow("returned no row");
+    await expect(appendConsentEventGuarded(fakeDb({ rpc: { data: [{ outcome: "maybe" }], error: null } }).db, e, "none")).rejects.toThrow("unexpected answer");
+  });
+
+  it("refuses an occurredAt that does not parse to a finite date, without writing (mutation: drop the parse-guard → the rpc runs, FAILS)", async () => {
+    const f = fakeDb();
+    await expect(appendConsentEventGuarded(f.db, { accountId: "a1", channel: "sms", address: "+19565550100", action: "revoked", method: "carrier_block", occurredAt: "infinity" }, "none"))
       .rejects.toThrow("occurredAt does not parse to a finite date");
-    expect(f.calls.some((c) => c[0] === "insert")).toBe(false);
+    expect(f.calls.some((c) => c[0] === "rpc")).toBe(false);
+  });
+});
+
+describe("appendConsentEvent — the unguarded wrapper", () => {
+  it("refuses hold_released outright: that row is written only with { ifNewest } on the hold (mutation: drop the refusal → the rpc runs with guard none, FAILS)", async () => {
+    const f = fakeDb();
+    await expect(appendConsentEvent(f.db, { accountId: "a1", channel: "sms", address: "+19565550100", action: "hold_released", method: "staff", actorId: "user_1" }))
+      .rejects.toThrow("hold_released is written only by appendConsentEventGuarded");
+    expect(f.calls.some((c) => c[0] === "rpc")).toBe(false);
+  });
+
+  it("writes with guard none and throws when the function refused, naming what it refused after (mutation: return a fake id on refusal → FAILS)", async () => {
+    const f = fakeDb();
+    expect(await appendConsentEvent(f.db, { accountId: "a1", channel: "sms", address: "+19565550100", action: "granted", method: "form" })).toEqual({ id: "e1" });
+    expect(rpcArgs(f.calls)).toMatchObject({ p_guard: "none", p_action: "granted" });
+    const g = fakeDb({ rpc: { data: [{ outcome: "refused", event_id: null, prior_id: "p", prior_action: "revoked", prior_method: "keyword", prior_evidence: {} }], error: null } });
+    await expect(appendConsentEvent(g.db, { accountId: "a1", channel: "sms", address: "+1", action: "held", method: "free_text" }))
+      .rejects.toThrow("refused (held after revoked)");
+  });
+});
+
+describe("CUSTOMER_STOP_METHODS", () => {
+  it("is exactly the five stops only the customer can lift, the same list 0055's unless_customer_stopped carries (choice 19; mutation: drop 'backfill_telnyx' → FAILS)", () => {
+    expect([...CUSTOMER_STOP_METHODS].sort()).toEqual(["backfill_telnyx", "carrier_block", "keyword", "one_click", "unsubscribe_link"]);
+  });
+});
+
+describe("recordCarrierBlock", () => {
+  it("appends revoked / carrier_block with the kind as evidence, guarded unless_customer_stopped (mutation: guard 'none' → FAILS)", async () => {
+    const f = fakeDb();
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: "c1", kind: "voice.textback" })).toBe("appended");
+    expect(rpcArgs(f.calls)).toMatchObject({ p_account_id: "a1", p_channel: "sms", p_address: "+19562921696", p_action: "revoked",
+      p_method: "carrier_block", p_contact_id: "c1", p_evidence: { kind: "voice.textback" }, p_guard: "unless_customer_stopped" });
+  });
+
+  it("an address already stopped is 'already_stopped', decided inside the function's lock (spec §4.3 idempotency; mutation: map refused to appended → FAILS)", async () => {
+    const f = fakeDb({ rpc: { data: [{ outcome: "refused", event_id: null, prior_id: "p", prior_action: "revoked", prior_method: "keyword", prior_evidence: {} }], error: null } });
+    expect(await recordCarrierBlock(f.db, { accountId: "a1", address: "+19562921696", contactId: null, kind: "voice.textback" })).toBe("already_stopped");
+  });
+});
+
+describe("consentAppendSql — the backfill's statement", () => {
+  it("calls the function once with every argument a typed literal, quotes doubled (mutation: skip the quote doubling → the O'Brien name breaks out of its literal, FAILS)", () => {
+    const sql = consentAppendSql({
+      accountId: "11111111-1111-4111-8111-111111111111", channel: "sms", address: "+19565550100", action: "revoked",
+      method: "backfill_telnyx", sourceRef: "telnyx_optout:+19565550000:+19565550100", occurredAt: "2026-04-28T12:00:38Z",
+      evidence: { keyword: "STOP", note: "O'Brien" },
+    }, "unless_customer_stopped");
+    expect(sql).toBe(
+      "select outcome, event_id from public.append_consent_event(" +
+      "'11111111-1111-4111-8111-111111111111'::uuid, 'sms'::text, '+19565550100'::text, 'revoked'::text, 'backfill_telnyx'::text, " +
+      "'unless_customer_stopped'::text, null::uuid, null::uuid, null::text, null::text, 'telnyx_optout:+19565550000:+19565550100'::text, " +
+      "'{\"keyword\":\"STOP\",\"note\":\"O''Brien\"}'::jsonb, '2026-04-28T12:00:38Z'::timestamptz);");
+  });
+
+  it("refuses a value that would carry a backslash into the MCP (memory bis-mcp-sql-escapes; mutation: drop the backslash check → the statement is returned, FAILS)", () => {
+    expect(() => consentAppendSql({ accountId: "a", channel: "sms", address: "+1", action: "revoked", method: "backfill_telnyx", evidence: { keyword: "ST\"OP" } }, "unless_customer_stopped"))
+      .toThrow("backslash");
   });
 });
