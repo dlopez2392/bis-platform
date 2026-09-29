@@ -152,13 +152,6 @@ export async function reopenTasks(
   for (const r of (data ?? []) as { id: string }[]) await emit(db, accountId, "task.reopened", actorId, { taskId: r.id }, actorType);
 }
 
-/**
- * When this contact's soonest upcoming `booked` appointment starts, or null.
- * For the consent CANCEL To-do (spec §4.2 step 2): a customer who texts
- * CANCEL has stopped their texts, and staff check whether they also meant
- * the appointment. THROWS on a read error (the inbound route retries).
- */
-
 /** A hold's To-do is closed by deciding the hold (Confirm stop / Not a stop), never by "Done" (review R3-I1). */
 export class HoldUndecidedError extends Error {
   constructor() {

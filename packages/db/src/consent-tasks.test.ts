@@ -52,7 +52,7 @@ describe("ensureConsentTask — one To-do per ledger row", () => {
     const f = fakeDb([{ data: null, error: { code: "23505", message: "duplicate" } }, { data: { id: "t0" }, error: null }]);
     expect(await ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "x" }, "sms-inbound", "system"))
       .toEqual({ id: "t0", created: false });
-    expect(f.calls).toEqual(expect.arrayContaining([["eq", "consent_event_id", "e1"]]));
+    expect(f.calls).toEqual(expect.arrayContaining([["eq", "account_id", "a1"], ["eq", "consent_event_id", "e1"]]));
     expect(emit).not.toHaveBeenCalled();
   });
 
@@ -90,7 +90,7 @@ describe("nextBookedStart — for the CANCEL To-do", () => {
     const f = fakeDb([{ data: [{ starts_at: "2026-10-09T15:00:00Z" }], error: null }]);
     expect(await nextBookedStart(f.db, "a1", "c1", "2026-10-06T00:00:00Z")).toBe("2026-10-09T15:00:00Z");
     expect(f.calls).toEqual(expect.arrayContaining([
-      ["eq", "contact_id", "c1"], ["eq", "status", "booked"], ["gt", "starts_at", "2026-10-06T00:00:00Z"],
+      ["eq", "account_id", "a1"], ["eq", "contact_id", "c1"], ["eq", "status", "booked"], ["gt", "starts_at", "2026-10-06T00:00:00Z"],
       ["order", "starts_at", { ascending: true }], ["limit", 1],
     ]));
   });
@@ -116,6 +116,14 @@ describe("completeTask — a hold's To-do closes by deciding the hold, never by 
     const f = fakeDb([{ data: { consent_event_id: "h1" }, error: null }]);
     await expect(completeTask(f.db, "a1", "t1", "user_1")).rejects.toBeInstanceOf(HoldUndecidedError);
     expect(f.calls.some((c) => c[0] === "update")).toBe(false);
+    // The guard's own read is scoped to THIS account — the only db call this
+    // path makes before throwing (mutation: drop .eq("account_id", …) on the
+    // guard read → this list no longer contains it, FAILS).
+    expect(f.calls).toEqual(expect.arrayContaining([["eq", "account_id", "a1"]]));
+    // The ledger reads the guard makes are scoped to THIS account too
+    // (mutation: pass a different/blank accountId into either read → FAILS).
+    expect(readConsentEvent).toHaveBeenCalledWith(f.db, "a1", "h1");
+    expect(readConsentHistory).toHaveBeenCalledWith(f.db, "a1", "sms", "+19562921696");
     // Not a stop, then its Undo: a NEW hold (H2) is newest, and the reopened To-do T1 still links H1.
     vi.mocked(readConsentHistory).mockResolvedValue([
       { ...HOLD, id: "h2", method: "staff_undo", occurred_at: "2026-10-05T12:00:00Z" },
@@ -123,6 +131,20 @@ describe("completeTask — a hold's To-do closes by deciding the hold, never by 
     ] as never);
     const g = fakeDb([{ data: { consent_event_id: "h1" }, error: null }]);
     await expect(completeTask(g.db, "a1", "t1", "user_1")).rejects.toBeInstanceOf(HoldUndecidedError);
+  });
+
+  it("a failed read of the To-do's own consent link fails CLOSED — no update issued (mutation: delete `if (readError) throw …` → FAILS)", async () => {
+    const f = fakeDb([{ data: null, error: { message: "boom" } }]);
+    await expect(completeTask(f.db, "a1", "t1", "user_1")).rejects.toThrow("boom");
+    expect(f.calls.some((c) => c[0] === "update")).toBe(false);
+  });
+
+  it("only a HOLD refuses — a CANCEL To-do (linking a revoked row) still completes even while the number's ledger separately shows a hold as newest (mutation: reduce the check to `if (!ev) return false` → FAILS)", async () => {
+    vi.mocked(readConsentEvent).mockResolvedValue({ ...HOLD, id: "r0", action: "revoked", method: "keyword" } as never);
+    vi.mocked(readConsentHistory).mockResolvedValue([{ ...HOLD, id: "h9" }] as never); // a hold, newest
+    const f = fakeDb([{ data: { consent_event_id: "r0" }, error: null }, { data: null, error: null }]);
+    await completeTask(f.db, "a1", "t9", "user_1");
+    expect(f.calls.some((c) => c[0] === "update")).toBe(true);
   });
 
   it("completes once the hold is decided, and a task with no consent link exactly as before (mutation: refuse every linked task → FAILS)", async () => {

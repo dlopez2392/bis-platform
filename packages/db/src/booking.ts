@@ -347,13 +347,6 @@ export async function listUpcomingBookings(
 }
 
 /**
- * Raw `created_at` instants in `[fromIso, toIso)` for the dashboard's 14-day
- * bookings chart — bucketing happens in JS on the caller side, not here.
- * Deliberately no status filter, unlike `listBookedRanges`: "pipeline
- * added"-style capture is the CREATED count, so a later cancel must not
- * erase a bar this account already earned.
- */
-/**
  * When this contact's soonest upcoming `booked` appointment starts, or null.
  * For the consent CANCEL To-do (spec §4.2 step 2): a customer who texts
  * CANCEL has stopped their texts, and staff check whether they also meant
@@ -371,6 +364,13 @@ export async function nextBookedStart(
   return ((data ?? []) as { starts_at: string }[])[0]?.starts_at ?? null;
 }
 
+/**
+ * Raw `created_at` instants in `[fromIso, toIso)` for the dashboard's 14-day
+ * bookings chart — bucketing happens in JS on the caller side, not here.
+ * Deliberately no status filter, unlike `listBookedRanges`: "pipeline
+ * added"-style capture is the CREATED count, so a later cancel must not
+ * erase a bar this account already earned.
+ */
 export async function listBookingCreationsBetween(
   db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
 ): Promise<string[]> {
