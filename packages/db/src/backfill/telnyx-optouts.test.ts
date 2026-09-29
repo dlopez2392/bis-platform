@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { parseOptouts, planTelnyxBackfill, telnyxBackfillSql, type OptoutRow } from "./telnyx-optouts";
+import {
+  parseOptouts, planTelnyxBackfill, telnyxBackfillSql, telnyxBackfillSqlParts, maskLast4,
+  type OptoutRow,
+} from "./telnyx-optouts";
 
 const OWNERS = [
   { e164: "+19565550000", account_id: "11111111-1111-4111-8111-111111111111", status: "live" },
@@ -9,6 +12,10 @@ const row = (o: Partial<OptoutRow> = {}): OptoutRow => ({
   from: "+19565550000", to: "+19565551234", messaging_profile_id: "prof-1", keyword: "STOP",
   created_at: "2025-04-28 12:00:38.631252+00:00", ...o,
 });
+
+function thrown(fn: () => unknown): string {
+  try { fn(); return ""; } catch (e) { return e instanceof Error ? e.message : String(e); }
+}
 
 describe("parseOptouts — what the orchestrator saved from Telnyx", () => {
   it("accepts an array of pages (each { data: [...] }) or a flat array of rows (mutation: accept only pages → the flat array throws, FAILS)", () => {
@@ -22,6 +29,13 @@ describe("parseOptouts — what the orchestrator saved from Telnyx", () => {
     expect(() => parseOptouts([row({ from: "BISRGV" })])).toThrow(/E\.164/);
     expect(() => parseOptouts([row({ created_at: "yesterday" })])).toThrow(/created_at/);
     expect(() => parseOptouts({ data: [] })).toThrow(/array/);
+  });
+
+  it("refuses a created_at with no explicit UTC offset, without naming any number (review M3; mutation: drop the offset check → the bare-local timestamp is accepted, FAILS)", () => {
+    const message = thrown(() => parseOptouts([row({ created_at: "2025-04-28T12:00:38" })]));
+    expect(message).toMatch(/created_at/);
+    expect(message).toMatch(/offset/);
+    expect(message).not.toMatch(/\+1956/);
   });
 });
 
@@ -43,8 +57,62 @@ describe("planTelnyxBackfill — which account each opt-out belongs to", () => {
     expect(planTelnyxBackfill([row(), row({ keyword: "QUIT" })], OWNERS).toAppend).toHaveLength(1);
   });
 
+  it("keeps the EARLIEST created_at deterministically when duplicates disagree, never whichever the input lists first (review M4; mutation: keep the later one → FAILS)", () => {
+    const plan = planTelnyxBackfill([
+      row({ created_at: "2025-04-28 12:00:38.631252+00:00" }),
+      row({ created_at: "2025-01-01 00:00:00+00:00" }),
+    ], OWNERS);
+    expect(plan.toAppend).toHaveLength(1);
+    expect(plan.toAppend[0]!.occurredAt).toBe("2025-01-01T00:00:00.000Z");
+  });
+
   it("counts how many `to` numbers are the business's OWN numbers — a reversed reading would show here, not in the ledger (mutation: drop the count → FAILS)", () => {
     expect(planTelnyxBackfill([row({ to: "+19565550001" })], OWNERS).toMatchesOwners).toBe(1);
+  });
+
+  it("computes future-dated rows itself, in count-only mode too, from an injected `now` rather than the wall clock (review M2, M6; mutation: drop futureDated → always empty, FAILS)", () => {
+    const now = new Date("2025-01-01T00:00:00Z");
+    const plan = planTelnyxBackfill([row({ created_at: "2025-06-01T00:00:00+00:00" })], OWNERS, now);
+    expect(plan.futureDated).toHaveLength(1);
+  });
+
+  it("a row AT `now` (not after) is never future-dated (mutation: use >= instead of > → a same-instant row wrongly counts, FAILS)", () => {
+    const now = new Date("2025-06-01T00:00:00Z");
+    const plan = planTelnyxBackfill([row({ created_at: "2025-06-01T00:00:00+00:00" })], OWNERS, now);
+    expect(plan.futureDated).toHaveLength(0);
+  });
+
+  describe("a released number's opt-outs are still written (orchestrator decision I3)", () => {
+    it("a released owner's opt-out is appended and counted separately as released (mutation: skip released owners → FAILS)", () => {
+      const releasedOwners = [...OWNERS, { e164: "+19565550002", account_id: OWNERS[0]!.account_id, status: "released" }];
+      const plan = planTelnyxBackfill([row({ from: "+19565550002", to: "+19565553333" })], releasedOwners);
+      expect(plan.toAppend).toHaveLength(1);
+      expect(plan.perAccount[OWNERS[0]!.account_id]).toBe(1);
+      expect(plan.releasedPerAccount[OWNERS[0]!.account_id]).toBe(1);
+    });
+
+    it("a live owner's opt-out is NOT counted as released (mutation: count every owner as released → FAILS)", () => {
+      const plan = planTelnyxBackfill([row()], OWNERS);
+      expect(plan.releasedPerAccount[OWNERS[0]!.account_id] ?? 0).toBe(0);
+    });
+  });
+
+  describe("owners are validated before planning (review M5)", () => {
+    it("refuses an owner with a non-uuid account_id (mutation: drop owner validation → FAILS)", () => {
+      expect(() => planTelnyxBackfill([row()], [{ e164: "+19565550000", account_id: "not-a-uuid", status: "live" }]))
+        .toThrow(/account_id/);
+    });
+
+    it("refuses an owner with a non-E.164 e164 (mutation: drop owner validation → FAILS)", () => {
+      expect(() => planTelnyxBackfill([row()], [{ e164: "BISRGV", account_id: "11111111-1111-4111-8111-111111111111", status: "live" }]))
+        .toThrow(/e164/);
+    });
+  });
+});
+
+describe("maskLast4 — never a full number in a log line (review I2)", () => {
+  it("keeps only the last four digits (mutation: return the input unchanged → FAILS)", () => {
+    expect(maskLast4("+19565559999")).toBe("********9999");
   });
 });
 
@@ -70,8 +138,45 @@ describe("telnyxBackfillSql — the statement the orchestrator pastes", () => {
     expect(() => telnyxBackfillSql(planTelnyxBackfill([], OWNERS))).toThrow(/nothing to write/);
   });
 
-  it("refuses the WHOLE run, naming the row, when a planned occurred_at is in the future — 0055's append_consent_event RAISES on that (errcode 22023) and would abort every row inside this one statement, not just the bad one (dispatch task-3 item 8; mutation: drop the future-time check → FAILS)", () => {
+  it("refuses the WHOLE run, naming the row by input position and its BUSINESS number, NEVER the customer number, when a planned occurred_at is in the future (review I1, M2; mutation: identify the row by `to` instead of `from` → the customer number appears, FAILS)", () => {
     const plan = planTelnyxBackfill([row({ created_at: "9999-01-01T00:00:00Z" })], OWNERS);
-    expect(() => telnyxBackfillSql(plan)).toThrow(/\+19565550000.*\+19565551234.*future/s);
+    const message = thrown(() => telnyxBackfillSql(plan));
+    expect(message).toMatch(/future/);
+    expect(message).toContain("+19565550000"); // the business number (`from`)
+    expect(message).not.toContain("+19565551234"); // the customer number (`to`) — never printed
+    expect(message).toMatch(/row #1/);
+  });
+
+  it("refuses to emit when a customer number matches one of OUR OWN numbers — a reversed from/to reading — and the message carries no number, only a count (review I1, I2; mutation: drop the toMatchesOwners guard → FAILS)", () => {
+    const plan = planTelnyxBackfill([row({ to: "+19565550001" })], OWNERS);
+    expect(plan.toMatchesOwners).toBe(1);
+    const message = thrown(() => telnyxBackfillSql(plan));
+    expect(message).toMatch(/reversed/);
+    expect(message).not.toContain("+19565550001");
+    expect(message).not.toContain("+19565550000");
+  });
+
+  it("refuses above the 1,000-row limit for one statement, naming telnyxBackfillSqlParts instead (review M1; mutation: drop the row-count check → FAILS)", () => {
+    const owner = [{ e164: "+19565550099", account_id: OWNERS[0]!.account_id, status: "live" }];
+    const rows = Array.from({ length: 1001 }, (_, i) => row({ from: "+19565550099", to: `+1956${String(1_000_000 + i).padStart(7, "0")}` }));
+    expect(() => telnyxBackfillSql(planTelnyxBackfill(rows, owner))).toThrow(/1,000-row limit/);
+  });
+});
+
+describe("telnyxBackfillSqlParts — splitting a large plan into numbered, independently-idempotent statements (review M1)", () => {
+  it("splits into parts of at most 1,000 rows, each its own ONE-statement write (mutation: drop the split, emit one giant statement → FAILS)", () => {
+    const owner = [{ e164: "+19565550099", account_id: OWNERS[0]!.account_id, status: "live" }];
+    const rows = Array.from({ length: 1500 }, (_, i) => row({ from: "+19565550099", to: `+1956${String(1_000_000 + i).padStart(7, "0")}` }));
+    const plan = planTelnyxBackfill(rows, owner);
+    expect(plan.toAppend).toHaveLength(1500);
+    const parts = telnyxBackfillSqlParts(plan);
+    expect(parts).toHaveLength(2);
+    expect(parts[0]!.match(/public\.append_consent_event\(/g)).toHaveLength(1000);
+    expect(parts[1]!.match(/public\.append_consent_event\(/g)).toHaveLength(500);
+    for (const p of parts) expect(p.match(/;/g)).toHaveLength(1);
+  });
+
+  it("still refuses an empty or reversed plan, same as telnyxBackfillSql (mutation: skip assertEmittable in the parts path → FAILS)", () => {
+    expect(() => telnyxBackfillSqlParts(planTelnyxBackfill([], OWNERS))).toThrow(/nothing to write/);
   });
 });
