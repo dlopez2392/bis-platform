@@ -78,6 +78,7 @@ describe("recordBookingGrant", () => {
       channel: "sms", address: "+19562921696", action: "granted", method: "booking", contactId: "c1",
       sourceRef: "booking:b1", evidence: { booking_id: "b1" },
     });
+    expect(db.appendConsentEventGuarded.mock.calls[0]![2]).toBe("none");
   });
 
   it("no phone, no grant; a failed write is only logged (mutation: throw → FAILS)", async () => {
@@ -85,5 +86,6 @@ describe("recordBookingGrant", () => {
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
     db.appendConsentEventGuarded.mockRejectedValue(new Error("down"));
     await expect(recordBookingGrant({} as never, { accountId: "a1", bookingId: "b1", contactId: "c1", phoneAsTyped: "9562921696" })).resolves.toBeUndefined();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("booking grant for booking b1"));
   });
 });
