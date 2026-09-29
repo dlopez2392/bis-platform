@@ -361,10 +361,11 @@ conflict, it holds: staff clear a false hold in one click.
   - **English:** stop texting, stop sending, stop messaging, stop contacting, dont text, do not text, dont message, do
     not message, no more texts, no more messages, remove me, take me off, unsubscribe me, wrong number, no more
     texting, do not contact me, dont contact me.
-  - **Spanish, about messages on their own:** no quiero mas mensajes, no quiero mensajes, no mas mensajes, no mas
-    textos, numero equivocado; and quitenme / quiteme / quitame / saquenme / saqueme / sacame de su lista or de la
-    lista. Any "… de la lista …" holds, "Quítame de la lista del sábado y ponme el domingo" included (danlo's list
-    form); only "lista de espera" (a waiting list) does not.
+  - **Spanish, about messages on their own:** no quiero mas mensajes, no quiero mensajes, no quiero sus mensajes, no
+    mas mensajes, no mas textos, numero equivocado; and quitenme / quiteme / quitame / saquenme / saqueme / sacame de
+    su lista or de la lista. Any "… de la lista …" holds, "Quítame de la lista del sábado y ponme el domingo" included
+    (danlo's list form); only "lista de espera" (a waiting list) does not. ("no quiero sus mensajes" added by the
+    orchestrator, 2026-09-28, dispatch-task-4: it holds anywhere, like "no quiero mensajes".)
 - **Spanish verb forms, ONLY ABOUT MESSAGES** (danlo): no me manden / mande / mandes / envien / envie / envies /
   escriban / escriba / escribas; dejen / deje / deja de mandar(me) / enviar(me) / escribir(me); no quiero recibir; no
   me vuelvan / vuelva / vuelvas a mandar / enviar. Each counts only with a message object:
@@ -377,14 +378,17 @@ conflict, it holds: staff clear a false hold in one click.
   or an invoice. "mensajes de voz" counts as messages: "No me mande mensajes de voz, mejor texto" is a false hold staff
   clear in one click, and excluding it missed "no me manden mensajes de voz ni textos" (orchestrator).
 - **Whole-message phrases:** "please stop" and "stop please" (English, exact); in Spanish "borrenme", "borreme",
-  "borrame", the escribir forms "dejen / deje / deja de escribirme" and "no me escriban / escriba / escribas", and "no
-  me vuelvan / vuelva / vuelvas a escribir". They count ONLY when they are the whole message, punctuation aside; the
-  Spanish ones may carry ONE leading "ya" / "por favor" / "porfa" / "porfavor" and ONE trailing "por favor" / "porfa" /
-  "porfavor" / "gracias" / "ya" (orchestrator). "Please stop!!", "¡Bórreme!", "Ya no me escriban" and "No me escriban,
-  gracias" hold; "Please stop by Thursday", "Bórreme la cita del lunes", "No me escriba el martes, mejor llámeme" and
-  "Ya no me escriba, yo le llamo" do not. "escribir" is always about messages — writing to the customer is texting
-  them — and a missed stop is worse than a false hold (decision 27), so its bare forms hold as the whole message while
-  mandar and enviar stay object-only.
+  "borrame", "borren / borre / borra mi numero", the escribir forms "dejen / deje / deja de escribirme" and "no me
+  escriban / escriba / escribas", and "no me vuelvan / vuelva / vuelvas a escribir". They count ONLY when they are the
+  whole message, punctuation aside; the Spanish ones may carry ONE leading "ya" / "por favor" / "porfa" / "porfavor"
+  and ONE trailing "por favor" / "porfa" / "porfavor" / "gracias" / "ya" (orchestrator). "Please stop!!", "¡Bórreme!",
+  "Ya no me escriban", "No me escriban, gracias", "Borren mi número" and "Por favor borre mi número" hold; "Please
+  stop by Thursday", "Bórreme la cita del lunes", "No me escriba el martes, mejor llámeme", "Ya no me escriba, yo le
+  llamo", "Borre mi número viejo, use el nuevo" (a number change) and "Borren mi número de la cita" (an appointment
+  detail) do not. "escribir" is always about messages — writing to the customer is texting them — and a missed stop
+  is worse than a false hold (decision 27), so its bare forms hold as the whole message while mandar and enviar stay
+  object-only. ("borren / borre / borra mi numero" added by the orchestrator, 2026-09-28, dispatch-task-4: same rule
+  and courtesy wrapper as "borrenme" / "borreme" / "borrame".)
 - **A stop word repeated as the whole message:** "stop stop", "parar parar", "alto alto", "baja baja", any number of
   repeats (English also with one "please" at either end, Spanish with the courtesy words); one word on its own is a
   keyword (decision 10), not a phrase.
