@@ -19,6 +19,14 @@ import { SMS_KINDS } from "./classes";
  * said, so `phoneFields` can flag the ones that could be Mexican or US).
  * Scan 4 (the customer-initiated EMAIL kinds) is PR-3's, with the email kinds.
  *
+ * PR-2 adds: every ledger write is the one guarded function (0055), named
+ * only in consent.ts; only the consent reply path sets `answersEventId` (the
+ * gate's one exception) or `numberFromCarrier` beside the text-back; only the
+ * registry, the gate (its one exception), the inbound step and the reply
+ * sender name a `consent.*` kind;
+ * the inbound route reaches a send only through lib/consent/replies; and a
+ * consent reply records no usage (plan G11).
+ *
  * Every scan reads CODE, never comments (the doc-comment-satisfies-the-guard
  * shape, memory bis-vacuous-test-shapes), and each has a positive control
  * proving it can see what it looks for — a scan that finds nothing because it
@@ -208,7 +216,7 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
     expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS))).toEqual([]);
   });
 
-  it("the scan reaches every send path's kind — none of the eleven is missing (the positive control)", () => {
+  it("the scan reaches every send path's kind — none of the fourteen is missing (the positive control)", () => {
     const seen = new Set(kindLiterals().map(({ kind }) => kind));
     expect([...seen].sort()).toEqual(Object.keys(SMS_KINDS).sort());
   });
@@ -292,6 +300,12 @@ describe("the carrier bypass: only the text-back and the consent reply set numbe
     expect(code(join(WEB_SRC, "lib", "voice", "textback.ts"))).toMatch(/\bnumberFromCarrier\s*:\s*true\b/);
     expect(code(join(WEB_SRC, "lib", "consent", "replies.ts"))).toMatch(/\bnumberFromCarrier\s*:\s*true\b/);
     expect(code(join(WEB_SRC, "lib", "consent", "gate.ts"))).not.toMatch(/\b(?:numberFromCarrier|fromCarrier)\s*[:=]\s*true\b/);
+  });
+
+  it("only the consent reply path names answersEventId: the gate (which checks it), the inbound step (which plans it) and the reply sender (which passes it) (spec §4.2's one exception; mutation: the composer passes answersEventId → FAILS naming it; replies.ts passing it is the positive control)", () => {
+    const naming = webSources().filter((f) => /\banswersEventId\b/.test(code(f))).map(rel).sort();
+    expect(naming).toEqual(["apps/web/src/lib/consent/gate.ts", "apps/web/src/lib/consent/inbound.ts", "apps/web/src/lib/consent/replies.ts"]);
+    expect(code(join(WEB_SRC, "lib", "consent", "replies.ts"))).toMatch(/\banswersEventId\s*:\s*r\.reply\.answersEventId\b/);
   });
 
   it("the gate's carrier line is pinned, so only an explicit true skips the stored flag (mutation: req.numberFromCarrier !== false → FAILS)", () => {
@@ -595,5 +609,29 @@ describe("F-009: every contact write gets the number as typed or as said", () =>
     // A carrier number used as a LOOKUP key beside the input is not the contact's phone.
     expect(normalisedIntoWrites(`const accountId = await accountFor(e164Of(to));\nawait createContact(db, accountId, { phone: val("phone") }, u);`, false)).toEqual([]);
     expect(normalisedIntoWrites(`if (!normalisePhone(value)) continue;\nif (key) input[key] = value;`, true)).toEqual([]);
+  });
+});
+
+describe("PR-2: who may send a consent reply, and how", () => {
+  const CONSENT_KIND = /["'`]consent\.(?:stop_confirmation|start_confirmation|help)["'`]/;
+
+  it("only the registry, the gate (its one exception), the inbound step and the reply sender name a consent.* kind (mutation: the composer sends kind \"consent.help\" → FAILS naming it; the four files are the positive control)", () => {
+    expect(webSources().filter((f) => CONSENT_KIND.test(code(f))).map(rel).sort()).toEqual([
+      "apps/web/src/lib/consent/classes.ts", "apps/web/src/lib/consent/gate.ts", "apps/web/src/lib/consent/inbound.ts", "apps/web/src/lib/consent/replies.ts",
+    ]);
+  });
+
+  it("the inbound route reaches a send only through lib/consent/replies: never the gate, lib/sms, an automation or email, by any import path (plan G16; mutation: import sendSms from the gate into the route → FAILS)", () => {
+    const route = join(WEB_SRC, "app", "api", "sms", "inbound", "route.ts");
+    const imports = importsOf(route);
+    expect(imports).toContain("apps/web/src/lib/consent/replies");
+    expect(imports.filter((i) => /^apps\/web\/src\/lib\/(?:consent\/gate|sms(?:\/|$)|automations|email)/.test(i))).toEqual([]);
+    expect(importsOf(join(WEB_SRC, "lib", "consent", "inbound.ts"))).not.toContain("apps/web/src/lib/consent/gate");
+  });
+
+  it("a consent reply records no usage (plan G11: not billed); the composer, which bills, is the positive control (mutation: recordUsageSafely in replies.ts → FAILS)", () => {
+    const usage = /\brecordUsage(?:Safely)?\b|["'`]usage_events["'`]/;
+    expect(code(join(WEB_SRC, "lib", "consent", "replies.ts"))).not.toMatch(usage);
+    expect(code(join(WEB_SRC, "app", "(dashboard)", "dashboard", "accounts", "[accountId]", "conversations", "actions.ts"))).toMatch(usage);
   });
 });
