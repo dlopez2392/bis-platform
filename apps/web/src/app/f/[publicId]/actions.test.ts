@@ -22,6 +22,11 @@ const instantReplyMock = vi.fn();
 vi.mock("@/lib/automations/instant-reply", () => ({
   sendInstantReply: (...a: unknown[]) => instantReplyMock(...a),
 }));
+const formGrantsMock = vi.fn();
+vi.mock("@/lib/consent/grants", () => ({
+  recordFormGrants: (...a: unknown[]) => formGrantsMock(...a),
+  recordBookingGrant: vi.fn(),
+}));
 
 /**
  * The row behind notify()'s account lookup.
@@ -139,6 +144,34 @@ beforeEach(() => {
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
   incrementUnreadCountMock.mockReset();
   instantReplyMock.mockReset().mockResolvedValue({ kind: "skipped", reason: "disabled" });
+  formGrantsMock.mockReset().mockResolvedValue(undefined);
+});
+
+describe("submitFormAction — the consent grant (consent chain PR-2, plan Task 10)", () => {
+  const CONSENT_FORM = [
+    { key: "phone", kind: "core.phone", label: "Phone", required: false },
+    { key: "sms_ok", kind: "consent", label: "Text me about my request", required: false },
+  ];
+
+  it("a saved submission hands its fields, answers and consent record to recordFormGrants (mutation: drop the call → FAILS)", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({ fields: CONSENT_FORM }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token, locale: "en", phone: "9562921696", sms_ok: "on" }));
+    expect(result.status).toBe("success");
+    expect(formGrantsMock).toHaveBeenCalledTimes(1);
+    expect(formGrantsMock.mock.calls[0]![1]).toMatchObject({
+      accountId: "acct_1", formId: "form_row_1", submissionId: "sub_1", fields: CONSENT_FORM,
+      answers: [{ key: "phone", value: "9562921696" }],
+      consent: [{ key: "sms_ok", given: true, text: "Text me about my request" }],
+    });
+  });
+
+  it("a submission caught as spam grants nothing (mutation: record grants before the guards → FAILS)", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({ fields: CONSENT_FORM }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+    await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token, locale: "en", phone: "9562921696", sms_ok: "on", [HONEYPOT_FIELD]: "bot" }));
+    expect(formGrantsMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("submitFormAction — expired render token (lead-loss regression)", () => {
