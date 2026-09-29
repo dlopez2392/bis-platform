@@ -140,10 +140,10 @@ describe("planTelnyxBackfill — the customer `to` is keyed exactly like every o
   });
 
   it("toMatchesOwners (the reversed from/to guard) still fires on the NORMALISED to, not just an exact string match (mutation: compare byNumber.has(r.to) instead of the normalised value → a +521 reversal would be missed, FAILS)", () => {
-    // OWNERS has no +52 entry, so this only proves the normalised value is what's
-    // compared; a live +521-owner case is covered by the dedupe test above using the
-    // same normalisation path.
-    expect(planTelnyxBackfill([row({ to: "+19565550001" })], OWNERS).toMatchesOwners).toBe(1);
+    // fix-review I1: an owner stored as +52..., and an opt-out whose `to` carries the
+    // retired mobile 1 (+521...). Only the normalised compare sees them as the same number.
+    const owners = [...OWNERS, { e164: "+525512345678", account_id: "33333333-3333-4333-8333-333333333333", status: "live" }];
+    expect(planTelnyxBackfill([row({ to: "+5215512345678" })], owners).toMatchesOwners).toBe(1);
   });
 });
 

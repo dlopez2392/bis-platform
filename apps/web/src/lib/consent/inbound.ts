@@ -135,7 +135,7 @@ async function cancelTodo(db: SupabaseClient, i: InboundConsentInput, eventId: s
     .replace("{name}", () => name)
     .replace("{word}", () => keywordDisplay(word))
     .replace("{date}", () => formatDateInZone(startsAt, hoursZone(zone)));
-  await ensureConsentTask(db, i.accountId, { contactId: i.contactId as string, consentEventId: eventId, title }, ACTOR, "system");
+  await ensureConsentTask(db, i.accountId, { contactId: i.contactId as string, consentEventId: eventId, title, dueAt: i.now.toISOString() }, ACTOR, "system");
 }
 
 /** Decision 5: a sentence holds texts and asks staff to confirm or undo. */
@@ -144,7 +144,7 @@ async function holdTodo(db: SupabaseClient, i: InboundConsentInput, eventId: str
   const title = m["todo.consent.hold.en"]
     .replace("{name}", () => name)
     .replace("{excerpt}", () => excerptOf(i.text, TODO_EXCERPT));
-  await ensureConsentTask(db, i.accountId, { contactId: i.contactId as string, consentEventId: eventId, title }, ACTOR, "system");
+  await ensureConsentTask(db, i.accountId, { contactId: i.contactId as string, consentEventId: eventId, title, dueAt: i.now.toISOString() }, ACTOR, "system");
 }
 
 /**

@@ -40,14 +40,14 @@ describe("ensureConsentTask — one To-do per ledger row", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-06T18:00:00Z")); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it("inserts the task with its consent_event_id, a due date of the moment it is created (m1), and emits task.created (mutation: drop consent_event_id, or drop due_at, from the insert → FAILS)", async () => {
+  it("inserts the task with its consent_event_id, a due date of the moment it is created (m1), and emits task.created (mutation: drop consent_event_id, or drop due_at, from the insert, or date it from new Date() instead of the caller's dueAt → FAILS)", async () => {
     vi.mocked(emit).mockClear();
     const f = fakeDb([{ data: { id: "t1" }, error: null }]);
-    expect(await ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "Ana may have asked …" }, "sms-inbound", "system"))
+    expect(await ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "Ana may have asked …", dueAt: "2026-10-06T20:00:00.000Z" }, "sms-inbound", "system"))
       .toEqual({ id: "t1", created: true });
     expect(f.calls.find((c) => c[0] === "insert")?.[1]).toEqual({
       account_id: "a1", contact_id: "c1", title: "Ana may have asked …", consent_event_id: "e1",
-      due_at: "2026-10-06T18:00:00.000Z",
+      due_at: "2026-10-06T20:00:00.000Z", // the CALLER's instant, not the (faked, 18:00) wall clock
     });
     expect(emit).toHaveBeenCalledWith(f.db, "a1", "task.created", "sms-inbound", { taskId: "t1", contactId: "c1", consentEventId: "e1" }, "system");
   });
@@ -55,14 +55,14 @@ describe("ensureConsentTask — one To-do per ledger row", () => {
   it("a second attempt for the same row never re-dates the existing task — only a fresh insert gets a due date (m1; mutation: update due_at on the duplicate-found path → FAILS)", async () => {
     vi.mocked(emit).mockClear();
     const f = fakeDb([{ data: null, error: { code: "23505", message: "duplicate" } }, { data: { id: "t0" }, error: null }]);
-    await ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "x" }, "sms-inbound", "system");
+    await ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "x", dueAt: "2026-10-06T20:00:00.000Z" }, "sms-inbound", "system");
     expect(f.calls.some((c) => c[0] === "update")).toBe(false);
   });
 
   it("a second attempt for the same row (23505 on tasks_consent_event_once) returns the FIRST task and emits nothing (mutation: throw on 23505 → FAILS)", async () => {
     vi.mocked(emit).mockClear();
     const f = fakeDb([{ data: null, error: { code: "23505", message: "duplicate" } }, { data: { id: "t0" }, error: null }]);
-    expect(await ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "x" }, "sms-inbound", "system"))
+    expect(await ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "x", dueAt: "2026-10-06T20:00:00.000Z" }, "sms-inbound", "system"))
       .toEqual({ id: "t0", created: false });
     expect(f.calls).toEqual(expect.arrayContaining([["eq", "account_id", "a1"], ["eq", "consent_event_id", "e1"]]));
     expect(emit).not.toHaveBeenCalled();
@@ -70,7 +70,7 @@ describe("ensureConsentTask — one To-do per ledger row", () => {
 
   it("any other insert error THROWS, so the inbound route answers 503 and Telnyx retries (mutation: swallow every error → FAILS)", async () => {
     const f = fakeDb([{ data: null, error: { code: "42501", message: "permission denied" } }]);
-    await expect(ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "x" }, "a", "system")).rejects.toThrow("permission denied");
+    await expect(ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "x", dueAt: "2026-10-06T20:00:00.000Z" }, "a", "system")).rejects.toThrow("permission denied");
   });
 });
 

@@ -13,8 +13,8 @@ describe("consent To-do rows (CI only: withTestAccount + serviceDb)", () => {
       const db = serviceDb();
       const contact = await createContact(db, id, { firstName: "Hold", phone: "+19565550133" }, "consent-tasks-live", "system");
       const ev = await appendConsentEvent(db, { accountId: id, channel: "sms", address: "+19565550133", action: "held", method: "free_text", contactId: contact.id });
-      const one = await ensureConsentTask(db, id, { contactId: contact.id, consentEventId: ev.id, title: "Hold may have asked to stop texts" }, "consent-tasks-live", "system");
-      const two = await ensureConsentTask(db, id, { contactId: contact.id, consentEventId: ev.id, title: "again" }, "consent-tasks-live", "system");
+      const one = await ensureConsentTask(db, id, { contactId: contact.id, consentEventId: ev.id, title: "Hold may have asked to stop texts", dueAt: new Date().toISOString() }, "consent-tasks-live", "system");
+      const two = await ensureConsentTask(db, id, { contactId: contact.id, consentEventId: ev.id, title: "again", dueAt: new Date().toISOString() }, "consent-tasks-live", "system");
       expect(one.created).toBe(true);
       expect(two).toEqual({ id: one.id, created: false });
       const work = await listAccountWork(db, id);

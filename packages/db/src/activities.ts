@@ -103,17 +103,19 @@ export async function reopenTask(
  * (`work-queue.ts`'s `openTasks`), so a consent hold's To-do would silently
  * lose the queue's "act today" ordering it exists for. Only the fresh insert
  * sets it; the "already there" (found) branch below never writes to the row
- * at all, so a retried webhook can never move an existing To-do's date.
+ * at all, so a retried webhook can never move an existing To-do's date. The
+ * caller supplies the instant (`dueAt`, the inbound pass's own `now`), never
+ * this function's wall clock (fix-review I2).
  */
 export async function ensureConsentTask(
   db: SupabaseClient, accountId: string,
-  input: { contactId: string; consentEventId: string; title: string }, actorId: string,
+  input: { contactId: string; consentEventId: string; title: string; dueAt: string }, actorId: string,
   actorType: ActorType = "system",
 ): Promise<{ id: string; created: boolean }> {
   const { data, error } = await db.from("tasks")
     .insert({
       account_id: accountId, contact_id: input.contactId, title: input.title,
-      consent_event_id: input.consentEventId, due_at: new Date().toISOString(),
+      consent_event_id: input.consentEventId, due_at: input.dueAt,
     })
     .select("id").single();
   if (!error && data) {

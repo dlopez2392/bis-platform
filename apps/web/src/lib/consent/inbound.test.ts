@@ -181,6 +181,7 @@ describe("recordInboundConsent — a stop", () => {
     expect(db.ensureConsentTask).toHaveBeenCalledWith(DB, "acct_1", {
       contactId: "ct_1", consentEventId: "ev_revoked",
       title: "Ana Ruiz texted CANCELAR, so their texts are stopped. Check whether they also meant their appointment on Oct 9, 2026.",
+      dueAt: NOW.toISOString(),
     }, "sms-inbound", "system");
     db.ensureConsentTask.mockClear();
     db.nextBookedStart.mockResolvedValue(null);
@@ -250,6 +251,7 @@ describe("recordInboundConsent — a phrase, the grant, the alert phone", () => 
     expect(db.ensureConsentTask).toHaveBeenCalledWith(DB, "acct_1", {
       contactId: "ct_1", consentEventId: "ev_held",
       title: m["todo.consent.hold.en"].replace("{name}", "Ana Ruiz").replace("{excerpt}", excerptOf(text, 60)),
+      dueAt: NOW.toISOString(),
     }, "sms-inbound", "system");
     expect(r.reply).toBeNull();
   });
