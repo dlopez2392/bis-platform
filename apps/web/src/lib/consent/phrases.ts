@@ -33,6 +33,15 @@
  * another (a separate test pins that too — the sentence/verb pairwise check
  * does not cover WHOLE_MESSAGE_PHRASES). One continuation is not what it
  * looks like: "lista de espera" is a waiting list, not the texting list.
+ *
+ * 5. A SINGLE STOP WORD with ONE courtesy word (danlo, 2026-09-28, D1) is a
+ *    whole-message HOLD, not a keyword stop: "Baja por favor", "Stop thanks".
+ *    The bare word alone is a keyword (keywords.ts matches it first — this
+ *    module never claims it); a longer text is neither ("Alto, por favor
+ *    mañana a las 3" holds nothing). The qualifying words are every STOP-kind
+ *    keyword from keywords.ts (English and Spanish), plus "no mas" — the
+ *    two-word spelling of NOMAS, which this module's normaliser does not
+ *    collapse the way keywords.ts's does (SINGLE_WORD_STOPS).
  */
 export type PhraseMatch = { phrase: string; language: "en" | "es" };
 
@@ -41,6 +50,8 @@ export const PHRASES_EN: readonly string[] = [
   "dont message", "do not message", "no more texts", "no more messages", "remove me", "take me off",
   "unsubscribe me", "wrong number",
   "no more texting", "do not contact me", "dont contact me",
+  // danlo, 2026-09-28 (D2):
+  "opt me out", "quit texting me", "leave me alone", "i dont want these texts", "i do not want these texts",
 ];
 
 /** Spanish sentence phrases that are about messages on their own. */
@@ -51,6 +62,11 @@ export const PHRASES_ES: readonly string[] = [
   "saqueme de su lista", "saqueme de la lista", "sacame de su lista", "sacame de la lista",
   // orchestrator amendment, 2026-09-28 (dispatch-task-4): holds anywhere, like "no quiero mensajes".
   "no quiero sus mensajes",
+  // danlo, 2026-09-28 (D2): "borrenme/borreme/borrame de su/la lista", like the quitenme forms;
+  // "no quiero promociones" — "promociones" is a message word (ES_MESSAGE_WORDS) but "no quiero"
+  // alone is not a verb form, so this needs its own literal (unlike "no quiero mensajes").
+  "borrenme de su lista", "borrenme de la lista", "borreme de su lista", "borreme de la lista",
+  "borrame de su lista", "borrame de la lista", "no quiero promociones",
 ];
 
 /** Spanish verb forms: each counts only with a message object (danlo, 2026-09-28). */
@@ -64,10 +80,17 @@ export const ES_VERB_FORMS: readonly string[] = [
   "no quiero recibir",
   "no me vuelvan a mandar", "no me vuelva a mandar", "no me vuelvas a mandar",
   "no me vuelvan a enviar", "no me vuelva a enviar", "no me vuelvas a enviar",
+  // danlo, 2026-09-28 (D2): the subjunctive "que me manden/envien/escriban" construction
+  // ("Ya no quiero que me manden mensajes"). ESCRIBIR is also a WHOLE_MESSAGE_PHRASES
+  // entry below (bare "No quiero que me escriban" holds too); MANDAR/ENVIAR stay object-only.
+  "no quiero que me manden", "no quiero que me envien", "no quiero que me escriban",
 ];
 /** Message words: right after a verb form, anywhere in the message. */
 export const ES_MESSAGE_WORDS: readonly string[] = [
   "mensajes", "textos", "sms", "msjs", "mensajitos", "ningun mensaje", "sus mensajes",
+  // danlo, 2026-09-28 (D2): "ofertas" and "publicidad" only in the plural/mass form given
+  // ("oferta" singular does NOT count — "No me manden la oferta del lunes" stays unheld).
+  "promociones", "ofertas", "publicidad", "sus promociones",
 ];
 /** "mas" and "nada": objects only at the END of the message (courtesy words aside) or right before a message word. */
 export const ES_END_OBJECTS: readonly string[] = ["mas", "nada", "nada mas", "nunca mas"];
@@ -92,6 +115,9 @@ export const WHOLE_MESSAGE_PHRASES: readonly PhraseMatch[] = [
   // to BE the entire message.
   { phrase: "borren mi numero", language: "es" }, { phrase: "borre mi numero", language: "es" },
   { phrase: "borra mi numero", language: "es" },
+  // danlo, 2026-09-28 (D2): the bare (object-free) form of the "que me escriban" construction —
+  // escribir is always about messages, so it holds as the whole message like "no me escriban".
+  { phrase: "no quiero que me escriban", language: "es" },
 ];
 
 /** A stop word repeated as the whole message, any number of times. */
@@ -102,6 +128,25 @@ export const REPEATED_KEYWORDS: readonly { word: string; language: "en" | "es" }
 /** One courtesy word the Spanish whole-message forms may carry before, and one after (orchestrator, review V2). */
 export const ES_COURTESY_LEAD: readonly string[] = ["ya", "por favor", "porfa", "porfavor"];
 export const ES_COURTESY_TRAIL: readonly string[] = ["por favor", "porfa", "porfavor", "gracias", "ya"];
+/** The English courtesy words D1's single-stop-word rule allows (one lead, one trail). */
+export const EN_COURTESY_LEAD: readonly string[] = ["please"];
+export const EN_COURTESY_TRAIL: readonly string[] = ["please", "thanks", "thank you"];
+
+/**
+ * Every STOP-kind keyword (keywords.ts) plus "no mas" — the two-word spelling
+ * of NOMAS that this module's normaliser (unlike keywords.ts's) does not
+ * collapse. Each holds as a phrase ONLY with exactly one courtesy word from
+ * its own language (D1): the bare word alone is a keyword (matched first,
+ * elsewhere), never a phrase.
+ */
+export const SINGLE_WORD_STOPS: readonly { word: string; language: "en" | "es" }[] = [
+  { word: "stop", language: "en" }, { word: "stopall", language: "en" }, { word: "unsubscribe", language: "en" },
+  { word: "cancel", language: "en" }, { word: "end", language: "en" }, { word: "quit", language: "en" },
+  { word: "revoke", language: "en" }, { word: "optout", language: "en" },
+  { word: "parar", language: "es" }, { word: "detener", language: "es" }, { word: "alto", language: "es" },
+  { word: "cancelar", language: "es" }, { word: "baja", language: "es" }, { word: "nomas", language: "es" },
+  { word: "no mas", language: "es" },
+];
 
 /** "lista de espera" is a waiting list: a list phrase followed by "de espera" does not count. */
 export const NOT_FOLLOWED_BY: readonly { last: string; next: string }[] = [{ last: "lista", next: "de espera" }];
@@ -113,12 +158,18 @@ export function normalisePhraseText(text: string): string {
     .trim();
 }
 
-/** The message without ONE leading and ONE trailing courtesy word. */
-export function withoutCourtesy(whole: string): string {
+/**
+ * The message without ONE leading and ONE trailing courtesy word, in the
+ * given language's own courtesy lists (default "es" — every existing call
+ * site is Spanish-only; D1 is the first English caller, via SINGLE_WORD_STOPS).
+ */
+export function withoutCourtesy(whole: string, language: "en" | "es" = "es"): string {
+  const leadList = language === "en" ? EN_COURTESY_LEAD : ES_COURTESY_LEAD;
+  const trailList = language === "en" ? EN_COURTESY_TRAIL : ES_COURTESY_TRAIL;
   let s = ` ${whole} `;
-  const lead = ES_COURTESY_LEAD.find((w) => s.startsWith(` ${w} `));
+  const lead = leadList.find((w) => s.startsWith(` ${w} `));
   if (lead) s = s.slice(lead.length + 1);
-  const trail = ES_COURTESY_TRAIL.find((w) => s.endsWith(` ${w} `));
+  const trail = trailList.find((w) => s.endsWith(` ${w} `));
   if (trail) s = s.slice(0, s.length - trail.length - 1);
   return s.trim();
 }
@@ -159,6 +210,14 @@ export function matchPhrase(text: string): PhraseMatch | null {
   const core = withoutCourtesy(whole);
   for (const w of WHOLE_MESSAGE_PHRASES) {
     if (w.phrase === whole || (w.language === "es" && w.phrase === core)) return { phrase: w.phrase, language: w.language };
+  }
+  // D1: a single stop word with exactly one courtesy word (its own language's).
+  // `core2 !== whole` requires a courtesy word to have actually been stripped —
+  // the bare word alone (core2 === whole) is a keyword, not a phrase (precedence
+  // pinned in the test file: matchKeyword is tried first by every caller).
+  for (const s of SINGLE_WORD_STOPS) {
+    const core2 = withoutCourtesy(whole, s.language);
+    if (core2 === s.word && core2 !== whole) return { phrase: s.word, language: s.language };
   }
   for (const r of REPEATED_KEYWORDS) {
     const words = (r.language === "es" ? core : whole).split(" ");

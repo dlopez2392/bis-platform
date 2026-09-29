@@ -297,8 +297,8 @@ phone could never be lifted.
 
 **The inbound route**, after it files the message (`route.ts:161`), so that staff always see what was written:
 
-1. **Normalise.** Unicode NFD with the accents removed, uppercase, trailing punctuation removed, and every space
-   removed (choice 26).
+1. **Normalise.** Unicode NFD with the accents removed, uppercase, punctuation, symbols and invisible characters
+   removed at either end, inner spaces and hyphens removed (plan G9; choice 26).
 2. **Stop keyword** (decision 10). Unless the customer's OWN stop already stands — the newest deciding row is a
    `revoked` whose method is `keyword`, `carrier_block`, `backfill_telnyx`, `unsubscribe_link` or `one_click` — append
    `revoked` (method `keyword`, with the word in the evidence). Over a staff stop or a confirmed free-text stop it IS
@@ -360,26 +360,36 @@ conflict, it holds: staff clear a false hold in one click.
 - **Sentence phrases, as whole words anywhere in the message.**
   - **English:** stop texting, stop sending, stop messaging, stop contacting, dont text, do not text, dont message, do
     not message, no more texts, no more messages, remove me, take me off, unsubscribe me, wrong number, no more
-    texting, do not contact me, dont contact me.
+    texting, do not contact me, dont contact me, opt me out, quit texting me, leave me alone, i dont want these texts,
+    i do not want these texts (the last five, danlo, 2026-09-28, D2).
   - **Spanish, about messages on their own:** no quiero mas mensajes, no quiero mensajes, no quiero sus mensajes, no
-    mas mensajes, no mas textos, numero equivocado; and quitenme / quiteme / quitame / saquenme / saqueme / sacame de
-    su lista or de la lista. Any "… de la lista …" holds, "Quítame de la lista del sábado y ponme el domingo" included
-    (danlo's list form); only "lista de espera" (a waiting list) does not. ("no quiero sus mensajes" added by the
-    orchestrator, 2026-09-28, dispatch-task-4: it holds anywhere, like "no quiero mensajes".)
+    mas mensajes, no mas textos, numero equivocado, no quiero promociones; and quitenme / quiteme / quitame / saquenme
+    / saqueme / sacame / borrenme / borreme / borrame de su lista or de la lista. Any "… de la lista …" holds, "Quítame
+    de la lista del sábado y ponme el domingo" included (danlo's list form); only "lista de espera" (a waiting list)
+    does not. ("no quiero sus mensajes" added by the orchestrator, 2026-09-28, dispatch-task-4: it holds anywhere,
+    like "no quiero mensajes". "borrenme / borreme / borrame de su/la lista" and "no quiero promociones" added by
+    danlo, 2026-09-28, D2.)
 - **Spanish verb forms, ONLY ABOUT MESSAGES** (danlo): no me manden / mande / mandes / envien / envie / envies /
   escriban / escriba / escribas; dejen / deje / deja de mandar(me) / enviar(me) / escribir(me); no quiero recibir; no
-  me vuelvan / vuelva / vuelvas a mandar / enviar. Each counts only with a message object:
+  me vuelvan / vuelva / vuelvas a mandar / enviar; no quiero que me manden / envien / escriban (D2, the subjunctive
+  construction, e.g. "Ya no quiero que me manden mensajes"). Each counts only with a message object:
   - a **message word** right after the form, anywhere in the message: mensajes, textos, sms, msjs, mensajitos, ningun
-    mensaje, sus mensajes ("No me envíen ningún mensaje", "No me vuelvan a mandar mensajes");
+    mensaje, sus mensajes, promociones, ofertas, publicidad, sus promociones ("No me envíen ningún mensaje", "No me
+    vuelvan a mandar mensajes", "Dejen de mandarme sus promociones" — the last four message words, danlo, 2026-09-28,
+    D2; "ofertas" and "publicidad" only in the form given, so "oferta" singular does not count);
   - or **"mas" / "nada"** (also "nada mas", "nunca mas") only at the END of the message, courtesy words aside, or right
-    before a message word: "No me manden más", "No me mande nada, gracias" and "No me mande más mensajes" hold; "No me
-    manden más a Pedro", "No me mande más de dos trabajadores" and "No me mande nada por correo" do not.
+    before a message word: "No me manden más", "No me mande nada, gracias" and "No me mande más mensajes" and "No me
+    manden más promociones" hold; "No me manden más a Pedro", "No me mande más de dos trabajadores", "No me mande
+    nada por correo" and "No me manden la oferta del lunes" (singular) do not.
   A bare mandar or enviar form does not hold ("No me mande la factura", "Dejen de mandarme"): "mandar" can mean a crew
   or an invoice. "mensajes de voz" counts as messages: "No me mande mensajes de voz, mejor texto" is a false hold staff
-  clear in one click, and excluding it missed "no me manden mensajes de voz ni textos" (orchestrator).
+  clear in one click, and excluding it missed "no me manden mensajes de voz ni textos" (orchestrator) — the exclusion
+  is checked independently on the verb-form path and the sentence-phrase path, each with its own test (review I2).
 - **Whole-message phrases:** "please stop" and "stop please" (English, exact); in Spanish "borrenme", "borreme",
   "borrame", "borren / borre / borra mi numero", the escribir forms "dejen / deje / deja de escribirme" and "no me
-  escriban / escriba / escribas", and "no me vuelvan / vuelva / vuelvas a escribir". They count ONLY when they are the
+  escriban / escriba / escribas", "no me vuelvan / vuelva / vuelvas a escribir", and "no quiero que me escriban" (D2,
+  the bare subjunctive form — escribir is always about messages, so it holds bare like the other escribir forms).
+  They count ONLY when they are the
   whole message, punctuation aside; the Spanish ones may carry ONE leading "ya" / "por favor" / "porfa" / "porfavor"
   and ONE trailing "por favor" / "porfa" / "porfavor" / "gracias" / "ya" (orchestrator). "Please stop!!", "¡Bórreme!",
   "Ya no me escriban", "No me escriban, gracias", "Borren mi número" and "Por favor borre mi número" hold; "Please
@@ -392,7 +402,15 @@ conflict, it holds: staff clear a false hold in one click.
 - **A stop word repeated as the whole message:** "stop stop", "parar parar", "alto alto", "baja baja", any number of
   repeats (English also with one "please" at either end, Spanish with the courtesy words); one word on its own is a
   keyword (decision 10), not a phrase.
-- No sentence phrase contains another, so the order of the lists never changes whether a text holds.
+- **A single stop word with ONE courtesy word** (danlo, 2026-09-28, D1) is a whole-message hold, not a keyword stop:
+  every STOP-kind keyword (decision 10) plus "no mas" (the two-word spelling of NOMAS, since the phrase matcher's
+  normaliser — unlike the keyword matcher's — does not collapse inner spaces), each with one Spanish courtesy word
+  above or, in English, one leading "please" / one trailing "please", "thanks" or "thank you". "Baja por favor",
+  "Alto, por favor", "Parar porfa", "Ya baja", "No más, gracias", "Ya no más", "No más por favor", "Detener gracias",
+  "Stop thanks" and "Stop thank you" hold; the bare word alone is a keyword (matched first, elsewhere — this rule
+  never claims it), and a longer text is neither ("Alto, por favor mañana a las 3" holds nothing).
+- No sentence phrase contains another, so the order of the lists never changes whether a text holds; nor does any
+  whole-message phrase contain another (checked separately — that pairwise check does not cover them).
 
 A false match only holds messages, and staff undo it in one click. A missed sentence is the risk, which is why staff
 can still record a stop by hand.
@@ -640,8 +658,9 @@ Of that, 6–7 is counted in §4.2 and S-05's 2–3 in the first release (:1266�
 - **Unit tests.**
   - `normalisePhone`: a table of US-only, MX-only, both, neither, `+52 1`, `00 52`, carrier-supplied and border-city
     numbers.
-  - The keyword matcher: every word with and without accents, in any case, with trailing punctuation and with inner
-    spaces. Non-matches too: "stop by at 3", "Cancel my appointment please", and "No".
+  - The keyword matcher: every word with and without accents, in any case, with punctuation, symbols and invisible
+    characters at either end, inner spaces and hyphens (plan G9). Non-matches too: "stop by at 3", "Cancel my
+    appointment please", and "No".
   - The phrase list: each phrase in context, plus a fixed negative set.
   - The state reducer: tables of event sequences, including a keyword stop landing between a hold and its release.
   - Hours: 20:59 and 21:00, Sunday 11:59 and 12:00 for marketing, DST changeover days (in a zone whose clocks jump

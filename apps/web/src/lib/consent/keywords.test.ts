@@ -27,8 +27,15 @@ describe("matchKeyword — the spec's stop words", () => {
     expect(matchKeyword("no ma" + String.fromCharCode(0x301) + "s")).toMatchObject({ kind: "stop", word: "NOMAS", language: "es" });
   });
 
-  it("punctuation and symbols at EITHER end, and inner spaces and hyphens, are ignored (plan G9; mutation: strip only the trailing end → ¡Alto! is missed, FAILS; mutation: keep inner hyphens → Opt-out is missed, FAILS)", () => {
-    for (const text of ["STOP.", "stop!!!", "Stop 🙏", "  stop  ", "¡Alto!", "¿Baja?", "\"STOP\"", "s t o p", "Opt-out", "no-más"]) {
+  it("punctuation and symbols at EITHER end, and inner spaces and hyphens, are ignored (plan G9; mutation: strip only the trailing end → ¡Alto! is missed, FAILS; mutation: keep inner hyphens → Opt-out is missed, FAILS; mutation: drop \\p{Cf} from the edge strip → 'Stop 🤦‍♀️' is missed, FAILS)", () => {
+    for (const text of [
+      "STOP.", "stop!!!", "Stop 🙏", "  stop  ", "¡Alto!", "¿Baja?", "\"STOP\"", "s t o p", "Opt-out", "no-más",
+      // review I1: a ZWJ emoji sequence (face-palm + ZWJ + female sign + variation
+      // selector, all in \p{Cf}/\p{M}/\p{S}) trails the word, and a zero-width
+      // space (U+200B, \p{Cf}) leads it — both invisible-character classes the
+      // edge strip must still eat.
+      "Stop \u{1F926}‍♀️", "​STOP",
+    ]) {
       expect(matchKeyword(text)?.kind, text).toBe("stop");
     }
   });
