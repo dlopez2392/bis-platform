@@ -224,11 +224,22 @@ describe("scan 3: the ledger has one writer, and it only appends", () => {
     expect(touching).toEqual(["packages/db/src/consent.ts"]);
   });
 
-  it("consent.ts never updates, upserts or deletes, anywhere in the file, however the table is spelled (mutation: add .update( to a consent_events call, or .delete() after .from(\"consent_events\" as never) or .from(CONST) → FAILS)", () => {
+  it("consent.ts never inserts, updates, upserts or deletes directly: every write is the one guarded function (0055; mutation: add .insert( or .update( to a consent_events call → FAILS)", () => {
     const src = code(join(DB_SRC, "consent.ts"));
-    expect(src.match(/\.from\(/g)?.length).toBeGreaterThanOrEqual(2);   // the read and the insert: the scan sees both
-    expect(src).toMatch(/\.insert\(/);
-    expect(src.match(/\.(?:update|upsert|delete)\s*\(/g) ?? []).toEqual([]);
+    expect(src.match(/\.from\(/g)?.length).toBeGreaterThanOrEqual(4);   // the four reads: the scan sees them
+    expect(src).toMatch(/\.rpc\(WRITE_FUNCTION,/);                      // and the one write
+    expect(src.match(/\.(?:insert|update|upsert|delete)\s*\(/g) ?? []).toEqual([]);
+  });
+
+  it("only packages/db/src/consent.ts names the ledger's write function, as any string literal (mutation: an rpc(\"append_consent_event\") from apps/web → FAILS naming the file)", () => {
+    const naming = [...webSources(), ...dbSources()].filter((f) => /["'`]append_consent_event["'`]/.test(code(f))).map(rel);
+    expect(naming).toEqual(["packages/db/src/consent.ts"]);
+  });
+
+  it("0055, which defines the function, inserts into the ledger and never updates, deletes or truncates it (the insert is the positive control; mutation: add an update of consent_events → FAILS)", () => {
+    const sql = readFileSync(join(REPO, "packages", "db", "supabase", "migrations", "0055_consent_writes.sql"), "utf-8").replace(/--[^\n]*/g, "");
+    expect(sql).toMatch(/insert into public\.consent_events/);
+    expect(sql).not.toMatch(/update\s+public\.consent_events|delete\s+from\s+public\.consent_events|truncate/i);
   });
 });
 
