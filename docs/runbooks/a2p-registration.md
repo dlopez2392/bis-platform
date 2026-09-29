@@ -198,15 +198,18 @@ the traffic is a rejection reason.
 confirmation. The help reply must name the brand and give customer care
 contact details; the opt-out reply must confirm no further messages.
 
-**Telnyx implements these, not us.** It detects STOP, STOPALL, UNSUBSCRIBE,
-CANCEL, END and QUIT on the way in, adds the number to its own opt-out list,
-auto-replies, and blocks every later send to it — at the messaging-profile
-level, before the platform sees anything. So do not add keyword handling to
-`/api/sms/inbound`: a second opt-out list would be racing the real one. What
-the platform owes is the LANGUAGE, and `lib/sms/opt-out.ts` appends it to
-every programme message (the text-back and everything through
-`sendAutomationSms`), which is also what makes the sample messages below match
-real traffic.
+**Both Telnyx and the platform implement these.** Telnyx detects its default
+keywords (STOP, STOPALL, STOP ALL, UNSUBSCRIBE, CANCEL, END, QUIT; START,
+UNSTOP; HELP), blocks a STOP at the messaging-profile level, and answers with
+the profile's configured reply. Since consent chain PR-2 the platform ALSO
+reads every inbound text (`/api/sms/inbound`): the same English words plus
+REVOKE, OPT OUT, OPTOUT and the Spanish PARAR, DETENER, ALTO, CANCELAR, BAJA,
+NO MAS, and stop sentences, and records each in the consent ledger that the
+send gate reads before every text. When Telnyx already answered (the webhook's
+`autoresponse_type`), the platform sends nothing more, so a customer never
+gets two confirmations. `lib/sms/opt-out.ts` still appends the opt-out
+LANGUAGE to every programme message, which is what makes the sample messages
+below match real traffic.
 
 The default auto-responses are generic. Custom ones naming the brand are worth
 setting per profile — `POST /v2/messaging_profiles/{id}/autoresp_configs` with

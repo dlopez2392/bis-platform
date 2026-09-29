@@ -11,13 +11,13 @@ import { m } from "@/lib/messages";
  * text from a number you do not recognise, with no way out of it, is the
  * behaviour this product exists not to have.
  *
- * WHAT THIS IS NOT: the opt-out MECHANISM. Telnyx detects STOP (and STOPALL,
- * UNSUBSCRIBE, CANCEL, END, QUIT) on the way in, adds the number to its own
- * opt-out list, auto-replies, and blocks every later send to it — at the
- * messaging-profile level, before this platform sees anything. Implementing a
- * second opt-out list here would be a race against that one, so we owe the
- * carriers the LANGUAGE and nothing else. Do not "finish the job" by adding
- * keyword handling to the inbound webhook.
+ * WHAT THIS IS NOT: the opt-out MECHANISM. That is the consent ledger (consent
+ * chain PR-2): the inbound webhook reads STOP, START and HELP in English and
+ * Spanish, and stop sentences, and writes them to the ledger the send gate
+ * reads before every text. Telnyx's own keyword handling stays on as the
+ * backstop (spec decision 12): it blocks at the messaging profile and answers
+ * the keywords it knows, and the webhook's `autoresponse_type` tells BIS it
+ * did, so the customer never gets two confirmations (plan G4).
  *
  * WHERE IT IS APPLIED — by the send gate (lib/consent/gate.ts, step 7), for
  * every kind whose registry row says `footer: "stop_line"`
@@ -48,11 +48,10 @@ import { m } from "@/lib/messages";
  * drops the WHOLE message to UCS-2 at 70 characters a segment. "para
  * cancelar" says it without them; "para no recibir más mensajes" would not.
  *
- * The KEYWORD stays the English "STOP" in both languages, which is not an
- * oversight: STOP is what Telnyx recognises by default. PARAR and DETENER
- * work only once they are registered as custom keywords on the messaging
- * profile, and telling a Spanish-speaking customer to reply with a word that
- * does nothing is worse than telling them one that works.
+ * The KEYWORD stays the English "STOP" in both languages: STOP is the word
+ * every carrier, Telnyx and BIS all recognise. PARAR works too (BIS's own
+ * matcher reads it, and step 0 registers it on each profile), but a
+ * disclosure that names the one universal word is the safer promise.
  */
 export function withOptOut(body: string, language: "en" | "es" = "en"): string {
   const trimmed = body.trim();

@@ -13,9 +13,25 @@ const dbMocks = vi.hoisted(() => ({
   getAlertPhone: vi.fn(),
   applyConfirmationReply: vi.fn(),
   serviceDb: vi.fn(),
+  // Consent chain PR-2 (the route's consent step, lib/consent/inbound.ts):
+  // every export it reaches is defined, so no path here reads an undefined
+  // mock (Global Constraints). A plain text writes only the grant.
+  appendConsentEventGuarded: vi.fn(),
+  ensureConsentTask: vi.fn(),
+  nextBookedStart: vi.fn(),
+  readAccountTimezone: vi.fn(),
+  getContact: vi.fn(),
+  completeTasksForConsentEvents: vi.fn(),
+  readConsentHistory: vi.fn(),
 }));
 vi.mock("@/lib/voice/telnyx-signature", () => ({ verifyTelnyxSignature: verify }));
 vi.mock("@bis/db", () => dbMocks);
+const afterMock = vi.hoisted(() => vi.fn());
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: (cb: () => unknown) => afterMock(cb) };
+});
+vi.mock("@/lib/consent/replies", () => ({ sendConsentReply: vi.fn() }));
 
 import { POST } from "./route";
 
@@ -38,6 +54,8 @@ beforeEach(() => {
   // Off by default, same as a real account (0035_alert_phone.sql: the field
   // IS the switch) — the loop-guard test below overrides it.
   dbMocks.getAlertPhone.mockResolvedValue(null);
+  dbMocks.appendConsentEventGuarded.mockResolvedValue({ outcome: "refused", prior: null });
+  afterMock.mockReset();
 });
 
 describe("POST /api/sms/inbound", () => {
@@ -334,58 +352,25 @@ describe("an inbound text that is a one-word answer", () => {
     expect(answeredAt).toBeGreaterThan(filedAt);
   });
 
-  it("NEVER sends anything back — the route is a recorder", async () => {
+  it("the YES/NO leg still sends nothing; the route's only way to send is the consent reply, after the response (plan G16; mutation: import any sender into this route → FAILS)", async () => {
     dbMocks.applyConfirmationReply.mockResolvedValue("yes");
     const res = await POST(inbound("yes"));
     expect(res.status).toBe(200);
     expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
     expect(dbMocks.createMessage.mock.calls[0]![2].direction).toBe("inbound");
-    // THE ROUTE HAS NO SEND PATH AT ALL, which is exactly why there is no
-    // `smsSend` spy in this file to assert against — so the assertion is on
-    // the source, not on a mock that does not exist. `Object.keys(await
-    // import(...))` would not be an assertion; this is.
-    //
-    // It asserts the IMPORT SURFACE, not a list of function names. The first
-    // form of this case deny-listed four
-    // (getSmsProvider / sendSmsAction / sendAutomationSms / sendInstantReply)
-    // and six of the seven real senders in this tree walked past it —
-    // MEASURED, not argued: a real `sendAlertSms` import plus a real call in
-    // handleInbound left this file 15/15 green. "Text the operator that the
-    // customer confirmed" is exactly the feature someone adds here next, and
-    // sendAlertSms is the one-call helper they would reach for.
-    //
-    // Every sender that lives in a LIBRARY lives under `@/lib/sms`,
-    // `@/lib/automations` or `@/lib/email`, so those three roots cannot rot
-    // when an eighth send function is named. `sendSmsAction` keeps its name
-    // because it is the one sender that is not in a library at all: it is a
-    // server action in the conversations route group
-    // (conversations/actions.ts:112), and dropping it would have been a
-    // strict loss against the four-name form.
-    //
-    // `@/lib/email` is in here because spec decision 6 is "no send of ANY
-    // kind", not "no text back". Its recorded reasoning — a second outbound
-    // costs a message, risks a loop against the carrier's own STOP handling,
-    // and makes this webhook a sender rather than a recorder — is about the
-    // outbound existing at all, and an emailed "your customer confirmed"
-    // alert is the same failure over a different transport. Also MEASURED: a
-    // real `getEmailProvider().send({...})` in handleInbound left this file
-    // 15/15 green while the guard named only the two SMS roots. The one
-    // import this could ever obstruct is `originFrom` from
-    // `@/lib/email/origin`, which an inbound SMS recorder has no use for; if
-    // some later task genuinely needs it, a deliberate carve-out with a
-    // comment beats a gap nobody noticed, which is what the four-name
-    // deny-list turned out to be.
-    //
-    // Three `toContain`s rather than one alternating regex on purpose: the
-    // failure names WHICH root was crossed, and an escaped-slash regex
-    // literal is the exact shape that gets mangled when an assertion is
-    // copied between files.
-    // Mutation: import any sender into this route -> red.
-    const routeSource = readFileSync(
-      new URL("./route.ts", import.meta.url), "utf8");
+    // A YES answer is a recorder's job (automation spec decision 6): nothing
+    // is scheduled after the response.
+    expect(afterMock).not.toHaveBeenCalled();
+    // The import surface, as before (a sender reached through a library
+    // import is what this case exists to stop): no SMS provider, no
+    // automation, no email, no composer action, and not the gate itself —
+    // the consent replies reach the gate only through lib/consent/replies,
+    // whose one kind family scans.test.ts pins (Task 14).
+    const routeSource = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
     expect(routeSource).not.toContain('from "@/lib/sms');
     expect(routeSource).not.toContain('from "@/lib/automations');
     expect(routeSource).not.toContain('from "@/lib/email');
+    expect(routeSource).not.toContain('from "@/lib/consent/gate');
     expect(routeSource).not.toContain("sendSmsAction");
   });
 
@@ -417,7 +402,7 @@ describe("an inbound text that is a one-word answer", () => {
     dbMocks.applyConfirmationReply.mockResolvedValue(null);
     await POST(inbound("can you come Tuesday instead?"));
     expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
-    expect(dbMocks.applyConfirmationReply).toHaveBeenCalledTimes(1);   // it decides; the route does not pre-filter
+    expect(dbMocks.applyConfirmationReply).toHaveBeenCalledTimes(1);   // a plain text reaches it; a keyword or a stop sentence does not (the route classifies first, spec §4.2 step 5)
   });
 
   it("a text from the account's own alert phone never reaches the matcher", async () => {
