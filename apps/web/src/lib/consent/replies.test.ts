@@ -1,5 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { consentReplyBody, telnyxReplyText, TELNYX_KEYWORDS } from "./replies";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const db = vi.hoisted(() => ({ getBranding: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn() }));
+vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
+const gate = vi.hoisted(() => ({ sendSms: vi.fn() }));
+vi.mock("./gate", () => gate);
+
+import { consentReplyBody, telnyxReplyText, sendConsentReply, TELNYX_KEYWORDS } from "./replies";
 import { segmentsFor } from "@/lib/sms/segments";
 
 const KINDS = ["consent.stop_confirmation", "consent.start_confirmation", "consent.help"] as const;
@@ -64,5 +70,101 @@ describe("telnyxReplyText — what each business's Telnyx profile answers (Task 
     expect(TELNYX_KEYWORDS.stop.length).toBeLessThanOrEqual(20);
     expect(TELNYX_KEYWORDS.start).toEqual(["START", "UNSTOP"]);
     expect(TELNYX_KEYWORDS.help).toEqual(["HELP", "AYUDA"]);
+  });
+});
+
+describe("sendConsentReply — the one BIS reply, through the gate", () => {
+  const plan = { kind: "consent.stop_confirmation" as const, language: "es" as const, answersEventId: "ev_1" };
+  beforeEach(() => {
+    for (const fn of [...Object.values(db), gate.sendSms]) fn.mockReset();
+    db.getBranding.mockResolvedValue({ brandName: " 956 Woodworks " });
+    db.createMessage.mockResolvedValue({ id: "msg_out" });
+    gate.sendSms.mockImplementation(async (_d: unknown, req: { body: string }, opts: { prepare?: (c: object) => Promise<void> }) => {
+      await opts.prepare?.({ body: req.body, to: "+19562921696", from: "+19565550000" });
+      return { kind: "sent", providerMessageId: "p_1", to: "+19562921696", from: "+19565550000", body: req.body, billable: true, segments: 1 };
+    });
+    // .mockClear() before re-implementing: vi.spyOn on an already-spied
+    // method returns the SAME mock instance, so without this its .mock.calls
+    // from an earlier test in this file leak into the next one's assertions
+    // (found running this file whole: "a 'sent' status write ..." failed only
+    // in the full-file run, never alone — the earlier "a refusal or a
+    // failure is logged ..." test's two "not sent:" lines were still in
+    // console.error's history).
+    vi.spyOn(console, "error").mockClear().mockImplementation(() => {});
+    vi.spyOn(console, "info").mockClear().mockImplementation(() => {});
+  });
+
+  it("asks the gate for the kind, the carrier's number, the stop it answers and the business-named line (mutation: numberFromCarrier false → FAILS)", async () => {
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    expect(gate.sendSms.mock.calls[0]![1]).toEqual({
+      accountId: "a1", kind: "consent.stop_confirmation", to: "+19562921696", contactId: "ct_1", language: "es",
+      numberFromCarrier: true, answersEventId: "ev_1",
+      body: "956 Woodworks: Ya no le enviaremos mensajes. Responda START para volver a recibirlos.",
+    });
+  });
+
+  it("files the reply in the thread before it leaves, then marks it sent with the provider's id (mutation: skip the sent write → FAILS)", async () => {
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    expect(db.createMessage).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ conversationId: "conv_1", channel: "sms", direction: "outbound" }), "sms-inbound", "system");
+    expect(db.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "msg_out", "sent", { providerMessageId: "p_1" }, "sms-inbound", "system");
+  });
+
+  it("the alert phone has no thread: the reply still goes, and nothing is filed (mutation: require a conversation → no send, FAILS)", async () => {
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: null, conversationId: null, reply: plan });
+    expect(gate.sendSms).toHaveBeenCalledTimes(1);
+    expect(db.createMessage).not.toHaveBeenCalled();
+    // Prepare skipping the filing must not abort the send itself: the text
+    // still reports sent, and nothing is logged as a failure (found running
+    // the brief's own probe 19: a throw here is silently swallowed by
+    // sendConsentReply's outer catch, so the two calls above hold either
+    // way — this line is what actually distinguishes "skip the filing" from
+    // "abort the send").
+    expect(vi.mocked(console.error)).not.toHaveBeenCalled();
+    expect(vi.mocked(console.info).mock.calls.at(-1)?.[0]).toMatch(/ sent$/);
+  });
+
+  it("a refusal or a failure is logged and never thrown — it runs after the response, where a throw has no one to reach (mutation: rethrow → FAILS)", async () => {
+    gate.sendSms.mockResolvedValue({ kind: "blocked", reason: "a2p_not_approved" });
+    await expect(sendConsentReply({} as never, { accountId: "a1", to: "+1", contactId: null, conversationId: null, reply: plan })).resolves.toBeUndefined();
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toMatch(/not sent: blocked a2p_not_approved/);
+    db.getBranding.mockRejectedValue(new Error("getBranding failed: timeout"));
+    await expect(sendConsentReply({} as never, { accountId: "a1", to: "+1", contactId: null, conversationId: null, reply: plan })).resolves.toBeUndefined();
+  });
+
+  it("a filing that fails does not stop the reply: the thread line is optional, the confirmation is not (review R2-I1b; mutation: let prepare's createMessage throw → the gate sends nothing, FAILS)", async () => {
+    db.createMessage.mockRejectedValue(new Error("createMessage failed"));
+    let prepared: Promise<void> | undefined;
+    gate.sendSms.mockImplementation(async (_d: unknown, req: { body: string }, opts: { prepare?: (c: object) => Promise<void> }) => {
+      prepared = opts.prepare?.({ body: req.body, to: "+19562921696", from: "+19565550000" });
+      await prepared;   // a throw here is the gate's "nothing leaves" (gate.ts:191-195)
+      return { kind: "sent", providerMessageId: "p_1", to: "+19562921696", from: "+19565550000", body: req.body, billable: true, segments: 1 };
+    });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    await expect(prepared).resolves.toBeUndefined();
+    expect(vi.mocked(console.info).mock.calls.map((c) => String(c[0]))).toContain("consent reply consent.stop_confirmation for account a1 sent");
+    expect(db.updateMessageStatus).not.toHaveBeenCalled();
+  });
+
+  it("a 'sent' status write that fails AFTER the send is logged as that, never as 'not sent' (review R2-m5; mutation: one try around both → 'not sent', FAILS)", async () => {
+    db.updateMessageStatus.mockRejectedValue(new Error("status write failed"));
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    const lines = vi.mocked(console.error).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => /sent, but its thread row was not marked sent/.test(l))).toBe(true);
+    expect(lines.some((l) => /not sent:/.test(l))).toBe(false);
+  });
+
+  it("a 40300 on a START confirmation is logged naming the carrier block the gate recorded — the START-then-blocked trace (review R2-I1c; mutation: fall through to the generic 'failed provider' line → FAILS)", async () => {
+    gate.sendSms.mockResolvedValue({ kind: "failed", stage: "provider", error: "telnyx send failed (403): …", carrierBlocked: true });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: null, conversationId: null, reply: { kind: "consent.start_confirmation", language: "en" } });
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toMatch(/consent\.start_confirmation .* the carrier refused it \(40300\): Telnyx still blocks this number/);
+  });
+
+  it("a provider failure after filing marks the filed row failed (mutation: leave it queued → FAILS)", async () => {
+    gate.sendSms.mockImplementation(async (_d: unknown, req: { body: string }, opts: { prepare?: (c: object) => Promise<void> }) => {
+      await opts.prepare?.({ body: req.body, to: "+1", from: "+2" });
+      return { kind: "failed", stage: "provider", error: "telnyx send failed (403): …", carrierBlocked: true };
+    });
+    await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
+    expect(db.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "msg_out", "failed", { error: "telnyx send failed (403): …" }, "sms-inbound", "system");
   });
 });
