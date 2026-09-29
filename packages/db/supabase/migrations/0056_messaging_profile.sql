@@ -7,9 +7,11 @@
 -- refuses to text for an approved account until this is set
 -- (lib/sms/sender.ts), and no two accounts can record the same profile.
 --
--- Agency-written through serviceDb only: 0013 and 0053 grant `authenticated`
--- UPDATE on named branding columns of accounts, and this column is not one of
--- them (schema-grants-guard.test.ts pins that list, unchanged).
+-- Agency-written through serviceDb only: no UPDATE grant to authenticated;
+-- INSERT rides accounts' table-level grant, which RLS limits to the agency.
+-- 0013 and 0053 grant authenticated UPDATE on named branding columns of
+-- accounts, and this column is not one of them
+-- (schema-grants-guard.test.ts pins that list, unchanged).
 --
 -- ADDITIVE ONLY: the build before this file never reads the column.
 -- No backslash anywhere in this file (the MCP apply rule).
