@@ -836,7 +836,7 @@ export const m = {
   // tell daily.
   "checklist.phone_number.title": "Buy a phone number",
   "checklist.phone_number.help":
-    "Done in Telnyx. Calling and SMS arrive in M2 — until then this is a record that the number exists.",
+    "Done in Telnyx. Calling and texting are both built and work once the rest of this checklist is done.",
   "checklist.a2p_registration.title": "Register A2P 10DLC brand and campaign",
   // Names where the gather list lives rather than carrying it: this line
   // renders inside a seven-item list, on the account dashboard as well as the
@@ -845,6 +845,19 @@ export const m = {
   // because ChecklistPanel is reusable and must not say "below".
   "checklist.a2p_registration.help":
     "Done with the carriers via Telnyx. Expect days to weeks; start it early because nothing you do here speeds it up. The A2P registration panel on this company's checklist lists what to collect from them first.",
+  // The three steps learned setting up BIS's own texting (2026-09-29): a
+  // messaging profile is per BUSINESS (a STOP blocks every number on the
+  // profile, and a profile has one reply text), so one company's rename or
+  // one company's opt-out must never touch another's.
+  "checklist.messaging_profile.title": "Give the number its own messaging profile",
+  "checklist.messaging_profile.help":
+    "Done in Telnyx. Every company needs its own messaging profile — a STOP blocks every number on a profile, so a shared one would block a company's number over another company's opt-out. Set the inbound webhook to https://app.bis-rgv.com/api/sms/inbound on API v2, put only this company's number on it, turn AI/opt-out detection off, and under Keywords → Global set the STOP, START and HELP replies signed with the company's name exactly as it's set on their account — renaming the company later means redoing these replies. Then paste the profile's ID into the Messaging profile ID field on the A2P registration card below.",
+  "checklist.campaign_numbers.title": "Assign the number to the approved campaign",
+  "checklist.campaign_numbers.help":
+    "Done in Telnyx, after the carriers approve the campaign. Open the campaign and use Assign numbers to put this company's number on it — skipping this step means carriers quietly filter the texts even though everything else reads approved.",
+  "checklist.sms_live_check.title": "Test STOP, START and HELP from a phone",
+  "checklist.sms_live_check.help":
+    "From a real phone that isn't this account's alert phone, text STOP, then START, then HELP to the company's number. Check each reply arrives and the contact's Texts row changes (Stopped → Texting on) before telling the client texting is live.",
   "checklist.email_domain.title": "Add a sending subdomain, DKIM and DMARC",
   "checklist.email_domain.help":
     "Done in Resend, then the DNS records at the domain host. DKIM alone is not enough — without a DMARC record the receiving server accepts the mail and may discard it, and every system here will still say delivered. Check the domain's Insights in Resend before the client sends anything real. A subdomain keeps this client's sending reputation separate. Once the domain is verified, set it as the Sending address in this company's Settings — until you do, their mail still goes out from the platform address.",
@@ -852,7 +865,7 @@ export const m = {
   "checklist.form_notify.help":
     "Done here. Forms applied from a blueprint deliberately start with an empty notify list so leads cannot reach the previous client.",
   "checklist.gbp_connect.title": "Connect Google Business Profile",
-  "checklist.gbp_connect.help": "Done in Google. Review management arrives in M5.",
+  "checklist.gbp_connect.help": "Done in Google. Review management isn't built yet — for now this is just a record that the profile is connected.",
   "checklist.invite_owner.title": "Invite the business owner",
   "checklist.invite_owner.help": "Done in this company's Settings, under Client access. Turn access on, then invite them by email.",
   // Not external: this is done in this app, on the Voice page. No href — the
@@ -871,6 +884,12 @@ export const m = {
   "checklist.complete": "Everything on the checklist is done.",
   "checklist.remaining": "remaining",
   "checklist.open": "Open",
+  // The A2P row's link to its own card further down this same page — added
+  // because the card sits below the whole checklist and was hard to find by
+  // scrolling. Distinct copy from checklist.open (which always leaves the
+  // app) so a keyboard/screen-reader user isn't told "Open" twice for two
+  // different destinations on the same row.
+  "checklist.goToA2pCard": "Go to the A2P card",
   "checklist.reviewLink": "Checklist complete — review",
   // The dashboard's compact row (checklist-row.tsx), not the full panel — it
   // sits under checklist.title as the row's own count, mirroring
