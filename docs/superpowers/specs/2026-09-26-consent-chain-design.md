@@ -448,7 +448,10 @@ can still record a stop by hand.
 `GET /v2/messaging_optouts`, PR-2 plan F6 and F10: each row's `from` is the business's number and `to` the
 customer's), so a one-off script appends `revoked` (method `backfill_telnyx`) for each `to`, in the account that owns
 the `from` number. danlo sees the count first. Because no account has texted a customer (§2), the list is expected to
-be short.
+be short. Each opt-out's `to` is normalised with `normalisePhone` (`packages/db/src/phone.ts`) before it is written,
+exactly like every other writer in the app (the inbound route, the send gate, staff actions, grants, the Texts row);
+a `to` `normalisePhone` cannot parse stops the whole import rather than writing an unreadable row into the
+append-only ledger (whole-branch review I1).
 
 ### 4.3 PR-3: email
 

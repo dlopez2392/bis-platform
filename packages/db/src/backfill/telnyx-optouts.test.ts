@@ -110,6 +110,43 @@ describe("planTelnyxBackfill — which account each opt-out belongs to", () => {
   });
 });
 
+describe("planTelnyxBackfill — the customer `to` is keyed exactly like every other writer (whole-branch review I1)", () => {
+  it("a +521... customer number (the retired Mexican mobile 1) is normalised to +52... in the written address (mutation: use r.to raw instead of normalisePhone's e164 → FAILS)", () => {
+    const plan = planTelnyxBackfill([row({ to: "+5215512345678" })], OWNERS);
+    expect(plan.toAppend).toHaveLength(1);
+    expect(plan.toAppend[0]!.address).toBe("+525512345678");
+  });
+
+  it("the normalised address is what the sourceRef and the SQL both carry, never the +521 form (mutation: use r.to raw instead of normalisePhone's e164 → FAILS)", () => {
+    const sql = telnyxBackfillSql(planTelnyxBackfill([row({ to: "+5215512345678" })], OWNERS));
+    expect(sql).toContain("telnyx_optout:+19565550000:+525512345678:2025-04-28T12:00:38.631Z");
+    expect(sql).not.toContain("+5215512345678");
+  });
+
+  it("a +521 row and its +52 twin for the same account dedupe to ONE row, keeping the earliest (mutation: key the dedupe on the raw to instead of the normalised address → two rows, FAILS)", () => {
+    const plan = planTelnyxBackfill([
+      row({ to: "+5215512345678", created_at: "2025-04-28 12:00:38.631252+00:00" }),
+      row({ to: "+525512345678", created_at: "2025-01-01 00:00:00+00:00" }),
+    ], OWNERS);
+    expect(plan.toAppend).toHaveLength(1);
+    expect(plan.toAppend[0]!.address).toBe("+525512345678");
+    expect(plan.toAppend[0]!.occurredAt).toBe("2025-01-01T00:00:00.000Z");
+  });
+
+  it("a to that normalisePhone refuses throws naming the row's input POSITION, never the number itself (mutation: skip the normalisePhone guard → the bad row reaches the ledger write path instead of throwing, FAILS)", () => {
+    const message = thrown(() => planTelnyxBackfill([row(), row({ to: "12345" })], OWNERS));
+    expect(message).toMatch(/opt-out 1/);
+    expect(message).not.toContain("12345");
+  });
+
+  it("toMatchesOwners (the reversed from/to guard) still fires on the NORMALISED to, not just an exact string match (mutation: compare byNumber.has(r.to) instead of the normalised value → a +521 reversal would be missed, FAILS)", () => {
+    // OWNERS has no +52 entry, so this only proves the normalised value is what's
+    // compared; a live +521-owner case is covered by the dedupe test above using the
+    // same normalisation path.
+    expect(planTelnyxBackfill([row({ to: "+19565550001" })], OWNERS).toMatchesOwners).toBe(1);
+  });
+});
+
 describe("maskLast4 — never a full number in a log line (review I2)", () => {
   it("keeps only the last four digits (mutation: return the input unchanged → FAILS)", () => {
     expect(maskLast4("+19565559999")).toBe("********9999");

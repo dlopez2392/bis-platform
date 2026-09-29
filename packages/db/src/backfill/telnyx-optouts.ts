@@ -1,4 +1,5 @@
 import { consentAppendSql } from "../consent";
+import { normalisePhone } from "../phone";
 
 /**
  * Consent chain PR-2's Telnyx backfill (spec §4.2, plan Task 3): Telnyx's
@@ -114,26 +115,39 @@ export function planTelnyxBackfill(
   const unmatched = new Map<string, number>();
   let toMatchesOwners = 0;
   const nowMs = now.getTime();
-  for (const r of rows) {
-    if (byNumber.has(r.to)) toMatchesOwners++;
+  rows.forEach((r, i) => {
+    // Whole-branch review I1: Telnyx's export writes `to` verbatim, which still carries
+    // Mexico's retired mobile `1` (`+521XXXXXXXXXX`) on a number a customer's carrier reports
+    // that way. Every OTHER writer in the app keys through normalisePhone (packages/db/src/
+    // phone.ts), which drops it (`+521...` -> `+52...`); a backfilled `+521...` row would
+    // report "appended" but no send would ever read it — and the ledger is append-only, so it
+    // could never be corrected. Run `to` through the SAME function before it is used
+    // anywhere: the self-match count, the dedupe key, and the written address (which is also
+    // what the sourceRef and the SQL statement below read from). A `to` normalisePhone
+    // refuses is never written — the row's INPUT POSITION is named, never its digits (the
+    // same discipline `asRow` already keeps for a malformed row).
+    const normalised = normalisePhone(r.to);
+    if (!normalised) throw new Error(`opt-out ${i}: to does not normalise to a phone number`);
+    const to = normalised.e164;
+    if (byNumber.has(to)) toMatchesOwners++;
     const owner = byNumber.get(r.from);
-    if (!owner) { unmatched.set(r.from, (unmatched.get(r.from) ?? 0) + 1); continue; }
-    const key = `${owner.account_id}|${r.to}`;
+    if (!owner) { unmatched.set(r.from, (unmatched.get(r.from) ?? 0) + 1); return; }
+    const key = `${owner.account_id}|${to}`;
     const occurredAt = isoOf(r.created_at);
     const existingIdx = indexByKey.get(key);
     if (existingIdx !== undefined) {
       // review M4: keep the EARLIEST created_at deterministically, never "whichever the input
       // happened to list first" — Telnyx's paging order is not guaranteed (plan F6/F10).
       if (Date.parse(occurredAt) < Date.parse(toAppend[existingIdx]!.occurredAt)) {
-        toAppend[existingIdx] = { accountId: owner.account_id, address: r.to, from: r.from, keyword: r.keyword, profileId: r.messaging_profile_id, occurredAt };
+        toAppend[existingIdx] = { accountId: owner.account_id, address: to, from: r.from, keyword: r.keyword, profileId: r.messaging_profile_id, occurredAt };
       }
-      continue;
+      return;
     }
     indexByKey.set(key, toAppend.length);
-    toAppend.push({ accountId: owner.account_id, address: r.to, from: r.from, keyword: r.keyword, profileId: r.messaging_profile_id, occurredAt });
+    toAppend.push({ accountId: owner.account_id, address: to, from: r.from, keyword: r.keyword, profileId: r.messaging_profile_id, occurredAt });
     perAccount[owner.account_id] = (perAccount[owner.account_id] ?? 0) + 1;
     if (owner.status === "released") releasedPerAccount[owner.account_id] = (releasedPerAccount[owner.account_id] ?? 0) + 1;
-  }
+  });
   // review M2: computed here, in count-only mode too — not only at the moment SQL is emitted.
   const futureDated = toAppend.filter((r) => Date.parse(r.occurredAt) > nowMs);
   return {

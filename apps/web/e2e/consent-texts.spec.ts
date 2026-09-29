@@ -99,6 +99,28 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   const db = serviceDb();
+  // whole-branch review m2: `conversations.contact_id` and `messages.conversation_id` both
+  // carry a plain FK with no ON DELETE action (0005_messaging.sql:14,33), unlike `tasks.contact_id`
+  // (ON DELETE CASCADE, 0003_crm_core.sql:109) — so a contact delete alone fails on
+  // conversations_contact_id_fkey the moment an inbound text (this spec's Stopper and Holder
+  // cases) has given the contact a conversation. Delete this spec's OWN messages, then its OWN
+  // conversations, then its OWN contacts — every delete scoped to made.contacts, never a wide
+  // delete on either table.
+  if (made.contacts.length > 0) {
+    const { data: convos, error: convReadErr } = await db.from("conversations")
+      .select("id").in("contact_id", made.contacts);
+    if (convReadErr) {
+      console.error(`consent-texts e2e: conversation lookup failed (the fixture sweep takes it): ${convReadErr.message}`);
+    } else {
+      const convoIds = (convos ?? []).map((c) => (c as { id: string }).id);
+      if (convoIds.length > 0) {
+        const { error: msgErr } = await db.from("messages").delete().in("conversation_id", convoIds);
+        if (msgErr) console.error(`consent-texts e2e: message cleanup failed (the fixture sweep takes it): ${msgErr.message}`);
+        const { error: convDelErr } = await db.from("conversations").delete().in("id", convoIds);
+        if (convDelErr) console.error(`consent-texts e2e: conversation cleanup failed (the fixture sweep takes it): ${convDelErr.message}`);
+      }
+    }
+  }
   for (const id of made.contacts) {
     const { error } = await db.from("contacts").delete().eq("id", id);
     if (error) console.error(`consent-texts e2e: contact cleanup failed (the fixture sweep takes it): ${error.message}`);

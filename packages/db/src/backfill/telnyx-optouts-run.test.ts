@@ -109,3 +109,51 @@ describe("telnyx-optouts-run: --emit-sql refuses a reversed from/to instead of s
     });
   });
 });
+
+describe("telnyx-optouts-run: a normal run's own console output never carries a customer number (T3-b, whole-branch review I1 item 7)", () => {
+  // A fictional business number and a fictional customer number — never a real one (dispatch rule 8).
+  const FROM = "+15550001111";
+  const TO = "+15559876543";
+  const TO_DIGITS = TO.slice(1); // in case anything strips the leading "+" but keeps the digits
+  // NOT a generic digit-run regex (the shared DIGIT_RUN, or a phone-length variant of it): the
+  // "to write, account …" line legitimately prints the owner's account UUID, and this file's own
+  // OWNER_ID has a 12-hex-character final segment that is entirely digits ("111111111111"), which
+  // would false-positive on ANY digit-run check, however long. The precise, targeted checks below
+  // (the exact customer number, with and without its "+") are what this test actually needs.
+
+  it("count-only mode (no --emit-sql, so no database is ever touched) prints only counts, never the customer number (mutation: console.log the raw `to` beside the read count → FAILS)", () => {
+    withTmp((dir) => {
+      const optoutsPath = join(dir, "optouts.json");
+      const ownersPath = join(dir, "owners.json");
+      writeFileSync(optoutsPath, JSON.stringify([
+        { from: FROM, to: TO, messaging_profile_id: null, keyword: "STOP", created_at: "2026-01-01T00:00:00Z" },
+      ]));
+      writeFileSync(ownersPath, JSON.stringify([{ e164: FROM, account_id: OWNER_ID, status: "active" }]));
+      const r = runCli([optoutsPath, ownersPath]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).not.toContain(TO);
+      expect(r.stdout).not.toContain(TO_DIGITS);
+      expect(r.stderr).not.toContain(TO);
+    });
+  });
+
+  it("--emit-sql mode's own console output never carries the customer number either — only the written (never-committed) file does (mutation: console.log the raw `to` beside the read count → FAILS)", () => {
+    withTmp((dir) => {
+      const optoutsPath = join(dir, "optouts.json");
+      const ownersPath = join(dir, "owners.json");
+      const outPath = join(dir, "out.sql");
+      writeFileSync(optoutsPath, JSON.stringify([
+        { from: FROM, to: TO, messaging_profile_id: null, keyword: "STOP", created_at: "2026-01-01T00:00:00Z" },
+      ]));
+      writeFileSync(ownersPath, JSON.stringify([{ e164: FROM, account_id: OWNER_ID, status: "active" }]));
+      const r = runCli([optoutsPath, ownersPath, "--emit-sql", outPath]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).not.toContain(TO);
+      expect(r.stdout).not.toContain(TO_DIGITS);
+      expect(r.stderr).not.toContain(TO);
+      // The file itself DOES hold the number — that is what it is for (§4.2) — never committed
+      // and deleted after the paste, per the module's own header comment.
+      expect(existsSync(outPath)).toBe(true);
+    });
+  });
+});

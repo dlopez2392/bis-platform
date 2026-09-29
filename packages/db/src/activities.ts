@@ -96,6 +96,14 @@ export async function reopenTask(
  * retrying a webhook whose first attempt already wrote the To-do — finds the
  * first one rather than making two, and emits nothing. Any other error
  * THROWS: the inbound route turns it into a 503 so the To-do is retried.
+ *
+ * Whole-branch review m1: the NEW insert gets a due date of the moment it is
+ * created — an undated task buckets to Waiting (apps/web's `lib/work/
+ * buckets.ts`) and is the first cut past the 200-task limit
+ * (`work-queue.ts`'s `openTasks`), so a consent hold's To-do would silently
+ * lose the queue's "act today" ordering it exists for. Only the fresh insert
+ * sets it; the "already there" (found) branch below never writes to the row
+ * at all, so a retried webhook can never move an existing To-do's date.
  */
 export async function ensureConsentTask(
   db: SupabaseClient, accountId: string,
@@ -103,7 +111,10 @@ export async function ensureConsentTask(
   actorType: ActorType = "system",
 ): Promise<{ id: string; created: boolean }> {
   const { data, error } = await db.from("tasks")
-    .insert({ account_id: accountId, contact_id: input.contactId, title: input.title, consent_event_id: input.consentEventId })
+    .insert({
+      account_id: accountId, contact_id: input.contactId, title: input.title,
+      consent_event_id: input.consentEventId, due_at: new Date().toISOString(),
+    })
     .select("id").single();
   if (!error && data) {
     await emit(db, accountId, "task.created", actorId,

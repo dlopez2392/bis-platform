@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 vi.mock("./events", () => ({ emit: vi.fn(async () => undefined) }));
@@ -37,15 +37,26 @@ function fakeDb(answers: Answer[]) {
 }
 
 describe("ensureConsentTask — one To-do per ledger row", () => {
-  it("inserts the task with its consent_event_id and emits task.created (mutation: drop consent_event_id from the insert → FAILS)", async () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-06T18:00:00Z")); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("inserts the task with its consent_event_id, a due date of the moment it is created (m1), and emits task.created (mutation: drop consent_event_id, or drop due_at, from the insert → FAILS)", async () => {
     vi.mocked(emit).mockClear();
     const f = fakeDb([{ data: { id: "t1" }, error: null }]);
     expect(await ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "Ana may have asked …" }, "sms-inbound", "system"))
       .toEqual({ id: "t1", created: true });
     expect(f.calls.find((c) => c[0] === "insert")?.[1]).toEqual({
       account_id: "a1", contact_id: "c1", title: "Ana may have asked …", consent_event_id: "e1",
+      due_at: "2026-10-06T18:00:00.000Z",
     });
     expect(emit).toHaveBeenCalledWith(f.db, "a1", "task.created", "sms-inbound", { taskId: "t1", contactId: "c1", consentEventId: "e1" }, "system");
+  });
+
+  it("a second attempt for the same row never re-dates the existing task — only a fresh insert gets a due date (m1; mutation: update due_at on the duplicate-found path → FAILS)", async () => {
+    vi.mocked(emit).mockClear();
+    const f = fakeDb([{ data: null, error: { code: "23505", message: "duplicate" } }, { data: { id: "t0" }, error: null }]);
+    await ensureConsentTask(f.db, "a1", { contactId: "c1", consentEventId: "e1", title: "x" }, "sms-inbound", "system");
+    expect(f.calls.some((c) => c[0] === "update")).toBe(false);
   });
 
   it("a second attempt for the same row (23505 on tasks_consent_event_once) returns the FIRST task and emits nothing (mutation: throw on 23505 → FAILS)", async () => {
