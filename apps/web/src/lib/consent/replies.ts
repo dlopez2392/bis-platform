@@ -104,7 +104,11 @@ export async function sendConsentReply(
       return;
     }
     if (result.kind === "failed" && messageId) {
-      await updateMessageStatus(db, r.accountId, messageId, "failed", { error: result.error }, ACTOR, "system");
+      try {
+        await updateMessageStatus(db, r.accountId, messageId, "failed", { error: result.error }, ACTOR, "system");
+      } catch (e) {
+        console.error(`consent reply ${r.reply.kind} for account ${r.accountId} failed, and its thread row was not marked failed: ${loggableError(e)}`);
+      }
     }
     if (result.kind === "failed" && result.carrierBlocked) {
       // Review R2-I1c: a START Telnyx did not recognise (say "Start!") lifts

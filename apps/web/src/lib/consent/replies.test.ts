@@ -167,4 +167,17 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
     await sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: plan });
     expect(db.updateMessageStatus).toHaveBeenCalledWith({}, "a1", "msg_out", "failed", { error: "telnyx send failed (403): …" }, "sms-inbound", "system");
   });
+
+  it("a 'failed' status write that itself throws does not swallow the carrier-block reason it was about to log, or throw past its own caller (review — the 'sent' write already guards itself; mutation: no try around the failed write → the 40300 line is lost, replaced by the generic status-write error, FAILS)", async () => {
+    gate.sendSms.mockImplementation(async (_d: unknown, req: { body: string }, opts: { prepare?: (c: object) => Promise<void> }) => {
+      await opts.prepare?.({ body: req.body, to: "+1", from: "+2" });
+      return { kind: "failed", stage: "provider", error: "telnyx send failed (403): …", carrierBlocked: true };
+    });
+    db.updateMessageStatus.mockRejectedValue(new Error("status write failed"));
+    await expect(sendConsentReply({} as never, { accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1", reply: { kind: "consent.start_confirmation", language: "en" } }))
+      .resolves.toBeUndefined();
+    const lines = vi.mocked(console.error).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => /the carrier refused it \(40300\)/.test(l))).toBe(true);
+    expect(lines.some((l) => /not marked failed/.test(l))).toBe(true);
+  });
 });

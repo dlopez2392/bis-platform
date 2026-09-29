@@ -126,7 +126,9 @@ async function handleInbound(
   const text = typeof payload?.text === "string" ? payload.text : "";
   const providerMessageId = payload?.id ?? null;
   const base = {
-    accountId, text, autoresponse: parseAutoresponse(payload?.autoresponse_type), providerMessageId,
+    accountId, text, autoresponse: parseAutoresponse(payload?.autoresponse_type),
+    autoresponseRaw: typeof payload?.autoresponse_type === "string" ? payload.autoresponse_type : null,
+    providerMessageId,
     messagingProfileId: typeof payload?.messaging_profile_id === "string" ? payload.messaging_profile_id : null,
     now: new Date(),
   };

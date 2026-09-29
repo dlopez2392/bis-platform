@@ -15,7 +15,7 @@ import { m } from "@/lib/messages";
 const DB = {} as never;
 const NOW = new Date("2026-10-06T20:00:00Z");
 const input = (over: Partial<InboundConsentInput> = {}): InboundConsentInput => ({
-  accountId: "acct_1", address: "+19562921696", text: "STOP", autoresponse: null,
+  accountId: "acct_1", address: "+19562921696", text: "STOP", autoresponse: null, autoresponseRaw: null,
   providerMessageId: "msg_1", messagingProfileId: "prof_1", contactId: "ct_1", firstFiling: true, now: NOW, ...over,
 });
 const appended = (id: string, prior: object | null = null) => ({ outcome: "appended", id, prior });
@@ -85,9 +85,22 @@ describe("recordInboundConsent — a stop", () => {
     expect(e[1]).toEqual({
       accountId: "acct_1", channel: "sms", address: "+19562921696", contactId: "ct_1", sourceRef: "msg_1",
       action: "revoked", method: "keyword",
-      evidence: { keyword: "STOP", language: "en", autoresponse_type: null, messaging_profile_id: "prof_1", excerpt: "Stop!" },
+      evidence: { keyword: "STOP", language: "en", autoresponse_type: null, autoresponse_type_raw: null, messaging_profile_id: "prof_1", excerpt: "Stop!" },
     });
     expect(e[2]).toBe("unless_customer_stopped");
+  });
+
+  it("keeps the RAW autoresponse_type string beside the parsed value, so a spelling BIS reads as OTHER is still on record (mutation: drop autoresponse_type_raw from the evidence → FAILS)", async () => {
+    await run(input({ text: "baja", autoresponse: "OTHER", autoresponseRaw: "OPT_OUT_XYZ" }), classifyInbound("baja", "OTHER"));
+    const e = db.appendConsentEventGuarded.mock.calls.find((c) => c[1].action === "revoked")!;
+    expect(e[1].evidence).toMatchObject({ autoresponse_type: "OTHER", autoresponse_type_raw: "OPT_OUT_XYZ" });
+  });
+
+  it("logs the ambiguity — never the customer's own number — when Telnyx's autoresponse_type reads as OTHER on a stop (mutation: skip the log → FAILS; mutation: log i.address → FAILS)", async () => {
+    await run(input({ text: "baja", address: "+19562921696", autoresponse: "OTHER", autoresponseRaw: "OPT_OUT_XYZ" }), classifyInbound("baja", "OTHER"));
+    const lines = vi.mocked(console.error).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => /OTHER/.test(l) && /OPT_OUT_XYZ/.test(l))).toBe(true);
+    expect(lines.some((l) => l.includes("+19562921696"))).toBe(false);
   });
 
   it("Telnyx did NOT answer: BIS sends the one confirmation, answering this row, in the keyword's language (mutation: drop answersEventId → FAILS)", async () => {

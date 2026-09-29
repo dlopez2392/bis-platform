@@ -285,11 +285,12 @@ describe("F-009: toE164 is gone, and the fake gate stays in the tests", () => {
   });
 });
 
-describe("the carrier bypass: only the text-back sets numberFromCarrier", () => {
-  it("no production file but the gate (which declares and carries it) and lib/voice/textback.ts names numberFromCarrier, and the gate never sets it true itself (mutation: the composer sends numberFromCarrier: true → FAILS naming it; the list holding textback.ts is the positive control)", () => {
+describe("the carrier bypass: only the text-back and the consent reply set numberFromCarrier", () => {
+  it("no production file but the gate (which declares and carries it), lib/voice/textback.ts and lib/consent/replies.ts names numberFromCarrier, and the gate never sets it true itself (mutation: the composer sends numberFromCarrier: true → FAILS naming it; the list holding textback.ts is the positive control)", () => {
     const naming = webSources().filter((f) => /\bnumberFromCarrier\b/.test(code(f))).map(rel).sort();
-    expect(naming).toEqual(["apps/web/src/lib/consent/gate.ts", "apps/web/src/lib/voice/textback.ts"]);
+    expect(naming).toEqual(["apps/web/src/lib/consent/gate.ts", "apps/web/src/lib/consent/replies.ts", "apps/web/src/lib/voice/textback.ts"]);
     expect(code(join(WEB_SRC, "lib", "voice", "textback.ts"))).toMatch(/\bnumberFromCarrier\s*:\s*true\b/);
+    expect(code(join(WEB_SRC, "lib", "consent", "replies.ts"))).toMatch(/\bnumberFromCarrier\s*:\s*true\b/);
     expect(code(join(WEB_SRC, "lib", "consent", "gate.ts"))).not.toMatch(/\b(?:numberFromCarrier|fromCarrier)\s*[:=]\s*true\b/);
   });
 

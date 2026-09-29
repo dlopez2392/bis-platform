@@ -97,6 +97,8 @@ export type InboundConsentInput = {
   address: string;
   text: string;
   autoresponse: Autoresponse | null;
+  /** Telnyx's own string, unparsed, kept beside the parsed value for the record (review — an OTHER spelling must stay legible on the ledger). */
+  autoresponseRaw: string | null;
   providerMessageId: string | null;
   messagingProfileId: string | null;
   /** The contact the route filed the text under; null for the alert phone (plan G10). */
@@ -173,6 +175,7 @@ export async function recordInboundConsent(
         ...base, action: "revoked", method: kw ? "keyword" : "carrier_block",
         evidence: {
           keyword: kw?.word ?? null, language: kw?.language ?? null, autoresponse_type: i.autoresponse,
+          autoresponse_type_raw: i.autoresponseRaw,
           messaging_profile_id: i.messagingProfileId, excerpt,
         },
       }, "unless_customer_stopped");
@@ -182,6 +185,13 @@ export async function recordInboundConsent(
       // confirm; the new row makes the stop the customer's own (spec S8).
       if (r.outcome === "appended" && kw && i.autoresponse === null && r.prior?.action !== "revoked") {
         owe({ kind: "consent.stop_confirmation", language: kw.language, answersEventId: r.id });
+      }
+      // Telnyx answered with a spelling BIS does not recognise (review
+      // R2-I2): BIS still sends nothing (ANY non-blank value means Telnyx
+      // replied), but the ambiguity is on record — never with the
+      // customer's own number, which this line has no reason to carry.
+      if (i.autoresponse === "OTHER") {
+        console.error(`inbound consent: account ${i.accountId}'s stop carries an autoresponse_type BIS reads as OTHER (raw ${JSON.stringify(i.autoresponseRaw)}); BIS is not sending its own confirmation`);
       }
       await closeHoldTodo(db, i, r);
       if (kw && CANCEL_WORDS.has(kw.word) && i.contactId !== null) await cancelTodo(db, i, r.id, kw.word);
