@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { brandDisplayName } from "./branding";
+import { readConsentActions, type ConsentAction } from "./consent";
 
 export type WorkSource = "task" | "conversation" | "booking";
 
@@ -11,6 +12,11 @@ export type WorkRow = {
   title: string;
   dueAt: string | null;
   occurredAt: string;
+  /** A task that asks about a consent ledger row (0055's
+   *  `tasks.consent_event_id`), with that row's action: `held` is a hold to
+   *  confirm or release (the To-do's Confirm stop / Not a stop), `revoked` a
+   *  CANCEL stop to check against the appointment. Absent on every other row. */
+  consent?: { eventId: string; action: ConsentAction } | null;
 };
 
 async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
@@ -33,17 +39,25 @@ async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow
   // sharing a due_at (including every undated one, tied on NULL) still order
   // deterministically rather than at the database's discretion.
   const { data, error } = await db.from("tasks")
-    .select("id, contact_id, title, due_at, created_at")
+    .select("id, contact_id, title, due_at, created_at, consent_event_id")
     .eq("account_id", accountId).is("completed_at", null)
     .order("due_at", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true })
     .limit(200);
   if (error) throw new Error(`openTasks failed: ${error.message}`);
-  return (data ?? []).map((t) => ({
-    id: `task:${t.id}`, source: "task" as const, accountId,
-    contactId: t.contact_id, title: t.title,
-    dueAt: t.due_at, occurredAt: t.created_at,
-  }));
+  const rows = (data ?? []) as { id: string; contact_id: string | null; title: string; due_at: string | null; created_at: string; consent_event_id: string | null }[];
+  // One read for the whole batch, and none at all without a consent task.
+  const linked = rows.map((t) => t.consent_event_id).filter((id): id is string => id !== null);
+  const actions = await readConsentActions(db, accountId, linked);
+  return rows.map((t) => {
+    const action = t.consent_event_id ? actions.get(t.consent_event_id) : undefined;
+    return {
+      id: `task:${t.id}`, source: "task" as const, accountId,
+      contactId: t.contact_id, title: t.title,
+      dueAt: t.due_at, occurredAt: t.created_at,
+      consent: t.consent_event_id && action ? { eventId: t.consent_event_id, action } : null,
+    };
+  });
 }
 
 /**

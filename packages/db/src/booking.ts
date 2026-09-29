@@ -353,6 +353,24 @@ export async function listUpcomingBookings(
  * added"-style capture is the CREATED count, so a later cancel must not
  * erase a bar this account already earned.
  */
+/**
+ * When this contact's soonest upcoming `booked` appointment starts, or null.
+ * For the consent CANCEL To-do (spec §4.2 step 2): a customer who texts
+ * CANCEL has stopped their texts, and staff check whether they also meant
+ * the appointment. THROWS on a read error (the inbound route retries).
+ */
+export async function nextBookedStart(
+  db: SupabaseClient, accountId: string, contactId: string, nowIso: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("bookings")
+    .select("starts_at")
+    .eq("account_id", accountId).eq("contact_id", contactId).eq("status", "booked")
+    .gt("starts_at", nowIso)
+    .order("starts_at", { ascending: true }).limit(1);
+  if (error) throw new Error(`nextBookedStart failed: ${error.message}`);
+  return ((data ?? []) as { starts_at: string }[])[0]?.starts_at ?? null;
+}
+
 export async function listBookingCreationsBetween(
   db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
 ): Promise<string[]> {

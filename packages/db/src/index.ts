@@ -27,7 +27,9 @@ export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBloc
          type PriorDecidingRow, type ConsentHistoryRow, type ConsentEventRow } from "./consent";
 export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
-export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask } from "./activities";
+export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask,
+         ensureConsentTask, completeTasksForConsentEvents, reopenTasks,
+         HoldUndecidedError, holdOpenTaskIds } from "./activities";
 export { listAccountWork, listAgencyWork, type WorkRow, type WorkSource, type AgencyWorkRow } from "./work-queue";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,
          ensureDefaultPipeline, listPipelinesWithStages, type CustomFieldDef } from "./crm-config";
@@ -64,7 +66,7 @@ export { getMailingAddress } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,
          listBookedRanges, createBooking, cancelBookingByToken, setBookingStatus,
-         listUpcomingBookings, countRecentBookings, listDueReminders, stampReminderSent,
+         listUpcomingBookings, nextBookedStart, countRecentBookings, listDueReminders, stampReminderSent,
          listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
          newCancelToken, SlotTakenError,
          getDueReminderById, getDueFollowupById,
