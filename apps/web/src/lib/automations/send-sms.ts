@@ -88,7 +88,9 @@ export class SmsDeferred extends Error {
 /** The gate said "not to this number": holdOrSend logs the row `skipped`
  *  with the reason. `ledger_unavailable` is never one of these: it is an
  *  outage, re-held for LEDGER_RETRY_MS (SmsDeferred). */
-export type AutomationBlockReason = Exclude<SmsBlockReason, "ledger_unavailable">;
+/** An automation never sends a consent reply, so the stop confirmation's own
+ *  refusal is not one of its reasons (hold-or-send.ts's BLOCK_REASONS). */
+export type AutomationBlockReason = Exclude<SmsBlockReason, "ledger_unavailable" | "stop_confirmation_stale">;
 export class SmsBlocked extends Error {
   constructor(readonly reason: AutomationBlockReason) {
     super(`automation sms not sent: ${reason}`);
@@ -151,6 +153,10 @@ export async function sendAutomationSms(ctx: SmsSendContext, input: AutomationSm
     case "blocked":
       if (result.reason === "ledger_unavailable") {
         throw new SmsDeferred(new Date(ctx.now.getTime() + LEDGER_RETRY_MS), "ledger_unavailable");
+      }
+      if (result.reason === "stop_confirmation_stale") {
+        // Only a consent reply can meet it (gate.ts), and no automation sends one.
+        throw new Error(`automation sms: ${input.kind} was refused as a stale stop confirmation, which only a consent reply can be`);
       }
       throw new SmsBlocked(result.reason);
     case "failed":

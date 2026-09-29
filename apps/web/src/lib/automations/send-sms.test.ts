@@ -102,6 +102,14 @@ describe("sendAutomationSms — through the send gate, write then send", () => {
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
   });
 
+  it("a stale-stop-confirmation refusal, which only a consent reply can meet, is a programming error, never a skipped row (mutation: throw SmsBlocked for it → FAILS)", async () => {
+    const odd = fakeSmsGate({ decide: () => ({ kind: "blocked", reason: "stop_confirmation_stale" }) });
+    const e = await sendAutomationSms(ctx({ sms: odd }), input()).catch((x: unknown) => x);
+    expect(e).not.toBeInstanceOf(SmsBlocked);
+    expect(String(e)).toMatch(/stale stop confirmation/);
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+  });
+
   it("an unreadable ledger is a 15-minute re-hold, never a refusal and never a failed row that leaves the queue (review R2-I4; mutation: throw a plain Error again → FAILS)", async () => {
     const down = fakeSmsGate({ decide: () => ({ kind: "blocked", reason: "ledger_unavailable" }) });
     const e = await sendAutomationSms(ctx({ sms: down }), input()).catch((x: unknown) => x);

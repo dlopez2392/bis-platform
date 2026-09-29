@@ -39,3 +39,9 @@ describe("composerBlockedLine — what the action says after a refused attempt",
     expect(m["compose.smsStopped"]).toBe("They stopped texts on {date}. You can't text this number until they text START.");
   });
 });
+
+describe("composerBlockedLine: the stop confirmation's own refusal", () => {
+  it("a staff text never meets stop_confirmation_stale, but if it did it would read as a plain failure, never a stop (mutation: map it to the stopped line → FAILS)", () => {
+    expect(composerBlockedLine("stop_confirmation_stale")).toBe(m["compose.smsFailed"]);
+  });
+});

@@ -263,7 +263,13 @@ export async function prepareTextback(
   }
   if (decision.kind === "blocked") {
     console.error(`${r.label}: text-back not sent — the send gate refused it (${decision.reason})`);
-    if (subject && decision.reason !== "ledger_unavailable") await recordBlocked(db, subject, decision.reason, r.label);
+    // stop_confirmation_stale cannot occur: a text-back never asks for the
+    // stop confirmation's own exception (kind is always "voice.textback").
+    // Excluded here, alongside ledger_unavailable, so this narrows to
+    // AutomationBlockReason for recordBlocked/BLOCK_REASONS (consent PR-2).
+    if (subject && decision.reason !== "ledger_unavailable" && decision.reason !== "stop_confirmation_stale") {
+      await recordBlocked(db, subject, decision.reason, r.label);
+    }
     return { contactId, conversationId, pending: null, notSent: "blocked" };
   }
 
@@ -325,6 +331,14 @@ export async function deliverTextback(
         await writeHeld({ db }, subject, new Date(pending.now.getTime() + LEDGER_RETRY_MS), "UTC", REASONS.ledgerRetry);
         console.error(`${label}: text-back held again — consent state unreadable at delivery`);
         return "held";
+      }
+      if (result.reason === "stop_confirmation_stale") {
+        // Cannot occur: deliverTextback's `cleared` is always kind
+        // "voice.textback", which the gate never treats as a stop
+        // confirmation (consent PR-2). Logged so a real occurrence would be
+        // visible rather than silently mis-typed into recordBlocked.
+        console.error(`${label}: text-back refused as a stale stop confirmation, which a text-back can never be`);
+        return "skipped";
       }
       if (subject) await recordBlocked(db, subject, result.reason, label);
       console.error(`${label}: text-back not sent — the send gate refused it at delivery (${result.reason})`);

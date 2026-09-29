@@ -20,12 +20,17 @@ export type SmsRecipientState =
   | { kind: "unknown" };
 
 /** The line a refused send reports, from the action (no date to hand). */
-export function composerBlockedLine(reason: "stopped" | "held" | "unconfirmed_number" | "window_after_deadline"): string {
+export function composerBlockedLine(
+  reason: "stopped" | "held" | "unconfirmed_number" | "window_after_deadline" | "stop_confirmation_stale",
+): string {
   switch (reason) {
     case "stopped": return m["compose.smsStoppedUndated"];
     case "held": return m["compose.smsHeld"];
     case "unconfirmed_number": return m["compose.smsCheckNumber"];
+    // Neither reaches a staff text (no deadline, not a stop confirmation):
+    // typed for the gate's full reason list, worded as a plain failure.
     case "window_after_deadline": return m["compose.smsFailed"];
+    case "stop_confirmation_stale": return m["compose.smsFailed"];
   }
 }
 
