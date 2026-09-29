@@ -20,7 +20,7 @@
 import { revalidatePath } from "next/cache";
 import {
   addTask, completeTask, reopenTask, readTaskContact, readConsentHistory, newestDecidingRow,
-  completeTasksForConsentEvents, HoldUndecidedError, type WorkSource,
+  completeTasksForConsentEvents, HoldUndecidedError, type WorkSource, type SupabaseClient,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
@@ -153,32 +153,55 @@ export async function closeOutBooking(
 }
 
 /**
+ * The stale-hold path (review R3-I1, and fix round 1 item 1): a hold's To-do
+ * has nothing left to ask — either the number's newest deciding row moved
+ * on, or the contact has no textable number at all anymore (its phone was
+ * cleared) — so it closes through its own ledger link rather than sitting
+ * open behind two dead buttons. `consentEventId` absent is a plain task,
+ * never reached by a hold's To-do; still a no-op guard, not an assumption.
+ */
+async function closeStaleHoldTodo(
+  db: SupabaseClient, accountId: string, taskId: string, consentEventId: string | null, userId: string,
+): Promise<void> {
+  if (!consentEventId) return;
+  try {
+    await completeTasksForConsentEvents(db, accountId, [consentEventId], userId);
+    revalidatePath(tasksPath(accountId));
+  } catch (e) {
+    console.error(`decideFromTask: stale hold To-do ${taskId} (account ${accountId}) not closed: ${loggableError(e)}`);
+  }
+}
+
+/**
  * The consent To-do's two buttons (spec §6): decide the contact's CURRENT
  * hold, whatever hold the To-do was made for, through the same guarded write
  * as the drawer (lib/consent/staff-actions.ts), which also completes the
- * hold's To-dos. A number no longer on hold says so, decides nothing, and
- * closes the To-do through its own ledger link (review R3-I1): it has
- * nothing left to ask.
+ * hold's To-dos. A number no longer on hold, OR a contact with no textable
+ * number anymore (review fix round 1, item 1: `textsContextFor`'s `reason`
+ * discriminant, never a copy-string comparison), says so, decides nothing,
+ * and closes the To-do through its own ledger link (review R3-I1): it has
+ * nothing left to ask. Any OTHER `textsContextFor` failure (a genuine read
+ * error) is reported as-is and closes nothing — the hold may still be real.
  */
 async function decideFromTask(
   accountId: string, taskId: string, decide: typeof confirmStop,
 ): Promise<TextsActionResult> {
   const { userId } = await requireAccountAccess(accountId);
   try {
-    const task = await readTaskContact(await dbForRequest(), accountId, taskId);
+    const db = await dbForRequest();
+    const task = await readTaskContact(db, accountId, taskId);
     if (!task?.contactId) return { ok: false, error: m["todo.consent.decided"] };
     const ctx = await textsContextFor(accountId, task.contactId, userId);
-    if ("ok" in ctx) return ctx;
+    if ("ok" in ctx) {
+      if (ctx.reason === "no_number") {
+        await closeStaleHoldTodo(db, accountId, taskId, task.consentEventId, userId);
+        return { ok: false, error: m["todo.consent.decided"] };
+      }
+      return ctx;
+    }
     const newest = newestDecidingRow(await readConsentHistory(ctx.db, accountId, "sms", ctx.address));
     if (!newest || newest.action !== "held") {
-      if (task.consentEventId) {
-        try {
-          await completeTasksForConsentEvents(ctx.db, accountId, [task.consentEventId], userId);
-          revalidatePath(tasksPath(accountId));
-        } catch (e) {
-          console.error(`decideFromTask: stale hold To-do ${taskId} (account ${accountId}) not closed: ${loggableError(e)}`);
-        }
-      }
+      await closeStaleHoldTodo(ctx.db, accountId, taskId, task.consentEventId, userId);
       return { ok: false, error: m["todo.consent.decided"] };
     }
     const result = await decide(ctx, newest.id);

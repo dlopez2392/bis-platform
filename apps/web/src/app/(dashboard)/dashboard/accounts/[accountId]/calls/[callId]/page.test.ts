@@ -602,4 +602,16 @@ describe("\"Send it now\" is closed on render when the number cannot be texted (
     expect(html).not.toContain("Send it now");
     expect(renderedText(html)).toContain(m["compose.smsStateUnknown"]);
   });
+
+  /** Review fix round 1, item 2: a read that SUCCEEDS but finds no contact
+   *  (the call's `contact_id` pointed at a row that no longer exists) must
+   *  close the same way an error does — the comment on this block already
+   *  claims "fails closed"; `resendClosedLine = null` on a missing contact
+   *  broke that promise by falling through to the open button below. */
+  it("a contact read that succeeds with no contact closes it with the unreadable line too (fails closed; mutation: leave resendClosedLine null on a missing contact → FAILS)", async () => {
+    getContactMock.mockResolvedValue(null);
+    const html = await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]);
+    expect(html).not.toContain("Send it now");
+    expect(renderedText(html)).toContain(m["compose.smsStateUnknown"]);
+  });
 });

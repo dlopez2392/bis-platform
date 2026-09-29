@@ -207,4 +207,17 @@ describe("the consent To-do's buttons (consent chain PR-2)", () => {
     vi.mocked(completeTask).mockRejectedValueOnce(new HoldUndecidedError());
     expect(await completeWorkTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decideFirst"] });
   });
+
+  it("a contact whose number was cleared closes the hold's To-do exactly like a number no longer on hold, rather than leaving it stuck open forever (review fix round 1, item 1; mutation: return the no-number failure without closing → FAILS)", async () => {
+    texts.textsContextFor.mockResolvedValue({ ok: false, reason: "no_number", error: m["contact.texts.noNumber"] });
+    expect(await confirmStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decided"] });
+    expect(vi.mocked(completeTasksForConsentEvents)).toHaveBeenCalledWith(db, "acct_1", ["h1"], "user_1");
+    expect(texts.confirmStop).not.toHaveBeenCalled();
+  });
+
+  it("a genuinely failed context read is NOT treated as a decided hold (the discriminator; mutation: close the To-do for every textsContextFor failure → FAILS)", async () => {
+    texts.textsContextFor.mockResolvedValue({ ok: false, reason: "failed", error: m["contact.texts.failed"] });
+    expect(await confirmStopFromTask("acct_1", "t1")).toEqual({ ok: false, reason: "failed", error: m["contact.texts.failed"] });
+    expect(vi.mocked(completeTasksForConsentEvents)).not.toHaveBeenCalled();
+  });
 });

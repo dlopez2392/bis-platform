@@ -110,7 +110,12 @@ export default async function CallDetailPage({
   if (textbackFailure && !textbackFailure.supersededAt && call.contact_id) {
     try {
       const contact = await getContact(db, accountId, call.contact_id);
-      resendClosedLine = contact ? composerStateLine(await smsRecipientState(db, accountId, contact), timezone) : null;
+      // A successful read that finds no contact fails closed the same as a
+      // thrown one (review fix round 1, item 2) — the button offers to text
+      // an address this page cannot vouch for either way.
+      resendClosedLine = contact
+        ? composerStateLine(await smsRecipientState(db, accountId, contact), timezone)
+        : m["compose.smsStateUnknown"];
     } catch (e) {
       console.error(`call detail ${callId}: recipient read failed, closing the resend: ${String(e)}`);
       resendClosedLine = m["compose.smsStateUnknown"];

@@ -14,12 +14,12 @@ import type { TextsContext } from "./staff-actions";
  */
 export async function textsContextFor(
   accountId: string, contactId: string, userId: string,
-): Promise<TextsContext | { ok: false; error: string }> {
+): Promise<TextsContext | { ok: false; reason: "no_number" | "failed"; error: string }> {
   try {
     const db = await dbForRequest();
     const contact = await getContact(db, accountId, contactId);
     const number = normalisePhone(contact?.phone ?? null);
-    if (!contact || !number) return { ok: false, error: m["contact.texts.noNumber"] };
+    if (!contact || !number) return { ok: false, reason: "no_number", error: m["contact.texts.noNumber"] };
     return {
       db, writer: serviceDb(), accountId, contactId, userId, actorName: await actorName(userId),
       address: number.e164, unconfirmed: contact.phone_country_unconfirmed === true || number.unconfirmed,
@@ -27,6 +27,6 @@ export async function textsContextFor(
     };
   } catch (e) {
     console.error(`textsContextFor: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
-    return { ok: false, error: m["contact.texts.failed"] };
+    return { ok: false, reason: "failed", error: m["contact.texts.failed"] };
   }
 }
