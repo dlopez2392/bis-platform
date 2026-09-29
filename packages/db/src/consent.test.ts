@@ -148,13 +148,19 @@ describe("newestDecidingRow — consentStateOf's own order, exported for the Tex
 });
 
 describe("readConsentHistory / readConsentEvent / readConsentActions", () => {
-  it("history reads the same 20 newest deciding rows WITH evidence, note and actor (mutation: drop evidence from the select → FAILS)", async () => {
+  it("history reads the same 20 newest deciding rows WITH evidence, note and actor, filtered by account, channel and address (review I1; mutation: drop evidence from the select → FAILS; mutation: drop the account/channel/address filter → FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
     await readConsentHistory(f.db, "a1", "sms", "+19562921696");
     expect(f.calls).toEqual(expect.arrayContaining([
       ["select", "id, action, method, occurred_at, evidence, note, actor_id"],
+      ["eq", "account_id", "a1"], ["eq", "channel", "sms"], ["eq", "address", "+19562921696"],
       ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]], ["limit", 20],
     ]));
+  });
+
+  it("history THROWS on a read error — closeHoldTodo calls this with serviceDb(), so the account filter is the only tenant barrier and a swallowed error would read as an empty history (review I1; mutation: drop the throw → FAILS)", async () => {
+    const f = fakeDb({ read: { data: null, error: { message: "permission denied" } } });
+    await expect(readConsentHistory(f.db, "a1", "sms", "+19562921696")).rejects.toThrow("readConsentHistory failed: permission denied");
   });
 
   it("one event is read by account AND id, so another account's id reads nothing (mutation: drop the account filter → FAILS)", async () => {
@@ -163,12 +169,23 @@ describe("readConsentHistory / readConsentEvent / readConsentActions", () => {
     expect(f.calls).toEqual(expect.arrayContaining([["eq", "account_id", "a1"], ["eq", "id", "e9"]]));
   });
 
-  it("actions by id: no ids is no read at all; a read error throws (mutation: read with an empty list → the chain is asked, FAILS)", async () => {
+  it("event THROWS on a read error (review I1; mutation: drop the throw → FAILS)", async () => {
+    const f = fakeDb({ single: { data: null, error: { message: "permission denied" } } });
+    await expect(readConsentEvent(f.db, "a1", "e9")).rejects.toThrow("readConsentEvent failed: permission denied");
+  });
+
+  it("actions by id: no ids is no read at all, and a real read is filtered by account AND the id list (mutation: read with an empty list → the chain is asked, FAILS; mutation: drop the account filter → FAILS)", async () => {
     const f = fakeDb();
     expect(await readConsentActions(f.db, "a1", [])).toEqual(new Map());
     expect(f.calls).toEqual([]);
     const g = fakeDb({ read: { data: [{ id: "e1", action: "held" }], error: null } });
     expect(await readConsentActions(g.db, "a1", ["e1"])).toEqual(new Map([["e1", "held"]]));
+    expect(g.calls).toEqual(expect.arrayContaining([["eq", "account_id", "a1"], ["in", "id", ["e1"]]]));
+  });
+
+  it("actions THROWS on a read error (review I1; the title above no longer claims this untested — this is the real case; mutation: drop the throw → FAILS)", async () => {
+    const f = fakeDb({ read: { data: null, error: { message: "permission denied" } } });
+    await expect(readConsentActions(f.db, "a1", ["e1"])).rejects.toThrow("readConsentActions failed: permission denied");
   });
 });
 
@@ -236,7 +253,7 @@ describe("appendConsentEvent — the unguarded wrapper", () => {
 });
 
 describe("CUSTOMER_STOP_METHODS", () => {
-  it("is exactly the five stops only the customer can lift, the same list 0055's unless_customer_stopped carries (choice 19; mutation: drop 'backfill_telnyx' → FAILS)", () => {
+  it("is exactly the five stops only the customer can lift (choice 19; the schema test 'unless_customer_stopped matches CUSTOMER_STOP_METHODS …' in consent-writes-schema.test.ts proves 0055's SQL list matches this export, method by method — this test only pins the TS constant itself; mutation: drop 'backfill_telnyx' → FAILS)", () => {
     expect([...CUSTOMER_STOP_METHODS].sort()).toEqual(["backfill_telnyx", "carrier_block", "keyword", "one_click", "unsubscribe_link"]);
   });
 });

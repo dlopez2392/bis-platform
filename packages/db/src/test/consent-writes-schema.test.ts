@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Client } from "pg";
 import { withRollback } from "./db";
+import { CUSTOMER_STOP_METHODS, CONSENT_METHODS } from "../consent";
 
 /**
  * 0055 (consent chain PR-2): the ledger's one write path, run as the role
@@ -160,6 +161,27 @@ describe("0055 append_consent_event: the guards", () => {
       await c.query("reset role");
       expect(e).toMatchObject({ code: "22023", message: expect.stringMatching(/unknown guard whenever/) });
     }));
+
+  it("unless_customer_stopped matches CUSTOMER_STOP_METHODS exactly, method by method (review I2: nothing else pinned that 0055's hardcoded list agrees with consent.ts's export; mutation: 0055's list drops 'carrier_block' or gains 'backfill_0049' → the corresponding method's row FAILS)", () =>
+    withRollback(async (c) => {
+      for (const method of CONSENT_METHODS) {
+        const a = await account(c, `pm_${method}`);
+        const actor = method === "staff" || method === "staff_undo" ? "user_1" : null;
+        if (method === "free_text") {
+          // free_text's own state rule needs a hold to land on, whatever the guard:
+          const hold = await append(c, { account: a, action: "held", method: "free_text", guard: "if_allowed" });
+          await append(c, { account: a, action: "revoked", method, actor, guard: "if_newest", expect: hold.event_id });
+        } else {
+          // Every other method's first write lands on a fresh (allowed) address under guard 'none':
+          // 'staff' and 'backfill_0049' each require this to be true anyway (their own state rule),
+          // and every other method has no state rule at all for 'revoked', so 'none' is the only way
+          // to land the row this test needs regardless of which methods CUSTOMER_STOP_METHODS names.
+          await append(c, { account: a, action: "revoked", method, actor, guard: "none" });
+        }
+        const again = await append(c, { account: a, action: "revoked", method: "keyword", guard: "unless_customer_stopped" });
+        expect(again.outcome).toBe(CUSTOMER_STOP_METHODS.includes(method) ? "refused" : "appended");
+      }
+    }));
 });
 
 describe("0055 append_consent_event: spec §3's two rules and choice 19's staff rules, whatever the guard", () => {
@@ -209,6 +231,46 @@ describe("0055 append_consent_event: spec §3's two rules and choice 19's staff 
       // A staff stop over a HOLD is refused too: a hold is decided by Confirm stop / Not a stop, never overwritten.
       const h2 = await append(c, { account: b, action: "held", method: "free_text", guard: "if_allowed" });
       expect((await append(c, { account: b, action: "revoked", method: "staff", actor: "user_1", guard: "if_newest", expect: h2.event_id })).outcome).toBe("refused");
+    }));
+});
+
+describe("0055 append_consent_event: m1/m2 (review, orchestrator fixes made directly in 0055 since it is not applied anywhere yet)", () => {
+  it("revoked/backfill_0049 lands only on an allowed address, exactly like a staff stop — never over an existing stop, whatever the guard (review m1, B1: before the fix, guard 'none' let a backfill land over a customer's keyword STOP, and staff could then Resume through it, bypassing choice 19; mutation: delete the `elsif p_action = 'revoked' and p_method = 'backfill_0049'` branch → the over-a-stop case appends, FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await account(c, "b1");
+      const kw = await append(c, { account: a, action: "revoked", method: "keyword" });
+      expect((await append(c, { account: a, action: "revoked", method: "backfill_0049", guard: "none" })).outcome).toBe("refused");
+      expect((await append(c, { account: a, action: "revoked", method: "backfill_0049", guard: "unless_customer_stopped" })).outcome).toBe("refused");
+      expect((await append(c, { account: a, action: "revoked", method: "backfill_0049", guard: "if_newest", expect: kw.event_id })).outcome).toBe("refused");
+      // A fresh (allowed) address still gets it, and staff can still Resume it (unchanged rule, proven still true):
+      const b = await account(c, "b1b");
+      const backfill = await append(c, { account: b, action: "revoked", method: "backfill_0049", guard: "none" });
+      expect(backfill.outcome).toBe("appended");
+      expect((await append(c, { account: b, action: "resubscribed", method: "staff", actor: "user_1", note: "Customer asked", guard: "if_newest", expect: backfill.event_id })).outcome).toBe("appended");
+    }));
+
+  it("resubscribed is refused for every method outside start_keyword, staff, staff_undo and unsubscribe_page, whatever the guard — a stray method can never lift a stop (review m1, B2, R1-N10: before the fix, resubscribed/form under guard 'none' lifted a customer's keyword STOP, breaking choice 28 (\"a grant never lifts a stop\"); mutation: drop the `elsif p_action = 'resubscribed' and p_method not in (...)` branch → the 'form' case appends, FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await account(c, "b2");
+      await append(c, { account: a, action: "revoked", method: "keyword" });
+      const strayMethods = CONSENT_METHODS.filter((m) => !["start_keyword", "staff", "staff_undo", "unsubscribe_page"].includes(m));
+      for (const method of strayMethods) {
+        expect((await append(c, { account: a, action: "resubscribed", method, guard: "none" })).outcome).toBe("refused");
+      }
+      // The allow-list itself still works: start_keyword and unsubscribe_page need only their guard
+      // (staff and staff_undo keep their own dedicated rules, proven in the describe block above).
+      expect((await append(c, { account: a, action: "resubscribed", method: "start_keyword", guard: "if_stopped_or_held" })).outcome).toBe("appended");
+      const b = await account(c, "b2b");
+      await append(c, { account: b, action: "revoked", method: "keyword" });
+      expect((await append(c, { account: b, action: "resubscribed", method: "unsubscribe_page", guard: "if_stopped_or_held" })).outcome).toBe("appended");
+    }));
+
+  it("a future p_occurred_at is refused outright, whatever the guard — a stop dated ahead of now can never outrank a real event that has not happened yet; a past time (every real backfill's own shape) still works (review m2, B11: a stop dated now+4 min would otherwise outrank a real START; mutation: drop `v_ok := v_ok and (p_occurred_at is null or p_occurred_at <= clock_timestamp())` → the future stop appends, FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await account(c, "b11");
+      const future = new Date(Date.now() + 4 * 60 * 1000).toISOString();
+      expect((await append(c, { account: a, action: "revoked", method: "backfill_telnyx", guard: "none", at: future })).outcome).toBe("refused");
+      expect((await append(c, { account: a, action: "revoked", method: "backfill_telnyx", guard: "none", at: "2026-01-01T10:00:00Z" })).outcome).toBe("appended");
     }));
 });
 

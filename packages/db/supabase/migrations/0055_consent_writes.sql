@@ -23,12 +23,24 @@
 --    still stands): that errs toward sending less, on purpose.
 --    Choice 19 (staff can lift only a stop staff made), enforced here and not
 --    only in the app: a staff 'revoked' lands only on an allowed address; a
---    confirmed free-text stop ('revoked' / 'free_text') only on a hold; a
---    staff Resume ('resubscribed' / 'staff') only over a stop whose method is
---    staff, free_text or backfill_0049; a staff undo of a stop
---    ('resubscribed' / 'staff_undo') only over a staff stop. Without these a
---    caller who knows the id of a customer's own STOP could stop over it and
---    then undo its own stop (plan review R3-C1).
+--    one-time historical backfill ('revoked' / 'backfill_0049') gets the same
+--    rule, so a caller that mistakenly passes guard 'none' still cannot land
+--    it over an existing stop (review m1, B1); a confirmed free-text stop
+--    ('revoked' / 'free_text') only on a hold; a staff Resume
+--    ('resubscribed' / 'staff') only over a stop whose method is staff,
+--    free_text or backfill_0049; a staff undo of a stop ('resubscribed' /
+--    'staff_undo') only over a staff stop. Without these a caller who knows
+--    the id of a customer's own STOP could stop over it and then undo its
+--    own stop (plan review R3-C1). A 'resubscribed' row is refused outright
+--    for any method outside {start_keyword, staff, staff_undo,
+--    unsubscribe_page} — the first is the customer's own START, the last is
+--    reserved for PR-3's one-click email resubscribe (choice 28); without
+--    this a stray method such as 'form' under guard 'none' could lift a
+--    stop no grant is allowed to lift (review m1, B2; review R1-N10). A
+--    future-dated p_occurred_at (beyond the table's own 5-minute skew
+--    allowance) is refused too, so a backfill can never outrank a real event
+--    that has not happened yet (review m2, B11) — only a backfill supplies
+--    this argument, and it always writes a past time.
 --    The guard unless_customer_stopped refuses only while the newest deciding
 --    row is the customer's OWN stop (keyword, carrier_block, backfill_telnyx,
 --    unsubscribe_link, one_click): a customer's STOP over a staff stop is
@@ -142,6 +154,15 @@ begin
     when 'if_newest' then v_prior_id is not distinct from p_expect_id
   end;
 
+  -- m2 (review): a future-dated write must never outrank a real event that
+  -- happens between now and then (a stop dated now+4 minutes would sort
+  -- ahead of a START that lands a minute from now). Only a backfill supplies
+  -- p_occurred_at, and it always writes a PAST time (0054's own
+  -- consent_events_occurred_at_sane CHECK already refuses a future one at
+  -- the table level; this refuses it here too, before the lock's write,
+  -- naming it in the same 'refused' shape as every other rule below).
+  v_ok := v_ok and (p_occurred_at is null or p_occurred_at <= pg_catalog.clock_timestamp());
+
   if p_action = 'hold_released' then
     v_ok := v_ok and v_prior_action = 'held';
   elsif p_action = 'held' then
@@ -152,12 +173,30 @@ begin
           and ((v_prior_action = 'revoked' and v_prior_method = 'free_text') or v_prior_action = 'hold_released')));
   elsif p_action = 'revoked' and p_method = 'staff' then
     v_ok := v_ok and (v_prior_action is null or v_prior_action in ('hold_released', 'resubscribed'));
+  elsif p_action = 'revoked' and p_method = 'backfill_0049' then
+    -- m1 (review, B1): a one-time historical backfill must never land OVER an
+    -- existing stop (staff's or the customer's) merely because a caller
+    -- passed guard 'none' by mistake; it gets the same "allowed address
+    -- only" rule as a staff stop, whatever the guard.
+    v_ok := v_ok and (v_prior_action is null or v_prior_action in ('hold_released', 'resubscribed'));
   elsif p_action = 'revoked' and p_method = 'free_text' then
     v_ok := v_ok and v_prior_action = 'held';
   elsif p_action = 'resubscribed' and p_method = 'staff' then
     v_ok := v_ok and v_prior_action = 'revoked' and v_prior_method in ('staff', 'free_text', 'backfill_0049');
   elsif p_action = 'resubscribed' and p_method = 'staff_undo' then
     v_ok := v_ok and v_prior_action = 'revoked' and v_prior_method = 'staff';
+  elsif p_action = 'resubscribed' and p_method not in ('start_keyword', 'unsubscribe_page') then
+    -- m1 (review, B2; review R1-N10 already named this gap): a resubscribed
+    -- row is written for exactly four methods — start_keyword (a customer's
+    -- own START), staff and staff_undo (both gated above by their own
+    -- rules), and unsubscribe_page (reserved for PR-3's one-click email
+    -- resubscribe, choice 28). Reaching this branch means p_method is none
+    -- of staff/staff_undo (both matched by the elsifs above) and not
+    -- start_keyword/unsubscribe_page either, so it is refused outright,
+    -- whatever the guard: choice 28 ("a grant never lifts a stop") would
+    -- otherwise be enforceable only by callers remembering never to pass
+    -- guard 'none' with a stray method such as 'form'.
+    v_ok := false;
   end if;
 
   -- coalesce is load-bearing: `v_prior_action in (...)` is NULL, not false,
@@ -180,7 +219,7 @@ end;
 $$;
 
 comment on function public.append_consent_event(uuid, text, text, text, text, text, uuid, uuid, text, text, text, jsonb, timestamptz) is
-  'The consent ledger''s one write path (0055). Per-address advisory lock; guard none, if_empty, unless_customer_stopped (refused only over the customer''s own stop), if_allowed, if_stopped_or_held or if_newest (p_expect_id: the newest deciding row the caller saw, null for none); hold_released only while held; held only while allowed or as a staff undo; staff stop only while allowed, confirmed free-text stop only while held, staff Resume only over a staff-made stop, staff undo only over a staff stop (choice 19). A source_ref names one delivery or event, never a reusable channel. Answers appended, duplicate (same address, action and source_ref) or refused, with the prior newest deciding row. Called only from packages/db/src/consent.ts.';
+  'The consent ledger''s one write path (0055). Per-address advisory lock; guard none, if_empty, unless_customer_stopped (refused only over the customer''s own stop), if_allowed, if_stopped_or_held or if_newest (p_expect_id: the newest deciding row the caller saw, null for none); hold_released only while held; held only while allowed or as a staff undo; staff stop and backfill_0049 stop only while allowed, confirmed free-text stop only while held, staff Resume only over a staff-made stop, staff undo only over a staff stop, resubscribed refused outright outside start_keyword/staff/staff_undo/unsubscribe_page (choice 19, choice 28); a future p_occurred_at is refused. A source_ref names one delivery or event, never a reusable channel. Answers appended, duplicate (same address, action and source_ref) or refused, with the prior newest deciding row. Called only from packages/db/src/consent.ts.';
 
 -- Default privileges hand EXECUTE to anon, authenticated and service_role BY
 -- NAME, so revoking from PUBLIC alone would leave them (0043's lesson).
