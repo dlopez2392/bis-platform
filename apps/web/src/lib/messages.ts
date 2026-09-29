@@ -474,6 +474,59 @@ export const m = {
   "contact.phoneCountry.unreadable": "That number can't be read as a US or Mexican number. Edit it instead.",
   "contact.phoneCountry.undoBusy": "Your last change is still saving. Edit the number itself to change it back.",
   "contact.phoneCountry.inlineChanged": "Their number changed since your edit. Reload to see it.",
+  // The rest of the Texts row (consent chain PR-2, spec §6). Status words are
+  // a dot + word (rule 3). "{date}" is a calendar day in the account's zone;
+  // "{word}" is the keyword as staff read it (keywordDisplay); "{excerpt}" is
+  // what the customer wrote, cut at 60 characters; "{name}" is the staff
+  // member's first name (plan G14).
+  "contact.texts.allowed": "Allowed",
+  "contact.texts.stopped": "Stopped",
+  "contact.texts.held": "On hold",
+  "contact.texts.since": "Since {date}",
+  "contact.texts.how.keyword": "they texted {word}",
+  "contact.texts.how.freeTextBy": "they wrote “{excerpt}”, confirmed by {name}",
+  "contact.texts.how.freeText": "they wrote “{excerpt}”, confirmed by your team",
+  "contact.texts.how.staff": "you recorded it",
+  "contact.texts.how.carrier": "the carrier blocked it",
+  "contact.texts.how.unsubscribeLink": "unsubscribe link",
+  "contact.texts.stopTexts": "Stop texts",
+  "contact.texts.stoppedToast": "Texts stopped.",
+  "contact.texts.resume": "Resume texts…",
+  "contact.texts.resumeNoteLabel": "What did they ask for? (required)",
+  "contact.texts.resumeSubmit": "Resume texts",
+  "contact.texts.resumeCancel": "Cancel",
+  "contact.texts.resumeNoteRequired": "Write what they asked for before you turn texts back on.",
+  "contact.texts.resumedToast": "Texts are back on. To stop them again, use Stop texts.",
+  "contact.texts.customerOnly": "They can text START to get texts again.",
+  "contact.texts.heldLine": "They wrote “{excerpt}”. Texts are on hold.",
+  "contact.texts.confirmStop": "Confirm stop",
+  "contact.texts.notAStop": "Not a stop",
+  "contact.texts.confirmedToast": "Stop confirmed. Texts to them are stopped.",
+  "contact.texts.releasedToast": "Hold lifted. Texts to them are back on.",
+  "contact.texts.loadFailed": "Couldn't load their message settings. Try again.",
+  "contact.texts.changed": "Their texts changed while you were looking. This is where they stand now.",
+  "contact.texts.failed": "Couldn't save that — please try again.",
+  "contact.texts.noNumber": "They have no number to text.",
+  "contact.texts.undoBusy": "Your last change is still saving. Try again in a moment.",
+  "contact.texts.undoExpired": "That can no longer be undone here. Use Stop texts or Resume texts instead.",
+  // The consent To-do rows (spec §6). The English line is written into
+  // tasks.title when the To-do is made (plan G8); the Spanish lines wait for an
+  // operator locale. "{date}" is the appointment's calendar day in the account's zone.
+  "todo.consent.hold.en": "{name} may have asked to stop texts: “{excerpt}”. Texts to them are on hold.",
+  "todo.consent.hold.es": "{name} quizá pidió dejar de recibir mensajes: “{excerpt}”. Los mensajes están en pausa.",
+  "todo.consent.hold.confirm.es": "Confirmar",
+  "todo.consent.hold.notStop.es": "No era eso",
+  "todo.consent.cancel.en": "{name} texted {word}, so their texts are stopped. Check whether they also meant their appointment on {date}.",
+  "todo.consent.cancel.es": "{name} envió {word} y sus mensajes quedaron suspendidos. Revise si también quería cancelar su cita del {date}.",
+  "todo.consent.decided": "This one was already decided. Open the contact to see where their texts stand.",
+  "todo.consent.decideFirst": "Decide this one with Confirm stop or Not a stop.",
+  // The contact timeline's line in place of Done for an open To-do whose
+  // number is still on hold (review R3-N1). It points at the To do page, the
+  // one place that can always close it: after a phone correction the Texts
+  // row no longer shows the old number's hold (review M3), and a CANCEL
+  // To-do the fail-closed read marks keeps its Done there (review M4).
+  "todo.consent.timelineHint": "Close this one from the To do page.",
+  "todo.consent.failed": "Couldn't save that — please try again.",
 
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
@@ -1017,6 +1070,26 @@ export const m = {
   // like every other string here — and because a carrier reads it.
   "sms.optOut.en": "Reply STOP to opt out.",
   "sms.optOut.es": "Responde STOP para cancelar.",
+  // The consent replies (spec §4.2's table, verbatim, with the help line's
+  // contact sentence added by spec correction S12): the ONE stop
+  // confirmation, the start confirmation and the help reply. Kept under
+  // sms.* on purpose: a "consent.…" string in a gate-importing file reads as
+  // a message kind to scan 2 (scans.test.ts). No á, í, ó or ú (UCS-2 would
+  // double every one); replies.test.ts measures each at one GSM-7 segment.
+  // "{Business}" is brandDisplayName; a blank name uses the noName line, the
+  // text-back's rule (textback-body.ts).
+  "sms.consentReply.stop.en": "{Business}: You won't get any more texts from us. Reply START to get them again.",
+  "sms.consentReply.stop.es": "{Business}: Ya no le enviaremos mensajes. Responda START para volver a recibirlos.",
+  "sms.consentReply.stop.noName.en": "You won't get any more texts from us. Reply START to get them again.",
+  "sms.consentReply.stop.noName.es": "Ya no le enviaremos mensajes. Responda START para volver a recibirlos.",
+  "sms.consentReply.start.en": "{Business}: You'll get our texts again. Reply STOP to stop them.",
+  "sms.consentReply.start.es": "{Business}: Listo, le enviaremos mensajes de nuevo. Responda PARAR para dejarlos.",
+  "sms.consentReply.start.noName.en": "You'll get our texts again. Reply STOP to stop them.",
+  "sms.consentReply.start.noName.es": "Listo, le enviaremos mensajes de nuevo. Responda PARAR para dejarlos.",
+  "sms.consentReply.help.en": "{Business}: Reply STOP to stop texts from us. Call or text this number for help.",
+  "sms.consentReply.help.es": "{Business}: Responda PARAR para dejar de recibir mensajes. Llame o escriba a este numero para recibir ayuda.",
+  "sms.consentReply.help.noName.en": "Reply STOP to stop texts from us. Call or text this number for help.",
+  "sms.consentReply.help.noName.es": "Responda PARAR para dejar de recibir mensajes. Llame o escriba a este numero para recibir ayuda.",
 
   "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
   "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
