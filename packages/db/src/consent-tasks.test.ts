@@ -10,6 +10,7 @@ vi.mock("./consent", async (importOriginal) => ({
 import { readConsentEvent, readConsentHistory } from "./consent";
 import {
   ensureConsentTask, completeTasksForConsentEvents, reopenTasks, completeTask, holdOpenTaskIds, HoldUndecidedError,
+  readTaskContact,
 } from "./activities";
 import { nextBookedStart } from "./booking";
 
@@ -180,5 +181,14 @@ describe("holdOpenTaskIds — the open To-dos the contact timeline shows a hint 
       { ...HOLD, id: "r1", action: "hold_released", method: "staff", occurred_at: "2026-10-05T11:00:00Z" }, HOLD,
     ] as never);
     expect(await holdOpenTaskIds({} as never, "a1", [{ id: "t_open", completed_at: null, consent_event_id: "h1" }])).toEqual([]);
+  });
+});
+
+describe("readTaskContact — the To-do's contact and the ledger row it asks about", () => {
+  it("reads the task by account AND id (mutation: drop the account filter → FAILS)", async () => {
+    const f = fakeDb([{ data: { contact_id: "c1", consent_event_id: "h1" }, error: null }]);
+    expect(await readTaskContact(f.db, "a1", "t1")).toEqual({ contactId: "c1", consentEventId: "h1" });
+    expect(f.calls).toEqual(expect.arrayContaining([["eq", "account_id", "a1"], ["eq", "id", "t1"]]));
+    expect(await readTaskContact(fakeDb([{ data: null, error: null }]).db, "a1", "t1")).toBeNull();
   });
 });

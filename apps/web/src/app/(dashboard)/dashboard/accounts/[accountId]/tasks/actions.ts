@@ -18,11 +18,17 @@
 // silence. `void` cannot surface an error at all.
 
 import { revalidatePath } from "next/cache";
-import { addTask, completeTask, reopenTask, type WorkSource } from "@bis/db";
+import {
+  addTask, completeTask, reopenTask, readTaskContact, readConsentHistory, newestDecidingRow,
+  completeTasksForConsentEvents, HoldUndecidedError, type WorkSource,
+} from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { tomorrowAt9 } from "@/lib/work/dismiss-date";
+import { loggableError } from "@/lib/loggable-error";
+import { textsContextFor } from "@/lib/consent/texts-context";
+import { confirmStop, notAStop, undoHoldDecision, type TextsActionResult } from "@/lib/consent/staff-actions";
 import { setBookingStatusAction } from "../calendar/actions";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -46,6 +52,9 @@ export async function completeWorkTask(accountId: string, taskId: string): Promi
   try {
     await completeTask(await dbForRequest(), accountId, taskId, userId);
   } catch (e) {
+    // Review R3-I1: a hold's To-do closes by deciding the hold (a stale tab
+    // can still show its old Done).
+    if (e instanceof HoldUndecidedError) return { ok: false, error: m["todo.consent.decideFirst"] };
     console.error(`completeWorkTask: failed for task ${taskId} (account ${accountId}): ${String(e)}`);
     return { ok: false, error: m["work.actionFailed"] };
   }
@@ -139,6 +148,63 @@ export async function closeOutBooking(
   accountId: string, bookingId: string, status: "completed" | "no_show",
 ): Promise<ActionResult> {
   const result = await setBookingStatusAction(accountId, bookingId, status);
+  if (result.ok) revalidatePath(tasksPath(accountId));
+  return result;
+}
+
+/**
+ * The consent To-do's two buttons (spec §6): decide the contact's CURRENT
+ * hold, whatever hold the To-do was made for, through the same guarded write
+ * as the drawer (lib/consent/staff-actions.ts), which also completes the
+ * hold's To-dos. A number no longer on hold says so, decides nothing, and
+ * closes the To-do through its own ledger link (review R3-I1): it has
+ * nothing left to ask.
+ */
+async function decideFromTask(
+  accountId: string, taskId: string, decide: typeof confirmStop,
+): Promise<TextsActionResult> {
+  const { userId } = await requireAccountAccess(accountId);
+  try {
+    const task = await readTaskContact(await dbForRequest(), accountId, taskId);
+    if (!task?.contactId) return { ok: false, error: m["todo.consent.decided"] };
+    const ctx = await textsContextFor(accountId, task.contactId, userId);
+    if ("ok" in ctx) return ctx;
+    const newest = newestDecidingRow(await readConsentHistory(ctx.db, accountId, "sms", ctx.address));
+    if (!newest || newest.action !== "held") {
+      if (task.consentEventId) {
+        try {
+          await completeTasksForConsentEvents(ctx.db, accountId, [task.consentEventId], userId);
+          revalidatePath(tasksPath(accountId));
+        } catch (e) {
+          console.error(`decideFromTask: stale hold To-do ${taskId} (account ${accountId}) not closed: ${loggableError(e)}`);
+        }
+      }
+      return { ok: false, error: m["todo.consent.decided"] };
+    }
+    const result = await decide(ctx, newest.id);
+    if (result.ok) revalidatePath(tasksPath(accountId));
+    return result;
+  } catch (e) {
+    console.error(`decideFromTask: task ${taskId} (account ${accountId}): ${loggableError(e)}`);
+    return { ok: false, error: m["todo.consent.failed"] };
+  }
+}
+
+export async function confirmStopFromTask(accountId: string, taskId: string): Promise<TextsActionResult> {
+  return decideFromTask(accountId, taskId, confirmStop);
+}
+
+export async function notAStopFromTask(accountId: string, taskId: string): Promise<TextsActionResult> {
+  return decideFromTask(accountId, taskId, notAStop);
+}
+
+export async function undoHoldDecisionFromTask(
+  accountId: string, contactId: string, eventId: string, reopenTaskIds: string[],
+): Promise<TextsActionResult> {
+  const { userId } = await requireAccountAccess(accountId);
+  const ctx = await textsContextFor(accountId, contactId, userId);
+  if ("ok" in ctx) return ctx;
+  const result = await undoHoldDecision(ctx, eventId, reopenTaskIds);
   if (result.ok) revalidatePath(tasksPath(accountId));
   return result;
 }

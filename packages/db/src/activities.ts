@@ -171,6 +171,21 @@ async function holdStillOpen(db: SupabaseClient, accountId: string, eventId: str
   return newestDecidingRow(await readConsentHistory(db, accountId, ev.channel, ev.address))?.action === "held";
 }
 
+/**
+ * A task's contact and the ledger row it asks about, by account AND id (the
+ * consent To-do's buttons act on that contact's number, and close the To-do
+ * through its own link).
+ */
+export async function readTaskContact(
+  db: SupabaseClient, accountId: string, taskId: string,
+): Promise<{ contactId: string | null; consentEventId: string | null } | null> {
+  const { data, error } = await db.from("tasks")
+    .select("contact_id, consent_event_id").eq("account_id", accountId).eq("id", taskId).maybeSingle();
+  if (error) throw new Error(`readTaskContact failed: ${error.message}`);
+  const row = data as { contact_id: string | null; consent_event_id: string | null } | null;
+  return row ? { contactId: row.contact_id, consentEventId: row.consent_event_id } : null;
+}
+
 /** The open To-dos whose linked number is still on hold: the contact timeline shows a hint in place of their Done (review R3-N1). */
 export async function holdOpenTaskIds(
   db: SupabaseClient, accountId: string,

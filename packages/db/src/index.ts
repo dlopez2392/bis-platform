@@ -30,7 +30,7 @@ export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
 export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask,
          ensureConsentTask, completeTasksForConsentEvents, reopenTasks,
-         HoldUndecidedError, holdOpenTaskIds } from "./activities";
+         HoldUndecidedError, holdOpenTaskIds, readTaskContact } from "./activities";
 export { listAccountWork, listAgencyWork, type WorkRow, type WorkSource, type AgencyWorkRow } from "./work-queue";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,
          ensureDefaultPipeline, listPipelinesWithStages, type CustomFieldDef } from "./crm-config";

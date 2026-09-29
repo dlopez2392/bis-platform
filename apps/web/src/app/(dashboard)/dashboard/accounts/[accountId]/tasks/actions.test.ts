@@ -12,6 +12,9 @@ const dbMocks = vi.hoisted(() => ({
   addTask: vi.fn(),
   completeTask: vi.fn(),
   reopenTask: vi.fn(),
+  readTaskContact: vi.fn(async () => ({ contactId: "c1", consentEventId: "h1" })),
+  readConsentHistory: vi.fn(async () => []),
+  completeTasksForConsentEvents: vi.fn(async () => ["t1"]),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
@@ -20,8 +23,14 @@ vi.mock("@bis/db", async (importOriginal) => ({
 const setBookingStatusActionMock = vi.hoisted(() => vi.fn());
 vi.mock("../calendar/actions", () => ({ setBookingStatusAction: setBookingStatusActionMock }));
 
+const texts = vi.hoisted(() => ({ textsContextFor: vi.fn(), confirmStop: vi.fn(), notAStop: vi.fn(), undoHoldDecision: vi.fn() }));
+vi.mock("@/lib/consent/texts-context", () => ({ textsContextFor: texts.textsContextFor }));
+vi.mock("@/lib/consent/staff-actions", () => ({ confirmStop: texts.confirmStop, notAStop: texts.notAStop, undoHoldDecision: texts.undoHoldDecision }));
+
 import { revalidatePath } from "next/cache";
-import { completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking } from "./actions";
+import { readConsentHistory, completeTask, completeTasksForConsentEvents, HoldUndecidedError } from "@bis/db";
+import { m } from "@/lib/messages";
+import { completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking, confirmStopFromTask, notAStopFromTask } from "./actions";
 
 /** A minimal fake Supabase client satisfying only the one chain
  *  `dismissToTask` reads directly (`accounts.timezone`) — everything else it
@@ -157,5 +166,45 @@ describe("closeOutBooking", () => {
     const r = await closeOutBooking("acct_1", "booking_1", "no_show");
     expect(r).toEqual({ ok: false, error: "Could not update this booking." });
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("the consent To-do's buttons (consent chain PR-2)", () => {
+  const CTX = { db: {}, writer: {}, accountId: "acct_1", contactId: "c1", userId: "user_1", actorName: null, address: "+19562921696", unconfirmed: false, now: new Date("2026-10-06T20:00:00Z") };
+  beforeEach(() => {
+    for (const fn of Object.values(texts)) fn.mockReset();
+    texts.textsContextFor.mockResolvedValue(CTX);
+    texts.confirmStop.mockResolvedValue({ ok: true, view: { kind: "stopped" } });
+    texts.notAStop.mockResolvedValue({ ok: true, view: { kind: "allowed", newestId: "r1" } });
+  });
+
+  it("Confirm stop decides the contact's CURRENT hold, whatever hold the To-do was made for (mutation: pass the task's own link → FAILS)", async () => {
+    vi.mocked(readConsentHistory).mockResolvedValue([
+      { id: "h2", action: "held", method: "staff_undo", occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: "u" },
+      { id: "h1", action: "held", method: "free_text", occurred_at: "2026-10-04T10:00:00Z", evidence: {}, note: null, actor_id: null },
+    ] as never);
+    expect((await confirmStopFromTask("acct_1", "t1")).ok).toBe(true);
+    expect(texts.confirmStop).toHaveBeenCalledWith(CTX, "h2");
+  });
+
+  it("a To-do whose number is no longer on hold says it was already decided, and decides nothing (mutation: decide anyway → FAILS)", async () => {
+    vi.mocked(readConsentHistory).mockResolvedValue([
+      { id: "r1", action: "hold_released", method: "staff", occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: "u" },
+    ] as never);
+    expect(await notAStopFromTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decided"] });
+    expect(texts.notAStop).not.toHaveBeenCalled();
+  });
+
+  it("…and that To-do closes itself, through its own ledger link, so it never sits open with two dead buttons (review R3-I1; mutation: return 'decided' without closing → FAILS)", async () => {
+    vi.mocked(readConsentHistory).mockResolvedValue([
+      { id: "r1", action: "resubscribed", method: "start_keyword", occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: null },
+    ] as never);
+    await confirmStopFromTask("acct_1", "t1");
+    expect(vi.mocked(completeTasksForConsentEvents)).toHaveBeenCalledWith(CTX.db, "acct_1", ["h1"], "user_1");
+  });
+
+  it("a Done on a hold's To-do while the hold is undecided (a stale tab) is refused with the decide-first line (review R3-I1; mutation: fall through to the generic failure → FAILS)", async () => {
+    vi.mocked(completeTask).mockRejectedValueOnce(new HoldUndecidedError());
+    expect(await completeWorkTask("acct_1", "t1")).toEqual({ ok: false, error: m["todo.consent.decideFirst"] });
   });
 });
