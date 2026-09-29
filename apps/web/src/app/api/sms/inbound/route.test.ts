@@ -227,6 +227,10 @@ describe("POST /api/sms/inbound", () => {
     // The idempotent-skip branch returns before the increment call — a
     // replayed delivery must not double-count the same text as two unreads.
     expect(dbMocks.incrementUnreadCount).toHaveBeenCalledTimes(1);
+    // YES/NO answers "the most recent unanswered ask" and is not idempotent
+    // (plan G1): a retry must not run it a second time (mutation: run it in
+    // the retry/else branch too → this goes to 2, FAILS).
+    expect(dbMocks.applyConfirmationReply).toHaveBeenCalledTimes(1);
   });
 
   it("routes a delivery receipt to updateMessageStatusByProviderId", async () => {

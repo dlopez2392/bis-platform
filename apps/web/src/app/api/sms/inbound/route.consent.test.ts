@@ -203,7 +203,7 @@ describe("YES/NO, the phrase list, the grant", () => {
     expect(deferred).toHaveLength(0);
   });
 
-  it("the first-text grant is written before anything else for a plain text, and a failed grant still answers 200 (decision 8, plan G2; mutation: 503 on a grant failure → FAILS)", async () => {
+  it("a plain text is filed and gets exactly the first-text grant; a failed grant still answers 200 (decision 8, plan G2; mutation: 503 on a grant failure → FAILS)", async () => {
     db.appendConsentEventGuarded.mockRejectedValue(new Error("down"));
     const res = await POST(text("see you Tuesday"));
     expect(res.status).toBe(200);
@@ -215,19 +215,31 @@ describe("YES/NO, the phrase list, the grant", () => {
 describe("the alert phone (review R2-I5, plan G10)", () => {
   beforeEach(() => { db.getAlertPhone.mockResolvedValue(CUSTOMER); });
 
-  it("its STOP and START are recorded BEFORE the drop, with no contact and no filing (mutation: drop before recording → FAILS)", async () => {
+  it("its STOP and START are recorded BEFORE the drop, with no contact and no filing, and its own reply is still scheduled to itself (mutation: drop before recording, or make owe a no-op → FAILS)", async () => {
     await POST(text("STOP"));
     await POST(text("START"));
     expect(writes()).toEqual([["revoked", "keyword", "unless_customer_stopped"], ["resubscribed", "start_keyword", "if_stopped_or_held"]]);
     expect(db.appendConsentEventGuarded.mock.calls.every((c) => c[1].contactId === null)).toBe(true);
     expect(db.createContact).not.toHaveBeenCalled();
     expect(db.createMessage).not.toHaveBeenCalled();
+    // Neither keyword carried autoresponse_type, so BIS owes both replies —
+    // and the alert phone gets its own reply the same way a customer does,
+    // just with no contact or conversation to file it under (mutation:
+    // replace the owe callback with a no-op → deferred stays 0 → FAILS).
+    expect(deferred).toHaveLength(2);
+    await runDeferred();
+    expect(sendReply).toHaveBeenCalledTimes(2);
+    for (const call of sendReply.mock.calls) {
+      expect(call[1].contactId).toBeNull();
+      expect(call[1].conversationId).toBeNull();
+    }
   });
 
-  it("anything else from the alert phone writes nothing at all (mutation: record its phrases too → FAILS)", async () => {
+  it("a phrase or a HELP from the alert phone writes and schedules nothing at all — only STOP and START are its own to record (mutation: record its phrases too, or let its HELP through → FAILS)", async () => {
     await POST(text("please stop texting me"));
     await POST(text("HELP"));
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
+    expect(deferred).toHaveLength(0);
   });
 });
 

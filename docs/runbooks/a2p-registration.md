@@ -215,9 +215,11 @@ The default auto-responses are generic. Custom ones naming the brand are worth
 setting per profile — `POST /v2/messaging_profiles/{id}/autoresp_configs` with
 `op` of `stop`, `help` or `start` — and the HELP reply in particular should
 carry the brand name and a contact, because that is what the campaign promises
-it will say. Spanish keywords (PARAR, DETENER) work only once registered that
-way, which is why the platform's Spanish disclosure still tells the customer to
-reply STOP.
+it will say. Registering the Spanish keywords (PARAR, DETENER) is what gets
+Telnyx's OWN block and branded reply to fire on them — the platform's own
+matcher reads them regardless of registration, same as it reads STOP. The
+disclosure still names STOP because it is the one word every carrier and
+Telnyx recognise with no registration at all.
 
 ---
 
