@@ -14,6 +14,19 @@ state's tie-break, `hold_released` until PR-2); §4.1 items 1, 3 and 4; §4.2 (t
 re-review of the corrected plan added: §4.1 item 1 (who wrote a number, for the backfill) and item 4 and §5 (the
 re-hold at delivery, and the re-hold age cap).
 
+Corrected on 2026-09-28 from the PR-2 plan's Telnyx research
+(`docs/superpowers/plans/2026-09-28-consent-pr2-keywords-holds-controls.md`, "Spec gaps resolved", S1–S6). The
+corrections are made in place: decisions 12 and 16 (verified); §4.2 step 5 (a phrase can be one word), the retry
+paragraph (the dedupe returns early) and the Telnyx backfill (verified); §5 go-live step 0 (START and UNSTOP are
+Telnyx defaults; AI opt-out detection stays off); §11 (Telnyx's answers).
+
+Corrected again on 2026-09-28 from the PR-2 plan's review (three reviewers) and danlo's decisions of that day (plan
+"Spec gaps resolved", S7–S12). In place: decision 10 (S7: BIS confirms only when Telnyx did not); choice 19's note
+(Telnyx's block is verified, F4); §3's `source_ref` (S10: one event, never a reusable channel); §4.2 step 2 (S8: a
+customer's STOP over a staff stop is recorded, without a reply), the retry paragraph (the attempt that writes the row
+owes the reply), the reply table's help lines (S12: a contact sentence) and the phrase list (S9: extended); §5 go-live
+step 0 (S11: US, MX and CA; the AI detection read; the opt-out import before any number moves).
+
 ## 1. Decisions
 
 ### 1.1 Owner decisions (danlo, 2026-09-26; binding)
@@ -34,13 +47,13 @@ re-hold at delivery, and the re-hold age cap).
 
 | # | Default |
 |---|---|
-| 10 | BIS handles the stop, start and help keywords in the inbound SMS webhook and sends the single confirmation itself. A keyword matches only the **whole message**, ignoring case and accents. **Stop, English:** STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, QUIT, REVOKE, OPT OUT, OPTOUT. **Stop, Spanish:** PARAR, DETENER, ALTO, CANCELAR, BAJA, NO MAS / NO MÁS |
+| 10 | BIS handles the stop, start and help keywords in the inbound SMS webhook. It sends the single confirmation itself only when Telnyx did not already answer the keyword (the webhook's `autoresponse_type` is absent); when Telnyx answered, Telnyx's configured reply, set to §4.2's own line, is the single confirmation (amended 2026-09-28, PR-2 plan S7: a Telnyx block also refuses BIS's own send, so BIS could not send it). A keyword matches only the **whole message**, ignoring case and accents. **Stop, English:** STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, QUIT, REVOKE, OPT OUT, OPTOUT. **Stop, Spanish:** PARAR, DETENER, ALTO, CANCELAR, BAJA, NO MAS / NO MÁS |
 | 11 | START and UNSTOP re-grant. HELP and AYUDA reply with the business name and how to stop |
-| 12 | Telnyx's own keyword handling stays on as a **backstop**, and the Spanish words are registered on the profile. How Telnyx's auto-reply interacts with BIS's confirmation, so that no customer gets two, is an **assumption**. It must be checked against Telnyx's docs or support before the PR-2 implementation plan is written. The setting the plan names is the `autoresponse_type` field on the inbound message webhook (`crm-features.md:1176`). It is **unverified** (§11) |
+| 12 | Telnyx's own keyword handling stays on as a **backstop**, and the Spanish words are registered on the profile. How Telnyx's auto-reply interacts with BIS's confirmation, so that no customer gets two, is an **assumption**. It must be checked against Telnyx's docs or support before the PR-2 implementation plan is written. The setting the plan names is the `autoresponse_type` field on the inbound message webhook (`crm-features.md:1176`). It is **verified 2026-09-28** (PR-2 plan F1–F4): Telnyx answers a keyword it knows before BIS sees the text, the webhook then carries `autoresponse_type`, and Telnyx's block also refuses BIS's own send, so BIS confirms only when `autoresponse_type` is absent |
 | 13 | The YES/NO appointment confirmation keeps working. Its precedence against the keywords is defined in §4.2 |
 | 14 | Staff can record an opt-out, and it takes effect at once. Resuming requires a note saying the customer asked |
 | 15 | The contact drawer shows "Texts: allowed / stopped (date, how)" and the same for email, with Stop and Resume controls. It follows DESIGN.md: dot + word, tokens only, and the reversible-with-undo and confirm rules. A free-text hold creates a To-do row |
-| 16 | A backfill brings in 0049's email opt-outs and, if its API allows (**unverified**), Telnyx's existing opt-out list. 0049's readers switch to the ledger |
+| 16 | A backfill brings in 0049's email opt-outs and, since its API allows it (**verified 2026-09-28**, `GET /v2/messaging_optouts`, PR-2 plan F6), Telnyx's existing opt-out list. 0049's readers switch to the ledger |
 | 17 | The "ten business days" duty is met by **acting immediately**. There is **no clock setting**: every revoke and every hold blocks the very next send, so nothing waits on a clock. The plan's proposed setting (`crm-features.md:1176`) is therefore not needed |
 
 ### 1.3 Choices this spec makes (for danlo's review)
@@ -48,7 +61,7 @@ re-hold at delivery, and the re-hold age cap).
 | # | Choice | Why |
 |---|---|---|
 | 18 | The stop confirmation, the start confirmation and the help reply go **at any hour**. They are exempt from decision 4's window | Each one answers the customer's own text within seconds. Today's 47 CFR 64.1200(a)(12) presumes a confirmation sent within five minutes is consented (`crm-features.md:1106`), and holding it until 8 a.m. would lose that |
-| 19 | A stop the customer made **themselves** (a keyword, the unsubscribe link, one-click), or one the carrier reports, is lifted **only by the customer's own act**: texting START, or Resubscribe on the unsubscribe page. Staff Resume is offered only for stops that staff recorded, staff confirmed, or that came from staff's 0049 switch | Only the customer's own act undoes their own act. For SMS, Telnyx also keeps its own block on that number (decision 2), so a BIS-side resume could not reach them anyway (assumption, §11) |
+| 19 | A stop the customer made **themselves** (a keyword, the unsubscribe link, one-click), or one the carrier reports, is lifted **only by the customer's own act**: texting START, or Resubscribe on the unsubscribe page. Staff Resume is offered only for stops that staff recorded, staff confirmed, or that came from staff's 0049 switch | Only the customer's own act undoes their own act. For SMS, Telnyx also keeps its own block on that number (decision 2), so a BIS-side resume could not reach them anyway (verified 2026-09-28: Telnyx's block is per messaging profile and has no exemption, PR-2 plan F4) |
 | 20 | A **free-text stop gets no confirmation text**, not at the hold and not when staff confirm it | A hold may be a false positive, and staff confirm long after the five-minute window of choice 18. Counsel reads this (§5, go-live item 3) |
 | 21 | An automated text or email whose purpose has passed before the window opens is **not sent**. It is logged "not sent: quiet hours ran past the appointment". Today's "deadline sends now, inside quiet hours" branch (`apps/web/src/lib/automations/hold-or-send.ts:184`) is removed | Decision 4 forbids sending in the quiet window. A reminder that arrives after the appointment is worse than none. Everything else is rescheduled, not dropped |
 | 22 | A **staff-typed email** to a contact who unsubscribed still sends. The composer shows a notice | Decision 7 covers *automated* email. A person replying about the customer's own matter is not automated |
@@ -136,7 +149,7 @@ parity (CLAUDE.md; `docs/runbooks/ci-supabase-project.md`).
 | `contact_id` | uuid null | The contact it concerned at the time, so the evidence outlives a merge or a delete. The reference is **composite**: `(account_id, contact_id)` → `contacts(account_id, id)`, `on delete set null (contact_id)` (0050's pattern), so a row can never name another account's contact |
 | `actor_id` | text null | The staff member's Clerk user id (`user_…`), for `staff` and `staff_undo`, where a check requires it non-blank. It is text, not a uuid FK to `users`: the id staff actions carry is Clerk's, as `events.actor_id` stores it |
 | `note` | text null | Required, and must not be blank, when `method = 'staff'` and `action = 'resubscribed'` (a check constraint) |
-| `source_ref` | text null | The inbound message, form submission or booking id |
+| `source_ref` | text null | The inbound message, form submission or booking id: ONE delivery or event, never a reusable channel such as a token or an address, because PR-2's one-row-per-source index reads a reused source as a retry forever and would drop a second real stop (PR-2 plan S10). The Telnyx backfill's source names the opt-out and its time |
 | `evidence` | jsonb not null default `'{}'` | The keyword or phrase matched, a message excerpt of at most 160 characters, the consent label shown, or the token's issue time |
 | `occurred_at` | timestamptz not null default `now()` | For backfills, the original time |
 | `created_at` | timestamptz not null default `now()` | |
@@ -284,12 +297,17 @@ phone could never be lifted.
 
 **The inbound route**, after it files the message (`route.ts:161`), so that staff always see what was written:
 
-1. **Normalise.** Unicode NFD with the accents removed, uppercase, trailing punctuation removed, and every space
-   removed (choice 26).
-2. **Stop keyword** (decision 10). If the address is not already stopped, append `revoked` (method `keyword`, with the
-   word in the evidence).
+1. **Normalise.** Unicode NFD with the accents removed, uppercase, punctuation, symbols and invisible characters
+   removed at either end, inner spaces and hyphens removed (plan G9; choice 26).
+2. **Stop keyword** (decision 10). Unless the customer's OWN stop already stands — the newest deciding row is a
+   `revoked` whose method is `keyword`, `carrier_block`, `backfill_telnyx`, `unsubscribe_link` or `one_click` — append
+   `revoked` (method `keyword`, with the word in the evidence). Over a staff stop or a confirmed free-text stop it IS
+   appended, so from then on only the customer can lift it (choice 19; corrected 2026-09-28 by danlo's decision, PR-2
+   plan S8). §4.3's email rule below ("an address that is already stopped gets no second row") is a different
+   principle; PR-3 decides whether email follows this one.
    - Then send **one** `consent.stop_confirmation` in the keyword's language, unless the webhook shows Telnyx already
-     auto-replied (decision 12). An address that was already stopped gets nothing.
+     auto-replied (decision 12), and only when the address was not already stopped: a stop over a staff stop gets no
+     confirmation (the texts were already off). An address the customer had already stopped gets nothing.
    - If the word was CANCEL or CANCELAR and the contact has an upcoming booking, also add a To-do asking staff to
      check whether they meant the appointment (§6).
    - Nothing else runs for that message.
@@ -298,39 +316,114 @@ phone could never be lifted.
 4. **HELP or AYUDA.** If the address is allowed, send `consent.help` in that language, unless Telnyx auto-replied. A
    stopped or held address gets nothing from BIS (decision 2, and the gate's block on held addresses).
 5. **Otherwise**, the YES/NO confirmation runs exactly as today (`route.ts:201`). Then the free-text detector runs.
-   - Every phrase has two or more words, and YES/NO matches only a whole one-word message (§2), so the two can never
-     both fire.
+   - No phrase matches a YES/NO word, and YES/NO matches only a whole one-word message (§2), so the two can never
+     both fire. (Corrected 2026-09-28: not every phrase has two words, `borrenme` is one; the PR-2 plan tests that no
+     phrase matches a YES/NO word.)
    - If a phrase matches and the address is allowed, append `held` (method `free_text`, with the phrase and an
      excerpt in the evidence) and add the To-do. No text is sent (choice 20).
 6. **Grant from texting first.** If the account's ledger has no row at all for this address, a `granted` row (method
    `inbound_text`) is appended first, before steps 2–5.
 
 **Replies are written after the ledger.** If the ledger write fails, the route returns a 5xx so that Telnyx retries.
-The existing provider-id dedupe (`route.ts:143–150`) stops a retry from filing the message twice.
+The existing provider-id dedupe (`route.ts:143–150`) RETURNS before anything else runs, so as it stands a retry would
+never reach the ledger (corrected 2026-09-28, PR-2 plan S1). On a retry the dedupe skips only the filing and the YES/NO
+step; the consent steps run again, every consent write is idempotent on the message id (one ledger row per source,
+one To-do per ledger row), and a reply is sent only by the attempt that wrote the row it answers. That attempt owes the
+reply from the moment the row is written and schedules it then, even if a later step (the CANCEL To-do) fails and
+answers 5xx; its retry finds the row already written and sends nothing (PR-2 plan review R2-I1a).
 
 **The only send allowed to a stopped address.** The gate lets `consent.stop_confirmation` through a stopped address
 only when the caller passes the id of the `revoked` row it answers, and that row is the newest and under five
 minutes old.
 
 **Customer-facing texts.** They have no á, í, ó or ú, which would drop the message to UCS-2 (`opt-out.ts:43–46`).
-`{Business}` is the name the text-back uses (`messages.ts:988`).
+`{Business}` is the name the text-back uses (`brandDisplayName`, as `lib/voice/textback.ts` applies it; the old
+citation `messages.ts:988` now points at other keys).
 
 | Kind | English | Spanish |
 |---|---|---|
 | stop confirmation | `{Business}: You won't get any more texts from us. Reply START to get them again.` | `{Business}: Ya no le enviaremos mensajes. Responda START para volver a recibirlos.` |
 | start confirmation | `{Business}: You'll get our texts again. Reply STOP to stop them.` | `{Business}: Listo, le enviaremos mensajes de nuevo. Responda PARAR para dejarlos.` |
-| help | `{Business}: Reply STOP to stop texts from us.` | `{Business}: Responda PARAR para dejar de recibir mensajes.` |
+| help | `{Business}: Reply STOP to stop texts from us. Call or text this number for help.` | `{Business}: Responda PARAR para dejar de recibir mensajes. Llame o escriba a este numero para recibir ayuda.` |
+
+The help line's second sentence (added 2026-09-28, danlo's decision; PR-2 plan S12) is the contact the A2P campaign
+promises (`docs/runbooks/a2p-registration.md:197-199`). "numero" is unaccented on purpose: "número" would push the
+Spanish help from one GSM-7 segment to two UCS-2 segments.
 
 The start confirmation uses the language of the stop it lifts, and English otherwise.
 
-**The phrase list** (`apps/web/src/lib/consent/phrases.ts`) is matched against the normalised text with the spaces
-kept, as whole words anywhere in the message. The starting set, reviewed in PR-2 and extended only with tests, is:
+**The phrase list** (`apps/web/src/lib/consent/phrases.ts`) is matched against the normalised text (accents, case,
+apostrophes and punctuation ignored). Reviewed in PR-2 (danlo, 2026-09-28, four decisions, and the orchestrator's calls
+under them; PR-2 plan S9) and extended only with tests, it has four kinds. Where a false hold and a missed stop
+conflict, it holds: staff clear a false hold in one click.
 
-- **English:** stop texting, stop sending, stop messaging, stop contacting, dont text, do not text, dont message, do
-  not message, no more texts, no more messages, remove me, take me off, unsubscribe me, wrong number.
-- **Spanish:** ya no me manden, ya no me envien, ya no me escriban, no me manden, no me envien, no me escriban, dejen
-  de mandar, dejen de enviar, dejen de escribir, no quiero mensajes, no quiero recibir, quitenme de, borrenme, numero
-  equivocado.
+- **Sentence phrases, as whole words anywhere in the message.**
+  - **English:** stop texting, stop sending, stop messaging, stop contacting, dont text, do not text, dont message, do
+    not message, no more texts, no more messages, remove me, take me off, unsubscribe me, wrong number, no more
+    texting, do not contact me, dont contact me, opt me out, quit texting me, leave me alone, i dont want these texts,
+    i do not want these texts (the last five, danlo, 2026-09-28, D2), i dont want texts, i dont want your texts, i do
+    not want texts (orchestrator, fix round 2).
+  - **Spanish, about messages on their own:** no quiero mas mensajes, no quiero mensajes, no quiero sus mensajes, no
+    mas mensajes, no mas textos, numero equivocado, este no es mi numero, se equivocaron de numero, no quiero
+    promociones, no quiero mas promociones, no quiero sus promociones, no quiero ofertas, no quiero mas ofertas, no
+    quiero publicidad, no quiero mas publicidad; and quitenme / quiteme / quitame / saquenme / saqueme / sacame /
+    borrenme / borreme / borrame de su lista or de la lista. Any "… de la lista …" holds, "Quítame de la lista del
+    sábado y ponme el domingo" included (danlo's list form); only "lista de espera" (a waiting list) does not. ("no
+    quiero sus mensajes" added by the orchestrator, 2026-09-28, dispatch-task-4: it holds anywhere, like "no quiero
+    mensajes". "borrenme / borreme / borrame de su/la lista" and "no quiero promociones" added by danlo, 2026-09-28,
+    D2. "este no es mi numero" / "se equivocaron de numero" — same class as "numero equivocado" — and the six "no
+    quiero … promociones/ofertas/publicidad" literals, added by the orchestrator, fix round 2; kept as their own
+    literals rather than a general "no quiero" verb form, which would also have newly held bare "no quiero mas" /
+    "no quiero nada" — unrequested.)
+- **Spanish verb forms, ONLY ABOUT MESSAGES** (danlo): no me manden / mande / mandes / envien / envie / envies /
+  escriban / escriba / escribas; dejen / deje / deja de mandar(me) / enviar(me) / escribir(me); no quiero recibir; no
+  me vuelvan / vuelva / vuelvas a mandar / enviar; no quiero que me manden / envien / escriban (D2, the subjunctive
+  construction, e.g. "Ya no quiero que me manden mensajes"). Each counts only with a message object:
+  - a **message word** right after the form, anywhere in the message: mensajes, textos, sms, msjs, mensajitos, ningun
+    mensaje, sus mensajes, promociones, ofertas, publicidad, sus promociones ("No me envíen ningún mensaje", "No me
+    vuelvan a mandar mensajes", "Dejen de mandarme sus promociones" — the last four message words, danlo, 2026-09-28,
+    D2; "ofertas" and "publicidad" only in the form given, so "oferta" singular does not count);
+  - or **"mas" / "nada"** (also "nada mas", "nunca mas") only at the END of the message, courtesy words aside, or right
+    before a message word: "No me manden más", "No me mande nada, gracias" and "No me mande más mensajes" and "No me
+    manden más promociones" hold; "No me manden más a Pedro", "No me mande más de dos trabajadores", "No me mande
+    nada por correo" and "No me manden la oferta del lunes" (singular) do not.
+  A bare mandar or enviar form does not hold ("No me mande la factura", "Dejen de mandarme"): "mandar" can mean a crew
+  or an invoice. "mensajes de voz" counts as messages: "No me mande mensajes de voz, mejor texto" is a false hold staff
+  clear in one click, and excluding it missed "no me manden mensajes de voz ni textos" (orchestrator) — the exclusion
+  is checked independently on the verb-form path and the sentence-phrase path, each with its own test (review I2).
+- **Whole-message phrases:** "please stop" and "stop please" (English, exact); in Spanish "borrenme", "borreme",
+  "borrame", "borren / borre / borra mi numero", the escribir forms "dejen / deje / deja de escribirme" and "no me
+  escriban / escriba / escribas", "no me vuelvan / vuelva / vuelvas a escribir", and "no quiero que me escriban" (D2,
+  the bare subjunctive form — escribir is always about messages, so it holds bare like the other escribir forms).
+  They count ONLY when they are the
+  whole message, punctuation aside; the Spanish ones may carry ONE leading "ya" / "por favor" / "porfa" / "porfavor" /
+  "gracias" (the last one added in fix round 2, e.g. "Gracias, no me escriban") and ONE trailing "por favor" /
+  "porfa" / "porfavor" / "gracias" / "ya" (orchestrator). "Please stop!!", "¡Bórreme!",
+  "Ya no me escriban", "No me escriban, gracias", "Borren mi número" and "Por favor borre mi número" hold; "Please
+  stop by Thursday", "Bórreme la cita del lunes", "No me escriba el martes, mejor llámeme", "Ya no me escriba, yo le
+  llamo", "Borre mi número viejo, use el nuevo" (a number change) and "Borren mi número de la cita" (an appointment
+  detail) do not. "escribir" is always about messages — writing to the customer is texting them — and a missed stop
+  is worse than a false hold (decision 27), so its bare forms hold as the whole message while mandar and enviar stay
+  object-only. ("borren / borre / borra mi numero" added by the orchestrator, 2026-09-28, dispatch-task-4: same rule
+  and courtesy wrapper as "borrenme" / "borreme" / "borrame".)
+- **A stop word repeated as the whole message:** "stop stop", "parar parar", "alto alto", "baja baja", any number of
+  repeats (English also with one "please" at either end, Spanish with the courtesy words); one word on its own is a
+  keyword (decision 10), not a phrase.
+- **A single stop word with ONE courtesy word at EACH end** (danlo, 2026-09-28, D1) is a whole-message hold, not a
+  keyword stop: every STOP-kind keyword (decision 10) plus the spaced spellings "no mas" (NOMAS), "opt out" (OPTOUT)
+  and "stop all" (STOPALL) — the phrase matcher's normaliser, unlike the keyword matcher's, does not collapse inner
+  spaces — EXCEPT cancel and cancelar (orchestrator, fix round 2: "Cancel please" / "Cancelar por favor" almost
+  always mean an appointment cancellation, not a stop; holding them as a phrase would lose the appointment To-do and
+  block the reschedule — the bare keyword CANCEL/CANCELAR is unaffected, still a stop AND the To-do, decision in
+  step 2 above). Each qualifying word holds with one Spanish courtesy word above (now including leading "gracias")
+  or, in English, one leading "please" / "thanks" or one trailing "please", "thanks" or "thank you". "Baja por
+  favor", "Alto, por favor", "Parar porfa", "Ya baja", "No más, gracias", "Ya no más", "No más por favor", "Detener
+  gracias", "Stop thanks", "Stop thank you", "Opt out please", "Please opt out", "Opt-out please" and "Stop all
+  please" hold; "Cancel please", "Please cancel", "Cancelar por favor" and "Ya cancelar" do NOT; the bare word alone
+  is a keyword (matched first, elsewhere — this rule never claims it), and a longer text is neither ("Alto, por
+  favor mañana a las 3" holds nothing).
+- No sentence phrase contains another, so the order of the lists never changes whether a text holds; nor does any
+  whole-message phrase contain another (checked separately — that pairwise check does not cover them).
 
 A false match only holds messages, and staff undo it in one click. A missed sentence is the risk, which is why staff
 can still record a stop by hand.
@@ -351,10 +444,14 @@ can still record a stop by hand.
   either one appends `held` (method `staff_undo`), which puts the contact back On hold.
 - **The number's country** (Mexico +52 / US +1) rewrites the contact's phone and clears the flag. Undo restores both.
 
-**Telnyx backfill.** If Telnyx's API lists a messaging profile's opted-out numbers (**unverified**, §11), a one-off
-script appends `revoked` (method `backfill_telnyx`) for each number in the account that owns the profile. If it does
-not, the step is dropped and noted in the PR. Because no account has texted a customer (§2), the list is expected to
-be short.
+**Telnyx backfill.** Telnyx's API lists a messaging profile's opted-out numbers (**verified 2026-09-28**,
+`GET /v2/messaging_optouts`, PR-2 plan F6 and F10: each row's `from` is the business's number and `to` the
+customer's), so a one-off script appends `revoked` (method `backfill_telnyx`) for each `to`, in the account that owns
+the `from` number. danlo sees the count first. Because no account has texted a customer (§2), the list is expected to
+be short. Each opt-out's `to` is normalised with `normalisePhone` (`packages/db/src/phone.ts`) before it is written,
+exactly like every other writer in the app (the inbound route, the send gate, staff actions, grants, the Texts row);
+a `to` `normalisePhone` cannot parse stops the whole import rather than writing an unreadable row into the
+append-only ledger (whole-branch review I1).
 
 ### 4.3 PR-3: email
 
@@ -465,9 +562,19 @@ ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` k
 
 **Blocking go-live, not merge** (texting stays off for every account until all of these hold, `crm-features.md:1098`):
 1. **Step 0:** the Telnyx profile keyword configuration.
-   - The Spanish words and NO MÁS, plus REVOKE, OPT OUT and OPTOUT, are registered as opt-out keywords.
-   - START and UNSTOP are registered as opt-in keywords.
-   - The profile's auto-reply wording is set to the bilingual stop line of §4.2.
+   - Every stop word of decision 10 (Telnyx's defaults with the Spanish words, NO MAS and NO MÁS, REVOKE, OPT OUT
+     and OPTOUT) is listed in ONE opt-out config per sender country — US, MX and CA (danlo, 2026-09-28, so a
+     Canadian +1 sender gets the named reply too; PR-2 plan S11) — whose reply is the bilingual stop line of §4.2.
+   - START and UNSTOP are Telnyx defaults, reserved and always active: nothing to register (corrected 2026-09-28,
+     PR-2 plan S2). START/UNSTOP and HELP/AYUDA each get one bilingual config per country too, whose replies are
+     §4.2's start and help lines, English then Spanish, with the business name (danlo, 2026-09-28).
+   - Telnyx's AI opt-out detection stays OFF on every profile: it would turn a free-text message into a carrier block
+     that only the customer's START lifts, against choice 20 and decision 5 (PR-2 plan F8). It is read before and
+     after the configs; `true` stops the rollout, turning it off is a Telnyx write under danlo's go with a read-back,
+     and an absent field is unknown, not off (S11).
+   - Telnyx's existing opt-outs are imported into the ledger BEFORE any number moves off the shared profile: whether
+     a number's opt-outs follow it to a new profile is not documented, and the inference from Telnyx's per-profile
+     blocks is that they do not (PR-2 plan A5, S11).
    - Done per account profile (`crm-features.md:1099`, :1172).
 2. **The Telnyx answers** listed in §11 are confirmed, and PR-2's reconciliation is adjusted to them.
 3. **Step 6:** counsel reads the adopted FCC order against this design, in the week it is published
@@ -567,8 +674,9 @@ Of that, 6–7 is counted in §4.2 and S-05's 2–3 in the first release (:1266�
 - **Unit tests.**
   - `normalisePhone`: a table of US-only, MX-only, both, neither, `+52 1`, `00 52`, carrier-supplied and border-city
     numbers.
-  - The keyword matcher: every word with and without accents, in any case, with trailing punctuation and with inner
-    spaces. Non-matches too: "stop by at 3", "Cancel my appointment please", and "No".
+  - The keyword matcher: every word with and without accents, in any case, with punctuation, symbols and invisible
+    characters at either end, inner spaces and hyphens (plan G9). Non-matches too: "stop by at 3", "Cancel my
+    appointment please", and "No".
   - The phrase list: each phrase in context, plus a fixed negative set.
   - The state reducer: tables of event sequences, including a keyword stop landing between a hold and its release.
   - Hours: 20:59 and 21:00, Sunday 11:59 and 12:00 for marketing, DST changeover days (in a zone whose clocks jump
@@ -641,18 +749,26 @@ re-read it.
 
 ## 11. External assumptions to verify at build time (not repo facts)
 
-- **Telnyx** (before the PR-2 implementation plan):
-  - that the inbound message webhook carries `autoresponse_type` when Telnyx has auto-replied to a keyword, and what
-    its values are;
-  - whether custom Spanish opt-out keywords, and START and UNSTOP as opt-in, can be registered per profile;
-  - whether the auto-reply text is configurable per profile, and in which language it is sent (the plan says per
-    sender country only, `crm-features.md:1172`);
-  - whether a profile-level block also stops BIS's own confirmation;
+- **Telnyx** (before the PR-2 implementation plan; answered 2026-09-28 from Telnyx's documentation, PR-2 plan F1–F11):
+  - ~~that the inbound message webhook carries `autoresponse_type` when Telnyx has auto-replied to a keyword, and what
+    its values are~~ **VERIFIED:** it does, on `message.received`, absent when no keyword matched; documented values
+    START, STOP, HELP;
+  - ~~whether custom Spanish opt-out keywords, and START and UNSTOP as opt-in, can be registered per profile~~
+    **VERIFIED:** custom keywords are added per profile (at most 20 per config); START and UNSTOP are defaults,
+    always active;
+  - ~~whether the auto-reply text is configurable per profile, and in which language it is sent~~ **VERIFIED:** per
+    profile and per sender country, one reply per config; two replies in two languages for ONE country is **NOT
+    FOUND** in Telnyx's docs;
+  - ~~whether a profile-level block also stops BIS's own confirmation~~ **VERIFIED:** it does; there is no exemption;
   - ~~the error code for a send to an opted-out number (for `carrier_block`)~~ **VERIFIED 2026-09-26:** `40300`,
     "Blocked due to STOP message" (developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out). Block rules
     are per messaging profile. The HTTP status of that refusal is still an assumption; the gate keys on the code;
-  - whether an API lists a profile's opted-out numbers (for the backfill);
-  - whether Telnyx retries an inbound webhook that gets a 5xx.
+  - ~~whether an API lists a profile's opted-out numbers (for the backfill)~~ **VERIFIED:** `GET /v2/messaging_optouts`;
+  - ~~whether Telnyx retries an inbound webhook that gets a 5xx~~ **VERIFIED:** any non-2xx is retried, up to 3
+    attempts per URL and then the failover URL; Telnyx expects an answer within 2 seconds;
+  - **new, VERIFIED:** Telnyx offers per-profile AI opt-out detection; it stays off (§5 step 0);
+  - still **NOT FOUND:** the HTTP status of the `40300` refusal (the gate keys on the code), and whether Telnyx's
+    keyword match ignores punctuation, accents or inner spaces (checked live at go-live).
 - **Resend:** the send call accepts custom `headers`.
 - **`libphonenumber-js`:** its metadata tells US from Mexican 10-digit numbers as §4.1 needs. Tests pin the border area
   codes.

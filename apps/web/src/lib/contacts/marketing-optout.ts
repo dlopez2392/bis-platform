@@ -1,6 +1,7 @@
 import type { ResolvedZone } from "@bis/db";
 import { m } from "@/lib/messages";
 import { formatDateInZone } from "@/lib/format";
+import type { ToastLike } from "@/lib/ui/guarded-run";
 
 /** The slice of `renderZone`'s answer the "Off since" line needs: the zone to
  *  print in, whether it was guessed, and the name `ZoneNote` would print. */
@@ -38,12 +39,8 @@ export function optOutSinceLine(optedOutAt: string | null, zone: OptOutZone | un
 export type OptOutResult = { ok: true } | { ok: false; error: string };
 export type OptOutSave = (optedOut: boolean) => Promise<OptOutResult>;
 
-/** The slice of sonner's `toast` this uses, injected so it is testable
- *  without a DOM. */
-export type OptOutToast = {
-  success: (message: string, opts: { action: { label: string; onClick: () => void } }) => unknown;
-  error: (message: string) => unknown;
-};
+/** The slice of sonner's `toast` this uses (lib/ui/guarded-run.ts). */
+type OptOutToast = ToastLike;
 
 /** One write: `true` on success, and on failure the box is put back to
  *  `!optedOut` and the operator is told why. */
@@ -113,29 +110,3 @@ export async function flipMarketingOptOut(
   );
 }
 
-/**
- * One write at a time. `busy` is a ref, not the transition's `pending`: the
- * Undo closure is built during an EARLIER flip, so a `pending` captured then
- * is stale by the time the toast's button is clicked; a ref is read at click
- * time. `start` is the switch's `startTransition`, so the box still reads
- * `pending` (and disables) while the write runs.
- *
- * Answers whether it took the work: `false` means refused, which the Undo
- * path turns into a word to the operator (#123 m2).
- */
-export function runGuarded(
-  busy: { current: boolean },
-  start: (work: () => Promise<void>) => void,
-  work: () => Promise<void>,
-): boolean {
-  if (busy.current) return false;
-  busy.current = true;
-  start(async () => {
-    try {
-      await work();
-    } finally {
-      busy.current = false;
-    }
-  });
-  return true;
-}

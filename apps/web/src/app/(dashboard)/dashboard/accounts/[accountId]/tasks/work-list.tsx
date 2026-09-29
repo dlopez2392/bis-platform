@@ -19,9 +19,12 @@ import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import {
   completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking,
+  confirmStopFromTask, notAStopFromTask, undoHoldDecisionFromTask,
   type ActionResult, type DismissResult,
 } from "./actions";
 import { WorkRowActions } from "./work-row-actions";
+import { ConsentHoldActions } from "./consent-hold-actions";
+import type { TextsActionResult } from "@/lib/consent/staff-actions";
 // Fix-wave Important 3 (task-11-brief): reused, never copied — `STATUS_TREATMENT`
 // (Task 7's own dot+word chip map) and `CARD`/`CARD_HEAD` (the same card
 // shell the call-detail page's own Suggested-next-steps block and the
@@ -39,6 +42,9 @@ type WorkActionProps = {
   reopenWorkTask: (taskId: string) => Promise<ActionResult>;
   dismissToTask: (row: { source: WorkSource; contactId: string | null; title: string }) => Promise<DismissResult>;
   closeOutBooking: (bookingId: string, status: "completed" | "no_show") => Promise<ActionResult>;
+  confirmStopFromTask: (taskId: string) => Promise<TextsActionResult>;
+  notAStopFromTask: (taskId: string) => Promise<TextsActionResult>;
+  undoHoldDecisionFromTask: (contactId: string, eventId: string, reopenTaskIds: string[]) => Promise<TextsActionResult>;
 };
 
 const BUCKET_ORDER: Bucket[] = ["overdue", "today", "waiting"];
@@ -354,16 +360,28 @@ function WorkRowItem({
         <div className={cn(rowClassName, "min-w-0 flex-1")}>{body}</div>
       )}
       <div className="shrink-0 pr-4">
-        <WorkRowActions
-          source={row.source}
-          rawId={rawRowId(row)}
-          contactId={row.contactId}
-          label={primary}
-          completeWorkTask={actions.completeWorkTask}
-          reopenWorkTask={actions.reopenWorkTask}
-          dismissToTask={actions.dismissToTask}
-          closeOutBooking={actions.closeOutBooking}
-        />
+        {/* A hold's To-do is decided, not ticked off (spec §6): its two
+            buttons replace Done. A CANCEL To-do keeps Done. */}
+        {row.consent?.action === "held" ? (
+          <ConsentHoldActions
+            taskId={rawRowId(row)}
+            contactId={row.contactId}
+            confirm={actions.confirmStopFromTask}
+            release={actions.notAStopFromTask}
+            undo={actions.undoHoldDecisionFromTask}
+          />
+        ) : (
+          <WorkRowActions
+            source={row.source}
+            rawId={rawRowId(row)}
+            contactId={row.contactId}
+            label={primary}
+            completeWorkTask={actions.completeWorkTask}
+            reopenWorkTask={actions.reopenWorkTask}
+            dismissToTask={actions.dismissToTask}
+            closeOutBooking={actions.closeOutBooking}
+          />
+        )}
       </div>
     </li>
   );
@@ -422,6 +440,9 @@ export function WorkList({
     reopenWorkTask: reopenWorkTask.bind(null, accountId),
     dismissToTask: dismissToTask.bind(null, accountId),
     closeOutBooking: closeOutBooking.bind(null, accountId),
+    confirmStopFromTask: confirmStopFromTask.bind(null, accountId),
+    notAStopFromTask: notAStopFromTask.bind(null, accountId),
+    undoHoldDecisionFromTask: undoHoldDecisionFromTask.bind(null, accountId),
   };
 
   return (

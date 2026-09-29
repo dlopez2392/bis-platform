@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getContact, listContactTags, listNotes, listContactTasks,
+import { getContact, listContactTags, listNotes, listContactTasks, holdOpenTaskIds,
          listCustomFields, listContactOpportunities, listContactSubmissions,
          listContactMessages } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
@@ -12,8 +12,10 @@ import { ActivityTimeline } from "./activity-timeline";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { e164Of } from "@/lib/voice/phone-number";
-import { normalisePhone } from "@bis/db/phone";
 import { smsRecipientState } from "@/lib/consent/recipient-state";
+import { readTextsView } from "@/lib/consent/texts-view";
+import type { TextsLoad } from "@/lib/consent/texts-row";
+import { loggableError } from "@/lib/loggable-error";
 import { composerStateLine } from "@/lib/consent/composer-state";
 import { renderZone } from "@/lib/zone";
 
@@ -51,6 +53,30 @@ export default async function ContactDetailPage({
   }
   const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
 
+  // The Texts row (consent chain PR-2, spec §6), read under this request's
+  // RLS client. An unreadable ledger is the row's error state, never a thrown
+  // page and never a guessed "Allowed".
+  let texts: TextsLoad;
+  try {
+    texts = { status: "ready", view: await readTextsView(db, accountId, contact), zone: zone.zone, phone: contact.phone ?? null };
+  } catch (e) {
+    console.error(`contact page: Texts row unreadable for contact ${contactId}: ${loggableError(e)}`);
+    texts = { status: "error" };
+  }
+
+  // Review R3-N1 (G21): a To-do whose number is still on hold is closed by
+  // deciding the hold, never by "Done", so the timeline shows a hint in its
+  // place. A failed read fails CLOSED: every open linked To-do gets the hint
+  // — a CANCEL To-do too (review M4), which is why the hint names the To do
+  // page, where that To-do keeps its Done.
+  let holdOpen: string[];
+  try {
+    holdOpen = await holdOpenTaskIds(db, accountId, tasks);
+  } catch (e) {
+    console.error(`contact page: hold To-dos unreadable for contact ${contactId}: ${loggableError(e)}`);
+    holdOpen = tasks.filter((t) => !t.completed_at && t.consent_event_id).map((t) => t.id);
+  }
+
   return (
     <>
       <PageHeader title={contactDisplayName(contact)} />
@@ -62,7 +88,7 @@ export default async function ContactDetailPage({
           tags={tags}
           fieldDefs={fieldDefs}
           zone={{ zone: zone.zone, guessed: zone.guessed, label: zone.label }}
-          phoneUnconfirmed={contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true}
+          texts={texts}
         />
         <ActivityTimeline
           accountId={accountId}
@@ -76,6 +102,7 @@ export default async function ContactDetailPage({
           smsBlockedLine={composerStateLine(smsRecipient, zone.zone)}
           notes={notes}
           tasks={tasks}
+          holdOpenTaskIds={holdOpen}
           opportunities={opps}
           submissions={submissions}
           messages={messages}

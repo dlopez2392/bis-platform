@@ -9,7 +9,7 @@ vi.mock("@/lib/sms/sender", () => sender);
 const factory = vi.hoisted(() => ({ getSmsProvider: vi.fn() }));
 vi.mock("@/lib/sms", () => factory);
 
-import { decideSms, deliverSms, sendSms, type SmsRequest, type ClearedSms } from "./gate";
+import { decideSms, deliverSms, sendSms, answersStop, STOP_CONFIRMATION_WINDOW_MS, type SmsRequest, type ClearedSms } from "./gate";
 import { SMS_KINDS, type SmsKind } from "./classes";
 import { SmsProviderError } from "@/lib/sms/types";
 import { m } from "@/lib/messages";
@@ -323,5 +323,114 @@ describe("deliverSms: the split callers", () => {
     await expect(deliverSms(DB, forged)).rejects.toThrow(/not a decision the gate cleared/);
     expect(db.readConsentState).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("the stop confirmation: the only send to a stopped address (spec §4.2, plan G5)", () => {
+  const STOPPED_AT = new Date(DAY.getTime() - 2 * 60_000).toISOString();
+  const stopped = (eventId = "rev_1", since = STOPPED_AT) => ({ state: "stopped" as const, since, method: "keyword" as const, eventId });
+  const confirm = (over: Partial<SmsRequest> = {}) => base({ kind: "consent.stop_confirmation", body: "956 Woodworks: You won't…", answersEventId: "rev_1", numberFromCarrier: true, ...over });
+
+  it("goes through when it answers the NEWEST revoked row, under five minutes old, and is sent as written, no footer (mutation: drop the exception → blocked stopped, FAILS)", async () => {
+    db.readConsentState.mockResolvedValue(stopped());
+    const r = await sendSms(DB, confirm());
+    expect(r).toMatchObject({ kind: "sent", body: "956 Woodworks: You won't…" });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("is refused when the newest revoked row is ANOTHER one — a stop it does not answer (mutation: skip the id comparison → sent, FAILS)", async () => {
+    db.readConsentState.mockResolvedValue(stopped("rev_2"));
+    expect(await sendSms(DB, confirm())).toEqual({ kind: "blocked", reason: "stopped" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("is refused at five minutes and sent at four minutes 59 (mutation: drop the age check → the late one is sent, FAILS; mutation: <= → the boundary is sent, FAILS)", async () => {
+    const at = (ms: number) => new Date(DAY.getTime() - ms).toISOString();
+    db.readConsentState.mockResolvedValue(stopped("rev_1", at(STOP_CONFIRMATION_WINDOW_MS)));
+    expect(await sendSms(DB, confirm())).toEqual({ kind: "blocked", reason: "stopped" });
+    db.readConsentState.mockResolvedValue(stopped("rev_1", at(STOP_CONFIRMATION_WINDOW_MS - 1_000)));
+    expect((await sendSms(DB, confirm())).kind).toBe("sent");
+    expect(STOP_CONFIRMATION_WINDOW_MS).toBe(300_000);
+  });
+
+  it("is refused with no answersEventId at all (mutation: treat a missing id as a match → sent, FAILS)", async () => {
+    db.readConsentState.mockResolvedValue(stopped());
+    expect(await sendSms(DB, confirm({ answersEventId: undefined }))).toEqual({ kind: "blocked", reason: "stopped" });
+  });
+
+  it("an address that is no longer stopped is refused as stale, never told 'you won't get any more texts' (mutation: let an allowed address through → sent, FAILS)", async () => {
+    db.readConsentState.mockResolvedValue({ state: "allowed" });
+    expect(await sendSms(DB, confirm())).toEqual({ kind: "blocked", reason: "stop_confirmation_stale" });
+    db.readConsentState.mockResolvedValue({ state: "held", since: STOPPED_AT, method: "free_text", eventId: "h1" });
+    expect(await sendSms(DB, confirm())).toEqual({ kind: "blocked", reason: "held" });
+  });
+
+  it("no other kind gets the exception, whatever id it carries (mutation: apply it to every kind → the help reply is sent to a stopped address, FAILS)", async () => {
+    db.readConsentState.mockResolvedValue(stopped());
+    for (const kind of ["consent.help", "consent.start_confirmation", "staff.composer_sms"] as const) {
+      expect(await sendSms(DB, confirm({ kind })), kind).toEqual({ kind: "blocked", reason: "stopped" });
+    }
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("the deliver re-check honours the same exception, with the id the decision carried (mutation: re-check with answersEventId null → blocked, FAILS)", async () => {
+    // The re-check judges the five minutes at the REAL clock (a delay between
+    // decide and deliver counts), so the clock is pinned to DAY here: without
+    // it this case would turn red on its own after 2026-10-06.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(DAY);
+    try {
+      db.readConsentState.mockResolvedValue(stopped());
+      const d = await decideSms(DB, confirm());
+      if (d.kind !== "clear") throw new Error(`expected clear, got ${d.kind}`);
+      expect(d.send.answersEventId).toBe("rev_1");
+      expect((await deliverSms(DB, d.send)).kind).toBe("sent");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the consent kinds go at 03:00 (choice 18) and carry no footer (mutation: give consent.help automated hours → deferred, FAILS; mutation: give consent.help footer stop_line → the opt-out disclosure is appended, FAILS)", async () => {
+    // No "STOP" instruction in this body (unlike the other cases in this
+    // describe block): withOptOut's hasOptOutInstruction guard would treat a
+    // body that already reads as an opt-out instruction as already carrying
+    // the disclosure, making a wrong footer: "stop_line" invisible here.
+    const night = new Date("2026-10-07T08:00:00Z"); // 03:00 in Chicago
+    const d = await decideSms(DB, base({ kind: "consent.help", body: "956 Woodworks: Call or text this number for help.", now: night }));
+    expect(d.kind === "clear" && d.send.body).toBe("956 Woodworks: Call or text this number for help.");
+  });
+
+  it("answersStop, pure: an unparseable 'since' is never within the window (mutation: treat NaN as 0 → true, FAILS)", () => {
+    expect(answersStop({ eventId: "e", since: "not a date" }, "e", DAY)).toBe(false);
+    expect(answersStop({ eventId: "e", since: DAY.toISOString() }, "e", DAY)).toBe(true);
+    expect(answersStop({ eventId: "e", since: DAY.toISOString() }, null, DAY)).toBe(false);
+  });
+
+  it("answersStop, pure: a 'since' from the future is refused past a small clock-skew allowance, never read as freshly answered (mutation: drop the skew floor → an hour in the future reads as answered, FAILS)", () => {
+    const anHourAhead = new Date(DAY.getTime() + 60 * 60_000).toISOString();
+    const thirtySecondsAhead = new Date(DAY.getTime() + 30_000).toISOString();
+    expect(answersStop({ eventId: "e", since: anHourAhead }, "e", DAY)).toBe(false);
+    expect(answersStop({ eventId: "e", since: thirtySecondsAhead }, "e", DAY)).toBe(true);
+  });
+
+  it("the deliver re-check judges the five minutes at the REAL clock at delivery, never a fixed or earlier one (mutation: re-check at a fixed or earlier clock → sent, FAILS)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(DAY);
+    try {
+      // Stopped 2 minutes before DAY: still fresh when decideSms clears it
+      // (decideSms judges against req.now, pinned to DAY by `base`/`confirm`).
+      db.readConsentState.mockResolvedValue(stopped("rev_1", new Date(DAY.getTime() - 2 * 60_000).toISOString()));
+      const d = await decideSms(DB, confirm());
+      if (d.kind !== "clear") throw new Error(`expected clear, got ${d.kind}`);
+      // Advance the wall clock past the five-minute window (the stop is now
+      // 5:01 old): deliverSms's re-check calls `new Date()` directly, so if
+      // it judged against a fixed or earlier instant instead, this would
+      // still read as fresh and the text would go.
+      vi.setSystemTime(new Date(DAY.getTime() + 3 * 60_000 + 1_000));
+      expect(await deliverSms(DB, d.send)).toEqual({ kind: "blocked", reason: "stopped" });
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

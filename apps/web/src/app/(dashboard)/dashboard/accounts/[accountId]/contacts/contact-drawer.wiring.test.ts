@@ -73,7 +73,10 @@ async function load(body: unknown, ok = true): Promise<unknown> {
   // starts at 0) — found by starting value, not hook order.
   const fetched = states.filter((s) => s.initial === null);
   expect(fetched).toHaveLength(1);
-  expect(effects).toHaveLength(1);
+  // Two effects since consent chain PR-2: the summary fetch (declared first,
+  // effects[0], the one this helper drives) and the Texts row's own fetch
+  // (effects[1], driven by its own describe block below).
+  expect(effects).toHaveLength(2);
   effects[0]!();
   await vi.waitFor(() => expect(fetched[0]!.set).toHaveBeenCalled());
   expect(fetched[0]!.set).toHaveBeenCalledTimes(1);
@@ -138,7 +141,8 @@ describe("ContactDrawer: a fetch cleaned up while its body is still being read n
     renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
     const fetched = states.filter((s) => s.initial === null);
     expect(fetched).toHaveLength(1);
-    expect(effects).toHaveLength(1);
+    // Two effects since consent chain PR-2 (see `load()`'s own comment above).
+    expect(effects).toHaveLength(2);
     const cleanup = effects[0]!();
     expect(typeof cleanup).toBe("function");
     await vi.waitFor(() => expect(json).toHaveBeenCalledTimes(1));
@@ -178,33 +182,96 @@ describe("ContactDrawer: a fetch cleaned up while its body is still being read n
 });
 
 /**
+ * Fix round 1 #5: `effects[1]` — the Texts row's own fetch effect, added by
+ * consent chain PR-2 alongside the summary's — driven directly, the same
+ * shape as `load()` above but against the state shaped
+ * `{ contactId, load: { status } }` rather than the summary's `null`.
+ */
+describe("ContactDrawer: the Texts row's own fetch effect (effects[1])", () => {
+  const LOADING_SHAPE = JSON.stringify({ contactId: "", load: { status: "loading" } });
+  const GOOD_TEXTS = { view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+15512345678" };
+
+  /** Mounts the drawer and runs ITS texts effect against `body`; answers
+   *  what it stored on the one state shaped like `{ contactId, load }`. */
+  async function loadTexts(body: unknown, ok = true): Promise<unknown> {
+    effects.length = 0;
+    states.length = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok, json: async () => body })));
+    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
+    const texts = states.filter((s) => JSON.stringify(s.initial) === LOADING_SHAPE);
+    expect(texts).toHaveLength(1);
+    expect(effects).toHaveLength(2);
+    effects[1]!();
+    await vi.waitFor(() => expect(texts[0]!.set).toHaveBeenCalled());
+    expect(texts[0]!.set).toHaveBeenCalledTimes(1);
+    return texts[0]!.set.mock.calls[0]![0];
+  }
+
+  it("a good body stores the ready state", async () => {
+    expect(await loadTexts(GOOD_TEXTS)).toEqual({ contactId: "c1", load: { status: "ready", ...GOOD_TEXTS } });
+  });
+
+  it("a non-OK response stores the error state, even with a body that would parse", async () => {
+    expect(await loadTexts(GOOD_TEXTS, false)).toEqual({ contactId: "c1", load: { status: "error" } });
+  });
+
+  it("a rejected fetch (network failure) stores the error state too (mutation: swallow the catch → the answer never arrives, FAILS)", async () => {
+    effects.length = 0;
+    states.length = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network down"); }));
+    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
+    const texts = states.filter((s) => JSON.stringify(s.initial) === LOADING_SHAPE);
+    effects[1]!();
+    await vi.waitFor(() => expect(texts[0]!.set).toHaveBeenCalled());
+    expect(texts[0]!.set).toHaveBeenCalledWith({ contactId: "c1", load: { status: "error" } });
+  });
+
+  it("a stale answer (cleanup ran first) is ignored, never written", async () => {
+    effects.length = 0;
+    states.length = 0;
+    let settle!: (v: unknown) => void;
+    const json = vi.fn(() => new Promise<unknown>((resolve) => { settle = resolve; }));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json })));
+    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
+    const texts = states.filter((s) => JSON.stringify(s.initial) === LOADING_SHAPE);
+    const cleanup = effects[1]!();
+    expect(typeof cleanup).toBe("function");
+    await vi.waitFor(() => expect(json).toHaveBeenCalledTimes(1));
+    (cleanup as () => void)();
+    settle(GOOD_TEXTS);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(texts[0]!.set).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * Review R3-I2: the Check number row must follow the number, not its first
  * render. Source pins (no DOM renderer here); the e2e spec proves the
  * behaviour in a browser.
  */
-describe("the Check number row follows a phone edit", () => {
+describe("the Texts row follows the contact (consent chain PR-2)", () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
   const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
+  const row = strip(readFileSync(path.join(here, "texts-row.tsx"), "utf8"));
 
-  it("the drawer keys the row by the summary's flag (mutation: key by the contact alone → FAILS)", () => {
-    expect(drawer).toContain("key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`}");
+  it("the drawer reads the Texts row on its own, again on every summary re-read: a phone save, a pick, an Undo (mutation: drop retryNonce from the texts effect's deps → FAILS)", () => {
+    expect(drawer).toMatch(/\/texts`\)[\s\S]{0,900}?\}, \[accountId, contactId, retryNonce\]\);/);
   });
 
   it("the drawer re-reads its summary after a phone save (mutation: drop the nonce bump → FAILS)", () => {
     expect(drawer).toMatch(/if \(field === "phone"\) setRetryNonce\(\(n\) => n \+ 1\);/);
   });
 
-  it("the drawer re-reads its summary after a pick and after an Undo, and the row hands that on (re-review minor 1; mutation: drop the onChanged prop, or stop passing it to pickPhoneCountry → FAILS)", () => {
-    const row = strip(readFileSync(path.join(here, "phone-country-row.tsx"), "utf8"));
-    // Anchored on the row's own prop: TagsRow carries the same onChanged text.
-    expect(drawer).toMatch(/unconfirmed=\{load\.summary\.phone_country_unconfirmed\}\s*onChanged=\{\(\) => setRetryNonce\(\(n\) => n \+ 1\)\}/);
+  it("a row action or a pick makes the drawer re-read, and the row hands onChanged to the pick (re-review minor 1; mutation: drop the onChanged prop, or stop passing it to pickPhoneCountry → FAILS)", () => {
+    expect(drawer).toMatch(/<TextsRow[\s\S]{0,400}?onChanged=\{\(\) => setRetryNonce\(\(n\) => n \+ 1\)\}/);
     expect(row).toMatch(/run,\s*onChanged,\s*\)\);/);
   });
 
-  it("the full page keys the row by the page's flag (mutation: key by the contact alone → FAILS)", () => {
-    expect(panel).toContain("key={`phone-${contactId}-${phoneUnconfirmed}`}");
+  it("the full page hands the row the page's own Texts load and refreshes on change (mutation: pass a constant load → FAILS)", () => {
+    expect(panel).toMatch(/<TextsRow[\s\S]{0,300}?load=\{texts\}/);
+    expect(panel).toMatch(/onChanged=\{\(\) => router\.refresh\(\)\}/);
   });
 });
 
@@ -269,20 +336,20 @@ describe("the inline phone Undo is server-authoritative", () => {
 describe("the pick is judged against the phone the operator SAW (review I3, round 4)", () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const row = strip(readFileSync(path.join(here, "phone-country-row.tsx"), "utf8"));
+  const row = strip(readFileSync(path.join(here, "texts-row.tsx"), "utf8"));
   const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
-  const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
+  const page = strip(readFileSync(path.join(here, "[contactId]", "page.tsx"), "utf8"));
 
-  it("the row passes ITS OWN phone prop to setPhoneCountryAction, never a literal \"\" (mutation: setPhoneCountryAction(accountId, contactId, c) → FAILS)", () => {
+  it("the row passes ITS OWN phone to setPhoneCountryAction, never a literal \"\" (mutation: setPhoneCountryAction(accountId, contactId, c) → FAILS)", () => {
     expect(row).toContain("setPhoneCountryAction(accountId, contactId, c, phone)");
   });
 
-  it("the drawer's phone prop comes from the SUMMARY, never row.phone (the peek stub) or a literal \"\" (mutation: phone={row.phone ?? \"\"} → FAILS)", () => {
-    expect(drawer).toContain('phone={load.summary.phone ?? ""}');
-    expect(drawer).not.toMatch(/<PhoneCountryRow[\s\S]{0,400}?phone=\{row\.phone/);
+  it("that phone is the one the server read with the view (the Texts load), never the peek stub row.phone (mutation: phone={row.phone ?? \"\"} → FAILS)", () => {
+    expect(row).toContain('const phone = load.phone ?? "";');
+    expect(drawer).not.toMatch(/<TextsRow[\s\S]{0,400}?row\.phone/);
   });
 
-  it("the panel's phone prop comes from the real contact record, never a literal \"\" (mutation: phone={\"\"} → FAILS)", () => {
-    expect(panel).toContain('phone={contact.phone ?? ""}');
+  it("the full page's load carries the real contact record's phone (mutation: phone: null → FAILS)", () => {
+    expect(page).toContain("phone: contact.phone ?? null");
   });
 });

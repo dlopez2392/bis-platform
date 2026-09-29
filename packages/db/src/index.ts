@@ -4,7 +4,8 @@ export type { SupabaseClient } from "@supabase/supabase-js";
 export { emit, listRecentEvents, type ActorType, type EventRow } from "./events";
 export { sanitizeSearchTerm } from "./search-term";
 export { createAccount, listAccounts, setClientAccess, renameAccount, getAccountByOrgId,
-         setA2pRegistration, getA2pRegistration, a2pApprovalIsComplete } from "./accounts";
+         setA2pRegistration, getA2pRegistration, a2pApprovalIsComplete,
+         isMessagingProfileId, MessagingProfileTakenError } from "./accounts";
 export type { A2pStatus, A2pRegistration, A2pRegistrationRecord } from "./accounts";
 export { getAlertPhone, setAlertPhone } from "./accounts";
 export { getTransferPhone, setTransferPhone } from "./accounts";
@@ -19,12 +20,17 @@ export { createContact, updateContact, listContacts, getContact,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
 export { setMarketingEmailOptOut, readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
 export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
-         CONSENT_METHODS, DECIDING_ACTIONS,
+         appendConsentEventGuarded, newestDecidingRow, readConsentHistory, readConsentEvent,
+         readConsentActions, consentWriteArgs, consentAppendSql,
+         CONSENT_METHODS, DECIDING_ACTIONS, CUSTOMER_STOP_METHODS,
          type ConsentChannel, type ConsentAction, type ConsentMethod, type ConsentRow,
-         type ConsentState, type ConsentEventInput } from "./consent";
+         type ConsentState, type ConsentEventInput, type ConsentGuard, type ConsentAppend,
+         type PriorDecidingRow, type ConsentHistoryRow, type ConsentEventRow } from "./consent";
 export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
-export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask } from "./activities";
+export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask,
+         ensureConsentTask, completeTasksForConsentEvents, reopenTasks,
+         HoldUndecidedError, holdOpenTaskIds, readTaskContact } from "./activities";
 export { listAccountWork, listAgencyWork, type WorkRow, type WorkSource, type AgencyWorkRow } from "./work-queue";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,
          ensureDefaultPipeline, listPipelinesWithStages, type CustomFieldDef } from "./crm-config";
@@ -61,7 +67,7 @@ export { getMailingAddress } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,
          listBookedRanges, createBooking, cancelBookingByToken, setBookingStatus,
-         listUpcomingBookings, countRecentBookings, listDueReminders, stampReminderSent,
+         listUpcomingBookings, nextBookedStart, countRecentBookings, listDueReminders, stampReminderSent,
          listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
          newCancelToken, SlotTakenError,
          getDueReminderById, getDueFollowupById,

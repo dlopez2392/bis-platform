@@ -25,6 +25,7 @@ import { setAttribution } from "@/lib/forms/enrich";
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { bookingConfirmationSubject } from "@/lib/email/templates/booking";
+import { recordBookingGrant } from "@/lib/consent/grants";
 
 export type BookingResult =
   | { ok: true; cancelUrl: string }
@@ -325,6 +326,11 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }
       throw e;
     }
+
+    // Consent chain PR-2 (decision 8): a booking made with a phone is a grant.
+    // Evidence only, never throws (lib/consent/grants.ts). As typed, so the
+    // ledger keys the number the contact row stores.
+    await recordBookingGrant(db, { accountId: calendar.account_id, bookingId, contactId, phoneAsTyped: phone || null });
 
     const contactName = [firstName, lastName].filter(Boolean).join(" ").trim() || email;
 

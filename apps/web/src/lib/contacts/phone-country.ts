@@ -1,12 +1,12 @@
 import type { PhoneCountry } from "@bis/db/phone";
 import { m } from "@/lib/messages";
-import type { OptOutToast } from "@/lib/contacts/marketing-optout";
+import type { ToastLike as OptOutToast } from "@/lib/ui/guarded-run";
 
 /**
  * The Texts row's Check number state (consent chain spec §6, F-009): "This
  * number could be Mexican or US." with ghost "Mexico (+52)" and "US (+1)",
  * each run at once with an undo toast (DESIGN.md rule 6). This is the
- * behaviour; phone-country-row.tsx is its shell. Type-only import of the
+ * behaviour; the Texts row's Check number state (texts-row.tsx) is its shell. Type-only import of the
  * normaliser's module: nothing of libphonenumber reaches the browser.
  */
 
@@ -52,7 +52,7 @@ export async function pickPhoneCountry(
   country: PhoneCountry, save: PhoneCountrySave, undo: PhoneCountryUndo,
   show: (checking: boolean) => void, toast: OptOutToast,
   run: (work: () => Promise<void>) => boolean | Promise<void> = (work) => work(),
-  // Re-review minor 1: the host (PhoneCountryRow) has no other way to learn
+  // Re-review minor 1: the host (the Texts row, texts-row.tsx) has no other way to learn
   // that the number changed — the row is keyed by the SUMMARY's flag, not
   // the contact alone, and a pick or an Undo the server took must make the
   // host re-read that summary, or the row for the NEXT ambiguous number

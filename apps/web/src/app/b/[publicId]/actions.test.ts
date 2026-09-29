@@ -159,6 +159,9 @@ vi.mock("@/lib/booking/time", async (importOriginal) => {
   };
 });
 
+const bookingGrantMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/consent/grants", () => ({ recordBookingGrant: bookingGrantMock, recordFormGrants: vi.fn() }));
+
 import { headers } from "next/headers";
 import { computeSlots, type SlotConfig } from "@/lib/booking/slots";
 import { submitBookingAction, getSlotsAction } from "./actions";
@@ -840,5 +843,23 @@ describe("submitBookingAction — a Spanish booker gets a Spanish confirmation",
     if (result.ok) expect(result.cancelUrl).not.toContain("locale");
     const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
     expect(confirmation.subject).toBe("You're booked in");
+  });
+});
+
+describe("submitBookingAction — the booking grant (consent chain PR-2, plan Task 10)", () => {
+  it("a created booking grants its phone, as typed, for that booking and contact (mutation: drop the call → FAILS)", async () => {
+    bookingGrantMock.mockReset().mockResolvedValue(undefined);
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result.ok).toBe(true);
+    expect(bookingGrantMock).toHaveBeenCalledWith(expect.anything(), {
+      accountId: ACCOUNT_ID, bookingId: "booking_1", contactId: "contact_1", phoneAsTyped: "956-555-0101",
+    });
+  });
+
+  it("a taken slot grants nothing (mutation: grant before the booking exists → FAILS)", async () => {
+    bookingGrantMock.mockReset();
+    createBookingMock.mockRejectedValue(new SlotTakenError());
+    await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(bookingGrantMock).not.toHaveBeenCalled();
   });
 });

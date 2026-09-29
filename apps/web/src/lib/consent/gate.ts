@@ -27,7 +27,10 @@ import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
  *   3. `resolveSmsSender`: A2P approved and a live number, else blocked
  *      with its reason (its own read error THROWS, as it always has, into
  *      each caller's existing catch);
- *   4. the ledger: stopped → blocked `stopped`, held → blocked `held`;
+ *   4. the ledger: stopped → blocked `stopped`, held → blocked `held` —
+ *      except `consent.stop_confirmation`, the one send let through a
+ *      stopped address, and only when it answers the newest `revoked` row
+ *      and that row is under five minutes old (`answersStop`);
  *   5. an unconfirmed number (the normalisation said so, or the contact's
  *      `phone_country_unconfirmed`, unless the number came from the carrier)
  *      → blocked `unconfirmed_number`;
@@ -68,11 +71,41 @@ export type SmsRequest = {
    *  `phone_country_unconfirmed` (about the phone a person TYPED) does not
    *  hold it. The text-back sets this. */
   numberFromCarrier?: boolean;
+  /** `consent.stop_confirmation` only: the id of the `revoked` row it answers.
+   *  The gate lets that one kind through a stopped address only when this
+   *  row is still the newest deciding row and under five minutes old (spec
+   *  §4.2). Only lib/consent/replies.ts sets it (source scan). */
+  answersEventId?: string;
 };
 
 export type SmsBlockReason =
   | "no_number" | "a2p_not_approved" | "no_live_number" | "stopped" | "held"
-  | "unconfirmed_number" | "window_after_deadline" | "ledger_unavailable";
+  | "unconfirmed_number" | "window_after_deadline" | "ledger_unavailable"
+  /** A stop confirmation for an address that is no longer stopped (a START
+   *  landed first): "you won't get any more texts" would be false. */
+  | "stop_confirmation_stale";
+
+/** Spec §4.2: the one stop confirmation goes within five minutes of the stop
+ *  (today's 47 CFR 64.1200(a)(12) presumes a confirmation sent within five
+ *  minutes is consented, choice 18). */
+export const STOP_CONFIRMATION_WINDOW_MS = 5 * 60 * 1000;
+
+/** How far into the future `since` may read and still count as "now-ish":
+ *  ordinary clock skew between whatever wrote the ledger row and this
+ *  process, not a sign the row is lying about when the stop happened. A
+ *  `since` further ahead than this is wrong data, not skew, and must not
+ *  read as freshly answered (review, fix round 1). */
+const CLOCK_SKEW_ALLOWANCE_MS = 60_000;
+
+/** Does a stop confirmation answer THIS stop: the newest row, still young? Pure. */
+export function answersStop(
+  state: { eventId: string; since: string }, answersEventId: string | null, now: Date,
+): boolean {
+  if (answersEventId === null || state.eventId !== answersEventId) return false;
+  const age = now.getTime() - Date.parse(state.since);
+  if (!Number.isFinite(age)) return false;
+  return age >= -CLOCK_SKEW_ALLOWANCE_MS && age < STOP_CONFIRMATION_WINDOW_MS;
+}
 
 const CLEARED: unique symbol = Symbol("cleared-sms");
 
@@ -87,6 +120,8 @@ export type ClearedSms = {
   readonly body: string;
   readonly contactId: string | null;
   readonly numberFromCarrier: boolean;
+  /** The stop this confirmation answers, for the deliver re-check. */
+  readonly answersEventId: string | null;
 };
 
 export type SmsDecision =
@@ -116,12 +151,19 @@ export type SmsSender = (req: SmsRequest, opts?: SmsSendOptions) => Promise<SmsS
 /** Steps 4 and 5's reads. Null = allowed; a reason = blocked. */
 async function consentBlock(
   db: SupabaseClient, accountId: string, kind: SmsKind, address: string, contactId: string | null,
-  numberFromCarrier: boolean,
+  numberFromCarrier: boolean, answersEventId: string | null, now: Date,
 ): Promise<SmsBlockReason | null> {
   try {
     const state = await readConsentState(db, accountId, "sms", address);
-    if (state.state === "stopped") return "stopped";
-    if (state.state === "held") return "held";
+    if (kind === "consent.stop_confirmation") {
+      // The one send a stopped address may get (spec §4.2), and ONLY there.
+      if (state.state === "held") return "held";
+      if (state.state !== "stopped") return "stop_confirmation_stale";
+      if (!answersStop(state, answersEventId, now)) return "stopped";
+    } else {
+      if (state.state === "stopped") return "stopped";
+      if (state.state === "held") return "held";
+    }
     if (contactId && !numberFromCarrier && await readPhoneCountryFlag(db, accountId, contactId)) return "unconfirmed_number";
     return null;
   } catch (e) {
@@ -141,7 +183,8 @@ export async function decideSms(db: SupabaseClient, req: SmsRequest): Promise<Sm
 
   const contactId = req.contactId ?? null;
   const fromCarrier = req.numberFromCarrier === true;
-  const blocked = await consentBlock(db, req.accountId, req.kind, number.e164, contactId, fromCarrier);
+  const answersEventId = req.answersEventId ?? null;
+  const blocked = await consentBlock(db, req.accountId, req.kind, number.e164, contactId, fromCarrier, answersEventId, req.now ?? new Date());
   if (blocked) return { kind: "blocked", reason: blocked };
   if (number.unconfirmed) return { kind: "blocked", reason: "unconfirmed_number" };
 
@@ -166,7 +209,7 @@ export async function decideSms(db: SupabaseClient, req: SmsRequest): Promise<Sm
   const body = spec.footer === "stop_line" ? withOptOut(req.body, req.language) : req.body;
   return {
     kind: "clear",
-    send: { [CLEARED]: true, accountId: req.accountId, kind: req.kind, to: number.e164, from: sender.from, body, contactId, numberFromCarrier: fromCarrier },
+    send: { [CLEARED]: true, accountId: req.accountId, kind: req.kind, to: number.e164, from: sender.from, body, contactId, numberFromCarrier: fromCarrier, answersEventId },
   };
 }
 
@@ -178,7 +221,7 @@ async function deliver(
   // and the footer entirely — only `decideSms` may mint one.
   if (cleared?.[CLEARED] !== true) throw new Error("deliverSms: not a decision the gate cleared");
   if (recheck) {
-    const blocked = await consentBlock(db, cleared.accountId, cleared.kind, cleared.to, cleared.contactId, cleared.numberFromCarrier);
+    const blocked = await consentBlock(db, cleared.accountId, cleared.kind, cleared.to, cleared.contactId, cleared.numberFromCarrier, cleared.answersEventId, new Date());
     if (blocked) return { kind: "blocked", reason: blocked };
   }
   let provider: SmsProvider;

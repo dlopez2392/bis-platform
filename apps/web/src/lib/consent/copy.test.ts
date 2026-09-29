@@ -60,3 +60,54 @@ describe("the re-hold age cap's words (orchestrator, 2026-09-26)", () => {
     expect(m["automations.reason.tooLongAfterWriteIn"]).toBe("Not sent: too long after they wrote in");
   });
 });
+
+describe("PR-2: the spec's own words (§4.2 and §6), verbatim", () => {
+  it("the six customer replies of §4.2's table, with {Business} (mutation: reword any one → FAILS)", () => {
+    expect(m["sms.consentReply.stop.en"]).toBe("{Business}: You won't get any more texts from us. Reply START to get them again.");
+    expect(m["sms.consentReply.stop.es"]).toBe("{Business}: Ya no le enviaremos mensajes. Responda START para volver a recibirlos.");
+    expect(m["sms.consentReply.start.en"]).toBe("{Business}: You'll get our texts again. Reply STOP to stop them.");
+    expect(m["sms.consentReply.start.es"]).toBe("{Business}: Listo, le enviaremos mensajes de nuevo. Responda PARAR para dejarlos.");
+    expect(m["sms.consentReply.help.en"]).toBe("{Business}: Reply STOP to stop texts from us. Call or text this number for help.");
+    expect(m["sms.consentReply.help.es"]).toBe("{Business}: Responda PARAR para dejar de recibir mensajes. Llame o escriba a este numero para recibir ayuda.");
+  });
+
+  it("each nameless variant is its named line without the \"{Business}: \" prefix (the text-back's rule; mutation: a nameless line that differs → FAILS)", () => {
+    for (const k of ["stop", "start", "help"] as const) {
+      for (const l of ["en", "es"] as const) {
+        expect(`{Business}: ${m[`sms.consentReply.${k}.noName.${l}` as keyof typeof m]}`).toBe(m[`sms.consentReply.${k}.${l}` as keyof typeof m]);
+      }
+    }
+  });
+
+  it("the Texts row's own words from §6 (mutation: reword → FAILS)", () => {
+    expect(m["contact.texts.loadFailed"]).toBe("Couldn't load their message settings. Try again.");
+    expect(m["contact.texts.customerOnly"]).toBe("They can text START to get texts again.");
+    expect(m["contact.texts.resumeNoteLabel"]).toBe("What did they ask for? (required)");
+    expect(m["contact.texts.stopTexts"]).toBe("Stop texts");
+    expect(m["contact.texts.stoppedToast"]).toBe("Texts stopped.");
+    expect(m["contact.texts.confirmStop"]).toBe("Confirm stop");
+    expect(m["contact.texts.notAStop"]).toBe("Not a stop");
+    expect(m["contact.texts.how.keyword"]).toBe("they texted {word}");
+    expect(m["contact.texts.how.staff"]).toBe("you recorded it");
+    expect(m["contact.texts.how.carrier"]).toBe("the carrier blocked it");
+    expect(m["contact.texts.how.unsubscribeLink"]).toBe("unsubscribe link");
+  });
+
+  it("the To-do rows of §6, English and Spanish, with their placeholders (mutation: reword → FAILS)", () => {
+    expect(m["todo.consent.hold.en"]).toBe("{name} may have asked to stop texts: “{excerpt}”. Texts to them are on hold.");
+    expect(m["todo.consent.hold.es"]).toBe("{name} quizá pidió dejar de recibir mensajes: “{excerpt}”. Los mensajes están en pausa.");
+    expect(m["todo.consent.hold.confirm.es"]).toBe("Confirmar");
+    expect(m["todo.consent.hold.notStop.es"]).toBe("No era eso");
+    expect(m["todo.consent.cancel.en"]).toBe("{name} texted {word}, so their texts are stopped. Check whether they also meant their appointment on {date}.");
+    expect(m["todo.consent.cancel.es"]).toBe("{name} envió {word} y sus mensajes quedaron suspendidos. Revise si también quería cancelar su cita del {date}.");
+  });
+
+  it("no PR-2 line exposes a code, a kind, a method or template syntax beyond its own placeholders (DESIGN.md voice; 52 keys, read off messages.ts; mutation: add a line naming 'carrier_block' → FAILS)", () => {
+    const keys = Object.keys(m).filter((k) => /^(sms\.consentReply|contact\.texts|todo\.consent)\./.test(k));
+    expect(keys.length).toBe(52);
+    for (const k of keys) {
+      const text = m[k as keyof typeof m];
+      expect(text, k).not.toMatch(/\{\{|40300|carrier_block|free_text|backfill|ledger|consent\.|automation\./);
+    }
+  });
+});

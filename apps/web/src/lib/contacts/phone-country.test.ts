@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { m } from "@/lib/messages";
-import type { OptOutToast } from "./marketing-optout";
+import type { ToastLike as OptOutToast } from "@/lib/ui/guarded-run";
 import {
   PHONE_CHECK_TREATMENT, pickPhoneCountry,
   type PhoneCountryPickResult, type PhoneCountryUndoResult, type PhoneCountryPrevious,
@@ -34,8 +34,8 @@ function harness(o: {
   const shown: boolean[] = [];
   let undoClick: (() => unknown) | null = null;
   const toast = {
-    success: vi.fn((...[, opts]: [string, { action: { label: string; onClick: () => void } }]) => {
-      undoClick = opts.action.onClick;
+    success: vi.fn((...[, opts]: [string, { action: { label: string; onClick: () => void } }?]) => {
+      undoClick = opts?.action.onClick ?? null;
     }),
     error: vi.fn(),
   } satisfies OptOutToast;

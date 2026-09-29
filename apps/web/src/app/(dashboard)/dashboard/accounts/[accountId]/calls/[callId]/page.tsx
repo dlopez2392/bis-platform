@@ -10,9 +10,11 @@ import {
   UserRound,
 } from "lucide-react";
 import {
-  getCall, listFailedOutboundSms, listProposalsForCall,
+  getCall, listFailedOutboundSms, listProposalsForCall, getContact,
   type FailedOutboundSms, type CallProposal,
 } from "@bis/db";
+import { smsRecipientState } from "@/lib/consent/recipient-state";
+import { composerStateLine } from "@/lib/consent/composer-state";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { requireAccountAccess } from "@/lib/auth";
@@ -96,6 +98,27 @@ export default async function CallDetailPage({
       console.error(
         `call detail ${callId}: failed-text-back read failed, rendering no badge: ${String(e)}`,
       );
+    }
+  }
+
+  // Review R3-M8: "Send it now" is closed ON RENDER when this contact cannot
+  // be texted — stopped, on hold, a number whose country is unknown, or a
+  // state that cannot be read — in the composer's own words (the same two
+  // reads, recipient-state.ts and composer-state.ts), so the call page and
+  // the contact page can never disagree. Fails closed like the composer.
+  let resendClosedLine: string | null = null;
+  if (textbackFailure && !textbackFailure.supersededAt && call.contact_id) {
+    try {
+      const contact = await getContact(db, accountId, call.contact_id);
+      // A successful read that finds no contact fails closed the same as a
+      // thrown one (review fix round 1, item 2) — the button offers to text
+      // an address this page cannot vouch for either way.
+      resendClosedLine = contact
+        ? composerStateLine(await smsRecipientState(db, accountId, contact), timezone)
+        : m["compose.smsStateUnknown"];
+    } catch (e) {
+      console.error(`call detail ${callId}: recipient read failed, closing the resend: ${String(e)}`);
+      resendClosedLine = m["compose.smsStateUnknown"];
     }
   }
 
@@ -283,6 +306,8 @@ export default async function CallDetailPage({
                   <p className="text-sm leading-6 text-muted-foreground">
                     {m["calls.textbackSuperseded"]}
                   </p>
+                ) : resendClosedLine ? (
+                  <p className="text-sm leading-6 text-muted-foreground">{resendClosedLine}</p>
                 ) : call.contact_id ? (
                   <TextbackResend
                     contactId={call.contact_id}

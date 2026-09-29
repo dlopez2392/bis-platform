@@ -26,6 +26,7 @@ const FILES = [
   "parity/migration-history.sql",
   "backfills/0054-phone-country-candidates.sql",
   "backfills/0054-dnd-preflight.sql",
+  "backfills/0055-telnyx-optout-owners.sql",
 ];
 const READS = FILES.filter((f) => f.startsWith("parity/") || f.startsWith("backfills/"));
 

@@ -23,7 +23,17 @@
 //     array — one entry for a normal SMS to one number), `data.payload.text`
 //     is the body. `message.sent` / `message.finalized`: per-recipient
 //     status lives at `data.payload.to[].status`.
-import { NextResponse } from "next/server";
+//
+//  3. Consent chain PR-2 (spec §4.2): every inbound text runs the consent
+//     step (lib/consent/inbound.ts) — STOP, START, HELP in English and
+//     Spanish, the phrase list, the first-text grant. `autoresponse_type`
+//     (VERIFIED, plan F1) says Telnyx already answered a keyword itself, in
+//     which case BIS sends nothing. Telnyx retries a non-2xx up to three
+//     times per URL, then the failover URL (VERIFIED, plan F7), and gives
+//     each attempt 2 s: so a text that changes consent and could not be
+//     handled answers 503, every write is idempotent on the message id, and
+//     BIS's own reply runs in `after()`, once this route has answered.
+import { NextResponse, after } from "next/server";
 import {
   serviceDb, ensureConversation, createMessage, createContact, incrementUnreadCount,
   updateMessageStatusByProviderId, findMessageByProviderId, getPhoneNumberByE164, getAlertPhone,
@@ -32,6 +42,11 @@ import {
 } from "@bis/db";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { e164Of } from "@/lib/voice/phone-number";
+import { loggableError } from "@/lib/loggable-error";
+import {
+  classifyInbound, parseAutoresponse, recordInboundConsent, CHANGES_CONSENT, type InboundClass,
+} from "@/lib/consent/inbound";
+import { sendConsentReply } from "@/lib/consent/replies";
 
 // A webhook, not a user action: there is no session, no operator, no AI
 // persona — "system" is the actor for every write this route makes.
@@ -67,12 +82,21 @@ type TelnyxPayload = {
   from?: { phone_number?: string };
   to?: TelnyxRecipient[];
   text?: string;
+  /** Telnyx answered the text itself as this keyword (plan F1). */
+  autoresponse_type?: string;
+  /** The profile the text came in on (plan F9), kept as evidence. */
+  messaging_profile_id?: string;
 };
 type TelnyxWebhookBody = {
   data?: { event_type?: string; payload?: TelnyxPayload };
 };
 
-async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefined): Promise<void> {
+/** Work to run once the response is sent (`after`); injected so tests can run it. */
+type Defer = (work: () => Promise<void>) => void;
+
+async function handleInbound(
+  db: SupabaseClient, payload: TelnyxPayload | undefined, consent: InboundClass, defer: Defer,
+): Promise<void> {
   const calledNumber = e164Of(payload?.to?.[0]?.phone_number ?? null);
   if (!calledNumber) {
     log("inbound message with no resolvable called (to) number");
@@ -98,29 +122,23 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
     return;
   }
   const accountId = phoneRow.account_id;
+  const fromNumber = e164Of(payload?.from?.phone_number ?? null);
+  const text = typeof payload?.text === "string" ? payload.text : "";
+  const providerMessageId = payload?.id ?? null;
+  const base = {
+    accountId, text, autoresponse: parseAutoresponse(payload?.autoresponse_type),
+    autoresponseRaw: typeof payload?.autoresponse_type === "string" ? payload.autoresponse_type : null,
+    providerMessageId,
+    messagingProfileId: typeof payload?.messaging_profile_id === "string" ? payload.messaging_profile_id : null,
+    now: new Date(),
+  };
 
   // THE loop guard 0035_alert_phone.sql's own comment leaves to the send
-  // path, deliberately: `accounts.alert_phone` can equal this account's own
-  // `phone_numbers` row with nothing in the schema stopping it (a
-  // `phone_numbers` row walks to `live` on its own, no write to `accounts`
-  // to catch it — see that migration's decision 3). A text FROM that number
-  // is the platform receiving its own outbound alert reply, or the business
-  // owner texting their own alert line by habit — either way, running it
-  // through the ordinary path below would create a CONTACT for the business
-  // owner and a CONVERSATION with them, quietly corrupting the CRM with a
-  // record of the operator as their own lead. Recognised and dropped here,
-  // BEFORE the retry-dedupe check: there is no message worth deduping
-  // against, only a sender worth never filing.
-  const fromNumber = e164Of(payload?.from?.phone_number ?? null);
-  // Contained on purpose: getAlertPhone is a plain accounts.alert_phone
-  // SELECT, and a transient read failure here (a DB blip, not a real
-  // "the operator texted their own line" case) must never escape into the
-  // route's outer catch. That catch logs and still returns 200 — Telnyx is
-  // told "handled" and never retries — so an uncontained throw here reads as
-  // "handled" while the whole inbound text, from every account, is silently
-  // discarded. A failed read is treated as "no alert phone" (the guard below
-  // simply does not fire), which is the loop guard degrading, not the
-  // customer's message. The guard is a nicety; the message is not.
+  // path: a text FROM the account's own alert phone is the platform
+  // receiving its own alert reply, or the owner texting their own line by
+  // habit, and filing it would create a CONTACT for the business owner.
+  // Contained on purpose: a failed read degrades the guard, never the
+  // customer's message.
   let alertPhone: string | null = null;
   try {
     alertPhone = await getAlertPhone(db, accountId);
@@ -128,81 +146,74 @@ async function handleInbound(db: SupabaseClient, payload: TelnyxPayload | undefi
     log("getAlertPhone read failed — proceeding without the loop guard rather than dropping the text", accountId, String(e));
   }
   if (alertPhone && fromNumber === alertPhone) {
+    // Review R2-I5 (plan G10): the gate records a carrier block for the
+    // alert phone's own texts too, and choice 19 lets only the phone's own
+    // START lift it, so its STOP and START are recorded BEFORE the drop. No
+    // grant, no To-do, no HELP: it is the business, not a customer.
+    if (consent.kind === "stop" || consent.kind === "start") {
+      await recordInboundConsent(db, { ...base, address: fromNumber, contactId: null, firstFiling: true }, consent,
+        (reply) => defer(() => sendConsentReply(db, { accountId, to: fromNumber, contactId: null, conversationId: null, reply })));
+    }
     log("dropping inbound text from the account's own alert_phone — recognized, not filed as a contact", accountId, alertPhone);
     return;
   }
 
-  // Telnyx retries message.received at-least-once. payload.id is the
-  // message's own id (file header note 1) and stable across retries, so a
-  // row already recorded under it means this exact delivery has been seen
-  // before — skip the insert rather than duplicate the line in the
-  // customer's thread. No providerMessageId at all (a payload shape Telnyx
-  // hasn't sent in practice but the type guards allow) skips the dedupe
-  // check, not the message — recording it once, undeduped, beats dropping
-  // it.
-  const providerMessageId = payload?.id;
-  if (providerMessageId) {
-    const existing = await findMessageByProviderId(db, accountId, providerMessageId);
-    if (existing) {
-      log("skipping already-recorded inbound message (retried delivery)", providerMessageId);
-      return;
-    }
-  }
+  // Telnyx retries message.received at-least-once, and a 503 below asks it
+  // to. payload.id is the message's own id (file header note 1), stable
+  // across retries: a row already recorded under it means this delivery was
+  // filed before, so the FILING is skipped (and YES/NO, which answers "the
+  // most recent unanswered ask" and must not run twice), but the consent step
+  // is not: it is idempotent on the same id, and it is what a retry is for
+  // (plan G1, spec S1).
+  const existing = providerMessageId ? await findMessageByProviderId(db, accountId, providerMessageId) : null;
+  const firstFiling = existing === null;
 
   // Match an existing contact on this account by phone, or create one —
   // createContact already dedupes on phone (contacts.ts's findDuplicate),
-  // so a single call gets both cases: a known customer's text joins their
-  // existing thread instead of forking a duplicate contact. `fromNumber` was
-  // already resolved above, for the loop guard.
+  // so a known customer's text joins their existing thread.
   const contact = await createContact(
     db, accountId, { phone: fromNumber ?? undefined }, ACTOR_ID, ACTOR_TYPE,
   );
   const conversation = await ensureConversation(db, accountId, contact.id, ACTOR_ID, ACTOR_TYPE);
-  await createMessage(db, accountId, {
-    conversationId: conversation.id, channel: "sms", direction: "inbound",
-    body: payload?.text ?? "", providerMessageId,
-  }, ACTOR_ID, ACTOR_TYPE);
-  // Same invariant every other inbound writer keeps (f/[publicId]/actions.ts,
-  // b/[publicId]/actions.ts, b/[publicId]/cancel/[token]/actions.ts,
-  // lib/voice/finish-call.ts): a new inbound message always bumps the
-  // conversation's unread count, immediately after the row that made it
-  // unread exists. Without this an inbound text left both the conversation
-  // list badge and the sidebar unread meter at zero. Still inside the
-  // route's outer try (see POST) — a failure here logs and falls through to
-  // the same 200 ack, it never escapes as a 500.
-  await incrementUnreadCount(db, accountId, conversation.id);
 
-  // PART B: the appointment-confirmation answer. The ONE place in this
-  // platform where an inbound text means something other than "a person
-  // wrote in" — `appointment_confirm` asks "Reply YES to confirm or NO if
-  // you need a different time", and this records what they said.
-  //
-  // CONTAINED ON PURPOSE, the getAlertPhone pattern above (:124-128). This
-  // route's outer catch logs and still returns 200, so an uncontained throw
-  // here is reported to Telnyx as "handled" while the customer's whole
-  // message — already written above — would be the last thing that happened
-  // before the failure. The message is the product; the keyword is a
-  // convenience. A failed recognition therefore degrades to "nobody recorded
-  // the answer", which the operator sees as an ordinary unread text saying
-  // "yes". THE LOG LINE BELOW IS LOAD-BEARING: it is the only observable
-  // difference between contained and uncontained, and route.test.ts asserts
-  // on exactly it.
-  //
-  // AFTER incrementUnreadCount, never before: the answer is a fact ABOUT a
-  // message that must already exist, and the operator's unread badge must
-  // rise whether or not the word was recognised.
-  //
-  // It sends NOTHING. A second outbound per confirmation costs a message,
-  // risks a loop against the carrier's own STOP handling, and would make this
-  // webhook a sender rather than a recorder (spec decision 6). It changes no
-  // booking STATUS either: a destructive action from one word in a text, with
-  // no confirmation, is what DESIGN.md rule 6 forbids (decision 5).
-  try {
-    const answer = await applyConfirmationReply(db, accountId, contact.id, payload?.text ?? "", new Date());
-    if (answer) log("recorded an appointment confirmation reply", accountId, contact.id, answer);
-  } catch (e) {
-    log("could not record a confirmation reply — the customer's message is filed regardless", accountId, String(e));
+  if (firstFiling) {
+    await createMessage(db, accountId, {
+      conversationId: conversation.id, channel: "sms", direction: "inbound",
+      body: text, providerMessageId: providerMessageId ?? undefined,
+    }, ACTOR_ID, ACTOR_TYPE);
+    // Same invariant every other inbound writer keeps: a new inbound message
+    // always bumps the conversation's unread count, right after the row that
+    // made it unread exists.
+    await incrementUnreadCount(db, accountId, conversation.id);
+
+    // PART B: the appointment-confirmation answer, for a text that is
+    // nothing else (a keyword or a stop sentence never reaches it; spec §4.2
+    // step 5's "otherwise", which includes a text Telnyx answered but BIS
+    // does not recognise — review R2-m4). CONTAINED ON PURPOSE: a failed
+    // recognition degrades to "nobody recorded the answer", which the
+    // operator still sees as an unread "yes". THE LOG LINE BELOW IS
+    // LOAD-BEARING: route.test.ts asserts on exactly it. It sends NOTHING
+    // (automation spec decision 6).
+    if (consent.kind === "none" || consent.kind === "telnyx_only") {
+      try {
+        const answer = await applyConfirmationReply(db, accountId, contact.id, text, new Date());
+        if (answer) log("recorded an appointment confirmation reply", accountId, contact.id, answer);
+      } catch (e) {
+        log("could not record a confirmation reply — the customer's message is filed regardless", accountId, String(e));
+      }
+    }
+  } else {
+    log("already-recorded inbound message (retried delivery): consent step only", providerMessageId);
   }
+
+  if (!fromNumber) {
+    if (consent.kind !== "none") log("inbound text with no sender number: nothing to record in the consent ledger", accountId);
+    return;
+  }
+  // The reply is scheduled the moment it is owed, inside the step, so a
+  // To-do failure after it (503) cannot lose it (review R2-I1a).
+  await recordInboundConsent(db, { ...base, address: fromNumber, contactId: contact.id, firstFiling }, consent,
+    (reply) => defer(() => sendConsentReply(db, { accountId, to: fromNumber, contactId: contact.id, conversationId: conversation.id, reply })));
 }
 
 async function handleStatus(db: SupabaseClient, payload: TelnyxPayload | undefined): Promise<void> {
@@ -242,24 +253,37 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const eventType = body.data?.event_type;
   const payload = body.data?.payload;
+  // Classified BEFORE anything can fail (pure), so a failure anywhere below —
+  // serviceDb() included — knows whether it lost a stop.
+  const consent: InboundClass = eventType === "message.received"
+    ? classifyInbound(typeof payload?.text === "string" ? payload.text : "", parseAutoresponse(payload?.autoresponse_type))
+    : { kind: "none" };
+  if (eventType === "message.received" && parseAutoresponse(payload?.autoresponse_type) === "OTHER") {
+    // Review R2-I2: any value means Telnyx replied, so BIS sends nothing; a
+    // value BIS does not know is logged so it can be added on purpose.
+    log("an autoresponse_type BIS does not know, read as 'Telnyx already replied'", String(payload?.autoresponse_type).slice(0, 40));
+  }
 
-  // Everything past the signature check acks 200 no matter what happens
-  // inside: a webhook that 500s gets retried forever, and nothing below
-  // this point is an error the provider can fix by retrying. Any unexpected
-  // throw (a DB blip, a malformed payload past the type guards, or
-  // serviceDb() itself throwing when its env vars are misconfigured) logs
-  // and falls through to the same 200 a graceful no-op would return —
-  // serviceDb() MUST stay inside this try for that guarantee to hold.
+  // Everything past the signature check acks 200 whatever happens inside,
+  // EXCEPT a text that changes consent (a stop, a start, a stop sentence):
+  // losing one of those is a legal failure, so it answers 503 and Telnyx
+  // retries (plan G2; every write it retries is idempotent). A plain text
+  // keeps the old rule: nothing a retry can fix, so 200 and a log line.
+  // serviceDb() MUST stay inside this try for either guarantee to hold.
   try {
     const db = serviceDb();
     if (eventType === "message.received") {
-      await handleInbound(db, payload);
+      await handleInbound(db, payload, consent, (work) => after(work));
     } else if (eventType === "message.sent" || eventType === "message.finalized") {
       await handleStatus(db, payload);
     } else {
       log("ignoring unrecognised event_type", eventType);
     }
   } catch (e) {
+    if (CHANGES_CONSENT.has(consent.kind)) {
+      log("could not handle a text that changes consent; answering 503 so Telnyx retries", eventType, consent.kind, loggableError(e));
+      return NextResponse.json({ error: "retry" }, { status: 503 });
+    }
     log("unexpected failure handling webhook", eventType, String(e));
   }
   return NextResponse.json({ ok: true });

@@ -17,7 +17,8 @@ import { m } from "@/lib/messages";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { updateContactFieldAction, undoInlinePhoneEditAction } from "./actions";
 import { MarketingOptOutSwitch } from "./marketing-optout-switch";
-import { PhoneCountryRow } from "./phone-country-row";
+import { TextsRow } from "./texts-row";
+import { textsLoadFrom, type TextsLoad } from "@/lib/consent/texts-row";
 import { addTagAction, removeTagAction } from "./[contactId]/actions";
 import type { ContactRow } from "./contacts-table";
 import { summaryLoadFrom, type ParsedContactSummary, type SummaryLoad } from "@/lib/contacts/summary";
@@ -83,6 +84,29 @@ export function ContactDrawer({
 
   const load: LoadResult | { status: "loading" } =
     contactId && fetched?.contactId === contactId ? fetched.result : { status: "loading" };
+
+  // The Texts row's own read (consent chain PR-2, spec §6: the Messages block
+  // has its own skeleton and error). Re-read whenever the summary is — a
+  // phone save, a pick, a row action, an Undo all bump retryNonce — with the
+  // same stale-closure guard as the summary's fetch above.
+  // Never initialised to `null`: the drawer's OTHER paired-fetch state
+  // (`fetched` above) is found in the wiring test's harness by starting
+  // value ("found by starting value, not hook order" — its own comment), and
+  // a second state starting at `null` would collide with that filter.
+  const [texts, setTexts] = useState<{ contactId: string; load: TextsLoad }>({ contactId: "", load: { status: "loading" } });
+  useEffect(() => {
+    if (!contactId) return;
+    let stale = false;
+    fetch(`/api/accounts/${accountId}/contacts/${contactId}/texts`)
+      .then(async (res) => {
+        if (stale) return;
+        const next = await textsLoadFrom(res);
+        if (!stale) setTexts({ contactId, load: next });
+      })
+      .catch(() => { if (!stale) setTexts({ contactId, load: { status: "error" } }); });
+    return () => { stale = true; };
+  }, [accountId, contactId, retryNonce]);
+  const textsLoad: TextsLoad = contactId && texts.contactId === contactId ? texts.load : { status: "loading" };
 
   const fullHref = contactId
     ? `/dashboard/accounts/${accountId}/contacts/${contactId}` : "#";
@@ -178,6 +202,14 @@ export function ContactDrawer({
                 ))}
               </dl>
 
+              <TextsRow
+                accountId={accountId}
+                contactId={row.id}
+                load={textsLoad}
+                onChanged={() => setRetryNonce((n) => n + 1)}
+                onRetry={() => setRetryNonce((n) => n + 1)}
+              />
+
               {load.status === "loading" ? (
                 <div className="space-y-2" data-testid="drawer-skeleton">
                   <Skeleton className="h-5 w-24" />
@@ -209,25 +241,6 @@ export function ContactDrawer({
                     accountId={accountId}
                     contactId={row.id}
                     tags={load.summary.tags}
-                    onChanged={() => setRetryNonce((n) => n + 1)}
-                  />
-                  {/* The Texts row's Check number state (spec §6, F-009), from
-                      the summary for the same stub-row reason. Renders
-                      nothing for a number that is not ambiguous. */}
-                  <PhoneCountryRow
-                    // Keyed by the flag too (review R3-I2): a re-read summary
-                    // that settles or raises the question remounts the row
-                    // from it, never from a stale first render.
-                    key={`phone-${row.id}-${load.summary.phone_country_unconfirmed}`}
-                    accountId={accountId}
-                    contactId={row.id}
-                    // The phone as RENDERED (review I3), from the SUMMARY —
-                    // never `row.phone`, which is a `?peek=` deep link's
-                    // all-null stub (round 3: that stub answered `""`, and
-                    // the pick's compare-and-set must fail closed on it,
-                    // not merely tolerate it).
-                    phone={load.summary.phone ?? ""}
-                    unconfirmed={load.summary.phone_country_unconfirmed}
                     onChanged={() => setRetryNonce((n) => n + 1)}
                   />
                   {/* From the summary, not `row`: a `?peek=` of a contact on

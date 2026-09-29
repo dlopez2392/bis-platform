@@ -15,7 +15,8 @@ import type { HoursRule } from "./hours";
  * which EMAIL kinds an unsubscribe does not stop (decision 7).
  *
  * The three `consent.*` kinds (the stop and start confirmations and the
- * help reply) arrive with PR-2, which is the first code to send them.
+ * help reply) are sent only by lib/consent/replies.ts (source scan), at any
+ * hour (choice 18), with no footer: each line carries its own way out.
  *
  * Footer: `stop_line` is `withOptOut`'s disclosure, exactly as
  * sendAutomationSms and the text-back appended it before this registry
@@ -40,6 +41,9 @@ export const SMS_KINDS = {
   "staff.composer_sms": { class: "staff_typed", hours: "any", footer: "none" },
   "operator.alert_sms": { class: "operator", hours: "any", footer: "none" },
   "operator.alert_phone_code": { class: "operator", hours: "any", footer: "none" },
+  "consent.stop_confirmation": { class: "consent_reply", hours: "any", footer: "none" },
+  "consent.start_confirmation": { class: "consent_reply", hours: "any", footer: "none" },
+  "consent.help": { class: "consent_reply", hours: "any", footer: "none" },
 } as const satisfies Record<string, SmsKindSpec>;
 
 export type SmsKind = keyof typeof SMS_KINDS;

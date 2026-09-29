@@ -19,6 +19,14 @@ import { SMS_KINDS } from "./classes";
  * said, so `phoneFields` can flag the ones that could be Mexican or US).
  * Scan 4 (the customer-initiated EMAIL kinds) is PR-3's, with the email kinds.
  *
+ * PR-2 adds: every ledger write is the one guarded function (0055), named
+ * only in consent.ts; only the consent reply path sets `answersEventId` (the
+ * gate's one exception) or `numberFromCarrier` beside the text-back; only the
+ * registry, the gate (its one exception), the inbound step and the reply
+ * sender name a `consent.*` kind;
+ * the inbound route reaches a send only through lib/consent/replies; and a
+ * consent reply records no usage (plan G11).
+ *
  * Every scan reads CODE, never comments (the doc-comment-satisfies-the-guard
  * shape, memory bis-vacuous-test-shapes), and each has a positive control
  * proving it can see what it looks for — a scan that finds nothing because it
@@ -86,6 +94,38 @@ const resolveSpec = (file: string, spec: string) =>
   : spec.startsWith(".") ? moduleId(join(dirname(file), spec))
   : spec;
 const GATE_FILE = join(WEB_SRC, "lib", "consent", "gate.ts");
+
+const moduleFileIndex = new Map<string, string>();
+/** A module id resolved back to the walked (production) web file that
+ *  defines it; a package specifier (`@bis/db`, `next/server`) has none and
+ *  is a terminal node for `reachableFrom`. */
+function fileForModule(id: string): string | undefined {
+  if (moduleFileIndex.size === 0) for (const f of webSources()) moduleFileIndex.set(moduleId(f), f);
+  return moduleFileIndex.get(id);
+}
+
+/**
+ * Every module `entryFile`'s import graph reaches, resolving `@/` and
+ * relative specifiers to their files — EXCEPT it never follows past
+ * `stopId`: that one module is a reached LEAF, its own imports unwalked.
+ * (review: a direct-imports-only check on the inbound route missed a banned
+ * module reached through an intermediate file, e.g. a helper that imports
+ * lib/billing/usage; this follows the whole graph instead, stopping only at
+ * the route's one sanctioned exception, lib/consent/replies.)
+ */
+function reachableFrom(entryFile: string, stopId: string): Set<string> {
+  const entryId = moduleId(entryFile);
+  const seen = new Set<string>([entryId]);
+  const queue: string[] = [entryId];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (id === stopId) continue;
+    const file = id === entryId ? entryFile : fileForModule(id);
+    if (!file) continue;   // a package specifier: no local file, nothing further to walk
+    for (const imp of importsOf(file)) if (!seen.has(imp)) { seen.add(imp); queue.push(imp); }
+  }
+  return seen;
+}
 
 describe("every scan reads the code, and only the comments are gone", () => {
   it("code after a `// …/*` line comment, and after a regex literal holding \\/\\/, is still scanned, while the comments themselves are not (mutation: strip block comments, then line comments, with regexes → FAILS)", () => {
@@ -208,7 +248,7 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
     expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS))).toEqual([]);
   });
 
-  it("the scan reaches every send path's kind — none of the eleven is missing (the positive control)", () => {
+  it("the scan reaches every send path's kind — none of the fourteen is missing (the positive control)", () => {
     const seen = new Set(kindLiterals().map(({ kind }) => kind));
     expect([...seen].sort()).toEqual(Object.keys(SMS_KINDS).sort());
   });
@@ -224,11 +264,22 @@ describe("scan 3: the ledger has one writer, and it only appends", () => {
     expect(touching).toEqual(["packages/db/src/consent.ts"]);
   });
 
-  it("consent.ts never updates, upserts or deletes, anywhere in the file, however the table is spelled (mutation: add .update( to a consent_events call, or .delete() after .from(\"consent_events\" as never) or .from(CONST) → FAILS)", () => {
+  it("consent.ts never inserts, updates, upserts or deletes directly: every write is the one guarded function (0055; mutation: add .insert( or .update( to a consent_events call → FAILS)", () => {
     const src = code(join(DB_SRC, "consent.ts"));
-    expect(src.match(/\.from\(/g)?.length).toBeGreaterThanOrEqual(2);   // the read and the insert: the scan sees both
-    expect(src).toMatch(/\.insert\(/);
-    expect(src.match(/\.(?:update|upsert|delete)\s*\(/g) ?? []).toEqual([]);
+    expect(src.match(/\.from\(/g)?.length).toBeGreaterThanOrEqual(4);   // the four reads: the scan sees them
+    expect(src).toMatch(/\.rpc\(WRITE_FUNCTION,/);                      // and the one write
+    expect(src.match(/\.(?:insert|update|upsert|delete)\s*\(/g) ?? []).toEqual([]);
+  });
+
+  it("only packages/db/src/consent.ts names the ledger's write function, as any string literal (mutation: an rpc(\"append_consent_event\") from apps/web → FAILS naming the file)", () => {
+    const naming = [...webSources(), ...dbSources()].filter((f) => /["'`]append_consent_event["'`]/.test(code(f))).map(rel);
+    expect(naming).toEqual(["packages/db/src/consent.ts"]);
+  });
+
+  it("0055, which defines the function, inserts into the ledger and never updates, deletes or truncates it (the insert is the positive control; mutation: add an update of consent_events → FAILS)", () => {
+    const sql = readFileSync(join(REPO, "packages", "db", "supabase", "migrations", "0055_consent_writes.sql"), "utf-8").replace(/--[^\n]*/g, "");
+    expect(sql).toMatch(/insert into public\.consent_events/);
+    expect(sql).not.toMatch(/update\s+(?:public\.)?consent_events|delete\s+from\s+(?:public\.)?consent_events|truncate/i);
   });
 });
 
@@ -274,16 +325,25 @@ describe("F-009: toE164 is gone, and the fake gate stays in the tests", () => {
   });
 });
 
-describe("the carrier bypass: only the text-back sets numberFromCarrier", () => {
-  it("no production file but the gate (which declares and carries it) and lib/voice/textback.ts names numberFromCarrier, and the gate never sets it true itself (mutation: the composer sends numberFromCarrier: true → FAILS naming it; the list holding textback.ts is the positive control)", () => {
+describe("the carrier bypass: only the text-back and the consent reply set numberFromCarrier", () => {
+  it("no production file but the gate (which declares and carries it), lib/voice/textback.ts and lib/consent/replies.ts names numberFromCarrier, and the gate never sets it true itself (mutation: the composer sends numberFromCarrier: true → FAILS naming it; the list holding textback.ts and replies.ts is the positive control)", () => {
     const naming = webSources().filter((f) => /\bnumberFromCarrier\b/.test(code(f))).map(rel).sort();
-    expect(naming).toEqual(["apps/web/src/lib/consent/gate.ts", "apps/web/src/lib/voice/textback.ts"]);
+    expect(naming).toEqual(["apps/web/src/lib/consent/gate.ts", "apps/web/src/lib/consent/replies.ts", "apps/web/src/lib/voice/textback.ts"]);
     expect(code(join(WEB_SRC, "lib", "voice", "textback.ts"))).toMatch(/\bnumberFromCarrier\s*:\s*true\b/);
+    expect(code(join(WEB_SRC, "lib", "consent", "replies.ts"))).toMatch(/\bnumberFromCarrier\s*:\s*true\b/);
     expect(code(join(WEB_SRC, "lib", "consent", "gate.ts"))).not.toMatch(/\b(?:numberFromCarrier|fromCarrier)\s*[:=]\s*true\b/);
   });
 
   it("the gate's carrier line is pinned, so only an explicit true skips the stored flag (mutation: req.numberFromCarrier !== false → FAILS)", () => {
     expect(code(GATE_FILE)).toContain("const fromCarrier = req.numberFromCarrier === true;");
+  });
+});
+
+describe("answersEventId: the gate's one stop-confirmation exception, named nowhere else", () => {
+  it("only the consent reply path names answersEventId: the gate (which checks it), the inbound step (which plans it) and the reply sender (which passes it) (spec §4.2's one exception; mutation: the composer passes answersEventId → FAILS naming it; replies.ts passing it is the positive control)", () => {
+    const naming = webSources().filter((f) => /\banswersEventId\b/.test(code(f))).map(rel).sort();
+    expect(naming).toEqual(["apps/web/src/lib/consent/gate.ts", "apps/web/src/lib/consent/inbound.ts", "apps/web/src/lib/consent/replies.ts"]);
+    expect(code(join(WEB_SRC, "lib", "consent", "replies.ts"))).toMatch(/\banswersEventId\s*:\s*r\.reply\.answersEventId\b/);
   });
 });
 
@@ -583,5 +643,48 @@ describe("F-009: every contact write gets the number as typed or as said", () =>
     // A carrier number used as a LOOKUP key beside the input is not the contact's phone.
     expect(normalisedIntoWrites(`const accountId = await accountFor(e164Of(to));\nawait createContact(db, accountId, { phone: val("phone") }, u);`, false)).toEqual([]);
     expect(normalisedIntoWrites(`if (!normalisePhone(value)) continue;\nif (key) input[key] = value;`, true)).toEqual([]);
+  });
+});
+
+describe("PR-2: who may send a consent reply, and how", () => {
+  const CONSENT_KIND = /["'`]consent\.(?:stop_confirmation|start_confirmation|help)["'`]/;
+
+  it("only the registry, the gate (its one exception), the inbound step and the reply sender name a consent.* kind (mutation: the composer sends kind \"consent.help\" → FAILS naming it; the four files are the positive control)", () => {
+    expect(webSources().filter((f) => CONSENT_KIND.test(code(f))).map(rel).sort()).toEqual([
+      "apps/web/src/lib/consent/classes.ts", "apps/web/src/lib/consent/gate.ts", "apps/web/src/lib/consent/inbound.ts", "apps/web/src/lib/consent/replies.ts",
+    ]);
+  });
+
+  it("the inbound route's import graph reaches a send only through lib/consent/replies, however indirectly (plan G16; mutation: route.ts imports deliverTextback from lib/voice/textback, or recordUsageSafely from lib/billing/usage, neither DIRECT — a direct-imports-only check misses both → FAILS)", () => {
+    const route = join(WEB_SRC, "app", "api", "sms", "inbound", "route.ts");
+    const REPLIES = "apps/web/src/lib/consent/replies";
+    // lib/consent/replies is the ONE leaf whose own imports (the gate
+    // included) are never followed — it is the route's one sanctioned way to
+    // reach a send. Everything else route.ts's graph touches is walked all
+    // the way down, so a banned module reached through two or three hops
+    // (a helper a helper imports) is caught exactly as a direct import
+    // would be; a "gate caller" one more hop out is caught the same way,
+    // because reaching it means walking THROUGH gate.ts or send-sms.ts,
+    // which are themselves in the banned list below.
+    const reached = reachableFrom(route, REPLIES);
+    expect(reached).toContain(REPLIES);
+    // The positive control: lib/automations/quiet-hours IS reached (route →
+    // inbound.ts → hours.ts → quiet-hours.ts) and must NOT be banned just for
+    // living under lib/automations — only send-sms.ts, one specific file
+    // there, may never be reached (review: "do not ban all of automations").
+    expect(reached).toContain("apps/web/src/lib/automations/quiet-hours");
+    const banned = [...reached].filter((id) =>
+      id === "apps/web/src/lib/consent/gate" ||
+      id === "apps/web/src/lib/automations/send-sms" ||
+      /^apps\/web\/src\/lib\/sms(?:\/|$)/.test(id) ||
+      id === "apps/web/src/lib/billing/usage" ||
+      /^apps\/web\/src\/lib\/email(?:\/|$)/.test(id));
+    expect(banned).toEqual([]);
+  });
+
+  it("a consent reply records no usage (plan G11: not billed); the composer, which bills, is the positive control (mutation: recordUsageSafely in replies.ts → FAILS)", () => {
+    const usage = /\brecordUsage(?:Safely)?\b|["'`]usage_events["'`]/;
+    expect(code(join(WEB_SRC, "lib", "consent", "replies.ts"))).not.toMatch(usage);
+    expect(code(join(WEB_SRC, "app", "(dashboard)", "dashboard", "accounts", "[accountId]", "conversations", "actions.ts"))).toMatch(usage);
   });
 });

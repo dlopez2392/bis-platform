@@ -20,12 +20,17 @@ const SPEC_TABLE: Record<string, [string, string, string]> = {
   "staff.composer_sms": ["staff_typed", "any", "none"],
   "operator.alert_sms": ["operator", "any", "none"],
   "operator.alert_phone_code": ["operator", "any", "none"],
+  // PR-2 (spec §4.1 item 2's last row; choice 18: any hour). No footer: each
+  // line carries its own way out (spec §4.2's table).
+  "consent.stop_confirmation": ["consent_reply", "any", "none"],
+  "consent.start_confirmation": ["consent_reply", "any", "none"],
+  "consent.help": ["consent_reply", "any", "none"],
 };
 
 describe("SMS_KINDS — the spec's table, row for row", () => {
-  it("has exactly the spec's eleven PR-1 kinds, no more and no fewer — which also proves the consent.* kinds are NOT here yet (PR-2 is the first code to send them): a set equal to SPEC_TABLE's eleven names has no room for a twelfth (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the spec's fourteen kinds — PR-1's eleven and PR-2's three consent replies — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(SMS_KINDS).sort()).toEqual(Object.keys(SPEC_TABLE).sort());
-    expect(Object.keys(SMS_KINDS)).toHaveLength(11);
+    expect(Object.keys(SMS_KINDS)).toHaveLength(14);
   });
 
   it.each(Object.entries(SPEC_TABLE))("%s is %j — its own class, hours and footer, none borrowed from another row (mutation: change any one of this row's three fields → FAILS)", (kind, [cls, hours, footer]) => {

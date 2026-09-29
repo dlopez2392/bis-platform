@@ -22,8 +22,10 @@ import { SubmitButton } from "../../../submit-button";
 import { updateContactAction, addTagAction, removeTagAction } from "./actions";
 import { updateContactFieldAction, undoInlinePhoneEditAction } from "../actions";
 import { FIELDS } from "../contact-drawer";
+import { useRouter } from "next/navigation";
 import { MarketingOptOutSwitch } from "../marketing-optout-switch";
-import { PhoneCountryRow } from "../phone-country-row";
+import { TextsRow } from "../texts-row";
+import type { TextsLoad } from "@/lib/consent/texts-row";
 import type { OptOutZone } from "@/lib/contacts/marketing-optout";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
@@ -38,7 +40,7 @@ export function ContactFieldsPanel({
   tags,
   fieldDefs,
   zone,
-  phoneUnconfirmed,
+  texts,
 }: {
   accountId: string;
   contactId: string;
@@ -47,11 +49,11 @@ export function ContactFieldsPanel({
   fieldDefs: CustomFieldDef[];
   /** The account's resolved zone (`renderZone`), for the opt-out's "Off since" date. */
   zone: OptOutZone;
-  /** F-009: the number could be Mexican or US (the flag, or the stored
-   *  number reads both ways). Worked out on the server page, which has the
-   *  normaliser; the panel is a client component and must not ship it. */
-  phoneUnconfirmed: boolean;
+  /** The Texts row, read on the server page (which has the normaliser and
+   *  the ledger read; this client component ships neither). */
+  texts: TextsLoad;
 }) {
+  const router = useRouter();
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const boundUpdateContact = updateContactAction.bind(null, accountId);
@@ -85,14 +87,13 @@ export function ContactFieldsPanel({
             ))}
           </dl>
 
-          <PhoneCountryRow
-            // Keyed by the flag too (review R3-I2): the page re-renders after
-            // a phone edit, and the row must follow the new answer.
-            key={`phone-${contactId}-${phoneUnconfirmed}`}
+          <TextsRow
             accountId={accountId}
             contactId={contactId}
-            unconfirmed={phoneUnconfirmed}
-            phone={contact.phone ?? ""}
+            load={texts}
+            // The composer on this page reads the same ledger: refresh it too.
+            onChanged={() => router.refresh()}
+            onRetry={() => router.refresh()}
           />
 
           <MarketingOptOutSwitch
