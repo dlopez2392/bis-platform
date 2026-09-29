@@ -72,7 +72,7 @@ describe("serviceDb-only account writes", () => {
       expect((await getA2pRegistration(db, accountId))!.status).toBe("not_started");
 
       await setA2pRegistration(db, accountId, {
-        brandId: "BRAND123", campaignId: "CAMP456", status: "pending",
+        brandId: "BRAND123", campaignId: "CAMP456", status: "pending", messagingProfileId: null,
       }, "user_test");
       const pending = (await getA2pRegistration(db, accountId))!;
       expect(pending.brandId).toBe("BRAND123");
@@ -94,15 +94,19 @@ describe("serviceDb-only account writes", () => {
       // approval with no campaign id has nothing to send on, yet would tick a
       // checklist item that reads "Register A2P 10DLC brand and campaign".
       await expect(setA2pRegistration(db, accountId, {
-        brandId: "BRAND123", campaignId: null, status: "approved",
-      }, "user_test")).rejects.toThrow(/brand id and a campaign id/);
+        brandId: "BRAND123", campaignId: null, status: "approved", messagingProfileId: null,
+      }, "user_test")).rejects.toThrow(/brand id, a campaign id and a messaging profile id/);
+      // Plan Task 7: approved also needs the business's OWN messaging profile.
+      await expect(setA2pRegistration(db, accountId, {
+        brandId: "BRAND123", campaignId: "CAMP456", status: "approved", messagingProfileId: null,
+      }, "user_test")).rejects.toThrow(/messaging profile id/);
       // …and it did not half-write on the way out.
       expect((await getA2pRegistration(db, accountId))!.status).toBe("pending");
 
       // The same patch is fine while the carriers still have it — you cannot
       // have ids you have not been issued yet.
       await setA2pRegistration(db, accountId, {
-        brandId: null, campaignId: null, status: "pending",
+        brandId: null, campaignId: null, status: "pending", messagingProfileId: null,
       }, "user_test");
 
       // updatedAt is stamped by the writer, and read back — a status with no
@@ -152,7 +156,7 @@ describe("serviceDb-only account writes", () => {
     // completeness guard BEFORE the query runs, so the test would pass without
     // ever reaching the zero-row check it exists for.
     await expect(setA2pRegistration(
-      db, ghost, { brandId: null, campaignId: null, status: "pending" }, "user_test",
+      db, ghost, { brandId: null, campaignId: null, status: "pending", messagingProfileId: null }, "user_test",
     )).rejects.toThrow(/no account/);
 
     const { data } = await db.from("events").select("id")

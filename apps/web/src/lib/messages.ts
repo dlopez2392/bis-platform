@@ -893,6 +893,12 @@ export const m = {
   "a2p.body": "What the carriers have approved for this company. Texting stays off until the campaign is approved.",
   "a2p.brandId": "Brand ID",
   "a2p.campaignId": "Campaign ID",
+  // Plan Task 7: the business's own Telnyx messaging profile (spec §5).
+  "a2p.messagingProfileId": "Messaging profile ID",
+  "a2p.messagingProfileIdHint": "From Telnyx, Messaging, Profiles. Every company needs its own, with its stop words and replies set up, before it can text.",
+  "a2p.approvedNeedsProfile": "This company's own messaging profile ID is needed before marking this approved",
+  "a2p.profileMalformed": "That doesn't look like a messaging profile ID. Copy it from Telnyx.",
+  "a2p.profileTaken": "Another company already uses that messaging profile. Every company needs its own.",
   "a2p.status": "Status",
   "a2p.status.not_started": "Not started",
   "a2p.status.pending": "With the carriers",

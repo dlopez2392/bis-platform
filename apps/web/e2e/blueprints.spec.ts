@@ -213,6 +213,9 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // cause. Both fields were empty for the refusal, so fill them now.
     await page.getByLabel("Brand ID").fill("BRAND123");
     await page.getByLabel("Campaign ID").fill("CAMP456");
+    // Plan Task 7: approved also needs the business's own messaging profile,
+    // unique across companies, so the run's own random one.
+    await page.getByLabel("Messaging profile ID").fill(crypto.randomUUID());
     // Deliberately NOT re-selecting the status: the whole point is that the
     // choice made before the refusal is still the choice being submitted.
     await page.getByRole("button", { name: "Save" }).click();
