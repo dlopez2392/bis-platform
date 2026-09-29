@@ -170,6 +170,10 @@ describe("confirmStop / notAStop / their undo", () => {
     expect(guardOf()).toEqual({ ifNewest: "ev_rel" });
     expect(db.reopenTasks).toHaveBeenCalledWith(READER, "a1", ["task_1"], "user_1");
     expect(r.ok).toBe(true);
+    // The write (the customer's number is back on hold) must land BEFORE the
+    // To-dos reopen: reopening first would show staff an open To-do for a
+    // hold the ledger hasn't recorded yet (review fix round 1, item 1).
+    expect(db.appendConsentEventGuarded.mock.invocationCallOrder[0]).toBeLessThan(db.reopenTasks.mock.invocationCallOrder[0]!);
   });
 
   it("the Undo of a hold decision is bound the same way: another user's, or an old one, is refused (review R3-I6; mutation: drop the bound from undoHoldDecision → a confirmed stop is lifted back to a hold with no note, FAILS)", async () => {

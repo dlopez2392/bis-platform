@@ -61,7 +61,8 @@ const heldIds = (rows: readonly ConsentHistoryRow[]) => rows.filter((r) => r.act
 async function changed(ctx: TextsContext): Promise<TextsActionResult> {
   try {
     return { ok: false, error: m["contact.texts.changed"], view: await view(ctx) };
-  } catch {
+  } catch (e) {
+    console.error(`changed: account ${ctx.accountId} contact ${ctx.contactId}: ${loggableError(e)}`);
     return { ok: false, error: m["contact.texts.changed"] };
   }
 }

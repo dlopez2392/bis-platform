@@ -27,7 +27,12 @@ export async function GET(
       readTextsView(db, accountId, contact),
       db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
     ]);
-    const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
+    if (account.error) {
+      // Not fatal to the Texts row: renderZone's own fallback (undefined →
+      // guessed) still gives a date, just not necessarily this account's.
+      console.error(`texts read: account ${accountId} timezone unreadable: ${loggableError(account.error)}`);
+    }
+    const zone = await renderZone(account.error ? undefined : (account.data as { timezone: string } | null)?.timezone);
     return NextResponse.json({ view, zone: zone.zone, phone: contact.phone ?? null } satisfies TextsResponse);
   } catch (e) {
     // Fails closed: an unreadable ledger is the row's error line, never a guessed "Allowed".
