@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { SMS_KINDS, EMAIL_KINDS } from "./classes";
+import { SMS_KINDS, EMAIL_KINDS, type EmailKind } from "./classes";
 
 /**
  * The consent chain's source scans (spec §8, "Source scans"), PR-1's share:
@@ -18,6 +18,12 @@ import { SMS_KINDS, EMAIL_KINDS } from "./classes";
  * number a normaliser already made (it must get the number as typed or as
  * said, so `phoneFields` can flag the ones that could be Mexican or US).
  * Scan 4 (the customer-initiated EMAIL kinds) is PR-3's, with the email kinds.
+ *
+ * PR-3 adds, for email: scan 1 (only the email gate reaches an email
+ * provider), scan 2 over both registries, each email kind's own send site,
+ * scan 4 (the customer-initiated email kinds only where the customer acted),
+ * scan 5's retired 0049 column, one writer of the customer's own email stop,
+ * and no token in any log line.
  *
  * PR-2 adds: every ledger write is the one guarded function (0055), named
  * only in consent.ts; only the consent reply path sets `answersEventId` (the
@@ -257,9 +263,11 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
     expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS) && !(kind in EMAIL_KINDS))).toEqual([]);
   });
 
-  it("the scan reaches every SMS send path's kind — none of the fourteen is missing (the positive control; Task 13 adds the email kinds once every site is routed)", () => {
+  it("the scan reaches every send path's kind — all fourteen SMS kinds and all twenty-two email kinds, 32 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
     const seen = new Set(kindLiterals().map(({ kind }) => kind));
-    expect([...seen]).toEqual(expect.arrayContaining(Object.keys(SMS_KINDS)));
+    const all = [...new Set([...Object.keys(SMS_KINDS), ...Object.keys(EMAIL_KINDS)])].sort();
+    expect(all).toHaveLength(32);
+    expect([...seen].sort()).toEqual(all);
   });
 });
 
@@ -705,5 +713,144 @@ describe("PR-2: who may send a consent reply, and how", () => {
     const usage = /\brecordUsage(?:Safely)?\b|["'`]usage_events["'`]/;
     expect(code(join(WEB_SRC, "lib", "consent", "replies.ts"))).not.toMatch(usage);
     expect(code(join(WEB_SRC, "app", "(dashboard)", "dashboard", "accounts", "[accountId]", "conversations", "actions.ts"))).toMatch(usage);
+  });
+});
+
+const EMAIL_GATE = join(WEB_SRC, "lib", "consent", "email-gate.ts");
+const DASH = "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]";
+const PASSES = "apps/web/src/lib/automations/passes";
+
+describe("scan 1 (email): only the email gate reaches an email provider (consent PR-3)", () => {
+  const PROVIDER_MODULES = new Set([
+    "apps/web/src/lib/email/index.ts", "apps/web/src/lib/email/resend.ts", "apps/web/src/lib/email/fake.ts",
+    "apps/web/src/lib/consent/email-gate.ts",
+  ]);
+  const PROVIDER_IDS = new Set(["apps/web/src/lib/email", "apps/web/src/lib/email/resend", "apps/web/src/lib/email/fake"]);
+  const NAMES = /\bgetEmailProvider\b|\bresendEmailProvider\b|\bfakeEmailProvider\b/;
+  const RESEND_PACKAGE = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["'`]resend["'`]/;
+
+  it("no source file outside lib/email's provider modules and the email gate imports the factory module, a provider or the resend package, or names them — by ANY path (mutation: import getEmailProvider back into the harness or a pass, or `../../lib/email` from a route → FAILS naming it)", () => {
+    const offenders = webSources().filter((f) => !PROVIDER_MODULES.has(rel(f))).filter((f) => {
+      const src = code(f);
+      return NAMES.test(src) || RESEND_PACKAGE.test(src) || importsOf(f, src).some((m) => PROVIDER_IDS.has(m));
+    }).map(rel);
+    expect(offenders).toEqual([]);
+  });
+
+  it("the email gate does reach the factory (the positive control: the scan can see an import)", () => {
+    expect(code(EMAIL_GATE)).toMatch(NAMES);
+    expect(importsOf(EMAIL_GATE)).toContain("apps/web/src/lib/email");
+  });
+
+  it("only lib/email/resend.ts imports the resend package, and nothing names Resend's API host: no raw fetch around the gate (mutation: fetch https://api.resend.com/emails from a pass → FAILS naming it)", () => {
+    expect(webSources().filter((f) => RESEND_PACKAGE.test(code(f))).map(rel)).toEqual(["apps/web/src/lib/email/resend.ts"]);
+    expect(webSources().filter((f) => /api\.resend\.com/.test(code(f))).map(rel)).toEqual([]);
+  });
+
+  it("the email gate re-exports nothing of the factory, so nothing reaches the provider THROUGH it (mutation: export { getEmailProvider } from the gate → FAILS)", () => {
+    const src = code(EMAIL_GATE);
+    expect(src.match(/export\s*(?:\*|\{[^}]*\})\s*from\s*["'`](?:@\/lib\/email(?:\/index)?|\.\.\/email(?:\/index)?)["'`]/g) ?? []).toEqual([]);
+    expect(src.match(/export\s*\{[^}]*\b(?:getEmailProvider|resendEmailProvider|fakeEmailProvider)\b[^}]*\}/g) ?? []).toEqual([]);
+    expect(src).not.toMatch(/export\s+(?:const|let|var)\s+\w+\s*=\s*(?:getEmailProvider|resendEmailProvider|fakeEmailProvider)\b/);
+  });
+});
+
+describe("the email kinds' own send sites (spec §4.3's table, E1)", () => {
+  /** Each email kind, where it may be named (besides the registry). */
+  const SITES: Record<EmailKind, readonly string[]> = {
+    "booking.confirmation": ["apps/web/src/app/b/[publicId]/actions.ts"],
+    "forms.receipt": ["apps/web/src/lib/forms/enrich.ts"],
+    "voice.booked": ["apps/web/src/lib/voice/tools/registry.ts"],
+    "voice.moved": ["apps/web/src/lib/voice/tools/registry.ts"],
+    "voice.cancelled": ["apps/web/src/lib/voice/tools/registry.ts"],
+    "automation.reminder": [`${PASSES}/reminders.ts`],
+    "automation.followup": [`${PASSES}/followups.ts`],
+    "automation.review_request": [`${PASSES}/review-request.ts`],
+    "automation.referral_ask": [`${PASSES}/referral-ask.ts`],
+    "automation.reactivation": [`${PASSES}/reactivation.ts`],
+    "automation.quote_followup": [`${PASSES}/quote-followup.ts`],
+    "automation.no_show_nudge": [`${PASSES}/no-show-nudge.ts`],
+    "staff.composer_email": [`${DASH}/conversations/actions.ts`],
+    "operator.booking_alert": ["apps/web/src/app/b/[publicId]/actions.ts"],
+    "operator.cancel_notice": ["apps/web/src/app/b/[publicId]/cancel/[token]/actions.ts"],
+    "operator.lead_alert": ["apps/web/src/lib/forms/enrich.ts"],
+    "operator.call_alert": ["apps/web/src/lib/voice/finish-call.ts"],
+    "operator.phone_change_alert": ["apps/web/src/lib/voice/tools/registry.ts"],
+    "operator.weekly_report": [`${PASSES}/weekly-report.ts`],
+    "operator.agency_report": [`${PASSES}/weekly-agency-report.ts`],
+    "operator.billing_link": [`${DASH}/settings/billing-actions.ts`],
+    "operator.sender_check": [`${DASH}/settings/actions.ts`],
+  };
+  const REGISTRY = "apps/web/src/lib/consent/classes.ts";
+
+  it("the table covers every email kind (mutation: add a kind to the registry without a site → FAILS)", () => {
+    expect(Object.keys(SITES).sort()).toEqual(Object.keys(EMAIL_KINDS).sort());
+  });
+
+  it.each(Object.entries(SITES))("%s is named in exactly %j, and nowhere else but the registry (mutation: a pass sends kind \"booking.confirmation\" → that pass's file is listed, FAILS)", (kind, sites) => {
+    const literal = new RegExp(`["'\`]${kind.replace(/\./g, "\\.")}["'\`]`);
+    const naming = webSources().filter((f) => rel(f) !== REGISTRY && literal.test(code(f))).map(rel).sort();
+    expect(naming).toEqual([...sites].sort());
+  });
+});
+
+describe("scan 4: the customer-initiated email kinds only where the customer acted (spec §8 item 4)", () => {
+  const CUSTOMER_INITIATED = Object.entries(EMAIL_KINDS).filter(([, s]) => s.class === "customer_initiated").map(([k]) => k);
+  const ALLOWED = new Set([
+    "apps/web/src/app/b/[publicId]/actions.ts", "apps/web/src/lib/forms/enrich.ts", "apps/web/src/lib/voice/tools/registry.ts",
+    "apps/web/src/lib/consent/classes.ts",
+  ]);
+
+  it("the class holds exactly the five kinds of spec §4.3 as corrected (the positive control; mutation: classify automation.reminder as customer_initiated → FAILS)", () => {
+    expect(CUSTOMER_INITIATED.sort()).toEqual(["booking.confirmation", "forms.receipt", "voice.booked", "voice.cancelled", "voice.moved"]);
+  });
+
+  it("no file outside the booking page, the form's enrich step and the voice tools names one, and nothing under lib/automations does (mutation: the reminder pass sends kind \"booking.confirmation\" → FAILS naming it)", () => {
+    const literal = new RegExp(`["'\`](?:${CUSTOMER_INITIATED.map((k) => k.replace(/\./g, "\\.")).join("|")})["'\`]`);
+    const naming = webSources().filter((f) => literal.test(code(f))).map(rel);
+    expect(naming.filter((f) => !ALLOWED.has(f))).toEqual([]);
+    expect(naming.filter((f) => f.startsWith("apps/web/src/lib/automations/"))).toEqual([]);
+    expect(naming.sort()).toEqual([...ALLOWED].sort());
+  });
+});
+
+describe("scan 5 (PR-3): nothing reads 0049's retired column", () => {
+  const COLUMN = /\bmarketing_email_opted_out_at\b|\bsetMarketingEmailOptOut\b|\bcontactMarketingEmailOptedOut\b|\bMarketingOptOutSwitch\b/;
+
+  it("no source file in apps/web/src or packages/db/src names it (spec §4.3; mutation: put `.is(\"contacts.marketing_email_opted_out_at\", null)` back in the reactivation walk → FAILS naming automations.ts)", () => {
+    expect([...webSources(), ...dbSources()].filter((f) => COLUMN.test(code(f))).map(rel)).toEqual([]);
+  });
+
+  it("the scan can see the column where it still exists: 0049 and the fold's SQL (the positive control)", () => {
+    for (const p of [["migrations", "0049_contacts_marketing_email_optout.sql"], ["backfills", "0049-fold-write.sql"]]) {
+      expect(readFileSync(join(REPO, "packages", "db", "supabase", ...p), "utf-8")).toMatch(COLUMN);
+    }
+  });
+});
+
+describe("the customer's own email stop has one writer (consent PR-3)", () => {
+  const WRITES = /\bappendConsentEvent(?:Guarded)?\b/;
+  const CUSTOMER_METHODS = /["'`](?:one_click|unsubscribe_link|unsubscribe_page)["'`]/;
+
+  it("only lib/consent/unsubscribe.ts both writes the ledger and names one_click, unsubscribe_link or unsubscribe_page (it is also the positive control; mutation: the Email row's staff action writes method \"unsubscribe_link\" → FAILS naming it)", () => {
+    expect(webSources().filter((f) => { const src = code(f); return WRITES.test(src) && CUSTOMER_METHODS.test(src); }).map(rel))
+      .toEqual(["apps/web/src/lib/consent/unsubscribe.ts"]);
+  });
+});
+
+describe("no token in a log line (spec §5 'Privacy')", () => {
+  const FILES = [
+    "lib/consent/unsubscribe.ts", "lib/consent/email-gate.ts", "app/api/unsubscribe/[token]/route.ts",
+    "app/u/[token]/page.tsx", "app/u/[token]/actions.ts",
+  ];
+  const LOGS_TOKEN = /\bconsole\.\w+\((?:[^()]|\([^()]*\))*\btoken\b/;
+
+  it("the five files that hold a token never pass it to console (mutation: log `unsubscribe failed for ${token}` in the route → FAILS naming it)", () => {
+    expect(FILES.filter((p) => LOGS_TOKEN.test(code(join(WEB_SRC, p))))).toEqual([]);
+  });
+
+  it("the pattern sees a token in a log call and ignores the variable's name in a message (the positive control)", () => {
+    expect(LOGS_TOKEN.test(code("probe.ts", "console.error(`bad ${token}`);"))).toBe(true);
+    expect(LOGS_TOKEN.test(code("probe.ts", "console.error(\"CONSENT_TOKEN_SECRET is not set\");"))).toBe(false);
   });
 });
