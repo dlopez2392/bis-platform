@@ -37,10 +37,12 @@ const INTERNAL_MILESTONE = /\bM\d[a-z]?\b/;
 // to drop their milestone codes (checklist-catalogue.test.ts now runs a
 // stricter, unconditional guard over every catalogue string, agency-only or
 // not) — removed rather than left behind to wave through a future regression.
-const AGENCY_ONLY = new Set([
-  // Settings — requireAgencyOnlyAccountAccess (settings/page.tsx).
-  "settings.customValuesBody",
-]);
+// settings.customValuesBody WAS exempted here (agency-only, requireAgency-
+// OnlyAccountAccess in settings/page.tsx) until 2026-09-30, when it was
+// rewritten to drop both its milestone code and its raw `{{...}}` template
+// syntax — removed rather than left behind to wave through a future
+// regression.
+const AGENCY_ONLY = new Set<string>([]);
 
 describe("messages", () => {
   it("cites no internal roadmap label on a client-reachable string", () => {

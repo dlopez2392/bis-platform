@@ -143,7 +143,7 @@ async function handleInbound(
   try {
     alertPhone = await getAlertPhone(db, accountId);
   } catch (e) {
-    log("getAlertPhone read failed — proceeding without the loop guard rather than dropping the text", accountId, String(e));
+    log("getAlertPhone read failed — proceeding without the loop guard rather than dropping the text", accountId, loggableError(e));
   }
   if (alertPhone && fromNumber === alertPhone) {
     // Review R2-I5 (plan G10): the gate records a carrier block for the
@@ -180,6 +180,10 @@ async function handleInbound(
     await createMessage(db, accountId, {
       conversationId: conversation.id, channel: "sms", direction: "inbound",
       body: text, providerMessageId: providerMessageId ?? undefined,
+      // Received in full, not queued to send anywhere — see NewMessage.status
+      // (packages/db/src/messaging.ts). The column default is 'queued', which
+      // is right for an outbound send and wrong for an inbound text.
+      status: "delivered",
     }, ACTOR_ID, ACTOR_TYPE);
     // Same invariant every other inbound writer keeps: a new inbound message
     // always bumps the conversation's unread count, right after the row that
@@ -199,7 +203,7 @@ async function handleInbound(
         const answer = await applyConfirmationReply(db, accountId, contact.id, text, new Date());
         if (answer) log("recorded an appointment confirmation reply", accountId, contact.id, answer);
       } catch (e) {
-        log("could not record a confirmation reply — the customer's message is filed regardless", accountId, String(e));
+        log("could not record a confirmation reply — the customer's message is filed regardless", accountId, loggableError(e));
       }
     }
   } else {
@@ -284,7 +288,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       log("could not handle a text that changes consent; answering 503 so Telnyx retries", eventType, consent.kind, loggableError(e));
       return NextResponse.json({ error: "retry" }, { status: 503 });
     }
-    log("unexpected failure handling webhook", eventType, String(e));
+    log("unexpected failure handling webhook", eventType, loggableError(e));
   }
   return NextResponse.json({ ok: true });
 }

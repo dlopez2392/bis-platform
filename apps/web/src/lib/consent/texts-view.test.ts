@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ConsentHistoryRow } from "@bis/db";
+
+// Same repo-root resolution scans.test.ts uses (same directory depth).
+const REPO = fileURLToPath(new URL("../../../../../", import.meta.url));
 
 const db = vi.hoisted(() => ({ readConsentHistory: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
@@ -71,5 +77,42 @@ describe("readTextsView — the Check number rule PR-1's page tests pinned, now 
     expect(await readTextsView({} as never, "a1", { phone: "(956) 292-1696", phone_country_unconfirmed: true })).toEqual({ kind: "check_number" });
     expect(await readTextsView({} as never, "a1", { phone: "(956) 292-1696", phone_country_unconfirmed: false })).toEqual({ kind: "allowed", newestId: null });
     expect(db.readConsentHistory).toHaveBeenLastCalledWith({}, "a1", "sms", "+19562921696");
+  });
+});
+
+describe("RESUMABLE_METHODS stays identical to 0055's staff-Resume rule (choice 19)", () => {
+  // The exact branch: `elsif p_action = 'resubscribed' and p_method = 'staff' then
+  // v_ok := v_ok and v_prior_action = 'revoked' and v_prior_method in (...)`.
+  // Extracted from the migration text itself, never re-typed, so a change to
+  // either side of the parity is what makes this fail — never a copy/paste of
+  // the same literal into both places.
+  function priorMethodsForStaffResume(sql: string): string[] {
+    const branch = sql.match(
+      /p_action = 'resubscribed' and p_method = 'staff' then\s*\n\s*v_ok := v_ok and v_prior_action = 'revoked' and v_prior_method in \(([^)]*)\)/,
+    );
+    if (!branch) throw new Error("could not find 0055's staff-Resume branch");
+    return [...branch[1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+  }
+
+  it("extracts exactly the three methods 0055 names (mutation: change the extractor's regex group to grab nothing → the SQL literal test below FAILS)", () => {
+    const sample = `
+      elsif p_action = 'resubscribed' and p_method = 'staff' then
+        v_ok := v_ok and v_prior_action = 'revoked' and v_prior_method in ('staff', 'free_text', 'backfill_0049');`;
+    expect(priorMethodsForStaffResume(sample)).toEqual(["staff", "free_text", "backfill_0049"]);
+  });
+
+  it("a changed SQL list makes the extractor return the changed list, not the old one (mutation: hardcode the extractor's return → this FAILS on the 'x' it should see)", () => {
+    const sample = `
+      elsif p_action = 'resubscribed' and p_method = 'staff' then
+        v_ok := v_ok and v_prior_action = 'revoked' and v_prior_method in ('staff', 'x');`;
+    expect(priorMethodsForStaffResume(sample)).toEqual(["staff", "x"]);
+  });
+
+  it("0055_consent_writes.sql's staff-Resume list equals RESUMABLE_METHODS, as a set (mutation: add a method to RESUMABLE_METHODS in texts-view.ts → FAILS)", () => {
+    const sql = readFileSync(
+      join(REPO, "packages", "db", "supabase", "migrations", "0055_consent_writes.sql"), "utf-8",
+    );
+    const fromSql = priorMethodsForStaffResume(sql);
+    expect([...fromSql].sort()).toEqual([...RESUMABLE_METHODS].sort());
   });
 });
