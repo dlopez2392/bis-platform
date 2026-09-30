@@ -10,7 +10,7 @@ import {
 } from "@bis/db";
 import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
 import { e164Of, isCallerIdNumber, spokenPhone } from "../phone-number";
-import { getEmailProvider } from "@/lib/email";
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { getMeetingProvider } from "@/lib/meetings/provider";
 import { emailBrand } from "@/lib/email/templates/shell";
 import {
@@ -191,15 +191,16 @@ async function alertStaffOfPhoneChange(
       callerNumber: ctx.callerNumber,
       contactUrl: `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`,
     });
-    // Throws synchronously when mail config is missing — inside this try.
-    const provider = getEmailProvider();
     const failures: string[] = [];
     await Promise.all(recipients.map(async (to) => {
       try {
         // No fromAddress: this goes to the client's OWN staff, and a
         // client-domain-to-client-domain send through a third-party sender
         // reads as spoofing to corporate filters. Platform From only.
-        await provider.send({ to, fromName: brand.name, subject, body: text, html });
+        await sendEmailOrThrow({
+          accountId: ctx.accountId, kind: "operator.phone_change_alert",
+          to, fromName: brand.name, subject, body: text, html,
+        });
       } catch (e) {
         failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);
       }
@@ -470,7 +471,8 @@ export async function runTool(
           const { html, text } = bookingConfirmationEmail({
             brand, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
           });
-          await getEmailProvider().send({
+          await sendEmailOrThrow({
+            accountId: ctx.accountId, kind: "voice.booked", contactId, origin: ctx.origin,
             to: email, fromName: brand.name, fromAddress: ctx.fromEmail ?? undefined,
             replyTo: normalizeReplyTo(ctx.branding.replyToEmail),
             subject: "You're booked in", body: text, html,
@@ -569,7 +571,8 @@ export async function runTool(
           const { html, text } = bookingRescheduledEmail({
             brand, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
           });
-          await getEmailProvider().send({
+          await sendEmailOrThrow({
+            accountId: ctx.accountId, kind: "voice.moved", contactId: old.contact_id, origin: ctx.origin,
             to: contactEmail, fromName: brand.name, fromAddress: ctx.fromEmail ?? undefined,
             replyTo: normalizeReplyTo(ctx.branding.replyToEmail),
             subject: "Your booking has been moved", body: text, html,
@@ -627,7 +630,8 @@ export async function runTool(
           const { html, text } = bookingCancelledEmail({
             brand, locale, whenCompanyZone: formatWhen(new Date(row.starts_at), ctx.timezone, locale),
           });
-          await getEmailProvider().send({
+          await sendEmailOrThrow({
+            accountId: ctx.accountId, kind: "voice.cancelled", contactId: row.contact_id, language: locale, origin: ctx.origin,
             to: contactEmail, fromName: brand.name, fromAddress: ctx.fromEmail ?? undefined,
             replyTo: normalizeReplyTo(ctx.branding.replyToEmail),
             subject: bookingCancelledSubject(locale), body: text, html,

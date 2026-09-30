@@ -4,7 +4,7 @@ import {
   ENDED_STATUSES, getAccountBilling, getBillingLink, markBillingLinkExpired, saveBillingLink,
   type Branding, type Plan, type SupabaseClient,
 } from "@bis/db";
-import type { EmailProvider } from "@/lib/email";
+import type { EmailProvider } from "@/lib/email/types";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { billingLinkEmail } from "@/lib/email/templates/billing-link";
 import { emailBrandNamed } from "@/lib/email/templates/shell";

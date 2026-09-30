@@ -31,6 +31,26 @@ vi.mock("@/lib/email", () => ({
 }));
 const meetingProviderMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/meetings/provider", () => ({ getMeetingProvider: (...a: unknown[]) => meetingProviderMock(...a) }));
+// consent PR-3: registry.ts now sends through the email gate
+// (sendEmailOrThrow), not getEmailProvider() directly. The REAL gate runs
+// (it delegates to the mocked "@/lib/email" above for the actual provider),
+// so every existing sendMock-based assertion keeps its shape unchanged;
+// this wrapper only RECORDS each request (kind, accountId, origin, …) for
+// the consent-PR-3 cases below, which the gate itself strips before the
+// provider ever sees it.
+const gateCalls = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock("@/lib/consent/email-gate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/consent/email-gate")>();
+  return {
+    ...real,
+    sendEmailOrThrow: (async (req: Parameters<typeof real.sendEmailOrThrow>[0],
+      deps?: Parameters<typeof real.sendEmailOrThrow>[1]) => {
+      gateCalls.push(req as unknown as Record<string, unknown>);
+      return real.sendEmailOrThrow(req, deps);
+    }) as typeof real.sendEmailOrThrow,
+  };
+});
+function gated(): Array<Record<string, unknown>> { return gateCalls; }
 
 import type { serviceDb, CalendarRow, VoiceProfileRow } from "@bis/db";
 import { runTool, type ToolContext, type ToolName } from "./registry";
@@ -60,6 +80,7 @@ beforeEach(() => {
   computeAllSlotsMock.mockReset();
   meetingProviderMock.mockReset().mockReturnValue(null);
   providerSetup.fails = false;
+  gateCalls.length = 0;
 });
 
 describe("check_availability", () => {
@@ -320,10 +341,13 @@ describe("book_appointment", () => {
     expect(sendMock).toHaveBeenCalledOnce();
     expect(sendMock.mock.calls[0]![0]).toMatchObject({
       to: "ana@example.com",
-      fromAddress: undefined,
       subject: "You're booked in",
       body: expect.any(String),
     });
+    // consent PR-3: the gate's sendFields omits fromAddress entirely when
+    // absent (a conditional spread), rather than setting the key to
+    // `undefined` — toBeUndefined() covers both shapes.
+    expect((sendMock.mock.calls[0]![0] as { fromAddress?: string }).fromAddress).toBeUndefined();
     expect((sendMock.mock.calls[0]![0] as { body?: unknown }).body).toBeTruthy();
   });
 
@@ -1088,8 +1112,11 @@ describe("reschedule / cancel", () => {
         { bookingId: "b1", startsAt: NEW_ISO });
       const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
       errSpy.mockRestore();
-      // Caught and named by the staff leg itself, not left to escape.
-      expect(logs.some((l) => /staff alert setup failed/.test(l) && l.includes("b1"))).toBe(true);
+      // Consent PR-3: the provider now fails INSIDE the email gate, per
+      // recipient (each is its own sendEmailOrThrow call caught by the
+      // staff leg's own per-recipient try/catch), so the log is the staff
+      // leg's "alert failed" line, not a single setup-wide one.
+      expect(logs.some((l) => /staff alert failed for/.test(l) && l.includes("b1"))).toBe(true);
       expect(cancel.result).toEqual({ ok: true });
       // The contact HAS an email and it could not be sent: that is the flag.
       expect(move.result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
@@ -1155,6 +1182,29 @@ describe("reschedule / cancel", () => {
       release();
       await pending;
       expect(returned).toBe(true);
+    });
+
+    it("the three emails to the caller go as voice.booked, voice.moved and voice.cancelled — customer-initiated, from the live call — and the staff alert as operator.phone_change_alert (consent PR-3, E1; mutation: send the cancellation as automation.reminder → an unsubscribed caller who just cancelled gets no confirmation, FAILS)", async () => {
+      // Both slots: the fresh booking asks for Jun 1 14:00, the reschedule
+      // for NEW_ISO (Jun 2 14:00, this describe's default `newSlot`).
+      computeAllSlotsMock.mockResolvedValue([
+        { startsAt: new Date("2027-06-01T14:00:00Z"), endsAt: new Date("2027-06-01T15:00:00Z") },
+        newSlot,
+      ]);
+      dbMocks.createContact.mockResolvedValue({ id: "ctA", existing: false });
+      await runTool(emptyCallState(), ctx, "book_appointment",
+        { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+      await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+
+      const kinds = gated().map((r) => r.kind);
+      expect(kinds).toEqual(expect.arrayContaining(
+        ["voice.booked", "voice.moved", "voice.cancelled", "operator.phone_change_alert"]));
+      for (const r of gated().filter((x) => (x.kind as string).startsWith("voice."))) {
+        expect(r).toMatchObject({ accountId: expect.any(String), origin: expect.stringMatching(/^https?:\/\//) });
+      }
+      expect(gated().find((r) => r.kind === "voice.cancelled")).toHaveProperty("language");
     });
   });
 });

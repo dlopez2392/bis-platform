@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const db = vi.hoisted(() => ({ readConsentState: vi.fn(), readAccountTimezone: vi.fn(), getMailingAddress: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
@@ -314,5 +317,17 @@ describe("sendEmailOrThrow, emailSenderFor, operatorMailer", () => {
       expect(r.kind, kind).toBe("sent");
       expect(Boolean(sent().headers), kind).toBe(EMAIL_KINDS[kind].footer === "unsubscribe");
     }
+  });
+});
+
+describe("the two operator paths that take a provider are handed operatorMailer (G11)", () => {
+  const read = (p: string) => readFileSync(join(fileURLToPath(new URL("../../", import.meta.url)), p), "utf8");
+  it("the sending-address check sends as operator.sender_check (mutation: getEmailProvider() back → FAILS)", () => {
+    expect(read("app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts"))
+      .toMatch(/saveVerifiedFromAddress\(\s*operatorMailer\("operator\.sender_check", accountId\)/);
+  });
+  it("the billing link sends as operator.billing_link (mutation: getEmailProvider() back → FAILS)", () => {
+    expect(read("app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts"))
+      .toMatch(/email: operatorMailer\("operator\.billing_link", accountId\)/);
   });
 });

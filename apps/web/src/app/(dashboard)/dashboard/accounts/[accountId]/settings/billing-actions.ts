@@ -25,7 +25,7 @@ import { loggableError, sendBillingLink, type SendBillingLinkResult } from "@/li
 import { safeZone } from "@/lib/billing/billing-view";
 import { planChangeItems } from "@/lib/billing/change-plan";
 import { billingGatewayFromEnv, idempotencyKey, webhookSecretFromEnv } from "@/lib/billing/stripe-gateway";
-import { getEmailProvider } from "@/lib/email";
+import { operatorMailer } from "@/lib/consent/email-gate";
 import { configuredOrigin, originFrom } from "@/lib/email/origin";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { brandDisplayName } from "@/lib/email/templates/shell";
@@ -106,7 +106,7 @@ export async function sendBillingLinkAction(accountId: string, formData: FormDat
   if (!plan) return fail("billing.error.plan");
   const result = await sendBillingLink(
     {
-      db, gateway: gateway.gateway, email: getEmailProvider(), origin, now: new Date(),
+      db, gateway: gateway.gateway, email: operatorMailer("operator.billing_link", accountId), origin, now: new Date(),
       replyTo: agencySupportReplyTo(),
     },
     { accountId, plan, email, businessName: brandDisplayName(branding) || null, zone: safeZone(account.timezone) },
