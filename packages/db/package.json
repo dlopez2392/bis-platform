@@ -5,7 +5,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./search-term": "./src/search-term.ts",
-    "./phone": "./src/phone.ts"
+    "./phone": "./src/phone.ts",
+    "./email-address": "./src/email-address.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

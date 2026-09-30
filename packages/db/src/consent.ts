@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+export { emailLedgerAddress } from "./email-address";
 
 /**
  * The consent ledger (0054, consent chain spec §3): append-only, per
@@ -93,6 +94,50 @@ export async function readConsentState(
     .limit(NEWEST_ROWS);
   if (error) throw new Error(`readConsentState failed: ${error.message}`);
   return consentStateOf((data ?? []) as ConsentRow[]);
+}
+
+/** One PostgREST page. A chunk that fills it is refused, never judged on. */
+const BLOCKED_PAGE = 1000;
+/** Addresses per read, so a page of candidates stays a short request. */
+const BLOCKED_CHUNK = 100;
+
+/**
+ * Which of these addresses are NOT allowed (stopped, or held), each in its
+ * own account: the keys `${accountId}|${address}`. For the due-lists that
+ * must leave a stopped customer out of the WALK itself rather than skip it
+ * in a pass (the reactivation walk, the #118 I1 trap). THROWS on a read
+ * error, and on a chunk that fills a whole page: the caller's walk then
+ * fails, and nothing is sent on a guess (fails closed, spec §5).
+ */
+export async function readBlockedAddresses(
+  db: SupabaseClient, channel: ConsentChannel, pairs: readonly { accountId: string; address: string }[],
+): Promise<Set<string>> {
+  const blocked = new Set<string>();
+  if (pairs.length === 0) return blocked;
+  const accountIds = [...new Set(pairs.map((p) => p.accountId))];
+  const addresses = [...new Set(pairs.map((p) => p.address))];
+  const byKey = new Map<string, ConsentRow[]>();
+  for (let i = 0; i < addresses.length; i += BLOCKED_CHUNK) {
+    const { data, error } = await db.from("consent_events")
+      .select("id, account_id, address, action, method, occurred_at")
+      .in("account_id", accountIds).eq("channel", channel)
+      .in("address", addresses.slice(i, i + BLOCKED_CHUNK))
+      .in("action", [...DECIDING_ACTIONS])
+      .limit(BLOCKED_PAGE);
+    if (error) throw new Error(`readBlockedAddresses failed: ${error.message}`);
+    const rows = (data ?? []) as (ConsentRow & { account_id: string; address: string })[];
+    if (rows.length >= BLOCKED_PAGE) throw new Error(`readBlockedAddresses: a chunk returned ${BLOCKED_PAGE} rows, the whole page; refusing to judge on it`);
+    for (const r of rows) {
+      const key = `${r.account_id}|${r.address}`;
+      const list = byKey.get(key);
+      if (list) list.push(r); else byKey.set(key, [r]);
+    }
+  }
+  for (const p of pairs) {
+    const key = `${p.accountId}|${p.address}`;
+    if (consentStateOf(byKey.get(key) ?? []).state !== "allowed") blocked.add(key);
+  }
+  return blocked;
 }
 
 /** A deciding row with what the Texts row and the staff actions show and check. */

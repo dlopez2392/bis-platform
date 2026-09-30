@@ -18,10 +18,10 @@ export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
-export { setMarketingEmailOptOut, readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
+export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
 export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
          appendConsentEventGuarded, newestDecidingRow, readConsentHistory, readConsentEvent,
-         readConsentActions, consentWriteArgs, consentAppendSql,
+         readConsentActions, consentWriteArgs, consentAppendSql, emailLedgerAddress, readBlockedAddresses,
          CONSENT_METHODS, DECIDING_ACTIONS, CUSTOMER_STOP_METHODS,
          type ConsentChannel, type ConsentAction, type ConsentMethod, type ConsentRow,
          type ConsentState, type ConsentEventInput, type ConsentGuard, type ConsentAppend,
