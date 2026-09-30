@@ -166,7 +166,7 @@ function withFooter(req: EmailRequest, links: Links | null, postal: readonly str
   return {
     ...sendFields(req),
     body: `${req.body}\n\n${lines.join("\n\n")}`,
-    ...(req.html ? { html: req.html.replace(UNSUBSCRIBE_MARKER, row) } : {}),
+    ...(req.html ? { html: req.html.replace(UNSUBSCRIBE_MARKER, () => row) } : {}),
     ...(links ? { headers: { "List-Unsubscribe": `<${links.oneClick}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } } : {}),
   };
 }

@@ -70,7 +70,7 @@ describe("sendEmail: what an unsubscribe stops (decision 7)", () => {
     "staff.composer_email", "operator.booking_alert"] as const)(
     "%s is NOT subject to the ledger: it never reads it and sends to a stopped address (decision 7, choices 22 and 23; mutation: read the ledger for every kind → FAILS)", async (kind) => {
       db.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-10-01T00:00:00Z", method: "one_click", eventId: "e1" });
-      expect((await sendEmail(base({ kind }), { env: ENV })).kind).toBe("sent");
+      expect((await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).kind).toBe("sent");
       expect(db.readConsentState).not.toHaveBeenCalled();
     });
 
@@ -193,6 +193,13 @@ describe("sendEmail: the postal address on the three follow-ups whose templates 
       expect(sent().html!.indexOf("120 S Main St")).toBeGreaterThan(sent().html!.indexOf("Unsubscribe</a>"));
       expect(sent().body).toMatch(/Unsubscribe: https:\/\/app\.example\.com\/u\/\S+\n\n120 S Main St\nMcAllen, TX 78501$/);
     });
+
+  it("a stored address carrying `$` patterns is printed literally, never read as a replace() pattern (mutation: replace the marker with the row string instead of a function → FAILS)", async () => {
+    db.getMailingAddress.mockResolvedValue("Unit $$ 5, $& $` 9\nMcAllen, TX 78501");
+    expect((await sendEmail(base({ kind: "automation.review_request" }), { db: CLIENT, env: ENV })).kind).toBe("sent");
+    expect(sent().html).toContain("Unit $$ 5, $&amp; $` 9<br>McAllen, TX 78501");
+    expect(sent().html).not.toContain("Unit $ 5");
+  });
 
   it("a blank or unset address never blocks them: sent, with no address lines (P1: unlike the check-in and the referral ask; mutation: block when blank → FAILS)", async () => {
     for (const blank of [null, "  \n "]) {
