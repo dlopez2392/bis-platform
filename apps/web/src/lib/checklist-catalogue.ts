@@ -21,6 +21,28 @@ export const CHECKLIST_CATALOGUE: CatalogueItem[] = [
   { key: "a2p_registration", title: m["checklist.a2p_registration.title"],
     help: m["checklist.a2p_registration.help"], external: true,
     href: "https://portal.telnyx.com/#/messaging-10dlc/brands" },
+  // The three steps setting up BIS's own texting found nothing here tracked
+  // (2026-09-29): a messaging profile per business, assigning the number to
+  // the campaign once approved, and a live phone check of STOP/START/HELP.
+  // All three are STORED ticks, not derived: mergeChecklist derives
+  // a2p_registration from `accounts.a2p_status` because that column IS the
+  // carriers' verdict, but nothing here reads Telnyx's own profile
+  // configuration — a recorded messaging-profile ID does not prove its
+  // keywords/replies are actually set up, so deriving "done" for any of
+  // these three would be a control that lies the same way a premature a2p
+  // derive would (see mergeChecklist's own comment on that one).
+  { key: "messaging_profile", title: m["checklist.messaging_profile.title"],
+    help: m["checklist.messaging_profile.help"], external: true,
+    href: "https://portal.telnyx.com/#/programmable-messaging/profiles" },
+  { key: "campaign_numbers", title: m["checklist.campaign_numbers.title"],
+    help: m["checklist.campaign_numbers.help"], external: true,
+    href: "https://portal.telnyx.com/#/messaging-10dlc/campaigns" },
+  // Not external in the "Done outside BIS" sense the badge means for the
+  // brand/profile/campaign steps above — this is done with a phone, not in
+  // Telnyx's portal — but it is still work the platform cannot verify for
+  // itself, hence no href: there is no single screen to send the operator to.
+  { key: "sms_live_check", title: m["checklist.sms_live_check.title"],
+    help: m["checklist.sms_live_check.help"], external: false },
   { key: "email_domain", title: m["checklist.email_domain.title"],
     help: m["checklist.email_domain.help"], external: true, href: "https://resend.com/domains" },
   { key: "form_notify", title: m["checklist.form_notify.title"],

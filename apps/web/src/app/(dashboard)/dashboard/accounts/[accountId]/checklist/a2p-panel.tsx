@@ -100,7 +100,11 @@ export function A2pPanel({
   });
 
   return (
-    <Card>
+    // id targeted by the checklist's own a2p_registration row
+    // (checklist-panel.tsx: "Go to the A2P card", href="#a2p-registration") —
+    // this card sits below the whole checklist and was hard to find by
+    // scrolling alone.
+    <Card id="a2p-registration">
       <CardHeader>
         <CardTitle>{m["a2p.title"]}</CardTitle>
         <CardDescription>{m["a2p.body"]}</CardDescription>

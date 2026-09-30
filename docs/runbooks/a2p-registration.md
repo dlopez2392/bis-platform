@@ -50,6 +50,21 @@ approved.
 
 ---
 
+## Platform prerequisite (once, not per business)
+
+Inbound texts are refused with a 401 (invalid signature) unless
+`TELNYX_PUBLIC_KEY` is set in Vercel production — the webhook every
+messaging profile is configured to call (`/api/sms/inbound`, see "The
+messaging profile" step below) verifies Telnyx's signature and has nowhere
+to check it against without this key. Setting it
+also hardens the voice routes, since the same env var gates both; follow
+`docs/runbooks/voice-setup.md`'s "TELNYX_PUBLIC_KEY — hardened activation
+procedure" section, in its order (TeXML app's Voice Method flipped to POST
+**first**, then the key set in Vercel — reversing that order breaks every
+live call). **Completed for production on 2026-09-29.**
+
+---
+
 ## Step 1 — Collect from the client
 
 Nothing starts until all of it is in hand. Send this list verbatim.
@@ -220,6 +235,64 @@ Telnyx's OWN block and branded reply to fire on them — the platform's own
 matcher reads them regardless of registration, same as it reads STOP. The
 disclosure still names STOP because it is the one word every carrier and
 Telnyx recognise with no registration at all.
+
+---
+
+## The messaging profile (per business)
+
+Learned setting up BIS's own texting (2026-09-29): nothing in this app
+tracked this step, and without it the number cannot text at all.
+
+**Every business needs its OWN messaging profile — never share one across
+companies.** A STOP blocks every number on a profile, and a profile has only
+one set of reply texts. Sharing a profile means one company's opt-out or
+rename reaches into another's.
+
+Telnyx portal → **Messaging → Programmable Messaging → Profiles → Create
+profile** (<https://portal.telnyx.com/#/programmable-messaging/profiles>):
+
+1. **Inbound tab** — webhook URL: `https://app.bis-rgv.com/api/sms/inbound`,
+   API version **v2**.
+2. **Outbound tab** — leave everything off, including Smart Encoding.
+3. **Senders** — add ONLY this business's number. No other business's
+   number ever goes on this profile.
+4. **Settings** — turn AI/opt-out detection **off**; the platform's own
+   consent ledger (`/api/sms/inbound`) already reads every inbound text for
+   STOP/START/HELP and the Spanish equivalents, so Telnyx's own detection
+   would be a second, uncoordinated opinion on the same message.
+5. **Keywords tab, Global section** — set the opt-out (STOP), opt-in
+   (START) and HELP keywords, each with its reply text signed with the
+   business's name **exactly as set on its account** (its brand name). Take
+   the exact wording from `telnyxReplyText` in
+   `apps/web/src/lib/consent/replies.ts` rather than retyping it — it is one
+   English line naming the business plus a Spanish line, e.g. for a business
+   named "Example Co", `telnyxReplyText("stop", "Example Co")` renders:
+   > Example Co: You won't get any more texts from us. Reply START to get
+   > them again. Ya no le enviaremos mensajes. Responda START para volver a
+   > recibirlos.
+
+   Renaming the business later means redoing these replies — the reply text
+   is not derived from the account, it is typed once into Telnyx.
+
+Once created, paste the profile's ID into the **Messaging profile ID** field
+on this account's **A2P registration** card
+(`/dashboard/accounts/<accountId>/checklist#a2p-registration`) — the app
+refuses to text without it (`resolveSmsSender`).
+
+### After approval: assign the number to the campaign
+
+This is Step 5 below, and it is easy to forget once the carriers approve the
+campaign: without it, carriers quietly filter the texts even though
+everything reads approved.
+
+### Before telling the client texting is live
+
+From a real phone that is **not** this account's alert phone: text STOP,
+then START, then HELP to the business's number. Confirm each reply arrives
+and that the contact's Texts row changes (Stopped → Texting on) between the
+STOP and the START. This is `sms_live_check` on the checklist — a stored
+tick, not something the app can verify for itself, because a recorded
+profile ID does not prove the keywords/replies above are actually configured.
 
 ---
 

@@ -32,13 +32,14 @@ const INTERNAL_MILESTONE = /\bM\d[a-z]?\b/;
  * to be consciously named here to be exempt. Each of these renders only behind
  * an agency-only guard, where a roadmap label is a note to ourselves.
  */
+// checklist.phone_number.help and checklist.gbp_connect.help WERE exempted
+// here (both agency-only strings) until 2026-09-29, when both were rewritten
+// to drop their milestone codes (checklist-catalogue.test.ts now runs a
+// stricter, unconditional guard over every catalogue string, agency-only or
+// not) — removed rather than left behind to wave through a future regression.
 const AGENCY_ONLY = new Set([
   // Settings — requireAgencyOnlyAccountAccess (settings/page.tsx).
   "settings.customValuesBody",
-  // Activation checklist — agency-only page, and an isAgency branch on the
-  // account dashboard that decides whether the panel renders at all.
-  "checklist.phone_number.help",
-  "checklist.gbp_connect.help",
 ]);
 
 describe("messages", () => {
