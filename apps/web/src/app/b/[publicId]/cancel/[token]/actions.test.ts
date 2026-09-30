@@ -17,6 +17,15 @@ vi.mock("@/lib/email", () => ({
   getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }),
 }));
 
+// consent PR-3: spies on the REAL gate, so the kind each site names is
+// asserted and the send still goes through the gate's own rules.
+vi.mock("@/lib/consent/email-gate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/consent/email-gate")>();
+  return { ...real, sendEmailOrThrow: vi.fn(real.sendEmailOrThrow) };
+});
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
+const gated = () => vi.mocked(sendEmailOrThrow).mock.calls.map((c) => c[0]);
+
 const ACCOUNT_ID = "acct_1";
 
 /**
@@ -166,6 +175,7 @@ beforeEach(() => {
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
   incrementUnreadCountMock.mockReset();
   sendMock.mockReset().mockResolvedValue(undefined);
+  vi.mocked(sendEmailOrThrow).mockClear();
   bookingsUpdateMock.mockReset();
   bookingLookupResultRef.current = { data: null, error: null };
   accountErrorRef.current = null;
@@ -261,6 +271,14 @@ describe("confirmCancelAction — happy path", () => {
     await confirmCancelAction(PUBLIC_ID, TOKEN);
 
     expect(sendMock.mock.calls[0]![0].body).toContain("Reschedule me later");
+  });
+
+  it("the cancel notice to staff goes as operator.cancel_notice for the booking's account (consent PR-3; mutation: another kind → FAILS)", async () => {
+    await confirmCancelAction(PUBLIC_ID, TOKEN);
+
+    expect(gated().map((r) => [r.kind, r.accountId])).toEqual(
+      expect.arrayContaining([["operator.cancel_notice", ACCOUNT_ID]]));
+    expect(gated().every((r) => r.kind === "operator.cancel_notice")).toBe(true);
   });
 });
 

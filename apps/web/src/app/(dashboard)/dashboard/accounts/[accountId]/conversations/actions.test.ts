@@ -18,6 +18,15 @@ vi.mock("@/lib/email", () => ({
   getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }),
 }));
 
+// consent PR-3: spies on the REAL gate, so the kind each site names is
+// asserted and the send still goes through the gate's own rules.
+vi.mock("@/lib/consent/email-gate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/consent/email-gate")>();
+  return { ...real, sendEmailOrThrow: vi.fn(real.sendEmailOrThrow) };
+});
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
+const gated = () => vi.mocked(sendEmailOrThrow).mock.calls.map((c) => c[0]);
+
 /**
  * THE gate for SMS, mocked at its own module boundary rather than
  * reconstructed from its two underlying queries (a2p_registrations +
@@ -176,6 +185,7 @@ beforeEach(() => {
   svc.provider.isFake = false;
   svc.provider.redirectTo = undefined;
   recordUsageMock.mockReset().mockResolvedValue("recorded");
+  vi.mocked(sendEmailOrThrow).mockClear();
 });
 
 /**
@@ -274,6 +284,21 @@ describe("sendEmailAction — the customer sees the brand, never the internal la
     }));
 
     expect(sendMock.mock.calls[0]![0].fromName).toBe("");
+  });
+
+  it("a staff-typed email goes as staff.composer_email for this account and contact, and — (decision Q4) — reaches the provider with no unsubscribe footer and no headers, even with the secret set (choice 22; mutation: send it as a customer-initiated kind → headers appear, FAILS)", async () => {
+    vi.stubEnv("CONSENT_TOKEN_SECRET", "composer-test-secret-0123456789abcdef");
+    vi.stubEnv("APP_ORIGIN", "https://app.example.com");
+
+    await sendEmailAction("acct_1", fd({
+      contactId: "contact_1", subject: "Hi", body: "Quote attached",
+    }));
+
+    expect(gated()).toEqual([expect.objectContaining({ kind: "staff.composer_email", accountId: "acct_1", contactId: "contact_1" })]);
+    const provided = sendMock.mock.calls[0]![0] as { headers?: unknown; body: string };
+    expect(provided.headers).toBeUndefined();
+    expect(provided.body).not.toMatch(/Unsubscribe/);
+    vi.unstubAllEnvs();
   });
 });
 
