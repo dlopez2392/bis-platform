@@ -15,6 +15,8 @@ import { e164Of } from "@/lib/voice/phone-number";
 import { smsRecipientState } from "@/lib/consent/recipient-state";
 import { readTextsView } from "@/lib/consent/texts-view";
 import type { TextsLoad } from "@/lib/consent/texts-row";
+import { readEmailView } from "@/lib/consent/email-view";
+import type { EmailLoad } from "@/lib/consent/email-row";
 import { loggableError } from "@/lib/loggable-error";
 import { composerStateLine } from "@/lib/consent/composer-state";
 import { renderZone } from "@/lib/zone";
@@ -64,6 +66,17 @@ export default async function ContactDetailPage({
     texts = { status: "error" };
   }
 
+  // The Email row (consent chain PR-3, spec §6), read under this request's
+  // RLS client. An unreadable ledger is the row's error state, never a
+  // thrown page.
+  let email: EmailLoad;
+  try {
+    email = { status: "ready", view: await readEmailView(db, accountId, contact), zone: zone.zone };
+  } catch (e) {
+    console.error(`contact page: Email row unreadable for contact ${contactId}: ${loggableError(e)}`);
+    email = { status: "error" };
+  }
+
   // Review R3-N1 (G21): a To-do whose number is still on hold is closed by
   // deciding the hold, never by "Done", so the timeline shows a hint in its
   // place. A failed read fails CLOSED: every open linked To-do gets the hint
@@ -87,7 +100,7 @@ export default async function ContactDetailPage({
           contact={contact}
           tags={tags}
           fieldDefs={fieldDefs}
-          zone={{ zone: zone.zone, guessed: zone.guessed, label: zone.label }}
+          email={email}
           texts={texts}
         />
         <ActivityTimeline

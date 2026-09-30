@@ -436,28 +436,6 @@ export const m = {
   "contact.noOpportunities": "None yet.",
   "contact.noName": "(no name)",
 
-  // The "No marketing emails" switch (drawer + full contact page, migration
-  // 0049). Flipped by the operator when a customer replies "stop" to a
-  // check-in or a referral ask; those two are the only emails it holds back.
-  "contact.marketingOptOut.label": "No marketing emails",
-  "contact.marketingOptOut.hint": "Check-ins and referral asks won't be emailed to this contact. Quotes and appointment emails still go.",
-  "contact.marketingOptOut.onToast": "Marketing emails turned off for this contact",
-  "contact.marketingOptOut.offToast": "Marketing emails turned back on for this contact",
-  "contact.marketingOptOut.failed": "Couldn't save that — please try again.",
-  // Under the ticked switch: the day the stop was recorded, in the account's
-  // zone — the operator's answer to "when did they ask?".
-  "contact.marketingOptOut.since": "Off since {date}",
-  // The same line when the account's own timezone could not be used and the
-  // date is printed in a stand-in zone (`renderZone`'s `guessed`) — so a
-  // date that may be a day off says which zone it is in. Not a full zone
-  // note: that is one per screen, and this is one line under a checkbox.
-  "contact.marketingOptOut.sinceGuessed": "Off since {date} ({zone})",
-  // Undo clicked while the last tick is still saving: the toast (and its
-  // Undo) is gone once clicked, so the operator is told what to do instead.
-  // "{label}" is `contact.marketingOptOut.label` above, .replace()d by
-  // `flipMarketingOptOut`, so the box is always named by what it says.
-  "contact.marketingOptOut.undoBusy": "Your last change is still saving. Use the “{label}” box to change it back.",
-
   // The contact's "Messages" block (consent chain spec §6). PR-1 ships only
   // the Texts row's Check number state (F-009); the rest lands in PR-2/PR-3.
   // "line", "mx" and "us" are the spec's words, verbatim.

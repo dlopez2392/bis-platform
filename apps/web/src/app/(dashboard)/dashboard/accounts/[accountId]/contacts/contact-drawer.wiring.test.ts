@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
  *
  * No DOM renderer in apps/web, so the effect is captured rather than run by
  * React (the server renderer never runs effects), and `useState` records its
- * setters (the marketing-optout-switch.wiring.test.ts idiom). The Sheet is
+ * setters (the retired 0049 switch's own wiring test used this idiom). The Sheet is
  * stubbed out: the fetch effect lives in ContactDrawer itself, and nothing
  * under the Sheet is what this pins.
  */
@@ -37,7 +37,8 @@ vi.mock("@/components/ui/sheet", () => {
   const none = () => null;
   return { Sheet: none, SheetContent: none, SheetDescription: none, SheetHeader: none, SheetTitle: none };
 });
-vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn(), setMarketingEmailOptOutAction: vi.fn() }));
+vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn() }));
+vi.mock("./email-actions", () => ({ stopEmailsAction: vi.fn(), undoStopEmailsAction: vi.fn(), resumeEmailsAction: vi.fn() }));
 vi.mock("./[contactId]/actions", () => ({ addTagAction: vi.fn(), removeTagAction: vi.fn() }));
 
 const { ContactDrawer } = await import("./contact-drawer");
@@ -50,7 +51,6 @@ const ROW: ContactRow = {
 const GOOD = {
   tags: [{ id: "t1", name: "vip" }],
   recent: [{ kind: "note", label: "Note", at: "2026-09-01T10:00:00+00:00" }],
-  marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00",
   phone_country_unconfirmed: false,
   phone: "+15512345678",
   zone: { zone: "UTC", guessed: false, label: "UTC" },
@@ -73,10 +73,11 @@ async function load(body: unknown, ok = true): Promise<unknown> {
   // starts at 0) — found by starting value, not hook order.
   const fetched = states.filter((s) => s.initial === null);
   expect(fetched).toHaveLength(1);
-  // Two effects since consent chain PR-2: the summary fetch (declared first,
-  // effects[0], the one this helper drives) and the Texts row's own fetch
-  // (effects[1], driven by its own describe block below).
-  expect(effects).toHaveLength(2);
+  // Three effects since consent chain PR-3: the summary fetch (declared
+  // first, effects[0], the one this helper drives), the Texts row's own
+  // fetch (effects[1], driven by its own describe block below) and the Email
+  // row's own fetch (effects[2], consent PR-3).
+  expect(effects).toHaveLength(3);
   effects[0]!();
   await vi.waitFor(() => expect(fetched[0]!.set).toHaveBeenCalled());
   expect(fetched[0]!.set).toHaveBeenCalledTimes(1);
@@ -91,10 +92,6 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe("ContactDrawer: the summary body is parsed, not cast", () => {
   it("a body without tags stores the error state, not a summary that would throw in render", async () => {
     expect(await load(omit("tags"))).toEqual({ contactId: "c1", result: { status: "error" } });
-  });
-
-  it("a body without the opt-out stamp stores the error state, not an unticked box", async () => {
-    expect(await load(omit("marketing_email_opted_out_at"))).toEqual({ contactId: "c1", result: { status: "error" } });
   });
 
   it("a good body stores the PARSED summary, extra keys dropped, with the clock read in the callback", async () => {
@@ -141,8 +138,8 @@ describe("ContactDrawer: a fetch cleaned up while its body is still being read n
     renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
     const fetched = states.filter((s) => s.initial === null);
     expect(fetched).toHaveLength(1);
-    // Two effects since consent chain PR-2 (see `load()`'s own comment above).
-    expect(effects).toHaveLength(2);
+    // Three effects since consent chain PR-3 (see `load()`'s own comment above).
+    expect(effects).toHaveLength(3);
     const cleanup = effects[0]!();
     expect(typeof cleanup).toBe("function");
     await vi.waitFor(() => expect(json).toHaveBeenCalledTimes(1));
@@ -200,7 +197,7 @@ describe("ContactDrawer: the Texts row's own fetch effect (effects[1])", () => {
     renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
     const texts = states.filter((s) => JSON.stringify(s.initial) === LOADING_SHAPE);
     expect(texts).toHaveLength(1);
-    expect(effects).toHaveLength(2);
+    expect(effects).toHaveLength(3);
     effects[1]!();
     await vi.waitFor(() => expect(texts[0]!.set).toHaveBeenCalled());
     expect(texts[0]!.set).toHaveBeenCalledTimes(1);
@@ -272,6 +269,13 @@ describe("the Texts row follows the contact (consent chain PR-2)", () => {
   it("the full page hands the row the page's own Texts load and refreshes on change (mutation: pass a constant load → FAILS)", () => {
     expect(panel).toMatch(/<TextsRow[\s\S]{0,300}?load=\{texts\}/);
     expect(panel).toMatch(/onChanged=\{\(\) => router\.refresh\(\)\}/);
+  });
+
+  it("the drawer reads the Email row on its own and renders it under the Texts row, and no longer renders the 0049 switch (consent PR-3; mutation: keep MarketingOptOutSwitch → FAILS)", () => {
+    const src = readFileSync(fileURLToPath(new URL("./contact-drawer.tsx", import.meta.url)), "utf8");
+    expect(src).toMatch(/fetch\(`\/api\/accounts\/\$\{accountId\}\/contacts\/\$\{contactId\}\/email`\)/);
+    expect(src.indexOf("<EmailRow")).toBeGreaterThan(src.indexOf("<TextsRow"));
+    expect(src).not.toMatch(/MarketingOptOutSwitch|marketing_email_opted_out_at/);
   });
 });
 

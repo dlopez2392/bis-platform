@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { runGuarded } from "./guarded-run";
 
-/** One write at a time for a guarded control (moved from marketing-optout.ts, review R3-M7: PR-3 retires that module). */
+/** One write at a time for a guarded control (moved from the retired 0049 switch's module, review R3-M7). */
 describe("runGuarded", () => {
   function starter() {
     const started: Array<Promise<void>> = [];

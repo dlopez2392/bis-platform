@@ -30,6 +30,7 @@ import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confi
 import { DotPill } from "@/components/dot-pill";
 import { PHONE_CHECK_TREATMENT } from "@/lib/contacts/phone-country";
 import { TEXTS_TREATMENT } from "@/lib/consent/texts-row";
+import { EMAIL_TREATMENT } from "@/lib/consent/email-row";
 import { BillingBanner } from "@/components/billing-banner";
 import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
 import { PAYMENT_PROCESSING } from "../accounts/[accountId]/billing/client-status";
@@ -186,6 +187,14 @@ export default async function StyleguidePage() {
             <DotPill {...TEXTS_TREATMENT.stopped} dense data-status="stopped" />
             <DotPill {...TEXTS_TREATMENT.held} dense data-status="held" />
             <DotPill {...PHONE_CHECK_TREATMENT} dense data-status="unconfirmed_number" />
+          </div>
+          <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            …/contacts/email-row.tsx · lib/consent/email-row.ts
+          </p>
+          <div className="flex flex-wrap items-center gap-2" data-testid="styleguide-email-state">
+            <span className="text-sm">{m["contact.messages.email"]}</span>
+            <DotPill {...EMAIL_TREATMENT.allowed} dense data-status="allowed" />
+            <DotPill {...EMAIL_TREATMENT.stopped} dense data-status="stopped" />
           </div>
         </section>
 

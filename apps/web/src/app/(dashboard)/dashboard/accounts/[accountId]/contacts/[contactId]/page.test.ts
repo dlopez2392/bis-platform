@@ -3,14 +3,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 /**
  * The full contact page's zone read (#123 m4b) — the one read this page makes
- * of its own, `accounts.timezone`, for the "No marketing emails" switch's
- * "Off since" date. Same shape as calls/[callId]/page.test.ts: the data reads
- * this async server component reaches are mocked, and what is under test is
- * what the page hands down.
+ * of its own, `accounts.timezone`, for the Email row's since-date (consent
+ * PR-3; the 0049 switch it served is gone). Same shape as
+ * calls/[callId]/page.test.ts: the data reads this async server component
+ * reaches are mocked, and what is under test is what the page hands down.
  *
  * `renderZone` is NOT mocked to a constant here (calls/[callId] does that,
  * because it tests the note, not the read): it ECHOES the zone it was handed,
- * so the only way the switch sees "America/Chicago" is if the account's row
+ * so the only way the row sees "America/Chicago" is if the account's row
  * reached `renderZone`.
  */
 
@@ -45,6 +45,7 @@ vi.mock("@bis/db", () => ({
   listContactOpportunities: async () => [],
   listContactSubmissions: async () => [],
   listContactMessages: async () => [],
+  readConsentHistory: async () => [],
 }));
 
 /** Echoes, in `resolveZone`'s own shape: a zone in is the account's own, no
@@ -64,7 +65,7 @@ vi.mock("./actions", () => ({
   addNoteAction: async () => {}, addTaskAction: async () => {}, completeTaskAction: async () => {},
 }));
 vi.mock("../actions", () => ({
-  updateContactFieldAction: async () => ({ ok: true }), setMarketingEmailOptOutAction: async () => ({ ok: true }),
+  updateContactFieldAction: async () => ({ ok: true }),
 }));
 // The timeline pulls in the message composer; only its props are pinned.
 const timelineProps = vi.fn();
@@ -84,12 +85,15 @@ vi.mock("../texts-row", () => ({
 const readTextsView = vi.fn();
 vi.mock("@/lib/consent/texts-view", () => ({ readTextsView: (...a: unknown[]) => readTextsView(...a) }));
 
-/** The switch's props, as the REAL panel hands them down — so this proves the
- *  zone reaches the switch, not merely the panel. */
-const switchProps = vi.fn();
-vi.mock("../marketing-optout-switch", () => ({
-  MarketingOptOutSwitch: (props: Record<string, unknown>) => { switchProps(props); return null; },
+/** The Email row's props, as the REAL panel hands them down — so this proves
+ *  the read reaches the row, not merely the panel (consent PR-3). */
+const emailRowProps = vi.fn();
+vi.mock("../email-row", () => ({
+  EmailRow: (props: Record<string, unknown>) => { emailRowProps(props); return null; },
 }));
+// The Email row's read, stubbed per test.
+const readEmailView = vi.fn();
+vi.mock("@/lib/consent/email-view", () => ({ readEmailView: (...a: unknown[]) => readEmailView(...a) }));
 
 const NOT_FOUND = new Error("NEXT_NOT_FOUND");
 vi.mock("next/navigation", () => ({
@@ -105,7 +109,7 @@ const { formatDateInZone } = await import("@/lib/format");
 
 const CONTACT = {
   id: "ct1", first_name: "Ana", last_name: "Reyes", email: "ana@example.com", phone: null,
-  company_name: null, custom: {}, marketing_email_opted_out_at: "2026-09-04T02:30:00.000Z",
+  company_name: null, custom: {},
 };
 
 async function render() {
@@ -113,48 +117,59 @@ async function render() {
   return renderToStaticMarkup(el);
 }
 
-describe("ContactDetailPage: the zone the opt-out's date is printed in", () => {
+describe("ContactDetailPage: the Email row's read, in the account's zone (consent PR-3)", () => {
   beforeEach(() => {
     getContactMock.mockReset();
     getContactMock.mockResolvedValue(CONTACT);
-    switchProps.mockClear();
+    emailRowProps.mockClear();
     renderZone.mockClear();
     accountsEq.mockClear();
     recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
   });
 
-  it("the account's own timezone reaches the switch (mutation: renderZone(undefined) -> FAILS)", async () => {
+  it("the page reads the Email row for this contact and hands it ready, in the ACCOUNT's zone (mutation: renderZone(undefined) → zone UTC, FAILS; mutation: pass no email → FAILS)", async () => {
     await render();
     expect(accountsEq).toHaveBeenCalledWith("id", "acct1");
-    expect(renderZone).toHaveBeenCalledWith("America/Chicago");
-    expect(switchProps).toHaveBeenCalledTimes(1);
-    expect(switchProps.mock.calls[0]![0]).toMatchObject({
+    expect(readEmailView).toHaveBeenCalledWith(expect.anything(), "acct1", CONTACT);
+    expect(emailRowProps).toHaveBeenCalledTimes(1);
+    expect(emailRowProps.mock.calls[0]![0]).toMatchObject({
       contactId: "ct1",
-      optedOutAt: CONTACT.marketing_email_opted_out_at,
-      zone: { zone: "America/Chicago", guessed: false, label: "America/Chicago" },
+      load: { status: "ready", view: { kind: "allowed", newestId: null }, zone: "America/Chicago" },
     });
   });
 
-  it("a failed account read falls back (a GUESSED zone) and is logged, never thrown", async () => {
+  it("a failed account read falls back to the GUESSED zone, logged, never thrown", async () => {
     accountRead.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await render();
       expect(renderZone).toHaveBeenCalledWith(undefined);
-      expect(switchProps.mock.calls[0]![0]).toMatchObject({
-        zone: { zone: "UTC", guessed: true, label: "UTC" },
-      });
+      expect(emailRowProps.mock.calls[0]![0]).toMatchObject({ load: { status: "ready", zone: "UTC" } });
       expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("boom");
     } finally {
       errors.mockRestore();
     }
   });
 
-  it("404s for a contact this account does not have, before any zone read", async () => {
+  it("an unreadable ledger is the row's error state, never a crashed page (spec §6; mutation: let readEmailView's throw escape → the render rejects, FAILS)", async () => {
+    readEmailView.mockRejectedValue(new Error("down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await render();
+      expect(emailRowProps.mock.calls[0]![0]).toMatchObject({ load: { status: "error" } });
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("404s for a contact this account does not have, before any read", async () => {
     getContactMock.mockResolvedValue(null);
     await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
     expect(renderZone).not.toHaveBeenCalled();
-    expect(switchProps).not.toHaveBeenCalled();
+    expect(readEmailView).not.toHaveBeenCalled();
+    expect(emailRowProps).not.toHaveBeenCalled();
   });
 });
 
@@ -169,6 +184,7 @@ describe("ContactDetailPage: the recipient's texts state", () => {
     timelineProps.mockClear();
     textsRowProps.mockClear();
     readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
     listContactTasksMock.mockReset().mockResolvedValue([]);
     holdOpenTaskIdsMock.mockReset().mockResolvedValue([]);
   });

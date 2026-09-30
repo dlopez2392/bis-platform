@@ -2,6 +2,11 @@ import { cache } from "react";
 import { unstable_rethrow } from "next/navigation";
 import { isUsableZone, resolveZone, serviceDb, type ResolvedZone } from "@bis/db";
 
+/** The slice of `renderZone`'s answer a date line needs: the zone to print
+ *  in, whether it was guessed, and the name a zone note would print. Was
+ *  `OptOutZone` (lib/contacts/marketing-optout.ts, retired by consent PR-3). */
+export type ZoneLabel = Pick<ResolvedZone, "zone" | "guessed" | "label">;
+
 /**
  * The zone a screen renders in, resolved the SAME way for every screen and
  * for both audiences.

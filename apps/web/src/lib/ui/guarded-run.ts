@@ -1,8 +1,8 @@
 /**
  * One write at a time for a control that runs at once and offers Undo
- * (DESIGN.md rule 6). Moved here from lib/contacts/marketing-optout.ts
- * (review R3-M7): the Texts row, the Check number state and the marketing
- * switch share it, and PR-3 retires the marketing module.
+ * (DESIGN.md rule 6). Moved here from the retired 0049 switch's module
+ * (review R3-M7): the Texts row, the Check number state and the Email row
+ * share it.
  *
  * `busy` is a ref, not the transition's `pending`: an Undo closure is built
  * during an EARLIER write, so a `pending` captured then is stale by the time
