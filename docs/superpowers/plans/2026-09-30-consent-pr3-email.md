@@ -8,19 +8,19 @@
 
 **Tech Stack:** Next.js 16 (App Router, server actions, route handlers), Node `crypto` (HKDF, AES-256-GCM, HMAC-SHA256), Supabase Postgres 17 (the local replica is PG18), `resend@6.18.1`, vitest 4, Playwright, Tailwind 4 with the repo's tokens.
 
-**Spec:** `docs/superpowers/specs/2026-09-26-consent-chain-design.md` at `001a25f9`, corrected by this branch's spec commit `2de603ed` (E1–E5 below: facts only). §1.1 decisions 1–9 are binding; §1.2 defaults stand; §1.3 choices 18–31 are approved (PR-2 plan, header). This plan covers §4.3 in full, §3's PR-3 line (`marketing_email_opted_out_at` stops being read and written), the PR-3 parts of §5 and §6 (the Email row, the composer's email notice, `/u/[token]`, the footer), §8's PR-3 tests (the token, scan 1 for email, scan 4, scan 5's column, the e2e's two email lines) and the PR-3 row of §7.
+**Spec:** `docs/superpowers/specs/2026-09-26-consent-chain-design.md` at `001a25f9`, corrected by this branch's spec commits `2de603ed` (E1–E5 below: facts only) and `1f738369` (danlo's DECISIONS below, Q1–Q7, P1, P2: decision 6 amended, choices 22, 24 and 27, §4.3, §5, §6, §8, §10). §1.1 decisions 1–9 are binding (decision 6 as amended); §1.2 defaults stand; §1.3 choices 18–31 are approved (PR-2 plan, header). This plan covers §4.3 in full, §3's PR-3 line (`marketing_email_opted_out_at` stops being read and written), the PR-3 parts of §5 and §6 (the Email row, the composer's email notice, `/u/[token]`, the footer), §8's PR-3 tests (the token, scan 1 for email, scan 4, scan 5's column, the e2e's two email lines) and the PR-3 row of §7.
 
 **Replay status: NOT REPLAYED.** This machine had between 0.1 and 0.2 GB of free memory while this plan was written (the floor for one targeted test file is 1.5 GB), so no step below was run. Every "Expected" output is the plan writer's prediction; every probe row is a prescription, not a measurement. The implementer runs each RED, each GREEN and each probe, and reports any that behave otherwise (verify before you apply; reject with evidence if wrong).
 
 ## Global Constraints
 
 - Tier: **HIGH (legal: CAN-SPAM, RFC 8058, the append-only ledger)**. Every new assertion names, in its title, the mutation that turns it red. Every task ends with a probe table; the implementer applies each probe to the finished task, one at a time, and records which tests turned red (memory `bis-vacuous-test-shapes`: a mutation must compile and must produce the WRONG OUTPUT, never a crash a catch launders; judge by the whole file, never one `-t` filter; a harness must tell "stayed green" from "nothing ran"). A guard kept "as defence in depth" gets a pure unit test of its own. Source scans read code with comments stripped (TypeScript's printer, `scans.test.ts`'s `code()`) and each carries a positive control.
-- **Decision 6, verbatim:** "The opt-out is an unsubscribe link in every automated email, plus the RFC 8058 one-click `List-Unsubscribe` and `List-Unsubscribe-Post` headers. Both land on a BIS page or endpoint that records the revoke at once. There is **no** inbound-email reading. The token is **signed (HMAC)** and encodes the account, the channel and the address, so there is no token table."
+- **Decision 6, verbatim:** "The opt-out is an unsubscribe link in every automated email, plus the RFC 8058 one-click `List-Unsubscribe` and `List-Unsubscribe-Post` headers. Both land on a BIS page or endpoint that records the revoke at once. There is **no** inbound-email reading. The token is **signed (HMAC)** and encodes the account, the channel and the address, so there is no token table." **Amended 2026-09-30 by danlo (Q1, Q3; spec `1f738369`):** the link opens a page with ONE button, and the press records the revoke (a GET records nothing); the RFC 8058 one-click POST stays instant; the token is encrypted AND signed, still with no table.
 - **Decision 7, verbatim:** "All automated email from that business stops, except a direct response to what the customer just did (the \"customer-initiated transactional\" class, §4.3)."
-- **Choices used here:** 19 (a stop the customer made themselves — the unsubscribe link, one-click — is lifted only by the customer's own act; staff Resume only for staff and `backfill_0049` stops), 22 (a staff-typed email to an unsubscribed contact still sends, with a notice), 23 (operator mail passes the gate, is not subject to the ledger, carries no link), 24 (the fold widens: "No marketing emails" becomes "no automated email"), 27 (the page's ghost Resubscribe), 28 (a grant never lifts a stop), 31 (automated email on the fixed 08:00–21:00 window).
+- **Choices used here:** 19 (a stop the customer made themselves — the unsubscribe link, one-click — is lifted only by the customer's own act; staff Resume only for staff and `backfill_0049` stops), 22 (a staff-typed email to an unsubscribed contact still sends, with a notice, and carries no footer or headers: Q4), 23 (operator mail passes the gate, is not subject to the ledger, carries no link), 24 (the fold widens: "No marketing emails" becomes "no automated email": Q7), 27 as rewritten by Q1 (the page asks; its one primary "Stop emails" records; then a ghost Resubscribe), 28 (a grant never lifts a stop), 31 (automated email on the fixed 08:00–21:00 window).
 - **The customer-initiated class** (spec §4.3, verbatim): "it is sent to the person whose own action caused it; it is sent inside the same request, or the same live call, that action started; it is about only that action; no cron pass sends it." Scan 4 pins those kinds to `app/b/[publicId]/actions.ts`, `lib/forms/enrich.ts` and `lib/voice/tools/registry.ts`, never under `lib/automations/`.
 - **The ledger stays append-only** (spec §3): every write goes through `appendConsentEventGuarded` in `packages/db/src/consent.ts` (0055's function; scan 3 unchanged). A `source_ref` names ONE delivery or event, never a token or an address (spec §3, PR-2 S10): the unsubscribe writes carry NO `source_ref`; their idempotence is the guard.
-- **Fails closed** (spec §5): an unreadable ledger or zone blocks an automated email (`ledger_unavailable`), which an automation turns into a 15-minute re-hold (`LEDGER_RETRY_MS`), never a send. A production send of a customer kind with no `CONSENT_TOKEN_SECRET` or no origin is blocked `unsubscribe_unavailable` (also a re-hold for automations), never sent without its way out.
+- **Fails closed** (spec §5): an unreadable ledger or zone blocks an automated email (`ledger_unavailable`), which an automation turns into a 15-minute re-hold (`LEDGER_RETRY_MS`), never a send. A production send of a customer kind with no `CONSENT_TOKEN_SECRET`, a secret shorter than 32 characters, no origin, or an origin that is not `https://` is blocked `unsubscribe_unavailable` (also a re-hold for automations), never sent without a working way out (RFC 8058 wants one HTTPS URI).
 - **Copy** lives in `apps/web/src/lib/messages.ts`, plain language (DESIGN.md "Voice"; `messages.test.ts` scans every key). The spec's own words (§4.3 footer, §6 page and composer lines) are used verbatim and pinned in `copy.test.ts`; every other line is this plan's (G-list). Task 4 adds every new line; later tasks only read `m` (Task 11 deletes the 0049 switch's keys).
 - **UI** follows DESIGN.md: tokens only (dashboard); both themes through `.dark`; status is a dot and a word (`DotPill`); loaded / empty / error states; one primary per view (rule 8); reversible actions at once with an Undo toast (rule 6); new variants get a `/dashboard/styleguide` specimen. The public `/u/[token]` page follows the cancel page's own convention (`var(--token, fallback)` inside its embedded stylesheet, `publicFormTheme`, `PublicBrand`, rule 9's client logo and colour). Email HTML keeps the email dialect (inline literal colours, the shell's precedent), which DESIGN.md's tokens do not reach.
 - **Supabase: never write to either project, never read production** from a lane. PR-3 has NO migration. The orchestrator runs the fold's two SQL files on production exactly as Task 15 says, under danlo's go. Local env files point at PRODUCTION, so the db suite, Playwright and `pnpm check` REFUSE to run locally (#135, by design). Never work around that.
@@ -32,7 +32,8 @@
 - **Lanes** (2–3 at a time, disjoint files, `.claude/worktrees/consent-pr3-<lane>` on `feat/consent-pr3`): each lane commits locally, one commit per task; the orchestrator cherry-picks at each checkpoint. Nobody pushes until Task 15.
 - **Secrets** (memory `bis-env-secret-reads`): `CONSENT_TOKEN_SECRET` is generated and piped straight into `vercel env add`; it is never echoed, printed, written to a file or parsed by code that can throw with it in the message. The e2e job's value is a NON-secret literal (the `STRIPE_WEBHOOK_SECRET: whsec_bis_ci_e2e_fixture_only` precedent).
 - Gates before merge: `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`, all in CI (`verify`, `e2e`). Read the check runs FOR THE HEAD SHA.
-- **Written to the recommended answers of the QUESTIONS FOR DANLO below.** Each question names the tasks and steps a different answer changes (marked `[Q-n]` in those steps).
+- **Written to danlo's DECISIONS below** (Q1–Q7, P1, P2; 2026-09-30, binding). `(decision Qn)` in a step marks where a decision shows; no step carries an alternative branch.
+- **`vi.mock("@bis/db")` and the gate's one new import.** The email gate imports `readConsentState`, `readAccountTimezone` and — for P1 only — `getMailingAddress` from `@bis/db`. It calls `getMailingAddress` only for the three P1 kinds (`automation.review_request`, `automation.quote_followup`, `automation.no_show_nudge`), which no site test drives through the real gate; the cron route test (the one suite that runs the real gate under a bare `@bis/db` factory) gains it in Task 6.
 
 ## Prerequisites
 
@@ -57,8 +58,9 @@ Repo facts (read on `001a25f9`):
 - **R1. Twenty-two email send sites, not twenty** (E1): `rg "\.send\(" apps/web/src --glob '!*.test.ts'` minus SMS and websocket lines. The two the spec's table missed are the voice cancellation email to the caller (`lib/voice/tools/registry.ts:630`, `bookingCancelledEmail`) and the voice phone-change alert to staff (`registry.ts:202`, `alertStaffOfPhoneChange`). The full list is Task 4's `EMAIL_KINDS`.
 - **R2. `apps/web/src/proxy.ts:3`** protects only `/dashboard(.*)`; `/u/…` and `/api/unsubscribe/…` are public already (E2).
 - **R3. 0054 and 0055 need no change** (E3): 0054's method CHECK lists `unsubscribe_link`, `one_click`, `unsubscribe_page`, `backfill_0049`; its address CHECK accepts `channel = 'email'` when `address = lower(address) and address = btrim(address)`, 3–254 characters, `position('@' in address) > 1`; 0055 already refuses a `backfill_0049` stop over any stop and allows `resubscribed` / `unsubscribe_page` under any guard, and its `unless_customer_stopped` list already names `unsubscribe_link` and `one_click`. PR-3 therefore ships no migration, and its rollout has no CI apply, no production apply and no parity step.
-- **R4. The cancel page refuses to write on GET on purpose** (`app/b/[publicId]/cancel/[token]/page.tsx`, its header comment): "an email client or security scanner that prefetches links to check them for malware issues a GET against this exact URL before any human ever opens the message, and a cancel-on-GET design would let that prefetch silently cancel a booking nobody asked to cancel." This is Q1's evidence.
-- **R5. The two marketing emails already carry a reply opt-out** (`templates/marketing-footer.ts`, #118/#122): "You're getting this because you've been a customer of {name}. If you'd rather not hear from us, reply and let us know." (`messages.ts:1514`). The referral ask carries it since #122 (`c0ef2d72`), so the memory's "referral_ask email has no opt-out/address" is out of date (Q2).
+- **R4. The cancel page refuses to write on GET on purpose** (`app/b/[publicId]/cancel/[token]/page.tsx`, its header comment): "an email client or security scanner that prefetches links to check them for malware issues a GET against this exact URL before any human ever opens the message, and a cancel-on-GET design would let that prefetch silently cancel a booking nobody asked to cancel." This was Q1's evidence.
+- **R10. `app/` has no root layout of its own; each public tree carries one** (`app/b/layout.tsx`, `app/f/layout.tsx`, `app/c/layout.tsx`: `<html>`/`<body>`, the three `next/font/google` variables at `preload: false`, a favicon; `app/b/layout.test.ts` pins it). A new top-level segment without one fails `next build` ("page.tsx doesn't have a root layout"), so `/u` gets its own (Task 9, review R2-I1).
+- **R5. The two marketing emails already carry a reply opt-out** (`templates/marketing-footer.ts`, #118/#122): "You're getting this because you've been a customer of {name}. If you'd rather not hear from us, reply and let us know." (`messages.ts:1514`). The referral ask carries it since #122 (`c0ef2d72`), so the memory's "referral_ask email has no opt-out/address" is out of date (Q2). Only these two print the postal address; the review request, the quote follow-up and the no-show nudge (also `marketing` in the registry) print none (review R1-I3; P1).
 - **R6. The composer's email template is deliberately bare** (`templates/outbound.ts`): "there is no button, no footer and no campaign chrome here, and that is a decision rather than an omission. The text part is the typed body byte-for-byte." This is Q4's evidence.
 - **R7. `getEmailProvider` is the only provider factory** (`lib/email/index.ts`), and today NINE modules outside `lib/email` call it or take its provider (`conversations/actions.ts`, `settings/actions.ts`, `settings/billing-actions.ts`, `b/[publicId]/actions.ts`, `b/[publicId]/cancel/[token]/actions.ts`, `lib/automations/harness.ts`, `lib/forms/enrich.ts`, `lib/voice/finish-call.ts`, `lib/voice/tools/registry.ts`), plus `lib/billing/billing-link.ts`'s `type EmailProvider` import of the index module.
 - **R8. The reactivation walk's 0049 filter is IN THE QUERY for a reason** (`packages/db/src/automations.ts`, `listDueReactivations`): a pass-level skip "would come back on every tick at the head of this oldest-first walk and refill the survivor window, starving every other account (the #118 I1 trap)". Task 1 keeps a stopped contact out of the WALK (after the page read, before the survivor count), not in the pass.
@@ -69,7 +71,8 @@ Assumptions (not verified; each names what settles it):
 - **A1. Resend's DKIM signature covers custom headers** (X2 requires it for one-click). NOT FOUND in Resend's docs. Settled at go-live (Task 15 step 9): the received message's `DKIM-Signature` `h=` list, read from Gmail's "Show original", must name `list-unsubscribe` and `list-unsubscribe-post`. If it does not: the header one-click is not honoured by Gmail, the footer link still works; report to danlo (no code change can fix Resend's signing).
 - **A2. Yahoo's bulk-sender rule** mirrors Gmail's (one-click for bulk senders). Not read; nothing here depends on it.
 - **A3. Clerk's middleware answers a cookie-less POST to `/api/unsubscribe/…` without a redirect or a `Set-Cookie`.** Clerk's handshake is for document requests; the e2e asserts no `set-cookie` and no redirect on the one-click POST (Task 14), which settles it for the e2e's Clerk instance; Task 15 step 9 checks production's with `curl -si -X POST`.
-- **A4. A page with one button counts as "visiting a single page"** (X4's wording does not say whether a click on that page is allowed; common practice treats a one-button confirm page as one page). Only matters under Q1's recommendation; counsel reads it with the §5 go-live item.
+- **A4. A page with one button counts as "visiting a single page"** (X4's wording does not say whether a click on that page is allowed; common practice treats a one-button confirm page as one page). It matters because of Q1's decision; counsel reads it with the §5 go-live item (spec §10).
+- **A6. The three P1 follow-ups are relationship messages under CAN-SPAM** (danlo's reading, P1; spec §10). Counsel reviews it before go-live; the plan prints the address whenever it is set either way.
 - **A5. Mail scanners (Microsoft Defender Safe Links, Mimecast, Proofpoint) fetch body links with GET** before or when a person clicks. Industry knowledge, not read here; R4 records that this repo already designed around it once.
 
 ## Spec gaps resolved here (the reviewer should confirm or overrule)
@@ -81,14 +84,14 @@ E1–E5 are corrections applied to the spec itself (commit `2de603ed`, facts onl
 - **E3. The fold is a backfill statement, not a migration** (R3). It runs on production only, through `execute_sql`, count first, write on danlo's go (Task 2, Task 15). A migration would also run on the CI project (fixture data, nothing to fold) and could not be counted before it writes.
 - **E4. CAN-SPAM's 30 days and "single page"** verified (X4).
 - **E5. RFC 8058, Gmail and Resend** verified (X1–X3); DKIM coverage is A1.
-- **G1. The email gate is its own module** (`lib/consent/email-gate.ts`), not a second half of `gate.ts`. The spec's scan 1 names "only `lib/consent/gate.ts`"; the email scan names `email-gate.ts` instead. Two small modules keep each provider's exceptions (the SMS stop confirmation, the email footer) apart.
-- **G2. The token is encrypted as well as signed** ([Q3]): `1.<base64url(iv | AES-256-GCM(payload) | tag)>.<base64url(HMAC-SHA256)>`, both keys derived from `CONSENT_TOKEN_SECRET` by HKDF-SHA256. It still carries the account, the channel and the address (decision 6: no token table) but no one reading a URL (request logs, a scanner's log, browser history, a `Referer`) can read the address. The payload adds two optional fields the spec did not list: `n` (the contact id, evidence only) and `k` (the kind of email that carried it, evidence only).
+- **G1. The email gate is its own module** (`lib/consent/email-gate.ts`), not a second half of `gate.ts`. The spec's scan 1 named "only `lib/consent/gate.ts`"; it now names `email-gate.ts` for email (spec `1f738369`, §8 scan 1, and §4.1 item 3). Two small modules keep each provider's exceptions (the SMS stop confirmation, the email footer) apart.
+- **G2. The token is encrypted as well as signed** (decision Q3): `1.<base64url(iv | AES-256-GCM(payload) | tag)>.<base64url(HMAC-SHA256)>`, both keys derived from `CONSENT_TOKEN_SECRET` by HKDF-SHA256. It still carries the account, the channel and the address (decision 6: no token table) but no one reading a URL (request logs, a scanner's log, browser history, a `Referer`) can read the address. The payload adds two optional fields the spec did not list: `n` (the contact id, evidence only) and `k` (the kind of email that carried it, evidence only).
 - **G3. The unsubscribe rows carry `contact_id = null`** and the token's contact in `evidence.contactId`: the composite contact FK (0054) would refuse the insert if the contact had been deleted since the email went out, and an unsubscribe must never fail on that. The state is per address; nothing reads `contact_id` to decide.
-- **G4. The unsubscribe writes use guard `unless_customer_stopped`** ([Q5]): an unsubscribe over a STAFF email stop (or a `backfill_0049` one) is recorded, so from then on only the customer can lift it — PR-2's S8 for texts, applied to email. Over the customer's own stop it is refused, so a second click writes nothing (spec §4.3's "an address that is already stopped gets no second row" holds for the customer's own stops).
+- **G4. The unsubscribe writes use guard `unless_customer_stopped`** (decision Q5): an unsubscribe over a STAFF email stop (or a `backfill_0049` one) is recorded, so from then on only the customer can lift it — PR-2's S8 for texts, applied to email. Over the customer's own stop it is refused, so a second click writes nothing (spec §4.3 as corrected: no second row over the customer's own stop). The page follows the same line (review R1-I1): `emailStateOf` answers the stop's METHOD, and only a customer's own stop (`unsubscribe_link`, `one_click`) shows "You're unsubscribed"; a staff, `backfill_0049` or any other stop shows the question with its primary "Stop emails", whose press is recorded under that guard. Otherwise the page would tell a customer stopped by staff "You're unsubscribed" and never record their own act, and staff could Resume over it.
 - **G5. Resubscribe uses guard `if_stopped_or_held`**: it lifts any stop, staff's included (the customer's own act; choice 19 restricts only staff), and answers `was_allowed` without a row for an address that is not stopped.
 - **G6. `GET /api/unsubscribe/[token]` redirects (303) to `/u/[token]`**: a client that opens the header URL instead of POSTing to it lands on the page (Resend's advice, X1). The POST never redirects (X2: redirected POSTs turn into GETs).
 - **G7. Where the footer goes.** `shell()` emits one marker, `<!--bis:unsubscribe-->`, as the card's last row; the gate replaces it with the footer row for a customer kind and with nothing for operator mail, and appends the footer line to the text part. A customer kind whose `html` has no marker THROWS (a programming error, caught by the gate's tests). User text cannot forge the marker: every template escapes `<`.
-- **G8. Outside production with no secret, customer emails carry no link** (and no headers), logged once per send. In production a missing secret or origin blocks the send (`unsubscribe_unavailable`). A preview deployment therefore never mints tokens with a guessable key, and never accepts one.
+- **G8. Outside production with no secret, customer emails carry no link** (and no headers), logged once per send. In production a missing secret, a secret shorter than 32 characters (review R1-M3), a missing origin or an origin that is not `https://` (RFC 8058's one HTTPS URI; reviews R1-M4, R2-m7) blocks the send (`unsubscribe_unavailable`). A preview deployment therefore never mints tokens with a guessable key, and never accepts one. **Rotation** (R1-M3): `CONSENT_TOKEN_SECRET_PREVIOUS` is ONE slot, so a second rotation drops the first secret and every link sealed with it; never rotate twice within 30 days (CAN-SPAM's minimum, X4). `.env.example` and `token.ts` say so.
 - **G9. Email hours live in the gate too** (choice 31), exactly as `decideSms` does: an automated kind outside 08:00–21:00 is `deferred`, and `holdOrSend` turns that into its held row. `holdOrSend` already holds email at the same `ctx.now`, so the two never disagree.
 - **G10. `ctx.email` keeps its shape** (`{ isFake, send(input) }`), and `send` now takes the gate's request (the send input plus `accountId`, `kind`, `contactId`, …) and throws `EmailNotSent` when the gate did not send. `holdOrSend` turns `EmailNotSent` into held / skipped rows the way it turns `SmsDeferred` / `SmsBlocked` today. The harness still constructs the provider once per tick, so a production tick with `RESEND_API_KEY` unset still fails loudly before any query (context.ts's designed failure).
 - **G11. Operator paths that take an `EmailProvider`** (the sending-address check, the billing link) get `operatorMailer(kind, accountId)`: a provider-shaped object whose `send` goes through the gate under that one operator kind and rethrows the provider's own words. `preflight.ts` and `billing-link.ts` keep their signatures and their tests.
@@ -98,22 +101,25 @@ E1–E5 are corrections applied to the spec itself (commit `2de603ed`, facts onl
 - **G15. The composer's notice has two lines**: the spec's "They unsubscribed from your emails on {date}. Write only about something they asked you for." for the customer's own stop, and "You stopped emails to them on {date}. Write only about something they asked you for." for a staff or fold stop (the spec's line would be false there).
 - **G16. The e2e mints its tokens with the CI literal** through `sealConsentToken` (the spec's list: `/u/{token}` for a fixture contact, Resubscribe, the one-click POST 200) and also asserts no `Set-Cookie`, no redirect, a 400 for a bad token, and the drawer's Email row after each.
 - **G17. Complaints are not stops.** Resend's `email.complained` stays a message status (`webhooks/resend/route.ts`). Recording it as a stop needs a method 0054 does not have and an account the event does not carry for automation email (automation emails write no `messages` row). Deferred (Next plans).
+- **G18. The postal address on three follow-ups** (decision P1; spec §4.3, §10). `FOOTER_ADDRESS_KINDS` (Task 4: `automation.review_request`, `automation.quote_followup`, `automation.no_show_nudge`) are the `marketing` kinds whose templates print no address. For them the gate reads `getMailingAddress(db, accountId)` after the hours step and, when it is set, prints its lines under the unsubscribe line (html: `<br>`-joined, escaped; text: one line each, after a blank line). A blank or unset address sends without it — never a block, unlike the check-in and the referral ask, which print their own and keep their skip. An unreadable address is a re-hold (`ledger_unavailable`, fails closed), never a send without it.
 
-## QUESTIONS FOR DANLO
+## DECISIONS (danlo, 2026-09-30; binding)
 
-Each has a recommendation (the plan is written to it) and names what a different answer changes.
+The plan's seven questions were answered by danlo on 2026-09-30, and two more points came out of the plan's two reviews (R1 legal/rollout, R2 code truth). The spec carries them (`1f738369`). Every task below is written to them; none carries an alternative branch.
 
-- **Q1. Does opening the unsubscribe link record the stop at once, or does the page ask for one click first?** Decision 6 (binding) says the page "records the revoke at once", and choice 27 adds the ghost Resubscribe for a mis-tap or a mail scanner. **Recommendation: one click on the page records it; the header one-click (Gmail's own Unsubscribe button) stays instant.** Why: decision 7 makes an email stop cover appointment reminders too, and choice 19 lets only the customer lift it. A corporate mail filter that fetches the footer link (A5; RFC 8058's own abstract says mail software does this; this repo's cancel page refuses to write on GET for exactly that reason, R4) would then silently and permanently stop that customer's reminders, and the customer never sees the page that could undo it. A button still counts as the one page CAN-SPAM allows (A4). **Alternatives:** (a) keep decision 6 literally (the GET records; the page shows "You're unsubscribed" with Resubscribe); (b) record on GET only for the header URL. **A different answer changes:** Task 9 (the page's first state and `unsubscribeAction`), Task 4 (two copy lines), Task 14 (the e2e's first step). Marked `[Q1]`.
-- **Q2. Does the referral ask need its own opt-out?** **Recommendation: no.** Since #122 it already carries the reply opt-out and the postal address (R5), and after PR-3 it also carries the unsubscribe link, and an email stop covers it (decision 7 lists it: "reminders, follow-ups, review requests, reactivation and referral asks all stop"). A per-kind choice is the preference page, out of scope (§9). **Alternative:** a per-kind opt-out (a new method or an evidence field, a new screen) — a later plan. **A different answer changes:** nothing in this plan (it would add one).
-- **Q3. The token: encrypted, or only signed?** Decision 6 says "signed (HMAC)" and the spec's §5 accepted that the address sits base64-encoded in the URL. The PR-3 brief asks for no personal data in the URL. **Recommendation: encrypt the payload and still sign it (G2)** — no table, the same one secret, about thirty more lines, and the address is no longer readable from a request log, a scanner's log or browser history. **Alternative:** the spec's plain signed token (`base64url(JSON).base64url(HMAC)`). **A different answer changes:** Task 3 only (`sealConsentToken` / `openConsentToken` internals and two tests). Marked `[Q3]`.
-- **Q4. Do staff-typed emails carry the unsubscribe link and headers?** The spec's §4.3 says "the first twelve rows", which includes `staff.composer_email`; decision 6 says "every **automated** email", and the composer's template is bare by decision (R6). **Recommendation: no link and no headers on staff-typed email.** A person's one-to-one reply is not automated mail (choice 22), and a List-Unsubscribe header on it would let one tap in Gmail stop every reminder from that business. The composer still shows the notice when they unsubscribed (G15). **Alternative:** follow §4.3 literally. **A different answer changes:** Task 4's `EMAIL_KINDS["staff.composer_email"].footer` (one word) and Task 7's composer test. Marked `[Q4]`.
-- **Q5. An unsubscribe over a staff "Stop emails": recorded, or not?** PR-2 decided for texts (S8, danlo 2026-09-28) that the customer's own STOP over a staff stop IS recorded, so only the customer can lift it; spec §4.2 says "PR-3 decides whether email follows this one". **Recommendation: follow S8 (G4).** **Alternative:** "an address already stopped gets no second row" whatever stopped it (guard `if_allowed`), so staff could still Resume. **A different answer changes:** Task 9's `recordUnsubscribe` guard and one test. Marked `[Q5]`.
-- **Q6. Email "stop" replies.** Decision 6 (binding) rules out reading inbound email, so a customer who replies "stop" to a reactivation or referral email (whose footer invites it, R5) is honoured only when staff read the reply and press "Stop emails" on the Email row. **Recommendation: keep it that way, and keep the reply sentence** (it is danlo's decision A of 2026-09-22, and CAN-SPAM names a reply as a valid way out, X4); the link now sits beside it, so most customers will use the link. **Alternatives:** reword the footer to point only at the link (a copy change danlo made, so his to change); or parse inbound replies (against decision 6). **A different answer changes:** nothing in this plan (a copy edit to `automations.reactivation.footerReason*`).
-- **Q7 (FYI, choice 24's count).** The fold widens every "No marketing emails" contact to "no automated email", reminders included. Task 15 shows you the count, how many of them have a booking in the next 30 days (their reminders will stop), and how many share an address with another contact (who stops too, because the ledger is per address), before anything is written.
+- **Q1. The unsubscribe link opens a page with ONE button; the RFC 8058 one-click POST stays instant.** A GET of `/u/[token]` records nothing (a mail scanner's fetch changes nothing, R4, A5); the page's primary button records `revoked` / `unsubscribe_link`; `POST /api/unsubscribe/[token]` records `revoked` / `one_click` at once. Decision 6 and choice 27 are amended in the spec. Shows in Task 4 (the question's copy), Task 9 (the page), Task 14 (the e2e's first test).
+- **Q2. The referral ask gets no separate opt-out.** It already carries the reply sentence and the postal address (R5), gains the link, and an email stop covers it (decision 7). Nothing to build.
+- **Q3. The token is encrypted AND signed, with no table; its secret is `CONSENT_TOKEN_SECRET`** (G2). Task 3.
+- **Q4. Staff-typed composer email carries no footer and no headers; every automated email carries both** (the five customer-initiated kinds and the seven automations). Task 4's registry (`staff.composer_email.footer = "none"`), Task 5 and Task 7's composer test.
+- **Q5. A customer's unsubscribe over a staff (or `backfill_0049`) stop IS recorded, and only the customer can lift it** (PR-2's S8 for email; G4). Task 9's guard `unless_customer_stopped` and its page state (review R1-I1).
+- **Q6. "Stop" replies to emails stay manual; the footer keeps the reply sentence.** Staff press "Stop emails" on the Email row. Nothing to build.
+- **Q7. The 0049 fold widens to all automated email (choice 24), and its counts are shown before anything is written.** Task 2's count, Task 15 steps 3 and 5.
+- **P1 (from review R1-I3). The three `marketing` kinds without a postal address — `automation.review_request`, `automation.quote_followup`, `automation.no_show_nudge` — carry the account's `mailing_address` in their footer WHENEVER it is set, and are NOT blocked when it is blank** (unlike the check-in and the referral ask, which keep their skip). The CAN-SPAM reasoning is in spec §10 (relationship follow-ups to the customer's own request or appointment; the address as good practice; flagged for counsel's go-live review, A6). G18; Tasks 4 and 5.
+- **P2 (from review R1-M1). The page's button reads "Stop emails" (English) / "Dejar de recibir correos" (Spanish)**, matching its title "Stop emails from {Business}?". One bilingual key, `unsubscribe.button` = "Stop emails / Dejar de recibir correos" (Task 4).
 
 ## File Structure
 
-Read off each task's Files block (each block is the authority). **34 files created, 85 modified (plus any other test that renders `ActivityTimeline` or `MessageComposer`, Task 12), 5 deleted**, across 14 implementation tasks and one rollout task. No migration. Test counts are left to each task's test code (nothing was run).
+Read off each task's Files block (each block is the authority). **36 files created, 88 modified (plus any other test that renders `ActivityTimeline` or `MessageComposer`, Task 12), 5 deleted** (recounted in the fix round: +2 created, `app/u/layout.tsx` and its test; +3 modified, `ci/sql.ts`, `ci/sql.test.ts`, `lib/ui/guarded-run.test.ts`), across 14 implementation tasks and one rollout task. No migration. Test counts are left to each task's test code (nothing was run).
 
 **packages/db**
 
@@ -123,14 +129,14 @@ Created:
 
 Modified:
 - `package.json` (the `./email-address` subpath), `src/consent.ts`, `src/consent.test.ts`, `src/index.ts`, `src/automations.ts`, `src/contacts.ts`, `src/test/automations.test.ts`, `src/test/contacts.test.ts` — Task 1
-- `src/ci/sql-files.test.ts` — Task 2
+- `src/ci/sql-files.test.ts`, `src/ci/sql.ts`, `src/ci/sql.test.ts` — Task 2
 
 **apps/web** (paths under `apps/web/`; `…/` is `src/app/(dashboard)/dashboard/accounts/[accountId]/`)
 
 Created:
 - `src/lib/consent/token.ts`, `token.test.ts` — Task 3
 - `src/lib/email/environment.ts`, `src/lib/consent/email-gate.ts`, `email-gate.test.ts` — Task 5 (Task 8 appends two cases to the test)
-- `src/lib/consent/unsubscribe.ts`, `unsubscribe.test.ts`, `unsubscribe-copy.ts`, `unsubscribe-copy.test.ts`, `src/app/api/unsubscribe/[token]/route.ts`, `route.test.ts`, `src/app/u/[token]/page.tsx`, `unsubscribe-form.tsx`, `actions.ts`, `actions.test.ts`, `page.test.ts`, `src/proxy.test.ts` — Task 9
+- `src/lib/consent/unsubscribe.ts`, `unsubscribe.test.ts`, `unsubscribe-copy.ts`, `unsubscribe-copy.test.ts`, `src/app/api/unsubscribe/[token]/route.ts`, `route.test.ts`, `src/app/u/[token]/page.tsx`, `unsubscribe-form.tsx`, `actions.ts`, `actions.test.ts`, `page.test.ts`, `src/app/u/layout.tsx`, `src/app/u/layout.test.ts`, `src/proxy.test.ts` — Task 9
 - `src/lib/consent/email-view.ts`, `email-view.test.ts`, `email-staff-actions.ts`, `email-staff-actions.test.ts`, `email-context.ts`, `…/contacts/email-actions.ts`, `src/app/api/accounts/[accountId]/contacts/[contactId]/email/route.ts`, `route.test.ts` — Task 10
 - `src/lib/consent/email-row.ts`, `email-row.test.ts`, `…/contacts/email-row.tsx`, `…/contacts/email-row.test.ts` — Task 11
 - `e2e/consent-email.spec.ts` — Task 14
@@ -141,7 +147,7 @@ Modified:
 - `src/lib/automations/context.ts`, `harness.ts`, `harness.test.ts`, `hold-or-send.ts`, `hold-or-send.test.ts`, `imports.test.ts`, `sentinel.test.ts`, the passes `reminders.ts`, `followups.ts`, `review-request.ts`, `referral-ask.ts`, `reactivation.ts`, `quote-followup.ts`, `no-show-nudge.ts`, `weekly-report.ts`, `weekly-agency-report.ts` and each one's `.test.ts`, `src/app/api/cron/reminders/route.test.ts` — Task 6
 - `src/app/b/[publicId]/actions.ts`, `actions.test.ts`, `src/app/b/[publicId]/cancel/[token]/actions.ts`, `actions.test.ts`, `src/lib/forms/enrich.ts`, `src/app/f/[publicId]/actions.test.ts`, `…/conversations/actions.ts`, `…/conversations/actions.test.ts` — Task 7
 - `src/lib/voice/tools/registry.ts`, `registry.test.ts`, `src/lib/voice/finish-call.ts`, `finish-call.test.ts`, `…/settings/actions.ts`, `…/settings/billing-actions.ts`, `src/lib/billing/billing-link.ts` — Task 8
-- `…/contacts/contact-drawer.tsx`, `contact-drawer.wiring.test.ts`, `…/contacts/[contactId]/contact-fields-panel.tsx`, `…/contacts/[contactId]/page.tsx` (Tasks 11, 12), `page.test.ts` (Tasks 11, 12), `…/contacts/actions.ts`, `…/contacts/actions.test.ts`, `src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts`, `route.test.ts`, `src/lib/contacts/summary.ts`, `summary.test.ts`, `src/lib/zone.ts`, `src/lib/ui/guarded-run.ts` (a comment), `src/app/(dashboard)/dashboard/styleguide/page.tsx`, `e2e/contacts-drawer.spec.ts` — Task 11
+- `…/contacts/contact-drawer.tsx`, `contact-drawer.wiring.test.ts`, `…/contacts/[contactId]/contact-fields-panel.tsx`, `…/contacts/[contactId]/page.tsx` (Tasks 11, 12), `page.test.ts` (Tasks 11, 12), `…/contacts/actions.ts`, `…/contacts/actions.test.ts`, `src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts`, `route.test.ts`, `src/lib/contacts/summary.ts`, `summary.test.ts`, `src/lib/zone.ts`, `src/lib/ui/guarded-run.ts` and `guarded-run.test.ts` (comments), `src/app/(dashboard)/dashboard/styleguide/page.tsx`, `e2e/contacts-drawer.spec.ts` — Task 11
 - `src/lib/consent/recipient-state.ts`, `recipient-state.test.ts`, `composer-state.ts`, `composer-state.test.ts`, `…/contacts/[contactId]/message-composer.tsx`, `…/contacts/[contactId]/activity-timeline.tsx` — Task 12
 
 Deleted:
@@ -197,7 +203,7 @@ Commands run from the lane's worktree root (Git Bash) unless a step says otherwi
 
 ### Task 1: The ledger's email key, the blocked-address read, and the two due-lists moved off the 0049 column
 
-**Owner:** bis-db-schema. **Tier:** HIGH. **Questions:** none.
+**Owner:** bis-db-schema. **Tier:** HIGH. **Decisions:** none.
 
 **Files:**
 - Create: `packages/db/src/email-address.ts`
@@ -613,13 +619,14 @@ git commit -m "feat(consent): the ledger's email key and blocked-address read; r
 
 ### Task 2: The 0049 fold: the count, the write, and their proof on the replica
 
-**Owner:** bis-db-schema. **Tier:** HIGH. **Questions:** Q7 (the count is shown to danlo before the write, Task 15).
+**Owner:** bis-db-schema. **Tier:** HIGH. **Decisions:** Q7 (the count is shown to danlo before the write, Task 15).
 
 **Files:**
 - Create: `packages/db/supabase/backfills/0049-fold-count.sql` (read only)
 - Create: `packages/db/supabase/backfills/0049-fold-write.sql` (one statement; writes through 0055's function)
 - Create: `packages/db/src/test/email-optout-fold.test.ts` (`withRollback`: the replica's `post` and CI)
 - Modify: `packages/db/src/ci/sql-files.test.ts`
+- Modify: `packages/db/src/ci/sql.ts` (`NOT_IN_A_READ` gains `append_consent_event`), `packages/db/src/ci/sql.test.ts` (review R2-I3)
 
 **Interfaces:**
 - Consumes: `public.append_consent_event` (0055) with guard `none` — its `backfill_0049` rule refuses the row over ANY existing stop, whatever the guard (0055's comment, "review m1, B1"); `public.contacts.marketing_email_opted_out_at` (0049).
@@ -628,6 +635,7 @@ git commit -m "feat(consent): the ledger's email key and blocked-address read; r
 **What the fold decides** (spec §4.3 "The 0049 fold", choice 24, G12):
 - One `revoked` / `backfill_0049` row per ACCOUNT AND ADDRESS (the ledger's key), dated at the EARLIEST opt-out among that account's contacts with that address, `contact_id` = that contact, `source_ref` = `contact:<id>:0049:<the opt-out's own instant>` (ONE event: S10), evidence `{ "column": "contacts.marketing_email_opted_out_at", "contactId": "<id>" }`.
 - The address rule is `emailLedgerAddress`'s: whitespace trimmed (space, tab, line breaks), lowercased, 3–254 characters, `@` after the first character — restricted here to printable ASCII. An address outside that is counted (`left_out_needs_a_look`) and never written: staff stop it by hand from the Email row.
+- A stamp in the FUTURE is never folded (0055 raises on a future `p_occurred_at`, which would fail the whole statement). The write skips it with `o.at <= now()`, and the count applies the SAME rule to what it calls foldable (review R1-I5), so `to_fold_addresses` is exactly what the write appends; `future_stamps` counts what it skips. A later run folds a stamp once its time has passed.
 - Re-running it writes nothing new: the same source answers `duplicate`; a different contact of an already-folded address answers `refused` (0055's rule).
 
 - [ ] **Step 1: Write the failing tests**
@@ -684,6 +692,7 @@ const outcomes = (rows: Outcome[]) => Object.fromEntries(rows.map((r) => [r.outc
  *   uni   opted out, "ñandu@x.com" — outside printable ASCII: left out
  *   fe    opted out, "fe@x.com", already stopped by the customer (one_click)
  *   gee   opted out, "gee@x.com", a booking in 7 days
+ *   fut   opted out TOMORROW, "fut@x.com": a future stamp, never folded
  */
 async function fixture(c: Client) {
   const a = await account(c, "one");
@@ -695,6 +704,7 @@ async function fixture(c: Client) {
     uni: await contact(c, a, "ñandu@x.com", "2026-09-03T10:00:00Z"),
     fe: await contact(c, a, "fe@x.com", "2026-09-04T10:00:00Z"),
     gee: await contact(c, a, "gee@x.com", "2026-09-06T10:00:00Z"),
+    fut: await contact(c, a, "fut@x.com", new Date(Date.now() + 86_400_000).toISOString()),
   };
   await asService(c, `select * from public.append_consent_event('${a}', 'email', 'fe@x.com', 'revoked', 'one_click', 'none', null, null, null, null, null, '{}'::jsonb, null)`);
   const cal = (await c.query<{ id: string }>(
@@ -715,7 +725,7 @@ const scoped = (file: string, accountId: string) => {
 };
 
 describe("0049-fold-count.sql", () => {
-  it("counts what the fold would write and what it widens, naming no customer (mutation: count contacts instead of distinct addresses → to_fold_addresses 4, FAILS; drop the ASCII rule → left_out_needs_a_look 0, FAILS)", () =>
+  it("counts what the fold would write and what it widens, naming no customer, judging foldable by the WRITE's own rules (mutation: count contacts instead of distinct addresses → to_fold_addresses 4, FAILS; drop the ASCII rule → left_out_needs_a_look 0, FAILS; drop `o.at <= now()` from foldable → to_fold_addresses 4, FAILS)", () =>
     withRollback(async (c) => {
       const { a } = await fixture(c);
       const [row] = await asService<Record<string, unknown>>(c, scoped("0049-fold-count.sql", a));
@@ -730,15 +740,15 @@ describe("0049-fold-count.sql", () => {
         with_a_booking_in_30_days: Number(row!.with_a_booking_in_30_days),
         future_stamps: Number(row!.future_stamps),
       }).toEqual({
-        opted_out_contacts: 6, no_email: 1, left_out_needs_a_look: 1, to_fold_addresses: 3, accounts: 1,
-        already_stopped_or_decided: 1, other_contacts_sharing_an_address: 1, with_a_booking_in_30_days: 1, future_stamps: 0,
+        opted_out_contacts: 7, no_email: 1, left_out_needs_a_look: 1, to_fold_addresses: 3, accounts: 1,
+        already_stopped_or_decided: 1, other_contacts_sharing_an_address: 1, with_a_booking_in_30_days: 1, future_stamps: 1,
       });
       expect(row!.can_write).toBe(true);
     }));
 });
 
 describe("0049-fold-write.sql", () => {
-  it("writes ONE backfill_0049 stop per address, dated at the earliest opt-out, sourced to that one event; refuses an address the customer already stopped (mutation: order the DISTINCT ON by the stamp DESC → occurred_at is 2026-09-05, FAILS)", () =>
+  it("writes ONE backfill_0049 stop per address, dated at the earliest opt-out, sourced to that one event; refuses an address the customer already stopped; skips the future stamp (mutation: order the DISTINCT ON by the stamp DESC → occurred_at is 2026-09-05, FAILS; drop `o.at <= now()` → 0055 raises 22023 on fut and the whole statement fails, FAILS)", () =>
     withRollback(async (c) => {
       const { a, ids } = await fixture(c);
       expect(outcomes(await asService<Outcome>(c, scoped("0049-fold-write.sql", a)))).toEqual({ appended: 2, refused: 1 });
@@ -751,7 +761,7 @@ describe("0049-fold-write.sql", () => {
       expect(rows[0]!.evidence).toEqual({ column: "contacts.marketing_email_opted_out_at", contactId: ids.ana1 });
     }));
 
-  it("is idempotent: a second run writes nothing — the same source answers duplicate, the refused stays refused (spec §5 'Backfills are idempotent'; mutation: a source_ref without the instant, e.g. just the contact id, still dedupes — so instead mutate the source to include now() → the second run appends 2, FAILS)", () =>
+  it("is idempotent: a second run writes nothing — the same source answers duplicate, the refused stays refused (spec §5 'Backfills are idempotent'; mutation: end the source with clock_timestamp()::text → the second run's sources are new, so 0055's backfill rule refuses all three over the first run's stops and the outcomes read { refused: 3 }, not { duplicate: 2, refused: 1 }, FAILS — `now()` would NOT bite: it is fixed for the whole transaction, withRollback's included)", () =>
     withRollback(async (c) => {
       const { a } = await fixture(c);
       await asService(c, scoped("0049-fold-write.sql", a));
@@ -814,14 +824,25 @@ describe("CI SQL files: the backfills that write", () => {
 });
 ```
 
+Edit `packages/db/src/ci/sql.test.ts` (review R2-I3: today `sqlRefusals` reads the fold's write as a READ — it starts with `with`, and none of its words is on the deny list — so the "refused as a read" case above could never pass; the ledger's write function joins the deny list instead of the assertion being dropped, which also closes that hole for any later file). After the case `"refuses a server-file read"`, add:
+```ts
+  it("refuses a call of the consent ledger's one write path, whose INSERT a read-only transaction would stop only at run time (consent PR-3: the 0049 fold's write file is refused as a read; mutation: drop append_consent_event from NOT_IN_A_READ → FAILS)", () => {
+    expect(refused("select r.outcome from public.append_consent_event('a', 'email', 'x@y.z', 'revoked', 'backfill_0049', 'none', null, null, null, null, null, '{}'::jsonb, null) r"))
+      .toEqual(['statement 1 uses "append_consent_event", which a read may not use']);
+    expect(refused('select * from public."append_consent_event"(null, null, null, null, null, null, null, null, null, null, null, null, null)'))
+      .toEqual(['statement 1 uses "append_consent_event", which a read may not use']);
+  });
+```
+(The second call is the quoted spelling: `sqlRefusals` checks quoted identifiers against the same deny list.)
+
 - [ ] **Step 2: Run the tests to see them fail**
 
 Replica up (Prerequisites 2), then:
 ```bash
 cd packages/db
-SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/test/email-optout-fold.test.ts src/ci/sql-files.test.ts
+SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/test/email-optout-fold.test.ts src/ci/sql-files.test.ts src/ci/sql.test.ts
 ```
-Expected (predicted): every case fails with ENOENT on the two new files.
+Expected (predicted): every fold case fails with ENOENT on the two new files; `sql.test.ts`'s new case fails (`[]`, nothing refused); every other `sql.test.ts` case passes.
 
 - [ ] **Step 3: Write the two files**
 
@@ -848,8 +869,12 @@ with opted as (
            and position('@' in o.address) > 1
            and o.address !~ '[^ -~]', false) as valid
     from opted o
+), foldable as (
+  -- EXACTLY the write's rule (0049-fold-write.sql's valid CTE): a valid
+  -- address AND a stamp that is not in the future (0055 raises on one).
+  select * from judged where valid and at <= now()
 ), folded as (
-  select distinct account_id, address from judged where valid
+  select distinct account_id, address from foldable
 )
 select
   (select count(*) from judged) as opted_out_contacts,
@@ -871,6 +896,8 @@ select
                    where b.account_id = f.account_id and b.status = 'booked'
                      and b.starts_at between now() and now() + interval '30 days'
                      and lower(btrim(c.email, ' ' || chr(9) || chr(10) || chr(11) || chr(12) || chr(13))) = f.address)) as with_a_booking_in_30_days,
+  -- Skipped by the write (never folded while in the future); a later run
+  -- folds each once its time has passed.
   (select count(*) from judged where at > now()) as future_stamps,
   has_function_privilege(current_user,
     'public.append_consent_event(uuid, text, text, text, text, text, uuid, uuid, text, text, text, jsonb, timestamptz)',
@@ -919,32 +946,51 @@ select r.outcome, count(*)::int as n
  order by r.outcome;
 ```
 
-(`'[^ -~]'` is a bracket expression from space to tilde: printable ASCII. No backslash anywhere.)
+(`'[^ -~]'` is a bracket expression from space to tilde: printable ASCII. No backslash anywhere. The count's `foldable` and the write's `valid` apply the same four address rules and the same `at <= now()`, so `to_fold_addresses` is the number of addresses the write will try: review R1-I5.)
+
+Edit `packages/db/src/ci/sql.ts`. Find:
+```ts
+  "pg_notify", "pg_switch_wal", "pg_promote", "pg_create_restore_point", "pg_log_backend_memory_contexts",
+]);
+```
+Replace with:
+```ts
+  "pg_notify", "pg_switch_wal", "pg_promote", "pg_create_restore_point", "pg_log_backend_memory_contexts",
+  // The consent ledger's one write path (0055). A read-only transaction stops
+  // its INSERT only at run time; a file that calls it is a write, and says so
+  // with --allow-write (consent PR-3's 0049 fold, review R2-I3).
+  "append_consent_event",
+]);
+```
+and add ", and the consent ledger's write function" to the end of the first sentence of the doc comment above `NOT_IN_A_READ` (before its full stop).
 
 - [ ] **Step 4: Run the tests to see them pass**
 
 ```bash
 cd packages/db
-SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/test/email-optout-fold.test.ts src/ci/sql-files.test.ts
+SUPABASE_DB_URL=postgresql://postgres@localhost:55433/post pnpm exec vitest run src/test/email-optout-fold.test.ts src/ci/sql-files.test.ts src/ci/sql.test.ts
 ```
-Expected (predicted): all pass.
+Expected (predicted): all pass: the fold's four cases, `sql-files.test.ts` (the count file still passes as a read — `append_consent_event` appears there only inside a string literal, which the lexer blanks — and the write file is refused as a read and passes with `--allow-write`), and `sql.test.ts` with its new case.
 
 - [ ] **Step 5: Probes** (edit the REAL file the test reads, run, then `git checkout --` it)
 
 | # | Mutation | Must fail |
 |---|---|---|
-| 1 | count: `select count(*) from folded` → `select count(*) from judged where valid` | the count case (to_fold_addresses 4) |
+| 1 | count: `select count(*) from folded` → `select count(*) from foldable` | the count case (to_fold_addresses 4) |
+| 1b | count: `foldable` drops `and at <= now()` | the count case (to_fold_addresses 4: fut counted) |
+| 1c | write: drop `and o.at <= now()` | the write case (0055 raises 22023 on fut: the statement fails) |
 | 2 | count and write: drop `and o.address !~ '[^ -~]'` / the same line in `judged` | the count case (left_out 0); the write case (appended 3) |
 | 3 | write: `o.at asc` → `o.at desc` | the write case (occurred_at 2026-09-05) |
-| 4 | write: the source_ref ends `\|\| now()::text` instead of the stamp | the idempotence case (second run appends 2) |
+| 4 | write: the source_ref ends `\|\| clock_timestamp()::text` instead of the stamp | the idempotence case (second run `{ refused: 3 }`, not `{ duplicate: 2, refused: 1 }`: 0055's backfill rule refuses the new sources over the first run's stops). `now()` instead would stay GREEN (one transaction, one `now()`): do not use it |
 | 5 | write: `v.at) r` → `clock_timestamp()) r` | "never lands over a later customer act" |
 | 6 | write: add a second statement `select 1;` | "is ONE statement" |
+| 6b | `sql.ts`: drop `"append_consent_event"` from `NOT_IN_A_READ` | `sql.test.ts`'s new case; `sql-files.test.ts` "refused as a read" |
 | 7 | write: `'none'` → `'if_empty'` | the write case (ana's address has no row: still appended; gee's too; fe refused — outcomes unchanged) — this probe is EXPECTED to stay green, and proves the guard does not matter here: 0055's `backfill_0049` rule is what refuses. Record it as such. |
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add packages/db/supabase/backfills/0049-fold-count.sql packages/db/supabase/backfills/0049-fold-write.sql packages/db/src/test/email-optout-fold.test.ts packages/db/src/ci/sql-files.test.ts
+git add packages/db/supabase/backfills/0049-fold-count.sql packages/db/supabase/backfills/0049-fold-write.sql packages/db/src/test/email-optout-fold.test.ts packages/db/src/ci/sql-files.test.ts packages/db/src/ci/sql.ts packages/db/src/ci/sql.test.ts
 git commit -m "feat(consent): the 0049 fold — a counted, idempotent backfill_0049 write through the ledger's function"
 ```
 
@@ -952,7 +998,7 @@ git commit -m "feat(consent): the 0049 fold — a counted, idempotent backfill_0
 
 ### Task 3: The unsubscribe token (sealed and signed, no table)
 
-**Owner:** bis-comms. **Tier:** HIGH. **Questions:** [Q3] (encrypted as well as signed; the plain signed form is the alternative).
+**Owner:** bis-comms. **Tier:** HIGH. **Decisions:** Q3 (encrypted as well as signed).
 
 **Files:**
 - Create: `apps/web/src/lib/consent/token.ts`, `apps/web/src/lib/consent/token.test.ts`
@@ -967,7 +1013,7 @@ git commit -m "feat(consent): the 0049 fold — a counted, idempotent backfill_0
   - `consentTokenSecrets(env?: NodeJS.ProcessEnv): { current: string | null; previous: string | null }` — `CONSENT_TOKEN_SECRET`, `CONSENT_TOKEN_SECRET_PREVIOUS`, trimmed, blank = null. No fallback to any other key (spec §4.3).
   - `isUuid(v: unknown): v is string` — the opener's own uuid rule, so a sealer never mints a token its opener refuses (the gate passes `n` only through it).
 
-**The format [Q3]:** `1.` + base64url(iv(12) ‖ AES-256-GCM ciphertext ‖ tag(16)) + `.` + base64url(HMAC-SHA256(macKey, `"1." + body`)). `encKey` and `macKey` are HKDF-SHA256 of the secret with salt `bis-consent-token` and infos `enc-v1` / `mac-v1`. The HMAC is checked first, in constant time; only a token that proves its MAC is decrypted. Tokens never expire (X4: the opt-out must work for at least 30 days). **If danlo answers Q3 "only signed":** `body` becomes base64url(JSON) with no cipher, `openConsentToken` parses it after the MAC check, and the two "cannot read the address" tests below are deleted; nothing else in the plan changes.
+**The format (decision Q3):** `1.` + base64url(iv(12) ‖ AES-256-GCM ciphertext ‖ tag(16)) + `.` + base64url(HMAC-SHA256(macKey, `"1." + body`)). `encKey` and `macKey` are HKDF-SHA256 of the secret with salt `bis-consent-token` and infos `enc-v1` / `mac-v1`. The HMAC is checked first, in constant time; only a token that proves its MAC is decrypted. Tokens never expire (X4: the opt-out must work for at least 30 days). Rotation keeps ONE previous secret (G8): never rotate twice within 30 days.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -977,7 +1023,7 @@ import { describe, it, expect } from "vitest";
 import { sealConsentToken, openConsentToken, consentTokenSecrets, isUuid, type ConsentTokenPayload } from "./token";
 
 /**
- * The unsubscribe token (spec §4.3 "The token", plan Task 3, [Q3]). §8's
+ * The unsubscribe token (spec §4.3 "The token", plan Task 3, (decision Q3)). §8's
  * list: sign and verify, a tampered payload, a wrong secret, the previous
  * secret. Plus: nobody can read the address out of it, and it is URL-safe.
  */
@@ -1000,7 +1046,7 @@ describe("sealConsentToken / openConsentToken", () => {
     }
   });
 
-  it("does not carry the address, the account or the kind in readable form, even base64-decoded (plan G2, [Q3]; mutation: store the JSON unencrypted → the decoded body contains the address, FAILS)", () => {
+  it("does not carry the address, the account or the kind in readable form, even base64-decoded (plan G2, (decision Q3); mutation: store the JSON unencrypted → the decoded body contains the address, FAILS)", () => {
     const t = sealConsentToken(P, SECRET);
     const decoded = Buffer.from(t.split(".")[1]!, "base64url").toString("latin1");
     for (const secret of [P.t, "ana.lopez", P.a, "automation.reminder"]) {
@@ -1074,6 +1120,11 @@ describe("consentTokenSecrets", () => {
     expect(consentTokenSecrets({ CONSENT_TOKEN_SECRET: "   ", SUPABASE_SERVICE_ROLE_KEY: "svc", FORM_TOKEN_SECRET: "f" } as NodeJS.ProcessEnv))
       .toEqual({ current: null, previous: null });
   });
+
+  it("with CONSENT_TOKEN_SECRET ABSENT and the service-role key set, current is still null (review R2-I5: the blank case above cannot catch a `??` fallback, because `\"   \" ?? svc` is the blank string; mutation: `clean(env.CONSENT_TOKEN_SECRET ?? env.SUPABASE_SERVICE_ROLE_KEY)` → current 'svc', FAILS)", () => {
+    expect(consentTokenSecrets({ SUPABASE_SERVICE_ROLE_KEY: "svc-0123456789abcdef-0123456789abcdef" } as unknown as NodeJS.ProcessEnv))
+      .toEqual({ current: null, previous: null });
+  });
 });
 ```
 
@@ -1096,7 +1147,7 @@ import { emailLedgerAddress } from "@bis/db/email-address";
  * The unsubscribe token (consent chain spec §4.3; decision 6: signed, no
  * token table). It carries the account, the channel and the address the
  * ledger keys on, and — for the record only — the contact and the kind of
- * email it came in. Its body is ENCRYPTED as well as signed (plan G2, [Q3]),
+ * email it came in. Its body is ENCRYPTED as well as signed (plan G2, (decision Q3)),
  * so no one reading a URL (a request log, a mail scanner, a browser's
  * history, a Referer) can read the customer's address out of it.
  *
@@ -1105,7 +1156,10 @@ import { emailLedgerAddress } from "@bis/db/email-address";
  * Both keys come from CONSENT_TOKEN_SECRET through HKDF, never from any
  * other credential (spec: no fallback to the service-role key, unlike the
  * form render token). CONSENT_TOKEN_SECRET_PREVIOUS still opens tokens
- * sealed before a rotation. Tokens never expire: CAN-SPAM wants the way out
+ * sealed before a rotation — ONE slot, so a second rotation drops the first
+ * secret and every link sealed with it: never rotate twice within 30 days
+ * (CAN-SPAM's minimum). In production the email gate refuses to seal with a
+ * secret shorter than 32 characters (plan G8). Tokens never expire: CAN-SPAM wants the way out
  * to work for at least 30 days after the email (plan X4), and a link in an
  * old email should still work years later.
  *
@@ -1214,10 +1268,13 @@ APP_ORIGIN=https://app.bis-rgv.com
 # Consent chain PR-3: seals and signs the unsubscribe link in every customer
 # email (lib/consent/token.ts). REQUIRED in production: without it every
 # customer email is held, never sent without its way out. Generate 32 random
-# bytes (base64url) and pipe them straight into `vercel env add`; never echo
-# it. Rotating: move the old value to CONSENT_TOKEN_SECRET_PREVIOUS so links
-# already sent keep working. Unset outside production = emails carry no link
-# (nothing real is delivered there). No fallback to any other key.
+# bytes (base64url, 43 characters; production refuses one under 32) and pipe
+# them straight into `vercel env add`; never echo it. Rotating: move the old
+# value to CONSENT_TOKEN_SECRET_PREVIOUS so links already sent keep working.
+# That is ONE slot: a second rotation drops the first secret and breaks every
+# link sealed with it, so never rotate twice within 30 days. Unset outside
+# production = emails carry no link (nothing real is delivered there). No
+# fallback to any other key.
 CONSENT_TOKEN_SECRET=
 CONSENT_TOKEN_SECRET_PREVIOUS=
 ```
@@ -1240,7 +1297,7 @@ Expected (predicted): all pass.
 | 4 | `openConsentToken`: `for (const secret of secrets.slice(0, 1))` | "the PREVIOUS secret still opens …" |
 | 5 | `openConsentToken`: drop `parts[0] !== VERSION` | "a tampered body … a wrong version …" |
 | 6 | `openConsentToken`: `return shapeOf(JSON.parse(json))` → `return JSON.parse(json)` | "refuses a payload whose shape is wrong …" |
-| 7 | `consentTokenSecrets`: `current: clean(env.CONSENT_TOKEN_SECRET ?? env.SUPABASE_SERVICE_ROLE_KEY)` | "reads the two variables … and NOTHING else" |
+| 7 | `consentTokenSecrets`: `current: clean(env.CONSENT_TOKEN_SECRET ?? env.SUPABASE_SERVICE_ROLE_KEY)` | "with CONSENT_TOKEN_SECRET ABSENT and the service-role key set, current is still null" (the blank-string case stays green under this mutation, R2-I5) |
 | 8 | `sealConsentToken`: drop the `!secret` throw | "sealing with no secret throws" |
 
 - [ ] **Step 6: Commit**
@@ -1254,7 +1311,7 @@ git commit -m "feat(consent): the unsubscribe token — sealed and signed, no ta
 
 ### Task 4: The email kinds, every PR-3 line of copy, and the shell's footer marker
 
-**Owner:** bis-comms (copy reviewed by bis-frontend). **Tier:** HIGH. **Questions:** [Q1] (four page lines), [Q4] (`staff.composer_email`'s footer).
+**Owner:** bis-comms (copy reviewed by bis-frontend). **Tier:** HIGH. **Decisions:** Q1 and P2 (the page's question and its button), Q4 (`staff.composer_email`'s footer), P1 (`FOOTER_ADDRESS_KINDS`), M2 (the bad-link line).
 
 **Files:**
 - Modify: `apps/web/src/lib/consent/classes.ts`, `apps/web/src/lib/consent/classes.test.ts`
@@ -1268,17 +1325,18 @@ git commit -m "feat(consent): the unsubscribe token — sealed and signed, no ta
   - `type EmailKindSpec = { readonly class: EmailClass; readonly hours: HoursRule; readonly footer: "unsubscribe" | "none" }`
   - `EMAIL_KINDS` (22 kinds, below), `type EmailKind`, `type AutomationEmailKind = Extract<EmailKind, \`automation.${string}\`>`, `type OperatorEmailKind = Extract<EmailKind, \`operator.${string}\`>`, `type CustomerInitiatedEmailKind`
   - `isEmailKind(kind: string): kind is EmailKind`, `emailReadsLedger(kind: EmailKind): boolean` (true for `informational` and `marketing` only: decision 7)
+  - `FOOTER_ADDRESS_KINDS: ReadonlySet<EmailKind>` — decision P1's three kinds (`automation.review_request`, `automation.quote_followup`, `automation.no_show_nudge`) whose footer the gate gives the account's postal address when it is set (G18)
 - Produces (from `@/lib/email/templates/shell`): `UNSUBSCRIBE_MARKER = "<!--bis:unsubscribe-->"`, emitted exactly once by `shell()`, as the card's last row.
 - Produces (in `m`): the keys listed in Step 3.
 
-**The registry** (spec §4.3 as corrected by E1, choice 31, [Q4]):
+**The registry** (spec §4.3 as corrected by E1, choice 31, (decision Q4)):
 
 | Kind | Class | Hours | Footer |
 |---|---|---|---|
 | `booking.confirmation`, `forms.receipt`, `voice.booked`, `voice.moved`, `voice.cancelled` | customer_initiated | any | unsubscribe |
 | `automation.reminder`, `automation.followup` | informational | automated | unsubscribe |
 | `automation.review_request`, `automation.referral_ask`, `automation.reactivation`, `automation.quote_followup`, `automation.no_show_nudge` | marketing | automated | unsubscribe |
-| `staff.composer_email` | staff_typed | any | **none** [Q4] (§4.3 literally: `unsubscribe`) |
+| `staff.composer_email` | staff_typed | any | **none** (decision Q4) |
 | `operator.booking_alert`, `operator.cancel_notice`, `operator.lead_alert`, `operator.call_alert`, `operator.phone_change_alert`, `operator.weekly_report`, `operator.agency_report`, `operator.billing_link`, `operator.sender_check` | operator | any | none |
 
 - [ ] **Step 1: Write the failing tests**
@@ -1289,7 +1347,7 @@ import { SMS_KINDS, isSmsKind } from "./classes";
 ```
 Replace with:
 ```ts
-import { SMS_KINDS, isSmsKind, EMAIL_KINDS, isEmailKind, emailReadsLedger, type EmailKind } from "./classes";
+import { SMS_KINDS, isSmsKind, EMAIL_KINDS, isEmailKind, emailReadsLedger, FOOTER_ADDRESS_KINDS, type EmailKind } from "./classes";
 ```
 Append at the end:
 ```ts
@@ -1299,7 +1357,7 @@ Append at the end:
  * what an unsubscribe stops by class), so it must fail here and be argued.
  * Hours: choice 31 (automated email keeps the fixed automated window).
  * Footer: every customer email carries the unsubscribe link and headers,
- * except staff-typed email ([Q4], the plan's recommendation).
+ * except staff-typed email (decision Q4).
  */
 const EMAIL_TABLE: Record<string, [string, string, string]> = {
   "booking.confirmation": ["customer_initiated", "any", "unsubscribe"],
@@ -1363,6 +1421,16 @@ describe("isEmailKind", () => {
     expect(isEmailKind("automation.sms_reminder")).toBe(false);
   });
 });
+
+describe("FOOTER_ADDRESS_KINDS — decision P1 (spec §4.3, §10)", () => {
+  it("is exactly the three marketing kinds whose templates print no postal address; the check-in and the referral ask print their own (mutation: add automation.reactivation → its address prints twice, FAILS; drop no_show_nudge → FAILS)", () => {
+    expect([...FOOTER_ADDRESS_KINDS].sort()).toEqual(["automation.no_show_nudge", "automation.quote_followup", "automation.review_request"]);
+    for (const kind of FOOTER_ADDRESS_KINDS) {
+      expect(EMAIL_KINDS[kind].class, kind).toBe("marketing");
+      expect(EMAIL_KINDS[kind].footer, kind).toBe("unsubscribe");
+    }
+  });
+});
 ```
 
 Edit `apps/web/src/lib/email/templates/shell.test.ts`. Find:
@@ -1386,9 +1454,10 @@ describe("the unsubscribe marker (consent PR-3, plan G7)", () => {
     expect(at).toBeLessThan(html.indexOf("</table>\n  </td></tr>"));
   });
 
-  it("text the operator or customer wrote cannot forge a second marker: escapeHtml neutralises it (mutation: stop escaping '<' → two markers, FAILS)", () => {
+  it("text the operator or customer wrote cannot forge a second marker, or even the start of one: escapeHtml neutralises it (mutation: drop escapeHtml's `<` replace → the body holds `<!--bis:unsubscribe--&gt;`, a second `<!--bis:` opener, FAILS; the whole-marker count alone would stay green under that mutation, because `>` is still escaped: review R2-m2)", () => {
     const html = shell(brand, `<p>${escapeHtml(UNSUBSCRIBE_MARKER)}</p>`);
     expect(html.split(UNSUBSCRIBE_MARKER)).toHaveLength(2);
+    expect(html.split("<!--bis:")).toHaveLength(2);
   });
 });
 ```
@@ -1409,8 +1478,16 @@ describe("PR-3: the spec's own words (§4.3 footer, §6 page, composer and Email
     expect(m["unsubscribe.resubscribe"]).toBe("Resubscribe / Volver a suscribirme");
     expect(m["unsubscribe.resubscribed.en"]).toBe("You'll get emails from {Business} again.");
     expect(m["unsubscribe.resubscribed.es"]).toBe("Volverá a recibir correos de {Business}.");
-    expect(m["unsubscribe.badLink.en"]).toBe("This unsubscribe link doesn't work. Reply to any email from the business and ask them to stop.");
-    expect(m["unsubscribe.badLink.es"]).toBe("Este enlace no funciona. Responda a cualquier correo del negocio y pida que dejen de escribirle.");
+    // Spec §6 as corrected 2026-09-30 (review R1-M2): most of these emails
+    // carry no reply-to, so the line no longer says "reply to any email".
+    expect(m["unsubscribe.badLink.en"]).toBe("This unsubscribe link doesn't work. Contact {Business} directly and ask them to stop.");
+    expect(m["unsubscribe.badLink.es"]).toBe("Este enlace no funciona. Comuníquese directamente con {Business} y pida que dejen de escribirle.");
+  });
+
+  it("the question and its one button, in both languages (decisions Q1 and P2: the button says what the title asks; mutation: 'Unsubscribe / Cancelar suscripción' → FAILS)", () => {
+    expect(m["unsubscribe.confirm.en"]).toBe("Stop emails from {Business}?");
+    expect(m["unsubscribe.confirm.es"]).toBe("¿Dejar de recibir correos de {Business}?");
+    expect(m["unsubscribe.button"]).toBe("Stop emails / Dejar de recibir correos");
   });
 
   it("the composer's unsubscribed notice, with its date as {date}", () => {
@@ -1446,8 +1523,14 @@ Find:
 ```
 Replace with:
 ```ts
+  // PR-3: the email gate, and the automations' PassContext (context.ts),
+  // whose `ctx.email` IS the email gate from Task 6. Without it the scan
+  // would never read reminders.ts, followups.ts, reactivation.ts,
+  // weekly-report.ts or weekly-agency-report.ts: they send through
+  // ctx.email and import neither gate module (review R2-I4).
   const GATE_MODULES = new Set([
     "apps/web/src/lib/consent/gate", "apps/web/src/lib/automations/send-sms", "apps/web/src/lib/consent/email-gate",
+    "apps/web/src/lib/automations/context",
   ]);
 ```
 Find:
@@ -1499,8 +1582,8 @@ Edit `apps/web/src/lib/consent/classes.ts`. Append at the end:
  * (choice 23) are not subject to it. The HOURS: every automated kind keeps
  * the fixed automated window (choice 31). The FOOTER: every customer email
  * carries the unsubscribe link and the RFC 8058 headers, except staff-typed
- * email, a person's own reply ([Q4], the plan's recommendation; spec §4.3
- * literally gives it the footer too). Operator mail carries neither.
+ * email, a person's own reply (danlo's decision Q4, 2026-09-30; spec §4.3,
+ * choice 22). Operator mail carries neither.
  */
 export type EmailClass = "customer_initiated" | "informational" | "marketing" | "staff_typed" | "operator";
 
@@ -1547,6 +1630,19 @@ export function emailReadsLedger(kind: EmailKind): boolean {
   const cls = EMAIL_KINDS[kind].class;
   return cls === "informational" || cls === "marketing";
 }
+
+/**
+ * Decision P1 (danlo, 2026-09-30; spec §4.3, §10): the three marketing kinds
+ * whose templates print no postal address. The email gate adds the account's
+ * `mailing_address` to their footer WHENEVER it is set, and a blank one never
+ * blocks them — they follow up the customer's own request or appointment
+ * (relationship mail; counsel reviews that reading at go-live). The check-in
+ * and the referral ask are not here: their templates print the address
+ * themselves (marketing-footer.ts) and their passes skip an account with none.
+ */
+export const FOOTER_ADDRESS_KINDS: ReadonlySet<EmailKind> = new Set<EmailKind>([
+  "automation.review_request", "automation.quote_followup", "automation.no_show_nudge",
+]);
 ```
 (The file already imports `type HoursRule` from `./hours`.)
 
@@ -1628,21 +1724,23 @@ And add a new block (next to the other public-page strings; anywhere inside the 
   "email.unsubscribe.link.es": "Cancelar suscripción",
   // The public /u/[token] page (spec §6). English and Spanish stacked: the
   // token carries no language. {Business} is the brand name, or the
-  // business/el negocio when it is blank. [Q1]: the confirm lines and the
-  // one primary button exist because the page asks for one click.
+  // business/el negocio when it is blank (always, for a bad link: a token
+  // that does not open names no business). Decision Q1: the page asks, and
+  // its one primary button records; decision P2: the button says "Stop
+  // emails", as the title asks.
   "unsubscribe.pageTitle": "Email preferences",
   "unsubscribe.confirm.en": "Stop emails from {Business}?",
   "unsubscribe.confirm.es": "¿Dejar de recibir correos de {Business}?",
   "unsubscribe.confirmBody.en": "{Business} will stop sending you automated emails. You'll still get a confirmation when you book or ask for something.",
   "unsubscribe.confirmBody.es": "{Business} dejará de enviarle correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.",
-  "unsubscribe.button": "Unsubscribe / Cancelar suscripción",
+  "unsubscribe.button": "Stop emails / Dejar de recibir correos",
   "unsubscribe.done.en": "You're unsubscribed. {Business} won't send you any more automated emails. You'll still get a confirmation when you book or ask for something.",
   "unsubscribe.done.es": "Listo. {Business} ya no le enviará correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.",
   "unsubscribe.resubscribe": "Resubscribe / Volver a suscribirme",
   "unsubscribe.resubscribed.en": "You'll get emails from {Business} again.",
   "unsubscribe.resubscribed.es": "Volverá a recibir correos de {Business}.",
-  "unsubscribe.badLink.en": "This unsubscribe link doesn't work. Reply to any email from the business and ask them to stop.",
-  "unsubscribe.badLink.es": "Este enlace no funciona. Responda a cualquier correo del negocio y pida que dejen de escribirle.",
+  "unsubscribe.badLink.en": "This unsubscribe link doesn't work. Contact {Business} directly and ask them to stop.",
+  "unsubscribe.badLink.es": "Este enlace no funciona. Comuníquese directamente con {Business} y pida que dejen de escribirle.",
   "unsubscribe.failed.en": "Something went wrong on our side. Try the link again in a few minutes.",
   "unsubscribe.failed.es": "Algo falló de nuestro lado. Vuelva a abrir el enlace en unos minutos.",
   "unsubscribe.business.en": "the business",
@@ -1656,7 +1754,7 @@ And add a new block (next to the other public-page strings; anywhere inside the 
 cd apps/web
 pnpm exec vitest run src/lib/consent/classes.test.ts src/lib/consent/copy.test.ts src/lib/email/templates src/lib/consent/scans.test.ts src/lib/messages.test.ts
 ```
-Expected (predicted): all pass. The template tests assert with `toContain`/`toMatch`; if any pins a template's whole `html` string, add `UNSUBSCRIBE_MARKER` to that expected string at the card's end (the marker is part of the shell now) and say so in the commit message. `messages.test.ts`'s voice scan must stay green: none of the new lines carries a milestone code, carrier jargon or `{{…}}`.
+Expected (predicted): all pass. Scan 2 now reads every module that imports `lib/automations/context` too (review R2-I4); on `001a25f9` those modules hold only registered SMS kind literals (`appointment-confirm.ts`, `sms-reminder.ts`, `review-request.ts`, `referral-ask.ts`, `quote-followup.ts`, `no-show-nudge.ts`; read in the plan's fix round), so nothing new is named. The template tests assert with `toContain`/`toMatch`; if any pins a template's whole `html` string, add `UNSUBSCRIBE_MARKER` to that expected string at the card's end (the marker is part of the shell now) and say so in the commit message. `messages.test.ts`'s voice scan must stay green: none of the new lines carries a milestone code, carrier jargon or `{{…}}`.
 
 - [ ] **Step 5: Probes**
 
@@ -1669,6 +1767,9 @@ Expected (predicted): all pass. The template tests assert with `toContain`/`toMa
 | 5 | `shell()`: put `${UNSUBSCRIBE_MARKER}` before the body row | "shell() emits the marker exactly once, AFTER the body row" |
 | 6 | `m["unsubscribe.done.es"]`: "Listo." → "Listo!" | the page lines case |
 | 7 | scans.test: KIND_LITERAL without `booking\|forms` | none yet (no gate caller holds such a literal until Task 7) — EXPECTED green here; Task 13's probe 2 covers it |
+| 8 | `FOOTER_ADDRESS_KINDS` gains `"automation.reactivation"` | "FOOTER_ADDRESS_KINDS — decision P1" |
+| 9 | `escapeHtml`: drop the `.replace(/</g, "&lt;")` line | "text the operator or customer wrote cannot forge a second marker, or even the start of one" |
+| 10 | `m["unsubscribe.button"]` back to `"Unsubscribe / Cancelar suscripción"` | "the question and its one button" |
 
 - [ ] **Step 6: Commit**
 
@@ -1681,7 +1782,7 @@ git commit -m "feat(consent): the twenty-two email kinds, PR-3's copy, and the s
 
 ### Task 5: The email gate, and the provider that carries headers
 
-**Owner:** bis-comms. **Tier:** HIGH. **Questions:** [Q4] (a staff kind carries no footer — decided by Task 4's registry, tested here).
+**Owner:** bis-comms. **Tier:** HIGH. **Decisions:** Q4 (a staff kind carries no footer — Task 4's registry, tested here), P1 (the postal address), M3/M4 (the secret's length, HTTPS only).
 
 **Files:**
 - Create: `apps/web/src/lib/consent/email-gate.ts`, `apps/web/src/lib/consent/email-gate.test.ts`
@@ -1689,7 +1790,7 @@ git commit -m "feat(consent): the twenty-two email kinds, PR-3's copy, and the s
 - Modify: `apps/web/src/lib/email/types.ts` (`headers`), `apps/web/src/lib/email/resend.ts`, `apps/web/src/lib/email/resend.test.ts`, `apps/web/src/lib/email/index.ts` (re-exports `isProductionEnv`), `apps/web/src/lib/email/email.test.ts`
 
 **Interfaces:**
-- Consumes: `EMAIL_KINDS`, `isEmailKind`, `emailReadsLedger`, `EmailKind`, `OperatorEmailKind` (Task 4); `UNSUBSCRIBE_MARKER` (Task 4); `sealConsentToken`, `consentTokenSecrets`, `isUuid` (Task 3); `emailLedgerAddress` (Task 1); `readConsentState`, `readAccountTimezone` (`@bis/db`); `nextOpening`, `expiresBeforeOpening`, `hoursZone` (PR-1); `configuredOrigin` (`lib/email/origin.ts`).
+- Consumes: `EMAIL_KINDS`, `isEmailKind`, `emailReadsLedger`, `FOOTER_ADDRESS_KINDS`, `EmailKind`, `OperatorEmailKind` (Task 4); `UNSUBSCRIBE_MARKER` (Task 4); `sealConsentToken`, `consentTokenSecrets`, `isUuid` (Task 3); `emailLedgerAddress` (Task 1); `readConsentState`, `readAccountTimezone`, `getMailingAddress` (`@bis/db`; the last for P1 only, see Global Constraints); `nextOpening`, `expiresBeforeOpening`, `hoursZone` (PR-1); `configuredOrigin` (`lib/email/origin.ts`).
 - Produces (from `@/lib/consent/email-gate`):
   - `type EmailRequest = Omit<SendEmailInput, "headers"> & { accountId: string | null; kind: EmailKind; contactId?: string | null; language?: "en" | "es"; origin?: string | null; now?: Date; accountZone?: string | null; deadline?: Date | null }`
   - `type EmailBlockReason = "no_address" | "stopped" | "held" | "window_after_deadline" | "ledger_unavailable" | "unsubscribe_unavailable"`
@@ -1707,8 +1808,9 @@ git commit -m "feat(consent): the twenty-two email kinds, PR-3's copy, and the s
 2. `to` is keyed with `emailLedgerAddress`; nothing keyable → blocked `no_address`;
 3. an `informational` or `marketing` kind reads the ledger: stopped → blocked `stopped`, held → blocked `held`, a read error → blocked `ledger_unavailable` (fails closed, logged through `loggableError`);
 4. an automated kind applies the fixed automated hours (choice 31) in `accountZone` (or `accounts.timezone`, read): outside → `deferred`, unless the deadline falls first → blocked `window_after_deadline`; an unreadable zone → blocked `ledger_unavailable`;
+4b. a `FOOTER_ADDRESS_KINDS` kind (decision P1, G18) reads the account's `mailing_address`: set → its lines go in the footer; blank or unset → nothing, and it still sends; unreadable → blocked `ledger_unavailable` (fails closed);
 5. the provider is constructed (its throw → failed `provider_unavailable`);
-6. a customer kind (footer `unsubscribe`) gets the footer row in place of the marker, the footer line at the end of the text part, and the two headers — or, in production with no secret or no origin, is blocked `unsubscribe_unavailable`; outside production it goes without them (G8). Any other kind has the marker removed and no headers;
+6. a customer kind (footer `unsubscribe`) gets the footer row in place of the marker, the footer line at the end of the text part, and the two headers — or, in production with no secret, a secret shorter than 32 characters, no origin or an origin that is not `https://`, is blocked `unsubscribe_unavailable`; outside production it goes without them (G8). Any other kind has the marker removed and no headers;
 7. the provider sends ONLY the send fields (never the gate's own); its throw → failed `provider` with its message.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1751,7 +1853,7 @@ Create `apps/web/src/lib/consent/email-gate.test.ts`:
 ```ts
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const db = vi.hoisted(() => ({ readConsentState: vi.fn(), readAccountTimezone: vi.fn() }));
+const db = vi.hoisted(() => ({ readConsentState: vi.fn(), readAccountTimezone: vi.fn(), getMailingAddress: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const factory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
 vi.mock("@/lib/email", async (importOriginal) => ({ ...(await importOriginal<object>()), ...factory }));
@@ -1785,6 +1887,7 @@ beforeEach(() => {
   for (const fn of [...Object.values(db), ...Object.values(factory), send]) fn.mockReset();
   db.readConsentState.mockResolvedValue({ state: "allowed" });
   db.readAccountTimezone.mockResolvedValue("America/Chicago");
+  db.getMailingAddress.mockResolvedValue(null);
   factory.getEmailProvider.mockReturnValue(provider());
   send.mockResolvedValue({ providerMessageId: "re_1" });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1890,7 +1993,7 @@ describe("sendEmail: the footer and the RFC 8058 headers (spec §4.3, plan G7)",
     expect(sent().html).toContain(">Cancelar suscripción</a>");
   });
 
-  it("operator mail and staff-typed mail carry no link and no headers, and the marker is removed ([Q4], choice 23; mutation: give staff kinds the footer → FAILS)", async () => {
+  it("operator mail and staff-typed mail carry no link and no headers, and the marker is removed ((decision Q4), choice 23; mutation: give staff kinds the footer → FAILS)", async () => {
     for (const kind of ["operator.booking_alert", "staff.composer_email"] as const) {
       send.mockClear();
       await sendEmail(base({ kind }), { env: ENV });
@@ -1933,6 +2036,41 @@ describe("sendEmail: the footer and the RFC 8058 headers (spec §4.3, plan G7)",
   });
 });
 
+describe("sendEmail: the postal address on the three follow-ups whose templates print none (decision P1, G18; spec §10)", () => {
+  it.each(["automation.review_request", "automation.quote_followup", "automation.no_show_nudge"] as const)(
+    "%s carries the account's mailing_address under the unsubscribe line, one line per stored line, in the html and the text part (mutation: drop the address step → FAILS)", async (kind) => {
+      db.getMailingAddress.mockResolvedValue("  120 S Main St\r\nMcAllen, TX 78501 \n\n");
+      expect((await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).kind).toBe("sent");
+      expect(db.getMailingAddress).toHaveBeenCalledWith(CLIENT, ACCOUNT);
+      expect(sent().html).toContain("120 S Main St<br>McAllen, TX 78501");
+      expect(sent().html!.indexOf("120 S Main St")).toBeGreaterThan(sent().html!.indexOf("Unsubscribe</a>"));
+      expect(sent().body).toMatch(/Unsubscribe: https:\/\/app\.example\.com\/u\/\S+\n\n120 S Main St\nMcAllen, TX 78501$/);
+    });
+
+  it("a blank or unset address never blocks them: sent, with no address lines (P1: unlike the check-in and the referral ask; mutation: block when blank → FAILS)", async () => {
+    for (const blank of [null, "  \n "]) {
+      send.mockClear();
+      db.getMailingAddress.mockResolvedValueOnce(blank);
+      expect((await sendEmail(base({ kind: "automation.review_request" }), { db: CLIENT, env: ENV })).kind).toBe("sent");
+      expect(sent().body).toMatch(/Unsubscribe: https:\/\/app\.example\.com\/u\/\S+$/);
+    }
+  });
+
+  it("the check-in, the referral ask and every other kind never read it (their templates print their own, or they carry none; mutation: read it for every marketing kind → FAILS)", async () => {
+    for (const kind of ["automation.reactivation", "automation.referral_ask", "automation.reminder", "booking.confirmation", "operator.lead_alert"] as const) {
+      await sendEmail(base({ kind }), { db: CLIENT, env: ENV });
+    }
+    expect(db.getMailingAddress).not.toHaveBeenCalled();
+  });
+
+  it("an unreadable address is a re-hold, never a send without it (fails closed; mutation: treat a read error as blank → sent, FAILS)", async () => {
+    db.getMailingAddress.mockRejectedValueOnce(new Error("getMailingAddress failed: timeout"));
+    expect(await sendEmail(base({ kind: "automation.quote_followup" }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    expect(vi.mocked(console.error).mock.calls.flat().join(" ")).toMatch(/automation\.quote_followup .*blocked, mailing address unreadable/);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
 describe("sendEmail: with no secret or no origin (plan G8)", () => {
   it("in PRODUCTION a customer kind is blocked unsubscribe_unavailable and never sent; operator mail still goes (mutation: send without the link in production → FAILS)", async () => {
     vi.stubEnv("NODE_ENV", "production");
@@ -1942,6 +2080,26 @@ describe("sendEmail: with no secret or no origin (plan G8)", () => {
       .toEqual({ kind: "blocked", reason: "unsubscribe_unavailable" });
     expect(send).not.toHaveBeenCalled();
     expect((await sendEmail(base({ kind: "operator.lead_alert" }), { env: prod })).kind).toBe("sent");
+  });
+
+  it("in PRODUCTION an origin that is not https, or a secret under 32 characters, blocks a customer kind; 32 characters and https send (RFC 8058's one HTTPS URI; reviews R1-M3, R1-M4, R2-m7; mutation: drop the https check → an http List-Unsubscribe goes out, FAILS; mutation: `< 32` → `< 31` → the 31-character secret seals, FAILS)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const env = (o: Record<string, string>) => ({ VERCEL_ENV: "production", ...o }) as unknown as NodeJS.ProcessEnv;
+    const S32 = "s".repeat(32);
+    expect(await sendEmail(base(), { db: CLIENT, env: env({ APP_ORIGIN: "http://app.example.com", CONSENT_TOKEN_SECRET: S32 }) }))
+      .toEqual({ kind: "blocked", reason: "unsubscribe_unavailable" });
+    expect(await sendEmail(base({ origin: "http://rio.example.com" }), { db: CLIENT, env: env({ CONSENT_TOKEN_SECRET: S32 }) }))
+      .toEqual({ kind: "blocked", reason: "unsubscribe_unavailable" });
+    expect(await sendEmail(base(), { db: CLIENT, env: env({ APP_ORIGIN: "https://app.example.com", CONSENT_TOKEN_SECRET: "s".repeat(31) }) }))
+      .toEqual({ kind: "blocked", reason: "unsubscribe_unavailable" });
+    expect(send).not.toHaveBeenCalled();
+    expect((await sendEmail(base(), { db: CLIENT, env: env({ APP_ORIGIN: "https://app.example.com", CONSENT_TOKEN_SECRET: S32 }) })).kind).toBe("sent");
+    expect(sent().headers!["List-Unsubscribe"]).toMatch(/^<https:\/\//);
+  });
+
+  it("OUTSIDE production an http origin still carries the link (local dev; mutation: apply the https rule everywhere → FAILS)", async () => {
+    await sendEmail(base(), { db: CLIENT, env: { APP_ORIGIN: "http://localhost:3000", CONSENT_TOKEN_SECRET: SECRET } as unknown as NodeJS.ProcessEnv });
+    expect(sent().headers!["List-Unsubscribe"]).toMatch(/^<http:\/\/localhost:3000\/api\/unsubscribe\//);
   });
 
   it("OUTSIDE production a customer kind goes without the link or headers (nothing real is delivered there; mutation: block outside production too → FAILS)", async () => {
@@ -2074,7 +2232,7 @@ Replace with:
 
 Create `apps/web/src/lib/consent/email-gate.ts` (it takes `emailLedgerAddress` from the `@bis/db/email-address` subpath and `isProductionEnv` from `@/lib/email/environment`, for the same mock-factory reason):
 ```ts
-import { readConsentState, readAccountTimezone, type SupabaseClient } from "@bis/db";
+import { readConsentState, readAccountTimezone, getMailingAddress, type SupabaseClient } from "@bis/db";
 import { emailLedgerAddress } from "@bis/db/email-address";
 import { getEmailProvider } from "@/lib/email";
 import { isProductionEnv } from "@/lib/email/environment";
@@ -2083,7 +2241,7 @@ import { configuredOrigin } from "@/lib/email/origin";
 import { escapeHtml, UNSUBSCRIBE_MARKER } from "@/lib/email/templates/shell";
 import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
-import { EMAIL_KINDS, isEmailKind, emailReadsLedger, type EmailKind, type OperatorEmailKind } from "./classes";
+import { EMAIL_KINDS, isEmailKind, emailReadsLedger, FOOTER_ADDRESS_KINDS, type EmailKind, type OperatorEmailKind } from "./classes";
 import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
 import { sealConsentToken, consentTokenSecrets, isUuid } from "./token";
 
@@ -2107,12 +2265,16 @@ import { sealConsentToken, consentTokenSecrets, isUuid } from "./token";
  *   4. an automated kind keeps the fixed automated hours (choice 31): outside
  *      them → `deferred`, unless the deadline falls first (choice 21) →
  *      blocked `window_after_deadline`;
+ *   4b. decision P1's three follow-ups (FOOTER_ADDRESS_KINDS) read the
+ *      account's mailing_address: set → printed under the unsubscribe line;
+ *      blank → nothing, and they still send; unreadable → blocked;
  *   5. the provider;
  *   6. a customer email gets its way out: the footer row in place of the
  *      shell's marker, the footer line under the text part, and the RFC 8058
  *      List-Unsubscribe / List-Unsubscribe-Post headers, all carrying ONE
- *      sealed token. In production with no CONSENT_TOKEN_SECRET or no origin
- *      it is blocked `unsubscribe_unavailable` — never sent without its way
+ *      sealed token. In production with no CONSENT_TOKEN_SECRET, a secret
+ *      under 32 characters, no origin or an origin that is not https, it is
+ *      blocked `unsubscribe_unavailable` — never sent without a working way
  *      out; outside production it goes without them (plan G8). Operator and
  *      staff-typed mail have the marker removed and carry no headers;
  *   7. the send, with the send fields ONLY.
@@ -2163,10 +2325,23 @@ function cleanOrigin(origin: string | null | undefined): string | null {
   return o && /^https?:\/\/[^/\s]+$/.test(o) ? o : null;
 }
 
+/** The shortest secret production seals with (plan G8, review R1-M3). */
+const MIN_SECRET_LENGTH = 32;
+
 /** The two links, null when this send goes without them, or "unavailable". */
 function unsubscribeLinks(req: EmailRequest, address: string, now: Date, env: NodeJS.ProcessEnv): Links | null | "unavailable" {
   const secret = consentTokenSecrets(env).current;
   const origin = configuredOrigin(env) ?? cleanOrigin(req.origin);
+  if (isProductionEnv(env) && secret && origin) {
+    // RFC 8058: List-Unsubscribe "MUST contain one HTTPS URI"; and no token is
+    // sealed in production with a short key (reviews R1-M3, R1-M4, R2-m7).
+    const weak = !origin.startsWith("https://") ? "the link's origin is not https"
+      : secret.length < MIN_SECRET_LENGTH ? `CONSENT_TOKEN_SECRET is shorter than ${MIN_SECRET_LENGTH} characters` : null;
+    if (weak) {
+      console.error(`email gate: ${req.kind} for account ${req.accountId} not sent, its unsubscribe link cannot be made: ${weak}`);
+      return "unavailable";
+    }
+  }
   if (!secret || !origin) {
     const missing = !secret ? "CONSENT_TOKEN_SECRET is not set" : "no origin for the link (APP_ORIGIN)";
     if (isProductionEnv(env)) {
@@ -2197,21 +2372,36 @@ function withoutFooter(req: EmailRequest): SendEmailInput {
   return { ...sendFields(req), ...(req.html ? { html: req.html.split(UNSUBSCRIBE_MARKER).join("") } : {}) };
 }
 
-function withFooter(req: EmailRequest, links: Links | null): SendEmailInput {
+/** A stored postal address as lines: CRLF or LF, edges trimmed, blanks dropped (marketing-footer.ts's rule). */
+function addressLines(raw: string | null): string[] {
+  return (raw ?? "").split(/\r\n|\r|\n/).map((l) => l.trim()).filter(Boolean);
+}
+
+function withFooter(req: EmailRequest, links: Links | null, postal: readonly string[]): SendEmailInput {
   if (req.html !== undefined && !req.html.includes(UNSUBSCRIBE_MARKER)) {
     throw new Error(`email gate: ${req.kind}'s html has no unsubscribe marker (render it with shell())`);
   }
-  if (!links) return withoutFooter(req);
-  const lang = req.language === "es" ? "es" : "en";
-  const lead = m[`email.unsubscribe.lead.${lang}`];
-  const label = m[`email.unsubscribe.link.${lang}`];
-  const row = `<tr><td style="${FOOTER_CELL}">${escapeHtml(lead)} `
-    + `<a href="${escapeHtml(links.page)}" style="${FOOTER_LINK}">${escapeHtml(label)}</a>.</td></tr>`;
+  const cells: string[] = [];
+  const lines: string[] = [];
+  if (links) {
+    const lang = req.language === "es" ? "es" : "en";
+    const lead = m[`email.unsubscribe.lead.${lang}`];
+    const label = m[`email.unsubscribe.link.${lang}`];
+    cells.push(`${escapeHtml(lead)} <a href="${escapeHtml(links.page)}" style="${FOOTER_LINK}">${escapeHtml(label)}</a>.`);
+    lines.push(`${lead} ${label}: ${links.page}`);
+  }
+  // Decision P1 (G18): the postal address, under the way out, when it is set.
+  if (postal.length > 0) {
+    cells.push(postal.map(escapeHtml).join("<br>"));
+    lines.push(postal.join("\n"));
+  }
+  if (cells.length === 0) return withoutFooter(req);
+  const row = `<tr><td style="${FOOTER_CELL}">${cells.join("<br><br>")}</td></tr>`;
   return {
     ...sendFields(req),
-    body: `${req.body}\n\n${lead} ${label}: ${links.page}`,
+    body: `${req.body}\n\n${lines.join("\n\n")}`,
     ...(req.html ? { html: req.html.replace(UNSUBSCRIBE_MARKER, row) } : {}),
-    headers: { "List-Unsubscribe": `<${links.oneClick}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" },
+    ...(links ? { headers: { "List-Unsubscribe": `<${links.oneClick}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } } : {}),
   };
 }
 
@@ -2254,6 +2444,20 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
     if (opening) return { kind: "deferred", until: opening, zone: hoursZone(zone) };
   }
 
+  // Decision P1 (G18): the three follow-ups whose templates print no postal
+  // address get the account's, whenever it is set. Blank never blocks them;
+  // an unreadable one is a re-hold, never a send without it.
+  let postal: string[] = [];
+  if (FOOTER_ADDRESS_KINDS.has(req.kind)) {
+    if (!deps.db) throw new Error(`email gate: ${req.kind} reads the mailing address and needs a client`);
+    try {
+      postal = addressLines(await getMailingAddress(deps.db, req.accountId!));
+    } catch (e) {
+      console.error(`email gate: ${req.kind} for account ${req.accountId} blocked, mailing address unreadable: ${loggableError(e)}`);
+      return { kind: "blocked", reason: "ledger_unavailable" };
+    }
+  }
+
   let provider: EmailProvider;
   try {
     provider = getEmailProvider(env);
@@ -2265,7 +2469,7 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
   if (spec.footer === "unsubscribe") {
     const links = unsubscribeLinks(req, address, now, env);
     if (links === "unavailable") return { kind: "blocked", reason: "unsubscribe_unavailable" };
-    input = withFooter(req, links);
+    input = withFooter(req, links, postal);
   } else {
     input = withoutFooter(req);
   }
@@ -2302,7 +2506,11 @@ export type GatedEmail = {
 };
 
 /** Builds the provider ONCE, eagerly: a production tick with Resend unset
- *  fails at construction, before any query (context.ts's designed failure). */
+ *  fails at construction, before any query (context.ts's designed failure).
+ *  That instance is only the fail-fast check and `isFake`: each send builds
+ *  its own through `sendEmail`'s `getEmailProvider(env)` (a client object, no
+ *  network), so the gate's per-send rules never depend on this one (review
+ *  R2-m9). */
 export function emailSenderFor(db: SupabaseClient, env: NodeJS.ProcessEnv = process.env): GatedEmail {
   const provider = getEmailProvider(env);
   return { isFake: provider.isFake, send: (input) => sendEmailOrThrow(input, { db, env }) };
@@ -2312,7 +2520,10 @@ export function emailSenderFor(db: SupabaseClient, env: NodeJS.ProcessEnv = proc
  * A provider-shaped sender bound to ONE operator kind (plan G11), for the two
  * operator paths that take an EmailProvider: the sending-address check
  * (preflight.ts, which also reads `isFake`) and the billing link
- * (billing-link.ts). It rethrows the provider's own words.
+ * (billing-link.ts). It rethrows the provider's own words. It builds the
+ * provider at once, exactly where the `getEmailProvider()` call it replaces
+ * did, so a production deployment with Resend unset throws where it threw
+ * before; each send then goes through `sendEmail` (review R2-m9).
  */
 export function operatorMailer(kind: OperatorEmailKind, accountId: string | null, env: NodeJS.ProcessEnv = process.env): EmailProvider {
   const provider = getEmailProvider(env);
@@ -2345,7 +2556,7 @@ Expected (predicted): all pass.
 | 7 | seal `t: req.to` | the same case (t mismatches) |
 | 8 | `withFooter`: `req.html + row` instead of the replace | "the footer row replaces the marker, under the message" |
 | 9 | `lang` fixed to `"en"` | "in Spanish when the email is Spanish" |
-| 10 | registry: `staff.composer_email.footer = "unsubscribe"` | "operator mail and staff-typed mail carry no link …" ([Q4]) |
+| 10 | registry: `staff.composer_email.footer = "unsubscribe"` | "operator mail and staff-typed mail carry no link …" ((decision Q4)) |
 | 11 | `sendFields` returns `{ ...req }` | "the provider gets the send fields ONLY" |
 | 12 | `configuredOrigin(env) ?? …` → `cleanOrigin(req.origin) ?? configuredOrigin(env)` | "the request's origin is used when APP_ORIGIN is unset …" |
 | 13 | `n: req.contactId ?? null` | "a contact id that is not a uuid is left out …" |
@@ -2355,6 +2566,12 @@ Expected (predicted): all pass.
 | 17 | `EmailNotSent`: `super(\`email not sent: ${result.kind}\`)` | "sendEmailOrThrow answers the id, or throws EmailNotSent … the provider's own words" |
 | 18 | `emailSenderFor`: `get isFake() { return getEmailProvider(env).isFake; }` and no eager call | "emailSenderFor builds the provider EAGERLY" |
 | 19 | resend.ts: drop the headers spread | resend.test "passes the unsubscribe headers through exactly" |
+| 20 | delete the P1 block (`postal` stays `[]`) | "%s carries the account's mailing_address …" (all three) |
+| 21 | P1: `if (postal.length === 0) return { kind: "blocked", reason: "unsubscribe_unavailable" }` | "a blank or unset address never blocks them" |
+| 22 | `FOOTER_ADDRESS_KINDS.has(req.kind)` → `EMAIL_KINDS[req.kind].class === "marketing"` | "the check-in, the referral ask and every other kind never read it" |
+| 23 | P1's catch: `postal = []` instead of the block | "an unreadable address is a re-hold …" |
+| 24 | delete the production `weak` check | "in PRODUCTION an origin that is not https, or a secret under 32 characters …" |
+| 25 | apply the `weak` check outside production too | "OUTSIDE production an http origin still carries the link" |
 
 - [ ] **Step 6: Commit**
 
@@ -2367,7 +2584,7 @@ git commit -m "feat(consent): the email gate — the ledger for automated mail, 
 
 ### Task 6: Every cron email through the gate: the harness, holdOrSend, and nine passes
 
-**Owner:** bis-automations. **Tier:** HIGH. **Questions:** none.
+**Owner:** bis-automations. **Tier:** HIGH. **Decisions:** none.
 
 **Files:**
 - Modify: `apps/web/src/lib/automations/context.ts`, `harness.ts`, `harness.test.ts`, `imports.test.ts`
@@ -2575,6 +2792,10 @@ Replace with:
   // (a throw would fail closed into a re-hold and change every count below).
   // Still no text is due in this suite.
   readConsentState: async () => ({ state: "allowed" as const }),
+  // Decision P1: the email gate reads the postal address for the review
+  // request, quote follow-up and no-show nudge. None is due here (their lists
+  // answer []), but the gate imports it, so the bare factory carries it.
+  getMailingAddress: async () => null,
 ```
 
 - [ ] **Step 2: Run to see them fail**
@@ -2773,7 +2994,7 @@ git commit -m "feat(consent): every cron email through the email gate — nine p
 
 ### Task 7: The booking page, the cancel page, the form and the composer through the gate
 
-**Owner:** bis-comms (bis-booking reviews the booking page's two sends). **Tier:** HIGH. **Questions:** [Q4] (the composer's kind carries no footer, so it passes no origin).
+**Owner:** bis-comms (bis-booking reviews the booking page's two sends). **Tier:** HIGH. **Decisions:** Q4 (the composer's kind carries no footer, so it passes no origin).
 
 **Files:**
 - Modify: `apps/web/src/app/b/[publicId]/actions.ts`, `actions.test.ts`
@@ -2835,18 +3056,24 @@ const gated = () => vi.mocked(sendEmailOrThrow).mock.calls.map((c) => c[0]);
 `apps/web/src/app/f/[publicId]/actions.test.ts` — the spy block, and next to its existing receipt case (`grep -n "receipt" apps/web/src/app/f/[publicId]/actions.test.ts`):
 ```ts
   it("the lead alert goes as operator.lead_alert and the receipt as forms.receipt — customer-initiated, in the page's language, with the lead's contact and the request's origin (consent PR-3; mutation: send the receipt as operator.lead_alert → it carries no way out, FAILS)", async () => {
-    // (arrange exactly as the existing receipt case, submitting from the Spanish page)
+    // The file's beforeEach hands `headers()` a user-agent and NO host, so
+    // originFrom answers null there; this case needs a host, exactly as the
+    // file's own "links to the contact" case sets one (review R2-m3).
+    vi.mocked(headers).mockResolvedValue(new Headers({
+      "user-agent": "test-agent", host: "crm.example.com", "x-forwarded-proto": "https",
+    }) as never);
+    // (then arrange exactly as the existing receipt case, submitting from the Spanish page)
     const kinds = gated().map((r) => r.kind);
     expect(kinds).toEqual(expect.arrayContaining(["operator.lead_alert", "forms.receipt"]));
     expect(gated().find((r) => r.kind === "forms.receipt")).toMatchObject({
-      accountId: expect.any(String), contactId: expect.any(String), language: "es", origin: expect.stringMatching(/^https?:\/\//),
+      accountId: expect.any(String), contactId: expect.any(String), language: "es", origin: "https://crm.example.com",
     });
   });
 ```
 
 `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.test.ts` — the spy block, and next to its existing email-send case:
 ```ts
-  it("a staff-typed email goes as staff.composer_email for this account and contact, and — [Q4] — reaches the provider with no unsubscribe footer and no headers, even with the secret set (choice 22; mutation: send it as a customer-initiated kind → headers appear, FAILS)", async () => {
+  it("a staff-typed email goes as staff.composer_email for this account and contact, and — (decision Q4) — reaches the provider with no unsubscribe footer and no headers, even with the secret set (choice 22; mutation: send it as a customer-initiated kind → headers appear, FAILS)", async () => {
     vi.stubEnv("CONSENT_TOKEN_SECRET", "composer-test-secret-0123456789abcdef");
     vi.stubEnv("APP_ORIGIN", "https://app.example.com");
     // (arrange exactly as the existing sendEmailAction success case)
@@ -2929,11 +3156,11 @@ Replace with:
 ```ts
     ({ providerMessageId } = await sendEmailOrThrow({
       // A person's own reply (choice 22): the gate does not read the ledger
-      // for it, and — [Q4] — it carries no unsubscribe footer. The composer
+      // for it, and — (decision Q4) — it carries no unsubscribe footer. The composer
       // shows the notice when they unsubscribed (Task 12).
       accountId, kind: "staff.composer_email", contactId,
 ```
-(the rest of the object unchanged). **If danlo answers Q4 "follow §4.3":** also pass `origin: configuredOrigin() ?? originFrom(await headers())` (both already importable from `@/lib/email/origin` and `next/headers`).
+(the rest of the object unchanged; no `origin`: the kind carries no link, decision Q4).
 
 - [ ] **Step 4: Run to see them pass**
 
@@ -2947,7 +3174,7 @@ The same command as Step 2. Expected (predicted): all pass, and every existing c
 | 2 | booking confirmation: drop `language: locale` | the same case; and the footer-language case |
 | 3 | booking alert: `kind: "booking.confirmation"` | "… the alert carries neither" |
 | 4 | receipt: `kind: "operator.lead_alert"` | "the lead alert goes as operator.lead_alert and the receipt as forms.receipt" |
-| 5 | receipt call site: pass `null` for `origin` with APP_ORIGIN unset | the same case (`origin` expected to be a URL) |
+| 5 | receipt call site: pass `null` for `origin` with APP_ORIGIN unset | the same case (`origin` expected to be `https://crm.example.com`) |
 | 6 | composer: `kind: "booking.confirmation"` | "a staff-typed email goes as staff.composer_email …" |
 | 7 | cancel notice: `kind: "operator.booking_alert"` | "the cancel notice to staff goes as operator.cancel_notice" |
 
@@ -2962,7 +3189,7 @@ git commit -m "feat(consent): the booking page, cancel page, form and composer e
 
 ### Task 8: Voice, the call alert, the billing link and the sending-address check through the gate
 
-**Owner:** bis-voice (registry, finish-call) and bis-platform (settings, billing). **Tier:** HIGH. **Questions:** none.
+**Owner:** bis-voice (registry, finish-call) and bis-platform (settings, billing). **Tier:** HIGH. **Decisions:** none.
 
 **Files:**
 - Modify: `apps/web/src/lib/voice/tools/registry.ts`, `registry.test.ts`
@@ -3077,23 +3304,25 @@ git commit -m "feat(consent): voice, the call alert, the billing link and the se
 
 ### Task 9: The one-click endpoint and the `/u/[token]` page
 
-**Owner:** bis-comms (bis-frontend reviews the page; bis-design-reviewer audits it at Task 15). **Tier:** HIGH. **Questions:** [Q1] (the page asks for one click; the header one-click is instant), [Q5] (an unsubscribe over a staff stop is recorded).
+**Owner:** bis-comms (bis-frontend reviews the page; bis-design-reviewer audits it at Task 15). **Tier:** HIGH. **Decisions:** Q1 (the page asks for one click; the header one-click is instant), Q5 (an unsubscribe over a staff stop is recorded, and the page asks rather than saying "unsubscribed" over one: R1-I1), P2 (the button's words).
 
 **Files:**
 - Create: `apps/web/src/lib/consent/unsubscribe.ts`, `unsubscribe.test.ts` (server: the token read and the two ledger writes)
 - Create: `apps/web/src/lib/consent/unsubscribe-copy.ts`, `unsubscribe-copy.test.ts` (client-safe: the page's words)
 - Create: `apps/web/src/app/api/unsubscribe/[token]/route.ts`, `route.test.ts`
 - Create: `apps/web/src/app/u/[token]/page.tsx`, `unsubscribe-form.tsx`, `actions.ts`, `actions.test.ts`, `page.test.ts`
+- Create: `apps/web/src/app/u/layout.tsx`, `apps/web/src/app/u/layout.test.ts` (the tree's own root layout, R10; review R2-I1: without it `next build` fails)
 - Create: `apps/web/src/proxy.test.ts`
 
 **Interfaces:**
 - Consumes: `openConsentToken`, `consentTokenSecrets`, `ConsentTokenPayload` (Task 3); `appendConsentEventGuarded`, `readConsentState`, `serviceDb`, `getBranding`, `brandLogoUrl` (`@bis/db`); the `unsubscribe.*` copy (Task 4); `publicFormTheme`, `parseHostMode`, `PublicBrand` (the cancel page's).
 - Produces:
   - `readUnsubscribeToken(token: unknown, env?): { ok: true; payload: ConsentTokenPayload } | { ok: false; why: "bad_token" | "not_configured" }`
-  - `recordUnsubscribe(db, p: ConsentTokenPayload, via: "one_click" | "unsubscribe_link"): Promise<"stopped" | "already_stopped">` — `revoked`, guard `unless_customer_stopped` [Q5], `contact_id` null, no `source_ref` (G3, G4). THROWS on a write error.
+  - `recordUnsubscribe(db, p: ConsentTokenPayload, via: "one_click" | "unsubscribe_link"): Promise<"stopped" | "already_stopped">` — `revoked`, guard `unless_customer_stopped` (decision Q5), `contact_id` null, no `source_ref` (G3, G4). THROWS on a write error.
   - `recordResubscribe(db, p): Promise<"resubscribed" | "was_allowed">` — `resubscribed` / `unsubscribe_page`, guard `if_stopped_or_held` (G5). THROWS on a write error.
-  - `emailStateOf(db, p): Promise<"allowed" | "stopped">` (a hold, which nothing writes for email, reads as stopped). THROWS on a read error.
-  - `type UnsubscribeState = "allowed" | "stopped" | "resubscribed" | "bad_link" | "failed"`; `pageLines(state, brandName: string | null): { en: string; es: string; detailEn: string | null; detailEs: string | null }`; `fillBusiness(template: string, brandName: string | null, lang: "en" | "es"): string` (from `unsubscribe-copy.ts`).
+  - `type EmailStateRead = { state: "allowed" } | { state: "stopped"; method: ConsentMethod }`; `emailStateOf(db, p): Promise<EmailStateRead>` — the stop's METHOD rides along (review R1-I1; a hold, which nothing writes for email, reads as stopped with its own method). THROWS on a read error.
+  - `CUSTOMER_EMAIL_STOP_METHODS: readonly ConsentMethod[] = ["unsubscribe_link", "one_click"]`; `pageStateOf(s: EmailStateRead): "ask" | "stopped"` — pure: `"stopped"` ONLY for the customer's own stop; allowed, staff, `backfill_0049` and anything else → `"ask"` (decision Q5, G4).
+  - `type UnsubscribeState = "ask" | "stopped" | "resubscribed" | "bad_link" | "failed"` (`"ask"` is the question with its one primary button); `pageLines(state, brandName: string | null): { en: string; es: string; detailEn: string | null; detailEs: string | null }`; `fillBusiness(template: string, brandName: string | null, lang: "en" | "es"): string` (from `unsubscribe-copy.ts`).
   - `unsubscribeAction(token: string): Promise<{ state: UnsubscribeState }>`, `resubscribeAction(token: string): Promise<{ state: UnsubscribeState }>` (server actions, `app/u/[token]/actions.ts`).
 
 **What each surface does:**
@@ -3104,14 +3333,14 @@ git commit -m "feat(consent): voice, the call alert, the billing link and the se
 | `POST` with a bad token | `400`, empty | nothing |
 | `POST` with no secret configured, or a failed write | `503`, empty (a retry can succeed) | nothing |
 | `GET /api/unsubscribe/<token>` | `303` to `/u/<token>` (G6) | nothing |
-| `GET /u/<valid token>`, address allowed | the confirm view: the question in English and Spanish, one PRIMARY "Unsubscribe / Cancelar suscripción" [Q1] | nothing on GET [Q1] |
-| its button | the unsubscribed view (spec §6 "Loaded") | `revoked` / `unsubscribe_link` |
-| `GET /u/<valid token>`, address stopped | the unsubscribed view: spec §6's lines, one GHOST "Resubscribe / Volver a suscribirme", no primary | nothing |
-| its Resubscribe | "You'll get emails from {Business} again." / Spanish, and the primary Unsubscribe again | `resubscribed` / `unsubscribe_page` |
+| `GET /u/<valid token>`, address allowed | the question (`ask`): "Stop emails from {Business}?" in English and Spanish, one PRIMARY "Stop emails / Dejar de recibir correos" (decisions Q1, P2) | nothing on GET (decision Q1) |
+| `GET /u/<valid token>`, address stopped by STAFF, by the 0049 fold, or held (anything but the customer's own stop) | the same question and primary button (review R1-I1: the customer's own act has not been recorded, so the page must not say "You're unsubscribed") | nothing on GET |
+| the primary button | the unsubscribed view (spec §6); focus moves to its Resubscribe button | `revoked` / `unsubscribe_link`, guard `unless_customer_stopped` — appended over a staff or fold stop (decision Q5), refused (no second row) over the customer's own |
+| `GET /u/<valid token>`, the customer's OWN stop (`unsubscribe_link`, `one_click`) stands | the unsubscribed view: spec §6's lines, one GHOST "Resubscribe / Volver a suscribirme", no primary | nothing |
+| its Resubscribe | "You'll get emails from {Business} again." / Spanish, and the primary "Stop emails" again; focus moves to it | `resubscribed` / `unsubscribe_page` |
 | `GET /u/<bad token>` | spec §6's error lines | nothing |
 | an unreadable ledger, a failed write, no secret | "Something went wrong on our side …" / Spanish | nothing |
 
-**[Q1] If danlo keeps decision 6 literally (the GET records):** in `page.tsx`, when `emailStateOf` answers `allowed`, call `recordUnsubscribe(db, payload, "unsubscribe_link")` and render `initial = "stopped"`; delete the `allowed` branch's lines from `pageLines` (and Task 4's four `unsubscribe.confirm*` / `unsubscribe.button` keys); the e2e's first step (Task 14) expects the unsubscribed view straight away. Nothing else changes.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3122,7 +3351,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const db = vi.hoisted(() => ({ appendConsentEventGuarded: vi.fn(), readConsentState: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 
-import { readUnsubscribeToken, recordUnsubscribe, recordResubscribe, emailStateOf } from "./unsubscribe";
+import { readUnsubscribeToken, recordUnsubscribe, recordResubscribe, emailStateOf, pageStateOf } from "./unsubscribe";
 import { sealConsentToken, type ConsentTokenPayload } from "./token";
 
 const SECRET = "unsub-test-secret-0123456789abcdef-01";
@@ -3160,7 +3389,7 @@ describe("recordUnsubscribe", () => {
     }, "unless_customer_stopped");
   });
 
-  it("[Q5] guard unless_customer_stopped: refused over the customer's own stop (idempotent: 'already_stopped', no second row), recorded over a staff stop (mutation: guard 'if_allowed' → FAILS)", async () => {
+  it("(decision Q5) guard unless_customer_stopped: refused over the customer's own stop (idempotent: 'already_stopped', no second row), recorded over a staff stop (mutation: guard 'if_allowed' → FAILS)", async () => {
     db.appendConsentEventGuarded.mockResolvedValueOnce({ outcome: "refused", prior: { id: "e0", action: "revoked", method: "unsubscribe_link", evidence: {} } });
     expect(await recordUnsubscribe(CLIENT, P, "unsubscribe_link")).toBe("already_stopped");
     expect(db.appendConsentEventGuarded.mock.calls[0]![2]).toBe("unless_customer_stopped");
@@ -3183,13 +3412,24 @@ describe("recordResubscribe", () => {
   });
 });
 
-describe("emailStateOf", () => {
-  it("reads the token's account and address; a hold reads as stopped (mutation: read the SMS channel → FAILS)", async () => {
+describe("emailStateOf and pageStateOf — what the page opens on (review R1-I1, decision Q5)", () => {
+  it("reads the token's account and address, and carries the stop's METHOD; a hold reads as stopped with its own method (mutation: read the SMS channel → FAILS; mutation: drop the method → FAILS)", async () => {
     db.readConsentState.mockResolvedValueOnce({ state: "allowed" });
-    expect(await emailStateOf(CLIENT, P)).toBe("allowed");
+    expect(await emailStateOf(CLIENT, P)).toEqual({ state: "allowed" });
     expect(db.readConsentState).toHaveBeenCalledWith(CLIENT, P.a, "email", "ana@example.com");
+    db.readConsentState.mockResolvedValueOnce({ state: "stopped", since: "x", method: "backfill_0049", eventId: "s" });
+    expect(await emailStateOf(CLIENT, P)).toEqual({ state: "stopped", method: "backfill_0049" });
     db.readConsentState.mockResolvedValueOnce({ state: "held", since: "x", method: "free_text", eventId: "h" });
-    expect(await emailStateOf(CLIENT, P)).toBe("stopped");
+    expect(await emailStateOf(CLIENT, P)).toEqual({ state: "stopped", method: "free_text" });
+  });
+
+  it("only the customer's OWN stop opens on 'You're unsubscribed'; allowed, staff, the 0049 fold and a hold open on the question (mutation: treat every stop as stopped → staff's and the fold's read 'stopped', FAILS)", () => {
+    expect(pageStateOf({ state: "stopped", method: "unsubscribe_link" })).toBe("stopped");
+    expect(pageStateOf({ state: "stopped", method: "one_click" })).toBe("stopped");
+    for (const method of ["staff", "backfill_0049", "free_text", "staff_undo"] as const) {
+      expect(pageStateOf({ state: "stopped", method }), method).toBe("ask");
+    }
+    expect(pageStateOf({ state: "allowed" })).toBe("ask");
   });
 });
 ```
@@ -3220,8 +3460,8 @@ describe("pageLines — spec §6, English and Spanish stacked", () => {
     });
   });
 
-  it("allowed [Q1]: the question and what it means, in both languages", () => {
-    const l = pageLines("allowed", "Rio Roofing");
+  it("ask (decision Q1): the question and what it means, in both languages", () => {
+    const l = pageLines("ask", "Rio Roofing");
     expect([l.en, l.es]).toEqual(["Stop emails from Rio Roofing?", "¿Dejar de recibir correos de Rio Roofing?"]);
     expect(l.detailEn).toMatch(/^Rio Roofing will stop sending you automated emails\./);
     expect(l.detailEs).toMatch(/^Rio Roofing dejará de enviarle correos automáticos\./);
@@ -3229,7 +3469,11 @@ describe("pageLines — spec §6, English and Spanish stacked", () => {
 
   it("resubscribed, bad_link and failed say the spec's (or this plan's) words (mutation: bad_link shows 'failed' → FAILS)", () => {
     expect(pageLines("resubscribed", "Rio Roofing").en).toBe("You'll get emails from Rio Roofing again.");
-    expect(pageLines("bad_link", null)).toMatchObject({ en: m["unsubscribe.badLink.en"], es: m["unsubscribe.badLink.es"] });
+    // A bad link names no business: the fallback, mid-sentence (review R1-M2's line).
+    expect(pageLines("bad_link", null)).toMatchObject({
+      en: "This unsubscribe link doesn't work. Contact the business directly and ask them to stop.",
+      es: "Este enlace no funciona. Comuníquese directamente con el negocio y pida que dejen de escribirle.",
+    });
     expect(pageLines("failed", null)).toMatchObject({ en: m["unsubscribe.failed.en"], es: m["unsubscribe.failed.es"] });
   });
 });
@@ -3381,7 +3625,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("/u/[token]", () => {
-  it("[Q1] an allowed address: the question in English AND Spanish, the client's name, ONE primary button — and NOTHING recorded on the GET (a mail scanner's fetch changes nothing; mutation: record on render → FAILS)", async () => {
+  it("(decision Q1) an allowed address: the question in English AND Spanish, the client's name, ONE primary button — and NOTHING recorded on the GET (a mail scanner's fetch changes nothing; mutation: record on render → FAILS)", async () => {
     const html = await render(sealConsentToken(P, SECRET));
     expect(html).toContain("Stop emails from Rio Roofing?");
     expect(html).toContain("¿Dejar de recibir correos de Rio Roofing?");
@@ -3399,6 +3643,15 @@ describe("/u/[token]", () => {
     expect(html).not.toContain("bis-unsub-primary");
   });
 
+  it.each(["backfill_0049", "staff"])("a stop made by %s (not the customer's own): the QUESTION and its one primary 'Stop emails', not 'You're unsubscribed', and nothing recorded on the GET (review R1-I1, decision Q5; mutation: treat every stop as stopped → no bis-unsub-primary, FAILS)", async (method) => {
+    dbm.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-09-01T00:00:00Z", method, eventId: "s1" });
+    const html = await render(sealConsentToken(P, SECRET));
+    expect(html.match(/class="bis-unsub-primary"/g)).toHaveLength(1);
+    expect(html).toContain("Stop emails / Dejar de recibir correos");
+    expect(renderedText(html)).not.toContain("You're unsubscribed.");
+    expect(unsub.recordUnsubscribe).not.toHaveBeenCalled();
+  });
+
   it("carries the client's brand (rule 9): its name in the header and ITS colour on the page's tokens, not the platform's fallback (mutation: render with the unbranded theme → FAILS)", async () => {
     const html = await render(sealConsentToken(P, SECRET));
     expect(html).toContain("Rio Roofing");
@@ -3410,7 +3663,7 @@ describe("/u/[token]", () => {
 
   it("a bad token shows spec §6's error lines in both languages, and reads nothing (mutation: 500 → FAILS)", async () => {
     const html = await render("1.forged.token");
-    expect(renderedText(html)).toContain("This unsubscribe link doesn't work.");
+    expect(renderedText(html)).toContain("This unsubscribe link doesn't work. Contact the business directly and ask them to stop.");
     expect(html).toContain("Este enlace no funciona.");
     expect(dbm.readConsentState).not.toHaveBeenCalled();
   });
@@ -3444,6 +3697,39 @@ describe("proxy.ts — the unsubscribe surfaces stay public (spec §4.3, E2)", (
 });
 ```
 
+Create `apps/web/src/app/u/layout.test.ts` (review R2-I1; `app/b/layout.test.ts`'s projecting font mock, for its reason):
+```ts
+import { describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+// next/font/google throws outside a Next build; the mock folds each call's
+// own args into the class name (app/b/layout.test.ts), so only the real
+// variable names at preload:false can pass.
+const mk = (tag: string) => (o: { variable: string; preload?: boolean }) => (
+  { variable: `__variable_${tag}_${o.variable}_preload-${o.preload}` }
+);
+vi.mock("next/font/google", () => ({ Geist: mk("geist"), Inter: mk("inter"), Source_Serif_4: mk("serif") }));
+
+const { default: UnsubscribeLayout, metadata } = await import("./layout");
+
+describe("UnsubscribeLayout — /u's own root layout (R10; `next build` refuses a page with none)", () => {
+  it("renders <html lang=\"en\"> with the three font variables at preload:false and a zero-margin, transparent <body> (mutation: delete the layout → the build fails; mutation: rename --font-geist-sans → FAILS)", () => {
+    const markup = renderToStaticMarkup(createElement(UnsubscribeLayout, null, createElement("p", null, "content")));
+    expect(markup).toMatch(/^<html lang="en"/);
+    expect(markup).toContain("__variable_geist_--font-geist-sans_preload-false");
+    expect(markup).toContain("__variable_inter_--font-inter_preload-false");
+    expect(markup).toContain("__variable_serif_--font-source-serif_preload-false");
+    expect(markup).toContain("margin:0");
+    expect(markup).toContain("content");
+  });
+
+  it("carries the favicon (app/ declares none; mutation: drop icons → FAILS)", () => {
+    expect(metadata.icons).toEqual({ icon: "/favicon.ico" });
+  });
+});
+```
+
 - [ ] **Step 2: Run to see them fail**
 
 ```bash
@@ -3454,9 +3740,45 @@ Expected (predicted): every file but `proxy.test.ts` fails to import its subject
 
 - [ ] **Step 3: Implement**
 
+Create `apps/web/src/app/u/layout.tsx` (R10, `app/b/layout.tsx`'s shape; review R2-I1):
+```tsx
+import type { Metadata } from "next";
+import { Geist, Inter, Source_Serif_4 } from "next/font/google";
+
+// The three faces `brand_type` can name, declared for the reason app/b and
+// app/f declare them: this tree has its own root layout and never sees the
+// dashboard's, so without them publicFormTheme's `var(--font-geist-sans)` and
+// friends resolve to nothing. preload:false: an unthemed page paints the
+// system stack and downloads no font.
+const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"], preload: false });
+const inter = Inter({ variable: "--font-inter", subsets: ["latin"], preload: false });
+const sourceSerif = Source_Serif_4({ variable: "--font-source-serif", subsets: ["latin"], preload: false });
+
+export const metadata: Metadata = {
+  // The page's own metadata sets its title, robots and referrer.
+  icons: { icon: "/favicon.ico" },
+};
+
+/**
+ * `/u/<token>` (consent chain PR-3): the unsubscribe page a customer reaches
+ * from an email's footer. The same unauthenticated shape as `/b` and `/f`: no
+ * dashboard tokens, no ClerkProvider, no theme preference, no `class="dark"`.
+ * `app/` declares no root layout (R10), so a tree without one fails `next
+ * build`. The page is English and Spanish stacked; each half carries its own
+ * `lang`, and the document's is English.
+ */
+export default function UnsubscribeLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" className={`${geistSans.variable} ${inter.variable} ${sourceSerif.variable}`}>
+      <body style={{ margin: 0, background: "transparent" }}>{children}</body>
+    </html>
+  );
+}
+```
+
 Create `apps/web/src/lib/consent/unsubscribe.ts`:
 ```ts
-import { appendConsentEventGuarded, readConsentState, type SupabaseClient } from "@bis/db";
+import { appendConsentEventGuarded, readConsentState, type ConsentMethod, type SupabaseClient } from "@bis/db";
 import { openConsentToken, consentTokenSecrets, type ConsentTokenPayload } from "./token";
 
 /**
@@ -3468,7 +3790,7 @@ import { openConsentToken, consentTokenSecrets, type ConsentTokenPayload } from 
  * reusable channel, never ONE event) — the guards make them idempotent:
  * an unsubscribe is refused over the customer's own stop (no second row) and
  * recorded over a staff one, so only the customer can lift it from then on
- * ([Q5], PR-2's S8 for texts); a resubscribe is refused when nothing is
+ * ((decision Q5), PR-2's S8 for texts); a resubscribe is refused when nothing is
  * stopped. Both write contact_id null, the token's contact in evidence (G3):
  * the contact may have been deleted since the email went out, and 0054's
  * composite key would refuse the row.
@@ -3510,9 +3832,26 @@ export async function recordResubscribe(db: SupabaseClient, p: ConsentTokenPaylo
   return r.outcome === "appended" ? "resubscribed" : "was_allowed";
 }
 
-export async function emailStateOf(db: SupabaseClient, p: ConsentTokenPayload): Promise<"allowed" | "stopped"> {
+/** The customer's OWN ways to stop email (choice 19). Only these open the page on "You're unsubscribed". */
+export const CUSTOMER_EMAIL_STOP_METHODS: readonly ConsentMethod[] = ["unsubscribe_link", "one_click"];
+
+export type EmailStateRead = { state: "allowed" } | { state: "stopped"; method: ConsentMethod };
+
+/** The address's email state, with the stop's METHOD (review R1-I1). A hold, which nothing writes for email, reads as stopped. */
+export async function emailStateOf(db: SupabaseClient, p: ConsentTokenPayload): Promise<EmailStateRead> {
   const s = await readConsentState(db, p.a, "email", p.t);
-  return s.state === "allowed" ? "allowed" : "stopped";
+  return s.state === "allowed" ? { state: "allowed" } : { state: "stopped", method: s.method };
+}
+
+/**
+ * What the page opens on (decision Q5, review R1-I1). "You're unsubscribed"
+ * ONLY over the customer's own stop. Over a stop staff made, the 0049 fold
+ * made, or a hold, the customer has not acted yet: the page asks, and their
+ * press is recorded under `unless_customer_stopped`, so from then on only they
+ * can lift it (choice 19) and the drawer offers no Resume.
+ */
+export function pageStateOf(s: EmailStateRead): "ask" | "stopped" {
+  return s.state === "stopped" && CUSTOMER_EMAIL_STOP_METHODS.includes(s.method) ? "stopped" : "ask";
 }
 ```
 
@@ -3527,7 +3866,8 @@ import { m } from "@/lib/messages";
  * "el negocio", capitalised where it starts a sentence, and "de el" contracts
  * to "del" (the fallback only — a brand name is never rewritten).
  */
-export type UnsubscribeState = "allowed" | "stopped" | "resubscribed" | "bad_link" | "failed";
+/** `ask` is the question with its one primary "Stop emails" (decisions Q1, P2). */
+export type UnsubscribeState = "ask" | "stopped" | "resubscribed" | "bad_link" | "failed";
 
 export function fillBusiness(template: string, brandName: string | null, lang: "en" | "es"): string {
   const brand = brandName?.trim();
@@ -3553,7 +3893,7 @@ export function pageLines(state: UnsubscribeState, brandName: string | null): {
     es: fillBusiness(m[`unsubscribe.${key}.es`], brandName, "es"),
   });
   switch (state) {
-    case "allowed":
+    case "ask":
       return {
         ...both("confirm"),
         detailEn: fillBusiness(m["unsubscribe.confirmBody.en"], brandName, "en"),
@@ -3623,7 +3963,7 @@ import type { UnsubscribeState } from "@/lib/consent/unsubscribe-copy";
 import { loggableError } from "@/lib/loggable-error";
 
 /**
- * The /u page's two buttons (spec §4.3; choice 27; [Q1]). Each RE-OPENS the
+ * The /u page's two buttons (spec §4.3; choice 27; (decision Q1)). Each RE-OPENS the
  * token (the page's state is never trusted), writes through the one ledger
  * path, and answers the state to show. Server actions are POST-only and
  * refuse a foreign Origin (plan X5), so a page elsewhere cannot press them.
@@ -3657,24 +3997,37 @@ Create `apps/web/src/app/u/[token]/unsubscribe-form.tsx`:
 ```tsx
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { m } from "@/lib/messages";
 import { pageLines, type UnsubscribeState } from "@/lib/consent/unsubscribe-copy";
 import { unsubscribeAction, resubscribeAction } from "./actions";
 
 /**
  * The page's one decision (spec §6; DESIGN.md rule 8, one primary per view):
- * allowed → one PRIMARY Unsubscribe [Q1]; stopped → one GHOST Resubscribe
- * (choice 27), no primary; after Resubscribe → the primary again. English and
- * Spanish stacked. The answer is announced (aria-live) and the button that
- * replaces the pressed one keeps the keyboard in the section.
+ * ask → one PRIMARY "Stop emails" (decisions Q1, P2); stopped → one GHOST
+ * Resubscribe (choice 27), no primary; after Resubscribe → the primary again.
+ * English and Spanish stacked. The answer is announced (aria-live). After a
+ * press, focus moves to the button that replaced the pressed one — or to the
+ * section when the answer has none (failed, bad link) — so the keyboard never
+ * falls back to <body> (review R2-m6).
  */
 export function UnsubscribeForm({ token, initial, brandName }: {
   token: string; initial: UnsubscribeState; brandName: string | null;
 }) {
   const [state, setState] = useState<UnsubscribeState>(initial);
   const [pending, startTransition] = useTransition();
+  const section = useRef<HTMLElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const pressed = useRef(false);
+  // After the press settles: `pending` must be false first, or the new
+  // button is still disabled and cannot take focus.
+  useEffect(() => {
+    if (!pressed.current || pending) return;
+    pressed.current = false;
+    (button.current ?? section.current)?.focus();
+  }, [state, pending]);
   const run = (act: (t: string) => Promise<{ state: UnsubscribeState }>) => startTransition(async () => {
+    pressed.current = true;
     try {
       setState((await act(token)).state);
     } catch {
@@ -3683,7 +4036,7 @@ export function UnsubscribeForm({ token, initial, brandName }: {
   });
   const lines = pageLines(state, brandName);
   return (
-    <section aria-live="polite" data-testid="unsubscribe" data-state={state}>
+    <section ref={section} tabIndex={-1} aria-live="polite" data-testid="unsubscribe" data-state={state} className="bis-unsub-section">
       <div className="bis-unsub-lang" lang="en">
         <p className="bis-unsub-title">{lines.en}</p>
         {lines.detailEn ? <p className="bis-unsub-detail">{lines.detailEn}</p> : null}
@@ -3692,16 +4045,16 @@ export function UnsubscribeForm({ token, initial, brandName }: {
         <p className="bis-unsub-title">{lines.es}</p>
         {lines.detailEs ? <p className="bis-unsub-detail">{lines.detailEs}</p> : null}
       </div>
-      {state === "allowed" || state === "resubscribed" ? (
+      {state === "ask" || state === "resubscribed" ? (
         <p className="bis-unsub-actions">
-          <button type="button" className="bis-unsub-primary" disabled={pending} onClick={() => run(unsubscribeAction)}>
+          <button ref={button} type="button" className="bis-unsub-primary" disabled={pending} onClick={() => run(unsubscribeAction)}>
             {m["unsubscribe.button"]}
           </button>
         </p>
       ) : null}
       {state === "stopped" ? (
         <p className="bis-unsub-actions">
-          <button type="button" className="bis-unsub-ghost" disabled={pending} onClick={() => run(resubscribeAction)}>
+          <button ref={button} type="button" className="bis-unsub-ghost" disabled={pending} onClick={() => run(resubscribeAction)}>
             {m["unsubscribe.resubscribe"]}
           </button>
         </p>
@@ -3719,7 +4072,7 @@ import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme
 import { PublicBrand } from "@/components/public-brand";
 import { m } from "@/lib/messages";
 import { loggableError } from "@/lib/loggable-error";
-import { readUnsubscribeToken, emailStateOf } from "@/lib/consent/unsubscribe";
+import { readUnsubscribeToken, emailStateOf, pageStateOf } from "@/lib/consent/unsubscribe";
 import type { UnsubscribeState } from "@/lib/consent/unsubscribe-copy";
 import { UnsubscribeForm } from "./unsubscribe-form";
 import "@/styles/public-brand.css";
@@ -3741,9 +4094,10 @@ const UNBRANDED: Branding = {
 
 /**
  * `/u/<token>` — the link in every customer email's footer (spec §4.3, §6).
- * A GET only READS [Q1]: a mail scanner that fetches the link records
- * nothing (plan R4, A5); the customer's own click records the stop
- * (unsubscribeAction). Branded with the client's logo and colour (DESIGN.md
+ * A GET only READS (decision Q1): a mail scanner that fetches the link
+ * records nothing (plan R4, A5); the customer's own press records the stop
+ * (unsubscribeAction). It opens on the question unless the customer's OWN
+ * stop already stands (pageStateOf; decision Q5, review R1-I1). Branded with the client's logo and colour (DESIGN.md
  * rule 9), server-rendered, so there is no loading state. Never logs the token.
  */
 export default async function UnsubscribePage({ params }: { params: Promise<{ token: string }> }) {
@@ -3762,7 +4116,7 @@ export default async function UnsubscribePage({ params }: { params: Promise<{ to
       console.error(`unsubscribe page: branding unreadable for account ${read.payload.a}: ${loggableError(e)}`);
     }
     try {
-      initial = await emailStateOf(db, read.payload);
+      initial = pageStateOf(await emailStateOf(db, read.payload));
     } catch (e) {
       console.error(`unsubscribe page: consent state unreadable for account ${read.payload.a}: ${loggableError(e)}`);
       initial = "failed";
@@ -3797,6 +4151,7 @@ const UNSUB_CSS = `
   color: var(--foreground, #18181b);
   padding: 16px; max-width: 480px; margin: 0 auto;
 }
+.bis-unsub-section:focus { outline: none; }
 .bis-unsub-lang + .bis-unsub-lang { margin-top: 16px; }
 .bis-unsub-title { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
 .bis-unsub-detail { color: var(--muted-foreground, #71717a); margin: 0; }
@@ -3824,15 +4179,20 @@ The same command as Step 2. Expected (predicted): all pass.
 |---|---|---|
 | 1 | `readUnsubscribeToken`: no secret → `bad_token` | "opens a good token, refuses a bad one, and says when no secret is configured" |
 | 2 | `recordUnsubscribe`: `sourceRef: token` (add a token param) or `contactId: p.n` | "appends the customer's own stop … with NO contact_id and NO source_ref" |
-| 3 | `recordUnsubscribe`: guard `"if_allowed"` | "[Q5] guard unless_customer_stopped" |
+| 3 | `recordUnsubscribe`: guard `"if_allowed"` | "(decision Q5) guard unless_customer_stopped" |
 | 4 | `recordResubscribe`: method `"staff"` | "appends resubscribed / unsubscribe_page …" |
 | 5 | route POST: `status: 204` | "a valid token: 200, an empty body …" |
 | 6 | route POST: `recordUnsubscribe(…, "unsubscribe_link")` | the same case |
 | 7 | route POST: answer 200 in the catch | "no secret configured, or the write failed: 503" |
 | 8 | route GET: call `recordUnsubscribe` then redirect | "redirects 303 to the page …" |
-| 9 | page: `recordUnsubscribe` when `initial === "allowed"` (the [Q1] alternative) | "[Q1] an allowed address … NOTHING recorded on the GET" |
+| 9 | page: `recordUnsubscribe` when `initial === "ask"` (the record-on-GET design decision Q1 rejected) | "(decision Q1) an allowed address … NOTHING recorded on the GET" |
+| 9b | `pageStateOf`: `s.state === "stopped" ? "stopped" : "ask"` (every stop reads as the customer's) | "only the customer's OWN stop opens on 'You're unsubscribed'"; page.test "a stop made by backfill_0049 / staff" (both) |
+| 9c | `emailStateOf`: return `{ state: "stopped" }` without the method | "reads the token's account and address, and carries the stop's METHOD" |
 | 10 | unsubscribe-form: render the primary in the `stopped` state too | "a stopped address … ONE ghost Resubscribe, no primary" |
-| 11 | page: `initial = "allowed"` in the state read's catch | "an unreadable ledger shows the 'went wrong' lines" |
+| 11 | page: `initial = "ask"` in the state read's catch | "an unreadable ledger shows the 'went wrong' lines" |
+| 15 | delete `app/u/layout.tsx` | layout.test (the import fails); and `pnpm --filter web build` refuses the page (Task 15 step 1) |
+| 16 | layout: `--font-geist-sans` → `--font-geist` | layout.test "renders <html lang=\"en\"> with the three font variables" |
+| 17 | unsubscribe-form: drop the focus `useEffect` | e2e test 1's two `toBeFocused` lines (Task 14; no DOM test runner in this repo's vitest) |
 | 12 | `fillBusiness`: capitalise the brand name too | "puts the brand name in as it is written …" |
 | 13 | page metadata: drop `referrer` | "is kept out of search engines and sends no Referer" |
 | 14 | proxy.ts: `createRouteMatcher(["/dashboard(.*)", "/u(.*)"])` | proxy.test (then revert) |
@@ -3848,7 +4208,7 @@ git commit -m "feat(consent): the RFC 8058 one-click endpoint and the branded, b
 
 ### Task 10: The Email row's data: the view, the staff actions and the drawer's read
 
-**Owner:** bis-crm. **Tier:** HIGH. **Questions:** none.
+**Owner:** bis-crm. **Tier:** HIGH. **Decisions:** none.
 
 **Files:**
 - Create: `apps/web/src/lib/consent/email-view.ts`, `email-view.test.ts`
@@ -4380,7 +4740,7 @@ git commit -m "feat(consent): the Email row's data — its view, Stop / Undo / R
 
 ### Task 11: The Email row in the drawer and on the contact page; the 0049 switch removed
 
-**Owner:** bis-crm (bis-frontend reviews; bis-design-reviewer audits at Task 15). **Tier:** HIGH. **Questions:** none.
+**Owner:** bis-crm (bis-frontend reviews; bis-design-reviewer audits at Task 15). **Tier:** HIGH. **Decisions:** none.
 
 **Files:**
 - Create: `apps/web/src/lib/consent/email-row.ts`, `email-row.test.ts`
@@ -4389,7 +4749,7 @@ git commit -m "feat(consent): the Email row's data — its view, Stop / Undo / R
 - Modify: `…/contacts/[contactId]/contact-fields-panel.tsx`, `…/contacts/[contactId]/page.tsx`, `…/contacts/[contactId]/page.test.ts`
 - Modify: `…/contacts/actions.ts`, `…/contacts/actions.test.ts` (the switch's action goes)
 - Modify: `src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts`, `route.test.ts`, `src/lib/contacts/summary.ts`, `summary.test.ts` (the column leaves the summary)
-- Modify: `src/lib/zone.ts` (`ZoneLabel`, the type `OptOutZone` was), `src/lib/messages.ts` (the switch's keys go), `src/app/(dashboard)/dashboard/styleguide/page.tsx`, `apps/web/e2e/contacts-drawer.spec.ts` (the switch's e2e case goes)
+- Modify: `src/lib/zone.ts` (`ZoneLabel`, the type `OptOutZone` was), `src/lib/ui/guarded-run.ts` and `src/lib/ui/guarded-run.test.ts` (their comments name the retired module), `src/lib/messages.ts` (the switch's keys go), `src/app/(dashboard)/dashboard/styleguide/page.tsx`, `apps/web/e2e/contacts-drawer.spec.ts` (the switch's e2e case goes)
 - Delete: `…/contacts/marketing-optout-switch.tsx`, `marketing-optout-switch.test.ts`, `marketing-optout-switch.wiring.test.ts`, `src/lib/contacts/marketing-optout.ts`, `marketing-optout.test.ts`
 
 **Interfaces:**
@@ -4483,7 +4843,9 @@ const buttons = (markup: string) => [...markup.matchAll(/<button[^>]*>([^<]*)<\/
 describe("EmailRow — spec §6's Email row", () => {
   it("Allowed: 'Email', the dot + word, ONE ghost 'Stop emails', no primary (rules 3, 8; mutation: make Stop emails the default variant → FAILS)", () => {
     const out = html(ready({ kind: "allowed", newestId: null }));
-    expect(renderedText(out)).toContain(`${m["contact.messages.email"]}${m["contact.email.allowed"]}`);
+    // renderedText turns each tag into a space, so the label and the word are
+    // apart in the text (review R2-I2): match the two with whitespace between.
+    expect(renderedText(out)).toMatch(new RegExp(`${m["contact.messages.email"]}\\s+${m["contact.email.allowed"]}`));
     expect(buttons(out)).toEqual([m["contact.email.stopEmails"]]);
     expect(out).toContain('data-variant="ghost"');
     expect(out).not.toContain('data-variant="default"');
@@ -4539,7 +4901,84 @@ Edit `src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.test.t
   });
 ```
 
-Edit `…/contacts/[contactId]/page.test.ts`: where it asserts the props handed to `ContactFieldsPanel`, replace `zone` with `email: { status: "ready", view: …, zone: … }` read through a mocked `readEmailView` (add `readEmailView: vi.fn().mockResolvedValue({ kind: "allowed", newestId: null })` to its `@/lib/consent/email-view` mock) and add one case: `readEmailView` rejecting → `email: { status: "error" }` (mutation: let the throw escape → the whole page errors, FAILS).
+Edit `…/contacts/[contactId]/page.test.ts` (review R2-I7: its mocks are the 0049 switch's; each must change or the file tests nothing about the Email row):
+1. Replace the switch's mock block (from `/** The switch's props, as the REAL panel hands them down` to the `vi.mock("../marketing-optout-switch", …)` call's closing `}));`) with:
+```ts
+/** The Email row's props, as the REAL panel hands them down — so this proves
+ *  the read reaches the row, not merely the panel (consent PR-3). */
+const emailRowProps = vi.fn();
+vi.mock("../email-row", () => ({
+  EmailRow: (props: Record<string, unknown>) => { emailRowProps(props); return null; },
+}));
+// The Email row's read, stubbed per test.
+const readEmailView = vi.fn();
+vi.mock("@/lib/consent/email-view", () => ({ readEmailView: (...a: unknown[]) => readEmailView(...a) }));
+```
+2. In the `vi.mock("../actions", …)` factory, delete `setMarketingEmailOptOutAction: async () => ({ ok: true }),` (the action is gone, Step 3).
+3. In the `vi.mock("@bis/db", …)` factory, add `readConsentHistory: async () => [],` (review R2-I7, defensive: on `001a25f9` `readConsentHistory` is imported by `tasks/actions.ts` and the consent modules, and vitest throws the moment a bare factory's missing export is touched).
+4. In `CONTACT`, delete `marketing_email_opted_out_at: "2026-09-04T02:30:00.000Z"`.
+5. Replace the first `describe("ContactDetailPage: the zone the opt-out's date is printed in", …)` block with:
+```ts
+describe("ContactDetailPage: the Email row's read, in the account's zone (consent PR-3)", () => {
+  beforeEach(() => {
+    getContactMock.mockReset();
+    getContactMock.mockResolvedValue(CONTACT);
+    emailRowProps.mockClear();
+    renderZone.mockClear();
+    accountsEq.mockClear();
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+  });
+
+  it("the page reads the Email row for this contact and hands it ready, in the ACCOUNT's zone (mutation: renderZone(undefined) → zone UTC, FAILS; mutation: pass no email → FAILS)", async () => {
+    await render();
+    expect(accountsEq).toHaveBeenCalledWith("id", "acct1");
+    expect(readEmailView).toHaveBeenCalledWith(expect.anything(), "acct1", CONTACT);
+    expect(emailRowProps).toHaveBeenCalledTimes(1);
+    expect(emailRowProps.mock.calls[0]![0]).toMatchObject({
+      contactId: "ct1",
+      load: { status: "ready", view: { kind: "allowed", newestId: null }, zone: "America/Chicago" },
+    });
+  });
+
+  it("a failed account read falls back to the GUESSED zone, logged, never thrown", async () => {
+    accountRead.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await render();
+      expect(renderZone).toHaveBeenCalledWith(undefined);
+      expect(emailRowProps.mock.calls[0]![0]).toMatchObject({ load: { status: "ready", zone: "UTC" } });
+      expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("boom");
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("an unreadable ledger is the row's error state, never a crashed page (spec §6; mutation: let readEmailView's throw escape → the render rejects, FAILS)", async () => {
+    readEmailView.mockRejectedValue(new Error("down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await render();
+      expect(emailRowProps.mock.calls[0]![0]).toMatchObject({ load: { status: "error" } });
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("404s for a contact this account does not have, before any read", async () => {
+    getContactMock.mockResolvedValue(null);
+    await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(renderZone).not.toHaveBeenCalled();
+    expect(readEmailView).not.toHaveBeenCalled();
+    expect(emailRowProps).not.toHaveBeenCalled();
+  });
+});
+```
+6. In the other `describe` blocks' `beforeEach`, add `readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });` so the page's Email read answers there too.
+7. Update the file's header comment: "the one read this page makes of its own, `accounts.timezone`, for the Email row's since-date (consent PR-3; the 0049 switch it served is gone)".
+
+(`readTextsView`, `recipientState`, `renderZone`, `accountRead`, `accountsEq`, `getContactMock` are the file's own names, read on `001a25f9`.)
 
 Edit `apps/web/e2e/contacts-drawer.spec.ts`: delete the test that ticks "No marketing emails" (it reads `marketing_email_opted_out_at` and `m["contact.marketingOptOut.*"]`; `grep -n "marketingOptOut\|marketing_email_opted_out_at" apps/web/e2e/contacts-drawer.spec.ts`). Task 14's `consent-email.spec.ts` replaces it.
 
@@ -4895,7 +5334,7 @@ Edit `src/lib/zone.ts`: add `export type ZoneLabel = Pick<ResolvedZone, "zone" |
 
 Edit `src/lib/messages.ts`: delete the `contact.marketingOptOut.*` keys and their comments (`grep -n "contact.marketingOptOut" apps/web/src/lib/messages.ts`).
 
-Delete the five files listed under Files. `grep -rn "marketing-optout\|MarketingOptOut\|marketingOptOut" apps/web/src apps/web/e2e` must print nothing afterwards (the one comment in `lib/ui/guarded-run.ts` that says it moved from there is reworded to "Moved here from the retired 0049 switch").
+Delete the five files listed under Files. Reword the two comments that name the retired module (review R2-m4; read on `001a25f9`): `lib/ui/guarded-run.ts`'s header ("Moved here from lib/contacts/marketing-optout.ts (review R3-M7): the Texts row, the Check number state and the marketing switch share it, and PR-3 retires the marketing module.") becomes "Moved here from the retired 0049 switch's module (review R3-M7): the Texts row, the Check number state and the Email row share it.", and `lib/ui/guarded-run.test.ts`'s first doc line ("… (moved from marketing-optout.ts, review R3-M7: PR-3 retires that module).") becomes "… (moved from the retired 0049 switch's module, review R3-M7).". Then `grep -rn "marketing-optout\|MarketingOptOut\|marketingOptOut" apps/web/src apps/web/e2e` must print nothing (on `001a25f9` its only other hits are the five deleted files, `contact-drawer.tsx`, `contact-fields-panel.tsx`, `page.test.ts`, `contacts/actions.ts`, `summary.ts`, the summary route, `messages.ts`'s `contact.marketingOptOut.*` keys and `e2e/contacts-drawer.spec.ts`, each handled above).
 
 Edit `src/app/(dashboard)/dashboard/styleguide/page.tsx`: import `EMAIL_TREATMENT` from `@/lib/consent/email-row`; after the `styleguide-texts-state` block add:
 ```tsx
@@ -4928,13 +5367,15 @@ Expected (predicted): all pass; the typecheck is clean (the last `setMarketingEm
 | 4 | email-row.tsx: render the Resume button when `!view.canResume` too | "Stopped by the customer: … NO Resume" |
 | 5 | email-row.tsx: `showTitle` ignored (always render the label) | "shows the Messages label only when told to" |
 | 6 | drawer: keep `<MarketingOptOutSwitch` | the wiring case |
-| 7 | page.tsx: drop the try around `readEmailView` | page.test's error case |
+| 7 | page.tsx: drop the try around `readEmailView` | page.test "an unreadable ledger is the row's error state" |
+| 7b | page.tsx: `zone: "UTC"` in the ready load | page.test "the page reads the Email row … in the ACCOUNT's zone" |
+| 3b | email-row.tsx: drop the `<span>` label | email-row.test "Allowed: 'Email', the dot + word …" (the `\s+` regex) |
 | 8 | summary parser: keep the stamp REQUIRED | "the summary no longer carries 0049's column …" |
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add -A "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts" apps/web/src/lib/consent/email-row.ts apps/web/src/lib/consent/email-row.test.ts apps/web/src/lib/contacts "apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary" apps/web/src/lib/zone.ts apps/web/src/lib/messages.ts apps/web/src/lib/ui/guarded-run.ts "apps/web/src/app/(dashboard)/dashboard/styleguide/page.tsx" apps/web/e2e/contacts-drawer.spec.ts
+git add -A "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts" apps/web/src/lib/consent/email-row.ts apps/web/src/lib/consent/email-row.test.ts apps/web/src/lib/contacts "apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary" apps/web/src/lib/zone.ts apps/web/src/lib/messages.ts apps/web/src/lib/ui/guarded-run.ts apps/web/src/lib/ui/guarded-run.test.ts "apps/web/src/app/(dashboard)/dashboard/styleguide/page.tsx" apps/web/e2e/contacts-drawer.spec.ts
 git commit -m "feat(consent): the contact's Email row — Stop, Undo and Resume emails — replaces the 0049 'No marketing emails' switch"
 ```
 
@@ -4942,7 +5383,7 @@ git commit -m "feat(consent): the contact's Email row — Stop, Undo and Resume 
 
 ### Task 12: The email composer's notice
 
-**Owner:** bis-comms. **Tier:** HIGH. **Questions:** none (choice 22; G15).
+**Owner:** bis-comms. **Tier:** HIGH. **Decisions:** none (choice 22; G15).
 
 **Files:**
 - Modify: `apps/web/src/lib/consent/recipient-state.ts`, `recipient-state.test.ts`
@@ -5134,14 +5575,14 @@ git commit -m "feat(consent): the email composer says when they unsubscribed, an
 
 ### Task 13: The source scans for PR-3
 
-**Owner:** bis-reviewer drafts, bis-comms applies (on the integration branch). **Tier:** HIGH. **Questions:** none.
+**Owner:** bis-reviewer drafts, bis-comms applies (on the integration branch). **Tier:** HIGH. **Decisions:** none.
 
 **Files:**
 - Modify: `apps/web/src/lib/consent/scans.test.ts`
 
 **What it pins** (spec §8 "Source scans", PR-3's share; each with a positive control, each reading code with comments stripped through the file's own `code()`):
 1. **scan 1 for email:** outside `lib/email/index.ts`, `resend.ts`, `fake.ts` and `lib/consent/email-gate.ts`, no source file imports the email factory module, the Resend or fake provider, or the `resend` package, or names `getEmailProvider` / `resendEmailProvider` / `fakeEmailProvider`; only `resend.ts` imports the `resend` package; no file names `api.resend.com`; the email gate re-exports nothing of the factory;
-2. **scan 2, finished:** every kind literal in a gate caller is in one of the two registries, and the scan sees all 36 kinds (14 SMS + 22 email);
+2. **scan 2, finished:** every kind literal in a gate caller (a module importing `lib/consent/gate`, `lib/automations/send-sms`, `lib/consent/email-gate` or `lib/automations/context`, Task 4) is in one of the two registries, and the scan sees all **32 distinct** kinds: 14 SMS + 22 email, less the 4 keys both registries hold (`automation.review_request`, `automation.referral_ask`, `automation.quote_followup`, `automation.no_show_nudge`; review R2-I4);
 3. **the email kinds' sites:** each of the 22 email kinds is named in exactly the file(s) the send-site table gives, and nowhere else but the registry (a kind moved to another path is a classification change, argued in review);
 4. **scan 4 (spec §8, item 4):** the `customer_initiated` email kinds are named only in `app/b/[publicId]/actions.ts`, `lib/forms/enrich.ts` and `lib/voice/tools/registry.ts`, never under `lib/automations/`;
 5. **scan 5, the column:** nothing in `apps/web/src` or `packages/db/src` names `marketing_email_opted_out_at`, `setMarketingEmailOptOut` or `contactMarketingEmailOptedOut`;
@@ -5176,9 +5617,11 @@ Replace the scan 2 positive control Task 4 left:
 ```
 with:
 ```ts
-  it("the scan reaches every send path's kind — all fourteen SMS kinds and all twenty-two email kinds (the positive control; mutation: a site stops naming its kind → FAILS)", () => {
+  it("the scan reaches every send path's kind — all fourteen SMS kinds and all twenty-two email kinds, 32 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
     const seen = new Set(kindLiterals().map(({ kind }) => kind));
-    expect([...seen].sort()).toEqual([...new Set([...Object.keys(SMS_KINDS), ...Object.keys(EMAIL_KINDS)])].sort());
+    const all = [...new Set([...Object.keys(SMS_KINDS), ...Object.keys(EMAIL_KINDS)])].sort();
+    expect(all).toHaveLength(32);
+    expect([...seen].sort()).toEqual(all);
   });
 ```
 Append at the end of the file:
@@ -5345,6 +5788,7 @@ Expected (predicted): all pass on the integration branch (Tasks 1–12 in).
 | 8 | the one-click route logs `` `refused ${token}` `` | "no token in a log line" |
 | 9 | classes.ts: `automation.reminder` class → `customer_initiated` | scan 4's positive control |
 | 10 | a pass does `await fetch("https://api.resend.com/emails", …)` | "… nothing names Resend's API host" |
+| 11 | scans.test: drop `"apps/web/src/lib/automations/context"` from `GATE_MODULES` | scan 2's positive control (the five kinds sent only through `ctx.email` go unseen: review R2-I4) |
 
 - [ ] **Step 4: Commit**
 
@@ -5357,7 +5801,7 @@ git commit -m "test(consent): PR-3's source scans — one email gate, every emai
 
 ### Task 14: e2e on the fixture account: the page, one-click, the Email row, the composer's notice
 
-**Owner:** bis-e2e-qa (and bis-platform for the one `ci.yml` line). **Tier:** HIGH. **Questions:** [Q1] (the page's first step).
+**Owner:** bis-e2e-qa (and bis-platform for the one `ci.yml` line). **Tier:** HIGH. **Decisions:** Q1 (the page's first step).
 
 **Files:**
 - Create: `apps/web/e2e/consent-email.spec.ts`
@@ -5385,7 +5829,7 @@ Edit `.github/workflows/ci.yml`. In the `e2e` job's `env:` block, after the `TEL
 
 Create `apps/web/e2e/consent-email.spec.ts`:
 ```ts
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext, type PlaywrightWorkerArgs } from "@playwright/test";
 import { readFileSync, existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
@@ -5398,10 +5842,13 @@ loadEnv({ path: ".env.local" });
 /**
  * Consent chain PR-3 end to end (spec §8's two email lines, plan G16), ON
  * THE PER-RUN FIXTURE ACCOUNT ONLY (never Test Client One, CLAUDE.md):
- *   1. /u/<token>: [Q1] the question and one Unsubscribe; the click records
- *      the stop; the drawer's Email row says "unsubscribe link" and offers no
- *      Resume; Resubscribe lifts it;
- *   2. the RFC 8058 one-click POST: 200, empty, no cookie, no redirect; a bad
+ *   1. /u/<token>: (decision Q1) the question and one "Stop emails"; the
+ *      press records the stop and moves focus to Resubscribe; the drawer's
+ *      Email row says "unsubscribe link" and offers no Resume; Resubscribe
+ *      lifts it;
+ *   2. the RFC 8058 one-click POST, sent the way a mail client sends it —
+ *      no cookies, no session (review R2-I6): 200, empty, no cookie, no
+ *      redirect; a bad
  *      token 400; the GET redirects to the page;
  *   3. staff Stop emails with Undo, and Resume with a required note;
  *   4. the email composer's notice after an unsubscribe, the form still there.
@@ -5476,12 +5923,14 @@ test("the unsubscribe link: the question, one click records it, the drawer says 
   const cpage = await customer.newPage();
   await cpage.goto(`/u/${token}`);
   const section = cpage.getByTestId("unsubscribe");
-  await expect(section).toHaveAttribute("data-state", "allowed");                                   // [Q1]
+  await expect(section).toHaveAttribute("data-state", "ask");                                       // decision Q1
   await expect(section).toContainText(`Stop emails from ${made.brand}?`);
   await expect(section).toContainText(`¿Dejar de recibir correos de ${made.brand}?`);
-  expect(await newestEmailRow("page")).toBeNull();                                                   // nothing on GET [Q1]
+  expect(await newestEmailRow("page")).toBeNull();                                                   // nothing on GET (decision Q1)
+  await expect(cpage.getByRole("button", { name: m["unsubscribe.button"] })).toHaveText("Stop emails / Dejar de recibir correos"); // decision P2
   await cpage.getByRole("button", { name: m["unsubscribe.button"] }).click();
   await expect(section).toHaveAttribute("data-state", "stopped");
+  await expect(cpage.getByRole("button", { name: m["unsubscribe.resubscribe"] })).toBeFocused();  // review R2-m6
   await expect(section).toContainText(`${made.brand} won't send you any more automated emails.`);
   expect(await newestEmailRow("page")).toEqual({ action: "revoked", method: "unsubscribe_link" });
 
@@ -5493,12 +5942,24 @@ test("the unsubscribe link: the question, one click records it, the drawer says 
 
   await cpage.getByRole("button", { name: m["unsubscribe.resubscribe"] }).click();
   await expect(section).toHaveAttribute("data-state", "resubscribed");
+  await expect(cpage.getByRole("button", { name: m["unsubscribe.button"] })).toBeFocused();
   await expect(section).toContainText(`You'll get emails from ${made.brand} again.`);
   expect(await newestEmailRow("page")).toEqual({ action: "resubscribed", method: "unsubscribe_page" });
   await customer.close();
 });
 
-test("the one-click POST: 200, empty, no cookie, no redirect; a bad token 400; the GET lands on the page", async ({ request }) => {
+/**
+ * A request context the way a mail client makes the RFC 8058 POST: no cookies,
+ * no session (X2: "MUST NOT include cookies, HTTP authorization, or any other
+ * context information"). The suite's own `request` fixture carries the
+ * signed-in storageState, which would prove nothing about A3 (review R2-I6).
+ */
+async function mailClient(playwright: PlaywrightWorkerArgs["playwright"], baseURL: string | undefined): Promise<APIRequestContext> {
+  return playwright.request.newContext({ baseURL, storageState: { cookies: [], origins: [] } });
+}
+
+test("the one-click POST: 200, empty, no cookie, no redirect; a bad token 400; the GET lands on the page", async ({ playwright, baseURL }) => {
+  const request = await mailClient(playwright, baseURL);
   const token = tokenFor(made.contacts[1]!, "click");
   const res = await request.post(`/api/unsubscribe/${token}`, {
     form: { "List-Unsubscribe": "One-Click" }, maxRedirects: 0,
@@ -5515,6 +5976,7 @@ test("the one-click POST: 200, empty, no cookie, no redirect; a bad token 400; t
   const get = await request.get(`/api/unsubscribe/${token}`, { maxRedirects: 0 });
   expect(get.status()).toBe(303);
   expect(get.headers()["location"]).toMatch(new RegExp(`/u/${token.replace(/[.]/g, "\\.")}$`));
+  await request.dispose();
 });
 
 test("staff Stop emails runs at once with Undo; Resume needs a note and then lifts the stop", async ({ page }) => {
@@ -5540,9 +6002,11 @@ test("staff Stop emails runs at once with Undo; Resume needs a note and then lif
   expect(await newestEmailRow("staff")).toEqual({ action: "resubscribed", method: "staff" });
 });
 
-test("after an unsubscribe, the email composer says so and still lets staff write", async ({ page, request }) => {
+test("after an unsubscribe, the email composer says so and still lets staff write", async ({ page, playwright, baseURL }) => {
   const contactId = made.contacts[3]!;
-  await request.post(`/api/unsubscribe/${tokenFor(contactId, "composer")}`, { form: { "List-Unsubscribe": "One-Click" }, maxRedirects: 0 });
+  const request = await mailClient(playwright, baseURL);
+  expect((await request.post(`/api/unsubscribe/${tokenFor(contactId, "composer")}`, { form: { "List-Unsubscribe": "One-Click" }, maxRedirects: 0 })).status()).toBe(200);
+  await request.dispose();
   await page.goto(`/dashboard/accounts/${fixture().accountId}/contacts/${contactId}`);
   await page.getByRole("button", { name: m["compose.email"], exact: true }).click();
   await expect(page.getByTestId("composer-email-notice")).toContainText("They unsubscribed from your emails on");
@@ -5550,7 +6014,6 @@ test("after an unsubscribe, the email composer says so and still lets staff writ
 });
 ```
 
-**[Q1] If danlo keeps decision 6 literally:** the first test's first `data-state` is `stopped` straight away, `newestEmailRow("page")` is the `unsubscribe_link` row before any click, and the Unsubscribe click is removed.
 
 - [ ] **Step 3: Run it** — in CI only (local e2e refuses while env files point at production, #135). Push happens in Task 15 step 2; this task commits.
 
@@ -5560,7 +6023,9 @@ Expected (predicted), in CI's `e2e` job: `consent-email.spec.ts` 4 passed; `cont
 
 | # | Mutation | Must fail |
 |---|---|---|
-| 1 | page.tsx records on GET (the [Q1] alternative) | test 1 (`newestEmailRow` not null before the click) |
+| 1 | page.tsx records on GET (what decision Q1 rejected) | test 1 (`newestEmailRow` not null before the click) |
+| 5 | unsubscribe-form: drop the focus `useEffect` | test 1 (`toBeFocused` after each press) |
+| 6 | route POST: `Set-Cookie` a session on the answer (or middleware adds one to a cookie-less request) | test 2 (`set-cookie` undefined) — only meaningful because the request carries no cookies (R2-I6) |
 | 2 | route POST answers `303` to `/u/…` | test 2 (`status` 200, no `location`) |
 | 3 | email-row.tsx: Stop emails without the Undo (`withUndo` false) | test 3 (no Undo button) |
 | 4 | message-composer: drop the notice | test 4 |
@@ -5583,9 +6048,10 @@ git commit -m "test(consent): e2e on the fixture account — the unsubscribe pag
 **Ordering hazard, analysed (the PR-2 choice-19 lesson):** the fold's rows are dated in the PAST (each opt-out's own time). 0055's `backfill_0049` rule appends one only while the address is ALLOWED (no deciding row, or a lift), so:
 - before the merge, nothing writes email deciding rows (no build before PR-3 has an email stop, an unsubscribe or an email staff action; PR-2's form grants are `granted`, which never decides): the pre-flight read in step 3 must show `already_stopped_or_decided = 0`, and every fold row lands as the address's only deciding row — the state the 0049 switch meant;
 - after the merge (the delta run), an address with a later customer unsubscribe or staff stop is STOPPED → the fold row is refused (the stop already stands); an address the customer (or staff) lifted since is ALLOWED → the fold row is appended but OLDER than the lift, so the lift stays the newest row and the state stays allowed — the customer's later act wins, as it should. No past-dated row can ever become the newest over a later act; that is the hazard PR-2's Telnyx import had to avoid by timing, and here the rule itself avoids it. The delta run is still done at once after the deploy, so the window for a missed stop is minutes.
-- the one residual: a contact the operator UN-ticked in the old build between steps 5 and 7 was folded as stopped. Step 8's second read counts them; staff can Resume a `backfill_0049` stop (choice 19).
+- the first residual: a contact the operator UN-ticked in the old build between steps 5 and 7 was folded as stopped. Step 8's second read counts them; staff can Resume a `backfill_0049` stop (choice 19).
+- the second residual, the WINDOW (review R1-M6): a stamp the old build's switch adds after step 5 is not in the ledger until step 8. Before the deploy that costs nothing (the old build honours its own column); from the deploy's READY to step 8, the new build reads only the ledger, so an automated email due to that contact in those minutes goes. Step 8 runs at once after READY to keep that window to minutes, and it counts what it folds (`appended`), so the size of the exposure is known. Old-build instances still serving during the rollout (Skew Protection, if on) can stamp the column, not the ledger: step 8 runs after they are gone, or is repeated once they are.
 
-- [ ] **Step 1: The branch is complete.** On `feat/consent-pr3` after Checkpoint D and Tasks 13–14: `pnpm install --frozen-lockfile --prefer-offline`; both typechecks; `pnpm --filter web lint` (0 errors); the full web suite (the two env suites only); the db suite on the replica's `post`, parent vs head, JSON reporter, per-test diff (no pass→fail; the CI-only files the only failures). `git log --oneline main..feat/consent-pr3` shows the spec commit, the plan commit, a `main` merge if one was needed, and one commit per task. Then `pnpm --filter web build` and the browser-bundle check (the token's crypto stays on the server; `bis-consent-token` is its HKDF salt, a string only `token.ts` holds): `grep -rl "bis-consent-token" apps/web/.next/server | wc -l` ≥ 1 and `grep -rl "bis-consent-token" apps/web/.next/static | wc -l` = 0. If D7 is done, bis-design-reviewer audits the `/u/[token]` page (a sealed test token, both a branded and an unbranded account, 375 px, the button's focus ring, the Spanish lines) and the Email row (dark and light through `.dark`, the blur fallback); otherwise that is danlo's eyeball after the deploy (step 9).
+- [ ] **Step 1: The branch is complete.** On `feat/consent-pr3` after Checkpoint D and Tasks 13–14: `pnpm install --frozen-lockfile --prefer-offline`; both typechecks; `pnpm --filter web lint` (0 errors); the full web suite (the two env suites only); the db suite on the replica's `post`, parent vs head, JSON reporter, per-test diff (no pass→fail; the CI-only files the only failures). `git log --oneline main..feat/consent-pr3` shows the spec commit, the plan commit, a `main` merge if one was needed, and one commit per task. Then `pnpm --filter web build` (it refuses `/u/[token]` if `app/u/layout.tsx` is missing, R10) and the browser-bundle check (the token's crypto stays on the server; `bis-consent-token` is its HKDF salt, a string only `token.ts` holds): `grep -rl "bis-consent-token" apps/web/.next/server | wc -l` ≥ 1 and `grep -rl "bis-consent-token" apps/web/.next/static | wc -l` = 0. If D7 is done, bis-design-reviewer audits the `/u/[token]` page (a sealed test token, both a branded and an unbranded account, 375 px, the button's focus ring, the Spanish lines) and the Email row (dark and light through `.dark`, the blur fallback); otherwise that is danlo's eyeball after the deploy (step 9).
 
 - [ ] **Step 2: Push, and CI green on the head SHA.** Push the branch (the first push; the pre-push hook runs). There is NO migration: nothing goes to the CI project. Read the check runs FOR THE HEAD SHA:
 ```bash
@@ -5599,7 +6065,7 @@ Expected: `verify` and `e2e` both `completed` / `success`. In `verify`'s log: `e
 select count(*) from public.consent_events
  where channel = 'email' and action in ('revoked', 'held', 'hold_released', 'resubscribed');
 ```
-Report to danlo, as Q7 says: `opted_out_contacts`, `to_fold_addresses` (the rows the write will append), `accounts`, `with_a_booking_in_30_days` (their reminders will stop), `other_contacts_sharing_an_address` (they stop too), `left_out_needs_a_look` (staff stop those by hand from the Email row after the merge), `future_stamps` (must be 0; if not, STOP: 0055 raises on a future time and the whole write would fail), and `can_write` (must be `true`; if not, STOP and re-plan the write's role). No customer is named anywhere in this output.
+Report to danlo, as Q7 says: `opted_out_contacts`, `to_fold_addresses` (the rows the write will append), `accounts`, `with_a_booking_in_30_days` (their reminders will stop), `other_contacts_sharing_an_address` (they stop too), `left_out_needs_a_look` (staff stop those by hand from the Email row after the merge), `future_stamps` (stamps dated in the future: the write SKIPS them — its `o.at <= now()` — because 0055 raises on a future `p_occurred_at`, and the count leaves them out of `to_fold_addresses` by the same rule (review R1-I5); if any, report the number, and a later run of the write folds each once its time has passed — step 8 does, if it has), and `can_write` (must be `true`; if not, STOP and re-plan the write's role). No customer is named anywhere in this output.
 
 - [ ] **Step 4: The secret — danlo's go (one go covers steps 4 to 8).** In the repo root, with the Vercel CLI linked to the web project:
   1. `vercel env ls production` — confirm the NAME `APP_ORIGIN` is listed (never print values). If it is missing, STOP: every customer email would be blocked `unsubscribe_unavailable` (G8) wherever the request carries no origin (every cron tick).
@@ -5609,13 +6075,13 @@ node -e "process.stdout.write(require('crypto').randomBytes(32).toString('base64
 ```
   3. `vercel env ls production` lists `CONSENT_TOKEN_SECRET`. Nothing redeploys: the live build does not read it; the merge's deploy will. Do NOT add it to Preview or Development (G8).
 
-- [ ] **Step 5: The fold write — production, BEFORE the merge.** Paste `packages/db/supabase/backfills/0049-fold-write.sql` into `execute_sql` exactly (no backslash: `sql-files.test.ts` pins it; no transaction control; ONE statement). Expected: one row per outcome, `appended` = step 3's `to_fold_addresses` minus any address a customer already stopped (none, by step 3's zero), `refused` = 0, no `duplicate`. **Run it a second time** to prove idempotence: every `appended` now answers `duplicate`, total unchanged, nothing appended. If the count is above about 1,000, split the statement by account (`where c.account_id = any(…)` on the `opted` CTE) before running it (PR-2 review R1-N7: one advisory lock per row inside one statement). Ledger line: `0049 FOLD WRITTEN — PROD <date> — appended N — re-run duplicate N`.
+- [ ] **Step 5: The fold write — production, BEFORE the merge.** Paste `packages/db/supabase/backfills/0049-fold-write.sql` into `execute_sql` exactly (no backslash: `sql-files.test.ts` pins it; no transaction control; ONE statement). Expected: one row per outcome, `appended` = step 3's `to_fold_addresses` minus any address a customer already stopped (none, by step 3's zero), `refused` = 0, no `duplicate`. **Run it a second time** to prove idempotence: every `appended` now answers `duplicate`, total unchanged, nothing appended. If the count is above about 1,000, split the statement by account (`where c.account_id = any(…)` on the `opted` CTE) before running it (PR-2 review R1-N7: one advisory lock per row inside one statement). Ledger line: `0049 FOLD WRITTEN — PROD <date> — appended N — re-run duplicate N`. **If the merge then stalls** (CI red on a later push, a review, danlo's go withheld; review R1-M5): the fold rows are harmless to the live build — it reads email stops only from the 0049 column and never reads an email ledger row (no build before PR-3 has one) — so nothing changes for any customer until the merge deploys. Do not undo them (the ledger is append-only). Whenever the deploy does land, step 8's delta fold runs at once after READY, however long after step 5 that is; the longer the stall, the more stamps it folds, and step 8's second read matters more (un-ticks in the stall).
 
 - [ ] **Step 6: Merge, under the same go.** Squash-merge through GitHub only after steps 2–5 (the ruleset requires `verify` and `e2e` green on the head SHA; the policy is non-strict, so if `main` moved since step 2, merge `main` in, re-run, and re-read the head SHA's check runs).
 
 - [ ] **Step 7: Deploy check.** The Vercel deployment is READY and its logs are clean; the cron's next tick is 200 and its JSON shows no email `held` with the reason "the unsubscribe link couldn't be added" (that reason means the secret or the origin is missing: STOP and fix before anything else); open any contact on production as the agency — the Email row renders (Allowed, or Stopped "you marked them “No marketing emails”" for a folded contact, with Resume); `curl -si https://app.bis-rgv.com/u/1.bad.token` shows the "This unsubscribe link doesn't work" page; `curl -si -X POST https://app.bis-rgv.com/api/unsubscribe/1.bad.token` answers `400` with no `set-cookie` header (A3).
 
-- [ ] **Step 8: The delta fold, at once after READY.** Run `0049-fold-write.sql` once more: rows the old build's switch added between step 5 and the deploy answer `appended` (expected 0), every other row `duplicate` or `refused`. Then this read (production, read-only) — addresses whose newest email row is a fold stop but where no contact with that address still carries the 0049 stamp (the operator un-ticked it in the window):
+- [ ] **Step 8: The delta fold, at once after READY** — whenever the deploy lands, even days after step 5 (R1-M5). Run `0049-fold-write.sql` once more: rows the old build's switch added between step 5 and the deploy answer `appended` (expected 0), every other row `duplicate` or `refused`. Then this read (production, read-only) — addresses whose newest email row is a fold stop but where no contact with that address still carries the 0049 stamp (the operator un-ticked it in the window):
 ```sql
 select count(*) from (
   select distinct on (e.account_id, e.address) e.account_id, e.address, e.action, e.method
@@ -5634,44 +6100,58 @@ Expected 0. If not 0, tell danlo the count (never the addresses): staff can Resu
 
 - [ ] **Step 9: The go-live check (right after the deploy; not a merge gate).** From danlo's own inbox (a Gmail address; it must not be one of BIS's `notify_emails` so the receipt and the alert do not land together): submit BIS's own website contact form with that address and ticking nothing else. Then:
   1. The receipt (`forms.receipt`) arrives with the footer line under the message, in the form's language; Gmail's "Show original" shows `List-Unsubscribe: <https://app.bis-rgv.com/api/unsubscribe/…>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, and its `DKIM-Signature` `h=` list names `list-unsubscribe` and `list-unsubscribe-post` (**A1**; if it does not, Gmail will not honour the header one-click: record it and tell danlo; the footer link still works).
-  2. The footer link opens the branded page ([Q1]: the question and one Unsubscribe); press it; BIS's drawer for that contact reads Stopped · "unsubscribe link", no Resume.
+  2. The footer link opens the branded page (decision Q1: the question and one "Stop emails / Dejar de recibir correos", decision P2); nothing is recorded yet (the drawer still reads Allowed); press it; BIS's drawer for that contact reads Stopped · "unsubscribe link", no Resume.
   3. Resubscribe on the page; the drawer reads Allowed.
   4. If Gmail shows its own "Unsubscribe" beside the sender (it may not for a low-volume sender; that is not a failure), use it: the ledger shows `revoked` / `one_click` for that address (read through the MCP, BIS's own account only). Resubscribe again from the footer link.
   5. Delete the test lead contact from BIS's contacts (the ledger rows stay; their `contact_id` is already null).
   Two footers, a missing header, or an unbranded page: STOP and report.
 
-- [ ] **Step 10: Handoff.** The ledger lines above; the head SHA and its check runs; the counts from steps 3, 5 and 8; A1's and A3's outcomes; danlo's answers to Q1–Q6 if any changed the plan; the Next plans below.
+- [ ] **Rollback — emergency only (review R1-I2).** Reverting PR-3 redeploys a build that reads email stops ONLY from `contacts.marketing_email_opted_out_at`, and only for the check-in and the referral ask: it cannot see a single ledger email stop — every unsubscribe, one-click and "Stop emails" since the deploy — and its reminders, follow-ups and every other automation would email those customers again. So roll back only for an outage worse than that (the app down, email broken for everyone); for anything else, fix forward. If it happens, under danlo's go:
+  1. At once, count the ledger email stops made since the deploy (production READ; the READY instant from step 7), and tell danlo the number, never the addresses:
+```sql
+select method, count(*) from public.consent_events
+ where channel = 'email' and action = 'revoked'
+   and method in ('unsubscribe_link', 'one_click', 'staff')
+   and occurred_at >= '<step 7 READY instant>'
+ group by method;
+```
+  2. The outer bound is CAN-SPAM's: an opt-out must be honoured within 10 business days (X4). The fix-forward redeploy of PR-3 must land well inside that for the oldest of those stops; until it does, the old build honours none of them. If it cannot, danlo decides between `accounts.outbound_suppressed` on the affected accounts (it stops EVERY automation, texts included) and stamping those contacts' 0049 column by hand (which the old build honours for the check-in and the referral ask only — reminders and follow-ups still go).
+  3. The fold's rows and every other email ledger row are harmless to the old build (it never reads an email ledger row), and PR-3 never wrote the column. When PR-3 is redeployed, it reads the ledger as it was; run step 8's delta fold again right after its READY (stamps the old build's switch made meanwhile).
+
+- [ ] **Step 10: Handoff.** The ledger lines above; the head SHA and its check runs; the counts from steps 3, 5 and 8; A1's and A3's outcomes; the Next plans below.
 
 ---
 
 ## Self-review (done while writing; recorded for the reviewer)
 
 **Spec coverage** (the §7 PR-3 row, item by item):
-- Email kinds in the registry: Task 4 (22 kinds; E1's two new sites; the class decides what an unsubscribe stops; choice 31's hours; [Q4]'s footer).
+- Email kinds in the registry: Task 4 (22 kinds; E1's two new sites; the class decides what an unsubscribe stops; choice 31's hours; (decision Q4)'s footer).
 - The footer and the headers: Task 4 (the shell's marker), Task 5 (the gate fills it, the text line, `List-Unsubscribe` / `List-Unsubscribe-Post`, Resend's `headers`, G8's production rule).
-- The token: Task 3 (sealed and signed [Q3], the previous secret, never expires, no fallback key; §8's four token tests plus URL-safety and "cannot read the address").
-- `/u/[token]` and the one-click endpoint: Task 9 (RFC 8058's 200 / no cookie / no redirect; 400; 503; the GET redirect; the page's four states and its error lines; [Q1]; rule 9's branding; bilingual; no Referer; public, pinned by `proxy.test.ts`).
+- The token: Task 3 (sealed and signed (decision Q3), the previous secret, never expires, no fallback key; §8's four token tests plus URL-safety and "cannot read the address").
+- `/u/[token]` and the one-click endpoint: Task 9 (RFC 8058's 200 / no cookie / no redirect; 400; 503; the GET redirect; the page's states and its error lines; decision Q1, P2; the page asks over a staff or fold stop, decision Q5 / R1-I1; focus after each press; rule 9's branding; bilingual; no Referer; public, pinned by `proxy.test.ts`; its own root layout, R10).
 - The 0049 fold and backfill: Task 1 (no reader left: the reactivation walk and its by-id read, the referral row, the contact select list), Task 2 (count and write, idempotent, one source per event, never over a later act), Task 11 (the switch, its action and copy removed), Task 13 (scan 5's column), Task 15 (count → danlo → secret → write → merge → delta; the ordering hazard analysed).
 - Every email path through the gate: Tasks 6, 7, 8 (all 22 sites), Task 13 (scan 1 for email, scan 2 over both registries, the sites table).
 - The customer-initiated rule: Task 4 (the class), Task 5 (never reads the ledger), Task 13 (scan 4).
 - The Email row on the contact, replacing the 0049 switch: Tasks 10, 11 (Allowed / Stopped, the since line, Stop with Undo, Resume with a note, choice 19's customer-only line, skeleton and error, the Messages label when the Texts row has none, the styleguide specimen).
 - §6's composer notice: Task 12 (choice 22; G15).
 - §8's PR-3 tests: token (Task 3), registry completeness (Task 4), scans 1, 2, 4, 5 (Task 13), backfill idempotency (Task 2, replica and CI), e2e's two email lines (Task 14).
-- §5's PR-3 items: fails closed (Task 5; Task 6's re-holds), mail scanners (Q1, which changes the spec's own answer to them), privacy (Q3; no token in a log line, Task 13; the page's `referrer`), rollout (Task 15).
+- §5's PR-3 items: fails closed (Task 5; Task 6's re-holds), mail scanners (decision Q1), privacy (decision Q3; no token in a log line, Task 13; the page's `referrer`), rollout (Task 15, with its Rollback block).
+- §4.3's postal address on three follow-ups (decision P1): Task 4 (`FOOTER_ADDRESS_KINDS`), Task 5 (the gate prints it when set, never blocks on blank).
 - Not in PR-3, deliberately: dropping the 0049 column (a later migration, spec §3); a preference page (§9); reading inbound email (decision 6; Q6); recording spam complaints as stops (G17).
 
 **Placeholder scan:** `grep -nE "TBD|TODO|implement later|fill in|similar to Task"` over this file finds only this line. Several edits say "the file's own" helper (`ctx`, `subject`, `sendMock`, a submit helper) instead of quoting it, because those test files are long and each helper is used as it is; each such edit names the grep that finds it.
 
-**Type consistency** (names a later task uses, checked against the task that defines them): `emailLedgerAddress` (Task 1, from `@bis/db/email-address` in the web) → Tasks 3, 5, 10, 12; `readBlockedAddresses` (Task 1) → Task 1's own walk; `ConsentTokenPayload`, `sealConsentToken`, `openConsentToken`, `consentTokenSecrets`, `isUuid` (Task 3) → Tasks 5, 9, 14; `EMAIL_KINDS`, `EmailKind`, `OperatorEmailKind`, `isEmailKind`, `emailReadsLedger`, `UNSUBSCRIBE_MARKER` (Task 4) → Tasks 5, 13; `EmailRequest`, `EmailSendResult`, `EmailBlockReason`, `EmailNotSent`, `sendEmail`, `sendEmailOrThrow`, `GatedEmail`, `emailSenderFor`, `operatorMailer` (Task 5) → Tasks 6, 7, 8; `isProductionEnv` (Task 5, `@/lib/email/environment`); `EMAIL_BLOCK_REASONS` (Task 6); `readUnsubscribeToken`, `recordUnsubscribe`, `recordResubscribe`, `emailStateOf`, `UnsubscribeState`, `pageLines`, `fillBusiness` (Task 9); `EmailView`, `EmailHow`, `EMAIL_RESUMABLE_METHODS`, `readEmailView`, `EmailContext`, `EmailActionResult`, `EmailUndo`, the three `…EmailsAction`s, `EmailResponse` (Task 10) → Task 11; `EmailLoad`, `EMAIL_TREATMENT`, `emailLine`, `runEmailAction` (Task 11); `EmailRecipientState`, `emailRecipientState`, `composerEmailNotice` (Task 12). NOT checked by a compiler: nothing was run.
+**Type consistency** (names a later task uses, checked against the task that defines them): `emailLedgerAddress` (Task 1, from `@bis/db/email-address` in the web) → Tasks 3, 5, 10, 12; `readBlockedAddresses` (Task 1) → Task 1's own walk; `ConsentTokenPayload`, `sealConsentToken`, `openConsentToken`, `consentTokenSecrets`, `isUuid` (Task 3) → Tasks 5, 9, 14; `EMAIL_KINDS`, `EmailKind`, `OperatorEmailKind`, `isEmailKind`, `emailReadsLedger`, `FOOTER_ADDRESS_KINDS`, `UNSUBSCRIBE_MARKER` (Task 4) → Tasks 5, 13; `EmailRequest`, `EmailSendResult`, `EmailBlockReason`, `EmailNotSent`, `sendEmail`, `sendEmailOrThrow`, `GatedEmail`, `emailSenderFor`, `operatorMailer` (Task 5) → Tasks 6, 7, 8; `isProductionEnv` (Task 5, `@/lib/email/environment`); `EMAIL_BLOCK_REASONS` (Task 6); `readUnsubscribeToken`, `recordUnsubscribe`, `recordResubscribe`, `emailStateOf`, `EmailStateRead`, `CUSTOMER_EMAIL_STOP_METHODS`, `pageStateOf`, `UnsubscribeState` (`"ask"` for the question), `pageLines`, `fillBusiness` (Task 9); `EmailView`, `EmailHow`, `EMAIL_RESUMABLE_METHODS`, `readEmailView`, `EmailContext`, `EmailActionResult`, `EmailUndo`, the three `…EmailsAction`s, `EmailResponse` (Task 10) → Task 11; `EmailLoad`, `EMAIL_TREATMENT`, `emailLine`, `runEmailAction` (Task 11); `EmailRecipientState`, `emailRecipientState`, `composerEmailNotice` (Task 12). NOT checked by a compiler: nothing was run.
 
-**Counts** (read off this file): 15 tasks; 4 checkpoints; 0 migrations; 22 email kinds (5 customer-initiated, 2 informational, 5 marketing, 1 staff-typed, 9 operator); 36 kinds seen by scan 2 (14 + 22); 7 questions for danlo (Q7 an FYI); 2 new env vars (`CONSENT_TOKEN_SECRET`, `CONSENT_TOKEN_SECRET_PREVIOUS`); 2 backfill SQL files.
+**Counts** (read off this file): 15 tasks; 4 checkpoints; 0 migrations; 22 email kinds (5 customer-initiated, 2 informational, 5 marketing, 1 staff-typed, 9 operator); 32 distinct kinds seen by scan 2 (14 SMS + 22 email, 4 keys in both); 3 P1 kinds (`FOOTER_ADDRESS_KINDS`); 9 decisions (Q1–Q7, P1, P2); 2 new env vars (`CONSENT_TOKEN_SECRET`, `CONSENT_TOKEN_SECRET_PREVIOUS`); 2 backfill SQL files.
 
 **Vacuity checks applied while writing** (memories `bis-vacuous-test-shapes`, `bis-test-vacuity`):
 - Every apostrophe-bearing assertion on rendered HTML reads through `renderedText` (the page and the Email row), so no negative assertion can pass on `&#x27;`.
 - The brand-colour assertion compares against the UNBRANDED theme's own value first (the fallback is also a `--form-accent`, so "contains `--form-accent:`" alone would have been vacuous).
 - The fold's tests run the FILE'S OWN statement, narrowed by account through one pinned line, and fail loudly if that line moves.
 - One probe (Task 2 probe 7) is predicted to STAY green and says so: it proves the guard is not what refuses the fold, 0055's rule is.
-- The two `vi.mock` hazards were designed out, not documented: `emailLedgerAddress` and `isProductionEnv` live on subpaths no web test mocks (`@bis/db/email-address`, `@/lib/email/environment`), so the gate cannot read an undefined mock through a bare `vi.mock("@bis/db")` or `vi.mock("@/lib/email")` factory.
+- The two `vi.mock` hazards were designed out, not documented: `emailLedgerAddress` and `isProductionEnv` live on subpaths no web test mocks (`@bis/db/email-address`, `@/lib/email/environment`), so the gate cannot read an undefined mock through a bare `vi.mock("@bis/db")` or `vi.mock("@/lib/email")` factory. P1's `getMailingAddress` is the one new `@bis/db` import the gate takes; it is called only for the three P1 kinds, and the one suite that runs the real gate under a bare factory (the cron route test) gains it (Task 6).
+- The fix round's own vacuity finds (reviews R2-I2, I3, I5, m1, m2): the Email row's `\s+` match, the fold write refused as a read only once `append_consent_event` is on the deny list, the absent-secret case that a `??` fallback turns red, the idempotence probe that must use `clock_timestamp()` (a `now()` mutation stays green in one transaction), and the shell's forge case that counts the `<!--bis:` opener (a whole-marker count stays green when only `<` escaping is dropped).
 - The site tests spy on the REAL gate (`vi.fn(real.sendEmailOrThrow)`), so a site's kind is asserted and its email still meets the gate's rules.
 - The one-click route test pins an EMPTY body and the absence of `set-cookie` and `location`, not just the status.
 - The e2e reads the ledger row itself, not only the page's words.
@@ -5682,6 +6162,9 @@ Expected 0. If not 0, tell danlo the count (never the addresses): staff can Resu
 - A 0049 address outside printable ASCII is left out of the fold and counted (Task 2); staff stop it by hand.
 - A spam complaint (`email.complained`) is not a stop (G17).
 - Whether Gmail honours the header one-click rests on Resend's DKIM coverage (A1), checked at go-live.
+- **A permanently email-stopped customer keeps coming back to the due-lists** (review R2-m8). The gate refuses the send and the pass gives back its tick-cap place (G13), but nothing is stamped, so the row is read again every tick until its own window closes. Where the list's read is capped it also keeps a slot in that read: `listDueQuoteFollowups` (`QUOTE_FOLLOWUP_CANDIDATE_LIMIT`, 200 per account) and the reactivation walk's page (`REACTIVATION_CANDIDATE_LIMIT`; left out before the survivor count, Task 1). The other email due-lists — `listDueReminders`, `listDueFollowups` (`packages/db/src/booking.ts`), `listDueReviewRequests`, `listDueReferralAsks`, `listDueNoShowNudges` — carry no candidate cap (read on `001a25f9`), so a stopped row costs them a re-read, not a slot. Only ~200 stopped quote contacts at the head of one account's order could starve that account's quote follow-ups. A later plan could stamp a gate-refused row.
+- **The fold's window** (review R1-M6; Task 15's ordering hazard): a stamp the old build's switch adds after the fold write is not honoured by the new build from its READY until the delta fold (step 8), which is why step 8 runs at once.
+- **Rotation is one slot deep** (G8): a second rotation within 30 days would break links sealed two secrets ago; the runbook line in `.env.example` and `token.ts` says so, nothing enforces it.
 - A person who forwards an email hands the recipient a working unsubscribe for the original address — the token is the capability (spec decision 6: no token table); the forwarded reader can also Resubscribe it.
 
 **Not replayed:** every step. The machine had 0.1–0.2 GB free while this plan was written. One pure piece was run instead, outside vitest: Task 3's seal/open logic, as a plain Node script (HKDF, AES-256-GCM, HMAC), round-tripped a payload, refused a wrong secret, and produced a 320-character token. That is evidence about the crypto calls, not a vitest run.
@@ -5692,10 +6175,11 @@ Expected 0. If not 0, tell danlo the count (never the addresses): staff can Resu
 - `EMAIL_RESUMABLE_METHODS` and 0055's staff-Resume list (`staff`, `free_text`, `backfill_0049`) are tied by no test; email never writes `free_text`, so the difference is harmless today (PR-2's R1-N4 again).
 - The billing link (`operator.billing_link`) goes to the CLIENT, not the business's customer, so it carries no footer; if a later plan emails clients' marketing, it is a new kind, not this one.
 - The drawer now makes three reads (summary, texts, email) on every open; a later change could fold the texts and email reads into one route.
+- The customer's own email stop methods are listed twice: `CUSTOMER_EMAIL_STOP_METHODS` (`lib/consent/unsubscribe.ts`, the page, Task 9) and `CUSTOMER_EMAIL_STOPS` (`lib/consent/recipient-state.ts`, the composer, Task 12), tied by no test. Both are `unsubscribe_link`, `one_click` today; a later change could export one from a client-safe module.
 
 ## Next plans
 
 - **A migration that drops `contacts.marketing_email_opted_out_at`** once both databases pass the parity check after this PR's deploy (spec §3), with PR-1's pending drop of `automation_settings`'s quiet columns.
 - **Recording spam complaints as email stops** (G17): a new method, and an account for automation email (a `messages` row, or the provider id stored with the send).
-- **A preference page and per-kind email choices** (spec §9; Q2's alternative).
+- **A preference page and per-kind email choices** (spec §9; danlo decided against a per-kind opt-out for now, Q2).
 - **The go-live of texting** (PR-2's Next plans) is independent of this PR.
