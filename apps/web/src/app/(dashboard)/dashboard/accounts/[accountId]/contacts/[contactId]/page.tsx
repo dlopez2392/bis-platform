@@ -12,13 +12,13 @@ import { ActivityTimeline } from "./activity-timeline";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { e164Of } from "@/lib/voice/phone-number";
-import { smsRecipientState } from "@/lib/consent/recipient-state";
+import { smsRecipientState, emailRecipientState } from "@/lib/consent/recipient-state";
 import { readTextsView } from "@/lib/consent/texts-view";
 import type { TextsLoad } from "@/lib/consent/texts-row";
 import { readEmailView } from "@/lib/consent/email-view";
 import type { EmailLoad } from "@/lib/consent/email-row";
 import { loggableError } from "@/lib/loggable-error";
-import { composerStateLine } from "@/lib/consent/composer-state";
+import { composerStateLine, composerEmailNotice } from "@/lib/consent/composer-state";
 import { renderZone } from "@/lib/zone";
 
 export const dynamic = "force-dynamic";
@@ -48,6 +48,9 @@ export default async function ContactDetailPage({
     // Never throws; a failed read is "unknown", which closes the form.
     smsRecipientState(db, accountId, contact),
   ]);
+  // The email composer's read (spec §6, choice 22): whether this contact's
+  // email is stopped, and by whom. Never throws.
+  const emailRecipient = await emailRecipientState(db, accountId, contact);
   // Not a throw, the checklist page's reasoning: one cosmetic date line must
   // not 500 the contact page. `undefined` makes `renderZone` fall back.
   if (account.error) {
@@ -113,6 +116,7 @@ export default async function ContactDetailPage({
           contactHasPhone={Boolean(e164Of(contact.phone))}
           smsGate={smsGate}
           smsBlockedLine={composerStateLine(smsRecipient, zone.zone)}
+          emailNoticeLine={composerEmailNotice(emailRecipient, zone.zone)}
           notes={notes}
           tasks={tasks}
           holdOpenTaskIds={holdOpen}

@@ -74,8 +74,10 @@ vi.mock("./activity-timeline", () => ({
 }));
 // Consent chain PR-1: the composer's recipient read, stubbed per test.
 const recipientState = vi.fn();
+const emailRecipientStateMock = vi.fn();
 vi.mock("@/lib/consent/recipient-state", () => ({
   smsRecipientState: (...a: unknown[]) => recipientState(...a),
+  emailRecipientState: (...a: unknown[]) => emailRecipientStateMock(...a),
 }));
 const textsRowProps = vi.fn();
 vi.mock("../texts-row", () => ({
@@ -125,6 +127,7 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     renderZone.mockClear();
     accountsEq.mockClear();
     recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
     readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
     readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
   });
@@ -181,6 +184,7 @@ describe("ContactDetailPage: the recipient's texts state", () => {
   beforeEach(() => {
     getContactMock.mockReset().mockResolvedValue(CONTACT);
     recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
     timelineProps.mockClear();
     textsRowProps.mockClear();
     readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
@@ -249,5 +253,22 @@ describe("ContactDetailPage: the recipient's texts state", () => {
     } finally {
       errors.mockRestore();
     }
+  });
+});
+
+describe("ContactDetailPage: the email composer's notice (Task 12, spec §6, choice 22)", () => {
+  beforeEach(() => {
+    getContactMock.mockReset();
+    getContactMock.mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+  });
+
+  it("the timeline gets the spec's line for a customer's own email stop, never null (mutation: pass null → FAILS)", async () => {
+    emailRecipientStateMock.mockResolvedValue({ kind: "stopped", since: "2026-10-01T15:00:00Z", byCustomer: true });
+    await render();
+    expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({
+      emailNoticeLine: m["compose.emailUnsubscribed"].replace("{date}", formatDateInZone("2026-10-01T15:00:00Z", "America/Chicago")),
+    });
   });
 });
