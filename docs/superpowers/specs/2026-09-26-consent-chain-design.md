@@ -27,6 +27,13 @@ customer's STOP over a staff stop is recorded, without a reply), the retry parag
 owes the reply), the reply table's help lines (S12: a contact sentence) and the phrase list (S9: extended); §5 go-live
 step 0 (S11: US, MX and CA; the AI detection read; the opt-out import before any number moves).
 
+Corrected on 2026-09-30 from the PR-3 plan's reading of `main` at `001a25f9`
+(`docs/superpowers/plans/2026-09-30-consent-pr3-email.md`, "Spec gaps resolved", E1-E5). Facts only, in place: §4.3's
+send-site table (22 sites, not 20: the voice cancellation email and the voice phone-change staff alert were added after
+this spec was written; line numbers re-read), the endpoints paragraph (nothing to add to the middleware), the 0049 fold
+(a backfill statement, not a migration: 0054 and 0055 already hold every method and rule PR-3 writes), §10's CAN-SPAM
+and RFC 8058 rows and §11's Resend bullet (verified). The PR-3 plan's open questions for danlo are NOT applied here.
+
 ## 1. Decisions
 
 ### 1.1 Owner decisions (danlo, 2026-09-26; binding)
@@ -468,8 +475,9 @@ the listed files. Paths below are under `apps/web/src/`.
 |---|---|---|---|---|
 | `booking.confirmation` | `app/b/[publicId]/actions.ts:436` | customer | customer_initiated | **sends** |
 | `forms.receipt` | `lib/forms/enrich.ts:411` | customer | customer_initiated | **sends** |
-| `voice.booked` | `lib/voice/tools/registry.ts:264` | caller | customer_initiated | **sends** |
-| `voice.moved` | `lib/voice/tools/registry.ts:365` | caller | customer_initiated | **sends** |
+| `voice.booked` | `lib/voice/tools/registry.ts:473` | caller | customer_initiated | **sends** |
+| `voice.moved` | `lib/voice/tools/registry.ts:572` | caller | customer_initiated | **sends** |
+| `voice.cancelled` | `lib/voice/tools/registry.ts:630` | caller | customer_initiated | **sends** (added 2026-09-30, E1) |
 | `automation.reminder` | `lib/automations/passes/reminders.ts:80` | customer | informational | stops |
 | `automation.followup` | `passes/followups.ts:121` | customer | informational | stops |
 | `automation.review_request` | `passes/review-request.ts:304` | customer | marketing | stops |
@@ -486,6 +494,7 @@ the listed files. Paths below are under `apps/web/src/`.
 | `operator.agency_report` | `passes/weekly-agency-report.ts:118` | agency | operator | not subject |
 | `operator.billing_link` | `lib/billing/billing-link.ts:236` | client | operator | not subject |
 | `operator.sender_check` | `lib/email/preflight.ts:34` | admin | operator | not subject |
+| `operator.phone_change_alert` | `lib/voice/tools/registry.ts:202` | staff | operator | not subject (added 2026-09-30, E1) |
 
 **Headers and footer.**
 - `SendEmailInput` gains `headers` and `resend.ts` passes them on. That the Resend SDK accepts them is an assumption
@@ -507,8 +516,8 @@ the listed files. Paths below are under `apps/web/src/`.
   already sent.
 - Tokens do not expire. The channel field lets SMS use the same format later.
 
-**Endpoints.** Both are public and are added to the middleware's public routes (`apps/web/src/proxy.ts:3` protects
-only `/dashboard(.*)` today).
+**Endpoints.** Both are public. Nothing is added to the middleware: `apps/web/src/proxy.ts:3` protects only
+`/dashboard(.*)`, so both paths are already public (corrected 2026-09-30, E2; a test pins it).
 - `GET /u/[token]`: verifies the token and, if the address is allowed, appends `revoked` (method `unsubscribe_link`),
   then renders the page (§6). Its ghost "Resubscribe" posts a server action that appends `resubscribed` (method
   `unsubscribe_page`).
@@ -518,7 +527,8 @@ only `/dashboard(.*)` today).
   and the error page on `/u`.
 
 **The 0049 fold.**
-- PR-3's migration appends `revoked` (method `backfill_0049`, `occurred_at` = the column's value) for every contact
+- PR-3's one-off backfill statement (not a migration: 0054's method list and 0055's `backfill_0049` rule already exist;
+  corrected 2026-09-30, E3) appends `revoked` (method `backfill_0049`, `occurred_at` = the column's value) for every contact
   whose `marketing_email_opted_out_at` is set and whose email is present.
 - The readers listed in §2 switch to the ledger:
   - the referral ask and reactivation skip on the email state, and every other email kind now does too, through the
@@ -743,8 +753,8 @@ re-read it.
 | Today's (a)(12): one confirmation, no promotion, presumed consented within five minutes | Plan-cited (`crm-features.md:1106`, :1147–1149) |
 | 47 CFR 64.1200(c)(1): 8 a.m. to 9 p.m. at the called party's location | Plan-cited (`crm-features.md:3881`). Whether it reaches informational texts is an **assumption**; BIS applies it to all automated texts by choice (decision 4) |
 | Tex. Bus. & Com. Code §301.051: 9 a.m. to 9 p.m. Monday to Saturday, noon to 9 p.m. Sunday | The statute is plan-cited (`crm-features.md:3883`). The hours are danlo's reading and an **assumption**, and whether they reach texts is for counsel |
-| CAN-SPAM: a working opt-out mechanism, honoured within ten business days | Plan-cited (FTC guide, `crm-features.md:3894`). That the mechanism must work for at least 30 days after sending is an **assumption** from the same guide |
-| RFC 8058 one-click: a POST of `List-Unsubscribe=One-Click` to an HTTPS URL | External standard, not cited by the plan. An **assumption** to verify, as is the claim that large mailbox providers expect it of bulk senders |
+| CAN-SPAM: a working opt-out mechanism, honoured within ten business days | **Verified 2026-09-30** (FTC, "CAN-SPAM Act: A Compliance Guide for Business", ftc.gov/business-guidance/resources/can-spam-act-compliance-guide-business): "Any opt-out mechanism you offer must be able to process opt-out requests for at least 30 days after you send your message. You must honor a recipient's opt-out request within 10 business days." The guide also forbids requiring "any step other than sending a reply email or visiting a single page on an Internet website" (E4) |
+| RFC 8058 one-click: a POST of `List-Unsubscribe=One-Click` to an HTTPS URL | **Verified 2026-09-30** (datatracker.ietf.org/doc/html/rfc8058): one HTTPS URI in `List-Unsubscribe`; `List-Unsubscribe-Post` holds exactly `List-Unsubscribe=One-Click`; the POST carries no cookies or authorization; the message needs a valid DKIM signature covering both headers. Gmail requires one-click unsubscribe of senders of more than 5,000 messages a day, for marketing and subscribed mail (support.google.com/mail/answer/81126, verified). Yahoo's rule is still an **assumption**, and so is whether Resend's DKIM signature covers the two headers (E5) |
 | **1 December 2026** | The plan's planning date for texting, not a legal date (`crm-features.md:1160–1163`) |
 
 ## 11. External assumptions to verify at build time (not repo facts)
@@ -769,7 +779,11 @@ re-read it.
   - **new, VERIFIED:** Telnyx offers per-profile AI opt-out detection; it stays off (§5 step 0);
   - still **NOT FOUND:** the HTTP status of the `40300` refusal (the gate keys on the code), and whether Telnyx's
     keyword match ignores punctuation, accents or inner spaces (checked live at go-live).
-- **Resend:** the send call accepts custom `headers`.
+- **Resend:** ~~the send call accepts custom `headers`~~ **VERIFIED 2026-09-30:** `resend@6.18.1`'s
+  `CreateEmailBaseOptions.headers?: Record<string, string>` (the installed package's `dist/index.d.mts`), and Resend's own
+  page (resend.com/docs/dashboard/emails/add-unsubscribe-to-transactional-emails) sends `List-Unsubscribe` that way and
+  says a `POST` should answer a blank `200` or `202`. Whether Resend's DKIM signature covers custom headers is NOT FOUND
+  (checked at go-live, E5).
 - **`libphonenumber-js`:** its metadata tells US from Mexican 10-digit numbers as §4.1 needs. Tests pin the border area
   codes.
 - **Postgres:** a cascade from `accounts` deletes ledger rows even though no role holds `delete`. A DB test proves it.
