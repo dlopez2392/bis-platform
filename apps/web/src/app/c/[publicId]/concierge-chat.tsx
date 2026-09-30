@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import { CONCIERGE_MAX_MESSAGE_CHARS } from "@/lib/concierge/guards";
 import type { ConciergeStrings } from "@/lib/concierge/strings";
@@ -171,7 +171,7 @@ function getServerFramed(): false {
  */
 export function ConciergeChat({
   publicId, greeting, locale, strings, renderToken, attribution,
-  brandAccent, brandAccentForeground,
+  brandAccent, brandAccentForeground, brand = null,
 }: {
   publicId: string; greeting: string; locale: "en" | "es";
   strings: ConciergeStrings; renderToken: string;
@@ -180,6 +180,12 @@ export function ConciergeChat({
    *  page is already painting the composer's send button with, forwarded to
    *  the host page's launcher via `bis-concierge-brand`. */
   brandAccent: string; brandAccentForeground: string;
+  /** The tenant's brand header (`<PublicBrand>`), drawn in the same row as
+   *  the close button. The page passes it in rather than rendering it as a
+   *  sibling: as a sibling it was a row of its own, so the × — which only
+   *  this component can draw, because only it knows whether it is framed —
+   *  fell onto a second line under the business name. */
+  brand?: ReactNode;
 }) {
   // The greeting IS the empty state. It is the tenant's own copy, from their
   // own profile row — there is nothing to invent here.
@@ -302,35 +308,27 @@ export function ConciergeChat({
 
   return (
     <div className="bis-concierge-panel">
-      {/* A small header close button (ghost, tokens only) — the panel's own
-          producer for bis-concierge-close. Not in concierge.css: inline
-          `var(--token, fallback)` values, the same technique `page.tsx`
-          already uses for the whole token set on <main>. No outline is set
-          here on purpose — the browser's own default :focus-visible ring
-          stays, which is what DESIGN.md's "visible focus ring" asks for.
-
-          Rendered only when `framed` — the whole row, not just the button,
-          so a direct visit to this route never shows an empty flex row
-          where a control that does nothing used to sit. */}
-      {framed && (
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            onClick={closeChat}
-            aria-label={strings.close}
-            style={{
-              background: "transparent",
-              border: 0,
-              cursor: "pointer",
-              color: "var(--muted-foreground, #71717a)",
-              padding: 4,
-              borderRadius: "var(--radius-ctl, 8px)",
-              fontSize: 18,
-              lineHeight: 1,
-            }}
-          >
-            ×
-          </button>
+      {/* The header row: the tenant's brand, and — only when framed — the
+          close button beside it, the panel's own producer for
+          bis-concierge-close. One row, so the × sits level with the name
+          instead of wrapping under it. A direct visit to this route has no
+          close button (there is nothing to close), and an unbranded tenant
+          that is not framed renders no row at all rather than an empty one.
+          The button keeps the browser's own :focus-visible ring, which is
+          what DESIGN.md's "visible focus ring" asks for. */}
+      {(brand || framed) && (
+        <div className="bis-concierge-header">
+          <div className="bis-concierge-header-brand">{brand}</div>
+          {framed && (
+            <button
+              type="button"
+              className="bis-concierge-close"
+              onClick={closeChat}
+              aria-label={strings.close}
+            >
+              ×
+            </button>
+          )}
         </div>
       )}
       <ol className="bis-concierge-log" aria-live="polite">

@@ -60,10 +60,10 @@
   padding: 16px;
   font: 400 15px/1.5 var(--font-sans, "Geist", -apple-system, "Segoe UI", sans-serif);
   color: var(--foreground, #1D1930);
-  /* The brand header (a SIBLING, not a child) reads this to match the chat
-     column's own width — same technique as `.bis-form-page`. Narrower than
-     the form's 34rem: a chat log reads better as a column than a wide sheet
-     of fields, closer to a messaging app's own measure. */
+  /* The chat column's width. Narrower than the form's 34rem: a chat log
+     reads better as a column than a wide sheet of fields, closer to a
+     messaging app's own measure. The brand header now sits INSIDE the panel
+     (see .bis-concierge-header), so it inherits this column directly. */
   --public-measure: 26rem;
 }
 
@@ -90,6 +90,53 @@
   width: 100%;
   max-width: 26rem;
   margin-inline: auto;
+}
+
+/* One row: the brand on the left, the close button on the right, both on
+   the same centre line. The shared .bis-brand carries its own top padding
+   and measure for pages where it is the first thing on the page; here the
+   panel already owns both, so they are zeroed rather than stacked. */
+.bis-concierge-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+.bis-concierge-header-brand {
+  flex: 1;
+  min-width: 0;
+}
+.bis-concierge-header .bis-brand {
+  padding: 0;
+  max-width: none;
+  margin: 0;
+}
+/* Ghost, tokens only. 32px square: a comfortable target on a phone without
+   growing the header row past the logo's own height. */
+.bis-concierge-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-ctl, 8px);
+  background: transparent;
+  color: var(--muted-foreground, #71717a);
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 150ms, color 150ms;
+}
+.bis-concierge-close:hover {
+  background: var(--muted, #F3F0FB);
+  color: var(--foreground, #1D1930);
+}
+@media (prefers-reduced-motion: reduce) {
+  .bis-concierge-close { transition: none; }
 }
 
 .bis-concierge-log {

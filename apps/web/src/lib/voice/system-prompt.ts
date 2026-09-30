@@ -54,7 +54,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     ? `the assistant on the website for ${input.businessName}`
     : `the phone receptionist for ${input.businessName}`;
   const toneMedium = onWeb
-    ? "This is a text chat: short messages, one question at a time, no long lists."
+    ? "This is a text chat: short messages, one question at a time, no long lists. Write plain text only — the chat shows your words exactly as written, so markdown appears as stray symbols: no asterisks or underscores for emphasis, no # headings."
     : "This is a phone call: short sentences, one question at a time, no bulleted lists read aloud.";
 
   const lines: string[] = [

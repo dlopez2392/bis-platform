@@ -141,10 +141,6 @@ export default async function ConciergePage({
       {/* Only a `follow` tenant emits this: the visitor's own device decides,
           which no server-rendered style attribute can answer on its own. */}
       {darkCss ? <style>{darkCss}</style> : null}
-      <PublicBrand
-        name={branding.brandName}
-        logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
-      />
       <ConciergeChat
         publicId={publicId}
         greeting={greeting}
@@ -154,6 +150,12 @@ export default async function ConciergePage({
         attribution={parseAttribution(query)}
         brandAccent={formAccent.accent}
         brandAccentForeground={formAccent.accentForeground}
+        brand={
+          <PublicBrand
+            name={branding.brandName}
+            logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
+          />
+        }
       />
       <p className="bis-concierge-footer">{strings.poweredBy}</p>
     </main>

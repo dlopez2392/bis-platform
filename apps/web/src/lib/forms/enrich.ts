@@ -20,9 +20,10 @@ import { sendInstantReply } from "@/lib/automations/instant-reply";
  * person, and the instant text. Moved out of `f/[publicId]/actions.ts` so it
  * has exactly two callers that must never drift apart: the public form's
  * server action (browser submissions, behind the render token, honeypot and
- * fill-time guards) and `api/intake/[publicId]` (machine submissions from the
- * agency's own site — today the website's AI assistant — behind a shared
- * secret). One pipeline, two front doors.
+ * fill-time guards) and the web concierge's `capture_lead`
+ * (`lib/concierge/lead.ts`). One pipeline, two front doors. (A third, the
+ * shared-secret machine intake for bis-rgv.com's old assistant, was retired
+ * once that site moved onto the concierge.)
  *
  * Being a plain module rather than a "use server" file also means
  * `setAttribution` is no longer registered as a callable server action just

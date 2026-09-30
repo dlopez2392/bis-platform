@@ -412,7 +412,7 @@ pipeline, the BIS website's assistant and the web chat, and both depend on switc
 | Instant text reply to the submitter, in English or Spanish | **Built, dormant** (waits on A2P; an agency-only recipe, off by default once it clears) | `apps/web/src/lib/automations/instant-reply.ts:95-200` |
 | Ad attribution (UTM tags, Google and Facebook click ids, page, referrer) | **Partial** (captured and stored; never shown anywhere) | `apps/web/src/lib/forms/enrich.ts:266-284` |
 | Submissions list per form | **Partial** (unpaged; no search, export or delete; spam mixed with leads) | `packages/db/src/forms.ts:325-333` |
-| Machine intake for the BIS website's assistant | **Behind a flag** (off unless the deployment enables it; production state not visible in the repository) | `apps/web/src/app/api/intake/[publicId]/route.ts:14-157` |
+| Machine intake for the BIS website's assistant | **Retired** 2026-09-30: bis-rgv.com now runs the web concierge, so the shared-secret route was removed | — |
 | Web chat files a captured lead into a chosen form | **Behind a flag** (agency-only switch per company, off by default) | `apps/web/src/lib/concierge/lead.ts:44-150` |
 | File upload, signature, conditional logic, multi-step | **Planned only** (study proposals) | `docs/research/2026-09-25-crm-feature-research.md:314-319` |
 | One form in two languages (Spanish twins for labels, help and success text) | **Planned only** (study proposal) | `docs/research/2026-09-25-crm-feature-research.md:356-357` |
@@ -813,7 +813,6 @@ gives its effort: its ½–1 d rows at that rate, plus the slices it names (§4.
 | The seeded "Name" field is the first-name field, so a full name lands in first name | `.../forms/actions.ts:24` | F-047 slice |
 | A mistyped notify address or redirect URL fails the save with only "Could not save the form." | `.../forms/[formId]/form-editor.tsx:46-49` | ½–1 d |
 | A draft, archived or unknown form shows the framework's English "page could not be found" box inside the client's embed | `apps/web/src/app/f/[publicId]/page.tsx:98` | F-102 layout |
-| A lead filed through the machine intake (the BIS website's own assistant, not the client web chat, which always withholds the text) on a form with no consent box qualifies for the automatic text, contrary to the route's own contract | `apps/web/src/app/api/intake/[publicId]/route.ts:33-37, 146-148`; `apps/web/src/lib/concierge/lead.ts:131-137` | ½–1 d |
 | The checklist's "form has no notify address" count includes drafts and archived forms | `packages/db/src/forms.ts:340-348` | ½–1 d |
 | The public page's browser tab title is always the English word "Form" | `apps/web/src/app/f/layout.tsx:27` | F-102 layout |
 | **Booking and calendar: 9 defects, 0.6–1.2 ew** | | |

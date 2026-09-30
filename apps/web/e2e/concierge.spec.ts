@@ -507,6 +507,17 @@ test.describe("embedded on a client's page", () => {
       await expect(launcher).toHaveAttribute("aria-expanded", "true");
       const closeBtn = frame.getByRole("button", { name: strings.close });
       await expect(closeBtn).toBeVisible();
+      // The × sits on the SAME row as the business name, not wrapped onto a
+      // line of its own under it (seen live on bis-rgv.com, 2026-09-30, when
+      // the brand header was a sibling row above the chat). Centres within a
+      // few pixels; the fixture account has a brand name, so this is never
+      // vacuous.
+      const brandName = frame.locator(".bis-brand-name");
+      await expect(brandName).toBeVisible();
+      const [nameBox, closeBox] = [await brandName.boundingBox(), await closeBtn.boundingBox()];
+      const centre = (b: { y: number; height: number }) => b.y + b.height / 2;
+      expect(Math.abs(centre(nameBox!) - centre(closeBox!))).toBeLessThanOrEqual(4);
+      expect(closeBox!.x).toBeGreaterThan(nameBox!.x + nameBox!.width - 1);
 
       // Step 3: a character does not close it. Opening moved focus into the
       // iframe (the loader's own `iframe.focus()`), so this keydown lands in
