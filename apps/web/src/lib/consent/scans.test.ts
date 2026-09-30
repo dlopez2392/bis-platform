@@ -281,8 +281,18 @@ describe("scan 3: the ledger has one writer, and it only appends", () => {
   });
 
   it("only packages/db/src/consent.ts names the ledger's write function, as any string literal (mutation: an rpc(\"append_consent_event\") from apps/web → FAILS naming the file)", () => {
-    const naming = [...webSources(), ...dbSources()].filter((f) => /["'`]append_consent_event["'`]/.test(code(f))).map(rel);
-    expect(naming).toEqual(["packages/db/src/consent.ts"]);
+    const naming = [...webSources(), ...dbSources()].filter((f) => /["'`]append_consent_event["'`]/.test(code(f))).map(rel).sort();
+    // The one other file that may name it is the ci:sql read guard, which names
+    // it only to REFUSE it in a read (PR-3 Task 2, NOT_IN_A_READ). The next test
+    // pins that it names it there and nowhere else, and calls nothing.
+    expect(naming).toEqual(["packages/db/src/ci/sql.ts", "packages/db/src/consent.ts"]);
+  });
+
+  it("the ci:sql read guard names the write function only inside its NOT_IN_A_READ deny list, and calls no rpc (mutation: move the name out of the set, or add an rpc call → FAILS)", () => {
+    const guard = code(join(REPO, "packages", "db", "src", "ci", "sql.ts"));
+    expect(guard).toMatch(/NOT_IN_A_READ = new Set\(\[[^\]]*"append_consent_event"[^\]]*\]\)/);
+    expect(guard.match(/["'`]append_consent_event["'`]/g)?.length).toBe(1);
+    expect(guard).not.toMatch(/\.rpc\s*\(/);
   });
 
   it("0055, which defines the function, inserts into the ledger and never updates, deletes or truncates it (the insert is the positive control; mutation: add an update of consent_events → FAILS)", () => {
