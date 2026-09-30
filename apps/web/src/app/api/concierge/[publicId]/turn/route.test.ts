@@ -281,6 +281,16 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
     }));
   });
 
+  it("strips markdown emphasis before the visitor or the transcript sees it", async () => {
+    // Seen live on bis-rgv.com, 2026-09-30: the bubble renders raw text, so
+    // "**BIS Platform**" showed its asterisks on the page.
+    fetchMock.mockResolvedValue(modelReplies("1. **BIS Platform**: our own CRM."));
+    const res = await firstTurn();
+    expect((await res.json()).reply).toBe("1. BIS Platform: our own CRM.");
+    const [, , turns] = dbFns.appendConciergeTurns.mock.calls[0]!;
+    expect((turns as { role: string; text: string }[]).at(-1)!.text).toBe("1. BIS Platform: our own CRM.");
+  });
+
   it("replays the stored transcript, so turn two knows what turn one said", async () => {
     dbFns.getConciergeConversation.mockResolvedValue({
       ...CONVERSATION,
@@ -707,8 +717,7 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
   // inside a sandboxed iframe, is the literal string "null" — that used to
   // flow straight into the lead-alert email's dashboard link, producing
   // "null/dashboard/accounts/…". `lib/email/origin.ts`'s `originFrom` checks
-  // APP_ORIGIN FIRST, same as the enrich route's other two callers
-  // (api/intake/[publicId]/route.ts, f/[publicId]/actions.ts).
+  // APP_ORIGIN FIRST, same as enrich's other caller (f/[publicId]/actions.ts).
   it("builds the lead-alert link through originFrom(), never the raw (spoofable) Origin header", async () => {
     vi.stubEnv("APP_ORIGIN", "https://app.example");
     fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
