@@ -153,7 +153,7 @@ describe("POST /api/sms/inbound", () => {
       expect.anything(), "acct_1",
       expect.objectContaining({
         conversationId: "conv_1", channel: "sms", direction: "inbound", body: "hi there",
-        providerMessageId: "msg_evt_1",
+        providerMessageId: "msg_evt_1", status: "delivered",
       }),
       expect.any(String), expect.any(String),
     );

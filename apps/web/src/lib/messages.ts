@@ -554,7 +554,7 @@ export const m = {
   "settings.customFields": "Custom fields",
   "settings.customFieldsBody": "Extra fields captured on every contact.",
   "settings.customValues": "Custom values",
-  "settings.customValuesBody": "Template variables, referenced as {{custom_values.key}} from M1c on.",
+  "settings.customValuesBody": "Details about this business — like its service area or license number — that messages and pages can fill in automatically.",
   "settings.fieldName": "Field name",
   "settings.fieldKey": "field_key",
   "settings.dataType": "Type",
