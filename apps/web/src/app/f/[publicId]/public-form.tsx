@@ -58,14 +58,34 @@ export function PublicForm({
 
   // Report height to the embedding page. The iframe cannot size itself, so
   // without this the form is either clipped or floats in dead space.
+  //
+  // Measured to the form's BOTTOM EDGE IN THE DOCUMENT, not to its own height
+  // — the booking page's rule, for the booking page's reason. The brand header
+  // is a sibling rendered by page.tsx, above this node, so an element-height
+  // measurement leaves it out, and embed.js assigns the posted number
+  // outright. That under-reported every embedded form by the header's height
+  // and clipped its Submit button: 34px short on bis-rgv.com/contact, the
+  // button's bottom edge cut off, in production. NOT <main> either: its
+  // min-height:100vh is the iframe's own height, and posting that back grows
+  // the frame without bound.
   useEffect(() => {
     const node = rootRef.current;
     if (!node || window.parent === window) return;
-    const post = () => window.parent.postMessage(
-      { type: "bis-form-height", height: node.getBoundingClientRect().height + 8 }, "*");
+    const post = () => {
+      const bottom = node.getBoundingClientRect().bottom + window.scrollY;
+      // Zero means layout has not happened yet, not that the form is empty;
+      // posting it would collapse the host's frame to 8px for a tick.
+      if (bottom <= 0) return;
+      window.parent.postMessage({ type: "bis-form-height", height: bottom + 8 }, "*");
+    };
     post();
     const observer = new ResizeObserver(post);
     observer.observe(node);
+    // The brand row too: a logo has no intrinsic size, so it grows when the
+    // image loads — after this first ran — and pushes the form down with it.
+    // Scoped to the form's own parent, where page.tsx renders the header.
+    const brand = node.parentElement?.querySelector(".bis-brand");
+    if (brand) observer.observe(brand);
     return () => observer.disconnect();
   }, [state.status]);
 
