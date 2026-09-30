@@ -87,6 +87,15 @@ export function escapeHtml(value: string): string {
  * must cost recognition, never identification — so the logo carries an empty
  * alt and the name stands on its own.
  */
+/**
+ * Where the email gate puts the unsubscribe footer (consent PR-3, plan G7):
+ * the card's last row. The gate replaces it with the footer row for a
+ * customer email and with nothing for operator mail, so no template decides
+ * whether its reader may unsubscribe — the kind does (lib/consent/classes.ts).
+ * A template's own text cannot forge it: every template escapes "<".
+ */
+export const UNSUBSCRIBE_MARKER = "<!--bis:unsubscribe-->";
+
 export function shell(brand: EmailBrand, bodyHtml: string): string {
   const logo = brand.logoUrl
     ? `<img src="${escapeHtml(brand.logoUrl)}" alt="" width="32" height="32" `
@@ -108,6 +117,7 @@ export function shell(brand: EmailBrand, bodyHtml: string): string {
         </tr></table>
       </td></tr>
       <tr><td>${bodyHtml}</td></tr>
+      ${UNSUBSCRIBE_MARKER}
     </table>
   </td></tr>
 </table>

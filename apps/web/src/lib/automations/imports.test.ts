@@ -5,15 +5,15 @@ import { fileURLToPath } from "node:url";
 
 /**
  * "Nothing new sends" made structural. A pass receives its providers on
- * `ctx`; it never imports a provider or a provider factory. The harness is
- * the ONLY module allowed to import the EMAIL factory; NO module here may
- * import the SMS factory or the Telnyx provider (consent chain PR-1: texts go
- * through `ctx.sms`, which is the send gate, and lib/consent/scans.test.ts
- * pins the gate as the only importer app-wide). Test files are exempt: they
- * mock those modules.
+ * `ctx`; it never imports a provider or a provider factory. NO module here
+ * may import the EMAIL factory or the SMS factory (consent PR-1 and PR-3:
+ * both go through their gates, `ctx.sms` and `ctx.email`) — not even the
+ * harness any more — ctx.email is the email gate (lib/consent/
+ * email-gate.ts), and scan 1 pins it as the only importer. Test files are
+ * exempt: they mock those modules.
  *
- * Mutations: add `import { getSmsProvider } from "@/lib/sms"` to harness.ts
- * or to any pass file → FAILS; add the email factory to a pass file → FAILS.
+ * Mutations: add `import { getEmailProvider } from "@/lib/email"` to
+ * harness.ts → FAILS; add the email factory to a pass file → FAILS.
  */
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 // Static `from "…"` and dynamic `import("…")` alike; `/index` spelled out
@@ -21,9 +21,11 @@ const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const FORBIDDEN: readonly { rule: RegExp; allowed: readonly string[] }[] = [
   // The factories, by alias OR by relative path (`../../email` from passes/),
   // with or without `/index` and a `.js`/`.ts` suffix.
-  { rule: /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)email(?:\/index)?(?:\.[jt]s)?["']/, allowed: ["harness.ts"] },
+  // Consent PR-3: not even the harness any more — ctx.email is the email
+  // gate (lib/consent/email-gate.ts), and scan 1 pins it as the only importer.
+  { rule: /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)email(?:\/index)?(?:\.[jt]s)?["']/, allowed: [] },
   { rule: /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)sms(?:\/index)?(?:\.[jt]s)?["']/, allowed: [] },
-  { rule: /(?:from\s+|import\s*\(\s*)["'][^"']*\/resend["']/, allowed: ["harness.ts"] },   // the real email provider
+  { rule: /(?:from\s+|import\s*\(\s*)["'][^"']*\/resend["']/, allowed: [] },   // the real email provider
   { rule: /(?:from\s+|import\s*\(\s*)["'][^"']*\/telnyx["']/, allowed: [] },              // the real sms provider
 ];
 

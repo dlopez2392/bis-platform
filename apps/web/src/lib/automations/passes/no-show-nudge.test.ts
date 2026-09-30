@@ -17,6 +17,7 @@ import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
 import { noShowNudgePass, releaseNoShowNudge } from "./no-show-nudge";
+import { EmailNotSent } from "@/lib/consent/email-gate";
 
 const STAMP_ATTEMPTS = STAMP_RETRY_DELAYS_MS.length + 1;
 const TICK = new Date("2026-09-09T14:00:00Z");   // NY 10:00 Wed · CHI 09:00 Wed
@@ -439,5 +440,23 @@ describe("noShowNudgePass: a hold gives back its tick slot, never its daily coun
     dbMocks.listDueNoShowNudges.mockResolvedValue(Array.from({ length: 2 }, (_, i) => sms({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
     const result = await noShowNudgePass.run({ ...ctx(), sms: holdFirst(1) });
     expect(result).toEqual({ ...EMPTY, held: 1, skippedCap: 1 });
+  });
+});
+
+describe("consent PR-3: the email goes through the gate", () => {
+  it("the email goes through the gate as automation.no_show_nudge, for this account and contact, at the tick's instant (mutation: kind \"automation.quote_followup\" → FAILS)", async () => {
+    dbMocks.listDueNoShowNudges.mockResolvedValue([row()]);
+    await noShowNudgePass.run(ctx());
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "acct_1", kind: "automation.no_show_nudge", contactId: "ct_1", origin: ORIGIN,
+      now: TICK, accountZone: "America/New_York",
+    }));
+  });
+
+  it("an unsubscribed customer: the gate refuses, the row is skipped with the reason the client reads, nothing is stamped, and the tick's cap place is given back (decision 7, G13; mutation: count it sent → FAILS)", async () => {
+    dbMocks.listDueNoShowNudges.mockResolvedValue([row()]);
+    emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
+    expect(await noShowNudgePass.run(ctx())).toEqual({ ...EMPTY, blocked: 1 });
+    expect(dbMocks.stampNoShowNudged).not.toHaveBeenCalled();
   });
 });

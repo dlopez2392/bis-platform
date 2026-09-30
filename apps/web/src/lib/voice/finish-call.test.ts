@@ -36,6 +36,26 @@ const senderMocks = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
 vi.mock("@/lib/sms/sender", async (importOriginal) => ({
   ...(await importOriginal<object>()), resolveSmsSender: senderMocks.resolveSmsSender,
 }));
+// consent PR-3: finish-call.ts now sends the staff alert through the email
+// gate (sendEmailOrThrow), not getEmailProvider() directly. The REAL gate
+// runs (it delegates to the mocked "@/lib/email" above for the actual
+// provider), so every existing emailRefs-based assertion keeps its shape
+// unchanged; this wrapper only RECORDS each request (kind, accountId, …)
+// for the consent-PR-3 case below, which the gate strips before the
+// provider ever sees it.
+const gateCalls = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock("@/lib/consent/email-gate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/consent/email-gate")>();
+  return {
+    ...real,
+    sendEmailOrThrow: (async (req: Parameters<typeof real.sendEmailOrThrow>[0],
+      deps?: Parameters<typeof real.sendEmailOrThrow>[1]) => {
+      gateCalls.push(req as unknown as Record<string, unknown>);
+      return real.sendEmailOrThrow(req, deps);
+    }) as typeof real.sendEmailOrThrow,
+  };
+});
+function gated(): Array<Record<string, unknown>> { return gateCalls; }
 const summaryMocks = vi.hoisted(() => ({ generateSummary: vi.fn() }));
 vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSummary }));
 // A STATIC import in finish-call.ts itself (`import { generateProposals } from
@@ -169,6 +189,7 @@ beforeEach(() => {
   summaryMocks.generateSummary.mockReset().mockResolvedValue("RECORDED — test.");
   emailRefs.providerShouldThrow = false;
   emailRefs.send.mockReset().mockResolvedValue({ providerMessageId: "x" });
+  gateCalls.length = 0;
   smsRefs.providerShouldThrow = false;
   smsRefs.send.mockReset().mockResolvedValue({ providerMessageId: "sm1" });
   senderMocks.resolveSmsSender.mockReset().mockResolvedValue({
@@ -233,6 +254,14 @@ describe("finishCall", () => {
     expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
       expect.objectContaining({ outcome: "lead", contactId: "ct1", conversationId: "cv1", durationSecs: 120 }));
   });
+  it("the call alert to staff goes as operator.call_alert for the call's account (consent PR-3; mutation: a customer kind → a footer on a staff alert, FAILS)", async () => {
+    const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    await finishCall(s, ctx, meta);
+    expect(gated().length).toBeGreaterThan(0);
+    expect(gated().every((r) => r.kind === "operator.call_alert" && typeof r.accountId === "string")).toBe(true);
+  });
+
   it("an abandoned call records the row but creates nothing and alerts nobody", async () => {
     const s = withTranscript(emptyCallState(), { role: "caller", text: "uh", at: "t" });
     const r = await finishCall(s, ctx, meta);

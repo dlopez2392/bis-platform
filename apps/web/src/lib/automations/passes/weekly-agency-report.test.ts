@@ -102,6 +102,15 @@ describe("weeklyAgencyReportPass", () => {
     expect(metricsMock.weeklyMetrics).toHaveBeenCalledWith(expect.anything(), "acct_b", windowB, false);
   });
 
+  it("the send carries kind \"operator.agency_report\" with accountId null (consent PR-3; mutation: a customer kind → FAILS)", async () => {
+    dbMocks.getAgencyReportTarget.mockResolvedValue(target());
+    dbMocks.listAccountsForWeeklyRollup.mockResolvedValue([acct()]);
+    await weeklyAgencyReportPass.run(ctx());
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: null, kind: "operator.agency_report",
+    }));
+  });
+
   it("skips when already stamped for this week", async () => {
     dbMocks.getAgencyReportTarget.mockResolvedValue(target({ lastSentWeek: MONDAY }));
     expect(await weeklyAgencyReportPass.run(ctx())).toEqual({ ...EMPTY, skippedAlreadySent: 1 });

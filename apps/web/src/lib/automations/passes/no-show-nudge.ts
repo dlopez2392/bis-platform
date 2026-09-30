@@ -296,6 +296,8 @@ async function sendEmail(
   const brand = emailBrandNamed(row.branding, row.brandName);
   const { subject, html, text } = noShowNudgeEmail({ brand, body, bookingUrl });
   await ctx.email.send({
+    accountId: row.accountId, kind: "automation.no_show_nudge", contactId: row.contactId,
+    origin: ctx.origin, now: ctx.now, accountZone: row.accountTimezone,
     to,
     fromName: brand.name,
     fromAddress: row.fromEmail ?? undefined,

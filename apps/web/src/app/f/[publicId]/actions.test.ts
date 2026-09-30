@@ -18,6 +18,15 @@ const sendMock = vi.fn();
 vi.mock("@/lib/email", () => ({
   getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }),
 }));
+
+// consent PR-3: spies on the REAL gate, so the kind each site names is
+// asserted and the send still goes through the gate's own rules.
+vi.mock("@/lib/consent/email-gate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/consent/email-gate")>();
+  return { ...real, sendEmailOrThrow: vi.fn(real.sendEmailOrThrow) };
+});
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
+const gated = () => vi.mocked(sendEmailOrThrow).mock.calls.map((c) => c[0]);
 const instantReplyMock = vi.fn();
 vi.mock("@/lib/automations/instant-reply", () => ({
   sendInstantReply: (...a: unknown[]) => instantReplyMock(...a),
@@ -145,6 +154,7 @@ beforeEach(() => {
   incrementUnreadCountMock.mockReset();
   instantReplyMock.mockReset().mockResolvedValue({ kind: "skipped", reason: "disabled" });
   formGrantsMock.mockReset().mockResolvedValue(undefined);
+  vi.mocked(sendEmailOrThrow).mockClear();
 });
 
 describe("submitFormAction — the consent grant (consent chain PR-2, plan Task 10)", () => {
@@ -591,6 +601,26 @@ describe("submitFormAction — the receipt to the person who wrote in", () => {
       to: "customer@example.com", subject: "We received your message — Rio Roofing",
     });
     expect(sendMock.mock.calls[1]![0].body).toContain("Hi Maria,");
+  });
+
+  it("the lead alert goes as operator.lead_alert and the receipt as forms.receipt — customer-initiated, in the page's language, with the lead's contact and the request's origin (consent PR-3; mutation: send the receipt as operator.lead_alert → it carries no way out, FAILS)", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withEmail({ notify_emails: ["owner@rioroofing.com"] }));
+    // The file's beforeEach hands `headers()` a user-agent and NO host, so
+    // originFrom answers null there; this case needs a host, exactly as the
+    // file's own "links to the contact" case sets one (review R2-m3).
+    vi.mocked(headers).mockResolvedValue(new Headers({
+      "user-agent": "test-agent", host: "crm.example.com", "x-forwarded-proto": "https",
+    }) as never);
+
+    await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "es", first_name: "Maria", email: "customer@example.com",
+    }));
+
+    const kinds = gated().map((r) => r.kind);
+    expect(kinds).toEqual(expect.arrayContaining(["operator.lead_alert", "forms.receipt"]));
+    expect(gated().find((r) => r.kind === "forms.receipt")).toMatchObject({
+      accountId: expect.any(String), contactId: expect.any(String), language: "es", origin: "https://crm.example.com",
+    });
   });
 
   it("is skipped when the form asks for no email address", async () => {

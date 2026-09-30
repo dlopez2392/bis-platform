@@ -1,7 +1,8 @@
-import { readConsentState, type SupabaseClient } from "@bis/db";
+import { readConsentState, type ConsentMethod, type SupabaseClient } from "@bis/db";
 import { normalisePhone } from "@bis/db/phone";
+import { emailLedgerAddress } from "@bis/db/email-address";
 import { loggableError } from "@/lib/loggable-error";
-import type { SmsRecipientState } from "./composer-state";
+import type { SmsRecipientState, EmailRecipientState } from "./composer-state";
 
 /**
  * The contact page's read for the text composer (spec §6): the ledger state
@@ -30,4 +31,27 @@ export async function smsRecipientState(
   }
   if (contact.phone_country_unconfirmed === true || number.unconfirmed) return { kind: "unconfirmed_number" };
   return { kind: "ok" };
+}
+
+/** The customer's own ways to stop email (choice 19): the composer says "They unsubscribed" for these. */
+const CUSTOMER_EMAIL_STOPS: readonly ConsentMethod[] = ["unsubscribe_link", "one_click"];
+
+/**
+ * The contact page's read for the EMAIL composer (spec §6, choice 22): the
+ * ledger state of the contact's address, under the caller's own client.
+ * NEVER throws: a read that fails is `unknown`, which the composer states.
+ */
+export async function emailRecipientState(
+  db: SupabaseClient, accountId: string, contact: { email: string | null },
+): Promise<EmailRecipientState> {
+  const address = emailLedgerAddress(contact.email);
+  if (!address) return { kind: "ok" };
+  try {
+    const state = await readConsentState(db, accountId, "email", address);
+    if (state.state === "allowed") return { kind: "ok" };
+    return { kind: "stopped", since: state.since, byCustomer: CUSTOMER_EMAIL_STOPS.includes(state.method) };
+  } catch (e) {
+    console.error(`composer: email consent state unreadable for account ${accountId}: ${loggableError(e)}`);
+    return { kind: "unknown" };
+  }
 }

@@ -27,6 +27,22 @@ customer's STOP over a staff stop is recorded, without a reply), the retry parag
 owes the reply), the reply table's help lines (S12: a contact sentence) and the phrase list (S9: extended); §5 go-live
 step 0 (S11: US, MX and CA; the AI detection read; the opt-out import before any number moves).
 
+Corrected on 2026-09-30 from the PR-3 plan's reading of `main` at `001a25f9`
+(`docs/superpowers/plans/2026-09-30-consent-pr3-email.md`, "Spec gaps resolved", E1-E5). Facts only, in place: §4.3's
+send-site table (22 sites, not 20: the voice cancellation email and the voice phone-change staff alert were added after
+this spec was written; line numbers re-read), the endpoints paragraph (nothing to add to the middleware), the 0049 fold
+(a backfill statement, not a migration: 0054 and 0055 already hold every method and rule PR-3 writes), §10's CAN-SPAM
+and RFC 8058 rows and §11's Resend bullet (verified). The PR-3 plan's open questions were decided afterwards (next
+paragraph).
+
+Corrected again on 2026-09-30 from danlo's decisions on the PR-3 plan (its DECISIONS Q1–Q7) and two from its reviews
+(P1, P2). In place: decision 6 (amended by Q1 and Q3: the page asks once and its button records; the one-click POST
+records at once; the token is encrypted as well as signed); choices 22 (Q4: no footer or headers on staff-typed email),
+24 (Q7) and 27 (rewritten for Q1); §4.2 step 2 (Q5: email follows S8); §4.3's footer and headers (Q4, P1), the token
+(Q3, the rotation slot, the secret's length, HTTPS only), the endpoints (Q1, Q5), the fold (Q7) and "stop" replies
+(Q6); §5's mail-scanner and privacy bullets; §6's `/u/[token]` page (Q1, P2, the bad-link line); §8's scan 1 (the email
+gate's own module), token tests and e2e lines; §10's postal-address row (P1).
+
 ## 1. Decisions
 
 ### 1.1 Owner decisions (danlo, 2026-09-26; binding)
@@ -38,7 +54,7 @@ step 0 (S11: US, MX and CA; the AI detection read; the opt-out import before any
 | 3 | Scope and key | The ledger is per **account**, keyed on the normalised address: E.164 for SMS, the lowercased address for email. **Every** send path passes the one gate: automations, text-back, composer, staff alerts, the alert-phone code, and every email path. A number F-009 marks as ambiguous is **held until someone confirms it** |
 | 4 | Quiet hours | **Fixed. They cannot be switched off.** Automated texts go only 8 a.m.–9 p.m. in the recipient's zone (the contact's zone if known, otherwise the account's). Marketing texts also follow the Texas solicitation hours: not before 9 a.m., on Sunday not before noon, and until 9 p.m. That reading of Tex. Bus. & Com. Code §301.051 is an **assumption**, and counsel confirms whether it reaches texts. Staff-typed conversation replies, staff alerts and alert-phone codes may go at any hour. Automations are **rescheduled** into the window, not dropped |
 | 5 | Free-text stop detection | A reviewed English and Spanish **phrase list in code**, with tests. AI detection waits for study decision 6 (the AI provider's data-retention terms) |
-| 6 | Email | **In scope.** The opt-out is an unsubscribe link in every automated email, plus the RFC 8058 one-click `List-Unsubscribe` and `List-Unsubscribe-Post` headers. Both land on a BIS page or endpoint that records the revoke at once. There is **no** inbound-email reading. The token is **signed (HMAC)** and encodes the account, the channel and the address, so there is no token table |
+| 6 | Email | **In scope.** The opt-out is an unsubscribe link in every automated email, plus the RFC 8058 one-click `List-Unsubscribe` and `List-Unsubscribe-Post` headers. Both land on a BIS page or endpoint that records the revoke at once. There is **no** inbound-email reading. The token is **signed (HMAC)** and encodes the account, the channel and the address, so there is no token table. **Amended 2026-09-30 (danlo, PR-3 plan Q1 and Q3):** the unsubscribe link opens a BIS page that asks once, and its one button records the revoke (a mail scanner that fetches the link records nothing); the RFC 8058 one-click POST still records at once. The token is **encrypted as well as signed** (its body sealed with AES-256-GCM inside the HMAC, both keys derived from `CONSENT_TOKEN_SECRET`), so a URL in a log does not show the address; there is still no token table |
 | 7 | What does an email unsubscribe cover? | **All automated email from that business stops, except a direct response to what the customer just did** (the "customer-initiated transactional" class, §4.3). Example: the confirmation of a booking they made after unsubscribing. Reminders, follow-ups, review requests, reactivation and referral asks all stop |
 | 8 | Grants | The ledger also records **grants where BIS already captures them**, with no new screens: the form consent checkbox, a booking that includes a phone number, and a customer texting first |
 | 9 | Architecture | **An append-only ledger plus one gate, enforced by source-scan tests.** This was chosen over flags on contacts and over leaning on the providers |
@@ -64,12 +80,12 @@ step 0 (S11: US, MX and CA; the AI detection read; the opt-out import before any
 | 19 | A stop the customer made **themselves** (a keyword, the unsubscribe link, one-click), or one the carrier reports, is lifted **only by the customer's own act**: texting START, or Resubscribe on the unsubscribe page. Staff Resume is offered only for stops that staff recorded, staff confirmed, or that came from staff's 0049 switch | Only the customer's own act undoes their own act. For SMS, Telnyx also keeps its own block on that number (decision 2), so a BIS-side resume could not reach them anyway (verified 2026-09-28: Telnyx's block is per messaging profile and has no exemption, PR-2 plan F4) |
 | 20 | A **free-text stop gets no confirmation text**, not at the hold and not when staff confirm it | A hold may be a false positive, and staff confirm long after the five-minute window of choice 18. Counsel reads this (§5, go-live item 3) |
 | 21 | An automated text or email whose purpose has passed before the window opens is **not sent**. It is logged "not sent: quiet hours ran past the appointment". Today's "deadline sends now, inside quiet hours" branch (`apps/web/src/lib/automations/hold-or-send.ts:184`) is removed | Decision 4 forbids sending in the quiet window. A reminder that arrives after the appointment is worse than none. Everything else is rescheduled, not dropped |
-| 22 | A **staff-typed email** to a contact who unsubscribed still sends. The composer shows a notice | Decision 7 covers *automated* email. A person replying about the customer's own matter is not automated |
+| 22 | A **staff-typed email** to a contact who unsubscribed still sends. The composer shows a notice. It carries **no** unsubscribe footer and **no** `List-Unsubscribe` headers (danlo, 2026-09-30, PR-3 plan Q4) | Decision 7 covers *automated* email. A person replying about the customer's own matter is not automated, and a header on a one-to-one reply would let one tap in the mail client stop every reminder from that business |
 | 23 | **Operator mail** (email BIS sends to the business's own people or the agency: alerts, reports, billing, the sending-address check) passes the gate but is **not** subject to the customer ledger | The ledger holds customers' choices about a business's customer mail. Operator mail never carries the unsubscribe link and has its own switches (the weekly report's recipients field, DESIGN.md "The weekly report") |
-| 24 | Folding 0049 **widens** each opt-out: a contact marked "No marketing emails" stops *all* automated email, reminders included | Decision 7 gives an email stop one meaning. 0049 promised "Quotes and appointment emails still go" (`apps/web/src/lib/messages.ts:443`), so the backfill's count is reported to danlo before production runs it (§5) |
+| 24 | Folding 0049 **widens** each opt-out: a contact marked "No marketing emails" stops *all* automated email, reminders included | Decision 7 gives an email stop one meaning. 0049 promised "Quotes and appointment emails still go" (`apps/web/src/lib/messages.ts:443`), so the backfill's count is reported to danlo before production runs it (§5). **Confirmed 2026-09-30 (danlo, PR-3 plan Q7):** the fold widens to all automated email, and the counts are shown before the write |
 | 25 | The gate does **not** read `contacts.dnd` | It is `jsonb not null default '{}'` (`packages/db/supabase/migrations/0003_crm_core.sql:13`), and no code reads or writes it (`packages/db/src/automations.ts:1293`, `0049_contacts_marketing_email_optout.sql:41–48`). Two sources of truth would be worse. PR-1 checks both databases for any non-empty value; if one exists, its implementation plan converts it into staff-recorded stops. This departs from `crm-features.md:1181`. **Checked 2026-09-26: 0 rows on production and on the CI project**, so there is nothing to convert |
 | 26 | Keyword matching ignores spaces too, so STOP ALL (a Telnyx default, `crm-features.md:1099`), OPT OUT and NO MAS match as well as their one-word forms | Customers type both |
-| 27 | Opening the `/u/[token]` page records the revoke at once. The page offers a ghost "Resubscribe" | Decision 6 says "at once". The button undoes a mis-tap, or a revoke caused by a link-scanning mail filter opening the page (§5) |
+| 27 | **Rewritten 2026-09-30 (danlo, PR-3 plan Q1).** Opening the `/u/[token]` page records **nothing**. The page asks one question with one primary button, "Stop emails / Dejar de recibir correos"; pressing it records the revoke (method `unsubscribe_link`). After that the page offers a ghost "Resubscribe". The RFC 8058 one-click POST records at once | An email stop covers reminders too (decision 7) and only the customer can lift it (choice 19), so a link-scanning mail filter that opened the page must not stop a customer's email where they would never see the page that undoes it. This repo's cancel page refuses to write on a GET for the same reason. A one-button page is still the "single page" CAN-SPAM allows (§10), and the ghost Resubscribe undoes a mis-tap |
 | 28 | A **grant never lifts a stop**. Only `resubscribed` does (START, the page's Resubscribe, or staff Resume with a note) | A customer who texted STOP and later books online with their phone has not asked for texts again |
 | 29 | The gate **blocks on a revocation**. It does not yet **require** a recorded grant before sending | Requiring a grant before marketing texts belongs to broadcasts (S-43, S-52), which are out of scope (§9) |
 | 30 | F-009 uses `libphonenumber-js` (MIT) to judge whether a 10-digit number is a valid US number, a valid Mexican one, or both | The platform spec allows MIT libraries (`crm-features.md:3206`). A hand-made table of area codes would rot |
@@ -250,7 +266,8 @@ parity (CLAUDE.md; `docs/runbooks/ci-supabase-project.md`).
      the stricter choice) and goes to counsel with the table (`crm-features.md:1106`).
 3. **The gate** (`apps/web/src/lib/consent/gate.ts`) is the only module that may call a provider. It exposes
    `sendSms({ accountId, kind, to, body, contactId?, language?, deadline? })` and, from PR-3,
-   `sendEmail({ accountId, kind, to, …, contactId? })`. Each call returns one of four results:
+   `sendEmail({ accountId, kind, to, …, contactId? })` (PR-3 puts it in its own module, `lib/consent/email-gate.ts`,
+   the only module that may call an email provider; §8 scan 1). Each call returns one of four results:
    `sent`, `deferred` (with `until`), `blocked` (with a reason) or `failed`. For an SMS the gate:
    1. rejects a `kind` missing from the registry (a programming error, and it throws);
    2. normalises `to`;
@@ -303,8 +320,8 @@ phone could never be lifted.
    `revoked` whose method is `keyword`, `carrier_block`, `backfill_telnyx`, `unsubscribe_link` or `one_click` — append
    `revoked` (method `keyword`, with the word in the evidence). Over a staff stop or a confirmed free-text stop it IS
    appended, so from then on only the customer can lift it (choice 19; corrected 2026-09-28 by danlo's decision, PR-2
-   plan S8). §4.3's email rule below ("an address that is already stopped gets no second row") is a different
-   principle; PR-3 decides whether email follows this one.
+   plan S8). Email follows the same principle (danlo, 2026-09-30, PR-3 plan Q5): a customer's unsubscribe over a
+   staff or `backfill_0049` stop is recorded, and only the customer's own stop gets no second row (§4.3).
    - Then send **one** `consent.stop_confirmation` in the keyword's language, unless the webhook shows Telnyx already
      auto-replied (decision 12), and only when the address was not already stopped: a stop over a staff stop gets no
      confirmation (the texts were already off). An address the customer had already stopped gets nothing.
@@ -468,8 +485,9 @@ the listed files. Paths below are under `apps/web/src/`.
 |---|---|---|---|---|
 | `booking.confirmation` | `app/b/[publicId]/actions.ts:436` | customer | customer_initiated | **sends** |
 | `forms.receipt` | `lib/forms/enrich.ts:411` | customer | customer_initiated | **sends** |
-| `voice.booked` | `lib/voice/tools/registry.ts:264` | caller | customer_initiated | **sends** |
-| `voice.moved` | `lib/voice/tools/registry.ts:365` | caller | customer_initiated | **sends** |
+| `voice.booked` | `lib/voice/tools/registry.ts:473` | caller | customer_initiated | **sends** |
+| `voice.moved` | `lib/voice/tools/registry.ts:572` | caller | customer_initiated | **sends** |
+| `voice.cancelled` | `lib/voice/tools/registry.ts:630` | caller | customer_initiated | **sends** (added 2026-09-30, E1) |
 | `automation.reminder` | `lib/automations/passes/reminders.ts:80` | customer | informational | stops |
 | `automation.followup` | `passes/followups.ts:121` | customer | informational | stops |
 | `automation.review_request` | `passes/review-request.ts:304` | customer | marketing | stops |
@@ -486,48 +504,75 @@ the listed files. Paths below are under `apps/web/src/`.
 | `operator.agency_report` | `passes/weekly-agency-report.ts:118` | agency | operator | not subject |
 | `operator.billing_link` | `lib/billing/billing-link.ts:236` | client | operator | not subject |
 | `operator.sender_check` | `lib/email/preflight.ts:34` | admin | operator | not subject |
+| `operator.phone_change_alert` | `lib/voice/tools/registry.ts:202` | staff | operator | not subject (added 2026-09-30, E1) |
 
 **Headers and footer.**
-- `SendEmailInput` gains `headers` and `resend.ts` passes them on. That the Resend SDK accepts them is an assumption
-  (§11).
-- Every email whose recipient is a customer (the first twelve rows) carries both:
+- `SendEmailInput` gains `headers` and `resend.ts` passes them on (verified, §11).
+- Every **automated** customer email — the table's first twelve rows: the five customer-initiated kinds and the seven
+  automations — carries both:
   - a footer link in the branded shell, "Don't want these emails? Unsubscribe." or "¿No quiere recibir estos correos?
     Cancelar suscripción.", in the email's language;
   - the headers `List-Unsubscribe: <https://…/api/unsubscribe/{token}>` and `List-Unsubscribe-Post:
-    List-Unsubscribe=One-Click` (RFC 8058).
+    List-Unsubscribe=One-Click` (RFC 8058). In production the URL must be `https://`; a send whose origin is not is
+    held, never sent without a working way out.
 - The customer-initiated ones carry them too, so the way out is always visible.
+- `staff.composer_email` carries **neither** (danlo, 2026-09-30, PR-3 plan Q4; choice 22): a person's one-to-one reply
+  is not automated mail.
 - Operator mail carries neither.
+- **The postal address on three follow-ups** (danlo, 2026-09-30, PR-3 plan P1). `automation.review_request`,
+  `automation.quote_followup` and `automation.no_show_nudge` are classed `marketing` but their templates print no
+  postal address. The gate adds the account's `mailing_address` to their footer **whenever it is set**, and does
+  **not** block them when it is blank. The check-in (`automation.reactivation`) and the referral ask keep their own
+  footer, which prints the address, and their existing skip of an account with none. The reasoning is in §10.
+- The check-in's and the referral ask's reply sentence ("If you'd rather not hear from us, reply and let us know.")
+  stays beside the link (danlo, 2026-09-30, PR-3 plan Q6). A "stop" reply is honoured by staff pressing "Stop emails"
+  on the Email row; BIS does not read inbound email (decision 6). The referral ask needs no separate opt-out: an email
+  stop covers it (danlo, 2026-09-30, PR-3 plan Q2; decision 7).
 
 **The token.**
-- It is `base64url(payload).base64url(mac)`. The payload is `{v:1, a:accountId, c:"email", t:address, i:issuedAt}`,
-  and the MAC is HMAC-SHA256, following the form token's pattern (`lib/forms/guards.ts:45–85`).
+- It is **encrypted and signed** (danlo, 2026-09-30, PR-3 plan Q3): `1.<base64url(iv | AES-256-GCM(payload) |
+  tag)>.<base64url(HMAC-SHA256)>`, both keys derived from the secret by HKDF-SHA256. The payload is `{v:1, a:accountId,
+  c:"email", t:address, i:issuedAt}`, plus the contact id and the email's kind as evidence only. The MAC is checked
+  first, in constant time, following the form token's pattern (`lib/forms/guards.ts:45–85`); only a token that proves
+  it is decrypted. There is still no token table.
 - The secret is a new env var, `CONSENT_TOKEN_SECRET`. It is required in production, the way the Resend key is
-  (`lib/email/index.ts:34`), and it has **no** fallback to the service-role key (unlike `guards.ts:37–41`).
+  (`lib/email/index.ts:34`), must be at least 32 characters there, and has **no** fallback to the service-role key
+  (unlike `guards.ts:37–41`). Without it, or with a shorter one, a production customer email is held, never sent
+  without its way out.
 - `CONSENT_TOKEN_SECRET_PREVIOUS` is optional and is still accepted when verifying, so a rotation does not break links
-  already sent.
+  already sent. It is ONE slot: a second rotation drops the first secret and every link sealed with it, so never rotate
+  twice within 30 days (CAN-SPAM's minimum, §10).
 - Tokens do not expire. The channel field lets SMS use the same format later.
 
-**Endpoints.** Both are public and are added to the middleware's public routes (`apps/web/src/proxy.ts:3` protects
-only `/dashboard(.*)` today).
-- `GET /u/[token]`: verifies the token and, if the address is allowed, appends `revoked` (method `unsubscribe_link`),
-  then renders the page (§6). Its ghost "Resubscribe" posts a server action that appends `resubscribed` (method
-  `unsubscribe_page`).
-- `POST /api/unsubscribe/[token]`: the RFC 8058 target. It verifies, appends `revoked` (method `one_click`) if the
-  address is allowed, and returns 200 with no body, with no cookies and no redirect.
-- Both are idempotent: an address that is already stopped gets no second row. A bad token gets a 400 on the endpoint
-  and the error page on `/u`.
+**Endpoints.** Both are public. Nothing is added to the middleware: `apps/web/src/proxy.ts:3` protects only
+`/dashboard(.*)`, so both paths are already public (corrected 2026-09-30, E2; a test pins it).
+- `GET /u/[token]`: verifies the token and renders the page (§6). It **records nothing** (decision 6 as amended by Q1;
+  choice 27). Unless the customer's own stop already stands, the page asks one question; its one primary button,
+  "Stop emails / Dejar de recibir correos", posts a server action that appends `revoked` (method `unsubscribe_link`).
+  When the customer's own stop stands, the page says so and offers a ghost "Resubscribe", a server action that appends
+  `resubscribed` (method `unsubscribe_page`).
+- `POST /api/unsubscribe/[token]`: the RFC 8058 target. It verifies, appends `revoked` (method `one_click`) at once,
+  and returns 200 with no body, with no cookies and no redirect. A `GET` of that URL redirects to `/u/[token]`.
+- Both writes use the guard `unless_customer_stopped` (danlo, 2026-09-30, PR-3 plan Q5, S8 for email): over the
+  customer's OWN stop (`unsubscribe_link`, `one_click`) nothing is written, so a second click writes no second row;
+  over a staff or `backfill_0049` stop the customer's revoke IS recorded, so from then on only the customer can lift
+  it (choice 19). The page therefore shows the question, not "You're unsubscribed", over a stop staff made. A bad token
+  gets a 400 on the endpoint and the error page on `/u`.
 
 **The 0049 fold.**
-- PR-3's migration appends `revoked` (method `backfill_0049`, `occurred_at` = the column's value) for every contact
+- PR-3's one-off backfill statement (not a migration: 0054's method list and 0055's `backfill_0049` rule already exist;
+  corrected 2026-09-30, E3) appends `revoked` (method `backfill_0049`, `occurred_at` = the column's value) for every contact
   whose `marketing_email_opted_out_at` is set and whose email is present.
 - The readers listed in §2 switch to the ledger:
   - the referral ask and reactivation skip on the email state, and every other email kind now does too, through the
     gate;
   - the summary API reports the email state;
   - the drawer's switch is replaced by the email row (§6).
-- The backfill's count is reported before production runs it (choice 24).
-- Until PR-3 ships, the plan's interim routine stands: forwarded "stop" replies are set by hand
-  (`crm-features.md:1099`).
+- The fold widens to all automated email (danlo, 2026-09-30, PR-3 plan Q7; choice 24). Its counts are reported before
+  production runs it: the addresses it will stop, how many have a booking in the next 30 days, how many other contacts
+  share an address, the addresses it must leave for staff, and the stamps in the future it skips.
+- "Stop" replies stay manual after PR-3 too (danlo, 2026-09-30, PR-3 plan Q6): staff read a forwarded "stop" and press
+  "Stop emails" on the Email row (`crm-features.md:1099`).
 
 **Routing.** The harness's email factory, every row above, and the `ctx.email()` path call the gate's `sendEmail`. The
 ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` kinds, but they still pass the gate.
@@ -541,11 +586,12 @@ ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` k
   a 5xx so Telnyx retries.
 - **One confirmation.** At most one BIS confirmation per `revoked` row, only within five minutes, never for an address
   that was already stopped, and none when Telnyx has already replied (decision 12, §11).
-- **Mail scanners.** A corporate mail filter that opens `/u/[token]` records a revoke nobody asked for. That errs
-  toward sending less, the drawer shows it as "unsubscribe link", and the page's Resubscribe recovers it (choice 27).
+- **Mail scanners.** A corporate mail filter that opens `/u/[token]` records nothing: the page only asks, and the
+  customer's own press records (decision 6 as amended, choice 27). The RFC 8058 POST is sent by the mail client on the
+  customer's own "Unsubscribe", never by a link fetch.
 - **Privacy.**
-  - The token carries the email address base64-encoded, not encrypted, so request logs can hold it. That is accepted,
-    because the owner chose a stateless signed token (decision 6).
+  - The token's payload is encrypted (decision 6 as amended by Q3), so a request log, a scanner's log or a browser's
+    history holds no readable address. The page sends no `Referer`.
   - The route never logs the token itself.
   - Evidence excerpts are capped at 160 characters.
 - **The carrier.** One Telnyx messaging profile per texting account is a go-live precondition, because a stop on a
@@ -555,7 +601,7 @@ ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` k
     quiet hours become fixed and their switch disappears, the text-back waits for the window, and flagged numbers are
     held. Automated email also moves to the fixed window.
   - **PR-2** starts reading keywords on every inbound text.
-  - **PR-3** puts the footer and headers on every customer email at once, and its 0049 fold widens those opt-outs
+  - **PR-3** puts the footer and headers on every automated customer email at once, and its 0049 fold widens those opt-outs
     (choice 24). danlo sees the count first.
 - **Migrations** go to the CI project first, then production, then a parity check. Backfills are idempotent: they skip
   an address whose newest row already came from the same backfill method.
@@ -634,14 +680,21 @@ ledger check is skipped for `customer_initiated`, `staff_typed` and `operator` k
   the ledger knows: "This number has stopped texts from your business line. Text START to it from that phone to turn
   them back on." A number typed with a country code that disagrees with the choice gets its own line and no code.
 - **`/u/[token]`** is branded with the client's logo and brand colour (rule 9). It shows English and Spanish stacked,
-  because the token carries no language.
-  - **Loaded:** "You're unsubscribed. {Business} won't send you any more automated emails. You'll still get a
-    confirmation when you book or ask for something." / "Listo. {Business} ya no le enviará correos automáticos. Si
-    reserva o pide algo, sí recibirá la confirmación." It has one ghost button, "Resubscribe / Volver a suscribirme",
-    and no primary.
-  - **After Resubscribe:** "You'll get emails from {Business} again." / "Volverá a recibir correos de {Business}."
-  - **Error (bad token):** "This unsubscribe link doesn't work. Reply to any email from the business and ask them to
-    stop." / "Este enlace no funciona. Responda a cualquier correo del negocio y pida que dejen de escribirle."
+  because the token carries no language. Opening it records nothing (choice 27, as rewritten).
+  - **The question** (the address is allowed, or stopped by staff or the 0049 fold): "Stop emails from {Business}?" /
+    "¿Dejar de recibir correos de {Business}?", with one line of what it means, and ONE primary button, "Stop emails /
+    Dejar de recibir correos" (danlo, 2026-09-30, PR-3 plan P2). Pressing it records the stop.
+  - **Unsubscribed** (after the press, or when the customer's own stop already stands): "You're unsubscribed.
+    {Business} won't send you any more automated emails. You'll still get a confirmation when you book or ask for
+    something." / "Listo. {Business} ya no le enviará correos automáticos. Si reserva o pide algo, sí recibirá la
+    confirmación." It has one ghost button, "Resubscribe / Volver a suscribirme", and no primary.
+  - **After Resubscribe:** "You'll get emails from {Business} again." / "Volverá a recibir correos de {Business}.", and
+    the question's primary button again.
+  - After each press the keyboard focus moves to the button that replaced the pressed one.
+  - **Error (bad token):** "This unsubscribe link doesn't work. Contact {Business} directly and ask them to stop." /
+    "Este enlace no funciona. Comuníquese directamente con {Business} y pida que dejen de escribirle." A bad token
+    names no business, so {Business} reads "the business" / "el negocio". (Corrected 2026-09-30: the first line said
+    "reply to any email", but most of these emails carry no reply-to.)
   - It is server-rendered, so there is no loading state.
 - **Emails:** the footer line of §4.3 goes in the branded shell. There is nothing new for ⌘K, since no settings section
   is added. `/styleguide` gains the dot+word consent statuses.
@@ -681,15 +734,17 @@ Of that, 6–7 is counted in §4.2 and S-05's 2–3 in the first release (:1266�
   - The state reducer: tables of event sequences, including a keyword stop landing between a hold and its release.
   - Hours: 20:59 and 21:00, Sunday 11:59 and 12:00 for marketing, DST changeover days (in a zone whose clocks jump
     at midnight, such as Havana, and a Pacific zone, not only the test machine's own), and choice 21's expiry.
-  - The token: sign and verify, a tampered payload, a wrong secret, and the previous secret.
+  - The token: seal and open, a tampered payload, a wrong secret, the previous secret, no readable address in it, and
+    no fallback to any other key (Q3).
   - Registry completeness.
 - **Inbound route tests** use signed fixtures: each keyword branch; `autoresponse_type` present versus absent (one
   confirmation, never two); an already-stopped address; CANCEL with a booking; YES/NO unchanged; the free-text hold;
   the first-text grant; and a 5xx when the ledger write fails.
 - **Source scans**, built on `lib/automations/imports.test.ts:18–48` and `send-sms.test.ts:189–220`:
-  1. Outside the provider's own modules (`lib/sms/index.ts`, `telnyx.ts`, `fake.ts`; for email, PR-3's equivalents),
-     only `lib/consent/gate.ts` imports `getSmsProvider`, `getEmailProvider`, the Telnyx or Resend modules or the
-     `resend` package (PR-1 for SMS, PR-3 for email). The rest of `lib/sms/` is NOT exempt: `alerts.ts` is a send
+  1. Outside the provider's own modules (`lib/sms/index.ts`, `telnyx.ts`, `fake.ts`; for email, `lib/email/index.ts`,
+     `resend.ts`, `fake.ts`), only the gate imports a provider: `lib/consent/gate.ts` for SMS (`getSmsProvider`, the
+     Telnyx module; PR-1) and `lib/consent/email-gate.ts` for email (`getEmailProvider`, the Resend module, the
+     `resend` package; PR-3, corrected 2026-09-30: the email gate is its own module). The rest of `lib/sms/` is NOT exempt: `alerts.ts` is a send
      path, and `types.ts` could re-export the factory. Only `telnyx.ts` names Telnyx's messages endpoint, so no raw
      `fetch` goes around the gate.
   2. Every `kind` literal passed to the gate exists in the registry (any quoted string that starts like a kind, so a
@@ -712,8 +767,9 @@ Of that, 6–7 is counted in §4.2 and S-05's 2–3 in the first release (:1266�
   - staff stop texts in the drawer, which shows Stopped with an undo, and the composer is disabled;
   - Resume refuses an empty note;
   - a simulated signed inbound STOP stops the contact, and the fake provider records one confirmation;
-  - `/u/{token}` for a fixture contact shows the unsubscribed page, and Resubscribe restores it;
-  - the one-click POST returns 200.
+  - `/u/{token}` for a fixture contact shows the question and records nothing; "Stop emails" records the stop and
+    shows the unsubscribed page; Resubscribe restores it (choice 27, as rewritten);
+  - the one-click POST, sent with no cookies, returns 200 and records the stop.
 
 ## 9. Out of scope
 
@@ -743,8 +799,9 @@ re-read it.
 | Today's (a)(12): one confirmation, no promotion, presumed consented within five minutes | Plan-cited (`crm-features.md:1106`, :1147–1149) |
 | 47 CFR 64.1200(c)(1): 8 a.m. to 9 p.m. at the called party's location | Plan-cited (`crm-features.md:3881`). Whether it reaches informational texts is an **assumption**; BIS applies it to all automated texts by choice (decision 4) |
 | Tex. Bus. & Com. Code §301.051: 9 a.m. to 9 p.m. Monday to Saturday, noon to 9 p.m. Sunday | The statute is plan-cited (`crm-features.md:3883`). The hours are danlo's reading and an **assumption**, and whether they reach texts is for counsel |
-| CAN-SPAM: a working opt-out mechanism, honoured within ten business days | Plan-cited (FTC guide, `crm-features.md:3894`). That the mechanism must work for at least 30 days after sending is an **assumption** from the same guide |
-| RFC 8058 one-click: a POST of `List-Unsubscribe=One-Click` to an HTTPS URL | External standard, not cited by the plan. An **assumption** to verify, as is the claim that large mailbox providers expect it of bulk senders |
+| CAN-SPAM: a working opt-out mechanism, honoured within ten business days | **Verified 2026-09-30** (FTC, "CAN-SPAM Act: A Compliance Guide for Business", ftc.gov/business-guidance/resources/can-spam-act-compliance-guide-business): "Any opt-out mechanism you offer must be able to process opt-out requests for at least 30 days after you send your message. You must honor a recipient's opt-out request within 10 business days." The guide also forbids requiring "any step other than sending a reply email or visiting a single page on an Internet website" (E4). That a page with one button counts as that single page (choice 27, as rewritten) is an **assumption** common practice shares; counsel reads it at go-live |
+| CAN-SPAM's postal address on the review request, the quote follow-up and the no-show nudge | **danlo's decision (P1, 2026-09-30); flagged for counsel's go-live review.** CAN-SPAM asks a commercial message for a valid physical postal address, and exempts a message whose primary purpose is transactional or relationship "from most provisions" (the FTC guide above, E4). BIS reads these three emails as relationship follow-ups to the customer's own request or appointment with that business: a review request after their visit, a follow-up on the quote they asked for, a nudge about the appointment they missed. So an account with no `mailing_address` does not block them. The registry still classes them `marketing`, the stricter class, for texts' hours and so that an unsubscribe stops them (decision 7), and as good practice the email gate prints the account's `mailing_address` in their footer whenever it is set (§4.3). The check-in and the referral ask are commercial, print the address themselves, and keep their skip of an account with none. Whether the three are relationship messages is counsel's reading, not a verified fact |
+| RFC 8058 one-click: a POST of `List-Unsubscribe=One-Click` to an HTTPS URL | **Verified 2026-09-30** (datatracker.ietf.org/doc/html/rfc8058): one HTTPS URI in `List-Unsubscribe`; `List-Unsubscribe-Post` holds exactly `List-Unsubscribe=One-Click`; the POST carries no cookies or authorization; the message needs a valid DKIM signature covering both headers. Gmail requires one-click unsubscribe of senders of more than 5,000 messages a day, for marketing and subscribed mail (support.google.com/mail/answer/81126, verified). Yahoo's rule is still an **assumption**, and so is whether Resend's DKIM signature covers the two headers (E5) |
 | **1 December 2026** | The plan's planning date for texting, not a legal date (`crm-features.md:1160–1163`) |
 
 ## 11. External assumptions to verify at build time (not repo facts)
@@ -769,7 +826,11 @@ re-read it.
   - **new, VERIFIED:** Telnyx offers per-profile AI opt-out detection; it stays off (§5 step 0);
   - still **NOT FOUND:** the HTTP status of the `40300` refusal (the gate keys on the code), and whether Telnyx's
     keyword match ignores punctuation, accents or inner spaces (checked live at go-live).
-- **Resend:** the send call accepts custom `headers`.
+- **Resend:** ~~the send call accepts custom `headers`~~ **VERIFIED 2026-09-30:** `resend@6.18.1`'s
+  `CreateEmailBaseOptions.headers?: Record<string, string>` (the installed package's `dist/index.d.mts`), and Resend's own
+  page (resend.com/docs/dashboard/emails/add-unsubscribe-to-transactional-emails) sends `List-Unsubscribe` that way and
+  says a `POST` should answer a blank `200` or `202`. Whether Resend's DKIM signature covers custom headers is NOT FOUND
+  (checked at go-live, E5).
 - **`libphonenumber-js`:** its metadata tells US from Mexican 10-digit numbers as §4.1 needs. Tests pin the border area
   codes.
 - **Postgres:** a cascade from `accounts` deletes ledger rows even though no role holds `delete`. A DB test proves it.

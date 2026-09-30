@@ -197,7 +197,7 @@ const SYNTAX_NOT_IN_A_READ = new Set(["insert", "update", "delete", "merge", "tr
  * pg_notify): sequence advances, a `set_config` that could flip
  * `transaction_read_only`, and the server-side file, backend, remote-link,
  * notify and WAL functions nothing in this repo has any business calling from
- * a parity read.
+ * a parity read, and the consent ledger's write function.
  */
 const NOT_IN_A_READ = new Set([
   "nextval", "setval", "set_config",
@@ -205,6 +205,10 @@ const NOT_IN_A_READ = new Set([
   "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf", "pg_rotate_logfile",
   "dblink", "dblink_exec", "pg_advisory_lock", "pg_advisory_xact_lock",
   "pg_notify", "pg_switch_wal", "pg_promote", "pg_create_restore_point", "pg_log_backend_memory_contexts",
+  // The consent ledger's one write path (0055). A read-only transaction stops
+  // its INSERT only at run time; a file that calls it is a write, and says so
+  // with --allow-write (consent PR-3's 0049 fold, review R2-I3).
+  "append_consent_event",
 ]);
 
 /**

@@ -67,9 +67,11 @@ export async function processReferralAsks(
     sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
     skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
     waitingForMorning: 0, waitingForReviewRequest: 0, unresolvableTimezone: 0,
-    // B21, email channel only: the contact asked not to get marketing email;
-    // the account has no postal address; the account has no reply-to.
-    skippedNoMailingAddress: 0, skippedNoReplyTo: 0, skippedOptedOut: 0,
+    // B21, email channel only: the account has no postal address; the
+    // account has no reply-to. The email stop itself is the email gate's
+    // (consent PR-3): a stopped customer is refused inside holdOrSend,
+    // counted `blocked`, and gives back its cap place below.
+    skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
   };
 
   const smsGates = new Map<string, SmsGate>();
@@ -199,28 +201,18 @@ export async function processReferralAsks(
       // ONLY: a text carries no footer and its opt-out is the carrier's STOP
       // list, so the SMS branch above asks none of this.
       //
-      // First the person: a contact the operator marked "No marketing
-      // emails" (0049) — they replied to a footer's "reply and let us know",
-      // and this is the promise kept. Before the account's own gaps, because
-      // "they asked not to" is the truer answer for this row either way.
-      //
-      // Then the account: the footer prints the postal address, and its
-      // opt-out is a REPLY, so a reply must reach the business rather than
-      // the agency's `EMAIL_FROM` mailbox — the check-in's rule, asked
-      // through the same function (under CAN-SPAM, the orchestrator's
-      // reading, not a lawyer's). The save refuses to turn the email channel
-      // on without both; this is either cleared since, or a release.
+      // The account: the footer prints the postal address, and its opt-out
+      // is a REPLY, so a reply must reach the business rather than the
+      // agency's `EMAIL_FROM` mailbox — the check-in's rule, asked through
+      // the same function (under CAN-SPAM, the orchestrator's reading, not a
+      // lawyer's). The save refuses to turn the email channel on without
+      // both; this is either cleared since, or a release.
       //
       // PASS-LEVEL SKIPS, where the check-in's opt-out is a query filter:
       // this due-list is a bounded booking window with no row limit, so a
       // row skipped here (never stamped) cannot crowd a sendable one out of
       // it. BEFORE THE CAPS, for the tick cap's sake: behind it, a run of
       // these would spend all ten attempts every tick of the morning.
-      if (row.contactMarketingEmailOptedOut) {
-        c.skippedOptedOut++;
-        await logSkipped(ctx, subject, REASONS.optedOutEmail);
-        continue;
-      }
       const missing = missingForMarketingEmail(row.mailingAddress, row.replyToEmail);
       if (missing.mailingAddress) {
         c.skippedNoMailingAddress++;
@@ -360,6 +352,8 @@ async function sendEmail(
     footerReason: marketingFooterReason(row.brandName),
   });
   await ctx.email.send({
+    accountId: row.accountId, kind: "automation.referral_ask", contactId: row.contactId,
+    origin: ctx.origin, now: ctx.now, accountZone: row.accountTimezone,
     to: target.to,
     fromName: brand.name,
     fromAddress: row.fromEmail ?? undefined,

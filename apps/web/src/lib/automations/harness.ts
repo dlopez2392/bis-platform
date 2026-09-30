@@ -1,21 +1,20 @@
 import type { SupabaseClient } from "@bis/db";
-import { getEmailProvider } from "@/lib/email";
 import { smsSenderFor } from "@/lib/consent/gate";
+import { emailSenderFor } from "@/lib/consent/email-gate";
 import type { Pass, PassContext, PassCounters } from "./context";
 
 /**
- * THE ONLY automations module allowed to import the EMAIL provider factory —
- * imports.test.ts scans every other file under lib/automations for it.
- * Everything a pass emails goes through the factory's production guard
- * (VERCEL_ENV AND NODE_ENV). Texts no longer come from a factory here: since
- * the consent chain's PR-1 the only way a pass texts is `ctx.sms`, which is
- * the send gate (lib/consent/gate.ts), and the gate is the only module
- * outside lib/sms that may reach an SMS provider (lib/consent/scans.test.ts).
+ * Builds a tick's context. No automations module imports a provider factory
+ * (imports.test.ts): since the consent chain's PR-1 a pass texts only through
+ * `ctx.sms` (the SMS gate) and since PR-3 it emails only through `ctx.email`
+ * (the email gate, lib/consent/email-gate.ts). Each gate is the only module
+ * outside its provider's own files that may reach that provider
+ * (lib/consent/scans.test.ts).
  */
 export function buildPassContext(
   input: { db: SupabaseClient; now: Date; origin: string },
 ): PassContext {
-  return { ...input, email: getEmailProvider(), sms: smsSenderFor(input.db) };
+  return { ...input, email: emailSenderFor(input.db), sms: smsSenderFor(input.db) };
 }
 
 /**

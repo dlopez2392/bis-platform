@@ -32,6 +32,15 @@ vi.mock("@/lib/email", () => ({
   },
 }));
 
+// consent PR-3: spies on the REAL gate, so the kind each site names is
+// asserted and the send still goes through the gate's own rules.
+vi.mock("@/lib/consent/email-gate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/consent/email-gate")>();
+  return { ...real, sendEmailOrThrow: vi.fn(real.sendEmailOrThrow) };
+});
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
+const gated = () => vi.mocked(sendEmailOrThrow).mock.calls.map((c) => c[0]);
+
 const ACCOUNT_ID = "acct_1";
 
 /**
@@ -250,6 +259,7 @@ beforeEach(() => {
   incrementUnreadCountMock.mockReset();
   setAttributionMock.mockReset().mockResolvedValue(undefined);
   sendMock.mockReset().mockResolvedValue(undefined);
+  vi.mocked(sendEmailOrThrow).mockClear();
   getMeetingProviderMock.mockReset().mockReturnValue(null);
   createMeetingRoomMock.mockReset();
   accountErrorRef.current = null;
@@ -586,6 +596,29 @@ describe("submitBookingAction — the alert and the confirmation are not the sam
     expect(confirmCall.to).toBe("maria@example.com");
     expect(confirmCall.fromAddress).toBe("hello@acme.com");
     expect(confirmCall.replyTo).toBe("owner-reply@acme.com");
+  });
+
+  it("the alert goes as operator.booking_alert and the confirmation as booking.confirmation — the customer-initiated kind, in the booker's language, with this booking's contact (consent PR-3; mutation: send the confirmation as automation.reminder → an unsubscribed booker would get no confirmation of the booking they just made, FAILS)", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+
+    expect(result.ok).toBe(true);
+    expect(gated().map((r) => r.kind)).toEqual(["operator.booking_alert", "booking.confirmation"]);
+    expect(gated()[1]).toMatchObject({ accountId: ACCOUNT_ID, contactId: expect.any(String), language: "es" });
+    expect(gated()[0]).not.toHaveProperty("contactId");
+  });
+
+  it("with CONSENT_TOKEN_SECRET and APP_ORIGIN set, the confirmation reaches the provider carrying the footer and the RFC 8058 headers, and the alert carries neither (choice 23; mutation: send the alert as a customer kind → headers on the staff alert, FAILS)", async () => {
+    vi.stubEnv("CONSENT_TOKEN_SECRET", "booking-test-secret-0123456789abcdef");
+    vi.stubEnv("APP_ORIGIN", "https://app.example.com");
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+    expect(result.ok).toBe(true);
+
+    const [alert, confirmation] = sendMock.mock.calls.map((c) => c[0] as { headers?: Record<string, string>; body: string });
+    expect(alert!.headers).toBeUndefined();
+    expect(confirmation!.headers!["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+    expect(confirmation!.body).toMatch(/¿No quiere recibir estos correos\? Cancelar suscripción: https:\/\/app\.example\.com\/u\//);
+    vi.unstubAllEnvs();
   });
 
   it("returns a real, absolute cancelUrl on success", async () => {

@@ -12,11 +12,13 @@ import { ActivityTimeline } from "./activity-timeline";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { e164Of } from "@/lib/voice/phone-number";
-import { smsRecipientState } from "@/lib/consent/recipient-state";
+import { smsRecipientState, emailRecipientState } from "@/lib/consent/recipient-state";
 import { readTextsView } from "@/lib/consent/texts-view";
 import type { TextsLoad } from "@/lib/consent/texts-row";
+import { readEmailView } from "@/lib/consent/email-view";
+import type { EmailLoad } from "@/lib/consent/email-row";
 import { loggableError } from "@/lib/loggable-error";
-import { composerStateLine } from "@/lib/consent/composer-state";
+import { composerStateLine, composerEmailNotice } from "@/lib/consent/composer-state";
 import { renderZone } from "@/lib/zone";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +48,9 @@ export default async function ContactDetailPage({
     // Never throws; a failed read is "unknown", which closes the form.
     smsRecipientState(db, accountId, contact),
   ]);
+  // The email composer's read (spec §6, choice 22): whether this contact's
+  // email is stopped, and by whom. Never throws.
+  const emailRecipient = await emailRecipientState(db, accountId, contact);
   // Not a throw, the checklist page's reasoning: one cosmetic date line must
   // not 500 the contact page. `undefined` makes `renderZone` fall back.
   if (account.error) {
@@ -62,6 +67,17 @@ export default async function ContactDetailPage({
   } catch (e) {
     console.error(`contact page: Texts row unreadable for contact ${contactId}: ${loggableError(e)}`);
     texts = { status: "error" };
+  }
+
+  // The Email row (consent chain PR-3, spec §6), read under this request's
+  // RLS client. An unreadable ledger is the row's error state, never a
+  // thrown page.
+  let email: EmailLoad;
+  try {
+    email = { status: "ready", view: await readEmailView(db, accountId, contact), zone: zone.zone };
+  } catch (e) {
+    console.error(`contact page: Email row unreadable for contact ${contactId}: ${loggableError(e)}`);
+    email = { status: "error" };
   }
 
   // Review R3-N1 (G21): a To-do whose number is still on hold is closed by
@@ -87,7 +103,7 @@ export default async function ContactDetailPage({
           contact={contact}
           tags={tags}
           fieldDefs={fieldDefs}
-          zone={{ zone: zone.zone, guessed: zone.guessed, label: zone.label }}
+          email={email}
           texts={texts}
         />
         <ActivityTimeline
@@ -100,6 +116,7 @@ export default async function ContactDetailPage({
           contactHasPhone={Boolean(e164Of(contact.phone))}
           smsGate={smsGate}
           smsBlockedLine={composerStateLine(smsRecipient, zone.zone)}
+          emailNoticeLine={composerEmailNotice(emailRecipient, zone.zone)}
           notes={notes}
           tasks={tasks}
           holdOpenTaskIds={holdOpen}

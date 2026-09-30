@@ -309,6 +309,8 @@ async function sendEmail(
     brand, subject: quoteFollowupSubject(row.brandName), body,
   });
   await ctx.email.send({
+    accountId: row.accountId, kind: "automation.quote_followup", contactId: row.contactId,
+    origin: ctx.origin, now: ctx.now, accountZone: row.accountTimezone,
     to,
     fromName: brand.name,
     fromAddress: row.fromEmail ?? undefined,

@@ -23,10 +23,10 @@ import { updateContactAction, addTagAction, removeTagAction } from "./actions";
 import { updateContactFieldAction, undoInlinePhoneEditAction } from "../actions";
 import { FIELDS } from "../contact-drawer";
 import { useRouter } from "next/navigation";
-import { MarketingOptOutSwitch } from "../marketing-optout-switch";
+import { EmailRow } from "../email-row";
+import type { EmailLoad } from "@/lib/consent/email-row";
 import { TextsRow } from "../texts-row";
 import type { TextsLoad } from "@/lib/consent/texts-row";
-import type { OptOutZone } from "@/lib/contacts/marketing-optout";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
@@ -39,7 +39,7 @@ export function ContactFieldsPanel({
   contact,
   tags,
   fieldDefs,
-  zone,
+  email,
   texts,
 }: {
   accountId: string;
@@ -47,8 +47,8 @@ export function ContactFieldsPanel({
   contact: Contact;
   tags: Tag[];
   fieldDefs: CustomFieldDef[];
-  /** The account's resolved zone (`renderZone`), for the opt-out's "Off since" date. */
-  zone: OptOutZone;
+  /** The Email row (consent PR-3), read on the server by page.tsx. */
+  email: EmailLoad;
   /** The Texts row, read on the server page (which has the normaliser and
    *  the ledger read; this client component ships neither). */
   texts: TextsLoad;
@@ -96,12 +96,14 @@ export function ContactFieldsPanel({
             onRetry={() => router.refresh()}
           />
 
-          <MarketingOptOutSwitch
-            key={contactId}
+          <EmailRow
             accountId={accountId}
             contactId={contactId}
-            optedOutAt={contact.marketing_email_opted_out_at}
-            zone={zone}
+            load={email}
+            showTitle={texts.status === "ready" && texts.view.kind === "no_number"}
+            // The composer on this page reads the same ledger: refresh it too.
+            onChanged={() => router.refresh()}
+            onRetry={() => router.refresh()}
           />
 
           {fieldDefs.length > 0 ? (

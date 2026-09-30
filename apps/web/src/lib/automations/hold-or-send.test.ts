@@ -4,7 +4,8 @@ const dbMocks = vi.hoisted(() => ({ recordAutomationLog: vi.fn(), getAutomationL
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
 import { holdOrSend, writeHeld, logSkipped, REASONS, subjectOf, verdict, type HoldSubject } from "./hold-or-send";
-import { SmsBlocked, SmsDeferred, type AutomationBlockReason } from "./send-sms";
+import { SmsBlocked, SmsDeferred, LEDGER_RETRY_MS, type AutomationBlockReason } from "./send-sms";
+import { EmailNotSent } from "@/lib/consent/email-gate";
 
 const NIGHT = new Date("2026-09-22T04:00:00Z");   // 23:00 CDT, Mon Sept 21
 const NOON = new Date("2026-09-21T17:00:00Z");    // 12:00 CDT, Mon Sept 21
@@ -189,5 +190,43 @@ describe("logSkipped, subjectOf, verdict", () => {
     expect(verdict({ sent: 0, held: 0, failed: 0 })).toBe("skipped");
     expect(verdict({ sent: 1, held: 1, failed: 1 })).toBe("sent");
     expect(verdict({ sent: 0, held: 1, failed: 1 })).toBe("held");
+  });
+});
+
+describe("holdOrSend: the EMAIL gate's answers (consent PR-3, plan G10)", () => {
+  const email = () => ({ ...subject(), channel: "email" as const, smsKind: undefined });
+  const logged = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1] as { status: string; reason: string; heldUntil?: string });
+
+  it("a gate deferral is the held row at the gate's own opening (mutation: treat EmailNotSent as a failure → FAILS)", async () => {
+    const until = new Date(NOON.getTime() + 3_600_000);
+    expect(await holdOrSend(ctx(NOON), email(), async () => { throw new EmailNotSent({ kind: "deferred", until, zone: "America/Chicago" }); })).toBe("held");
+    expect(logged()).toEqual([expect.objectContaining({ status: "held", heldUntil: until.toISOString() })]);
+  });
+
+  it.each([
+    ["ledger_unavailable", "Waiting a few minutes: couldn't check whether they can get emails"],
+    ["unsubscribe_unavailable", "Waiting a few minutes: the unsubscribe link couldn't be added"],
+  ] as const)("an outage (%s) is a %j re-hold for LEDGER_RETRY_MS, never a send or a skip (fails closed; mutation: log it skipped → the email never goes once the outage ends, FAILS)", async (reason, words) => {
+    expect(await holdOrSend(ctx(NOON), email(), async () => { throw new EmailNotSent({ kind: "blocked", reason }); })).toBe("held");
+    expect(logged()).toEqual([expect.objectContaining({
+      status: "held", reason: words, heldUntil: new Date(NOON.getTime() + LEDGER_RETRY_MS).toISOString(),
+    })]);
+  });
+
+  it.each([
+    ["stopped", "They asked not to get these emails"],
+    ["held", "They asked not to get these emails"],
+    ["no_address", "No email address on file"],
+    ["window_after_deadline", "Not sent: quiet hours ran past the appointment"],
+  ] as const)("a refusal (%s) is ONE skipped row reading %j, and no throw (mutation: rethrow it → FAILS)", async (reason, words) => {
+    expect(await holdOrSend(ctx(NOON), email(), async () => { throw new EmailNotSent({ kind: "blocked", reason }); })).toBe("skipped");
+    expect(logged()).toEqual([expect.objectContaining({ status: "skipped", reason: words })]);
+  });
+
+  it("a provider failure is today's failure: a failed row and the throw (mutation: swallow it → the pass counts it sent, FAILS)", async () => {
+    await expect(holdOrSend(ctx(NOON), email(), async () => {
+      throw new EmailNotSent({ kind: "failed", stage: "provider", error: "rejected" });
+    })).rejects.toThrow("rejected");
+    expect(logged()).toEqual([expect.objectContaining({ status: "failed" })]);
   });
 });

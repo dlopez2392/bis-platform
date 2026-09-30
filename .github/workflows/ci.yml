@@ -219,6 +219,12 @@ jobs:
       # spec's signed SMS webhooks. Production's TELNYX_PUBLIC_KEY is set on
       # Vercel Production only and is a different key.
       TELNYX_PUBLIC_KEY: lW4zmAKH3ZvWpUaw9UO78RQpX8fUhVcP0vvuEaUxS0w=
+      # NOT a secret: a fixed literal the e2e server seals its unsubscribe
+      # links with, and e2e/consent-email.spec.ts mints its tokens with, so
+      # the spec can open /u/<token> and POST the one-click endpoint.
+      # Production's CONSENT_TOKEN_SECRET is set on Vercel Production only
+      # (consent PR-3 plan, Task 15) and is a different value.
+      CONSENT_TOKEN_SECRET: bis_ci_e2e_consent_token_fixture_only
     concurrency:
       # Serialized repo-wide and never cancelled; see the header. A new name
       # for the reason verify's has one: branches still on the old ci.yml run

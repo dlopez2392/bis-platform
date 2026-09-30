@@ -5,7 +5,7 @@ import {
   ensureConversation, createMessage, incrementUnreadCount, type BookingRow,
   type Branding,
 } from "@bis/db";
-import { getEmailProvider } from "@/lib/email";
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { formatWhen } from "@/lib/booking/time";
 import { normalizeLocale } from "@/lib/forms/public-strings";
@@ -172,7 +172,6 @@ export async function confirmCancelAction(
           ...(row.note ? [`Note: ${row.note}`] : []),
         ].join("\n");
 
-        const provider = getEmailProvider();
         const failures: string[] = [];
         for (const to of notifyEmails) {
           try {
@@ -180,7 +179,7 @@ export async function confirmCancelAction(
             // alert (`b/[publicId]/actions.ts`): this goes to the client's
             // OWN staff, and a client-domain-to-client-domain send through a
             // third-party sender reads as spoofing to corporate filters.
-            await provider.send({ to, fromName: brand.name, subject, body });
+            await sendEmailOrThrow({ accountId: row.account_id, kind: "operator.cancel_notice", to, fromName: brand.name, subject, body });
           } catch (e) {
             failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);
           }

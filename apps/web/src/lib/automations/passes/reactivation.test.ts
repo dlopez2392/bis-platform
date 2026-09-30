@@ -22,6 +22,7 @@ import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { m } from "@/lib/messages";
 import type { PassContext } from "../context";
 import { reactivationPass, releaseReactivation } from "./reactivation";
+import { EmailNotSent } from "@/lib/consent/email-gate";
 
 const TICK = new Date("2027-09-24T14:00:00.000Z");      // 09:00 CDT, inside the band
 const OUTSIDE_BAND = new Date("2027-09-24T20:00:00.000Z"); // 15:00 CDT, the same day
@@ -424,5 +425,23 @@ describe("the check-in never goes without a postal address and a reply-to", () =
     expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, sent: 1, skippedNoMailingAddress: 11 });
     expect(emailSend).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampReactivationSent).toHaveBeenCalledWith(expect.anything(), "ct_ok");
+  });
+});
+
+describe("consent PR-3: the email goes through the gate", () => {
+  it("the email goes through the gate as automation.reactivation, for this account and contact, at the tick's instant (mutation: kind \"automation.referral_ask\" → FAILS)", async () => {
+    dbMocks.listDueReactivations.mockResolvedValue([row()]);
+    await reactivationPass.run(ctx());
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "acct_1", kind: "automation.reactivation", contactId: "ct_1", origin: "https://app.example.com",
+      now: TICK, accountZone: "America/Chicago",
+    }));
+  });
+
+  it("an unsubscribed customer: the gate refuses, the row is skipped with the reason the client reads, nothing is stamped, and the tick's cap place is given back (decision 7, G13; mutation: count it sent → FAILS)", async () => {
+    dbMocks.listDueReactivations.mockResolvedValue([row()]);
+    emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
+    expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, blocked: 1 });
+    expect(dbMocks.stampReactivationSent).not.toHaveBeenCalled();
   });
 });

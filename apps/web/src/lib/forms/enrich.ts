@@ -4,7 +4,7 @@ import {
   ensureConversation, createMessage, incrementUnreadCount, emitFormSubmitted,
   setSubmissionProcessingError,
 } from "@bis/db";
-import { getEmailProvider } from "@/lib/email";
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { leadAlertEmail } from "@/lib/email/templates/lead-alert";
@@ -154,7 +154,7 @@ export async function enrich(
   // the operator's "somebody was not told about this lead" signal, and a
   // bounced auto-reply is not that.
   try {
-    await receipt(db, form, locale, byKind.get("core.email") ?? "", byKind.get("core.first_name") ?? "");
+    await receipt(db, form, locale, byKind.get("core.email") ?? "", byKind.get("core.first_name") ?? "", contactId, origin);
   } catch (e) {
     console.error(`form ${form.id} submission ${submissionId} receipt failed: ${String(e)}`);
   }
@@ -354,11 +354,11 @@ async function notify(
   // loop and every later recipient silently heard nothing about the lead.
   // Failures are collected and rethrown together so `enrich` still records them
   // in `processing_error`, but only the addresses that actually failed are lost.
-  const provider = getEmailProvider();
   const failures: string[] = [];
   for (const to of form.notify_emails) {
     try {
-      await provider.send({
+      await sendEmailOrThrow({
+        accountId: form.account_id, kind: "operator.lead_alert",
         // brand.name, not account.name: `accounts.name` is the agency's
         // internal label for this company and is not for the client's eyes.
         to, fromName: brand.name,
@@ -388,6 +388,8 @@ async function notify(
 async function receipt(
   db: ReturnType<typeof serviceDb>, form: FormRow, locale: "en" | "es",
   leadEmail: string, firstName: string,
+  /** Evidence in the unsubscribe token, and the links' origin (consent PR-3). */
+  contactId: string | null, origin: string | null,
 ): Promise<void> {
   if (!leadEmail || !isValidEmail(leadEmail)) return;
 
@@ -411,7 +413,11 @@ async function receipt(
     brand, locale, firstName: firstName || null, canReply: Boolean(replyTo),
   });
 
-  await getEmailProvider().send({
+  // The customer-initiated kind (spec §4.3): the person who just filled the
+  // form in, in the same request. An unsubscribe never stops it; it still
+  // carries the way out.
+  await sendEmailOrThrow({
+    accountId: form.account_id, kind: "forms.receipt", contactId, language: locale, origin,
     to: leadEmail, fromName: brand.name, fromAddress: account?.from_email ?? undefined,
     replyTo, subject: leadReceiptSubject(locale, brand.name), body, html,
   });

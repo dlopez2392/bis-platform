@@ -20,6 +20,10 @@ export type SendEmailInput = {
    *  it is composed deliberately by each template rather than derived by
    *  stripping tags. */
   html?: string;
+  /** Extra headers, passed to Resend as they are (its `headers` field, plan
+   *  X1). Only the email gate sets them: the RFC 8058 List-Unsubscribe and
+   *  List-Unsubscribe-Post pair on customer email (consent PR-3). */
+  headers?: Record<string, string>;
 };
 
 export type SendEmailResult = { providerMessageId: string };

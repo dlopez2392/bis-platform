@@ -7,7 +7,7 @@ import {
   getContact, ensureConversation, createMessage, updateMessageStatus,
   clearUnreadCount, serviceDb,
 } from "@bis/db";
-import { getEmailProvider } from "@/lib/email";
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { outboundEmail } from "@/lib/email/templates/outbound";
@@ -77,7 +77,11 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
   // id the delivery webhook needs to correlate against.
   let providerMessageId: string;
   try {
-    ({ providerMessageId } = await getEmailProvider().send({
+    ({ providerMessageId } = await sendEmailOrThrow({
+      // A person's own reply (choice 22): the gate does not read the ledger
+      // for it, and — (decision Q4) — it carries no unsubscribe footer. The composer
+      // shows the notice when they unsubscribed (Task 12).
+      accountId, kind: "staff.composer_email", contactId,
       to: contact.email,
       // The BRAND name. `accounts.name` is the agency's internal label for this
       // company ("Rio Roofing — trial") and was reaching the customer's From

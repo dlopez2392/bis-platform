@@ -48,6 +48,7 @@ export function ActivityTimeline({
   contactHasPhone,
   smsGate,
   smsBlockedLine,
+  emailNoticeLine,
   notes,
   tasks,
   holdOpenTaskIds,
@@ -71,6 +72,8 @@ export function ActivityTimeline({
    *  form when the recipient's texts are stopped, held or the number is
    *  unconfirmed (lib/consent/composer-state.ts); null when it may text. */
   smsBlockedLine: string | null;
+  /** The email composer's notice, decided on the server (consent PR-3). */
+  emailNoticeLine: string | null;
   notes: Note[];
   tasks: Task[];
   /** Open To-dos whose number is still on hold (consent chain PR-2, G21):
@@ -214,6 +217,7 @@ export function ActivityTimeline({
           contactHasPhone={contactHasPhone}
           smsGate={smsGate}
           smsBlockedLine={smsBlockedLine}
+          emailNoticeLine={emailNoticeLine}
           noteAction={boundAddNote}
           emailAction={emailAction}
           smsAction={smsAction}

@@ -21,6 +21,7 @@ import { defaultQuoteFollowupBody } from "../quote-followup-copy";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
 import { quoteFollowupPass, releaseQuoteFollowup } from "./quote-followup";
+import { EmailNotSent } from "@/lib/consent/email-gate";
 
 const TICK = new Date("2027-10-20T14:00:00.000Z");      // 09:00 CDT, inside the band
 const STAGE = "6f1b2c3d-4e5a-4b7c-8d9e-0a1b2c3d4e5f";
@@ -439,5 +440,26 @@ describe("quoteFollowupPass: a hold gives back its tick slot, never its daily co
     dbMocks.listDueQuoteFollowups.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ opportunityId: `opp_${i}`, contactId: `ct_${i}` })));
     const result = await quoteFollowupPass.run({ ...ctx(), sms: holdFirst(1) });
     expect(result).toEqual({ ...EMPTY, held: 1, skippedCap: 1 });
+  });
+});
+
+describe("consent PR-3: the email goes through the gate", () => {
+  const emailRow = (over: Partial<DueQuoteFollowup> = {}) =>
+    row({ config: { stageId: STAGE, quietDays: 3, channel: "email" }, ...over });
+
+  it("the email goes through the gate as automation.quote_followup, for this account and contact, at the tick's instant (mutation: kind \"automation.no_show_nudge\" → FAILS)", async () => {
+    dbMocks.listDueQuoteFollowups.mockResolvedValue([emailRow()]);
+    await quoteFollowupPass.run(ctx());
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "acct_1", kind: "automation.quote_followup", contactId: "ct_q1", origin: "https://app.example.com",
+      now: TICK, accountZone: "America/Chicago",
+    }));
+  });
+
+  it("an unsubscribed customer: the gate refuses, the row is skipped with the reason the client reads, nothing is stamped, and the tick's cap place is given back (decision 7, G13; mutation: count it sent → FAILS)", async () => {
+    dbMocks.listDueQuoteFollowups.mockResolvedValue([emailRow()]);
+    emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
+    expect(await quoteFollowupPass.run(ctx())).toEqual({ ...EMPTY, blocked: 1 });
+    expect(dbMocks.stampQuoteFollowupSent).not.toHaveBeenCalled();
   });
 });

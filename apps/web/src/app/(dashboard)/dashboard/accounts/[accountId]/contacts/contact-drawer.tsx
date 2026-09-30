@@ -16,7 +16,8 @@ import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { updateContactFieldAction, undoInlinePhoneEditAction } from "./actions";
-import { MarketingOptOutSwitch } from "./marketing-optout-switch";
+import { EmailRow } from "./email-row";
+import { emailLoadFrom, type EmailLoad } from "@/lib/consent/email-row";
 import { TextsRow } from "./texts-row";
 import { textsLoadFrom, type TextsLoad } from "@/lib/consent/texts-row";
 import { addTagAction, removeTagAction } from "./[contactId]/actions";
@@ -107,6 +108,25 @@ export function ContactDrawer({
     return () => { stale = true; };
   }, [accountId, contactId, retryNonce]);
   const textsLoad: TextsLoad = contactId && texts.contactId === contactId ? texts.load : { status: "loading" };
+
+  // The Email row's own read (consent PR-3), the Texts row's pattern: the
+  // same retryNonce, the same stale-closure guard. Its starting value's SHAPE
+  // differs from the texts state's (an `email` key, not `load`), so the
+  // wiring test's find-by-starting-value harness can tell the two apart.
+  const [emailRead, setEmailRead] = useState<{ contactId: string; email: EmailLoad }>({ contactId: "", email: { status: "loading" } });
+  useEffect(() => {
+    if (!contactId) return;
+    let stale = false;
+    fetch(`/api/accounts/${accountId}/contacts/${contactId}/email`)
+      .then(async (res) => {
+        if (stale) return;
+        const next = await emailLoadFrom(res);
+        if (!stale) setEmailRead({ contactId, email: next });
+      })
+      .catch(() => { if (!stale) setEmailRead({ contactId, email: { status: "error" } }); });
+    return () => { stale = true; };
+  }, [accountId, contactId, retryNonce]);
+  const emailLoad: EmailLoad = contactId && emailRead.contactId === contactId ? emailRead.email : { status: "loading" };
 
   const fullHref = contactId
     ? `/dashboard/accounts/${accountId}/contacts/${contactId}` : "#";
@@ -209,6 +229,14 @@ export function ContactDrawer({
                 onChanged={() => setRetryNonce((n) => n + 1)}
                 onRetry={() => setRetryNonce((n) => n + 1)}
               />
+              <EmailRow
+                accountId={accountId}
+                contactId={row.id}
+                load={emailLoad}
+                showTitle={textsLoad.status === "ready" && textsLoad.view.kind === "no_number"}
+                onChanged={() => setRetryNonce((n) => n + 1)}
+                onRetry={() => setRetryNonce((n) => n + 1)}
+              />
 
               {load.status === "loading" ? (
                 <div className="space-y-2" data-testid="drawer-skeleton">
@@ -242,17 +270,6 @@ export function ContactDrawer({
                     contactId={row.id}
                     tags={load.summary.tags}
                     onChanged={() => setRetryNonce((n) => n + 1)}
-                  />
-                  {/* From the summary, not `row`: a `?peek=` of a contact on
-                      another page has only missingRow's all-null stub, which
-                      would show an opted-out contact as unticked. Keyed by
-                      contact so its local state never carries across. */}
-                  <MarketingOptOutSwitch
-                    key={row.id}
-                    accountId={accountId}
-                    contactId={row.id}
-                    optedOutAt={load.summary.marketing_email_opted_out_at}
-                    zone={load.summary.zone}
                   />
                   <div>
                     <p className="text-muted-foreground mb-2 font-mono text-[10px] tracking-[0.14em] uppercase">

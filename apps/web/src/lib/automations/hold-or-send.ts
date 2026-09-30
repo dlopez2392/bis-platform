@@ -6,7 +6,8 @@ import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { SMS_KINDS, type AutomationSmsKind } from "@/lib/consent/classes";
 import { nextOpening, expiresBeforeOpening, hoursZone, type HoursRule } from "@/lib/consent/hours";
 import { formatInstantClock } from "./quiet-hours";
-import { SmsDeferred, SmsBlocked, type AutomationBlockReason } from "./send-sms";
+import { SmsDeferred, SmsBlocked, LEDGER_RETRY_MS, type AutomationBlockReason } from "./send-sms";
+import { EmailNotSent, type EmailBlockReason } from "@/lib/consent/email-gate";
 import type { PassContext } from "./context";
 import { m } from "@/lib/messages";
 
@@ -27,6 +28,8 @@ import { m } from "@/lib/messages";
  *     otherwise         → send(); write `sent`; return "sent".
  *                         send() throwing SmsDeferred → held, as above;
  *                         SmsBlocked → skipped with the gate's reason;
+ *                         EmailNotSent → held, skipped or failed by the email
+ *                         gate's answer (consent PR-3);
  *                         anything else → write `failed`, rethrow.
  *
  * THE HOURS ARE FIXED and come from the gate's own module (lib/consent/
@@ -87,6 +90,10 @@ export const REASONS = {
   /** Review R2-I4: the consent state could not be read, so the send waits
    *  LEDGER_RETRY_MS and the release pass tries again. */
   ledgerRetry: m["automations.reason.ledgerRetry"],
+  /** The email gate's two outages (consent PR-3): each a LEDGER_RETRY_MS
+   *  re-hold, never a skip, so the email goes once the outage ends. */
+  emailLedgerRetry: m["automations.reason.emailLedgerRetry"],
+  emailSetupRetry: m["automations.reason.emailSetupRetry"],
   /** The re-hold age cap (orchestrator, 2026-09-26; RETRY_MAX_AGE_MS). */
   tooLongAfterCall: m["automations.reason.tooLongAfterCall"],
   tooLongAfterWriteIn: m["automations.reason.tooLongAfterWriteIn"],
@@ -154,13 +161,11 @@ export const REASONS = {
    *  business's — an opt-out that reaches nobody who can act on it. Skipped,
    *  like the missing address, for the same decision. */
   noReplyTo: "The company has no reply-to address",
-  /** A referral ask on the EMAIL channel to a contact the operator marked
-   *  "No marketing emails" (`contacts.marketing_email_opted_out_at`, 0049) —
-   *  the customer replied to a footer's "reply and let us know", and this is
-   *  the promise kept (B21). Logged, because the client should be able to see
-   *  why a customer did not get one. The SMS channel never writes it: a
-   *  text's opt-out is the carrier's STOP list. Reactivation never writes it
-   *  either — its due-list query leaves opted-out contacts out altogether. */
+  /** An automated email to a customer whose email is stopped in the ledger
+   *  (consent PR-3): they unsubscribed, staff recorded their request, or
+   *  0049's old "No marketing emails" was folded in. The email gate refuses
+   *  it for every automated kind (decision 7), and this is the line the
+   *  client reads on the Activity page. */
   optedOutEmail: "They asked not to get these emails",
   outsideRegion: "Number is outside the US, Canada or Mexico",
   consentWithheld: "They didn't agree to texts",
@@ -204,6 +209,15 @@ export const BLOCK_REASONS: Record<AutomationBlockReason, string> = {
   stopped: REASONS.textsStopped,
   held: REASONS.textsHeld,
   unconfirmed_number: REASONS.numberUnconfirmed,
+  window_after_deadline: REASONS.windowAfterDeadline,
+};
+
+/** Every refusal the EMAIL gate can hand an automation, as the Activity page
+ *  says it. Its two outages are re-holds, not refusals (holdOrSend). */
+export const EMAIL_BLOCK_REASONS: Record<Exclude<EmailBlockReason, "ledger_unavailable" | "unsubscribe_unavailable">, string> = {
+  no_address: REASONS.noEmail,
+  stopped: REASONS.optedOutEmail,
+  held: REASONS.optedOutEmail,
   window_after_deadline: REASONS.windowAfterDeadline,
 };
 
@@ -273,6 +287,23 @@ export async function holdOrSend(
     if (e instanceof SmsBlocked) {
       await logSkipped(ctx, s, BLOCK_REASONS[e.reason]);
       return "skipped";
+    }
+    if (e instanceof EmailNotSent) {
+      const r = e.result;
+      if (r.kind === "deferred") {
+        await writeHeld(ctx, s, r.until, zone);
+        return "held";
+      }
+      if (r.kind === "blocked") {
+        if (r.reason === "ledger_unavailable" || r.reason === "unsubscribe_unavailable") {
+          await writeHeld(ctx, s, new Date(ctx.now.getTime() + LEDGER_RETRY_MS), zone,
+            r.reason === "ledger_unavailable" ? REASONS.emailLedgerRetry : REASONS.emailSetupRetry);
+          return "held";
+        }
+        await logSkipped(ctx, s, EMAIL_BLOCK_REASONS[r.reason]);
+        return "skipped";
+      }
+      // failed: today's failure path, below.
     }
     await record(ctx.db, { ...writeOf(s), status: "failed", reason: REASONS.failed });
     throw e;

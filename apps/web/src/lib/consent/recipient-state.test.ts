@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const readConsentState = vi.fn();
 vi.mock("@bis/db", () => ({ readConsentState: (...a: unknown[]) => readConsentState(...a) }));
 
-const { smsRecipientState } = await import("./recipient-state");
+const { smsRecipientState, emailRecipientState } = await import("./recipient-state");
 const DB = {} as never;
 
 /**
@@ -51,5 +51,26 @@ describe("smsRecipientState", () => {
     expect(await smsRecipientState(DB, "a1", { phone: null })).toEqual({ kind: "ok" });
     expect(await smsRecipientState(DB, "a1", { phone: "12" })).toEqual({ kind: "ok" });
     expect(readConsentState).not.toHaveBeenCalled();
+  });
+});
+
+describe("emailRecipientState — the email composer's read", () => {
+  beforeEach(() => {
+    readConsentState.mockReset().mockResolvedValue({ state: "allowed" });
+  });
+
+  it("reads the contact's LEDGER address on the email channel; a customer's own stop is byCustomer, a staff or folded one is not (mutation: read the raw address → FAILS; mutation: byCustomer always true → FAILS)", async () => {
+    readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-01T15:00:00Z", method: "one_click", eventId: "e1" });
+    expect(await emailRecipientState(DB, "a1", { email: " Ana@Example.com " }))
+      .toEqual({ kind: "stopped", since: "2026-10-01T15:00:00Z", byCustomer: true });
+    expect(readConsentState).toHaveBeenLastCalledWith(DB, "a1", "email", "ana@example.com");
+    readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-09-01T15:00:00Z", method: "backfill_0049", eventId: "e2" });
+    expect(await emailRecipientState(DB, "a1", { email: "ana@example.com" })).toMatchObject({ byCustomer: false });
+  });
+
+  it("no address is ok (the composer's own 'no email' line covers it); an unreadable ledger is unknown, never a throw (mutation: rethrow → the contact page errors, FAILS)", async () => {
+    expect(await emailRecipientState(DB, "a1", { email: null })).toEqual({ kind: "ok" });
+    readConsentState.mockRejectedValueOnce(new Error("down"));
+    expect(await emailRecipientState(DB, "a1", { email: "ana@example.com" })).toEqual({ kind: "unknown" });
   });
 });

@@ -9,7 +9,7 @@ import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, se
          startAlertPhoneVerification, verifyAlertPhoneCode, countRecentAlertPhoneVerifications,
          discardAlertPhoneVerification,
          ALERT_CODE_MAX_SENDS_PER_HOUR } from "@bis/db";
-import { getEmailProvider } from "@/lib/email";
+import { operatorMailer } from "@/lib/consent/email-gate";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 // The public form's own validator, reused deliberately rather than a second
 // regex — the same reasoning branding/actions.ts records: one email regex
@@ -178,7 +178,7 @@ export async function setFromEmailAction(
     // the only place the ordering can be proven.
     const db = serviceDb();
     await saveVerifiedFromAddress(
-      getEmailProvider(), raw, adminEmail,
+      operatorMailer("operator.sender_check", accountId), raw, adminEmail,
       (address) => setFromEmail(db, accountId, address, userId),
     );
   } catch (e) {

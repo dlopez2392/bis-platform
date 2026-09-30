@@ -2,9 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const gate = vi.hoisted(() => ({ smsSenderFor: vi.fn() }));
 vi.mock("@/lib/consent/gate", () => gate);
-vi.mock("@/lib/email", () => ({
-  getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }),
-}));
+const emailGate = vi.hoisted(() => ({ emailSenderFor: vi.fn() }));
+vi.mock("@/lib/consent/email-gate", () => emailGate);
 
 import { buildPassContext, runPasses } from "./harness";
 import type { Pass, PassContext } from "./context";
@@ -17,6 +16,7 @@ function ctx(): PassContext {
 
 beforeEach(() => {
   gate.smsSenderFor.mockReset().mockReturnValue(vi.fn());
+  emailGate.emailSenderFor.mockReset().mockReturnValue({ isFake: true, send: vi.fn() });
 });
 
 describe("runPasses — independent error isolation, the finishCall-legs pattern", () => {
@@ -67,5 +67,16 @@ describe("PassContext — structurally cannot carry the agency's internal label"
     // @ts-expect-error accountName is deliberately absent from PassContext.
     // If it is ever added, this directive becomes unused and `tsc` refuses it.
     expect(c.accountName).toBeUndefined();
+  });
+});
+
+describe("buildPassContext — email goes through the email gate, bound to the tick (consent PR-3)", () => {
+  it("ctx.email IS the email gate's sender for this tick's client (mutation: build it from getEmailProvider again → emailSenderFor is never called, FAILS)", () => {
+    const db = { tag: "tick-db" } as never;
+    const sender = { isFake: false, send: vi.fn() };
+    emailGate.emailSenderFor.mockReturnValue(sender);
+    const c = buildPassContext({ db, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com" });
+    expect(c.email).toBe(sender);
+    expect(emailGate.emailSenderFor).toHaveBeenCalledWith(db);
   });
 });

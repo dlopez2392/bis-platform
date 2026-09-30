@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   consentStateOf, readConsentState, recordCarrierBlock, appendConsentEvent, appendConsentEventGuarded,
   newestDecidingRow, readConsentHistory, readConsentEvent, readConsentActions, consentWriteArgs, consentAppendSql,
-  CUSTOMER_STOP_METHODS, type ConsentRow,
+  CUSTOMER_STOP_METHODS, emailLedgerAddress, readBlockedAddresses, type ConsentRow,
 } from "./consent";
 
 /**
@@ -294,5 +294,84 @@ describe("consentAppendSql — the backfill's statement", () => {
   it("refuses a value that would carry a backslash into the MCP (memory bis-mcp-sql-escapes; mutation: drop the backslash check → the statement is returned, FAILS)", () => {
     expect(() => consentAppendSql({ accountId: "a", channel: "sms", address: "+1", action: "revoked", method: "backfill_telnyx", evidence: { keyword: "ST\"OP" } }, "unless_customer_stopped"))
       .toThrow("backslash");
+  });
+});
+
+describe("emailLedgerAddress — the ledger's email key (0054's CHECK, spec §3)", () => {
+  it("trims and lowercases (mutation: drop .toLowerCase() → the mixed-case address misses the ledger, FAILS)", () => {
+    expect(emailLedgerAddress("  Ana.Lopez@Example.COM \n")).toBe("ana.lopez@example.com");
+  });
+
+  it("refuses what 0054's CHECK refuses: no @, @ first, under 3 or over 254 characters, blank, null (mutation: indexOf('@') < 0 → '@example.com' passes, FAILS)", () => {
+    expect(emailLedgerAddress("ana.example.com")).toBeNull();
+    expect(emailLedgerAddress("@example.com")).toBeNull();
+    expect(emailLedgerAddress("a@")).toBeNull();
+    expect(emailLedgerAddress(`${"a".repeat(250)}@x.co`)).toBeNull();
+    expect(emailLedgerAddress("   ")).toBeNull();
+    expect(emailLedgerAddress(null)).toBeNull();
+    expect(emailLedgerAddress(undefined)).toBeNull();
+  });
+
+  it("the boundaries: 3 characters and 254 characters are kept (mutation: `< 3` → `<= 3`, or `> 254` → `>= 254`, FAILS)", () => {
+    expect(emailLedgerAddress("a@b")).toBe("a@b");
+    const long = `${"a".repeat(248)}@x.com`;   // 254
+    expect(long.length).toBe(254);
+    expect(emailLedgerAddress(long)).toBe(long);
+  });
+
+  it("counts characters, not UTF-16 units, as Postgres's char_length does (mutation: use .length → a 254-character address holding an astral character reads as 255 and is refused, FAILS)", () => {
+    const astral = String.fromCodePoint(0x1f600);
+    const addr = `${astral}${"a".repeat(247)}@x.com`;   // 254 characters, 255 UTF-16 units
+    expect([...addr].length).toBe(254);
+    expect(emailLedgerAddress(addr)).toBe(addr);
+  });
+});
+
+describe("readBlockedAddresses — which addresses a due-list must leave out", () => {
+  const ROW = (id: string, account_id: string, address: string, action: string, method: string, occurred_at: string) =>
+    ({ id, account_id, address, action, method, occurred_at });
+
+  it("keys `${account}|${address}` whose newest deciding row is a stop; an allowed address and another account's stop of the SAME address are not blocked (mutation: key on address alone → a1's stop blocks a2, FAILS)", async () => {
+    const f = fakeDb({ read: { data: [
+      ROW("00000000-0000-0000-0000-000000000001", "a1", "ana@x.com", "revoked", "one_click", "2026-10-01T10:00:00Z"),
+      ROW("00000000-0000-0000-0000-000000000002", "a1", "bo@x.com", "revoked", "staff", "2026-10-01T10:00:00Z"),
+      ROW("00000000-0000-0000-0000-000000000003", "a1", "bo@x.com", "resubscribed", "staff_undo", "2026-10-01T10:01:00Z"),
+    ], error: null } });
+    const blocked = await readBlockedAddresses(f.db, "email", [
+      { accountId: "a1", address: "ana@x.com" }, { accountId: "a1", address: "bo@x.com" }, { accountId: "a2", address: "ana@x.com" },
+    ]);
+    expect([...blocked]).toEqual(["a1|ana@x.com"]);
+  });
+
+  it("reads only deciding rows of that channel for those accounts and addresses (mutation: drop the channel filter → an SMS stop of the same string could block an email, FAILS)", async () => {
+    const f = fakeDb({ read: { data: [], error: null } });
+    await readBlockedAddresses(f.db, "email", [{ accountId: "a1", address: "ana@x.com" }]);
+    expect(f.calls).toEqual(expect.arrayContaining([
+      ["from", "consent_events"], ["in", "account_id", ["a1"]], ["eq", "channel", "email"],
+      ["in", "address", ["ana@x.com"]], ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]],
+      ["limit", 1000],
+    ]));
+  });
+
+  it("no pairs, no read (mutation: drop the early return → a from() call on an empty list, FAILS)", async () => {
+    const f = fakeDb();
+    expect([...await readBlockedAddresses(f.db, "email", [])]).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it("chunks the addresses by 100 so a page of 200 candidates stays a short URL (mutation: one read for all → one limit call, FAILS)", async () => {
+    const f = fakeDb({ read: { data: [], error: null } });
+    const pairs = Array.from({ length: 150 }, (_, i) => ({ accountId: "a1", address: `c${i}@x.com` }));
+    await readBlockedAddresses(f.db, "email", pairs);
+    expect(f.calls.filter((c) => c[0] === "limit")).toHaveLength(2);
+  });
+
+  it("THROWS on a read error, and on a full 1000-row page, so a walk never judges on a truncated read (mutation: drop the length check → a truncated page answers 'not blocked', FAILS)", async () => {
+    await expect(readBlockedAddresses(fakeDb({ read: { data: null, error: { message: "boom" } } }).db, "email",
+      [{ accountId: "a1", address: "ana@x.com" }])).rejects.toThrow("readBlockedAddresses failed: boom");
+    const full = Array.from({ length: 1000 }, (_, i) =>
+      ROW(`00000000-0000-0000-0000-${String(i).padStart(12, "0")}`, "a1", "ana@x.com", "revoked", "staff", "2026-10-01T10:00:00Z"));
+    await expect(readBlockedAddresses(fakeDb({ read: { data: full, error: null } }).db, "email",
+      [{ accountId: "a1", address: "ana@x.com" }])).rejects.toThrow(/1000 rows/);
   });
 });

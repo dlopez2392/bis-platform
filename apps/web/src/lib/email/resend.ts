@@ -35,6 +35,8 @@ class ResendEmailProvider implements EmailProvider {
       // Spread rather than `html: input.html`, so a text-only send carries no
       // `html` key at all rather than an explicit undefined.
       ...(input.html ? { html: input.html } : {}),
+      // Same spread discipline: a send without headers carries no key.
+      ...(input.headers ? { headers: input.headers } : {}),
     });
     if (error) throw new Error(error.message);
     if (!data?.id) throw new Error("resend returned no message id");
