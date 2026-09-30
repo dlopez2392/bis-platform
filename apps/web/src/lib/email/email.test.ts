@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { getEmailProvider } from "./index";
+import { getEmailProvider, isProductionEnv } from "./index";
 import { fakeEmailProvider } from "./fake";
 
 const base = { RESEND_API_KEY: "re_test", EMAIL_FROM: "crm@bis-rgv.com" };
@@ -49,5 +49,14 @@ describe("getEmailProvider", () => {
       to: "someone@example.com", fromName: "Test Co", subject: "s", body: "b",
     });
     expect(r.providerMessageId).toMatch(/^fake_/);
+  });
+});
+
+describe("isProductionEnv — getEmailProvider's own rule, shared with the email gate", () => {
+  it("needs BOTH VERCEL_ENV=production and the real NODE_ENV=production (mutation: read VERCEL_ENV alone → a pulled .env under next dev reads as production, FAILS)", () => {
+    expect(isProductionEnv({ VERCEL_ENV: "production" } as unknown as NodeJS.ProcessEnv)).toBe(false);
+    vi.stubEnv("NODE_ENV", "production");
+    expect(isProductionEnv({ VERCEL_ENV: "production" } as unknown as NodeJS.ProcessEnv)).toBe(true);
+    expect(isProductionEnv({ VERCEL_ENV: "preview" } as unknown as NodeJS.ProcessEnv)).toBe(false);
   });
 });
