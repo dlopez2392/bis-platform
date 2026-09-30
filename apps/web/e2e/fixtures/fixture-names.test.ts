@@ -64,6 +64,9 @@ const NOT_SWEPT_BY_NAME: Record<string, string> = {
     "a form on the per-run fixture account — removed by that account's cascade (teardown, or the accounts leg)",
   "concierge.spec.ts: E2E Concierge ${stamp}":
     "a form on the per-run fixture account — removed by that account's cascade",
+  "forms.spec.ts: E2E Embed Height ${publicId}":
+    "a form on the per-run fixture account — removed by that account's cascade (teardown, or " +
+    "the accounts leg); the spec also deletes it by public_id in a `finally`",
   "forms.spec.ts: E2E Lead ${stamp}":
     "a CONTACT row the public form captures, on the SEEDED account (Test Client One) — its " +
     "purge runs in a `finally` that a killed run never reaches, so a killed run DOES strand it " +

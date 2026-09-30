@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
-import { SEEDED_ACCOUNT_NAME, openAccountByName } from "./support";
+import { SEEDED_ACCOUNT_NAME, openAccountByName, readClientFixture } from "./support";
 
 // Playwright's config passes env to the webServer, not to this process, so the
 // service-role credentials have to be loaded explicitly for setup and cleanup.
@@ -237,6 +237,57 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
     // Only this run's rows, in FK order. The seeded account, its contacts and
     // its opportunities must all survive.
     await purge(formName, leadEmail);
+  }
+});
+
+test("an embedded form asks for enough height to show its Submit button", async ({ page, baseURL }) => {
+  // The form reported its own element height, and the brand header sits
+  // ABOVE that element — so every embed came out one header short and the
+  // Submit button was clipped at the frame's bottom edge (bis-rgv.com/contact,
+  // 34px, in production). This hosts the form the way a client's site does
+  // and checks the number the host is told against where the button ends.
+  //
+  // On the per-run fixture account, never Test Client One: this writes a form
+  // row. It is inserted directly — the builder is the other specs' subject,
+  // and this one is about the public page alone.
+  const fixture = readClientFixture();
+  test.skip(!fixture, "client fixture file missing — run through the setup project");
+  const db = serviceDb();
+  const publicId = `e2eh${Date.now()}`;
+  const { error } = await db.from("forms").insert({
+    account_id: fixture!.accountId, public_id: publicId, name: `E2E Embed Height ${publicId}`,
+    status: "published",
+    fields: [
+      { key: "first_name", kind: "core.first_name", label: "First name", required: true },
+      { key: "email", kind: "core.email", label: "Email", required: true },
+      { key: "message", kind: "message", label: "Message", required: false },
+    ],
+  });
+  expect(error, error?.message).toBeNull();
+
+  try {
+    await page.setContent(`<!doctype html><body style="margin:0">
+      <script>window.__heights = []; addEventListener("message", (e) => {
+        if (e.data && e.data.type === "bis-form-height") window.__heights.push(e.data.height);
+      });</script>
+      <iframe id="f" src="${new URL(`/f/${publicId}`, baseURL).href}" style="width:420px;height:300px;border:0"></iframe>
+    </body>`);
+
+    const frame = page.frameLocator("#f");
+    const submit = frame.getByRole("button", { name: "Submit" });
+    await expect(submit).toBeVisible({ timeout: 30_000 });
+    // The header this bug was about has to be there, or the check proves nothing.
+    await expect(frame.locator(".bis-brand")).toBeVisible();
+
+    const needed = await submit.evaluate((b) => b.getBoundingClientRect().bottom + window.scrollY);
+    // The observer posts again as layout settles; the host keeps the last one.
+    await expect.poll(async () => {
+      const heights = await page.evaluate(() => (window as unknown as { __heights: number[] }).__heights);
+      return heights.at(-1) ?? 0;
+    }, { message: "the last height posted must reach the Submit button's bottom edge" })
+      .toBeGreaterThanOrEqual(needed);
+  } finally {
+    await db.from("forms").delete().eq("public_id", publicId);
   }
 });
 
