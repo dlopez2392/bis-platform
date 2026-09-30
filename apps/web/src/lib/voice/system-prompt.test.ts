@@ -231,6 +231,9 @@ describe("buildSystemPrompt medium", () => {
     expect(p).not.toContain("This is a phone call");
     expect(p).toContain("the assistant on the website for Rio Roofing");
     expect(p).toContain("This is a text chat");
+    // The bubble renders raw text; a model left to its defaults answers in
+    // markdown and the asterisks land on a client's website.
+    expect(p).toContain("Write plain text only");
   });
 
   it("keeps the tenant's own facts, limits and tools on both mediums", () => {

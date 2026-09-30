@@ -107,9 +107,9 @@ export async function fileLead(ctx: {
       return false;
     }
 
-    // Item 10 (Branch 2 hardening): the machine intake (#99,
-    // api/intake/[publicId]/route.ts:117-121) writes every CONSENT-kind field
-    // on the form as `{ key, given: false, text: label, at }`, never `[]`
+    // Item 10 (Branch 2 hardening): the machine intake (#99, since retired)
+    // wrote every CONSENT-kind field on the form as
+    // `{ key, given: false, text: label, at }`, never `[]`
     // regardless of whether the form carries one — so an operator reading the
     // row can tell "this form has no consent field at all" from "the visitor
     // never ticked it". A widget conversation cannot tick a box under its
