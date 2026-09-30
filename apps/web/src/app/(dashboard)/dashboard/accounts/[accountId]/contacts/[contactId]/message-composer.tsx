@@ -19,6 +19,7 @@ export function MessageComposer({
   contactHasPhone,
   smsGate,
   smsBlockedLine,
+  emailNoticeLine,
   noteAction,
   emailAction,
   smsAction,
@@ -40,6 +41,10 @@ export function MessageComposer({
   // that could be Mexican or US. The form is not rendered while it is set;
   // the action says the same line after an attempt from a stale tab.
   smsBlockedLine: string | null;
+  // The email composer's one line (spec §6, choice 22): set when the
+  // contact's email is stopped. The form STILL shows — a person replying
+  // about their own matter is not automated mail.
+  emailNoticeLine: string | null;
   noteAction: (formData: FormData) => Promise<void>;
   emailAction: (formData: FormData) => Promise<void>;
   smsAction: (formData: FormData) => Promise<void>;
@@ -140,6 +145,9 @@ export function MessageComposer({
           aria-label={isEmail ? m["compose.email"] : isSms ? m["compose.sms"] : m["compose.note"]}
         >
           <input type="hidden" name="contactId" value={contactId} />
+          {isEmail && emailNoticeLine ? (
+            <p role="note" className="text-xs text-muted-foreground" data-testid="composer-email-notice">{emailNoticeLine}</p>
+          ) : null}
           {isEmail ? (
             <Input name="subject" placeholder={m["compose.subject"]} className="text-sm" />
           ) : null}

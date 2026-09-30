@@ -57,3 +57,28 @@ export function composerStateLine(state: SmsRecipientState, zone: string): strin
     case "unknown": return m["compose.smsStateUnknown"];
   }
 }
+
+/** The email composer's read (recipient-state.ts): who stopped their email, if anyone. */
+export type EmailRecipientState =
+  | { kind: "ok" }
+  | { kind: "stopped"; since: string; byCustomer: boolean }
+  | { kind: "unknown" };
+
+/**
+ * The ONE line the email composer shows above the subject, or null (spec §6,
+ * choice 22; plan G15). The composer stays usable: a person writing about
+ * the customer's own matter is not automated mail. The spec's line for the
+ * customer's own unsubscribe; "You stopped …" for a staff or folded stop,
+ * where "They unsubscribed" would be false. A date that will not format drops
+ * the date rather than throwing inside a render.
+ */
+export function composerEmailNotice(state: EmailRecipientState, zone: string): string | null {
+  if (state.kind === "ok") return null;
+  if (state.kind === "unknown") return m["compose.emailStateUnknown"];
+  const line = state.byCustomer ? m["compose.emailUnsubscribed"] : m["compose.emailStoppedByYou"];
+  try {
+    return line.replace("{date}", formatDateInZone(state.since, zone));
+  } catch {
+    return line.replace(" on {date}", "");
+  }
+}

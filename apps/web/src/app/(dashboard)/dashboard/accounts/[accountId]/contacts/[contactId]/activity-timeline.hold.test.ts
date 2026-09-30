@@ -14,7 +14,7 @@ const task = (id: string, title: string, consent_event_id: string | null) =>
   ({ id, title, due_at: null, completed_at: null, created_at: "2026-10-05T10:00:00Z", consent_event_id });
 const html = (holdOpenTaskIds: string[]) => renderToStaticMarkup(createElement(ActivityTimeline, {
   accountId: "a1", contactId: "c1", contactHasEmail: false, contactHasPhone: false,
-  smsGate: { ok: false, reason: "a2p_not_approved" }, smsBlockedLine: null,
+  smsGate: { ok: false, reason: "a2p_not_approved" }, smsBlockedLine: null, emailNoticeLine: null,
   notes: [], tasks: [task("t_hold", "Ana may have asked to stop texts", "h1"), task("t_plain", "Call back", null)],
   holdOpenTaskIds, opportunities: [], submissions: [], messages: [],
   emailAction: async () => {}, smsAction: async () => {},
