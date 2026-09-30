@@ -9,6 +9,7 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 
 import type { PassContext } from "../context";
 import { followupsPass, releaseFollowup } from "./followups";
+import { EmailNotSent } from "@/lib/consent/email-gate";
 
 // 09:00 CDT on Sept 22 — inside the 08:00–11:00 band, the day after a meeting that ended Sept 21.
 const MORNING = new Date("2026-09-22T14:00:00Z");
@@ -117,5 +118,23 @@ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN I
     expect(emailSend).not.toHaveBeenCalled();
     expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
     expect(logCalls()).toEqual([expect.objectContaining({ accountId: "acct_2", status: "skipped", reason: "No longer due" })]);
+  });
+});
+
+describe("consent PR-3: the email goes through the gate", () => {
+  it("the email goes through the gate as automation.followup, for this account and contact, at the tick's instant (mutation: kind \"automation.reminder\" → FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+    await followupsPass.run(ctx(MORNING));
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "acct_1", kind: "automation.followup", contactId: "ct_1", origin: "https://app.example.com",
+      now: MORNING, accountZone: "America/Chicago",
+    }));
+  });
+
+  it("an unsubscribed customer: the gate refuses, the row is skipped with the reason the client reads, nothing is stamped, and the tick's cap place is given back (decision 7, G13; mutation: count it sent → FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+    emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
+    expect(await followupsPass.run(ctx(MORNING))).toEqual({ ...EMPTY, blocked: 1 });
+    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
   });
 });

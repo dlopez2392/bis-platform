@@ -155,4 +155,12 @@ describe("weeklyClientReportPass", () => {
     expect(emailSend).not.toHaveBeenCalled();
     expect(dbMocks.stampWeeklyReportSent).not.toHaveBeenCalled();
   });
+
+  it("the send carries kind \"operator.weekly_report\" with the account's own id (consent PR-3; mutation: a customer kind → FAILS)", async () => {
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([row()]);
+    await weeklyClientReportPass.run(ctx());
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "acct_1", kind: "operator.weekly_report",
+    }));
+  });
 });

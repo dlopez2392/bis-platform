@@ -8,6 +8,7 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 
 import type { PassContext } from "../context";
 import { remindersPass, releaseReminder } from "./reminders";
+import { EmailNotSent } from "@/lib/consent/email-gate";
 
 const NIGHT = new Date("2026-09-22T04:00:00Z");   // 23:00 CDT, Sept 21
 const NOON = new Date("2026-09-21T17:00:00Z");    // 12:00 CDT
@@ -126,5 +127,23 @@ describe("releaseReminder — the held row is the queue", () => {
     expect(await releaseReminder(ctx(NOON), otherAccountHeld)).toBe("skipped");
     expect(emailSend).not.toHaveBeenCalled();
     expect(logCalls()).toEqual([expect.objectContaining({ accountId: "acct_2", status: "skipped", reason: "No longer due" })]);
+  });
+});
+
+describe("consent PR-3: the email goes through the gate", () => {
+  it("the email goes through the gate as automation.reminder, for this account and contact, at the tick's instant, with the appointment as its deadline (consent PR-3; mutation: kind \"automation.followup\" → FAILS; mutation: drop the deadline → FAILS)", async () => {
+    dbMocks.listDueReminders.mockResolvedValue([row()]);
+    await remindersPass.run(ctx(NOON));
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "acct_1", kind: "automation.reminder", contactId: "ct_1", origin: "https://app.example.com",
+      now: NOON, accountZone: "America/Chicago", deadline: new Date(row().startsAt),
+    }));
+  });
+
+  it("an unsubscribed customer: the gate refuses, the row is skipped with the reason the client reads, nothing is stamped, and the tick's cap place is given back (decision 7, G13; mutation: count it sent → FAILS)", async () => {
+    dbMocks.listDueReminders.mockResolvedValue([row()]);
+    emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
+    expect(await remindersPass.run(ctx(NOON))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 1 });
+    expect(dbMocks.stampReminderSent).not.toHaveBeenCalled();
   });
 });

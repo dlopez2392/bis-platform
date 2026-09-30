@@ -129,7 +129,15 @@ vi.mock("@bis/db", () => ({
   // (Global Constraint "vi.mock factories"). No text is due and nothing is
   // held in this suite, so none is ever asked; one that were would fail
   // closed and change the exact counts below.
-  readConsentState: async () => { throw new Error("route.test: no text is due"); },
+  // Consent PR-3: the reminder and follow-up EMAILS read the ledger through
+  // the email gate now, so this answers — allowed — rather than throwing
+  // (a throw would fail closed into a re-hold and change every count below).
+  // Still no text is due in this suite.
+  readConsentState: async () => ({ state: "allowed" as const }),
+  // Decision P1: the email gate reads the postal address for the review
+  // request, quote follow-up and no-show nudge. None is due here (their lists
+  // answer []), but the gate imports it, so the bare factory carries it.
+  getMailingAddress: async () => null,
   readPhoneCountryFlag: async () => { throw new Error("route.test: no text is due"); },
   readAccountTimezone: async () => { throw new Error("route.test: no text is due"); },
   recordCarrierBlock: async () => { throw new Error("route.test: no text is due"); },
@@ -258,8 +266,9 @@ const EMPTY_REFERRAL_ASKS = {
   sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
   waitingForMorning: 0, waitingForReviewRequest: 0, unresolvableTimezone: 0,
-  // B21: the email channel's three marketing-email skips.
-  skippedNoMailingAddress: 0, skippedNoReplyTo: 0, skippedOptedOut: 0,
+  // B21: the email channel's two marketing-email skips (the email stop
+  // itself is the email gate's, consent PR-3, counted `blocked`).
+  skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
 };
 const EMPTY_NO_SHOW_NUDGES = {
   sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,

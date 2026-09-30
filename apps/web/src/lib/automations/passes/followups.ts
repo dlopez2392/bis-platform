@@ -120,6 +120,8 @@ export async function processFollowups(
         // `followup.branding.replyToEmail` — that's the whole reason
         // `listDueFollowups` duplicates it there.
         await ctx.email.send({
+          accountId: followup.accountId, kind: "automation.followup", contactId: followup.contactId,
+          origin: ctx.origin, now: ctx.now, accountZone: followup.accountTimezone,
           to: followup.contactEmail!,
           fromName: brand.name,
           fromAddress: followup.fromEmail ?? undefined,

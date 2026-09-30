@@ -320,6 +320,8 @@ async function sendEmail(
   const brand = emailBrandNamed(row.branding, row.brandName);
   const { subject, html, text } = reviewRequestEmail({ brand, body, reviewUrl: config.reviewUrl });
   await ctx.email.send({
+    accountId: row.accountId, kind: "automation.review_request", contactId: row.contactId,
+    origin: ctx.origin, now: ctx.now, accountZone: row.accountTimezone,
     to,
     fromName: brand.name,
     fromAddress: row.fromEmail ?? undefined,

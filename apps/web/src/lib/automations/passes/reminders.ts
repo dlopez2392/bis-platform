@@ -79,6 +79,11 @@ export async function processReminders(ctx: PassContext, reminders: DueReminder[
         // fromAddress carries the account's sending address: a reminder is
         // customer-facing outbound, same shape as the booking confirmation.
         await ctx.email.send({
+          // The email gate (consent PR-3): the ledger, the fixed hours at this
+          // tick's instant, choice 21's deadline, and the unsubscribe footer.
+          accountId: reminder.accountId, kind: "automation.reminder", contactId: reminder.contactId,
+          origin: ctx.origin, now: ctx.now, accountZone: reminder.accountTimezone,
+          deadline: new Date(reminder.startsAt),
           to,
           fromName: brand.name,
           fromAddress: reminder.fromEmail ?? undefined,

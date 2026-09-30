@@ -115,7 +115,7 @@ export const weeklyAgencyReportPass: Pass = {
       const { html, text } = agencyRollupEmail({ brand, rows });
       const subject = `Weekly roll-up — ${rows.length} account${rows.length === 1 ? "" : "s"}`;
 
-      await ctx.email.send({ to: reportEmail, fromName: brand.name, subject, body: text, html });
+      await ctx.email.send({ accountId: null, kind: "operator.agency_report", to: reportEmail, fromName: brand.name, subject, body: text, html });
       c.sent++;
 
       // SEND-THEN-STAMP: a stamp failure after a successful send counts
