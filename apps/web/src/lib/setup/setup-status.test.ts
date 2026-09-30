@@ -20,10 +20,17 @@ function fullInputs(overrides: Partial<SetupInputs> = {}): SetupInputs {
       facts: "Open Monday through Friday, 9 to 5.",
       enabled: true,
       languages: "en",
+      // website_assistant done in the full fixture too, so "every step
+      // done" tests reach all ten without a dedicated override.
+      concierge_enabled: true,
+      concierge_form_id: "form_full",
+      public_id: "pub_full",
     },
     numbers: [{ status: "live" }],
     callCount: 3,
     ticks: { emailSkipped: false, forwardingDone: true },
+    publishedFormCount: 1,
+    conciergeSiteConversation: true,
     ...overrides,
   };
 }
@@ -38,6 +45,8 @@ const emptyInputs: SetupInputs = {
   numbers: [],
   callCount: 0,
   ticks: { emailSkipped: false, forwardingDone: false },
+  publishedFormCount: 0,
+  conciergeSiteConversation: false,
 };
 
 function stepFor(steps: SetupStepState[], key: SetupStepKey): SetupStepState {
@@ -47,17 +56,17 @@ function stepFor(steps: SetupStepState[], key: SetupStepKey): SetupStepState {
 }
 
 describe("deriveSetupStatus shape", () => {
-  it("always returns all nine steps, in canonical order", () => {
+  it("always returns all ten steps, in canonical order — website_assistant sits between voice_profile and number", () => {
     const steps = deriveSetupStatus(fullInputs());
     expect(steps.map((s) => s.key)).toEqual<SetupStepKey[]>([
-      "account", "branding", "hours", "voice_profile", "number",
+      "account", "branding", "hours", "voice_profile", "website_assistant", "number",
       "email", "forwarding", "test_call", "go_live",
     ]);
   });
 
-  it("returns all nine steps even for a brand new, wholly unconfigured tenant", () => {
+  it("returns all ten steps even for a brand new, wholly unconfigured tenant", () => {
     const steps = deriveSetupStatus(emptyInputs);
-    expect(steps).toHaveLength(9);
+    expect(steps).toHaveLength(10);
   });
 });
 
@@ -126,6 +135,7 @@ describe("voice_profile", () => {
       profile: {
         greeting_en: "Hi, thanks for calling!", greeting_es: "",
         facts: "We fix things.", enabled: true, languages: "en",
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
       },
     }));
     expect(stepFor(steps, "voice_profile").done).toBe(true);
@@ -136,6 +146,7 @@ describe("voice_profile", () => {
       profile: {
         greeting_en: "", greeting_es: "¡Hola, gracias por llamar!",
         facts: "Reparamos cosas.", enabled: true, languages: "es",
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
       },
     }));
     expect(stepFor(steps, "voice_profile").done).toBe(true);
@@ -146,6 +157,7 @@ describe("voice_profile", () => {
       profile: {
         greeting_en: "Hi, thanks for calling!", greeting_es: "",
         facts: "Reparamos cosas.", enabled: true, languages: "es",
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
       },
     }));
     expect(stepFor(steps, "voice_profile").done).toBe(false);
@@ -156,6 +168,7 @@ describe("voice_profile", () => {
       profile: {
         greeting_en: "Hi, thanks for calling!", greeting_es: "",
         facts: "We fix things.", enabled: true, languages: "both",
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
       },
     }));
     expect(stepFor(steps, "voice_profile").done).toBe(true);
@@ -166,6 +179,7 @@ describe("voice_profile", () => {
       profile: {
         greeting_en: "Hi, thanks for calling!", greeting_es: "",
         facts: "   ", enabled: true, languages: "en",
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
       },
     }));
     expect(stepFor(steps, "voice_profile").done).toBe(false);
@@ -257,6 +271,7 @@ describe("go_live", () => {
       profile: {
         greeting_en: "Hi!", greeting_es: "", facts: "We fix things.",
         enabled: true, languages: "en",
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
       },
       numbers: [{ status: "live" }],
     }));
@@ -268,6 +283,7 @@ describe("go_live", () => {
       profile: {
         greeting_en: "Hi!", greeting_es: "", facts: "We fix things.",
         enabled: false, languages: "en",
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
       },
       numbers: [{ status: "live" }],
     }));
@@ -279,6 +295,7 @@ describe("go_live", () => {
       profile: {
         greeting_en: "Hi!", greeting_es: "", facts: "We fix things.",
         enabled: true, languages: "en",
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
       },
       numbers: [{ status: "provisioned" }, { status: "testing" }],
     }));
@@ -343,16 +360,17 @@ describe("goLivePrereqsMet", () => {
 });
 
 describe("reduceSetupProgress", () => {
-  it("counts done steps against the full nine for a wholly unconfigured tenant", () => {
+  it("counts done steps against the full ten for a wholly unconfigured tenant", () => {
     const steps = deriveSetupStatus(emptyInputs);
-    expect(reduceSetupProgress(steps)).toEqual({ done: 1, total: 9 }); // account is always done
+    expect(reduceSetupProgress(steps)).toEqual({ done: 1, total: 10 }); // account is always done
   });
 
-  it("counts all nine as done for a fully configured, live tenant", () => {
+  it("counts all ten as done for a fully configured, live tenant", () => {
     // fullInputs()'s own defaults are already a fully-done tenant (profile
-    // enabled, a live number) — no overrides needed to reach 9 of 9.
+    // enabled, a live number, concierge on with a form) — no overrides
+    // needed to reach 10 of 10.
     const steps = deriveSetupStatus(fullInputs());
-    expect(reduceSetupProgress(steps)).toEqual({ done: 9, total: 9 });
+    expect(reduceSetupProgress(steps)).toEqual({ done: 10, total: 10 });
   });
 
   it("does not count a skipped-but-not-done step as done", () => {
@@ -362,11 +380,51 @@ describe("reduceSetupProgress", () => {
     const email = stepFor(steps, "email");
     expect(email.done).toBe(false);
     expect(email.skipped).toBe(true);
-    expect(reduceSetupProgress(steps).done).toBe(8); // every step but email
+    expect(reduceSetupProgress(steps).done).toBe(9); // every step but email
   });
 
   it("total always reflects the number of steps passed in, not a hardcoded 9", () => {
     expect(reduceSetupProgress([{ key: "account", done: true, skipped: false }])).toEqual({ done: 1, total: 1 });
+  });
+});
+
+describe("website_assistant", () => {
+  it("is done when concierge_enabled is true AND a concierge_form_id is set", () => {
+    const steps = deriveSetupStatus(fullInputs({
+      profile: {
+        ...fullInputs().profile!,
+        concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_1",
+      },
+    }));
+    expect(stepFor(steps, "website_assistant").done).toBe(true);
+  });
+
+  // MUTATION: change `done` to `profile?.concierge_enabled === true` alone
+  // (drop the `&& Boolean(profile.concierge_form_id)` half) — this FAILS,
+  // because concierge_enabled can be true while the form was cleared.
+  it("is NOT done when concierge_enabled is true but concierge_form_id is null", () => {
+    const steps = deriveSetupStatus(fullInputs({
+      profile: {
+        ...fullInputs().profile!,
+        concierge_enabled: true, concierge_form_id: null, public_id: "pub_1",
+      },
+    }));
+    expect(stepFor(steps, "website_assistant").done).toBe(false);
+  });
+
+  it("is not done when concierge_form_id is set but concierge_enabled is false", () => {
+    const steps = deriveSetupStatus(fullInputs({
+      profile: {
+        ...fullInputs().profile!,
+        concierge_enabled: false, concierge_form_id: "form_1", public_id: "pub_1",
+      },
+    }));
+    expect(stepFor(steps, "website_assistant").done).toBe(false);
+  });
+
+  it("is not done when there is no voice profile at all", () => {
+    const steps = deriveSetupStatus(fullInputs({ profile: null }));
+    expect(stepFor(steps, "website_assistant").done).toBe(false);
   });
 });
 
@@ -380,7 +438,7 @@ describe("SETUP_TICK_KEYS", () => {
 /**
  * The one string the demo seeder has to know about this file.
  *
- * Eight of the nine setup steps are computed from live rows, so the seeder
+ * Nine of the ten setup steps are computed from live rows, so the seeder
  * gets them for free by writing those rows. "forwarding" cannot be computed
  * — no row proves a carrier-side change — so it is a stored tick, and
  * packages/db's `DEMO_FORWARDING_TICK_KEY` carries a second copy of the key
@@ -391,7 +449,8 @@ describe("SETUP_TICK_KEYS", () => {
  * neutral-ramps and theme-style mirrors drifted, so the duplication is held
  * by an assertion rather than by a comment asking people to be careful. If
  * the key here is ever renamed, the demo silently stops ticking the step and
- * every screenshot goes back to reading "Setup 8/9" — this fails first.
+ * every screenshot goes back to reading "Setup 8/9" (now "Setup 8/10", the
+ * demo seeder does not turn website_assistant on either) — this fails first.
  */
 describe("the forwarding tick key is mirrored in @bis/db", () => {
   it("matches the demo seeder's copy exactly", () => {

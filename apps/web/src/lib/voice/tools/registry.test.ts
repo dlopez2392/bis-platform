@@ -12,19 +12,30 @@ const dbMocks = vi.hoisted(() => ({
   setBookingStatus: vi.fn(), getBookingById: vi.fn(),
   fillContactBlanks: vi.fn(), getContact: vi.fn(),
   markHandoffRequested: vi.fn(),
+  ensureConversation: vi.fn(), createMessage: vi.fn(), incrementUnreadCount: vi.fn(),
 }));
 const sendMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@bis/db")>();
   return { ...real, ...dbMocks, SlotTakenError: real.SlotTakenError };
 });
-vi.mock("@/lib/email", () => ({ getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }) }));
+// `getEmailProvider()` throws synchronously when mail config is missing in
+// production (see finish-call.ts's staff-alert catch); `providerSetup.fails`
+// reproduces that. Reset per test below.
+const providerSetup = vi.hoisted(() => ({ fails: false }));
+vi.mock("@/lib/email", () => ({
+  getEmailProvider: () => {
+    if (providerSetup.fails) throw new Error("EMAIL_FROM is not set");
+    return { send: (...a: unknown[]) => sendMock(...a) };
+  },
+}));
 const meetingProviderMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/meetings/provider", () => ({ getMeetingProvider: (...a: unknown[]) => meetingProviderMock(...a) }));
 
 import type { serviceDb, CalendarRow, VoiceProfileRow } from "@bis/db";
 import { runTool, type ToolContext, type ToolName } from "./registry";
 import { emptyCallState } from "../call-state";
+import { formatWhen } from "@/lib/booking/time";
 
 const ctx: ToolContext = {
   db: {} as unknown as ReturnType<typeof serviceDb>, accountId: "a1",
@@ -48,6 +59,7 @@ beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
   computeAllSlotsMock.mockReset();
   meetingProviderMock.mockReset().mockReturnValue(null);
+  providerSetup.fails = false;
 });
 
 describe("check_availability", () => {
@@ -89,21 +101,85 @@ describe("check_availability", () => {
   });
 });
 
+// Booking tools are bound to the caller ID: it is the only
+// identity, and a number the caller recites never finds, reveals, moves or
+// cancels anything.
 describe("find_my_booking", () => {
-  it("uses caller ID when no phone arg, E.164-normalizes an explicit one", async () => {
-    dbMocks.findUpcomingBookingForPhone.mockResolvedValue({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
+  const HIT = { bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" };
+  const TARGET = { available: true as const, to: "+19565550199" };
+
+  it("looks up the caller ID and hands back the spoken local time", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
     const r1 = await runTool(emptyCallState(), ctx, "find_my_booking", {});
     expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenCalledWith({}, "a1", "+19562921696", expect.any(String));
     expect(r1.result).toMatchObject({ found: true, bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
     // Spoken rendering rides along so the model never converts the ISO itself.
     expect((r1.result as { startsAtLocal: string }).startsAtLocal).toContain("9:00 AM");
-    await runTool(emptyCallState(), ctx, "find_my_booking", { phone: "(956) 555-0100" });
-    expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenLastCalledWith({}, "a1", "+19565550100", expect.any(String));
   });
-  it("no caller ID and no arg â†’ found:false, no query", async () => {
-    const r = await runTool(emptyCallState(), { ...ctx, callerNumber: null }, "find_my_booking", {});
-    expect(r.result).toEqual({ found: false });
+
+  it("a recited number that is not the caller ID is refused with no lookup, nothing revealed, nobody served", async () => {
+    // The mock WOULD find a booking — a lookup by the recited number would
+    // hand its details straight back.
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    const pre = emptyCallState();
+    const { state, result } = await runTool(pre, ctx, "find_my_booking", { phone: "(956) 555-0100" });
     expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ found: false, verified: false });
+    expect(result).not.toHaveProperty("bookingId");
+    expect(result).not.toHaveProperty("startsAt");
+    expect(result).not.toHaveProperty("startsAtLocal");
+    expect(String((result as { error?: string }).error)).toMatch(/number they are calling from/);
+    expect(state).toBe(pre);
+    expect(state.served).toEqual([]);
+  });
+
+  it("a garbled recited number is refused the same way — never quietly swapped for caller ID", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    const pre = emptyCallState();
+    const { state, result } = await runTool(pre, ctx, "find_my_booking", { phone: "55 01" });
+    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ found: false, verified: false });
+    expect(result).not.toHaveProperty("bookingId");
+    expect(state).toBe(pre);
+  });
+
+  it("a recited number that IS the caller ID, in another shape, looks up the caller ID and finds it", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    const { state, result } = await runTool(emptyCallState(), ctx, "find_my_booking", { phone: "(956) 292-1696" });
+    expect(dbMocks.findUpcomingBookingForPhone).toHaveBeenCalledWith({}, "a1", "+19562921696", expect.any(String));
+    expect(result).toMatchObject({ found: true, bookingId: "b9" });
+    expect(state.served).toEqual(["booking_found"]);
+  });
+
+  it("no caller ID and no arg → no query, verified:false, and an instruction instead of a bare found:false", async () => {
+    const pre = emptyCallState();
+    const r = await runTool(pre, { ...ctx, callerNumber: null }, "find_my_booking", {});
+    expect(r.result).toMatchObject({ found: false, verified: false, error: expect.any(String) });
+    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(r.state).toBe(pre);
+  });
+
+  it("no caller ID and a recited number → still no query: a withheld call can look nothing up", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue(HIT);
+    const pre = emptyCallState();
+    const { state, result } = await runTool(pre, { ...ctx, callerNumber: null }, "find_my_booking",
+      { phone: "(956) 292-1696" });
+    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ found: false, verified: false });
+    expect(result).not.toHaveProperty("bookingId");
+    expect(state).toBe(pre);
+  });
+
+  it("a refusal offers the transfer only when there is somewhere to transfer to, else a message", async () => {
+    const withTarget = await runTool(emptyCallState(),
+      { ...ctx, callerNumber: null, handoffTarget: TARGET }, "find_my_booking", {});
+    const errWith = String((withTarget.result as { error?: string }).error);
+    expect(errWith).toMatch(/transfer_to_human/);
+    expect(errWith).not.toMatch(/take_message/);
+    const without = await runTool(emptyCallState(), { ...ctx, callerNumber: null }, "find_my_booking", {});
+    const errWithout = String((without.result as { error?: string }).error);
+    expect(errWithout).toMatch(/take_message/);
+    expect(errWithout).not.toMatch(/transfer_to_human/);
   });
   // A caller who rings in only to check their own appointment time changes
   // nothing in the database, so the call classifies `abandoned` -- and was
@@ -193,6 +269,27 @@ describe("book_appointment", () => {
     expect(state.contactId).toBe("ct1");
   });
 
+  it("stores the number the caller SAID as said, never pre-read as +1, so the contact write can flag it (review R2-C1; mutation: phone = e164Of(args.phone) → \"+15512345678\", FAILS)", async () => {
+    await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true, phone: "+1 55 1234 5678" });
+    expect(dbMocks.createContact).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ phone: "5512345678" }), "voice", "ai");
+  });
+
+  // Review m2: e164Of("1 055 123 4567") reads it as an 11-digit NANP trunk
+  // number ("kept as given", no validation of the trailing 10 digits) and
+  // passes the precheck, but spokenPhone's OWN judgment of the same text
+  // strips the leading 1 and refuses "0551234567" (a leading 0 is never a
+  // real national number) — so the two disagreed, and the caller's garbled
+  // number was silently swapped for the caller ID instead of the model
+  // being told to ask again.
+  it("the garbled-number precheck agrees with spokenPhone, not e164Of's lenient 11-digit rule (mutation: precheck via e164Of(rawPhone) → passes \"1 055 123 4567\" through, silently swapped for the caller ID, FAILS)", async () => {
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true, phone: "1 055 123 4567" });
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("give it to me again") });
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+  });
+
   it("refuses a time that was never offered", async () => {
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T03:00:00.000Z", name: "Ana", emailDeclined: true });
@@ -248,18 +345,77 @@ describe("book_appointment", () => {
     expect(state.contactId).toBe("ct1");
   });
 
-  it("dedupe onto an existing contact backfills blanks with the split name + email + phone", async () => {
+  // The dedupe matches on email first, then phone — and either can be
+  // something the caller merely SAID. Blanks are filled only on the caller's
+  // OWN contact (stored phone = caller ID); on anyone else's the booking still
+  // lands there, but nothing of this caller's is written onto that record.
+  const CALLERS_OWN = { id: "ct1", first_name: "Caller", last_name: null, email: null, phone: "+19562921696" };
+
+  it("dedupe onto the caller's own contact backfills blanks with the split name + email, never the phone", async () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockResolvedValue(CALLERS_OWN);
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(dbMocks.getContact).toHaveBeenCalledWith({}, "a1", "ct1");
+    expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
+      { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com" },
+      "voice", "ai");
+    expect(dbMocks.fillContactBlanks.mock.calls[0]![3]).not.toHaveProperty("phone");
+  });
+
+  it("the stored phone is compared as E.164: \"(956) 292-1696\" on file is the caller's own — the fill runs", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockResolvedValue({ ...CALLERS_OWN, phone: "(956) 292-1696" });
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
     expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
     expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
-      { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com", phone: "+19562921696" },
-      "voice", "ai");
+      { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com" }, "voice", "ai");
+  });
+
+  it.each([
+    ["a different number (a recited phone that matched someone else)", "+19565550100"],
+    ["no phone at all (an email-only match)", null],
+  ])("an existing contact with %s gets NOTHING filled — the booking still lands on it", async (_label, storedPhone) => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockResolvedValue({ ...CALLERS_OWN, phone: storedPhone });
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com", phone: "(956) 555-0100" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+    expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ contactId: "ct1" }), "voice", "ai");
+  });
+
+  it("caller ID withheld: an existing contact gets NOTHING filled, and the booking still lands", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    // Even a contact with no phone on file: an absent number is not a match.
+    dbMocks.getContact.mockResolvedValue({ ...CALLERS_OWN, phone: null });
+    const { result } = await runTool(emptyCallState(), { ...ctx, callerNumber: null }, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+    expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ contactId: "ct1" }), "voice", "ai");
+  });
+
+  it("a failing contact read during the backfill fills nothing and never fails the booking", async () => {
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockRejectedValue(new Error("db blip"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
+    errSpy.mockRestore();
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+    expect(logs.some((l) => l.includes("ct1"))).toBe(true);
   });
 
   it("never-break pin: fillContactBlanks rejecting still yields a successful booking", async () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockResolvedValue(CALLERS_OWN);
     dbMocks.fillContactBlanks.mockRejectedValue(new Error("db down"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
@@ -342,6 +498,18 @@ describe("book_appointment", () => {
 });
 
 describe("reschedule / cancel", () => {
+  // Every fixture here OWNS the booking it changes: the contact's phone is
+  // the caller ID. The ownership rule itself is pinned in "bound to the
+  // caller ID" below.
+  const OWNER = { id: "ct1", first_name: "Ana", last_name: "Ruiz", email: null, phone: "+19562921696" };
+  beforeEach(() => {
+    dbMocks.getContact.mockResolvedValue(OWNER);
+    dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
+    dbMocks.createMessage.mockResolvedValue({ id: "msg1" });
+    dbMocks.incrementUnreadCount.mockResolvedValue(undefined);
+    sendMock.mockReset().mockResolvedValue({ providerMessageId: "x" });
+  });
+
   it("reschedule books the new slot BEFORE cancelling the old", async () => {
     const calls: string[] = [];
     computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }]);
@@ -357,6 +525,8 @@ describe("reschedule / cancel", () => {
     // forward. The result now hands it the spoken time directly.
     expect((result as { startsAtLocal: string }).startsAtLocal).toContain("9:00 AM");
     expect(calls).toEqual(["book", "cancel"]);
+    // The AI did this, not a signed-in user.
+    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "old1", "cancelled", "voice", "ai");
     expect(state.bookings.find((b) => b.id === "old1")).toBeUndefined(); // replaced, not duplicated
     expect(state.bookings.find((b) => b.id === "new1")).toMatchObject({ status: "booked" });
     expect(state.served).toEqual(["rescheduled"]);
@@ -368,7 +538,7 @@ describe("reschedule / cancel", () => {
     const pre = { ...emptyCallState(), bookings: [{ id: "b1", contactName: "A", startsAt: "x", endsAt: "y", status: "booked" as const }] };
     const { state, result } = await runTool(pre, ctx, "cancel_appointment", { bookingId: "b1" });
     expect(result).toEqual({ ok: true });
-    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice");
+    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai");
     expect(state.bookings[0]!.status).toBe("cancelled");
     expect(state.served).toEqual(["cancelled"]);
   });
@@ -477,7 +647,7 @@ describe("reschedule / cancel", () => {
       dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok99" });
       dbMocks.setBookingStatus.mockResolvedValue(undefined);
       dbMocks.getContact.mockResolvedValue({
-        id: "ct1", first_name: "Ana", last_name: "Ruiz", email: "ana@example.com", phone: null,
+        id: "ct1", first_name: "Ana", last_name: "Ruiz", email: "ana@example.com", phone: "+19562921696",
       });
       sendMock.mockReset().mockResolvedValue({ providerMessageId: "x" });
     });
@@ -498,7 +668,7 @@ describe("reschedule / cancel", () => {
 
     it("a contact with no email on file gets no send and raises no flag", async () => {
       dbMocks.getContact.mockResolvedValue({
-        id: "ct1", first_name: "Ana", last_name: "Ruiz", email: null, phone: "+19565550100",
+        id: "ct1", first_name: "Ana", last_name: "Ruiz", email: null, phone: "+19562921696",
       });
       const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
         { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
@@ -531,14 +701,460 @@ describe("reschedule / cancel", () => {
       expect(result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
     });
 
-    it("a throwing contact lookup never fails the reschedule either — flagged, not sent", async () => {
+    // The contact is what proves the booking is this caller's, so it is read
+    // BEFORE anything changes — and a read that fails leaves nothing changed
+    // (it used to be read after the commit and only soft-flag the email).
+    it("a throwing contact lookup REFUSES the reschedule and writes nothing", async () => {
       dbMocks.getContact.mockRejectedValue(new Error("db blip"));
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+      const pre = emptyCallState();
+      const { state, result } = await runTool(pre, ctx, "reschedule_appointment",
         { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+      const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
+      errSpy.mockRestore();
+      expect(result).toMatchObject({ ok: false, error: expect.any(String) });
+      expect(result).not.toHaveProperty("bookingId");
+      expect(state).toBe(pre);
+      expect(dbMocks.createBooking).not.toHaveBeenCalled();
+      expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+      expect(computeAllSlotsMock).not.toHaveBeenCalled();
+      expect(sendMock).not.toHaveBeenCalled();
+      // Logged by booking id, never by the caller's number.
+      expect(logs.some((l) => l.includes("old1"))).toBe(true);
+      expect(logs.some((l) => l.includes("+19562921696") || l.includes("9562921696"))).toBe(false);
+    });
+  });
+
+  // Booking tools are bound to the caller ID. A booking may be moved or
+  // cancelled only when it was made on THIS call, or when its contact's phone
+  // is the caller ID. Everything a refusal must not do is asserted against a
+  // context where doing it would be observable: a video calendar (so a room
+  // would be minted), notify emails set and a contact email on file (so mail
+  // would go out).
+  describe("bound to the caller ID", () => {
+    const newSlot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") };
+    const NEW_ISO = "2027-06-02T14:00:00.000Z";
+    const ROW = { id: "b1", contact_id: "ct2", calendar_id: "cal1",
+      starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" };
+    const SOMEONE_ELSE = { id: "ct2", first_name: "Bea", last_name: "Lopez",
+      email: "bea@example.com", phone: "+19565550100" };
+    const watchedCtx: ToolContext = {
+      ...ctx,
+      calendar: { ...ctx.calendar, meeting_type: "video", notify_emails: ["owner@biz.example"] } as unknown as CalendarRow,
+    };
+    const withheld: ToolContext = { ...watchedCtx, callerNumber: null };
+    let createMeetingRoom: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      computeAllSlotsMock.mockResolvedValue([newSlot]);
+      dbMocks.getBookingById.mockResolvedValue(ROW);
+      dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
+      dbMocks.setBookingStatus.mockResolvedValue(undefined);
+      createMeetingRoom = vi.fn().mockResolvedValue({ url: "https://video.example/r" });
+      meetingProviderMock.mockReturnValue({ createMeetingRoom });
+    });
+
+    function expectNothingWritten() {
+      expect(dbMocks.createBooking).not.toHaveBeenCalled();
+      expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+      expect(computeAllSlotsMock).not.toHaveBeenCalled();
+      expect(meetingProviderMock).not.toHaveBeenCalled();
+      expect(createMeetingRoom).not.toHaveBeenCalled();
+      expect(sendMock).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+      expect(dbMocks.createMessage).not.toHaveBeenCalled();
+      expect(dbMocks.incrementUnreadCount).not.toHaveBeenCalled();
+    }
+
+    // The refusal is read to a caller who is NOT the booking's owner: it may
+    // carry nothing of that booking or its person — name, number in any
+    // shape, email, or the appointment time as ISO or as spoken.
+    function expectNoDetailsOfTheBooking(error: string) {
+      const spoken = formatWhen(new Date(ROW.starts_at), ctx.timezone);
+      for (const detail of [
+        SOMEONE_ELSE.first_name, SOMEONE_ELSE.last_name, SOMEONE_ELSE.email,
+        "+19565550100", "9565550100", "(956) 555-0100", "555-0100", "555",
+        ROW.starts_at, new Date(ROW.starts_at).toISOString(), spoken, "Jun 1", "9:00",
+      ]) {
+        expect(error).not.toContain(detail);
+      }
+    }
+
+    it("refuses to reschedule a booking under a different number — no slot lookup, room, booking, cancel or mail", async () => {
+      dbMocks.getContact.mockResolvedValue(SOMEONE_ELSE);
+      const pre = emptyCallState();
+      const { state, result } = await runTool(pre, watchedCtx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      expect(result).toEqual({ ok: false, error: expect.stringMatching(/isn't under the number they're calling from/) });
+      expect(String((result as { error: string }).error)).toMatch(/do not share/i);
+      expectNoDetailsOfTheBooking(String((result as { error: string }).error));
+      expect(state).toBe(pre);
+      expectNothingWritten();
+    });
+
+    it("refuses to cancel a booking under a different number — nothing cancelled, nothing sent", async () => {
+      dbMocks.getContact.mockResolvedValue(SOMEONE_ELSE);
+      const pre = emptyCallState();
+      const { state, result } = await runTool(pre, watchedCtx, "cancel_appointment", { bookingId: "b1" });
+      expect(result).toEqual({ ok: false, error: expect.stringMatching(/isn't under the number they're calling from/) });
+      expectNoDetailsOfTheBooking(String((result as { error: string }).error));
+      expect(state).toBe(pre);
+      expect(state.served).toEqual([]);
+      expectNothingWritten();
+    });
+
+    it("the stored phone is compared as E.164: \"(956) 292-1696\" on file matches caller ID +19562921696 — cancel", async () => {
+      dbMocks.getContact.mockResolvedValue({ ...SOMEONE_ELSE, phone: "(956) 292-1696" });
+      const { result } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "b1" });
+      expect(result).toEqual({ ok: true });
+      expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai");
+    });
+
+    it("the stored phone is compared as E.164: \"(956) 292-1696\" on file matches caller ID +19562921696 — reschedule", async () => {
+      dbMocks.getContact.mockResolvedValue({ ...SOMEONE_ELSE, phone: "(956) 292-1696" });
+      const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(dbMocks.createBooking).toHaveBeenCalled();
+      expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai");
+    });
+
+    it("withheld caller ID: a booking NOT made on this call cannot be cancelled", async () => {
+      // The contact's phone is the very number that would have matched, had
+      // the call shown one: with no caller ID there is nothing to match.
+      const pre = emptyCallState();
+      const { state, result } = await runTool(pre, withheld, "cancel_appointment", { bookingId: "b1" });
+      expect(result).toMatchObject({ ok: false });
+      expect(state).toBe(pre);
+      expectNothingWritten();
+    });
+
+    it("withheld caller ID: a booking NOT made on this call cannot be rescheduled", async () => {
+      const pre = emptyCallState();
+      const { state, result } = await runTool(pre, withheld, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      expect(result).toMatchObject({ ok: false });
+      expect(state).toBe(pre);
+      expectNothingWritten();
+    });
+
+    it("withheld caller ID and a contact with NO phone on file: an absent number never matches an absent number", async () => {
+      dbMocks.getContact.mockResolvedValue({ ...SOMEONE_ELSE, phone: null });
+      const { result } = await runTool(emptyCallState(), withheld, "cancel_appointment", { bookingId: "b1" });
+      expect(result).toMatchObject({ ok: false });
+      expectNothingWritten();
+    });
+
+    it("withheld caller ID: a booking made on THIS call can still be cancelled", async () => {
+      dbMocks.getContact.mockResolvedValue({ ...SOMEONE_ELSE, phone: null });
+      const pre = { ...emptyCallState(), bookings: [{ id: "b1", contactName: "Bea", startsAt: ROW.starts_at,
+        endsAt: ROW.ends_at, status: "booked" as const }] };
+      const { state, result } = await runTool(pre, withheld, "cancel_appointment", { bookingId: "b1" });
+      expect(result).toEqual({ ok: true });
+      expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "b1", "cancelled", "voice", "ai");
+      expect(state.bookings[0]!.status).toBe("cancelled");
+    });
+
+    it("withheld caller ID: \"actually, make that 3 PM\" still works for a booking made on THIS call", async () => {
+      dbMocks.getContact.mockResolvedValue({ ...SOMEONE_ELSE, phone: null });
+      const pre = { ...emptyCallState(), bookings: [{ id: "b1", contactName: "Bea", startsAt: ROW.starts_at,
+        endsAt: ROW.ends_at, status: "booked" as const }] };
+      const { state, result } = await runTool(pre, { ...ctx, callerNumber: null }, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(state.bookings.map((b) => b.id)).toEqual(["new1"]);
+    });
+
+    it("a throwing contact lookup REFUSES the cancel and writes nothing", async () => {
+      dbMocks.getContact.mockRejectedValue(new Error("db blip"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const pre = emptyCallState();
+      const { state, result } = await runTool(pre, watchedCtx, "cancel_appointment", { bookingId: "b1" });
+      const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
+      errSpy.mockRestore();
+      expect(result).toMatchObject({ ok: false, error: expect.any(String) });
+      expect(state).toBe(pre);
+      expectNothingWritten();
+      expect(logs.some((l) => l.includes("b1"))).toBe(true);
+      expect(logs.some((l) => l.includes("9562921696"))).toBe(false);
+    });
+
+    it("a throwing contact lookup refuses even a booking made on this call — the one read is the gate", async () => {
+      dbMocks.getContact.mockRejectedValue(new Error("db blip"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const pre = { ...emptyCallState(), bookings: [{ id: "b1", contactName: "Bea", startsAt: ROW.starts_at,
+        endsAt: ROW.ends_at, status: "booked" as const }] };
+      const { state, result } = await runTool(pre, watchedCtx, "cancel_appointment", { bookingId: "b1" });
+      errSpy.mockRestore();
+      expect(result).toMatchObject({ ok: false });
+      expect(state).toBe(pre);
+      expectNothingWritten();
+    });
+  });
+
+  // A change made by phone used to reach nobody: a cancel-only call
+  // classifies `abandoned`, so finishCall sent no alert, and the customer got
+  // no email. Every successful phone cancel and reschedule now tells the
+  // business (staff alert + a line in the contact's thread) and the customer
+  // — after the commit, best-effort, never turning ok:true into a failure.
+  describe("telling the business about a phone change", () => {
+    const newSlot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") };
+    const NEW_ISO = "2027-06-02T14:00:00.000Z";
+    const ROW = { id: "b1", contact_id: "ct1", calendar_id: "cal1",
+      starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" };
+    const STAFF = ["owner@biz.example", "desk@biz.example"];
+    // A real sending address on the context, so "the staff alert carries NO
+    // fromAddress" is a claim the customer email (which does) can contrast.
+    const notifyCtx: ToolContext = {
+      ...ctx, fromEmail: "hello@rioroofing.example",
+      calendar: { ...ctx.calendar, notify_emails: STAFF } as unknown as CalendarRow,
+    };
+    const CONTACT_URL = "https://x.example/dashboard/accounts/a1/contacts/ct1";
+    type Sent = { to: string; subject: string; body: string; html?: string; fromAddress?: string; replyTo?: string };
+    const sentTo = (to: string) => sendMock.mock.calls.map((c) => c[0] as Sent).filter((m) => m.to === to);
+
+    beforeEach(() => {
+      computeAllSlotsMock.mockResolvedValue([newSlot]);
+      dbMocks.getBookingById.mockResolvedValue(ROW);
+      dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "newtok" });
+      dbMocks.setBookingStatus.mockResolvedValue(undefined);
+      dbMocks.getContact.mockResolvedValue({ ...OWNER, email: "ana@example.com" });
+    });
+
+    it("cancel: one staff alert per recipient with no fromAddress, one customer email, and the conversation trail", async () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const errors = errSpy.mock.calls.length;
+      errSpy.mockRestore();
+      expect(result).toEqual({ ok: true });
+      expect(errors).toBe(0);
+
+      for (const to of STAFF) {
+        const mails = sentTo(to);
+        expect(mails).toHaveLength(1);
+        expect(mails[0]!.fromAddress).toBeUndefined();
+        expect(mails[0]!.subject).toMatch(/^Booking cancelled by phone: .*Jun 1.* — Ana Ruiz$/);
+        expect(mails[0]!.body).toContain("+19562921696");
+        expect(mails[0]!.html).toContain(CONTACT_URL);
+      }
+
+      const customer = sentTo("ana@example.com");
+      expect(customer).toHaveLength(1);
+      expect(customer[0]!.subject).toBe("Your booking has been cancelled");
+      expect(customer[0]!.body).toContain("If you didn't ask for this, please contact us right away.");
+      // The OLD time, in the business's zone (14:00Z is 9:00 AM in Chicago).
+      expect(customer[0]!.body).toContain("9:00 AM");
+      expect(customer[0]!.fromAddress).toBe("hello@rioroofing.example");
+      expect(sendMock).toHaveBeenCalledTimes(3);
+
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+        conversationId: "cv1", channel: "voice", direction: "inbound", subject: "Booking cancelled by phone",
+      }), "voice", "ai");
+      const message = dbMocks.createMessage.mock.calls[0]![2] as { body: string };
+      expect(message.body).toContain("9:00 AM");
+      expect(dbMocks.incrementUnreadCount).toHaveBeenCalledWith({}, "a1", "cv1");
+    });
+
+    it("cancel with no notify emails and no contact email still writes the thread line — the signal that always exists", async () => {
+      dbMocks.getContact.mockResolvedValue(OWNER);
+      const { result } = await runTool(emptyCallState(), ctx, "cancel_appointment", { bookingId: "b1" });
+      expect(result).toEqual({ ok: true });
+      expect(sendMock).not.toHaveBeenCalled();
+      expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1",
+        expect.objectContaining({ channel: "voice", subject: "Booking cancelled by phone" }), "voice", "ai");
+      expect(dbMocks.incrementUnreadCount).toHaveBeenCalledWith({}, "a1", "cv1");
+    });
+
+    it("a Spanish-speaking caller gets the Spanish cancellation email; the staff alert stays English", async () => {
+      const esCtx: ToolContext = {
+        ...notifyCtx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+      };
+      const pre = { ...emptyCallState(), transcript: [
+        { role: "caller" as const, text: "Hola, necesito cancelar mi cita para mañana, por favor.", at: "2027-06-01T12:00:00Z" },
+      ] };
+      const { result } = await runTool(pre, esCtx, "cancel_appointment", { bookingId: "b1" });
+      expect(result).toEqual({ ok: true });
+      const customer = sentTo("ana@example.com");
+      expect(customer).toHaveLength(1);
+      expect(customer[0]!.subject).toBe("Tu cita fue cancelada");
+      expect(customer[0]!.body).toContain("Si no pediste esta cancelación");
+      // The appointment time is written the way a Spanish reader reads it,
+      // not the English rendering dropped into Spanish copy. The two
+      // renderings are asserted different first, so this cannot pass
+      // vacuously on a zone or locale where they happen to coincide.
+      const whenEs = formatWhen(new Date(ROW.starts_at), notifyCtx.timezone, "es");
+      const whenEn = formatWhen(new Date(ROW.starts_at), notifyCtx.timezone, "en");
+      expect(whenEs).not.toBe(whenEn);
+      expect(customer[0]!.body).toContain(whenEs);
+      expect(customer[0]!.html).toContain(whenEs);
+      expect(customer[0]!.body).not.toContain(whenEn);
+      expect(sentTo(STAFF[0]!)[0]!.subject).toMatch(/^Booking cancelled by phone/);
+    });
+
+    it("reschedule: the staff alert says moved, with the old AND new times, alongside the unchanged customer email", async () => {
+      const { result } = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(result).not.toHaveProperty("emailFailed");
+      for (const to of STAFF) {
+        const mails = sentTo(to);
+        expect(mails).toHaveLength(1);
+        expect(mails[0]!.fromAddress).toBeUndefined();
+        expect(mails[0]!.subject).toMatch(/^Booking moved by phone: /);
+        expect(mails[0]!.subject).toContain("Jun 1");
+        expect(mails[0]!.subject).toContain("Jun 2");
+        expect(mails[0]!.html).toContain(CONTACT_URL);
+      }
+      const customer = sentTo("ana@example.com");
+      expect(customer).toHaveLength(1);
+      expect(customer[0]!.subject).toBe("Your booking has been moved");
+      expect(customer[0]!.body).toContain("https://x.example/b/pub1/cancel/newtok");
+      expect(dbMocks.createMessage).toHaveBeenCalledWith({}, "a1", expect.objectContaining({
+        conversationId: "cv1", channel: "voice", direction: "inbound", subject: "Booking moved by phone",
+      }), "voice", "ai");
+      expect(dbMocks.incrementUnreadCount).toHaveBeenCalledWith({}, "a1", "cv1");
+    });
+
+    it("every leg failing still returns exactly { ok: true } for a cancel, and the logs carry no caller details", async () => {
+      sendMock.mockRejectedValue(new Error("mail down"));
+      dbMocks.ensureConversation.mockRejectedValue(new Error("db down"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const logs = errSpy.mock.calls.map((c) => c.map(String).join(" "));
+      errSpy.mockRestore();
+      expect(result).toEqual({ ok: true });
+      // Every leg was tried.
+      expect(sendMock).toHaveBeenCalledTimes(3);
+      expect(dbMocks.ensureConversation).toHaveBeenCalled();
+      // Each failure is logged by its own leg, by booking id — the staff
+      // alert naming every recipient it could not reach, like the public
+      // cancel path's notify loop.
+      expect(logs.some((l) => /staff alert failed for/.test(l) && l.includes("b1")
+        && l.includes("owner@biz.example") && l.includes("desk@biz.example"))).toBe(true);
+      expect(logs.some((l) => /conversation trail failed/.test(l) && l.includes("b1"))).toBe(true);
+      for (const l of logs) {
+        expect(l).not.toContain("9562921696");
+        expect(l).not.toContain("Ana");
+        expect(l).not.toContain("Ruiz");
+        expect(l).not.toContain("ana@example.com");
+        expect(l).not.toContain("https://");
+      }
+    });
+
+    it("a failed cancellation email is logged by booking id, not surfaced", async () => {
+      sendMock.mockImplementation(async (m: Sent) => {
+        if (m.to === "ana@example.com") throw new Error("mail down");
+        return { providerMessageId: "x" };
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
+      errSpy.mockRestore();
+      expect(result).toEqual({ ok: true });
+      expect(logs.some((l) => /cancellation email failed/.test(l) && l.includes("b1"))).toBe(true);
+    });
+
+    it("every leg failing still returns ok:true for a reschedule — emailFailed because the customer's email failed", async () => {
+      sendMock.mockRejectedValue(new Error("mail down"));
+      dbMocks.ensureConversation.mockRejectedValue(new Error("db down"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
       errSpy.mockRestore();
       expect(result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
-      expect(sendMock).not.toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).toHaveBeenCalled();
+    });
+
+    it("a staff-alert or thread failure never sets emailFailed — those are for the business, not the caller", async () => {
+      sendMock.mockImplementation(async (m: Sent) => {
+        if (m.to !== "ana@example.com") throw new Error("staff mail down");
+        return { providerMessageId: "x" };
+      });
+      dbMocks.ensureConversation.mockRejectedValue(new Error("db down"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { result } = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      errSpy.mockRestore();
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      expect(result).not.toHaveProperty("emailFailed");
+    });
+
+    it("a mail provider that throws on setup costs neither change, and the thread line is still written", async () => {
+      providerSetup.fails = true;
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const cancel = await runTool(emptyCallState(), notifyCtx, "cancel_appointment", { bookingId: "b1" });
+      const move = await runTool(emptyCallState(), notifyCtx, "reschedule_appointment",
+        { bookingId: "b1", startsAt: NEW_ISO });
+      const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
+      errSpy.mockRestore();
+      // Caught and named by the staff leg itself, not left to escape.
+      expect(logs.some((l) => /staff alert setup failed/.test(l) && l.includes("b1"))).toBe(true);
+      expect(cancel.result).toEqual({ ok: true });
+      // The contact HAS an email and it could not be sent: that is the flag.
+      expect(move.result).toMatchObject({ ok: true, bookingId: "new1", emailFailed: true });
+      expect(dbMocks.createMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["cancel_appointment", { bookingId: "b1" }],
+      ["reschedule_appointment", { bookingId: "b1", startsAt: NEW_ISO }],
+    ] as const)("%s: the legs run side by side, and all of them finish before the tool answers", async (tool, args) => {
+      // Dead air: this runs while the caller waits on the line, so the legs
+      // must not queue behind one another — and nothing may be left running
+      // un-awaited when the tool returns. Both a mail leg and the thread leg
+      // are held open; if either leg waited on the other, only one of the
+      // two would have started.
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      sendMock.mockImplementation(async () => { await gate; return { providerMessageId: "x" }; });
+      dbMocks.ensureConversation.mockImplementation(async () => { await gate; return { id: "cv1", created: false }; });
+
+      const pending = runTool(emptyCallState(), notifyCtx, tool, { ...args });
+      let returned = false;
+      void pending.then(() => { returned = true; });
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+
+      expect(sendMock).toHaveBeenCalled();
+      expect(dbMocks.ensureConversation).toHaveBeenCalled();
+      expect(returned).toBe(false);
+
+      release();
+      const { result } = await pending;
+      expect(result).toMatchObject({ ok: true });
+      expect(dbMocks.createMessage).toHaveBeenCalled();
+      expect(dbMocks.incrementUnreadCount).toHaveBeenCalled();
+    });
+
+    // One leg held open at a time: a leg that was started but not awaited
+    // would let the tool answer while it is still in flight — and a send or
+    // write still running when the call ends is a notification lost.
+    it.each([
+      ["cancel_appointment", "staff alert"], ["cancel_appointment", "thread line"],
+      ["cancel_appointment", "customer email"],
+      ["reschedule_appointment", "staff alert"], ["reschedule_appointment", "thread line"],
+      ["reschedule_appointment", "customer email"],
+    ] as const)("%s does not answer while its %s is still in flight", async (tool, leg) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      if (leg === "thread line") {
+        dbMocks.ensureConversation.mockImplementation(async () => { await gate; return { id: "cv1", created: false }; });
+      } else {
+        sendMock.mockImplementation(async (m: Sent) => {
+          const toCustomer = m.to === "ana@example.com";
+          if (toCustomer === (leg === "customer email")) await gate;
+          return { providerMessageId: "x" };
+        });
+      }
+      const args = tool === "cancel_appointment" ? { bookingId: "b1" } : { bookingId: "b1", startsAt: NEW_ISO };
+      const pending = runTool(emptyCallState(), notifyCtx, tool, args);
+      let returned = false;
+      void pending.then(() => { returned = true; });
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      expect(returned).toBe(false);
+      release();
+      await pending;
+      expect(returned).toBe(true);
     });
   });
 });

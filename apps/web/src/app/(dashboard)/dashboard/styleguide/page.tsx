@@ -8,6 +8,7 @@ import { DeviceStrip } from "../accounts/[accountId]/website/device-strip";
 import { EmptyState } from "@/components/empty-state";
 import { ZoneNote } from "@/components/zone-note";
 import { LineDownBanner } from "@/components/line-down-banner";
+import { UsageStaleBanner } from "@/components/usage-stale-banner";
 import { TagChips } from "@/components/tag-chips";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,11 +25,29 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SCREENED_REASONS, screenedClass, type ProposalStatus } from "@bis/db";
 import { CLASS_DOT } from "../screened/screened-table";
 import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposals";
+import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
+import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
+import { DotPill } from "@/components/dot-pill";
+import { PHONE_CHECK_TREATMENT } from "@/lib/contacts/phone-country";
+import { TEXTS_TREATMENT } from "@/lib/consent/texts-row";
+import { BillingBanner } from "@/components/billing-banner";
+import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";
+import { PAYMENT_PROCESSING } from "../accounts/[accountId]/billing/client-status";
+import { BILLING_STATUS_TREATMENTS, type BillingStatus } from "@/lib/billing/billing-view";
+import { SmsPreview } from "@/components/sms-preview";
+import { withOptOut } from "@/lib/sms/opt-out";
+import {
+  composeSmsReminder, defaultSmsReminderBody, SMS_REMINDER_PREVIEW_INSTANT,
+} from "@/lib/automations/sms-reminder-copy";
+import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
+import { BillingCardStates } from "./billing-card-states";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
+import { EmbedSnippet } from "@/components/embed-snippet";
+import "@/app/c/[publicId]/concierge.css";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +55,14 @@ export const dynamic = "force-dynamic";
 /** All three of `STATUS_TREATMENT`'s own keys, in the order a reader meets
  *  them: still open, then the two decided outcomes. */
 const PROPOSAL_STATUSES: ProposalStatus[] = ["pending", "accepted", "dismissed"];
+
+/** The Manage billing specimen's action: it answers with the page's own
+ *  failure sentence and touches nothing (no read, no Stripe), so pressing it
+ *  here shows the button's error state without a real portal. */
+async function styleguidePortalFailed(): Promise<{ ok: false; error: string }> {
+  "use server";
+  return { ok: false, error: m["billing.page.portalFailed"] };
+}
 
 /**
  * The working index DESIGN.md's definition-of-done refers to ("`/styleguide`
@@ -58,7 +85,7 @@ function Section({
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+        <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
           {file}
         </p>
       </CardHeader>
@@ -82,12 +109,12 @@ export default async function StyleguidePage() {
             {(["--surface-0", "--surface-1", "--surface-2", "--surface-3"] as const).map((t) => (
               <div key={t} className="flex flex-col gap-1">
                 <div className="h-14 w-28 rounded-lg border border-border glass" style={{ backgroundColor: `var(${t})` }} />
-                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{t}</span>
+                <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{t}</span>
               </div>
             ))}
             <div className="flex flex-col gap-1">
               <div className="h-14 w-28 rounded-lg" style={{ backgroundColor: "var(--accent-2)" }} />
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">--accent-2</span>
+              <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">--accent-2</span>
             </div>
           </div>
           {/* The hero gradient — display size only (≥ 22px), one per screen. */}
@@ -129,6 +156,38 @@ export default async function StyleguidePage() {
             chip + dot
           </Badge>
         </Section>
+
+        <section aria-labelledby="sg-activity-status" data-testid="styleguide-activity-status" className="space-y-3">
+          <h2 id="sg-activity-status" className="text-sm font-medium">Activity status</h2>
+          <div className="flex flex-wrap gap-2">
+            {(["sent", "held", "skipped", "failed"] as const).map((s) => <LogStatusPill key={s} status={s} />)}
+          </div>
+          {/* The same DotPill (components/dot-pill.tsx), `dense`, as the
+              calendar shows the customer's answer to the confirmation text:
+              a yes in the history's `sent` colours, a NO as a warning because
+              it is the one an operator must act on. Read off
+              confirm-reply.ts's own map, so this row cannot drift. */}
+          <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            components/dot-pill.tsx · …/calendar/confirm-reply.ts
+          </p>
+          <div className="flex flex-wrap gap-2" data-testid="styleguide-confirm-reply">
+            {(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)}
+          </div>
+          {/* The contact Messages block's Texts row (consent chain PR-1 and
+              PR-2): its four states, each a dot + word. Allowed, Stopped and
+              On hold are read off lib/consent/texts-row.ts; Check number off
+              lib/contacts/phone-country.ts, so none can drift. */}
+          <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            …/contacts/texts-row.tsx · lib/consent/texts-row.ts · lib/contacts/phone-country.ts
+          </p>
+          <div className="flex flex-wrap items-center gap-2" data-testid="styleguide-texts-state">
+            <span className="text-sm">{m["contact.messages.texts"]}</span>
+            <DotPill {...TEXTS_TREATMENT.allowed} dense data-status="allowed" />
+            <DotPill {...TEXTS_TREATMENT.stopped} dense data-status="stopped" />
+            <DotPill {...TEXTS_TREATMENT.held} dense data-status="held" />
+            <DotPill {...PHONE_CHECK_TREATMENT} dense data-status="unconfirmed_number" />
+          </div>
+        </section>
 
         <Section title="Meter" file="components/meter.tsx">
           {/* The mockup's `.meter` (northern-lights.html:56): a 5px track on
@@ -188,6 +247,79 @@ export default async function StyleguidePage() {
           </div>
         </Section>
 
+        <Section
+          title="Website assistant — launcher & message bubbles"
+          file="lib/forms/embed-script.ts (loader, served at app/embed.js/route.ts) · app/c/[publicId]/concierge-chat.tsx · concierge.css"
+        >
+          <div
+            className="flex w-full flex-wrap items-start gap-8"
+            // concierge.css's `.bis-msg-*` rules paint from `--form-accent`/
+            // `--form-accent-foreground` — `publicFormTheme`'s own CTA pair,
+            // set on the real `/c/[publicId]` page but never on a dashboard
+            // route. Undefined here, `var(--form-accent, #6D28D9)` always
+            // took its literal fallback — the mockup's violet, unmoved by
+            // `.dark` — so the bubbles below looked identical in both
+            // themes. Bridged to this dashboard's own accent pair instead
+            // of inventing a third color, so the demo actually shows what a
+            // themed tenant's visitor sees, in both modes.
+            style={{
+              "--form-accent": "var(--accent)",
+              "--form-accent-foreground": "var(--primary-foreground)",
+            } as React.CSSProperties}
+          >
+            {/* The launcher `embed.js` draws on the HOST page — inline-styled
+                there on purpose (a snippet running on someone else's site
+                cannot reach this app's CSS custom properties), so this is a
+                tokened re-creation for reference, not the literal element. */}
+            <div className="flex flex-col items-center gap-2">
+              <div
+                data-slot="concierge-launcher-demo"
+                className="flex size-14 items-center justify-center rounded-full bg-[var(--accent)] text-2xl text-primary-foreground shadow-[var(--shadow-glow)]"
+                aria-hidden
+              >
+                💬
+              </div>
+              <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Launcher</p>
+            </div>
+            <ol className="bis-concierge-log w-full max-w-xs list-none" aria-hidden>
+              <li className="bis-msg bis-msg-assistant">Hi! Ask me anything about our services.</li>
+              <li data-slot="concierge-bubble-demo" className="bis-msg bis-msg-visitor">Do you serve the 78041 zip code?</li>
+              <li className="bis-msg bis-msg-assistant bis-msg-skeleton" aria-label="Thinking">
+                <span /><span /><span />
+              </li>
+            </ol>
+          </div>
+        </Section>
+
+        <Section title="Shared embed snippet card" file="components/embed-snippet.tsx">
+          <div className="grid w-full max-w-sm gap-4">
+            <EmbedSnippet
+              attribute="data-concierge"
+              publicId="pub_demo123"
+              origin="https://app.example.com"
+              title={m["voice.assistant.snippetTitle"]}
+              hint={m["voice.assistant.snippetHint"]}
+              disabledHint={m["voice.assistant.noFormBody"]}
+              enabled
+              copyLabel={m["voice.assistant.copy"]}
+              copiedLabel={m["voice.assistant.copied"]}
+              publicLinkLabel={m["voice.assistant.publicLink"]}
+            />
+            <EmbedSnippet
+              attribute="data-concierge"
+              publicId="pub_demo123"
+              origin="https://app.example.com"
+              title={m["voice.assistant.snippetTitle"]}
+              hint={m["voice.assistant.snippetHint"]}
+              disabledHint={m["voice.assistant.noFormBody"]}
+              enabled={false}
+              copyLabel={m["voice.assistant.copy"]}
+              copiedLabel={m["voice.assistant.copied"]}
+              publicLinkLabel={m["voice.assistant.publicLink"]}
+            />
+          </div>
+        </Section>
+
         <Section title="Form controls" file="components/ui/{input,label,checkbox}.tsx">
           <div className="grid w-full max-w-sm gap-2">
             <Label htmlFor="sg-input">Label</Label>
@@ -197,6 +329,25 @@ export default async function StyleguidePage() {
             <label className="flex items-center gap-2 text-sm">
               <Checkbox id="sg-check" /> Checkbox
             </label>
+          </div>
+        </Section>
+
+        {/* The text a customer will receive, shown as the field it becomes:
+            the one preview box every Automations card renders. The text is
+            the text reminder's real default, built by its own composer and
+            the send path's opt-out rule, so it is exactly what goes out. */}
+        <Section title="SMS preview" file="components/sms-preview.tsx">
+          <div className="grid w-full max-w-sm gap-1.5">
+            <SmsPreview
+              id="sg-sms-preview"
+              label={m["automations.smsReminder.preview"]}
+              text={withOptOut(composeSmsReminder(
+                "Rio Roofing",
+                formatWhen(SMS_REMINDER_PREVIEW_INSTANT, "America/Chicago"),
+                defaultSmsReminderBody(),
+              ))}
+              testId="styleguide-sms-preview"
+            />
           </div>
         </Section>
 
@@ -384,6 +535,70 @@ export default async function StyleguidePage() {
               <LineDownBanner count={3} />
             </div>
           </div>
+        </Section>
+
+        <Section title="Stale-usage banner" file="components/usage-stale-banner.tsx">
+          {/* The line-down banner's design: derived, never stored, and the
+              zero state renders NOTHING. DESIGN.md rule 3: the sentence is
+              the marker, never the tint alone. */}
+          <div className="w-full space-y-5">
+            <p className="text-xs text-muted-foreground">
+              Every billed client up to date renders nothing at all. The line below mounts
+              <code className="font-mono">{"<UsageStaleBanner count={0} />"}</code>
+              and nothing appears between this line and the next one.
+            </p>
+            <UsageStaleBanner count={0} />
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">One client — singular phrase, not a plural template</p>
+              <UsageStaleBanner count={1} />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Several — billed clients whose usage has waited over a day</p>
+              <UsageStaleBanner count={3} />
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Billing status and banner" file="lib/billing/billing-view.ts · components/billing-banner.tsx">
+          {/* DESIGN rule 3: every billing state is a dot AND a word, in token
+              classes only (billing-view.test.ts pins them). The banner is the
+              payment-failed one, in both audiences' words. */}
+          <div className="w-full space-y-5">
+            <div className="flex flex-wrap gap-2">
+              {(Object.keys(BILLING_STATUS_TREATMENTS) as BillingStatus[]).map((s) => (
+                <DotPill key={s} label={BILLING_STATUS_TREATMENTS[s].label} chip={BILLING_STATUS_TREATMENTS[s].chip}
+                  dot={BILLING_STATUS_TREATMENTS[s].dot} data-status={s} />
+              ))}
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">The client, on every page of their account</p>
+              <BillingBanner audience="client" accountId="styleguide" />
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">The agency, inside that account</p>
+              <BillingBanner audience="agency" accountId="styleguide" />
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Manage billing" file="…/accounts/[accountId]/billing/manage-billing-button.tsx">
+          {/* The client Billing page's one primary (DESIGN rule 8). Pressing it
+              here shows its failure state: the sentence, said inline. Beside
+              it, the one status word only the Billing PAGE uses: a first
+              payment still going through, in the client's words to whoever
+              opens the page (the agency's Settings card says Payment failed). */}
+          <div className="w-full space-y-4">
+            <DotPill {...PAYMENT_PROCESSING} data-status="payment_processing" />
+            <ManageBillingButton open={styleguidePortalFailed} help={m["billing.page.manageHelp"]} />
+          </div>
+        </Section>
+
+        <Section title="Billing card (agency, on account Settings)" file="accounts/[accountId]/settings/billing-card.tsx">
+          {/* Every status word, the no-plans and no-Stripe lines, and the
+              loading and error states. One primary per card (rule 8): Send
+              billing link, where it applies. Built by the real
+              billingCardView from fixture rows (billing-card-states.tsx). */}
+          <BillingCardStates />
         </Section>
 
         <Section title="Empty state" file="components/empty-state.tsx">

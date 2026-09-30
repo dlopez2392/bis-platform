@@ -23,6 +23,12 @@ export type NewMessage = {
   // the outbound send path instead records this later via
   // updateMessageStatus's own providerMessageId patch.
   providerMessageId?: string;
+  // Left unset for the outbound send path, which wants the column default
+  // ('queued', 0005_messaging.sql) because the row really is queued to send.
+  // An inbound writer sets this explicitly: the message was already received
+  // in full, never queued to go anywhere, so leaving it at the default
+  // mislabels it. sms/inbound's message.received handler passes "delivered".
+  status?: MessageStatus;
 };
 
 export type ConversationSummary = {
@@ -106,6 +112,7 @@ export async function createMessage(
       subject: input.subject ?? null,
       body: input.body,
       provider_message_id: input.providerMessageId ?? null,
+      ...(input.status !== undefined ? { status: input.status } : {}),
     })
     .select("id").single();
   if (error || !data) throw new Error(`createMessage failed: ${error?.message}`);

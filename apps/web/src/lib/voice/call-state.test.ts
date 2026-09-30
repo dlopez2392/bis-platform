@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   emptyCallState, classifyOutcome, withBooking, withBookingCancelled,
   withLead, withMessage, withTranscript, withServed, wasServed, withTransferred,
-  withRecordedCaller, withCallerDelta, clearPendingCallerTurn,
+  withRecordedCaller, withCallerDelta, clearPendingCallerTurn, callerSpoke,
 } from "./call-state";
 
 describe("classifyOutcome priority", () => {
@@ -184,5 +184,16 @@ describe("pendingCallerTurn — the growing prefix of the caller's in-flight tur
     expect(before.pendingCallerTurn).toBe(pendingBefore);
     expect(before.pendingCallerTurn).toEqual({ itemId: "item_1", text: "abc" });
     expect(after.pendingCallerTurn).toBeNull();
+  });
+});
+
+describe("callerSpoke — the billing signal for voice minutes", () => {
+  it("is true only when a CALLER turn carries words: Sofía's greeting alone, or a blank caller turn, is not the caller speaking; a robocall's recorded words are (mutation: return transcript.length > 0 → FAILS; drop .trim() → FAILS)", () => {
+    expect(callerSpoke(emptyCallState())).toBe(false);
+    expect(callerSpoke(withTranscript(emptyCallState(), { role: "assistant", text: "Hi, this is Sofía with Rio Roofing.", at: "t" }))).toBe(false);
+    expect(callerSpoke(withTranscript(emptyCallState(), { role: "caller", text: "   ", at: "t" }))).toBe(false);
+    expect(callerSpoke(withTranscript(emptyCallState(), { role: "caller", text: "hello?", at: "t" }))).toBe(true);
+    expect(callerSpoke(withRecordedCaller(withTranscript(emptyCallState(),
+      { role: "caller", text: "Press 1 to renew your vehicle warranty", at: "t" })))).toBe(true);
   });
 });

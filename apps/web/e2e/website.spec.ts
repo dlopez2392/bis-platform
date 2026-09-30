@@ -3,6 +3,15 @@ import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess, upsertSite } from "@bis/db";
 
+// Page-level text assertions on the Website section are scoped to the
+// `main` landmark: React 19.2 streams this route's Suspense boundary into a
+// hidden `<div hidden id="S:0">`, and the dashboard shell's context update
+// (ShellDataProvider, above <main>) can re-render that still-pending
+// boundary from scratch, leaving a hidden duplicate alongside the visible
+// copy in <main> for up to ~300ms. An unscoped `page.getByText(...)` hits a
+// strict-mode "resolved to 2 elements" violation during that window; scoping
+// to `main` keeps requiring the VISIBLE copy without loosening to `.first()`.
+
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
 
@@ -27,7 +36,7 @@ test.describe("the Website section, as the agency", () => {
     const { accountId } = fixture();
     await page.goto(`/dashboard/accounts/${accountId}/website`);
     await expect(page.getByRole("heading", { name: "Website", exact: true })).toBeVisible();
-    await expect(page.getByText("See who visits your website")).toBeVisible();
+    await expect(page.getByRole("main").getByText("See who visits your website")).toBeVisible();
     await expect(page.getByRole("link", { name: "Link a site" }))
       .toHaveAttribute("href", `/dashboard/accounts/${accountId}/settings#website`);
 
@@ -38,8 +47,8 @@ test.describe("the Website section, as the agency", () => {
       vercelProjectId: `prj_e2e_${accountId.slice(0, 8)}`, domain: "fixture.example",
     });
     await page.reload();
-    await expect(page.getByText("Your first numbers arrive tomorrow morning")).toBeVisible();
-    await expect(page.getByText("fixture.example is connected")).toBeVisible();
+    await expect(page.getByRole("main").getByText("Your first numbers arrive tomorrow morning")).toBeVisible();
+    await expect(page.getByRole("main").getByText("fixture.example is connected")).toBeVisible();
     // Skeletons, not spinners — and no numbers invented before a full day exists.
     await expect(page.locator('[data-slot="skeleton"]').first()).toBeVisible();
     await expect(page.getByText("Visitors", { exact: true })).toHaveCount(0);
@@ -64,7 +73,7 @@ test.describe("the Website section, as the client", () => {
     expect(links.indexOf("Website")).toBe(links.indexOf("To do") + 1);
     await nav.getByRole("link", { name: "Website", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/website$`));
-    await expect(page.getByText("Your first numbers arrive tomorrow morning")).toBeVisible();
+    await expect(page.getByRole("main").getByText("Your first numbers arrive tomorrow morning")).toBeVisible();
     await expect(page.getByRole("link", { name: "Link a site" })).toHaveCount(0);
   });
 });
@@ -89,7 +98,7 @@ test.describe("unlinking a site, as the agency", () => {
     await expect(page.getByRole("button", { name: "Unlink site" })).toHaveCount(0);
     await expect(page.getByText("Connect the site BIS built for this client")).toBeVisible();
     await page.goto(`/dashboard/accounts/${accountId}/website`);
-    await expect(page.getByText("See who visits your website")).toBeVisible();
+    await expect(page.getByRole("main").getByText("See who visits your website")).toBeVisible();
     await expect(page.getByRole("link", { name: "Link a site" })).toBeVisible();
   });
 });

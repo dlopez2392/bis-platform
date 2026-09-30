@@ -5,7 +5,7 @@ import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import {
   setChecklistItem, addCustomChecklistItem, serviceDb, setA2pRegistration,
-  a2pApprovalIsComplete, type A2pStatus,
+  a2pApprovalIsComplete, isMessagingProfileId, MessagingProfileTakenError, type A2pStatus,
 } from "@bis/db";
 import { m } from "@/lib/messages";
 
@@ -72,18 +72,24 @@ export async function setA2pRegistrationAction(
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;
   };
-  const patch = { brandId: str("brandId"), campaignId: str("campaignId"), status };
+  const profile = str("messagingProfileId")?.toLowerCase() ?? null;
+  if (profile !== null && !isMessagingProfileId(profile)) return { ok: false, error: m["a2p.profileMalformed"] };
+  const patch = { brandId: str("brandId"), campaignId: str("campaignId"), status, messagingProfileId: profile };
 
   // Checked here as well as in setA2pRegistration so the operator gets a
   // sentence that names the problem instead of the generic write failure the
   // catch below produces. The db-layer guard is the one that binds.
-  if (!a2pApprovalIsComplete(patch)) {
+  if (status === "approved" && !(patch.brandId && patch.campaignId)) {
     return { ok: false, error: m["a2p.approvedNeedsIds"] };
+  }
+  if (!a2pApprovalIsComplete(patch)) {
+    return { ok: false, error: m["a2p.approvedNeedsProfile"] };
   }
 
   try {
     await setA2pRegistration(serviceDb(), accountId, patch, userId);
   } catch (e) {
+    if (e instanceof MessagingProfileTakenError) return { ok: false, error: m["a2p.profileTaken"] };
     console.error(`setA2pRegistrationAction: write failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["a2p.saveFailed"] };
   }

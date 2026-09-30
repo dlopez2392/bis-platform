@@ -54,7 +54,7 @@ describe("text controls: the mockup's --input-bg fill, accent border + 3px ring-
     const c = get();
     expect(c).toContain("bg-[var(--input-bg)]");
     expect(c).toContain("border-[var(--input-line)]");
-    expect(c).toContain("rounded-[8px]");
+    expect(c).toContain("rounded-[var(--radius-ctl)]");
     expect(c).not.toContain("shadow-xs");
     expect(c).toContain("focus-visible:border-[var(--accent)]");
     expect(c).toContain("focus-visible:ring-[3px]");

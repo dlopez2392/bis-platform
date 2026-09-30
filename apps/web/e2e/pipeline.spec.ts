@@ -14,7 +14,7 @@ test("dragging an opportunity persists after reload", async ({ page }) => {
   // whichever one rendered first, which landed on an empty account (no
   // opportunity cards, nothing to drag) once stray empty accounts existed
   // alongside the seeded one. Target the seeded account explicitly by name;
-  // openAccountByName skips with a clear reason if it isn't present rather
+  // openAccountByName FAILS, naming `ci:seed`, if it isn't present rather
   // than silently continuing against the wrong account.
   await openAccountByName(page, SEEDED_ACCOUNT_NAME);
   await page.getByRole("link", { name: "Opportunities" }).click();

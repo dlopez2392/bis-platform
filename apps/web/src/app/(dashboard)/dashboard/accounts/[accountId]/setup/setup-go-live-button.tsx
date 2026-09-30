@@ -54,7 +54,7 @@ export function SetupGoLiveButton({
             setError(result.error);
             return;
           }
-          // Re-derives all nine cards, including this one — go_live flipping
+          // Re-derives all ten cards, including this one — go_live flipping
           // to done is what replaces this button with a tick.
           router.refresh();
         }}

@@ -46,6 +46,22 @@ describe("buildPaletteEntries", () => {
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#alert-phone`);
   });
 
+  it("registers the billing settings section, agency only (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+    const entry = buildPaletteEntries(BASE, true).find((e) => e.id === "settings:billing");
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#billing`);
+    expect(buildPaletteEntries(BASE, false).some((e) => e.id === "settings:billing")).toBe(false);
+  });
+
+  it("finds the website assistant by the words an operator would type", () => {
+    const entries = buildPaletteEntries(BASE, true);
+    const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;
+    // MUTATION: remove the NAV_KEYWORDS entry — this FAILS, and an operator
+    // typing "widget" finds nothing.
+    for (const word of ["website", "widget", "chat", "concierge"]) {
+      expect(voice.keywords).toContain(word);
+    }
+  });
+
   it("has no duplicate ids and no entry without a label", () => {
     for (const isAgency of [true, false]) {
       const entries = buildPaletteEntries(BASE, isAgency);
@@ -62,7 +78,22 @@ describe("buildPaletteEntries", () => {
     // Derived from buildNavGroups, so a nav destination cannot exist without
     // a palette entry — this asserts the newest one actually made it through.
     expect(hrefs).toContain("/dashboard/numbers");
+    expect(hrefs).toContain("/dashboard/plans");
     expect(hrefs.some((h) => h.includes("/contacts"))).toBe(false);
+  });
+
+  it("finds Plans by the words an operator types for it (mutation: drop its NAV_KEYWORDS entry → FAILS)", () => {
+    const entries = buildPaletteEntries(null, true);
+    for (const word of ["billing", "pricing", "stripe"]) {
+      expect(filterEntries(entries, word).map((e) => e.id)).toContain("nav:/dashboard/plans");
+    }
+  });
+
+  it("finds a client's Billing page by the words a business owner types for it (mutation: drop its NAV_KEYWORDS entry → FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, false);
+    for (const word of ["invoice", "card", "receipt"]) {
+      expect(filterEntries(entries, word).map((e) => e.id)).toContain(`nav:${BASE}/billing`);
+    }
   });
 
   it("offers no action that writes tenant data", () => {

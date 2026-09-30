@@ -17,7 +17,7 @@ import type { StepDetailProps } from "./step-shared";
  * component and `InlineField` is `"use client"`: a function prop across
  * that boundary is not a lint nit but a hard Flight serializer error
  * ("Functions cannot be passed directly to Client Components") that 500s
- * the whole setup page — setup-panel.tsx builds all nine step nodes on
+ * the whole setup page — setup-panel.tsx builds all ten step nodes on
  * every render, so it threw no matter which step was selected. A boolean
  * serializes; a rule the client component already owns runs.
  */

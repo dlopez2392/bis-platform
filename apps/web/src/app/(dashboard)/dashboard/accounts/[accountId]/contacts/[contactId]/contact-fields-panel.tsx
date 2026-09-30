@@ -20,8 +20,14 @@ import { InlineField } from "@/components/inline-field";
 import { m } from "@/lib/messages";
 import { SubmitButton } from "../../../submit-button";
 import { updateContactAction, addTagAction, removeTagAction } from "./actions";
-import { updateContactFieldAction } from "../actions";
+import { updateContactFieldAction, undoInlinePhoneEditAction } from "../actions";
 import { FIELDS } from "../contact-drawer";
+import { useRouter } from "next/navigation";
+import { MarketingOptOutSwitch } from "../marketing-optout-switch";
+import { TextsRow } from "../texts-row";
+import type { TextsLoad } from "@/lib/consent/texts-row";
+import type { OptOutZone } from "@/lib/contacts/marketing-optout";
+import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
@@ -33,13 +39,21 @@ export function ContactFieldsPanel({
   contact,
   tags,
   fieldDefs,
+  zone,
+  texts,
 }: {
   accountId: string;
   contactId: string;
   contact: Contact;
   tags: Tag[];
   fieldDefs: CustomFieldDef[];
+  /** The account's resolved zone (`renderZone`), for the opt-out's "Off since" date. */
+  zone: OptOutZone;
+  /** The Texts row, read on the server page (which has the normaliser and
+   *  the ledger read; this client component ships neither). */
+  texts: TextsLoad;
 }) {
+  const router = useRouter();
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const boundUpdateContact = updateContactAction.bind(null, accountId);
@@ -64,11 +78,31 @@ export function ContactFieldsPanel({
                     inputType={type}
                     value={(contact[field] as string | null) ?? null}
                     save={(v) => updateContactFieldAction(accountId, contactId, field, v)}
+                    {...(field === "phone" ? {
+                      undoPhone: (undo: PhoneInlineUndo) => undoInlinePhoneEditAction(accountId, contactId, undo),
+                    } : {})}
                   />
                 </dd>
               </div>
             ))}
           </dl>
+
+          <TextsRow
+            accountId={accountId}
+            contactId={contactId}
+            load={texts}
+            // The composer on this page reads the same ledger: refresh it too.
+            onChanged={() => router.refresh()}
+            onRetry={() => router.refresh()}
+          />
+
+          <MarketingOptOutSwitch
+            key={contactId}
+            accountId={accountId}
+            contactId={contactId}
+            optedOutAt={contact.marketing_email_opted_out_at}
+            zone={zone}
+          />
 
           {fieldDefs.length > 0 ? (
             <>

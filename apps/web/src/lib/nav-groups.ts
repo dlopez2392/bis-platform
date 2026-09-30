@@ -14,6 +14,7 @@ export type NavIconKey =
   | "opportunities"
   | "conversations"
   | "calls"
+  | "activity"
   | "forms"
   | "calendar"
   | "branding"
@@ -24,7 +25,9 @@ export type NavIconKey =
   | "numbers"
   | "checklist"
   | "work"
-  | "screened";
+  | "screened"
+  | "plans"
+  | "billing";
 
 export type NavItemSpec = {
   href: string;
@@ -77,6 +80,13 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
           // construction (requireAgency, first line) and unreadable by
           // `authenticated` at the grant level besides.
           { href: "/dashboard/screened", labelKey: "nav.screened", iconKey: "screened" },
+          // Client billing plans — /dashboard/plans, agency-only by
+          // construction: requireAgency, first line of the page and of every
+          // action, is the ONLY gate. The page and actions read and write
+          // through serviceDb(), which bypasses RLS, so 0051's
+          // plans_agency_read policy does not stand behind them (it binds
+          // only a user-token client). Appended: "add a line, never reorder".
+          { href: "/dashboard/plans", labelKey: "nav.plans", iconKey: "plans" },
         ],
       },
     ];
@@ -111,6 +121,13 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
         ...(isAgency
           ? ([{ href: `${base}/checklist`, labelKey: "nav.checklist", iconKey: "checklist" }] satisfies NavItemSpec[])
           : []),
+        // Clients only (G20), like Branding: the agency sees billing on the
+        // account's Settings card. Shown before billing starts too (DECISION
+        // 4; the page says what will appear). The route itself works for the
+        // agency; hiding a link is not authorization (requireAccountAccess is).
+        ...(isAgency
+          ? []
+          : ([{ href: `${base}/billing`, labelKey: "nav.billing", iconKey: "billing" }] satisfies NavItemSpec[])),
       ],
     },
     {
@@ -130,6 +147,10 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
         // data, and one of the screens where they see what they are paying
         // for, same class of surface as Calls right after it.
         { href: `${base}/calls`, labelKey: "nav.calls", iconKey: "calls" },
+        // BOTH audiences, like Calls beside it: the record of what the
+        // system sent, held and skipped on the client's behalf — the first
+        // place to look when an automation misfires (part C, A9).
+        { href: `${base}/activity`, labelKey: "nav.activity", iconKey: "activity" },
         // Agency only. The route itself is still gated independently by
         // requireAgencyOnlyAccountAccess and by the isAgency check inside
         // every action in ./voice/actions.ts — hiding the link here is

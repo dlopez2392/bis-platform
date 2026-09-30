@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
 import { clerkClient } from "@clerk/nextjs/server";
+import { CHECKLIST_CATALOGUE } from "../src/lib/checklist-catalogue";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -212,6 +213,10 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // cause. Both fields were empty for the refusal, so fill them now.
     await page.getByLabel("Brand ID").fill("BRAND123");
     await page.getByLabel("Campaign ID").fill("CAMP456");
+    // Plan Task 7: approved also needs the business's own messaging profile,
+    // unique across companies, so the run's own random one.
+    const messagingProfileId = crypto.randomUUID();
+    await page.getByLabel("Messaging profile ID").fill(messagingProfileId);
     // Deliberately NOT re-selecting the status: the whole point is that the
     // choice made before the refusal is still the choice being submitted.
     await page.getByRole("button", { name: "Save" }).click();
@@ -222,6 +227,11 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await expect(a2pItem).toHaveAttribute("aria-pressed", "true");
     await page.reload();
     await expect(page.getByLabel("Brand ID")).toHaveValue("BRAND123");
+    // Fix round 1 (opus review, task 7): no test previously read the profile
+    // id BACK — the checklist item ticks from `status` alone, so a save that
+    // silently dropped the column would still show "done" here. Assert the
+    // field itself survived the reload with the value this run actually typed.
+    await expect(page.getByLabel("Messaging profile ID")).toHaveValue(messagingProfileId);
     await expect(page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" }))
       .toHaveAttribute("aria-pressed", "true");
     // The status carries its date — "with the carriers" means one thing a day
@@ -254,13 +264,19 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // — NOT the full ChecklistPanel /checklist itself renders — links back to
     // the full checklist route, so an unfinished checklist stays reachable
     // from the summary view. This account has only "phone_number" ticked,
-    // and A2P sitting at `rejected` from the block above — 1 of the 7
-    // catalogue items done — so the row's own accessible name (an aria-label
-    // on the Link, carrying the count) reads "Activation checklist (1 of 7
-    // done)". If the row stopped rendering (or the isAgency gate around it
-    // dropped for a client), no such link would exist at all.
+    // and A2P sitting at `rejected` from the block above — 1 of
+    // `CHECKLIST_CATALOGUE.length` catalogue items done — so the row's own
+    // accessible name (an aria-label on the Link, carrying the count) reads
+    // "Activation checklist (1 of N done)". Read from the catalogue itself
+    // rather than a literal: this line went red in CI (run 35537743468) the
+    // moment Task 6 added an eighth item (`concierge_embed`), because no
+    // scoped unit run ever imports this spec. If the row stopped rendering
+    // (or the isAgency gate around it dropped for a client), no such link
+    // would exist at all.
     await page.goto(`/dashboard/accounts/${accountId}/dashboard`);
-    const checklistRow = page.getByRole("link", { name: "Activation checklist (1 of 7 done)" });
+    const checklistRow = page.getByRole(
+      "link", { name: `Activation checklist (1 of ${CHECKLIST_CATALOGUE.length} done)` },
+    );
     await expect(checklistRow).toBeVisible();
     await expect(checklistRow)
       .toHaveAttribute("href", `/dashboard/accounts/${accountId}/checklist`);

@@ -4,7 +4,24 @@ import { serviceDb, sumUnreadCount, getVoiceProfile } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { deriveSetupStatus, reduceSetupProgress } from "@/lib/setup/setup-status";
+import type { ReadKey } from "@/lib/setup/setup-view";
 import { getVoicePresence, type VoicePresence } from "@/lib/voice/presence";
+
+/**
+ * Exactly the reads `deriveSetupStatus`'s `done` computations touch (fix-round
+ * review, IMPORTANT 1) — NOT `Object.values(failed)`'s full set. `forms` and
+ * `conversations` (the website-assistant step's own two legs) are deliberately
+ * excluded: `deriveSetupStatus` never reads `inputs.publishedFormCount` or
+ * `inputs.conciergeSiteConversation` at all (website_assistant's `done` is
+ * `profile?.concierge_enabled && concierge_form_id` alone; row 2/row 4 are
+ * proof for the PANE, not a `done` input) — same reasoning `actions.ts`
+ * already carries for `reReadFailed` excluding the same two keys from
+ * go-live's re-check. A hiccup on either must not blank a footer meter
+ * DESIGN.md pins as always visible over a count it never touched.
+ */
+const COUNT_DEPENDS_ON: readonly ReadKey[] = [
+  "account", "calendar", "profile", "numbers", "calls", "ticks",
+];
 
 export type ShellSnapshot = {
   unreadTotal: number;
@@ -62,11 +79,14 @@ export type ShellSnapshot = {
  * `reduceSetupProgress`) is the same proven-safe read set
  * `getSetupProgress` used, now the one shared copy in
  * `lib/setup/setup-inputs.ts`. That function is per-leg fault-isolated
- * internally (see its own doc comment) and reports which of its six reads
+ * internally (see its own doc comment) and reports which of its EIGHT reads
  * failed rather than rejecting outright — this leg folds to `null` the
- * moment ANY of them did (`Object.values(failed).some(Boolean)`), matching
- * this action's own one-leg-at-a-time contract: a setup count built from a
- * partial read is not a count worth showing.
+ * moment one of the SIX `COUNT_DEPENDS_ON` reads did, matching this action's
+ * own one-leg-at-a-time contract: a setup count built from a partial read is
+ * not a count worth showing. NOT `Object.values(failed).some(Boolean)`
+ * (fix-round review, IMPORTANT 1) — that folded in `forms`/`conversations`
+ * too, blanking this always-visible footer meter over two reads
+ * `deriveSetupStatus` never touches when computing `done`.
  *
  * Presence: `getVoiceProfile` is checked FIRST — `null` when the account has
  * no ENABLED voice profile, before `getVoicePresence`'s two calls ever run —
@@ -112,7 +132,7 @@ async function readSetupProgress(
   if (!isAgency) return null;
   try {
     const { inputs, failed } = await gatherSetupInputs(db, accountId);
-    if (Object.values(failed).some(Boolean)) return null;
+    if (COUNT_DEPENDS_ON.some((key) => failed[key])) return null;
     return reduceSetupProgress(deriveSetupStatus(inputs));
   } catch (error) {
     console.error(

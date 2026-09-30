@@ -19,8 +19,19 @@ import {
  *     no-shows at midnight does not text anyone at midnight.
  *
  * `no_show_nudged_at` does all the deduping; this gate has no memory.
+ *
+ * `skipBand` is THE RELEASE PATH, and it skips rule 2 ALONE (the release
+ * contract in part B's spec, line 16, and amendment B16). A held row passed
+ * the band once, at the hour it was held, and is released at the quiet
+ * window's end — by definition not a band hour — so re-applying rule 2 would
+ * park every overnight hold for a whole extra day. Rules 0, 1 and 3 ARE
+ * re-applied, because the releaser re-reads the booking: one un-marked and
+ * re-marked no-show during the hold gives a brand-new `no_show_at`, and rule
+ * 3 is the only thing anywhere that keeps that text off the same day.
  */
-export function shouldSendNoShowNudgeNow(now: Date, anchor: Date, timezone: string): boolean {
+export function shouldSendNoShowNudgeNow(
+  now: Date, anchor: Date, timezone: string, opts: { skipBand?: boolean } = {},
+): boolean {
   const elapsedMs = now.getTime() - anchor.getTime();
   if (!Number.isFinite(elapsedMs)) return false;
   if (elapsedMs < 0) return false;
@@ -29,6 +40,6 @@ export function shouldSendNoShowNudgeNow(now: Date, anchor: Date, timezone: stri
   const zone = resolveAccountZone(timezone);
   if (zone === null) return false;
 
-  if (!isInMorningBand(now, zone)) return false;
+  if (!opts.skipBand && !isInMorningBand(now, zone)) return false;
   return isStrictlyEarlierLocalDay(anchor, now, zone);
 }

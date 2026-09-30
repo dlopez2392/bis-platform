@@ -6,18 +6,22 @@ import { GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type StateKind } from 
 // step is shown and WHICH steps are locked lives here so it is reachable
 // by a test — vitest.config.ts does not include .tsx files.
 
-/** The canonical nine, in the order the wizard walks them. Mirrors the array
+/** The canonical ten, in the order the wizard walks them. Mirrors the array
  *  `deriveSetupStatus` returns; kept here so the rail can order itself
  *  without depending on that function having been called. */
 export const SETUP_STEP_KEYS: readonly SetupStepKey[] = [
-  "account", "branding", "hours", "voice_profile", "number",
+  "account", "branding", "hours", "voice_profile", "website_assistant", "number",
   "email", "forwarding", "test_call", "go_live",
 ] as const;
 
 /**
- * Which steps can be LOCKED. Exactly two — `test_call` and `go_live` — the
- * other seven are independent and are NEVER locked; claiming otherwise would
- * invent a dependency the derivation does not have.
+ * Which steps can be LOCKED. Exactly three — `test_call`, `go_live` and
+ * `website_assistant` — the other seven are independent and are NEVER
+ * locked; claiming otherwise would invent a dependency the derivation does
+ * not have. `website_assistant` locks on `voice_profile` alone: the website
+ * assistant answers from the same greeting and facts the phone does, so
+ * turning it on before that profile exists would let it greet a visitor with
+ * nothing to say.
  *
  * A step is locked exactly when `lockedPrereqKeys` names at least one unmet
  * prerequisite for it. This is the ONLY source of truth for the lock: it is
@@ -76,6 +80,11 @@ export function lockedPrereqKeys(
   if (key === "test_call") {
     return views
       .filter((v) => (v.key === "number" || v.key === "voice_profile") && (!v.done || v.unknown))
+      .map((v) => v.key);
+  }
+  if (key === "website_assistant") {
+    return views
+      .filter((v) => v.key === "voice_profile" && (!v.done || v.unknown))
       .map((v) => v.key);
   }
   return [];

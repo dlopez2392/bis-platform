@@ -1,0 +1,32 @@
+-- Revoke EXECUTE on concierge_claim_turn from anon and authenticated.
+--
+-- WHY THIS IS A SEPARATE MIGRATION. 0042 shipped with
+--   revoke all on function public.concierge_claim_turn(uuid, int) from public;
+-- which is not enough, and 0042 had already been applied to the project when
+-- that was found. Amending an applied migration's file so it no longer matches
+-- what actually ran is the divergence this repo guards against, so the fix
+-- gets its own file and says what happened. Same shape and same reason as
+-- 0020_voice_grants_revoke.sql.
+--
+-- WHY `revoke ... from public` WAS NOT ENOUGH. It works — the PUBLIC grant is
+-- gone; the verification after 0042 showed proacl with no leading `=X/postgres`
+-- entry. But this project's DEFAULT PRIVILEGES grant EXECUTE to `anon` and
+-- `authenticated` by name on every new function, the same mechanism that
+-- grants ALL on every new table (0020 exists for the table half). A grant made
+-- TO A NAMED ROLE is not inherited from PUBLIC, so revoking PUBLIC cannot
+-- remove it. After 0042 the ACL was:
+--   {postgres=X/postgres, anon=X/postgres, authenticated=X/postgres,
+--    service_role=X/postgres}
+--
+-- ⚠️ THE GENERAL RULE, for every future function in this schema: revoke from
+-- `anon, authenticated` BY NAME, not only from `public`. Revoking PUBLIC alone
+-- reads like it worked and does not.
+--
+-- NOT A LIVE HOLE, stated honestly rather than overclaimed: the function is
+-- `language sql` and NOT security definer (verified — this schema has no
+-- security-definer functions at all), so it executes with the CALLER's
+-- privileges and an `anon` caller still hits concierge_conversations' own
+-- grants and gets 42501. This is defence in depth: a function reachable by
+-- anon is a ready-made path the day a table grant is widened, and
+-- concierge-grants.test.ts asserts the tight shape for that reason.
+revoke all on function public.concierge_claim_turn(uuid, int) from anon, authenticated;

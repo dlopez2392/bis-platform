@@ -1,16 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
+import { SEEDED_ACCOUNT_NAME, openAccountByName } from "./support";
 
 // Playwright's config passes env to the webServer, not to this process, so the
 // service-role credentials have to be loaded explicitly for setup and cleanup.
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
-
-// Pinned by name, not position — same reasoning as messaging.spec.ts: "first
-// card" on /dashboard/accounts broke once stray accounts existed alongside the
-// seeded one.
-const ACCOUNT_NAME = "Test Client One";
 
 // Both specs drive the whole loop — build a form, publish it, submit it as a
 // stranger, read the lead back on three screens — against a dev server that
@@ -96,10 +92,20 @@ async function addConsentField(page: Page, label: string): Promise<void> {
 async function newPublishedForm(
   page: Page, formName: string, consentLabel?: string,
 ): Promise<string> {
-  await page.goto("/dashboard/accounts");
-  await page.getByRole("link", { name: new RegExp(ACCOUNT_NAME, "i") }).first().click();
+  // By accessible name, never `.first()` — the seeded-account rule in
+  // support.ts.
+  await openAccountByName(page, SEEDED_ACCOUNT_NAME);
   await expect(page).toHaveURL(/\/contacts$/);
 
+  // The sidebar's Forms link, on purpose: it is the path a real user takes,
+  // and it is the path that exposed a Next router race. The shell reads its
+  // badges with a server action on every route change (shell-data.tsx), so
+  // this click can land while the Contacts page's read is still in flight.
+  // Next 16.2.11 then started createFormAction early and put a stale forms
+  // list back over the new editor (CI run 36021404608). 16.3.0 fixed it
+  // upstream (#95391): runRemainingActions advances the queue only when the
+  // settled action is still at its head. If this spec flakes here again,
+  // suspect that race before the form builder.
   await page.getByRole("link", { name: "Forms" }).click();
   await expect(page).toHaveURL(/\/forms$/);
 

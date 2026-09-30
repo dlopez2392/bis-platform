@@ -39,6 +39,7 @@ const SETTINGS_SECTIONS: { anchor: string; label: string; keywords: string[] }[]
   { anchor: "custom-fields", label: m["palette.settings.customFields"], keywords: ["field", "crm"] },
   { anchor: "custom-values", label: m["palette.settings.customValues"], keywords: ["value", "variable", "merge"] },
   { anchor: "alert-phone", label: m["palette.settings.alertPhone"], keywords: ["sms", "text", "notify", "lead alert"] },
+  { anchor: "billing", label: m["palette.settings.billing"], keywords: ["plan", "subscription", "invoice", "stripe", "complimentary", "payment"] },
 ];
 
 /** Extra search words per nav destination, keyed by the href SUFFIX so this
@@ -49,16 +50,22 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/pipeline": ["deals", "opportunities", "sales"],
   "/conversations": ["messages", "inbox", "sms", "email"],
   "/calls": ["phone", "receptionist", "sofia"],
+  // "activity" added 2026-09-21 (cleanup item 2): the nav label changed to
+  // "What went out" to stop colliding with the dashboard's own Activity
+  // card, but the old word should still find this page.
+  "/activity": ["history", "activity", "what went out", "sent", "waiting", "held", "skipped", "quiet hours", "usage", "log"],
   "/forms": ["lead form", "intake"],
   "/calendar": ["booking", "availability", "hours"],
   "/tasks": ["task", "tasks", "to-do", "todo"],
   "/branding": ["logo", "colors", "theme"],
-  "/voice": ["receptionist", "sofia", "ai"],
+  "/voice": ["receptionist", "sofia", "ai", "website", "widget", "chat", "concierge", "bubble"],
   "/automations": ["no-show", "no show", "text reminder", "reminder", "reviews", "review requests", "google review", "follow up", "text"],
   "/dashboard/accounts": ["companies", "clients"],
   "/dashboard/blueprints": ["templates"],
   "/dashboard/numbers": ["phone", "telnyx", "did", "line", "inventory", "reassign"],
   "/dashboard/screened": ["refused", "blocked", "spam", "declined", "rejected", "turned away"],
+  "/dashboard/plans": ["billing", "pricing", "stripe", "subscription", "tier", "allowance", "overage"],
+  "/billing": ["invoice", "invoices", "card", "payment", "plan", "subscription", "receipt"],
 };
 
 function keywordsFor(href: string, base: string | null): string[] {

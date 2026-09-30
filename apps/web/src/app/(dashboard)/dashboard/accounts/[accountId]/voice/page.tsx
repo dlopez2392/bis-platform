@@ -1,5 +1,6 @@
+import { headers } from "next/headers";
 import {
-  serviceDb, getVoiceProfile, getBranding, getTransferPhone, type PhoneNumberRow,
+  serviceDb, getVoiceProfile, getBranding, getTransferPhone, listForms, type PhoneNumberRow,
 } from "@bis/db";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
@@ -9,6 +10,7 @@ import { m } from "@/lib/messages";
 import { VoiceSettings } from "./voice-settings";
 import {
   saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, setTransferPhoneAction,
+  enableConciergeAction, disableConciergeAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +44,7 @@ export default async function VoicePage({
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
-  const [profile, { data: numbersData, error: numbersError }, brandName, transferPhone] =
+  const [profile, { data: numbersData, error: numbersError }, brandName, transferPhone, forms, h] =
     await Promise.all([
       getVoiceProfile(db, accountId),
       db.from("phone_numbers")
@@ -86,14 +88,30 @@ export default async function VoicePage({
       // so this read throws and the operator gets the page's error state instead
       // — the same treatment the phone-number read below already gets.
       getTransferPhone(db, accountId),
+      // The website assistant's destination choices — narrowed to PUBLISHED
+      // below, since `listForms` returns every form regardless of status and
+      // a draft has no `/f/<publicId>` a lead could land on.
+      listForms(db, accountId),
+      headers(),
     ]);
   if (numbersError) throw new Error(`voice: phone number lookup failed: ${numbersError.message}`);
   const numbers = (numbersData ?? []) as PhoneNumberRow[];
+  const publishedForms = forms
+    .filter((f) => f.status === "published")
+    .map((f) => ({ id: f.id, name: f.name }));
+
+  // Read from the request, not an env var — the same reason the sibling
+  // forms/calendar embed snippets do: the origin has to match whatever host
+  // the operator is actually on (localhost, a preview deploy, production).
+  const proto = h.get("x-forwarded-proto") ?? "http";
+  const origin = `${proto}://${h.get("host") ?? "localhost:3000"}`;
 
   const boundSaveProfile = saveVoiceProfileAction.bind(null, accountId);
   const boundAssignNumber = assignNumberAction.bind(null, accountId);
   const boundSetStatus = setNumberStatusAction.bind(null, accountId);
   const boundSetTransferPhone = setTransferPhoneAction.bind(null, accountId);
+  const boundEnableConcierge = enableConciergeAction.bind(null, accountId);
+  const boundDisableConcierge = disableConciergeAction.bind(null, accountId);
 
   return (
     <>
@@ -101,14 +119,19 @@ export default async function VoicePage({
       <PageHeader title={m["voice.title"]} />
       <div className="max-w-2xl space-y-6 p-6">
         <VoiceSettings
+          accountId={accountId}
           profile={profile}
           brandName={brandName}
           numbers={numbers}
           transferPhone={transferPhone}
+          publishedForms={publishedForms}
+          origin={origin}
           saveProfileAction={boundSaveProfile}
           assignNumberAction={boundAssignNumber}
           setStatusAction={boundSetStatus}
           setTransferPhoneAction={boundSetTransferPhone}
+          enableConciergeAction={boundEnableConcierge}
+          disableConciergeAction={boundDisableConcierge}
         />
       </div>
     </>

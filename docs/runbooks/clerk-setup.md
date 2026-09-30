@@ -39,8 +39,12 @@ Both have already happened once on this project, and both are recorded.
 and `0008_client_access.sql:13`). Those are **customized** claims, not Clerk
 defaults. A fresh instance issues a default token, and then:
 
-- `app_role` is absent → `is_agency()` is false → you are redirected to `/`
-  and locked out of the agency side.
+- `app_role` is absent → `is_agency()` is NULL, not false (it evaluates
+  `NULL = 'agency_admin'`) → you are redirected to `/` and locked out of the
+  agency side. A policy treats that NULL as a refusal; a plpgsql
+  `IF NOT (...)` does not (`NOT NULL` is NULL, and `IF` acts only on true),
+  which is why `public.record_event` (0053) wraps its account check in
+  `coalesce(..., false)`.
 - `org_id` is absent → `current_account_id()` returns NULL → RLS matches
   nothing → **every query succeeds and returns zero rows.**
 
@@ -292,6 +296,14 @@ That means either option works:
 Recommendation: **keep e2e on the development instance** if Part E confirms
 two domains are supported, because it also removes a standing hazard. If it
 does not, move e2e and accept the fixture churn.
+
+**Settled, 2026-09-24 (#133):** CI now runs on its own Supabase project
+(`bis-ci`, `docs/runbooks/ci-supabase-project.md`), whose only Third-Party
+Auth provider is the Clerk **development** instance
+(`topical-redfish-40.clerk.accounts.dev`) — so the first option above is no
+longer a recommendation but the only one CI's database will accept. This
+does not change what a LOCAL run does until that machine's env files are
+switched (that runbook's section 9).
 
 ## Part I — verify, in this order, and stop at the first failure
 

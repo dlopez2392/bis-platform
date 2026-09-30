@@ -6,6 +6,8 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, createAccount, setClientAccess, createContact,
          setBranding, uploadBrandLogo, createForm, updateForm } from "@bis/db";
 import { sweepStaleFixtures, formatSweepReport } from "./fixtures/sweep";
+import { refuseProduction } from "./fixtures/production-guard";
+import { saveSignedInState } from "./fixtures/session-state";
 
 // Needed for the client-fixture setup below, which calls serviceDb() and
 // clerkClient() directly from the Playwright test runner process (not
@@ -17,6 +19,13 @@ import { sweepStaleFixtures, formatSweepReport } from "./fixtures/sweep";
 // is the one that actually resolves.
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
+
+// Before any setup test is even registered: everything below creates real
+// rows, Clerk users and Storage objects, and the sweep deletes. Where the env
+// still names production (docs/runbooks/ci-supabase-project.md, section 9),
+// nothing here runs. playwright.config.ts refuses first; this is the check on
+// the values this process actually loaded. See fixtures/production-guard.ts.
+refuseProduction(process.env, "The e2e setup");
 
 const AUTH_FILE = "e2e/.auth/state.json";
 const CLIENT_AUTH_FILE = "e2e/.auth/client-state.json";
@@ -77,7 +86,9 @@ setup("authenticate as agency_admin", async ({ page }) => {
 
   await page.waitForURL(/\/dashboard\/accounts$/);
 
-  await page.context().storageState({ path: AUTH_FILE });
+  // Without the 60-second session token: every spec's first page load then
+  // mints its own. See fixtures/session-state.ts for the CI trace behind it.
+  await saveSignedInState(page.context(), AUTH_FILE);
 });
 
 // A second, isolated identity for client-access.spec.ts: a Clerk user with
@@ -108,7 +119,8 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   try {
     const report = await sweepStaleFixtures({ dryRun: false });
     const swept = report.accounts.length + report.clerkUsers.length
-      + report.clerkOrgs.length + report.orphanObjects.length;
+      + report.clerkOrgs.length + report.orphanObjects.length + report.strandedForms.length
+      + report.strandedBlueprints.length;
     if (swept > 0) console.log(formatSweepReport(report, false));
   } catch (e) {
     console.error(`e2e setup: fixture sweep failed (continuing): ${String(e)}`);
@@ -252,5 +264,10 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   await page.goto("/");
   await page.waitForLoadState("networkidle");
 
-  await page.context().storageState({ path: CLIENT_AUTH_FILE });
+  // Same as the agency state above: no session token. The active organization
+  // set above lives on the Clerk session, not in the token, so the token the
+  // first page load mints carries it. (Assumption from Clerk's session model;
+  // the evidence is that every client spec already starts this way once the
+  // saved token is more than 65 s old, and passes.)
+  await saveSignedInState(page.context(), CLIENT_AUTH_FILE);
 });

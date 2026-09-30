@@ -29,6 +29,7 @@ const ACCOUNTS_UPDATE_COLUMNS = [
   "brand_name",
   "brand_neutral",
   "brand_type",
+  "mailing_address",
   "reply_to_email",
 ].sort();
 

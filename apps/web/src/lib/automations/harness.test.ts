@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const smsFactory = vi.hoisted(() => ({ getSmsProvider: vi.fn() }));
-vi.mock("@/lib/sms", () => ({ getSmsProvider: () => smsFactory.getSmsProvider() }));
+const gate = vi.hoisted(() => ({ smsSenderFor: vi.fn() }));
+vi.mock("@/lib/consent/gate", () => gate);
 vi.mock("@/lib/email", () => ({
   getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }),
 }));
 
-import { buildPassContext, runPasses, lazySmsProvider } from "./harness";
+import { buildPassContext, runPasses } from "./harness";
 import type { Pass, PassContext } from "./context";
 
 function ctx(): PassContext {
@@ -16,7 +16,7 @@ function ctx(): PassContext {
 }
 
 beforeEach(() => {
-  smsFactory.getSmsProvider.mockReset();
+  gate.smsSenderFor.mockReset().mockReturnValue(vi.fn());
 });
 
 describe("runPasses — independent error isolation, the finishCall-legs pattern", () => {
@@ -50,29 +50,14 @@ describe("runPasses — independent error isolation, the finishCall-legs pattern
   });
 });
 
-describe("buildPassContext — the SMS provider is LAZY", () => {
-  it("does not construct the SMS provider until a pass asks, so a throwing factory cannot fail the tick", async () => {
-    // getSmsProvider() throws in production when TELNYX_API_KEY is unset —
-    // and it IS unset today, by design. An eager construction would 500 every
-    // tick, reminders included. Mutation: make `sms` eager in
-    // buildPassContext and this must fail.
-    smsFactory.getSmsProvider.mockImplementation(() => {
-      throw new Error("TELNYX_API_KEY is required in production");
-    });
-    const c = ctx();
-    expect(smsFactory.getSmsProvider).not.toHaveBeenCalled();
-    expect(() => c.sms()).toThrow(/TELNYX_API_KEY/);
-    const results = await runPasses([{ key: "emailOnly", run: async () => ({ sent: 0 }) }], c);
-    expect(results).toEqual({ emailOnly: { sent: 0 } });
-  });
-
-  it("memoises the SMS provider after the first successful construction", () => {
-    const provider = { isFake: true, send: async () => ({ providerMessageId: "s" }) };
-    smsFactory.getSmsProvider.mockReturnValue(provider);
-    const c = ctx();
-    expect(c.sms()).toBe(provider);
-    expect(c.sms()).toBe(provider);
-    expect(smsFactory.getSmsProvider).toHaveBeenCalledTimes(1);
+describe("buildPassContext — texts go through the send gate, bound to the tick", () => {
+  it("ctx.sms IS the gate bound to this tick's own client, and building it constructs no SMS provider (mutation: bind the gate to another client → FAILS)", () => {
+    const bound = vi.fn();
+    gate.smsSenderFor.mockReturnValue(bound);
+    const db = { tick: "db" } as never;
+    const c = buildPassContext({ db, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com" });
+    expect(gate.smsSenderFor).toHaveBeenCalledWith(db);
+    expect(c.sms).toBe(bound);
   });
 });
 
@@ -82,27 +67,5 @@ describe("PassContext — structurally cannot carry the agency's internal label"
     // @ts-expect-error accountName is deliberately absent from PassContext.
     // If it is ever added, this directive becomes unused and `tsc` refuses it.
     expect(c.accountName).toBeUndefined();
-  });
-});
-
-describe("lazySmsProvider — ONE definition of lazy, shared by the cron and the inline recipe", () => {
-  it("constructs nothing until called, then once — the second call returns the same provider", () => {
-    // Mutation: make it eager (`const sms = getSmsProvider(); return () => sms`).
-    smsFactory.getSmsProvider.mockReturnValue({ isFake: true, send: async () => ({ providerMessageId: "s" }) });
-    const sms = lazySmsProvider();
-    expect(smsFactory.getSmsProvider).not.toHaveBeenCalled();
-    const first = sms();
-    expect(sms()).toBe(first);
-    expect(smsFactory.getSmsProvider).toHaveBeenCalledTimes(1);
-  });
-
-  it("a throwing factory is retried on the next call rather than cached as a failure", () => {
-    smsFactory.getSmsProvider
-      .mockImplementationOnce(() => { throw new Error("TELNYX_API_KEY unset"); })
-      .mockReturnValue({ isFake: true, send: async () => ({ providerMessageId: "s" }) });
-    const sms = lazySmsProvider();
-    expect(() => sms()).toThrow("TELNYX_API_KEY unset");
-    expect(sms().isFake).toBe(true);
-    expect(smsFactory.getSmsProvider).toHaveBeenCalledTimes(2);
   });
 });

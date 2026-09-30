@@ -97,7 +97,7 @@ function shiftDayKey(dayKey: string, delta: number): string {
  * forward gap `zonedTimeToUtc` guards against with a null return cannot
  * land on the instant this function is ever asked to resolve.
  */
-function localMidnightInstant(dayKey: string, zone: string): Date {
+export function localMidnightInstant(dayKey: string, zone: string): Date {
   const [y, m, d] = dayKey.split("-").map(Number) as [number, number, number];
   const target = Date.UTC(y, m - 1, d, 0, 0, 0);
   let ts = target;

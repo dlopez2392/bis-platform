@@ -29,6 +29,9 @@ export type PanelCopy = {
    *  fallback; the client's says "us", because naming our own mailbox to a
    *  client explains nothing and describes plumbing they do not have. */
   replyToHint: string;
+  /** Under the mailing-address box (migration 0048): where the address is
+   *  printed, and why it has to be a real one. */
+  mailingAddressHint: string;
 };
 
 const AGENCY: PanelCopy = {
@@ -40,6 +43,7 @@ const AGENCY: PanelCopy = {
   modeHint: m["branding.modeHint"],
   modeFollow: m["branding.modeFollow"],
   replyToHint: m["branding.replyToHint"],
+  mailingAddressHint: m["branding.mailingAddressHint"],
 };
 
 const CLIENT: PanelCopy = {
@@ -51,6 +55,7 @@ const CLIENT: PanelCopy = {
   modeHint: m["branding.clientModeHint"],
   modeFollow: m["branding.clientModeFollow"],
   replyToHint: m["branding.clientReplyToHint"],
+  mailingAddressHint: m["branding.clientMailingAddressHint"],
 };
 
 export function panelCopy(audience: BrandingAudience): PanelCopy {

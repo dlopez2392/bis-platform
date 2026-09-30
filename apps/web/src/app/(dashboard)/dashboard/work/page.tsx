@@ -7,9 +7,12 @@
 // unanswered conversations and un-closed-out bookings in one pass, and that
 // read must never even be ISSUED on a client's behalf, boundary test first
 // (apps/web/e2e/work-queue.spec.ts, Task 6 Step 1).
-import { countLinesTurningCallersAway, listAgencyWork, listPendingProposalsForAgency, serviceDb } from "@bis/db";
+import {
+  countLinesTurningCallersAway, listAccountsWithStaleUsage, listAgencyWork, listPendingProposalsForAgency, serviceDb,
+} from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { LineDownBanner } from "@/components/line-down-banner";
+import { UsageStaleBanner } from "@/components/usage-stale-banner";
 import { requireAgency } from "@/lib/auth";
 import { bucketAgencyWork } from "@/lib/work/agency-buckets";
 import { contactDisplayName } from "@/lib/format";
@@ -57,7 +60,10 @@ export default async function AgencyWorkPage() {
   // from a real task. Swallowed the same best-effort way: a `call_proposals`
   // hiccup must never cost the agency their real work list, so this degrades
   // to no suggestions section rather than a broken page.
-  const [rows, linesDown, proposals] = await Promise.all([
+  // The stale-usage read (client billing) joins the same Promise.all, and is
+  // swallowed the same way as the lines-down read: a banner is cosmetic, the
+  // queue is the page. `now` is the page's one clock reference.
+  const [rows, linesDown, proposals, staleUsage] = await Promise.all([
     listAgencyWork(db),
     countLinesTurningCallersAway(db, since).catch((e: unknown) => {
       console.error(`work queue: lines-down read failed, rendering no banner: ${String(e)}`);
@@ -66,6 +72,10 @@ export default async function AgencyWorkPage() {
     listPendingProposalsForAgency(db).catch((e: unknown) => {
       console.error(`work queue: proposals read failed, rendering no suggestions: ${String(e)}`);
       return [];
+    }),
+    listAccountsWithStaleUsage(db, now).catch((e: unknown) => {
+      console.error(`work queue: stale-usage read failed, rendering no banner: ${String(e)}`);
+      return [] as string[];
     }),
   ]);
 
@@ -139,6 +149,7 @@ export default async function AgencyWorkPage() {
       <PageHeader title={m["work.agency.title"]} subtitle={m["work.agency.subtitle"]} />
       <div className="space-y-4 p-6">
         <LineDownBanner count={linesDown} />
+        <UsageStaleBanner count={staleUsage.length} />
         <AgencyWorkList
           buckets={buckets}
           contactNames={contactNames}

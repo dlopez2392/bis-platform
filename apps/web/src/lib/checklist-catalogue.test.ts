@@ -13,11 +13,23 @@ describe("checklist catalogue", () => {
     // Assert the exact SET of internal items, not a count. A count plus a
     // spot-check on form_notify would still pass if some other item were
     // wrongly marked internal and form_notify external — the two errors
-    // cancel. These two are the only ones the platform performs itself:
-    // form_notify shows a live count of forms with no notify address, and
-    // invite_owner moved in-app in M2 (Settings, under Client access).
+    // cancel. These are the only ones the platform performs itself, or (for
+    // sms_live_check) the only ones recorded here despite happening entirely
+    // off-platform (a phone in hand, not the app): form_notify shows a live
+    // count of forms with no notify address, invite_owner moved in-app in M2
+    // (Settings, under Client access), and sms_live_check is a stored tick
+    // with no href because there is no single Telnyx screen it points to.
     expect(CHECKLIST_CATALOGUE.filter((i) => !i.external).map((i) => i.key).sort())
-      .toEqual(["form_notify", "invite_owner", "reply_to"]);
+      .toEqual(["concierge_embed", "form_notify", "invite_owner", "reply_to", "sms_live_check"]);
+  });
+
+  it("carries the concierge item, internal, so it reaches every new client", () => {
+    const item = CHECKLIST_CATALOGUE.find((i) => i.key === "concierge_embed");
+    expect(item).toBeDefined();
+    // MUTATION: mark it external — this FAILS. The work happens in this app,
+    // on the Voice page, and a "Done outside BIS" badge on it would be a lie
+    // the checklist tells daily.
+    expect(item!.external).toBe(false);
   });
 
   it("links the two external items that have a single right destination", () => {
@@ -117,5 +129,56 @@ describe("checklist catalogue", () => {
     ], { a2pStatus: undefined });
     expect(entries.find((e) => e.key === "retired_item")).toBeUndefined();
     expect(entries).toHaveLength(CHECKLIST_CATALOGUE.length);
+  });
+
+  it("carries no internal milestone code in any catalogue title or help", () => {
+    // Same class as messages.test.ts's own guard, but stricter for this file:
+    // this catalogue's copy must never carry a roadmap label at all, agency-only
+    // page or not — a checklist that says "arrives in M2" to an operator who
+    // does not track the roadmap is exactly the defect the guard exists for.
+    const INTERNAL_MILESTONE = /\bM\d[a-z]?\b/;
+    for (const item of CHECKLIST_CATALOGUE) {
+      expect(item.title, `"${item.key}" title names a milestone: ${item.title}`)
+        .not.toMatch(INTERNAL_MILESTONE);
+      expect(item.help, `"${item.key}" help names a milestone: ${item.help}`)
+        .not.toMatch(INTERNAL_MILESTONE);
+    }
+  });
+
+  it("places the three texting-activation steps right after a2p_registration, in order", () => {
+    const keys = CHECKLIST_CATALOGUE.map((i) => i.key);
+    const a2pIndex = keys.indexOf("a2p_registration");
+    expect(keys.slice(a2pIndex + 1, a2pIndex + 4)).toEqual([
+      "messaging_profile", "campaign_numbers", "sms_live_check",
+    ]);
+  });
+
+  it("marks the messaging-profile and campaign-numbers steps external, with their Telnyx destinations", () => {
+    const item = (key: string) => CHECKLIST_CATALOGUE.find((i) => i.key === key)!;
+    expect(item("messaging_profile").external).toBe(true);
+    expect(item("messaging_profile").href).toBe("https://portal.telnyx.com/#/programmable-messaging/profiles");
+    expect(item("campaign_numbers").external).toBe(true);
+    expect(item("campaign_numbers").href).toBe("https://portal.telnyx.com/#/messaging-10dlc/campaigns");
+  });
+
+  it("marks the live phone check internal (done with a phone, recorded here) with no href", () => {
+    const item = CHECKLIST_CATALOGUE.find((i) => i.key === "sms_live_check")!;
+    expect(item.external).toBe(false);
+    expect(item.href).toBeUndefined();
+  });
+
+  it("does not derive any of the three new steps from account state — a stored tick alone drives them", () => {
+    // MUTATION: make mergeChecklist derive `messaging_profile` from
+    // `a2pStatus === "approved"` the way it does a2p_registration — this
+    // FAILS, because a recorded profile ID does not prove Telnyx's own
+    // keywords/replies are configured (the STOP/START/HELP check is a
+    // separate, human step), so deriving "done" here would be a control
+    // that lies the same way a premature a2p derive would have.
+    const entries = mergeChecklist([], { a2pStatus: "approved" });
+    for (const key of ["messaging_profile", "campaign_numbers", "sms_live_check"]) {
+      const entry = entries.find((e) => e.key === key)!;
+      expect(entry.derived, key).toBe(false);
+      expect(entry.done, key).toBe(false);
+    }
   });
 });

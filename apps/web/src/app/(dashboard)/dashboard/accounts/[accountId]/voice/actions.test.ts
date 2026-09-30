@@ -10,7 +10,7 @@ const dbMocks = vi.hoisted(() => ({
   upsertVoiceProfile: vi.fn(), assignPhoneNumber: vi.fn(),
   setPhoneNumberStatus: vi.fn(), getVoiceProfile: vi.fn(),
   reassignPhoneNumber: vi.fn(), listPhoneNumbersForAccount: vi.fn(),
-  setTransferPhone: vi.fn(),
+  setTransferPhone: vi.fn(), enableConcierge: vi.fn(), disableConcierge: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -51,7 +51,7 @@ import { m } from "@/lib/messages";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import {
   saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, moveNumberAction,
-  setTransferPhoneAction,
+  setTransferPhoneAction, enableConciergeAction, disableConciergeAction,
 } from "./actions";
 
 const fd = (o: Record<string, string>) => {
@@ -378,5 +378,108 @@ describe("setTransferPhoneAction", () => {
     expect(r).toEqual({ ok: false, error: m["voice.agencyOnly"] });
     expect(dbMocks.setTransferPhone).not.toHaveBeenCalled();
     expect(dbMocks.listPhoneNumbersForAccount).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The website assistant's on/off switch. `enableConcierge`/`disableConcierge`
+ * (packages/db/src/concierge.ts) are the ONLY things standing behind this —
+ * `voice_profiles` grants `authenticated` SELECT only, same as every other
+ * write in this file — so the `isAgency` guard is load-bearing here too.
+ */
+describe("enableConciergeAction", () => {
+  it("a non-agency caller is rejected before any db call", async () => {
+    guardFixture.isAgency = false;
+    const r = await enableConciergeAction("a1", "form1");
+    expect(r).toEqual({ ok: false, error: m["voice.agencyOnly"] });
+    expect(dbMocks.enableConcierge).not.toHaveBeenCalled();
+  });
+
+  it("turns it on and hands back the address the snippet needs", async () => {
+    dbMocks.enableConcierge.mockResolvedValue({ publicId: "pub_abc" });
+    const r = await enableConciergeAction("a1", "form1");
+    expect(r).toEqual({ ok: true, publicId: "pub_abc" });
+    expect(dbMocks.enableConcierge).toHaveBeenCalledWith({}, "a1", "form1");
+  });
+
+  /**
+   * The accessor's own contract (concierge.ts): a missing `voice_profiles`
+   * row throws with this exact substring, and it is a REAL state, not a bug
+   * — the card is supposed to lock the toggle before this can ever fire, but
+   * the action still has to answer sanely for a caller that bypasses the UI.
+   */
+  it("a missing profile row renders the same sentence the locked toggle shows", async () => {
+    dbMocks.enableConcierge.mockRejectedValue(
+      new Error("enableConcierge failed: no voice profile for this account"),
+    );
+    const r = await enableConciergeAction("a1", "form1");
+    expect(r).toEqual({ ok: false, error: m["voice.assistant.lockedNoProfile"] });
+  });
+
+  /**
+   * Post-5a: the MESSAGE is the discriminator. This is 0045's cross-tenant
+   * RAISE text, and — per concierge.ts's own doc — it is ALSO what a form
+   * deleted between the picker rendering and the submit reads as, which is
+   * why the sentence allows for both rather than asserting either happened.
+   *
+   * The two failure modes must render as two DIFFERENT sentences — this test
+   * and the one above pin that the strings are not the same one reused.
+   */
+  it("a cross-tenant (or since-deleted) form renders a DIFFERENT sentence than the missing-profile case", async () => {
+    dbMocks.enableConcierge.mockRejectedValue(
+      new Error("enableConcierge failed: form does not belong to this account"),
+    );
+    const r = await enableConciergeAction("a1", "form1");
+    expect(r).toEqual({ ok: false, error: m["voice.assistant.wrongForm"] });
+    expect(m["voice.assistant.wrongForm"]).not.toBe(m["voice.assistant.lockedNoProfile"]);
+  });
+
+  /**
+   * Task 6 review, Minor: this branch returned without a `console.error` at
+   * all — a real cross-tenant attempt (or a race against a just-deleted
+   * form) left no trace naming WHICH account and WHICH form, unlike the
+   * generic-failure branch just below, which already logs.
+   */
+  it("logs the account and form id on the cross-tenant/deleted-form branch, not just the sentence", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.enableConcierge.mockRejectedValue(
+      new Error("enableConcierge failed: form does not belong to this account"),
+    );
+    await enableConciergeAction("a1", "form1");
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("a1"));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("form1"));
+    errSpy.mockRestore();
+  });
+
+  it("any other failure gets the generic sentence, logged rather than swallowed", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.enableConcierge.mockRejectedValue(new Error("enableConcierge failed: db down"));
+    const r = await enableConciergeAction("a1", "form1");
+    expect(r).toEqual({ ok: false, error: m["voice.assistant.enableFailed"] });
+    errSpy.mockRestore();
+  });
+});
+
+describe("disableConciergeAction", () => {
+  it("a non-agency caller is rejected before any db call", async () => {
+    guardFixture.isAgency = false;
+    const r = await disableConciergeAction("a1");
+    expect(r).toEqual({ ok: false, error: m["voice.agencyOnly"] });
+    expect(dbMocks.disableConcierge).not.toHaveBeenCalled();
+  });
+
+  it("turns it off through serviceDb", async () => {
+    dbMocks.disableConcierge.mockResolvedValue(undefined);
+    const r = await disableConciergeAction("a1");
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.disableConcierge).toHaveBeenCalledWith({}, "a1");
+  });
+
+  it("reports a thrown disable rather than rejecting into the caller", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.disableConcierge.mockRejectedValue(new Error("disableConcierge matched no row"));
+    const r = await disableConciergeAction("a1");
+    expect(r).toEqual({ ok: false, error: m["voice.assistant.disableFailed"] });
+    errSpy.mockRestore();
   });
 });

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
 
 const verify = vi.hoisted(() => vi.fn());
 const dbMocks = vi.hoisted(() => ({
@@ -10,10 +11,27 @@ const dbMocks = vi.hoisted(() => ({
   incrementUnreadCount: vi.fn(),
   getPhoneNumberByE164: vi.fn(),
   getAlertPhone: vi.fn(),
+  applyConfirmationReply: vi.fn(),
   serviceDb: vi.fn(),
+  // Consent chain PR-2 (the route's consent step, lib/consent/inbound.ts):
+  // every export it reaches is defined, so no path here reads an undefined
+  // mock (Global Constraints). A plain text writes only the grant.
+  appendConsentEventGuarded: vi.fn(),
+  ensureConsentTask: vi.fn(),
+  nextBookedStart: vi.fn(),
+  readAccountTimezone: vi.fn(),
+  getContact: vi.fn(),
+  completeTasksForConsentEvents: vi.fn(),
+  readConsentHistory: vi.fn(),
 }));
 vi.mock("@/lib/voice/telnyx-signature", () => ({ verifyTelnyxSignature: verify }));
 vi.mock("@bis/db", () => dbMocks);
+const afterMock = vi.hoisted(() => vi.fn());
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: (cb: () => unknown) => afterMock(cb) };
+});
+vi.mock("@/lib/consent/replies", () => ({ sendConsentReply: vi.fn() }));
 
 import { POST } from "./route";
 
@@ -36,6 +54,8 @@ beforeEach(() => {
   // Off by default, same as a real account (0035_alert_phone.sql: the field
   // IS the switch) — the loop-guard test below overrides it.
   dbMocks.getAlertPhone.mockResolvedValue(null);
+  dbMocks.appendConsentEventGuarded.mockResolvedValue({ outcome: "refused", prior: null });
+  afterMock.mockReset();
 });
 
 describe("POST /api/sms/inbound", () => {
@@ -133,7 +153,7 @@ describe("POST /api/sms/inbound", () => {
       expect.anything(), "acct_1",
       expect.objectContaining({
         conversationId: "conv_1", channel: "sms", direction: "inbound", body: "hi there",
-        providerMessageId: "msg_evt_1",
+        providerMessageId: "msg_evt_1", status: "delivered",
       }),
       expect.any(String), expect.any(String),
     );
@@ -207,6 +227,10 @@ describe("POST /api/sms/inbound", () => {
     // The idempotent-skip branch returns before the increment call — a
     // replayed delivery must not double-count the same text as two unreads.
     expect(dbMocks.incrementUnreadCount).toHaveBeenCalledTimes(1);
+    // YES/NO answers "the most recent unanswered ask" and is not idempotent
+    // (plan G1): a retry must not run it a second time (mutation: run it in
+    // the retry/else branch too → this goes to 2, FAILS).
+    expect(dbMocks.applyConfirmationReply).toHaveBeenCalledTimes(1);
   });
 
   it("routes a delivery receipt to updateMessageStatusByProviderId", async () => {
@@ -270,5 +294,131 @@ describe("POST /api/sms/inbound", () => {
 
     expect(res.status).toBe(200);
     expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part B, Task 4: the one place in this platform where an inbound text means
+// something other than "a person wrote in". `appointment_confirm` asks a
+// customer to reply YES or NO, and `applyConfirmationReply` records what they
+// said on the booking. This route is a RECORDER: no reply-back, no status
+// change, no new event.
+// ---------------------------------------------------------------------------
+const OUR_NUMBER = "+15550000000";
+const THEIR_NUMBER = "+19565550107";
+
+/** The four mocks a message has to pass to reach the end of handleInbound,
+ *  set exactly as `records an inbound text from a known number` sets them.
+ *  Local to this describe: the file's own beforeEach deliberately leaves
+ *  getPhoneNumberByE164 unset so the "unowned number" cases can use the
+ *  default. */
+function anOwnedNumberAndAKnownContact() {
+  dbMocks.getPhoneNumberByE164.mockResolvedValue({
+    id: "pn_1", account_id: "acct_1", e164: OUR_NUMBER, telnyx_id: null, status: "live",
+  });
+  dbMocks.createContact.mockResolvedValue({ id: "contact_1", existing: true });
+  dbMocks.ensureConversation.mockResolvedValue({ id: "conv_1", created: false });
+  dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
+  // The file's top-level beforeEach runs `vi.clearAllMocks()`, which clears
+  // CALLS and not IMPLEMENTATIONS. Without this line a case appended after
+  // "a failure recording the answer is CONTAINED" inherits its REJECTING
+  // applyConfirmationReply, the route swallows the rejection by design, and
+  // the new case passes green while silently exercising the failure path.
+  // The same shape cost part C's appointment-confirm suite ~0.9s per test
+  // before it was noticed.
+  dbMocks.applyConfirmationReply.mockResolvedValue(null);
+}
+
+const inbound = (text: string, from = THEIR_NUMBER) => post({
+  data: {
+    event_type: "message.received",
+    payload: {
+      id: `evt_${text.slice(0, 6)}`,
+      to: [{ phone_number: OUR_NUMBER }], from: { phone_number: from }, text,
+    },
+  },
+});
+
+describe("an inbound text that is a one-word answer", () => {
+  beforeEach(anOwnedNumberAndAKnownContact);
+
+  it("records the answer AFTER the message is filed, and sends nothing", async () => {
+    dbMocks.applyConfirmationReply.mockResolvedValue("yes");
+    await POST(inbound("YES"));
+    // Order matters: the customer's message is filed first, always.
+    expect(dbMocks.createMessage).toHaveBeenCalled();
+    expect(dbMocks.incrementUnreadCount).toHaveBeenCalled();
+    expect(dbMocks.applyConfirmationReply).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "contact_1", "YES", expect.any(Date));
+    // Mutation: move the call ABOVE createMessage -> the order assertion below reds.
+    const filedAt = dbMocks.createMessage.mock.invocationCallOrder[0]!;
+    const answeredAt = dbMocks.applyConfirmationReply.mock.invocationCallOrder[0]!;
+    expect(answeredAt).toBeGreaterThan(filedAt);
+  });
+
+  it("the YES/NO leg still sends nothing; the route's only way to send is the consent reply, after the response (plan G16; mutation: import any sender into this route → FAILS)", async () => {
+    dbMocks.applyConfirmationReply.mockResolvedValue("yes");
+    const res = await POST(inbound("yes"));
+    expect(res.status).toBe(200);
+    expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.createMessage.mock.calls[0]![2].direction).toBe("inbound");
+    // A YES answer is a recorder's job (automation spec decision 6): nothing
+    // is scheduled after the response.
+    expect(afterMock).not.toHaveBeenCalled();
+    // The import surface, as before (a sender reached through a library
+    // import is what this case exists to stop): no SMS provider, no
+    // automation, no email, no composer action, and not the gate itself —
+    // the consent replies reach the gate only through lib/consent/replies,
+    // whose one kind family scans.test.ts pins (Task 14).
+    const routeSource = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+    expect(routeSource).not.toContain('from "@/lib/sms');
+    expect(routeSource).not.toContain('from "@/lib/automations');
+    expect(routeSource).not.toContain('from "@/lib/email');
+    expect(routeSource).not.toContain('from "@/lib/consent/gate');
+    expect(routeSource).not.toContain("sendSmsAction");
+  });
+
+  it("a failure recording the answer is CONTAINED — the customer's message is filed and the outer catch never sees it", async () => {
+    // The containment is the whole point of this leg, and the ONLY thing
+    // that proves it is WHICH log line came out. Dropping the try/catch
+    // lets the rejection reach the route's outer catch, which logs and STILL
+    // returns `{ ok: true }` — by which time createMessage and
+    // incrementUnreadCount have each run once. So `res.status === 200` and
+    // both call counts of 1 stay TRUE under the mutation: an earlier draft
+    // of this case asserted exactly those three and could not fail.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.applyConfirmationReply.mockRejectedValue(new Error("db blip"));
+    const res = await POST(inbound("no"));
+    expect(res.status).toBe(200);
+    expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.incrementUnreadCount).toHaveBeenCalledTimes(1);
+
+    const logged = spy.mock.calls.map((args) => args.join(" ")).join("\n");
+    // Mutation: drop the try/catch around applyConfirmationReply -> this pair
+    // flips, and only this pair. The contained line disappears and the outer
+    // catch's appears.
+    expect(logged).toContain("could not record a confirmation reply");
+    expect(logged).not.toContain("unexpected failure handling webhook");
+    spy.mockRestore();
+  });
+
+  it("an ordinary message still goes through untouched", async () => {
+    dbMocks.applyConfirmationReply.mockResolvedValue(null);
+    await POST(inbound("can you come Tuesday instead?"));
+    expect(dbMocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(dbMocks.applyConfirmationReply).toHaveBeenCalledTimes(1);   // a plain text reaches it; a keyword or a stop sentence does not (the route classifies first, spec §4.2 step 5)
+  });
+
+  it("a text from the account's own alert phone never reaches the matcher", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559999");
+    await POST(inbound("yes", "+19565559999"));
+    expect(dbMocks.applyConfirmationReply).not.toHaveBeenCalled();
+    // Mutation: delete the guard's early return (route.ts:130-133) -> red.
+    //
+    // NOT "move the new block above the alert-phone guard", which is what the
+    // plan prescribed and nobody can apply: the block reads `contact.id`, and
+    // `contact` is const-declared 27 lines BELOW the guard (route.ts:157), so
+    // that move is a TDZ/compile error rather than a test failure. A mutation
+    // that cannot be applied proves nothing about the case it names.
   });
 });

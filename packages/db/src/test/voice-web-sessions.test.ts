@@ -72,8 +72,18 @@ describe("countWebSessionsByIp / countWebSessionsForAccount", () => {
   // about to make.
   it("each counter counts only its own key — rows on both sides of both filters (mutation: swap the two `.eq()` filter columns -> FAILS)", async () => {
     const db = serviceDb();
-    const orgA = `org_WS_TWOKEY_A_${Math.random().toString(36).slice(2, 10)}`;
-    const orgB = `org_WS_TWOKEY_B_${Math.random().toString(36).slice(2, 10)}`;
+    const orgA = `org_test_ws_a_${Math.random().toString(36).slice(2, 10)}`;
+    const orgB = `org_test_ws_b_${Math.random().toString(36).slice(2, 10)}`;
+    // Asserted, not merely written, because the prefix is the ONLY thing the
+    // abandoned-fixture sweep goes on (`test/sweep-fixtures.ts`). These two
+    // ids read `org_WS_TWOKEY_A_…`/`…_B_…` until 2026-09-22 and carried no
+    // `org_test_` prefix, so a killed run stranded both accounts in the
+    // Supabase project that also serves production with nothing in the
+    // system that would ever reclaim them. The `_a_`/`_b_` keeps A and B
+    // apart, which is all the old prefix was doing.
+    expect(orgA.startsWith("org_test_")).toBe(true);
+    expect(orgB.startsWith("org_test_")).toBe(true);
+    expect(orgA).not.toBe(orgB);
     // Every id lands here THE MOMENT it is created, and `finally` tears down
     // everything on this list — not just "the two accounts this test meant
     // to make". `createAccount` is three round trips (an agency select, the

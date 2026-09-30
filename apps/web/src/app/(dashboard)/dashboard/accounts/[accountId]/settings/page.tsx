@@ -1,6 +1,7 @@
+import { Suspense } from "react";
 import { Braces, SlidersHorizontal } from "lucide-react";
 import { clerkClient } from "@clerk/nextjs/server";
-import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding,
+import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding, getMailingAddress,
          getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
@@ -11,6 +12,7 @@ import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
 import { SendingAddressCard } from "./sending-address-card";
 import { WeeklyReportCard } from "./weekly-report-card";
+import { BillingSection, BillingCardSkeleton } from "./billing-section";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { LinkSiteCard, type VercelProjectOption } from "../website/link-site-card";
 import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "../website/actions";
@@ -58,7 +60,7 @@ export default async function CrmSettingsPage({
   const { from } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [fields, values, blueprints, account, branding, sendingIdentity, site, daysStored, projects, smsGate] = await Promise.all([
+  const [fields, values, blueprints, account, branding, mailingAddress, sendingIdentity, site, daysStored, projects, smsGate] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
     // Agency-wide, not account-scoped — this account is just where the
@@ -81,6 +83,7 @@ export default async function CrmSettingsPage({
         return data;
       }),
     getBranding(db, accountId),
+    getMailingAddress(db, accountId),
     getSendingIdentity(db, accountId),
     getSiteForAccount(db, accountId),
     countTrafficDays(db, accountId),
@@ -182,6 +185,12 @@ export default async function CrmSettingsPage({
           setAccessAction={boundSetAccess}
           inviteAction={boundInvite}
         />
+        {/* Billing (M7a step 3): streamed in its own boundary so a slow
+            billing read never holds the rest of Settings, and a failed one
+            renders its own error card (billing-section.tsx). */}
+        <Suspense fallback={<BillingCardSkeleton />}>
+          <BillingSection accountId={accountId} />
+        </Suspense>
         <BrandingPanel
           // Remount when the ACCOUNT changes, so the panel's own state cannot
           // carry one account's values into another's fields on a client-side
@@ -198,6 +207,7 @@ export default async function CrmSettingsPage({
           key={accountId}
           brandName={branding.brandName}
           replyToEmail={branding.replyToEmail}
+          mailingAddress={mailingAddress}
           brandColor={branding.brandColor}
           brandNeutral={branding.brandNeutral}
           brandCorners={branding.brandCorners}

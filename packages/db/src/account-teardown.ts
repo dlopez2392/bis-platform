@@ -11,14 +11,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  *
  * Extracted from `test/fixtures.ts`, which held the only copy until the demo
  * tenant needed to re-seed itself. A second hand-maintained copy of a
- * 25-entry FK-ordered list is a bug with a delivery date: the table that gets
+ * 26-entry FK-ordered list is a bug with a delivery date: the table that gets
  * added to one and not the other leaves rows behind, and the failure surfaces
  * somewhere else entirely, on a unique constraint, far from the cause. One
  * list, two callers.
  */
 export const ACCOUNT_OWNED_TABLES = [
   "site_traffic_breakdown", "site_traffic_daily", "sites",
-  "calls", "bookings", "calendars", "events", "form_submissions", "forms",
+  "calls", "bookings", "calendars", "events",
+  "concierge_conversations", "form_submissions", "forms",
   "messages", "conversations",
   "checklist_items", "contact_tags", "notes", "tasks",
   "opportunities", "pipeline_stages", "pipelines", "custom_fields",
@@ -29,15 +30,25 @@ export const ACCOUNT_OWNED_TABLES = [
 /**
  * ⚠️ `alert_phone_verifications` (0036) is DELIBERATELY not on that list,
  * neither is `contact_duplicate_flags` (0033), neither is `screened_calls`
- * (0039).
+ * (0039), neither is `consent_events` (0054) — four tables now, not three,
+ * each for its own reason (m4 correction).
  *
- * All three carry `account_id … on delete cascade` rather than `restrict`,
- * so the account's own deletion below carries their rows away — they are
- * derived or scratch state, not the lead-bearing rows 0017 made restrict to
- * protect. 0036 argues the case in its own comments;
+ * The FIRST THREE carry `account_id … on delete cascade` rather than
+ * `restrict`, so the account's own deletion below carries their rows away —
+ * they are derived or scratch state, not the lead-bearing rows 0017 made
+ * restrict to protect. 0036 argues the case in its own comments;
  * `alert-phone-verification-grants.test.ts` proves the cascade instead of
  * assuming it, by inserting a row, letting `withTestAccount` tear the account
  * down, and then asserting nothing is left.
+ *
+ * `account_billing`, `usage_events` (0051) and `billing_links` (0052) are
+ * deliberately not on it either, for the same reason: all three carry
+ * `account_id … on delete cascade` (derived billing state), so the account's
+ * own deletion carries their rows away. `billing-schema.test.ts` and
+ * `billing-checkout-schema.test.ts` prove those cascades live. (`plans` is
+ * agency-scoped, not account-owned, so it never belonged on the list;
+ * `account_billing.plan_id` and `billing_links.plan_id` are both `restrict`
+ * toward it, not toward the account.)
  *
  * `call_proposals` (0040) is ALSO not on that list, but for a different
  * reason, and it needs no `account_id`-cascade proof of its own: `call_id`
@@ -49,6 +60,20 @@ export const ACCOUNT_OWNED_TABLES = [
  * `accounts` delete (e.g. from the Studio UI), not the mechanism this
  * function exercises. `call-proposals-grants.test.ts` proves the row is gone
  * after teardown without assuming which FK did it.
+ *
+ * `consent_events` (0054) is off this list for a DIFFERENT, load-bearing
+ * reason: it is NOT derived or scratch state — it is the append-only
+ * consent ledger, and a row in it is legal evidence — but `service_role`
+ * holds no DELETE on it at all (0054's grants are SELECT and INSERT only,
+ * by design: the whole table is append-only). Listing it in the loop above
+ * would make `.delete().eq("account_id", accountId)` throw 42501 on EVERY
+ * account's teardown, aborting before `contacts` or `accounts` itself ever
+ * ran. Its rows still leave, just not through this loop: deleting
+ * `contacts` above only nulls `contact_id` (the composite FK's `on delete
+ * set null (contact_id)`), and it is the `accounts` delete at the very end
+ * of this function that actually carries each ledger row away
+ * (`account_id … on delete cascade`); `consent-ledger-schema.test.ts`
+ * proves both halves.
  *
  * A table added with the usual `restrict` and left off the list is a different
  * story and still a bug: it surfaces as "cleanup failed on accounts" here, or

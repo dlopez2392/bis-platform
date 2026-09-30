@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { updateContact, addTagToContact, removeTagFromContact,
-         addNote, addTask, completeTask, listCustomFields } from "@bis/db";
+         addNote, addTask, completeTask, listCustomFields, HoldUndecidedError } from "@bis/db";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 function ids(accountId: string, formData: FormData) {
@@ -73,6 +73,15 @@ export async function addTaskAction(accountId: string, formData: FormData): Prom
 export async function completeTaskAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAccountAccess(accountId);
   const { path } = ids(accountId, formData);
-  await completeTask(await dbForRequest(), accountId, String(formData.get("taskId")), userId);
+  try {
+    await completeTask(await dbForRequest(), accountId, String(formData.get("taskId")), userId);
+  } catch (e) {
+    // Review R3-I1, R3-N1: a hold's To-do is closed by deciding the hold,
+    // and the timeline shows a hint instead of Done for one (Task 12), so
+    // this is a stale page. Re-render (the hint appears) rather than show an
+    // error page. The decision is on the To-do page, and in the Texts row
+    // while the contact's current number is the one on hold.
+    if (!(e instanceof HoldUndecidedError)) throw e;
+  }
   revalidatePath(path);
 }

@@ -1,19 +1,21 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
-  finishCallRow, emit, getAlertPhone, getContact,
+  finishCallRow, emit, getAlertPhone, getContact, recordAutomationLog,
 } from "@bis/db";
+import { REASONS } from "@/lib/automations/hold-or-send";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
 import { getEmailProvider } from "@/lib/email";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
 import type { CallState } from "./call-state";
-import { classifyOutcome, wasServed, wasTransferred } from "./call-state";
+import { classifyOutcome, wasServed, wasTransferred, callerSpoke } from "./call-state";
+import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
 import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
-import { toE164 } from "./phone-number";
+import { isCallerIdNumber, spokenPhone } from "./phone-number";
 // STATIC, not the lazy `await import(...)` this repo otherwise reaches for
 // near route handlers: the documented page-data trap (a module-scope DB
 // import breaking `next build`'s page-data collection) doesn't apply to a
@@ -266,8 +268,8 @@ async function resolveOpenOpportunity(
  *
  * `state.contactId` wins outright — set by an in-call booking or an explicit
  * lookup, it is never second-guessed here. Absent that, a captured lead's
- * fields build a real contact (name split, phone normalized, source
- * "voice"). Absent even a lead, a caller ID still deserves a contact record
+ * fields build a real contact (name split, phone as said via `spokenPhone`,
+ * source "voice"). Absent even a lead, a caller ID still deserves a contact record
  * for the message that follows — that gets the minimal shape, `firstName:
  * "Caller"` plus the number, rather than leaving the conversation orphaned.
  */
@@ -281,16 +283,27 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
     const created = await createContact(ctx.db, ctx.accountId, {
       firstName: firstName || "Caller",
       lastName,
-      phone: toE164(fields.callbackNumber) ?? ctx.callerNumber ?? undefined,
+      // As said, or the caller ID (review R2-C1): phoneFields flags a
+      // number that could be Mexican or US; an e164Of here would not.
+      phone: spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? undefined,
       email: fields.email,
       source: "voice",
     }, ACTOR_ID, ACTOR_TYPE);
-    if (created.existing) {
+    // Backfill ONLY the caller's own contact. The lead's email or callback
+    // number is what the caller said, and the dedupe (email first, then
+    // phone) can land it on someone else's record: the lead still goes
+    // there, but nothing of this caller's is written onto it unless its
+    // stored phone is the caller ID. `phone` is never passed — on the
+    // caller's own contact it already is the caller ID. A withheld caller ID
+    // fills nothing.
+    if (created.existing && ctx.callerNumber) {
       try {
-        await fillContactBlanks(ctx.db, ctx.accountId, created.id,
-          { firstName: firstName || undefined, lastName, email: fields.email,
-            phone: toE164(fields.callbackNumber) ?? ctx.callerNumber ?? undefined },
-          ACTOR_ID, ACTOR_TYPE);
+        const existing = (await getContact(ctx.db, ctx.accountId, created.id)) as { phone?: string | null } | null;
+        if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
+          await fillContactBlanks(ctx.db, ctx.accountId, created.id,
+            { firstName: firstName || undefined, lastName, email: fields.email },
+            ACTOR_ID, ACTOR_TYPE);
+        }
       } catch (e) {
         console.error(`finishCall fillContactBlanks failed for ${created.id}: ${String(e)}`);
       }
@@ -299,6 +312,9 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
   }
 
   if (ctx.callerNumber) {
+    // Safe as it stands: this dedupes on the caller ID ALONE, so a match IS
+    // the caller's own contact and the phone fill is a no-op. Do not add the
+    // lead path's email/name here without its caller-ID check.
     const created = await createContact(ctx.db, ctx.accountId, {
       firstName: "Caller",
       phone: ctx.callerNumber,
@@ -532,6 +548,10 @@ export async function finishCall(
         brandName: brandDisplayName(ctx.branding),
         textbackBody: ctx.textbackBody,
         label: `finishCall ${meta.callRowId ?? "(no row)"}`,
+        // The call's own row and instant: the held row's subject, and the
+        // clock the sending hours are judged at (never a freshly-read one).
+        callId: meta.callRowId,
+        now: meta.endedAt,
       });
       // Assigned to the OUTER ids rather than shadowed: the call row below
       // points at the contact and conversation the text lives in, and a
@@ -545,6 +565,10 @@ export async function finishCall(
     }
   }
 
+  // Computed once: the calls row stores it, and the voice usage below bills
+  // from the SAME number, so the row and the bill agree to the minute.
+  const durationSecs = Math.max(0, Math.round((meta.endedAt.getTime() - meta.startedAt.getTime()) / 1000));
+
   // The durable row. Its own try/catch, independent of both legs above — a
   // DB outage here must not un-send an alert already on the wire, and must
   // not roll back a contact/message already written.
@@ -555,7 +579,7 @@ export async function finishCall(
       await finishCallRow(ctx.db, ctx.accountId, meta.callRowId, {
         outcome,
         endedAt: meta.endedAt,
-        durationSecs: Math.max(0, Math.round((meta.endedAt.getTime() - meta.startedAt.getTime()) / 1000)),
+        durationSecs,
         turnCount: state.transcript.length,
         transcript: state.transcript,
         summary,
@@ -570,6 +594,24 @@ export async function finishCall(
     }
   }
 
+  // Part C: one `ai` row per answered call, AFTER the durable row. A spam
+  // outcome is `skipped` with its reason — "8 skipped · Screened as a
+  // robocall" is the visibility the robocall week asked for — and "calls
+  // handled" on the Activity page counts the sent rows. Its own try/catch,
+  // like every other leg.
+  if (meta.callRowId) {
+    try {
+      await recordAutomationLog(ctx.db, {
+        accountId: ctx.accountId, source: "voice", channel: "ai", contactId,
+        subjectKey: `call:${meta.callRowId}`,
+        status: outcome === "spam" ? "skipped" : "sent",
+        reason: outcome === "spam" ? REASONS.robocall : "",
+      });
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId}: automation log write failed: ${String(e)}`);
+    }
+  }
+
   // The other half of the staff alert SMS leg: the actual carrier POST,
   // deliberately AFTER the durable row above — same ordering, same reason as
   // the text-back's own split just below (finding 4, alert-send-report
@@ -578,7 +620,7 @@ export async function finishCall(
   // defense-in-depth every other leg in this function carries.
   if (pendingAlertSms) {
     try {
-      await deliverAlertSms(ctx.accountId, pendingAlertSms);
+      await deliverAlertSms(ctx.db, ctx.accountId, pendingAlertSms);
     } catch (e) {
       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS deliver failed: ${String(e)}`);
     }
@@ -610,6 +652,34 @@ export async function finishCall(
   if (pendingTextback) {
     await deliverTextback(ctx.db, ctx.accountId, pendingTextback,
       `finishCall ${meta.callRowId ?? "(no row)"}`);
+  }
+
+  // USAGE (client billing): one `voice_minutes` row per call Sofía talked
+  // to (danlo): the caller said something (`callerSpoke`), OR the outcome
+  // is booked/lead/message (`meaningful`, computed at the top), because
+  // those mean the caller interacted even when no caller turn was
+  // transcribed. That includes a robocall that reached her (its words are a
+  // caller turn, and its minutes were spent) and excludes a silent ring or a
+  // connect-timeout. Minutes are the stored duration rounded UP, at least
+  // one (`voiceMinutes`).
+  //
+  // Gated on `meta.callRowId`, NOT on `stored`, like the automation-log leg
+  // above: the carrier and model minutes were spent whether or not
+  // finishCallRow landed. The call id is the usage row's source_ref, so a
+  // call with no row id (startCallRow failed open) has nothing to key
+  // idempotently on and is not recorded.
+  //
+  // After the durable row AND after both carrier sends above: the staff
+  // alert and the text-back are waiting people, and a stalled ledger write
+  // (recordUsageSafely allows it 5 s) must not hold either up. Both sends
+  // carry their own time limits, so this leg still runs. `recordUsageSafely`
+  // never throws, so it cannot cost the call this function's never-throws
+  // contract either.
+  if (meta.callRowId && (callerSpoke(state) || meaningful)) {
+    await recordUsageSafely(ctx.db, {
+      accountId: ctx.accountId, meter: "voice_minutes", quantity: voiceMinutes(durationSecs),
+      occurredAt: meta.endedAt, sourceRef: `call:${meta.callRowId}`,
+    }, `finishCall ${meta.callRowId}`);
   }
 
   // The one failure mode with no other trace anywhere: a real booked/lead/

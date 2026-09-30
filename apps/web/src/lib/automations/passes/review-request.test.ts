@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { DueReviewRequest } from "@bis/db";
+import type { DueReviewRequest, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listDueReviewRequests: vi.fn(), stampReviewRequested: vi.fn(), countReviewRequestsSince: vi.fn(),
-  stampReviewRequestSmsFailed: vi.fn(),
+  stampReviewRequestSmsFailed: vi.fn(), getDueReviewRequestById: vi.fn(), recordAutomationLog: vi.fn(),
+  getAutomationLogEntry: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
   listDueReminders: vi.fn(), stampReminderSent: vi.fn(),
 }));
@@ -14,8 +15,9 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => send
 
 import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
-import { reviewRequestPass } from "./review-request";
+import { reviewRequestPass, releaseReviewRequest } from "./review-request";
 import { remindersPass } from "./reminders";
 
 const STAMP_ATTEMPTS = STAMP_RETRY_DELAYS_MS.length + 1;
@@ -46,15 +48,15 @@ function row(overrides: Partial<DueReviewRequest> = {}): DueReviewRequest {
 
 const emailSend = vi.fn();
 const smsSend = vi.fn();
-function ctx(): PassContext {
+function ctx(now: Date = TICK): PassContext {
   return {
-    db: {} as never, now: TICK, origin: "https://app.example.com",
+    db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
   };
 }
 const EMPTY = {
-  sent: 0, failed: 0, unstamped: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
 };
 
@@ -64,6 +66,9 @@ beforeEach(() => {
   dbMocks.stampReviewRequested.mockResolvedValue(undefined);
   dbMocks.countReviewRequestsSince.mockResolvedValue(0);
   dbMocks.stampReviewRequestSmsFailed.mockResolvedValue(undefined);
+  dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  // Task 3: the held path reads the existing row before re-holding.
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
   dbMocks.updateMessageStatus.mockResolvedValue(undefined);
@@ -166,8 +171,10 @@ describe("review-request pass — SMS channel, the sendSmsAction discipline", ()
   });
 
   it("constructs the SMS provider BEFORE writing the message row, so a throwing factory leaves no failed text in the inbox", async () => {
-    // Review finding: ctx.sms() is lazy and throws in production when
-    // TELNYX_API_KEY is unset. Mutation: move `ctx.sms()` back below createMessage.
+    // Review finding: the provider throws in production when TELNYX_API_KEY
+    // is unset. Since consent PR-1 the send gate takes it BEFORE its `prepare`
+    // writes the row (gate.test.ts pins that order); here the gate itself
+    // throws outright, and still nothing reaches the inbox.
     dbMocks.listDueReviewRequests.mockResolvedValue([sms()]);
     const c: PassContext = { ...ctx(), sms: () => { throw new Error("TELNYX_API_KEY is required in production"); } };
     expect(await reviewRequestPass.run(c)).toEqual({ ...EMPTY, failed: 1 });
@@ -228,6 +235,9 @@ describe("review-request pass — fail closed, each case its own counter", () =>
     expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, waitingForMorning: 1 });
     dbMocks.listDueReviewRequests.mockResolvedValue([row({ followupSentAt: stamped, accountTimezone: "America/Chicago" })]);
     expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    // Neither call above was a release — "no longer due" is a release-path
+    // write only; a normal tick that holds stays silent.
+    expect(dbMocks.recordAutomationLog.mock.calls.filter((c) => c[1].status === "skipped")).toEqual([]);
   });
 });
 
@@ -240,6 +250,9 @@ describe("caps — recipe passes only", () => {
     expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: AUTOMATION_TICK_CAP, skippedCap: 1 });
     expect(dbMocks.stampReviewRequested).toHaveBeenCalledTimes(AUTOMATION_TICK_CAP);
     expect(dbMocks.stampReviewRequested).not.toHaveBeenCalledWith(expect.anything(), `bk_${AUTOMATION_TICK_CAP}`);
+    // The TICK cap is a per-tick queue, not a refusal — logging it would be
+    // noise on every busy tick a client ever has.
+    expect(dbMocks.recordAutomationLog.mock.calls.filter((c) => c[1].status === "skipped")).toEqual([]);
   });
 
   it("per account per day: 24 already sent in the last 24h leaves room for exactly one", async () => {
@@ -272,7 +285,7 @@ describe("caps — recipe passes only", () => {
         brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
       fromEmail: null, meetingUrl: null,
     })));
-    expect(await remindersPass.run(ctx())).toEqual({ sent: 30, failed: 0, unstamped: 0 });
+    expect(await remindersPass.run(ctx())).toEqual({ sent: 30, failed: 0, unstamped: 0, held: 0, blocked: 0 });
   });
 });
 
@@ -340,5 +353,178 @@ describe("review-request pass — the completion clock (0026)", () => {
   it("a pre-0026 row (completedAt null) behaves exactly as before", async () => {
     dbMocks.listDueReviewRequests.mockResolvedValue([row({ completedAt: null })]);
     expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+  });
+});
+
+describe("review request — quiet hours and release", () => {
+  // The gate defers the text to noon, as it does a marketing text on a
+  // Sunday morning (lib/consent/hours.ts); the band and the hours compose.
+  const NOON = new Date("2026-09-09T16:00:00Z");
+  const heldRow = (channel: "sms" | "email"): AutomationLogRow => ({
+    id: "log_r", account_id: "acct_1", source: "review_request", channel, contact_id: "ct_1",
+    subject_key: "booking:bk_r1", status: "held", reason: "Held until 12:00 PM — quiet hours", held_until: NOON.toISOString(), payload: {}, occurred_at: TICK.toISOString(),
+  });
+
+  it("in the band, the gate defers the text to noon: held, not sent, not stamped, no message row (mutation: bypass holdOrSend → FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } })]);   // the file's default row is EMAIL and its id is bk_r1; this test needs the SMS channel
+    const result = await reviewRequestPass.run({ ...ctx(TICK), sms: fakeSmsGate({ decide: () => ({ kind: "deferred", until: NOON, zone: "America/Chicago" }) }) });
+    expect(result.held).toBe(1);
+    expect(result.sent).toBe(0);
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "review_request", channel: "sms", subjectKey: "booking:bk_r1", status: "held", heldUntil: NOON.toISOString(),
+    }));
+  });
+
+  it("release at noon skips the band and sends through the same path — stamp included (mutation: gate on release → FAILS)", async () => {
+    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({ config: { channel: "sms", reviewUrl: URL } }) });
+    expect(await releaseReviewRequest(ctx(NOON), heldRow("sms"))).toBe("sent");
+    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampReviewRequested).toHaveBeenCalledWith(expect.anything(), "bk_r1");
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
+  });
+
+  it("THE LADDER ON THE RELEASE PATH: the calendar follow-up went out THIS morning, so the release skips and says so (mutation: put the gate back inside `if (!opts.released)` → this reds with 'sent')", async () => {
+    // RULE 4, the reason the release path re-applies the gate at all. The
+    // follow-up pass runs first in the registry and stamps `followup_sent_at`;
+    // its email and this request can both be held inside one quiet window and
+    // come back on the same release tick. Day one "how did it go?", day two
+    // "would you leave a review?" — never both the same morning.
+    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({
+      config: { channel: "sms", reviewUrl: URL },
+      followupSentAt: "2026-09-09T12:30:00.000Z",   // NY Wed 08:30, the same local day as NOON
+    }) });
+    expect(await releaseReviewRequest(ctx(NOON), heldRow("sms"))).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+    // ONE row, replacing the held one on the same (account, source, subject):
+    // a released row left untouched keeps its past `held_until` and parks the
+    // head of the queue for ever.
+    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => [c[1].subjectKey, c[1].status, c[1].reason]))
+      .toEqual([["booking:bk_r1", "skipped", "No longer due"]]);
+  });
+
+  it("the daily cap and a missing address write skipped rows with plain reasons", async () => {
+    dbMocks.countReviewRequestsSince.mockResolvedValue(AUTOMATION_DAILY_CAP);
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } }), row({ bookingId: "bk_2", contactPhone: null, config: { channel: "sms", reviewUrl: URL } })]);
+    await reviewRequestPass.run(ctx());
+    // The loop hits bk_r1 (daily cap) before bk_2 (no phone), the reverse of
+    // this list's literal order — sorted on both sides so the assertion
+    // reads the SET of (subject, reason) pairs, not the loop's own order.
+    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => [c[1].subjectKey, c[1].reason]).sort()).toEqual([
+      ["booking:bk_2", "No phone number we can text"],
+      ["booking:bk_r1", "Daily limit reached"],
+    ].sort());
+  });
+
+  it("release: a still-cooling-down SMS review request leaves the queue as a real skip rather than staying silently held (mutation: drop the guarded logSkipped call in the cooldown branch → FAILS)", async () => {
+    dbMocks.getDueReviewRequestById.mockResolvedValue({
+      due: row({ config: { channel: "sms", reviewUrl: URL }, smsFailedAt: new Date(TICK.getTime() - 60 * 60 * 1000).toISOString() }),
+    });
+    expect(await releaseReviewRequest(ctx(), heldRow("sms"))).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "booking:bk_r1", status: "skipped", reason: "Waiting before trying this text again",
+    }));
+  });
+
+  it("release: the recipe was turned off → 'This automation was turned off'", async () => {
+    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: null, why: "off" });
+    expect(await releaseReviewRequest(ctx(), heldRow("email"))).toBe("skipped");
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This automation was turned off" }));
+  });
+
+  it("characterises the silent branch the data layer's parse guard makes unreachable", async () => {
+    // A due row whose `config` is null CANNOT come out of
+    // `getDueReviewRequestById` — it answers `why: "off"` for a config that
+    // will not parse, which is the case above. Forced here, the pass takes
+    // its silent `config === null` branch and writes NOTHING, which is right
+    // on a normal tick and would park a released row for ever. This case
+    // stays green; it is the thing that goes green-for-the-wrong-reason if
+    // anyone removes that guard, and the guard's own RED lives in the db
+    // suite (`by id, a review-request config that no longer parses answers
+    // 'off'`). No mutation is prescribed here for that reason.
+    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({ config: null }) });
+    expect(await releaseReviewRequest(ctx(), heldRow("email"))).toBe("skipped");
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
+
+  it("release: a held row's account is not trusted across tenants — a mismatch never sends (mutation: delete the check → FAILS)", async () => {
+    dbMocks.getDueReviewRequestById.mockResolvedValue({ due: row({ config: { channel: "sms", reviewUrl: URL } }) });   // due.accountId is "acct_1"
+    const crossTenant: AutomationLogRow = { ...heldRow("sms"), account_id: "acct_2" };
+    expect(await releaseReviewRequest(ctx(), crossTenant)).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      accountId: "acct_2", status: "skipped", reason: "No longer due",
+    }));
+  });
+});
+
+/**
+ * Review R2-I2: a text the gate refuses sends nothing, so it must not use up
+ * AUTOMATION_TICK_CAP (one counter across EVERY account) or the account's
+ * daily count. Refused rows are never stamped and come back every tick; without
+ * the give-back ten flagged contacts at the head of the list starve everyone.
+ */
+describe("reviewRequestPass: a refusal gives back its tick slot and its daily count", () => {
+  const refuseFirst = (n: number) => {
+    let seen = 0;
+    return fakeSmsGate({ send: (m) => smsSend(m), decide: () => (seen++ < n ? { kind: "blocked", reason: "stopped" } : null) });
+  };
+
+  it("ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ config: { channel: "sms", reviewUrl: URL }, bookingId: `bk_${i}`, contactId: `ct_${i}` })));
+    const result = await reviewRequestPass.run({ ...ctx(), sms: refuseFirst(AUTOMATION_TICK_CAP) });
+    expect(result).toEqual({ ...EMPTY, blocked: AUTOMATION_TICK_CAP, sent: 1 });
+  });
+
+  it("one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)", async () => {
+    dbMocks.countReviewRequestsSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
+    dbMocks.listDueReviewRequests.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ config: { channel: "sms", reviewUrl: URL }, bookingId: `bk_${i}`, contactId: `ct_${i}` })));
+    const result = await reviewRequestPass.run({ ...ctx(), sms: refuseFirst(1) });
+    expect(result).toEqual({ ...EMPTY, blocked: 1, sent: 1 });
+  });
+});
+
+describe("reviewRequestPass hands the gate its own kind (review R2 minor)", () => {
+  it("the gate is asked for automation.review_request, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ config: { channel: "sms", reviewUrl: URL } })]);
+    const gate = fakeSmsGate();
+    await reviewRequestPass.run({ ...ctx(), sms: gate });
+    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.review_request"]);
+  });
+});
+
+/**
+ * Task 9 review, concern 1 (orchestrator, 2026-09-27): a HELD text sends
+ * nothing this tick, so it gives back its TICK slot; its DAILY count stays
+ * taken, because a held row is that day's send. On a Sunday morning ten
+ * accounts' marketing texts held until noon must not use up
+ * AUTOMATION_TICK_CAP (one counter across EVERY account) while another
+ * account's could go now.
+ */
+describe("reviewRequestPass: a hold gives back its tick slot, never its daily count", () => {
+  const holdFirst = (n: number) => {
+    let seen = 0;
+    return fakeSmsGate({
+      send: (m) => smsSend(m),
+      decide: () => (seen++ < n ? { kind: "deferred", until: new Date("2030-01-06T18:00:00.000Z"), zone: "America/Chicago" } : null),
+    });
+  };
+
+  it("ten rows HELD by the gate, then one sendable: {held: 10, sent: 1} (mutation: drop the held branch's `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ config: { channel: "sms", reviewUrl: URL }, bookingId: `bk_${i}`, contactId: `ct_${i}` })));
+    const result = await reviewRequestPass.run({ ...ctx(), sms: holdFirst(AUTOMATION_TICK_CAP) });
+    expect(result).toEqual({ ...EMPTY, held: AUTOMATION_TICK_CAP, sent: 1 });
+  });
+
+  it("one short of the daily cap: a HELD row keeps today's count, so the next row is capped (mutation: give the daily count back on a hold → it sends, FAILS)", async () => {
+    dbMocks.countReviewRequestsSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
+    dbMocks.listDueReviewRequests.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ config: { channel: "sms", reviewUrl: URL }, bookingId: `bk_${i}`, contactId: `ct_${i}` })));
+    const result = await reviewRequestPass.run({ ...ctx(), sms: holdFirst(1) });
+    expect(result).toEqual({ ...EMPTY, held: 1, skippedCap: 1 });
   });
 });

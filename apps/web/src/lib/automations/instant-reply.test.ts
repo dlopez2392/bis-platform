@@ -4,14 +4,18 @@ const dbMocks = vi.hoisted(() => ({
   getAutomation: vi.fn(), hasRecentOutboundSms: vi.fn(), countInstantRepliesSince: vi.fn(),
   stampInstantReplySent: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
+  readAccountTimezone: vi.fn(), recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(),
+  // The send gate's own reads (lib/consent/gate.ts): the instant reply goes
+  // through the REAL gate, so the ledger and the number's country are mocked
+  // here, allowed by default.
+  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), recordCarrierBlock: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => senderMock.resolveSmsSender(...a) }));
-// The factories, mocked exactly as harness.test.ts mocks them: this module
-// reaches the SMS provider only through harness.ts's lazySmsProvider
-// (imports.test.ts forbids anything else), so the factory is where the
-// provider under test comes from.
+// The factory, mocked: this module reaches the SMS provider only through the
+// send gate (lib/consent/scans.test.ts forbids anything else), and the gate
+// takes it from here once a send is cleared.
 const smsFactory = vi.hoisted(() => ({ getSmsProvider: vi.fn() }));
 vi.mock("@/lib/sms", () => ({ getSmsProvider: () => smsFactory.getSmsProvider() }));
 vi.mock("@/lib/email", () => ({
@@ -21,7 +25,9 @@ vi.mock("@/lib/email", () => ({
 import {
   AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS, INSTANT_REPLY_ALLOWED_PATTERNS,
 } from "./caps";
-import { sendInstantReply, type InstantReplyInput } from "./instant-reply";
+import { sendInstantReply, releaseInstantReply, parseInstantReplyPayload, type InstantReplyInput } from "./instant-reply";
+import type { AutomationLogRow } from "@bis/db";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
 
 const NOW = new Date("2026-09-10T15:00:00Z");
 const smsSend = vi.fn();
@@ -55,6 +61,12 @@ beforeEach(() => {
   smsSend.mockReset().mockResolvedValue({ providerMessageId: "s1" });
   smsFactory.getSmsProvider.mockReset()
     .mockReturnValue({ isFake: true, send: (...a: unknown[]) => smsSend(...a) });
+  dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
+  dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
+  dbMocks.recordCarrierBlock.mockResolvedValue("appended");   // explicit: the gate reaches it only on a carrier stop (phase 3 rule)
+  dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
+  dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);   // Task 3: the held path reads the existing row before re-holding
   // Re-spying an already-spied method keeps the same spy and its call list;
   // cleared here so a line logged by an earlier test cannot fail a later one.
   vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
@@ -219,5 +231,226 @@ describe("sendInstantReply — the send", () => {
     expect(dbMocks.updateMessageStatus).toHaveBeenCalledWith(expect.anything(), "acct_1", "msg_1", "sent",
       { providerMessageId: "s1" }, "automation", "system");
     expect(errors().join("\n")).toContain("not stamped");
+  });
+});
+
+describe("instant reply — the fixed automated hours (08:00-21:00)", () => {
+  const NIGHT = new Date("2026-09-22T04:00:00Z");   // 23:00 CDT
+  const END = "2026-09-22T13:00:00.000Z";
+
+  it("a form submitted at 23:00: held, not texted, not stamped; the held row carries what a release needs (mutation: bypass holdOrSend → FAILS)", async () => {
+    expect(await sendInstantReply(input({ now: NIGHT, locale: "es", consentWithheld: false }))).toEqual({ kind: "held" });
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.stampInstantReplySent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "acct_1", source: "instant_reply", channel: "sms", subjectKey: "submission:sub_1", contactId: "ct_1",
+      payload: { contactId: "ct_1", conversationId: "convo_1", phoneE164: "+19565550101", locale: "es", consentWithheld: false, submittedAt: NIGHT.toISOString() },
+      status: "held", heldUntil: END, reason: "Held until 8:00 AM — quiet hours",
+    });
+  });
+
+  it("the hours are read in the SUBMISSION's account's zone, not a default (mutation: hardcode the zone → FAILS)", async () => {
+    // Same instant NIGHT holds under Chicago (23:00, outside 08:00–21:00): here
+    // it must NOT hold, because Tokyo reads it as 13:00 the next day — well
+    // outside the window. A test that also sends "sent" under Chicago could
+    // not tell a real zone read from a hardcoded one; this one can.
+    dbMocks.readAccountTimezone.mockResolvedValue("Asia/Tokyo");   // NIGHT (23:00 Chicago) is 13:00 JST Sept 22
+    expect((await sendInstantReply(input({ now: NIGHT }))).kind).toBe("sent");
+    expect(dbMocks.readAccountTimezone).toHaveBeenCalledWith(expect.anything(), "acct_1");
+  });
+
+  it("nothing is read for a submission the free checks refuse, and nothing is logged for an account without the recipe (mutation: log `disabled` → FAILS)", async () => {
+    dbMocks.getAutomation.mockResolvedValue({ ...ROW, enabled: false });
+    expect(await sendInstantReply(input())).toEqual({ kind: "skipped", reason: "disabled" });
+    expect(dbMocks.readAccountTimezone).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
+
+  it("with the recipe ON, the gate / the 24h hold / the daily cap each write a skipped row a client can read", async () => {
+    senderMock.resolveSmsSender.mockResolvedValueOnce({ ok: false, reason: "a2p_not_approved" });
+    await sendInstantReply(input());
+    dbMocks.hasRecentOutboundSms.mockResolvedValueOnce(true);
+    await sendInstantReply(input({ submissionId: "sub_2" }));
+    dbMocks.countInstantRepliesSince.mockResolvedValueOnce(AUTOMATION_DAILY_CAP);
+    await sendInstantReply(input({ submissionId: "sub_3" }));
+    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => [c[1].subjectKey, c[1].status, c[1].reason])).toEqual([
+      ["submission:sub_1", "skipped", "Texting isn't set up for this company yet"],
+      ["submission:sub_2", "skipped", "A text already went to this person today"],
+      ["submission:sub_3", "skipped", "Daily limit reached"],
+    ]);
+  });
+});
+
+describe("instant reply — the consent gate, through the real gate", () => {
+  it("a number that stopped texts is NOT texted: no message row, not stamped, one skipped row a client can read (mutation: skip the ledger in the gate → sent, FAILS)", async () => {
+    dbMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-09-01T00:00:00Z", method: "carrier_block", eventId: "ev_1" });
+    expect(await sendInstantReply(input())).toEqual({ kind: "blocked", reason: "the consent gate refused it; the log row says why" });
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.stampInstantReplySent).not.toHaveBeenCalled();
+    expect(dbMocks.readConsentState).toHaveBeenCalledWith(expect.anything(), "acct_1", "sms", "+19565550101");
+    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => [c[1].subjectKey, c[1].status, c[1].reason]))
+      .toEqual([["submission:sub_1", "skipped", "They stopped texts from this business"]]);
+  });
+
+  it("a contact whose number's country is unconfirmed is held back the same way (mutation: skip the flag read → sent, FAILS)", async () => {
+    dbMocks.readPhoneCountryFlag.mockResolvedValue(true);
+    expect((await sendInstantReply(input())).kind).toBe("blocked");
+    expect(dbMocks.readPhoneCountryFlag).toHaveBeenCalledWith(expect.anything(), "acct_1", "ct_1");
+    expect(smsSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("releaseInstantReply — from the held row's payload", () => {
+  const heldRow = (payload: Record<string, unknown>): AutomationLogRow => ({
+    id: "log_i", account_id: "acct_1", source: "instant_reply", channel: "sms", contact_id: "ct_1",
+    subject_key: "submission:sub_1", status: "held", reason: "x", held_until: "2026-09-22T13:00:00.000Z", payload, occurred_at: "2026-09-22T04:00:00.000Z",
+  });
+  const PAYLOAD = { contactId: "ct_1", conversationId: "convo_1", phoneE164: "+19565550101", locale: "en", consentWithheld: false };
+  const ctx = { db: {} as never, now: new Date("2026-09-22T13:00:00Z"), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate() };
+
+  it("re-runs every check and sends: the text goes, the submission is stamped, the row flips to sent (mutation: skip the stamp on release → FAILS)", async () => {
+    expect(await releaseInstantReply(ctx, heldRow(PAYLOAD))).toBe("sent");
+    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect((smsSend.mock.calls[0]![0] as { body: string }).body).toContain(EN);
+    expect(dbMocks.stampInstantReplySent).toHaveBeenCalledWith(expect.anything(), "sub_1");
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent", subjectKey: "submission:sub_1" }));
+  });
+
+  it("a payload that cannot be parsed is skipped as 'No longer due', never texted", async () => {
+    expect(await releaseInstantReply(ctx, heldRow({ phoneE164: 5 }))).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "skipped", reason: "No longer due" }));
+  });
+
+  it("a skip at release (the recipe was turned off meanwhile) writes a reason only the release path can produce (mutation: delete the releaser's logSkipped branch → FAILS)", async () => {
+    // Not `recentText`: the inline path writes that identical string on its
+    // OWN skip, so a test built on it stays green even with the releaser's
+    // logSkipped branch deleted. `recipeOff` is unreachable from the inline
+    // send (it returns before `logSubject` exists), so this string can only
+    // have come from releaseInstantReply's own skip-logging.
+    dbMocks.getAutomation.mockResolvedValue({ ...ROW, enabled: false });
+    expect(await releaseInstantReply(ctx, heldRow(PAYLOAD))).toBe("skipped");
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This automation was turned off" }));
+  });
+
+  it("a row keyed for something other than a submission is skipped as 'No longer due', never texted", async () => {
+    const row: AutomationLogRow = { ...heldRow(PAYLOAD), subject_key: "booking:x" };
+    expect(await releaseInstantReply(ctx, row)).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "skipped", reason: "No longer due" }));
+  });
+
+  it("parseInstantReplyPayload accepts exactly the shape the hold wrote", () => {
+    expect(parseInstantReplyPayload(PAYLOAD)).toEqual(PAYLOAD);
+    expect(parseInstantReplyPayload({ ...PAYLOAD, locale: "fr" })).toBeNull();
+    expect(parseInstantReplyPayload({ ...PAYLOAD, consentWithheld: "no" })).toBeNull();
+    expect(parseInstantReplyPayload(null)).toBeNull();
+  });
+});
+
+/**
+ * Review R2-C1: the instant reply texts the number AS TYPED, so the gate
+ * judges ten digits that could be Mexican or US and holds them, instead of
+ * texting the confirmed-looking +1 that phoneE164 carries.
+ */
+describe("sendInstantReply: the number as typed is what the gate judges", () => {
+  it("\"55 1234 5678\" typed on the form is refused unconfirmed_number, never texted as +1 (mutation: text phoneE164 → sent, FAILS)", async () => {
+    const out = await sendInstantReply(input({ phoneE164: "+15512345678", phoneAsTyped: "55 1234 5678" }));
+    expect(out.kind).toBe("blocked");
+    expect(smsSend).not.toHaveBeenCalled();
+  });
+
+  it("the typed number rides the held row's payload, and an old payload without it still parses (re-review minor 2; mutation: drop phoneAsTyped from the payload → FAILS; require it in the parser → the old payload is null, FAILS)", async () => {
+    // Held at 23:00: the payload carries the number as typed.
+    expect(await sendInstantReply(input({ now: new Date("2026-09-22T04:00:00Z"), phoneAsTyped: "(956) 555-0101" }))).toEqual({ kind: "held" });
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      status: "held", payload: expect.objectContaining({ phoneAsTyped: "(956) 555-0101", phoneE164: "+19565550101" }),
+    }));
+    // A payload held before PR-1 has neither field and still parses.
+    const old = { contactId: "ct_1", conversationId: "convo_1", phoneE164: "+19565550101", locale: "en", consentWithheld: false };
+    expect(parseInstantReplyPayload(old)).toEqual(old);
+    expect(parseInstantReplyPayload({ ...old, phoneAsTyped: "(956) 555-0101" })).toEqual({ ...old, phoneAsTyped: "(956) 555-0101" });
+  });
+});
+
+describe("sendInstantReply hands the gate its own kind (review R2 minor)", () => {
+  it("the gate is asked for automation.instant_reply (mutation: pass another automation kind → FAILS)", async () => {
+    const seen: string[] = [];
+    dbMocks.readConsentState.mockImplementation(async () => { return { state: "allowed" }; });
+    const spy = vi.spyOn(await import("@/lib/consent/gate"), "smsSenderFor");
+    spy.mockImplementation(() => (async (req) => { seen.push(req.kind); return { kind: "blocked", reason: "stopped" }; }));
+    // Restored in `finally`: a spy left installed by a failing run would
+    // refuse every later test's send and could satisfy a "nothing was sent".
+    try {
+      await sendInstantReply(input());
+      expect(seen).toEqual(["automation.instant_reply"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+/**
+ * The re-hold age cap (orchestrator, 2026-09-26): a reply released more than
+ * 24 h after the person wrote in is skipped, so an outage never answers a
+ * form days later.
+ */
+describe("releaseInstantReply — the re-hold age cap", () => {
+  const WROTE = "2026-09-22T15:00:00.000Z";   // 10:00 CDT, inside the hours at +24 h too
+  const PAYLOAD = { contactId: "ct_1", conversationId: "convo_1", phoneE164: "+19565550101", locale: "en", consentWithheld: false, submittedAt: WROTE };
+  const heldRow = (payload: Record<string, unknown>): AutomationLogRow => ({
+    id: "log_i", account_id: "acct_1", source: "instant_reply", channel: "sms", contact_id: "ct_1",
+    subject_key: "submission:sub_1", status: "held", reason: "x", held_until: "2026-09-23T04:15:00.000Z", payload, occurred_at: "2026-09-23T04:00:00.000Z",
+  });
+  const ctx = (now: string) => ({ db: {} as never, now: new Date(now), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate() });
+
+  it("more than 24 h after they wrote in: skipped 'Not sent: too long after they wrote in', nothing sent (mutation: drop the cap → sent, FAILS)", async () => {
+    expect(await releaseInstantReply(ctx("2026-09-23T15:00:00.001Z"), heldRow(PAYLOAD))).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      status: "skipped", reason: "Not sent: too long after they wrote in",
+    }));
+  });
+
+  it("exactly 24 h after still sends, and a re-hold keeps the ORIGINAL instant (mutation: >= → skipped, FAILS; stamp the release's own now → the cap never bites, FAILS)", async () => {
+    expect(await releaseInstantReply(ctx("2026-09-23T15:00:00.000Z"), heldRow(PAYLOAD))).toBe("sent");
+    // An unreadable ledger at the next release re-holds it with the same submittedAt.
+    dbMocks.readConsentState.mockRejectedValue(new Error("fetch failed"));
+    expect(await releaseInstantReply(ctx("2026-09-22T20:00:00.000Z"), heldRow(PAYLOAD))).toBe("held");
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      status: "held", payload: expect.objectContaining({ submittedAt: WROTE }),
+    }));
+  });
+
+  it("a payload held before PR-1 carries no instant, so no cap applies (mutation: treat a missing instant as too old → skipped, FAILS)", async () => {
+    const { submittedAt: _dropped, ...old } = PAYLOAD;
+    void _dropped;
+    expect(await releaseInstantReply(ctx("2026-09-30T14:00:00.000Z"), heldRow(old))).toBe("sent");
+  });
+});
+
+/**
+ * Task 9 review, minor 1: the gate refusing a RELEASED instant reply is the
+ * verdict "skipped". releaseHeldPass counts `c[verdict]++`, and a verdict of
+ * "blocked" is no counter there (NaN in the tick's JSON).
+ */
+describe("releaseInstantReply — the gate refuses at release", () => {
+  it("a number that stopped texts while the reply was held: verdict \"skipped\", nothing sent, one skipped row (mutation: delete the release's `blocked` → \"skipped\" line → \"blocked\", FAILS)", async () => {
+    dbMocks.readConsentState.mockResolvedValue({ state: "stopped", since: "2026-09-22T05:00:00Z", method: "carrier_block", eventId: "ev_1" });
+    const held: AutomationLogRow = {
+      id: "log_i", account_id: "acct_1", source: "instant_reply", channel: "sms", contact_id: "ct_1",
+      subject_key: "submission:sub_1", status: "held", reason: "x", held_until: "2026-09-22T13:00:00.000Z",
+      payload: { contactId: "ct_1", conversationId: "convo_1", phoneE164: "+19565550101", locale: "en", consentWithheld: false },
+      occurred_at: "2026-09-22T04:00:00.000Z",
+    };
+    const ctx = { db: {} as never, now: new Date("2026-09-22T15:00:00Z"), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate() };
+    expect(await releaseInstantReply(ctx, held)).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampInstantReplySent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "submission:sub_1", status: "skipped", reason: "They stopped texts from this business",
+    }));
   });
 });

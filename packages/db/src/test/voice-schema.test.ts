@@ -1,7 +1,43 @@
 import { describe, it, expect } from "vitest";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
+import { withRollback } from "./db";
+import { upsertVoiceProfile } from "../voice";
 
 describe("0019 voice schema", () => {
+  // MINOR (Task 1, second review): `voice-schema.test.ts` pinned four
+  // defaults, not the column SET. A column added to the table and to
+  // `VoiceProfileRow` but forgotten in `PROFILE_COLS` gives every reader
+  // `undefined` for it, with no type error and no failing test -- the exact
+  // drift that produced this task's Critical (a copied column list in
+  // `concierge.ts` that silently fell out of step with `voice.ts`'s).
+  //
+  // Pinned against the TABLE, not against another reader of the constant:
+  // `concierge.test.ts:330` already proves `getVoiceProfileByPublicId` and
+  // `getVoiceProfile` return the same keys as EACH OTHER, which cannot fail
+  // on a column both of them (wrongly) omit -- both read `PROFILE_COLS`, so
+  // they always agree with each other even when they've drifted from the
+  // table. This instead selects a REAL row through `upsertVoiceProfile`
+  // (which is `PROFILE_COLS` under the hood) and compares its key set to
+  // `information_schema.columns`' own account of `voice_profiles`, less the
+  // two audit columns `PROFILE_COLS` deliberately omits (`created_at`,
+  // `updated_at` are never rendered and carry no accessor-facing meaning).
+  it("PROFILE_COLS returns exactly the voice_profiles columns it means to, pinned against the table itself", async () => {
+    let selectedKeys: string[] = [];
+    await withTestAccount(async (db, accountId) => {
+      const row = await upsertVoiceProfile(db, accountId, {}, "user_test");
+      selectedKeys = Object.keys(row).sort();
+    });
+    await withRollback(async (c) => {
+      const { rows } = await c.query<{ column_name: string }>(
+        `select column_name from information_schema.columns
+          where table_schema = 'public' and table_name = 'voice_profiles'
+            and column_name not in ('created_at', 'updated_at')`,
+      );
+      const tableCols = rows.map((r) => r.column_name).sort();
+      expect(selectedKeys).toEqual(tableCols);
+    });
+  });
+
   it("phone_numbers accepts a valid row and rejects a bad e164", async () => {
     await withTestAccount(async (db, accountId) => {
       // Unique across every account, so the accepted number is drawn per run.

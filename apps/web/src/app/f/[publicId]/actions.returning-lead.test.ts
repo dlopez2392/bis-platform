@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { config as loadEnv } from "dotenv";
+import { refuseProduction } from "../../../../e2e/fixtures/production-guard";
 
 // `apps/web`'s test script runs with this directory as cwd, and its
 // credentials live in `.env.local`, not the `.env` that `dotenv/config`
 // loads by default — this file needs the path spelled out.
 loadEnv({ path: ".env.local" });
+// This suite creates and deletes real accounts. Where .env.local still names
+// production (docs/runbooks/ci-supabase-project.md, section 9), refuse before
+// anything is created. Policed by e2e/fixtures/production-guard.test.ts.
+refuseProduction(process.env, "f/[publicId]/actions.returning-lead.test.ts");
 
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 
@@ -12,7 +17,8 @@ import { headers } from "next/headers";
 import { submitFormAction } from "./actions";
 import { signRenderToken, MIN_FILL_MS, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import { IDLE } from "./submit-result";
-import { serviceDb, createAccount, createForm, updateForm, type FormField } from "@bis/db";
+import { serviceDb, createAccount, createForm, updateForm, deleteAccountCascade,
+  ACCOUNT_OWNED_TABLES, type FormField } from "@bis/db";
 
 /**
  * Deliberately NOT mocking `@bis/db` here (contrast with `actions.test.ts`,
@@ -43,9 +49,35 @@ function fd(entries: Record<string, string>) {
   return formData;
 }
 
-/** Throwaway account, cleaned up in `finally` — mirrors packages/db's
- * `withTestAccount`, reimplemented locally because `@bis/db`'s package.json
- * only exports "." (its own test fixtures are not a public subpath). Must
+/** The tables `deleteAccountCascade` must delete BY `account_id` for this
+ * fixture — not the delete list itself, which is `ACCOUNT_OWNED_TABLES`; the
+ * test below pins this as a subset of it. This copy is the one that went
+ * stale: it omitted `messages` and `conversations`, which M1c began creating
+ * for every lead ("every lead opens a thread") AFTER the list was written, so
+ * the accounts delete failed on a foreign key and the row survived —
+ * silently, because none of the deletes checked `.error`. Eleven orphaned
+ * "Fixture Co (returning lead)" accounts had accumulated in the shared
+ * project, visible in the real accounts list, before anyone noticed. Pinning
+ * the subset is what turns that into a red test instead of a leak. */
+const TABLES_THE_CASCADE_MUST_DELETE_BY_ACCOUNT_ID = [
+  "events", "form_submissions", "forms", "messages", "conversations",
+  "checklist_items", "contact_tags", "notes", "tasks",
+  "opportunities", "pipeline_stages", "pipelines", "custom_fields",
+  "custom_values", "tags", "contacts",
+] as const;
+
+it("the shared cascade still covers every table this fixture needs deleted by account_id", () => {
+  const covered = new Set<string>(ACCOUNT_OWNED_TABLES);
+  expect(TABLES_THE_CASCADE_MUST_DELETE_BY_ACCOUNT_ID.filter((t) => !covered.has(t))).toEqual([]);
+});
+
+/** Throwaway account, cleaned up in `finally` by packages/db's OWN
+ * `deleteAccountCascade` — the same FK-ordered list `withTestAccount` uses,
+ * now that `@bis/db` exports it. It used to be a private copy of that list
+ * here, because the package only exported "." and its test fixtures are not a
+ * public subpath. Deferring to the shared list is what stops this file's copy
+ * going stale a second time; `deleteAccountCascade` also throws on every
+ * delete's `.error`, naming the table, which the original copy did not. Must
  * never go near the seeded "Test Client One" account. */
 async function withTestAccount(fn: (accountId: string) => Promise<void>) {
   const db = serviceDb();
@@ -55,25 +87,7 @@ async function withTestAccount(fn: (accountId: string) => Promise<void>) {
   try {
     await fn(accountId);
   } finally {
-    // Mirrors packages/db's withTestAccount list, in the same FK order.
-    // It previously omitted messages and conversations, which M1c began
-    // creating for every lead ("every lead opens a thread") AFTER this list
-    // was written — so the accounts delete failed on a foreign key and the
-    // row survived. Because none of these deletes checked .error, that
-    // failed silently on every run: 11 orphaned "Fixture Co (returning
-    // lead)" accounts had accumulated in the shared dev database, visible
-    // in the real accounts list, before anyone noticed.
-    for (const table of ["events", "form_submissions", "forms", "messages", "conversations",
-                         "checklist_items", "contact_tags", "notes", "tasks",
-                         "opportunities", "pipeline_stages", "pipelines", "custom_fields",
-                         "custom_values", "tags", "contacts"]) {
-      const { error } = await db.from(table).delete().eq("account_id", accountId);
-      if (error) throw new Error(`test cleanup: ${table} delete failed: ${error.message}`);
-    }
-    // Fail loud here above all: a surviving account row is what leaks into
-    // the shared dev database and shows up in the agency's own UI.
-    const { error } = await db.from("accounts").delete().eq("id", accountId);
-    if (error) throw new Error(`test cleanup: accounts delete failed: ${error.message}`);
+    await deleteAccountCascade(db, accountId, "f/[publicId]/actions.returning-lead.test.ts");
   }
 }
 

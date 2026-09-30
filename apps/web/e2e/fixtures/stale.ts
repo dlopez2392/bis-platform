@@ -25,8 +25,83 @@
  */
 export const FIXTURE_ACCOUNT_RE = /^E2E Client Co (\d{13})$/;
 
+/**
+ * `E2E Co 1786412389258` — the company `blueprints.spec.ts` creates through
+ * the real "Add company" dialog. `createClientAccount` names the Clerk org
+ * after the account, so this one string is BOTH an account row and a real
+ * Clerk org, and the spec's own `finally` is the only thing that removed
+ * either: a killed run stranded both where this sweep could not see them,
+ * because `FIXTURE_ACCOUNT_RE` knows only the per-run fixture's name.
+ * Anchored exactly as tightly: "E2E Co-op", "E2E Corp", "E2E Company" and
+ * "E2E Client Co" itself are all refused by THIS pattern.
+ */
+export const FIXTURE_CO_ACCOUNT_RE = /^E2E Co (\d{13})$/;
+
+/**
+ * Every account (and therefore Clerk org) name a spec mints. The accounts leg
+ * and the Clerk orgs leg of the sweep both ask `isStaleFixtureAccount`, which
+ * reads this list, so a shape added here is swept in both systems at once.
+ * `fixture-names.test.ts` walks the specs and fails on any stamped `E2E …`
+ * name that no pattern here (or in the form/blueprint patterns) admits.
+ */
+export const FIXTURE_ACCOUNT_PATTERNS: readonly RegExp[] = [FIXTURE_ACCOUNT_RE, FIXTURE_CO_ACCOUNT_RE];
+
+/**
+ * `E2E Blueprint 1786412389258`, the blueprint `blueprints.spec.ts` captures
+ * from the seeded account. `blueprints` is AGENCY-scoped (migration 0007) and
+ * its `source_account_id` is `on delete set null`, so no account delete ever
+ * takes one of these with it — it needs its own leg.
+ */
+export const FIXTURE_BLUEPRINT_RE = /^E2E Blueprint (\d{13})$/;
+
 /** `e2e-client-1786412389258@example.com`, built in auth.setup.ts. */
 export const FIXTURE_EMAIL_RE = /^e2e-client-(\d{13})@example\.com$/;
+
+/**
+ * `E2E Form 1789613520660` or `E2E Spam 1789613520660` — the two names
+ * `forms.spec.ts` mints, always on the SEEDED account (`Test Client One`),
+ * never on a per-run fixture account. That account also carries real forms
+ * ("Quote request" among them), so this is anchored just as tightly as
+ * `FIXTURE_ACCOUNT_RE`: exact word, exact 13 digits, exact case, nothing
+ * before or after. The `Form|Spam` alternation is non-capturing so the stamp
+ * stays capture group 1 — the same shape `fixtureStamp`/`isStaleFixture`
+ * already read for every other fixture pattern, which is what lets
+ * `isStaleFixtureForm` below be built on those instead of re-deriving the
+ * staleness math a second time.
+ */
+export const FIXTURE_FORM_RE = /^E2E (?:Form|Spam) (\d{13})$/;
+
+/**
+ * The SQL `LIKE` prefilter sweep.ts's accounts leg, forms leg AND plans leg
+ * all send to the database, before any row is handed to
+ * `isStaleFixtureAccount`, `isStaleFixtureForm` or `isStaleFixturePlan` at
+ * all — one string because every shape (`FIXTURE_ACCOUNT_RE`,
+ * `FIXTURE_CO_ACCOUNT_RE`, `FIXTURE_FORM_RE`, `FIXTURE_PLAN_RE`) starts
+ * "E2E ". A row this refuses is never fetched, so a prefilter narrower than
+ * every pattern above silently starves the decision function of rows it
+ * would otherwise admit: narrowing this to "E2E Client Co %" (its shape
+ * before this constant existed) still left `vitest run e2e/fixtures` green,
+ * because nothing exercised the network leg — it only ever stopped fetching
+ * "E2E Co <stamp>" rows, which `isStaleFixtureAccount` would still have
+ * admitted had they arrived. `fixture-names.test.ts` now pins this string
+ * against every admitted sample name directly, so that regression reds by
+ * name instead of passing silently again.
+ *
+ * The plans leg reuses this one rather than getting its own narrower
+ * prefilter the way blueprints did: `FIXTURE_PLAN_RE` admits TWO words
+ * ("Plan" and "Canary"), and SQL `LIKE` has no alternation, so nothing
+ * narrower than "E2E %" can cover both without a second query. Blueprints
+ * could narrow to "E2E Blueprint %" only because that leg has a single word
+ * to match.
+ */
+export const FIXTURE_NAME_PREFILTER = "E2E %";
+
+/**
+ * The blueprints leg's own prefilter — narrower than `FIXTURE_NAME_PREFILTER`
+ * because `blueprints` rows are agency-scoped and never share a table with
+ * an account or a form, so nothing else needs this one widened.
+ */
+export const FIXTURE_BLUEPRINT_PREFILTER = "E2E Blueprint %";
 
 /**
  * How long a fixture is left alone before it is considered abandoned.
@@ -74,6 +149,52 @@ export function isStaleFixture(
   if (stamp === null) return false;
   const age = now - stamp;
   return age >= maxAgeMs;
+}
+
+/**
+ * True only for a form name `forms.spec.ts` minted, at least `STALE_AFTER_MS`
+ * ago — the same 30-minute window every other fixture uses, so a suite
+ * running right now never has its own in-progress form read as abandoned.
+ */
+export function isStaleFixtureForm(name: string, now: number): boolean {
+  return isStaleFixture(name, FIXTURE_FORM_RE, now);
+}
+
+/**
+ * True only for an account (or Clerk org) name matching one of
+ * `FIXTURE_ACCOUNT_PATTERNS`, at least `maxAgeMs` old. Each pattern is asked
+ * on its own through `isStaleFixture`, so every one of them inherits the same
+ * anchoring, plausible-stamp floor and future-stamp refusal.
+ */
+export function isStaleFixtureAccount(
+  name: string, now: number, maxAgeMs: number = STALE_AFTER_MS,
+): boolean {
+  return FIXTURE_ACCOUNT_PATTERNS.some((pattern) => isStaleFixture(name, pattern, now, maxAgeMs));
+}
+
+/** True only for a blueprint name `blueprints.spec.ts` minted, at least `maxAgeMs` old. */
+export function isStaleFixtureBlueprint(
+  name: string, now: number, maxAgeMs: number = STALE_AFTER_MS,
+): boolean {
+  return isStaleFixture(name, FIXTURE_BLUEPRINT_RE, now, maxAgeMs);
+}
+
+/**
+ * `E2E Plan 1786412389258` (the plan Save creates through the UI) or
+ * `E2E Canary 1786412389258` (the row `plans.spec.ts`'s boundary test writes
+ * straight to the table to prove a plan's name never reaches a client's
+ * browser). `plans` is AGENCY-scoped exactly like `blueprints` — nothing
+ * cascades it — so a killed run strands it forever without its own leg. Both
+ * words share one pattern (a non-capturing alternation, same shape as
+ * `FIXTURE_FORM_RE`'s `Form|Spam`) so the stamp stays capture group 1.
+ */
+export const FIXTURE_PLAN_RE = /^E2E (?:Plan|Canary) (\d{13})$/;
+
+/** True only for a plan name `plans.spec.ts` minted, at least `maxAgeMs` old. */
+export function isStaleFixturePlan(
+  name: string, now: number, maxAgeMs: number = STALE_AFTER_MS,
+): boolean {
+  return isStaleFixture(name, FIXTURE_PLAN_RE, now, maxAgeMs);
 }
 
 /**

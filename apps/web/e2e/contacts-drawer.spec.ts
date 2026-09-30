@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
@@ -6,6 +6,7 @@ import {
   assignPhoneNumber, startCallRow, finishCallRow, addTagToContact, addNote,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
+import { watchRouterTraffic } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -83,6 +84,41 @@ function fullFixture(): ClientFixtureFull {
   return JSON.parse(readFileSync(CLIENT_FIXTURE_FILE, "utf-8")) as ClientFixtureFull;
 }
 
+/**
+ * Resolves once the bulk delete's own server action has been sent AND the
+ * server has answered it. Call it BEFORE the click, then await it before
+ * asserting the toast.
+ *
+ * The delete does not start when the button is clicked. Next runs server
+ * actions one at a time, and the shell's badge read (shell-data.tsx, sent on
+ * every route change) can be ahead of it. In CI run 36014117982 that read
+ * took 6.2s, the delete was only sent when it came back, and its own response
+ * had still not arrived when the 10s toast wait ran out. Another run's
+ * `verify` job (36015930225) was running the live db suite against the same
+ * database the whole time. Waiting for the answer takes that queue and that
+ * latency out of the toast's 10s.
+ *
+ * Not "until the response is complete": the body of an action response can
+ * stay open for minutes after the refreshed table has rendered (run
+ * 36045077317: the table showed one contact within a second, and the body had
+ * not finished three minutes later).
+ *
+ * The request is found by a contact id in its body. The badge read goes to the
+ * same URL with the same `next-action` header, but carries only the account
+ * id, so matching on URL and header alone would also match the read.
+ */
+function bulkDeleteAnswered(page: Page, oneOfTheIds: string): Promise<void> {
+  return page.waitForRequest((req) =>
+    req.method() === "POST"
+    && "next-action" in req.headers()
+    && (req.postData() ?? "").includes(oneOfTheIds))
+    .then(async (req) => {
+      const res = await req.response();
+      expect(res, "the bulk delete action got no response").not.toBeNull();
+      expect(res!.status(), "the bulk delete action failed").toBe(200);
+    });
+}
+
 const stamp = Date.now();
 const ACTOR = "e2e-contacts-drawer";
 
@@ -97,6 +133,7 @@ let pipelineId = "";
 let scrollCheckId = "";
 const seededTagName = "vip-e2e";
 let callLinkContactId = "";
+let optOutId = "";
 
 /**
  * Makes `beforeAll` below safe to run more than once against the SAME
@@ -112,7 +149,7 @@ let callLinkContactId = "";
  * owns an opportunity/pipeline/tag/call/phone_number on it, and none of the
  * first names deleted below collide with what TEST BODIES create live
  * through the UI ("Drawer", "Tag", "Bulk" — never "Deeplink", "SpaceKey",
- * "Retry", "BulkGate", "CallLink", or "Paging"). FK order matters:
+ * "Retry", "BulkGate", "CallLink", "Paging" or "OptOut"). FK order matters:
  * opportunities reference contacts with NO `on delete` clause (migration
  * 0003_crm_core.sql) and the pipeline, so they must go first; pipelines
  * cascade their own stages.
@@ -130,7 +167,7 @@ async function clearOwnFixtures(db: ReturnType<typeof serviceDb>, accId: string)
   if (numErr) throw new Error(`contacts-drawer e2e: pre-clean phone_numbers failed: ${numErr.message}`);
   const { error: contactErr } = await db.from("contacts").delete()
     .eq("account_id", accId)
-    .in("first_name", ["Deeplink", "SpaceKey", "Retry", "BulkGate", "CallLink", "Paging", "ScrollCheck"]);
+    .in("first_name", ["Deeplink", "SpaceKey", "Retry", "BulkGate", "CallLink", "Paging", "ScrollCheck", "OptOut"]);
   if (contactErr) throw new Error(`contacts-drawer e2e: pre-clean contacts failed: ${contactErr.message}`);
 }
 
@@ -243,6 +280,12 @@ test.beforeAll(async () => {
   for (let i = 1; i <= 5; i++) {
     await addNote(db, accountId, scrollCheckId, `Scroll check note ${i}`, ACTOR);
   }
+
+  // Addition I: a contact for the "No marketing emails" switch (0049). Its
+  // own row, so ticking it never changes what any other test here reads.
+  optOutId = (await createContact(
+    db, accountId, { firstName: "OptOut", lastName: "Target" }, ACTOR,
+  )).id;
 });
 
 test.afterAll(async () => {
@@ -374,17 +417,59 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     const drawer = page.getByRole("dialog");
     await drawer.getByRole("button", { name: /edit company/i }).click();
     await drawer.getByLabel(/company/i).fill("Painted Proof LLC");
+    // Watching starts BEFORE the save, so the action's own request is counted.
+    const traffic = watchRouterTraffic(page);
     await page.keyboard.press("Enter");
     await expect(page.getByText(/saved/i).first()).toBeVisible();
-    // The URL still carries `?peek=` from the click above, so reload doesn't
-    // land on a bare table — use-peek.ts's deep-link behavior (proved by the
-    // earlier test in this file) re-opens the SAME drawer straight from
-    // hydration. Re-clicking a role="row" locator here would hang: the Sheet
-    // that's already open marks the rest of the page aria-hidden, so the row
-    // locator resolves to nothing. Assert straight on the drawer that's
-    // already open instead of trying to reopen it.
+    // The save revalidates the contacts path, and Next follows that with a
+    // navigation to the router's canonical URL. `?peek=` was pushed shallowly
+    // by use-peek.ts; if the router never learned it (the `__NA` bug), that
+    // navigation strips it and the drawer closes under the operator's hands.
+    // Hold the param until the router has settled (support.ts says why this
+    // cannot pass early), THEN confirm the drawer is still the one on screen.
+    await traffic.expectSearchHeld(/[?&]peek=/);
+    await expect(drawer).toBeVisible();
+    await expect(page).toHaveURL(/[?&]peek=/);
+    // Because `?peek=` survived, the reload is a deep link: use-peek.ts
+    // re-opens the SAME drawer straight from hydration (proved by the earlier
+    // test in this file). Re-clicking a role="row" locator here would hang:
+    // the open Sheet marks the rest of the page aria-hidden, so the row
+    // locator resolves to nothing. Assert straight on the reopened drawer.
     await page.reload();
     await expect(page.getByRole("dialog").getByText("Painted Proof LLC")).toBeVisible();
+  });
+
+  test("No marketing emails: tick saves for real - reload proves it - untick clears it", async ({ page }) => {
+    const optedOutAt = async () => {
+      const { data, error } = await serviceDb().from("contacts")
+        .select("marketing_email_opted_out_at").eq("id", optOutId).single();
+      if (error) throw new Error(`contacts-drawer e2e: read opt-out failed: ${error.message}`);
+      return (data as { marketing_email_opted_out_at: string | null }).marketing_email_opted_out_at;
+    };
+    const box = () => page.getByRole("dialog")
+      .getByRole("checkbox", { name: m["contact.marketingOptOut.label"] });
+
+    await page.goto(`${base()}/contacts?q=OptOut`);
+    await page.getByRole("row").filter({ hasText: "OptOut Target" }).first().click();
+    await expect(box()).toHaveAttribute("aria-checked", "false");
+
+    await box().click();
+    // The toast only appears once the action has resolved, so the write has
+    // landed before the reload below (and before the db read).
+    await expect(page.getByText(m["contact.marketingOptOut.onToast"])).toBeVisible();
+    expect(await optedOutAt()).not.toBeNull();
+
+    // `?peek=` is still on the URL, so the reload re-opens the same drawer
+    // (the inline-edit test above says why a row re-click would hang); the
+    // box's state now comes from the server, not from the click.
+    await expect(page).toHaveURL(/[?&]peek=/);
+    await page.reload();
+    await expect(box()).toHaveAttribute("aria-checked", "true");
+
+    await box().click();
+    await expect(page.getByText(m["contact.marketingOptOut.offToast"])).toBeVisible();
+    await expect(box()).toHaveAttribute("aria-checked", "false");
+    expect(await optedOutAt()).toBeNull();
   });
 
   test("keyboard: focused row opens on Enter, arrows move focus", async ({ page }) => {
@@ -605,6 +690,12 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     }
     const bar = page.getByTestId("bulk-action-bar");
     await expect(bar.getByText("2 selected")).toBeVisible();
+    // Read BEFORE the confirm dialog opens: a modal dialog hides the rest of
+    // the page from the accessibility tree, so no row is found by role once
+    // it is open (CI run 36040607440 timed out right here).
+    const bulkOneId = await page.getByRole("row").filter({ hasText: "Bulk One" })
+      .getAttribute("data-contact-row");
+    expect(bulkOneId, "the Bulk One row carries its contact id").toBeTruthy();
 
     await bar.getByRole("button", { name: /delete/i }).click();
     const dialog = page.getByRole("dialog").filter({ hasText: /delete 2 contacts/i });
@@ -612,8 +703,16 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await dialog.getByRole("textbox").fill("1");
     await expect(dialog.getByRole("button", { name: /delete/i })).toBeDisabled();
     await dialog.getByRole("textbox").fill("2");
+    const answered = bulkDeleteAnswered(page, bulkOneId!);
     await dialog.getByRole("button", { name: /delete/i }).click();
+    await answered;
     await expect(page.getByText("Deleted 2 contacts")).toBeVisible();
+    // The toast comes from the action's return value. The rows go only when
+    // the server's re-render of this page (revalidatePath) arrives, later in
+    // the same response, and that re-render gets the default 10s. In CI run
+    // 36014117982 it took longer than that, with the toast already showing,
+    // while another run's db suite was running against the same database.
+    // That is CI scheduling, not this assertion; it stays as it is.
     await expect(page.getByText("Bulk One")).toHaveCount(0);
     await expect(page.getByText("Bulk Two")).toHaveCount(0);
   });
@@ -634,8 +733,10 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await bar.getByRole("button", { name: /delete/i }).click();
     const dialog = page.getByRole("dialog").filter({ hasText: /delete 2 contacts/i });
     await dialog.getByRole("textbox").fill("2");
+    const answered = bulkDeleteAnswered(page, blockedId);
     await dialog.getByRole("button", { name: /delete/i }).click();
 
+    await answered;
     await expect(page.getByText(
       "Deleted 1 · skipped 1 linked to bookings, deals, or conversations",
     )).toBeVisible();

@@ -4,6 +4,7 @@ import type { DueSmsReminder } from "@bis/db";
 const dbMocks = vi.hoisted(() => ({
   listDueSmsReminders: vi.fn(), stampSmsReminderSent: vi.fn(), stampSmsReminderFailed: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
+  getDueSmsReminderById: vi.fn(), recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -12,8 +13,10 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => send
 import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { formatWhen } from "@/lib/booking/time";
 import { AUTOMATION_TICK_CAP } from "../caps";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
-import { smsReminderPass } from "./sms-reminder";
+import type { AutomationLogRow } from "@bis/db";
+import { smsReminderPass, releaseSmsReminder } from "./sms-reminder";
 
 const STAMP_ATTEMPTS = STAMP_RETRY_DELAYS_MS.length + 1;
 const TICK = new Date("2026-09-09T14:00:00Z");
@@ -35,20 +38,22 @@ function row(overrides: Partial<DueSmsReminder> = {}): DueSmsReminder {
 
 const smsSend = vi.fn();
 const emailSend = vi.fn();
-function ctx(): PassContext {
+function ctx(now: Date = TICK): PassContext {
   return {
-    db: {} as never, now: TICK, origin: "https://app.example.com",
+    db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
+    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
   };
 }
-const EMPTY = { sent: 0, failed: 0, unstamped: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
+const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
 
 beforeEach(() => {
   for (const fn of Object.values(dbMocks)) fn.mockReset();
   dbMocks.listDueSmsReminders.mockResolvedValue([]);
   dbMocks.stampSmsReminderSent.mockResolvedValue(undefined);
   dbMocks.stampSmsReminderFailed.mockResolvedValue(undefined);
+  dbMocks.recordAutomationLog.mockResolvedValue(undefined);
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);   // Task 3: the held path reads the existing row before re-holding
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
   dbMocks.updateMessageStatus.mockResolvedValue(undefined);
@@ -166,5 +171,93 @@ describe("sms reminder pass — UNCAPPED, like the email reminder it pairs with"
     expect(30).toBeGreaterThan(AUTOMATION_TICK_CAP);   // guards the fixture
     expect(await smsReminderPass.run(ctx())).toEqual({ ...EMPTY, sent: 30 });
     expect(dbMocks.stampSmsReminderSent).toHaveBeenCalledTimes(30);
+  });
+});
+
+describe("sms reminder pass — the fixed automated hours (08:00-21:00)", () => {
+  // 06:30 CDT for an 08:30 CDT appointment: due (inside 90–135 min), inside the window, and the appointment is AFTER the window ends.
+  const EARLY = new Date("2026-09-22T11:30:00Z");
+  const APPT_0830 = "2026-09-22T13:30:00.000Z";
+  const END = "2026-09-22T13:00:00.000Z";
+  const heldRow = (): AutomationLogRow => ({
+    id: "log_s", account_id: "acct_1", source: "sms_reminder", channel: "sms", contact_id: "ct_1",
+    subject_key: "booking:bk_s1", status: "held", reason: "Held until 8:00 AM — quiet hours", held_until: END, payload: {}, occurred_at: EARLY.toISOString(),
+  });
+
+  it("before 08:00 with the appointment after 08:00: NOT sent, NO message row, NOT stamped, one held row (mutation: bypass holdOrSend → FAILS)", async () => {
+    dbMocks.listDueSmsReminders.mockResolvedValue([row({ startsAt: APPT_0830, accountTimezone: "America/Chicago" })]);
+    expect(await smsReminderPass.run(ctx(EARLY))).toEqual({ ...EMPTY, held: 1 });
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.stampSmsReminderSent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "sms_reminder", channel: "sms", subjectKey: "booking:bk_s1", contactId: "ct_1", status: "held", heldUntil: END,
+    }));
+  });
+
+  it("choice 21: 05:30 for a 07:30 job is NOT texted, and not held past the job; a skipped row says why (mutation: drop `deadline` → held, FAILS)", async () => {
+    const fiveThirty = new Date("2026-09-22T10:30:00Z");
+    dbMocks.listDueSmsReminders.mockResolvedValue([row({ startsAt: "2026-09-22T12:30:00.000Z", accountTimezone: "America/Chicago" })]);
+    expect(await smsReminderPass.run(ctx(fiveThirty))).toEqual({ ...EMPTY, blocked: 1 });
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "booking:bk_s1", status: "skipped", reason: "Not sent: quiet hours ran past the appointment",
+    }));
+  });
+
+  it("no textable phone / gate refused: a skipped row with the plain reason (mutation: drop either logSkipped → FAILS)", async () => {
+    dbMocks.listDueSmsReminders.mockResolvedValue([row({ contactPhone: "" }), row({ bookingId: "bk_s2" })]);
+    senderMock.resolveSmsSender.mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+    await smsReminderPass.run(ctx());
+    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => [c[1].subjectKey, c[1].status, c[1].reason])).toEqual([
+      ["booking:bk_s1", "skipped", "No phone number we can text"],
+      ["booking:bk_s2", "skipped", "Texting isn't set up for this company yet"],
+    ]);
+  });
+
+  it("release: an appointment that started during the hold is skipped, never texted (mutation: drop the check → FAILS)", async () => {
+    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: row({ startsAt: "2026-09-22T12:45:00.000Z", accountTimezone: "America/Chicago" }) });   // 07:45, before an 08:00 release
+    expect(await releaseSmsReminder(ctx(new Date("2026-09-22T13:00:00Z")), heldRow())).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "skipped", reason: "Appointment already started" }));
+  });
+
+  it("release: still due → texts through the same path and the row flips to sent", async () => {
+    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: row({ startsAt: APPT_0830, accountTimezone: "America/Chicago" }) });
+    expect(await releaseSmsReminder(ctx(new Date("2026-09-22T13:00:00Z")), heldRow())).toBe("sent");
+    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampSmsReminderSent).toHaveBeenCalledWith(expect.anything(), "bk_s1");
+    expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "sent" }));
+  });
+
+  it("release: the booking is no longer due → 'No longer due'", async () => {
+    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: null, why: "gone" });
+    expect(await releaseSmsReminder(ctx(), heldRow())).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "No longer due" }));
+  });
+
+  it("release: a held row's subject_key is not trusted across accounts: acct_2's held row whose lookup returns acct_1's booking is skipped, never texted (mutation: delete the check → FAILS)", async () => {
+    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: row({ startsAt: APPT_0830, accountTimezone: "America/Chicago" }) });   // row()'s accountId is "acct_1"
+    const otherAccountHeld = { ...heldRow(), account_id: "acct_2" };
+    expect(await releaseSmsReminder(ctx(new Date("2026-09-22T13:00:00Z")), otherAccountHeld)).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ accountId: "acct_2", status: "skipped", reason: "No longer due" }));
+  });
+
+  it("release: the recipe was turned off meanwhile → 'This automation was turned off'", async () => {
+    dbMocks.getDueSmsReminderById.mockResolvedValue({ due: null, why: "off" });
+    expect(await releaseSmsReminder(ctx(), heldRow())).toBe("skipped");
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This automation was turned off" }));
+  });
+});
+
+describe("smsReminderPass hands the gate its own kind (review R2 minor)", () => {
+  it("the gate is asked for automation.sms_reminder, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
+    dbMocks.listDueSmsReminders.mockResolvedValue([row()]);
+    const gate = fakeSmsGate();
+    await smsReminderPass.run({ ...ctx(), sms: gate });
+    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.sms_reminder"]);
   });
 });

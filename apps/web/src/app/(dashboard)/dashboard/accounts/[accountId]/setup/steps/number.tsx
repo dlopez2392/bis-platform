@@ -24,7 +24,7 @@ function MovableNumbers({
   return (
     // Ladder step 2, the nested-panel step — this sits inside the wizard's
     // detail pane, so it takes no card material and no alpha of --muted.
-    <div className="rounded-[8px] border border-[var(--line)] bg-[var(--surface-2)] p-3">
+    <div className="rounded-[var(--radius-ctl)] border border-[var(--line)] bg-[var(--surface-2)] p-3">
       <p className="text-xs font-medium text-muted-foreground">{m["setup.number.moveTitle"]}</p>
       <ul className="mt-1 divide-y divide-border">
         {numbers.map((n) => (

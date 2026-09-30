@@ -89,25 +89,33 @@ export async function setSetupTickAction(
  * RLS silently narrowed would answer that question wrong.
  *
  * `gatherSetupInputs` (lib/setup/setup-inputs.ts) is the one shared copy of
- * this re-check's read set — it reports which of its SIX legs failed rather
- * than an atomic pass/fail (its own doc comment explains why), and is itself
- * per-leg fault-isolated (`Promise.allSettled`), so it should not actually
- * reject; the try/catch below is the same defensive belt-and-braces every
- * other `"use server"` action in this tree wraps its reads in — an
- * exception escaping unhandled would reject this action outright, which the
- * client island's Result-typed rendering can never see (same reasoning
- * `setSetupTickAction`'s own doc comment gives for its write). This action
- * now reads all SIX legs, including `accounts`: branding gates go-live
- * (spec 2026-09-07-brand-name-resolver, `goLivePrereqsMet` in
- * setup-status.ts), and branding is read off the `accounts` row's
- * `brand_name` — the leg this action used to hardcode to `null` and ignore
- * entirely because neither `brandName` nor `fromEmail` used to gate go-live.
- * An `accounts`-leg failure is now exactly as unverifiable as a failed
+ * this re-check's read set — it reports which of its EIGHT legs failed
+ * rather than an atomic pass/fail (its own doc comment explains why), and is
+ * itself per-leg fault-isolated (`Promise.allSettled`), so it should not
+ * actually reject; the try/catch below is the same defensive
+ * belt-and-braces every other `"use server"` action in this tree wraps its
+ * reads in — an exception escaping unhandled would reject this action
+ * outright, which the client island's Result-typed rendering can never see
+ * (same reasoning `setSetupTickAction`'s own doc comment gives for its
+ * write). Of those eight, `reReadFailed` below folds in the SIX that
+ * go-live's own prerequisites can actually depend on, including `accounts`:
+ * branding gates go-live (spec
+ * 2026-09-07-brand-name-resolver, `goLivePrereqsMet` in setup-status.ts),
+ * and branding is read off the `accounts` row's `brand_name` — the leg this
+ * action used to hardcode to `null` and ignore entirely because neither
+ * `brandName` nor `fromEmail` used to gate go-live. An `accounts`-leg
+ * failure is now exactly as unverifiable as a failed
  * calendar/profile/numbers/calls/ticks read, so it is folded into
  * `reReadFailed` below rather than singled out: a prerequisite this
  * function could not verify is not a met one, and — same distinction the
  * page draws — it must not be reported as an unmet one either, hence the
  * separate `m["setup.goLive.failed"]` rather than `notReady` below.
+ *
+ * `forms`/`conversations` — the website-assistant step's own two legs — are
+ * deliberately NOT folded into `reReadFailed`: `website_assistant` is not in
+ * `GO_LIVE_PREREQ_KEYS` (setup-view.ts) and never has been, so a hiccup in
+ * either read must not block an otherwise-ready client from going live over
+ * a feature the go-live gate was never supposed to know about.
  */
 export async function goLiveAction(accountId: string): Promise<ActionResult> {
   const { userId, isAgency } = await requireAccountAccess(accountId);
@@ -168,7 +176,7 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
   }
 
   // No revalidatePath: the setup page is `force-dynamic`, and the client
-  // island calls router.refresh() to re-derive all nine cards — same
+  // island calls router.refresh() to re-derive all ten cards — same
   // arrangement as setSetupTickAction above.
   return { ok: true };
 }

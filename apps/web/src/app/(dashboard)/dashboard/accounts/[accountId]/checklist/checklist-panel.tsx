@@ -99,6 +99,19 @@ export function ChecklistPanel({
                       {m["checklist.open"]}
                     </a>
                   ) : null}
+                  {/* Additive to the Telnyx link above, not a replacement —
+                      the A2P card (a2p-panel.tsx) sits below the whole
+                      checklist on this same page and is easy to miss by
+                      scrolling. A same-page anchor, not a special field on
+                      CatalogueItem: only this one row ever needs an in-page
+                      destination, so a generic field would carry `undefined`
+                      on every other item for no reader's benefit. */}
+                  {entry.key === "a2p_registration" ? (
+                    <a href="#a2p-registration"
+                       className="flex items-center gap-1 text-xs text-primary underline focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-[var(--ring-glow)]">
+                      {m["checklist.goToA2pCard"]}
+                    </a>
+                  ) : null}
                 </div>
               </div>
             </li>

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getContact, listContactTags, listNotes, listContactTasks,
+import { getContact, listContactTags, listNotes, listContactTasks, holdOpenTaskIds,
          listCustomFields, listContactOpportunities, listContactSubmissions,
          listContactMessages } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
@@ -11,7 +11,13 @@ import { ContactFieldsPanel } from "./contact-fields-panel";
 import { ActivityTimeline } from "./activity-timeline";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
 import { resolveSmsSender } from "@/lib/sms/sender";
-import { toE164 } from "@/lib/voice/phone-number";
+import { e164Of } from "@/lib/voice/phone-number";
+import { smsRecipientState } from "@/lib/consent/recipient-state";
+import { readTextsView } from "@/lib/consent/texts-view";
+import type { TextsLoad } from "@/lib/consent/texts-row";
+import { loggableError } from "@/lib/loggable-error";
+import { composerStateLine } from "@/lib/consent/composer-state";
+import { renderZone } from "@/lib/zone";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +28,7 @@ export default async function ContactDetailPage({
   const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) notFound();
-  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate] = await Promise.all([
+  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate, account, smsRecipient] = await Promise.all([
     listContactTags(db, accountId, contactId),
     listNotes(db, accountId, contactId),
     listContactTasks(db, accountId, contactId),
@@ -33,7 +39,43 @@ export default async function ContactDetailPage({
     // Resolved here (server component) and passed down as a prop — the
     // composer is a client component and must not query the database.
     resolveSmsSender(db, accountId),
+    // Only for the opt-out's "Off since" date, printed in the ACCOUNT's zone.
+    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
+    // The ledger state and F-009's flag for the text composer (spec §6): the
+    // two facts the send gate checks, read under this request's RLS client.
+    // Never throws; a failed read is "unknown", which closes the form.
+    smsRecipientState(db, accountId, contact),
   ]);
+  // Not a throw, the checklist page's reasoning: one cosmetic date line must
+  // not 500 the contact page. `undefined` makes `renderZone` fall back.
+  if (account.error) {
+    console.error(`contact page: account ${accountId} timezone read failed: ${account.error.message}`);
+  }
+  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
+
+  // The Texts row (consent chain PR-2, spec §6), read under this request's
+  // RLS client. An unreadable ledger is the row's error state, never a thrown
+  // page and never a guessed "Allowed".
+  let texts: TextsLoad;
+  try {
+    texts = { status: "ready", view: await readTextsView(db, accountId, contact), zone: zone.zone, phone: contact.phone ?? null };
+  } catch (e) {
+    console.error(`contact page: Texts row unreadable for contact ${contactId}: ${loggableError(e)}`);
+    texts = { status: "error" };
+  }
+
+  // Review R3-N1 (G21): a To-do whose number is still on hold is closed by
+  // deciding the hold, never by "Done", so the timeline shows a hint in its
+  // place. A failed read fails CLOSED: every open linked To-do gets the hint
+  // — a CANCEL To-do too (review M4), which is why the hint names the To do
+  // page, where that To-do keeps its Done.
+  let holdOpen: string[];
+  try {
+    holdOpen = await holdOpenTaskIds(db, accountId, tasks);
+  } catch (e) {
+    console.error(`contact page: hold To-dos unreadable for contact ${contactId}: ${loggableError(e)}`);
+    holdOpen = tasks.filter((t) => !t.completed_at && t.consent_event_id).map((t) => t.id);
+  }
 
   return (
     <>
@@ -45,18 +87,22 @@ export default async function ContactDetailPage({
           contact={contact}
           tags={tags}
           fieldDefs={fieldDefs}
+          zone={{ zone: zone.zone, guessed: zone.guessed, label: zone.label }}
+          texts={texts}
         />
         <ActivityTimeline
           accountId={accountId}
           contactId={contactId}
           contactHasEmail={Boolean(contact.email)}
-          // Same toE164-based notion of "usable" sendSmsAction itself gates
+          // Same e164Of-based notion of "usable" sendSmsAction itself gates
           // on (actions.ts) — mirrors contactHasEmail above so SMS fails up
           // front, in place of the form, instead of only on submit.
-          contactHasPhone={Boolean(toE164(contact.phone))}
+          contactHasPhone={Boolean(e164Of(contact.phone))}
           smsGate={smsGate}
+          smsBlockedLine={composerStateLine(smsRecipient, zone.zone)}
           notes={notes}
           tasks={tasks}
+          holdOpenTaskIds={holdOpen}
           opportunities={opps}
           submissions={submissions}
           messages={messages}

@@ -1,50 +1,28 @@
 "use client";
 
-import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { EmbedSnippet as SharedEmbedSnippet } from "@/components/embed-snippet";
 import { m } from "@/lib/messages";
 
+/** A thin wrapper over the shared `components/embed-snippet.tsx` card — kept
+ *  as its own file/export so `forms/[formId]/page.tsx` doesn't change, and
+ *  so the snippet still forwards `data-locale`, which the shared card has
+ *  no reason to know about on its own. */
 export function EmbedSnippet({
   origin, publicId, locale, published,
 }: { origin: string; publicId: string; locale: string; published: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const snippet =
-    `<script src="${origin}/embed.js"\n        data-form="${publicId}"\n        data-locale="${locale}"></script>`;
-  const link = `${origin}/f/${publicId}`;
-
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-sm">{m["forms.embed"]}</CardTitle></CardHeader>
-      <CardContent className="space-y-3">
-        {published ? (
-          <>
-            <p className="text-xs text-muted-foreground">{m["forms.embedHint"]}</p>
-            <pre className="overflow-x-auto rounded-md bg-secondary p-3 text-xs text-secondary-foreground">
-              <code>{snippet}</code>
-            </pre>
-            <Button
-              type="button" variant="outline" size="sm"
-              onClick={async () => {
-                await navigator.clipboard.writeText(snippet);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-            >
-              {copied ? m["forms.copied"] : m["forms.copy"]}
-            </Button>
-            <div className="space-y-1 border-t border-border pt-3">
-              <p className="text-xs font-medium text-card-foreground">{m["forms.publicLink"]}</p>
-              <a href={link} target="_blank" rel="noreferrer"
-                 className="block break-all text-xs text-primary underline">
-                {link}
-              </a>
-            </div>
-          </>
-        ) : (
-          <p className="text-xs text-muted-foreground">{m["forms.embedNotPublished"]}</p>
-        )}
-      </CardContent>
-    </Card>
+    <SharedEmbedSnippet
+      attribute="data-form"
+      publicId={publicId}
+      origin={origin}
+      title={m["forms.embed"]}
+      hint={m["forms.embedHint"]}
+      disabledHint={m["forms.embedNotPublished"]}
+      enabled={published}
+      copyLabel={m["forms.copy"]}
+      copiedLabel={m["forms.copied"]}
+      publicLinkLabel={m["forms.publicLink"]}
+      extraAttrs={`data-locale="${locale}"`}
+    />
   );
 }

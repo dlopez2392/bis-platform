@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import { serviceDb } from "../service";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import {
   createAccount, listAccounts, renameAccount,
   setA2pRegistration, getA2pRegistration, getAlertPhone, setAlertPhone,
-  getTransferPhone, setTransferPhone,
+  getTransferPhone, setTransferPhone, MessagingProfileTakenError,
 } from "../accounts";
 
 const suffix = () => Math.random().toString(36).slice(2, 10);
@@ -72,7 +73,7 @@ describe("serviceDb-only account writes", () => {
       expect((await getA2pRegistration(db, accountId))!.status).toBe("not_started");
 
       await setA2pRegistration(db, accountId, {
-        brandId: "BRAND123", campaignId: "CAMP456", status: "pending",
+        brandId: "BRAND123", campaignId: "CAMP456", status: "pending", messagingProfileId: null,
       }, "user_test");
       const pending = (await getA2pRegistration(db, accountId))!;
       expect(pending.brandId).toBe("BRAND123");
@@ -94,15 +95,19 @@ describe("serviceDb-only account writes", () => {
       // approval with no campaign id has nothing to send on, yet would tick a
       // checklist item that reads "Register A2P 10DLC brand and campaign".
       await expect(setA2pRegistration(db, accountId, {
-        brandId: "BRAND123", campaignId: null, status: "approved",
-      }, "user_test")).rejects.toThrow(/brand id and a campaign id/);
+        brandId: "BRAND123", campaignId: null, status: "approved", messagingProfileId: null,
+      }, "user_test")).rejects.toThrow(/brand id, a campaign id and a messaging profile id/);
+      // Plan Task 7: approved also needs the business's OWN messaging profile.
+      await expect(setA2pRegistration(db, accountId, {
+        brandId: "BRAND123", campaignId: "CAMP456", status: "approved", messagingProfileId: null,
+      }, "user_test")).rejects.toThrow(/messaging profile id/);
       // …and it did not half-write on the way out.
       expect((await getA2pRegistration(db, accountId))!.status).toBe("pending");
 
       // The same patch is fine while the carriers still have it — you cannot
       // have ids you have not been issued yet.
       await setA2pRegistration(db, accountId, {
-        brandId: null, campaignId: null, status: "pending",
+        brandId: null, campaignId: null, status: "pending", messagingProfileId: null,
       }, "user_test");
 
       // updatedAt is stamped by the writer, and read back — a status with no
@@ -113,6 +118,52 @@ describe("serviceDb-only account writes", () => {
       expect(Number.isNaN(Date.parse(stamped.updatedAt!))).toBe(false);
     });
   });
+
+  /**
+   * Fix round 1 (opus review, plan Task 7). Every `setA2pRegistration` call
+   * above passes `messagingProfileId: null` — none of them proves a REAL
+   * profile id is written, read back, or carried on the event, and none of
+   * them exercises 0056's unique index from the JS side. The review found
+   * that removing the column from the update, hardcoding
+   * `getA2pRegistration`'s return to null, AND disabling the 23505 →
+   * `MessagingProfileTakenError` mapping could all happen at once and every
+   * test above (plus tsc, plus the web tests, plus the schema test) would
+   * stay green — texting would silently stay off at go-live. This is the
+   * test that closes that gap.
+   */
+  it("round-trips a REAL messaging profile id, carries it on the event, and refuses a second account the same one (mutation: drop the column from the update, or hardcode getA2pRegistration's return to null, or drop the 23505 mapping -> FAILS)", () =>
+    withTestAccount((db, a) => withTestAccount(async (_d, b) => {
+      const profileId = randomUUID();
+
+      await setA2pRegistration(db, a, {
+        brandId: "BRAND123", campaignId: "CAMP456", status: "approved", messagingProfileId: profileId,
+      }, "user_test");
+
+      // Read back through the same function the app uses — not the raw row —
+      // so a return-value shortcut (hardcoding `null`) is what this catches.
+      const saved = (await getA2pRegistration(db, a))!;
+      expect(saved.status).toBe("approved");
+      expect(saved.messagingProfileId).toBe(profileId);
+
+      // The identifiers ride the event too (setA2pRegistration's own doc
+      // comment) — this is the only test that checks THIS one rides along.
+      const { data: a2pEv } = await db.from("events").select("type, payload")
+        .eq("account_id", a).eq("type", "account.a2p_updated");
+      expect(a2pEv).toHaveLength(1);
+      expect(a2pEv![0]).toMatchObject({
+        payload: { status: "approved", messagingProfileId: profileId },
+      });
+
+      // A second, unrelated account cannot record the SAME Telnyx profile —
+      // one profile per business, 0056's unique index, surfaced as the named
+      // error rather than a generic write failure.
+      await expect(setA2pRegistration(db, b, {
+        brandId: "OTHERBRAND", campaignId: "OTHERCAMP", status: "approved", messagingProfileId: profileId,
+      }, "user_test")).rejects.toThrow(MessagingProfileTakenError);
+
+      // …and the refused write left b's own row untouched, not half-set.
+      expect((await getA2pRegistration(db, b))!.messagingProfileId).toBeNull();
+    })));
 
   /**
    * The assertion this helper exists for. PostgREST returns NO error and NO
@@ -152,7 +203,7 @@ describe("serviceDb-only account writes", () => {
     // completeness guard BEFORE the query runs, so the test would pass without
     // ever reaching the zero-row check it exists for.
     await expect(setA2pRegistration(
-      db, ghost, { brandId: null, campaignId: null, status: "pending" }, "user_test",
+      db, ghost, { brandId: null, campaignId: null, status: "pending", messagingProfileId: null }, "user_test",
     )).rejects.toThrow(/no account/);
 
     const { data } = await db.from("events").select("id")

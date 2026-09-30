@@ -34,7 +34,7 @@ type ContactMessage = Awaited<ReturnType<typeof listContactMessages>>[number];
 
 type TimelineItem =
   | { kind: "note"; id: string; at: string; body: string }
-  | { kind: "task"; id: string; at: string; title: string; dueAt: string | null; completedAt: string | null }
+  | { kind: "task"; id: string; at: string; title: string; dueAt: string | null; completedAt: string | null; holdOpen: boolean }
   | { kind: "opportunity"; id: string; at: string; name: string; value: number; status: string }
   | { kind: "submission"; id: string; at: string; formName: string;
       answers: { key: string; label: string; value: string }[] }
@@ -47,8 +47,10 @@ export function ActivityTimeline({
   contactHasEmail,
   contactHasPhone,
   smsGate,
+  smsBlockedLine,
   notes,
   tasks,
+  holdOpenTaskIds,
   opportunities,
   submissions,
   messages,
@@ -65,8 +67,15 @@ export function ActivityTimeline({
   // a plain prop — MessageComposer is a client component and must not query
   // the database itself.
   smsGate: SmsGate;
+  /** Consent chain spec §6: the one line the Text tab shows in place of the
+   *  form when the recipient's texts are stopped, held or the number is
+   *  unconfirmed (lib/consent/composer-state.ts); null when it may text. */
+  smsBlockedLine: string | null;
   notes: Note[];
   tasks: Task[];
+  /** Open To-dos whose number is still on hold (consent chain PR-2, G21):
+   *  decided with Confirm stop / Not a stop, so a hint stands in for Done. */
+  holdOpenTaskIds: string[];
   opportunities: Opportunity[];
   submissions: Submission[];
   /** Every message exchanged with this contact. Before these were passed, an
@@ -91,6 +100,7 @@ export function ActivityTimeline({
         title: t.title,
         dueAt: t.due_at,
         completedAt: t.completed_at,
+        holdOpen: holdOpenTaskIds.includes(t.id),
       }),
     ),
     ...opportunities.map(
@@ -136,7 +146,7 @@ export function ActivityTimeline({
         <form
           action={boundAddTask}
           aria-label={m["contact.tasks"]}
-          className="flex flex-wrap items-center gap-2 rounded-[8px] border border-dashed border-[var(--line-strong)] p-2"
+          className="flex flex-wrap items-center gap-2 rounded-[var(--radius-ctl)] border border-dashed border-[var(--line-strong)] p-2"
         >
           {hidden}
           <Input
@@ -203,6 +213,7 @@ export function ActivityTimeline({
           contactHasEmail={contactHasEmail}
           contactHasPhone={contactHasPhone}
           smsGate={smsGate}
+          smsBlockedLine={smsBlockedLine}
           noteAction={boundAddNote}
           emailAction={emailAction}
           smsAction={smsAction}
@@ -253,7 +264,11 @@ function TimelineRow({
             ) : null}
           </div>
         </div>
-        {!done ? (
+        {!done && item.holdOpen ? (
+          <p className="shrink-0 text-xs text-muted-foreground" data-testid="task-decide-first">
+            {m["todo.consent.timelineHint"]}
+          </p>
+        ) : !done ? (
           <form action={completeAction} className="shrink-0">
             {hidden}
             <input type="hidden" name="taskId" value={item.id} />

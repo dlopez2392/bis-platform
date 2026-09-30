@@ -1,4 +1,4 @@
-import { getBranding, getAlertPhone, brandLogoUrl, serviceDb } from "@bis/db";
+import { getBranding, getAlertPhone, getMailingAddress, brandLogoUrl, serviceDb } from "@bis/db";
 import { BrandingPanel } from "@/components/branding-panel";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { BackToSetup } from "@/components/back-to-setup";
@@ -24,9 +24,9 @@ export const dynamic = "force-dynamic";
  *
  * What keeps this page safe to expose is not "branding and nothing else" —
  * it is that every read on it is UNCONDITIONAL and already known to be safe
- * for this account's own users to see (`getBranding` and `getAlertPhone` are
- * both just `accounts_member_read` reads of columns the client's own RLS
- * already returns; `AlertPhoneCard` below renders with no `action`, so there
+ * for this account's own users to see (`getBranding`, `getMailingAddress` and
+ * `getAlertPhone` are all just `accounts_member_read` reads of columns the
+ * client's own RLS already returns; `AlertPhoneCard` below renders with no `action`, so there
  * is no write path here to gate at all). `resolveSmsSender` below is the
  * same shape: it reads THE gate's own tables via `serviceDb()` and hands
  * the card only the derived boolean, never the A2P/carrier detail behind
@@ -61,8 +61,9 @@ export default async function BrandingPage({
   // that moved to the RLS-enforced client — see ./actions.ts. alert_phone
   // has no write here at all — AlertPhoneCard renders with no `action`,
   // which is what makes it read-only rather than merely disabled-looking.
-  const [branding, alertPhone, smsGate] = await Promise.all([
+  const [branding, mailingAddress, alertPhone, smsGate] = await Promise.all([
     getBranding(serviceDb(), accountId),
+    getMailingAddress(serviceDb(), accountId),
     getAlertPhone(serviceDb(), accountId),
     // The SAME gate the send path (and the agency's own Settings copy of
     // this card) consults — never re-derived. Only `!smsGate.ok` crosses
@@ -86,6 +87,7 @@ export default async function BrandingPage({
         audience="client"
         brandName={branding.brandName}
         replyToEmail={branding.replyToEmail}
+        mailingAddress={mailingAddress}
         brandColor={branding.brandColor}
         brandNeutral={branding.brandNeutral}
         brandCorners={branding.brandCorners}

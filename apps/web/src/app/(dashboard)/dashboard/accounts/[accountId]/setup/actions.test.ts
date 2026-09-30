@@ -100,6 +100,7 @@ function allMocks() {
 const noFailures: Record<ReadKey, boolean> = {
   account: false, calendar: false, profile: false,
   numbers: false, calls: false, ticks: false,
+  forms: false, conversations: false,
 };
 
 /** The full rows `listPhoneNumbersForAccount` returns — `gatherSetupInputs`'s
@@ -128,6 +129,10 @@ function readyGathered(overrides: {
     profile: {
       greeting_en: "Thanks for calling Acme.", greeting_es: "",
       facts: "Open Monday to Friday.", enabled: false, languages: "en",
+      // website_assistant is not a go-live prerequisite (GO_LIVE_PREREQ_KEYS
+      // unchanged) — these three are irrelevant to every test in this file,
+      // filled in anyway so `inputs` stands on its own as a valid SetupInputs.
+      concierge_enabled: false, concierge_form_id: null, public_id: null,
     },
     // Mirrors gatherSetupInputs's own real relationship between `numbers`
     // (full rows) and `inputs.numbers` (status-only) — see that module's
@@ -135,6 +140,8 @@ function readyGathered(overrides: {
     numbers: numbers.map(({ status }) => ({ status })),
     callCount: 2,
     ticks: { emailSkipped: false, forwardingDone: false },
+    publishedFormCount: 0,
+    conciergeSiteConversation: false,
     ...overrides.inputs,
   };
   return { inputs, numbers, failed: { ...noFailures, ...overrides.failed } };
@@ -249,6 +256,7 @@ describe("goLiveAction", () => {
         profile: {
           greeting_en: "", greeting_es: "Gracias por llamar.",
           facts: "Open Monday to Friday.", enabled: false, languages: "en",
+          concierge_enabled: false, concierge_form_id: null, public_id: null,
         },
       },
     }));

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { unstable_rethrow } from "next/navigation";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -26,28 +25,27 @@ import { m } from "@/lib/messages";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
 import { SubmitButton } from "./submit-button";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
+import { settleCreateAccount } from "./create-account-feedback";
+import type { CreateAccountResult } from "./actions";
 
 export function CreateAccountDialog({
   action,
   blueprints,
 }: {
-  action: (formData: FormData) => Promise<void>;
+  action: (formData: FormData) => Promise<CreateAccountResult>;
   blueprints: { id: string; name: string }[];
 }) {
   const [open, setOpen] = useState(false);
-  const { pending, onSubmit } = useFormSubmit(async (formData) => {
-    try {
-      await action(formData);
-      setOpen(false);
-    } catch (e) {
-      // A successful create ends in redirect(), which Next.js implements by
-      // throwing a special control-flow error. Rethrow it so the navigation
-      // actually happens instead of being swallowed here and misreported as a
-      // failed create.
-      unstable_rethrow(e);
-      toast.error(m["accounts.createFailed"]);
-    }
-  });
+  // A refusal the action returns is shown in its own words; an unexpected
+  // throw gets the generic line; a successful create's redirect() propagates
+  // so the navigation happens. The branching lives in
+  // create-account-feedback.ts, where it is tested without a DOM.
+  const { pending, onSubmit } = useFormSubmit((formData) =>
+    settleCreateAccount(() => action(formData), {
+      close: () => setOpen(false),
+      error: (message) => toast.error(message),
+    }),
+  );
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -61,7 +59,7 @@ export function CreateAccountDialog({
           <DialogTitle>{m["accounts.add"]}</DialogTitle>
         </DialogHeader>
         <form
-          // onSubmit, NOT the `action` prop: on the catch path the dialog
+          // onSubmit, NOT the `action` prop: on a failed create the dialog
           // stays open, and React's post-action reset cleared the name,
           // timezone and blueprint Select the operator had just filled in — so
           // a failed create meant re-entering all of it, and re-picking a

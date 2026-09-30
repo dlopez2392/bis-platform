@@ -22,7 +22,7 @@ Daily.co for video links.
 | `bis-automations` | sonnet | cron harness, every pass, weekly reports, website traffic, `automations.ts`/`weekly-report.ts`/`sites.ts` | adds a second scheduler |
 | `bis-crm` | sonnet | contacts, import/export, dedupe flags, pipeline, forms + `/f/[publicId]`, search, blueprints, checklist | mutates Test Client One |
 | `bis-frontend` | sonnet | tokens, shadcn components, theming engine, shell, dashboard, Branding, setup wizard shell, styleguide, copy catalogue | hard-codes a color |
-| `bis-platform` | opus | Clerk auth/tenancy, middleware, CI, hooks, Vercel config, env contract, tooling, runbooks, deploy verification | pushes to main |
+| `bis-platform` | opus | Clerk auth/tenancy, proxy (formerly middleware), CI, hooks, Vercel config, env contract, tooling, runbooks, deploy verification | pushes to main |
 | `bis-reviewer` | opus | two-stage review (spec, then quality) with empirical proof | edits or commits |
 | `bis-design-reviewer` | sonnet | DESIGN.md definition-of-done audit, measured on a running build | starts a build |
 | `bis-e2e-qa` | sonnet | Playwright suite, fixture discipline, the three gates, CI diagnosis | runs two gates at once |
@@ -60,13 +60,17 @@ not write feature code. It:
    produced, numbered steps, and the expected red evidence. The brief names
    its owner agent and lists anything outside that agent's ownership as "ask
    the orchestrator", so the agent stops instead of reaching across.
-2. **Owns everything irreversible or shared**: applying migrations (Supabase
-   MCP `apply_migration` against `tlbkbmlrfafquucsmsmm`, after a pre-flight
-   READ that matches `schema_migrations.name` and the concrete objects, then a
-   post-apply verification, then an "APPLIED — NEVER RE-APPLY" ledger line);
-   opening and merging PRs (both `verify` and `e2e` green on the CURRENT HEAD,
-   read from check runs via REST); pushing branches; the fixture sweep; and any
-   env or Vercel change, which it writes as a runbook step for danlo.
+2. **Owns everything irreversible or shared**: applying migrations — since
+   #133, CI first (`db:push:ci` against the CI project `odnobiodsftffphuuosz`,
+   dispatched one step at a time via `ci-project-setup.yml`) and only then
+   production (Supabase MCP `apply_migration` against `tlbkbmlrfafquucsmsmm`,
+   after a pre-flight READ that matches `schema_migrations.name` and the
+   concrete objects, then a post-apply verification, then an
+   "APPLIED — NEVER RE-APPLY" ledger line; `docs/runbooks/ci-supabase-project.md`
+   section 6); opening and merging PRs (both `verify` and `e2e` green on the
+   CURRENT HEAD, read from check runs via REST); pushing branches; the fixture
+   sweep; and any env or Vercel change, which it writes as a runbook step for
+   danlo.
 3. **Sequences the work.** Schema first (`bis-db-schema`, apply, then the
    domain agent builds on the applied schema). Then domain tasks, in parallel
    when their ownership sets are disjoint. Then `bis-reviewer` and, for UI,

@@ -1,35 +1,21 @@
 import type { SupabaseClient } from "@bis/db";
 import { getEmailProvider } from "@/lib/email";
-import { getSmsProvider } from "@/lib/sms";
-import type { SmsProvider } from "@/lib/sms/types";
+import { smsSenderFor } from "@/lib/consent/gate";
 import type { Pass, PassContext, PassCounters } from "./context";
 
 /**
- * THE ONLY automations module allowed to import the provider factories —
- * imports.test.ts scans every other file under lib/automations for exactly
- * these imports. Everything a pass sends goes through the two factories'
- * production guard (VERCEL_ENV AND NODE_ENV), because there is no other way
- * for a pass to obtain a provider.
+ * THE ONLY automations module allowed to import the EMAIL provider factory —
+ * imports.test.ts scans every other file under lib/automations for it.
+ * Everything a pass emails goes through the factory's production guard
+ * (VERCEL_ENV AND NODE_ENV). Texts no longer come from a factory here: since
+ * the consent chain's PR-1 the only way a pass texts is `ctx.sms`, which is
+ * the send gate (lib/consent/gate.ts), and the gate is the only module
+ * outside lib/sms that may reach an SMS provider (lib/consent/scans.test.ts).
  */
-/**
- * The LAZY SMS getter, defined once. `getSmsProvider()` throws in production
- * while TELNYX_API_KEY is unset (by design — no A2P-approved client yet), so
- * nothing constructs it until a send has actually been decided; memoised on
- * the first success, retried on the next call after a throw. buildPassContext
- * hands one to every cron tick; the inline instant reply (instant-reply.ts)
- * takes one for a single form submission. This module is the only one allowed
- * to touch the factory (imports.test.ts), which is why the getter lives here
- * and not beside its inline caller.
- */
-export function lazySmsProvider(): () => SmsProvider {
-  let sms: SmsProvider | null = null;
-  return () => (sms ??= getSmsProvider());
-}
-
 export function buildPassContext(
   input: { db: SupabaseClient; now: Date; origin: string },
 ): PassContext {
-  return { ...input, email: getEmailProvider(), sms: lazySmsProvider() };
+  return { ...input, email: getEmailProvider(), sms: smsSenderFor(input.db) };
 }
 
 /**

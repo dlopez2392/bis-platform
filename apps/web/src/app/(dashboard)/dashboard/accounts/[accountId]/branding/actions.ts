@@ -29,6 +29,10 @@ import { CORNER_NAMES, MODE_NAMES, NEUTRAL_NAMES, TYPE_NAMES, parseAllowlisted }
 import { isValidEmail } from "@/lib/forms/guards";
 import { m } from "@/lib/messages";
 
+/** accounts_mailing_address_check's upper bound (migration 0048). Not
+ *  exported: a "use server" module may export only async functions. */
+const MAX_MAILING_ADDRESS = 300;
+
 export async function setBrandingAction(
   accountId: string,
   formData: FormData,
@@ -64,6 +68,28 @@ export async function setBrandingAction(
   const replyToEmail = rawReplyTo === "" ? null : rawReplyTo;
   if (replyToEmail !== null && !isValidEmail(replyToEmail)) {
     return { ok: false, error: m["branding.badReplyTo"] };
+  }
+
+  // The postal address the reactivation email prints (migration 0048; the
+  // requirement for one is the orchestrator's reading of CAN-SPAM, not a
+  // lawyer's). Empty clears it, like replyToEmail above. Never looser than
+  // the column's CHECK, which strips EXACTLY what `.trim()` strips and caps
+  // the rest at 300 code points: whitespace-only therefore arrives as null,
+  // never as text Postgres would refuse, and `.length` counts UTF-16 units —
+  // never fewer than code points — so a value this accepts the CHECK accepts.
+  // An HTML form submission normalizes a textarea's line breaks to CRLF on
+  // submit, whatever the user actually typed or however the value was set
+  // programmatically — a browser fact, not a bug in the page. Every other
+  // line-break convention (a lone CR included) is folded to LF here, before
+  // the trim and the length check, so the stored value — and the count the
+  // length check uses — is always LF-only, matching what the unit tests
+  // post and what the reactivation email expects to print.
+  const rawMailing = String(formData.get("mailingAddress") ?? "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+  const mailingAddress = rawMailing === "" ? null : rawMailing;
+  if (mailingAddress !== null && mailingAddress.length > MAX_MAILING_ADDRESS) {
+    return { ok: false, error: m["branding.mailingAddressTooLong"] };
   }
 
   // A closed set on the way in as well as in the column. The constraint is the
@@ -123,9 +149,9 @@ export async function setBrandingAction(
       // editing the display name must not delete the logo already set.
       brandLogoPath
         ? { brandName, brandLogoPath, brandColor, brandNeutral, brandCorners, brandType, brandMode,
-            replyToEmail }
+            replyToEmail, mailingAddress }
         : { brandName, brandColor, brandNeutral, brandCorners, brandType, brandMode,
-            replyToEmail },
+            replyToEmail, mailingAddress },
       userId,
     );
   } catch (e) {

@@ -31,7 +31,7 @@ const DAY = { visitors: 10, pageviews: 20, pages: [{ value: "/", visitors: 10, p
   devices: [{ value: "mobile", visitors: 7, pageviews: 14 }] };
 const ctx = (): PassContext => ({
   db: {} as never, now: TICK, origin: "https://app.example.com",
-  email: { isFake: true, send: vi.fn() }, sms: () => ({ isFake: true, send: vi.fn() }),
+  email: { isFake: true, send: vi.fn() }, sms: vi.fn(),
 });
 const EMPTY = { synced: 0, daysSynced: 0, failed: 0, skippedNotYet: 0, skippedUpToDate: 0, skippedCap: 0, unresolvableTimezone: 0 };
 

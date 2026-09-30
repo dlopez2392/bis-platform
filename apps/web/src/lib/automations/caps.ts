@@ -2,7 +2,11 @@
  * FIXED platform constants (danlo, 2026-09-06), and they apply to RECIPE
  * passes only — the reminder and follow-up passes are uncapped (see their doc
  * comments: a reminder is one-to-one with a booking the customer made, and a
- * daily cap would drop reminders for a busy client).
+ * daily cap would drop reminders for a busy client), and since part B so is
+ * `appointment_confirm`, the THIRD uncapped pass and the first RECIPE to be
+ * one (spec decision 2): it is keyed on `starts_at` inside a 75-minute
+ * window, so no status change and no import can burst it, and a fully-booked
+ * Saturday would otherwise leave five customers unasked.
  *
  * The cap's job is a burst guard against a bug or a bulk status change, not
  * a plan feature: the morning band is twelve ticks wide, so an uncapped pass
@@ -17,6 +21,16 @@ export const AUTOMATION_DAILY_CAP = 25;
 /** "A day" is a rolling 24h from the tick, counted from the pass's own stamp
  *  column — no ledger table, no timezone. */
 export const DAILY_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * REACTIVATION'S OWN CAP (danlo, 2026-09-21), and the reason it is not the
+ * platform's 25: 25 a day is 750 people a month who did NOT just interact
+ * with the business, which is a blast. Five is a number an operator can read
+ * in their sent folder. Counted per account per rolling 24h off
+ * `contacts.reactivation_sent_at`, and it composes with the harder limit the
+ * schema itself enforces — one reactivation per contact, ever.
+ */
+export const REACTIVATION_DAILY_CAP = 5;
 
 /**
  * One SMS attempt per booking per day after a FAILED attempt (danlo,
@@ -37,6 +51,10 @@ export const DAILY_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
  * customer their reminder. That pass still writes its attempt marker but
  * never reads it back; the window itself bounds it to three attempts and
  * three failed rows, which is the pile-up this hold exists to prevent.
+ * THE CONFIRMATION ASK IS EXEMPT TOO (part B), for the identical reason at a
+ * different width: its window is 75 minutes — five ticks — so the same 24h
+ * hold would again mean one attempt ever. It writes `confirm_sms_failed_at`
+ * and never reads it back.
  */
 export const SMS_RETRY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
@@ -83,3 +101,32 @@ export const INSTANT_REPLY_THREAD_HOLD_MS = 24 * 60 * 60 * 1000;
  * eleven with the legacy mobile "1" (+52 1 …) some people still type.
  */
 export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/, /^\+521?\d{10}$/];
+
+/**
+ * THE USAGE REPORT's per-tick limits (client billing, spec section 3 flow 3).
+ * Not a burst guard like the recipe caps: a backlog is simply sent over the
+ * next ticks, and nothing is lost by waiting (each row carries its own
+ * occurred_at, and Stripe takes events up to 35 days old).
+ *
+ *   USAGE_REPORT_TICK_CAP  meter events sent per tick. At an ASSUMED 0.2-0.3 s
+ *     a round trip (not measured; the budget below bounds the pass whatever
+ *     it costs), 200 rows take about 40-60 s. 200 every 15 minutes is 19,200
+ *     a day, about 128 clients at an estimated 150 billable facts a day each.
+ *     Past that, Stripe's v2 meter event stream is the next step.
+ *   USAGE_REPORT_BUDGET_MS the pass's wall clock for sending. It stops
+ *     STARTING sends at this minus METER_EVENT_WORST_CASE_MS below, so the
+ *     last send still ends inside it even in that worst case. The release
+ *     pass's own shape (RELEASE_BUDGET_MS): the two 60 s budgets leave the
+ *     route's 300 s maxDuration room for every other pass.
+ *   METER_EVENT_WORST_CASE_MS one send's worst case past its start, for the
+ *     installed stripe SDK (22.6.2; see stripe-gateway.ts's
+ *     METER_EVENT_TIMEOUT_MS/reportMeterEvent comments): its per-request
+ *     `timeout` is a SOCKET-IDLE timeout, not a hard deadline, and its
+ *     `RequestSender.js` retries a reset/broken-pipe connection ONCE even
+ *     with `maxNetworkRetries: 0`. Two idle timeouts plus one retry's
+ *     ~0.5 s backoff: 2 * 10_000 + 500 = 20,500 ms, rounded up to 21,000 for
+ *     margin — hence the 60 − 21 = 39 s last-start point above.
+ */
+export const USAGE_REPORT_TICK_CAP = 200;
+export const USAGE_REPORT_BUDGET_MS = 60_000;
+export const METER_EVENT_WORST_CASE_MS = 21_000;

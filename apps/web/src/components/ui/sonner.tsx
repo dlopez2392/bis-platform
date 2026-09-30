@@ -16,7 +16,17 @@ const Toaster = ({ ...props }: ToasterProps) => {
   return (
     <Sonner
       theme={theme as ToasterProps["theme"]}
-      className="toaster group"
+      // Radix sets `body { pointer-events: none }` while a modal Sheet/Dialog
+      // is open; without this the toaster — drawn above the modal, but a
+      // sibling of it in the DOM — inherits that and a click passes through
+      // to whatever sits underneath instead of reaching the toast (#151, an
+      // Undo toast unclickable behind the contact drawer). Two things keep
+      // this from blocking anything else: the toaster `ol` renders only
+      // while a toast exists (sonner's own `if (!filteredToasts.length)
+      // return null;`), and even then it has no height of its own — every
+      // toast inside it is absolutely positioned — so only the toasts' own
+      // boxes ever take a click.
+      className="toaster group pointer-events-auto"
       icons={{
         success: <CircleCheckIcon className="size-4" />,
         info: <InfoIcon className="size-4" />,

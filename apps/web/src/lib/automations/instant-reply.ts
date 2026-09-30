@@ -1,13 +1,16 @@
 import {
   getAutomation, parseInstantReplyConfig, hasRecentOutboundSms, countInstantRepliesSince,
-  stampInstantReplySent, type SupabaseClient,
+  stampInstantReplySent, readAccountTimezone, type SupabaseClient,
 } from "@bis/db";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import {
   AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS, INSTANT_REPLY_THREAD_HOLD_MS, INSTANT_REPLY_ALLOWED_PATTERNS,
 } from "./caps";
-import { lazySmsProvider } from "./harness";
-import { sendAutomationSms, markAutomationSmsSent, type SentSms, type SmsSendContext } from "./send-sms";
+import { smsSenderFor } from "@/lib/consent/gate";
+import { sendAutomationSms, markAutomationSmsSent, type SentSms, type SmsSendContext, pastRetryAge } from "./send-sms";
+import {
+  holdOrSend, logSkipped, subjectOf, REASONS, type SmsHoldSubject, type LogSubject, type Releaser,
+} from "./hold-or-send";
 
 /**
  * Milestone C — the INLINE recipe: a text to a new web-form lead from the
@@ -44,6 +47,9 @@ export type InstantReplyInput = {
   /** The submission instant, passed in by the action so the hold and the cap
    *  measure from ONE "now". */
   now: Date;
+  /** When the person wrote in: `now` on the inline send, the held payload's
+   *  on a release. The re-hold age cap is measured from it. */
+  submittedAt?: Date;
   accountId: string;
   submissionId: string;
   contactId: string;
@@ -51,9 +57,15 @@ export type InstantReplyInput = {
    *  (account, contact), so a returning contact's second submission lands in
    *  the same thread the hold reads. */
   conversationId: string;
-  /** `toE164(rawPhone)`: null when the person typed nothing, or something the
+  /** `e164Of(rawPhone)`: null when the person typed nothing, or something the
    *  parser could not read. A number stored as typed is NOT textable. */
   phoneE164: string | null;
+  /** The number as the person TYPED it (review R2-C1). This is what is
+   *  texted, so the gate judges the ten digits itself and holds a number
+   *  that could be Mexican or US; `phoneE164` would claim a confirmed +1.
+   *  `phoneE164` still decides "no phone" and the region check. Absent on a
+   *  payload held before PR-1, where `phoneE164` is texted as before. */
+  phoneAsTyped?: string | null;
   /** The submission's normalized locale — the language the person filled the
    *  form in, the receipt email's own signal. Picks the body. */
   locale: "en" | "es";
@@ -68,8 +80,33 @@ export type InstantReplySkip =
 
 export type InstantReplyOutcome =
   | { kind: "sent"; unstamped: boolean }
+  | { kind: "held" }
+  | { kind: "blocked"; reason: string }
   | { kind: "failed"; error: string }
   | { kind: "skipped"; reason: InstantReplySkip; detail?: string };
+
+/** What the release needs and the submission row cannot cheaply re-derive.
+ *  Written into the held row's `payload`; parsed back, never trusted. */
+export type InstantReplyPayload = {
+  contactId: string; conversationId: string; phoneE164: string; phoneAsTyped?: string; locale: "en" | "es"; consentWithheld: boolean;
+  /** When they wrote in (UTC ISO); absent on a payload written before PR-1's
+   *  re-hold, which then has no age cap. */
+  submittedAt?: string;
+};
+
+export function parseInstantReplyPayload(raw: unknown): InstantReplyPayload | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const p = raw as Record<string, unknown>;
+  if (typeof p.contactId !== "string" || typeof p.conversationId !== "string" || typeof p.phoneE164 !== "string") return null;
+  if (p.locale !== "en" && p.locale !== "es") return null;
+  if (typeof p.consentWithheld !== "boolean") return null;
+  const phoneAsTyped = typeof p.phoneAsTyped === "string" && p.phoneAsTyped.trim() ? p.phoneAsTyped : undefined;
+  const submittedAt = typeof p.submittedAt === "string" && Number.isFinite(Date.parse(p.submittedAt)) ? p.submittedAt : undefined;
+  return {
+    contactId: p.contactId, conversationId: p.conversationId, phoneE164: p.phoneE164, ...(phoneAsTyped ? { phoneAsTyped } : {}),
+    locale: p.locale, consentWithheld: p.consentWithheld, ...(submittedAt ? { submittedAt } : {}),
+  };
+}
 
 const WHAT = "instant reply";
 
@@ -100,9 +137,21 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
   const body = (input.locale === "es" ? config.bodyEs : row.body).trim();
   if (!body) return { kind: "skipped", reason: "disabled", detail: `empty ${input.locale} body` };
 
+  // From here on the recipe is ON, so a refusal is something the client
+  // wants to see on the Activity page. Nothing above this line is logged:
+  // `disabled` would write a row per lead for every company without the
+  // recipe, and `noPhone`/`outsideRegion`/`consentWithheld` are decided
+  // BEFORE the recipe is even read, so they are never logged for anyone —
+  // SKIP_REASONS' entries for them are reachable only through a
+  // hand-edited payload reaching releaseInstantReply directly.
+  const logSubject: LogSubject = {
+    accountId, source: "instant_reply", channel: "sms", subjectKey: `submission:${submissionId}`, contactId: input.contactId,
+  };
+
   const gate = await resolveSmsSender(db, accountId);
   if (!gate.ok) {
     console.error(`${WHAT} skipped for submission ${submissionId}: account ${accountId} cannot text (${gate.reason})`);
+    await logSkipped({ db }, logSubject, REASONS.smsGate);
     return { kind: "skipped", reason: "smsGate", detail: gate.reason };
   }
 
@@ -113,46 +162,114 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
   // not worth its weight at this volume — noted here so nobody hunts for it.
   const holdSince = new Date(now.getTime() - INSTANT_REPLY_THREAD_HOLD_MS);
   if (await hasRecentOutboundSms(db, accountId, input.conversationId, holdSince)) {
+    await logSkipped({ db }, logSubject, REASONS.recentText);
     return { kind: "skipped", reason: "recentText" };
   }
 
   const capSince = new Date(now.getTime() - DAILY_CAP_WINDOW_MS).toISOString();
   if (await countInstantRepliesSince(db, accountId, capSince) >= AUTOMATION_DAILY_CAP) {
     console.error(`${WHAT} skipped for submission ${submissionId}: account ${accountId} is at its daily cap (${AUTOMATION_DAILY_CAP}/24h)`);
+    await logSkipped({ db }, logSubject, REASONS.dailyCap);
     return { kind: "skipped", reason: "dailyCap" };
   }
 
-  // The provider comes from the harness's lazy getter and from nowhere else
-  // (imports.test.ts): constructed only now, after the send is decided.
-  const ctx: SmsSendContext = { db, sms: lazySmsProvider() };
-  let sent: SentSms;
+  // The send gate, bound to this client (lib/consent/gate.ts): it decides,
+  // and takes the SMS provider only once a send is cleared. No module here
+  // imports a provider (imports.test.ts).
+  const ctx: SmsSendContext = { db, sms: smsSenderFor(db), now };
+  // THE SENDING HOURS: the one inline send goes through the same seam as
+  // every pass. Held → the row carries the payload, and releaseInstantReply
+  // below re-runs this whole function from it when the hours open.
+  const subject: SmsHoldSubject = {
+    ...logSubject,
+    smsKind: "automation.instant_reply",
+    accountTimezone: await readAccountTimezone(db, accountId),
+    payload: {
+      contactId: input.contactId, conversationId: input.conversationId, phoneE164: to,
+      ...(input.phoneAsTyped ? { phoneAsTyped: input.phoneAsTyped } : {}),
+      locale: input.locale, consentWithheld: input.consentWithheld,
+      submittedAt: (input.submittedAt ?? now).toISOString(),
+    } satisfies InstantReplyPayload,
+  };
+  let sent: SentSms | null = null;
+  let unstamped = false;
+  let outcome: "sent" | "held" | "skipped";
   try {
-    sent = await sendAutomationSms(ctx, {
-      accountId, contactId: input.contactId, to, from: gate.from, body,
-      // The same locale that picked the body picks the opt-out
-      // disclosure's language. Sending a Spanish reply that ends in
-      // "Reply STOP to opt out." would undo the whole point of having a
-      // bodyEs at all.
-      language: input.locale,
-      // Nothing retries an instant reply, so there is no attempt marker to write.
-      onProviderFailure: async () => {},
+    outcome = await holdOrSend({ db, now }, subject, async () => {
+      sent = await sendAutomationSms(ctx, {
+        accountId, contactId: input.contactId, to: input.phoneAsTyped || to, body,
+        kind: subject.smsKind, accountTimezone: subject.accountTimezone,
+        // The same locale that picked the body picks the opt-out
+        // disclosure's language. Sending a Spanish reply that ends in
+        // "Reply STOP to opt out." would undo the whole point of having a
+        // bodyEs at all.
+        language: input.locale,
+        // Nothing retries an instant reply, so there is no attempt marker to write.
+        onProviderFailure: async () => {},
+      });
+      // SEND-THEN-STAMP, no retry: the per-thread hold is the double-text guard;
+      // the stamp is the cap's evidence — a miss undercounts by one and re-texts
+      // no one.
+      try {
+        await stampInstantReplySent(db, submissionId);
+      } catch (e) {
+        unstamped = true;
+        console.error(`${WHAT}: text sent but submission ${submissionId} not stamped: ${String(e)}`);
+      }
     });
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     console.error(`${WHAT} failed for submission ${submissionId}: ${error}`);
     return { kind: "failed", error };
   }
-
-  // SEND-THEN-STAMP, no retry: the per-thread hold is the double-text guard;
-  // the stamp is the cap's evidence — a miss undercounts by one and re-texts
-  // no one.
-  let unstamped = false;
-  try {
-    await stampInstantReplySent(db, submissionId);
-  } catch (e) {
-    unstamped = true;
-    console.error(`${WHAT}: text sent but submission ${submissionId} not stamped: ${String(e)}`);
-  }
-  await markAutomationSmsSent(ctx, accountId, sent, WHAT);
+  if (outcome === "held") return { kind: "held" };
+  if (outcome === "skipped") return { kind: "blocked", reason: "the consent gate refused it; the log row says why" };
+  await markAutomationSmsSent(ctx, accountId, sent!, WHAT);
   return { kind: "sent", unstamped };
 }
+
+const SKIP_REASONS: Record<InstantReplySkip, string> = {
+  noPhone: REASONS.noPhone, outsideRegion: REASONS.outsideRegion, consentWithheld: REASONS.consentWithheld,
+  disabled: REASONS.recipeOff, smsGate: REASONS.smsGate, recentText: REASONS.recentText, dailyCap: REASONS.dailyCap,
+};
+
+/** The release: rebuild the input from the held row and run the whole
+ *  function again — every check re-applies, and the held row flips to
+ *  whatever this run decides. */
+export const releaseInstantReply: Releaser = async (ctx, row) => {
+  // `subject_key` is always `submission:<id>` for this source (built above);
+  // anything else means the row was never this function's to release. A
+  // silent `.replace` no-op would re-run with the WRONG submission id and,
+  // worse, write the release's log under a DIFFERENT subject key than the
+  // one the pass holds — leaving the original held row to be picked up and
+  // re-released on every subsequent tick forever.
+  const match = /^submission:(.+)$/.exec(row.subject_key);
+  if (!match) {
+    await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
+    return "skipped";
+  }
+  const payload = parseInstantReplyPayload(row.payload);
+  if (!payload) {
+    await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
+    return "skipped";
+  }
+  // The re-hold age cap: every hold ends here, so this one door is where a
+  // reply more than RETRY_MAX_AGE_MS after they wrote in stops (orchestrator,
+  // 2026-09-26). A payload from before PR-1 carries no instant: no cap.
+  const { submittedAt, ...rest } = payload;
+  if (submittedAt && pastRetryAge(new Date(submittedAt), ctx.now)) {
+    await logSkipped(ctx, subjectOf(row), REASONS.tooLongAfterWriteIn);
+    return "skipped";
+  }
+  const outcome = await sendInstantReply({
+    db: ctx.db, now: ctx.now, accountId: row.account_id,
+    submissionId: match[1]!, ...rest, ...(submittedAt ? { submittedAt: new Date(submittedAt) } : {}),
+  });
+  if (outcome.kind === "skipped") {
+    await logSkipped(ctx, subjectOf(row), SKIP_REASONS[outcome.reason]);
+    return "skipped";
+  }
+  // holdOrSend already wrote this row `skipped` with the gate's reason.
+  if (outcome.kind === "blocked") return "skipped";
+  return outcome.kind;
+};

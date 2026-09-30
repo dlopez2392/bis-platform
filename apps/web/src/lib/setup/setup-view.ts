@@ -11,7 +11,9 @@ import { goLivePrereqsMet, type SetupStepKey, type SetupStepState } from "./setu
 // does not include, so neither was reachable by a test. See
 // setup-view.test.ts.
 
-export type ReadKey = "account" | "calendar" | "profile" | "numbers" | "ticks" | "calls";
+export type ReadKey =
+  | "account" | "calendar" | "profile" | "numbers" | "ticks" | "calls"
+  | "forms" | "conversations";
 
 /** Which read each step's answer depends on. A step whose read did not settle
  *  renders "couldn't check" — never "done", and never "to do" either, since a
@@ -21,6 +23,11 @@ export const READS_BEHIND: Record<SetupStepKey, readonly ReadKey[]> = {
   branding: ["account"],
   hours: ["calendar"],
   voice_profile: ["profile"],
+  // Three legs: the toggle/destination live on `profile`, row 2's published
+  // count on `forms`, row 4's proof on `conversations`. Any one failing
+  // degrades ONLY this step — never voice_profile, which reads `profile`
+  // alone and would otherwise wrongly go unknown on a forms-only failure.
+  website_assistant: ["profile", "forms", "conversations"],
   number: ["numbers"],
   // Both: `from_email` decides done, the stored tick decides skipped.
   email: ["account", "ticks"],

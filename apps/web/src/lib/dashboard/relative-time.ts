@@ -20,7 +20,14 @@ const DAY_MS = 24 * HOUR_MS;
  * rendering server) reads "now" rather than a nonsensical negative bucket.
  */
 export function relativeTime(createdAtIso: string, nowMs: number): string {
-  const diff = Math.max(0, nowMs - new Date(createdAtIso).getTime());
+  const createdAtMs = new Date(createdAtIso).getTime();
+  // An unparseable timestamp must not fall through to `${NaN}d` — every
+  // comparison against NaN is false, so without this guard a bad ISO string
+  // silently renders as the literal text "NaNd". Callers (contact-drawer.tsx,
+  // activity-card.tsx) drop this straight into a <span>, so an empty string
+  // is the honest "nothing to show" rather than invented copy.
+  if (Number.isNaN(createdAtMs)) return "";
+  const diff = Math.max(0, nowMs - createdAtMs);
   if (diff < MINUTE_MS) return "now";
   if (diff < HOUR_MS) return `${Math.floor(diff / MINUTE_MS)}m`;
   if (diff < DAY_MS) return `${Math.floor(diff / HOUR_MS)}h`;

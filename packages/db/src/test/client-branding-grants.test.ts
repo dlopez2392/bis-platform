@@ -31,6 +31,11 @@ const BRANDING_COLUMNS = [
   // Not visual branding, and it belongs here for the same reason as the rest:
   // a client edits it on the same page, through the same RLS-enforced write.
   "reply_to_email",
+  // 0048. Same argument as reply_to_email: the business's own postal address,
+  // edited on the same Branding page, printed only in mail the account already
+  // sends under its own brand. Leave it out of the grant and a client's save
+  // is FILTERED, not refused: success reported, nothing stored.
+  "mailing_address",
 ].sort();
 
 // `withRollback` is the connection helper this package exposes (with `actAs`
