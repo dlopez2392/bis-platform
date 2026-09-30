@@ -463,6 +463,30 @@ export const m = {
   // "line", "mx" and "us" are the spec's words, verbatim.
   "contact.messages.title": "Messages",
   "contact.messages.texts": "Texts",
+  // Consent chain PR-3: the Email row (spec §6; plan G14). "Stop emails" /
+  // "Resume emails…" mirror the Texts row's words.
+  "contact.messages.email": "Email",
+  "contact.email.allowed": "Allowed",
+  "contact.email.stopped": "Stopped",
+  "contact.email.since": "Since {date}",
+  "contact.email.how.unsubscribeLink": "unsubscribe link",
+  "contact.email.how.staff": "you recorded it",
+  "contact.email.how.backfill0049": "you marked them “No marketing emails”",
+  "contact.email.stopEmails": "Stop emails",
+  "contact.email.stoppedToast": "Emails stopped.",
+  "contact.email.resume": "Resume emails…",
+  "contact.email.resumeNoteLabel": "What did they ask for? (required)",
+  "contact.email.resumeSubmit": "Resume emails",
+  "contact.email.resumeCancel": "Cancel",
+  "contact.email.resumeNoteRequired": "Write what they asked for before you turn emails back on.",
+  "contact.email.resumedToast": "Emails are back on. To stop them again, use Stop emails.",
+  "contact.email.customerOnly": "They can resubscribe from the unsubscribe link in any email from you.",
+  "contact.email.loadFailed": "Couldn't load their email settings. Try again.",
+  "contact.email.changed": "Their emails changed while you were looking. This is where they stand now.",
+  "contact.email.failed": "Couldn't save that — please try again.",
+  "contact.email.noEmail": "They have no email address.",
+  "contact.email.undoBusy": "Your last change is still saving. Try again in a moment.",
+  "contact.email.undoExpired": "That can no longer be undone here. Use Stop emails or Resume emails instead.",
   "contact.phoneCountry.word": "Check number",
   "contact.phoneCountry.line": "This number could be Mexican or US.",
   "contact.phoneCountry.mx": "Mexico (+52)",
@@ -726,6 +750,11 @@ export const m = {
   "compose.smsHeld": "Texts to them are on hold while you check whether they asked to stop.",
   "compose.smsCheckNumber": "This number could be Mexican or US. Pick its country on their contact before you text it.",
   "compose.smsStateUnknown": "Couldn't check whether they can get texts. Reload the page to try again.",
+  // Consent chain PR-3 (spec §6, choice 22; plan G15): the email composer
+  // stays usable and says why the operator should keep it to their matter.
+  "compose.emailUnsubscribed": "They unsubscribed from your emails on {date}. Write only about something they asked you for.",
+  "compose.emailStoppedByYou": "You stopped emails to them on {date}. Write only about something they asked you for.",
+  "compose.emailStateUnknown": "Couldn't check whether they unsubscribed. Write only about something they asked you for.",
   // {n} segments — SMS bills per segment, and a single non-GSM character
   // (an accent, a curly apostrophe) drops the whole message to 70 per segment.
   "compose.smsSegments": "{chars} characters · {segments} message(s)",
@@ -1565,6 +1594,8 @@ export const m = {
   // lib/automations/hold-or-send.ts points at these; its older lines stay
   // there (the automation engine's precedent, Global Constraints).
   "automations.reason.ledgerRetry": "Waiting a few minutes: couldn't check whether they can get texts",
+  "automations.reason.emailLedgerRetry": "Waiting a few minutes: couldn't check whether they can get emails",
+  "automations.reason.emailSetupRetry": "Waiting a few minutes: the unsubscribe link couldn't be added",
   "automations.reason.textsStopped": "They stopped texts from this business",
   "automations.reason.textsHeld": "Texts to them are on hold",
   "automations.reason.numberUnconfirmed": "Their number could be Mexican or US. Pick its country on their contact",
@@ -2426,6 +2457,37 @@ export const m = {
   "billing.done.success.body": "Your plan starts as soon as your payment is confirmed, usually within a minute. You can close this tab.",
   "billing.done.cancelled.title": "Checkout wasn't finished",
   "billing.done.cancelled.body": "Nothing was charged. Use the link you were sent to try again.",
+
+  // Consent chain PR-3: the footer every customer email carries (spec §4.3),
+  // in the email's language. The link text is the second key.
+  "email.unsubscribe.lead.en": "Don't want these emails?",
+  "email.unsubscribe.link.en": "Unsubscribe",
+  "email.unsubscribe.lead.es": "¿No quiere recibir estos correos?",
+  "email.unsubscribe.link.es": "Cancelar suscripción",
+  // The public /u/[token] page (spec §6). English and Spanish stacked: the
+  // token carries no language. {Business} is the brand name, or the
+  // business/el negocio when it is blank (always, for a bad link: a token
+  // that does not open names no business). Decision Q1: the page asks, and
+  // its one primary button records; decision P2: the button says "Stop
+  // emails", as the title asks.
+  "unsubscribe.pageTitle": "Email preferences",
+  "unsubscribe.confirm.en": "Stop emails from {Business}?",
+  "unsubscribe.confirm.es": "¿Dejar de recibir correos de {Business}?",
+  "unsubscribe.confirmBody.en": "{Business} will stop sending you automated emails. You'll still get a confirmation when you book or ask for something.",
+  "unsubscribe.confirmBody.es": "{Business} dejará de enviarle correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.",
+  "unsubscribe.button": "Stop emails / Dejar de recibir correos",
+  "unsubscribe.done.en": "You're unsubscribed. {Business} won't send you any more automated emails. You'll still get a confirmation when you book or ask for something.",
+  "unsubscribe.done.es": "Listo. {Business} ya no le enviará correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.",
+  "unsubscribe.resubscribe": "Resubscribe / Volver a suscribirme",
+  "unsubscribe.resubscribed.en": "You'll get emails from {Business} again.",
+  "unsubscribe.resubscribed.es": "Volverá a recibir correos de {Business}.",
+  "unsubscribe.badLink.en": "This unsubscribe link doesn't work. Contact {Business} directly and ask them to stop.",
+  "unsubscribe.badLink.es": "Este enlace no funciona. Comuníquese directamente con {Business} y pida que dejen de escribirle.",
+  "unsubscribe.failed.en": "Something went wrong on our side. Try the link again in a few minutes.",
+  "unsubscribe.failed.es": "Algo falló de nuestro lado. Vuelva a abrir el enlace en unos minutos.",
+  "unsubscribe.business.en": "the business",
+  "unsubscribe.business.es": "el negocio",
+  "unsubscribe.poweredBy": "Powered by BIS",
 } as const;
 
 export type MessageKey = keyof typeof m;

@@ -40,13 +40,15 @@ describe("the spec's own words (§6)", () => {
 
   it("no PR-1 line exposes a code, a kind or template syntax other than its own placeholder (DESIGN.md voice)", () => {
     const keys = Object.keys(m).filter((k) => /^(contact\.phoneCountry|contact\.messages|compose\.sms(Stopped|StoppedUndated|Held|CheckNumber|StateUnknown)|settings\.alertPhone(Country|Stopped)|automations\.quiet\.fixed|activity\.source\.textback|voice\.textback\.defaultBodyHeld|automations\.reason\.)/.test(k));
-    // 33, read off messages.ts: 11 contact.phoneCountry (the 11th,
+    // 36, read off messages.ts: 11 contact.phoneCountry (the 11th,
     // `inlineChanged`, is the inline phone edit's own Undo — never sent by
-    // a pick, only by an inline text edit), 2 contact.messages, 5 compose,
+    // a pick, only by an inline text edit), 3 contact.messages (PR-3 adds
+    // `contact.messages.email`, the Email row's tab label), 5 compose,
     // 5 settings.alertPhone (Country, CountryUs, CountryMx, CountryMismatch,
     // Stopped), the hours sentence, the textback title, the 2 held
-    // text-back bodies, and 6 automations.reason lines.
-    expect(keys.length).toBe(33);
+    // text-back bodies, and 8 automations.reason lines (PR-3 adds
+    // `emailLedgerRetry` and `emailSetupRetry`).
+    expect(keys.length).toBe(36);
     for (const k of keys) {
       const text = m[k as keyof typeof m];
       expect(text).not.toMatch(/\{\{|40300|unconfirmed_number|ledger|automation\./);
@@ -109,5 +111,40 @@ describe("PR-2: the spec's own words (§4.2 and §6), verbatim", () => {
       const text = m[k as keyof typeof m];
       expect(text, k).not.toMatch(/\{\{|40300|carrier_block|free_text|backfill|ledger|consent\.|automation\./);
     }
+  });
+});
+
+describe("PR-3: the spec's own words (§4.3 footer, §6 page, composer and Email row)", () => {
+  it("the footer, in both languages (mutation: 'Unsubscribe.' → 'Unsubscribe here' FAILS)", () => {
+    expect(m["email.unsubscribe.lead.en"]).toBe("Don't want these emails?");
+    expect(m["email.unsubscribe.link.en"]).toBe("Unsubscribe");
+    expect(m["email.unsubscribe.lead.es"]).toBe("¿No quiere recibir estos correos?");
+    expect(m["email.unsubscribe.link.es"]).toBe("Cancelar suscripción");
+  });
+
+  it("the page's unsubscribed, resubscribed and bad-link lines, English and Spanish, and its two buttons", () => {
+    expect(m["unsubscribe.done.en"]).toBe("You're unsubscribed. {Business} won't send you any more automated emails. You'll still get a confirmation when you book or ask for something.");
+    expect(m["unsubscribe.done.es"]).toBe("Listo. {Business} ya no le enviará correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.");
+    expect(m["unsubscribe.resubscribe"]).toBe("Resubscribe / Volver a suscribirme");
+    expect(m["unsubscribe.resubscribed.en"]).toBe("You'll get emails from {Business} again.");
+    expect(m["unsubscribe.resubscribed.es"]).toBe("Volverá a recibir correos de {Business}.");
+    // Spec §6 as corrected 2026-09-30 (review R1-M2): most of these emails
+    // carry no reply-to, so the line no longer says "reply to any email".
+    expect(m["unsubscribe.badLink.en"]).toBe("This unsubscribe link doesn't work. Contact {Business} directly and ask them to stop.");
+    expect(m["unsubscribe.badLink.es"]).toBe("Este enlace no funciona. Comuníquese directamente con {Business} y pida que dejen de escribirle.");
+  });
+
+  it("the question and its one button, in both languages (decisions Q1 and P2: the button says what the title asks; mutation: 'Unsubscribe / Cancelar suscripción' → FAILS)", () => {
+    expect(m["unsubscribe.confirm.en"]).toBe("Stop emails from {Business}?");
+    expect(m["unsubscribe.confirm.es"]).toBe("¿Dejar de recibir correos de {Business}?");
+    expect(m["unsubscribe.button"]).toBe("Stop emails / Dejar de recibir correos");
+  });
+
+  it("the composer's unsubscribed notice, with its date as {date}", () => {
+    expect(m["compose.emailUnsubscribed"]).toBe("They unsubscribed from your emails on {date}. Write only about something they asked you for.");
+  });
+
+  it("the Email row's line for a stop only the customer can lift", () => {
+    expect(m["contact.email.customerOnly"]).toBe("They can resubscribe from the unsubscribe link in any email from you.");
   });
 });

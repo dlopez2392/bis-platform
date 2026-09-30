@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { SMS_KINDS } from "./classes";
+import { SMS_KINDS, EMAIL_KINDS } from "./classes";
 
 /**
  * The consent chain's source scans (spec §8, "Source scans"), PR-1's share:
@@ -223,11 +223,20 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
   // Any quoted string that starts like a kind, in any quote, digits and all
   // (review R3-I4: `[a-z_]+` could not see "operator.alert_sms_v2", and a
   // kind held in a constant has no `kind:` in front of it).
-  const KIND_LITERAL = /["'`]((?:automation|voice|staff|operator|consent)\.[^"'`]+)["'`]/g;
+  // PR-3 adds the email kinds' two other prefixes (booking., forms.).
+  const KIND_LITERAL = /["'`]((?:automation|voice|staff|operator|consent|booking|forms)\.[^"'`]+)["'`]/g;
   // A gate caller imports the gate or the automations' send-sms by ANY path:
   // resolved, not spelled (review of 884220c2: `../../../../lib/consent/gate`
   // from a route slipped past a regex of four spellings).
-  const GATE_MODULES = new Set(["apps/web/src/lib/consent/gate", "apps/web/src/lib/automations/send-sms"]);
+  // PR-3: the email gate, and the automations' PassContext (context.ts),
+  // whose `ctx.email` IS the email gate from Task 6. Without it the scan
+  // would never read reminders.ts, followups.ts, reactivation.ts,
+  // weekly-report.ts or weekly-agency-report.ts: they send through
+  // ctx.email and import neither gate module (review R2-I4).
+  const GATE_MODULES = new Set([
+    "apps/web/src/lib/consent/gate", "apps/web/src/lib/automations/send-sms", "apps/web/src/lib/consent/email-gate",
+    "apps/web/src/lib/automations/context",
+  ]);
   const isGateCaller = (f: string, src?: string) => importsOf(f, src).some((m) => GATE_MODULES.has(m));
 
   function kindLiterals(): { file: string; kind: string }[] {
@@ -244,13 +253,13 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
     expect(isGateCaller(at("lib", "consent", "probe.ts"), `import { fakeSmsGate } from "./fake-gate";`)).toBe(false);
   });
 
-  it("each kind literal in a file that sends through the gate is a registry key (mutation: a pass sends kind \"automation.review_requests\" → FAILS naming it)", () => {
-    expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS))).toEqual([]);
+  it("each kind literal in a file that sends through either gate is a key of one of the two registries (mutation: a pass sends kind \"automation.reminders\" → FAILS naming it)", () => {
+    expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS) && !(kind in EMAIL_KINDS))).toEqual([]);
   });
 
-  it("the scan reaches every send path's kind — none of the fourteen is missing (the positive control)", () => {
+  it("the scan reaches every SMS send path's kind — none of the fourteen is missing (the positive control; Task 13 adds the email kinds once every site is routed)", () => {
     const seen = new Set(kindLiterals().map(({ kind }) => kind));
-    expect([...seen].sort()).toEqual(Object.keys(SMS_KINDS).sort());
+    expect([...seen]).toEqual(expect.arrayContaining(Object.keys(SMS_KINDS)));
   });
 });
 

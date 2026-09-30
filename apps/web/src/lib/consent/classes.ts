@@ -54,3 +54,79 @@ export type AutomationSmsKind = Extract<SmsKind, `automation.${string}`>;
 export function isSmsKind(kind: string): kind is SmsKind {
   return Object.prototype.hasOwnProperty.call(SMS_KINDS, kind);
 }
+
+/**
+ * THE EMAIL KINDS (consent chain spec §4.3, corrected by the PR-3 plan's E1:
+ * twenty-two send sites). The email gate (email-gate.ts) throws on a kind
+ * that is not here, and scan 2 fails on any kind literal handed to it that
+ * is not here.
+ *
+ * The CLASS decides what an unsubscribe stops (decision 7): `informational`
+ * and `marketing` are automated mail, and the gate reads the ledger for them
+ * alone; `customer_initiated` (a direct response to what the customer just
+ * did, in the same request or live call, never a cron pass — scan 4 pins
+ * where these kinds may be used), `staff_typed` (choice 22) and `operator`
+ * (choice 23) are not subject to it. The HOURS: every automated kind keeps
+ * the fixed automated window (choice 31). The FOOTER: every customer email
+ * carries the unsubscribe link and the RFC 8058 headers, except staff-typed
+ * email, a person's own reply (danlo's decision Q4, 2026-09-30; spec §4.3,
+ * choice 22). Operator mail carries neither.
+ */
+export type EmailClass = "customer_initiated" | "informational" | "marketing" | "staff_typed" | "operator";
+
+export type EmailKindSpec = { readonly class: EmailClass; readonly hours: HoursRule; readonly footer: "unsubscribe" | "none" };
+
+export const EMAIL_KINDS = {
+  "booking.confirmation": { class: "customer_initiated", hours: "any", footer: "unsubscribe" },
+  "forms.receipt": { class: "customer_initiated", hours: "any", footer: "unsubscribe" },
+  "voice.booked": { class: "customer_initiated", hours: "any", footer: "unsubscribe" },
+  "voice.moved": { class: "customer_initiated", hours: "any", footer: "unsubscribe" },
+  "voice.cancelled": { class: "customer_initiated", hours: "any", footer: "unsubscribe" },
+  "automation.reminder": { class: "informational", hours: "automated", footer: "unsubscribe" },
+  "automation.followup": { class: "informational", hours: "automated", footer: "unsubscribe" },
+  "automation.review_request": { class: "marketing", hours: "automated", footer: "unsubscribe" },
+  "automation.referral_ask": { class: "marketing", hours: "automated", footer: "unsubscribe" },
+  "automation.reactivation": { class: "marketing", hours: "automated", footer: "unsubscribe" },
+  "automation.quote_followup": { class: "marketing", hours: "automated", footer: "unsubscribe" },
+  "automation.no_show_nudge": { class: "marketing", hours: "automated", footer: "unsubscribe" },
+  "staff.composer_email": { class: "staff_typed", hours: "any", footer: "none" },
+  "operator.booking_alert": { class: "operator", hours: "any", footer: "none" },
+  "operator.cancel_notice": { class: "operator", hours: "any", footer: "none" },
+  "operator.lead_alert": { class: "operator", hours: "any", footer: "none" },
+  "operator.call_alert": { class: "operator", hours: "any", footer: "none" },
+  "operator.phone_change_alert": { class: "operator", hours: "any", footer: "none" },
+  "operator.weekly_report": { class: "operator", hours: "any", footer: "none" },
+  "operator.agency_report": { class: "operator", hours: "any", footer: "none" },
+  "operator.billing_link": { class: "operator", hours: "any", footer: "none" },
+  "operator.sender_check": { class: "operator", hours: "any", footer: "none" },
+} as const satisfies Record<string, EmailKindSpec>;
+
+export type EmailKind = keyof typeof EMAIL_KINDS;
+export type AutomationEmailKind = Extract<EmailKind, `automation.${string}`>;
+export type OperatorEmailKind = Extract<EmailKind, `operator.${string}`>;
+export type CustomerInitiatedEmailKind = {
+  [K in EmailKind]: (typeof EMAIL_KINDS)[K]["class"] extends "customer_initiated" ? K : never;
+}[EmailKind];
+
+export function isEmailKind(kind: string): kind is EmailKind {
+  return Object.prototype.hasOwnProperty.call(EMAIL_KINDS, kind);
+}
+
+/** Decision 7: an unsubscribe stops the automated classes, and only those. */
+export function emailReadsLedger(kind: EmailKind): boolean {
+  const cls = EMAIL_KINDS[kind].class;
+  return cls === "informational" || cls === "marketing";
+}
+
+/**
+ * Decision P1 (danlo, 2026-09-30; spec §4.3, §10): the three marketing kinds
+ * whose templates print no postal address. The email gate adds the account's
+ * `mailing_address` to their footer WHENEVER it is set, and a blank one never
+ * blocks them — they follow up the customer's own request or appointment
+ * (relationship mail; counsel reviews that reading at go-live). The check-in
+ * and the referral ask are not here: their templates print the address
+ * themselves (marketing-footer.ts) and their passes skip an account with none.
+ */
+export const FOOTER_ADDRESS_KINDS: ReadonlySet<EmailKind> = new Set<EmailKind>([
+  "automation.review_request", "automation.quote_followup", "automation.no_show_nudge",
+]);
