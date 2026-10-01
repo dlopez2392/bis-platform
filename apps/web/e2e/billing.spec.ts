@@ -377,10 +377,15 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
       try {
         const cp = await client.newPage();
         await cp.goto(`/dashboard/accounts/${accountId}/billing`);
-        await expect(cp.getByText(PLAN_NAME, { exact: true })).toBeVisible();
-        await expect(cp.locator('[data-status="active"]')).toBeVisible();
-        await expect(cp.getByText(minutes, { exact: true })).toBeVisible();
-        await expect(cp.getByText(nextInvoice)).toBeVisible();
+        // Scoped to <main>: the billing route has a loading.tsx, and the
+        // streamed reveal briefly leaves a hidden copy of the page outside it
+        // (the same duplicate website.spec met in #141), which made an
+        // unscoped getByText resolve to two elements.
+        const cpMain = cp.getByRole("main");
+        await expect(cpMain.getByText(PLAN_NAME, { exact: true })).toBeVisible();
+        await expect(cpMain.locator('[data-status="active"]')).toBeVisible();
+        await expect(cpMain.getByText(minutes, { exact: true })).toBeVisible();
+        await expect(cpMain.getByText(nextInvoice)).toBeVisible();
 
         const refusal = cp.getByRole("alert").filter({ hasText: m["billing.page.portalFailed"] });
         await cp.getByRole("button", { name: m["billing.page.manage"] }).click();
