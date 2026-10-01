@@ -120,7 +120,8 @@ test.describe("the agency's plan becomes Stripe prices", () => {
     await dialog.getByRole("button", { name: m["plans.save"] }).click();
     await expect(dialog).toBeHidden({ timeout: 30_000 });
 
-    const row = page.locator("[data-plan-row]").filter({ hasText: PLAN_NAME });
+    // Scoped to <main>: /dashboard/plans has a loading.tsx (see work-queue.spec).
+    const row = page.getByRole("main").locator("[data-plan-row]").filter({ hasText: PLAN_NAME });
     await expect(row).toContainText(m["plans.status.active"]);
     await expect(row).toContainText("$49.00/month");
     await expect(row).toContainText(m["plans.feature.voice_receptionist"]); // assumption A3

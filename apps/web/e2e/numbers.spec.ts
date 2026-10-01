@@ -117,8 +117,13 @@ test.describe("the agency admin can reach the inventory this file guards", () =>
     // the WHOLE inventory, and a filter that quietly dropped a row (an inner
     // join losing a number whose account row was gone, say) is precisely the
     // bug that would hide a reclaimable line from the agency.
+    // Scoped to <main>: the numbers route has a loading.tsx, and the
+    // streamed reveal briefly leaves a hidden duplicate of the page outside
+    // it (the same duplicate website.spec.ts met in #141) — `.first()` alone
+    // does not guarantee the VISIBLE copy wins that race.
+    const main = page.getByRole("main");
     for (const e164 of stable) {
-      await expect(page.getByText(e164).first()).toBeVisible();
+      await expect(main.getByText(e164).first()).toBeVisible();
     }
   });
 });
