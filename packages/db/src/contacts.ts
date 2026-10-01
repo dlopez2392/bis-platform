@@ -164,9 +164,12 @@ export function emailKey(value: string): string {
     .replace(/\+[^@]*@/, "@");
 }
 
-/** `countryTwin`: a contact holding the same ten digits under +1 when the
- *  new number is their +52 reading (review R1-I3). Not the same person for
- *  sure, so it is recorded for the merge queue, never merged. */
+/** `countryTwin`: a contact holding the SAME ten digits under the OTHER NANP/
+ *  Mexican reading of the incoming number — an existing +1 contact when the
+ *  new number reads as +52, OR (symmetrically — the follow-up to PR #151,
+ *  893f0bc4's note) an existing +52 contact when the new number reads as
+ *  +1. Not the same person for sure, so it is recorded for the merge queue,
+ *  never merged. */
 type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null; countryTwin: string | null };
 
 /**
@@ -228,12 +231,24 @@ async function findDuplicate(
 
     // 0033's phone_key is the stored DIGITS, so a contact saved before F-009
     // as "899 922 1234" keys 8999221234 while its +52 reading keys
-    // 528999221234 (review R1-I3). On a miss for a +52 ten-digit number, look
-    // up BOTH legacy shapes those same ten digits could have been keyed
-    // under: the bare ten (pKey.slice(2)) and the retired-mobile-prefixed
-    // "521" + ten (review m4 — a contact stored as "+52 1 899…" keys
-    // "521…" and was missed entirely by the bare-only lookup, a SILENT
-    // duplicate rather than even a flagged twin).
+    // 528999221234 (review R1-I3). `phoneDigits` strips a leading NANP "1"
+    // off any 11-digit key but leaves a Mexican "52"/"521" prefix alone — a
+    // 12/13-digit key is never touched by that rule at all. The practical
+    // effect: a US/+1 number's key is ALWAYS the bare ten digits, identical
+    // in shape to a legacy bare-stored (no-country-marker) number, so the
+    // direct `.eq("phone_key", pKey)` above already finds a bare-ten-digit
+    // OR an explicit-+1-stored twin for an incoming +1 number. It can never
+    // find an explicit +52-stored twin on those same ten digits, though,
+    // because THAT key keeps its "52"/"521" prefix and never equals the bare
+    // pKey. The fallback below is symmetric for exactly that reason: an
+    // incoming 12-digit +52 key checks the bare and 521-prefixed legacy MX
+    // shapes on its own ten digits (first branch), and an incoming bare
+    // 10-digit key that reads as a firm +1 claim checks the 52- and
+    // 521-prefixed MX shapes on ITS ten digits (second branch, narrowed to
+    // only a firm +1 reading — see its own comment below). Before this fix
+    // only the first branch existed, so saving the +52 contact FIRST and the
+    // +1 one SECOND found nothing at all, not even a flag (follow-up from PR
+    // #151, 893f0bc4's note: "+52 after +1 flags; +1 after +52 doesn't").
     //
     // Per the spec (orchestrator decision): the same-or-twin call is decided
     // by what the stored number READS AS, never by whether its raw text
@@ -246,19 +261,37 @@ async function findDuplicate(
     // digits would normalise today (ambiguous or not). A stored number that
     // DOES carry an explicit marker (a "+", `00`/`011`, or the bare
     // NANP/Mexican code forms) is the SAME contact only if it reads as the
-    // exact +52 number being matched; otherwise (it reads as +1, or
-    // anything else) it is left alone as a genuine country TWIN, flagged
+    // exact number being matched; otherwise (it reads as the OTHER country,
+    // or anything else) it is left alone as a genuine country TWIN, flagged
     // for a human to resolve.
     //
-    // No `.limit(1)`: with a bare-stored contact and a +1-stored contact
-    // both keyed under the same bare ten digits, taking only whichever
-    // Postgres returns first could hand back the +1 one and miss the bare
-    // (same) contact entirely, minting a THIRD contact (review m3). Fetch
-    // every candidate and prefer the one that reads as the same contact.
+    // No `.limit(1)`: with a bare-stored contact and an explicitly-coded
+    // contact both keyed under the same bare ten digits, taking only
+    // whichever Postgres returns first could hand back the explicit one and
+    // miss the bare (same) contact entirely, minting a THIRD contact (review
+    // m3). Fetch every candidate and prefer the one that reads as the same
+    // contact.
+    let legacyTenDigits: string | null = null;
+    let legacyKeys: string[] = [];
     if (!result.phoneMatch && /^52\d{10}$/.test(pKey)) {
-      const tenDigits = pKey.slice(2);
+      legacyTenDigits = pKey.slice(2);
+      legacyKeys = [legacyTenDigits, `521${legacyTenDigits}`];
+    } else if (!result.phoneMatch && /^\d{10}$/.test(pKey) && phone === `+1${pKey}`) {
+      // Narrowed to a FIRM +1 reading of the incoming number, not merely a
+      // bare ten-digit key: `phoneKeyOf` keys unparseable typed text (kept
+      // as-is by `phoneFields` when it cannot normalise — "0123456789", a
+      // leading-zero ten digits `normalisePhone` refuses outright) on its
+      // bare digits too, which would otherwise take this branch and queue a
+      // spurious twin flag against any contact that merely happens to share
+      // those digits under an explicit +52. `phone === "+1" + pKey` is true
+      // only when this number is actually stored as a confirmed-or-ambiguous
+      // +1 E.164 value.
+      legacyTenDigits = pKey;
+      legacyKeys = [`52${pKey}`, `521${pKey}`];
+    }
+    if (legacyTenDigits) {
       const { data: bare, error: bareErr } = await db.from("contacts").select("id, phone")
-        .eq("account_id", accountId).in("phone_key", [tenDigits, `521${tenDigits}`]).limit(10);
+        .eq("account_id", accountId).in("phone_key", legacyKeys).limit(10);
       if (bareErr) throw new Error(`contact dedupe failed: ${bareErr.message}`);
       const hits = (bare ?? []) as { id: string; phone: string | null }[];
       const bareHit = hits.find((h) =>
