@@ -169,10 +169,21 @@ describe("createContact: a +52 number meets the contact stored before F-009 (rev
     expect(m.reads.map((r) => r.find(([k]) => k === "phone_key")?.[1])).toEqual(["528999221234"]);
   });
 
-  it("a +1 number never takes the +52 fallback (mutation: drop the /^52\\d{10}$/ guard → a second phone_key read, FAILS)", async () => {
+  // Was "a +1 number never takes the +52 fallback": that pinned the exact
+  // one-directional bug this follow-up fixes. A +1 number's key is always
+  // the bare ten digits (phoneDigits strips the leading NANP "1"), which is
+  // indistinguishable in shape from a legacy bare-stored number OR a
+  // Mexican one with its "52" stripped — so it now takes the SAME symmetric
+  // fallback the +52 branch always has, checking the 52-/521-prefixed MX
+  // legacy shapes on those ten digits. On an empty account that fallback
+  // read happens and simply finds nothing.
+  it("a +1 number also takes the fallback, checking for an MX-keyed twin on the same ten digits (symmetric with the +52 case above; mutation: drop the /^\\d{10}$/ branch → no second read, FAILS)", async () => {
     const n = memoryDb([]);
     expect(await createContact(n.db, "a1", { phone: "(956) 292-1696" }, "user_test")).toMatchObject({ existing: false, flagged: false });
-    expect(n.reads.map((r) => r.find(([k]) => k === "phone_key")?.[1])).toEqual(["9562921696"]);
+    expect(n.reads.map((r) => r.find(([k]) => k === "phone_key")?.[1])).toEqual([
+      "9562921696",
+      ["529562921696", "5219562921696"],
+    ]);
   });
 
   it("an EMAIL match still queues the country twin its +52 number found (re-review minor 12; mutation: return the email match without the flag → FAILS)", async () => {
@@ -194,6 +205,25 @@ describe("createContact: a +52 number meets the contact stored before F-009 (rev
     const created = await createContact(m.db, "a1", { email: "x@example.com", phone: "899 922 1234" }, "user_test");
     expect(created).toEqual({ id: "c1", existing: true, flagged: false });
     expect(m.tables.contact_duplicate_flags).toHaveLength(0);
+  });
+
+  /**
+   * The reverse of "the same ten digits stored as +1 are a country TWIN"
+   * above: a +52 contact already on file, then a NEW contact arrives whose
+   * number unambiguously reads as +1 with the SAME ten digits. findDuplicate
+   * only ever special-cased an INCOMING +52 key (the `/^52\d{10}$/` guard),
+   * so this direction found nothing at all — not even a flag — and a second,
+   * undetected duplicate contact was created silently. Followed up from
+   * PR #151 (893f0bc4's note: "+52 after +1 flags; +1 after +52 doesn't").
+   */
+  it("the same ten digits stored as +52 ARE a country twin when the new number reads as +1 (symmetric with the +1-then-+52 case above; mutation: drop the /^1\\d{10}$/ branch → no flag, FAILS)", async () => {
+    const m = memoryDb([{ id: "c-mx", account_id: "a1", phone: "+529562921696", phone_key: "529562921696" }]);
+    const created = await createContact(m.db, "a1", { phone: "(956) 292-1696" }, "user_test");
+    expect(created).toMatchObject({ existing: false, flagged: true });
+    expect(m.tables.contacts.find((r) => r.id === created.id)).toMatchObject({ phone: "+19562921696" });
+    expect(m.tables.contact_duplicate_flags).toEqual([expect.objectContaining({
+      account_id: "a1", contact_a: [created.id, "c-mx"].sort()[0], contact_b: [created.id, "c-mx"].sort()[1], reason: "phone_country_twin",
+    })]);
   });
 });
 
