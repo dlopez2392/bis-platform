@@ -134,8 +134,12 @@ test.describe("the agency admin can reach the queue this file guards", () => {
     // exactly how "everything due" survived unnoticed until 41a5a3f. Same
     // key AgencyWorkPage renders (dashboard/work/page.tsx) and the same key
     // page.test.ts's own unit test already pins to an <h1>.
+    // Scoped to <main>: /dashboard/work has a loading.tsx too (see this
+    // file's other test above), and the same streamed hidden duplicate
+    // website.spec.ts met in #141 can leave a second, hidden heading outside
+    // <main> during the reveal.
     await expect(
-      page.getByRole("heading", { name: m["work.agency.title"] }),
+      page.getByRole("main").getByRole("heading", { name: m["work.agency.title"] }),
     ).toBeVisible();
   });
 });
@@ -195,8 +199,12 @@ test.describe("It happened closes the loop the milestone exists for", () => {
       // (`secondaryLine`, work-list.tsx) — every booking row shares the same
       // primary sentence ("Did this job happen?", `work.booking`), so a bare
       // role query for the button alone would be ambiguous if another stale
-      // booking exists on this account.
-      const row = page.locator("li").filter({ hasText: contactName });
+      // booking exists on this account. Also scoped to <main>: the tasks
+      // route has a loading.tsx, and the streamed reveal briefly leaves a
+      // hidden copy of the queue outside it (the same duplicate website.spec
+      // met in #141, billing.spec in #163), which made an unscoped `li`
+      // locator resolve to two elements.
+      const row = page.getByRole("main").locator("li").filter({ hasText: contactName });
       await expect(row).toBeVisible();
       await row.getByRole("button", { name: m["work.booking.completed"] }).click();
       await expect(page.getByText(m["work.booking.completed.toast"])).toBeVisible();

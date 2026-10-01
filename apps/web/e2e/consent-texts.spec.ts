@@ -201,7 +201,12 @@ test("a stop sentence holds texts and makes a To-do; Not a stop on the To-do lif
 
   const { accountId } = fixture();
   await page.goto(`/dashboard/accounts/${accountId}/tasks`);
-  const todo = page.getByRole("listitem").filter({ hasText: "may have asked to stop texts" }).filter({ hasText: "please stop texting me" });
+  // Scoped to <main>: the tasks route has a loading.tsx, and the streamed
+  // reveal briefly leaves a hidden duplicate of the queue outside it (the
+  // same duplicate website.spec.ts met in #141, work-queue.spec.ts too),
+  // which made an unscoped listitem locator resolve to 2 elements.
+  const todo = page.getByRole("main").getByRole("listitem")
+    .filter({ hasText: "may have asked to stop texts" }).filter({ hasText: "please stop texting me" });
   await expect(todo).toHaveCount(1);
   await todo.getByRole("button", { name: m["contact.texts.notAStop"] }).click();
   await expect(page.getByText(m["contact.texts.releasedToast"])).toBeVisible();
