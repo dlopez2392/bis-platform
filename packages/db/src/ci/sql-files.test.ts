@@ -28,11 +28,12 @@ const FILES = [
   "backfills/0054-dnd-preflight.sql",
   "backfills/0055-telnyx-optout-owners.sql",
   "backfills/0049-fold-count.sql",
+  "drill/restore-check.sql",
 ];
 /** Backfills that WRITE (through the ledger's function): the same byte rules,
  *  refused as a read, and no transaction control of their own. */
 const WRITES = ["backfills/0049-fold-write.sql"];
-const READS = FILES.filter((f) => f.startsWith("parity/") || f.startsWith("backfills/"));
+const READS = FILES.filter((f) => f.startsWith("parity/") || f.startsWith("backfills/") || f.startsWith("drill/"));
 
 const oneLine = (s: string) => s.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 

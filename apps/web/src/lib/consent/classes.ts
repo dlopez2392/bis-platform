@@ -99,6 +99,7 @@ export const EMAIL_KINDS = {
   "operator.agency_report": { class: "operator", hours: "any", footer: "none" },
   "operator.billing_link": { class: "operator", hours: "any", footer: "none" },
   "operator.sender_check": { class: "operator", hours: "any", footer: "none" },
+  "operator.ops_alert": { class: "operator", hours: "any", footer: "none" },
 } as const satisfies Record<string, EmailKindSpec>;
 
 export type EmailKind = keyof typeof EMAIL_KINDS;
