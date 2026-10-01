@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, updateCalendarSettings } from "@bis/db";
 import { DEFAULT_FOLLOWUP_BODY } from "../src/lib/email/templates/followup";

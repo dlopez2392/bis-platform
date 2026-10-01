@@ -260,8 +260,24 @@ jobs:
       - name: Seed the CI project
         run: pnpm --filter @bis/db ci:seed
 
+      # Bounded, with one retry. On PR #162 (run 36885435767, attempt 2) this
+      # step hung inside `apt-get update` on an Ubuntu mirror for the job's
+      # whole 30 minutes and was cancelled before a single spec ran; a normal
+      # install takes about a minute. Each attempt gets 6 minutes, a second
+      # attempt covers a mirror that recovers, and the step's own cap makes a
+      # hang a fast, clearly named failure rather than a cancelled job.
       - name: Install Chromium for Playwright
-        run: pnpm --filter web exec playwright install --with-deps chromium
+        timeout-minutes: 14
+        run: |
+          for attempt in 1 2; do
+            if timeout --kill-after=20s 6m pnpm --filter web exec playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::Chromium install attempt $attempt failed or exceeded 6 minutes"
+            sleep 15
+          done
+          echo "::error::Chromium install failed twice; see the apt output above"
+          exit 1
 
       # playwright.config.ts builds and starts the production server itself
       # (`pnpm build && pnpm start`), signs in as the agency admin through a

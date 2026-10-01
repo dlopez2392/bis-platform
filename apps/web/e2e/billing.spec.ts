@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
@@ -368,8 +368,11 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
       const invoicePrefix = m["billing.nextInvoice"].split("{date}")[0] ?? "";
       const nextInvoice = new RegExp(`^${invoicePrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
       await page.goto(`/dashboard/accounts/${accountId}/settings#billing`);
-      await expect(page.locator('#billing [data-status="active"]')).toBeVisible();
-      await expect(page.locator("#billing")).toContainText(minutes);
+      // Scoped to <main> for the same reason as the client's page below:
+      // mid-stream, #billing also exists in React's hidden S:0 buffer.
+      const card = page.getByRole("main").locator("#billing");
+      await expect(card.locator('[data-status="active"]')).toBeVisible();
+      await expect(card).toContainText(minutes);
 
       // ── The client's page, and Manage billing (B3, B9) ───────────────────
       const tagged = await taggedPortalConfigurations(s);

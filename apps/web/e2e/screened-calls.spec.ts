@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { readFileSync } from "node:fs";
 import { m } from "../src/lib/messages";
 import { SEEDED_ACCOUNT_NAME } from "./support";

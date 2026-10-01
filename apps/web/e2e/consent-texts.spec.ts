@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";

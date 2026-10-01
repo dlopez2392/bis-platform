@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type PlaywrightWorkerArgs } from "@playwright/test";
+import { test, expect, type APIRequestContext, type PlaywrightWorkerArgs } from "./fixtures/test";
 import { readFileSync, existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
