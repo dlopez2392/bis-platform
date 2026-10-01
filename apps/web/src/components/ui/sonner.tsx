@@ -31,7 +31,6 @@ import {
   isEscapeKey,
 } from "./toast-jump"
 
-const TOAST_SELECTOR = "[data-sonner-toast]"
 const TOAST_ACTION_SELECTOR = "[data-action]"
 
 const Toaster = ({ ...props }: ToasterProps) => {
@@ -155,7 +154,9 @@ const Toaster = ({ ...props }: ToasterProps) => {
     const root = toasterRef.current
     if (!root) return
     const observer = new MutationObserver(() => {
-      if (!root.querySelector(TOAST_SELECTOR)) setJumpActive(false)
+      // Same selector as the engage gate: an action-less toast left behind
+      // (e.g. the error toast a failed Undo raises) must not hold jump mode.
+      if (!root.querySelector(TOAST_ACTION_SELECTOR)) setJumpActive(false)
     })
     observer.observe(root, { childList: true, subtree: true })
     const onFocusIn = (event: FocusEvent) => {
