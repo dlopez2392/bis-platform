@@ -1,5 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { POST } from "./route";
+// Heartbeats are mocked out so the `after()` recorders below keep counting
+// only this route's own work; their calls are asserted where they matter
+// (lib/ops/stamp.ts).
+const stampMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 
 // The token lookup is deliberately NOT account-scoped (the token IS the
 // credential), so every other read this route makes has to be scoped by the
@@ -7,6 +12,8 @@ import { POST } from "./route";
 const getCallByHandoffTokenMock = vi.hoisted(() => vi.fn());
 const getTransferPhoneMock = vi.hoisted(() => vi.fn());
 const listPhoneNumbersForAccountMock = vi.hoisted(() => vi.fn());
+// The model-down fallback's cross-account loop guard: is the target any BIS line?
+const platformNumberMock = vi.hoisted(() => vi.fn());
 // Ordering ledger: which db read happened first. `toHaveBeenCalledWith` is
 // "was called at least once with", so it cannot tell a route that resolved
 // the account first from one that ALSO read another tenant's row before it.
@@ -26,6 +33,7 @@ vi.mock("@bis/db", () => ({
     events.push("owned");
     return listPhoneNumbersForAccountMock(...a);
   },
+  getPhoneNumberByE164: (...a: unknown[]) => platformNumberMock(...a),
 }));
 
 const REQUESTED = {
@@ -72,6 +80,8 @@ beforeEach(() => {
   listPhoneNumbersForAccountMock.mockReset().mockResolvedValue([
     { id: "pn1", account_id: "acct1", e164: "+19565550999", telnyx_id: null, status: "testing" },
   ]);
+  stampMock.mockReset();
+  platformNumberMock.mockReset().mockResolvedValue(null);
 });
 
 describe("voice texml handoff route", () => {
@@ -377,3 +387,93 @@ describe("voice texml handoff route — signature enforcement matches /api/voice
     expect(res.status).toBe(200);
   });
 });
+
+describe("the model-down fallback (operational-floor spec §3)", () => {
+  const ACCOUNT = "0b2cbb04-b46c-4fed-a377-d377a1a201eb";
+  const TOKEN = "f".repeat(32);
+  let ticket: string;
+  const fallbackReq = (status: string | null, f: string | null = ticket) => {
+    const q = new URLSearchParams({ t: TOKEN, ...(f ? { f } : {}) });
+    return new Request(`https://x.example/api/voice/texml/handoff?${q}`, {
+      method: "POST",
+      body: new URLSearchParams(status ? { DialCallStatus: status } : {}),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+  };
+  const fall = async (status: string | null, f?: string | null) => (await POST(fallbackReq(status, f))).text();
+
+  beforeEach(async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-fixture";
+    const { signFallbackTicket } = await import("@/lib/voice/fallback-ticket");
+    ticket = signFallbackTicket(TOKEN, ACCOUNT, "+19565550999", Date.now())!;
+    // Sofía's webhook never ran, so there is no call row for the token.
+    getCallByHandoffTokenMock.mockResolvedValue(null);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it.each(["failed", "busy", "no-answer"])("a never-connected leg (%s) with a transfer number rings it, presenting the dialled number, for the ticket's account only", async (status) => {
+    const xml = await fall(status);
+    expect(xml).toContain('<Dial callerId="+19565550999" timeout="20" timeLimit="3600" passDiversionHeader="true">+19562921696</Dial>');
+    expect(getTransferPhoneMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT);
+    expect(listPhoneNumbersForAccountMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT);
+  });
+
+  it("it emails BIS: a voice.sip_webhook error heartbeat (mutation: drop the stamp → FAILS)", async () => {
+    await fall("failed");
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.sip_webhook", { ok: false, error: "Sofia's line did not connect (DialCallStatus failed)" });
+  });
+
+  it("with no transfer number it hangs up, as today, and STILL stamps the outage", async () => {
+    getTransferPhoneMock.mockResolvedValue(null);
+    expect(await fall("no-answer")).toContain("<Hangup/>");
+    expect(stampMock).toHaveBeenCalledOnce();
+  });
+
+  it("a completed leg with no handoff request hangs up as today, with no stamp (mutation: add completed to NEVER_CONNECTED → FAILS)", async () => {
+    expect(await fall("completed")).toContain("<Hangup/>");
+    expect(getTransferPhoneMock).not.toHaveBeenCalled();
+    expect(stampMock).not.toHaveBeenCalled();
+  });
+
+  it("a caller who hung up while it rang (canceled) is not chased with a call to the business", async () => {
+    expect(await fall("canceled")).toContain("<Hangup/>");
+    expect(getTransferPhoneMock).not.toHaveBeenCalled();
+  });
+
+  it("no ticket — a call the guards did not clear — hangs up and stamps nothing, so a forger cannot raise an alert either", async () => {
+    expect(await fall("failed", null)).toContain("<Hangup/>");
+    expect(getTransferPhoneMock).not.toHaveBeenCalled();
+    expect(stampMock).not.toHaveBeenCalled();
+  });
+
+  it("a forged ticket naming another account is refused before any read (mutation: trust the ticket unverified → FAILS)", async () => {
+    const forged = ticket.replace(ACCOUNT, "11111111-2222-4333-8444-555555555555");
+    expect(await fall("failed", forged)).toContain("<Hangup/>");
+    expect(getTransferPhoneMock).not.toHaveBeenCalled();
+  });
+
+  it("a transfer number that is one of the account's own lines is refused: it would ring straight back into Sofía", async () => {
+    getTransferPhoneMock.mockResolvedValue("+19565550999");
+    expect(await fall("failed")).toContain("<Hangup/>");
+  });
+
+  it("a transfer number that is ANOTHER account's BIS line is refused: two fallbacks would hand the caller back and forth (mutation: drop the platform-number check → FAILS)", async () => {
+    platformNumberMock.mockResolvedValue({ id: "pnX", account_id: "someone-else", e164: "+19562921696", telnyx_id: null, status: "live" });
+    expect(await fall("failed")).toContain("<Hangup/>");
+    expect(platformNumberMock).toHaveBeenCalledWith(expect.anything(), "+19562921696");
+  });
+
+  it("a read that throws hangs up rather than dialling, as everything in this route does", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    getTransferPhoneMock.mockRejectedValue(new Error("db down"));
+    expect(await fall("failed")).toContain("<Hangup/>");
+  });
+
+  it("a call row that exists still takes the requested-handoff path: the fallback is only for a call Sofía never answered", async () => {
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, handoff_requested_at: null });
+    expect(await fall("failed")).toContain("<Hangup/>");
+    expect(stampMock).not.toHaveBeenCalled();
+  });
+});
+

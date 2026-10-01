@@ -83,9 +83,10 @@ function isStale(h: Heartbeat, now: Date): boolean {
 export function describeKey(key: string): string {
   if (key.startsWith("cron.pass.")) return `the scheduled job "${key.slice("cron.pass.".length)}"`;
   switch (key) {
+    // One label per key a route stamps (lib/ops/stamp.ts WebhookHeartbeatKey),
+    // pinned by watch.test.ts so a key added there cannot reach an email raw.
     case "voice.texml": return "incoming calls (Telnyx call routing)";
-    case "voice.incoming": return "Sofía's call webhook (OpenAI)";
-    case "voice.sofia": return "Sofía answering calls (the AI line was unreachable)";
+    case "voice.sip_webhook": return "Sofía answering calls (OpenAI)";
     case "sms.inbound": return "incoming texts (Telnyx)";
     case "email.resend_webhook": return "email delivery reports (Resend)";
     case "stripe.webhook": return "billing events (Stripe)";

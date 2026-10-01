@@ -3,6 +3,8 @@ import Stripe from "stripe";
 
 const processMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/billing/webhook", () => ({ processStripeEvent: (...a: unknown[]) => processMock(...a) }));
+const stampMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), serviceDb: () => ({ tag: "service" }) }));
 
 const route = await import("./route");
@@ -26,6 +28,7 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://odnobiodsftffphuuosz.supabase.co";
   delete process.env.VERCEL_ENV;
   processMock.mockReset().mockResolvedValue({ status: "processed", accountId: "acct" });
+  stampMock.mockReset();
 });
 // restoreAllMocks: a test that fails before its own mockRestore must not
 // leave console.error spied, with its calls, for the next test to read.
@@ -134,5 +137,46 @@ describe("POST /api/webhooks/stripe", () => {
     expect(route.runtime).toBe("nodejs");
     expect(route.dynamic).toBe("force-dynamic");
     expect(route.maxDuration).toBe(30);
+  });
+
+  describe("heartbeat (operational-floor spec §1)", () => {
+    beforeEach(() => { vi.spyOn(console, "error").mockImplementation(() => {}); });
+
+    it("a processed event, a duplicate and a wrong-mode refusal are all the route working: one ok stamp each", async () => {
+      await POST(signed(RAW));
+      processMock.mockResolvedValueOnce({ status: "duplicate" });
+      await POST(signed(RAW));
+      processMock.mockResolvedValueOnce({ status: "mode_mismatch" });
+      await POST(signed(RAW));
+      expect(stampMock.mock.calls).toEqual([
+        ["stripe.webhook", { ok: true }], ["stripe.webhook", { ok: true }], ["stripe.webhook", { ok: true }],
+      ]);
+    });
+
+    it("a bad signature is never stamped: a forgery must not be able to send BIS an alert (mutation: stamp an error there → FAILS)", async () => {
+      await POST(signed(RAW, "whsec_someone_else"));
+      expect(stampMock).not.toHaveBeenCalled();
+    });
+
+    it("no secret, an unreadable signed event and a refused key are outages: each an error stamp with a fixed sentence", async () => {
+      delete process.env.STRIPE_WEBHOOK_SECRET;
+      await POST(signed(RAW));
+      process.env.STRIPE_WEBHOOK_SECRET = SECRET;
+      await POST(signed("not json"));
+      process.env.NEXT_PUBLIC_SUPABASE_URL = "https://tlbkbmlrfafquucsmsmm.supabase.co";
+      await POST(signed(RAW));
+      expect(stampMock.mock.calls).toEqual([
+        ["stripe.webhook", { ok: false, error: "STRIPE_WEBHOOK_SECRET is not set" }],
+        ["stripe.webhook", { ok: false, error: "a signed event could not be read" }],
+        ["stripe.webhook", { ok: false, error: "Stripe key refused (test_key_on_production_data)" }],
+      ]);
+    });
+
+    it("a processing failure stamps the event TYPE and the error's class, never its message (which can quote a customer)", async () => {
+      processMock.mockRejectedValueOnce(new Error("connection reset while reading jane@example.com"));
+      await POST(signed(RAW));
+      expect(stampMock).toHaveBeenCalledExactlyOnceWith("stripe.webhook", { ok: false, error: "invoice.paid processing failed (Error)" });
+      expect(JSON.stringify(stampMock.mock.calls)).not.toContain("example.com");
+    });
   });
 });

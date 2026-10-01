@@ -5,6 +5,8 @@ vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
   updateMessageStatusByProviderId: (...args: unknown[]) => updateMock(...args),
 }));
+const stampMock = vi.fn();
+vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 const verifyMock = vi.fn();
 vi.mock("svix", () => ({ Webhook: class { verify(...a: unknown[]) { return verifyMock(...a); } } }));
 
@@ -21,6 +23,7 @@ function req(body: unknown) {
 beforeEach(() => {
   updateMock.mockReset().mockResolvedValue({ updated: true });
   verifyMock.mockReset();
+  stampMock.mockReset();
   process.env.RESEND_WEBHOOK_SECRET = "whsec_test";
 });
 
@@ -30,6 +33,8 @@ describe("resend webhook", () => {
     const res = await POST(req({ type: "email.delivered", data: { email_id: "prov_1" } }));
     expect(res.status).toBe(400);
     expect(updateMock).not.toHaveBeenCalled();
+    // A forgery is a stranger, not an outage (mutation: stamp an error here → FAILS).
+    expect(stampMock).not.toHaveBeenCalled();
   });
 
   it("maps a delivered event to the delivered status", async () => {
@@ -37,6 +42,7 @@ describe("resend webhook", () => {
     const res = await POST(req({}));
     expect(res.status).toBe(200);
     expect(updateMock).toHaveBeenCalledWith(expect.anything(), "prov_1", "delivered");
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.resend_webhook", { ok: true });
   });
 
   it("maps a failed event to the failed status", async () => {
@@ -66,5 +72,29 @@ describe("resend webhook", () => {
     const res = await POST(req({}));
     expect(res.status).toBe(200);
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  describe("heartbeat (operational-floor spec §1)", () => {
+    it("an unset secret is an outage: 500 and an error stamp, before any read", async () => {
+      delete process.env.RESEND_WEBHOOK_SECRET;
+      const res = await POST(req({}));
+      expect(res.status).toBe(500);
+      expect(verifyMock).not.toHaveBeenCalled();
+      expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.resend_webhook", { ok: false, error: "RESEND_WEBHOOK_SECRET is not set" });
+    });
+
+    it("a signed event it does not map is still the route working: an ok stamp", async () => {
+      verifyMock.mockReturnValue({ type: "email.something_else", data: { email_id: "prov_3" } });
+      await POST(req({}));
+      expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.resend_webhook", { ok: true });
+    });
+
+    it("a failed status write rethrows (Resend retries) and stamps the error's TYPE only, never its message", async () => {
+      verifyMock.mockReturnValue({ type: "email.delivered", data: { email_id: "prov_1" } });
+      updateMock.mockRejectedValue(new TypeError("connect failed for someone@example.com"));
+      await expect(POST(req({}))).rejects.toThrow(TypeError);
+      expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.resend_webhook", { ok: false, error: "status write failed: TypeError" });
+      expect(JSON.stringify(stampMock.mock.calls)).not.toContain("example.com");
+    });
   });
 });

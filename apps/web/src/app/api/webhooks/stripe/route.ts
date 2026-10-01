@@ -5,6 +5,7 @@ import {
 } from "@/lib/billing/stripe-gateway";
 import { loggableError } from "@/lib/billing/billing-link";
 import { processStripeEvent } from "@/lib/billing/webhook";
+import { stampHeartbeat } from "@/lib/ops/stamp";
 
 /**
  * Stripe's webhook (spec flow 4). PUBLIC: proxy.ts protects /dashboard only,
@@ -35,6 +36,7 @@ export async function POST(request: Request): Promise<Response> {
   const secret = webhookSecretFromEnv();
   if (!secret) {
     console.error("stripe webhook: STRIPE_WEBHOOK_SECRET is not set; answering 503 so Stripe retries");
+    stampHeartbeat("stripe.webhook", { ok: false, error: "STRIPE_WEBHOOK_SECRET is not set" });
     return new Response("not configured", { status: 503 });
   }
 
@@ -52,6 +54,9 @@ export async function POST(request: Request): Promise<Response> {
       // secret 400s EVERY event (Stripe retries each for days), and without
       // this line nothing would say so.
       console.error("stripe webhook: signature did not verify (a wrong STRIPE_WEBHOOK_SECRET, or a forgery); answering 400");
+      // Not stamped, though a WRONG secret looks exactly like this: a forgery
+      // must never be able to send BIS an alert (lib/ops/stamp.ts). A wrong
+      // secret shows instead as stripe.webhook going quiet, plus the line above.
       return new Response("invalid signature", { status: 400 });
     }
     // Signed by Stripe, but BIS could not read it (not JSON, or a shape the
@@ -60,12 +65,14 @@ export async function POST(request: Request): Promise<Response> {
     // a customer's details, so it is named by its type only.
     const why = e instanceof SyntaxError ? "SyntaxError (the body is not JSON)" : loggableError(e);
     console.error(`stripe webhook: verified but unreadable: ${why}`);
+    stampHeartbeat("stripe.webhook", { ok: false, error: "a signed event could not be read" });
     return new Response("unreadable event", { status: 500 });
   }
 
   const gateway = billingGatewayFromEnv(process.env as StripeEnv);
   if (!gateway.ok) {
     console.error(`stripe webhook: Stripe key refused here (${gateway.reason}); answering 503 so Stripe retries`);
+    stampHeartbeat("stripe.webhook", { ok: false, error: `Stripe key refused (${gateway.reason})` });
     return new Response("stripe unavailable", { status: 503 });
   }
 
@@ -73,6 +80,9 @@ export async function POST(request: Request): Promise<Response> {
     const outcome = await processStripeEvent(
       { db: serviceDb(), gateway: gateway.gateway, live: gateway.live, now: () => new Date() }, event,
     );
+    // Every outcome here is a signed event the route handled as designed, the
+    // wrong-mode refusal included, so each is an ok heartbeat.
+    stampHeartbeat("stripe.webhook", { ok: true });
     if (outcome.status === "mode_mismatch") return new Response("wrong mode", { status: 400 });
     return Response.json({ received: true, outcome: outcome.status });
   } catch (e) {
@@ -80,6 +90,8 @@ export async function POST(request: Request): Promise<Response> {
     // m3). A SyntaxError by its type only, as above: its message quotes the
     // text it failed on.
     console.error(`stripe webhook: ${event.type} ${event.id} failed; Stripe will retry: ${e instanceof SyntaxError ? "SyntaxError" : loggableError(e)}`);
+    // The event type is Stripe's own name (e.g. invoice.paid), never data.
+    stampHeartbeat("stripe.webhook", { ok: false, error: `${event.type} processing failed (${e instanceof Error ? e.name : typeof e})` });
     return new Response("processing failed", { status: 500 });
   }
 }

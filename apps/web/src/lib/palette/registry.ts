@@ -58,7 +58,7 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/calendar": ["booking", "availability", "hours"],
   "/tasks": ["task", "tasks", "to-do", "todo"],
   "/branding": ["logo", "colors", "theme"],
-  "/voice": ["receptionist", "sofia", "ai", "website", "widget", "chat", "concierge", "bubble"],
+  "/voice": ["receptionist", "sofia", "ai", "website", "widget", "chat", "concierge", "bubble", "transfer", "forward", "person", "phones"],
   "/automations": ["no-show", "no show", "text reminder", "reminder", "reviews", "review requests", "google review", "follow up", "text"],
   "/dashboard/accounts": ["companies", "clients"],
   "/dashboard/blueprints": ["templates"],

@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { NextRequest } from "next/server";
+// Heartbeats are mocked out so the `after()` recorders below keep counting
+// only this route's own work; their calls are asserted where they matter
+// (lib/ops/stamp.ts).
+const stampMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 
 // --- openai: fully mocked here (the un-mocked signing test lives in its own
 // file, webhook-signing.test.ts, so it never fights this mock). ------------
@@ -142,6 +147,7 @@ function req(): NextRequest {
 const fetchMock = vi.hoisted(() => vi.fn());
 
 beforeEach(() => {
+  stampMock.mockReset();
   process.env.OPENAI_WEBHOOK_SECRET = "whsec_test";
   process.env.OPENAI_API_KEY = "sk-test";
   delete process.env.PHONE_MAX_CALLS_PER_NUMBER_PER_DAY;
@@ -194,6 +200,10 @@ describe("POST /api/voice/incoming — step 2: signature verification", () => {
     const res = await POST(req());
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "invalid signature" });
+    // The most exposed public URL in the set: a refused signature is a
+    // stranger, never an outage, so anyone POSTing junk here must not be able
+    // to send BIS an alert (mutation: stamp an error before the 400 → FAILS).
+    expect(stampMock).not.toHaveBeenCalled();
   });
 });
 
@@ -641,3 +651,32 @@ describe("POST /api/voice/incoming — step 11: accept failure", () => {
     expect(await res.json()).toEqual({ ok: true });
   });
 });
+
+describe("the voice.sip_webhook heartbeat (operational-floor spec §1)", () => {
+  it("an accepted call — Sofía answered — is the one ok stamp (mutation: drop it → the fallback's error never clears, FAILS)", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.sip_webhook", { ok: true });
+  });
+
+  it("a deliberate decline is not an outage: no stamp at all", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    countCallsByCallerSinceMock.mockResolvedValue(5);
+    await POST(req());
+    expect(stampMock).not.toHaveBeenCalled();
+  });
+
+  it("OpenAI refusing the accept is an error stamp with the error's type only", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    fetchMock.mockRejectedValue(new Error("network down for +19565550111"));
+    await POST(req());
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.sip_webhook", { ok: false, error: "OpenAI did not accept the call (Error)" });
+  });
+
+  it("missing configuration is Sofía's outage: an error stamp", async () => {
+    delete process.env.OPENAI_API_KEY;
+    await POST(req());
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.sip_webhook", { ok: false, error: "OPENAI_WEBHOOK_SECRET or OPENAI_API_KEY is not set" });
+  });
+});
+

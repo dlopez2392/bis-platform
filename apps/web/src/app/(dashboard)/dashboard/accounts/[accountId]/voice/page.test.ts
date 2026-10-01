@@ -64,6 +64,7 @@ vi.mock("./actions", () => ({
   setTransferPhoneAction: async () => ({ ok: true }),
   enableConciergeAction: async () => ({ ok: true, publicId: "pub_x" }),
   disableConciergeAction: async () => ({ ok: true }),
+  setForwardCallsAction: async () => ({ ok: true }),
 }));
 
 const captured = vi.hoisted(() => ({
@@ -86,7 +87,7 @@ const PROFILE: VoiceProfileRow = {
   greeting_en: "", greeting_es: "", facts: "", services: "",
   languages: "both", booking_enabled: true, after_hours: "hours_then_message",
   enabled: true, textback_enabled: true, textback_body: "",
-  public_id: null, concierge_enabled: false, concierge_form_id: null,
+  public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
 };
 
 async function render() {

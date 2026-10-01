@@ -306,6 +306,8 @@ export const m = {
   "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
   "dashboard.activity.formSubmitted": "A new lead came in through your form.",
   "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
+  "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of Sofía.",
+  "dashboard.activity.forwardOff": "Sofía started answering calls again.",
   // Rule 5 (designed empty states): one sentence, verbatim from the brief.
   // No action link — the brief pins this one deliberately link-less.
   "dashboard.activity.empty": "Bookings, form leads, and call outcomes appear here as they happen.",
@@ -1185,6 +1187,22 @@ export const m = {
   "voice.transfer.badE164": "Enter a real phone number, or leave it blank to keep taking messages.",
   "voice.transfer.ownNumber": "That's this client's own number, so the call would ring straight back to Sofía. Use a number that reaches a person.",
   "voice.transfer.saveFailed": "Could not save the transfer number.",
+
+  // Send calls straight to a person (operational-floor spec §3): the agency's
+  // lever for taking the phones back from Sofía. It rings the SAME number as
+  // the transfer above — there is no second number to keep in step — so the
+  // copy shows that number rather than asking for one. `needsTransfer` names
+  // where to fix it, `noTransferOn` says what callers get meanwhile.
+  "voice.forward.title": "Send calls straight to a person",
+  "voice.forward.body": "Sofía steps aside and the calls she would have answered ring your transfer number instead. Numbers already marked as spam are still turned away.",
+  "voice.forward.toggleLabel": "Send calls straight to a person",
+  "voice.forward.rings": "When this is on, calls ring {number}.",
+  "voice.forward.needsTransfer": "Add a transfer number above first. That's the number calls will ring.",
+  "voice.forward.noProfile": "Set up Sofía first. This switch hands her calls to a person, so she needs to be set up.",
+  "voice.forward.noTransferOn": "There's no transfer number, so Sofía is answering calls until you add one.",
+  "voice.forward.onToast": "Calls now ring {number} instead of Sofía",
+  "voice.forward.offToast": "Sofía is answering calls again",
+  "voice.forward.saveFailed": "Could not change where calls go. Nothing was changed.",
 
   // ── Website assistant — the same receptionist, answering on the website
   // instead of the phone. Copy here avoids the internal words for this
