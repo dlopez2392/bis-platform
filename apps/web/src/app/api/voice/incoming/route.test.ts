@@ -200,6 +200,10 @@ describe("POST /api/voice/incoming — step 2: signature verification", () => {
     const res = await POST(req());
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "invalid signature" });
+    // The most exposed public URL in the set: a refused signature is a
+    // stranger, never an outage, so anyone POSTing junk here must not be able
+    // to send BIS an alert (mutation: stamp an error before the 400 → FAILS).
+    expect(stampMock).not.toHaveBeenCalled();
   });
 });
 

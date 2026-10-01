@@ -258,9 +258,21 @@ export function forwardTarget(env: NodeJS.ProcessEnv = process.env): string | nu
   return e164Of(env.VOICE_FORWARD_TO);
 }
 
+/**
+ * One hour, the same billing ceiling the handoff dial carries and for the
+ * same reason (`handoff/route.ts`, MAX_TRANSFER_SECONDS): once the person
+ * answers, a forward is an ordinary per-minute leg on our trunk, and without
+ * `timeLimit` nothing anywhere bounds it — a voicemail or IVR that answers
+ * and never hangs up bills until the carrier gives up.
+ */
+export const FORWARD_TIME_LIMIT_SECONDS = 3600;
+
 export function forwardXml(to: string, callerId: string | null): string {
-  const cid = callerId ? ` callerId="${callerId}"` : "";
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial${cid} timeout="30">${to}</Dial></Response>`;
+  // `xmlText` on both, per `./xml`'s rule that everything interpolated goes
+  // through it: both are E.164 today, which bounds the column, not this
+  // function.
+  const cid = callerId ? ` callerId="${xmlText(callerId)}"` : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial${cid} timeout="30" timeLimit="${FORWARD_TIME_LIMIT_SECONDS}">${xmlText(to)}</Dial></Response>`;
 }
 
 /**
@@ -337,7 +349,7 @@ function xmlResponse(body: string): NextResponse {
  */
 async function accountForwardTarget(accountId: string): Promise<string | null> {
   try {
-    const { serviceDb, getTransferPhone, listPhoneNumbersForAccount } = await import("@bis/db");
+    const { serviceDb, getTransferPhone, listPhoneNumbersForAccount, getPhoneNumberByE164 } = await import("@bis/db");
     const db = serviceDb();
     const [transferPhone, owned] = await Promise.all([
       getTransferPhone(db, accountId),
@@ -349,6 +361,14 @@ async function accountForwardTarget(accountId: string): Promise<string | null> {
     );
     if (!target.available) {
       console.log(`texml forward is on but unusable (${target.reason}) — Sofía answers, accountId ${accountId}`);
+      return null;
+    }
+    // ANY number this platform owns, not only this account's: two accounts
+    // forwarding to each other's lines would ping-pong a call between this
+    // route's two forwards, and a forwarded call writes no row that a cap
+    // could count. A number we own is never a person's phone.
+    if (await getPhoneNumberByE164(db, target.to)) {
+      console.log(`texml forward is on but its transfer number is a BIS line — Sofía answers, accountId ${accountId}`);
       return null;
     }
     return target.to;
@@ -429,7 +449,11 @@ async function route(
     // kind === "dial": the per-account forward, if the agency turned it on,
     // takes the place of the bridge; otherwise the same dial path as
     // calledE164 === null, carrying the fallback ticket when cleared.
-    if (result.accountId && result.forwardCalls) {
+    // Only a CLEARED call: a forwarded call never reaches Sofía's webhook, so
+    // the webhook's re-check — what makes this route's fail-open safe — is
+    // not there behind it. A call whose guard reads failed goes to Sofía,
+    // where the webhook gates it for real, never to a person's phone.
+    if (result.cleared && result.accountId && result.forwardCalls) {
       const to = await accountForwardTarget(result.accountId);
       if (to) {
         // Logged on every call for the reason the deployment-wide override

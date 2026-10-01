@@ -225,7 +225,7 @@ async function modelDownFallback(
   const accountId = ticket.accountId;
   stampHeartbeat("voice.sip_webhook", { ok: false, error: `Sofia's line did not connect (DialCallStatus ${dialStatus})` });
 
-  const { serviceDb, getTransferPhone, listPhoneNumbersForAccount } = await import("@bis/db");
+  const { serviceDb, getTransferPhone, listPhoneNumbersForAccount, getPhoneNumberByE164 } = await import("@bis/db");
   const db = serviceDb();
   const [transferPhone, ownedRows] = await Promise.all([
     getTransferPhone(db, accountId),
@@ -235,6 +235,14 @@ async function modelDownFallback(
   const target = resolveHandoffTarget(transferPhone, usable.map((n) => n.e164));
   if (!target.available) {
     console.log(`handoff: Sofía's leg did not connect (${dialStatus}) and there is no transfer target (${target.reason}) — hanging up, accountId ${accountId}`);
+    return null;
+  }
+  // ANY BIS line, not only this account's: while Sofía is down for everyone,
+  // two accounts whose transfer numbers are each other's lines would hand a
+  // caller back and forth through this fallback. A number we own is never
+  // a person's phone.
+  if (await getPhoneNumberByE164(db, target.to)) {
+    console.log(`handoff: Sofía's leg did not connect (${dialStatus}) and the transfer number is a BIS line — hanging up, accountId ${accountId}`);
     return null;
   }
   // The number the caller dialled, when it is still one of this account's
@@ -442,8 +450,12 @@ export async function POST(req: Request): Promise<NextResponse> {
   try {
     // Never log the token itself: unlike a call id or a dialed number, this
     // value IS the authorisation.
-    // The carrier's status is read from the signed body only to decide WHETHER
-    // the fallback may run; who it rings comes from the signed ticket.
+    // The carrier's status decides only WHETHER the fallback may run; who it
+    // rings comes from the signed ticket. The status itself is signed only
+    // once TELNYX_PUBLIC_KEY is set (unset today): until then a holder of a
+    // logged action URL can claim `failed` for its ten minutes and read back
+    // the transfer number — the same disclosure, and the same window, the
+    // handoff token already documents above (MAX_TOKEN_AGE_MS).
     const dialStatus = new URLSearchParams(rawBody).get("DialCallStatus")?.trim().toLowerCase() || null;
     const xml = await decide(token, configuredOrigin() ?? new URL(req.url).origin, query.get("f"), dialStatus);
     return xmlResponse(xml ?? HANGUP);

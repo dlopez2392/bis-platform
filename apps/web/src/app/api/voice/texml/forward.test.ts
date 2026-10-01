@@ -60,4 +60,14 @@ describe("forwardXml", () => {
     expect(xml).toContain("</Response>");
     expect(xml).toContain('timeout="30"');
   });
+
+  it("carries a one-hour timeLimit, the handoff dial's billing ceiling: once answered, a forward is an open per-minute leg (mutation: drop it → FAILS)", () => {
+    expect(forwardXml("+19562921696", "+19565061545")).toContain('timeLimit="3600"');
+  });
+
+  it("escapes what it interpolates, per ./xml's rule", () => {
+    const xml = forwardXml("+1&2<", '+3"4');
+    expect(xml).toContain(">+1&amp;2&lt;</Dial>");
+    expect(xml).toContain('callerId="+3&quot;4"');
+  });
 });

@@ -248,10 +248,29 @@ production forbids today. It is recorded so the trade-off is visible.
   `voice.sip_webhook` error heartbeat, written whenever a verified ticket meets a never-connected
   leg (with or without a transfer number), which is what emails BIS. The fallback dial carries no
   machine detection and no result URL, both of which read the call row.
-- **The forward replaces the bridge and nothing else.** An unknown or not-live number, a disabled
-  profile, a repeat-spam caller and the daily cap still refuse first. The forward target passes
-  the handoff feature's own-number guard at call time too: a transfer number that is one of the
-  account's own lines would ring back into the TeXML route and forward again, forever.
+- **The forward replaces the bridge, and only for a fully cleared call.** An unknown or not-live
+  number, a disabled profile and a known repeat-spam caller still refuse first. A forwarded call
+  never reaches Sofía's webhook, so the TeXML route's fail-open is not backed by the webhook's
+  re-check there: a call whose guard reads FAILED goes to Sofía (where the webhook gates it),
+  never to the forward (review, Important 1).
+- **The forward target is refused when it is any BIS line**, the account's own (the handoff
+  guard) or another account's (two forwards, or two model-down fallbacks, would ping-pong a call
+  that writes no row a cap could count). The fallback applies the same check.
+- **Forward dials carry `timeLimit="3600"`**, the handoff dial's billing ceiling, including the
+  deployment-wide `VOICE_FORWARD_TO`.
+- **KNOWN LIMIT, recorded rather than built: a forwarded call writes no `calls` row**, so the daily
+  cap and the repeat-spam reputation only ever count calls Sofía took. A robot that starts calling
+  while the forward is on is not counted or marked. Accepted for now because the forward is a
+  short-lived lever and each leg is bounded by `timeLimit`; the copy says only that numbers
+  already marked as spam are turned away. A forward cap (or a row per forwarded call) is the
+  follow-up if the lever is ever left on for long.
+- **OPEN: the fallback's carrier behaviour is unmeasured.** It sends a second `<Dial>` on an
+  inbound leg the bridge never answered (`answerOnBridge`), where every earlier handoff ran on an
+  answered call. One real test call (OpenAI unreachable on a test number) should confirm it
+  before decision 2 is relied on.
+- **While `TELNYX_PUBLIC_KEY` is unset**, anyone reaching `/api/voice/texml` stamps `voice.texml`
+  ok, which can close an open `voice.texml` alert early. Accepted: it is the same unsigned state
+  every Telnyx route is in today, and setting the key (runbook) closes it.
 - **The webhook stamps.** One helper, `lib/ops/stamp.ts`, writes through `after()` and never
   throws. Ok on a request the route accepted and handled; an error when the route cannot work for
   anyone (a missing secret) or the work failed after acceptance, with a fixed sentence and at

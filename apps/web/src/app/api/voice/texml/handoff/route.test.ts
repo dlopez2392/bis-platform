@@ -12,6 +12,8 @@ vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMo
 const getCallByHandoffTokenMock = vi.hoisted(() => vi.fn());
 const getTransferPhoneMock = vi.hoisted(() => vi.fn());
 const listPhoneNumbersForAccountMock = vi.hoisted(() => vi.fn());
+// The model-down fallback's cross-account loop guard: is the target any BIS line?
+const platformNumberMock = vi.hoisted(() => vi.fn());
 // Ordering ledger: which db read happened first. `toHaveBeenCalledWith` is
 // "was called at least once with", so it cannot tell a route that resolved
 // the account first from one that ALSO read another tenant's row before it.
@@ -31,6 +33,7 @@ vi.mock("@bis/db", () => ({
     events.push("owned");
     return listPhoneNumbersForAccountMock(...a);
   },
+  getPhoneNumberByE164: (...a: unknown[]) => platformNumberMock(...a),
 }));
 
 const REQUESTED = {
@@ -78,6 +81,7 @@ beforeEach(() => {
     { id: "pn1", account_id: "acct1", e164: "+19565550999", telnyx_id: null, status: "testing" },
   ]);
   stampMock.mockReset();
+  platformNumberMock.mockReset().mockResolvedValue(null);
 });
 
 describe("voice texml handoff route", () => {
@@ -452,6 +456,12 @@ describe("the model-down fallback (operational-floor spec §3)", () => {
   it("a transfer number that is one of the account's own lines is refused: it would ring straight back into Sofía", async () => {
     getTransferPhoneMock.mockResolvedValue("+19565550999");
     expect(await fall("failed")).toContain("<Hangup/>");
+  });
+
+  it("a transfer number that is ANOTHER account's BIS line is refused: two fallbacks would hand the caller back and forth (mutation: drop the platform-number check → FAILS)", async () => {
+    platformNumberMock.mockResolvedValue({ id: "pnX", account_id: "someone-else", e164: "+19562921696", telnyx_id: null, status: "live" });
+    expect(await fall("failed")).toContain("<Hangup/>");
+    expect(platformNumberMock).toHaveBeenCalledWith(expect.anything(), "+19562921696");
   });
 
   it("a read that throws hangs up rather than dialling, as everything in this route does", async () => {

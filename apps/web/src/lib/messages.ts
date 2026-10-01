@@ -1194,9 +1194,9 @@ export const m = {
   // copy shows that number rather than asking for one. `needsTransfer` names
   // where to fix it, `noTransferOn` says what callers get meanwhile.
   "voice.forward.title": "Send calls straight to a person",
-  "voice.forward.body": "Sofía steps aside and every call she would have answered rings your transfer number instead. Spam calls and daily limits are still screened first.",
+  "voice.forward.body": "Sofía steps aside and the calls she would have answered ring your transfer number instead. Numbers already marked as spam are still turned away.",
   "voice.forward.toggleLabel": "Send calls straight to a person",
-  "voice.forward.rings": "Calls will ring {number}.",
+  "voice.forward.rings": "When this is on, calls ring {number}.",
   "voice.forward.needsTransfer": "Add a transfer number above first. That's the number calls will ring.",
   "voice.forward.noProfile": "Set up Sofía first. This switch hands her calls to a person, so she needs to be set up.",
   "voice.forward.noTransferOn": "There's no transfer number, so Sofía is answering calls until you add one.",

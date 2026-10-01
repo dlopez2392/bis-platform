@@ -350,6 +350,54 @@ describe("every emitted TeXML document parses", () => {
     parseXmlStrict(xml);
   });
 
+  // ── Operational floor PR-2: the three new documents ───────────────────
+  //
+  // The bridge now carries a SECOND query parameter (`&f=`, the model-down
+  // fallback ticket) — the exact separator that broke the bridge once — and
+  // two new dials exist. Each goes through the parser, not a substring.
+
+  it("the bridge carrying the fallback ticket (a second action-URL parameter)", async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-fixture";
+    // A real UUID: the signer refuses an id the verifier would reject.
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: "0b2cbb04-b46c-4fed-a377-d377a1a201eb", e164: LIVE_TO, telnyx_id: null, status: "live" });
+    const xml = await texml({ To: LIVE_TO, From: CALLER });
+    expect(xml).toContain("&amp;f=");
+    parseXmlStrict(xml);
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  });
+
+  it("the per-account forward to a person", async () => {
+    profileMock.mockResolvedValue({ ...PROFILE, forward_calls: true });
+    // The called line is ours; the transfer number is no BIS line.
+    lookupMock.mockImplementation(async (_db: unknown, e164: string) =>
+      (e164 === LIVE_TO ? { id: "pn1", account_id: "a1", e164, telnyx_id: null, status: "live" } : null));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const xml = await texml({ To: LIVE_TO, From: CALLER });
+    expect(xml).toContain(`>${CALLER}</Dial>`);
+    parseXmlStrict(xml);
+    vi.restoreAllMocks();
+  });
+
+  it("the model-down fallback dial (no call row, a signed ticket, a never-connected leg)", async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-fixture";
+    const { signFallbackTicket } = await import("@/lib/voice/fallback-ticket");
+    const token = "f".repeat(32);
+    const ticket = signFallbackTicket(token, "0b2cbb04-b46c-4fed-a377-d377a1a201eb", LIVE_TO, Date.now())!;
+    getCallByHandoffTokenMock.mockResolvedValue(null);
+    lookupMock.mockResolvedValue(null);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const res = await handoffPOST(new Request(
+      `https://x.example/api/voice/texml/handoff?${new URLSearchParams({ t: token, f: ticket })}`,
+      { method: "POST", body: new URLSearchParams({ DialCallStatus: "failed" }),
+        headers: { "content-type": "application/x-www-form-urlencoded" } },
+    ));
+    const xml = await res.text();
+    expect(xml).toContain(`>${CALLER}</Dial>`);
+    parseXmlStrict(xml);
+    vi.restoreAllMocks();
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  });
+
   it("the handoff dial to a person", async () => {
     const xml = await handoff("tok_abc");
     expect(xml).toContain("<Dial");

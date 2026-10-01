@@ -182,7 +182,9 @@ test.describe("the agency's forward-calls switch", () => {
     await expect(checkbox(page)).toBeDisabled();
     await expect(checkbox(page)).not.toBeChecked();
     await expect(page.getByText(m["voice.forward.needsTransfer"])).toBeVisible();
-    await expect(page.getByText(/Calls will ring/)).toHaveCount(0);
+    // The "calls ring <number>" line is absent until a number exists; matched
+    // on the catalogue's own words before the placeholder, never a literal.
+    await expect(page.getByText(m["voice.forward.rings"].split("{number}")[0]!.trim())).toHaveCount(0);
 
     await page.locator("#transfer_phone").fill(TRANSFER);
     await page.getByRole("button", { name: m["voice.transfer.save"] }).click();

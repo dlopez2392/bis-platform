@@ -152,7 +152,8 @@ function curate(event: EventRow): CuratedRow | null {
     case "voice.forward_changed": {
       if (typeof payload.forwardCalls !== "boolean") return null; // never guess which way it went
       return {
-        key: event.id, icon: payload.forwardCalls ? PhoneForwarded : Phone, tone: "warning",
+        // On is a warning (Sofía is no longer answering); off is Sofía back.
+        key: event.id, icon: payload.forwardCalls ? PhoneForwarded : Phone, tone: payload.forwardCalls ? "warning" : "accent",
         summary: payload.forwardCalls ? m["dashboard.activity.forwardOn"] : m["dashboard.activity.forwardOff"],
         createdAtIso: event.createdAt,
       };

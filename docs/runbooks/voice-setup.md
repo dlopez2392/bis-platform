@@ -596,8 +596,11 @@ Two levers send calls to a person instead of Sofía, plus one automatic fallback
      account's existing transfer number ("Transfer to a person"); there is no second number.
    - It is disabled until a transfer number is saved, and it runs at once with an undo toast.
      Each change records a `voice.forward_changed` event with who made it.
-   - It replaces the bridge to Sofía and nothing else: unknown numbers, a disabled line, repeat
-     spam and the daily cap still refuse first, so a known robot never reaches a person's phone.
+   - It replaces the bridge to Sofía and nothing else: unknown numbers, a disabled line and numbers
+     already marked as spam still refuse first, and a call whose screening could not be checked
+     goes to Sofía, never to the person. Each forwarded call is capped at an hour.
+   - Forwarded calls are not counted toward the daily cap or spam marking (they write no call
+     record), so treat it as a short-lived lever, not a permanent setting.
 2. **Every number at once: `VOICE_FORWARD_TO` in Vercel.**
    - The deployment-wide override, checked before anything else. Set it to an E.164 number and
      redeploy; every call on every number rings it. Unset it and redeploy to hand the phones back.
