@@ -190,3 +190,9 @@ export { SUBSCRIPTION_STATUSES, ENDED_STATUSES, PAST_DUE_STATUSES, isSubscriptio
          type SubscriptionItemSnapshot, type SubscriptionSnapshot, type MirrorRefusal, type MirrorDecision,
          type MirrorOutcome, type MirrorPlan } from "./account-billing";
 export { sumUsageSince } from "./usage";
+
+// Heartbeats (0057 ops_heartbeats): written by the cron harness and the
+// webhook routes, read by the alert pass and the health route. See ./ops.ts.
+export { recordHeartbeat, listHeartbeats, markAlerted, HEARTBEAT_KEYS, passHeartbeatKey,
+         HEARTBEAT_KEY_PATTERN, isHeartbeatKey, HEARTBEAT_ERROR_MAX_CHARS, boundHeartbeatError,
+         type HeartbeatRow } from "./ops";

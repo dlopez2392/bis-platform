@@ -1,0 +1,60 @@
+name: Ops health
+
+# The dead-man's switch (operational-floor spec §1, decision 1, danlo
+# 2026-10-01). Everything else that can break on the platform is reported by
+# the alert pass, which runs inside the 15-minute cron. The one failure that
+# pass cannot report is the cron itself stopping (a failed deploy, a revoked
+# secret, the scheduler): a pass cannot say the passes stopped running. So
+# this checks from OUTSIDE, once an hour: it asks production's
+# /api/ops/health, which answers 503 when the last completed tick is older
+# than three missed ticks or the database does not answer. A non-200 fails
+# this job, and GitHub emails the repository owner about a failed scheduled
+# run. No new vendor.
+#
+# WHAT IT HOLDS. One secret, OPS_HEALTH_SECRET, a value that opens
+# /api/ops/health and NOTHING else (it is not CRON_SECRET, which runs the
+# passes). No database URL, no service-role key, no production credential:
+# CI never touches production (CLAUDE.md), and a reader of this file can
+# confirm it in one glance. The URL is the public app origin.
+#
+# FAILS LOUD WHEN UNCONFIGURED. Without the secret the request is a 401, which
+# fails the job, so a forgotten setup step shows up as a red run rather than
+# a switch that silently never fires.
+
+on:
+  schedule:
+    # Hourly, at minute 17 rather than :00, when GitHub's scheduler is busiest
+    # and runs are most often delayed or dropped.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ops-health
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask production whether the cron is alive
+        env:
+          OPS_HEALTH_SECRET: ${{ secrets.OPS_HEALTH_SECRET }}
+          HEALTH_URL: https://app.bis-rgv.com/api/ops/health
+        run: |
+          # Two tries a minute apart: one dropped request is not an outage.
+          for attempt in 1 2; do
+            status=$(curl -sS -o body.json -w '%{http_code}' --max-time 30 \
+              -H "authorization: Bearer ${OPS_HEALTH_SECRET}" "$HEALTH_URL" || echo 000)
+            if [ "$status" = "200" ]; then
+              echo "healthy"
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $status"
+            cat body.json 2>/dev/null || true
+            [ "$attempt" = "1" ] && sleep 60
+          done
+          echo "::error::The platform health check failed (HTTP $status). The 15-minute cron may have stopped: check Vercel's cron logs for /api/cron/reminders."
+          exit 1

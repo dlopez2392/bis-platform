@@ -780,6 +780,7 @@ describe("the email kinds' own send sites (spec §4.3's table, E1)", () => {
     "operator.agency_report": [`${PASSES}/weekly-agency-report.ts`],
     "operator.billing_link": [`${DASH}/settings/billing-actions.ts`],
     "operator.sender_check": [`${DASH}/settings/actions.ts`],
+    "operator.ops_alert": [`${PASSES}/ops-watch.ts`],
   };
   const REGISTRY = "apps/web/src/lib/consent/classes.ts";
 
