@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Branding } from "@bis/db";
-import { emailBrand, UNSUBSCRIBE_MARKER } from "./shell";
+import { emailBrand } from "./shell";
+import { withoutUnsubscribeMarker } from "./test-helpers";
 import { quoteFollowupEmail } from "./quote-followup";
 
 /**
@@ -55,7 +56,7 @@ describe("quoteFollowupEmail", () => {
     // `UNSUBSCRIBE_MARKER`, as the card's last row, for the email gate to
     // replace later (this template's own kind gets the footer from Task 5
     // on). Strip it before asserting: this test is about VISIBLE content.
-    expect(html.toLowerCase().replace(UNSUBSCRIBE_MARKER, "")).not.toContain("unsubscribe");
+    expect(withoutUnsubscribeMarker(html)).not.toContain("unsubscribe");
   });
 
   it("never returns an empty text part, and the text part carries no HTML", () => {

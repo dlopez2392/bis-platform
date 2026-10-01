@@ -44,6 +44,13 @@ describe("recordFormGrants (spec §4.2, grants; decision 8)", () => {
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
   });
 
+  it("the email is keyed like every other ledger writer, via emailLedgerAddress — too long for the DB CHECK is skipped, not written and lost (mutation: back to toLowerCase only → FAILS)", async () => {
+    const tooLong = "a".repeat(250) + "@x.co"; // 255 chars, over 0054's CHECK
+    await recordFormGrants({} as never, { accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
+      answers: [{ key: "e", value: tooLong }], consent: consent({ ok2: true }) });
+    expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
+  });
+
   it("an address that will not normalise is skipped, never written malformed (mutation: write the email as typed → FAILS)", async () => {
     await recordFormGrants({} as never, { accountId: "a1", formId: "f1", submissionId: "s1", fields: FIELDS,
       answers: [{ key: "p", value: "call me" }, { key: "e", value: "not-an-email" }], consent: consent({ ok: true }) });

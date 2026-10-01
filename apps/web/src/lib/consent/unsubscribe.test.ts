@@ -1,10 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const db = vi.hoisted(() => ({ appendConsentEventGuarded: vi.fn(), readConsentState: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 
-import { readUnsubscribeToken, recordUnsubscribe, recordResubscribe, emailStateOf, pageStateOf } from "./unsubscribe";
+import {
+  readUnsubscribeToken, recordUnsubscribe, recordResubscribe, emailStateOf, pageStateOf,
+  CUSTOMER_EMAIL_STOP_METHODS,
+} from "./unsubscribe";
 import { sealConsentToken, type ConsentTokenPayload } from "./token";
+
+// Same repo-root resolution texts-view.test.ts / scans.test.ts use.
+const REPO = fileURLToPath(new URL("../../../../../", import.meta.url));
 
 const SECRET = "unsub-test-secret-0123456789abcdef-01";
 const ENV = { CONSENT_TOKEN_SECRET: SECRET } as unknown as NodeJS.ProcessEnv;
@@ -82,5 +91,31 @@ describe("emailStateOf and pageStateOf — what the page opens on (review R1-I1,
       expect(pageStateOf({ state: "stopped", method }), method).toBe("ask");
     }
     expect(pageStateOf({ state: "allowed" })).toBe("ask");
+  });
+});
+
+describe("CUSTOMER_EMAIL_STOP_METHODS stays identical to 0055's unless_customer_stopped guard, email members only (choice 19)", () => {
+  // The exact branch: `when 'unless_customer_stopped' then v_prior_action is
+  // distinct from 'revoked' or v_prior_method not in (...)`. Extracted from
+  // the migration text itself, never re-typed, so a change to either side of
+  // the parity is what makes this fail.
+  function customerStopMethods(sql: string): string[] {
+    const branch = sql.match(
+      /when 'unless_customer_stopped' then v_prior_action is distinct from 'revoked'\s*\n\s*or v_prior_method not in \(([^)]*)\)/,
+    );
+    if (!branch) throw new Error("could not find 0055's unless_customer_stopped branch");
+    return [...branch[1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+  }
+
+  // The sms-only members of that one shared guard (texted stops have no
+  // email equivalent): everything left over is email's.
+  const SMS_ONLY = ["keyword", "carrier_block", "backfill_telnyx"];
+
+  it("0055_consent_writes.sql's unless_customer_stopped list, minus the sms-only methods, equals CUSTOMER_EMAIL_STOP_METHODS (mutation: add a method to CUSTOMER_EMAIL_STOP_METHODS in unsubscribe.ts → FAILS)", () => {
+    const sql = readFileSync(
+      join(REPO, "packages", "db", "supabase", "migrations", "0055_consent_writes.sql"), "utf-8",
+    );
+    const emailFromSql = customerStopMethods(sql).filter((m) => !SMS_ONLY.includes(m));
+    expect([...emailFromSql].sort()).toEqual([...CUSTOMER_EMAIL_STOP_METHODS].sort());
   });
 });

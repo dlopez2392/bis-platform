@@ -88,15 +88,24 @@ describe("consentStateOf — spec §3's table", () => {
 /** A PostgREST-shaped chain that records what it was asked; `rpc` answers the write function. */
 function fakeDb(o: {
   read?: { data: unknown; error: unknown };
+  /** A queue of reads, consumed in order by successive `.range()` calls
+   *  (readBlockedAddresses's within-chunk paging, item 7); falls back to
+   *  repeating `read` (or an empty page) once exhausted. */
+  reads?: Array<{ data: unknown; error: unknown }>;
   single?: { data: unknown; error: unknown };
   rpc?: { data: unknown; error: unknown };
 } = {}) {
   const calls: Array<[string, ...unknown[]]> = [];
+  const reads = [...(o.reads ?? [])];
   const chain: Record<string, (...a: unknown[]) => unknown> = {};
   for (const k of ["select", "eq", "in", "order"]) {
     chain[k] = (...a: unknown[]) => { calls.push([k, ...a]); return chain; };
   }
   chain.limit = (...a: unknown[]) => { calls.push(["limit", ...a]); return Promise.resolve(o.read ?? { data: [], error: null }); };
+  chain.range = (...a: unknown[]) => {
+    calls.push(["range", ...a]);
+    return Promise.resolve(reads.shift() ?? o.read ?? { data: [], error: null });
+  };
   chain.maybeSingle = () => { calls.push(["maybeSingle"]); return Promise.resolve(o.single ?? { data: null, error: null }); };
   // readConsentActions ends at `.in(...)`: make the chain awaitable there.
   (chain as { then?: unknown }).then = (res: (v: unknown) => unknown) => res(o.read ?? { data: [], error: null });
@@ -343,13 +352,13 @@ describe("readBlockedAddresses — which addresses a due-list must leave out", (
     expect([...blocked]).toEqual(["a1|ana@x.com"]);
   });
 
-  it("reads only deciding rows of that channel for those accounts and addresses (mutation: drop the channel filter → an SMS stop of the same string could block an email, FAILS)", async () => {
+  it("reads only deciding rows of that channel for those accounts and addresses, ordered by id for stable paging, ranged to one page (mutation: drop the channel filter → an SMS stop of the same string could block an email, FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
     await readBlockedAddresses(f.db, "email", [{ accountId: "a1", address: "ana@x.com" }]);
     expect(f.calls).toEqual(expect.arrayContaining([
       ["from", "consent_events"], ["in", "account_id", ["a1"]], ["eq", "channel", "email"],
       ["in", "address", ["ana@x.com"]], ["in", "action", ["revoked", "held", "hold_released", "resubscribed"]],
-      ["limit", 1000],
+      ["order", "id", { ascending: true }], ["range", 0, 999],
     ]));
   });
 
@@ -359,19 +368,26 @@ describe("readBlockedAddresses — which addresses a due-list must leave out", (
     expect(f.calls).toEqual([]);
   });
 
-  it("chunks the addresses by 100 so a page of 200 candidates stays a short URL (mutation: one read for all → one limit call, FAILS)", async () => {
+  it("chunks the addresses by 100 so a page of 200 candidates stays a short URL (mutation: one read for all → one range call, FAILS)", async () => {
     const f = fakeDb({ read: { data: [], error: null } });
     const pairs = Array.from({ length: 150 }, (_, i) => ({ accountId: "a1", address: `c${i}@x.com` }));
     await readBlockedAddresses(f.db, "email", pairs);
-    expect(f.calls.filter((c) => c[0] === "limit")).toHaveLength(2);
+    expect(f.calls.filter((c) => c[0] === "range")).toHaveLength(2);
   });
 
-  it("THROWS on a read error, and on a full 1000-row page, so a walk never judges on a truncated read (mutation: drop the length check → a truncated page answers 'not blocked', FAILS)", async () => {
-    await expect(readBlockedAddresses(fakeDb({ read: { data: null, error: { message: "boom" } } }).db, "email",
-      [{ accountId: "a1", address: "ana@x.com" }])).rejects.toThrow("readBlockedAddresses failed: boom");
+  it("a chunk whose true size fills one page is PAGED within the chunk, not thrown on: a full page then a short page are both read and both counted (item 7; mutation: throw on `rows.length >= BLOCKED_PAGE` instead of paging → FAILS)", async () => {
     const full = Array.from({ length: 1000 }, (_, i) =>
       ROW(`00000000-0000-0000-0000-${String(i).padStart(12, "0")}`, "a1", "ana@x.com", "revoked", "staff", "2026-10-01T10:00:00Z"));
-    await expect(readBlockedAddresses(fakeDb({ read: { data: full, error: null } }).db, "email",
-      [{ accountId: "a1", address: "ana@x.com" }])).rejects.toThrow(/1000 rows/);
+    const short = [ROW("00000000-0000-0000-0000-000000001000", "a1", "ana@x.com", "resubscribed", "staff_undo", "2026-10-02T10:00:00Z")];
+    const f = fakeDb({ reads: [{ data: full, error: null }, { data: short, error: null }] });
+    const blocked = await readBlockedAddresses(f.db, "email", [{ accountId: "a1", address: "ana@x.com" }]);
+    // The newest row across BOTH pages (the short page's resubscribed, one day later) decides: allowed.
+    expect([...blocked]).toEqual([]);
+    expect(f.calls.filter((c) => c[0] === "range")).toEqual([["range", 0, 999], ["range", 1000, 1999]]);
+  });
+
+  it("THROWS on a read error, so a walk never judges on a truncated or failed read (mutation: swallow the error → FAILS)", async () => {
+    await expect(readBlockedAddresses(fakeDb({ read: { data: null, error: { message: "boom" } } }).db, "email",
+      [{ accountId: "a1", address: "ana@x.com" }])).rejects.toThrow("readBlockedAddresses failed: boom");
   });
 });

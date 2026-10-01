@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { Branding } from "@bis/db";
 import { m } from "@/lib/messages";
-import { emailBrand, UNSUBSCRIBE_MARKER } from "./shell";
+import { emailBrand } from "./shell";
+import { withoutUnsubscribeMarker } from "./test-helpers";
 import { referralAskEmail } from "./referral-ask";
 import { reactivationEmail } from "./reactivation";
 
@@ -70,7 +71,7 @@ describe("referralAskEmail", () => {
     // `UNSUBSCRIBE_MARKER`, as the card's last row, for the email gate to
     // replace later. Strip it before asserting: this test is about VISIBLE
     // content — the way out here is a reply, not a link.
-    expect(html.toLowerCase().replace(UNSUBSCRIBE_MARKER, "")).not.toContain("unsubscribe");
+    expect(withoutUnsubscribeMarker(html)).not.toContain("unsubscribe");
     expect(text.toLowerCase()).not.toContain("unsubscribe");
   });
 

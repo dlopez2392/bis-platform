@@ -105,9 +105,16 @@ const BLOCKED_CHUNK = 100;
  * Which of these addresses are NOT allowed (stopped, or held), each in its
  * own account: the keys `${accountId}|${address}`. For the due-lists that
  * must leave a stopped customer out of the WALK itself rather than skip it
- * in a pass (the reactivation walk, the #118 I1 trap). THROWS on a read
- * error, and on a chunk that fills a whole page: the caller's walk then
- * fails, and nothing is sent on a guess (fails closed, spec §5).
+ * in a pass (the reactivation walk, the #118 I1 trap).
+ *
+ * A chunk whose true size fills one page is PAGED WITHIN the chunk (item 7,
+ * email follow-ups) rather than thrown on: the old `rows.length >=
+ * BLOCKED_PAGE` throw aborted the WHOLE walk on every tick once any one
+ * account's history for a channel passed 1,000 deciding rows, not just that
+ * one address. Ordered by id so successive pages never overlap or skip a
+ * row; it keeps reading while a page comes back full and stops at the first
+ * short page. THROWS on a real read error: the caller's walk then fails, and
+ * nothing is sent on a guess (fails closed, spec §5).
  */
 export async function readBlockedAddresses(
   db: SupabaseClient, channel: ConsentChannel, pairs: readonly { accountId: string; address: string }[],
@@ -118,19 +125,23 @@ export async function readBlockedAddresses(
   const addresses = [...new Set(pairs.map((p) => p.address))];
   const byKey = new Map<string, ConsentRow[]>();
   for (let i = 0; i < addresses.length; i += BLOCKED_CHUNK) {
-    const { data, error } = await db.from("consent_events")
-      .select("id, account_id, address, action, method, occurred_at")
-      .in("account_id", accountIds).eq("channel", channel)
-      .in("address", addresses.slice(i, i + BLOCKED_CHUNK))
-      .in("action", [...DECIDING_ACTIONS])
-      .limit(BLOCKED_PAGE);
-    if (error) throw new Error(`readBlockedAddresses failed: ${error.message}`);
-    const rows = (data ?? []) as (ConsentRow & { account_id: string; address: string })[];
-    if (rows.length >= BLOCKED_PAGE) throw new Error(`readBlockedAddresses: a chunk returned ${BLOCKED_PAGE} rows, the whole page; refusing to judge on it`);
-    for (const r of rows) {
-      const key = `${r.account_id}|${r.address}`;
-      const list = byKey.get(key);
-      if (list) list.push(r); else byKey.set(key, [r]);
+    const chunk = addresses.slice(i, i + BLOCKED_CHUNK);
+    for (let offset = 0; ; offset += BLOCKED_PAGE) {
+      const { data, error } = await db.from("consent_events")
+        .select("id, account_id, address, action, method, occurred_at")
+        .in("account_id", accountIds).eq("channel", channel)
+        .in("address", chunk)
+        .in("action", [...DECIDING_ACTIONS])
+        .order("id", { ascending: true })
+        .range(offset, offset + BLOCKED_PAGE - 1);
+      if (error) throw new Error(`readBlockedAddresses failed: ${error.message}`);
+      const rows = (data ?? []) as (ConsentRow & { account_id: string; address: string })[];
+      for (const r of rows) {
+        const key = `${r.account_id}|${r.address}`;
+        const list = byKey.get(key);
+        if (list) list.push(r); else byKey.set(key, [r]);
+      }
+      if (rows.length < BLOCKED_PAGE) break;
     }
   }
   for (const p of pairs) {

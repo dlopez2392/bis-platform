@@ -1,5 +1,6 @@
 import { appendConsentEventGuarded, type FormField, type SupabaseClient } from "@bis/db";
 import { normalisePhone } from "@bis/db/phone";
+import { emailLedgerAddress } from "@bis/db/email-address";
 import { loggableError } from "@/lib/loggable-error";
 
 /**
@@ -29,8 +30,7 @@ export async function recordFormGrants(
   const ticked = (input.consent ?? []).filter((c) => c.given);
   if (ticked.length === 0) return;
   const sms = normalisePhone(answerOf(input.fields, input.answers, "core.phone") || null)?.e164 ?? null;
-  const typedEmail = answerOf(input.fields, input.answers, "core.email").toLowerCase();
-  const email = typedEmail.indexOf("@") > 0 ? typedEmail : null;
+  const email = emailLedgerAddress(answerOf(input.fields, input.answers, "core.email") || null);
   // Together, not one after another: this runs on the public submit path
   // (review R2-m16). Each write is contained on its own.
   const writes: Promise<void>[] = [];
