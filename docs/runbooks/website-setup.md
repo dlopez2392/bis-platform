@@ -36,9 +36,12 @@ Plan: `docs/superpowers/plans/2026-09-07-website-traffic.md`.
 
 1. Vercel → Account → Tokens → create `bis-platform-analytics`, scope = the
    team, expiry 1 year. Copy it once.
-2. Vercel → bis-platform project → Settings → Environment Variables:
-   `VERCEL_API_TOKEN` = the token (mark it Sensitive), `VERCEL_TEAM_ID` =
-   `team_8zjV46sJxQDsVzikNQa1JaO2` (Production + Preview).
+2. Vercel → bis-platform project → Settings → Environment Variables,
+   **Production only**: `VERCEL_API_TOKEN` = the token (mark it Sensitive),
+   `VERCEL_TEAM_ID` = `team_8zjV46sJxQDsVzikNQa1JaO2` (Production; Preview is
+   fine too, it is an id). Never put the token on Preview: it is team-scoped,
+   and a preview runs any pushed branch's code
+   (`production-isolation.md`, "What may live on Preview").
 3. **Redeploy.** Vercel applies environment variables to NEW deployments
    only (docs: "Changes to environment variables are not applied to
    previous deployments"). Deployments → the current production deployment
