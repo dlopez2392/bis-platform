@@ -15,8 +15,19 @@ export type VoiceProfileRow = {
   textback_enabled: boolean; textback_body: string;
   public_id: string | null; concierge_enabled: boolean;
   concierge_form_id: string | null;
+  /** 0058. Send this account's callers straight to `accounts.transfer_phone`
+   *  instead of to the receptionist. Written ONLY by `setForwardCalls`. */
+  forward_calls: boolean;
 };
-export type VoiceProfilePatch = Partial<Omit<VoiceProfileRow, "id" | "account_id">>;
+/**
+ * `forward_calls` is omitted on purpose (0058): `setForwardCalls` is its only
+ * writer, so every change to where this business's calls go records its own
+ * `voice.forward_changed` event with the actor. A general settings save that
+ * could carry it would change routing under a `voice_profile.updated` event
+ * that does not say so. `upsertVoiceProfile` also refuses the key at run time,
+ * for a caller whose patch is not an object literal.
+ */
+export type VoiceProfilePatch = Partial<Omit<VoiceProfileRow, "id" | "account_id" | "forward_calls">>;
 /**
  * The TypeScript twin of `calls_outcome_check` (0019, widened by 0037). The
  * two must hold the same six strings: a value this union admits and the CHECK
@@ -50,7 +61,7 @@ const PHONE_COLS = "id, account_id, e164, telnyx_id, status";
 export const PROFILE_COLS =
   "id, account_id, persona_name, greeting_en, greeting_es, facts, services, " +
   "languages, booking_enabled, after_hours, enabled, textback_enabled, textback_body, " +
-  "public_id, concierge_enabled, concierge_form_id";
+  "public_id, concierge_enabled, concierge_form_id, forward_calls";
 
 export async function getPhoneNumberByE164(
   db: SupabaseClient, e164: string,
@@ -151,6 +162,12 @@ export async function getVoiceProfile(
 export async function upsertVoiceProfile(
   db: SupabaseClient, accountId: string, patch: VoiceProfilePatch, actorId: string, actorType: ActorType = "user",
 ): Promise<VoiceProfileRow> {
+  // The type already omits it; this catches a patch built from a wider
+  // object (a spread row, a parsed form) that the type cannot see. Refused,
+  // not stripped: silently dropping it would hide the caller's bug.
+  if (Object.prototype.hasOwnProperty.call(patch, "forward_calls")) {
+    throw new Error("upsertVoiceProfile cannot write forward_calls; use setForwardCalls");
+  }
   const existing = await getVoiceProfile(db, accountId);
   if (!existing) {
     const { data, error } = await db.from("voice_profiles")
@@ -166,6 +183,41 @@ export async function upsertVoiceProfile(
   if (error || !data) throw new Error(`upsertVoiceProfile update failed: ${error?.message}`);
   await emit(db, accountId, "voice_profile.updated", actorId, { fields: Object.keys(patch) }, actorType);
   return data as unknown as VoiceProfileRow;
+}
+
+/**
+ * The per-account call forward (0058; spec 2026-10-01-operational-floor,
+ * section 3). `on` sends this account's callers straight to
+ * `accounts.transfer_phone` instead of to the receptionist; there is no second
+ * number. The TeXML route decides what happens with no transfer number set
+ * (the receptionist answers), and the deployment-wide `VOICE_FORWARD_TO` still
+ * wins over both.
+ *
+ * The ONLY writer of `voice_profiles.forward_calls` (`VoiceProfilePatch`
+ * omits it). Call it with `serviceDb()` behind the app's agency check:
+ * `authenticated` has no UPDATE on voice_profiles (0019/0020), so a user
+ * client is refused by the database, and that absence is the control.
+ *
+ * Every change records `voice.forward_changed` with `{ forwardCalls }` and the
+ * actor, so the account's history shows who took the phones back and when.
+ * The write comes first and the event only after it succeeded; an account with
+ * no `voice_profiles` row throws, naming the account, and records nothing
+ * (PostgREST reports an UPDATE matching no row as success with no rows, the
+ * setBranding lesson).
+ */
+export async function setForwardCalls(
+  db: SupabaseClient, accountId: string, on: boolean, actorId: string,
+  actorType: "user" | "system" = "user",
+): Promise<void> {
+  // `undefined` would serialise away, update only updated_at, and still record
+  // an event claiming a change.
+  if (typeof on !== "boolean") throw new Error("setForwardCalls: on must be true or false");
+  const { data, error } = await db.from("voice_profiles")
+    .update({ forward_calls: on, updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).select("id");
+  if (error) throw new Error(`setForwardCalls failed: ${error.message}`);
+  if (!data || data.length === 0) throw new Error(`setForwardCalls: no voice profile for account ${accountId}`);
+  await emit(db, accountId, "voice.forward_changed", actorId, { forwardCalls: on }, actorType);
 }
 
 /**

@@ -34,6 +34,10 @@ vi.mock("next/server", async (importOriginal) => {
 vi.mock("@/lib/consent/replies", () => ({ sendConsentReply: vi.fn() }));
 
 import { POST } from "./route";
+// Heartbeats are mocked out so the `after()` recorders below keep counting
+// only this route's own work (lib/ops/stamp.ts).
+const stampMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 
 function post(body: object) {
   return new Request("https://x.test/api/sms/inbound", {
@@ -422,3 +426,29 @@ describe("an inbound text that is a one-word answer", () => {
     // that cannot be applied proves nothing about the case it names.
   });
 });
+
+describe("the sms.inbound heartbeat (operational-floor spec §1)", () => {
+  it("a handled event is one ok stamp", async () => {
+    await POST(post({ data: { event_type: "message.finalized", payload: { id: "prov_1", to: [{ status: "delivered" }] } } }));
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("sms.inbound", { ok: true });
+  });
+
+  it("a refused signature — or an unset key — is never stamped (mutation: stamp an error there → FAILS)", async () => {
+    verify.mockReturnValue(false);
+    await POST(post({ data: { event_type: "message.received" } }));
+    delete process.env.TELNYX_PUBLIC_KEY;
+    await POST(post({ data: { event_type: "message.received" } }));
+    expect(stampMock).not.toHaveBeenCalled();
+  });
+
+  it("a failure past the signature is an error stamp naming the event and the error's TYPE, never its message, and no ok stamp after it", async () => {
+    dbMocks.serviceDb.mockImplementation(() => { throw new Error("env missing for +15551112222"); });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await POST(post({ data: { event_type: "message.received", payload: {
+      to: [{ phone_number: "+15550000000" }], from: { phone_number: "+15551112222" }, text: "hi" } } }));
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("sms.inbound", { ok: false, error: "message.received handling failed (Error)" });
+    expect(JSON.stringify(stampMock.mock.calls)).not.toContain("5551112222");
+    vi.restoreAllMocks();
+  });
+});
+

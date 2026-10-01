@@ -26,6 +26,10 @@ vi.mock("next/server", async (importOriginal) => {
 });
 
 import { POST } from "./route";
+// Heartbeats are mocked out so the `after()` recorders below keep counting
+// only this route's own work (lib/ops/stamp.ts).
+const stampMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const RAW_PUBLIC_KEY = publicKey.export({ format: "der", type: "spki" }).subarray(12).toString("base64");

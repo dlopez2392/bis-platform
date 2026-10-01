@@ -1186,6 +1186,22 @@ export const m = {
   "voice.transfer.ownNumber": "That's this client's own number, so the call would ring straight back to Sofía. Use a number that reaches a person.",
   "voice.transfer.saveFailed": "Could not save the transfer number.",
 
+  // Send calls straight to a person (operational-floor spec §3): the agency's
+  // lever for taking the phones back from Sofía. It rings the SAME number as
+  // the transfer above — there is no second number to keep in step — so the
+  // copy shows that number rather than asking for one. `needsTransfer` names
+  // where to fix it, `noTransferOn` says what callers get meanwhile.
+  "voice.forward.title": "Send calls straight to a person",
+  "voice.forward.body": "Sofía steps aside and every call she would have answered rings your transfer number instead. Spam calls and daily limits are still screened first.",
+  "voice.forward.toggleLabel": "Send calls straight to a person",
+  "voice.forward.rings": "Calls will ring {number}.",
+  "voice.forward.needsTransfer": "Add a transfer number above first. That's the number calls will ring.",
+  "voice.forward.noProfile": "Set up Sofía first. This switch hands her calls to a person, so she needs to be set up.",
+  "voice.forward.noTransferOn": "There's no transfer number, so Sofía is answering calls until you add one.",
+  "voice.forward.onToast": "Calls now ring {number} instead of Sofía",
+  "voice.forward.offToast": "Sofía is answering calls again",
+  "voice.forward.saveFailed": "Could not change where calls go. Nothing was changed.",
+
   // ── Website assistant — the same receptionist, answering on the website
   // instead of the phone. Copy here avoids the internal words for this
   // feature ("concierge", "widget", "embed", "public id") on purpose — this

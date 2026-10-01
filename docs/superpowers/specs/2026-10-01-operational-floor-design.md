@@ -222,3 +222,39 @@ production forbids today. It is recorded so the trade-off is visible.
   path, route by route, each with its own test updated. PR-1 ships the cron's heartbeats, the
   alert pass, the health route and the dead-man's switch, which cover the failure the roadmap
   names first: the cron stopping, or a pass failing on every tick.
+
+## Amendments taken while building PR-2 (2026-10-01)
+
+- **The model-down fallback needs a signed ticket, because "no call row" is exactly its case.**
+  The handoff route finds a call by the token on its `calls` row, and that row is written by
+  Sofía's own webhook (`startCallRow`), which never runs when OpenAI is unreachable. Section 3
+  assumed a row to stamp. So the TeXML route, which has already resolved the account and passed
+  every guard before it dials Sofía, writes a ticket into the `<Dial action>` URL: the account,
+  the dialled number and the time, HMAC-signed with a key derived from
+  `SUPABASE_SERVICE_ROLE_KEY` (no new env var), bound to the call's own handoff token, valid
+  10 minutes (`apps/web/src/lib/voice/fallback-ticket.ts`). The handoff route acts only on a
+  verified ticket.
+- **Only a call every guard cleared carries a ticket.** The webhook declines by never accepting,
+  which looks the same from the handoff route as Sofía being down. But the TeXML route runs the
+  same guards first and speaks the refusal itself, so a call it dialled was cleared. When a guard
+  read fails open, no ticket is signed, and the fallback hangs up as today: a caller the guards
+  could not vouch for is never forwarded to a person.
+- **"Never connected" is `DialCallStatus` of exactly `failed`, `busy` or `no-answer`.** Telnyx
+  documents the enum (completed, busy, no-answer, canceled, failed) but not which failure gives
+  which value. `canceled` is excluded (the caller hung up while it rang; dialling the business
+  then rings a person for nobody). The "`DialCallDuration` of 0" clause is dropped: Telnyx
+  documents the field as conditional, and a `completed` leg connected whatever it says.
+- **No `transferred` stamp on a fallback call.** There is no call row to stamp. The record is the
+  `voice.sip_webhook` error heartbeat, written whenever a verified ticket meets a never-connected
+  leg (with or without a transfer number), which is what emails BIS. The fallback dial carries no
+  machine detection and no result URL, both of which read the call row.
+- **The forward replaces the bridge and nothing else.** An unknown or not-live number, a disabled
+  profile, a repeat-spam caller and the daily cap still refuse first. The forward target passes
+  the handoff feature's own-number guard at call time too: a transfer number that is one of the
+  account's own lines would ring back into the TeXML route and forward again, forever.
+- **The webhook stamps.** One helper, `lib/ops/stamp.ts`, writes through `after()` and never
+  throws. Ok on a request the route accepted and handled; an error when the route cannot work for
+  anyone (a missing secret) or the work failed after acceptance, with a fixed sentence and at
+  most the error's type, never its message. Never on a refused signature: a stranger must not be
+  able to send BIS an alert. The keys are the five in Section 1; `watch.ts` names each in words,
+  pinned by a type-level test.

@@ -1,0 +1,112 @@
+-- 0058_voice_forward_calls.sql
+-- The operational floor, Section 3 "The forward" (F-120 part)
+-- (docs/superpowers/specs/2026-10-01-operational-floor-design.md, sections 3
+-- and 5; approved by danlo 2026-10-01).
+--
+-- WHY. When one client's phones need taking back from the receptionist, the
+-- only lever today is VOICE_FORWARD_TO. It is deployment-wide: it takes a
+-- redeploy to set and another to clear, and it forwards every number on every
+-- account (spec "Why this, and why now"). This column is the per-account
+-- lever: one switch on one business's voice profile that sends that
+-- business's callers straight to a person.
+--
+-- ONE COLUMN: public.voice_profiles.forward_calls boolean not null default
+-- false.
+--
+--   * WHERE IT GOES. The forward target is accounts.transfer_phone (0037),
+--     the number a caller who asks for a person is already connected to.
+--     There is NO second number, on purpose: two numbers that mean "a person
+--     at this business" would drift apart, and the day they did, a forwarded
+--     caller and a handed-off caller would ring different handsets with
+--     nothing on any screen to say so.
+--   * WHY ON voice_profiles. The profile already holds the per-feature
+--     switches for this business's calls: enabled (the phone line),
+--     booking_enabled, textback_enabled (0024), concierge_enabled (0042).
+--     Taking the calls back from the receptionist is one more of those. An
+--     account with no voice_profiles row has nothing to forward from and
+--     reads as off; setForwardCalls refuses it rather than inventing a row.
+--   * NOT NULL, DEFAULT FALSE. Every account that exists when this file runs
+--     keeps exactly today's routing, and every new profile starts the same
+--     way. NOT NULL so that "off" has one spelling: a NULL would read as off
+--     to `if (profile.forward_calls)` and as not-off to a
+--     `forward_calls is distinct from false` query, and the call path and a
+--     report would disagree about the same row (0037 makes the same argument
+--     about the empty string). On Postgres 11 and later, adding a column with
+--     a constant default rewrites no rows; the lock below is held only for
+--     the catalog change.
+--   * NO CHECK THAT transfer_phone IS SET. A CHECK cannot read another
+--     table, and a trigger that refused one would make clearing
+--     accounts.transfer_phone fail while the forward is on, which is the
+--     wrong way round. The route decides instead (spec section 3): with
+--     forward_calls on and no transfer_phone, the receptionist answers as
+--     today, never dead air. The settings switch is disabled, with its
+--     reason, while no transfer number is set.
+--   * VOICE_FORWARD_TO STILL WINS. The deployment-wide forward is checked
+--     first, exactly as today. Nothing here changes it.
+--
+-- WHO WRITES IT: the agency only, through serviceDb(), behind the app's
+-- isAgency check, in ONE function: setForwardCalls (packages/db/src/voice.ts).
+-- It writes the column and records a voice.forward_changed event carrying the
+-- actor, so the account's history shows who took the phones back and when
+-- (spec section 3). upsertVoiceProfile cannot write this column (its patch
+-- type omits it and it refuses the key at run time), so there is no second
+-- writer that would change routing without that event.
+--
+-- GRANTS: NONE, and the absence is the control. DO NOT "FIX" THIS BY ADDING
+-- `grant update (forward_calls) on public.voice_profiles to authenticated`.
+--   * authenticated has table-level SELECT on voice_profiles (0019) and no
+--     write verb at all: 0020 revoked insert, update, delete, truncate,
+--     references and trigger, and 0053 revoked maintain schema-wide. A column
+--     added today inherits exactly that, so a member of the account can READ
+--     whether its calls are being forwarded and cannot change it. (The
+--     settings switch itself is shown to the agency only, spec section 5.)
+--   * Why no UPDATE grant, even a column-level one (the same reasoning as
+--     0037's transfer_phone "DO NOT FIX"): a granted column is writable by
+--     any authenticated token for the org straight through PostgREST, with
+--     no server action, no agency check and no event in the path. Whoever
+--     can flip it decides whether this business's callers reach the
+--     receptionist or a handset, and flipping it ON moves every call onto the
+--     client's own line, on the platform's trunk, at its per-minute cost. The
+--     spec makes it agency-written like alert_phone (0035). That includes the
+--     agency's OWN authenticated token: an agency write through PostgREST
+--     would change routing and leave no voice.forward_changed event behind,
+--     so the agency writes through serviceDb() too.
+--   * service_role holds table-level UPDATE on voice_profiles from the
+--     project's default privileges, so serviceDb() needs nothing here.
+--   * anon has nothing on voice_profiles (0020 revoked all) and gains
+--     nothing.
+--   * schema-grants-guard.test.ts lists no voice_profiles entry in the client
+--     write surface, so a later grant of any write on this column to anon or
+--     authenticated fails there by name. voice-forward-grants.test.ts pins
+--     this column on its own.
+--
+-- NO RLS POLICY CHANGE. voice_profiles_tenant (0019) is a ROW policy and
+-- already covers every column added today.
+--
+-- ADDITIVE ONLY: the build before this file never reads the column. The
+-- build AFTER it does, on the live call path: PROFILE_COLS names
+-- forward_calls, so every getVoiceProfile (the TeXML route included) asks
+-- PostgREST for it, and PostgREST fails a select naming a column it does not
+-- know. APPLY ORDER: the CI project first, then production, then reload
+-- PostgREST's schema cache (notify pgrst, 'reload schema'), and only then the
+-- merge deploy.
+--
+-- No backslash and no non-ASCII byte anywhere in this file (the MCP apply
+-- rule).
+--
+-- ROLLBACK (roll the app back first; the build after this file selects the
+-- column on every voice profile read):
+--   alter table public.voice_profiles drop column forward_calls;
+-- The voice.forward_changed events already recorded stay (events is
+-- append-only) and nothing reads them back as state.
+
+-- The ALTER takes an ACCESS EXCLUSIVE lock on a table the call path reads on
+-- every inbound call; wait at most 5s for it rather than queue behind a long
+-- transaction (0050's precedent).
+set local lock_timeout = '5s';
+
+alter table public.voice_profiles
+  add column forward_calls boolean not null default false;
+
+comment on column public.voice_profiles.forward_calls is
+  'When true, an inbound call to this account goes straight to accounts.transfer_phone instead of to the receptionist. With no transfer_phone set the receptionist answers as usual; VOICE_FORWARD_TO, deployment-wide, still wins over both. Off by default. Agency-written through serviceDb() by setForwardCalls only, which records voice.forward_changed with the actor; authenticated has SELECT but deliberately no UPDATE.';

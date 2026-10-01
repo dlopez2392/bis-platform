@@ -722,6 +722,106 @@ function TransferPanel({
   );
 }
 
+/**
+ * The forward switch's whole state, as a pure function so a test can pin it
+ * (`renderToStaticMarkup` never fires a handler; see conciergeAttemptReenable).
+ *
+ *   - `locked`: the switch refuses a click to turn it ON — no profile (the
+ *     write has no row to land on) or no transfer number (nothing to ring).
+ *     It is never locked while ON: an on switch is its own off switch, and
+ *     the off switch must always work.
+ *   - `reason`: the one sentence under the switch, tied to it with
+ *     aria-describedby so a screen reader hears why it refuses — or, while
+ *     ON with the transfer number since cleared, what callers get meanwhile
+ *     (the call path falls back to Sofía; it never rings nothing).
+ *   - `rings`: the number the calls go to, shown so the operator sees what
+ *     they are about to do. Formatted copy lives in messages.ts.
+ */
+export function forwardSwitchState(
+  profile: Pick<VoiceProfileRow, "forward_calls"> | null, transferPhone: string | null,
+): { checked: boolean; locked: boolean; reason: string | null; rings: string | null } {
+  const checked = profile?.forward_calls === true;
+  if (!profile) return { checked: false, locked: true, reason: m["voice.forward.noProfile"], rings: null };
+  if (!transferPhone) {
+    return checked
+      ? { checked, locked: false, reason: m["voice.forward.noTransferOn"], rings: null }
+      : { checked, locked: true, reason: m["voice.forward.needsTransfer"], rings: null };
+  }
+  return { checked, locked: false, reason: null, rings: transferPhone };
+}
+
+/**
+ * "Send calls straight to a person" — the agency's lever for taking the
+ * phones back (operational-floor spec §3). Its own card and its own action,
+ * beside the transfer number it rings rather than inside that form: the
+ * transfer form's Save writes `accounts`, this writes `voice_profiles`, and
+ * neither may commit the other's edit (DESIGN.md rule 8, the card test).
+ *
+ * Reversible, immediate, with an undo toast (DESIGN.md rule 6), exactly as
+ * the website assistant's switch above. The Undo goes through the same
+ * action, so turning it back on re-checks the transfer number on the server.
+ */
+function ForwardCallsCard({
+  profile, transferPhone, action,
+}: {
+  profile: VoiceProfileRow | null;
+  transferPhone: string | null;
+  action: (on: boolean) => Promise<ActionResult>;
+}) {
+  const [pending, startTransition] = useTransition();
+  const state = forwardSwitchState(profile, transferPhone);
+  const reasonId = "forward-calls-reason";
+
+  function flip(on: boolean) {
+    if (pending || (on && state.locked)) return;
+    startTransition(async () => {
+      const result = await action(on);
+      if (!result.ok) { toast.error(result.error); return; }
+      const message = on
+        ? m["voice.forward.onToast"].replace("{number}", state.rings ?? "")
+        : m["voice.forward.offToast"];
+      toast.success(message, {
+        action: {
+          label: m["common.undo"],
+          onClick: () => startTransition(async () => {
+            const r = await action(!on);
+            if (!r.ok) toast.error(r.error);
+          }),
+        },
+      });
+    });
+  }
+
+  return (
+    <Card id="forward-calls">
+      <CardHeader>
+        <CardTitle>{m["voice.forward.title"]}</CardTitle>
+        <CardDescription>{m["voice.forward.body"]}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="forward_calls"
+            checked={state.checked}
+            disabled={pending || (!state.checked && state.locked)}
+            onCheckedChange={(v) => flip(v === true)}
+            aria-describedby={state.reason ? reasonId : undefined}
+          />
+          <Label htmlFor="forward_calls">{m["voice.forward.toggleLabel"]}</Label>
+        </div>
+        {state.rings ? (
+          <p className="text-sm text-muted-foreground tabular-nums">
+            {m["voice.forward.rings"].replace("{number}", state.rings)}
+          </p>
+        ) : null}
+        {state.reason ? (
+          <p id={reasonId} className="text-xs text-muted-foreground">{state.reason}</p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 function NumberStatusSelect({
   phoneNumber, statusAction,
 }: {
@@ -822,7 +922,7 @@ function PhoneNumbersPanel({
 export function VoiceSettings({
   accountId, profile, brandName, numbers, transferPhone, publishedForms, origin,
   saveProfileAction, assignNumberAction, setStatusAction, setTransferPhoneAction,
-  enableConciergeAction, disableConciergeAction,
+  enableConciergeAction, disableConciergeAction, setForwardCallsAction,
 }: {
   accountId: string;
   profile: VoiceProfileRow | null;
@@ -849,6 +949,7 @@ export function VoiceSettings({
   setTransferPhoneAction: (formData: FormData) => Promise<ActionResult>;
   enableConciergeAction: (formId: string) => Promise<EnableConciergeResult>;
   disableConciergeAction: () => Promise<ActionResult>;
+  setForwardCallsAction: (on: boolean) => Promise<ActionResult>;
 }) {
   return (
     <div className="space-y-6">
@@ -862,6 +963,7 @@ export function VoiceSettings({
         disableAction={disableConciergeAction}
       />
       <TransferPanel transferPhone={transferPhone} action={setTransferPhoneAction} />
+      <ForwardCallsCard profile={profile} transferPhone={transferPhone} action={setForwardCallsAction} />
       <PhoneNumbersPanel numbers={numbers} assignAction={assignNumberAction} statusAction={setStatusAction} />
     </div>
   );

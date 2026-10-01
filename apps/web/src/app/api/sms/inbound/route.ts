@@ -41,6 +41,7 @@ import {
   type MessageStatus, type SupabaseClient,
 } from "@bis/db";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
+import { stampHeartbeat } from "@/lib/ops/stamp";
 import { e164Of } from "@/lib/voice/phone-number";
 import { loggableError } from "@/lib/loggable-error";
 import {
@@ -243,6 +244,10 @@ export async function POST(req: Request): Promise<NextResponse> {
   const verified = !!publicKey &&
     verifyTelnyxSignature({ rawBody, timestamp, signatureB64, publicKeyB64: publicKey });
   if (!verified) {
+    // Never stamped (lib/ops/stamp.ts): a forgery is a stranger, not an
+    // outage. An UNSET key lands here too, and is deliberately not an alert
+    // either: texting is dormant until A2P clears, and the key's absence is
+    // a known state, not a failure.
     log("rejected: invalid signature");
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   }
@@ -252,6 +257,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     body = JSON.parse(rawBody);
   } catch {
     log("rejected: malformed JSON body past a valid signature");
+    stampHeartbeat("sms.inbound", { ok: true });
     return NextResponse.json({ ok: true });
   }
 
@@ -284,11 +290,16 @@ export async function POST(req: Request): Promise<NextResponse> {
       log("ignoring unrecognised event_type", eventType);
     }
   } catch (e) {
+    // The event type is Telnyx's own name and the error is named by its type,
+    // never its message, which can quote a phone number or the text itself.
+    stampHeartbeat("sms.inbound", { ok: false, error: `${String(eventType ?? "unknown").slice(0, 40)} handling failed (${e instanceof Error ? e.name : typeof e})` });
     if (CHANGES_CONSENT.has(consent.kind)) {
       log("could not handle a text that changes consent; answering 503 so Telnyx retries", eventType, consent.kind, loggableError(e));
       return NextResponse.json({ error: "retry" }, { status: 503 });
     }
     log("unexpected failure handling webhook", eventType, loggableError(e));
+    return NextResponse.json({ ok: true });
   }
+  stampHeartbeat("sms.inbound", { ok: true });
   return NextResponse.json({ ok: true });
 }

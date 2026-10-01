@@ -30,6 +30,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GET as texmlGET } from "./route";
 import { POST as handoffPOST } from "./handoff/route";
 import { POST as handoffResultPOST } from "./handoff-result/route";
+// Heartbeats are mocked out so the `after()` recorders below keep counting
+// only this route's own work; their calls are asserted where they matter
+// (lib/ops/stamp.ts).
+const stampMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 
 // ---------------------------------------------------------------------------
 // The parser.

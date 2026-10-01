@@ -2,6 +2,11 @@ import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { GET, POST } from "./route";
 import { utcDayStart } from "@/lib/voice/call-limits";
+// Heartbeats are mocked out so the `after()` recorders below keep counting
+// only this route's own work; their calls are asserted where they matter
+// (lib/ops/stamp.ts).
+const stampMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 
 const lookupMock = vi.hoisted(() => vi.fn());
 const profileMock = vi.hoisted(() => vi.fn());
@@ -9,7 +14,11 @@ const countCallsSinceMock = vi.hoisted(() => vi.fn());
 const countCallsByCallerSinceMock = vi.hoisted(() => vi.fn());
 const countCallerHistorySinceMock = vi.hoisted(() => vi.fn());
 const recordScreenedCallMock = vi.hoisted(() => vi.fn());
+const transferPhoneMock = vi.hoisted(() => vi.fn());
+const ownedNumbersMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({
+  getTransferPhone: (...a: unknown[]) => transferPhoneMock(...a),
+  listPhoneNumbersForAccount: (...a: unknown[]) => ownedNumbersMock(...a),
   serviceDb: () => ({}),
   getPhoneNumberByE164: (...a: unknown[]) => lookupMock(...a),
   getVoiceProfile: (...a: unknown[]) => profileMock(...a),
@@ -63,6 +72,9 @@ beforeEach(() => {
   // the verdict it was written for now that classify() also reads reputation.
   countCallerHistorySinceMock.mockReset().mockResolvedValue({ spamCalls: 0, otherCalls: 0 });
   recordScreenedCallMock.mockReset().mockResolvedValue(undefined);
+  transferPhoneMock.mockReset().mockResolvedValue("+19565550123");
+  ownedNumbersMock.mockReset().mockResolvedValue([{ id: "pn1", account_id: "a1", e164: "+19565550999", telnyx_id: null, status: "live" }]);
+  stampMock.mockReset();
   afterMock.mockReset();
 });
 
@@ -756,3 +768,130 @@ describe("screened calls are recorded", () => {
     errSpy.mockRestore();
   });
 });
+
+describe("the per-account forward (operational-floor spec §3)", () => {
+  const ACCOUNT = "0b2cbb04-b46c-4fed-a377-d377a1a201eb";
+  const call = () => GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19565550111"));
+  beforeEach(() => {
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: ACCOUNT, e164: "+19565550999", telnyx_id: null, status: "live" });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => { vi.restoreAllMocks(); delete process.env.VOICE_FORWARD_TO; });
+
+  it("forward_calls on with a transfer number: the TeXML dials that number, presenting the dialled number, and no SIP bridge (mutation: ignore forward_calls → FAILS)", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    const xml = await (await call()).text();
+    expect(xml).toContain('<Dial callerId="+19565550999" timeout="30">+19565550123</Dial>');
+    expect(xml).not.toContain("<Sip>");
+    expect(transferPhoneMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT);
+  });
+
+  it("forward_calls off: today's SIP dial, and the forward reads never run", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: false });
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    expect(transferPhoneMock).not.toHaveBeenCalled();
+  });
+
+  it("VOICE_FORWARD_TO still wins over both, before any lookup", async () => {
+    process.env.VOICE_FORWARD_TO = "+19565550777";
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    const xml = await (await call()).text();
+    expect(xml).toContain(">+19565550777</Dial>");
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it("forward_calls on but no transfer number: Sofía answers, never dead air", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    transferPhoneMock.mockResolvedValue(null);
+    expect(await (await call()).text()).toContain("<Sip>");
+  });
+
+  it("a transfer number that is one of the account's own lines is refused, or the call would ring back into this route forever (mutation: drop the own-number guard → FAILS)", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    transferPhoneMock.mockResolvedValue("+19565550999");
+    expect(await (await call()).text()).toContain("<Sip>");
+  });
+
+  it("a forward read that throws falls back to Sofía, not a 500", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    transferPhoneMock.mockRejectedValue(new Error("db down"));
+    const res = await call();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<Sip>");
+  });
+
+  it("the forward replaces the bridge and nothing else: a disabled line still refuses, and a repeat-spam caller is never forwarded to a person", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true, enabled: false });
+    expect(await (await call()).text()).toContain("<Hangup/>");
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    process.env.PHONE_SPAM_BLOCK_THRESHOLD = "1";
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 5, otherCalls: 0 });
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Hangup/>");
+    expect(xml).not.toContain("+19565550123");
+  });
+});
+
+describe("the model-down fallback ticket on the bridge", () => {
+  const ACCOUNT = "0b2cbb04-b46c-4fed-a377-d377a1a201eb";
+  const call = () => GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19565550111"));
+  beforeEach(() => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-fixture";
+    lookupMock.mockResolvedValue({ id: "pn1", account_id: ACCOUNT, e164: "+19565550999", telnyx_id: null, status: "live" });
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("a call every guard cleared carries a ticket for ITS account and number, bound to its own handoff token", async () => {
+    const { verifyFallbackTicket } = await import("@/lib/voice/fallback-ticket");
+    const xml = await (await call()).text();
+    const action = xml.match(/action="([^"]+)"/)![1]!.replaceAll("&amp;", "&");
+    const url = new URL(action);
+    expect(verifyFallbackTicket(url.searchParams.get("f"), url.searchParams.get("t")!, Date.now()))
+      .toEqual({ ok: true, accountId: ACCOUNT, calledE164: "+19565550999" });
+  });
+
+  it("a call whose guard reads failed carries NO ticket: the fallback must never forward a caller the guards could not vouch for (mutation: sign on the fail-open path → FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    countCallerHistorySinceMock.mockRejectedValue(new Error("db down"));
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("&amp;f=");
+  });
+
+  it("a number that could not be looked up carries no ticket either", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    lookupMock.mockRejectedValue(new Error("db down"));
+    expect(await (await call()).text()).not.toContain("&amp;f=");
+  });
+});
+
+describe("the voice.texml heartbeat (operational-floor spec §1)", () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("a bridge, a refusal and a forward are each one ok stamp", async () => {
+    await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"));
+    lookupMock.mockResolvedValueOnce(null);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550998"));
+    expect(stampMock.mock.calls).toEqual([["voice.texml", { ok: true }], ["voice.texml", { ok: true }]]);
+  });
+
+  it("a number lookup that throws is the route's own outage: an error stamp, while the caller still gets the bridge", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    lookupMock.mockRejectedValue(new Error("db down"));
+    const xml = await (await GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999"))).text();
+    expect(xml).toContain("<Sip>");
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.texml", { ok: false, error: "the called number could not be looked up" });
+  });
+
+  it("a request refused by the signature check is never stamped", async () => {
+    process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await POST(new Request("https://x.example/api/voice/texml", { method: "POST", body: "To=%2B19565550999" }));
+    expect(res.status).toBe(403);
+    expect(stampMock).not.toHaveBeenCalled();
+  });
+});
+

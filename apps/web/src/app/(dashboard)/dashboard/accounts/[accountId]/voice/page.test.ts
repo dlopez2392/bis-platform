@@ -64,6 +64,7 @@ vi.mock("./actions", () => ({
   setTransferPhoneAction: async () => ({ ok: true }),
   enableConciergeAction: async () => ({ ok: true, publicId: "pub_x" }),
   disableConciergeAction: async () => ({ ok: true }),
+  setForwardCallsAction: async () => ({ ok: true }),
 }));
 
 const captured = vi.hoisted(() => ({

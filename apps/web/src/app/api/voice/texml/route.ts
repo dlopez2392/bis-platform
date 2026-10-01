@@ -36,16 +36,30 @@ import { NextResponse, after } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { callAnswerable } from "@/lib/voice/accept-gate";
-import { newHandoffToken } from "@/lib/voice/handoff";
+import { newHandoffToken, resolveHandoffTarget } from "@/lib/voice/handoff";
+import { signFallbackTicket } from "@/lib/voice/fallback-ticket";
 import { configuredOrigin } from "@/lib/email/origin";
+import { stampHeartbeat } from "@/lib/ops/stamp";
 import { xmlText } from "./xml";
 import type { ScreenedCallInput } from "@bis/db";
 
 export const runtime = "nodejs";
 
 type Languages = "en" | "es" | "both";
+/**
+ * `dial` carries what the route learned on the way there:
+ *   - `accountId` / `forwardCalls`: the account the called number resolved
+ *     to, and whether the agency has sent its calls straight to a person.
+ *     Absent when the number could not be looked up (failing open).
+ *   - `cleared`: EVERY guard read succeeded and passed. Only a cleared call
+ *     may carry the model-down fallback ticket, so a caller the guards could
+ *     not vouch for (a count read failed) is never forwarded to a person by
+ *     the fallback; it gets today's hang-up.
+ *   - `lookupFailed`: the number lookup itself threw — the one failure that
+ *     is this route's own outage, stamped as such.
+ */
 type Routability =
-  | { kind: "dial" }
+  | { kind: "dial"; accountId?: string; forwardCalls?: boolean; cleared?: boolean; lookupFailed?: boolean }
   | { kind: "refuse"; languages: Languages; screened: ScreenedCallInput }
   | { kind: "cap"; languages: Languages; screened: ScreenedCallInput }
   // A caller whose whole recent history on this account is silent calls.
@@ -210,11 +224,12 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       }
     } catch (e) {
       console.error(`texml cap/reputation count failed for ${calledE164}: ${String(e)}`); // fail open
+      return { kind: "dial", accountId: row.account_id, forwardCalls: profile.forward_calls === true, cleared: false };
     }
-    return { kind: "dial" };
+    return { kind: "dial", accountId: row.account_id, forwardCalls: profile.forward_calls === true, cleared: true };
   } catch (e) {
     console.error(`texml lookup failed for ${calledE164}: ${String(e)}`);
-    return { kind: "dial" }; // fail open — the webhook still gates
+    return { kind: "dial", lookupFailed: true }; // fail open — the webhook still gates
   }
 }
 
@@ -268,7 +283,7 @@ export function forwardXml(to: string, callerId: string | null): string {
  * tenant from the To/Diversion fallbacks on such a call, so it can still be
  * answered — and its caller can still ask for a person.
  */
-function dialXml(calledE164: string | null, origin: string): string {
+function dialXml(calledE164: string | null, origin: string, cleared?: { accountId: string }): string {
   const projectId = process.env.VOICE_OPENAI_PROJECT_ID;
   if (!projectId) {
     // Speak the misconfig: a broken deploy should be audible on a test call,
@@ -282,7 +297,15 @@ function dialXml(calledE164: string | null, origin: string): string {
     `X-BIS-Handoff=${encodeURIComponent(token)}`,
   ];
   const uri = `${base}?${params.join("&")}`;
-  const action = `${origin}/api/voice/texml/handoff?t=${encodeURIComponent(token)}`;
+  // The model-down fallback's ticket rides the same URL, and only for a call
+  // every guard cleared (see `Routability`): if this SIP leg never connects,
+  // the handoff route has no `calls` row to find the account by, and this is
+  // the one signed statement of which account and number the call was for.
+  const ticket = cleared && calledE164
+    ? signFallbackTicket(token, cleared.accountId, calledE164, Date.now())
+    : null;
+  const action = `${origin}/api/voice/texml/handoff?t=${encodeURIComponent(token)}`
+    + (ticket ? `&f=${encodeURIComponent(ticket)}` : "");
   // xmlText on BOTH: the URI's `&` separators are the live bug, and the
   // action URL is one appended query parameter away from the same one.
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial answerOnBridge="true" action="${xmlText(action)}" method="POST"><Sip>${xmlText(uri)}</Sip></Dial></Response>`;
@@ -295,7 +318,61 @@ function xmlResponse(body: string): NextResponse {
   });
 }
 
+/**
+ * The per-account forward (operational-floor spec §3): the agency's "Send
+ * calls straight to a person" switch, `voice_profiles.forward_calls`, sends a
+ * call that would have gone to Sofía to the account's own transfer number.
+ *
+ * It REPLACES THE BRIDGE AND NOTHING ELSE. Every guard in front of Sofía —
+ * an unknown or not-live number, a disabled profile, a repeat-spam caller,
+ * the daily cap — still answers first, so a robot the guards would refuse is
+ * never forwarded to somebody's personal phone.
+ *
+ * The target goes through the handoff feature's own `resolveHandoffTarget`,
+ * own-number guard included: a transfer number that is one of this account's
+ * own lines would ring straight back into this route, which would forward it
+ * again, forever, on the tenant's trunk. Any failure here — a read that
+ * throws, no transfer number, the loop guard — falls back to Sofía, which is
+ * where the call was going anyway; never to dead air.
+ */
+async function accountForwardTarget(accountId: string): Promise<string | null> {
+  try {
+    const { serviceDb, getTransferPhone, listPhoneNumbersForAccount } = await import("@bis/db");
+    const db = serviceDb();
+    const [transferPhone, owned] = await Promise.all([
+      getTransferPhone(db, accountId),
+      listPhoneNumbersForAccount(db, accountId),
+    ]);
+    const target = resolveHandoffTarget(
+      transferPhone,
+      owned.filter((n) => n.status === "testing" || n.status === "live").map((n) => n.e164),
+    );
+    if (!target.available) {
+      console.log(`texml forward is on but unusable (${target.reason}) — Sofía answers, accountId ${accountId}`);
+      return null;
+    }
+    return target.to;
+  } catch (e) {
+    console.error(`texml forward lookup failed — Sofía answers, accountId ${accountId}: ${String(e)}`);
+    return null;
+  }
+}
+
 async function respond(calledE164: string | null, callerE164: string | null, origin: string): Promise<NextResponse> {
+  const result = await route(calledE164, callerE164, origin);
+  // One stamp per answered request (lib/ops/stamp.ts). The route is down for
+  // everyone only when it cannot look a number up; a refusal, a forward and a
+  // bridge are all the route working.
+  stampHeartbeat("voice.texml", result.lookupFailed
+    ? { ok: false, error: "the called number could not be looked up" }
+    : { ok: true });
+  return result.response;
+}
+
+async function route(
+  calledE164: string | null, callerE164: string | null, origin: string,
+): Promise<{ response: NextResponse; lookupFailed: boolean }> {
+  const done = (response: NextResponse, lookupFailed = false) => ({ response, lookupFailed });
   const forward = forwardTarget();
   if (forward) {
     // Logged on EVERY forwarded call, not once at boot. This mode bypasses
@@ -303,7 +380,7 @@ async function respond(calledE164: string | null, callerE164: string | null, ori
     // that quietly rings a personal mobile for a week is worse than one that
     // is briefly unavailable.
     console.log(`texml FORWARDING to ${forward} — Sofía is bypassed while VOICE_FORWARD_TO is set`);
-    return xmlResponse(forwardXml(forward, calledE164));
+    return done(xmlResponse(forwardXml(forward, calledE164)));
   }
   if (calledE164) {
     const result = await classify(calledE164, callerE164);
@@ -344,14 +421,29 @@ async function respond(calledE164: string | null, callerE164: string | null, ori
         console.error(`texml: could not schedule the screened-call write (${screened.reason}) for ${screened.calledE164}: ${String(e)}`);
       }
     }
-    if (result.kind === "refuse") return xmlResponse(sayXml(result.languages, COPY.refuse));
+    if (result.kind === "refuse") return done(xmlResponse(sayXml(result.languages, COPY.refuse)));
     // Deliberately the same sentence as `refuse`, and deliberately ABOVE the
     // bridge: a refusal costs nothing, a bridge starts billing.
-    if (result.kind === "blocked") return xmlResponse(sayXml(result.languages, COPY.refuse));
-    if (result.kind === "cap") return xmlResponse(sayXml(result.languages, COPY.cap));
-    // kind === "dial" → fall through to the same dial path as calledE164===null
+    if (result.kind === "blocked") return done(xmlResponse(sayXml(result.languages, COPY.refuse)));
+    if (result.kind === "cap") return done(xmlResponse(sayXml(result.languages, COPY.cap)));
+    // kind === "dial": the per-account forward, if the agency turned it on,
+    // takes the place of the bridge; otherwise the same dial path as
+    // calledE164 === null, carrying the fallback ticket when cleared.
+    if (result.accountId && result.forwardCalls) {
+      const to = await accountForwardTarget(result.accountId);
+      if (to) {
+        // Logged on every call for the reason the deployment-wide override
+        // above logs: the failure this invites is leaving it on.
+        console.log(`texml FORWARDING account ${result.accountId} to its transfer number — Sofía is bypassed while forward_calls is on`);
+        return done(xmlResponse(forwardXml(to, calledE164)));
+      }
+    }
+    return done(
+      xmlResponse(dialXml(calledE164, origin, result.cleared && result.accountId ? { accountId: result.accountId } : undefined)),
+      result.lookupFailed === true,
+    );
   }
-  return xmlResponse(dialXml(calledE164, origin));
+  return done(xmlResponse(dialXml(calledE164, origin)));
 }
 
 /**

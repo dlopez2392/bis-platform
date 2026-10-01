@@ -5,7 +5,7 @@ import type { VoiceProfileRow } from "@bis/db";
 import {
   conciergeLockReason, shouldShowConciergeEmptyState, conciergeDestinationOptions,
   conciergeFormUnpublished, conciergeSnippetPublicId, conciergeToggleLocked, ConciergeCard,
-  conciergeCanTurnOn, conciergeAttemptReenable, VoiceProfileForm,
+  conciergeCanTurnOn, conciergeAttemptReenable, VoiceProfileForm, forwardSwitchState,
 } from "./voice-settings";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
@@ -540,3 +540,25 @@ describe("VoiceProfileForm's text-back segment counter — counts the disclosed 
     expect(es).not.toContain("Reply STOP to opt out.");
   });
 });
+
+describe("forwardSwitchState — the 'send calls straight to a person' switch", () => {
+  const on = { forward_calls: true };
+  const off = { forward_calls: false };
+
+  it("off with a transfer number: unlocked, and shows the number calls will ring", () => {
+    expect(forwardSwitchState(off, "+19562921696")).toEqual({ checked: false, locked: false, reason: null, rings: "+19562921696" });
+  });
+
+  it("off with no transfer number: locked, saying where to fix it (mutation: unlock it → FAILS)", () => {
+    expect(forwardSwitchState(off, null)).toEqual({ checked: false, locked: true, reason: m["voice.forward.needsTransfer"], rings: null });
+  });
+
+  it("ON with the transfer number since cleared is never locked — it is its own off switch — and says Sofía is answering meanwhile", () => {
+    expect(forwardSwitchState(on, null)).toEqual({ checked: true, locked: false, reason: m["voice.forward.noTransferOn"], rings: null });
+  });
+
+  it("no profile: locked, naming why", () => {
+    expect(forwardSwitchState(null, "+19562921696")).toEqual({ checked: false, locked: true, reason: m["voice.forward.noProfile"], rings: null });
+  });
+});
+
