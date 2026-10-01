@@ -17,10 +17,18 @@ loadEnv({ path: ".env.local" });
  * 918-920) gets immediately overridden by that same trap (its document-level
  * `focusin` listener snaps focus back whenever it lands outside the drawer's
  * own container — @radix-ui/react-focus-scope/dist/index.mjs:39-46).
- * sonner.tsx now mounts a fresh trapped FocusScope of its own around the
- * toaster the moment Alt+T is pressed, which — by Radix's own
- * focus-scope-stack rules — pauses the drawer's trap and takes over until
- * Escape or the Undo click releases it again.
+ *
+ * sonner.tsx now mounts a fresh, UNTRAPPED, empty FocusScope "sentinel" the
+ * moment Alt+T is pressed and a toast exists. Mounting ANY FocusScope pushes
+ * onto Radix's own focus-scope stack and pauses whichever scope was
+ * previously active — unconditional on `trapped`
+ * (@radix-ui/react-focus-scope/dist/index.mjs:76-78, 196-202) — the same
+ * mechanism Radix itself uses for a dialog nested inside a dialog. sonner.tsx
+ * then focuses the toast's actual action button itself (the sentinel's own
+ * container is empty — the toast is never moved). Escape, the toast
+ * disappearing (Undo fired), or focus moving back into the modal on its own
+ * all exit jump mode again, which runs FocusScope's own unmount effect:
+ * return focus to wherever it was, then resume the modal's trap.
  *
  * ON THE PER-RUN FIXTURE ACCOUNT ONLY ("E2E Client Co …", auth.setup.ts),
  * never Test Client One (CLAUDE.md). Its own contact, deleted in afterAll.
@@ -60,7 +68,25 @@ test.afterAll(async () => {
   if (error) console.error(`toast-keyboard-reach e2e: cleanup failed: ${error.message}`);
 });
 
-test("Alt+T reaches the Undo toast's button while the drawer stays open and trapped; Enter activates it", async ({ page }) => {
+test("Alt+T with no toast on screen does nothing harmful: focus stays put, Tab still works", async ({ page }) => {
+  const { accountId } = fixture();
+  await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${STAMP}`);
+  await page.getByRole("row").filter({ hasText: `Number ${STAMP}` }).first().click();
+  const drawer = page.getByRole("dialog");
+  const closeButton = drawer.getByRole("button", { name: "Close" });
+  await closeButton.focus();
+  await expect(closeButton).toBeFocused();
+
+  await page.keyboard.press("Alt+T");
+  // No toast exists — jump mode must not engage at all.
+  await expect(closeButton).toBeFocused();
+
+  await page.keyboard.press("Tab");
+  // Normal Tab navigation inside the (still fully trapped) drawer still works.
+  await expect(drawer.locator(":focus")).toHaveCount(1);
+});
+
+test("Alt+T reaches the Undo toast's action button, tagged aria-keyshortcuts, while the drawer stays open and trapped; Enter activates it and returns focus + Tab into the drawer", async ({ page }) => {
   const { accountId } = fixture();
   await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${STAMP}`);
   await page.getByRole("row").filter({ hasText: `Number ${STAMP}` }).first().click();
@@ -73,12 +99,15 @@ test("Alt+T reaches the Undo toast's button while the drawer stays open and trap
   expect(await stored()).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
   // Review R3-I4 (consent-phone-country.spec.ts:89): the app itself parks
   // keyboard focus on the row's status line after the pressed button
-  // unmounts — this is what jump mode must hand focus BACK to on Escape.
-  await expect(drawer.getByTestId("texts-row-status")).toBeFocused();
+  // unmounts — this is what jump mode must hand focus BACK to.
+  const statusLine = drawer.getByTestId("texts-row-status");
+  await expect(statusLine).toBeFocused();
 
   await page.keyboard.press("Alt+T");
   const undoButton = page.getByRole("button", { name: m["common.undo"] });
   await expect(undoButton).toBeFocused();
+  // No visible hint (owner decision) — AT metadata only.
+  await expect(undoButton).toHaveAttribute("aria-keyshortcuts", "Alt+T");
   // The drawer itself is untouched: still open, still a dialog, still the
   // same contact — Alt+T only ever reached the toast, nothing closed.
   await expect(drawer).toBeVisible();
@@ -87,6 +116,12 @@ test("Alt+T reaches the Undo toast's button while the drawer stays open and trap
   await page.keyboard.press("Enter");
   await expect(drawer.getByTestId("phone-country-row")).toBeVisible();
   await expect.poll(stored).toEqual({ phone: "+15512345678", phone_country_unconfirmed: true });
+  // Jump mode must have ended on its own (the toast going away), not only
+  // on Escape: focus is back inside the drawer, on the same control it was
+  // on before Alt+T, and the drawer's own controls are reachable again.
+  await expect(statusLine).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(drawer.locator(":focus")).toHaveCount(1);
 });
 
 test("Escape leaves jump mode and returns focus into the drawer, without closing it", async ({ page }) => {
@@ -111,12 +146,39 @@ test("Escape leaves jump mode and returns focus into the drawer, without closing
   // which always runs before the drawer's own `ownerDocument`-level capture
   // listener (@radix-ui/react-dismissable-layer/dist/index.mjs:101-106).
   await expect(drawer).toBeVisible();
-  // Radix's own FocusScope unmount-autofocus returns focus to whatever was
-  // focused before jump mode engaged.
   await expect(statusLine).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(drawer.locator(":focus")).toHaveCount(1);
 
   // Clean up the write this test made, same as the mouse-driven spec does.
   await page.getByRole("button", { name: m["common.undo"] }).click();
   await expect(drawer.getByTestId("phone-country-row")).toBeVisible();
+  await expect.poll(stored).toEqual({ phone: "+15512345678", phone_country_unconfirmed: true });
+});
+
+test("no modal open: Alt+T still reaches the toast (nothing to pause, same mechanism)", async ({ page }) => {
+  const { accountId } = fixture();
+  await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${STAMP}`);
+  await page.getByRole("row").filter({ hasText: `Number ${STAMP}` }).first().click();
+  const drawer = page.getByRole("dialog");
+  const row = drawer.getByTestId("phone-country-row");
+  await expect(row).toBeVisible();
+
+  await row.getByRole("button", { name: m["contact.phoneCountry.mx"] }).click();
+  const toast = page.getByText(m["contact.phoneCountry.mxToast"]);
+  await expect(toast).toBeVisible();
+  expect(await stored()).toEqual({ phone: "+525512345678", phone_country_unconfirmed: false });
+
+  // Close the drawer itself (its own Close button) — the toast is an
+  // independent lifecycle and persists.
+  await drawer.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(toast).toBeVisible();
+
+  await page.keyboard.press("Alt+T");
+  const undoButton = page.getByRole("button", { name: m["common.undo"] });
+  await expect(undoButton).toBeFocused();
+
+  await page.keyboard.press("Enter");
   await expect.poll(stored).toEqual({ phone: "+15512345678", phone_country_unconfirmed: true });
 });
