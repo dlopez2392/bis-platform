@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { evaluate, isFailing, composeOpsEmail, RE_ALERT_MS, type Heartbeat } from "./watch";
+import { evaluate, isFailing, composeOpsEmail, describeKey, RE_ALERT_MS, type Heartbeat } from "./watch";
+import type { WebhookHeartbeatKey } from "./stamp";
 
 const NOW = new Date("2026-10-01T15:00:00Z");
 const ago = (min: number) => new Date(NOW.getTime() - min * 60_000);
@@ -86,3 +87,15 @@ describe("evaluate — a retired pass is not an incident (PASS_STALE_MS)", () =>
     expect(evaluate([hb({ key: "cron.pass.reminders", consecutiveFailures: 2, lastErrorAt: ago(14) })], NOW).alert).toHaveLength(1);
   });
 });
+
+describe("describeKey — every key a webhook route stamps has a plain-language name", () => {
+  // A Record over the union: adding a key to WebhookHeartbeatKey without a
+  // line here is a type error, so it cannot reach an email as a raw key.
+  const KEYS: Record<WebhookHeartbeatKey, true> = {
+    "voice.texml": true, "voice.sip_webhook": true, "email.resend_webhook": true, "sms.inbound": true, "stripe.webhook": true,
+  };
+  it.each(Object.keys(KEYS))("%s is described in words, not echoed (mutation: drop its case → FAILS)", (key) => {
+    expect(describeKey(key)).not.toBe(key);
+  });
+});
+

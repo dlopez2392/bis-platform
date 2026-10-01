@@ -116,3 +116,20 @@ describe("ActivityCard", () => {
 function m_activityEmpty(): string {
   return "Bookings, form leads, and call outcomes appear here as they happen.";
 }
+
+describe("ActivityCard — who answers the phone (operational-floor PR-2)", () => {
+  it("voice.forward_changed renders which way it went, never the raw type", () => {
+    const on = render([row({ id: "f1", type: "voice.forward_changed", payload: { forwardCalls: true } })]);
+    expect(on).toContain("Calls started going straight to your transfer number instead of Sofía.");
+    expect(on).not.toContain("voice.forward_changed");
+    const off = render([row({ id: "f2", type: "voice.forward_changed", payload: { forwardCalls: false } })]);
+    expect(off).toContain("Sofía started answering calls again.");
+  });
+
+  it("a payload without a boolean is skipped, never guessed (mutation: default to 'on' → FAILS)", () => {
+    const html = render([row({ id: "f3", type: "voice.forward_changed", payload: {} })]);
+    expect(html).not.toContain("transfer number");
+    expect(html).not.toContain("answering calls again");
+  });
+});
+

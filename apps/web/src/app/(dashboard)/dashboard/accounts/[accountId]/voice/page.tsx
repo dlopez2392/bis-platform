@@ -10,7 +10,7 @@ import { m } from "@/lib/messages";
 import { VoiceSettings } from "./voice-settings";
 import {
   saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, setTransferPhoneAction,
-  enableConciergeAction, disableConciergeAction,
+  enableConciergeAction, disableConciergeAction, setForwardCallsAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -112,6 +112,7 @@ export default async function VoicePage({
   const boundSetTransferPhone = setTransferPhoneAction.bind(null, accountId);
   const boundEnableConcierge = enableConciergeAction.bind(null, accountId);
   const boundDisableConcierge = disableConciergeAction.bind(null, accountId);
+  const boundSetForwardCalls = setForwardCallsAction.bind(null, accountId);
 
   return (
     <>
@@ -132,6 +133,7 @@ export default async function VoicePage({
           setTransferPhoneAction={boundSetTransferPhone}
           enableConciergeAction={boundEnableConcierge}
           disableConciergeAction={boundDisableConcierge}
+          setForwardCallsAction={boundSetForwardCalls}
         />
       </div>
     </>

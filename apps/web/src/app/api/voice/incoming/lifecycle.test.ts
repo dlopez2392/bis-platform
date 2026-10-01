@@ -20,6 +20,11 @@ import { emptyCallState, type CallState, type MirroredBooking } from "@/lib/voic
 // a restatement of whatever the route happens to send.
 import { handoffLine } from "@/lib/voice/handoff";
 import type { TranscriptEvent } from "@bis/db";
+// Heartbeats are mocked out so the `after()` recorders below keep counting
+// only this route's own work; their calls are asserted where they matter
+// (lib/ops/stamp.ts).
+const stampMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 
 // --- ws: a minimal hand-rolled emitter standing in for the socket, so tests
 // can fire open/message/close/error exactly like the real `ws` package

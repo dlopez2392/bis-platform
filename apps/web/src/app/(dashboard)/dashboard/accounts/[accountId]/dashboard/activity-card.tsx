@@ -26,6 +26,11 @@
 //     (calls/format.ts) — reused, not duplicated, the same principle Task 6
 //     applied to `OutcomePill`. An outcome value `OUTCOMES` doesn't
 //     recognize is treated as unknown (skipped), never rendered raw.
+//   - "voice.forward_changed", payload.forwardCalls true/false → forwardOn /
+//     forwardOff (operational-floor PR-2). The one "voice_profile"-family
+//     change that is NOT setup plumbing: it changes who answers the
+//     business's phone, which an owner needs to see in the same place they
+//     see their calls. A payload without a boolean is skipped, never guessed.
 //
 // Deliberately SKIPPED (event types that exist in the ledger today but do
 // NOT get a feed line — a judgment call, recorded here rather than silently
@@ -51,7 +56,7 @@
 // own DATA HONESTY rule.
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
-import { Activity, CalendarCheck, CalendarX, CheckCircle2, Mail, Phone } from "lucide-react";
+import { Activity, CalendarCheck, CalendarX, CheckCircle2, Mail, Phone, PhoneForwarded } from "lucide-react";
 import type { EventRow, CallOutcome } from "@bis/db";
 import { EmptyState } from "@/components/empty-state";
 import { buttonVariants } from "@/components/ui/button";
@@ -141,6 +146,15 @@ function curate(event: EventRow): CuratedRow | null {
       return {
         key: event.id, icon: Phone, tone: "accent",
         summary: m["dashboard.activity.callRecorded"].replace("{outcome}", treatment.label),
+        createdAtIso: event.createdAt,
+      };
+    }
+    case "voice.forward_changed": {
+      if (typeof payload.forwardCalls !== "boolean") return null; // never guess which way it went
+      return {
+        // On is a warning (Sofía is no longer answering); off is Sofía back.
+        key: event.id, icon: payload.forwardCalls ? PhoneForwarded : Phone, tone: payload.forwardCalls ? "warning" : "accent",
+        summary: payload.forwardCalls ? m["dashboard.activity.forwardOn"] : m["dashboard.activity.forwardOff"],
         createdAtIso: event.createdAt,
       };
     }
