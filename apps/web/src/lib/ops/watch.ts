@@ -39,6 +39,15 @@ export type WatchVerdict = {
 };
 
 export const CRON_TICK_KEY = "cron.tick";
+/**
+ * A pass's row is only judged while the pass is still running. Every live pass
+ * writes its heartbeat every 15 minutes, so a `cron.pass.*` row with no
+ * activity for an hour belongs to a pass that was renamed or removed, or to a
+ * cron that has stopped altogether. Neither is this pass's to report: a
+ * retired pass would otherwise re-alert every six hours forever (the table has
+ * no DELETE grant, by design), and a stopped cron is the health route's.
+ */
+export const PASS_STALE_MS = 60 * 60_000;
 export const RE_ALERT_MS = 6 * 60 * 60_000;
 export const CRON_PASS_FAILURES_TO_ALERT = 2;
 
@@ -54,6 +63,7 @@ export function evaluate(rows: readonly Heartbeat[], now: Date): WatchVerdict {
   const recovered: Heartbeat[] = [];
   for (const h of rows) {
     if (h.key === CRON_TICK_KEY) continue;
+    if (h.key.startsWith("cron.pass.") && isStale(h, now)) continue;
     if (isFailing(h)) {
       if (!h.alertedAt || now.getTime() - h.alertedAt.getTime() >= RE_ALERT_MS) alert.push(h);
     } else if (h.alertedAt) {
@@ -62,6 +72,11 @@ export function evaluate(rows: readonly Heartbeat[], now: Date): WatchVerdict {
   }
   const byKey = (a: Heartbeat, b: Heartbeat) => a.key.localeCompare(b.key);
   return { alert: alert.sort(byKey), recovered: recovered.sort(byKey) };
+}
+
+function isStale(h: Heartbeat, now: Date): boolean {
+  const last = Math.max(h.lastOkAt?.getTime() ?? 0, h.lastErrorAt?.getTime() ?? 0);
+  return now.getTime() - last > PASS_STALE_MS;
 }
 
 /** Plain-language names for the keys BIS staff will read in an alert. */

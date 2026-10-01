@@ -74,3 +74,15 @@ describe("composeOpsEmail — what BIS staff read", () => {
     expect(mail.body).toContain("Working again");
   });
 });
+
+describe("evaluate — a retired pass is not an incident (PASS_STALE_MS)", () => {
+  it("a cron.pass row untouched for over an hour is neither alerted nor reported recovered (mutation: drop the stale skip → FAILS)", () => {
+    const retired = hb({ key: "cron.pass.oldRecipe", consecutiveFailures: 40, lastErrorAt: ago(61), alertedAt: ago(400) });
+    const retiredQuiet = hb({ key: "cron.pass.goneToo", lastOkAt: ago(90), alertedAt: ago(120) });
+    expect(evaluate([retired, retiredQuiet], NOW)).toEqual({ alert: [], recovered: [] });
+  });
+
+  it("a live pass failing within the hour is still alerted", () => {
+    expect(evaluate([hb({ key: "cron.pass.reminders", consecutiveFailures: 2, lastErrorAt: ago(14) })], NOW).alert).toHaveLength(1);
+  });
+});
