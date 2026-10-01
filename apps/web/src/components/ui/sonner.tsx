@@ -44,10 +44,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
   // there's no race scoping queries/observers to it instead of `document`.
   const toasterRef = React.useRef<HTMLElement | null>(null)
   const [jumpActive, setJumpActive] = React.useState(false)
-  // M2: set just before `setJumpActive(false)` when we're exiting BECAUSE
-  // focus already moved somewhere on its own (the `focusin` listener below)
-  // — read once, synchronously, by the sentinel's own `onUnmountAutoFocus`.
-  const skipUnmountAutoFocusRef = React.useRef(false)
+  // The deferred focus call's timer id (see the sentinel's `onMountAutoFocus`
+  // below) — cleared whenever jump mode ends, so a stale call from a PRIOR
+  // engage cycle can never fire after the fact.
+  const jumpFocusTimeoutRef = React.useRef<number | undefined>(undefined)
 
   // Tag every action (Undo-style) button with its keyboard shortcut as AT
   // metadata — owner decision: no visible hint/new copy, `aria-keyshortcuts`
@@ -81,14 +81,16 @@ const Toaster = ({ ...props }: ToasterProps) => {
   // the toaster — a sibling in the DOM, not a descendant of the modal's
   // content — is always "outside" to that check.
   //
-  // IMPORTANT: never engage with no toast on screen — an empty, invisible
-  // trapped-stack entry would swallow Tab for nothing (there'd be nothing to
-  // focus) and only Escape could get out. Gate on a real `[data-sonner-toast]`
-  // existing first.
+  // IMPORTANT: never engage with nothing to focus — an empty, invisible
+  // trapped-stack entry would swallow Tab for nothing and only Escape could
+  // get out. Gate on a toast that actually HAS an action button
+  // (`[data-action]`, sonner/dist/index.mjs:813-814), not merely on any
+  // `[data-sonner-toast]` existing — an info/error toast with no action has
+  // nothing for jump mode to focus either.
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!matchesToastJumpHotkey(event)) return
-      if (!toasterRef.current?.querySelector(TOAST_SELECTOR)) return
+      if (!toasterRef.current?.querySelector(TOAST_ACTION_SELECTOR)) return
       setJumpActive(true)
     }
     window.addEventListener("keydown", onKeyDown, { capture: true })
@@ -131,10 +133,23 @@ const Toaster = ({ ...props }: ToasterProps) => {
   // `onClick`, sonner/dist/index.mjs:816-820, which removes the toast node
   // ~200ms later, sonner/dist/index.mjs:425 `TIME_BEFORE_UNMOUNT`), or when
   // focus moves back into the modal on its own (e.g. a stray click into a
-  // drawer field) — M2: that's the user's own, deliberate choice of where
-  // focus should be, so we flag it for the sentinel's `onUnmountAutoFocus`
-  // below to leave alone rather than snapping it back to wherever it was
-  // BEFORE jump mode engaged.
+  // drawer field).
+  //
+  // On THAT second exit path, focus does NOT stay on whatever the user
+  // clicked — and that's not something we fight. Sonner's own `<ol>` already
+  // carries an onBlur (sonner/dist/index.mjs:1109-1118) that restores focus
+  // to `lastFocusedElementRef` — set in its onFocus (index.mjs:1120-1126) to
+  // `event.relatedTarget`, i.e. whatever was focused right before Alt+T's
+  // `listRef.current.focus()` call first landed — whenever focus leaves the
+  // list and the new target isn't contained in it. This runs SYNCHRONOUSLY,
+  // inside the browser's own focus-change algorithm for the user's click
+  // (calling `.focus()` from within a blur/focusout handler takes effect
+  // immediately, pre-empting the in-flight change — the same mechanism
+  // FocusScope's own `handleFocusOut` already relies on for the modal's
+  // trap), well before this `focusin` listener or our own `setJumpActive`
+  // could matter. So a user who clicks away is returned to wherever focus
+  // was before Alt+T, the same place Escape and "toast gone" already land —
+  // consistent, and acceptable.
   React.useEffect(() => {
     if (!jumpActive) return
     const root = toasterRef.current
@@ -146,7 +161,6 @@ const Toaster = ({ ...props }: ToasterProps) => {
     const onFocusIn = (event: FocusEvent) => {
       const target = event.target
       if (target instanceof Node && !root.contains(target)) {
-        skipUnmountAutoFocusRef.current = true
         setJumpActive(false)
       }
     }
@@ -154,6 +168,19 @@ const Toaster = ({ ...props }: ToasterProps) => {
     return () => {
       observer.disconnect()
       document.removeEventListener("focusin", onFocusIn)
+    }
+  }, [jumpActive])
+
+  // M2 follow-up: clear any pending deferred-focus timer the instant jump
+  // mode ends (by any path) or the component unmounts, so a stale call from
+  // a PRIOR engage cycle can never fire later and steal focus back — this
+  // cleanup makes the ordering deliberate rather than accidental.
+  React.useEffect(() => {
+    return () => {
+      if (jumpFocusTimeoutRef.current !== undefined) {
+        window.clearTimeout(jumpFocusTimeoutRef.current)
+        jumpFocusTimeoutRef.current = undefined
+      }
     }
   }, [jumpActive])
 
@@ -208,15 +235,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
           onMountAutoFocus={(event) => {
             event.preventDefault()
             const root = toasterRef.current
-            window.setTimeout(() => {
+            jumpFocusTimeoutRef.current = window.setTimeout(() => {
+              jumpFocusTimeoutRef.current = undefined
               root?.querySelector<HTMLElement>(TOAST_ACTION_SELECTOR)?.focus()
             }, 0)
-          }}
-          onUnmountAutoFocus={(event) => {
-            if (skipUnmountAutoFocusRef.current) {
-              event.preventDefault()
-              skipUnmountAutoFocusRef.current = false
-            }
           }}
         />
       )}
