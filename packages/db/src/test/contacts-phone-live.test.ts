@@ -23,8 +23,30 @@ describe("F-009 on the contacts table (CI only: withTestAccount + serviceDb)", (
       const us = await createContact(db, accountId, { firstName: "Us", phone: "+18999221234" }, "user_test");
       const mx = await createContact(db, accountId, { firstName: "Mx", phone: "899 922 1234" }, "user_test");
       expect(mx.id).not.toBe(us.id);
+      expect(mx.flagged).toBe(true);
       const { data } = await db.from("contacts").select("phone").eq("id", mx.id).single();
       expect(data).toEqual({ phone: "+528999221234" });
+      const [a, b] = [us.id, mx.id].sort();
+      const pairFlags = (await db.from("contact_duplicate_flags").select("reason")
+        .eq("account_id", accountId).eq("contact_a", a).eq("contact_b", b)).data;
+      expect(pairFlags).toEqual([{ reason: "phone_country_twin" }]);
+    });
+  });
+
+  // Follow-up from PR #151 (893f0bc4's note: "+52 after +1 flags; +1 after
+  // +52 doesn't") — the reverse save order of the test directly above. Before
+  // this fix, saving the +52 contact FIRST and the +1 one SECOND found
+  // nothing at all, not even a flag.
+  it("the reverse order flags the pair too: a +52 contact saved FIRST, then a +1 contact on the same ten digits (follow-up, PR #151)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const mx = await createContact(db, accountId, { firstName: "Mx", phone: "+528999221234" }, "user_test");
+      const us = await createContact(db, accountId, { firstName: "Us", phone: "+18999221234" }, "user_test");
+      expect(us.id).not.toBe(mx.id);
+      expect(us.flagged).toBe(true);
+      const [a, b] = [mx.id, us.id].sort();
+      const pairFlags = (await db.from("contact_duplicate_flags").select("reason")
+        .eq("account_id", accountId).eq("contact_a", a).eq("contact_b", b)).data;
+      expect(pairFlags).toEqual([{ reason: "phone_country_twin" }]);
     });
   });
 

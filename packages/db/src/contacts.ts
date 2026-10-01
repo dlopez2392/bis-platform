@@ -164,9 +164,12 @@ export function emailKey(value: string): string {
     .replace(/\+[^@]*@/, "@");
 }
 
-/** `countryTwin`: a contact holding the same ten digits under +1 when the
- *  new number is their +52 reading (review R1-I3). Not the same person for
- *  sure, so it is recorded for the merge queue, never merged. */
+/** `countryTwin`: a contact holding the SAME ten digits under the OTHER NANP/
+ *  Mexican reading of the incoming number — an existing +1 contact when the
+ *  new number reads as +52, OR (symmetrically — the follow-up to PR #151,
+ *  893f0bc4's note) an existing +52 contact when the new number reads as
+ *  +1. Not the same person for sure, so it is recorded for the merge queue,
+ *  never merged. */
 type DuplicateMatch = { emailMatch: string | null; phoneMatch: string | null; countryTwin: string | null };
 
 /**
@@ -229,22 +232,22 @@ async function findDuplicate(
     // 0033's phone_key is the stored DIGITS, so a contact saved before F-009
     // as "899 922 1234" keys 8999221234 while its +52 reading keys
     // 528999221234 (review R1-I3). `phoneDigits` strips a leading NANP "1"
-    // off any 11-digit key but leaves a Mexican "52"/"521" prefix alone, so a
-    // US/+1 number's key is ALWAYS the bare ten digits — identical in shape
-    // to a legacy bare-stored (no-country-marker) number, AND to the key
-    // phoneDigits produces for a different contact's Mexican number once its
-    // "52" is stripped by nothing (it isn't: 12/13-digit keys are untouched).
-    // That asymmetry in shapes is why this fallback used to run ONLY for an
-    // incoming +52 key: the direct `.eq("phone_key", pKey)` above already
-    // finds a bare-ten-digit OR an explicit-+1-stored twin for an incoming
-    // +1 number (same 10-digit key either way), but it can never find an
-    // explicit +52-stored twin on those same ten digits, because that key
-    // keeps its "52"/"521" prefix and never equals the bare pKey. So BOTH
-    // directions need the extra lookup — one for an incoming 12-digit +52
-    // key (checking the bare and 521-prefixed legacy MX shapes), the other
-    // for an incoming bare 10-digit key (checking the 52- and
-    // 521-prefixed MX shapes) — or saving the +52 contact FIRST and the +1
-    // one SECOND found nothing at all, not even a flag (follow-up from PR
+    // off any 11-digit key but leaves a Mexican "52"/"521" prefix alone — a
+    // 12/13-digit key is never touched by that rule at all. The practical
+    // effect: a US/+1 number's key is ALWAYS the bare ten digits, identical
+    // in shape to a legacy bare-stored (no-country-marker) number, so the
+    // direct `.eq("phone_key", pKey)` above already finds a bare-ten-digit
+    // OR an explicit-+1-stored twin for an incoming +1 number. It can never
+    // find an explicit +52-stored twin on those same ten digits, though,
+    // because THAT key keeps its "52"/"521" prefix and never equals the bare
+    // pKey. The fallback below is symmetric for exactly that reason: an
+    // incoming 12-digit +52 key checks the bare and 521-prefixed legacy MX
+    // shapes on its own ten digits (first branch), and an incoming bare
+    // 10-digit key that reads as a firm +1 claim checks the 52- and
+    // 521-prefixed MX shapes on ITS ten digits (second branch, narrowed to
+    // only a firm +1 reading — see its own comment below). Before this fix
+    // only the first branch existed, so saving the +52 contact FIRST and the
+    // +1 one SECOND found nothing at all, not even a flag (follow-up from PR
     // #151, 893f0bc4's note: "+52 after +1 flags; +1 after +52 doesn't").
     //
     // Per the spec (orchestrator decision): the same-or-twin call is decided
@@ -273,7 +276,16 @@ async function findDuplicate(
     if (!result.phoneMatch && /^52\d{10}$/.test(pKey)) {
       legacyTenDigits = pKey.slice(2);
       legacyKeys = [legacyTenDigits, `521${legacyTenDigits}`];
-    } else if (!result.phoneMatch && /^\d{10}$/.test(pKey)) {
+    } else if (!result.phoneMatch && /^\d{10}$/.test(pKey) && phone === `+1${pKey}`) {
+      // Narrowed to a FIRM +1 reading of the incoming number, not merely a
+      // bare ten-digit key: `phoneKeyOf` keys unparseable typed text (kept
+      // as-is by `phoneFields` when it cannot normalise — "0123456789", a
+      // leading-zero ten digits `normalisePhone` refuses outright) on its
+      // bare digits too, which would otherwise take this branch and queue a
+      // spurious twin flag against any contact that merely happens to share
+      // those digits under an explicit +52. `phone === "+1" + pKey` is true
+      // only when this number is actually stored as a confirmed-or-ambiguous
+      // +1 E.164 value.
       legacyTenDigits = pKey;
       legacyKeys = [`52${pKey}`, `521${pKey}`];
     }
