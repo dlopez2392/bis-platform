@@ -1,4 +1,4 @@
-import { test, expect, type Page, type BrowserContextOptions } from "@playwright/test";
+import { test, expect, type Page, type BrowserContextOptions } from "./fixtures/test";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess } from "@bis/db";

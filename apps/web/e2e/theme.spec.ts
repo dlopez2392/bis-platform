@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 
 // Dark mode shipped with tokens and a provider but no way to reach it.
 // These assert the control exists, actually flips the class the tokens key

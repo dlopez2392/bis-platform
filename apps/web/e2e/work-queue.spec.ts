@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, getOrCreateCalendar, createBooking } from "@bis/db";

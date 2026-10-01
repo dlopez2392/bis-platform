@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
 import { SEEDED_ACCOUNT_NAME, openAccountByName, readClientFixture } from "./support";

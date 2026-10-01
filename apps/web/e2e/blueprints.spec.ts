@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
 import { clerkClient } from "@clerk/nextjs/server";

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { SEEDED_CONTACT_NAME } from "./support";
 import { m } from "../src/lib/messages";
 

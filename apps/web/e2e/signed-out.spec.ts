@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 
 // Explicitly no storage state. playwright.config.ts gives the "chromium"
 // project the agency's saved session, and every assertion in this file is

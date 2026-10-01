@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { SEEDED_ACCOUNT_NAME, openAccountByName } from "./support";
 
 test("contacts table renders and sorts", async ({ page }) => {

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
@@ -368,8 +368,11 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
       const invoicePrefix = m["billing.nextInvoice"].split("{date}")[0] ?? "";
       const nextInvoice = new RegExp(`^${invoicePrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
       await page.goto(`/dashboard/accounts/${accountId}/settings#billing`);
-      await expect(page.locator('#billing [data-status="active"]')).toBeVisible();
-      await expect(page.locator("#billing")).toContainText(minutes);
+      // Scoped to <main> for the same reason as the client's page below:
+      // mid-stream, #billing also exists in React's hidden S:0 buffer.
+      const card = page.getByRole("main").locator("#billing");
+      await expect(card.locator('[data-status="active"]')).toBeVisible();
+      await expect(card).toContainText(minutes);
 
       // ── The client's page, and Manage billing (B3, B9) ───────────────────
       const tagged = await taggedPortalConfigurations(s);
@@ -377,10 +380,16 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
       try {
         const cp = await client.newPage();
         await cp.goto(`/dashboard/accounts/${accountId}/billing`);
-        await expect(cp.getByText(PLAN_NAME, { exact: true })).toBeVisible();
-        await expect(cp.locator('[data-status="active"]')).toBeVisible();
-        await expect(cp.getByText(minutes, { exact: true })).toBeVisible();
-        await expect(cp.getByText(nextInvoice)).toBeVisible();
+        // Scoped to <main>: while React is still streaming this page, the
+        // card exists twice — once in <main>, once in the hidden
+        // <div hidden id="S:0"> it was streamed into — and an unscoped
+        // locator is a strict-mode violation (main's e2e, run 36854117839).
+        // <main> is what the client actually sees.
+        const view = cp.getByRole("main");
+        await expect(view.getByText(PLAN_NAME, { exact: true })).toBeVisible();
+        await expect(view.locator('[data-status="active"]')).toBeVisible();
+        await expect(view.getByText(minutes, { exact: true })).toBeVisible();
+        await expect(view.getByText(nextInvoice)).toBeVisible();
 
         const refusal = cp.getByRole("alert").filter({ hasText: m["billing.page.portalFailed"] });
         await cp.getByRole("button", { name: m["billing.page.manage"] }).click();
