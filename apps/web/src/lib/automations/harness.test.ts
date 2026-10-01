@@ -80,3 +80,40 @@ describe("buildPassContext — email goes through the email gate, bound to the t
     expect(emailGate.emailSenderFor).toHaveBeenCalledWith(db);
   });
 });
+
+describe("runPasses — the operational floor's heartbeats (spec §1)", () => {
+  it("writes one heartbeat per pass, ok or error, then cron.tick, in order (mutation: drop the per-pass beat → FAILS)", async () => {
+    const beats: [string, unknown][] = [];
+    const beat = async (_c: PassContext, key: string, outcome: unknown) => { beats.push([key, outcome]); };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom: Pass = { key: "boom", run: async () => { throw new Error("db exploded"); } };
+    const fine: Pass = { key: "fine", run: async () => ({ sent: 1 }) };
+
+    await runPasses([boom, fine], ctx(), beat);
+
+    expect(beats).toEqual([
+      ["cron.pass.boom", { ok: false, error: "Error: db exploded" }],
+      ["cron.pass.fine", { ok: true }],
+      ["cron.tick", { ok: true }],
+    ]);
+    spy.mockRestore();
+  });
+
+  it("a heartbeat writer that throws never fails a pass or the tick (mutation: drop safeBeat's try → FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const beat = async () => { throw new Error("heartbeat table gone"); };
+    const fine: Pass = { key: "fine", run: async () => ({ sent: 3 }) };
+
+    await expect(runPasses([fine], ctx(), beat)).resolves.toEqual({ fine: { sent: 3 } });
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("heartbeat cron.pass.fine not written"));
+    spy.mockRestore();
+  });
+
+  it("the heartbeat for a pass is written AFTER that pass and BEFORE the next one runs, so the alert pass (last) reads this tick", async () => {
+    const order: string[] = [];
+    const beat = async (_c: PassContext, key: string) => { order.push(`beat:${key}`); };
+    const mk = (key: string): Pass => ({ key, run: async () => { order.push(`run:${key}`); return {}; } });
+    await runPasses([mk("a"), mk("b")], ctx(), beat);
+    expect(order).toEqual(["run:a", "beat:cron.pass.a", "run:b", "beat:cron.pass.b", "beat:cron.tick"]);
+  });
+});

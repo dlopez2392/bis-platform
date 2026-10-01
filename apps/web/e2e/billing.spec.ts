@@ -380,16 +380,15 @@ test.describe("client billing: the link, the webhook, both Billing screens (Stri
       try {
         const cp = await client.newPage();
         await cp.goto(`/dashboard/accounts/${accountId}/billing`);
-        // Scoped to <main>: while React is still streaming this page, the
-        // card exists twice — once in <main>, once in the hidden
-        // <div hidden id="S:0"> it was streamed into — and an unscoped
-        // locator is a strict-mode violation (main's e2e, run 36854117839).
-        // <main> is what the client actually sees.
-        const view = cp.getByRole("main");
-        await expect(view.getByText(PLAN_NAME, { exact: true })).toBeVisible();
-        await expect(view.locator('[data-status="active"]')).toBeVisible();
-        await expect(view.getByText(minutes, { exact: true })).toBeVisible();
-        await expect(view.getByText(nextInvoice)).toBeVisible();
+        // Scoped to <main>: the billing route has a loading.tsx, and the
+        // streamed reveal briefly leaves a hidden copy of the page outside it
+        // (the same duplicate website.spec met in #141), which made an
+        // unscoped getByText resolve to two elements.
+        const cpMain = cp.getByRole("main");
+        await expect(cpMain.getByText(PLAN_NAME, { exact: true })).toBeVisible();
+        await expect(cpMain.locator('[data-status="active"]')).toBeVisible();
+        await expect(cpMain.getByText(minutes, { exact: true })).toBeVisible();
+        await expect(cpMain.getByText(nextInvoice)).toBeVisible();
 
         const refusal = cp.getByRole("alert").filter({ hasText: m["billing.page.portalFailed"] });
         await cp.getByRole("button", { name: m["billing.page.manage"] }).click();

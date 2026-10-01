@@ -79,12 +79,13 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
   "operator.agency_report": ["operator", "any", "none"],
   "operator.billing_link": ["operator", "any", "none"],
   "operator.sender_check": ["operator", "any", "none"],
+  "operator.ops_alert": ["operator", "any", "none"],
 };
 
 describe("EMAIL_KINDS — spec §4.3's table, row for row", () => {
-  it("has exactly the twenty-two send sites (E1) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the twenty-three send sites (E1, plus the operational floor's ops alert) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(EMAIL_KINDS).sort()).toEqual(Object.keys(EMAIL_TABLE).sort());
-    expect(Object.keys(EMAIL_KINDS)).toHaveLength(22);
+    expect(Object.keys(EMAIL_KINDS)).toHaveLength(23);
   });
 
   it.each(Object.entries(EMAIL_TABLE))("%s is %j (mutation: change any one of this row's three fields → FAILS)", (kind, [cls, hours, footer]) => {
