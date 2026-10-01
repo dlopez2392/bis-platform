@@ -156,6 +156,39 @@ test("Escape leaves jump mode and returns focus into the drawer, without closing
   await expect.poll(stored).toEqual({ phone: "+15512345678", phone_country_unconfirmed: true });
 });
 
+test("clicking into a drawer field while jump mode is engaged leaves focus there (M2)", async ({ page }) => {
+  const { accountId } = fixture();
+  await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${STAMP}`);
+  await page.getByRole("row").filter({ hasText: `Number ${STAMP}` }).first().click();
+  const drawer = page.getByRole("dialog");
+  const row = drawer.getByTestId("phone-country-row");
+  await expect(row).toBeVisible();
+
+  await row.getByRole("button", { name: m["contact.phoneCountry.mx"] }).click();
+  await expect(page.getByText(m["contact.phoneCountry.mxToast"])).toBeVisible();
+
+  await page.keyboard.press("Alt+T");
+  await expect(page.getByRole("button", { name: m["common.undo"] })).toBeFocused();
+
+  // The user clicks a drawer field instead of using Undo — their own,
+  // deliberate choice of where focus should be. The sentinel's unmount must
+  // NOT snap it back to wherever it was before Alt+T (M2): its own default
+  // `onUnmountAutoFocus` is prevented on exactly this exit path.
+  const phoneInput = drawer.getByLabel(m["contacts.phone"], { exact: true });
+  await drawer.getByRole("button", { name: /edit phone/i }).click();
+  await expect(phoneInput).toBeFocused();
+  await expect(drawer).toBeVisible();
+
+  // Clean up: Escape here cancels the inline phone edit (inline-field.tsx's
+  // own cancel path), not jump mode — jump mode already ended the moment
+  // focus moved into the field above. Then undo the phone-country write by
+  // mouse, same pattern as consent-phone-country.spec.ts.
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: m["common.undo"] }).hover();
+  await page.getByRole("button", { name: m["common.undo"] }).click();
+  await expect.poll(stored).toEqual({ phone: "+15512345678", phone_country_unconfirmed: true });
+});
+
 test("no modal open: Alt+T still reaches the toast (nothing to pause, same mechanism)", async ({ page }) => {
   const { accountId } = fixture();
   await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${STAMP}`);

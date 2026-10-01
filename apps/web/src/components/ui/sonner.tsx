@@ -44,6 +44,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
   // there's no race scoping queries/observers to it instead of `document`.
   const toasterRef = React.useRef<HTMLElement | null>(null)
   const [jumpActive, setJumpActive] = React.useState(false)
+  // M2: set just before `setJumpActive(false)` when we're exiting BECAUSE
+  // focus already moved somewhere on its own (the `focusin` listener below)
+  // — read once, synchronously, by the sentinel's own `onUnmountAutoFocus`.
+  const skipUnmountAutoFocusRef = React.useRef(false)
 
   // Tag every action (Undo-style) button with its keyboard shortcut as AT
   // metadata — owner decision: no visible hint/new copy, `aria-keyshortcuts`
@@ -91,18 +95,29 @@ const Toaster = ({ ...props }: ToasterProps) => {
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true })
   }, [])
 
-  // Escape claims the keystroke for "leave the toast" — stopping it before
-  // the modal's own Escape-closes-overlay handler ever sees it. We listen at
-  // `window`'s CAPTURE phase: DOM capture dispatch runs window, then
-  // document, then down to the target, so a `window`-capture listener always
-  // fires before the modal's own `ownerDocument`-level Escape handler
-  // (@radix-ui/react-dismissable-layer/dist/index.mjs:101-106), regardless
-  // of which was registered first.
+  // Escape claims the keystroke for "leave the toast" with `preventDefault`,
+  // NOT `stopPropagation`. We listen at `window`'s CAPTURE phase, which runs
+  // before the modal's own `ownerDocument`-level capture listener
+  // (@radix-ui/react-dismissable-layer/dist/index.mjs:101-106: `if
+  // (event.key !== "Escape") return; onEscapeKeyDown?.(event); if
+  // (!event.defaultPrevented && onDismiss) { event.preventDefault();
+  // onDismiss(); }`) — that handler only dismisses `if
+  // (!event.defaultPrevented)`, so `preventDefault()` alone keeps the drawer
+  // open; we don't need (and must not use) `stopPropagation`, which would
+  // ALSO have stopped Sonner's own Escape handler (`document` BUBBLE phase,
+  // sonner/dist/index.mjs:1055-1057: `if (event.code === 'Escape' &&
+  // (document.activeElement === listRef.current || listRef.current
+  // ?.contains(document.activeElement))) setExpanded(false);` — it doesn't
+  // check `defaultPrevented` at all, so it still runs). That's the handler
+  // that resumes the toast's auto-dismiss timer: sonner's own Alt+T handler
+  // sets `expanded = true` (sonner/dist/index.mjs:1049-1050), which pauses
+  // it (index.mjs:605); without Sonner's own Escape resetting `expanded`
+  // back to `false`, the toast would never time out again.
   React.useEffect(() => {
     if (!jumpActive) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (isEscapeKey(event)) {
-        event.stopPropagation()
+        event.preventDefault()
         setJumpActive(false)
       }
     }
@@ -110,29 +125,16 @@ const Toaster = ({ ...props }: ToasterProps) => {
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true })
   }, [jumpActive])
 
-  // The sentinel's own container is an EMPTY div — the toast itself lives in
-  // its normal place (never moved: a portal container swap unmounts and
-  // remounts the portaled subtree in React 19 the instant `containerInfo`
-  // differs — react-dom-client.development.js `updatePortal`, ~6277-6284 —
-  // and sonner's toast list lives in a `useState([])` a fresh subscription
-  // never replays, sonner/dist/index.mjs:878-911, 921, so that would have
-  // made a visible toast vanish). We focus the real Undo button ourselves,
-  // once the sentinel has done its job below.
-  React.useEffect(() => {
-    if (!jumpActive) return
-    const button = toasterRef.current?.querySelector<HTMLElement>(TOAST_ACTION_SELECTOR)
-    button?.focus()
-  }, [jumpActive])
-
   // IMPORTANT: jump mode must end as soon as it's no longer useful, not only
   // on Escape — when the toast itself goes away (Undo fired: sonner's own
   // action-button handler calls `deleteToast()` right after the caller's
   // `onClick`, sonner/dist/index.mjs:816-820, which removes the toast node
   // ~200ms later, sonner/dist/index.mjs:425 `TIME_BEFORE_UNMOUNT`), or when
-  // focus moves back into the modal on its own (e.g. a stray click). The
-  // listener is attached AFTER the focus-the-button effect above (both keyed
-  // on the same `jumpActive` commit, same component, so declaration order is
-  // execution order) so it never fires on the focus WE just set.
+  // focus moves back into the modal on its own (e.g. a stray click into a
+  // drawer field) — M2: that's the user's own, deliberate choice of where
+  // focus should be, so we flag it for the sentinel's `onUnmountAutoFocus`
+  // below to leave alone rather than snapping it back to wherever it was
+  // BEFORE jump mode engaged.
   React.useEffect(() => {
     if (!jumpActive) return
     const root = toasterRef.current
@@ -144,6 +146,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
     const onFocusIn = (event: FocusEvent) => {
       const target = event.target
       if (target instanceof Node && !root.contains(target)) {
+        skipUnmountAutoFocusRef.current = true
         setJumpActive(false)
       }
     }
@@ -169,17 +172,53 @@ const Toaster = ({ ...props }: ToasterProps) => {
         //
         // Deliberately UNTRAPPED: the real toast lives OUTSIDE this
         // sentinel's own (empty) container, so a trapped scope's
-        // `handleFocusIn` would see our own `button.focus()` call above as
-        // an "outside" interaction and immediately snap it back
-        // (index.mjs:39-46) — we only want the stack push/pause and the
-        // default return-focus-on-unmount, both unconditional on `trapped`
+        // `handleFocusIn` would see our own focus call as an "outside"
+        // interaction and immediately snap it back (index.mjs:39-46) — we
+        // only want the stack push/pause and the default
+        // return-focus-on-unmount, both unconditional on `trapped`
         // (index.mjs:76-78, 92-104), not FocusScope's actual containment
-        // enforcement. `onMountAutoFocus` is prevented for the same reason:
-        // its default would focus the first tabbable candidate INSIDE the
-        // sentinel's own (empty) container, finding nothing, and fall back
-        // to focusing the sentinel div itself (index.mjs:81-90) instead of
-        // leaving the real focus-the-button effect above to do its job.
-        <FocusScope.Root onMountAutoFocus={(event) => event.preventDefault()} />
+        // enforcement.
+        //
+        // `container` is `useState`, not a plain ref (index.mjs:23, composed
+        // via `useComposedRefs(forwardedRef, setContainer)` at line 27), so
+        // the push/pause/autofocus effect — gated `if (container)`,
+        // index.mjs:77 — runs ONE COMMIT AFTER this sentinel's DOM node
+        // mounts, not in the same one. Doing the real focus work from
+        // `onMountAutoFocus` (rather than a separate effect keyed on
+        // `jumpActive`) is what fixes that: `focusScopesStack.add(focusScope)`
+        // (line 77, pausing the modal's scope) always runs BEFORE
+        // `container.dispatchEvent(mountEvent)` a few lines later in that
+        // SAME effect, so by the time this handler fires the modal is
+        // already paused. `preventDefault()` skips FocusScope's own default
+        // (which would focus the first tabbable candidate INSIDE the
+        // sentinel's empty container, find nothing, and fall back to
+        // focusing the sentinel div itself, index.mjs:81-90).
+        //
+        // The actual `.focus()` call is still deferred one more step, via a
+        // macrotask (`setTimeout`, NOT a microtask/Promise) — browsers run a
+        // microtask checkpoint between invoking separate listeners for the
+        // SAME event, and Sonner's own Alt+T handler is a plain `document`
+        // BUBBLE-phase listener that ALSO tries `listRef.current.focus()`
+        // on this exact keydown (sonner/dist/index.mjs:1047-1053), running
+        // later in this same dispatch than our `window`-capture listener. A
+        // microtask-deferred call here could still land before that bubble
+        // listener runs and then lose when it fires; a macrotask guarantees
+        // we are the last writer.
+        <FocusScope.Root
+          onMountAutoFocus={(event) => {
+            event.preventDefault()
+            const root = toasterRef.current
+            window.setTimeout(() => {
+              root?.querySelector<HTMLElement>(TOAST_ACTION_SELECTOR)?.focus()
+            }, 0)
+          }}
+          onUnmountAutoFocus={(event) => {
+            if (skipUnmountAutoFocusRef.current) {
+              event.preventDefault()
+              skipUnmountAutoFocusRef.current = false
+            }
+          }}
+        />
       )}
       <Sonner
         ref={toasterRef}

@@ -38,9 +38,15 @@ function hotkeyPartLabel(part: string): string {
 export const TOAST_JUMP_HOTKEY_LABEL = TOAST_JUMP_HOTKEY.map(hotkeyPartLabel).join("+");
 
 /**
- * Mirrors sonner's own default hotkey match exactly
+ * Mirrors sonner's own default hotkey match
  * (`sonner/dist/index.mjs:1049`), generalised over `TOAST_JUMP_HOTKEY`
- * instead of hardcoding its two entries.
+ * instead of hardcoding its two entries — but, unlike sonner's own check,
+ * ALSO rejects Ctrl or Meta held alongside it: on Windows, AltGr is
+ * physically Ctrl+Alt, so typing a character that needs AltGr+T on an
+ * international keyboard layout would otherwise engage jump mode and pause
+ * the open modal's trap mid-keystroke. Sonner's own hotkey has this same gap
+ * (it only focuses its own toast list, not consequential enough to matter);
+ * ours pauses a modal, so it's worth the extra check here.
  */
 export function matchesToastJumpHotkey(event: {
   altKey?: boolean;
@@ -49,6 +55,7 @@ export function matchesToastJumpHotkey(event: {
   shiftKey?: boolean;
   code?: string;
 }): boolean {
+  if (event.ctrlKey === true || event.metaKey === true) return false;
   return TOAST_JUMP_HOTKEY.every(
     (key) => (event as Record<string, unknown>)[key] === true || event.code === key,
   );

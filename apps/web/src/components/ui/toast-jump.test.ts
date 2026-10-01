@@ -26,6 +26,12 @@ describe("matchesToastJumpHotkey", () => {
   it("is false when altKey is simply absent from the event", () => {
     expect(matchesToastJumpHotkey({ code: "KeyT" })).toBe(false);
   });
+  it("is false when Ctrl is also held — AltGr on Windows is physically Ctrl+Alt", () => {
+    expect(matchesToastJumpHotkey({ altKey: true, ctrlKey: true, code: "KeyT" })).toBe(false);
+  });
+  it("is false when Meta is also held", () => {
+    expect(matchesToastJumpHotkey({ altKey: true, metaKey: true, code: "KeyT" })).toBe(false);
+  });
 });
 
 describe("isEscapeKey", () => {
