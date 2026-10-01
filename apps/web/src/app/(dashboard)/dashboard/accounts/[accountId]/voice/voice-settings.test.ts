@@ -320,7 +320,7 @@ describe("ConciergeCard — the render proof", () => {
     greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
     languages: "en", booking_enabled: true, after_hours: "hours_then_message",
     enabled: true, textback_enabled: false, textback_body: "",
-    public_id: null, concierge_enabled: false, concierge_form_id: null,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
   };
 
   function renderCard(opts: {
@@ -467,7 +467,7 @@ describe("VoiceProfileForm's text-back segment counter — counts the disclosed 
     greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
     languages: "en", booking_enabled: true, after_hours: "hours_then_message",
     enabled: true, textback_enabled: true, textback_body: "",
-    public_id: null, concierge_enabled: false, concierge_form_id: null,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
   };
 
   function render(over: Partial<VoiceProfileRow> = {}, brandName = "Rio Roofing"): string {

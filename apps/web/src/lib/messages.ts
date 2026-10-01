@@ -306,6 +306,8 @@ export const m = {
   "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
   "dashboard.activity.formSubmitted": "A new lead came in through your form.",
   "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
+  "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of Sofía.",
+  "dashboard.activity.forwardOff": "Sofía started answering calls again.",
   // Rule 5 (designed empty states): one sentence, verbatim from the brief.
   // No action link — the brief pins this one deliberately link-less.
   "dashboard.activity.empty": "Bookings, form leads, and call outcomes appear here as they happen.",
