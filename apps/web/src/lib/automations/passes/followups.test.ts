@@ -3,13 +3,15 @@ import type { DueFollowup, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listDueFollowups: vi.fn(), stampFollowupSent: vi.fn(), getDueFollowupById: vi.fn(), recordAutomationLog: vi.fn(),
-  getAutomationLogEntry: vi.fn(),
+  getAutomationLogEntry: vi.fn(), readConsentState: vi.fn(), readAccountTimezone: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
+const emailFactory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
+vi.mock("@/lib/email", async (importOriginal) => ({ ...(await importOriginal<object>()), ...emailFactory }));
 
 import type { PassContext } from "../context";
 import { followupsPass, releaseFollowup } from "./followups";
-import { EmailNotSent } from "@/lib/consent/email-gate";
+import { EmailNotSent, emailSenderFor } from "@/lib/consent/email-gate";
 
 // 09:00 CDT on Sept 22 — inside the 08:00–11:00 band, the day after a meeting that ended Sept 21.
 const MORNING = new Date("2026-09-22T14:00:00Z");
@@ -136,5 +138,32 @@ describe("consent PR-3: the email goes through the gate", () => {
     emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
     expect(await followupsPass.run(ctx(MORNING))).toEqual({ ...EMPTY, blocked: 1 });
     expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+  });
+});
+
+describe("the REAL email gate, end to end, for a stopped customer (item 3, follow-up)", () => {
+  const providerSend = vi.fn();
+
+  function realCtx(now: Date): PassContext {
+    return {
+      db: {} as never, now, origin: "https://app.example.com",
+      email: emailSenderFor({} as never),
+      sms: async () => { throw new Error("follow-ups never text"); },
+    };
+  }
+
+  beforeEach(() => {
+    providerSend.mockReset().mockResolvedValue({ providerMessageId: "re_1" });
+    emailFactory.getEmailProvider.mockReset().mockReturnValue({ isFake: true, send: providerSend });
+    dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "stopped", since: "2026-09-01T00:00:00Z", method: "unsubscribe_link", eventId: "e1" });
+    dbMocks.readAccountTimezone.mockReset().mockResolvedValue("America/Chicago");
+  });
+
+  it("the provider's send is NEVER called, and the booking is NOT stamped sent, for a customer the ledger says is stopped (mutation: treat kind 'automation.followup' as customer_initiated so the gate skips the ledger read → FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+    const result = await followupsPass.run(realCtx(MORNING));
+    expect(providerSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+    expect(result).toEqual({ ...EMPTY, blocked: 1 });
   });
 });

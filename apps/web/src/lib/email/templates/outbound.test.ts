@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Branding } from "@bis/db";
-import { emailBrand, UNSUBSCRIBE_MARKER } from "./shell";
+import { emailBrand } from "./shell";
+import { withoutUnsubscribeMarker } from "./test-helpers";
 import { outboundEmail } from "./outbound";
 
 const UNBRANDED: Branding = {
@@ -42,6 +43,6 @@ describe("outboundEmail", () => {
     // `UNSUBSCRIBE_MARKER`, as the card's last row, for the email gate to
     // replace later. Strip it before asserting: this test is about VISIBLE
     // footer content, which the composer's bare template still carries none of.
-    expect(html.toLowerCase().replace(UNSUBSCRIBE_MARKER, "")).not.toContain("unsubscribe");
+    expect(withoutUnsubscribeMarker(html)).not.toContain("unsubscribe");
   });
 });

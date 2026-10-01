@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
  * submit must not be pressable while the trimmed note is empty.
  *
  * No DOM renderer in apps/web (the codebase's own convention:
- * contact-drawer.wiring.test.ts, marketing-optout-switch.wiring.test.ts):
+ * contact-drawer.wiring.test.ts):
  * `useState` is mocked to RECORD its setter (found by starting value) and,
  * when a test needs a state ReadyRow itself decides internally — `resuming`
  * — an override by the hook's own call INDEX, discovered dynamically on an

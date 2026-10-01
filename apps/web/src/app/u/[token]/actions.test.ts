@@ -34,4 +34,9 @@ describe("the page's two server actions", () => {
     unsub.recordUnsubscribe.mockRejectedValueOnce(new Error("down"));
     expect(await unsubscribeAction(sealConsentToken(P, SECRET))).toEqual({ state: "failed" });
   });
+
+  it("a failed resubscribe write answers failed, never resubscribed (mutation: answer 'resubscribed' in the catch → FAILS)", async () => {
+    unsub.recordResubscribe.mockRejectedValueOnce(new Error("down"));
+    expect(await resubscribeAction(sealConsentToken(P, SECRET))).toEqual({ state: "failed" });
+  });
 });
