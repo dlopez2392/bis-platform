@@ -230,18 +230,20 @@ describe.skipIf(!hasCredentials)("brand logo storage", () => {
     it("emits account.branding_updated only on an actual restore, not on a refused one", async () => {
       await withTestAccount(async (db, accountId) => {
         const path = `${accountId}/logo-0123456789abcdef.png`;
+        // setBranding emits account.branding_updated itself, so count the
+        // events each restore ADDS rather than assuming a zero baseline.
+        const events = async () => (await db.from("events").select("id", { count: "exact", head: true })
+          .eq("account_id", accountId).eq("type", "account.branding_updated")).count ?? 0;
 
         await setBranding(db, accountId, { brandLogoPath: "acct/logo-aaaaaaaaaaaaaaaa.png" }, "user_test");
-        await restoreBrandLogoIfCleared(db, accountId, path, "user_test");
-        const { count: refusedCount } = await db.from("events").select("id", { count: "exact", head: true })
-          .eq("account_id", accountId).eq("type", "account.branding_updated");
-        expect(refusedCount).toBe(0);
+        const beforeRefused = await events();
+        expect(await restoreBrandLogoIfCleared(db, accountId, path, "user_test")).toBe(false);
+        expect(await events(), "a refused restore records nothing").toBe(beforeRefused);
 
         await setBranding(db, accountId, { brandLogoPath: null }, "user_test");
-        await restoreBrandLogoIfCleared(db, accountId, path, "user_test");
-        const { count: restoredCount } = await db.from("events").select("id", { count: "exact", head: true })
-          .eq("account_id", accountId).eq("type", "account.branding_updated");
-        expect(restoredCount).toBe(1);
+        const beforeRestore = await events();
+        expect(await restoreBrandLogoIfCleared(db, accountId, path, "user_test")).toBe(true);
+        expect(await events(), "an actual restore records exactly one event").toBe(beforeRestore + 1);
       });
     });
   });
