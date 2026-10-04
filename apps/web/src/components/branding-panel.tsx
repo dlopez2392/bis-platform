@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,7 @@ import { deriveTheme, type CornerName, type ModeName, type NeutralName, type Typ
 import { themeStyle } from "@/lib/branding/theme-style";
 import { MAX_LOGO_BYTES } from "@/lib/branding/validate-logo";
 import { runRemoveLogo, type RemoveLogoResult, type RestoreLogoResult } from "@/lib/branding/remove-logo";
+import { runGuarded } from "@/lib/ui/guarded-run";
 
 /** "" is always first: it is how the operator clears the input again. */
 function RadioRow({
@@ -122,9 +123,18 @@ export function BrandingPanel({
     setAdoptedLogoUrl(logoUrl);
     setHasLogo(logoUrl !== null);
   }
+  // The double-click guard other reversible-and-undoable rows share
+  // (guarded-run.ts: the Texts row, the Email row) — a busy REF, not
+  // `removePending` alone, because the Undo closure built during THIS
+  // click fires later, outside this render, and a ref is what it reads at
+  // that later moment.
+  const [removePending, startRemoveTransition] = useTransition();
+  const removeBusy = useRef(false);
   const removeLogo = () => {
     if (!removeLogoAction || !restoreLogoAction) return;
-    void runRemoveLogo(removeLogoAction, restoreLogoAction, setHasLogo, toast);
+    runGuarded(removeBusy, startRemoveTransition, async () => {
+      await runRemoveLogo(removeLogoAction, restoreLogoAction, setHasLogo, toast);
+    });
   };
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
@@ -480,7 +490,7 @@ export function BrandingPanel({
                     than a confirm dialog (rule 6). Only rendered once there
                     is a logo to remove. */}
                 {removeLogoAction && restoreLogoAction ? (
-                  <Button type="button" variant="ghost" size="sm" onClick={removeLogo}>
+                  <Button type="button" variant="ghost" size="sm" onClick={removeLogo} disabled={removePending}>
                     {m["branding.removeLogo"]}
                   </Button>
                 ) : null}

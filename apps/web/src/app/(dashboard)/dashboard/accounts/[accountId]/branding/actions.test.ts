@@ -7,6 +7,8 @@ const dbMocks = vi.hoisted(() => ({
   uploadBrandLogo: vi.fn(),
   removeBrandLogo: vi.fn(),
   sweepOrphanedLogos: vi.fn(),
+  restoreBrandLogoIfCleared: vi.fn(),
+  logoExists: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -40,6 +42,8 @@ beforeEach(() => {
   dbMocks.uploadBrandLogo.mockReset();
   dbMocks.removeBrandLogo.mockReset();
   dbMocks.sweepOrphanedLogos.mockReset().mockResolvedValue(undefined);
+  dbMocks.restoreBrandLogoIfCleared.mockReset().mockResolvedValue(true);
+  dbMocks.logoExists.mockReset().mockResolvedValue(true);
   authMocks.requireAccountAccess.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
 });
 
@@ -167,8 +171,10 @@ describe("setBrandingAction — mailing address", () => {
       brandLogoPath: "acct_1/logo.png", mailingAddress: "PO Box 12, Edinburg, TX 78539",
     });
   });
+});
 
-  it("sweeps the account's whole logo prefix, keeping only the freshly-uploaded path, after a successful upload", async () => {
+describe("setBrandingAction — sweeping stale logo objects after a successful upload", () => {
+  it("sweeps the account's whole logo prefix, keeping only the freshly-uploaded path", async () => {
     // Replaces the old single-file removeBrandLogo(previousLogoPath) call:
     // the sweep also cleans up anything an earlier, un-undone Remove left
     // behind. Mutation: call removeBrandLogo(previousLogoPath) instead of
@@ -184,13 +190,11 @@ describe("setBrandingAction — mailing address", () => {
     expect(dbMocks.removeBrandLogo).not.toHaveBeenCalled();
   });
 
-  it("does not sweep when the upload is byte-identical and resolves to the SAME path", async () => {
-    // Content-addressed re-upload: the "previous" and "new" path are one and
-    // the same object, still referenced. Mutation: sweep unconditionally even
-    // without a real new path change → this still passes (sweep is called,
-    // but with keepPath === the one object, so nothing is actually deleted);
-    // the meaningful assertion is in the DB-level sweepOrphanedLogos test,
-    // which proves the kept path survives.
+  it("sweeps with keep = the SAME path when the upload is byte-identical (content-addressed, nothing to orphan)", async () => {
+    // Mutation: title/intent check — sweepOrphanedLogos IS still called here
+    // (it is the one place that re-reads the live column and decides what
+    // survives); what must NOT happen is a second, different removeBrandLogo
+    // call. Mutation: call removeBrandLogo as well → FAILS.
     dbMocks.getBranding.mockResolvedValue({ brandLogoPath: "acct_1/logo-same.png" });
     dbMocks.uploadBrandLogo.mockResolvedValue("acct_1/logo-same.png");
     const f = fd({ brandName: "Acme Dental" });
@@ -198,6 +202,7 @@ describe("setBrandingAction — mailing address", () => {
     f.set("logo", new File([png], "logo.png", { type: "image/png" }));
     expect(await setBrandingAction("acct_1", f)).toEqual({ ok: true });
     expect(dbMocks.sweepOrphanedLogos).toHaveBeenCalledWith({}, "acct_1", "acct_1/logo-same.png");
+    expect(dbMocks.removeBrandLogo).not.toHaveBeenCalled();
   });
 });
 
@@ -206,6 +211,12 @@ describe("removeBrandLogoAction", () => {
     dbMocks.getBranding.mockResolvedValue({ brandLogoPath: "acct_1/logo.png" });
     await removeBrandLogoAction("acct_1");
     expect(authMocks.requireAccountAccess).toHaveBeenCalledWith("acct_1");
+  });
+
+  it("reads the current path through the RLS-enforced client, not serviceDb() (house rule) (mutation: getBranding(serviceDb()) → FAILS, {} is not dbForRequestInstance)", async () => {
+    dbMocks.getBranding.mockResolvedValue({ brandLogoPath: "acct_1/logo.png" });
+    await removeBrandLogoAction("acct_1");
+    expect(dbMocks.getBranding).toHaveBeenCalledWith(dbForRequestInstance, "acct_1");
   });
 
   it("clears brand_logo_path to null through setBranding, WITHOUT deleting the stored object, and returns the cleared path", async () => {
@@ -225,6 +236,22 @@ describe("removeBrandLogoAction", () => {
     dbMocks.getBranding.mockResolvedValue({ brandLogoPath: "acct_1/logo-abc.png" });
     await removeBrandLogoAction("acct_1");
     expect(dbMocks.sweepOrphanedLogos).toHaveBeenCalledWith({}, "acct_1", "acct_1/logo-abc.png");
+  });
+
+  it("sweeps ONLY after the write succeeds, never before (near-Critical review fix: a failed write must delete nothing) (mutation: reorder sweep before setBranding → FAILS, call order below is checked)", async () => {
+    const order: string[] = [];
+    dbMocks.getBranding.mockResolvedValue({ brandLogoPath: "acct_1/logo-abc.png" });
+    dbMocks.setBranding.mockImplementation(async () => { order.push("write"); });
+    dbMocks.sweepOrphanedLogos.mockImplementation(async () => { order.push("sweep"); });
+    await removeBrandLogoAction("acct_1");
+    expect(order).toEqual(["write", "sweep"]);
+  });
+
+  it("sweeps nothing when the write throws (mutation: run the sweep unconditionally, outside the write's try/catch → FAILS)", async () => {
+    dbMocks.getBranding.mockResolvedValue({ brandLogoPath: "acct_1/logo-abc.png" });
+    dbMocks.setBranding.mockRejectedValue(new Error("boom"));
+    expect(await removeBrandLogoAction("acct_1")).toEqual({ ok: false, error: m["branding.saveFailed"] });
+    expect(dbMocks.sweepOrphanedLogos).not.toHaveBeenCalled();
   });
 
   it("refuses with a plain-language error when there is no logo to remove, and writes nothing", async () => {
@@ -253,27 +280,73 @@ describe("removeBrandLogoAction", () => {
 
 describe("restoreBrandLogoAction — the Undo of removeBrandLogoAction", () => {
   it("checks account access before doing anything (mutation: delete the requireAccountAccess call → FAILS)", async () => {
-    await restoreBrandLogoAction("acct_1", "acct_1/logo.png");
+    await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png");
     expect(authMocks.requireAccountAccess).toHaveBeenCalledWith("acct_1");
   });
 
-  it("writes the exact path back through setBranding, never re-uploading", async () => {
-    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-abc.png")).toEqual({ ok: true });
-    expect(dbMocks.setBranding).toHaveBeenCalledWith(
-      dbForRequestInstance, "acct_1", { brandLogoPath: "acct_1/logo-abc.png" }, "user_1",
+  it("checks Storage existence and the database compare-and-set, never setBranding directly, and never re-uploads", async () => {
+    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png")).toEqual({ ok: true });
+    expect(dbMocks.logoExists).toHaveBeenCalledWith({}, "acct_1/logo-0123456789abcdef.png");
+    expect(dbMocks.restoreBrandLogoIfCleared).toHaveBeenCalledWith(
+      dbForRequestInstance, "acct_1", "acct_1/logo-0123456789abcdef.png", "user_1",
     );
+    expect(dbMocks.setBranding).not.toHaveBeenCalled();
     expect(dbMocks.uploadBrandLogo).not.toHaveBeenCalled();
   });
 
-  it("refuses a path outside the account's own folder, without writing (mutation: drop the prefix check → FAILS)", async () => {
-    expect(await restoreBrandLogoAction("acct_1", "acct_2/logo-abc.png"))
-      .toEqual({ ok: false, error: m["branding.saveFailed"] });
-    expect(dbMocks.setBranding).not.toHaveBeenCalled();
+  // I1 (near-Critical, 2026-10-04): Remove → a fresh upload sets a NEW path
+  // → a stale Undo toast for the OLD path must lose, not overwrite the new
+  // logo. restoreBrandLogoIfCleared's compare-and-set is what actually
+  // refuses this (false = "column was not null"); here it's wired to a
+  // plain-language refusal, not a silent `ok: true`.
+  it("refuses, in plain language, when the compare-and-set reports the column was no longer null (Remove → upload → stale Undo)", async () => {
+    dbMocks.restoreBrandLogoIfCleared.mockResolvedValue(false);
+    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png"))
+      .toEqual({ ok: false, error: m["branding.logoGone"] });
   });
 
-  it("answers the generic save-failed message when the write throws", async () => {
-    dbMocks.setBranding.mockRejectedValue(new Error("boom"));
-    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo.png"))
+  // I1 (near-Critical, 2026-10-04): Remove → upload → Remove → stale Undo
+  // for the FIRST Remove's path, which the second upload's sweep already
+  // deleted. Mutation: skip the exists() check and go straight to the CAS →
+  // FAILS (the CAS alone would succeed here, since the column IS null).
+  it("refuses, in plain language, when the object no longer exists in Storage (Remove → upload → Remove → stale Undo for the first path)", async () => {
+    dbMocks.logoExists.mockResolvedValue(false);
+    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png"))
+      .toEqual({ ok: false, error: m["branding.logoGone"] });
+    expect(dbMocks.restoreBrandLogoIfCleared).not.toHaveBeenCalled();
+  });
+
+  // I2 (near-Critical, 2026-10-04): a bare `startsWith` prefix check passed
+  // `acct_1/../acct_2/logo-abc.png`, which a URL normalizes to the OTHER
+  // account's object. The exact-shape regex refuses it outright.
+  it("refuses a path that escapes the account's own folder via '..' , without writing (mutation: drop the exact-shape check for a bare startsWith → FAILS)", async () => {
+    expect(await restoreBrandLogoAction("acct_1", "acct_1/../acct_2/logo-0123456789abcdef.png"))
+      .toEqual({ ok: false, error: m["branding.saveFailed"] });
+    expect(dbMocks.logoExists).not.toHaveBeenCalled();
+    expect(dbMocks.restoreBrandLogoIfCleared).not.toHaveBeenCalled();
+  });
+
+  it("refuses a path in the right folder but the wrong shape — not one of uploadBrandLogo's own names (mutation: drop the filename regex → FAILS)", async () => {
+    expect(await restoreBrandLogoAction("acct_1", "acct_1/not-a-logo.png"))
+      .toEqual({ ok: false, error: m["branding.saveFailed"] });
+    expect(dbMocks.logoExists).not.toHaveBeenCalled();
+  });
+
+  it("refuses a path outside the account's own folder, without writing (mutation: drop the prefix check → FAILS)", async () => {
+    expect(await restoreBrandLogoAction("acct_1", "acct_2/logo-0123456789abcdef.png"))
+      .toEqual({ ok: false, error: m["branding.saveFailed"] });
+    expect(dbMocks.restoreBrandLogoIfCleared).not.toHaveBeenCalled();
+  });
+
+  it("answers the generic save-failed message when the compare-and-set throws", async () => {
+    dbMocks.restoreBrandLogoIfCleared.mockRejectedValue(new Error("boom"));
+    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png"))
+      .toEqual({ ok: false, error: m["branding.saveFailed"] });
+  });
+
+  it("answers the generic save-failed message when the Storage existence check throws", async () => {
+    dbMocks.logoExists.mockRejectedValue(new Error("boom"));
+    expect(await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png"))
       .toEqual({ ok: false, error: m["branding.saveFailed"] });
   });
 });

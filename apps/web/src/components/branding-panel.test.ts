@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { renderedText } from "@/lib/rendered-text";
 import { m } from "@/lib/messages";
 import { BrandingPanel } from "./branding-panel";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const panelSource = readFileSync(path.join(here, "./branding-panel.tsx"), "utf8");
 
 /**
  * The mailing-address field (migration 0048): a real render of the panel,
@@ -122,5 +128,15 @@ describe("BrandingPanel — Remove logo (DESIGN rule 6, rule 8)", () => {
   it("never renders the button at all without BOTH actions wired (mutation: show it with only removeLogoAction set → FAILS)", () => {
     const html = renderWithLogo("https://cdn.example.com/acct_1/logo.png", { removeLogoAction: ok });
     expect(renderedText(html)).not.toContain(m["branding.removeLogo"]);
+  });
+
+  // M4 (review, 2026-10-04): a double-click guard, the same `runGuarded`
+  // pattern the Texts/Email rows share (lib/ui/guarded-run.ts, its own
+  // test proves the guard logic itself) — this only pins that THIS button
+  // actually goes through it rather than firing `runRemoveLogo` bare.
+  it("runs the click through runGuarded's busy-ref guard, and disables the button while pending (mutation: call runRemoveLogo directly, or drop the disabled prop → FAILS)", () => {
+    expect(panelSource).toContain('from "@/lib/ui/guarded-run"');
+    expect(panelSource).toMatch(/runGuarded\(removeBusy, startRemoveTransition,/);
+    expect(panelSource).toMatch(/<Button type="button" variant="ghost" size="sm" onClick=\{removeLogo\} disabled=\{removePending\}>/);
   });
 });

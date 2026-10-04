@@ -62,8 +62,24 @@ export async function removeBrandLogo(db: SupabaseClient, path: string): Promise
 }
 
 /**
- * Deletes every object under one account's logo prefix EXCEPT `keepPath`.
- * SERVER ONLY.
+ * Whether a logo object is still in Storage. SERVER ONLY.
+ *
+ * The Storage-side half of `restoreBrandLogoAction`'s two Undo checks (the
+ * database-side half is `restoreBrandLogoIfCleared` below) — "Remove logo"
+ * never deletes the object right away, but a LATER action can have by the
+ * time a stale Undo toast fires: another Remove's own sweep, or this
+ * account's next upload (both call `sweepOrphanedLogos`).
+ */
+export async function logoExists(db: SupabaseClient, path: string): Promise<boolean> {
+  const { data, error } = await db.storage.from(BUCKET).exists(path);
+  if (error) throw new Error(`logoExists failed: ${error.message}`);
+  return data;
+}
+
+/**
+ * Deletes every object under one account's logo prefix EXCEPT `keepPath` AND
+ * the account's CURRENT `brand_logo_path` (re-read right here, never just
+ * trusted from the caller). SERVER ONLY.
  *
  * Exists for "Remove logo" (web's removeBrandLogoAction): that action clears
  * `brand_logo_path` WITHOUT deleting the stored object, so an Undo toast can
@@ -73,25 +89,76 @@ export async function removeBrandLogo(db: SupabaseClient, path: string): Promise
  * this sweeps up whatever was left behind by an EARLIER Remove nobody undid,
  * never the object a caller is relying on still being there.
  *
+ * The live re-read closes a race a near-Critical review caught (2026-10-04):
+ * `keepPath` is a SNAPSHOT the caller computed before this call was
+ * scheduled, and Remove's own sweep in particular can be scheduled well
+ * after its write. If a second save — a concurrent upload, say — changes
+ * `brand_logo_path` in between, a sweep that trusted only the stale
+ * `keepPath` would delete the object that upload just wrote. Keeping
+ * whatever is live at sweep-time as well closes that window; it does not
+ * widen the account/prefix scope below, which is still exactly `keepPath`
+ * and the DB row's own current value for THIS account.
+ *
  * Lists exactly one prefix (`${accountId}/`) and only ever removes objects
  * found under it — `uploadBrandLogo`'s content-addressed paths all start
  * there, so a cross-account delete is impossible by construction, not by a
- * check here.
+ * check here. Account ids are fixed-length UUID folders and Storage's `list`
+ * is per-folder (non-recursive), so this can never see — let alone touch —
+ * another account's objects.
  *
- * `keepPath === null` sweeps the whole prefix: there is nothing to keep
- * (the account has no current logo at all).
+ * `keepPath === null` and no live `brand_logo_path` sweeps the whole prefix:
+ * there is nothing to keep (the account has no current logo at all).
  */
 export async function sweepOrphanedLogos(
   db: SupabaseClient, accountId: string, keepPath: string | null,
 ): Promise<void> {
+  const { data: row, error: readError } = await db.from("accounts")
+    .select("brand_logo_path").eq("id", accountId).maybeSingle();
+  if (readError) throw new Error(`sweepOrphanedLogos: read failed: ${readError.message}`);
+  const current = (row as { brand_logo_path: string | null } | null)?.brand_logo_path ?? null;
+  const keep = new Set([keepPath, current].filter((p): p is string => p !== null));
+
   const { data, error } = await db.storage.from(BUCKET).list(accountId);
   if (error) throw new Error(`sweepOrphanedLogos: list failed: ${error.message}`);
   const stale = (data ?? [])
     .map((o) => `${accountId}/${o.name}`)
-    .filter((p) => p !== keepPath);
+    .filter((p) => !keep.has(p));
   if (stale.length === 0) return;
   const { error: removeError } = await db.storage.from(BUCKET).remove(stale);
   if (removeError) throw new Error(`sweepOrphanedLogos: remove failed: ${removeError.message}`);
+}
+
+/**
+ * The Undo of "Remove logo" — restores `brand_logo_path` to `path`, but ONLY
+ * if the column is still NULL right now. A compare-and-set, not a plain
+ * write: this is the fix for a near-Critical review finding (2026-10-04),
+ * reproduced as writes=[null, "acct_1/logo-new.png", "acct_1/logo-old.png"]
+ * — Remove, then a fresh upload, then a STALE Undo toast (sonner pauses its
+ * timer on hover/focus, so "stale" can be seconds or minutes) silently
+ * overwriting the upload that came after it. The `.is("brand_logo_path",
+ * null)` below is translated to a single `UPDATE … WHERE id = … AND
+ * brand_logo_path IS NULL`, so the check and the write are one atomic
+ * statement — there is no read-then-write gap for a second save to land in.
+ *
+ * Returns whether the write actually happened; the caller (restoreBrandLogo-
+ * Action) turns `false` into a plain-language refusal rather than reporting
+ * success for a write that did not occur. Never re-derived from an upload —
+ * the caller is responsible for the object still existing in Storage (see
+ * `.exists()` at the call site); this function only owns the database side
+ * of the compare-and-set.
+ */
+export async function restoreBrandLogoIfCleared(
+  db: SupabaseClient, accountId: string, path: string, actorId: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("accounts")
+    .update({ brand_logo_path: path })
+    .eq("id", accountId)
+    .is("brand_logo_path", null)
+    .select("id");
+  if (error) throw new Error(`restoreBrandLogoIfCleared failed: ${error.message}`);
+  if (!data?.length) return false;
+  await emit(db, accountId, "account.branding_updated", actorId, {});
+  return true;
 }
 
 export function brandLogoUrl(path: string): string {

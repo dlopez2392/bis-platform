@@ -153,6 +153,7 @@ export const m = {
   "branding.removeLogo": "Remove logo",
   "branding.logoRemoved": "Logo removed",
   "branding.noLogoToRemove": "There's no logo to remove.",
+  "branding.logoGone": "That logo can't be brought back. Upload it again.",
   "branding.color": "Brand color",
   "branding.colorHint": "Used for buttons and highlights on their lead forms and in their sidebar. Leave blank for the default.",
   "branding.badColor": "Enter a color as a hex code, like #0f766e.",

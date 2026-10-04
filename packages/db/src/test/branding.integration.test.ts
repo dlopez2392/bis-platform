@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { serviceDb } from "../service";
-import { uploadBrandLogo, removeBrandLogo, sweepOrphanedLogos, brandLogoUrl } from "../branding";
+import { uploadBrandLogo, removeBrandLogo, sweepOrphanedLogos, restoreBrandLogoIfCleared,
+         brandLogoUrl, setBranding, getBranding } from "../branding";
+import { withTestAccount } from "./fixtures";
 
 // This suite hits the real hosted Supabase project's Storage -- it has no
 // local/hermetic mode. Skip loudly rather than fail hard when the
@@ -137,6 +139,110 @@ describe.skipIf(!hasCredentials)("brand logo storage", () => {
       const db = serviceDb();
       const accountId = "00000000-0000-0000-0000-0000000000af";
       await expect(sweepOrphanedLogos(db, accountId, null)).resolves.toBeUndefined();
+    });
+
+    // M7 (review, 2026-10-04): sweeping ONE account's folder must never
+    // reach another's — the doc comment's "fixed-length UUID folders,
+    // per-folder `list`" claim, proven rather than merely asserted. Two
+    // DIFFERENT accounts, each with their own stale object to sweep.
+    it("never touches a different account's folder (mutation: list the bucket root instead of accountId's own prefix → FAILS, `otherStale` would be gone)", async () => {
+      const db = serviceDb();
+      const accountA = "00000000-0000-0000-0000-0000000000b0";
+      const accountB = "00000000-0000-0000-0000-0000000000b1";
+      const aStale = await uploadBrandLogo(db, accountA, PNG_1PX, "image/png");
+      const aKeep = await uploadBrandLogo(db, accountA, PNG_1PX_ALT, "image/png");
+      const otherStale = await uploadBrandLogo(db, accountB, PNG_1PX, "image/png");
+      try {
+        await sweepOrphanedLogos(db, accountA, aKeep);
+
+        const { data: listedA, error: errA } = await db.storage.from("brand-logos").list(accountA);
+        if (errA) throw new Error(`list A failed: ${errA.message}`);
+        const namesA = (listedA ?? []).map((o) => `${accountA}/${o.name}`);
+        expect(namesA).not.toContain(aStale);
+        expect(namesA).toContain(aKeep);
+
+        // Account B's object was never a candidate — it wasn't even listed —
+        // and it is still exactly where it was.
+        const { data: listedB, error: errB } = await db.storage.from("brand-logos").list(accountB);
+        if (errB) throw new Error(`list B failed: ${errB.message}`);
+        const namesB = (listedB ?? []).map((o) => `${accountB}/${o.name}`);
+        expect(namesB).toContain(otherStale);
+      } finally {
+        await db.storage.from("brand-logos").remove([aStale, aKeep, otherStale]);
+      }
+    });
+
+    // I3 (near-Critical review fix, 2026-10-04): the sweep re-reads the
+    // account's LIVE brand_logo_path before deleting, not just the caller's
+    // `keepPath` snapshot — so a concurrent save that changed the column
+    // since the caller computed `keepPath` still has its object survive.
+    it("also keeps the account's LIVE brand_logo_path, not only the caller's keepPath snapshot", async () => {
+      await withTestAccount(async (db, accountId) => {
+        const stale = await uploadBrandLogo(db, accountId, PNG_1PX, "image/png");
+        // Simulates a concurrent save that landed AFTER the caller computed
+        // `keepPath` but BEFORE this sweep runs: the column now points at
+        // `concurrent`, a path the caller's `keepPath` (still `stale`) does
+        // not know about.
+        const concurrent = await uploadBrandLogo(db, accountId, PNG_1PX_ALT, "image/png");
+        await setBranding(db, accountId, { brandLogoPath: concurrent }, "user_test");
+        try {
+          // Mutation: read keepPath alone, skip the live re-read → FAILS
+          // (`concurrent` would be deleted here, even though it is the
+          // account's CURRENT logo).
+          await sweepOrphanedLogos(db, accountId, stale);
+          const { data: listed, error } = await db.storage.from("brand-logos").list(accountId);
+          if (error) throw new Error(`list failed: ${error.message}`);
+          const names = (listed ?? []).map((o) => `${accountId}/${o.name}`);
+          expect(names).toContain(concurrent);
+        } finally {
+          await db.storage.from("brand-logos").remove([stale, concurrent]);
+        }
+      });
+    });
+  });
+
+  // I1 (near-Critical review fix, 2026-10-04): restoreBrandLogoAction's
+  // database-side compare-and-set. Proven against REAL Postgres rather than
+  // a mock, because the whole point is that the check and the write are one
+  // atomic statement.
+  describe("restoreBrandLogoIfCleared", () => {
+    it("writes the path and returns true when the column is NULL (mutation: drop the .is(null) filter → still true, but see the next test)", async () => {
+      await withTestAccount(async (db, accountId) => {
+        await setBranding(db, accountId, { brandLogoPath: null }, "user_test");
+        const path = `${accountId}/logo-0123456789abcdef.png`;
+        expect(await restoreBrandLogoIfCleared(db, accountId, path, "user_test")).toBe(true);
+        expect((await getBranding(db, accountId)).brandLogoPath).toBe(path);
+      });
+    });
+
+    it("refuses and writes NOTHING when the column already holds a different path — the exact Remove-then-upload-then-stale-Undo case (mutation: drop the .is(null) filter → FAILS, returns true and overwrites)", async () => {
+      await withTestAccount(async (db, accountId) => {
+        const newer = `${accountId}/logo-fedcba9876543210.png`;
+        await setBranding(db, accountId, { brandLogoPath: newer }, "user_test");
+        const older = `${accountId}/logo-0123456789abcdef.png`;
+        expect(await restoreBrandLogoIfCleared(db, accountId, older, "user_test")).toBe(false);
+        // The newer upload survives untouched — this IS the near-Critical
+        // defect (writes=[null,"...-new.png","...-old.png"]) with its fix.
+        expect((await getBranding(db, accountId)).brandLogoPath).toBe(newer);
+      });
+    });
+
+    it("emits account.branding_updated only on an actual restore, not on a refused one", async () => {
+      await withTestAccount(async (db, accountId) => {
+        const path = `${accountId}/logo-0123456789abcdef.png`;
+
+        await setBranding(db, accountId, { brandLogoPath: "acct/logo-aaaaaaaaaaaaaaaa.png" }, "user_test");
+        await restoreBrandLogoIfCleared(db, accountId, path, "user_test");
+        const { count: refusedCount } = await db.from("events").select("id", { count: "exact", head: true })
+          .eq("account_id", accountId).eq("type", "account.branding_updated");
+        expect(refusedCount).toBe(0);
+
+        await setBranding(db, accountId, { brandLogoPath: null }, "user_test");
+        await restoreBrandLogoIfCleared(db, accountId, path, "user_test");
+        const { count: restoredCount } = await db.from("events").select("id", { count: "exact", head: true })
+          .eq("account_id", accountId).eq("type", "account.branding_updated");
+        expect(restoredCount).toBe(1);
+      });
     });
   });
 });
