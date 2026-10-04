@@ -382,7 +382,7 @@ describe("voice texml handoff route — signature enforcement matches /api/voice
     errSpy.mockRestore();
   });
 
-  it("with the key unset, no signature is required (today's state)", async () => {
+  it("with the key unset (local runs; production has had it since 2026-09-29), no signature is required", async () => {
     const res = await POST(req("tok_abc"));
     expect(res.status).toBe(200);
   });
@@ -439,6 +439,20 @@ describe("the model-down fallback (operational-floor spec §3)", () => {
   it("a caller who hung up while it rang (canceled) is not chased with a call to the business", async () => {
     expect(await fall("canceled")).toContain("<Hangup/>");
     expect(getTransferPhoneMock).not.toHaveBeenCalled();
+  });
+
+  it("a status outside the never-connected set is logged, so a drill can read what the carrier sent (mutation: drop the status from the line → FAILS)", async () => {
+    const logSpy = vi.mocked(console.log);
+    await fall("canceled");
+    expect(logSpy).toHaveBeenCalledWith("handoff: no call for this token (DialCallStatus canceled) — hanging up");
+  });
+
+  it("only a short lower-case word is echoed: anything else logs as none, never the raw input", async () => {
+    const logSpy = vi.mocked(console.log);
+    await fall("Weird\nInjected: line");
+    await fall(null);
+    expect(logSpy).toHaveBeenCalledWith("handoff: no call for this token (DialCallStatus none) — hanging up");
+    expect(logSpy.mock.calls.flat().join("\n")).not.toContain("Injected");
   });
 
   it("no ticket — a call the guards did not clear — hangs up and stamps nothing, so a forger cannot raise an alert either", async () => {

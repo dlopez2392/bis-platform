@@ -38,6 +38,7 @@ import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 import { newHandoffToken, resolveHandoffTarget } from "@/lib/voice/handoff";
 import { signFallbackTicket } from "@/lib/voice/fallback-ticket";
+import { FALLBACK_DRILL_SIP_BASE, fallbackDrillActive } from "@/lib/voice/fallback-drill";
 import { configuredOrigin } from "@/lib/email/origin";
 import { stampHeartbeat } from "@/lib/ops/stamp";
 import { xmlText } from "./xml";
@@ -295,7 +296,9 @@ export function forwardXml(to: string, callerId: string | null): string {
  * tenant from the To/Diversion fallbacks on such a call, so it can still be
  * answered — and its caller can still ask for a person.
  */
-function dialXml(calledE164: string | null, origin: string, cleared?: { accountId: string }): string {
+function dialXml(
+  calledE164: string | null, origin: string, cleared?: { accountId: string }, drill = false,
+): string {
   const projectId = process.env.VOICE_OPENAI_PROJECT_ID;
   if (!projectId) {
     // Speak the misconfig: a broken deploy should be audible on a test call,
@@ -303,7 +306,10 @@ function dialXml(calledE164: string | null, origin: string, cleared?: { accountI
     return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say>Configuration error: the project identifier is not set.</Say><Hangup/></Response>`;
   }
   const token = newHandoffToken();
-  const base = `sip:${projectId}@sip.api.openai.com;transport=tls`;
+  // The drill swaps ONLY the address: token, ticket and action URL below are
+  // what a real call carries, so the drill tests the real path
+  // (lib/voice/fallback-drill.ts).
+  const base = drill ? FALLBACK_DRILL_SIP_BASE : `sip:${projectId}@sip.api.openai.com;transport=tls`;
   const params = [
     ...(calledE164 ? [`X-BIS-Called=${encodeURIComponent(calledE164)}`] : []),
     `X-BIS-Handoff=${encodeURIComponent(token)}`,
@@ -462,8 +468,20 @@ async function route(
         return done(xmlResponse(forwardXml(to, calledE164)));
       }
     }
+    const cleared = result.cleared && result.accountId ? { accountId: result.accountId } : undefined;
+    // The fallback drill engages only on a CLEARED call: that is the only call
+    // the fallback serves, so on any other the drill would prove nothing and
+    // just drop the caller. Logged every time, for the forward's reason: the
+    // failure this invites is leaving it on.
+    let drill = false;
+    if (fallbackDrillActive(calledE164, callerE164)) {
+      drill = cleared !== undefined;
+      console.log(drill
+        ? `texml FALLBACK DRILL on ${calledE164} from ${callerE164} — Sofía is deliberately unreachable on this call while VOICE_FALLBACK_DRILL_TO/FROM are set`
+        : `texml fallback drill NOT engaged on ${calledE164} — the call was not cleared, so Sofía answers`);
+    }
     return done(
-      xmlResponse(dialXml(calledE164, origin, result.cleared && result.accountId ? { accountId: result.accountId } : undefined)),
+      xmlResponse(dialXml(calledE164, origin, cleared, drill)),
       result.lookupFailed === true,
     );
   }

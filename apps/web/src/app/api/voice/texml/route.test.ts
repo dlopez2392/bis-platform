@@ -889,6 +889,80 @@ describe("the model-down fallback ticket on the bridge", () => {
   });
 });
 
+describe("the model-down fallback drill (lib/voice/fallback-drill.ts)", () => {
+  const ACCOUNT = "0b2cbb04-b46c-4fed-a377-d377a1a201eb";
+  const LINE = "+19565550999";
+  const ME = "+19565550111";
+  const call = (from = ME) =>
+    GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(LINE)}&From=${encodeURIComponent(from)}`));
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-fixture";
+    process.env.VOICE_FALLBACK_DRILL_TO = LINE;
+    process.env.VOICE_FALLBACK_DRILL_FROM = ME;
+    // Per number, as the forward's tests do: only the drill line is ours, so
+    // the transfer number is not mistaken for another BIS line.
+    lookupMock.mockImplementation(async (_db: unknown, e164: string) =>
+      (e164 === LINE ? { id: "pn1", account_id: ACCOUNT, e164: LINE, telnyx_id: null, status: "live" } : null));
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.VOICE_FALLBACK_DRILL_TO;
+    delete process.env.VOICE_FALLBACK_DRILL_FROM;
+  });
+
+  it("the drill caller's call dials the unresolvable address, not Sofía, and logs that it did (mutation: ignore the drill → FAILS)", async () => {
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>sip:fallback-drill@fallback-drill.invalid;transport=tls?");
+    expect(xml).not.toContain("sip.api.openai.com");
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("texml FALLBACK DRILL on +19565550999 from +19565550111"));
+  });
+
+  it("everything but the address is what a real call carries: the same token on the SIP URI and the action, and a ticket that verifies for this account (mutation: drop the ticket on a drill → FAILS)", async () => {
+    const { verifyFallbackTicket } = await import("@/lib/voice/fallback-ticket");
+    const xml = await (await call()).text();
+    const action = new URL(xml.match(/action="([^"]+)"/)![1]!.replaceAll("&amp;", "&"));
+    const onUri = /X-BIS-Handoff=([A-Za-z0-9_-]+)/.exec(xml)![1];
+    expect(action.pathname).toBe("/api/voice/texml/handoff");
+    expect(action.searchParams.get("t")).toBe(onUri);
+    expect(xml).toContain(`X-BIS-Called=${encodeURIComponent(LINE)}`);
+    expect(verifyFallbackTicket(action.searchParams.get("f"), onUri!, Date.now()))
+      .toEqual({ ok: true, accountId: ACCOUNT, calledE164: LINE });
+  });
+
+  it("any OTHER caller to the drill line still reaches Sofía (mutation: match on the called number alone → FAILS)", async () => {
+    const xml = await (await call("+19565550222")).text();
+    expect(xml).toContain("sip:proj_test123@sip.api.openai.com");
+    expect(xml).not.toContain(".invalid");
+  });
+
+  it("a drill call the guards could not vouch for is NOT drilled — the fallback would not serve it, so the caller gets Sofía (mutation: drill without `cleared` → FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    countCallerHistorySinceMock.mockRejectedValue(new Error("statement timeout"));
+    const xml = await (await call()).text();
+    expect(xml).toContain("sip.api.openai.com");
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("fallback drill NOT engaged"));
+  });
+
+  it("the guards still run first: a drill caller over the cap hears the cap, and the account's own forward still wins", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(99);
+    expect(await (await call()).text()).toContain("<Hangup/>");
+    countCallsByCallerSinceMock.mockResolvedValue(0);
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    const xml = await (await call()).text();
+    expect(xml).toContain(">+19565550123</Dial>");
+    expect(xml).not.toContain(".invalid");
+  });
+
+  it("unset, nothing changes: today's bridge for the same caller", async () => {
+    delete process.env.VOICE_FALLBACK_DRILL_FROM;
+    const xml = await (await call()).text();
+    expect(xml).toContain("sip:proj_test123@sip.api.openai.com");
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("DRILL"));
+  });
+});
+
 describe("the voice.texml heartbeat (operational-floor spec §1)", () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
