@@ -57,8 +57,12 @@ blur shadows in either mode; ambient light is accent-tinted, which is why
 **Shape & motion:** radii are 8px (controls, `--radius-ctl` / the mockup's
 `--r-ctl`), 12px (cards, `--radius-card` / `--r-card`; `--radius` is
 `0.75rem` so `rounded-lg` and `rounded-xl` finally agree), 999px (pills) —
-no other values. Spacing on a 4px grid. Motion: 150ms hovers, 250ms panels,
-`prefers-reduced-motion` respected, and NOTHING animates on scroll.
+no other values, with two sanctioned small-control exceptions (owner
+decision, 2026-10-04): the checkbox box at 4px and the dialog/sheet close (X)
+button at 2px, because a 16px checkbox at 8px reads as a pill (pinned in
+`components/ui/material.test.ts`). Spacing on a 4px grid. Motion: 150ms
+hovers, 250ms panels, `prefers-reduced-motion` respected, and NOTHING
+animates on scroll.
 
 **Tenant seam:** `deriveTheme`/`themeStyle` override the semantic surfaces
 (`--background`, `--card`, `--popover`, `--muted`, `--secondary`, `--border`,
