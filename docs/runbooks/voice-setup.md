@@ -675,7 +675,8 @@ call from, the fallback rings a phone that is already on this call, and you lear
   guard, from earlier test calls). Add it to `PHONE_SPAM_EXEMPT_CALLERS` and try again.
 - "We can't take more calls today": the per-caller daily cap. Every drill call that rings the
   transfer phone counts toward it (0059), as do your test calls to Sofía, so five in a day from the
-  same phone is the limit. Use another phone or wait for midnight UTC.
+  same phone is the limit by default (`PHONE_MAX_CALLS_PER_NUMBER_PER_DAY`). Use another phone or
+  wait for midnight UTC.
 - Sofía answers: the variables did not reach the running deployment (redeploy), or one of them is
   not exactly the E.164 form the carrier sends.
 

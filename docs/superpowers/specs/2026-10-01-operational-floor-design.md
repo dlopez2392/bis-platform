@@ -273,6 +273,10 @@ production forbids today. It is recorded so the trade-off is visible.
   parallel read, so a robot is capped across forwarded and answered calls alike. Reputation still
   does not count them: a forwarded call has no outcome. The webhook's own cap re-check is
   unchanged; it never sees a forwarded call, and on the fail-open path the call goes to Sofia.
+  The caller rides the signed fallback ticket (now five parts), so a model-down row is counted
+  against the right caller without trusting the callback body. ACCEPTED: concurrent calls read
+  the same count, and no webhook re-check stands behind a forward, so a burst can overshoot a cap
+  by the calls in flight at once; each leg is still bounded by `timeLimit`.
 - **OPEN: the fallback's carrier behaviour is unmeasured.** It sends a second `<Dial>` on an
   inbound leg the bridge never answered (`answerOnBridge`), where every earlier handoff ran on an
   answered call. One real test call (OpenAI unreachable on a test number) should confirm it

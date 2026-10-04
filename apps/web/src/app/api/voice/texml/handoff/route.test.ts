@@ -429,13 +429,10 @@ describe("the model-down fallback (operational-floor spec §3)", () => {
     expect(listPhoneNumbersForAccountMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT);
   });
 
-  it("a fallback forward is recorded as model-down, with the ticket's account and number and the carrier's caller, in after() (mutation: drop the write → FAILS)", async () => {
-    const res = await POST(new Request(`https://x.example/api/voice/texml/handoff?${new URLSearchParams({ t: TOKEN, f: ticket })}`, {
-      method: "POST",
-      body: new URLSearchParams({ DialCallStatus: "failed", From: "+19565550111" }),
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-    }));
-    expect(await res.text()).toContain("+19562921696</Dial>");
+  it("a fallback forward is recorded as model-down, with the account, number and CALLER from the signed ticket, in after() (mutation: drop the write → FAILS)", async () => {
+    const { signFallbackTicket } = await import("@/lib/voice/fallback-ticket");
+    const withCaller = signFallbackTicket(TOKEN, ACCOUNT, "+19565550999", Date.now(), process.env, "+19565550111")!;
+    expect(await fall("failed", withCaller)).toContain("+19562921696</Dial>");
     expect(recordForwardedCallMock).not.toHaveBeenCalled();
     for (const [cb] of afterMock.mock.calls) await (cb as () => unknown)();
     expect(recordForwardedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
@@ -444,12 +441,17 @@ describe("the model-down fallback (operational-floor spec §3)", () => {
     });
   });
 
-  it("no From on the callback counts toward the account alone (caller null), and no transfer target records nothing", async () => {
-    await fall("busy");
+  it("a From in the callback body is NOT trusted for the caller — only the signed ticket is (mutation: read From from the body → FAILS)", async () => {
+    await POST(new Request(`https://x.example/api/voice/texml/handoff?${new URLSearchParams({ t: TOKEN, f: ticket })}`, {
+      method: "POST",
+      body: new URLSearchParams({ DialCallStatus: "failed", From: "+19565550333" }),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
     for (const [cb] of afterMock.mock.calls) await (cb as () => unknown)();
     expect(recordForwardedCallMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ callerE164: null }));
-    recordForwardedCallMock.mockClear();
-    afterMock.mockClear();
+  });
+
+  it("no transfer target records nothing", async () => {
     getTransferPhoneMock.mockResolvedValue(null);
     await fall("busy");
     for (const [cb] of afterMock.mock.calls) await (cb as () => unknown)();

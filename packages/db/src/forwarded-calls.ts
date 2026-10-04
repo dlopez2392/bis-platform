@@ -67,5 +67,13 @@ export async function countForwardedCallsSince(
   const [a, c] = await Promise.all([account, caller]);
   if (a.error) throw new Error(`countForwardedCallsSince failed: ${a.error.message}`);
   if (c?.error) throw new Error(`countForwardedCallsSince failed: ${c.error.message}`);
-  return { forAccount: a.count ?? 0, forCaller: c?.count ?? 0 };
+  // A HEAD request for a table PostgREST does not know (not applied yet, or
+  // applied without `notify pgrst, 'reload schema'`) is a 404 with no body,
+  // which postgrest-js reports as NO error and a null count. Read as 0, that
+  // would switch the forward cap off without a word, so a missing count is
+  // an error here: the caller fails open, and says so in its log.
+  if (a.count === null || (c && c.count === null)) {
+    throw new Error("countForwardedCallsSince failed: no count returned (is forwarded_calls in PostgREST's schema cache?)");
+  }
+  return { forAccount: a.count, forCaller: c?.count ?? 0 };
 }

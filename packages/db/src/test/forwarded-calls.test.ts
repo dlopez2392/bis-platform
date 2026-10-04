@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { withRollback, actAs } from "./db";
 import { withTestAccount } from "./fixtures";
+import { serviceDb } from "../service";
 import { recordForwardedCall, countForwardedCallsSince, FORWARD_KINDS } from "../forwarded-calls";
 
 /**
@@ -63,6 +64,14 @@ describe("0059 forwarded_calls: grants and shape", () => {
       expect(rows.filter((r) => r.grantee === "service_role").map((r) => r.privilege_type))
         .toEqual(expect.arrayContaining(["SELECT", "INSERT", "DELETE"]));
     }));
+
+  it("service_role holds NO update or truncate: 0057's revoke-then-grant-back shape (mutation: drop service_role from the revoke → FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ upd: boolean; trunc: boolean }>(
+        `select has_table_privilege('service_role', 'public.forwarded_calls', 'UPDATE') as upd,
+                has_table_privilege('service_role', 'public.forwarded_calls', 'TRUNCATE') as trunc`);
+      expect(rows[0]).toEqual({ upd: false, trunc: false });
+    }));
 });
 
 describe("0059 forwarded_calls: record and count, through serviceDb()", () => {
@@ -80,6 +89,20 @@ describe("0059 forwarded_calls: record and count, through serviceDb()", () => {
       const later = new Date(Date.now() + 60_000).toISOString();
       expect(await countForwardedCallsSince(db, accountId, "+19565550111", later)).toEqual({ forAccount: 0, forCaller: 0 });
     }));
+
+  it("the account's own teardown carries its rows away (the cascade account-teardown.ts relies on)", async () => {
+    let id = "";
+    await withTestAccount(async (db, accountId) => {
+      id = accountId;
+      await recordForwardedCall(db, {
+        accountId, phoneNumberId: null, calledE164: "+19565550999", callerE164: null, kind: "model-down",
+      });
+    });
+    const { count, error } = await serviceDb().from("forwarded_calls")
+      .select("id", { count: "exact", head: true }).eq("account_id", id);
+    expect(error).toBeNull();
+    expect(count).toBe(0);
+  });
 
   it("a kind outside the two throws rather than being swallowed", () =>
     withTestAccount(async (db, accountId) => {

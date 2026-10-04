@@ -46,16 +46,22 @@
 -- phone_number_id nullable, on delete set null: a number outlives its
 -- assignment (0039's reasoning).
 --
--- GRANTS ARE THE CONTROL (0039's shape): RLS on with no policy, nothing to
--- anon or authenticated, service_role select/insert/delete. The writers and
--- the reader run through serviceDb().
+-- GRANTS ARE THE CONTROL: RLS on with no policy, nothing to anon or
+-- authenticated. service_role gets select/insert/delete and NOTHING else:
+-- 0057's revoke-all-then-grant-back shape, stricter than 0039's, because the
+-- project's default ACL hands every role ALL (update, truncate and maintain
+-- included) by name, and no writer here ever updates or truncates. The
+-- writers and the reader run through serviceDb().
 --
 -- ADDITIVE ONLY. The build before this file never reads or writes the table.
 -- The build after it READS it on every cleared inbound call (the cap
--- counts); if the table is missing that read throws, the cap block fails
--- open, the call is not cleared, and it goes to Sofia instead of being
--- forwarded. APPLY ORDER: the CI project first, then production, then
--- notify pgrst, 'reload schema', and only then the merge deploy.
+-- counts). A HEAD count against a table PostgREST does not know returns NO
+-- error and a null count, so countForwardedCallsSince treats a null count as
+-- a failure: the cap block fails open, the call is not cleared, and it goes
+-- to Sofia instead of being forwarded, with an error in the log. APPLY ORDER:
+-- the CI project first, then production, then notify pgrst, 'reload schema'
+-- (LOAD-BEARING: without it the table exists but PostgREST cannot see it,
+-- which is that same failure on every call), and only then the merge deploy.
 --
 -- No backslash and no non-ASCII byte anywhere in this file (the MCP apply
 -- rule).
@@ -88,5 +94,5 @@ create index forwarded_calls_caller_idx
   on public.forwarded_calls (account_id, caller_e164, created_at desc);
 
 alter table public.forwarded_calls enable row level security;
-revoke all on public.forwarded_calls from anon, authenticated;
+revoke all on public.forwarded_calls from anon, authenticated, service_role;
 grant select, insert, delete on public.forwarded_calls to service_role;

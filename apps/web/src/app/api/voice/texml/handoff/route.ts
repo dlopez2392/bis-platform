@@ -23,7 +23,6 @@ import { resolveHandoffTarget } from "@/lib/voice/handoff";
 import { verifyFallbackTicket } from "@/lib/voice/fallback-ticket";
 import { configuredOrigin } from "@/lib/email/origin";
 import { stampHeartbeat } from "@/lib/ops/stamp";
-import { e164Of } from "@/lib/voice/phone-number";
 import { xmlText } from "../xml";
 
 export const runtime = "nodejs";
@@ -216,7 +215,7 @@ function xmlResponse(body: string): NextResponse {
  * Sofía being unreachable, and BIS needs to hear about it either way.
  */
 async function modelDownFallback(
-  token: string, ticketRaw: string | null, dialStatus: string | null, callerE164: string | null,
+  token: string, ticketRaw: string | null, dialStatus: string | null,
 ): Promise<string | null> {
   if (!dialStatus || !NEVER_CONNECTED.has(dialStatus)) {
     // The status is logged because it is the one fact a fallback drill exists
@@ -269,14 +268,15 @@ async function modelDownFallback(
   // Counted toward the daily caps the TeXML route applies (0059): while Sofía
   // is down EVERY cleared call lands here, and none of them gets a `calls`
   // row, so without this a robot would ring the transfer number unbounded
-  // for the whole outage. Best-effort in `after()`, like the texml writes: a
+  // for the whole outage. The caller comes from the SIGNED ticket, never the
+  // callback body. Best-effort in `after()`, like the texml writes: a
   // failed write under-counts one call and never costs this caller the dial.
   const phoneNumberId = usable.find((n) => n.e164 === ticket.calledE164)?.id ?? null;
   try {
     after(async () => {
       try {
         await recordForwardedCall(db, {
-          accountId, phoneNumberId, calledE164: ticket.calledE164, callerE164, kind: "model-down",
+          accountId, phoneNumberId, calledE164: ticket.calledE164, callerE164: ticket.callerE164, kind: "model-down",
         });
       } catch (e) {
         console.error(`handoff: forwarded-call write failed (model-down), accountId ${accountId}: ${String(e)}`);
@@ -290,7 +290,6 @@ async function modelDownFallback(
 
 async function decide(
   token: string, origin: string, ticketRaw: string | null = null, dialStatus: string | null = null,
-  callerE164: string | null = null,
 ): Promise<string | null> {
   // Lazy import: a module-scope DB import breaks `next build` during
   // page-data collection (the documented trap this whole directory obeys).
@@ -303,7 +302,7 @@ async function decide(
   //    account-scoped (see its doc comment in packages/db/src/voice.ts) —
   //    which is exactly why its result is the ONLY source of tenancy below.
   const call = await getCallByHandoffToken(db, token);
-  if (!call) return modelDownFallback(token, ticketRaw, dialStatus, callerE164);
+  if (!call) return modelDownFallback(token, ticketRaw, dialStatus);
   const accountId = call.account_id;
 
   // 2. The token says WHICH call; `handoff_requested_at` says the caller
@@ -490,13 +489,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     // they could, for the ticket's ten minutes, and read back the transfer
     // number — the same disclosure, and the same window, the handoff token
     // documents above (MAX_TOKEN_AGE_MS).
-    const form = new URLSearchParams(rawBody);
-    const dialStatus = form.get("DialCallStatus")?.trim().toLowerCase() || null;
-    // The original caller, as the carrier reports it on the action callback:
-    // used only to count a fallback forward against that caller's daily cap.
-    // Absent or unparseable → null, which counts toward the account alone.
-    const callerE164 = e164Of(form.get("From"));
-    const xml = await decide(token, configuredOrigin() ?? new URL(req.url).origin, query.get("f"), dialStatus, callerE164);
+    const dialStatus = new URLSearchParams(rawBody).get("DialCallStatus")?.trim().toLowerCase() || null;
+    const xml = await decide(token, configuredOrigin() ?? new URL(req.url).origin, query.get("f"), dialStatus);
     return xmlResponse(xml ?? HANGUP);
   } catch (e) {
     console.error(`handoff: failed, hanging up rather than dialling: ${String(e)}`);

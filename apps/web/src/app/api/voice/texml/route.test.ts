@@ -879,7 +879,7 @@ describe("the model-down fallback ticket on the bridge", () => {
     const action = xml.match(/action="([^"]+)"/)![1]!.replaceAll("&amp;", "&");
     const url = new URL(action);
     expect(verifyFallbackTicket(url.searchParams.get("f"), url.searchParams.get("t")!, Date.now()))
-      .toEqual({ ok: true, accountId: ACCOUNT, calledE164: "+19565550999" });
+      .toEqual({ ok: true, accountId: ACCOUNT, calledE164: "+19565550999", callerE164: "+19565550111" });
   });
 
   it("a call whose guard reads failed carries NO ticket: the fallback must never forward a caller the guards could not vouch for (mutation: sign on the fail-open path → FAILS)", async () => {
@@ -936,7 +936,7 @@ describe("the model-down fallback drill (lib/voice/fallback-drill.ts)", () => {
     expect(action.searchParams.get("t")).toBe(onUri);
     expect(xml).toContain(`X-BIS-Called=${encodeURIComponent(LINE)}`);
     expect(verifyFallbackTicket(action.searchParams.get("f"), onUri!, Date.now()))
-      .toEqual({ ok: true, accountId: ACCOUNT, calledE164: LINE });
+      .toEqual({ ok: true, accountId: ACCOUNT, calledE164: LINE, callerE164: ME });
   });
 
   it("any OTHER caller to the drill line still reaches Sofía (mutation: match on the called number alone → FAILS)", async () => {

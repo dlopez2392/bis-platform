@@ -314,7 +314,7 @@ export function forwardXml(to: string, callerId: string | null): string {
  * answered — and its caller can still ask for a person.
  */
 function dialXml(
-  calledE164: string | null, origin: string, cleared?: { accountId: string }, drill = false,
+  calledE164: string | null, origin: string, cleared?: { accountId: string; callerE164: string | null }, drill = false,
 ): string {
   const projectId = process.env.VOICE_OPENAI_PROJECT_ID;
   if (!projectId) {
@@ -337,7 +337,7 @@ function dialXml(
   // the handoff route has no `calls` row to find the account by, and this is
   // the one signed statement of which account and number the call was for.
   const ticket = cleared && calledE164
-    ? signFallbackTicket(token, cleared.accountId, calledE164, Date.now())
+    ? signFallbackTicket(token, cleared.accountId, calledE164, Date.now(), process.env, cleared.callerE164)
     : null;
   const action = `${origin}/api/voice/texml/handoff?t=${encodeURIComponent(token)}`
     + (ticket ? `&f=${encodeURIComponent(ticket)}` : "");
@@ -511,7 +511,7 @@ async function route(
         return done(xmlResponse(forwardXml(to, calledE164)));
       }
     }
-    const cleared = result.cleared && result.accountId ? { accountId: result.accountId } : undefined;
+    const cleared = result.cleared && result.accountId ? { accountId: result.accountId, callerE164 } : undefined;
     // The fallback drill engages only on a CLEARED call: that is the only call
     // the fallback serves, so on any other the drill would prove nothing and
     // just drop the caller. Logged every time, for the forward's reason: the
