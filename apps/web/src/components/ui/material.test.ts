@@ -649,6 +649,40 @@ describe("one control radius, spelled as the token", () => {
   });
 });
 
+// DESIGN.md's "no other values" sentence names exactly two sanctioned
+// small-control exceptions (owner decision, 2026-10-04): the checkbox box at
+// 4px and the dialog/sheet close (X) button at 2px — a 16px checkbox at 8px
+// reads as a pill. Anything else still has to be 8/12/999.
+//
+// `data-slot="dialog-close"`/`data-slot="sheet-close"` carry a bare
+// `className="..."` string, not `className={cn(...)}` — classLiteralAfter
+// above assumes the latter, so these read the quoted literal directly.
+const quotedClassAfter = (text: string, anchor: string) => {
+  const start = text.indexOf(anchor);
+  expect(start, `anchor not found: ${anchor}`).toBeGreaterThan(-1);
+  const open = text.indexOf('className="', start);
+  expect(open, `no className="..." after: ${anchor}`).toBeGreaterThan(-1);
+  const valueStart = open + 'className="'.length;
+  const close = text.indexOf('"', valueStart);
+  expect(close, `unterminated className after: ${anchor}`).toBeGreaterThan(-1);
+  return text.slice(valueStart, close);
+};
+
+describe("the two sanctioned small-control radius exceptions (DESIGN.md Shape & motion)", () => {
+  it("the checkbox box is 4px (mutation: rounded-[4px] -> rounded-[var(--radius-ctl)] → FAILS)", () => {
+    const literal = classLiteralAfter(src("./checkbox.tsx"), 'data-slot="checkbox"');
+    expect(literal).toContain("rounded-[4px]");
+  });
+  it("the dialog's close button is 2px, Tailwind's rounded-xs (mutation: rounded-xs -> rounded-md → FAILS)", () => {
+    const literal = quotedClassAfter(src("./dialog.tsx"), 'data-slot="dialog-close"');
+    expect(literal).toContain("rounded-xs");
+  });
+  it("the sheet's close button is 2px too, the same exception as the dialog's (mutation: rounded-xs -> rounded-md → FAILS)", () => {
+    const literal = quotedClassAfter(src("./sheet.tsx"), "SheetPrimitive.Close");
+    expect(literal).toContain("rounded-xs");
+  });
+});
+
 // Found 2026-10-04 on production (computed styles): shadcn's bare `rounded-md`
 // (10px, calc(var(--radius) - 2px)) and the sidebar collapse button's bare
 // `rounded` (4px, Tailwind's static default — this app's --radius-sm/md/lg

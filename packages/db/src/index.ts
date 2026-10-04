@@ -61,7 +61,8 @@ export { captureBlueprint, listBlueprints, getBlueprint, blueprintKey, applyBlue
          type BlueprintBundle, type BlueprintRow, type BlueprintSummary, type ApplyReport } from "./blueprints";
 export { listChecklistState, setChecklistItem, addCustomChecklistItem,
          type ChecklistStateRow } from "./checklist";
-export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding, brandDisplayName,
+export { uploadBrandLogo, removeBrandLogo, sweepOrphanedLogos, restoreBrandLogoIfCleared, logoExists,
+         brandLogoUrl, setBranding, getBranding, brandDisplayName,
          type Branding } from "./branding";
 export { getMailingAddress } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";

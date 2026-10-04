@@ -15,7 +15,8 @@
  */
 
 import { revalidatePath } from "next/cache";
-import { setBranding, getBranding, uploadBrandLogo, removeBrandLogo, serviceDb } from "@bis/db";
+import { setBranding, getBranding, uploadBrandLogo, sweepOrphanedLogos, restoreBrandLogoIfCleared,
+         logoExists, serviceDb } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { sniffImageType, MAX_LOGO_BYTES } from "@/lib/branding/validate-logo";
@@ -112,10 +113,7 @@ export async function setBrandingAction(
   const file = formData.get("logo");
 
   let brandLogoPath: string | undefined;
-  let previousLogoPath: string | null = null;
   if (file instanceof File && file.size > 0) {
-    // Read before the write, so the old object can be swept up afterwards.
-    previousLogoPath = (await getBranding(serviceDb(), accountId)).brandLogoPath;
     if (file.size > MAX_LOGO_BYTES) return { ok: false, error: m["branding.tooLarge"] };
     const bytes = new Uint8Array(await file.arrayBuffer());
     // Re-check against what actually arrived. file.size is metadata; this is
@@ -161,15 +159,133 @@ export async function setBrandingAction(
 
   // Only after the new path is durably recorded, and never fatal: an orphaned
   // object costs a few KB, while failing here would report a save that in fact
-  // succeeded. Deliberately skipped when the paths match — re-uploading the
-  // same image resolves to the same content-addressed path, and deleting it
-  // would delete the logo that was just saved.
-  if (brandLogoPath && previousLogoPath && previousLogoPath !== brandLogoPath) {
+  // succeeded. sweepOrphanedLogos keeps `brandLogoPath` itself, so a
+  // byte-identical re-upload (same content-addressed path as before) is
+  // naturally a no-op rather than a special case here — and the sweep also
+  // picks up anything an earlier, un-undone "Remove logo" (./actions.ts
+  // below) left sitting in this account's folder unreferenced.
+  if (brandLogoPath) {
     try {
-      await removeBrandLogo(serviceDb(), previousLogoPath);
+      await sweepOrphanedLogos(serviceDb(), accountId, brandLogoPath);
     } catch (e) {
-      console.error(`setBranding: orphaned previous logo ${previousLogoPath}: ${String(e)}`);
+      console.error(`setBranding: logo sweep failed for account ${accountId}: ${String(e)}`);
     }
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+  revalidatePath(`/dashboard/accounts/${accountId}/branding`);
+  return { ok: true };
+}
+
+/**
+ * uploadBrandLogo's exact output shape (packages/db/src/branding.ts):
+ * `${accountId}/logo-<16 lowercase hex>.<png|jpg|webp>`. Anchored at both
+ * ends against the ACCOUNT'S OWN id — not merely a `startsWith` prefix — so
+ * a path like `acct_1/../acct_2/logo-abc.png` (which a URL normalizes into
+ * the OTHER account's object; a near-Critical review finding, 2026-10-04)
+ * fails the match outright: it is neither inside this account's folder nor
+ * shaped like one of its own logos. The one legitimate caller of this
+ * pattern (restoreBrandLogoAction below) only ever hands back a path this
+ * same upload function produced, so the shape check is exact on purpose.
+ */
+function isOwnLogoPath(accountId: string, path: string): boolean {
+  const escaped = accountId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped}/logo-[0-9a-f]{16}\\.(?:png|jpg|webp)$`).test(path);
+}
+
+/**
+ * "Remove logo" (DESIGN.md rule 6): runs at once, no confirm dialog. Clears
+ * `brand_logo_path` through the SAME write as setBrandingAction above (RLS
+ * client, `account.branding_updated` emit and all) but deliberately does NOT
+ * delete the stored object — `restoreBrandLogoAction` below is this
+ * action's Undo, and it restores the exact path rather than re-uploading, so
+ * the object has to still be there for it to point back at.
+ *
+ * Sweeps the account's OTHER stored logo objects AFTER the write succeeds,
+ * never before (a near-Critical review fix, 2026-10-04): a sweep that ran
+ * first and the write then failing would have deleted Storage objects for a
+ * database change that never happened. The sweep itself re-reads the live
+ * `brand_logo_path` before deleting anything (sweepOrphanedLogos), so a
+ * concurrent save landing between this write and this sweep still survives
+ * — this call only needs to keep the path it is ABOUT to orphan, which is
+ * exactly what Undo needs.
+ */
+export async function removeBrandLogoAction(
+  accountId: string,
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  const { userId } = await requireAccountAccess(accountId);
+
+  // The RLS-enforced client, not serviceDb() (house rule: reads on the
+  // in-account surface go through the client the signed-in user actually
+  // has, the same backstop setBrandingAction's own read relies on).
+  const requestDb = await dbForRequest();
+  const current = await getBranding(requestDb, accountId);
+  const path = current.brandLogoPath;
+  if (!path) return { ok: false, error: m["branding.noLogoToRemove"] };
+
+  try {
+    await setBranding(requestDb, accountId, { brandLogoPath: null }, userId);
+  } catch (e) {
+    console.error(`removeBrandLogo: write failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["branding.saveFailed"] };
+  }
+
+  try {
+    await sweepOrphanedLogos(serviceDb(), accountId, path);
+  } catch (e) {
+    console.error(`removeBrandLogo: sweep failed for account ${accountId}: ${String(e)}`);
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+  revalidatePath(`/dashboard/accounts/${accountId}/branding`);
+  return { ok: true, path };
+}
+
+/**
+ * The Undo of `removeBrandLogoAction`: restores the exact path Remove just
+ * cleared. Never re-derived from an upload — the object was never deleted
+ * (ordinarily), so there is nothing to upload again.
+ *
+ * Two checks a near-Critical review added (2026-10-04), both because a
+ * sonner Undo toast can sit around far longer than the click that produced
+ * it (its auto-dismiss pauses on hover/focus) and the world can have moved
+ * on by the time it fires — reproduced as writes=[null, "...-new.png",
+ * "...-old.png"]: Remove, then a fresh upload, then this STALE toast
+ * silently overwriting the upload that came after it.
+ *   (a) The write only happens if `brand_logo_path` is STILL null right now
+ *       — `restoreBrandLogoIfCleared`'s compare-and-set, atomic at the
+ *       database, so there is no read-then-write gap for a second save to
+ *       land in. A later upload leaves the column non-null, and Undo loses.
+ *   (b) The object has to still EXIST in Storage — a later Remove's own
+ *       sweep (or this account's next upload) can have deleted it since.
+ * Either failing answers the same plain-language refusal, not a crash and
+ * not a false "ok: true": the operator sees nothing restored because
+ * nothing SHOULD have been.
+ *
+ * `path` also has to be shaped like one of THIS account's own uploads
+ * (isOwnLogoPath) before either check runs — the Undo toast holds it, not
+ * the server, and a member of account A handing this a path shaped like
+ * `acct_B/logo-....png` must not be able to point their own branding at a
+ * different account's stored object.
+ */
+export async function restoreBrandLogoAction(
+  accountId: string, path: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId } = await requireAccountAccess(accountId);
+
+  if (!isOwnLogoPath(accountId, path)) {
+    return { ok: false, error: m["branding.saveFailed"] };
+  }
+
+  try {
+    const stillThere = await logoExists(serviceDb(), path);
+    if (!stillThere) return { ok: false, error: m["branding.logoGone"] };
+
+    const restored = await restoreBrandLogoIfCleared(await dbForRequest(), accountId, path, userId);
+    if (!restored) return { ok: false, error: m["branding.logoGone"] };
+  } catch (e) {
+    console.error(`restoreBrandLogo: write failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["branding.saveFailed"] };
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
