@@ -326,6 +326,13 @@ describe("restoreBrandLogoAction — the Undo of removeBrandLogoAction", () => {
     expect(dbMocks.restoreBrandLogoIfCleared).not.toHaveBeenCalled();
   });
 
+  it("refuses a path with anything before the account's folder (mutation: drop the regex's leading ^ → FAILS)", async () => {
+    expect(await restoreBrandLogoAction("acct_1", "x/acct_1/logo-0123456789abcdef.png"))
+      .toEqual({ ok: false, error: m["branding.saveFailed"] });
+    expect(dbMocks.logoExists).not.toHaveBeenCalled();
+    expect(dbMocks.restoreBrandLogoIfCleared).not.toHaveBeenCalled();
+  });
+
   it("refuses a path in the right folder but the wrong shape — not one of uploadBrandLogo's own names (mutation: drop the filename regex → FAILS)", async () => {
     expect(await restoreBrandLogoAction("acct_1", "acct_1/not-a-logo.png"))
       .toEqual({ ok: false, error: m["branding.saveFailed"] });
