@@ -10,9 +10,11 @@
 // the drill caller dials an address that can never resolve instead of Sofía.
 // Every other caller to that number, and every other number, is untouched.
 // The handoff token, the fallback ticket and the action URL are exactly what a
-// real call carries, so the drill exercises the production path end to end:
-// Telnyx's DialCallStatus, the ticket check, the transfer lookup, the second
-// <Dial>, and the voice.sip_webhook error stamp.
+// real call carries, so everything after the failed leg is the production
+// path: Telnyx's DialCallStatus, the ticket check, the transfer lookup, the
+// second <Dial>, and the voice.sip_webhook error stamp. What it reproduces is
+// ONE way to be unreachable — a name that does not resolve. An OpenAI timeout
+// or 5xx may report a different DialCallStatus, and only after a longer ring.
 //
 // WHY BOTH NUMBERS. Every number BIS owns is live, so the called number alone
 // would cut Sofía off from that line's real callers for as long as the switch
@@ -24,12 +26,20 @@
 // DNS — no traffic reaches OpenAI or anyone else, and no stranger can ever
 // register the name.
 
+import { e164Of } from "./phone-number";
+
 /** Never resolves (RFC 6761 §6.4). */
 export const FALLBACK_DRILL_SIP_BASE = "sip:fallback-drill@fallback-drill.invalid;transport=tls";
 
+/**
+ * Strict E.164 first — a half-typed value is off, never guessed at — then the
+ * SAME normalisation the route gives the carrier's To/From (`e164Of`), or a
+ * correctly typed Mexican mobile (`+521…`, which `e164Of` writes as `+52…`)
+ * would silently never match.
+ */
 function e164(value: string | undefined): string | null {
   const v = value?.trim();
-  return v && /^\+[1-9][0-9]{7,14}$/.test(v) ? v : null;
+  return v && /^\+[1-9][0-9]{7,14}$/.test(v) ? e164Of(v) : null;
 }
 
 /**

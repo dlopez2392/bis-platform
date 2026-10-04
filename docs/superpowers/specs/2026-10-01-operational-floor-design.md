@@ -271,7 +271,10 @@ production forbids today. It is recorded so the trade-off is visible.
   live and the SIP address is shared), so a drill switch was added — `VOICE_FALLBACK_DRILL_TO`
   and `_FROM`, both required, dial an address that never resolves for that one caller on that
   one line (`lib/voice/fallback-drill.ts`; runbook `voice-setup.md`, "Drilling the model-down
-  fallback"). It runs quarterly beside the restore drill.
+  fallback"). It runs quarterly beside the restore drill. It reproduces ONE way to be
+  unreachable — a name that does not resolve; an OpenAI timeout or 5xx may report a different
+  `DialCallStatus`, after a longer ring. Any status outside the set is now logged by the handoff
+  route, so a real outage teaches us the rest.
 - **Wherever `TELNYX_PUBLIC_KEY` is unset**, anyone reaching `/api/voice/texml` stamps
   `voice.texml` ok, which can close an open `voice.texml` alert early. Corrected 2026-10-04: this
   section was written believing the key unset in production; it has been set there since

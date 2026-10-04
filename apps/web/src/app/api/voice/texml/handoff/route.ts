@@ -218,7 +218,12 @@ async function modelDownFallback(
   token: string, ticketRaw: string | null, dialStatus: string | null,
 ): Promise<string | null> {
   if (!dialStatus || !NEVER_CONNECTED.has(dialStatus)) {
-    console.log("handoff: no call for this token — hanging up");
+    // The status is logged because it is the one fact a fallback drill exists
+    // to measure (lib/voice/fallback-drill.ts): a leg that failed some way
+    // outside NEVER_CONNECTED lands HERE, and without it the log says nothing
+    // about why. Only a short lower-case word is echoed, never raw input.
+    const shown = dialStatus && /^[a-z-]{1,20}$/.test(dialStatus) ? dialStatus : "none";
+    console.log(`handoff: no call for this token (DialCallStatus ${shown}) — hanging up`);
     return null;
   }
   const ticket = verifyFallbackTicket(ticketRaw, token, Date.now());

@@ -86,6 +86,6 @@ and it cannot be undone.
 
 ## Fallback drill log
 
-| Date | Line | DialCallStatus seen | Transfer phone rang | Alert email arrived | Result | Run by |
+| Date | Line | DialCallStatus seen | Transfer phone rang | Outage stamp recorded | Result | Run by |
 |---|---|---|---|---|---|---|
 | | | | | | First drill: run when the drill switch ships | |

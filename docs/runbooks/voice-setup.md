@@ -641,21 +641,38 @@ call from, the fallback rings a phone that is already on this call, and you lear
      `handoff: Sofía's leg did not connect (<status>) — ringing the transfer number instead`.
      **Write down `<status>`** (`failed`, `busy` or `no-answer`): it is what the carrier really
      sends, which no test can tell us.
-4. **Remove both variables and redeploy.** Confirm the next call from the same phone reaches Sofía,
-   and that the logs no longer say `FALLBACK DRILL`.
-5. **Expect, and close, the alert.** The drill stamps a `voice.sip_webhook` error, as a real
-   outage would, so the next cron pass emails hello@bis-rgv.com that Sofía was unreachable. That
-   email is part of the drill passing. The call in step 4 records a fresh success and clears it.
+4. **Confirm the outage was recorded** — before anyone calls Sofía again. The drill stamps a
+   `voice.sip_webhook` error exactly as a real outage would. Read it (Claude, read-only, on
+   production): `select last_error_at, last_error, last_ok_at from public.ops_heartbeats where
+   key = 'voice.sip_webhook';` — `last_error_at` should be the drill's minute, with
+   `Sofia's line did not connect (DialCallStatus <status>)`.
+   - The alert EMAIL is best-effort here, not a pass/fail: the key is platform-wide, and ANY call
+     Sofía accepts on ANY account (step 5's, or a client's) stamps a success that clears the error
+     before the 15-minute pass sees it. That is correct for a real outage — it is over — and it
+     means a drill only emails if nobody reaches Sofía until the next pass.
+5. **Remove both variables and redeploy — promptly.** While they are set, anyone who fakes the
+   drill caller's number reaches the transfer phone without Sofía (or her caps) in between, so keep
+   the window to the minutes the drill takes. Then confirm the next call from the same phone
+   reaches Sofía, and that the logs no longer say `FALLBACK DRILL`.
 
 **What a failure looks like:**
-- Silence, then a hang-up, and the log says `there is no usable fallback ticket`: the call was
-  not cleared. Look for `fallback drill NOT engaged` and the screening line above it.
+- Silence, then a hang-up, and the log says `handoff: no call for this token (DialCallStatus …)`:
+  the leg failed in a way outside `failed`/`busy`/`no-answer`, so the fallback did not run.
+  **Record that status** — it is the finding, and the fallback's set may need it added.
+- Silence, then a hang-up, with NO `handoff:` line at all: Telnyx never called back the action URL
+  (it may have refused the address outright). Note what the caller heard and check Telnyx's call
+  log for that call.
+- Silence, then a hang-up, and the log says `there is no usable fallback ticket (<reason>)`: the
+  ticket was refused — `expired` (clocks or a very slow leg), `bad-signature` or `no-key` (the
+  service-role key differs between, or is missing in, the deployment). A call that was not cleared
+  never gets here: it is not drilled at all, and Sofía answers it (`fallback drill NOT engaged`).
 - A spoken refusal instead of ringing: the screening refused your phone (usually the repeat-caller
   guard, from earlier test calls). Add it to `PHONE_SPAM_EXEMPT_CALLERS` and try again.
 - Sofía answers: the variables did not reach the running deployment (redeploy), or one of them is
   not exactly the E.164 form the carrier sends.
 
-Record the date, the line, the `<status>` and the result next to the restore drill's record.
+Record the date, the line, the `<status>`, whether the transfer phone rang and whether step 4 found
+the stamp, in the fallback drill log at the bottom of `restore-drill.md`.
 
 ## Troubleshooting quick-reference
 

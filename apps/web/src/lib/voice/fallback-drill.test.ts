@@ -26,6 +26,12 @@ describe("the model-down fallback drill switch", () => {
     expect(fallbackDrillActive(null, null, env("", ""))).toBe(false);
   });
 
+  it("compares in the route's own E.164 form: a Mexican mobile typed as +521… matches the +52… the route derives from the caller ID (mutation: compare the raw env value → FAILS)", async () => {
+    const { e164Of } = await import("./phone-number");
+    const callerAsRouted = e164Of("+5218991234567");
+    expect(fallbackDrillActive(LINE, callerAsRouted, env(LINE, "+5218991234567"))).toBe(true);
+  });
+
   it("tolerates surrounding whitespace in the env values", () => {
     expect(fallbackDrillActive(LINE, ME, env(` ${LINE} `, `${ME}\n`))).toBe(true);
   });
