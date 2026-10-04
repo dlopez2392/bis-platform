@@ -648,3 +648,41 @@ describe("one control radius, spelled as the token", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// Found 2026-10-04 on production (computed styles): shadcn's bare `rounded-md`
+// (10px, calc(var(--radius) - 2px)) and the sidebar collapse button's bare
+// `rounded` (4px, Tailwind's static default — this app's --radius-sm/md/lg
+// theme keys never touch the unsuffixed utility) both drift from the 8px
+// `--radius-ctl` DESIGN.md pins for every control. Fixed by spelling every
+// one of these controls' radius as the same `rounded-[var(--radius-ctl)]`
+// idiom already used by input/textarea/select-trigger/notice/branding-panel
+// (see the describe block above) rather than inventing a second spelling.
+describe("control radius converges on --radius-ctl, not rounded-md/rounded-sm/bare rounded (2026-10-04)", () => {
+  it("Button: every variant/size shares the base rounded-md and must lose it", () => {
+    const btn = src("./button.tsx");
+    expect(btn).not.toContain("rounded-md");
+    expect(btn).toContain("rounded-[var(--radius-ctl)]");
+  });
+  it("inline-field's click-to-edit trigger", () => {
+    const f = src("../inline-field.tsx");
+    expect(f).not.toContain("rounded-md");
+    expect(f).toContain("rounded-[var(--radius-ctl)]");
+  });
+  it("account-switcher's popover trigger ('Switch company')", () => {
+    const a = src("../account-switcher.tsx");
+    expect(a).not.toContain("rounded-md border border-sidebar-border");
+    expect(a).toContain("rounded-[var(--radius-ctl)] border border-sidebar-border");
+  });
+  it("sidebar: the 'Collapse sidebar' toggle and the footer setup-meter link", () => {
+    const s = src("../app-sidebar.tsx");
+    expect(s).not.toContain('className="rounded p-1.5');
+    expect(s).toContain("rounded-[var(--radius-ctl)] p-1.5");
+    expect(s).not.toContain("flex flex-col gap-1.5 rounded-md");
+    expect(s).toContain("flex flex-col gap-1.5 rounded-[var(--radius-ctl)]");
+  });
+  it("TabsTrigger (unused today, but named in the follow-up's survey)", () => {
+    const t = src("./tabs.tsx");
+    expect(t).not.toContain("rounded-md border border-transparent");
+    expect(t).toContain("rounded-[var(--radius-ctl)] border border-transparent");
+  });
+});

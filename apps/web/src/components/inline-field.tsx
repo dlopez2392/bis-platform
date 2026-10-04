@@ -156,7 +156,7 @@ export function InlineField(
         type="button"
         onClick={() => { cancelled.current = false; setEditing(true); }}
         className={cn(
-          "block w-full rounded-md px-2 py-1 text-left text-sm transition-colors",
+          "block w-full rounded-[var(--radius-ctl)] px-2 py-1 text-left text-sm transition-colors",
           "hover:bg-muted focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
           shown ? "text-foreground" : "text-muted-foreground italic",
         )}
