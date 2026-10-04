@@ -42,7 +42,7 @@ export function AccountSwitcher({
       <PopoverTrigger
         aria-label={m["shell.switchAccount"]}
         className={cn(
-          "flex w-full items-center gap-2 rounded-md border border-sidebar-border px-2 py-2 text-left text-sidebar-foreground transition-colors hover:bg-white/5",
+          "flex w-full items-center gap-2 rounded-[var(--radius-ctl)] border border-sidebar-border px-2 py-2 text-left text-sidebar-foreground transition-colors hover:bg-white/5",
           collapsed && "justify-center px-0",
         )}
       >
