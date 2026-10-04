@@ -226,7 +226,7 @@ export function AppSidebar({
           type="button"
           onClick={toggle}
           aria-label={collapsed ? m["shell.expand"] : m["shell.collapse"]}
-          className="rounded p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]"
+          className="rounded-[var(--radius-ctl)] p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]"
         >
           {collapsed ? (
             <PanelLeft className="size-4" aria-hidden />
@@ -495,7 +495,7 @@ function SetupMeterLink({
       title={collapsed ? m["nav.setup"] : undefined}
       aria-label={`${m["nav.setup"]} (${progressText})`}
       className={cn(
-        "flex flex-col gap-1.5 rounded-md px-2.5 py-2 text-sm text-sidebar-foreground/75 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]",
+        "flex flex-col gap-1.5 rounded-[var(--radius-ctl)] px-2.5 py-2 text-sm text-sidebar-foreground/75 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]",
         // Collapsed: no room for the label/count row (hidden below), so this
         // link keeps only the bar — full rail-button width, same reasoning
         // as every other collapsed row's `px-0` above.
