@@ -42,7 +42,7 @@ import { FALLBACK_DRILL_SIP_BASE, fallbackDrillActive } from "@/lib/voice/fallba
 import { configuredOrigin } from "@/lib/email/origin";
 import { stampHeartbeat } from "@/lib/ops/stamp";
 import { xmlText } from "./xml";
-import type { ScreenedCallInput } from "@bis/db";
+import type { ScreenedCallInput, ForwardedCallInput } from "@bis/db";
 
 export const runtime = "nodejs";
 
@@ -58,9 +58,14 @@ type Languages = "en" | "es" | "both";
  *     the fallback; it gets today's hang-up.
  *   - `lookupFailed`: the number lookup itself threw — the one failure that
  *     is this route's own outage, stamped as such.
+ *   - `phoneNumberId`: the called line's row, on a cleared call only — what
+ *     a forwarded call's record (0059) points at.
  */
 type Routability =
-  | { kind: "dial"; accountId?: string; forwardCalls?: boolean; cleared?: boolean; lookupFailed?: boolean }
+  | {
+    kind: "dial"; accountId?: string; phoneNumberId?: string; forwardCalls?: boolean;
+    cleared?: boolean; lookupFailed?: boolean;
+  }
   | { kind: "refuse"; languages: Languages; screened: ScreenedCallInput }
   | { kind: "cap"; languages: Languages; screened: ScreenedCallInput }
   // A caller whose whole recent history on this account is silent calls.
@@ -99,7 +104,7 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
   try {
     const {
       serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince,
-      countCallsByCallerSince, countCallerHistorySince,
+      countCallsByCallerSince, countCallerHistorySince, countForwardedCallsSince,
     } = await import("@bis/db");
     const { readLimitConfig, decideLimit, utcDayStart } = await import("@/lib/voice/call-limits");
     const {
@@ -182,14 +187,23 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       const repCfg = readReputationConfig();
       // Independent reads — run them together, this route sits on Telnyx's
       // carrier answer-deadline. The third read joins the existing pair
-      // rather than following them, so Guard 2 costs no wall-clock at all.
-      const [forAccount, forNumber, history] = await Promise.all([
+      // rather than following them, so Guard 2 costs no wall-clock at all;
+      // the fourth (forwarded calls, 0059) the same way.
+      const [callsForAccount, callsForNumber, history, forwarded] = await Promise.all([
         countCallsSince(db, row.account_id, dayStart),
         callerE164 ? countCallsByCallerSince(db, row.account_id, callerE164, dayStart) : Promise.resolve(0),
         callerE164
           ? countCallerHistorySince(db, row.account_id, callerE164, windowStart(now, repCfg.windowDays))
           : Promise.resolve({ spamCalls: 0, otherCalls: 0 }),
+        countForwardedCallsSince(db, row.account_id, callerE164, dayStart),
       ]);
+      // A call put through to a person writes no `calls` row (Sofía's webhook
+      // never sees it), so the caps add the forwarded ones — or a robot
+      // ringing while the forward is on, or while Sofía is down, would never
+      // reach a cap. Reputation does NOT read them: a forwarded call has no
+      // outcome to judge (0059's header).
+      const forAccount = callsForAccount + forwarded.forAccount;
+      const forNumber = callsForNumber + forwarded.forCaller;
       // Reputation first: a caller we already know to be a robot should not
       // be described by the day's volume. It is also the more actionable log
       // line of the two. Note the two verdicts read OPPOSITE senses —
@@ -227,7 +241,10 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       console.error(`texml cap/reputation count failed for ${calledE164}: ${String(e)}`); // fail open
       return { kind: "dial", accountId: row.account_id, forwardCalls: profile.forward_calls === true, cleared: false };
     }
-    return { kind: "dial", accountId: row.account_id, forwardCalls: profile.forward_calls === true, cleared: true };
+    return {
+      kind: "dial", accountId: row.account_id, phoneNumberId: row.id,
+      forwardCalls: profile.forward_calls === true, cleared: true,
+    };
   } catch (e) {
     console.error(`texml lookup failed for ${calledE164}: ${String(e)}`);
     return { kind: "dial", lookupFailed: true }; // fail open — the webhook still gates
@@ -297,7 +314,7 @@ export function forwardXml(to: string, callerId: string | null): string {
  * answered — and its caller can still ask for a person.
  */
 function dialXml(
-  calledE164: string | null, origin: string, cleared?: { accountId: string }, drill = false,
+  calledE164: string | null, origin: string, cleared?: { accountId: string; callerE164: string | null }, drill = false,
 ): string {
   const projectId = process.env.VOICE_OPENAI_PROJECT_ID;
   if (!projectId) {
@@ -320,7 +337,7 @@ function dialXml(
   // the handoff route has no `calls` row to find the account by, and this is
   // the one signed statement of which account and number the call was for.
   const ticket = cleared && calledE164
-    ? signFallbackTicket(token, cleared.accountId, calledE164, Date.now())
+    ? signFallbackTicket(token, cleared.accountId, calledE164, Date.now(), process.env, cleared.callerE164)
     : null;
   const action = `${origin}/api/voice/texml/handoff?t=${encodeURIComponent(token)}`
     + (ticket ? `&f=${encodeURIComponent(ticket)}` : "");
@@ -381,6 +398,28 @@ async function accountForwardTarget(accountId: string): Promise<string | null> {
   } catch (e) {
     console.error(`texml forward lookup failed — Sofía answers, accountId ${accountId}: ${String(e)}`);
     return null;
+  }
+}
+
+/**
+ * The forwarded call's record (0059), which the caps above count. In
+ * `after()` and best-effort, exactly like the screened-call write in
+ * `route()`, for the same two reasons: this route cannot spend Telnyx's
+ * answer deadline, and a failed write must never cost the caller the forward.
+ * A missed row under-counts one call; it never refuses one.
+ */
+function recordForwardedCallLater(input: ForwardedCallInput): void {
+  try {
+    after(async () => {
+      try {
+        const { serviceDb, recordForwardedCall } = await import("@bis/db");
+        await recordForwardedCall(serviceDb(), input);
+      } catch (e) {
+        console.error(`texml: forwarded-call write failed (${input.kind}) for ${input.calledE164}: ${String(e)}`);
+      }
+    });
+  } catch (e) {
+    console.error(`texml: could not schedule the forwarded-call write (${input.kind}) for ${input.calledE164}: ${String(e)}`);
   }
 }
 
@@ -465,10 +504,14 @@ async function route(
         // Logged on every call for the reason the deployment-wide override
         // above logs: the failure this invites is leaving it on.
         console.log(`texml FORWARDING account ${result.accountId} to its transfer number — Sofía is bypassed while forward_calls is on`);
+        recordForwardedCallLater({
+          accountId: result.accountId, phoneNumberId: result.phoneNumberId ?? null,
+          calledE164, callerE164, kind: "account-forward",
+        });
         return done(xmlResponse(forwardXml(to, calledE164)));
       }
     }
-    const cleared = result.cleared && result.accountId ? { accountId: result.accountId } : undefined;
+    const cleared = result.cleared && result.accountId ? { accountId: result.accountId, callerE164 } : undefined;
     // The fallback drill engages only on a CLEARED call: that is the only call
     // the fallback serves, so on any other the drill would prove nothing and
     // just drop the caller. Logged every time, for the forward's reason: the

@@ -17,7 +17,7 @@
 // It still answers 200 with valid TeXML on every one of those. A 5xx to
 // Telnyx mid-call is worse than a clean hangup: the carrier's own error
 // handling is what the caller would hear, and it is not words.
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { resolveHandoffTarget } from "@/lib/voice/handoff";
 import { verifyFallbackTicket } from "@/lib/voice/fallback-ticket";
@@ -234,7 +234,9 @@ async function modelDownFallback(
   const accountId = ticket.accountId;
   stampHeartbeat("voice.sip_webhook", { ok: false, error: `Sofia's line did not connect (DialCallStatus ${dialStatus})` });
 
-  const { serviceDb, getTransferPhone, listPhoneNumbersForAccount, getPhoneNumberByE164 } = await import("@bis/db");
+  const {
+    serviceDb, getTransferPhone, listPhoneNumbersForAccount, getPhoneNumberByE164, recordForwardedCall,
+  } = await import("@bis/db");
   const db = serviceDb();
   const [transferPhone, ownedRows] = await Promise.all([
     getTransferPhone(db, accountId),
@@ -263,6 +265,26 @@ async function modelDownFallback(
     ?? usable.find((n) => n.status === "testing"))?.e164 ?? null;
   const cid = callerId ? ` callerId="${xmlText(callerId)}"` : "";
   console.log(`handoff: Sofía's leg did not connect (${dialStatus}) — ringing the transfer number instead, accountId ${accountId}`);
+  // Counted toward the daily caps the TeXML route applies (0059): while Sofía
+  // is down EVERY cleared call lands here, and none of them gets a `calls`
+  // row, so without this a robot would ring the transfer number unbounded
+  // for the whole outage. The caller comes from the SIGNED ticket, never the
+  // callback body. Best-effort in `after()`, like the texml writes: a
+  // failed write under-counts one call and never costs this caller the dial.
+  const phoneNumberId = usable.find((n) => n.e164 === ticket.calledE164)?.id ?? null;
+  try {
+    after(async () => {
+      try {
+        await recordForwardedCall(db, {
+          accountId, phoneNumberId, calledE164: ticket.calledE164, callerE164: ticket.callerE164, kind: "model-down",
+        });
+      } catch (e) {
+        console.error(`handoff: forwarded-call write failed (model-down), accountId ${accountId}: ${String(e)}`);
+      }
+    });
+  } catch (e) {
+    console.error(`handoff: could not schedule the forwarded-call write (model-down), accountId ${accountId}: ${String(e)}`);
+  }
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial${cid} timeout="${RING_SECONDS}" timeLimit="${MAX_TRANSFER_SECONDS}" passDiversionHeader="true">${xmlText(target.to)}</Dial></Response>`;
 }
 

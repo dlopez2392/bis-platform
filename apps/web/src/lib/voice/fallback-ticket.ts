@@ -9,9 +9,11 @@
 //
 // So the TeXML route, which already resolved the account and cleared every
 // guard before it dialled Sofía, writes that fact into the `<Dial action=…>`
-// URL: which account, which number was dialled, and when — signed, and bound
-// to this call's own handoff token. The handoff route trusts nothing else in
-// the request.
+// URL: which account, which number was dialled, who called, and when —
+// signed, and bound to this call's own handoff token. The handoff route
+// trusts nothing else in the request. (The caller rides the ticket so the
+// fallback's forwarded-call record, 0059, can count it against that caller's
+// daily cap without trusting the callback body's From.)
 //
 // WHAT IT PROTECTS. The action URL lands in Telnyx's and Vercel's request
 // logs. A holder of a logged URL could POST it with `DialCallStatus=failed`
@@ -46,25 +48,32 @@ function mac(k: Buffer, handoffToken: string, payload: string): string {
 }
 
 /**
- * `<issuedAtMs>.<accountId>.<calledDigits>.<hmac>` — the dialled number
- * without its `+`, so the value needs no escaping in a query string. Returns
- * null when there is no key or the inputs are not what the route resolved
- * them to be (a UUID and an E.164 number), so a caller never ships a ticket
- * the verifier would refuse.
+ * `<issuedAtMs>.<accountId>.<calledDigits>.<callerDigits>.<hmac>` — numbers
+ * without their `+`, so the value needs no escaping in a query string; the
+ * caller segment is EMPTY for a withheld caller ID. Returns null when there
+ * is no key or the inputs are not what the route resolved them to be (a UUID
+ * and E.164 numbers), so a caller never ships a ticket the verifier would
+ * refuse. A malformed caller is dropped to empty rather than refusing the
+ * ticket: the caller only feeds a cap count, never who is rung.
+ *
+ * Four-part tickets (before 0059) read as malformed: one in flight across
+ * that deploy gets the old hang-up, for at most the ticket's ten minutes.
  */
 export function signFallbackTicket(
   handoffToken: string, accountId: string, calledE164: string, nowMs: number,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = process.env, callerE164: string | null = null,
 ): string | null {
   const k = key(env);
   const digits = calledE164.startsWith("+") ? calledE164.slice(1) : "";
   if (!k || !handoffToken || !ACCOUNT_ID.test(accountId) || !DIGITS.test(digits)) return null;
-  const payload = `${Math.trunc(nowMs)}.${accountId}.${digits}`;
+  const callerRaw = callerE164?.startsWith("+") ? callerE164.slice(1) : "";
+  const caller = DIGITS.test(callerRaw) ? callerRaw : "";
+  const payload = `${Math.trunc(nowMs)}.${accountId}.${digits}.${caller}`;
   return `${payload}.${mac(k, handoffToken, payload)}`;
 }
 
 export type FallbackTicket =
-  | { ok: true; accountId: string; calledE164: string }
+  | { ok: true; accountId: string; calledE164: string; callerE164: string | null }
   | { ok: false; reason: "absent" | "no-key" | "malformed" | "bad-signature" | "expired" };
 
 export function verifyFallbackTicket(
@@ -75,14 +84,14 @@ export function verifyFallbackTicket(
   const k = key(env);
   if (!k) return { ok: false, reason: "no-key" };
   const parts = ticket.split(".");
-  if (parts.length !== 4) return { ok: false, reason: "malformed" };
-  const [issuedRaw, accountId, digits, given] = parts as [string, string, string, string];
+  if (parts.length !== 5) return { ok: false, reason: "malformed" };
+  const [issuedRaw, accountId, digits, caller, given] = parts as [string, string, string, string, string];
   const issued = Number(issuedRaw);
   if (!/^[0-9]{1,16}$/.test(issuedRaw) || !Number.isFinite(issued)
-    || !ACCOUNT_ID.test(accountId) || !DIGITS.test(digits)) {
+    || !ACCOUNT_ID.test(accountId) || !DIGITS.test(digits) || (caller !== "" && !DIGITS.test(caller))) {
     return { ok: false, reason: "malformed" };
   }
-  const expected = Buffer.from(mac(k, handoffToken, `${issuedRaw}.${accountId}.${digits}`));
+  const expected = Buffer.from(mac(k, handoffToken, `${issuedRaw}.${accountId}.${digits}.${caller}`));
   const actual = Buffer.from(given);
   // Length first: timingSafeEqual throws on a mismatch rather than returning
   // false, which would be a 500 instead of a refusal.
@@ -91,5 +100,5 @@ export function verifyFallbackTicket(
   }
   // Both directions: a ticket from the future is a clock problem or a forgery.
   if (Math.abs(nowMs - issued) > maxAgeMs) return { ok: false, reason: "expired" };
-  return { ok: true, accountId, calledE164: `+${digits}` };
+  return { ok: true, accountId, calledE164: `+${digits}`, callerE164: caller ? `+${caller}` : null };
 }

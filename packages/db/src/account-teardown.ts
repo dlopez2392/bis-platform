@@ -31,7 +31,10 @@ export const ACCOUNT_OWNED_TABLES = [
  * ⚠️ `alert_phone_verifications` (0036) is DELIBERATELY not on that list,
  * neither is `contact_duplicate_flags` (0033), neither is `screened_calls`
  * (0039), neither is `consent_events` (0054) — four tables now, not three,
- * each for its own reason (m4 correction).
+ * each for its own reason (m4 correction). `forwarded_calls` (0059) joins
+ * `screened_calls` for the same reason: `account_id … on delete cascade`,
+ * derived cap-counting state that the account's own deletion carries away
+ * (`forwarded-calls.test.ts` proves the cascade).
  *
  * The FIRST THREE carry `account_id … on delete cascade` rather than
  * `restrict`, so the account's own deletion below carries their rows away —
