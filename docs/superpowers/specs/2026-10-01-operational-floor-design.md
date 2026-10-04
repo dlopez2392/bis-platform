@@ -268,9 +268,13 @@ production forbids today. It is recorded so the trade-off is visible.
   inbound leg the bridge never answered (`answerOnBridge`), where every earlier handoff ran on an
   answered call. One real test call (OpenAI unreachable on a test number) should confirm it
   before decision 2 is relied on.
-- **While `TELNYX_PUBLIC_KEY` is unset**, anyone reaching `/api/voice/texml` stamps `voice.texml`
-  ok, which can close an open `voice.texml` alert early. Accepted: it is the same unsigned state
-  every Telnyx route is in today, and setting the key (runbook) closes it.
+- **Wherever `TELNYX_PUBLIC_KEY` is unset**, anyone reaching `/api/voice/texml` stamps
+  `voice.texml` ok, which can close an open `voice.texml` alert early. Corrected 2026-10-04: this
+  section was written believing the key unset in production; it has been set there since
+  2026-09-29 (`docs/runbooks/a2p-registration.md`; `GET /api/voice/texml` answers 405). So in
+  production a stranger cannot stamp `voice.texml`, and the fallback's `DialCallStatus` arrives
+  in a Telnyx-signed body. The signature covers the body, not the query string, so the handoff
+  token and the fallback ticket still do the binding to one call; nothing here is relaxed.
 - **The webhook stamps.** One helper, `lib/ops/stamp.ts`, writes through `after()` and never
   throws. Ok on a request the route accepted and handled; an error when the route cannot work for
   anyone (a missing secret) or the work failed after acceptance, with a fixed sentence and at

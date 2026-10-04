@@ -114,8 +114,9 @@ describe("voice texml handoff-amd route", () => {
   });
 
   it("refuses an unsigned request once TELNYX_PUBLIC_KEY is set", async () => {
-    // The gate is off today (the key is unset in every environment) and this
-    // is what notices the day the runbook's Step 6 turns it on.
+    // The gate is on in production (the key has been set there since
+    // 2026-09-29) and off in the route tests, so this is the case that pins
+    // production's behaviour.
     process.env.TELNYX_PUBLIC_KEY = "not-a-real-key";
     const res = await POST(req("tok_abc", { AnsweredBy: "human" }));
     expect(res.status).toBe(403);

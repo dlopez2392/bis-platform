@@ -51,10 +51,13 @@ const REACHED_A_PERSON = new Set(["completed", "answered"]);
  * The gate below it (`handoff_requested_at` is set) proves the caller ASKED.
  * It does not prove anyone was DIALLED — the parent route can refuse, on no
  * transfer number, on an own-number loop, or on its own ten-minute expiry —
- * and with `TELNYX_PUBLIC_KEY` unset this route accepts
+ * and wherever `TELNYX_PUBLIC_KEY` is unset this route accepts
  * `DialCallStatus=completed` from whoever POSTs it. A token harvested from a
  * carrier or Vercel access log could therefore stamp `transferred` on a call
- * nobody was ever put through on, forever. That is a lie on the client's own
+ * nobody was ever put through on, forever. (Production has had the key since
+ * 2026-09-29, so there the body must also carry a fresh Telnyx signature —
+ * but the signature does not cover the query string, and this ceiling is
+ * what still holds if the key is ever rolled back.) That is a lie on the client's own
  * dashboard, which is the one place they see what this product did for them.
  *
  * Four hours, and deliberately NOT the parent's ten minutes. This request
@@ -168,8 +171,9 @@ async function decide(token: string, status: string): Promise<string> {
   const accountId = call.account_id;
 
   // 2. The call actually asked for a person. This route holds the ONLY write
-  //    in the feature, and with `TELNYX_PUBLIC_KEY` unset (today's state)
-  //    anyone who can reach this URL holding a logged token can trigger it.
+  //    in the feature, and wherever `TELNYX_PUBLIC_KEY` is unset (not
+  //    production since 2026-09-29) anyone who can reach this URL holding a
+  //    logged token can trigger it.
   //    A call with no `handoff_requested_at` was never handed to anybody, so
   //    stamping it would put a transfer on the client's dashboard that never
   //    happened.
@@ -317,9 +321,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     console.error(`handoff-result: failed to read request body: ${String(e)}`);
   }
   // Identical gate to `/api/voice/texml` and `/api/voice/texml/handoff`,
-  // deliberately duplicated rather than inferred, so the three cannot drift
-  // when TELNYX_PUBLIC_KEY is finally set (runbook Step 6). Unset today means
-  // validation is OFF.
+  // deliberately duplicated rather than inferred, so the three cannot drift.
+  // TELNYX_PUBLIC_KEY is set in production (since 2026-09-29); unset — local
+  // runs and the route tests — means validation is OFF.
   const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
   if (publicKey) {
     const timestamp = req.headers.get("telnyx-timestamp");
