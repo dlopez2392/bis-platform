@@ -264,6 +264,15 @@ production forbids today. It is recorded so the trade-off is visible.
   short-lived lever and each leg is bounded by `timeLimit`; the copy says only that numbers
   already marked as spam are turned away. A forward cap (or a row per forwarded call) is the
   follow-up if the lever is ever left on for long.
+  **CLOSED 2026-10-04 (0059, danlo: "go ahead with the forward-call cap").** A row per forwarded
+  call, in its own table `forwarded_calls` (NOT `calls`, for 0039's reasons: the call list,
+  reports and metering would each need an exception, and an outcome would disarm the repeat-spam
+  guard). Written best-effort in `after()` by the per-account forward (`account-forward`) and the
+  model-down fallback (`model-down`); `VOICE_FORWARD_TO` is still exempt by design. The TeXML
+  route ADDS the account's and the caller's forwarded rows to its two cap counts, in the same
+  parallel read, so a robot is capped across forwarded and answered calls alike. Reputation still
+  does not count them: a forwarded call has no outcome. The webhook's own cap re-check is
+  unchanged; it never sees a forwarded call, and on the fail-open path the call goes to Sofia.
 - **OPEN: the fallback's carrier behaviour is unmeasured.** It sends a second `<Dial>` on an
   inbound leg the bridge never answered (`answerOnBridge`), where every earlier handoff ran on an
   answered call. One real test call (OpenAI unreachable on a test number) should confirm it

@@ -16,6 +16,8 @@ const countCallerHistorySinceMock = vi.hoisted(() => vi.fn());
 const recordScreenedCallMock = vi.hoisted(() => vi.fn());
 const transferPhoneMock = vi.hoisted(() => vi.fn());
 const ownedNumbersMock = vi.hoisted(() => vi.fn());
+const countForwardedMock = vi.hoisted(() => vi.fn());
+const recordForwardedCallMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({
   getTransferPhone: (...a: unknown[]) => transferPhoneMock(...a),
   listPhoneNumbersForAccount: (...a: unknown[]) => ownedNumbersMock(...a),
@@ -26,6 +28,8 @@ vi.mock("@bis/db", () => ({
   countCallsByCallerSince: (...a: unknown[]) => countCallsByCallerSinceMock(...a),
   countCallerHistorySince: (...a: unknown[]) => countCallerHistorySinceMock(...a),
   recordScreenedCall: (...a: unknown[]) => recordScreenedCallMock(...a),
+  countForwardedCallsSince: (...a: unknown[]) => countForwardedMock(...a),
+  recordForwardedCall: (...a: unknown[]) => recordForwardedCallMock(...a),
 }));
 
 // `after()` becomes a recorder we invoke ourselves — same pattern as
@@ -76,6 +80,10 @@ beforeEach(() => {
   ownedNumbersMock.mockReset().mockResolvedValue([{ id: "pn1", account_id: "a1", e164: "+19565550999", telnyx_id: null, status: "live" }]);
   stampMock.mockReset();
   afterMock.mockReset();
+  // No forwarded calls today, by default (0059), so every pre-existing cap
+  // test still counts only what it arranged.
+  countForwardedMock.mockReset().mockResolvedValue({ forAccount: 0, forCaller: 0 });
+  recordForwardedCallMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("texml route", () => {
@@ -996,3 +1004,94 @@ describe("the voice.texml heartbeat (operational-floor spec §1)", () => {
   });
 });
 
+
+describe("forwarded calls count toward the daily caps (0059)", () => {
+  const ACCOUNT = "0b2cbb04-b46c-4fed-a377-d377a1a201eb";
+  const LINE = { id: "pn1", account_id: ACCOUNT, e164: "+19565550999", telnyx_id: null, status: "live" };
+  const call = () => GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19565550111"));
+  beforeEach(() => {
+    lookupMock.mockImplementation(async (_db: unknown, e164: string) => (e164 === LINE.e164 ? LINE : null));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("a caller with five forwarded calls today and no Sofía calls hears the cap (mutation: leave forCaller out of the per-number count → FAILS)", async () => {
+    countForwardedMock.mockResolvedValue({ forAccount: 5, forCaller: 5 });
+    const xml = await (await call()).text();
+    expect(xml).toContain("can't take more calls today");
+    expect(xml).not.toContain("<Dial");
+  });
+
+  it("forwarded and Sofía calls ADD: three of each is over the per-number cap of five (mutation: take the larger instead of the sum → FAILS)", async () => {
+    countCallsByCallerSinceMock.mockResolvedValue(3);
+    countForwardedMock.mockResolvedValue({ forAccount: 3, forCaller: 3 });
+    expect(await (await call()).text()).toContain("can't take more calls today");
+  });
+
+  it("the account's forwarded calls reach the per-account cap of fifty (mutation: leave forAccount out → FAILS)", async () => {
+    countForwardedMock.mockResolvedValue({ forAccount: 50, forCaller: 0 });
+    expect(await (await call()).text()).toContain("can't take more calls today");
+  });
+
+  it("is read for this account and caller, from midnight UTC, alongside the other counts", async () => {
+    await call();
+    expect(countForwardedMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT, "+19565550111", utcDayStart(new Date()));
+  });
+
+  it("the forwarded count failing fails OPEN like the others: the call is not cleared, so Sofía answers and nothing is forwarded", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    countForwardedMock.mockRejectedValue(new Error("relation does not exist"));
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("+19565550123");
+  });
+});
+
+describe("a per-account forward is recorded (0059)", () => {
+  const ACCOUNT = "0b2cbb04-b46c-4fed-a377-d377a1a201eb";
+  const LINE = { id: "pn1", account_id: ACCOUNT, e164: "+19565550999", telnyx_id: null, status: "live" };
+  const call = () => GET(new Request("https://x.example/api/voice/texml?To=%2B19565550999&From=%2B19565550111"));
+  beforeEach(() => {
+    lookupMock.mockImplementation(async (_db: unknown, e164: string) => (e164 === LINE.e164 ? LINE : null));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("one account-forward row with the account, the line, the dialled number and the caller, written in after() (mutation: drop the write → FAILS)", async () => {
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    const xml = await (await call()).text();
+    expect(xml).toContain(">+19565550123</Dial>");
+    expect(recordForwardedCallMock).not.toHaveBeenCalled();
+    await flushAfter();
+    expect(recordForwardedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      accountId: ACCOUNT, phoneNumberId: "pn1", calledE164: "+19565550999",
+      callerE164: "+19565550111", kind: "account-forward",
+    });
+  });
+
+  it("a call that goes to Sofía records nothing (mutation: record on the bridge too → FAILS)", async () => {
+    await call();
+    await flushAfter();
+    expect(recordForwardedCallMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed write is logged and changes nothing about the forward", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    recordForwardedCallMock.mockRejectedValue(new Error("db down"));
+    const xml = await (await call()).text();
+    await flushAfter();
+    expect(xml).toContain(">+19565550123</Dial>");
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("forwarded-call write failed (account-forward)"));
+  });
+
+  it("after() itself throwing still forwards, never a 500 (mutation: remove the try around after() → FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    afterMock.mockImplementation(() => { throw new Error("no request scope"); });
+    const res = await call();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain(">+19565550123</Dial>");
+  });
+});

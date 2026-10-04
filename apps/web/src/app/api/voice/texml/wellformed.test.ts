@@ -220,6 +220,7 @@ const getCallMock = vi.hoisted(() => vi.fn());
 // route.test.ts and incoming/lifecycle.test.ts do. Nothing here inspects it.
 const recordScreenedCallMock = vi.hoisted(() => vi.fn());
 const afterMock = vi.hoisted(() => vi.fn());
+const countForwardedMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
@@ -234,6 +235,8 @@ vi.mock("@bis/db", () => ({
   setCallOutcome: (...a: unknown[]) => setCallOutcomeMock(...a),
   getCall: (...a: unknown[]) => getCallMock(...a),
   recordScreenedCall: (...a: unknown[]) => recordScreenedCallMock(...a),
+  countForwardedCallsSince: (...a: unknown[]) => countForwardedMock(...a),
+  recordForwardedCall: async () => undefined,
 }));
 vi.mock("next/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("next/server")>();
@@ -261,6 +264,7 @@ beforeEach(() => {
   countCallsSinceMock.mockReset().mockResolvedValue(0);
   countCallsByCallerSinceMock.mockReset().mockResolvedValue(0);
   countCallerHistorySinceMock.mockReset().mockResolvedValue({ spamCalls: 0, otherCalls: 0 });
+  countForwardedMock.mockReset().mockResolvedValue({ forAccount: 0, forCaller: 0 });
   getCallByHandoffTokenMock.mockReset().mockResolvedValue({
     id: "c1", account_id: "acct1", phone_number_id: "pn1",
     handoff_requested_at: new Date().toISOString(),

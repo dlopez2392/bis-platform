@@ -18,6 +18,13 @@ const platformNumberMock = vi.hoisted(() => vi.fn());
 // "was called at least once with", so it cannot tell a route that resolved
 // the account first from one that ALSO read another tenant's row before it.
 const events = vi.hoisted(() => [] as string[]);
+// The fallback's forwarded-call record (0059), written in after().
+const recordForwardedCallMock = vi.hoisted(() => vi.fn());
+const afterMock = vi.hoisted(() => vi.fn());
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: (cb: () => unknown) => afterMock(cb) };
+});
 
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
@@ -34,6 +41,7 @@ vi.mock("@bis/db", () => ({
     return listPhoneNumbersForAccountMock(...a);
   },
   getPhoneNumberByE164: (...a: unknown[]) => platformNumberMock(...a),
+  recordForwardedCall: (...a: unknown[]) => recordForwardedCallMock(...a),
 }));
 
 const REQUESTED = {
@@ -72,6 +80,8 @@ beforeEach(() => {
   delete process.env.TELNYX_PUBLIC_KEY;
   delete process.env.APP_ORIGIN;
   events.length = 0;
+  recordForwardedCallMock.mockReset().mockResolvedValue(undefined);
+  afterMock.mockReset();
   getCallByHandoffTokenMock.mockReset().mockResolvedValue(REQUESTED);
   getTransferPhoneMock.mockReset().mockResolvedValue("+19562921696");
   // The account's own numbers — the loop guard's input. `testing` on purpose:
@@ -417,6 +427,42 @@ describe("the model-down fallback (operational-floor spec §3)", () => {
     expect(xml).toContain('<Dial callerId="+19565550999" timeout="20" timeLimit="3600" passDiversionHeader="true">+19562921696</Dial>');
     expect(getTransferPhoneMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT);
     expect(listPhoneNumbersForAccountMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT);
+  });
+
+  it("a fallback forward is recorded as model-down, with the ticket's account and number and the carrier's caller, in after() (mutation: drop the write → FAILS)", async () => {
+    const res = await POST(new Request(`https://x.example/api/voice/texml/handoff?${new URLSearchParams({ t: TOKEN, f: ticket })}`, {
+      method: "POST",
+      body: new URLSearchParams({ DialCallStatus: "failed", From: "+19565550111" }),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
+    expect(await res.text()).toContain("+19562921696</Dial>");
+    expect(recordForwardedCallMock).not.toHaveBeenCalled();
+    for (const [cb] of afterMock.mock.calls) await (cb as () => unknown)();
+    expect(recordForwardedCallMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      accountId: ACCOUNT, phoneNumberId: "pn1", calledE164: "+19565550999",
+      callerE164: "+19565550111", kind: "model-down",
+    });
+  });
+
+  it("no From on the callback counts toward the account alone (caller null), and no transfer target records nothing", async () => {
+    await fall("busy");
+    for (const [cb] of afterMock.mock.calls) await (cb as () => unknown)();
+    expect(recordForwardedCallMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ callerE164: null }));
+    recordForwardedCallMock.mockClear();
+    afterMock.mockClear();
+    getTransferPhoneMock.mockResolvedValue(null);
+    await fall("busy");
+    for (const [cb] of afterMock.mock.calls) await (cb as () => unknown)();
+    expect(recordForwardedCallMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed write, or after() throwing, never costs the caller the dial", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    recordForwardedCallMock.mockRejectedValue(new Error("db down"));
+    expect(await fall("failed")).toContain("+19562921696</Dial>");
+    for (const [cb] of afterMock.mock.calls) await (cb as () => unknown)();
+    afterMock.mockImplementation(() => { throw new Error("no request scope"); });
+    expect(await fall("failed")).toContain("+19562921696</Dial>");
   });
 
   it("it emails BIS: a voice.sip_webhook error heartbeat (mutation: drop the stamp → FAILS)", async () => {

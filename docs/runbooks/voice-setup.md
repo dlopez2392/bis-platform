@@ -605,8 +605,11 @@ Two levers send calls to a person instead of Sofía, plus one automatic fallback
    - It replaces the bridge to Sofía and nothing else: unknown numbers, a disabled line and numbers
      already marked as spam still refuse first, and a call whose screening could not be checked
      goes to Sofía, never to the person. Each forwarded call is capped at an hour.
-   - Forwarded calls are not counted toward the daily cap or spam marking (they write no call
-     record), so treat it as a short-lived lever, not a permanent setting.
+   - Forwarded calls write no call record (no transcript, no outcome), but since 0059 each one is
+     recorded in `forwarded_calls` and COUNTS toward the daily caps: a caller's sixth call of the
+     day hears the cap sentence instead of ringing the phone. They are still not judged for spam
+     (a forwarded call has no outcome to judge), so numbers already marked as spam are turned away
+     but new robots are only capped. Treat it as a short-lived lever, not a permanent setting.
 2. **Every number at once: `VOICE_FORWARD_TO` in Vercel.**
    - The deployment-wide override, checked before anything else. Set it to an E.164 number and
      redeploy; every call on every number rings it. Unset it and redeploy to hand the phones back.
@@ -616,6 +619,8 @@ Two levers send calls to a person instead of Sofía, plus one automatic fallback
      handoff route rings the account's transfer number instead of hanging up.
    - With no transfer number it hangs up, as before. Either way it records a `voice.sip_webhook`
      error heartbeat, so the ops alert emails BIS that Sofía was unreachable.
+   - Each call it puts through is recorded (`forwarded_calls`, kind `model-down`) and counts toward
+     the daily caps, so an outage cannot become an unbounded stream of calls to a person's phone.
    - It acts only for calls the TeXML route fully cleared (a signed ticket on the handoff URL);
      a call whose screening reads failed is never forwarded.
 
@@ -668,6 +673,9 @@ call from, the fallback rings a phone that is already on this call, and you lear
   never gets here: it is not drilled at all, and Sofía answers it (`fallback drill NOT engaged`).
 - A spoken refusal instead of ringing: the screening refused your phone (usually the repeat-caller
   guard, from earlier test calls). Add it to `PHONE_SPAM_EXEMPT_CALLERS` and try again.
+- "We can't take more calls today": the per-caller daily cap. Every drill call that rings the
+  transfer phone counts toward it (0059), as do your test calls to Sofía, so five in a day from the
+  same phone is the limit. Use another phone or wait for midnight UTC.
 - Sofía answers: the variables did not reach the running deployment (redeploy), or one of them is
   not exactly the E.164 form the carrier sends.
 
