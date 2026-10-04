@@ -327,8 +327,8 @@ describe("voice texml handoff route — the token stops working minutes after th
   // read back the account's private transfer number and one of its owned
   // numbers. It cannot place a call — nothing here writes, and only Telnyx
   // executes TeXML — so the loss is disclosure of a private business line.
-  // Unbounded in time, until this gate: with TELNYX_PUBLIC_KEY unset (today's
-  // state) a logged token is a complete credential.
+  // Unbounded in time, until this gate: wherever TELNYX_PUBLIC_KEY is unset
+  // (not production since 2026-09-29) a logged token is a complete credential.
   //
   // A recency gate, NOT single use: Task 5's result route is pointed at
   // `handoff-result?t=<the same token>`, so consuming it here would break it.
@@ -371,8 +371,8 @@ describe("voice texml handoff route — the token stops working minutes after th
 });
 
 describe("voice texml handoff route — signature enforcement matches /api/voice/texml", () => {
-  // Same gate as the route that mints the token, so the two cannot drift
-  // when TELNYX_PUBLIC_KEY is finally set (runbook Step 6).
+  // Same gate as the route that mints the token, so the two cannot drift.
+  // Production has run with TELNYX_PUBLIC_KEY set since 2026-09-29.
   it("with the key set, a request carrying no signature headers is rejected", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";

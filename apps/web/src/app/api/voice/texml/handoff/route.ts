@@ -128,8 +128,12 @@ const MAX_TRANSFER_SECONDS = 3600;
  * and a refusal to overwrite an outcome that outranks `transferred`, so a
  * replay is a no-op. The two ceilings are deliberately different quantities —
  * ten minutes to DIAL a person, four hours to RECORD a conversation that had
- * to happen first. `TELNYX_PUBLIC_KEY` is unset today, so there is no second
- * gate underneath either of them.
+ * to happen first. Underneath both sits the Telnyx signature: `TELNYX_PUBLIC_KEY`
+ * has been set in production since 2026-09-29 (runbook `a2p-registration.md`),
+ * so a logged URL alone no longer gets a request in — it also needs a
+ * five-minute-fresh Telnyx signature over its body. The signature does NOT
+ * cover the query string, so the token is still what binds a request to its
+ * call, and these ceilings still matter.
  *
  * Why ten and not two: the legitimate fetch happens seconds after the stamp —
  * Sofía says her line, the socket closes, Telnyx fetches this URL. But the
@@ -421,8 +425,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     console.error(`handoff: failed to read request body: ${String(e)}`);
   }
   // Identical gate to `/api/voice/texml`'s POST, deliberately duplicated
-  // rather than inferred, so the two cannot drift when TELNYX_PUBLIC_KEY is
-  // finally set (runbook Step 6). Unset today means validation is OFF.
+  // rather than inferred, so the two cannot drift. TELNYX_PUBLIC_KEY is set in
+  // production (since 2026-09-29); unset — local runs and the route tests —
+  // means validation is OFF.
   const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
   if (publicKey) {
     const timestamp = req.headers.get("telnyx-timestamp");
@@ -451,11 +456,12 @@ export async function POST(req: Request): Promise<NextResponse> {
     // Never log the token itself: unlike a call id or a dialed number, this
     // value IS the authorisation.
     // The carrier's status decides only WHETHER the fallback may run; who it
-    // rings comes from the signed ticket. The status itself is signed only
-    // once TELNYX_PUBLIC_KEY is set (unset today): until then a holder of a
-    // logged action URL can claim `failed` for its ten minutes and read back
-    // the transfer number — the same disclosure, and the same window, the
-    // handoff token already documents above (MAX_TOKEN_AGE_MS).
+    // rings comes from the signed ticket. With TELNYX_PUBLIC_KEY set (as in
+    // production) the status arrives in a Telnyx-signed body, so a holder of
+    // a logged action URL cannot simply claim `failed`. Where the key is unset
+    // they could, for the ticket's ten minutes, and read back the transfer
+    // number — the same disclosure, and the same window, the handoff token
+    // documents above (MAX_TOKEN_AGE_MS).
     const dialStatus = new URLSearchParams(rawBody).get("DialCallStatus")?.trim().toLowerCase() || null;
     const xml = await decide(token, configuredOrigin() ?? new URL(req.url).origin, query.get("f"), dialStatus);
     return xmlResponse(xml ?? HANGUP);

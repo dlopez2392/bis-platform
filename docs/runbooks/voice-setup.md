@@ -11,6 +11,9 @@ Two follow-on procedures live alongside the 7 steps, not numbered into them:
 test or real — actually gets set up now, via the Setup wizard page; and
 **"TELNYX_PUBLIC_KEY — hardened activation procedure"** (after Step 3) is an
 optional hardening upgrade you can do later, on your own schedule.
+**Production completed it on 2026-09-29** (texting needs the key — see
+`a2p-registration.md`), so production runs Voice Method **POST** with the key
+set, and `GET /api/voice/texml` answers 405 there by design.
 
 Two URLs everything below points at:
 
@@ -78,7 +81,9 @@ Production deployment's "Redeployed" timestamp is AFTER these were saved.
    POST + signature-verified mode exists (see "TELNYX_PUBLIC_KEY —
    hardened activation procedure" below) but it is optional, and flipping
    Voice Method to POST outside that procedure's order breaks every call —
-   read it before touching this setting.
+   read it before touching this setting. **Production is already on POST
+   (since 2026-09-29):** do not set it back to GET there while
+   `TELNYX_PUBLIC_KEY` is set, or every live call gets a 405.
 3. **Webhook URL**: `https://app.bis-rgv.com/api/voice/texml`
 4. **Inbound**: enable the **OPUS** codec.
 5. **Outbound**: attach the account's existing **OVP** (Outbound Voice
@@ -539,7 +544,8 @@ Beyond Step 2's three, these are the ones worth knowing by name:
   saga this milestone closed out). Unset behavior: still works, just leaks
   the `vercel.app` domain into links again — don't unset this without a
   reason.
-- **`TELNYX_PUBLIC_KEY`** — unset by default. See "TELNYX_PUBLIC_KEY —
+- **`TELNYX_PUBLIC_KEY`** — unset by default; SET in production since
+  2026-09-29 (inbound texts need it). See "TELNYX_PUBLIC_KEY —
   hardened activation procedure" above before ever setting this one; it is
   not a "set and forget" var, the TeXML app's Voice Method has to be
   flipped to POST first or every live call breaks.
