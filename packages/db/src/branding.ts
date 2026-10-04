@@ -61,6 +61,39 @@ export async function removeBrandLogo(db: SupabaseClient, path: string): Promise
   if (error) throw new Error(`removeBrandLogo failed: ${error.message}`);
 }
 
+/**
+ * Deletes every object under one account's logo prefix EXCEPT `keepPath`.
+ * SERVER ONLY.
+ *
+ * Exists for "Remove logo" (web's removeBrandLogoAction): that action clears
+ * `brand_logo_path` WITHOUT deleting the stored object, so an Undo toast can
+ * restore it — the object sits unreferenced until something else touches
+ * this account's logo. Both call sites that touch it (a fresh upload, or a
+ * new Remove) pass the path they are about to make current as `keepPath`, so
+ * this sweeps up whatever was left behind by an EARLIER Remove nobody undid,
+ * never the object a caller is relying on still being there.
+ *
+ * Lists exactly one prefix (`${accountId}/`) and only ever removes objects
+ * found under it — `uploadBrandLogo`'s content-addressed paths all start
+ * there, so a cross-account delete is impossible by construction, not by a
+ * check here.
+ *
+ * `keepPath === null` sweeps the whole prefix: there is nothing to keep
+ * (the account has no current logo at all).
+ */
+export async function sweepOrphanedLogos(
+  db: SupabaseClient, accountId: string, keepPath: string | null,
+): Promise<void> {
+  const { data, error } = await db.storage.from(BUCKET).list(accountId);
+  if (error) throw new Error(`sweepOrphanedLogos: list failed: ${error.message}`);
+  const stale = (data ?? [])
+    .map((o) => `${accountId}/${o.name}`)
+    .filter((p) => p !== keepPath);
+  if (stale.length === 0) return;
+  const { error: removeError } = await db.storage.from(BUCKET).remove(stale);
+  if (removeError) throw new Error(`sweepOrphanedLogos: remove failed: ${removeError.message}`);
+}
+
 export function brandLogoUrl(path: string): string {
   const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
   if (!base) throw new Error("brandLogoUrl: NEXT_PUBLIC_SUPABASE_URL missing");

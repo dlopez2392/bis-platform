@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { serviceDb } from "../service";
-import { uploadBrandLogo, removeBrandLogo, brandLogoUrl } from "../branding";
+import { uploadBrandLogo, removeBrandLogo, sweepOrphanedLogos, brandLogoUrl } from "../branding";
 
 // This suite hits the real hosted Supabase project's Storage -- it has no
 // local/hermetic mode. Skip loudly rather than fail hard when the
@@ -99,5 +99,44 @@ describe.skipIf(!hasCredentials)("brand logo storage", () => {
     } finally {
       await db.storage.from("brand-logos").remove([a]);
     }
+  });
+
+  // sweepOrphanedLogos: "Remove logo" (web's removeBrandLogoAction) clears
+  // brand_logo_path WITHOUT deleting the object, so an un-undone Remove
+  // leaves exactly this shape behind — an object no account row points at.
+  describe("sweepOrphanedLogos", () => {
+    it("deletes every object under the prefix except keepPath (mutation: sweep unconditionally, ignoring keepPath, → FAILS: `second` would be gone too)", async () => {
+      const db = serviceDb();
+      const accountId = "00000000-0000-0000-0000-0000000000ad";
+      const first = await uploadBrandLogo(db, accountId, PNG_1PX, "image/png");
+      const second = await uploadBrandLogo(db, accountId, PNG_1PX_ALT, "image/png");
+      try {
+        await sweepOrphanedLogos(db, accountId, second);
+        const { data: listed, error } = await db.storage.from("brand-logos").list(accountId);
+        if (error) throw new Error(`list failed: ${error.message}`);
+        const names = (listed ?? []).map((o) => `${accountId}/${o.name}`);
+        expect(names).not.toContain(first);
+        expect(names).toContain(second);
+      } finally {
+        await db.storage.from("brand-logos").remove([first, second]);
+      }
+    });
+
+    it("sweeps the WHOLE prefix when keepPath is null — there is nothing to keep (mutation: no-op on a null keepPath → FAILS: `only` would survive)", async () => {
+      const db = serviceDb();
+      const accountId = "00000000-0000-0000-0000-0000000000ae";
+      const only = await uploadBrandLogo(db, accountId, PNG_1PX, "image/png");
+      await sweepOrphanedLogos(db, accountId, null);
+      const { data: listed, error } = await db.storage.from("brand-logos").list(accountId);
+      if (error) throw new Error(`list failed: ${error.message}`);
+      expect(listed ?? []).toHaveLength(0);
+      void only; // uploaded only to be proven gone, above
+    });
+
+    it("is a no-op (no error, no deletion) on a prefix with nothing in it", async () => {
+      const db = serviceDb();
+      const accountId = "00000000-0000-0000-0000-0000000000af";
+      await expect(sweepOrphanedLogos(db, accountId, null)).resolves.toBeUndefined();
+    });
   });
 });

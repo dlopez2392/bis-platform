@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
 import { badgeVariants } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
@@ -18,6 +19,7 @@ import { publicFormTheme } from "@/lib/branding/public-form-theme";
 import { deriveTheme, type CornerName, type ModeName, type NeutralName, type TypeName } from "@/lib/branding/theme";
 import { themeStyle } from "@/lib/branding/theme-style";
 import { MAX_LOGO_BYTES } from "@/lib/branding/validate-logo";
+import { runRemoveLogo, type RemoveLogoResult, type RestoreLogoResult } from "@/lib/branding/remove-logo";
 
 /** "" is always first: it is how the operator clears the input again. */
 function RadioRow({
@@ -72,6 +74,8 @@ export function BrandingPanel({
   brandMode,
   logoUrl,
   action,
+  removeLogoAction,
+  restoreLogoAction,
 }: {
   audience?: BrandingAudience;
   brandName: string | null;
@@ -90,12 +94,38 @@ export function BrandingPanel({
    *  service-role client into the browser bundle. */
   logoUrl: string | null;
   action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** "Remove logo" (DESIGN.md rule 6): runs at once with an Undo toast, no
+   *  confirm dialog — see ./actions.ts's removeBrandLogoAction/
+   *  restoreBrandLogoAction and lib/branding/remove-logo.ts's runRemoveLogo.
+   *  Optional only because the panel also renders in the styleguide with no
+   *  account behind it; every real page binds both together. */
+  removeLogoAction?: () => Promise<RemoveLogoResult>;
+  restoreLogoAction?: (path: string) => Promise<RestoreLogoResult>;
 }) {
   const copy = panelCopy(audience);
 
   // Bumped on success to reset the file input, so the chosen filename stops
   // being displayed next to a preview that has already moved on to it.
   const [fileKey, setFileKey] = useState(0);
+
+  // Whether a logo CURRENTLY exists, independent of `logoUrl` itself: Remove
+  // never deletes the stored object (see remove-logo.ts), so the same prop
+  // URL is still valid bytes if Undo brings it back within this render's
+  // lifetime — this flag is only which state the card is showing right now.
+  const [hasLogo, setHasLogo] = useState(logoUrl !== null);
+  // Re-adopt on a genuinely new `logoUrl` (React's own pattern for a prop
+  // that changed under a component holding derived state) — a fresh Save
+  // that uploads a different file must not keep showing a stale "removed"
+  // flag from this account's PREVIOUS logo.
+  const [adoptedLogoUrl, setAdoptedLogoUrl] = useState(logoUrl);
+  if (adoptedLogoUrl !== logoUrl) {
+    setAdoptedLogoUrl(logoUrl);
+    setHasLogo(logoUrl !== null);
+  }
+  const removeLogo = () => {
+    if (!removeLogoAction || !restoreLogoAction) return;
+    void runRemoveLogo(removeLogoAction, restoreLogoAction, setHasLogo, toast);
+  };
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     // Refuse an oversized logo here, before the request leaves the browser.
@@ -430,17 +460,31 @@ export function BrandingPanel({
 
           <div className="space-y-1.5">
             <p className="text-sm font-medium text-card-foreground">{m["branding.currentLogo"]}</p>
-            {logoUrl ? (
-              // Plain <img>, not next/image: this is a small asset on a public
-              // CDN path, and routing it through the optimizer would mean
-              // configuring a remote pattern for the Supabase host to gain
-              // nothing. max-h keeps a tall upload from stretching the panel.
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={logoUrl}
-                alt={brandName ?? m["branding.logo"]}
-                className="max-h-12 w-auto rounded-[var(--radius-ctl)] border border-border bg-[var(--surface-2)] p-1"
-              />
+            {logoUrl && hasLogo ? (
+              <div className="flex items-center gap-3">
+                {/* Plain <img>, not next/image: this is a small asset on a
+                    public CDN path, and routing it through the optimizer
+                    would mean configuring a remote pattern for the Supabase
+                    host to gain nothing. max-h keeps a tall upload from
+                    stretching the panel. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={logoUrl}
+                  alt={brandName ?? m["branding.logo"]}
+                  className="max-h-12 w-auto rounded-[var(--radius-ctl)] border border-border bg-[var(--surface-2)] p-1"
+                />
+                {/* Ghost, never the card's primary (DESIGN rule 8: Save
+                    stays the one primary button on this view) — and
+                    type="button" so it never submits the surrounding form.
+                    Reversible, so it runs at once with an Undo toast rather
+                    than a confirm dialog (rule 6). Only rendered once there
+                    is a logo to remove. */}
+                {removeLogoAction && restoreLogoAction ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={removeLogo}>
+                    {m["branding.removeLogo"]}
+                  </Button>
+                ) : null}
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground">{m["branding.noLogo"]}</p>
             )}
