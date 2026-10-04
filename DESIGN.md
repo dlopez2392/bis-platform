@@ -34,8 +34,10 @@ mockup parity; danlo then decided on the A/B measurement — blurred vs not on
 the real dashboard, 23.2% of pixels differ at all but by a mean of 2.3/765 and
 only 0.07% past 8/765, because a card sits over the lit ground's smooth
 gradients and the blur has nothing to resolve. The sidebar and overlays sit
-over real content and never scroll, so they keep it), and `--shadow-card` — never gray
-blur shadows in either mode; ambient light is accent-tinted, which is why
+over real content and never scroll, so they keep it), and `--shadow-card` — never a gray
+blur shadow; in light mode the card shadow is accent-tinted (ambient light),
+and in dark mode it is the mockup's own deep black drop under the glass
+highlight (`docs/design/northern-lights.html`'s `--card-shadow`), which is why
 `--shadow-card` and `--shadow-overlay` are declared on `*`, not `:root`.
 
 **Type roles (3, no exceptions):**
