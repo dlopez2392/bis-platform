@@ -13,6 +13,10 @@ comparison through the Supabase MCP).
 **Touches production:** never for writing. The restore goes to a *new* project,
 and production is only read, by one read-only SQL file.
 
+**Same quarter, same sitting:** the model-down fallback drill
+(`docs/runbooks/voice-setup.md`, "Drilling the model-down fallback"), ten
+minutes, logged in its own table at the bottom of this file.
+
 ## Before you start
 
 1. **Confirm the plan.** Production is in the paid organization (see the facts
@@ -79,3 +83,9 @@ and it cannot be undone.
 | Date | Plan | Backup age | PITR | Duration | Result | Notes | Run by |
 |---|---|---|---|---|---|---|---|
 | | | | | | | First drill: run when this runbook ships | |
+
+## Fallback drill log
+
+| Date | Line | DialCallStatus seen | Transfer phone rang | Alert email arrived | Result | Run by |
+|---|---|---|---|---|---|---|
+| | | | | | First drill: run when the drill switch ships | |

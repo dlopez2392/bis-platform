@@ -267,7 +267,11 @@ production forbids today. It is recorded so the trade-off is visible.
 - **OPEN: the fallback's carrier behaviour is unmeasured.** It sends a second `<Dial>` on an
   inbound leg the bridge never answered (`answerOnBridge`), where every earlier handoff ran on an
   answered call. One real test call (OpenAI unreachable on a test number) should confirm it
-  before decision 2 is relied on.
+  before decision 2 is relied on. 2026-10-04: no line could be cut off alone (every number is
+  live and the SIP address is shared), so a drill switch was added — `VOICE_FALLBACK_DRILL_TO`
+  and `_FROM`, both required, dial an address that never resolves for that one caller on that
+  one line (`lib/voice/fallback-drill.ts`; runbook `voice-setup.md`, "Drilling the model-down
+  fallback"). It runs quarterly beside the restore drill.
 - **Wherever `TELNYX_PUBLIC_KEY` is unset**, anyone reaching `/api/voice/texml` stamps
   `voice.texml` ok, which can close an open `voice.texml` alert early. Corrected 2026-10-04: this
   section was written believing the key unset in production; it has been set there since
