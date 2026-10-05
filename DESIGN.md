@@ -67,7 +67,9 @@ hovers, 250ms panels, `prefers-reduced-motion` respected, and NOTHING
 animates on scroll.
 
 **Tenant seam:** `deriveTheme`/`themeStyle` override the semantic surfaces
-(`--background`, `--card`, `--popover`, `--muted`, `--secondary`, `--border`,
+(`--background`, `--foreground`, `--card`, `--card-foreground`, `--popover`,
+`--popover-foreground`, `--primary`, `--primary-foreground`, `--secondary`,
+`--secondary-foreground`, `--muted`, `--muted-foreground`, `--border`,
 `--input`, `--ring`, the four `--sidebar*` names, `--radius`, `--font-sans`)
 and the whole accent family (`--accent`, `--accent-strong`, `--accent-dim`,
 `--ring-glow`, `--accent-2`, `--accent-2-dim`, `--ring-glow-2`,
