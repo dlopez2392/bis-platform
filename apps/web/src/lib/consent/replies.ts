@@ -20,11 +20,33 @@ const LINES = {
   "consent.help": { en: ["sms.consentReply.help.en", "sms.consentReply.help.noName.en"], es: ["sms.consentReply.help.es", "sms.consentReply.help.noName.es"] },
 } as const satisfies Record<ReplyKind, Record<"en" | "es", readonly [keyof typeof m, keyof typeof m]>>;
 
-/** The reply in the language asked, signed with the customer-facing name; a blank name drops the prefix. */
-export function consentReplyBody(kind: ReplyKind, language: "en" | "es", brandName: string): string {
+/**
+ * The HELP reply's support-contact phrase (TCR rejection 611: a HELP message
+ * must name a real contact — email, phone or website — not just "this
+ * number"). The account's own `reply_to_email` (Branding; a client sets it on
+ * their own Settings page) wins when set: BIS's own domain has no business
+ * appearing on a CLIENT's text once that client has a contact of its own.
+ * With nothing set, BIS's fixed contact (owner decision, 2026-10-05) is the
+ * floor every account ships with.
+ */
+function helpContactPhrase(language: "en" | "es", supportEmail: string | null | undefined): string {
+  const email = supportEmail?.trim();
+  if (!email) return m[language === "es" ? "sms.consentReply.help.contact.fallback.es" : "sms.consentReply.help.contact.fallback.en"];
+  return language === "es" ? `escriba a ${email}` : `email ${email}`;
+}
+
+/**
+ * The reply in the language asked, signed with the customer-facing name; a
+ * blank name drops the prefix (see the catalogue comment on why that case is
+ * not carrier-compliant, and is not "fixed" by signing with `accounts.name`
+ * instead — DESIGN.md rule 8: that name is the agency's internal label, never
+ * shown to a customer). `supportEmail` only matters for the help reply.
+ */
+export function consentReplyBody(kind: ReplyKind, language: "en" | "es", brandName: string, supportEmail?: string | null): string {
   const [named, nameless] = LINES[kind][language];
   const name = brandName.trim();
-  return name ? m[named].replace("{Business}", () => name) : m[nameless];
+  const templated = name ? m[named].replace("{Business}", () => name) : m[nameless];
+  return kind === "consent.help" ? templated.replace("{Contact}", () => helpContactPhrase(language, supportEmail)) : templated;
 }
 
 /**
@@ -45,9 +67,9 @@ export const TELNYX_KEYWORDS = {
 } as const satisfies Record<"stop" | "start" | "help", readonly string[]>;
 
 /** One bilingual reply per operation: the English line, then the Spanish line without its prefix (spec §5 step 0). */
-export function telnyxReplyText(op: "stop" | "start" | "help", brandName: string): string {
+export function telnyxReplyText(op: "stop" | "start" | "help", brandName: string, supportEmail?: string | null): string {
   const kind: ReplyKind = op === "stop" ? "consent.stop_confirmation" : op === "start" ? "consent.start_confirmation" : "consent.help";
-  return `${consentReplyBody(kind, "en", brandName)} ${consentReplyBody(kind, "es", "")}`;
+  return `${consentReplyBody(kind, "en", brandName, supportEmail)} ${consentReplyBody(kind, "es", "", supportEmail)}`;
 }
 
 const ACTOR = "sms-inbound";
@@ -74,7 +96,8 @@ export async function sendConsentReply(
   r: { accountId: string; to: string; contactId: string | null; conversationId: string | null; reply: ConsentReplyPlan },
 ): Promise<void> {
   try {
-    const body = consentReplyBody(r.reply.kind, r.reply.language, brandDisplayName(await getBranding(db, r.accountId)));
+    const branding = await getBranding(db, r.accountId);
+    const body = consentReplyBody(r.reply.kind, r.reply.language, brandDisplayName(branding), branding.replyToEmail);
     let messageId: string | null = null;
     const result = await sendSms(db, {
       accountId: r.accountId, kind: r.reply.kind, to: r.to, body, contactId: r.contactId,
