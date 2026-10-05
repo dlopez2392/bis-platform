@@ -178,11 +178,11 @@ describe("opportunities", () => {
       // pageSize=1 forces three separate keyset pages (`.gt("id", lastId)`
       // + `.limit(1)`) for the two open rows plus the empty page that ends
       // the loop — a real multi-page SUM against Postgres, not just the
-      // mocked unit test. What this does NOT prove: two rows inserted a
-      // moment apart almost certainly come back in that same order even
-      // with no ORDER BY at all, so this test passing is not evidence that
-      // `.order("id", …)` is doing anything — opportunities-pagination.test.ts's
-      // mock test is what pins that requirement (asserts `.order()` fires
+      // mocked unit test. As evidence for `.order("id", …)` it is weak, not
+      // proof: with keyset paging a missing ORDER BY would drop the second
+      // row only when its uuid sorts below the first, so a run can pass by
+      // luck. opportunities-pagination.test.ts's mock test is what pins
+      // that requirement (asserts `.order()` fires
       // on every page, and fails if paging stops on a merely SHORT page
       // instead of a genuinely empty one).
       const result = await sumOpenOpportunities(db, accountId, 1);

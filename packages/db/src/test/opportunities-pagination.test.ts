@@ -89,13 +89,22 @@ describe("sumOpenOpportunities (keyset pagination, no row-cap undercount)", () =
     expect(orderCalls).toEqual(limitCalls.map(() => ["id", { ascending: true }]));
   });
 
-  it("scopes to one account when accountId is given", async () => {
-    const { db, eqCalls } = fakeOpenOpportunitiesDb([[{ id: "a", monetary_value: 50 }]]);
+  // Over several pages: an agency user can read every account's rows under
+  // RLS, so a filter applied to the first page only would silently add other
+  // accounts' deals from page 2 on (mutation: filter only when lastId is
+  // undefined → FAILS).
+  it("scopes EVERY page to one account when accountId is given", async () => {
+    const { db, eqCalls, limitCalls } = fakeOpenOpportunitiesDb([
+      [{ id: "a", monetary_value: 50 }],
+      [{ id: "b", monetary_value: 25 }],
+      [],
+    ]);
 
-    await sumOpenOpportunities(db, "acct_1", 1000);
+    await sumOpenOpportunities(db, "acct_1", 1);
 
-    expect(eqCalls).toContainEqual(["status", "open"]);
-    expect(eqCalls).toContainEqual(["account_id", "acct_1"]);
+    expect(limitCalls.length).toBe(3);
+    expect(eqCalls.filter(([c]) => c === "account_id")).toEqual(limitCalls.map(() => ["account_id", "acct_1"]));
+    expect(eqCalls.filter(([c]) => c === "status")).toEqual(limitCalls.map(() => ["status", "open"]));
   });
 
   it("omits the account filter when no accountId is given (agency-wide)", async () => {
