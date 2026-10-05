@@ -262,17 +262,46 @@ profile** (<https://portal.telnyx.com/#/programmable-messaging/profiles>):
    would be a second, uncoordinated opinion on the same message.
 5. **Keywords tab, Global section** — set the opt-out (STOP), opt-in
    (START) and HELP keywords, each with its reply text signed with the
-   business's name **exactly as set on its account** (its brand name). Take
-   the exact wording from `telnyxReplyText` in
+   business's name **exactly as set on its account** (its brand name), and
+   the HELP reply carrying its support contact (the account's own
+   `reply_to_email` when it has one, else BIS's). Take the exact wording
+   from `telnyxReplyText(op, brandName, supportEmail)` in
    `apps/web/src/lib/consent/replies.ts` rather than retyping it — it is one
    English line naming the business plus a Spanish line, e.g. for a business
-   named "Example Co", `telnyxReplyText("stop", "Example Co")` renders:
-   > Example Co: You won't get any more texts from us. Reply START to get
-   > them again. Ya no le enviaremos mensajes. Responda START para volver a
-   > recibirlos.
+   named "Example Co" with no support email of its own,
+   `telnyxReplyText("stop", "Example Co")` renders:
+   > Example Co: You will receive no further messages. Reply START to
+   > resubscribe. Ya no le enviaremos mas mensajes. Responda START para
+   > volver a recibirlos.
 
    Renaming the business later means redoing these replies — the reply text
    is not derived from the account, it is typed once into Telnyx.
+
+   **Rewritten 2026-10-05** (TCR rejection, reason 611 — see this runbook's
+   history and `apps/web/src/lib/messages.ts`'s `sms.consentReply.*`
+   comment): the opt-in/STOP/HELP wording changed to carry the frequency,
+   rates, HELP/STOP and "no further messages" disclosures TCR requires. A
+   reply-text change in the app does **not** reach Telnyx or TCR on its
+   own — `telnyxReplyText`'s output is typed into each profile by hand, and
+   the keywords tab is the ONLY place it lives once set. Whenever the
+   wording in `replies.ts`/`messages.ts` changes:
+   1. Re-run `telnyxReplyText` for every LIVE business and retype its three
+      keyword replies (STOP, START, HELP) on that business's OWN messaging
+      profile in the Telnyx portal — there is no bulk edit, and a profile
+      still carrying the old wording means that business's customers keep
+      getting the old, non-compliant text even though the app's own records
+      (and any NEW profile) are current.
+   2. Resubmit the campaign's Opt-in message, Opt-out message and Help
+      message fields in TCR with the new wording for every campaign that
+      wording was submitted under — a campaign's approval is pinned to the
+      exact text it was approved with, same as the sample-message rule
+      above.
+
+   BIS's own profile (`4001a0ee-bd95-4fb6-b2b7-6e8d66a9834a`) needed exactly
+   this on 2026-10-05: it still carried the pre-rejection wording at the
+   time of the fix PR, so its three keyword replies and TCR's three MT
+   fields both needed retyping from the new `telnyxReplyText`/catalogue
+   output — not just the code.
 
 Once created, paste the profile's ID into the **Messaging profile ID** field
 on this account's **A2P registration** card

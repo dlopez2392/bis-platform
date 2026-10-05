@@ -2,6 +2,7 @@ import { getBranding, createMessage, updateMessageStatus, type SupabaseClient } 
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { m } from "@/lib/messages";
 import { loggableError } from "@/lib/loggable-error";
+import { segmentsFor } from "@/lib/sms/segments";
 import { sendSms } from "./gate";
 import type { ConsentReplyPlan } from "./inbound";
 
@@ -28,10 +29,24 @@ const LINES = {
  * appearing on a CLIENT's text once that client has a contact of its own.
  * With nothing set, BIS's fixed contact (owner decision, 2026-10-05) is the
  * floor every account ships with.
+ *
+ * Also the floor for a `reply_to_email` that would make the whole reply
+ * carrier-UNcompliant in a different way: longer than 60 characters pushes
+ * a message that is otherwise 1–2 segments well past the cap this file was
+ * just rewritten to hold, and anything outside GSM-7 (an accented local
+ * part, say) drops the WHOLE reply to UCS-2 at 70 characters a segment
+ * (segments.ts) — either one is worse than naming BIS's contact instead of
+ * the client's own.
  */
+function isUsableContactEmail(email: string): boolean {
+  return email.length <= 60 && segmentsFor(email).encoding === "gsm7";
+}
+
 function helpContactPhrase(language: "en" | "es", supportEmail: string | null | undefined): string {
   const email = supportEmail?.trim();
-  if (!email) return m[language === "es" ? "sms.consentReply.help.contact.fallback.es" : "sms.consentReply.help.contact.fallback.en"];
+  if (!email || !isUsableContactEmail(email)) {
+    return m[language === "es" ? "sms.consentReply.help.contact.fallback.es" : "sms.consentReply.help.contact.fallback.en"];
+  }
   return language === "es" ? `escriba a ${email}` : `email ${email}`;
 }
 

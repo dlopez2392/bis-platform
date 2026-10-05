@@ -40,7 +40,7 @@ describe("consentReplyBody — what BIS itself sends", () => {
       .toBe("A$&B: For help, email hello@bis-rgv.com or visit bis-rgv.com. Msg & data rates may apply. Reply STOP to opt out.");
   });
 
-  it.each(KINDS)("the opt-in confirmation (%s=start) names the brand, HELP, STOP, frequency and rates (TCR reason 611; mutation: drop any one → FAILS)", () => {
+  it("the opt-in confirmation names the brand, HELP, STOP, frequency and rates (TCR reason 611; mutation: drop any one → FAILS)", () => {
     const en = consentReplyBody("consent.start_confirmation", "en", "956 Woodworks");
     expect(en).toContain("956 Woodworks");
     expect(en).toMatch(/\bHELP\b/);
@@ -79,6 +79,22 @@ describe("consentReplyBody — what BIS itself sends", () => {
     expect(es).toMatch(/\bPARAR\b/);
   });
 
+  it("a support email over 60 characters falls back to BIS's own contact rather than push the reply past its segment cap (mutation: raise or drop the length check → FAILS)", () => {
+    const longEmail = `${"a".repeat(55)}@x.com`;
+    expect(longEmail.length).toBeGreaterThan(60);
+    const en = consentReplyBody("consent.help", "en", "956 Woodworks", longEmail);
+    expect(en).toContain("hello@bis-rgv.com");
+    expect(en).not.toContain(longEmail);
+  });
+
+  it("a support email outside GSM-7 falls back to BIS's own contact rather than drop the whole reply to UCS-2 (mutation: skip the GSM-7 check → FAILS)", () => {
+    const accented = "sopórte@x.com";
+    const en = consentReplyBody("consent.help", "en", "956 Woodworks", accented);
+    expect(en).toContain("hello@bis-rgv.com");
+    expect(en).not.toContain(accented);
+    expect(segmentsFor(en).encoding).toBe("gsm7");
+  });
+
   it.each(KINDS.flatMap((k) => (["en", "es"] as const).map((l) => [k, l] as const)))(
     "%s in %s is GSM-7 and at most TWO segments for a 20-character GSM-7 name — compliance costs more than the one segment this used to fit (spec: no á, í, ó or ú; mutation: put an accent in the line → UCS-2, FAILS)",
     (kind, lang) => {
@@ -108,6 +124,12 @@ describe("telnyxReplyText — what each business's Telnyx profile answers (Task 
       expect(s.encoding, op).toBe("gsm7");
       expect(s.segments, op).toBeLessThanOrEqual(3);
     }
+  });
+
+  it("the help reply's bilingual Telnyx text carries the client's own support email in BOTH halves, not just the English one (mutation: drop supportEmail from the English half → FAILS)", () => {
+    const t = telnyxReplyText("help", "956 Woodworks", "support@956woodworks.com");
+    expect(t.match(/support@956woodworks\.com/g)?.length).toBe(2);
+    expect(t).not.toContain("bis-rgv.com");
   });
 
   it("the stop config lists every stop word of decision 10, each at most once, within Telnyx's 20 (plan F2; mutation: drop NO MÁS → FAILS)", () => {
@@ -141,6 +163,16 @@ describe("sendConsentReply — the one BIS reply, through the gate", () => {
     // console.error's history).
     vi.spyOn(console, "error").mockClear().mockImplementation(() => {});
     vi.spyOn(console, "info").mockClear().mockImplementation(() => {});
+  });
+
+  it("the HELP reply uses the account's own reply-to email, not BIS's fallback (mutation: pass null instead of branding.replyToEmail → FAILS)", async () => {
+    db.getBranding.mockResolvedValue({ brandName: " 956 Woodworks ", replyToEmail: "support@956woodworks.com" });
+    await sendConsentReply({} as never, {
+      accountId: "a1", to: "+19562921696", contactId: "ct_1", conversationId: "conv_1",
+      reply: { kind: "consent.help", language: "en" },
+    });
+    expect(gate.sendSms.mock.calls[0]![1].body).toBe(
+      "956 Woodworks: For help, email support@956woodworks.com. Msg & data rates may apply. Reply STOP to opt out.");
   });
 
   it("asks the gate for the kind, the carrier's number, the stop it answers and the business-named line (mutation: numberFromCarrier false → FAILS)", async () => {
