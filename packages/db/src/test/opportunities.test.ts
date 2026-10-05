@@ -177,7 +177,11 @@ describe("opportunities", () => {
 
       // pageSize=1 forces three separate .range() pages for the two open
       // rows plus the empty page that ends the loop — a real multi-page
-      // traversal against Postgres, not just the mocked unit test.
+      // traversal against Postgres, not just the mocked unit test. The
+      // exact count/sum below only holds if `.order("id", …)` pins the same
+      // row order on every one of those three requests; without it,
+      // Postgres is free to answer each page from a different ordering and
+      // this could skip or double-count a row.
       const result = await sumOpenOpportunities(db, accountId, 1);
       expect(result).toEqual({ count: 2, value: 300 });
     }));

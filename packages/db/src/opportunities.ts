@@ -179,7 +179,14 @@ export async function sumOpenOpportunities(
   for (;;) {
     let query = db.from("opportunities").select("monetary_value").eq("status", "open");
     if (accountId !== undefined) query = query.eq("account_id", accountId);
-    const { data, error } = await query.range(from, from + pageSize - 1);
+    // Without a deterministic order, Postgres/PostgREST may hand back a
+    // different row order per request, and `.range()` pages by POSITION in
+    // that order — a second page fetched against a re-ordered result set
+    // can then skip or double-count rows. `id` is the table's primary key
+    // (0003_crm_core.sql), so ordering by it is both stable and indexed.
+    const { data, error } = await query
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
     if (error) throw new Error(`sumOpenOpportunities failed: ${error.message}`);
     const rows = (data ?? []) as { monetary_value: number }[];
     for (const row of rows) {

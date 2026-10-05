@@ -12,10 +12,15 @@ import { sumOpenOpportunities } from "../opportunities";
 function fakeOpenOpportunitiesDb(pages: { monetary_value: number }[][]) {
   const rangeCalls: Array<[number, number]> = [];
   const eqCalls: Array<[string, unknown]> = [];
+  const orderCalls: Array<[string, unknown]> = [];
   let call = 0;
   const builder: Record<string, unknown> = {
     eq: (col: string, val: unknown) => {
       eqCalls.push([col, val]);
+      return builder;
+    },
+    order: (col: string, opts: unknown) => {
+      orderCalls.push([col, opts]);
       return builder;
     },
     range: async (from: number, to: number) => {
@@ -28,7 +33,7 @@ function fakeOpenOpportunitiesDb(pages: { monetary_value: number }[][]) {
   const db = {
     from: () => ({ select: () => builder }),
   } as unknown as SupabaseClient;
-  return { db, rangeCalls, eqCalls };
+  return { db, rangeCalls, eqCalls, orderCalls };
 }
 
 describe("sumOpenOpportunities (pagination, no row-cap undercount)", () => {
@@ -45,6 +50,25 @@ describe("sumOpenOpportunities (pagination, no row-cap undercount)", () => {
     // Three range() calls: two full pages (which look like "there might be
     // more") plus the empty page that proves there wasn't.
     expect(rangeCalls).toEqual([[0, 1], [2, 3], [4, 5]]);
+  });
+
+  // Without a deterministic ORDER BY, Postgres/PostgREST is free to hand
+  // back a different row order per request — and `.range()` pages by
+  // POSITION in that order, not by any stable key. Each page is its own
+  // independent HTTP request (there is no server-side cursor held open
+  // between them), so EVERY page must carry the same `.order("id", …)`,
+  // not just the first — otherwise a later page could skip or repeat rows
+  // from a result set Postgres happened to re-order between requests.
+  it("orders by id on every page, not just the first", async () => {
+    const { db, orderCalls, rangeCalls } = fakeOpenOpportunitiesDb([
+      [{ monetary_value: 100 }, { monetary_value: 200 }],
+      [{ monetary_value: 300 }],
+    ]);
+
+    await sumOpenOpportunities(db, undefined, 2);
+
+    expect(rangeCalls.length).toBeGreaterThan(1);
+    expect(orderCalls).toEqual(rangeCalls.map(() => ["id", { ascending: true }]));
   });
 
   it("scopes to one account when accountId is given", async () => {
