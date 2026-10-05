@@ -57,7 +57,7 @@ highlight (`docs/design/northern-lights.html`'s `--card-shadow`), which is why
 - All aligned digits get `font-variant-numeric: tabular-nums`.
 
 **Shape & motion:** radii are 8px (controls, `--radius-ctl` / the mockup's
-`--r-ctl`), 12px (cards, `--radius-card` / `--r-card`; `--radius` is
+`--r-ctl`), 12px (cards and floating overlay panels — popovers, menus, the select dropdown, the command palette — `--radius-card` / `--r-card`; `--radius` is
 `0.75rem` so `rounded-lg` and `rounded-xl` finally agree), 999px (pills) —
 no other values, with two sanctioned small-control exceptions (owner
 decision, 2026-10-04): the checkbox box at 4px and the dialog/sheet close (X)

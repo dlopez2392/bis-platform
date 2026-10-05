@@ -707,6 +707,24 @@ describe("TooltipContent converges on --radius-ctl, not the bare rounded-md (202
 // no border and no background on that element — the wrapper div around it
 // is what paints the border, so the radius never renders anywhere. A dead
 // class that also happened to be the shape #1's test above now forbids.
+// Owner decision 2026-10-04: the five floating overlay panels were shadcn's
+// 10px (`rounded-md`), between the sanctioned 8px and 12px. They are panels,
+// not controls, so they take the card radius.
+describe("overlay panels use the 12px card radius (owner decision 2026-10-04)", () => {
+  const panels: Array<[string, string]> = [
+    ["./popover.tsx", 'data-slot="popover-content"'],
+    ["./dropdown-menu.tsx", 'data-slot="dropdown-menu-content"'],
+    ["./dropdown-menu.tsx", 'data-slot="dropdown-menu-sub-content"'],
+    ["./select.tsx", 'data-slot="select-content"'],
+    ["./command.tsx", 'data-slot="command"'],
+  ];
+  it.each(panels)("%s %s (mutation: restore rounded-md → FAILS)", (file, slot) => {
+    const literal = classLiteralAfter(src(file), slot);
+    expect(literal).toContain("rounded-[var(--radius-card)]");
+    expect(literal).not.toContain("rounded-md");
+  });
+});
+
 describe("CommandInput carries no dead rounded-md (2026-10-04)", () => {
   it("mutation: delete `rounded-md ` from the class list -> restoring it → test FAILS", () => {
     const literal = classLiteralAfter(src("./command.tsx"), 'data-slot="command-input"');
