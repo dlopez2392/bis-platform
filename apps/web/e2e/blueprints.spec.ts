@@ -138,7 +138,10 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // The checklist is still a live route with its own state — reached
     // directly now rather than by redirect.
     await page.goto(`/dashboard/accounts/${accountId}/checklist`);
-    await expect(page.getByRole("heading", { name: "Activation checklist" })).toBeVisible();
+    // level 1: the page title. Since CardTitle became an h3 (#174), the
+    // checklist card's own "Activation checklist · N remaining" title is a
+    // heading too, and an unscoped name matches both.
+    await expect(page.getByRole("heading", { name: "Activation checklist", level: 1 })).toBeVisible();
 
     // setChecklistItemAction is a raw (unwrapped) form action — clicking submit
     // fires a real POST that Next.js's router intercepts, but page.click() only

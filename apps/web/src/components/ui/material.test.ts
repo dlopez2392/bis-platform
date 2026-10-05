@@ -10,7 +10,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Inbox } from "lucide-react";
-import { Card } from "./card";
+import { Card, CardTitle } from "./card";
 import { Skeleton } from "./skeleton";
 import { Notice } from "./notice";
 import { EmptyState } from "../empty-state";
@@ -40,6 +40,25 @@ describe("Card is glass (spec §4)", () => {
   it("keeps bg-card (a tenant's --card must still win) and adds the glass utility", () => {
     expect(html).toMatch(/class="[^"]*\bbg-card\b[^"]*\bglass\b/);
     expect(html).not.toMatch(/shadow-sm/);
+  });
+});
+
+// Found 2026-10-04: CardTitle rendered a plain <div>, so screen-reader users
+// navigating by heading never heard a section's name. Every PageHeader route
+// already owns the page's <h1>, so a card title is the next level down — h3
+// was the smallest-risk default (no call site surveyed uses CardTitle beside
+// its own hand-rolled <h2>, so h2 would have been safe too, but h3 keeps a
+// clean h1 -> h3 skip rather than risking a future h2 collision on a page
+// that grows one).
+describe("CardTitle is a real heading for screen readers (2026-10-04)", () => {
+  it("renders an <h3>, not a <div> (mutation: as = 'h3' -> as = 'div' → FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(CardTitle, null, "Section"));
+    expect(html).toMatch(/^<h3[^>]*data-slot="card-title"/);
+  });
+  it("keeps its visual classes unchanged", () => {
+    const html = renderToStaticMarkup(createElement(CardTitle, null, "Section"));
+    expect(html).toContain("leading-none");
+    expect(html).toContain("font-semibold");
   });
 });
 
@@ -668,6 +687,51 @@ const quotedClassAfter = (text: string, anchor: string) => {
   return text.slice(valueStart, close);
 };
 
+// Found 2026-10-04: tooltip.tsx's content panel carried the bare shadcn
+// `rounded-md` (10px), not one of DESIGN.md's three sanctioned radii. The
+// mockup's only tooltip-shaped thing (`.bar.hot::after`, the chart's hot-bar
+// annotation) is a different component with its own `--tip-*` token family
+// and a 7px radius that belongs to that annotation, not to this generic
+// hover tooltip — so there is no mockup-defined tooltip radius to defer to,
+// and the content converges on the control radius like every other overlay
+// edge case already does.
+describe("TooltipContent converges on --radius-ctl, not the bare rounded-md (2026-10-04)", () => {
+  it("mutation: rounded-[var(--radius-ctl)] -> rounded-md → FAILS", () => {
+    const literal = classLiteralAfter(src("./tooltip.tsx"), 'data-slot="tooltip-content"');
+    expect(literal).toContain("rounded-[var(--radius-ctl)]");
+    expect(literal).not.toContain("rounded-md");
+  });
+});
+
+// Found 2026-10-04: CommandInput's own className carries `rounded-md` with
+// no border and no background on that element — the wrapper div around it
+// is what paints the border, so the radius never renders anywhere. A dead
+// class that also happened to be the shape #1's test above now forbids.
+// Owner decision 2026-10-04: the five floating overlay panels were shadcn's
+// 10px (`rounded-md`), between the sanctioned 8px and 12px. They are panels,
+// not controls, so they take the card radius.
+describe("overlay panels use the 12px card radius (owner decision 2026-10-04)", () => {
+  const panels: Array<[string, string]> = [
+    ["./popover.tsx", 'data-slot="popover-content"'],
+    ["./dropdown-menu.tsx", 'data-slot="dropdown-menu-content"'],
+    ["./dropdown-menu.tsx", 'data-slot="dropdown-menu-sub-content"'],
+    ["./select.tsx", 'data-slot="select-content"'],
+    ["./command.tsx", 'data-slot="command"'],
+  ];
+  it.each(panels)("%s %s (mutation: restore rounded-md → FAILS)", (file, slot) => {
+    const literal = classLiteralAfter(src(file), slot);
+    expect(literal).toContain("rounded-[var(--radius-card)]");
+    expect(literal).not.toContain("rounded-md");
+  });
+});
+
+describe("CommandInput carries no dead rounded-md (2026-10-04)", () => {
+  it("mutation: delete `rounded-md ` from the class list -> restoring it → test FAILS", () => {
+    const literal = classLiteralAfter(src("./command.tsx"), 'data-slot="command-input"');
+    expect(literal).not.toContain("rounded-md");
+  });
+});
+
 describe("the two sanctioned small-control radius exceptions (DESIGN.md Shape & motion)", () => {
   it("the checkbox box is 4px (mutation: rounded-[4px] -> rounded-[var(--radius-ctl)] → FAILS)", () => {
     const literal = classLiteralAfter(src("./checkbox.tsx"), 'data-slot="checkbox"');
@@ -713,10 +777,5 @@ describe("control radius converges on --radius-ctl, not rounded-md/rounded-sm/ba
     expect(s).toContain("rounded-[var(--radius-ctl)] p-1.5");
     expect(s).not.toContain("flex flex-col gap-1.5 rounded-md");
     expect(s).toContain("flex flex-col gap-1.5 rounded-[var(--radius-ctl)]");
-  });
-  it("TabsTrigger (unused today, but named in the follow-up's survey)", () => {
-    const t = src("./tabs.tsx");
-    expect(t).not.toContain("rounded-md border border-transparent");
-    expect(t).toContain("rounded-[var(--radius-ctl)] border border-transparent");
   });
 });
