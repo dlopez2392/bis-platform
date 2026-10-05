@@ -668,6 +668,22 @@ const quotedClassAfter = (text: string, anchor: string) => {
   return text.slice(valueStart, close);
 };
 
+// Found 2026-10-04: tooltip.tsx's content panel carried the bare shadcn
+// `rounded-md` (10px), not one of DESIGN.md's three sanctioned radii. The
+// mockup's only tooltip-shaped thing (`.bar.hot::after`, the chart's hot-bar
+// annotation) is a different component with its own `--tip-*` token family
+// and a 7px radius that belongs to that annotation, not to this generic
+// hover tooltip — so there is no mockup-defined tooltip radius to defer to,
+// and the content converges on the control radius like every other overlay
+// edge case already does.
+describe("TooltipContent converges on --radius-ctl, not the bare rounded-md (2026-10-04)", () => {
+  it("mutation: rounded-[var(--radius-ctl)] -> rounded-md → FAILS", () => {
+    const literal = classLiteralAfter(src("./tooltip.tsx"), 'data-slot="tooltip-content"');
+    expect(literal).toContain("rounded-[var(--radius-ctl)]");
+    expect(literal).not.toContain("rounded-md");
+  });
+});
+
 describe("the two sanctioned small-control radius exceptions (DESIGN.md Shape & motion)", () => {
   it("the checkbox box is 4px (mutation: rounded-[4px] -> rounded-[var(--radius-ctl)] → FAILS)", () => {
     const literal = classLiteralAfter(src("./checkbox.tsx"), 'data-slot="checkbox"');
