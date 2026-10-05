@@ -10,7 +10,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Inbox } from "lucide-react";
-import { Card } from "./card";
+import { Card, CardTitle } from "./card";
 import { Skeleton } from "./skeleton";
 import { Notice } from "./notice";
 import { EmptyState } from "../empty-state";
@@ -40,6 +40,25 @@ describe("Card is glass (spec §4)", () => {
   it("keeps bg-card (a tenant's --card must still win) and adds the glass utility", () => {
     expect(html).toMatch(/class="[^"]*\bbg-card\b[^"]*\bglass\b/);
     expect(html).not.toMatch(/shadow-sm/);
+  });
+});
+
+// Found 2026-10-04: CardTitle rendered a plain <div>, so screen-reader users
+// navigating by heading never heard a section's name. Every PageHeader route
+// already owns the page's <h1>, so a card title is the next level down — h3
+// was the smallest-risk default (no call site surveyed uses CardTitle beside
+// its own hand-rolled <h2>, so h2 would have been safe too, but h3 keeps a
+// clean h1 -> h3 skip rather than risking a future h2 collision on a page
+// that grows one).
+describe("CardTitle is a real heading for screen readers (2026-10-04)", () => {
+  it("renders an <h3>, not a <div> (mutation: as = 'h3' -> as = 'div' → FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(CardTitle, null, "Section"));
+    expect(html).toMatch(/^<h3[^>]*data-slot="card-title"/);
+  });
+  it("keeps its visual classes unchanged", () => {
+    const html = renderToStaticMarkup(createElement(CardTitle, null, "Section"));
+    expect(html).toContain("leading-none");
+    expect(html).toContain("font-semibold");
   });
 });
 
