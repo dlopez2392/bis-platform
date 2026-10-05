@@ -193,7 +193,7 @@ describe("the agency's billing actions", () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
-  it("send: an address with an underscore or a plus is ONE valid address and is sent (the agency types real mailboxes; forms' isValidEmail refuses `_` for its ILIKE lookup, which this path does not have) (mutation: validate with isValidEmail → FAILS)", async () => {
+  it("send: an address with an underscore or a plus is ONE valid address and is sent (the agency types real mailboxes; this path's own EMAIL regex accepts `_` and always has) (mutation: add `_` to EMAIL's excluded class → FAILS)", async () => {
     sendMock.mockResolvedValue({ ok: true, url: "https://checkout.stripe.test/c/pay/cs_1" });
     expect(await actions.sendBillingLinkAction(ACCOUNT, form({ planId: P1, email: "first_last+billing@rio-roofing.com" }))).toEqual({ ok: true });
     expect((sendMock.mock.calls[0]![1] as { email: string }).email).toBe("first_last+billing@rio-roofing.com");

@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { FormTheme } from "@bis/db";
-import { defaultFieldKey, mergeFormTheme, isValidFormFieldList } from "./editor-helpers";
+import {
+  defaultFieldKey, mergeFormTheme, isValidFormFieldList, defaultFormFields,
+} from "./editor-helpers";
 
 describe("defaultFieldKey", () => {
   it("strips the core. prefix", () => {
@@ -36,6 +38,41 @@ describe("mergeFormTheme", () => {
     const stored = { accent: "#111111", transparentBackground: false } as FormTheme;
     const merged = mergeFormTheme(stored, { transparentBackground: true });
     expect((merged as Record<string, unknown>).accent).toBe("#111111");
+  });
+});
+
+describe("defaultFormFields", () => {
+  // F-047 phase 1 defect (docs/crm-features.md §2.3, "the seeded Name
+  // field"): a brand-new form seeded a single field, kind core.first_name,
+  // labeled plainly "Name" — a visitor reads "Name" and types a full name,
+  // which lands entirely in first_name because there is no last_name field
+  // for the rest to go to (confirmed against apps/web/src/lib/concierge/
+  // lead.ts:79-81, which falls back to stuffing the whole fullName into
+  // core.first_name specifically when the form carries no core.last_name
+  // field). The fix seeds both, same as the demo form
+  // (packages/db/src/demo/seed.ts:810-811), and labels the first one
+  // truthfully instead of the ambiguous "Name".
+  it("seeds a first name AND a last name field, not one field mislabeled 'Name'", () => {
+    const fields = defaultFormFields();
+    const first = fields.find((f) => f.kind === "core.first_name");
+    const last = fields.find((f) => f.kind === "core.last_name");
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+    expect(first!.label).not.toBe("Name");
+    expect(first!.label.toLowerCase()).toContain("first");
+    expect(last!.label.toLowerCase()).toContain("last");
+  });
+
+  it("still seeds an email field and a message field, both as before", () => {
+    const fields = defaultFormFields();
+    expect(fields.some((f) => f.kind === "core.email" && f.required)).toBe(true);
+    expect(fields.some((f) => f.kind === "message")).toBe(true);
+  });
+
+  it("every seeded field has a unique key, so FormData never collides two answers onto one name", () => {
+    const fields = defaultFormFields();
+    const keys = fields.map((f) => f.key);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });
 

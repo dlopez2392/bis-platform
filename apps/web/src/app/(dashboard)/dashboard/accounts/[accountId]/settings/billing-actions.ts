@@ -39,9 +39,13 @@ const isUuid = (x: unknown): x is string => typeof x === "string" && UUID.test(x
  * ONE bare address, as the Stripe customer's email and the To header get it:
  * no whitespace, `,` or `;` (a list is refused), and no `<` `>` `"` `'` (a
  * display-name form like `Name <a@b.co>`, or a quoted local part, is refused
- * rather than passed through as one odd "address"). Not forms' isValidEmail:
- * that refuses `_` and `%` because its value meets an ILIKE lookup
- * (lib/forms/guards.ts), and `first_last@…` is a real mailbox an agency types.
+ * rather than passed through as one odd "address"). Not forms' isValidEmail
+ * (lib/forms/guards.ts): as of F-047 phase 1 that function accepts `_` in
+ * the local part too, but still refuses `%` everywhere — its value meets an
+ * exact-match dedupe lookup, and whether the mail provider (Resend) handles
+ * a literal `%` is unverified, so lifting it there waits on that check. This
+ * path has no dedupe lookup at all, so both stay accepted: `first_last@…`
+ * and `first%last@…` are both real mailboxes an agency types.
  */
 const EMAIL = /^[^\s@,;<>"']+@[^\s@,;<>"']+\.[^\s@,;<>"']+$/;
 const fail = (key: MessageKey, url?: string): BillingActionResult =>
