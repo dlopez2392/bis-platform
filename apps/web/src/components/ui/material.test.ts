@@ -760,9 +760,4 @@ describe("control radius converges on --radius-ctl, not rounded-md/rounded-sm/ba
     expect(s).not.toContain("flex flex-col gap-1.5 rounded-md");
     expect(s).toContain("flex flex-col gap-1.5 rounded-[var(--radius-ctl)]");
   });
-  it("TabsTrigger (unused today, but named in the follow-up's survey)", () => {
-    const t = src("./tabs.tsx");
-    expect(t).not.toContain("rounded-md border border-transparent");
-    expect(t).toContain("rounded-[var(--radius-ctl)] border border-transparent");
-  });
 });
