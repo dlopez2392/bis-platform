@@ -152,18 +152,24 @@ export function parseAttribution(params: URLSearchParams): Record<string, string
   return out;
 }
 
-// Deliberately excludes " ' , and whitespace. Beyond being invalid in an
+// Deliberately excludes " ' , < > and whitespace. Beyond being invalid in an
 // address, those are exactly the characters that break out of a PostgREST
 // filter, and this value reaches the contact dedupe lookup from a public form.
 //
-// Also excludes % and _: those are not PostgREST filter-grammar characters,
-// but they are SQL ILIKE *pattern wildcards*, and the contact dedupe lookup
-// (`findDuplicate` in packages/db/src/contacts.ts) matches this value with
-// ILIKE. `packages/db` now escapes them defensively before they reach ILIKE,
-// but rejecting them here means a wildcard address is refused as invalid
-// input at the public boundary instead of silently sanitized — a stranger
-// cannot submit `%@%.com` and have it treated as a real address at all.
-const EMAIL_RE = /^[^\s@,"'<>%_]+@[^\s@,"'<>%_]+\.[a-z]{2,}$/i;
+// % and _ were excluded here too, until F-047 phase 1 (docs/crm-features.md
+// §2.3, "addresses with an underscore refused on every public path"): the
+// contact dedupe lookup (`findDuplicate` in packages/db/src/contacts.ts) used
+// to match this value with ILIKE, where `%`/`_` are live pattern wildcards.
+// That lookup no longer exists — migrations 0033/0034 moved it to an exact
+// `.eq("email_key", …)` comparison on a generated column, where `%` and `_`
+// are literal characters "by construction rather than by escaping"
+// (contacts.ts's own comment above `findDuplicate`), so a submitted
+// `%@%.com` or `john_doe@example.com` can no longer hijack another contact's
+// dedupe match by ILIKE pattern, and rejecting either character here no
+// longer buys any safety — it only refused a real address shape (both are
+// valid RFC 5322 local-part characters) on every public form, the booking
+// page, the web chat and Sofía's video booking.
+const EMAIL_RE = /^[^\s@,"'<>]+@[^\s@,"'<>]+\.[a-z]{2,}$/i;
 // Leading "(" (as in "(956) 555-0101") is accepted alongside a leading digit
 // or "+" — the RGV-common way to write a US number with an area code.
 const PHONE_RE = /^\+?[0-9(][0-9()\-.\s]{5,19}$/;

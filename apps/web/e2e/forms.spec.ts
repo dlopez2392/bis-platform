@@ -138,7 +138,11 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
 
     // --- The public side, as a stranger -------------------------------
     await page.goto(publicPath);
-    await page.getByLabel("Name").fill(leadName);
+    // The default seed now carries First name AND Last name fields (F-047
+    // phase 1 defect fix — a lone field labeled "Name" let a full name land
+    // entirely in first_name) — fill the first-name field specifically,
+    // since "Name" alone would now match both labels' substrings.
+    await page.getByLabel("First name").fill(leadName);
     await page.getByLabel("Email").fill(leadEmail);
     await page.getByLabel(/How can we help/).fill(messageBody);
     await page.getByLabel(consentLabel).check();
@@ -300,7 +304,7 @@ test("a honeypot submission looks like success and creates nothing", async ({ pa
     const publicPath = await newPublishedForm(page, formName);
 
     await page.goto(publicPath);
-    await page.getByLabel("Name").fill("Bot");
+    await page.getByLabel("First name").fill("Bot");
     await page.getByLabel("Email").fill(leadEmail);
     // The trap. A human never sees this field — it is positioned off-screen
     // rather than display:none precisely so a bot will find and fill it.
