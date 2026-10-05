@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   pickTurnUpdate, pickErrorUpdate, conversationStore, type TurnResult,
   CLOSE_MESSAGE, brandMessage, shouldCloseOnKey,
+  ASK_MESSAGE_TYPE, parseAskMessage, askAllowedFrom,
 } from "./concierge-chat";
+import { CONCIERGE_MAX_MESSAGE_CHARS } from "@/lib/concierge/guards";
 import { conciergeStrings } from "@/lib/concierge/strings";
 
 /**
@@ -233,5 +235,64 @@ describe("brandMessage", () => {
     expect(brandMessage("#112233", "#ffffff")).toEqual({
       type: "bis-concierge-brand", accent: "#112233", accentForeground: "#ffffff",
     });
+  });
+});
+
+/**
+ * A question posted by the host page (the BIS website's Ask BIS panel). It is
+ * sent exactly as if typed, so these pin the two gates in front of that:
+ * the payload's shape, and the one origin allowed to post it.
+ */
+describe("host questions (bis-concierge-ask)", () => {
+  it("pins the wire type the website posts", () => {
+    // MUTATION: rename the type — the website's chips post into the void.
+    expect(ASK_MESSAGE_TYPE).toBe("bis-concierge-ask");
+  });
+
+  it("accepts a well-formed question, trimmed", () => {
+    expect(parseAskMessage({ type: "bis-concierge-ask", text: "  Can Sofía book appointments?  " }))
+      .toBe("Can Sofía book appointments?");
+  });
+
+  it.each([
+    ["another message type", { type: "bis-concierge-close", text: "hi" }],
+    ["a non-string text", { type: "bis-concierge-ask", text: 42 }],
+    ["an empty question", { type: "bis-concierge-ask", text: "   " }],
+    ["a bare string", "bis-concierge-ask"],
+    ["null", null],
+  ])("refuses %s", (_label, data) => {
+    expect(parseAskMessage(data)).toBeNull();
+  });
+
+  it("refuses a question longer than the composer allows, rather than cutting it", () => {
+    // MUTATION: slice to the cap instead — the visitor would be sent words
+    // the host never showed them.
+    const long = "a".repeat(CONCIERGE_MAX_MESSAGE_CHARS + 1);
+    expect(parseAskMessage({ type: "bis-concierge-ask", text: long })).toBeNull();
+    const max = "a".repeat(CONCIERGE_MAX_MESSAGE_CHARS);
+    expect(parseAskMessage({ type: "bis-concierge-ask", text: max })).toBe(max);
+  });
+
+  it("takes questions only from the origin of the page the chat was opened on", () => {
+    const page = "https://bis-rgv.com/es?utm_source=fb";
+    expect(askAllowedFrom("https://bis-rgv.com", page)).toBe(true);
+    // MUTATION: drop the origin comparison — any origin holding the parent's
+    // window handle could make the chat speak.
+    expect(askAllowedFrom("https://evil.example", page)).toBe(false);
+    expect(askAllowedFrom("https://www.bis-rgv.com", page)).toBe(false);
+    expect(askAllowedFrom("http://bis-rgv.com", page)).toBe(false);
+  });
+
+  it("refuses when there is no page to compare against (closed by default)", () => {
+    expect(askAllowedFrom("https://bis-rgv.com", undefined)).toBe(false);
+    expect(askAllowedFrom("https://bis-rgv.com", "")).toBe(false);
+    expect(askAllowedFrom("https://bis-rgv.com", "not a url")).toBe(false);
+  });
+
+  it("never treats an opaque origin as an identity, even against an opaque page", () => {
+    // MUTATION: drop the "null" guard — `new URL("about:blank").origin` is
+    // "null", so a sandboxed sender would match a host that declared it.
+    expect(askAllowedFrom("null", "about:blank")).toBe(false);
+    expect(askAllowedFrom("null", "data:text/html,hi")).toBe(false);
   });
 });

@@ -592,6 +592,58 @@ test.describe("embedded on a client's page", () => {
     },
   );
 
+  /**
+   * The BIS website frames this page itself (its own "Ask BIS" panel), asks
+   * for `?chrome=bare` because it draws its own header and close, and posts
+   * suggested questions in with `bis-concierge-ask`. The host here is served
+   * by `page.route` on the app's own origin — the same Private Network
+   * Access reason as above rules out a foreign host address — which is
+   * enough: what is on trial is the frame's two gates, not cross-origin
+   * delivery, and a second frame whose declared `page` is elsewhere proves
+   * the origin gate is wired, not just unit-tested.
+   */
+  test("chrome=bare drops the header when framed, and a host question is sent as the visitor's own", async ({ page }) => {
+    test.skip(!widget, skipReason);
+    const strings = conciergeStrings("en");
+    const hostUrl = `${BASE}/__ask-host-e2e`;
+    const src = (declared: string) =>
+      `${BASE}/c/${widget!.publicId}?chrome=bare&page=${encodeURIComponent(declared)}`;
+    await page.route(hostUrl, (route) => route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><body>
+        <iframe id="ours" title="ours" src="${src(hostUrl)}"></iframe>
+        <iframe id="elsewhere" title="elsewhere" src="${src("https://elsewhere.example/")}"></iframe>
+      </body></html>`,
+    }));
+    await page.goto(hostUrl);
+
+    const ours = page.frameLocator("#ours");
+    const elsewhere = page.frameLocator("#elsewhere");
+    await expect(ours.getByText(GREETING)).toBeVisible();
+    await expect(elsewhere.getByText(GREETING)).toBeVisible();
+    // MUTATION: drop `!(bare && framed)` from the header gate — this FAILS,
+    // and the website's panel shows a second brand row and a second ×.
+    await expect(ours.getByRole("button", { name: strings.close })).toHaveCount(0);
+    await expect(ours.locator(".bis-brand-name")).toHaveCount(0);
+
+    const ask = (id: string) => page.evaluate(([frameId, origin]) => {
+      const el = document.getElementById(frameId) as HTMLIFrameElement;
+      el.contentWindow!.postMessage({ type: "bis-concierge-ask", text: "What are your hours?" }, origin);
+    }, [id, BASE] as const);
+
+    await ask("elsewhere");
+    await ask("ours");
+    // MUTATION: remove the message listener in concierge-chat.tsx — this
+    // FAILS (no visitor bubble ever appears in our frame).
+    await expect(ours.locator(".bis-msg-visitor")).toHaveText("What are your hours?");
+    // The frame whose declared page is another origin heard the same message
+    // from this page and refused it. MUTATION: drop the `askAllowedFrom`
+    // check — this FAILS. Sink the frame first so a refusal is not just a
+    // message still in flight.
+    await elsewhere.locator("body").evaluate(() => 0);
+    await expect(elsewhere.locator(".bis-msg-visitor")).toHaveCount(0);
+  });
+
   // Whole-branch review, I1: on a 360x640 phone the sheet's composer puts
   // Send roughly under the launcher's own fixed position, and the
   // launcher's click handler reads the panel's own `display` to decide

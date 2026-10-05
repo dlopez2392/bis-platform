@@ -148,6 +148,7 @@ export default async function ConciergePage({
         strings={strings}
         renderToken={issueRenderToken(publicId)}
         attribution={parseAttribution(query)}
+        bare={query.get("chrome") === "bare"}
         brandAccent={formAccent.accent}
         brandAccentForeground={formAccent.accentForeground}
         brand={
