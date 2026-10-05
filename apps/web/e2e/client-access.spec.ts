@@ -213,16 +213,23 @@ test("a client sees only their own account, and nothing when access is off", asy
   // column/table grants — a mock DB client is more permissive than the real
   // one, so it proves nothing about what the CLIENT role can actually
   // SELECT). This session is running as this fixture's real Clerk identity
-  // through dbForRequest(), not service role, so the Calls-answered KPI
-  // rendering a NUMBER here — rather than the tile being absent, or the page
-  // throwing — is the only thing in this suite that proves `calls`,
-  // `bookings`, and `opportunities` SELECT actually reach the client role
-  // (the KPI row reads all three; see [accountId]/dashboard/page.tsx). The
-  // fixture has taken zero calls, so "0" is the honest, EXPECTED value, not
-  // a fallback being tolerated — this asserts a numeric string specifically
-  // (not "not empty", not "not an error"), so a read that silently failed
-  // and rendered nothing, or threw past an error boundary, still fails this.
-  await expect(page.getByTestId("kpi-calls-answered")).toHaveText(/^\d+$/);
+  // through dbForRequest(), not service role, so the hero KPI rendering a
+  // NUMBER here — rather than the tile being absent, or the page throwing —
+  // is the only thing in this suite that proves `calls`, `bookings`,
+  // `contacts`, and `opportunities` SELECT actually reach the client role
+  // (the KPI row reads all four in the SAME Promise.all; see
+  // [accountId]/dashboard/page.tsx — a missing grant on any one of them
+  // throws and takes the whole page down, not just that tile). Asserted via
+  // `data-hero`, not a fixed `kpi-calls-answered` testid: this fixture has
+  // no voice profile (F-076's now slice, crm-features.md §2.3/§6.3), so its
+  // hero is "New customers" (`kpi-new-customers`), not "Calls answered" —
+  // `kpi-calls-answered` would not even render here. The fixture has taken
+  // zero calls/created zero contacts in-window, so "0" is the honest,
+  // EXPECTED value, not a fallback being tolerated — this asserts a numeric
+  // string specifically (not "not empty", not "not an error"), so a read
+  // that silently failed and rendered nothing, or threw past an error
+  // boundary, still fails this.
+  await expect(page.locator('[data-hero="true"]')).toHaveText(/^\d+$/);
 
   // 6. With client_access_enabled flipped false, they get the no-access
   // page — not an empty CRM. This is what proves design spec sections

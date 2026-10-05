@@ -299,9 +299,14 @@ test.describe("a client cannot reach the forward-calls switch", () => {
     await page.goto(`/dashboard/accounts/${accountId}/voice`);
     await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/dashboard$`));
     // The positive half, or every absence below passes against a client who
-    // can read nothing at all (a 404 or an error page): the dashboard's own KPI
-    // proves a real page rendered.
-    await expect(page.getByTestId("kpi-calls-answered")).toHaveText(/^\d+$/);
+    // can read nothing at all (a 404 or an error page): the dashboard's own
+    // hero KPI proves a real page rendered. Asserted via `data-hero`, not
+    // the fixed `kpi-calls-answered` testid: this file's own top-level
+    // `beforeAll` just above writes `voice_profiles.enabled: false` for
+    // this fixture, so the hero is "New customers" (`kpi-new-customers`),
+    // not "Calls answered" (F-076's now slice, crm-features.md §2.3/§6.3) —
+    // `kpi-calls-answered` would not even render here.
+    await expect(page.locator('[data-hero="true"]')).toHaveText(/^\d+$/);
 
     await expect(page.locator("#forward-calls")).toHaveCount(0);
     await expect(page.locator("#forward_calls")).toHaveCount(0);

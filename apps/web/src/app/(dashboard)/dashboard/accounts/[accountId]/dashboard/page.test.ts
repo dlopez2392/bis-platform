@@ -66,6 +66,8 @@ const dbMocks = vi.hoisted(() => ({
   listCallStartsBetween: vi.fn(),
   listBookingCreationsBetween: vi.fn(),
   listOpportunityValuesCreatedBetween: vi.fn(),
+  // F-076 (now slice): the CRM-only hero ("New customers").
+  listContactCreationsBetween: vi.fn(),
   // Task 5's dashboard row — the same `listAccountWork` read tasks/page.tsx
   // already makes; mocked here in this file's own vi.fn() shape.
   listAccountWork: vi.fn(),
@@ -96,6 +98,7 @@ vi.mock("@bis/db", () => ({
   listCallStartsBetween: (...a: unknown[]) => dbMocks.listCallStartsBetween(...a),
   listBookingCreationsBetween: (...a: unknown[]) => dbMocks.listBookingCreationsBetween(...a),
   listOpportunityValuesCreatedBetween: (...a: unknown[]) => dbMocks.listOpportunityValuesCreatedBetween(...a),
+  listContactCreationsBetween: (...a: unknown[]) => dbMocks.listContactCreationsBetween(...a),
   listAccountWork: (...a: unknown[]) => dbMocks.listAccountWork(...a),
   sumOpenOpportunities: (...a: unknown[]) => dbMocks.sumOpenOpportunities(...a),
 }));
@@ -170,6 +173,7 @@ function resetFixtures() {
   dbMocks.listCallStartsBetween.mockResolvedValue([]);
   dbMocks.listBookingCreationsBetween.mockResolvedValue([]);
   dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([]);
+  dbMocks.listContactCreationsBetween.mockResolvedValue([]);
   dbMocks.listAccountWork.mockResolvedValue([]);
   dbMocks.sumOpenOpportunities.mockResolvedValue({ count: 0, value: 0 });
   // Default: one item ticked, A2P not approved — mirrors blueprints.spec.ts's
@@ -352,5 +356,60 @@ describe("AccountDashboardPage — open deals and pipeline value (F-055 now-half
     await AccountDashboardPage(route("acct_specific"));
 
     expect(dbMocks.sumOpenOpportunities).toHaveBeenCalledWith(expect.anything(), "acct_specific");
+  });
+});
+
+/**
+ * F-076 (now slice, crm-features.md §2.3/§6.3): the dashboard's hero used to
+ * be "Calls answered" for every account, unconditionally — structurally
+ * always 0 on a CRM-only account (no enabled voice profile), since nothing
+ * is answering calls. The honest, available-today signal is the same one
+ * `showVoiceSub`/`offerVoiceSetup` already use elsewhere on this exact page
+ * and in calls-chart-card.tsx: `voiceProfile?.enabled === true`, not a
+ * billing plan (account_billing/plans.features.voice_receptionist isn't
+ * populated for most accounts yet — M7a's own billing-floor work is still
+ * in flight per crm-features.md §4.2 — so reading it here would silently
+ * misclassify a real client as "CRM-only").
+ */
+describe("AccountDashboardPage — the hero follows the plan (F-076 now slice)", () => {
+  beforeEach(resetFixtures);
+
+  it("no enabled voice profile: the hero is New customers, not Calls answered (mutation: hard-code hero on the calls-answered tile -> FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    dbMocks.listContactCreationsBetween.mockResolvedValue([
+      "2026-01-05T12:00:00.000Z", "2026-01-06T12:00:00.000Z", "2026-01-07T12:00:00.000Z",
+    ]);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(html.match(/data-hero="true"/g)?.length).toBe(1);
+    expect(html).toMatch(/data-testid="kpi-new-customers"[^>]*data-hero="true"/);
+    expect(html).not.toContain('data-testid="kpi-calls-answered"');
+    expect(renderedText(html)).toContain(m["dashboard.kpi.newCustomers"]);
+  });
+
+  it("an enabled voice profile keeps Calls answered as the hero (mutation: drop the showVoiceSub branch -> FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true });
+    dbMocks.listCallStartsBetween.mockResolvedValue(["2026-01-05T12:00:00.000Z"]);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(html.match(/data-hero="true"/g)?.length).toBe(1);
+    expect(html).toMatch(/data-testid="kpi-calls-answered"[^>]*data-hero="true"/);
+    expect(html).not.toContain('data-testid="kpi-new-customers"');
+    expect(renderedText(html)).toContain(m["dashboard.kpi.callsAnswered"]);
+  });
+
+  it("the New-customers hero reads real contact-creation counts for THIS account's window, not a made-up number", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    dbMocks.listContactCreationsBetween.mockResolvedValue([
+      "2026-01-05T12:00:00.000Z", "2026-01-06T12:00:00.000Z", "2026-01-07T12:00:00.000Z",
+    ]);
+
+    await AccountDashboardPage(route("acct_specific"));
+
+    expect(dbMocks.listContactCreationsBetween).toHaveBeenCalledWith(
+      expect.anything(), "acct_specific", expect.any(String), expect.any(String),
+    );
   });
 });

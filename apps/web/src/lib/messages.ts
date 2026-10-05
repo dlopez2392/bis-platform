@@ -271,6 +271,11 @@ export const m = {
   // none of these four need a `period` caption the way the "All time" row
   // below them does.
   "dashboard.kpi.callsAnswered": "Calls answered",
+  // F-076 (now slice): the hero on a CRM-only account (no enabled voice
+  // profile) — "Calls answered" is structurally always 0 with no
+  // receptionist taking calls, so it is never the right headline there
+  // (crm-features.md §2.3, §6.3). Plain words, no plan/billing jargon.
+  "dashboard.kpi.newCustomers": "New customers",
   "dashboard.kpi.appointmentsBooked": "Appointments booked",
   "dashboard.kpi.afterHoursCaptured": "After-hours captured",
   "dashboard.kpi.pipelineAdded": "Pipeline added",
