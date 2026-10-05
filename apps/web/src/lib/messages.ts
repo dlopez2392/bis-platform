@@ -271,6 +271,16 @@ export const m = {
   // none of these four need a `period` caption the way the "All time" row
   // below them does.
   "dashboard.kpi.callsAnswered": "Calls answered",
+  // F-076 (now slice): the hero on a CRM-only account (no enabled voice
+  // profile) — "Calls answered" is structurally always 0 with no
+  // receptionist taking calls, so it is never the right headline there
+  // (crm-features.md §2.3, §6.3). Owner decision: this is the SAME "leads
+  // captured" the Monday weekly report sends (lib/reports/weekly-metrics.ts
+  // — a real submission or a lead-outcome call), not "every new contact";
+  // the weekly report's own email copy (lib/email/templates/weekly-report.ts)
+  // spells it lowercase inline rather than through a messages.ts key, so
+  // there was no existing key to reuse here.
+  "dashboard.kpi.leadsCaptured": "Leads captured",
   "dashboard.kpi.appointmentsBooked": "Appointments booked",
   "dashboard.kpi.afterHoursCaptured": "After-hours captured",
   "dashboard.kpi.pipelineAdded": "Pipeline added",

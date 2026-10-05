@@ -216,6 +216,51 @@ export async function recordRejectedSubmission(
   return { id: data.id };
 }
 
+const SUBMISSION_CREATIONS_PAGE_SIZE = 1000;
+
+/**
+ * Raw `created_at` instants for REAL (non-spam) submissions in
+ * `[fromIso, toIso)` — the form half of "leads captured". `spam_reason is
+ * null` is the same predicate `listForms` uses for its own counts, kept in
+ * the data layer beside it rather than re-expressed in the web app, so
+ * "what counts as a real submission" has ONE definition. A honeypot hit is
+ * not a lead and must never inflate a number a client is shown.
+ *
+ * This is the ONLY read of `form_submissions` the weekly report's "leads
+ * captured" and the dashboard's CRM-only hero (F-076) both go through —
+ * there used to be a second, count-only function here
+ * (`countRealSubmissionsBetween`) that the report called instead; it was
+ * removed once nothing but this row-returning read fed either caller, so
+ * the predicate above has exactly one place it can drift from. Paged on
+ * `id` (the table's primary key, 0006_forms.sql), stopping only on a
+ * genuinely EMPTY page, the same shape `sumOpenOpportunities`
+ * (opportunities.ts) uses: a row-returning read — unlike the removed
+ * function's `count: "exact", head: true` — truncates at PostgREST's row
+ * cap (max_rows) unless paged.
+ */
+export async function listSubmissionCreationsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+  pageSize: number = SUBMISSION_CREATIONS_PAGE_SIZE,
+): Promise<string[]> {
+  const result: string[] = [];
+  let lastId: string | undefined;
+  for (;;) {
+    let query = db.from("form_submissions")
+      .select("id, created_at")
+      .eq("account_id", accountId)
+      .is("spam_reason", null)
+      .gte("created_at", fromIso).lt("created_at", toIso)
+      .order("id", { ascending: true });
+    if (lastId !== undefined) query = query.gt("id", lastId);
+    const { data, error } = await query.limit(pageSize);
+    if (error) throw new Error(`listSubmissionCreationsBetween failed: ${error.message}`);
+    const rows = (data ?? []) as { id: string; created_at: string }[];
+    if (rows.length === 0) return result;
+    for (const row of rows) result.push(row.created_at);
+    lastId = rows[rows.length - 1]!.id;
+  }
+}
+
 /**
  * Rate-limit counter. DB-backed, not in-process: on Vercel an in-process
  * counter is per-lambda, so it would reset unpredictably under concurrency and
@@ -224,31 +269,6 @@ export async function recordRejectedSubmission(
  *
  * Takes no accountId: the caller has the form, not a tenant context.
  */
-/**
- * Real submissions across the whole account in a window — the weekly report's
- * "leads captured", form half.
- *
- * `spam_reason is null` is the same predicate `listForms` uses for its own
- * counts, kept in the data layer beside it rather than re-expressed in the web
- * app, so "what counts as a real submission" has ONE definition. A honeypot
- * hit is not a lead and must never inflate a number a client is shown.
- *
- * Half-open `[from, to)`, matching `listCallOutcomesBetween` and
- * `listBookingCreationsBetween`, so all three agree about which instants
- * belong to a week.
- */
-export async function countRealSubmissionsBetween(
-  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
-): Promise<number> {
-  const { count, error } = await db.from("form_submissions")
-    .select("id", { count: "exact", head: true })
-    .eq("account_id", accountId)
-    .is("spam_reason", null)
-    .gte("created_at", fromIso).lt("created_at", toIso);
-  if (error) throw new Error(`countRealSubmissionsBetween failed: ${error.message}`);
-  return count ?? 0;
-}
-
 export async function countRecentSubmissions(
   db: SupabaseClient, formId: string, ipHash: string, sinceIso: string,
 ): Promise<number> {

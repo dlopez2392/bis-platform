@@ -600,6 +600,44 @@ export async function listCallStartsBetween(
   return (data ?? []).map((r: { started_at: string }) => r.started_at);
 }
 
+const CALL_OUTCOME_STARTS_PAGE_SIZE = 1000;
+
+/**
+ * Raw `started_at` instants for calls whose `outcome` is one of `outcomes`,
+ * in `[fromIso, toIso)` — e.g. the call half of "leads captured"
+ * (weekly-metrics.ts's `LEAD_OUTCOME`). `outcomes` is a PARAMETER, not a
+ * literal filtered in here, so this can never define "lead" (or any other
+ * outcome set) differently than the caller that owns that definition —
+ * weekly-metrics.ts passes its own `LEAD_OUTCOME` constant, never a second
+ * `"lead"` string that could drift from it. Filtered server-side (unlike
+ * `listCallOutcomesBetween` above, which hands back every outcome for the
+ * caller to filter in JS) and paged by id for the same reason
+ * `sumOpenOpportunities`/`listSubmissionCreationsBetween` are: an unpaged
+ * row-returning read silently truncates at PostgREST's row cap once an
+ * account crosses it in one window, even a narrower one than "every call".
+ */
+export async function listCallStartsByOutcomeBetween(
+  db: SupabaseClient, accountId: string, outcomes: readonly string[],
+  fromIso: string, toIso: string, pageSize: number = CALL_OUTCOME_STARTS_PAGE_SIZE,
+): Promise<string[]> {
+  const result: string[] = [];
+  let lastId: string | undefined;
+  for (;;) {
+    let query = db.from("calls")
+      .select("id, started_at")
+      .eq("account_id", accountId).in("outcome", outcomes as string[])
+      .gte("started_at", fromIso).lt("started_at", toIso)
+      .order("id", { ascending: true });
+    if (lastId !== undefined) query = query.gt("id", lastId);
+    const { data, error } = await query.limit(pageSize);
+    if (error) throw new Error(`listCallStartsByOutcomeBetween failed: ${error.message}`);
+    const rows = (data ?? []) as { id: string; started_at: string }[];
+    if (rows.length === 0) return result;
+    for (const row of rows) result.push(row.started_at);
+    lastId = rows[rows.length - 1]!.id;
+  }
+}
+
 export async function findUpcomingBookingForPhone(
   db: SupabaseClient, accountId: string, phoneE164: string, nowIso: string,
 ): Promise<{ bookingId: string; startsAt: string } | null> {

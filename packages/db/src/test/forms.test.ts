@@ -4,7 +4,7 @@ import { withTestAccount } from "./fixtures";
 import { withRollback, actAs } from "./db";
 import {
   newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId, updateForm,
-  countFormsMissingNotify, countRealSubmissionsBetween,
+  countFormsMissingNotify, listSubmissionCreationsBetween,
 } from "../forms";
 
 const FIELDS = [
@@ -156,12 +156,15 @@ describe("forms", () => {
 });
 
 /**
- * The weekly report's "leads captured", form half. A honeypot hit is not a
- * lead and must never inflate a number a client is shown, so the spam
+ * The weekly report's "leads captured" AND the dashboard's CRM-only hero
+ * (F-076) both reach `form_submissions` through this one function now —
+ * `countRealSubmissionsBetween`, a head-count-only twin with the same
+ * predicate, was removed once nothing else called it. A honeypot hit is not
+ * a lead and must never inflate a number a client is shown, so the spam
  * predicate is the same one `listForms` already uses for its counts.
  */
-describe("countRealSubmissionsBetween", () => {
-  it("counts real submissions in the window, never spam, never the upper bound", async () => {
+describe("listSubmissionCreationsBetween", () => {
+  it("real submissions in [from, to), never spam, never the upper bound", async () => {
     await withTestAccount(async (db, accountId) => {
       const { id: formId } = await createForm(
         db, accountId, { name: "Weekly", fields: [] }, "user_test");
@@ -179,8 +182,17 @@ describe("countRealSubmissionsBetween", () => {
       await seed("2026-03-05T10:00:00Z", "honeypot");  // spam, must not count
       await seed("2026-03-09T00:00:00Z", null);        // on the exclusive bound
 
-      expect(await countRealSubmissionsBetween(
-        db, accountId, "2026-03-02T00:00:00Z", "2026-03-09T00:00:00Z")).toBe(2);
+      const result = await listSubmissionCreationsBetween(
+        db, accountId, "2026-03-02T00:00:00Z", "2026-03-09T00:00:00Z");
+      // Epoch-ms comparison, not a string match (same reason
+      // booking.test.ts's `listBookingCreationsBetween` suite does this):
+      // PostgREST returns a `+00:00`-suffixed timestamp, a different
+      // lexical form of the same instant than the ISO string this test
+      // seeded with.
+      const times = result.map((s) => new Date(s).getTime()).sort();
+      expect(times).toEqual([
+        new Date("2026-03-02T10:00:00Z").getTime(), new Date("2026-03-04T10:00:00Z").getTime(),
+      ].sort());
     });
   });
 });
