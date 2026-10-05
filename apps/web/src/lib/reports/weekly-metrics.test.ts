@@ -1,5 +1,18 @@
-import { describe, expect, it } from "vitest";
-import { countFromOutcomes, ANSWERED_OUTCOMES, LEAD_OUTCOME } from "./weekly-metrics";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { countFromOutcomes, ANSWERED_OUTCOMES, LEAD_OUTCOME, listLeadInstantsBetween } from "./weekly-metrics";
+
+// `listLeadInstantsBetween` (F-076 now slice: the dashboard's CRM-only hero)
+// is the only export here that touches @bis/db — every test above and below
+// this mock exercises pure functions and never calls it, so stubbing just
+// the two reads this function needs leaves them untouched.
+const dbMocks = vi.hoisted(() => ({
+  listSubmissionCreationsBetween: vi.fn(),
+  listCallStartsByOutcomeBetween: vi.fn(),
+}));
+vi.mock("@bis/db", () => ({
+  listSubmissionCreationsBetween: (...a: unknown[]) => dbMocks.listSubmissionCreationsBetween(...a),
+  listCallStartsByOutcomeBetween: (...a: unknown[]) => dbMocks.listCallStartsByOutcomeBetween(...a),
+}));
 
 /**
  * These two constants ARE the definitions the client's email reports, so they
@@ -56,5 +69,53 @@ describe("a transferred call is an answered call", () => {
     // Same distinction the booked/lead pair already draws: the two tallies
     // come from ONE read of the same array and answer different questions.
     expect(countFromOutcomes(["transferred", "transferred"], LEAD_OUTCOME)).toBe(0);
+  });
+});
+
+/**
+ * F-076 (now slice): the dashboard's CRM-only hero reuses this definition of
+ * "leads captured" (submissions + `LEAD_OUTCOME` calls) rather than
+ * re-deriving its own — the owner's explicit instruction after the first
+ * version of this fix used "every new contact" instead.
+ */
+describe("listLeadInstantsBetween — the raw instants behind weeklyMetrics().leads", () => {
+  beforeEach(() => {
+    dbMocks.listSubmissionCreationsBetween.mockReset();
+    dbMocks.listCallStartsByOutcomeBetween.mockReset();
+  });
+
+  it("merges real-submission and lead-outcome-call instants into one array (mutation: return only one half -> FAILS)", async () => {
+    dbMocks.listSubmissionCreationsBetween.mockResolvedValue(["2027-01-01T00:00:00.000Z"]);
+    dbMocks.listCallStartsByOutcomeBetween.mockResolvedValue(["2027-01-02T00:00:00.000Z", "2027-01-03T00:00:00.000Z"]);
+
+    const result = await listLeadInstantsBetween(
+      {} as never, "acct_1", "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z",
+    );
+
+    expect(result.sort()).toEqual([
+      "2027-01-01T00:00:00.000Z", "2027-01-02T00:00:00.000Z", "2027-01-03T00:00:00.000Z",
+    ]);
+  });
+
+  it("passes the SAME LEAD_OUTCOME constant weeklyMetrics() uses, not a second hard-coded array (mutation: pass ANSWERED_OUTCOMES instead -> FAILS)", async () => {
+    dbMocks.listSubmissionCreationsBetween.mockResolvedValue([]);
+    dbMocks.listCallStartsByOutcomeBetween.mockResolvedValue([]);
+
+    await listLeadInstantsBetween({} as never, "acct_1", "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z");
+
+    expect(dbMocks.listCallStartsByOutcomeBetween).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", LEAD_OUTCOME, "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z",
+    );
+  });
+
+  it("scopes both reads to the account and window given", async () => {
+    dbMocks.listSubmissionCreationsBetween.mockResolvedValue([]);
+    dbMocks.listCallStartsByOutcomeBetween.mockResolvedValue([]);
+
+    await listLeadInstantsBetween({} as never, "acct_specific", "from-iso", "to-iso");
+
+    expect(dbMocks.listSubmissionCreationsBetween).toHaveBeenCalledWith(
+      expect.anything(), "acct_specific", "from-iso", "to-iso",
+    );
   });
 });

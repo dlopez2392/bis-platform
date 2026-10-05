@@ -633,24 +633,6 @@ export async function countContacts(
 }
 
 /**
- * Raw `created_at` instants in `[fromIso, toIso)` — the dashboard's
- * "New customers" hero (F-076 now slice: a CRM-only account's hero must not
- * be the always-zero "Calls answered" tile). Same shape as
- * `listCallStartsBetween` (voice.ts) and `listBookingCreationsBetween`
- * (booking.ts): bucketing happens in JS on the caller side, not here.
- */
-export async function listContactCreationsBetween(
-  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
-): Promise<string[]> {
-  const { data, error } = await db.from("contacts")
-    .select("created_at")
-    .eq("account_id", accountId).gte("created_at", fromIso).lt("created_at", toIso)
-    .order("created_at", { ascending: true });
-  if (error) throw new Error(`listContactCreationsBetween failed: ${error.message}`);
-  return (data ?? []).map((r: { created_at: string }) => r.created_at);
-}
-
-/**
  * Bulk tag: one tag upsert + one contact_tags bulk upsert. Same
  * trim/lowercase normalization as addTagToContact so "VIP" and "vip"
  * are the same tag. Returns the tagId so the caller can offer undo.

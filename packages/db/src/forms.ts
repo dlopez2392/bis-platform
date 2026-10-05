@@ -249,6 +249,45 @@ export async function countRealSubmissionsBetween(
   return count ?? 0;
 }
 
+const SUBMISSION_CREATIONS_PAGE_SIZE = 1000;
+
+/**
+ * Raw `created_at` instants for REAL (non-spam) submissions in
+ * `[fromIso, toIso)` — the exact same `spam_reason is null` predicate
+ * `countRealSubmissionsBetween` (just above) uses, so "what counts as a
+ * real submission" still has the one definition that comment names, even
+ * though this hands back the rows themselves rather than a head-count. A
+ * caller doing day-by-day bucketing (the dashboard's CRM-only hero, F-076's
+ * "leads captured") needs the individual timestamps, not just their sum,
+ * and a row-returning read — unlike a `count: "exact", head: true` one —
+ * truncates at PostgREST's row cap (max_rows) unless paged: keyset on `id`
+ * (the table's primary key, 0006_forms.sql), stopping only on a genuinely
+ * EMPTY page, the same shape `sumOpenOpportunities` (opportunities.ts) uses
+ * for the identical reason.
+ */
+export async function listSubmissionCreationsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+  pageSize: number = SUBMISSION_CREATIONS_PAGE_SIZE,
+): Promise<string[]> {
+  const result: string[] = [];
+  let lastId: string | undefined;
+  for (;;) {
+    let query = db.from("form_submissions")
+      .select("id, created_at")
+      .eq("account_id", accountId)
+      .is("spam_reason", null)
+      .gte("created_at", fromIso).lt("created_at", toIso)
+      .order("id", { ascending: true });
+    if (lastId !== undefined) query = query.gt("id", lastId);
+    const { data, error } = await query.limit(pageSize);
+    if (error) throw new Error(`listSubmissionCreationsBetween failed: ${error.message}`);
+    const rows = (data ?? []) as { id: string; created_at: string }[];
+    if (rows.length === 0) return result;
+    for (const row of rows) result.push(row.created_at);
+    lastId = rows[rows.length - 1]!.id;
+  }
+}
+
 export async function countRecentSubmissions(
   db: SupabaseClient, formId: string, ipHash: string, sinceIso: string,
 ): Promise<number> {

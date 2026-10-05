@@ -1,6 +1,7 @@
 import {
   countRealSubmissionsBetween, listBookingCreationsBetween, listCallOutcomesBetween,
-  listTrafficDays, type SupabaseClient,
+  listTrafficDays, listSubmissionCreationsBetween, listCallStartsByOutcomeBetween,
+  type SupabaseClient,
 } from "@bis/db";
 
 /**
@@ -76,4 +77,30 @@ export async function weeklyMetrics(
     bookings: bookings.length,
     visitors,
   };
+}
+
+/**
+ * The raw instants behind "leads captured" — a REAL (non-spam) form
+ * submission's `created_at`, or a `LEAD_OUTCOME` call's `started_at`. One
+ * number, `weeklyMetrics().leads` above, is this array's length for ONE
+ * week; the dashboard's CRM-only hero (F-076's now slice, crm-features.md
+ * §2.3/§6.3) needs the individual timestamps instead, to bucket them by day
+ * for a sparkline and split them into a current/prior 7-day pair for a
+ * delta — so it calls this rather than reimplementing "what counts as a
+ * lead" a second time that could drift from the report's own definition.
+ * Both reads reuse the exact filter/outcome set `weeklyMetrics` does
+ * (`countRealSubmissionsBetween`'s `spam_reason is null`, `LEAD_OUTCOME`),
+ * just as row-returning, keyset-paged reads rather than a head-count and a
+ * client-side filter over every outcome — `weeklyMetrics` itself has no
+ * reason to change shape, since one week's calls realistically never
+ * approach the row cap these page past.
+ */
+export async function listLeadInstantsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+): Promise<string[]> {
+  const [submissionIso, callIso] = await Promise.all([
+    listSubmissionCreationsBetween(db, accountId, fromIso, toIso),
+    listCallStartsByOutcomeBetween(db, accountId, LEAD_OUTCOME, fromIso, toIso),
+  ]);
+  return [...submissionIso, ...callIso];
 }

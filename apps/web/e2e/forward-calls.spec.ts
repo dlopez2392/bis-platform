@@ -303,7 +303,8 @@ test.describe("a client cannot reach the forward-calls switch", () => {
     // hero KPI proves a real page rendered. Asserted via `data-hero`, not
     // the fixed `kpi-calls-answered` testid: this file's own top-level
     // `beforeAll` just above writes `voice_profiles.enabled: false` for
-    // this fixture, so the hero is "New customers" (`kpi-new-customers`),
+    // this fixture, so the hero is "Leads captured" (`kpi-leads-captured` —
+    // the same definition the Monday weekly report sends, owner decision),
     // not "Calls answered" (F-076's now slice, crm-features.md §2.3/§6.3) —
     // `kpi-calls-answered` would not even render here.
     await expect(page.locator('[data-hero="true"]')).toHaveText(/^\d+$/);

@@ -216,15 +216,17 @@ test("a client sees only their own account, and nothing when access is off", asy
   // through dbForRequest(), not service role, so the hero KPI rendering a
   // NUMBER here — rather than the tile being absent, or the page throwing —
   // is the only thing in this suite that proves `calls`, `bookings`,
-  // `contacts`, and `opportunities` SELECT actually reach the client role
-  // (the KPI row reads all four in the SAME Promise.all; see
-  // [accountId]/dashboard/page.tsx — a missing grant on any one of them
+  // `form_submissions`, and `opportunities` SELECT actually reach the
+  // client role (the KPI row reads all four in the SAME Promise.all; see
+  // [accountId]/dashboard/page.tsx and `listLeadInstantsBetween`,
+  // lib/reports/weekly-metrics.ts — a missing grant on any one of them
   // throws and takes the whole page down, not just that tile). Asserted via
   // `data-hero`, not a fixed `kpi-calls-answered` testid: this fixture has
   // no voice profile (F-076's now slice, crm-features.md §2.3/§6.3), so its
-  // hero is "New customers" (`kpi-new-customers`), not "Calls answered" —
+  // hero is "Leads captured" (`kpi-leads-captured` — the SAME definition the
+  // Monday weekly report sends, owner decision), not "Calls answered" —
   // `kpi-calls-answered` would not even render here. The fixture has taken
-  // zero calls/created zero contacts in-window, so "0" is the honest,
+  // zero calls and zero submissions in-window, so "0" is the honest,
   // EXPECTED value, not a fallback being tolerated — this asserts a numeric
   // string specifically (not "not empty", not "not an error"), so a read
   // that silently failed and rendered nothing, or threw past an error

@@ -34,13 +34,16 @@ describe("Dashboard hero (spec §5; F-076 now slice): one hero, and it follows t
   // would now pass VACUOUSLY (the fixed key still appears inside the
   // ternary), so it asserts BOTH keys are present instead — proof the hero
   // tile's content is plan-conditional, not a fixed key. Which key actually
-  // RENDERS for which plan is page.test.ts's job (a real render, not a
-  // source scan): "AccountDashboardPage — the hero follows the plan".
-  it("exactly one tile carries hero, and its content follows the plan (mutation: revert to the single hard-coded calls-answered key -> FAILS, since dashboard.kpi.newCustomers would then be absent)", () => {
+  // RENDERS for which plan, with real value/delta/spark, is page.test.ts's
+  // job (a real render, not a source scan): "AccountDashboardPage — the
+  // hero follows the plan". The CRM-only key is `leadsCaptured`, not
+  // `newCustomers` — the owner's later decision to reuse the weekly
+  // report's "leads captured" definition instead of "every new contact".
+  it("exactly one tile carries hero, and its content follows the plan (mutation: revert to the single hard-coded calls-answered key -> FAILS, since dashboard.kpi.leadsCaptured would then be absent)", () => {
     const heroes = tiles.filter(hasHeroProp);
     expect(heroes.length).toBe(1);
     expect(heroes[0]).toContain('m["dashboard.kpi.callsAnswered"]');
-    expect(heroes[0]).toContain('m["dashboard.kpi.newCustomers"]');
+    expect(heroes[0]).toContain('m["dashboard.kpi.leadsCaptured"]');
   });
 
   it("the word alone does not satisfy it — only the prop does (negative control)", () => {

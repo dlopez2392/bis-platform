@@ -17,7 +17,6 @@ export { ALERT_CODE_DIGITS, ALERT_CODE_MAX_ATTEMPTS, ALERT_CODE_TTL_MINUTES,
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
-         listContactCreationsBetween,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
 export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
 export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
@@ -50,7 +49,7 @@ export { ensureConversation, createMessage, updateMessageStatus,
 // NOTE: searchCalls needs no line here — voice is `export * from "./voice"` below.
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
          updateForm, createSubmission, recordRejectedSubmission, countRecentSubmissions,
-         countRealSubmissionsBetween,
+         countRealSubmissionsBetween, listSubmissionCreationsBetween,
          shouldRecordRateLimit, findRecentDuplicate, linkSubmissionContact,
          setSubmissionProcessingError, emitFormSubmitted, listSubmissions, listContactSubmissions,
          countFormsMissingNotify,

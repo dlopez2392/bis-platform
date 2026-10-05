@@ -4,10 +4,10 @@ import {
   listChecklistState, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
   listCallStartsBetween, listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
-  listContactCreationsBetween,
   sumOpenOpportunities,
   getA2pRegistration, listAccountWork,
 } from "@bis/db";
+import { listLeadInstantsBetween } from "@/lib/reports/weekly-metrics";
 import { StatTile } from "@/components/stat-tile";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
@@ -100,7 +100,7 @@ export default async function AccountDashboardPage({
 
   const [
     checklistRows, contactsCount, openOpps,
-    voiceProfile, calendar, callsIso, bookingsIso, oppPairs, contactsCreatedIso, recentCalls, recentEvents,
+    voiceProfile, calendar, callsIso, bookingsIso, oppPairs, leadInstantsIso, recentCalls, recentEvents,
     a2p, workRows,
   ] = await Promise.all([
     listChecklistState(db, accountId),
@@ -114,12 +114,14 @@ export default async function AccountDashboardPage({
     listCallStartsBetween(db, accountId, window14.fromIso, window14.toIso),
     listBookingCreationsBetween(db, accountId, window14.fromIso, window14.toIso),
     listOpportunityValuesCreatedBetween(db, accountId, window14.fromIso, window14.toIso),
-    // F-076 (now slice): the CRM-only hero ("New customers") — fetched
-    // unconditionally (same Promise.all), same reason the calls/bookings/
-    // opportunities reads above are: whether THIS one feeds the hero isn't
-    // known until `showVoiceSub` resolves below, and a second sequential
-    // round-trip just to learn that would cost latency for nothing.
-    listContactCreationsBetween(db, accountId, window14.fromIso, window14.toIso),
+    // F-076 (now slice): the CRM-only hero ("Leads captured" — owner
+    // decision, the SAME definition the Monday weekly report uses, not
+    // "every new contact"). Fetched unconditionally (same Promise.all),
+    // same reason the calls/bookings/opportunities reads above are: whether
+    // THIS one feeds the hero isn't known until `showVoiceSub` resolves
+    // below, and a second sequential round-trip just to learn that would
+    // cost latency for nothing.
+    listLeadInstantsBetween(db, accountId, window14.fromIso, window14.toIso),
     // The calls chart card's (Task 6) mini table — the 3 most recent calls
     // ever, not scoped to the 14-day window above.
     listCalls(db, accountId, { limit: 3 }),
@@ -219,18 +221,21 @@ export default async function AccountDashboardPage({
   const bookingsSpark = bucketByLocalDay(bookingsIso, timezone, window14.dayKeys).map((b) => b.count);
   const bookingsDelta = deltaVsPrior(currentBookingsIso.length, priorBookingsIso.length);
 
-  // New customers — F-076 (now slice): the CRM-only hero, same split/spark
+  // Leads captured — F-076 (now slice): the CRM-only hero, same split/spark
   // shape as calls/bookings above. `showVoiceSub` (voice_profiles.enabled —
   // already resolved above for the greeting subtitle, and the same signal
   // calls-chart-card.tsx's own `offerVoiceSetup` reads) decides which of
   // this and the calls metric below leads the KPI row: a CRM-only account
   // has no receptionist taking calls, so "Calls answered" is structurally
   // always 0 there and is never the honest headline (crm-features.md
-  // §2.3's defect row, §6.3's "else 'New customers' on a CRM-only plan").
-  const currentContactsCreatedIso = contactsCreatedIso.filter((iso) => Date.parse(iso) >= window7FromMs);
-  const priorContactsCreatedIso = contactsCreatedIso.filter((iso) => Date.parse(iso) < window7FromMs);
-  const newCustomersSpark = bucketByLocalDay(contactsCreatedIso, timezone, window14.dayKeys).map((b) => b.count);
-  const newCustomersDelta = deltaVsPrior(currentContactsCreatedIso.length, priorContactsCreatedIso.length);
+  // §2.3's defect row). Owner decision: "leads captured" — the SAME
+  // definition the Monday weekly report sends (`listLeadInstantsBetween`,
+  // lib/reports/weekly-metrics.ts), not "every new contact" — so this
+  // cannot drift from what that email already tells the client.
+  const currentLeadsIso = leadInstantsIso.filter((iso) => Date.parse(iso) >= window7FromMs);
+  const priorLeadsIso = leadInstantsIso.filter((iso) => Date.parse(iso) < window7FromMs);
+  const leadsSpark = bucketByLocalDay(leadInstantsIso, timezone, window14.dayKeys).map((b) => b.count);
+  const leadsDelta = deltaVsPrior(currentLeadsIso.length, priorLeadsIso.length);
 
   // After-hours captured — DATA HONESTY (brief): hidden entirely, not
   // rendered as a zero, when there is no calendar or no configured hours to
@@ -244,7 +249,12 @@ export default async function AccountDashboardPage({
   // `Object.keys(...).length > 0` check while `countAfterHours` normalizes
   // it down to nothing and judges every call after-hours — the exact
   // "every-call-after-hours" reading this gate exists to prevent.
-  const hasAfterHours = calendar !== null && Object.keys(normalizeOpenHours(calendar.open_hours)).length > 0;
+  // Also gated on `showVoiceSub`: after-hours capture is a property of
+  // calls Sofía takes, so a CRM-only account (no enabled voice profile)
+  // would otherwise show an always-0 tile here too — the same "unmeasured
+  // is hidden, not zeroed" reasoning the hero swap above follows.
+  const hasAfterHours = showVoiceSub
+    && calendar !== null && Object.keys(normalizeOpenHours(calendar.open_hours)).length > 0;
   const afterHoursCurrent = hasAfterHours
     ? countAfterHours(currentCallsIso, timezone, calendar.open_hours)
     : 0;
@@ -287,15 +297,15 @@ export default async function AccountDashboardPage({
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           {/* F-076 (now slice): ONE hero tile (DESIGN.md rule 11), whose
               metric follows the plan rather than a fixed metric that reads
-              0 forever on a CRM-only account — see the `newCustomersDelta`
+              0 forever on a CRM-only account — see the `leadsDelta`
               comment above. */}
           <StatTile
             hero
-            label={showVoiceSub ? m["dashboard.kpi.callsAnswered"] : m["dashboard.kpi.newCustomers"]}
-            value={showVoiceSub ? String(currentCallsIso.length) : String(currentContactsCreatedIso.length)}
-            delta={showVoiceSub ? callsDelta : newCustomersDelta}
-            spark={showVoiceSub ? callsSpark : newCustomersSpark}
-            valueTestId={showVoiceSub ? "kpi-calls-answered" : "kpi-new-customers"}
+            label={showVoiceSub ? m["dashboard.kpi.callsAnswered"] : m["dashboard.kpi.leadsCaptured"]}
+            value={showVoiceSub ? String(currentCallsIso.length) : String(currentLeadsIso.length)}
+            delta={showVoiceSub ? callsDelta : leadsDelta}
+            spark={showVoiceSub ? callsSpark : leadsSpark}
+            valueTestId={showVoiceSub ? "kpi-calls-answered" : "kpi-leads-captured"}
           />
           <StatTile
             label={m["dashboard.kpi.appointmentsBooked"]}

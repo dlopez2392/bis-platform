@@ -3,12 +3,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
-         deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
-         listContactCreationsBetween } from "../contacts";
+         deleteContacts, addTagToContacts, removeTagFromContacts, listTags } from "../contacts";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -642,47 +640,4 @@ describe("dedupe after the key columns (spec §5)", () => {
       expect(again.existing).toBe(true);
       expect(again.flagged, "one contact matching both ways is not a conflict").toBe(false);
     }));
-});
-
-// F-076 (now slice): the dashboard's CRM-only hero ("New customers") reads
-// this. Same [from, to) boundary + cross-tenant shape as
-// booking.test.ts's `listBookingCreationsBetween` suite — these two helpers
-// are twins by design (page.tsx buckets both the same way).
-describe("listContactCreationsBetween", () => {
-  it("[from, to) on created_at — pins both boundary edges, cross-tenant rows excluded", () =>
-    withTestAccount(async (db, accountA) =>
-      withTestAccount(async (db2, accountB) => {
-        const from = "2027-06-01T00:00:00.000Z";
-        const to = "2027-06-15T00:00:00.000Z";
-
-        async function contactAt(dbc: SupabaseClient, acct: string, name: string, createdIso: string) {
-          const { data, error } = await dbc.from("contacts")
-            .insert({ account_id: acct, first_name: name, created_at: createdIso })
-            .select("id").single();
-          if (error || !data) throw new Error(`contactAt failed: ${error?.message}`);
-          return data.id as string;
-        }
-
-        // Outside the window on both sides — excluded.
-        await contactAt(db, accountA, "Before", "2027-05-31T23:59:59.999Z");
-        await contactAt(db, accountA, "AtEnd", to); // exclusive edge — excluded
-
-        // Inside, including the inclusive `from` edge.
-        await contactAt(db, accountA, "AtStart", from);
-        await contactAt(db, accountA, "Middle", "2027-06-10T12:00:00.000Z");
-        await contactAt(db, accountA, "AtLastMs", "2027-06-14T23:59:59.999Z");
-
-        // Same window, other tenant — must not leak into accountA's result.
-        await contactAt(db2, accountB, "Other", "2027-06-05T00:00:00.000Z");
-
-        const result = await listContactCreationsBetween(db, accountA, from, to);
-        expect(result).toHaveLength(3);
-        const times = result.map((s) => new Date(s).getTime());
-        expect(times).toEqual([
-          new Date(from).getTime(),
-          new Date("2027-06-10T12:00:00.000Z").getTime(),
-          new Date("2027-06-14T23:59:59.999Z").getTime(),
-        ]);
-      }),
-    ));
 });

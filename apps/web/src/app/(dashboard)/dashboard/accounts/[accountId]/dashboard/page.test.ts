@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkRow } from "@bis/db";
 import { m } from "@/lib/messages";
@@ -55,6 +55,15 @@ vi.mock("@/lib/branding/tenant-theme-reader", () => ({
   getTenantBranding: async () => ({ brandName: null }),
 }));
 
+// F-076 (now slice): the CRM-only hero ("Leads captured") reads the SAME
+// shared helper the Monday weekly report uses (owner decision) —
+// `listLeadInstantsBetween` lives in `@/lib/reports/weekly-metrics`, not
+// `@bis/db`, so it needs its own mock module separate from the one below.
+const reportMocks = vi.hoisted(() => ({ listLeadInstantsBetween: vi.fn() }));
+vi.mock("@/lib/reports/weekly-metrics", () => ({
+  listLeadInstantsBetween: (...a: unknown[]) => reportMocks.listLeadInstantsBetween(...a),
+}));
+
 const dbMocks = vi.hoisted(() => ({
   listChecklistState: vi.fn(),
   getA2pRegistration: vi.fn(),
@@ -66,8 +75,6 @@ const dbMocks = vi.hoisted(() => ({
   listCallStartsBetween: vi.fn(),
   listBookingCreationsBetween: vi.fn(),
   listOpportunityValuesCreatedBetween: vi.fn(),
-  // F-076 (now slice): the CRM-only hero ("New customers").
-  listContactCreationsBetween: vi.fn(),
   // Task 5's dashboard row — the same `listAccountWork` read tasks/page.tsx
   // already makes; mocked here in this file's own vi.fn() shape.
   listAccountWork: vi.fn(),
@@ -98,7 +105,6 @@ vi.mock("@bis/db", () => ({
   listCallStartsBetween: (...a: unknown[]) => dbMocks.listCallStartsBetween(...a),
   listBookingCreationsBetween: (...a: unknown[]) => dbMocks.listBookingCreationsBetween(...a),
   listOpportunityValuesCreatedBetween: (...a: unknown[]) => dbMocks.listOpportunityValuesCreatedBetween(...a),
-  listContactCreationsBetween: (...a: unknown[]) => dbMocks.listContactCreationsBetween(...a),
   listAccountWork: (...a: unknown[]) => dbMocks.listAccountWork(...a),
   sumOpenOpportunities: (...a: unknown[]) => dbMocks.sumOpenOpportunities(...a),
 }));
@@ -165,6 +171,7 @@ function resetFixtures() {
   checklistRowProps.current = null;
   workRowProps.current = null;
   for (const fn of Object.values(dbMocks)) fn.mockReset();
+  reportMocks.listLeadInstantsBetween.mockReset();
   dbMocks.countContacts.mockResolvedValue(0);
   dbMocks.getVoiceProfile.mockResolvedValue(null);
   dbMocks.getCalendarForAccount.mockResolvedValue(null);
@@ -173,7 +180,7 @@ function resetFixtures() {
   dbMocks.listCallStartsBetween.mockResolvedValue([]);
   dbMocks.listBookingCreationsBetween.mockResolvedValue([]);
   dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([]);
-  dbMocks.listContactCreationsBetween.mockResolvedValue([]);
+  reportMocks.listLeadInstantsBetween.mockResolvedValue([]);
   dbMocks.listAccountWork.mockResolvedValue([]);
   dbMocks.sumOpenOpportunities.mockResolvedValue({ count: 0, value: 0 });
   // Default: one item ticked, A2P not approved — mirrors blueprints.spec.ts's
@@ -369,47 +376,143 @@ describe("AccountDashboardPage — open deals and pipeline value (F-055 now-half
  * billing plan (account_billing/plans.features.voice_receptionist isn't
  * populated for most accounts yet — M7a's own billing-floor work is still
  * in flight per crm-features.md §4.2 — so reading it here would silently
- * misclassify a real client as "CRM-only").
+ * misclassify a real client as "CRM-only"). Owner decision: the CRM-only
+ * hero is "Leads captured", the SAME definition `listLeadInstantsBetween`
+ * (lib/reports/weekly-metrics.ts) hands the Monday weekly report — not
+ * "every new contact".
+ *
+ * Time is PINNED (`vi.setSystemTime`) for the two value/delta/spark tests
+ * below: `page.tsx` reads `new Date()` directly (no injectable clock), and
+ * without pinning it, fixture ISO strings written at commit time silently
+ * drift outside the rolling 14-day window as the real clock advances —
+ * exactly the gap the reviewer found (every mutation below passed, because
+ * nothing in the OLD test put rows on both sides of the current/prior
+ * split). `NOW` is a fixed Monday noon UTC = 7 AM America/Chicago (this
+ * fixture's own zone, no DST ambiguity in June), so `window7`'s current
+ * period is June 9–15 and its prior period is June 2–8 — the fixture
+ * timestamps below sit well inside the middle of each half, clear of any
+ * midnight boundary.
  */
 describe("AccountDashboardPage — the hero follows the plan (F-076 now slice)", () => {
-  beforeEach(resetFixtures);
+  const NOW = new Date("2026-06-15T12:00:00.000Z");
+  // Leads: 3 in the current week, 1 in the prior week — current=3, prior=1,
+  // so deltaVsPrior gives "up 200%" (diff 2 / prior 1).
+  const LEADS_CURRENT = [
+    "2026-06-10T12:00:00.000Z", "2026-06-11T12:00:00.000Z", "2026-06-12T12:00:00.000Z",
+  ];
+  const LEADS_PRIOR = ["2026-06-05T12:00:00.000Z"];
+  // Calls: 2 current, 1 prior — "up 100%" (diff 1 / prior 1). Deliberately a
+  // DIFFERENT count and a DIFFERENT delta than leads, so a mutation that
+  // reuses one branch's source for the other is visible in the rendered
+  // value AND the delta wording, not just one of the two.
+  const CALLS_CURRENT = ["2026-06-11T12:00:00.000Z", "2026-06-12T12:00:00.000Z"];
+  const CALLS_PRIOR = ["2026-06-04T12:00:00.000Z"];
 
-  it("no enabled voice profile: the hero is New customers, not Calls answered (mutation: hard-code hero on the calls-answered tile -> FAILS)", async () => {
+  beforeEach(() => {
+    resetFixtures();
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The EXACT sparkline geometry `page.tsx` should hand `StatTile` for a
+   *  given source array — computed with the real `bucketByLocalDay`/
+   *  `sparklinePath` (never re-implemented here), the same window14 the
+   *  page itself derives from the pinned `NOW` and this fixture's zone. */
+  async function expectedSparkPoints(sourceIso: string[]): Promise<string> {
+    const { localDayWindow, bucketByLocalDay, sparklinePath } = await import("@/lib/dashboard/metrics");
+    const window14 = localDayWindow(NOW, "America/Chicago", 14);
+    const counts = bucketByLocalDay(sourceIso, "America/Chicago", window14.dayKeys).map((b) => b.count);
+    return sparklinePath(counts, 84, 26).line;
+  }
+
+  it("no enabled voice profile: the hero is Leads captured, with its own real value, delta and sparkline (mutations: value from calls -> FAILS; hard-coded 0 -> FAILS; calls delta/spark reused -> FAILS; flipped current/prior split -> FAILS)", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue(null);
-    dbMocks.listContactCreationsBetween.mockResolvedValue([
-      "2026-01-05T12:00:00.000Z", "2026-01-06T12:00:00.000Z", "2026-01-07T12:00:00.000Z",
-    ]);
+    reportMocks.listLeadInstantsBetween.mockResolvedValue([...LEADS_CURRENT, ...LEADS_PRIOR]);
+    // A distinctly different, non-zero calls source: if the hero wrongly
+    // read from calls instead of leads, the value/delta assertions below
+    // would see THIS shape, not the leads one.
+    dbMocks.listCallStartsBetween.mockResolvedValue([...CALLS_CURRENT, ...CALLS_PRIOR]);
 
     const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+    const leadsLine = await expectedSparkPoints([...LEADS_CURRENT, ...LEADS_PRIOR]);
 
     expect(html.match(/data-hero="true"/g)?.length).toBe(1);
-    expect(html).toMatch(/data-testid="kpi-new-customers"[^>]*data-hero="true"/);
+    // Value: exactly the 3 CURRENT leads, not 0, not the calls count (2).
+    expect(html).toMatch(/data-testid="kpi-leads-captured" data-hero="true"[^>]*>3</);
     expect(html).not.toContain('data-testid="kpi-calls-answered"');
-    expect(renderedText(html)).toContain(m["dashboard.kpi.newCustomers"]);
+    expect(renderedText(html)).toContain(m["dashboard.kpi.leadsCaptured"]);
+    // Delta: "up 200%" (3 vs 1) — would read "up 100%" (the calls shape) or
+    // "flat"/"1" under the named mutations.
+    expect(renderedText(html)).toContain("up 200% vs the prior period");
+    // Sparkline: the exact geometry the real LEADS source produces, not an
+    // empty/zeroed one and not the calls source's geometry.
+    expect(html).toContain(`points="${leadsLine}"`);
   });
 
-  it("an enabled voice profile keeps Calls answered as the hero (mutation: drop the showVoiceSub branch -> FAILS)", async () => {
+  it("an enabled voice profile keeps Calls answered as the hero, with its own real value, delta and sparkline (mutations: value from leads -> FAILS; hard-coded 0 -> FAILS; leads delta/spark reused -> FAILS; flipped current/prior split -> FAILS)", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true });
-    dbMocks.listCallStartsBetween.mockResolvedValue(["2026-01-05T12:00:00.000Z"]);
+    dbMocks.listCallStartsBetween.mockResolvedValue([...CALLS_CURRENT, ...CALLS_PRIOR]);
+    // A distinctly different, non-zero leads source: if the hero wrongly
+    // read from leads instead of calls, the value/delta assertions below
+    // would see THIS shape, not the calls one.
+    reportMocks.listLeadInstantsBetween.mockResolvedValue([...LEADS_CURRENT, ...LEADS_PRIOR]);
 
     const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+    const callsLine = await expectedSparkPoints([...CALLS_CURRENT, ...CALLS_PRIOR]);
 
     expect(html.match(/data-hero="true"/g)?.length).toBe(1);
-    expect(html).toMatch(/data-testid="kpi-calls-answered"[^>]*data-hero="true"/);
-    expect(html).not.toContain('data-testid="kpi-new-customers"');
+    // Value: exactly the 2 CURRENT calls, not 0, not the leads count (3).
+    expect(html).toMatch(/data-testid="kpi-calls-answered" data-hero="true"[^>]*>2</);
+    expect(html).not.toContain('data-testid="kpi-leads-captured"');
     expect(renderedText(html)).toContain(m["dashboard.kpi.callsAnswered"]);
+    // Delta: "up 100%" (2 vs 1) — would read "up 200%" (the leads shape) or
+    // "flat"/"0" under the named mutations.
+    expect(renderedText(html)).toContain("up 100% vs the prior period");
+    expect(html).toContain(`points="${callsLine}"`);
   });
 
-  it("the New-customers hero reads real contact-creation counts for THIS account's window, not a made-up number", async () => {
+  it("the Leads-captured hero reads real lead instants for THIS account's window, not a made-up number", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue(null);
-    dbMocks.listContactCreationsBetween.mockResolvedValue([
-      "2026-01-05T12:00:00.000Z", "2026-01-06T12:00:00.000Z", "2026-01-07T12:00:00.000Z",
-    ]);
+    reportMocks.listLeadInstantsBetween.mockResolvedValue([...LEADS_CURRENT, ...LEADS_PRIOR]);
 
     await AccountDashboardPage(route("acct_specific"));
 
-    expect(dbMocks.listContactCreationsBetween).toHaveBeenCalledWith(
+    expect(reportMocks.listLeadInstantsBetween).toHaveBeenCalledWith(
       expect.anything(), "acct_specific", expect.any(String), expect.any(String),
     );
+  });
+});
+
+/**
+ * Minor fix from code review: "After-hours captured" is a property of calls
+ * Sofía takes, so a CRM-only account (no enabled voice profile) showed an
+ * always-0 tile there too, the same unmeasured-not-zeroed defect the hero
+ * swap above fixes — now gated on `showVoiceSub` as well as a configured
+ * calendar (page.tsx's `hasAfterHours`).
+ */
+describe("AccountDashboardPage — After-hours captured is hidden without voice (minor fix)", () => {
+  beforeEach(resetFixtures);
+
+  const CONFIGURED_CALENDAR = { open_hours: { mon: [["09:00", "17:00"]] } } as never;
+
+  it("no enabled voice profile, even with a configured calendar: After-hours captured does not render (mutation: drop showVoiceSub from hasAfterHours -> FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    dbMocks.getCalendarForAccount.mockResolvedValue(CONFIGURED_CALENDAR);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(renderedText(html)).not.toContain(m["dashboard.kpi.afterHoursCaptured"]);
+  });
+
+  it("an enabled voice profile with a configured calendar: After-hours captured still renders", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true });
+    dbMocks.getCalendarForAccount.mockResolvedValue(CONFIGURED_CALENDAR);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(renderedText(html)).toContain(m["dashboard.kpi.afterHoursCaptured"]);
   });
 });
