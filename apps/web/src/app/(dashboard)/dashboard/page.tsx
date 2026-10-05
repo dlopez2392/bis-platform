@@ -1,4 +1,4 @@
-import { serviceDb, listAccounts } from "@bis/db";
+import { serviceDb, listAccounts, sumOpenOpportunities } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { StatTile } from "@/components/stat-tile";
 import { requireAgency } from "@/lib/auth";
@@ -17,9 +17,14 @@ export default async function DashboardPage() {
   const [accounts, contactCount, openOpps] = await Promise.all([
     listAccounts(db),
     db.from("contacts").select("id", { count: "exact", head: true }),
-    // PostgREST caps rows at max_rows (1000). Above that, this sum and count
-    // silently undercount — an accurate figure needs a DB-side aggregate.
-    db.from("opportunities").select("monetary_value").eq("status", "open"),
+    // Pages past PostgREST's row cap (max_rows, 1000) internally, so neither
+    // the count nor the sum silently undercounts above it — see
+    // sumOpenOpportunities' own comment. No accountId: this tile is
+    // agency-wide, across every account.
+    sumOpenOpportunities(db).then(
+      (result) => ({ result, error: null as Error | null }),
+      (error: Error) => ({ result: null, error }),
+    ),
   ]);
 
   if (contactCount.error) {
@@ -33,12 +38,10 @@ export default async function DashboardPage() {
     ? m["common.unavailable"]
     : String(contactCount.count ?? 0);
 
-  const opps = openOpps.data ?? [];
-  const pipelineValue = opps.reduce((sum, o) => sum + Number(o.monetary_value), 0);
-  const openOppsValue = openOpps.error ? m["common.unavailable"] : String(opps.length);
+  const openOppsValue = openOpps.error ? m["common.unavailable"] : String(openOpps.result!.count);
   const pipelineValueDisplay = openOpps.error
     ? m["common.unavailable"]
-    : formatCurrency(pipelineValue);
+    : formatCurrency(openOpps.result!.value);
 
   return (
     <>

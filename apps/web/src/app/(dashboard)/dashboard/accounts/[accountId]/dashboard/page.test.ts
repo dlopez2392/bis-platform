@@ -28,7 +28,6 @@ vi.mock("@/lib/auth", () => ({
 
 const dbFixture = vi.hoisted(() => ({
   name: "Test Client One", timezone: "America/Chicago",
-  openOpps: [] as { monetary_value: number }[],
 }));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
@@ -44,15 +43,9 @@ vi.mock("@/lib/db", () => ({
           }),
         };
       }
-      if (table === "opportunities") {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({ data: dbFixture.openOpps, error: null }),
-            }),
-          }),
-        };
-      }
+      // Open-opportunity totals now go through sumOpenOpportunities
+      // (@bis/db, mocked below) rather than a raw query on this client, so
+      // "opportunities" is no longer a table this page's db.from() reaches.
       throw new Error(`unexpected table in dashboard page.test.ts mock: ${table}`);
     },
   }),
@@ -76,6 +69,7 @@ const dbMocks = vi.hoisted(() => ({
   // Task 5's dashboard row — the same `listAccountWork` read tasks/page.tsx
   // already makes; mocked here in this file's own vi.fn() shape.
   listAccountWork: vi.fn(),
+  sumOpenOpportunities: vi.fn(),
 }));
 // mergeChecklist (@/lib/checklist-catalogue) is NOT mocked — the real
 // CHECKLIST_CATALOGUE (its length read below, never hard-coded here) is
@@ -103,6 +97,7 @@ vi.mock("@bis/db", () => ({
   listBookingCreationsBetween: (...a: unknown[]) => dbMocks.listBookingCreationsBetween(...a),
   listOpportunityValuesCreatedBetween: (...a: unknown[]) => dbMocks.listOpportunityValuesCreatedBetween(...a),
   listAccountWork: (...a: unknown[]) => dbMocks.listAccountWork(...a),
+  sumOpenOpportunities: (...a: unknown[]) => dbMocks.sumOpenOpportunities(...a),
 }));
 
 vi.mock("./calls-chart-card", () => ({ CallsChartCard: () => null }));
@@ -164,7 +159,6 @@ const ALL_CATALOGUE_KEYS = CHECKLIST_CATALOGUE
 // when the work row's own describe block was added for the Task 5 review fix.
 function resetFixtures() {
   authFixture.isAgency = true;
-  dbFixture.openOpps = [];
   checklistRowProps.current = null;
   workRowProps.current = null;
   for (const fn of Object.values(dbMocks)) fn.mockReset();
@@ -177,6 +171,7 @@ function resetFixtures() {
   dbMocks.listBookingCreationsBetween.mockResolvedValue([]);
   dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([]);
   dbMocks.listAccountWork.mockResolvedValue([]);
+  dbMocks.sumOpenOpportunities.mockResolvedValue({ count: 0, value: 0 });
   // Default: one item ticked, A2P not approved — mirrors blueprints.spec.ts's
   // own GAP 3 fixture shape (1 ticked, A2P rejected).
   dbMocks.listChecklistState.mockResolvedValue([row("phone_number")]);
@@ -325,5 +320,37 @@ describe("AccountDashboardPage — the zone note", () => {
     // Settings is agency-only; a client following that link is redirected
     // straight back to this page.
     expect(clientHtml).not.toContain("/settings");
+  });
+});
+
+/**
+ * F-055 (now half): this page used to query `opportunities` directly
+ * (`.select("monetary_value").eq("account_id", …).eq("status", "open")`),
+ * which PostgREST caps at `max_rows` (1000) — silently undercounting both
+ * the "Open deals" count and the "Pipeline value" sum above that. It now
+ * goes through `sumOpenOpportunities` (packages/db/src/opportunities.ts),
+ * which pages past the cap; this test pins that the KPI tiles render
+ * exactly what that call returned, not a value this page recomputed from a
+ * raw row set.
+ */
+describe("AccountDashboardPage — open deals and pipeline value (F-055 now-half)", () => {
+  beforeEach(resetFixtures);
+
+  it("renders the count and currency-formatted sum sumOpenOpportunities returned", async () => {
+    dbMocks.sumOpenOpportunities.mockResolvedValue({ count: 7, value: 12345 });
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(renderedText(html)).toContain(m["account.openOpps"]);
+    expect(html).toContain(">7<");
+    expect(html).toContain("$12,345");
+  });
+
+  it("scopes the call to this account", async () => {
+    dbMocks.sumOpenOpportunities.mockResolvedValue({ count: 0, value: 0 });
+
+    await AccountDashboardPage(route("acct_specific"));
+
+    expect(dbMocks.sumOpenOpportunities).toHaveBeenCalledWith(expect.anything(), "acct_specific");
   });
 });

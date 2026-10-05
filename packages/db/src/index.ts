@@ -37,7 +37,7 @@ export { listCustomFields, createCustomField, listCustomValues, upsertCustomValu
 export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
          listBoard, listContactOpportunities,
-         listOpportunityValuesCreatedBetween } from "./opportunities";
+         listOpportunityValuesCreatedBetween, sumOpenOpportunities } from "./opportunities";
 export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, findMessageByProviderId, hasRecentOutboundSms,
          listFailedOutboundSms,

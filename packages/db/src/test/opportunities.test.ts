@@ -8,7 +8,7 @@ import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
          listBoard, listContactOpportunities,
-         listOpportunityValuesCreatedBetween } from "../opportunities";
+         listOpportunityValuesCreatedBetween, sumOpenOpportunities } from "../opportunities";
 
 describe("opportunities", () => {
   it("create → first stage; move right; board groups + totals", () =>
@@ -158,6 +158,35 @@ describe("opportunities", () => {
       const { data: ev } = await db.from("events").select("type").eq("account_id", accountId)
         .eq("type", "opportunity.updated");
       expect(ev).toHaveLength(0);
+    }));
+
+  it("sumOpenOpportunities counts and sums only open deals, scoped to the account, past a shrunk page size", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Sum" }, "user_test");
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const { id: a } = await createOpportunity(db, accountId,
+        { contactId, pipelineId, name: "A", value: 100 }, "user_test");
+      const { id: b } = await createOpportunity(db, accountId,
+        { contactId, pipelineId, name: "B", value: 200 }, "user_test");
+      const { id: c } = await createOpportunity(db, accountId,
+        { contactId, pipelineId, name: "C", value: 300 }, "user_test");
+      // Won — must not be counted or summed; proves the filter is on
+      // status, not just account.
+      await setOpportunityStatus(db, accountId, c, "won", "user_test");
+      void a; void b;
+
+      // pageSize=1 forces three separate keyset pages (`.gt("id", lastId)`
+      // + `.limit(1)`) for the two open rows plus the empty page that ends
+      // the loop — a real multi-page SUM against Postgres, not just the
+      // mocked unit test. As evidence for `.order("id", …)` it is weak, not
+      // proof: with keyset paging a missing ORDER BY would drop the second
+      // row only when its uuid sorts below the first, so a run can pass by
+      // luck. opportunities-pagination.test.ts's mock test is what pins
+      // that requirement (asserts `.order()` fires
+      // on every page, and fails if paging stops on a merely SHORT page
+      // instead of a genuinely empty one).
+      const result = await sumOpenOpportunities(db, accountId, 1);
+      expect(result).toEqual({ count: 2, value: 300 });
     }));
 });
 
