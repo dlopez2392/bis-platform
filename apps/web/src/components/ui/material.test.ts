@@ -684,6 +684,17 @@ describe("TooltipContent converges on --radius-ctl, not the bare rounded-md (202
   });
 });
 
+// Found 2026-10-04: CommandInput's own className carries `rounded-md` with
+// no border and no background on that element — the wrapper div around it
+// is what paints the border, so the radius never renders anywhere. A dead
+// class that also happened to be the shape #1's test above now forbids.
+describe("CommandInput carries no dead rounded-md (2026-10-04)", () => {
+  it("mutation: delete `rounded-md ` from the class list -> restoring it → test FAILS", () => {
+    const literal = classLiteralAfter(src("./command.tsx"), 'data-slot="command-input"');
+    expect(literal).not.toContain("rounded-md");
+  });
+});
+
 describe("the two sanctioned small-control radius exceptions (DESIGN.md Shape & motion)", () => {
   it("the checkbox box is 4px (mutation: rounded-[4px] -> rounded-[var(--radius-ctl)] → FAILS)", () => {
     const literal = classLiteralAfter(src("./checkbox.tsx"), 'data-slot="checkbox"');
