@@ -75,7 +75,9 @@ vi.mock("./actions", () => ({
   setAlertPhoneAction: noop, startAlertPhoneVerificationAction: noop,
   confirmAlertPhoneVerificationAction: noop,
 }));
-vi.mock("../branding/actions", () => ({ setBrandingAction: noop }));
+vi.mock("../branding/actions", () => ({
+  setBrandingAction: noop, removeBrandLogoAction: noop, restoreBrandLogoAction: noop,
+}));
 vi.mock("../website/actions", () => ({
   saveSiteAction: noop, testSiteConnectionAction: noop, unlinkSiteAction: noop,
 }));

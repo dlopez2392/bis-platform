@@ -7,7 +7,7 @@ import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
          setFromEmailAction, setReportEmailsAction, setAlertPhoneAction,
          startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction } from "./actions";
-import { setBrandingAction } from "../branding/actions";
+import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
 import { SendingAddressCard } from "./sending-address-card";
@@ -159,6 +159,8 @@ export default async function CrmSettingsPage({
   const boundInvite = inviteClientAdminAction.bind(null, accountId);
   // accountId is bound here, server-side. It must never travel as a form field.
   const boundSetBranding = setBrandingAction.bind(null, accountId);
+  const boundRemoveLogo = removeBrandLogoAction.bind(null, accountId);
+  const boundRestoreLogo = restoreBrandLogoAction.bind(null, accountId);
   const boundSetFromEmail = setFromEmailAction.bind(null, accountId);
   const boundSetReportEmails = setReportEmailsAction.bind(null, accountId);
   const boundSetAlertPhone = setAlertPhoneAction.bind(null, accountId);
@@ -215,6 +217,8 @@ export default async function CrmSettingsPage({
           brandMode={branding.brandMode}
           logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
           action={boundSetBranding}
+          removeLogoAction={boundRemoveLogo}
+          restoreLogoAction={boundRestoreLogo}
         />
         <SendingAddressCard
           fromEmail={sendingIdentity.fromEmail}
