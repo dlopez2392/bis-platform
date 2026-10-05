@@ -410,6 +410,13 @@ export const m = {
   "bulk.deletedSkipped": "Deleted {count} · skipped {skipped} linked to bookings, deals, or conversations",
 
   "pipeline.title": "Opportunities",
+  // The header badge used to read "N · $X" — the same shape the per-column
+  // subtotals use, which count every status (open+won+lost). Saying "open"
+  // plainly tells the two apart instead of relying on the reader to notice
+  // this one number landed above the columns rather than inside one.
+  // "{count}"/"{value}" are the house {placeholder} convention (see
+  // setup.progress above); the page .replace()s them.
+  "pipeline.openTotal": "{count} open · {value}",
   "pipeline.add": "Add opportunity",
   "pipeline.moveFailed": "Could not move that opportunity. Refresh and try again.",
   "pipeline.updateFailed": "Could not save that opportunity. Try again.",

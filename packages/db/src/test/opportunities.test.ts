@@ -175,13 +175,16 @@ describe("opportunities", () => {
       await setOpportunityStatus(db, accountId, c, "won", "user_test");
       void a; void b;
 
-      // pageSize=1 forces three separate .range() pages for the two open
-      // rows plus the empty page that ends the loop — a real multi-page
-      // traversal against Postgres, not just the mocked unit test. The
-      // exact count/sum below only holds if `.order("id", …)` pins the same
-      // row order on every one of those three requests; without it,
-      // Postgres is free to answer each page from a different ordering and
-      // this could skip or double-count a row.
+      // pageSize=1 forces three separate keyset pages (`.gt("id", lastId)`
+      // + `.limit(1)`) for the two open rows plus the empty page that ends
+      // the loop — a real multi-page SUM against Postgres, not just the
+      // mocked unit test. What this does NOT prove: two rows inserted a
+      // moment apart almost certainly come back in that same order even
+      // with no ORDER BY at all, so this test passing is not evidence that
+      // `.order("id", …)` is doing anything — opportunities-pagination.test.ts's
+      // mock test is what pins that requirement (asserts `.order()` fires
+      // on every page, and fails if paging stops on a merely SHORT page
+      // instead of a genuinely empty one).
       const result = await sumOpenOpportunities(db, accountId, 1);
       expect(result).toEqual({ count: 2, value: 300 });
     }));

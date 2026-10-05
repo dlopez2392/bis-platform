@@ -169,31 +169,42 @@ const OPEN_OPPORTUNITY_PAGE_SIZE = 1000;
  * past PostgREST's row cap so neither figure undercounts above it.
  * `accountId` omitted sums across every account (the agency home's use);
  * given, it scopes to one account (the account dashboard's use).
+ *
+ * KEYSET paging (`.gt("id", lastId)` + `.limit()`), not `.range()`/offset —
+ * the repo already ruled offset paging here unsafe (billing.ts's
+ * `countBilledAccountsByPlan`, same comment): a server `max_rows` LOWER than
+ * `pageSize` hands back a page shorter than asked even though more rows
+ * remain, so "stop when the page is short" silently undercounts. Keyset
+ * paging stops ONLY on a genuinely empty page, and as a side effect avoids
+ * offset's O(N²) rescan and its skip-on-concurrent-insert — `.range()`
+ * re-counts rows 0..from on every request, so a row inserted ahead of the
+ * cursor between requests pushes a not-yet-seen row out of the next page.
  */
 export async function sumOpenOpportunities(
   db: SupabaseClient, accountId?: string, pageSize: number = OPEN_OPPORTUNITY_PAGE_SIZE,
 ): Promise<{ count: number; value: number }> {
   let count = 0;
   let value = 0;
-  let from = 0;
+  let lastId: string | undefined;
   for (;;) {
-    let query = db.from("opportunities").select("monetary_value").eq("status", "open");
+    let query = db.from("opportunities").select("id, monetary_value").eq("status", "open");
     if (accountId !== undefined) query = query.eq("account_id", accountId);
     // Without a deterministic order, Postgres/PostgREST may hand back a
-    // different row order per request, and `.range()` pages by POSITION in
-    // that order — a second page fetched against a re-ordered result set
-    // can then skip or double-count rows. `id` is the table's primary key
-    // (0003_crm_core.sql), so ordering by it is both stable and indexed.
-    const { data, error } = await query
-      .order("id", { ascending: true })
-      .range(from, from + pageSize - 1);
+    // different row order per request — there is no server-held cursor
+    // between the separate HTTP requests each page is, so this has to be
+    // attached on every one of them, not just the first. `id` is the
+    // table's primary key (0003_crm_core.sql), so ordering by it is both
+    // stable and indexed, and doubles as the keyset column below.
+    query = query.order("id", { ascending: true });
+    if (lastId !== undefined) query = query.gt("id", lastId);
+    const { data, error } = await query.limit(pageSize);
     if (error) throw new Error(`sumOpenOpportunities failed: ${error.message}`);
-    const rows = (data ?? []) as { monetary_value: number }[];
+    const rows = (data ?? []) as { id: string; monetary_value: number }[];
+    if (rows.length === 0) return { count, value };
     for (const row of rows) {
       count += 1;
       value += Number(row.monetary_value);
     }
-    if (rows.length < pageSize) return { count, value };
-    from += pageSize;
+    lastId = rows[rows.length - 1]!.id;
   }
 }
