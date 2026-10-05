@@ -152,24 +152,36 @@ export function parseAttribution(params: URLSearchParams): Record<string, string
   return out;
 }
 
-// Deliberately excludes " ' , < > and whitespace. Beyond being invalid in an
-// address, those are exactly the characters that break out of a PostgREST
-// filter, and this value reaches the contact dedupe lookup from a public form.
+// Deliberately excludes " ' , < > and whitespace in BOTH parts. Beyond being
+// invalid in an address, those are exactly the characters that break out of
+// a PostgREST filter, and this value reaches the contact dedupe lookup from
+// a public form.
 //
-// % and _ were excluded here too, until F-047 phase 1 (docs/crm-features.md
-// §2.3, "addresses with an underscore refused on every public path"): the
-// contact dedupe lookup (`findDuplicate` in packages/db/src/contacts.ts) used
-// to match this value with ILIKE, where `%`/`_` are live pattern wildcards.
-// That lookup no longer exists — migrations 0033/0034 moved it to an exact
-// `.eq("email_key", …)` comparison on a generated column, where `%` and `_`
-// are literal characters "by construction rather than by escaping"
-// (contacts.ts's own comment above `findDuplicate`), so a submitted
-// `%@%.com` or `john_doe@example.com` can no longer hijack another contact's
-// dedupe match by ILIKE pattern, and rejecting either character here no
-// longer buys any safety — it only refused a real address shape (both are
-// valid RFC 5322 local-part characters) on every public form, the booking
-// page, the web chat and Sofía's video booking.
-const EMAIL_RE = /^[^\s@,"'<>]+@[^\s@,"'<>]+\.[a-z]{2,}$/i;
+// `_` in the LOCAL part only is lifted as of F-047 phase 1
+// (docs/crm-features.md §2.3, "addresses with an underscore refused on every
+// public path"): the contact dedupe lookup (`findDuplicate` in
+// packages/db/src/contacts.ts) used to match this value with ILIKE, where
+// `_` is a live single-char pattern wildcard. That lookup no longer exists —
+// migrations 0033/0034 moved it to an exact `.eq("email_key", …)` comparison
+// on a generated column, where `_` is a literal character "by construction
+// rather than by escaping" (contacts.ts's own comment above `findDuplicate`),
+// so `john_doe@example.com` can no longer hijack another contact's dedupe
+// match, and refusing it bought no safety — only a real RFC 5322 local-part
+// character refused on every public form, the booking page, the web chat and
+// Sofía's video booking.
+//
+// `%` stays refused everywhere, local part included (owner decision,
+// 2026-10-05): the same ILIKE argument would lift it too, but Resend's own
+// acceptance of a literal `%` in an address is unverified, a failed
+// `replyTo` would break every lead alert, and production carries zero such
+// addresses today — nothing is gained by lifting it before that is checked.
+//
+// `_` ALSO stays refused in the DOMAIN part: a domain label cannot legally
+// contain one, and this function is the only gate the value passes through
+// on the surfaces F-047 names — public form pages render with `noValidate`,
+// and the web chat/Sofía paths have no browser form validation behind them
+// at all, so there is no second check to catch a malformed domain.
+const EMAIL_RE = /^[^\s@,"'<>%]+@[^\s@,"'<>%_]+\.[a-z]{2,}$/i;
 // Leading "(" (as in "(956) 555-0101") is accepted alongside a leading digit
 // or "+" — the RGV-common way to write a US number with an area code.
 const PHONE_RE = /^\+?[0-9(][0-9()\-.\s]{5,19}$/;
