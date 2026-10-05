@@ -4,6 +4,7 @@ import {
   listChecklistState, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
   listCallStartsBetween, listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
+  sumOpenOpportunities,
   getA2pRegistration, listAccountWork,
 } from "@bis/db";
 import { StatTile } from "@/components/stat-tile";
@@ -97,19 +98,16 @@ export default async function AccountDashboardPage({
   const window7FromMs = Date.parse(window7.fromIso);
 
   const [
-    checklistRows, contactsCount, opps,
+    checklistRows, contactsCount, openOpps,
     voiceProfile, calendar, callsIso, bookingsIso, oppPairs, recentCalls, recentEvents,
     a2p, workRows,
   ] = await Promise.all([
     listChecklistState(db, accountId),
     countContacts(db, accountId),
-    // PostgREST caps rows at max_rows (1000). Above that, this sum and count
-    // silently undercount — an accurate figure needs a DB-side aggregate.
-    db
-      .from("opportunities")
-      .select("monetary_value")
-      .eq("account_id", accountId)
-      .eq("status", "open"),
+    // Pages past PostgREST's row cap (max_rows, 1000) internally, so neither
+    // the count nor the sum silently undercounts above it — see
+    // sumOpenOpportunities' own comment.
+    sumOpenOpportunities(db, accountId),
     getVoiceProfile(db, accountId),
     getCalendarForAccount(db, accountId),
     listCallStartsBetween(db, accountId, window14.fromIso, window14.toIso),
@@ -143,13 +141,8 @@ export default async function AccountDashboardPage({
     listAccountWork(db, accountId),
   ]);
 
-  if (opps.error) {
-    throw new Error(`account dashboard: opportunities query failed: ${opps.error.message}`);
-  }
-
-  const open = opps.data ?? [];
-  const openOppsValue = String(open.length);
-  const pipelineValueDisplay = formatCurrency(open.reduce((sum, o) => sum + Number(o.monetary_value), 0));
+  const openOppsValue = String(openOpps.count);
+  const pipelineValueDisplay = formatCurrency(openOpps.value);
 
   const checklistEntries = mergeChecklist(checklistRows, { a2pStatus: a2p?.status });
   const checklistRemaining = checklistEntries.filter((e) => !e.done).length;

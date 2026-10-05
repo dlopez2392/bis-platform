@@ -155,3 +155,38 @@ export async function listOpportunityValuesCreatedBetween(
     createdAt: r.created_at, monetaryValue: Number(r.monetary_value),
   }));
 }
+
+// PostgREST caps a single response at `max_rows` (1000 in production). A
+// plain `.select("monetary_value")` therefore silently undercounts both the
+// row count AND the sum of value once an account (or the whole agency) has
+// more open opportunities than that. Default kept at 1000 so pagination is
+// invisible in the common case; tests shrink it to prove the loop itself
+// without creating a thousand real rows.
+const OPEN_OPPORTUNITY_PAGE_SIZE = 1000;
+
+/**
+ * Exact count and sum of `monetary_value` for open opportunities, paging
+ * past PostgREST's row cap so neither figure undercounts above it.
+ * `accountId` omitted sums across every account (the agency home's use);
+ * given, it scopes to one account (the account dashboard's use).
+ */
+export async function sumOpenOpportunities(
+  db: SupabaseClient, accountId?: string, pageSize: number = OPEN_OPPORTUNITY_PAGE_SIZE,
+): Promise<{ count: number; value: number }> {
+  let count = 0;
+  let value = 0;
+  let from = 0;
+  for (;;) {
+    let query = db.from("opportunities").select("monetary_value").eq("status", "open");
+    if (accountId !== undefined) query = query.eq("account_id", accountId);
+    const { data, error } = await query.range(from, from + pageSize - 1);
+    if (error) throw new Error(`sumOpenOpportunities failed: ${error.message}`);
+    const rows = (data ?? []) as { monetary_value: number }[];
+    for (const row of rows) {
+      count += 1;
+      value += Number(row.monetary_value);
+    }
+    if (rows.length < pageSize) return { count, value };
+    from += pageSize;
+  }
+}

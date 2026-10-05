@@ -5,6 +5,7 @@ import { AddOpportunityDialog } from "./add-opportunity-dialog";
 import { PageHeader } from "@/components/page-header";
 import { dbForRequest } from "@/lib/db";
 import { formatCurrency, contactDisplayName } from "@/lib/format";
+import { pipelineOpenTotals } from "@/lib/pipeline/totals";
 import { m } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
@@ -22,8 +23,12 @@ export default async function PipelinePage({
     listContacts(db, accountId, { limit: 200 }),
   ]);
 
-  const total = board.reduce((s, c) => s + c.totalValue, 0);
-  const count = board.reduce((s, c) => s + c.opportunities.length, 0);
+  // The board itself still shows every stage's own total (won + lost
+  // included — a closed deal must still show where it closed), but this
+  // header figure is "what's in the pipeline": the same one definition
+  // (open only) the account dashboard's "Pipeline value" tile uses, so the
+  // two numbers never disagree again.
+  const { count, value: total } = pipelineOpenTotals(board);
 
   const boundCreate = createOpportunityAction.bind(null, accountId);
   const boundMove = moveOppToStageAction.bind(null, accountId);
