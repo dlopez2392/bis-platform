@@ -229,9 +229,16 @@ export default async function AccountDashboardPage({
   // has no receptionist taking calls, so "Calls answered" is structurally
   // always 0 there and is never the honest headline (crm-features.md
   // §2.3's defect row). Owner decision: "leads captured" — the SAME
-  // definition the Monday weekly report sends (`listLeadInstantsBetween`,
-  // lib/reports/weekly-metrics.ts), not "every new contact" — so this
-  // cannot drift from what that email already tells the client.
+  // DEFINITION of a lead (a real submission or a `LEAD_OUTCOME` call) the
+  // Monday weekly report uses, read through the one shared function both
+  // call, `listLeadInstantsBetween` (lib/reports/weekly-metrics.ts) — not
+  // "every new contact", and not a second, parallel computation that could
+  // drift from the report's. The NUMBER shown here can still differ from
+  // the email's: this window is a rolling 7 local days ending NOW, while
+  // the email's is the calendar week just finished (Monday 00:00 to the
+  // next Monday 00:00, the account's own zone) — two different windows
+  // over the one shared definition, the same relationship "Calls answered"
+  // already has with the report's own "calls answered".
   const currentLeadsIso = leadInstantsIso.filter((iso) => Date.parse(iso) >= window7FromMs);
   const priorLeadsIso = leadInstantsIso.filter((iso) => Date.parse(iso) < window7FromMs);
   const leadsSpark = bucketByLocalDay(leadInstantsIso, timezone, window14.dayKeys).map((b) => b.count);

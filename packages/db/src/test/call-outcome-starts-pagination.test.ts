@@ -15,12 +15,20 @@ function fakeCallsDb(pages: { id: string; started_at: string }[][]) {
   const inCalls: Array<[string, unknown]> = [];
   const orderCalls: Array<[string, unknown]> = [];
   const gtCalls: Array<[string, unknown]> = [];
+  // Column-aware, unlike a bare `() => builder` passthrough: a mutation that
+  // swaps the filtered COLUMN (`started_at` -> `created_at`) or drops the
+  // account scope entirely must fail an assertion here, not silently no-op
+  // (the reviewer's finding against the first version of this file, which
+  // only recorded `gt`/`order`/`in` and let `eq`/`gte`/`lt` ignore their
+  // arguments).
+  const gteCalls: Array<[string, unknown]> = [];
+  const ltCalls: Array<[string, unknown]> = [];
   let call = 0;
   const builder: Record<string, unknown> = {
     eq: (col: string, val: unknown) => { eqCalls.push([col, val]); return builder; },
     in: (col: string, val: unknown) => { inCalls.push([col, val]); return builder; },
-    gte: () => builder,
-    lt: () => builder,
+    gte: (col: string, val: unknown) => { gteCalls.push([col, val]); return builder; },
+    lt: (col: string, val: unknown) => { ltCalls.push([col, val]); return builder; },
     order: (col: string, opts: unknown) => { orderCalls.push([col, opts]); return builder; },
     gt: (col: string, val: unknown) => { gtCalls.push([col, val]); return builder; },
     limit: async (n: number) => {
@@ -31,7 +39,7 @@ function fakeCallsDb(pages: { id: string; started_at: string }[][]) {
     },
   };
   const db = { from: () => ({ select: () => builder }) } as unknown as SupabaseClient;
-  return { db, limitCalls, eqCalls, inCalls, orderCalls, gtCalls };
+  return { db, limitCalls, eqCalls, inCalls, orderCalls, gtCalls, gteCalls, ltCalls };
 }
 
 describe("listCallStartsByOutcomeBetween (keyset pagination, no row-cap undercount)", () => {
@@ -85,5 +93,40 @@ describe("listCallStartsByOutcomeBetween (keyset pagination, no row-cap undercou
 
     expect(result).toEqual([]);
     expect(limitCalls.length).toBe(1);
+  });
+
+  // Review finding: a mutation swapping the filtered column to `created_at`
+  // previously survived every test above, since the fake `gte`/`lt` ignored
+  // which column they were called with.
+  it("filters the WINDOW on started_at, never created_at", async () => {
+    const { db, gteCalls, ltCalls } = fakeCallsDb([
+      [{ id: "a", started_at: "2027-01-01T00:00:00.000Z" }],
+      [],
+    ]);
+
+    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", 1);
+
+    expect(gteCalls).toEqual([
+      ["started_at", "2027-01-01T00:00:00.000Z"], ["started_at", "2027-01-01T00:00:00.000Z"],
+    ]);
+    expect(ltCalls).toEqual([
+      ["started_at", "2027-02-01T00:00:00.000Z"], ["started_at", "2027-02-01T00:00:00.000Z"],
+    ]);
+  });
+
+  // Review finding: dropping `.eq("account_id", …)` previously survived
+  // every test above too — an agency viewer's dashboard would then count
+  // every client's leads, not just this account's.
+  it("scopes EVERY page to the given account — not just the first", async () => {
+    const { db, eqCalls, limitCalls } = fakeCallsDb([
+      [{ id: "a", started_at: "2027-01-01T00:00:00.000Z" }],
+      [{ id: "b", started_at: "2027-01-02T00:00:00.000Z" }],
+      [],
+    ]);
+
+    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", 1);
+
+    expect(limitCalls.length).toBe(3);
+    expect(eqCalls).toEqual(limitCalls.map(() => ["account_id", "acct_1"]));
   });
 });

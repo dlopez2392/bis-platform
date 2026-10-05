@@ -18,12 +18,17 @@ function fakeSubmissionsDb(pages: { id: string; created_at: string }[][]) {
   const isCalls: Array<[string, unknown]> = [];
   const orderCalls: Array<[string, unknown]> = [];
   const gtCalls: Array<[string, unknown]> = [];
+  // Column-aware, unlike a bare `() => builder` passthrough: a mutation
+  // that swaps the filtered COLUMN (`created_at` -> some other timestamp)
+  // must fail an assertion here, not silently no-op.
+  const gteCalls: Array<[string, unknown]> = [];
+  const ltCalls: Array<[string, unknown]> = [];
   let call = 0;
   const builder: Record<string, unknown> = {
     eq: (col: string, val: unknown) => { eqCalls.push([col, val]); return builder; },
     is: (col: string, val: unknown) => { isCalls.push([col, val]); return builder; },
-    gte: () => builder,
-    lt: () => builder,
+    gte: (col: string, val: unknown) => { gteCalls.push([col, val]); return builder; },
+    lt: (col: string, val: unknown) => { ltCalls.push([col, val]); return builder; },
     order: (col: string, opts: unknown) => { orderCalls.push([col, opts]); return builder; },
     gt: (col: string, val: unknown) => { gtCalls.push([col, val]); return builder; },
     limit: async (n: number) => {
@@ -34,7 +39,7 @@ function fakeSubmissionsDb(pages: { id: string; created_at: string }[][]) {
     },
   };
   const db = { from: () => ({ select: () => builder }) } as unknown as SupabaseClient;
-  return { db, limitCalls, eqCalls, isCalls, orderCalls, gtCalls };
+  return { db, limitCalls, eqCalls, isCalls, orderCalls, gtCalls, gteCalls, ltCalls };
 }
 
 describe("listSubmissionCreationsBetween (keyset pagination, no row-cap undercount)", () => {
@@ -94,5 +99,21 @@ describe("listSubmissionCreationsBetween (keyset pagination, no row-cap undercou
 
     expect(result).toEqual([]);
     expect(limitCalls.length).toBe(1);
+  });
+
+  it("filters the WINDOW on created_at, never some other timestamp column", async () => {
+    const { db, gteCalls, ltCalls } = fakeSubmissionsDb([
+      [{ id: "a", created_at: "2027-01-01T00:00:00.000Z" }],
+      [],
+    ]);
+
+    await listSubmissionCreationsBetween(db, "acct_1", "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", 1);
+
+    expect(gteCalls).toEqual([
+      ["created_at", "2027-01-01T00:00:00.000Z"], ["created_at", "2027-01-01T00:00:00.000Z"],
+    ]);
+    expect(ltCalls).toEqual([
+      ["created_at", "2027-02-01T00:00:00.000Z"], ["created_at", "2027-02-01T00:00:00.000Z"],
+    ]);
   });
 });
