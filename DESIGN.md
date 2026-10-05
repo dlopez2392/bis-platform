@@ -57,7 +57,7 @@ highlight (`docs/design/northern-lights.html`'s `--card-shadow`), which is why
 - All aligned digits get `font-variant-numeric: tabular-nums`.
 
 **Shape & motion:** radii are 8px (controls, `--radius-ctl` / the mockup's
-`--r-ctl`), 12px (cards, `--radius-card` / `--r-card`; `--radius` is
+`--r-ctl`), 12px (cards and floating overlay panels — popovers, menus, the select dropdown, the command palette — `--radius-card` / `--r-card`; `--radius` is
 `0.75rem` so `rounded-lg` and `rounded-xl` finally agree), 999px (pills) —
 no other values, with two sanctioned small-control exceptions (owner
 decision, 2026-10-04): the checkbox box at 4px and the dialog/sheet close (X)
@@ -67,7 +67,9 @@ hovers, 250ms panels, `prefers-reduced-motion` respected, and NOTHING
 animates on scroll.
 
 **Tenant seam:** `deriveTheme`/`themeStyle` override the semantic surfaces
-(`--background`, `--card`, `--popover`, `--muted`, `--secondary`, `--border`,
+(`--background`, `--foreground`, `--card`, `--card-foreground`, `--popover`,
+`--popover-foreground`, `--primary`, `--primary-foreground`, `--secondary`,
+`--secondary-foreground`, `--muted`, `--muted-foreground`, `--border`,
 `--input`, `--ring`, the four `--sidebar*` names, `--radius`, `--font-sans`)
 and the whole accent family (`--accent`, `--accent-strong`, `--accent-dim`,
 `--ring-glow`, `--accent-2`, `--accent-2-dim`, `--ring-glow-2`,
