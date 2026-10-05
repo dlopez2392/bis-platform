@@ -115,5 +115,5 @@ describe("listLeadInstantsBetween (live DB) — the one function both the weekly
         ].sort((a, b) => a - b));
       }),
     );
-  });
+  }, 60_000); // two real fixture accounts + inserts against the CI project: well past the 5 s default
 });
