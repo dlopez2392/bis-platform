@@ -26,6 +26,16 @@ describe("bookingStrings", () => {
     expect(bookingStrings("es").timezoneLabel).toContain("{zone}");
   });
 
+  // F-102: the booking and cancel tab titles (`generateMetadata` in
+  // `app/b/[publicId]/page.tsx` and `.../cancel/[token]/page.tsx`).
+  // `{business}` is the customer-facing name, substituted by the caller.
+  it("keeps the {business} placeholder the caller substitutes, in both languages, for every tab-title key", () => {
+    for (const locale of ["en", "es"] as const) {
+      expect(bookingStrings(locale).tabTitleWithBrand).toContain("{business}");
+      expect(bookingStrings(locale).cancelTabTitleWithBrand).toContain("{business}");
+    }
+  });
+
   // Same rule `messages.test.ts` pins for the dashboard catalogue: a stranger
   // must never read an internal roadmap label.
   it("cites no internal roadmap label", () => {

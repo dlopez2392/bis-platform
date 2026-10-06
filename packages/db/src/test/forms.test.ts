@@ -3,7 +3,8 @@ import { Client } from "pg";
 import { withTestAccount } from "./fixtures";
 import { withRollback, actAs } from "./db";
 import {
-  newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId, updateForm,
+  newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
+  getFormByPublicId, updateForm,
   countFormsMissingNotify, listSubmissionCreationsBetween,
 } from "../forms";
 
@@ -60,6 +61,32 @@ describe("forms", () => {
 
       await updateForm(db, accountId, id, { status: "archived" }, "user_test");
       expect(await getPublishedFormByPublicId(db, publicId)).toBeNull();
+    }));
+
+  // F-102: the public `/f/<publicId>` layout needs a document's own
+  // account_id and locale_default to paint a branded, correctly-`lang`
+  // not-found page EVEN for a draft or archived form — `lang` and
+  // branding decisions happen above the page's own status check (see
+  // `app/f/[publicId]/layout.tsx`), so they need the row regardless of
+  // status. `getPublishedFormByPublicId` cannot be reused for this: it
+  // is the one accessor allowed to 404-before-the-caller-sees-it, and
+  // widening ITS filter would un-404 every draft form on the live page.
+  it("getFormByPublicId returns a draft or archived form (unlike getPublishedFormByPublicId), but still null for an unknown id", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id, publicId } = await createForm(
+        db, accountId, { name: "Quote Request", fields: FIELDS }, "user_test");
+
+      // MUTATION: add `.eq("status", "published")` to getFormByPublicId's
+      // query (copy getPublishedFormByPublicId's filter) -- this FAILS.
+      const draft = await getFormByPublicId(db, publicId);
+      expect(draft!.status).toBe("draft");
+      expect(draft!.account_id).toBe(accountId);
+      expect(draft!.locale_default).toBe("en");
+
+      await updateForm(db, accountId, id, { status: "archived" }, "user_test");
+      expect((await getFormByPublicId(db, publicId))!.status).toBe("archived");
+
+      expect(await getFormByPublicId(db, "no-such-public-id")).toBeNull();
     }));
 
   it("listForms reports a submission count", () =>

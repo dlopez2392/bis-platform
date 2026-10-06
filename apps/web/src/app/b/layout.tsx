@@ -1,28 +1,12 @@
 import type { Metadata } from "next";
-import { Geist, Inter, Source_Serif_4 } from "next/font/google";
-
-// Same three faces `brand_type` can name, declared for the same reason
-// `app/f/layout.tsx` declares them: this tree has its own root layout and
-// never sees the dashboard's, so without these declarations `deriveTheme`'s
-// `var(--font-geist-sans)` and friends resolve to nothing on this route — the
-// whole `font` shorthand in `booking-page.tsx`'s CSS goes invalid and a
-// themed tenant silently loses their type scale. The exact inert-token
-// failure M4a shipped, verbatim, on a second unauthenticated route.
-//
-// All three carry `preload: false`, matching `f/layout.tsx`: an unthemed
-// booking page paints the system stack and downloads no font at all, which is
-// the common case for a link shared in a text message rather than embedded.
-const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"], preload: false });
-const inter = Inter({ variable: "--font-inter", subsets: ["latin"], preload: false });
-const sourceSerif = Source_Serif_4({
-  variable: "--font-source-serif", subsets: ["latin"], preload: false,
-});
+import { PublicHtml } from "@/components/public/public-html";
 
 export const metadata: Metadata = {
   title: "Booking",
   // `app/` is a separate root layout tree from the dashboard's (see below), so
-  // this one needs its own default. The page's own `generateMetadata`
-  // overrides this with the client's logo when they have one.
+  // this one needs its own default. Each page's own `generateMetadata`
+  // overrides this with a localized, brand-aware title (F-102) and the
+  // client's logo when they have one.
   icons: { icon: "/favicon.ico" },
 };
 
@@ -37,27 +21,34 @@ export const metadata: Metadata = {
  * Without this file, Next served this segment with NO `<html>`/`<body>` at
  * all — quirks mode, a WCAG lang failure, and the browser's default 8px body
  * margin showing up as a gutter around `booking-page.tsx`'s own padding — on
- * top of the missing font variables above. Same "multiple root layouts"
- * pattern as `app/f`: `app/b` and `app/(dashboard)` are sibling top-level
- * segments, each with its own root layout, and `app/` itself declares none.
+ * top of the missing font variables `PublicHtml` now declares once for all
+ * three public trees. Same "multiple root layouts" pattern as `app/f`:
+ * `app/b` and `app/(dashboard)` are sibling top-level segments, each with
+ * its own root layout, and `app/` itself declares none.
+ *
+ * `lang` is hard-coded to `"en"` here, UNLIKE `app/f/[publicId]/layout.tsx`
+ * and `app/c/[publicId]/layout.tsx` — and this is deliberate, not a leftover
+ * of the old bug (F-102, defect :881). Those two trees moved their layout
+ * DOWN to `[publicId]` because the form and the voice profile each carry
+ * their own `locale_default`/`languages` column to read instead. A calendar
+ * carries no such column (confirmed by reading `packages/db/src/booking.ts`
+ * — no `locale`/`language` field on `calendars` or `bookings`), so there is
+ * NO per-document default to read even if this layout moved down too; the
+ * only locale signal on `/b` is `?locale=` (`embed.js`'s `data-locale`, or a
+ * confirmation/reminder email's own link), which no layout — moved down or
+ * not — can ever see (searchParams are not passed to ANY layout, by Next's
+ * own design; confirmed against `next/dist/build/.../next-types-plugin`'s
+ * own `LayoutProps`, which carries `params` only). So `/b`'s `<html lang>`
+ * stays "en" exactly as before. See this task's report for the full
+ * reasoning and the two remedies that would unblock it (a `locale` column on
+ * `bookings`, or a deliberately re-reviewed carve-out in `proxy.ts`, which
+ * `proxy.test.ts` currently pins shut for `/b`, `/f`, `/c` and `/u` as a
+ * whole — see that file's own mutation note before touching it).
  */
 export default function PublicBookingLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return (
-    <html lang="en" className={`${geistSans.variable} ${inter.variable} ${sourceSerif.variable}`}>
-      {/* The token set is painted on <main> by the page (`publicFormTheme`),
-          same as `/f`, and the body is transparent for the same reason `/f`'s
-          is: `/b` IS embedded — `embed.js` has a `data-booking` variant, and
-          bis-rgv.com's contact page frames it. This used to paint nothing
-          here on the reasoning that `/b` was only ever a direct destination;
-          the first real embed on a dark host page showed the browser's
-          default white body around a dark <main>. A visitor reaching the
-          bare page directly sees no difference: <main> still paints its own
-          background, and the unthemed fallback is transparent-on-white. */}
-      <body style={{ margin: 0, background: "transparent" }}>{children}</body>
-    </html>
-  );
+  return <PublicHtml lang="en">{children}</PublicHtml>;
 }

@@ -2,12 +2,12 @@ import type { Metadata } from "next";
 import { cache } from "react";
 import { notFound } from "next/navigation";
 import {
-  serviceDb, getCalendarByPublicId, getBranding, brandLogoUrl, type Branding,
+  serviceDb, getCalendarByPublicId, getBranding, brandLogoUrl, brandDisplayName, type Branding,
 } from "@bis/db";
 import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { partsInZone } from "@/lib/booking/slots";
 import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
-import { normalizeLocale } from "@/lib/forms/public-strings";
+import { normalizeLocale, publicTabTitle } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
@@ -70,16 +70,28 @@ function pad(n: number): string {
 // Same reasoning as `f/[publicId]/page.tsx`: a booking calendar is reachable
 // only by knowing its opaque publicId, and this URL is never meant to be a
 // discoverable destination.
+//
+// The title (F-102, defect :870) is set only for the live case; a disabled
+// or unknown calendar falls through to `app/b/layout.tsx`'s static "Booking"
+// default — that layout cannot compute a brand-aware one itself (no
+// `[publicId]` segment to read; see its own comment for why `/b` did not
+// move down the way `/f` and `/c` did).
 export async function generateMetadata(
-  { params }: { params: Promise<{ publicId: string }> },
+  { params, searchParams }: {
+    params: Promise<{ publicId: string }>;
+    searchParams: Promise<Record<string, string | string[] | undefined>>;
+  },
 ): Promise<Metadata> {
   const robots = { index: false, follow: false };
   const { publicId } = await params;
   const calendar = await loadCalendar(publicId);
   if (!calendar || !calendar.enabled) return { robots };
   const branding = await loadBranding(calendar.account_id, publicId);
+  const query = await searchParams;
+  const locale = normalizeLocale(typeof query.locale === "string" ? query.locale : undefined, "en");
   return {
     robots,
+    title: publicTabTitle(bookingStrings(locale), brandDisplayName(branding ?? UNBRANDED)),
     ...(branding?.brandLogoPath ? { icons: { icon: brandLogoUrl(branding.brandLogoPath) } } : {}),
   };
 }

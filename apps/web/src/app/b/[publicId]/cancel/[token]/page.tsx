@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 import { cache } from "react";
 import { notFound } from "next/navigation";
 import {
-  serviceDb, getBranding, brandLogoUrl, type Branding,
+  serviceDb, getBranding, brandLogoUrl, brandDisplayName, type Branding,
 } from "@bis/db";
 import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
 import { safeZone, formatWhen } from "@/lib/booking/time";
-import { normalizeLocale } from "@/lib/forms/public-strings";
+import { normalizeLocale, publicTabTitle } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
@@ -56,16 +56,31 @@ async function loadTimezone(accountId: string): Promise<string> {
 
 // Same reasoning as the sibling booking page: reachable only by an opaque
 // token in an email link, never a discoverable destination.
+//
+// The title (F-102) uses the `cancelTabTitle*` pair, not the booking page's
+// own `tabTitle*` — "Cancel your visit with Acme" is a different sentence
+// from "Book with Acme", and `publicTabTitle` is shape-generic over whichever
+// `{with,no}Brand` pair it is handed.
 export async function generateMetadata(
-  { params }: { params: Promise<{ publicId: string; token: string }> },
+  { params, searchParams }: {
+    params: Promise<{ publicId: string; token: string }>;
+    searchParams: Promise<Record<string, string | string[] | undefined>>;
+  },
 ): Promise<Metadata> {
   const robots = { index: false, follow: false };
   const { publicId, token } = await params;
   const row = await loadBooking(token);
   if (!row) return { robots };
   const branding = await loadBranding(row.account_id, publicId, token);
+  const query = await searchParams;
+  const locale = normalizeLocale(typeof query.locale === "string" ? query.locale : undefined, "en");
+  const strings = bookingStrings(locale);
   return {
     robots,
+    title: publicTabTitle(
+      { tabTitleWithBrand: strings.cancelTabTitleWithBrand, tabTitleNoBrand: strings.cancelTabTitleNoBrand },
+      brandDisplayName(branding ?? UNBRANDED),
+    ),
     ...(branding?.brandLogoPath ? { icons: { icon: brandLogoUrl(branding.brandLogoPath) } } : {}),
   };
 }

@@ -34,6 +34,40 @@ export async function getVoiceProfileByPublicId(
   return (data as ConciergeProfile | null) ?? null;
 }
 
+/** Unlike `ConciergeProfile`, `concierge_form_id` is NOT narrowed to
+ *  non-null — the whole point of this accessor is to also return a profile
+ *  whose concierge is off, which may never have had a destination form. */
+export type ConciergeProfileAnyStatus = VoiceProfileRow & { public_id: string };
+
+/**
+ * Same public_id lookup, ANY status — the concierge-off and
+ * no-destination-form cases `getVoiceProfileByPublicId` folds into null both
+ * come back here. `/c`'s own root layout (moved to `[publicId]/layout.tsx`
+ * for F-102) needs the row regardless: a not-found page's `lang` and whether
+ * to show the account's brand both have to be decided for a switched-off
+ * concierge too, above the page's own `notFound()` check. Mirrors
+ * `getFormByPublicId`'s split from `getPublishedFormByPublicId`.
+ */
+export async function getVoiceProfileAnyStatusByPublicId(
+  db: SupabaseClient, publicId: string,
+): Promise<ConciergeProfileAnyStatus | null> {
+  const { data, error } = await db.from("voice_profiles")
+    .select(PROFILE_COLS)
+    .eq("public_id", publicId)
+    .maybeSingle();
+  if (error) throw new Error(`getVoiceProfileAnyStatusByPublicId failed: ${error.message}`);
+  return (data as ConciergeProfileAnyStatus | null) ?? null;
+}
+
+/** The predicate `getVoiceProfileByPublicId`'s SQL filter used to make for
+ *  the caller, spelled out so the layout (lang/branding) and the page
+ *  (`notFound()`) can apply it independently against the SAME cached row. */
+export function isConciergeLive(
+  profile: Pick<VoiceProfileRow, "concierge_enabled" | "concierge_form_id">,
+): boolean {
+  return profile.concierge_enabled === true && profile.concierge_form_id != null;
+}
+
 /**
  * Switches the concierge on and returns the address the snippet must carry.
  *

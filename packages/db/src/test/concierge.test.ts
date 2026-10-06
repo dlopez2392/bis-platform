@@ -6,6 +6,7 @@ import { createForm } from "../forms";
 import { upsertVoiceProfile, getVoiceProfile } from "../voice";
 import {
   enableConcierge, disableConcierge, getVoiceProfileByPublicId,
+  getVoiceProfileAnyStatusByPublicId, isConciergeLive,
   createConciergeConversation, getConciergeConversation, claimConciergeTurn,
   appendConciergeTurns, setConciergeSubmission,
   countConciergeConversationsByIp, countConciergeConversationsForAccount,
@@ -174,6 +175,32 @@ describe("concierge accessors", () => {
         .update({ concierge_form_id: null }).eq("account_id", accountId);
       // MUTATION: drop `.not("concierge_form_id", "is", null)` -- this FAILS.
       expect(await getVoiceProfileByPublicId(db, publicId)).toBeNull();
+    }));
+
+  // F-102: `/c`'s own root layout (moved to `[publicId]/layout.tsx`) needs
+  // the profile's account_id and `languages` for `lang`/branding even while
+  // the concierge is off or has no destination form — the same "lang and
+  // branding decide above the page's own 404 check" shape `getFormByPublicId`
+  // exists for. Same split: this accessor folds nothing, `isConciergeLive`
+  // (and the page's own `notFound()`) apply the "is this actually live"
+  // predicate `getVoiceProfileByPublicId`'s SQL used to apply for the caller.
+  it("getVoiceProfileAnyStatusByPublicId returns the profile even OFF or with no destination form; isConciergeLive tells them apart", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedVoiceProfile(db, accountId);
+      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      const { publicId } = await enableConcierge(db, accountId, form.id);
+
+      const live = await getVoiceProfileAnyStatusByPublicId(db, publicId);
+      expect(live!.account_id).toBe(accountId);
+      // MUTATION: make isConciergeLive always return true -- this FAILS below.
+      expect(isConciergeLive(live!)).toBe(true);
+
+      await disableConcierge(db, accountId);
+      const off = await getVoiceProfileAnyStatusByPublicId(db, publicId);
+      expect(off).not.toBeNull();
+      expect(isConciergeLive(off!)).toBe(false);
+
+      expect(await getVoiceProfileAnyStatusByPublicId(db, "no-such-public-id")).toBeNull();
     }));
 
   it("claimConciergeTurn counts up and returns null at the cap", () =>

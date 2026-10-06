@@ -48,6 +48,7 @@ export { ensureConversation, createMessage, updateMessageStatus,
          sumUnreadCount, searchConversations } from "./messaging";
 // NOTE: searchCalls needs no line here — voice is `export * from "./voice"` below.
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
+         getFormByPublicId, isFormLive,
          updateForm, createSubmission, recordRejectedSubmission, countRecentSubmissions,
          listSubmissionCreationsBetween,
          shouldRecordRateLimit, findRecentDuplicate, linkSubmissionContact,

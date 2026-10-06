@@ -119,6 +119,35 @@ export async function getPublishedFormByPublicId(
   return (data as FormRow | null) ?? null;
 }
 
+/**
+ * Public path, ANY status — a draft and an archived form both come back,
+ * only a public_id that never existed returns null. `/f`'s own root layout
+ * (moved to `[publicId]/layout.tsx` for F-102) needs this: deciding the
+ * document's own `lang` and whether to show the account's brand on a
+ * not-found page both have to happen for a draft too, above the page's own
+ * "is this published" check — `getPublishedFormByPublicId` is the one
+ * accessor allowed to fold "draft" into "doesn't exist", and narrowing a
+ * second caller onto it would un-404 every draft on the live page the
+ * moment they shared a query. The status check moves to the caller
+ * (`page.tsx`'s own `notFound()` guard) instead.
+ */
+export async function getFormByPublicId(
+  db: SupabaseClient, publicId: string,
+): Promise<FormRow | null> {
+  const { data, error } = await db.from("forms").select(FORM_COLS)
+    .eq("public_id", publicId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as FormRow | null) ?? null;
+}
+
+/** The predicate `getPublishedFormByPublicId`'s SQL filter used to make for
+ *  the caller — now spelled out so `/f`'s layout and page can share the
+ *  SAME row (one query, via React `cache()`) and apply it independently:
+ *  the layout needs it for lang/branding, the page for `notFound()`. */
+export function isFormLive(form: Pick<FormRow, "status">): boolean {
+  return form.status === "published";
+}
+
 export async function updateForm(
   db: SupabaseClient, accountId: string, formId: string,
   patch: Partial<Pick<FormRow, "name" | "status" | "success_mode" | "success_message"
