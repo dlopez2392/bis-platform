@@ -6,9 +6,15 @@ import { GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type StateKind } from 
 // step is shown and WHICH steps are locked lives here so it is reachable
 // by a test — vitest.config.ts does not include .tsx files.
 
-/** The canonical ten, in the order the wizard walks them. Mirrors the array
- *  `deriveSetupStatus` returns; kept here so the rail can order itself
- *  without depending on that function having been called. */
+/** The canonical ten, in the order the wizard walks them. `deriveSetupStatus`
+ *  FILTERS this exact order down to a plan-shaped subset (a CRM-only
+ *  account's five, say) rather than returning a differently-ordered list, so
+ *  this still mirrors it — just the full-plan case now, not every caller's
+ *  own `views`. Kept here so the rail can order itself without depending on
+ *  that function having been called; nothing in this module indexes INTO
+ *  this constant to number a step any more (`stepNumber` below walks the
+ *  caller's own `views` instead, precisely because this list can be longer
+ *  than that). */
 export const SETUP_STEP_KEYS: readonly SetupStepKey[] = [
   "account", "branding", "hours", "voice_profile", "website_assistant", "number",
   "email", "forwarding", "test_call", "go_live",
@@ -83,6 +89,19 @@ export function lockedPrereqKeys(
       .map((v) => v.key);
   }
   if (key === "website_assistant") {
+    // DECIDED (review round): on a CRM-only plan `views` carries NO
+    // `voice_profile` entry at all (deriveSetupStatus drops it) — this
+    // `.filter` then matches nothing and the step never locks, which is
+    // deliberate, not the silent gap it looks like at first read. A lock
+    // reason has to name a step the rail actually shows; naming
+    // "voice_profile" here would point at a step this account does not
+    // have. The profile requirement does not disappear — it moves INSIDE
+    // this step's own pane instead (row 1, setup/steps/website-assistant.tsx,
+    // via the shared `isVoiceProfileDone` predicate, setup-status.ts), which
+    // is the one surface a CRM-only account actually sees for this step.
+    // Pinned in setup-rail.test.ts: `lockedPrereqKeys("website_assistant",
+    // <CRM-only views>)` stays `[]` even when the underlying profile is
+    // nowhere near ready.
     return views
       .filter((v) => v.key === "voice_profile" && (!v.done || v.unknown))
       .map((v) => v.key);
@@ -162,22 +181,63 @@ export function nextStepKey(views: SetupStepView[]): SetupStepKey | null {
  * First the loosest reading of "unfinished" — any step not `done`, which
  * catches a skipped or unknown step when there is nothing better to offer, so
  * an account whose only remaining item is a failed read still opens on that
- * read rather than somewhere unrelated. Then the last step (go-live), for the
- * genuinely finished account, rather than an arbitrary one.
+ * read rather than somewhere unrelated. Then the LAST step in THIS account's
+ * own `views` — go-live on the full plan, but whatever this plan's own final
+ * step is otherwise (email, for a CRM-only account that dropped go-live
+ * entirely) — for the genuinely finished account, rather than an arbitrary
+ * one.
  */
 export function defaultStepKey(views: SetupStepView[]): SetupStepKey {
   return nextStepKey(views)
     ?? views.find((v) => !v.done)?.key
-    ?? SETUP_STEP_KEYS[SETUP_STEP_KEYS.length - 1]!;
+    // The LAST step in THIS account's own `views`, not
+    // `SETUP_STEP_KEYS[SETUP_STEP_KEYS.length - 1]` ("go_live"). A CRM-only
+    // account's `views` never carries a go_live entry at all (deriveSetupStatus
+    // drops it, setup-status.ts) — falling back to a key with no matching view
+    // is exactly the "blank pane" failure this function exists to prevent
+    // (setup-shell.tsx's `if (!view) return null`). `views` is never empty in
+    // practice (every plan shape keeps "account"), so the non-null assertion
+    // mirrors the one this line replaced.
+    ?? views[views.length - 1]!.key;
 }
 
-/** `?step=` → a real key. Anything missing, unknown or malformed falls back
- *  to the default rather than rendering an empty pane. */
+/** `?step=` → a real key. Anything missing, unknown, malformed, OR naming a
+ *  step this account's OWN `views` does not carry (a CRM-only account has no
+ *  view at all for the five Sofía-only steps — see setup-status.ts) falls
+ *  back to the default rather than rendering an empty pane. Checked against
+ *  `views` itself, not `SETUP_STEP_KEYS` — the full canonical ten still NAMES
+ *  "number", but that is not the question this function is answering; "does
+ *  THIS account have a step by that name" is. */
 export function parseStepParam(
   raw: string | null | undefined, views: SetupStepView[],
 ): SetupStepKey {
-  if (raw && (SETUP_STEP_KEYS as readonly string[]).includes(raw)) {
+  if (raw && views.some((v) => v.key === raw)) {
     return raw as SetupStepKey;
   }
   return defaultStepKey(views);
+}
+
+/**
+ * The step's 1-based position within THIS caller's own `views` — never a
+ * fixed index into `SETUP_STEP_KEYS`, which always lists the full canonical
+ * ten even when `views` is a CRM-only account's shorter list. `views` already
+ * walks in canonical order (`deriveSetupStatus` filters the canonical ten;
+ * filtering preserves order, and `buildSetupViews` maps 1:1 without
+ * reordering), so a step's position in THAT array is its real, gapless
+ * display number — "01, 02, 03, 04, 05" for a five-step CRM-only plan, never
+ * "01, 02, 03, 05, 07" from indexing into the full ten. Both the rail
+ * (setup-rail.tsx) and the pane header (setup-shell.tsx) call this rather
+ * than each re-deriving an index of their own, so the two can never show a
+ * different number for the same step.
+ *
+ * Returns `0` rather than throwing when `key` has no view — unreachable in
+ * practice (every caller already found `key` IN `views`: the rail enumerates
+ * `views` itself, and the pane's `selected` only ever comes from
+ * `parseStepParam`/`defaultStepKey` above, both of which now only return a
+ * key `views` actually carries) — a display number is not a lookup whose
+ * failure should crash a render.
+ */
+export function stepNumber(key: SetupStepKey, views: SetupStepView[]): number {
+  const index = views.findIndex((v) => v.key === key);
+  return index === -1 ? 0 : index + 1;
 }

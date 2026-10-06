@@ -5,7 +5,7 @@ import { AlertTriangle } from "lucide-react";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import type { SetupStepView } from "@/lib/setup/setup-view";
 import {
-  SETUP_STEP_KEYS, parseStepParam, lockedPrereqKeys, railKindOf,
+  parseStepParam, lockedPrereqKeys, railKindOf, stepNumber,
 } from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
 import { Notice } from "@/components/ui/notice";
@@ -45,9 +45,10 @@ function readStep(): string | null {
  * `select` uses `pushState`, not `router.push`: the latter would re-render
  * the whole server component tree on every rail click, which is the exact
  * cost this two-pane shell exists to avoid (`details` below is already
- * fully computed server-side for all ten steps — a step click only ever
- * needs to change which one is DISPLAYED). `pushState` also means Back
- * walks steps one at a time, same as forward navigation through the rail.
+ * fully computed server-side for every step this account has — ten on the
+ * full plan, fewer on a CRM-only one — a step click only ever needs to
+ * change which one is DISPLAYED). `pushState` also means Back walks steps
+ * one at a time, same as forward navigation through the rail.
  */
 export function useSetupStep(views: SetupStepView[]) {
   const raw = useSyncExternalStore(subscribe, readStep, () => null);
@@ -89,26 +90,30 @@ export function SetupShell({
    *  setup-panel.tsx — reused for its banner rather than deriving a second
    *  string (see setup-rail.tsx's `lockedHint`). */
   blockedReason: string | null;
-  /** One pre-rendered node per step. All ten exist as React elements;
-   *  only the selected key's is ever placed into the returned tree, so the
-   *  other nine are computed but never mounted. */
+  /** One pre-rendered node per step THIS ACCOUNT HAS. Every one of them
+   *  exists as a React element; only the selected key's is ever placed into
+   *  the returned tree, so every other one is computed but never mounted. */
   details: Record<SetupStepKey, React.ReactNode>;
 }) {
   const { selected, select } = useSetupStep(views);
   const view = views.find((v) => v.key === selected);
-  // Unreachable in practice: `parseStepParam` only ever returns a key that
-  // exists in `SETUP_STEP_KEYS`, and `views` always carries all ten — kept
+  // Unreachable in practice: `parseStepParam` and `defaultStepKey`
+  // (lib/setup/setup-rail.ts) both only ever return a key that is actually
+  // present in `views` ITSELF — not merely one of `SETUP_STEP_KEYS`'s full
+  // ten, which a CRM-only account's shorter `views` would not carry — kept
   // as a typed guard rather than a non-null assertion.
   if (!view) return null;
 
   const kind = railKindOf(view, selected === nextKey, views);
   const locked = kind === "locked";
   const copy = STEP_COPY[selected];
-  // Same source as the rail's own numbering (setup-rail.tsx maps over
-  // SETUP_STEP_KEYS). Deriving this one from `views` instead would let the
-  // pane say "04" while the rail entry it came from says "05" the moment
-  // the two lists ever disagree on order or length.
-  const index = SETUP_STEP_KEYS.indexOf(selected);
+  // Same source as the rail's own numbering now (setup-rail.tsx enumerates
+  // `views` and calls this same `stepNumber`, lib/setup/setup-rail.ts) — a
+  // fixed index into `SETUP_STEP_KEYS` used to feed this, which is the full
+  // canonical ten even for a CRM-only account whose `views` is shorter: "04"
+  // here could have disagreed with the rail entry's own gapless count the
+  // moment a step was dropped. One function, so the two can never drift.
+  const index = stepNumber(selected, views);
 
   // The blockers as KEYS, not a pre-joined sentence: naming what blocks this
   // step and then making the operator find it again in the rail is half the
@@ -145,7 +150,7 @@ export function SetupShell({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-medium tracking-widest text-muted-foreground tabular-nums">
-                {String(index + 1).padStart(2, "0")}
+                {String(index).padStart(2, "0")}
               </span>
               <h2 id={SETUP_PANE_HEADING_ID} className="text-base font-semibold text-card-foreground">
                 {copy.title}

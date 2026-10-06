@@ -28,6 +28,7 @@ function fullInputs(overrides: Partial<SetupInputs> = {}): SetupInputs {
     ticks: { emailSkipped: false, forwardingDone: true },
     publishedFormCount: 1,
     conciergeSiteConversation: true,
+    permissions: null,
     ...overrides,
   };
 }

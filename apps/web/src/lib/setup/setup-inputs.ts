@@ -4,7 +4,7 @@ import {
   countCallsSince, listChecklistState, listForms, hasConciergeSiteConversation,
   serviceDb, type SupabaseClient, type PhoneNumberRow,
 } from "@bis/db";
-import { SETUP_TICK_KEYS, type SetupInputs } from "./setup-status";
+import { SETUP_TICK_KEYS, type SetupInputs, type SetupPermissions } from "./setup-status";
 import type { ReadKey } from "./setup-view";
 
 export type GatheredSetupInputs = {
@@ -71,6 +71,18 @@ export type GatheredSetupInputs = {
  * runs as the signed-in agency user (`dbForRequest()`, so a grants problem
  * shows up as a broken card, unchanged by this move), the sidebar meter and
  * goLiveAction's re-check both already ran on `serviceDb()`.
+ *
+ * Tested two ways, deliberately: this file's own `setup-inputs.test.ts`
+ * drives the REAL function body against a fake `db` (review round, Important
+ * 3 — mocking `@bis/db`'s individual reads and letting every caller mock
+ * THIS function at the import boundary, as `shell-actions.test.ts` and
+ * `setup/actions.test.ts` both correctly do for THEIR own purposes, left a
+ * real gap: a mutation inside this function's own body, e.g. hardcoding
+ * `permissions: null` instead of reading `account?.permissions`, left all of
+ * those callers green because none of them ever runs this body at all).
+ * Each caller's own test suite still mocks this module at the boundary —
+ * that is still the right shape for proving what THAT caller does with the
+ * result, just not a substitute for a direct test of this function.
  */
 export async function gatherSetupInputs(
   db: SupabaseClient, accountId: string,
@@ -83,10 +95,18 @@ export async function gatherSetupInputs(
   // comment (and every other caller's) relies on this function never doing.
   const privileged = serviceDb();
   const settled = await Promise.allSettled([
-    db.from("accounts").select("brand_name, from_email").eq("id", accountId).maybeSingle()
+    // `permissions` rides along on this SAME row read, not a second query —
+    // the same reasoning `brand_name`/`from_email` already follow. A failed
+    // read degrades `inputs.permissions` to `null` below exactly like it
+    // degrades `brandName`/`fromEmail`, and `deriveSetupStatus` treats that
+    // `null` identically to an unbilled account's own `{}` (full plan,
+    // never a silently shortened one) — see that function's own comment.
+    db.from("accounts").select("brand_name, from_email, permissions").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`gatherSetupInputs: account lookup failed: ${error.message}`);
-        return data as { brand_name: string | null; from_email: string | null } | null;
+        return data as {
+          brand_name: string | null; from_email: string | null; permissions: SetupPermissions | null;
+        } | null;
       }),
     getCalendarForAccount(db, accountId),
     getVoiceProfile(db, accountId),
@@ -167,6 +187,7 @@ export async function gatherSetupInputs(
     },
     publishedFormCount,
     conciergeSiteConversation: conversationsR.status === "fulfilled" ? conversationsR.value : false,
+    permissions: account?.permissions ?? null,
   };
 
   return { inputs, numbers, failed };

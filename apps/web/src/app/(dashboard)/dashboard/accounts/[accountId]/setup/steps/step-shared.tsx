@@ -164,19 +164,41 @@ export type StepDetailProps = {
   accountName: string | null;
   renameAction: SetupRenameAction;
   /** Every step's own view, unfiltered — `./website-assistant.tsx` alone
-   *  reads it, to find `voice_profile`'s `done`/`unknown` for row 1 without
-   *  re-deriving a second copy of a question `buildSetupViews` already
-   *  answered (setup-status.ts:3-7's whole promise: computed once, from
-   *  live rows, never restated). Every other module ignores it, same as
-   *  every other field in this bag it doesn't need. */
+   *  reads it, to find `voice_profile`'s `done`/`unknown` for row 1 WHEN
+   *  that step is in the list (the full plan) without re-deriving a second
+   *  copy of a question `buildSetupViews` already answered
+   *  (setup-status.ts:3-7's whole promise: computed once, from live rows,
+   *  never restated). On a CRM-only plan `voice_profile` is not in this
+   *  array at all (deriveSetupStatus drops it) — row 1 falls back to
+   *  `isVoiceProfileDone(conciergeProfile)` and `profileReadFailed` below for
+   *  that shape. Every other module ignores `views`, same as every other
+   *  field in this bag it doesn't need. */
   views: SetupStepView[];
-  /** The three website-assistant columns off the SAME `voice_profiles` row
-   *  `hasVoiceProfile` above already reads existence from — `null` exactly
-   *  when `hasVoiceProfile` is `false` (no row, or the profile read itself
-   *  failed; `./website-assistant.tsx` tells the two apart via `views`'
-   *  own `voice_profile.unknown`, since READS_BEHIND.voice_profile is
-   *  `["profile"]` alone). `./website-assistant.tsx` alone reads it. */
-  conciergeProfile: Pick<VoiceProfileRow, "concierge_enabled" | "concierge_form_id" | "public_id"> | null;
+  /** The voice-profile columns `isVoiceProfileDone` (setup-status.ts) and
+   *  rows 1/3/4 need — widened from the original "three website-assistant
+   *  columns" (`concierge_enabled`/`concierge_form_id`/`public_id`) to also
+   *  carry `facts`/`greeting_en`/`greeting_es`/`languages`, review round
+   *  Important 1: row 1 used to read `voice_profile`'s `done`/`unknown`
+   *  OFF `views` alone, which has no such entry on a CRM-only plan at all,
+   *  so row 1 read "To do" forever regardless of the real profile.
+   *  `null` exactly when `hasVoiceProfile` above is `false` (no row, or the
+   *  profile read itself failed — `./website-assistant.tsx` tells the two
+   *  apart via `views`' own `voice_profile.unknown` when that view exists,
+   *  and via `profileReadFailed` below when it does not). `./website-
+   *  assistant.tsx` alone reads it. */
+  conciergeProfile: Pick<
+    VoiceProfileRow,
+    "concierge_enabled" | "concierge_form_id" | "public_id"
+    | "facts" | "greeting_en" | "greeting_es" | "languages"
+  > | null;
+  /** Whether the `voice_profiles` READ ITSELF failed (`failed.profile`,
+   *  gatherSetupInputs) — the one signal `views`' own `voice_profile.unknown`
+   *  carries when that step exists, but which has nowhere to live when it
+   *  does not (a CRM-only plan). `./website-assistant.tsx` alone reads it,
+   *  and only when `views.find(v => v.key === "voice_profile")` comes back
+   *  empty — on the full plan that view's own `unknown` is still the answer,
+   *  so the two sources never disagree about which plan shape they are. */
+  profileReadFailed: boolean;
   /** Row 2's count, published forms only — `"unknown"` when the forms read
    *  itself failed, the same three-state shape `assignedNumber` above uses
    *  for the numbers read, so a failed read can never be mistaken for "zero

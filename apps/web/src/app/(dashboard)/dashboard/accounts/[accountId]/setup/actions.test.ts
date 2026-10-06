@@ -30,12 +30,19 @@ import type { ReadKey } from "@/lib/setup/setup-view";
  *
  * goLiveAction's re-check now goes through the single shared
  * `gatherSetupInputs` (lib/setup/setup-inputs.ts) rather than five separate
- * `@bis/db` reads — mocked at that module boundary below, per that module's
- * own doc comment ("NOT separately unit-tested" — its callers mock it as one
- * unit, the same way this file already mocked `@bis/db`'s individual reads
- * before this task). `gatherSetupInputs` resolves to `{ inputs, numbers,
- * failed }` (per-leg fault isolation, not a bare `SetupInputs`/a rejection) —
- * see that module's own doc comment for why.
+ * `@bis/db` reads — mocked at THIS module's boundary below, the same way
+ * this file already mocked `@bis/db`'s individual reads before this task.
+ * `gatherSetupInputs` resolves to `{ inputs, numbers, failed }` (per-leg
+ * fault isolation, not a bare `SetupInputs`/a rejection) — see that module's
+ * own doc comment for why.
+ *
+ * Mocking it here proves this ACTION's own re-check logic (branding/hours/
+ * voice_profile/number/test_call, the writes, the refusal), never
+ * `gatherSetupInputs`'s own body — review round, Important 3 found that gap
+ * mocked-at-the-boundary tests like this one cannot close by themselves
+ * (mutating that function's own `permissions` line left every test in THIS
+ * file green). `setup-inputs.test.ts` is the one file that exercises the
+ * real function against a fake `db`.
  */
 
 const dbMocks = vi.hoisted(() => ({
@@ -142,6 +149,11 @@ function readyGathered(overrides: {
     ticks: { emailSkipped: false, forwardingDone: false },
     publishedFormCount: 0,
     conciergeSiteConversation: false,
+    // `null` reads as the full plan, same as `{}` — see
+    // setup-status.ts's own doc comment. No test in this file is about the
+    // CRM-only filter, so every one of them should keep seeing all ten
+    // steps unless it overrides this explicitly.
+    permissions: null,
     ...overrides.inputs,
   };
   return { inputs, numbers, failed: { ...noFailures, ...overrides.failed } };
@@ -275,6 +287,25 @@ describe("goLiveAction", () => {
   it("refuses when the only number on the account is released", async () => {
     setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered({
       numbers: [{ id: "pn1", account_id: "a1", e164: "+19565550111", telnyx_id: null, status: "released" }],
+    }));
+    const r = await goLiveAction("a1");
+    expect(r).toEqual({ ok: false, error: m["setup.goLive.notReady"] });
+    writes().forEach((mock) => expect(mock).not.toHaveBeenCalled());
+  });
+
+  // docs/crm-features.md:883 — a CRM-only account (permissions.voice_
+  // receptionist: false) has no voice_profile/number/test_call/go_live step
+  // at all once `deriveSetupStatus` filters them out, so `goLivePrereqsMet`
+  // is false by construction even though the base fixture is otherwise a
+  // "ready" full-plan tenant (hours, voice_profile, number, test_call and
+  // branding all done). This is the belt-and-braces half of the fix: the
+  // button is also unreachable through the UI (no go_live step means no
+  // GoLiveStep card renders at all), but this proves the SERVER re-check
+  // refuses on its own evidence even if that button were somehow pressed
+  // anyway.
+  it("refuses as notReady for a CRM-only account, even with every PRESENT prerequisite done — writes nothing", async () => {
+    setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered({
+      inputs: { permissions: { voice_receptionist: false } },
     }));
     const r = await goLiveAction("a1");
     expect(r).toEqual({ ok: false, error: m["setup.goLive.notReady"] });

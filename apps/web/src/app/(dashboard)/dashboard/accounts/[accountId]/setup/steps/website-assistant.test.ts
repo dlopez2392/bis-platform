@@ -45,6 +45,7 @@ function baseProps(overrides: Partial<StepDetailProps> = {}): StepDetailProps {
     renameAction: noop as unknown as StepDetailProps["renameAction"],
     views: views(),
     conciergeProfile: null,
+    profileReadFailed: false,
     publishedFormCount: 0,
     conciergeSiteConversation: false,
     origin: "https://app.example.com",
@@ -78,7 +79,7 @@ describe("WebsiteAssistantStep", () => {
   it("(b) ON with a public id, one published form, no site conversation yet — rows 1-3 done, row 4 'not seen yet', the embed attribute carries the public id", () => {
     const html = render({
       views: views({ done: true }),
-      conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x" },
+      conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x", greeting_en: "Hi!", greeting_es: "", facts: "We fix things.", languages: "en" },
       publishedFormCount: 1,
       conciergeSiteConversation: false,
     });
@@ -99,7 +100,7 @@ describe("WebsiteAssistantStep", () => {
   it("(c) ON, a real site conversation exists — row 4 reads done", () => {
     const html = render({
       views: views({ done: true }),
-      conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x" },
+      conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x", greeting_en: "Hi!", greeting_es: "", facts: "We fix things.", languages: "en" },
       publishedFormCount: 1,
       conciergeSiteConversation: true,
     });
@@ -112,7 +113,7 @@ describe("WebsiteAssistantStep", () => {
   it("(d) the conversations read failed — row 4 renders unknown, never 'not seen'", () => {
     const html = render({
       views: views({ done: true }),
-      conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x" },
+      conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x", greeting_en: "Hi!", greeting_es: "", facts: "We fix things.", languages: "en" },
       publishedFormCount: 1,
       conciergeSiteConversation: "unknown",
     });
@@ -144,12 +145,79 @@ describe("WebsiteAssistantStep", () => {
     expect(html).toMatch(/data-row="1" data-row-state="unknown"/);
   });
 
+  // Review round, Important 1: on a CRM-only plan `deriveSetupStatus` drops
+  // `voice_profile` entirely, so `views` carries no entry for it at all —
+  // `views.find(v => v.key === "voice_profile")` is `undefined`. Row 1 has
+  // to ask `isVoiceProfileDone` directly off `conciergeProfile` (the same
+  // `voice_profiles` row, widened to carry facts/greetings/languages) in
+  // that shape, and read `unknown` off `profileReadFailed` instead of a
+  // views entry that doesn't exist.
+  function crmOnlyViews(): SetupStepView[] {
+    const of = (key: SetupStepView["key"], over: Partial<SetupStepView> = {}): SetupStepView => ({
+      key, done: false, skipped: false, unknown: false, ...over,
+    });
+    return [
+      of("account", { done: true }), of("branding"), of("hours"),
+      of("website_assistant"), of("email"),
+    ];
+  }
+
+  describe("CRM-only plan — no voice_profile view at all", () => {
+    // MUTATION: drop the `voiceProfileView ? ... : isVoiceProfileDone(...)`
+    // fallback and read `voiceProfileView?.done === true` alone — this
+    // FAILS, because `voiceProfileView` is `undefined` on this plan shape
+    // and the mutant reads row 1 as permanently "To do" even though the
+    // profile below genuinely has both a greeting and facts.
+    it("row 1 reads DONE when the profile (read off conciergeProfile, not a views entry) has both a greeting and facts", () => {
+      const html = render({
+        views: crmOnlyViews(),
+        conciergeProfile: {
+          concierge_enabled: false, concierge_form_id: null, public_id: null,
+          greeting_en: "Thanks for calling!", greeting_es: "", facts: "We fix things.", languages: "en",
+        },
+        profileReadFailed: false,
+      });
+      expect(html).toMatch(/data-row="1" data-row-state="done"/);
+    });
+
+    it("row 1 reads OPEN (not unknown) when the profile genuinely has no facts yet — a real, unconfigured state, not a read failure", () => {
+      const html = render({
+        views: crmOnlyViews(),
+        conciergeProfile: {
+          concierge_enabled: false, concierge_form_id: null, public_id: null,
+          greeting_en: "", greeting_es: "", facts: "", languages: "en",
+        },
+        profileReadFailed: false,
+      });
+      expect(html).toMatch(/data-row="1" data-row-state="open"/);
+    });
+
+    it("row 1 reads OPEN when there is no voice_profiles row at all (conciergeProfile null, read did not fail)", () => {
+      const html = render({
+        views: crmOnlyViews(), conciergeProfile: null, profileReadFailed: false,
+      });
+      expect(html).toMatch(/data-row="1" data-row-state="open"/);
+    });
+
+    // MUTATION: drop the `voiceProfileView ? ... : profileReadFailed`
+    // fallback and read `voiceProfileView?.unknown === true` alone — this
+    // FAILS, always reading `false` (since `voiceProfileView` is
+    // `undefined`), so a failed read on a CRM-only account would render
+    // row 1 "To do" instead of "Couldn't check".
+    it("row 1 reads UNKNOWN, never 'To do', when the profile read itself failed", () => {
+      const html = render({
+        views: crmOnlyViews(), conciergeProfile: null, profileReadFailed: true,
+      });
+      expect(html).toMatch(/data-row="1" data-row-state="unknown"/);
+    });
+  });
+
   // Fix-round review, MINOR 7: the embed card is nested INSIDE this pane's
   // own card (--surface-1), so it must paint from the ladder's next step.
   it("the nested embed card paints from --surface-2, not --surface-1 on --surface-1", () => {
     const html = render({
       views: views({ done: true }),
-      conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x" },
+      conciergeProfile: { concierge_enabled: true, concierge_form_id: "form_1", public_id: "pub_x", greeting_en: "Hi!", greeting_es: "", facts: "We fix things.", languages: "en" },
       publishedFormCount: 1,
       conciergeSiteConversation: false,
     });
