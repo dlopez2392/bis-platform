@@ -12,7 +12,7 @@ import {
   hasActiveCallSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
-  listCalls, getCall, listCallStartsBetween, listCallOutcomesBetween,
+  listCalls, getCall, listCallStartsBetween, listCallOutcomesBetween, listCallStartsByOutcomeBetween,
   listContactCalls, searchCalls,
   markHandoffRequested, getCallByHandoffToken, setCallOutcome,
   callerInTouchSince,
@@ -583,6 +583,46 @@ describe("listCallOutcomesBetween", () => {
       const got = await listCallOutcomesBetween(
         db, accountId, "2026-03-02T00:00:00Z", "2026-03-09T00:00:00Z");
       expect(got.slice().sort()).toEqual(["booked", "lead", "spam"]);
+    });
+  });
+});
+
+/**
+ * The metrics reads drop the agency's own test handsets (`excludeCallers`).
+ * Live, because the point is how PostgREST reads the `or` filter: a bare
+ * `NOT IN` would also drop every withheld-number call (SQL's NULL NOT IN is
+ * NULL), and only a real database proves the `IS NULL` arm keeps them.
+ */
+describe("listCallStartsByOutcomeBetween excludeCallers", () => {
+  it("drops calls from the listed numbers and keeps withheld and other callers", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const seed = async (startedAt: string, caller: string | null) => {
+        const { error } = await db.from("calls").insert({
+          account_id: accountId, phone_number_id: num.id,
+          started_at: startedAt, outcome: "booked", caller_e164: caller,
+        });
+        if (error) throw new Error(`seed call failed: ${error.message}`);
+      };
+      await seed("2026-03-02T10:00:00Z", "+19565550101"); // the agency handset
+      await seed("2026-03-03T10:00:00Z", "+19565550102"); // a second handset
+      await seed("2026-03-04T10:00:00Z", null);           // withheld number
+      await seed("2026-03-05T10:00:00Z", "+19565550199"); // a customer
+
+      const from = "2026-03-02T00:00:00Z";
+      const to = "2026-03-09T00:00:00Z";
+      const times = (rows: string[]) => rows.map((s) => new Date(s).getTime()).sort((a, b) => a - b);
+
+      const all = await listCallStartsByOutcomeBetween(db, accountId, ["booked"], from, to);
+      expect(all).toHaveLength(4);
+
+      const kept = await listCallStartsByOutcomeBetween(
+        db, accountId, ["booked"], from, to, { excludeCallers: ["+19565550101", "+19565550102"] },
+      );
+      expect(times(kept)).toEqual([
+        new Date("2026-03-04T10:00:00Z").getTime(),
+        new Date("2026-03-05T10:00:00Z").getTime(),
+      ]);
     });
   });
 });

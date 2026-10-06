@@ -3,18 +3,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // House pattern (registry.test.ts): mock the specific @bis/db reads this
 // module calls rather than faking a chainable supabase client — the two
-// reads it delegates to (countCallsSince, hasActiveCallSince) are already
+// reads it delegates to (hasActiveCallSince here; the answered-calls read in weekly-metrics.test.ts) are already
 // unit-proven against a live DB in packages/db/src/test/voice.test.ts, so
 // this file only needs to prove getVoicePresence WIRES them correctly
 // (right args, right combination), not re-prove the SQL underneath.
 const dbMocks = vi.hoisted(() => ({
-  countCallsSince: vi.fn(),
   hasActiveCallSince: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@bis/db")>();
   return { ...real, ...dbMocks };
 });
+// weekCount reads the Monday report's answered-calls helper (2026-10-06), so
+// "handled" means what the report's "calls answered" means. Its own suite
+// (weekly-metrics.test.ts) pins the outcome set and the handset exclusion.
+const reportMocks = vi.hoisted(() => ({ listAnsweredCallStartsBetween: vi.fn() }));
+vi.mock("@/lib/reports/weekly-metrics", () => ({
+  listAnsweredCallStartsBetween: (...a: unknown[]) => reportMocks.listAnsweredCallStartsBetween(...a),
+}));
 
 import type { serviceDb } from "@bis/db";
 import { getVoicePresence } from "./presence";
@@ -24,7 +30,7 @@ import { getVoicePresence } from "./presence";
 const db = {} as unknown as ReturnType<typeof serviceDb>;
 
 beforeEach(() => {
-  dbMocks.countCallsSince.mockReset().mockResolvedValue(0);
+  reportMocks.listAnsweredCallStartsBetween.mockReset().mockResolvedValue([]);
   dbMocks.hasActiveCallSince.mockReset().mockResolvedValue(false);
 });
 
@@ -43,8 +49,8 @@ describe("getVoicePresence", () => {
     expect(onCall).toBe(false);
   });
 
-  it("weekCount comes straight from countCallsSince's answer", async () => {
-    dbMocks.countCallsSince.mockResolvedValue(7);
+  it("weekCount is the number of ANSWERED calls, not every call row", async () => {
+    reportMocks.listAnsweredCallStartsBetween.mockResolvedValue(["a", "b", "c", "d", "e", "f", "g"]);
     const { weekCount } = await getVoicePresence(db, "acct1", new Date("2027-06-03T12:00:00.000Z"));
     expect(weekCount).toBe(7);
   });
@@ -52,7 +58,7 @@ describe("getVoicePresence", () => {
   it("both reads are scoped to the given accountId, never a hardcoded one", async () => {
     await getVoicePresence(db, "acct-xyz", new Date("2027-06-03T12:00:00.000Z"));
     expect(dbMocks.hasActiveCallSince).toHaveBeenCalledWith(db, "acct-xyz", expect.any(String));
-    expect(dbMocks.countCallsSince).toHaveBeenCalledWith(db, "acct-xyz", expect.any(String));
+    expect(reportMocks.listAnsweredCallStartsBetween).toHaveBeenCalledWith(db, "acct-xyz", expect.any(String), expect.any(String));
   });
 
   // "Start of current week" convention, pinned: UTC, ISO-8601 (Monday
@@ -66,25 +72,25 @@ describe("getVoicePresence", () => {
     it("Thursday mid-week: since = the Monday just passed, at UTC midnight", async () => {
       const now = new Date("2027-06-03T12:34:56.000Z"); // Thursday, June 3 2027
       await getVoicePresence(db, "acct1", now);
-      expect(dbMocks.countCallsSince).toHaveBeenCalledWith(db, "acct1", "2027-05-31T00:00:00.000Z");
+      expect(reportMocks.listAnsweredCallStartsBetween).toHaveBeenCalledWith(db, "acct1", "2027-05-31T00:00:00.000Z", now.toISOString());
     });
 
     it("exactly Monday 00:00:00 UTC: since = itself, unmoved", async () => {
       const now = new Date("2027-05-31T00:00:00.000Z"); // Monday
       await getVoicePresence(db, "acct1", now);
-      expect(dbMocks.countCallsSince).toHaveBeenCalledWith(db, "acct1", "2027-05-31T00:00:00.000Z");
+      expect(reportMocks.listAnsweredCallStartsBetween).toHaveBeenCalledWith(db, "acct1", "2027-05-31T00:00:00.000Z", now.toISOString());
     });
 
     it("Sunday, the LAST day of the ISO week: still resolves to the Monday before it, not the week ahead", async () => {
       const now = new Date("2027-06-06T23:59:59.000Z"); // Sunday, June 6 2027
       await getVoicePresence(db, "acct1", now);
-      expect(dbMocks.countCallsSince).toHaveBeenCalledWith(db, "acct1", "2027-05-31T00:00:00.000Z");
+      expect(reportMocks.listAnsweredCallStartsBetween).toHaveBeenCalledWith(db, "acct1", "2027-05-31T00:00:00.000Z", now.toISOString());
     });
 
     it("the following Monday rolls the boundary forward exactly one week", async () => {
       const now = new Date("2027-06-07T00:00:00.000Z"); // next Monday
       await getVoicePresence(db, "acct1", now);
-      expect(dbMocks.countCallsSince).toHaveBeenCalledWith(db, "acct1", "2027-06-07T00:00:00.000Z");
+      expect(reportMocks.listAnsweredCallStartsBetween).toHaveBeenCalledWith(db, "acct1", "2027-06-07T00:00:00.000Z", now.toISOString());
     });
   });
 });

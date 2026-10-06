@@ -1,23 +1,23 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   countFromOutcomes, ANSWERED_OUTCOMES, LEAD_OUTCOME, listLeadInstantsBetween, weeklyMetrics,
+  listAnsweredCallStartsBetween,
   type WeeklyWindow,
 } from "./weekly-metrics";
 
-// `listLeadInstantsBetween` and `weeklyMetrics` (below) are the only exports
+// `listLeadInstantsBetween`, `listAnsweredCallStartsBetween` and
+// `weeklyMetrics` (below) are the only exports
 // here that touch @bis/db — every test above exercises pure functions and
 // never calls either, so stubbing these reads leaves them untouched.
 const dbMocks = vi.hoisted(() => ({
   listSubmissionCreationsBetween: vi.fn(),
   listCallStartsByOutcomeBetween: vi.fn(),
-  listCallOutcomesBetween: vi.fn(),
   listBookingCreationsBetween: vi.fn(),
   listTrafficDays: vi.fn(),
 }));
 vi.mock("@bis/db", () => ({
   listSubmissionCreationsBetween: (...a: unknown[]) => dbMocks.listSubmissionCreationsBetween(...a),
   listCallStartsByOutcomeBetween: (...a: unknown[]) => dbMocks.listCallStartsByOutcomeBetween(...a),
-  listCallOutcomesBetween: (...a: unknown[]) => dbMocks.listCallOutcomesBetween(...a),
   listBookingCreationsBetween: (...a: unknown[]) => dbMocks.listBookingCreationsBetween(...a),
   listTrafficDays: (...a: unknown[]) => dbMocks.listTrafficDays(...a),
 }));
@@ -113,6 +113,7 @@ describe("listLeadInstantsBetween — the raw instants behind weeklyMetrics().le
 
     expect(dbMocks.listCallStartsByOutcomeBetween).toHaveBeenCalledWith(
       expect.anything(), "acct_1", LEAD_OUTCOME, "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z",
+      expect.anything(),
     );
   });
 
@@ -129,6 +130,53 @@ describe("listLeadInstantsBetween — the raw instants behind weeklyMetrics().le
 });
 
 /**
+ * The agency's own test handsets (`PHONE_SPAM_EXEMPT_CALLERS`, read through
+ * `agencyHandsets()`) are not customers: on 2026-10-06 they were 13 of the BIS
+ * account's 16 non-spam calls. Both call-backed reads leave them out, and
+ * read the list from the environment themselves, so no caller can forget to.
+ */
+describe("the agency's own test calls are not client activity", () => {
+  beforeEach(() => {
+    dbMocks.listSubmissionCreationsBetween.mockReset().mockResolvedValue([]);
+    dbMocks.listCallStartsByOutcomeBetween.mockReset().mockResolvedValue([]);
+    vi.stubEnv("PHONE_SPAM_EXEMPT_CALLERS", "+19565550101, +19565550102");
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it("calls answered reads ANSWERED_OUTCOMES and leaves the handsets out (mutation: drop excludeCallers -> FAILS)", async () => {
+    await listAnsweredCallStartsBetween({} as never, "acct_1", "from-iso", "to-iso");
+    expect(dbMocks.listCallStartsByOutcomeBetween).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", ANSWERED_OUTCOMES, "from-iso", "to-iso",
+      { excludeCallers: ["+19565550101", "+19565550102"] },
+    );
+  });
+
+  it("the call half of leads leaves them out too", async () => {
+    await listLeadInstantsBetween({} as never, "acct_1", "from-iso", "to-iso");
+    expect(dbMocks.listCallStartsByOutcomeBetween).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", LEAD_OUTCOME, "from-iso", "to-iso",
+      { excludeCallers: ["+19565550101", "+19565550102"] },
+    );
+  });
+
+  it("a junk entry is dropped, never spliced into the query; unset excludes nothing", async () => {
+    vi.stubEnv("PHONE_SPAM_EXEMPT_CALLERS", "+19565550101,9565550102,+1956),x");
+    await listAnsweredCallStartsBetween({} as never, "acct_1", "from-iso", "to-iso");
+    expect(dbMocks.listCallStartsByOutcomeBetween).toHaveBeenLastCalledWith(
+      expect.anything(), "acct_1", ANSWERED_OUTCOMES, "from-iso", "to-iso",
+      { excludeCallers: ["+19565550101"] },
+    );
+
+    vi.stubEnv("PHONE_SPAM_EXEMPT_CALLERS", "");
+    await listAnsweredCallStartsBetween({} as never, "acct_1", "from-iso", "to-iso");
+    expect(dbMocks.listCallStartsByOutcomeBetween).toHaveBeenLastCalledWith(
+      expect.anything(), "acct_1", ANSWERED_OUTCOMES, "from-iso", "to-iso",
+      { excludeCallers: [] },
+    );
+  });
+});
+
+/**
  * Review correction: the first version of this fix made `weeklyMetrics()`
  * and the dashboard AGREE on "leads captured" only by convention — two
  * separate computations that happened to produce the same number today,
@@ -137,9 +185,9 @@ describe("listLeadInstantsBetween — the raw instants behind weeklyMetrics().le
  * SHARED BY CONSTRUCTION: these tests mock the exact same two primitives
  * `listLeadInstantsBetween`'s own suite above does, and prove
  * `weeklyMetrics().leads` is nothing but that function's result length —
- * not a value independently re-derived from `listCallOutcomesBetween`'s
- * raw outcomes (the OLD shape), which is why every fixture below gives that
- * mock a value `LEAD_OUTCOME` would never match.
+ * not a value independently re-derived from the week's raw call outcomes
+ * (the OLD shape). `calls` is now shared the same way, through
+ * `listAnsweredCallStartsBetween`.
  */
 describe("weeklyMetrics().leads is listLeadInstantsBetween's length (shared by construction)", () => {
   const WINDOW: WeeklyWindow = {
@@ -147,20 +195,26 @@ describe("weeklyMetrics().leads is listLeadInstantsBetween's length (shared by c
     fromDay: "2027-01-01", toDay: "2027-01-07",
   };
 
+  // `weeklyMetrics` reads `listCallStartsByOutcomeBetween` twice — once for
+  // LEAD_OUTCOME (leads), once for ANSWERED_OUTCOMES (calls) — so the mock
+  // answers by the outcome set it was asked for.
+  function callReads(r: { lead: string[]; answered: string[] }) {
+    dbMocks.listCallStartsByOutcomeBetween.mockImplementation(
+      async (_db: unknown, _acct: unknown, outcomes: readonly string[]) =>
+        outcomes === LEAD_OUTCOME ? r.lead : outcomes === ANSWERED_OUTCOMES ? r.answered : [],
+    );
+  }
+
   beforeEach(() => {
     dbMocks.listSubmissionCreationsBetween.mockReset();
     dbMocks.listCallStartsByOutcomeBetween.mockReset();
-    dbMocks.listCallOutcomesBetween.mockReset();
     dbMocks.listBookingCreationsBetween.mockReset().mockResolvedValue([]);
     dbMocks.listTrafficDays.mockReset();
   });
 
-  it("leads = submissions + lead-outcome calls, read through listLeadInstantsBetween — never re-derived from listCallOutcomesBetween (mutation: weeklyMetrics computes leads as countFromOutcomes(outcomes, LEAD_OUTCOME) + submissions.length again -> FAILS, because outcomes below holds no \"lead\" entries)", async () => {
+  it("leads = submissions + lead-outcome calls, read through listLeadInstantsBetween — never re-derived from the answered calls (mutation: leads counts the ANSWERED_OUTCOMES read -> FAILS, because that read below returns five)", async () => {
     dbMocks.listSubmissionCreationsBetween.mockResolvedValue(["s1", "s2"]);
-    dbMocks.listCallStartsByOutcomeBetween.mockResolvedValue(["c1"]);
-    // Deliberately NOT "lead" — a regression to the old parallel
-    // computation would read 0 leads from this, not 3.
-    dbMocks.listCallOutcomesBetween.mockResolvedValue(["booked", "spam", "abandoned"]);
+    callReads({ lead: ["c1"], answered: ["a1", "a2", "a3", "a4", "a5"] });
 
     const result = await weeklyMetrics({} as never, "acct_1", WINDOW, false);
 
@@ -169,31 +223,31 @@ describe("weeklyMetrics().leads is listLeadInstantsBetween's length (shared by c
 
   it("a different split of the SAME two reads changes weeklyMetrics().leads by exactly that much — proving it tracks listLeadInstantsBetween's length, not a fixed or cached number", async () => {
     dbMocks.listSubmissionCreationsBetween.mockResolvedValue([]);
-    dbMocks.listCallStartsByOutcomeBetween.mockResolvedValue(["c1", "c2", "c3", "c4"]);
-    dbMocks.listCallOutcomesBetween.mockResolvedValue([]);
+    callReads({ lead: ["c1", "c2", "c3", "c4"], answered: [] });
 
     const result = await weeklyMetrics({} as never, "acct_1", WINDOW, false);
 
     expect(result.leads).toBe(4);
   });
 
-  it("calls is still countFromOutcomes(outcomes, ANSWERED_OUTCOMES) — unaffected by the leads change", async () => {
+  it("calls is listAnsweredCallStartsBetween's length — the read the dashboard and topbar share (mutation: count every call row again -> FAILS)", async () => {
     dbMocks.listSubmissionCreationsBetween.mockResolvedValue([]);
-    dbMocks.listCallStartsByOutcomeBetween.mockResolvedValue([]);
-    dbMocks.listCallOutcomesBetween.mockResolvedValue(["booked", "lead", "message", "abandoned", "spam"]);
+    callReads({ lead: [], answered: ["a1", "a2", "a3"] });
 
-    const result = await weeklyMetrics({} as never, "acct_1", WINDOW, false);
+    const [report, direct] = await Promise.all([
+      weeklyMetrics({} as never, "acct_1", WINDOW, false),
+      listAnsweredCallStartsBetween({} as never, "acct_1", WINDOW.fromIso, WINDOW.toIso),
+    ]);
 
-    expect(result.calls).toBe(3);
-    expect(result.leads).toBe(0);
+    expect(report.calls).toBe(direct.length);
+    expect(report.calls).toBe(3);
+    expect(report.leads).toBe(0);
   });
 
   it("a mutation in EITHER half of listLeadInstantsBetween changes weeklyMetrics().leads too — the two are not two tests of two parallel implementations", async () => {
-    dbMocks.listCallOutcomesBetween.mockResolvedValue([]);
-
     // Half A only.
     dbMocks.listSubmissionCreationsBetween.mockResolvedValue(["s1"]);
-    dbMocks.listCallStartsByOutcomeBetween.mockResolvedValue([]);
+    callReads({ lead: [], answered: [] });
     const [reportA, directA] = await Promise.all([
       weeklyMetrics({} as never, "acct_1", WINDOW, false),
       listLeadInstantsBetween({} as never, "acct_1", WINDOW.fromIso, WINDOW.toIso),
@@ -205,7 +259,7 @@ describe("weeklyMetrics().leads is listLeadInstantsBetween's length (shared by c
     // half from `listLeadInstantsBetween` would move BOTH numbers here,
     // not just one.
     dbMocks.listSubmissionCreationsBetween.mockResolvedValue([]);
-    dbMocks.listCallStartsByOutcomeBetween.mockResolvedValue(["c1", "c2"]);
+    callReads({ lead: ["c1", "c2"], answered: [] });
     const [reportB, directB] = await Promise.all([
       weeklyMetrics({} as never, "acct_1", WINDOW, false),
       listLeadInstantsBetween({} as never, "acct_1", WINDOW.fromIso, WINDOW.toIso),

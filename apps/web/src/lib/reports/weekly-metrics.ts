@@ -1,8 +1,9 @@
 import {
-  listBookingCreationsBetween, listCallOutcomesBetween,
+  listBookingCreationsBetween,
   listTrafficDays, listSubmissionCreationsBetween, listCallStartsByOutcomeBetween,
   type SupabaseClient,
 } from "@bis/db";
+import { agencyHandsets } from "@/lib/voice/caller-reputation";
 
 /**
  * One week, in the two shapes the reads actually take.
@@ -66,12 +67,36 @@ export function countFromOutcomes(outcomes: string[], wanted: readonly string[])
  */
 export async function listLeadInstantsBetween(
   db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+  excludeCallers: readonly string[] = agencyHandsets(),
 ): Promise<string[]> {
   const [submissionIso, callIso] = await Promise.all([
     listSubmissionCreationsBetween(db, accountId, fromIso, toIso),
-    listCallStartsByOutcomeBetween(db, accountId, LEAD_OUTCOME, fromIso, toIso),
+    listCallStartsByOutcomeBetween(db, accountId, LEAD_OUTCOME, fromIso, toIso, { excludeCallers }),
   ]);
   return [...submissionIso, ...callIso];
+}
+
+/**
+ * The raw instants behind "calls answered" — a call whose outcome is in
+ * `ANSWERED_OUTCOMES`, from anyone but the agency's own test handsets.
+ *
+ * The ONE read every "calls answered" number goes through: the Monday
+ * report's `calls` (below), the dashboard's hero, its 14-day chart and its
+ * after-hours tile, and the topbar's "N calls handled this week". Until
+ * 2026-10-06 the dashboard and the topbar counted EVERY call row instead —
+ * on the BIS account that was 123 robocalls out of 139 calls, shown under a
+ * label that says "answered" — while the report beside them filtered
+ * correctly. Same lesson as `listLeadInstantsBetween`: one definition,
+ * shared by construction, or two screens disagree about one number.
+ *
+ * `excludeCallers` defaults to `agencyHandsets()` and is a parameter only so
+ * a test can pin it; no caller passes anything else.
+ */
+export async function listAnsweredCallStartsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+  excludeCallers: readonly string[] = agencyHandsets(),
+): Promise<string[]> {
+  return listCallStartsByOutcomeBetween(db, accountId, ANSWERED_OUTCOMES, fromIso, toIso, { excludeCallers });
 }
 
 /**
@@ -82,18 +107,16 @@ export async function listLeadInstantsBetween(
  * about a number. That is the entire reason it exists as a function rather
  * than as two sets of queries in two passes.
  *
- * `leads` is `listLeadInstantsBetween(...).length`, not a second,
- * independently-filtered submissions-count-plus-outcomes-count — see that
- * function's own doc comment for why. `calls` still comes from
- * `listCallOutcomesBetween`'s raw outcomes (every outcome in the window,
- * filtered here to `ANSWERED_OUTCOMES`): that part of the report is
- * unchanged, and not shared with anything the dashboard reads today.
+ * `leads` is `listLeadInstantsBetween(...).length` and `calls` is
+ * `listAnsweredCallStartsBetween(...).length` — never a second,
+ * independently-filtered count — see those functions' own doc comments for
+ * why. Both leave out the agency's own test handsets.
  */
 export async function weeklyMetrics(
   db: SupabaseClient, accountId: string, window: WeeklyWindow, hasSite: boolean,
 ): Promise<WeeklyNumbers> {
-  const [outcomes, leadInstants, bookings] = await Promise.all([
-    listCallOutcomesBetween(db, accountId, window.fromIso, window.toIso),
+  const [answered, leadInstants, bookings] = await Promise.all([
+    listAnsweredCallStartsBetween(db, accountId, window.fromIso, window.toIso),
     listLeadInstantsBetween(db, accountId, window.fromIso, window.toIso),
     listBookingCreationsBetween(db, accountId, window.fromIso, window.toIso),
   ]);
@@ -106,7 +129,7 @@ export async function weeklyMetrics(
     : null;
 
   return {
-    calls: countFromOutcomes(outcomes, ANSWERED_OUTCOMES),
+    calls: answered.length,
     leads: leadInstants.length,
     bookings: bookings.length,
     visitors,
