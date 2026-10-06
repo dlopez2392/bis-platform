@@ -43,6 +43,13 @@ export function cookieModeToPersist(
 export function resolveThemeMode(
   cookie: string | undefined,
   brandMode: ModeName | null,
+  // Owner decision, 2026-10-06: operators (agency staff) default to dark;
+  // client-role users keep light. The agency never has a brand_mode of its
+  // own (DESIGN.md's "the agency's chrome stays BIS" -- no theme to emit),
+  // so that branch alone cannot tell an operator apart from an unbranded
+  // client. A stored cookie still wins over BOTH defaults, which is why
+  // this is checked last, not first.
+  isOperator = false,
 ): { serverMode: "light" | "dark"; providerDefault: "light" | "dark" | "system" } {
   const cookieMode = cookie === "light" || cookie === "dark" ? cookie : undefined;
 
@@ -71,7 +78,8 @@ export function resolveThemeMode(
   if (brandMode === "light" || brandMode === "dark") {
     return { serverMode: brandMode, providerDefault: brandMode };
   }
-  return { serverMode: "light", providerDefault: "light" };
+  const fallback = isOperator ? "dark" : "light";
+  return { serverMode: fallback, providerDefault: fallback };
 }
 
 /**

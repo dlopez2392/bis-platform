@@ -34,6 +34,10 @@ export function DailyChart({ days, secondSeries, primaryLabel = m["website.tile.
   // be a second axis in disguise. Bars shorten when the line is taller —
   // the tooltip still reports the true numbers.
   const max = Math.max(1, ...days.map((d) => d.visitors), ...(secondSeries?.values ?? []));
+  // The BUSIEST bar, not the hovered one (DESIGN.md's Charts section: "the
+  // busiest bar is bar-hot"). Ties keep the earliest, same as
+  // calls-chart-card.tsx's own `peak`, which this mirrors.
+  const hotIndex = days.reduce((best, d, i) => (d.visitors > days[best]!.visitors ? i : best), 0);
   const shortDate = (day: string) => formatDateUTC(day).replace(/,.*$/, "");
   const xAt = (i: number) => ((i + 0.5) / days.length) * 100;
   const yAt = (v: number) => 100 - Math.min(100, Math.max(0, (v / max) * 100));
@@ -75,7 +79,7 @@ export function DailyChart({ days, secondSeries, primaryLabel = m["website.tile.
               data-slot="chart-bar"
               aria-label={`${formatDateUTC(d.day)}: ${d.visitors} visitors, ${d.pageviews} pageviews`}
               onMouseEnter={() => setActive(i)} onFocus={() => setActive(i)} onBlur={() => setActive(null)}
-              className={`relative w-full rounded-t-[4px] rounded-b-[2px] outline-none transition-[opacity,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none ${d.isWeekend ? "bg-[var(--bar-wk)]" : "bar-accent"} ${active === i ? "bar-hot" : ""} ${active !== null && active !== i ? "opacity-70" : ""}`}
+              className={`relative w-full rounded-t-[4px] rounded-b-[2px] outline-none transition-[opacity,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none ${d.isWeekend ? "bg-[var(--bar-wk)]" : "bar-accent"} ${i === hotIndex ? "bar-hot" : ""} ${active !== null && active !== i ? "opacity-70" : ""}`}
               style={{ height: `${Math.max(2, (d.visitors / max) * 100)}%` }}
             />
           </span>

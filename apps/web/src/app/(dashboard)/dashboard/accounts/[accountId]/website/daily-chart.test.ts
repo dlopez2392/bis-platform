@@ -52,6 +52,18 @@ describe("DailyChart bars (spec §5)", () => {
     expect(html).not.toContain("chart-series-2");
     expect(html).not.toContain("chart-legend");
   });
+  it("marks the BUSIEST bar bar-hot on its own, with no hover — DESIGN.md's Charts section: "
+     + "\"the busiest bar is bar-hot\", not the hovered one", () => {
+    // Server-rendered markup has no hover/focus state (`active` starts null),
+    // so if bar-hot only ever rode on `active === i` nothing would carry it
+    // here at all. DAYS[0] has the most visitors (100) and must be the one
+    // bar-hot bar regardless of who is hovered.
+    const bars = html.match(/data-slot="chart-bar"[^>]*>/g) ?? [];
+    expect(bars.length).toBe(DAYS.length);
+    expect(html.match(/bar-hot/g)?.length).toBe(1);
+    expect(bars[0]).toMatch(/\bbar-hot\b/);
+    for (const bar of bars.slice(1)) expect(bar).not.toMatch(/\bbar-hot\b/);
+  });
 });
 
 describe("DailyChart second series (spec §5): same axis, --accent-2, mono legend", () => {
