@@ -7,7 +7,7 @@ import { normalizeLocale, publicTabTitle } from "@/lib/forms/public-strings";
 import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
 import { PublicBrand } from "@/components/public-brand";
 import { ConciergeChat } from "./concierge-chat";
-import { loadProfile, loadProfileBranding, UNBRANDED } from "./data";
+import { loadProfile, loadProfileSafe, loadProfileBranding, UNBRANDED } from "./data";
 import "@/styles/public-brand.css";
 import "./concierge.css";
 
@@ -25,6 +25,10 @@ export const dynamic = "force-dynamic";
 // The title is set here for the live case; a switched-off/unknown profile
 // falls through to the title `layout.tsx`'s own `generateMetadata` computes
 // instead (a page's metadata with no `title` key inherits its layout's).
+//
+// Uses `loadProfileSafe`, NOT the page component's own `loadProfile` below
+// (F-102 review round, fix 1) — see `app/f/[publicId]/page.tsx`'s identical
+// comment: `generateMetadata` has no `error.tsx` boundary to land in.
 export async function generateMetadata(
   { params, searchParams }: {
     params: Promise<{ publicId: string }>;
@@ -33,7 +37,7 @@ export async function generateMetadata(
 ): Promise<Metadata> {
   const robots = { index: false, follow: false };
   const { publicId } = await params;
-  const profile = await loadProfile(publicId);
+  const profile = await loadProfileSafe(publicId);
   if (!profile || !isConciergeLive(profile)) return { robots };
   const branding = await loadProfileBranding(profile.account_id, publicId);
   const sp = await searchParams;
@@ -72,9 +76,13 @@ export default async function ConciergePage({
   // `generateMetadata`'s identical reads for this request cost nothing.
   const profile = await loadProfile(publicId);
   // A switched-off concierge, one with no destination form, and an unknown
-  // public id are all the same 404 — `isConciergeLive` is the status check
-  // `getVoiceProfileByPublicId`'s SQL filter used to make for this caller,
-  // now spelled out so `layout.tsx` can apply it too, against the same row.
+  // public id are all the same HTTP STATUS (404) — `isConciergeLive` is the
+  // status check `getVoiceProfileByPublicId`'s SQL filter used to make for
+  // this caller, now spelled out so `layout.tsx` can apply it too, against
+  // the same row. Status parity is not look parity — `layout.tsx` may still
+  // brand the first two (the account is known); only a truly unknown
+  // public id gets the neutral page (see `getPublishedFormByPublicId`'s doc
+  // in `packages/db/src/forms.ts` for why that split is sanctioned).
   if (!profile || !isConciergeLive(profile)) notFound();
 
   const branding: Branding = (await loadProfileBranding(profile.account_id, publicId)) ?? UNBRANDED;
@@ -119,7 +127,10 @@ export default async function ConciergePage({
     // The tokens ride on <main>, the one element on this route that paints a
     // surface; `data-tenant-theme` is both the dark rule's selector and the
     // e2e hook, exactly as the public form and the booking page do it.
-    <main className="bis-concierge" style={style}
+    // `lang` here too (F-102 review round, decision) — see
+    // `app/f/[publicId]/page.tsx`'s identical comment for why this can
+    // legitimately differ from `<html lang>` when `?locale=` overrides it.
+    <main lang={locale} className="bis-concierge" style={style}
           {...(themed ? { "data-tenant-theme": "" } : {})}>
       {/* Only a `follow` tenant emits this: the visitor's own device decides,
           which no server-rendered style attribute can answer on its own. */}

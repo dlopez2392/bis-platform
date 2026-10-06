@@ -8,30 +8,29 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // assigns it as a property value directly, same as `actions.test.ts`'s
 // `emailProviderThrowsRef` needs this for.
 //
-// F-102: `page.tsx` now reads through `./data`'s `loadProfile`
-// (`getVoiceProfileAnyStatusByPublicId`, ANY status) and applies
-// `isConciergeLive` itself, rather than `getVoiceProfileByPublicId`'s own
-// SQL filter doing that folding — see `./data.ts`'s and `./layout.tsx`'s
-// comments for why (the layout needs the row for a switched-off profile
-// too). `isConciergeLive` is real logic, not mocked, same reasoning
-// `getFormByPublicId`'s sibling test in `apps/web` would give: it is a pure
-// predicate the page and the layout must apply IDENTICALLY, so faking it
-// here would hide a drift between the two.
+// F-102 review round, fix 2: `isConciergeLive` (and `brandDisplayName`) are
+// pulled through `vi.importActual` now, NOT hand-rewritten in the mock
+// factory. The previous version of this file rewrote `isConciergeLive`
+// inline as `(p) => p.concierge_enabled === true && p.concierge_form_id !=
+// null` while its own comment claimed it was "real logic, not mocked" — a
+// copy that could drift from the real predicate silently, and exactly the
+// shape a reviewer flagged.
 const { getVoiceProfileAnyStatusByPublicIdMock, getBrandingMock } = vi.hoisted(() => ({
   getVoiceProfileAnyStatusByPublicIdMock: vi.fn(),
   getBrandingMock: vi.fn(),
 }));
-vi.mock("@bis/db", () => ({
-  serviceDb: () => ({}),
-  getVoiceProfileAnyStatusByPublicId: getVoiceProfileAnyStatusByPublicIdMock,
-  isConciergeLive: (p: { concierge_enabled: boolean; concierge_form_id: string | null }) =>
-    p.concierge_enabled === true && p.concierge_form_id != null,
-  getBranding: getBrandingMock,
-  brandLogoUrl: () => null,
-  brandDisplayName: (b: { brandName: string | null }) => b.brandName?.trim() || "",
-}));
+vi.mock("@bis/db", async () => {
+  const actual = await vi.importActual<typeof import("@bis/db")>("@bis/db");
+  return {
+    ...actual,
+    serviceDb: () => ({}),
+    getVoiceProfileAnyStatusByPublicId: getVoiceProfileAnyStatusByPublicIdMock,
+    getBranding: getBrandingMock,
+    brandLogoUrl: () => null,
+  };
+});
 
-import { generateMetadata } from "./page";
+import ConciergePage, { generateMetadata } from "./page";
 
 const PROFILE = {
   id: "p1", account_id: "a1", persona_name: "Sofía",
@@ -39,7 +38,7 @@ const PROFILE = {
   facts: "f", services: "s", languages: "both", booking_enabled: false,
   after_hours: "message_only", enabled: true, textback_enabled: false,
   textback_body: "", public_id: "abc123", concierge_enabled: true,
-  concierge_form_id: "f1",
+  concierge_form_id: "f1", forward_calls: false,
 };
 
 const noSearchParams = Promise.resolve({});
@@ -90,5 +89,61 @@ describe("/c/[publicId] metadata", () => {
       params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams,
     });
     expect(meta.title).toBeUndefined();
+  });
+});
+
+// F-102 review round, fix 2: nothing had ever called the PAGE COMPONENT
+// itself with an off/no-form-id/live profile and watched it 404 or render —
+// only `generateMetadata` was under test. Mutating `isConciergeLive` to
+// drop its `concierge_form_id != null` half, or rewriting `page.tsx`'s own
+// check to `if (!profile) notFound()`, left every prior test in this file
+// green.
+describe("ConciergePage (F-102 review round, fix 2)", () => {
+  it("404s when the concierge is switched off", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue({ ...PROFILE, concierge_enabled: false });
+    await expect(
+      ConciergePage({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams }),
+    ).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+  });
+
+  // Reachable in production: migration 0042's `concierge_form_id` is
+  // `references forms(id) on delete set null`, so deleting a widget's
+  // destination form leaves `concierge_enabled` true with no form id.
+  it("404s when concierge_enabled is true but concierge_form_id is null (the deleted-destination-form case)", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue({ ...PROFILE, concierge_form_id: null });
+    await expect(
+      ConciergePage({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams }),
+    ).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+  });
+
+  it("404s for an unknown public id", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue(null);
+    await expect(
+      ConciergePage({ params: Promise.resolve({ publicId: "nope" }), searchParams: noSearchParams }),
+    ).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+  });
+
+  it("renders instead of calling notFound() when the concierge is live", async () => {
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-only-key");
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue(PROFILE);
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+    const el = await ConciergePage({
+      params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams,
+    });
+    expect(el.type).toBe("main");
+    expect(el.props.className).toBe("bis-concierge");
+  });
+});
+
+// F-102 review round, fix 1 (widened) — see
+// `app/f/[publicId]/page.test.ts`'s identical test.
+describe("generateMetadata never throws, even when the underlying read fails", () => {
+  it("falls back to {robots} rather than rejecting", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockRejectedValue(new Error("Invalid API key"));
+    // MUTATION: call the page's OWN `loadProfile` here instead of
+    // `loadProfileSafe` -- this FAILS (the promise rejects).
+    await expect(
+      generateMetadata({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams }),
+    ).resolves.toEqual({ robots: { index: false, follow: false } });
   });
 });

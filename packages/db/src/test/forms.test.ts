@@ -4,7 +4,7 @@ import { withTestAccount } from "./fixtures";
 import { withRollback, actAs } from "./db";
 import {
   newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
-  getFormByPublicId, updateForm,
+  getFormByPublicId, isFormLive, updateForm,
   countFormsMissingNotify, listSubmissionCreationsBetween,
 } from "../forms";
 
@@ -88,6 +88,18 @@ describe("forms", () => {
 
       expect(await getFormByPublicId(db, "no-such-public-id")).toBeNull();
     }));
+
+  // Direct, DB-free unit test for the predicate `page.tsx` and
+  // `layout.tsx` both apply against the SAME row returned by
+  // `getFormByPublicId` (F-102 review round, fix 2) — a reviewer found that
+  // mutating this one function is invisible to every test that only
+  // exercises it indirectly through a page/layout render.
+  it("isFormLive is true only for status 'published'", () => {
+    // MUTATION: `return true;` unconditionally -- this FAILS on both lines.
+    expect(isFormLive({ status: "published" })).toBe(true);
+    expect(isFormLive({ status: "draft" })).toBe(false);
+    expect(isFormLive({ status: "archived" })).toBe(false);
+  });
 
   it("listForms reports a submission count", () =>
     withTestAccount(async (db, accountId) => {

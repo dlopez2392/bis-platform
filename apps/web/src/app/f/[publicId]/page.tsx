@@ -7,7 +7,7 @@ import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme
 import { PublicForm } from "./public-form";
 import { PublicBrand } from "@/components/public-brand";
 import { submitFormAction } from "./actions";
-import { loadForm, loadFormBranding, UNBRANDED } from "./data";
+import { loadForm, loadFormSafe, loadFormBranding, UNBRANDED } from "./data";
 import "@/styles/public-brand.css";
 import "./form.css";
 
@@ -28,6 +28,15 @@ export const dynamic = "force-dynamic";
 // `layout.tsx`'s own `generateMetadata` computes instead (Next merges a
 // page's metadata over its layout's, field by field — a page that returns
 // no `title` key inherits the layout's).
+//
+// Uses `loadFormSafe`, NOT the page component's own `loadForm` below (F-102
+// review round, fix 1): `generateMetadata` runs OUTSIDE the render tree
+// `error.tsx` boundaries wrap, so a throw here — even though `page.tsx`'s
+// own render below has a real boundary to land in — escapes straight to
+// Next's bare `__next_error__` page instead. Proved by curling a built app
+// with a deliberately invalid `SUPABASE_SERVICE_ROLE_KEY`: fixing only
+// `layout.tsx`'s own read was not enough, because this function's unguarded
+// `loadForm` call still threw.
 export async function generateMetadata(
   { params, searchParams }: {
     params: Promise<{ publicId: string }>;
@@ -36,7 +45,7 @@ export async function generateMetadata(
 ): Promise<Metadata> {
   const robots = { index: false, follow: false };
   const { publicId } = await params;
-  const form = await loadForm(publicId);
+  const form = await loadFormSafe(publicId);
   if (!form || !isFormLive(form)) return { robots };
   const branding = await loadFormBranding(form.account_id, publicId);
   const query = await searchParams;
@@ -71,6 +80,11 @@ export default async function PublicFormPage({
   const query = await searchParams;
   // Through the cached reader in `./data`, so `layout.tsx`'s and
   // `generateMetadata`'s identical reads for this request cost nothing.
+  // Deliberately the THROWING `loadForm`, not `loadFormSafe` —
+  // `generateMetadata` above has no `error.tsx` boundary to land in and so
+  // must never throw, but THIS call is inside the page component's own
+  // render, which `app/f/[publicId]/error.tsx` (inside the now-standing
+  // shell) exists to catch.
   const form = await loadForm(publicId);
   // A draft, an archived form and a token that never existed are the same
   // 404 from the VISITOR's side — `isFormLive` is the status check
@@ -112,7 +126,12 @@ export default async function PublicFormPage({
     // The tokens ride on <main>, the one element on this route that paints a
     // surface, and `data-tenant-theme` is both the dark rule's selector and
     // the e2e hook — the same attribute the workspace exposes on <body>.
-    <main className="bis-form-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
+    // `lang` here too (F-102 review round, decision): `<html lang>`
+    // (`layout.tsx`) carries the FORM's own default, but `locale` here also
+    // honors a `?locale=` override the layout can never see, so the two can
+    // legitimately disagree — this element is what a screen reader actually
+    // reads, and it is always right.
+    <main lang={locale} className="bis-form-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
       {/* Only a `follow` tenant emits this: the visitor's own device decides,
           which no server-rendered style attribute can answer on its own. */}
       {darkCss ? <style>{darkCss}</style> : null}

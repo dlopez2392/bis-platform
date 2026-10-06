@@ -56,4 +56,17 @@ describe("/b/[publicId]/cancel/[token] metadata (F-102 — the title was always 
     });
     expect(meta.title).toBe("Cancela tu cita con Acme Plumbing");
   });
+
+  // F-102 review round, fix 1 (widened) — see
+  // `app/f/[publicId]/page.test.ts`'s identical test.
+  it("never throws, even when the underlying read fails — falls back to {robots}", async () => {
+    lookupBookingByTokenMock.mockRejectedValue(new Error("Invalid API key"));
+    // MUTATION: call the page's OWN `loadBooking` here instead of
+    // `loadBookingSafe` -- this FAILS (the promise rejects).
+    await expect(
+      generateMetadata({
+        params: Promise.resolve({ publicId: "pub1", token: "tok123" }), searchParams: noSearchParams,
+      }),
+    ).resolves.toEqual({ robots: { index: false, follow: false } });
+  });
 });

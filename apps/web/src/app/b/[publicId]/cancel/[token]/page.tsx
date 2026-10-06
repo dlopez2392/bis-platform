@@ -24,6 +24,23 @@ export const dynamic = "force-dynamic";
  */
 const loadBooking = cache((token: string) => lookupBookingByToken(serviceDb(), token));
 
+/**
+ * `generateMetadata` below goes through THIS, not `loadBooking` directly
+ * (F-102 review round, fix 1 — see `app/f/[publicId]/page.tsx`'s identical
+ * comment for the full reasoning, confirmed by a live build+curl check).
+ * `generateMetadata` has no `error.tsx` boundary of its own to land in; the
+ * page component below is the one place on this route allowed to throw
+ * (via the real `loadBooking`), since `app/b/error.tsx` can catch it there.
+ */
+async function loadBookingSafe(token: string): ReturnType<typeof loadBooking> {
+  try {
+    return await loadBooking(token);
+  } catch (e) {
+    console.error(`cancel/${token}: booking read failed: ${String(e)}`);
+    return null;
+  }
+}
+
 const UNBRANDED: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
   brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
@@ -69,7 +86,7 @@ export async function generateMetadata(
 ): Promise<Metadata> {
   const robots = { index: false, follow: false };
   const { publicId, token } = await params;
-  const row = await loadBooking(token);
+  const row = await loadBookingSafe(token);
   if (!row) return { robots };
   const branding = await loadBranding(row.account_id, publicId, token);
   const query = await searchParams;
@@ -138,7 +155,16 @@ export default async function CancelBookingPage({
   const isPast = row.status === "completed" || row.status === "no_show";
 
   return (
-    <main className="bis-cancel-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
+    // `lang` on this element (F-102 review round, fix 7) — the one fix that
+    // actually clears defect :881 at the element level: `<html lang>` on
+    // this tree is always "en" (no per-document default; see
+    // `app/b/layout.tsx`'s comment), but `locale` here is the SAME value a
+    // confirmation/reminder email's `?locale=es` already resolves on this
+    // very page, so the visible, screen-reader-relevant content now carries
+    // the correct language at first paint even though the document-level
+    // default still does not. See this task's report for the nuance between
+    // the two.
+    <main lang={locale} className="bis-cancel-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
       {darkCss ? <style>{darkCss}</style> : null}
       <style>{CANCEL_CSS}</style>
       <PublicBrand

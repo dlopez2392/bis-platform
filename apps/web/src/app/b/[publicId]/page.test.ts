@@ -64,4 +64,15 @@ describe("/b/[publicId] metadata (F-102, defect :870 — the tab title was alway
     });
     expect(meta.title).toBe("Book an appointment");
   });
+
+  // F-102 review round, fix 1 (widened) — see
+  // `app/f/[publicId]/page.test.ts`'s identical test.
+  it("never throws, even when the underlying read fails — falls back to {robots}", async () => {
+    getCalendarByPublicIdMock.mockRejectedValue(new Error("Invalid API key"));
+    // MUTATION: call the page's OWN `loadCalendar` here instead of
+    // `loadCalendarSafe` -- this FAILS (the promise rejects).
+    await expect(
+      generateMetadata({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams }),
+    ).resolves.toEqual({ robots: { index: false, follow: false } });
+  });
 });
