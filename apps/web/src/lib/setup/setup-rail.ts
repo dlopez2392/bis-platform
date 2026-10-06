@@ -168,16 +168,54 @@ export function nextStepKey(views: SetupStepView[]): SetupStepKey | null {
 export function defaultStepKey(views: SetupStepView[]): SetupStepKey {
   return nextStepKey(views)
     ?? views.find((v) => !v.done)?.key
-    ?? SETUP_STEP_KEYS[SETUP_STEP_KEYS.length - 1]!;
+    // The LAST step in THIS account's own `views`, not
+    // `SETUP_STEP_KEYS[SETUP_STEP_KEYS.length - 1]` ("go_live"). A CRM-only
+    // account's `views` never carries a go_live entry at all (deriveSetupStatus
+    // drops it, setup-status.ts) — falling back to a key with no matching view
+    // is exactly the "blank pane" failure this function exists to prevent
+    // (setup-shell.tsx's `if (!view) return null`). `views` is never empty in
+    // practice (every plan shape keeps "account"), so the non-null assertion
+    // mirrors the one this line replaced.
+    ?? views[views.length - 1]!.key;
 }
 
-/** `?step=` → a real key. Anything missing, unknown or malformed falls back
- *  to the default rather than rendering an empty pane. */
+/** `?step=` → a real key. Anything missing, unknown, malformed, OR naming a
+ *  step this account's OWN `views` does not carry (a CRM-only account has no
+ *  view at all for the five Sofía-only steps — see setup-status.ts) falls
+ *  back to the default rather than rendering an empty pane. Checked against
+ *  `views` itself, not `SETUP_STEP_KEYS` — the full canonical ten still NAMES
+ *  "number", but that is not the question this function is answering; "does
+ *  THIS account have a step by that name" is. */
 export function parseStepParam(
   raw: string | null | undefined, views: SetupStepView[],
 ): SetupStepKey {
-  if (raw && (SETUP_STEP_KEYS as readonly string[]).includes(raw)) {
+  if (raw && views.some((v) => v.key === raw)) {
     return raw as SetupStepKey;
   }
   return defaultStepKey(views);
+}
+
+/**
+ * The step's 1-based position within THIS caller's own `views` — never a
+ * fixed index into `SETUP_STEP_KEYS`, which always lists the full canonical
+ * ten even when `views` is a CRM-only account's shorter list. `views` already
+ * walks in canonical order (`deriveSetupStatus` filters the canonical ten;
+ * filtering preserves order, and `buildSetupViews` maps 1:1 without
+ * reordering), so a step's position in THAT array is its real, gapless
+ * display number — "01, 02, 03, 04, 05" for a five-step CRM-only plan, never
+ * "01, 02, 03, 05, 07" from indexing into the full ten. Both the rail
+ * (setup-rail.tsx) and the pane header (setup-shell.tsx) call this rather
+ * than each re-deriving an index of their own, so the two can never show a
+ * different number for the same step.
+ *
+ * Returns `0` rather than throwing when `key` has no view — unreachable in
+ * practice (every caller already found `key` IN `views`: the rail enumerates
+ * `views` itself, and the pane's `selected` only ever comes from
+ * `parseStepParam`/`defaultStepKey` above, both of which now only return a
+ * key `views` actually carries) — a display number is not a lookup whose
+ * failure should crash a render.
+ */
+export function stepNumber(key: SetupStepKey, views: SetupStepView[]): number {
+  const index = views.findIndex((v) => v.key === key);
+  return index === -1 ? 0 : index + 1;
 }

@@ -5,7 +5,7 @@ import { AlertTriangle } from "lucide-react";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import type { SetupStepView } from "@/lib/setup/setup-view";
 import {
-  SETUP_STEP_KEYS, parseStepParam, lockedPrereqKeys, railKindOf,
+  parseStepParam, lockedPrereqKeys, railKindOf, stepNumber,
 } from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
 import { Notice } from "@/components/ui/notice";
@@ -104,11 +104,13 @@ export function SetupShell({
   const kind = railKindOf(view, selected === nextKey, views);
   const locked = kind === "locked";
   const copy = STEP_COPY[selected];
-  // Same source as the rail's own numbering (setup-rail.tsx maps over
-  // SETUP_STEP_KEYS). Deriving this one from `views` instead would let the
-  // pane say "04" while the rail entry it came from says "05" the moment
-  // the two lists ever disagree on order or length.
-  const index = SETUP_STEP_KEYS.indexOf(selected);
+  // Same source as the rail's own numbering now (setup-rail.tsx enumerates
+  // `views` and calls this same `stepNumber`, lib/setup/setup-rail.ts) — a
+  // fixed index into `SETUP_STEP_KEYS` used to feed this, which is the full
+  // canonical ten even for a CRM-only account whose `views` is shorter: "04"
+  // here could have disagreed with the rail entry's own gapless count the
+  // moment a step was dropped. One function, so the two can never drift.
+  const index = stepNumber(selected, views);
 
   // The blockers as KEYS, not a pre-joined sentence: naming what blocks this
   // step and then making the operator find it again in the rail is half the
@@ -145,7 +147,7 @@ export function SetupShell({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-medium tracking-widest text-muted-foreground tabular-nums">
-                {String(index + 1).padStart(2, "0")}
+                {String(index).padStart(2, "0")}
               </span>
               <h2 id={SETUP_PANE_HEADING_ID} className="text-base font-semibold text-card-foreground">
                 {copy.title}

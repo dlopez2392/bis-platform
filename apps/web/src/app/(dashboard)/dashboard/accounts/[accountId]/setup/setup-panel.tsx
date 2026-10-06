@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import { Rocket } from "lucide-react";
 import type { VoiceProfileRow } from "@bis/db";
-import type { SetupStepKey } from "@/lib/setup/setup-status";
+import { reduceSetupProgress, type SetupStepKey } from "@/lib/setup/setup-status";
 import { GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type AssignedNumber } from "@/lib/setup/setup-view";
 import { nextStepKey } from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
@@ -123,13 +123,21 @@ export function SetupPanel({
 }) {
   const base = `/dashboard/accounts/${accountId}`;
 
-  // A skipped step leaves the denominator rather than sitting in it forever:
-  // the email identity is genuinely optional, and a meter that could never
-  // reach the end for an account that is fully live would be lying in the
-  // other direction.
+  // The SAME reduction the sidebar's setup meter uses (shell-actions.ts's
+  // `readSetupProgress` → `reduceSetupProgress`, lib/setup/setup-status.ts) —
+  // this pane used to carry its own copy (`steps.filter(s => !s.skipped)
+  // .length` / `steps.filter(s => s.done).length`), and a change to one
+  // formula without the other is exactly how a live tenant who skipped email
+  // once read "9 of 9" on this pane while the sidebar stuck at "9 of 10"
+  // forever (docs/crm-features.md:884). One function now, so the two can
+  // never drift again.
   //
-  // Counted on `s.done` alone, and that stays unknown-safe for a reason that
-  // has nothing to do with how many reads sit behind a step: in
+  // `total` excludes a SKIPPED step from the denominator: the email identity
+  // is genuinely optional, and a meter that could never reach the end for an
+  // account that is fully live would be lying in the other direction.
+  //
+  // `done` counts `s.done` alone, and that stays unknown-safe for a reason
+  // that has nothing to do with how many reads sit behind a step: in
   // deriveSetupStatus (setup-status.ts), `done` is a CONJUNCTION over every
   // read named in that step's READS_BEHIND entry (setup-view.ts) for every
   // key except `email`. A read that threw feeds deriveSetupStatus a neutral
@@ -147,8 +155,7 @@ export function SetupPanel({
   // verified `done` even while the tick read failed and its own card renders
   // "couldn't check" — `done: true` and `unknown: true` at once, which no
   // other step can do. Counting it here is right, not a leak.
-  const total = steps.filter((s) => !s.skipped).length;
-  const doneCount = steps.filter((s) => s.done).length;
+  const { done: doneCount, total } = reduceSetupProgress(steps);
 
   // The one step the pane badges "Next up" and the rail rings "Current" —
   // and, through `defaultStepKey`, the one the wizard OPENS on when no
