@@ -6,9 +6,15 @@ import { GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type StateKind } from 
 // step is shown and WHICH steps are locked lives here so it is reachable
 // by a test — vitest.config.ts does not include .tsx files.
 
-/** The canonical ten, in the order the wizard walks them. Mirrors the array
- *  `deriveSetupStatus` returns; kept here so the rail can order itself
- *  without depending on that function having been called. */
+/** The canonical ten, in the order the wizard walks them. `deriveSetupStatus`
+ *  FILTERS this exact order down to a plan-shaped subset (a CRM-only
+ *  account's five, say) rather than returning a differently-ordered list, so
+ *  this still mirrors it — just the full-plan case now, not every caller's
+ *  own `views`. Kept here so the rail can order itself without depending on
+ *  that function having been called; nothing in this module indexes INTO
+ *  this constant to number a step any more (`stepNumber` below walks the
+ *  caller's own `views` instead, precisely because this list can be longer
+ *  than that). */
 export const SETUP_STEP_KEYS: readonly SetupStepKey[] = [
   "account", "branding", "hours", "voice_profile", "website_assistant", "number",
   "email", "forwarding", "test_call", "go_live",
@@ -83,6 +89,19 @@ export function lockedPrereqKeys(
       .map((v) => v.key);
   }
   if (key === "website_assistant") {
+    // DECIDED (review round): on a CRM-only plan `views` carries NO
+    // `voice_profile` entry at all (deriveSetupStatus drops it) — this
+    // `.filter` then matches nothing and the step never locks, which is
+    // deliberate, not the silent gap it looks like at first read. A lock
+    // reason has to name a step the rail actually shows; naming
+    // "voice_profile" here would point at a step this account does not
+    // have. The profile requirement does not disappear — it moves INSIDE
+    // this step's own pane instead (row 1, setup/steps/website-assistant.tsx,
+    // via the shared `isVoiceProfileDone` predicate, setup-status.ts), which
+    // is the one surface a CRM-only account actually sees for this step.
+    // Pinned in setup-rail.test.ts: `lockedPrereqKeys("website_assistant",
+    // <CRM-only views>)` stays `[]` even when the underlying profile is
+    // nowhere near ready.
     return views
       .filter((v) => v.key === "voice_profile" && (!v.done || v.unknown))
       .map((v) => v.key);
@@ -162,8 +181,11 @@ export function nextStepKey(views: SetupStepView[]): SetupStepKey | null {
  * First the loosest reading of "unfinished" — any step not `done`, which
  * catches a skipped or unknown step when there is nothing better to offer, so
  * an account whose only remaining item is a failed read still opens on that
- * read rather than somewhere unrelated. Then the last step (go-live), for the
- * genuinely finished account, rather than an arbitrary one.
+ * read rather than somewhere unrelated. Then the LAST step in THIS account's
+ * own `views` — go-live on the full plan, but whatever this plan's own final
+ * step is otherwise (email, for a CRM-only account that dropped go-live
+ * entirely) — for the genuinely finished account, rather than an arbitrary
+ * one.
  */
 export function defaultStepKey(views: SetupStepView[]): SetupStepKey {
   return nextStepKey(views)

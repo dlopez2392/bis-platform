@@ -71,6 +71,18 @@ export type GatheredSetupInputs = {
  * runs as the signed-in agency user (`dbForRequest()`, so a grants problem
  * shows up as a broken card, unchanged by this move), the sidebar meter and
  * goLiveAction's re-check both already ran on `serviceDb()`.
+ *
+ * Tested two ways, deliberately: this file's own `setup-inputs.test.ts`
+ * drives the REAL function body against a fake `db` (review round, Important
+ * 3 — mocking `@bis/db`'s individual reads and letting every caller mock
+ * THIS function at the import boundary, as `shell-actions.test.ts` and
+ * `setup/actions.test.ts` both correctly do for THEIR own purposes, left a
+ * real gap: a mutation inside this function's own body, e.g. hardcoding
+ * `permissions: null` instead of reading `account?.permissions`, left all of
+ * those callers green because none of them ever runs this body at all).
+ * Each caller's own test suite still mocks this module at the boundary —
+ * that is still the right shape for proving what THAT caller does with the
+ * result, just not a substitute for a direct test of this function.
  */
 export async function gatherSetupInputs(
   db: SupabaseClient, accountId: string,

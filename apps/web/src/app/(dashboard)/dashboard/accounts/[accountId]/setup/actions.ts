@@ -176,8 +176,9 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
   }
 
   // No revalidatePath: the setup page is `force-dynamic`, and the client
-  // island calls router.refresh() to re-derive all ten cards — same
-  // arrangement as setSetupTickAction above.
+  // island calls router.refresh() to re-derive every step this account has
+  // (ten on the full plan, fewer on a CRM-only one) — same arrangement as
+  // setSetupTickAction above.
   return { ok: true };
 }
 

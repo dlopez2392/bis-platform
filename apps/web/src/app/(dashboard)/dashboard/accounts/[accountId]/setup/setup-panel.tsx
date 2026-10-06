@@ -39,9 +39,10 @@ import { SetupShell } from "./setup-shell";
  *
  * What stays server-side, unchanged from before: everything here is still
  * computed once, from props already in hand, with no client round trip.
- * Only WHICH of the ten pre-rendered nodes gets placed into the DOM is a
- * client decision now (./setup-shell.tsx) — the nodes themselves, and every
- * write action bound to them, are exactly what this file already built.
+ * Only WHICH of this account's pre-rendered step nodes gets placed into the
+ * DOM is a client decision now (./setup-shell.tsx) — the nodes themselves,
+ * and every write action bound to them, are exactly what this file already
+ * built.
  */
 
 // Re-exported so the four write-islands (setup-tick-button.tsx,
@@ -72,7 +73,7 @@ const STEP_DETAIL: Record<SetupStepKey, (p: StepDetailProps) => React.ReactNode>
 export function SetupPanel({
   accountId, steps, prereqsMet, assignedNumber, movableNumbers, hasVoiceProfile, accountName,
   tickAction, goLiveAction, moveNumberAction, enableTestCallsAction, renameAction,
-  conciergeProfile, publishedFormCount, conciergeSiteConversation, origin,
+  conciergeProfile, profileReadFailed, publishedFormCount, conciergeSiteConversation, origin,
 }: {
   accountId: string;
   steps: SetupStepView[];
@@ -116,7 +117,16 @@ export function SetupPanel({
    *  them, same as `assignedNumber`/`movableNumbers` above. See
    *  `StepDetailProps`'s own doc comments (steps/step-shared.tsx) for what
    *  each carries and why. */
-  conciergeProfile: Pick<VoiceProfileRow, "concierge_enabled" | "concierge_form_id" | "public_id"> | null;
+  conciergeProfile: Pick<
+    VoiceProfileRow,
+    "concierge_enabled" | "concierge_form_id" | "public_id"
+    | "facts" | "greeting_en" | "greeting_es" | "languages"
+  > | null;
+  /** `failed.profile` off `gatherSetupInputs`, passed straight through —
+   *  review round, Important 1. `./steps/website-assistant.tsx` alone
+   *  reads it, and only for a CRM-only plan (see `StepDetailProps`'s own
+   *  doc comment). */
+  profileReadFailed: boolean;
   publishedFormCount: number | "unknown";
   conciergeSiteConversation: boolean | "unknown";
   origin: string;
@@ -187,11 +197,13 @@ export function SetupPanel({
         blocked.map((s) => STEP_COPY[s.key].title).join(", "),
       );
 
-  // One pre-rendered node per step, from props already in hand — same
-  // props every module always received (StepDetailProps), computed for all
-  // ten regardless of which one ends up selected. setup-shell.tsx places
-  // only the selected key's node into the tree; the other nine are real
-  // React elements that are simply never mounted.
+  // One pre-rendered node per step THIS ACCOUNT HAS, from props already in
+  // hand — same props every module always received (StepDetailProps),
+  // computed for every step in `steps` regardless of which one ends up
+  // selected (ten on the full plan, fewer on a CRM-only one —
+  // `deriveSetupStatus`). setup-shell.tsx places only the selected key's
+  // node into the tree; every other one is a real React element that is
+  // simply never mounted.
   const details = {} as Record<SetupStepKey, React.ReactNode>;
   for (const step of steps) {
     const kind = kindOf(step, step.key === nextKey);
@@ -217,6 +229,7 @@ export function SetupPanel({
         renameAction={renameAction}
         views={steps}
         conciergeProfile={conciergeProfile}
+        profileReadFailed={profileReadFailed}
         publishedFormCount={publishedFormCount}
         conciergeSiteConversation={conciergeSiteConversation}
         origin={origin}

@@ -108,6 +108,23 @@ describe("lockedPrereqKeys", () => {
     const v = views({ voice_profile: { done: true, unknown: true } });
     expect(lockedPrereqKeys("website_assistant", v)).toEqual(["voice_profile"]);
   });
+
+  // DECIDED (review round): a CRM-only account's own `views` carries NO
+  // `voice_profile` entry at all — locking website_assistant against a step
+  // this account doesn't have would need a reason that names something the
+  // rail never shows. The profile requirement is not dropped; it moves
+  // INSIDE this step's own pane instead (row 1,
+  // setup/steps/website-assistant.tsx, via the shared `isVoiceProfileDone`
+  // predicate) — the one surface a CRM-only account actually sees for this
+  // step. Pinned here, against a CRM-only-shaped `views`, so a future change
+  // that tries to "fix" this by reaching past `views` for a profile signal
+  // has to change this test on purpose.
+  it("never locks website_assistant on a CRM-only plan — there is no voice_profile view to name; row 1 inside the pane carries that signal instead", () => {
+    const crmOnlyKeys: SetupStepKey[] = ["account", "branding", "hours", "website_assistant", "email"];
+    const v = crmOnlyKeys.map((k) => view(k));
+    expect(lockedPrereqKeys("website_assistant", v)).toEqual([]);
+    expect(isLockedStep("website_assistant", v)).toBe(false);
+  });
 });
 
 describe("railKindOf", () => {

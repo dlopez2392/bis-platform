@@ -45,9 +45,10 @@ function readStep(): string | null {
  * `select` uses `pushState`, not `router.push`: the latter would re-render
  * the whole server component tree on every rail click, which is the exact
  * cost this two-pane shell exists to avoid (`details` below is already
- * fully computed server-side for all ten steps — a step click only ever
- * needs to change which one is DISPLAYED). `pushState` also means Back
- * walks steps one at a time, same as forward navigation through the rail.
+ * fully computed server-side for every step this account has — ten on the
+ * full plan, fewer on a CRM-only one — a step click only ever needs to
+ * change which one is DISPLAYED). `pushState` also means Back walks steps
+ * one at a time, same as forward navigation through the rail.
  */
 export function useSetupStep(views: SetupStepView[]) {
   const raw = useSyncExternalStore(subscribe, readStep, () => null);
@@ -89,15 +90,17 @@ export function SetupShell({
    *  setup-panel.tsx — reused for its banner rather than deriving a second
    *  string (see setup-rail.tsx's `lockedHint`). */
   blockedReason: string | null;
-  /** One pre-rendered node per step. All ten exist as React elements;
-   *  only the selected key's is ever placed into the returned tree, so the
-   *  other nine are computed but never mounted. */
+  /** One pre-rendered node per step THIS ACCOUNT HAS. Every one of them
+   *  exists as a React element; only the selected key's is ever placed into
+   *  the returned tree, so every other one is computed but never mounted. */
   details: Record<SetupStepKey, React.ReactNode>;
 }) {
   const { selected, select } = useSetupStep(views);
   const view = views.find((v) => v.key === selected);
-  // Unreachable in practice: `parseStepParam` only ever returns a key that
-  // exists in `SETUP_STEP_KEYS`, and `views` always carries all ten — kept
+  // Unreachable in practice: `parseStepParam` and `defaultStepKey`
+  // (lib/setup/setup-rail.ts) both only ever return a key that is actually
+  // present in `views` ITSELF — not merely one of `SETUP_STEP_KEYS`'s full
+  // ten, which a CRM-only account's shorter `views` would not carry — kept
   // as a typed guard rather than a non-null assertion.
   if (!view) return null;
 

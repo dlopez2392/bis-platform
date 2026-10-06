@@ -160,6 +160,7 @@ export default async function SetupPage({
           hasVoiceProfile={profile !== null}
           accountName={accountName}
           conciergeProfile={profile}
+          profileReadFailed={failed.profile}
           publishedFormCount={publishedFormCount}
           conciergeSiteConversation={conciergeSiteConversation}
           origin={origin}

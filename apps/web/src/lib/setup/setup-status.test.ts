@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  deriveSetupStatus, goLivePrereqsMet, reduceSetupProgress, SETUP_TICK_KEYS,
+  deriveSetupStatus, goLivePrereqsMet, reduceSetupProgress, SETUP_TICK_KEYS, isVoiceProfileDone,
   type SetupInputs, type SetupStepState, type SetupStepKey,
 } from "./setup-status";
 import { DEMO_FORWARDING_TICK_KEY } from "@bis/db";
@@ -62,7 +62,7 @@ function stepFor(steps: SetupStepState[], key: SetupStepKey): SetupStepState {
 }
 
 describe("deriveSetupStatus shape", () => {
-  it("always returns all ten steps, in canonical order — website_assistant sits between voice_profile and number", () => {
+  it("returns all ten steps, in canonical order, for the full plan — website_assistant sits between voice_profile and number", () => {
     const steps = deriveSetupStatus(fullInputs());
     expect(steps.map((s) => s.key)).toEqual<SetupStepKey[]>([
       "account", "branding", "hours", "voice_profile", "website_assistant", "number",
@@ -194,6 +194,38 @@ describe("voice_profile", () => {
   it("is not done when there is no voice profile at all", () => {
     const steps = deriveSetupStatus(fullInputs({ profile: null }));
     expect(stepFor(steps, "voice_profile").done).toBe(false);
+  });
+});
+
+// Standalone coverage of the extracted predicate itself — the same question
+// deriveSetupStatus's own voice_profile step asks, now also asked directly
+// by website-assistant.tsx's row 1 when voice_profile is absent from the
+// account's own `views` (a CRM-only plan). Mirrors the step-level cases
+// above, against the function website-assistant.tsx actually calls.
+describe("isVoiceProfileDone (the shared predicate row 1 of website_assistant also calls)", () => {
+  it("is done when facts and the primary-language greeting are both non-blank", () => {
+    expect(isVoiceProfileDone({
+      greeting_en: "Hi, thanks for calling!", greeting_es: "",
+      facts: "We fix things.", languages: "en",
+    })).toBe(true);
+  });
+
+  it("mirrors the incoming route's language pick: an es profile is done with only greeting_es set", () => {
+    expect(isVoiceProfileDone({
+      greeting_en: "", greeting_es: "¡Hola, gracias por llamar!",
+      facts: "Reparamos cosas.", languages: "es",
+    })).toBe(true);
+  });
+
+  it("is not done when facts is blank, even with a greeting set", () => {
+    expect(isVoiceProfileDone({
+      greeting_en: "Hi, thanks for calling!", greeting_es: "",
+      facts: "   ", languages: "en",
+    })).toBe(false);
+  });
+
+  it("is not done when there is no profile at all", () => {
+    expect(isVoiceProfileDone(null)).toBe(false);
   });
 });
 
@@ -350,6 +382,26 @@ describe("goLivePrereqsMet", () => {
 
   it("is false for a wholly unconfigured tenant", () => {
     const steps = deriveSetupStatus(emptyInputs);
+    expect(goLivePrereqsMet(steps)).toBe(false);
+  });
+
+  // docs/crm-features.md:883's own belt-and-braces: a CRM-only account's
+  // `steps` has NO voice_profile/number/test_call entry at all (deriveSetupStatus
+  // drops them) — not merely undone. `isDone` must read a MISSING key the
+  // same false way it reads an undone one, or go-live becomes reachable for
+  // a plan that was never sold a receptionist.
+  it("is false for a CRM-only account even when every PRESENT step is done — there is no voice_profile/number/test_call to be true", () => {
+    const steps = deriveSetupStatus(fullInputs({ permissions: { voice_receptionist: false } }));
+    // Sanity check: every step this plan DOES carry is done in the full
+    // fixture, so a false verdict below is provably about the MISSING keys,
+    // not an undone present one.
+    expect(steps.every((s) => s.done)).toBe(true);
+    expect(steps.map((s) => s.key)).not.toContain("voice_profile");
+    // MUTATION: change `isDone`'s `?.done === true` to `?.done !== false` —
+    // this FAILS. `steps.find(s => s.key === "voice_profile")` is `undefined`
+    // on this plan shape; `undefined === true` is `false` (today's correct
+    // read), but `undefined !== false` is `true` — the mutant reads an
+    // ABSENT step as a satisfied one.
     expect(goLivePrereqsMet(steps)).toBe(false);
   });
 

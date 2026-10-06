@@ -98,6 +98,34 @@ function step(key: SetupStepKey, done: boolean, skipped = false): SetupStepState
   return { key, done, skipped };
 }
 
+/**
+ * The profile question `voice_profile`'s own `done` bit answers — extracted
+ * so `WebsiteAssistantStep` (setup/steps/website-assistant.tsx) can ask the
+ * SAME question for its row 1 without a second, hand-rolled copy. On a
+ * CRM-only plan `voice_profile` is not in `deriveSetupStatus`'s returned
+ * list at all (see `CRM_ONLY_DROPPED_KEYS` below), so there is no `views`
+ * entry row 1 could read `done`/`unknown` off — it has to ask this question
+ * directly, off the same `profile` row, and get the same answer
+ * `deriveSetupStatus` would have computed had the step existed.
+ *
+ * Mirrors the incoming voice route's step-11 greeting pick exactly
+ * (apps/web/src/app/api/voice/incoming/route.ts) and the website
+ * assistant's own system-prompt builder (api/concierge/[publicId]/turn/
+ * route.ts, which passes BOTH `greeting` and `facts` into
+ * `buildSystemPrompt` for a chat session exactly as it does for a phone
+ * call) — the website assistant genuinely reads the same greeting the
+ * phone does, not a lesser requirement, so this is the right question for
+ * row 1 to ask on EITHER plan shape, not an over-requirement carried over
+ * from the phone-only step.
+ */
+export function isVoiceProfileDone(
+  profile: Pick<VoiceProfileRow, "facts" | "greeting_en" | "greeting_es" | "languages"> | null,
+): boolean {
+  if (!profile) return false;
+  const primaryGreeting = profile.languages === "es" ? profile.greeting_es : profile.greeting_en;
+  return nonBlank(profile.facts) && nonBlank(primaryGreeting);
+}
+
 // The five steps a CRM-only plan can never reach: each one is either Sofía
 // herself (voice_profile), the phone number she answers on (number), proof
 // she is reachable (test_call), the one-time flip that turns her on
@@ -116,16 +144,11 @@ export function deriveSetupStatus(inputs: SetupInputs): SetupStepState[] {
 
   const hoursDone = calendar?.enabled === true && hasOpenHours(calendar.open_hours);
 
-  // Mirrors the incoming route's step-11 greeting pick exactly
-  // (apps/web/src/app/api/voice/incoming/route.ts): languages === "es" reads
-  // greeting_es, everything else (including "both") reads greeting_en. A
-  // profile that's only filled in for the OTHER language would pass a naive
-  // "either greeting is set" check yet still greet a real caller with dead
-  // air — this must ask the same question the live route asks.
-  const primaryGreeting = profile
-    ? (profile.languages === "es" ? profile.greeting_es : profile.greeting_en)
-    : null;
-  const voiceProfileDone = Boolean(profile) && nonBlank(profile?.facts) && nonBlank(primaryGreeting);
+  // `isVoiceProfileDone` (above) — the same question row 1 of the website
+  // assistant step now asks directly when `voice_profile` is not in this
+  // function's own returned list (a CRM-only plan). One predicate, so the
+  // two can never answer it differently for the same profile row.
+  const voiceProfileDone = isVoiceProfileDone(profile);
 
   // Never a stored flag (this file's whole promise, see the header comment):
   // a client whose concierge got disabled, or whose destination form was
@@ -177,21 +200,21 @@ export function deriveSetupStatus(inputs: SetupInputs): SetupStepState[] {
   });
 }
 
-/** What the sidebar's setup meter shows (app-sidebar.tsx via
- *  dashboard/accounts/[accountId]/shell-actions.ts's getShellSnapshot): how
- *  many of the steps are done, out of how many exist.
- *
- * `total` excludes a SKIPPED step from the denominator, mirroring
- * setup-panel.tsx's own `total = steps.filter(s => !s.skipped).length`
- * exactly — the two must never disagree about what "finished" means for the
- * same account (docs/crm-features.md:884). Before this, `total` was
- * `steps.length` unconditionally: a live tenant who skipped the (genuinely
- * optional) email step could never reach "N of N" on this meter, even though
- * the wizard's own pane already read fully done. `steps.length` would still
- * be the right total for every step that is never skippable — this reads
- * off the array's own `skipped` flags rather than hardcoding either number,
- * so it stays correct however many steps the caller hands it (today's ten,
- * or a CRM-only plan's shorter list — see `deriveSetupStatus`). */
+/** What the sidebar's setup meter AND the wizard's own progress pane show —
+ *  `setup-panel.tsx`'s `SetupProgress` calls this function directly rather
+ *  than carrying its own copy of the formula, so the two can never disagree
+ *  about what "finished" means for the same account
+ *  (docs/crm-features.md:884: before this function excluded skipped steps
+ *  from `total`, a live tenant who skipped the genuinely optional email step
+ *  could never reach "N of N" on the sidebar meter even though the wizard's
+ *  own pane already read fully done — that was the exact shape of the
+ *  defect, back when the pane still computed its own total separately).
+ *  `total` excludes a SKIPPED step from the denominator; `steps.length`
+ *  would still be the right total for every step that is never skippable —
+ *  this reads off the array's own `skipped` flags rather than hardcoding
+ *  either number, so it stays correct however many steps the caller hands
+ *  it (today's ten, or a CRM-only plan's shorter list — see
+ *  `deriveSetupStatus`). */
 export function reduceSetupProgress(steps: SetupStepState[]): { done: number; total: number } {
   return {
     done: steps.filter((s) => s.done).length,
