@@ -142,6 +142,11 @@ function readyGathered(overrides: {
     ticks: { emailSkipped: false, forwardingDone: false },
     publishedFormCount: 0,
     conciergeSiteConversation: false,
+    // `null` reads as the full plan, same as `{}` — see
+    // setup-status.ts's own doc comment. No test in this file is about the
+    // CRM-only filter, so every one of them should keep seeing all ten
+    // steps unless it overrides this explicitly.
+    permissions: null,
     ...overrides.inputs,
   };
   return { inputs, numbers, failed: { ...noFailures, ...overrides.failed } };

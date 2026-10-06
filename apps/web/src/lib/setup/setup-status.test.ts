@@ -31,6 +31,11 @@ function fullInputs(overrides: Partial<SetupInputs> = {}): SetupInputs {
     ticks: { emailSkipped: false, forwardingDone: true },
     publishedFormCount: 1,
     conciergeSiteConversation: true,
+    // `null` here means the SAME thing `{}` does to `deriveSetupStatus`
+    // (see the "permissions default to the full list" describe block
+    // below): the full plan, unchanged from before this field existed. A
+    // test that cares about the CRM-only filter overrides this explicitly.
+    permissions: null,
     ...overrides,
   };
 }
@@ -47,6 +52,7 @@ const emptyInputs: SetupInputs = {
   ticks: { emailSkipped: false, forwardingDone: false },
   publishedFormCount: 0,
   conciergeSiteConversation: false,
+  permissions: null,
 };
 
 function stepFor(steps: SetupStepState[], key: SetupStepKey): SetupStepState {
@@ -386,6 +392,31 @@ describe("reduceSetupProgress", () => {
   it("total always reflects the number of steps passed in, not a hardcoded 9", () => {
     expect(reduceSetupProgress([{ key: "account", done: true, skipped: false }])).toEqual({ done: 1, total: 1 });
   });
+
+  // docs/crm-features.md:884 — the meter's own total used to be
+  // `steps.length` unconditionally, so a fully-live tenant who skipped the
+  // (genuinely optional) email step could never reach "N of N": the wizard's
+  // own pane already excludes a skipped step from ITS denominator
+  // (setup-panel.tsx's `total = steps.filter(s => !s.skipped).length`), so a
+  // live client with email skipped read "9 of 9" in the wizard forever while
+  // the sidebar meter stuck at "9 of 10".
+  //
+  // MUTATION: revert `total` to `steps.length` — this FAILS, since the full
+  // fixture below has one skipped step and `steps.length` is still 10.
+  it("a skipped step leaves the denominator too, matching setup-panel.tsx's own meter — a fully-live tenant who skipped email reads 9 of 9, not 9 of 10", () => {
+    const steps = deriveSetupStatus(fullInputs({
+      fromEmail: null, ticks: { emailSkipped: true, forwardingDone: true },
+    }));
+    expect(reduceSetupProgress(steps)).toEqual({ done: 9, total: 9 });
+  });
+
+  it("agrees for a CRM-only account too: a fully-configured CRM-only tenant who skipped email reads 4 of 4, not 4 of 5", () => {
+    const steps = deriveSetupStatus(fullInputs({
+      permissions: { voice_receptionist: false },
+      fromEmail: null, ticks: { emailSkipped: true, forwardingDone: true },
+    }));
+    expect(reduceSetupProgress(steps)).toEqual({ done: 4, total: 4 });
+  });
 });
 
 describe("website_assistant", () => {
@@ -425,6 +456,62 @@ describe("website_assistant", () => {
   it("is not done when there is no voice profile at all", () => {
     const steps = deriveSetupStatus(fullInputs({ profile: null }));
     expect(stepFor(steps, "website_assistant").done).toBe(false);
+  });
+});
+
+describe("CRM-only plan (permissions.voice_receptionist === false, docs/crm-features.md:883)", () => {
+  it("drops voice_profile, number, forwarding, test_call and go_live — keeps account, branding, hours, website_assistant, email, in order", () => {
+    const steps = deriveSetupStatus(fullInputs({ permissions: { voice_receptionist: false } }));
+    expect(steps.map((s) => s.key)).toEqual<SetupStepKey[]>([
+      "account", "branding", "hours", "website_assistant", "email",
+    ]);
+  });
+
+  it("website_assistant stays when web_concierge is not explicitly false", () => {
+    const steps = deriveSetupStatus(fullInputs({
+      permissions: { voice_receptionist: false, web_concierge: true },
+    }));
+    expect(steps.some((s) => s.key === "website_assistant")).toBe(true);
+  });
+
+  // MUTATION: drop the `webConciergeOff` filter entirely — this FAILS,
+  // because website_assistant would still appear in the five-step list.
+  it("also drops website_assistant when web_concierge is explicitly false", () => {
+    const steps = deriveSetupStatus(fullInputs({
+      permissions: { voice_receptionist: false, web_concierge: false },
+    }));
+    expect(steps.map((s) => s.key)).toEqual<SetupStepKey[]>(["account", "branding", "hours", "email"]);
+  });
+});
+
+describe("web_concierge: false alone (a full, non-CRM-only plan with no website assistant)", () => {
+  it("drops only website_assistant — every Sofía step stays", () => {
+    const steps = deriveSetupStatus(fullInputs({ permissions: { web_concierge: false } }));
+    expect(steps.map((s) => s.key)).toEqual<SetupStepKey[]>([
+      "account", "branding", "hours", "voice_profile", "number",
+      "email", "forwarding", "test_call", "go_live",
+    ]);
+  });
+});
+
+describe("permissions default to today's full ten-step list, unchanged", () => {
+  it("{} (unbilled, accounts.permissions's own default) is the full ten", () => {
+    const steps = deriveSetupStatus(fullInputs({ permissions: {} }));
+    expect(steps).toHaveLength(10);
+  });
+
+  // The failed-read case: gatherSetupInputs degrades a failed account read
+  // to `null` (setup-inputs.ts), and that must read exactly like `{}` here —
+  // never as "hide the Sofía steps", which would be a read failure silently
+  // taking steps away from an operator who never asked for a CRM-only plan.
+  it("null (a failed permissions read) also falls back to the full ten", () => {
+    const steps = deriveSetupStatus(fullInputs({ permissions: null }));
+    expect(steps).toHaveLength(10);
+  });
+
+  it("voice_receptionist: true explicitly is the full ten too", () => {
+    const steps = deriveSetupStatus(fullInputs({ permissions: { voice_receptionist: true } }));
+    expect(steps).toHaveLength(10);
   });
 });
 

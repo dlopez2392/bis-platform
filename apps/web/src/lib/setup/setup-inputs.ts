@@ -4,7 +4,7 @@ import {
   countCallsSince, listChecklistState, listForms, hasConciergeSiteConversation,
   serviceDb, type SupabaseClient, type PhoneNumberRow,
 } from "@bis/db";
-import { SETUP_TICK_KEYS, type SetupInputs } from "./setup-status";
+import { SETUP_TICK_KEYS, type SetupInputs, type SetupPermissions } from "./setup-status";
 import type { ReadKey } from "./setup-view";
 
 export type GatheredSetupInputs = {
@@ -83,10 +83,18 @@ export async function gatherSetupInputs(
   // comment (and every other caller's) relies on this function never doing.
   const privileged = serviceDb();
   const settled = await Promise.allSettled([
-    db.from("accounts").select("brand_name, from_email").eq("id", accountId).maybeSingle()
+    // `permissions` rides along on this SAME row read, not a second query —
+    // the same reasoning `brand_name`/`from_email` already follow. A failed
+    // read degrades `inputs.permissions` to `null` below exactly like it
+    // degrades `brandName`/`fromEmail`, and `deriveSetupStatus` treats that
+    // `null` identically to an unbilled account's own `{}` (full plan,
+    // never a silently shortened one) — see that function's own comment.
+    db.from("accounts").select("brand_name, from_email, permissions").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`gatherSetupInputs: account lookup failed: ${error.message}`);
-        return data as { brand_name: string | null; from_email: string | null } | null;
+        return data as {
+          brand_name: string | null; from_email: string | null; permissions: SetupPermissions | null;
+        } | null;
       }),
     getCalendarForAccount(db, accountId),
     getVoiceProfile(db, accountId),
@@ -167,6 +175,7 @@ export async function gatherSetupInputs(
     },
     publishedFormCount,
     conciergeSiteConversation: conversationsR.status === "fulfilled" ? conversationsR.value : false,
+    permissions: account?.permissions ?? null,
   };
 
   return { inputs, numbers, failed };

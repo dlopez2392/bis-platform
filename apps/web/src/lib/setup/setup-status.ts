@@ -12,6 +12,16 @@ export type SetupStepKey =
 
 export type SetupStepState = { key: SetupStepKey; done: boolean; skipped: boolean };
 
+/**
+ * The two plan flags `accounts.permissions` ever carries — `writePermissions`
+ * (packages/db/src/account-billing.ts) is the ONLY writer, and it copies
+ * exactly these two keys off the plan's `PlanFeatures` when billed, or writes
+ * `{}` for an unbilled account. Optional, not `boolean`, because the column
+ * itself can be `{}` or missing either key — see `deriveSetupStatus`'s own
+ * comment on what each absence means.
+ */
+export type SetupPermissions = { voice_receptionist?: boolean; web_concierge?: boolean };
+
 export type SetupInputs = {
   brandName: string | null;
   fromEmail: string | null;
@@ -47,6 +57,16 @@ export type SetupInputs = {
    *  bounded with `.limit(1)`) — same "carried for downstream readers"
    *  reasoning as the field above. */
   conciergeSiteConversation: boolean;
+  /**
+   * The account's plan flags, straight off `accounts.permissions` — read
+   * alongside `brandName`/`fromEmail` in the same `accounts` row
+   * (setup-inputs.ts), so a failed read degrades THIS field the exact same
+   * way it already degrades those two: to `null`. `null` must read
+   * IDENTICALLY to `{}` below (see `deriveSetupStatus`) — a read failure
+   * must never silently hide a step an operator never asked to lose
+   * (docs/crm-features.md:883).
+   */
+  permissions: SetupPermissions | null;
 };
 
 // localStorage-style keys the wizard persists the two ticks under. Named
@@ -78,8 +98,19 @@ function step(key: SetupStepKey, done: boolean, skipped = false): SetupStepState
   return { key, done, skipped };
 }
 
+// The five steps a CRM-only plan can never reach: each one is either Sofía
+// herself (voice_profile), the phone number she answers on (number), proof
+// she is reachable (test_call), the one-time flip that turns her on
+// (go_live), or a fact about the carrier forwarding TO her (forwarding). A
+// client who bought the CRM alone has none of these to finish — leaving them
+// in the list is docs/crm-features.md:883's defect: Setup never completes,
+// and the sidebar meter never fills.
+const CRM_ONLY_DROPPED_KEYS: ReadonlySet<SetupStepKey> = new Set([
+  "voice_profile", "number", "forwarding", "test_call", "go_live",
+]);
+
 export function deriveSetupStatus(inputs: SetupInputs): SetupStepState[] {
-  const { brandName, fromEmail, calendar, profile, numbers, callCount, ticks } = inputs;
+  const { brandName, fromEmail, calendar, profile, numbers, callCount, ticks, permissions } = inputs;
 
   const brandingDone = nonBlank(brandName);
 
@@ -116,7 +147,7 @@ export function deriveSetupStatus(inputs: SetupInputs): SetupStepState[] {
 
   const goLiveDone = profile?.enabled === true && numbers.some((n) => n.status === "live");
 
-  return [
+  const allSteps: SetupStepState[] = [
     step("account", true),
     step("branding", brandingDone),
     step("hours", hoursDone),
@@ -128,16 +159,44 @@ export function deriveSetupStatus(inputs: SetupInputs): SetupStepState[] {
     step("test_call", testCallDone),
     step("go_live", goLiveDone),
   ];
+
+  // `=== false`, explicitly — `{}` (unbilled), a missing key, and `true` all
+  // take the ELSE branch, i.e. today's full ten-step list, unchanged. This is
+  // the one signal `writePermissions` (packages/db/src/account-billing.ts)
+  // ever writes true/false on purpose; everything else is "we don't know,
+  // assume full" by construction, which is also what makes a failed
+  // permissions read (SetupInputs's own doc comment: degrades to `null`)
+  // safe to fall through here without a separate check.
+  const voiceReceptionistOff = permissions?.voice_receptionist === false;
+  const webConciergeOff = permissions?.web_concierge === false;
+
+  return allSteps.filter((s) => {
+    if (voiceReceptionistOff && CRM_ONLY_DROPPED_KEYS.has(s.key)) return false;
+    if (webConciergeOff && s.key === "website_assistant") return false;
+    return true;
+  });
 }
 
 /** What the sidebar's setup meter shows (app-sidebar.tsx via
  *  dashboard/accounts/[accountId]/shell-actions.ts's getShellSnapshot): how
- *  many of the steps are done, out of how many exist. `total` reads off
- *  `steps.length` rather than a hardcoded 9 so it stays correct if a step is
- *  ever added or removed here — the one number this function must never
- *  duplicate from the array it was handed. */
+ *  many of the steps are done, out of how many exist.
+ *
+ * `total` excludes a SKIPPED step from the denominator, mirroring
+ * setup-panel.tsx's own `total = steps.filter(s => !s.skipped).length`
+ * exactly — the two must never disagree about what "finished" means for the
+ * same account (docs/crm-features.md:884). Before this, `total` was
+ * `steps.length` unconditionally: a live tenant who skipped the (genuinely
+ * optional) email step could never reach "N of N" on this meter, even though
+ * the wizard's own pane already read fully done. `steps.length` would still
+ * be the right total for every step that is never skippable — this reads
+ * off the array's own `skipped` flags rather than hardcoding either number,
+ * so it stays correct however many steps the caller hands it (today's ten,
+ * or a CRM-only plan's shorter list — see `deriveSetupStatus`). */
 export function reduceSetupProgress(steps: SetupStepState[]): { done: number; total: number } {
-  return { done: steps.filter((s) => s.done).length, total: steps.length };
+  return {
+    done: steps.filter((s) => s.done).length,
+    total: steps.filter((s) => !s.skipped).length,
+  };
 }
 
 // branding now gates go-live (spec 2026-09-07-brand-name-resolver): a
