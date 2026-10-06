@@ -21,6 +21,21 @@ describe("resolveThemeMode", () => {
     expect(resolveThemeMode(undefined, null)).toEqual({ serverMode: "light", providerDefault: "light" });
   });
 
+  // Owner decision, 2026-10-06: operators (agency staff) default to dark;
+  // client-role users keep light (the branch above). The agency never has a
+  // brand_mode of its own (no theme to emit), so without this third
+  // parameter an operator with no stored choice yet would always land on
+  // the client-role fallback above instead.
+  it("falls back to dark for an operator with no cookie and no tenant mode", () => {
+    expect(resolveThemeMode(undefined, null, true)).toEqual({ serverMode: "dark", providerDefault: "dark" });
+  });
+
+  // A person's own stored choice still wins over the operator default --
+  // the cookie branch above is checked before isOperator is ever consulted.
+  it("still lets an operator's own stored choice win over the operator default", () => {
+    expect(resolveThemeMode("light", null, true)).toEqual({ serverMode: "light", providerDefault: "light" });
+  });
+
   // The one honest wrinkle in the spec: the server cannot know the OS
   // preference, so it paints light and hands next-themes "system" to correct
   // on mount. One frame, once per browser -- the cookie sync writes on resolve.

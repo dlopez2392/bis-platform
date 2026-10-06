@@ -809,7 +809,7 @@ gives its effort: its ½–1 d rows at that rate, plus the slices it names (§4.
 | Stale copy: the empty inbox says threads start only from email | `apps/web/src/lib/messages.ts:647` | ½–1 d |
 | On a phone, a selected thread renders below the whole list, with no way back | `.../conversations/page.tsx:55` | ½–1 d |
 | **Forms and lead intake: 7 defects, 0.8–1.1 ew with the F-047 slice** | | |
-| Email addresses containing `_` or `%` are rejected on every public form, the booking page, the web chat (so a chat lead can be filed with no email) and Sofía's video booking | `apps/web/src/lib/forms/guards.ts:166` | F-047 slice |
+| **Aligned 2026-10-05 (owner):** `_` in the local part is now accepted (#177, F-047 phase 1 — the dedupe lookup that made it unsafe no longer uses ILIKE). `%` anywhere, and `_` in the domain part, are still rejected on every public form, the booking page, the web chat (so a chat lead can be filed with no email) and Sofía's video booking; `%` stays refused pending a check of whether Resend accepts a literal `%` in a `replyTo` address | `apps/web/src/lib/forms/guards.ts:166` | F-047 slice |
 | The seeded "Name" field is the first-name field, so a full name lands in first name | `.../forms/actions.ts:24` | F-047 slice |
 | A mistyped notify address or redirect URL fails the save with only "Could not save the form." | `.../forms/[formId]/form-editor.tsx:46-49` | ½–1 d |
 | A draft, archived or unknown form shows the framework's English "page could not be found" box inside the client's embed | `apps/web/src/app/f/[publicId]/page.tsx:98` | F-102 layout |
@@ -1220,7 +1220,7 @@ Each row is costed as §2.3 sets out, plus the slices and the skeletons named.
 | Accounts, sign-in and billing | 5 | the switched-off client told to open an invitation; two primaries on the Client access card; alert texts unmetered; a renamed company keeps its old name in invitations | F-055 carries the agency home's undercount (its cost is in the Contacts row) | 0.4–0.8 |
 | Contacts, pipeline and To do | 9 | due dates a day early; bulk-tag undo; blank tags in export; search dropping characters and sort; silent duplicates on edit; blank contacts | F-001: timeline fixes: the company's zone, bookings on the timeline, status labels (1); F-055: `Amount`, the US$ rule, both pipeline totals, the 1,000-row caps (1) | 2.6–3.2 |
 | Messaging | 7 | one-line message bodies; complaints recorded as bounces; failure reasons hidden; inbox previews capped; stale empty-inbox copy; phone thread layout | — | 0.7–1.4 |
-| Forms and lead intake | 7 | addresses with an underscore refused on every public path; the seeded Name field; vague save errors; drafts counted as missing a notify address | F-047: phase 1: the refused addresses and the blank-name rules (0.5); F-102 carries the embed's not-found box and the tab title (its cost is in the Public front door row) | 0.8–1.1 |
+| Forms and lead intake | 7 | addresses with a `%`, or an underscore in the domain part, refused on every public path (the local-part underscore was lifted 2026-10-05, #177); the seeded Name field; vague save errors; drafts counted as missing a notify address | F-047: phase 1: the refused addresses and the blank-name rules (0.5); F-102 carries the embed's not-found box and the tab title (its cost is in the Public front door row) | 0.8–1.1 |
 | Booking and calendar | 9 | a buffer that removes the next slot; no-show buttons on future jobs; a returning booker's details dropped; a success screen that claims a sent email; notify addresses | F-049 (first release) carries the late-booking reminder; F-048 (rider) carries Sofía's reschedule and the irreversible cancel | 0.6–1.2 |
 | Sofía, the phone receptionist | 10 | the Spanish greeting never used; 'Always take a message'; robocalls counted as calls answered; blank fields filled with no approval; two active numbers; go-live in two writes | F-009 (legal chain) carries the 10-digit number; S-09 (first release) carries the English-only phone emails | 0.8–1.6 |
 | Website assistant | 6 | a 'passed on' reply after a failed capture; an unpublished form failing silently; the chat resetting per page; a Spanish-only profile forced to write English | F-102 carries the chat page's error boundary and `lang` (its cost is in the Public front door row) | 0.5–1 |
@@ -2841,7 +2841,7 @@ with its own Amendments table) is the vehicle for all of them.
 
 | # | Amendment | Needed by | Recommendation | Status |
 |---|---|---|---|---|
-| 1 | **Identity, operator default.** DESIGN.md says "Dark-first operator UI"; the code defaults the agency to light, and a role-based default is "explicitly deferred, not planned". | F-111 (in F-096), F-101 · first sitting, October 2026 | "Dark and light are equal. A person's own choice wins and follows them across devices; otherwise the company's default; otherwise light." | Proposed — needs the owner's dated decision |
+| 1 | **Identity, operator default.** DESIGN.md says "Dark-first operator UI"; the code defaults the agency to light, and a role-based default is "explicitly deferred, not planned". | F-111 (in F-096), F-101 · first sitting, October 2026 | "Dark and light are equal. A person's own choice wins and follows them across devices; otherwise the company's default; otherwise light." | **Decided 2026-10-06 (owner), differently from this row's own recommendation:** operators (agency staff) default to dark, client-role users default to light (DESIGN.md's existing line, now code-true); a person's own stored choice still wins over either default. See DESIGN.md's Identity section and `resolveThemeMode`'s `isOperator` parameter. |
 | 2 | **Rule 10 on a phone.** The footer cluster is "pinned and visible at every viewport height"; a phone has no sidebar. | F-107 · second sitting, January 2027 | Ajustes and the launch meter are the first rows of the Más sheet, one tap from every screen. | Proposed — needs the owner's dated decision |
 | 3 | **Blur on the bottom bar.** `--glass-filter` is allowed on "the sidebar and the overlays ONLY". | F-107 · second sitting | The bottom bar is the phone's sidebar: it may carry `--glass-filter` with the existing `@supports not (backdrop-filter)` fallback, and never hides or animates on scroll. | Proposed — needs the owner's dated decision |
 | 4 | **Rule 8 and the "+" (added).** "One primary button per view"; a filled "+" in the bar would be a second primary on every screen. | F-083, F-107 · second sitting | Navigation chrome is not a view's primary: the "+" is drawn as chrome (`--accent-dim` with the word "Nuevo"), never as a filled primary. | Proposed — needs the owner's dated decision |
@@ -2850,17 +2850,17 @@ with its own Amendments table) is the vehicle for all of them.
 | 7 | **Sidebar groups.** The pattern fixes OVERVIEW / CRM / COMMUNICATIONS / GROWTH (and the Northern Lights spec made restructuring navigation a non-goal). | F-089, F-001, F-041, F-100, F-107 · second sitting | The spine (Hoy · Pendientes · Clientes · Bandeja · Agenda), up to four module slots by plan and pack, a collapsible Crecer, a budget of nine primary items, the "Buscar o preguntar" field at the top, pinned views once views exist, labels in the reader's language. Grouping the agency's own top level (F-136) rides on the same decision. Until decided, new modules go into today's groups. | Proposed — needs the owner's dated decision |
 | 8 | **Setup and the Checklist.** "Checklist remains reachable from the nav's own Checklist entry." | F-099 · when the launch plan starts, later (the CRM-plan step fix ships now inside today's Setup) | One launch plan by plan and pack; the Checklist entry retires; the owner gets "Primeros pasos" on Hoy; once done it leaves the nav and stays in Ajustes and the box. | Proposed — needs the owner's dated decision |
 | 9 | **The palette becomes the one box (added; it narrows "runs actions").** The pattern "finds contacts/calls/conversations, jumps to any settings section by name, runs actions". | F-092, F-095 · with the palette v2, next | Every entry carries English and Spanish keywords; search covers every record type; "ask" answers read-only from the database with its filter shown first and never writes; the box offers no creates (F-083 owns them) and no destructive action. | Proposed — needs the owner's dated decision |
-| 10 | **The module contract (additive).** | F-090 (in F-101) · with DESIGN.md v2, in the first release | A key pattern: a card on the record, one list, a place in the box, one settings section, work to Pendientes and news to the timeline, AI to the one tray, customer visibility off by default. | Proposed — needs the owner's dated decision |
-| 11 | **Rule 11, "at most one hero".** "One hero gradient per screen, named in the screen's spec." | F-001, F-100, F-160 · when the record page starts, first release | "At most one": record pages, the queue and settings name none; Hoy's spec names its hero as "the headline metric the catalogue picks for the plan and pack". | Proposed — needs the owner's dated decision |
+| 10 | **The module contract (additive).** | F-090 (in F-101) · with DESIGN.md v2, in the first release | A key pattern: a card on the record, one list, a place in the box, one settings section, work to Pendientes and news to the timeline, AI to the one tray, customer visibility off by default. | **Decided 2026-10-05 (owner) — amended into DESIGN.md's Key patterns in this sitting.** |
+| 11 | **Rule 11, "at most one hero".** "One hero gradient per screen, named in the screen's spec." | F-001, F-100, F-160 · when the record page starts, first release | "At most one": record pages, the queue and settings name none; Hoy's spec names its hero as "the headline metric the catalogue picks for the plan and pack". | **Decided 2026-10-05 (owner) — rule 11 amended in this sitting.** |
 | 12 | **Rule 1, a delta names its window (added).** Rule 1 accepts "a delta, sparkline, or period label"; today's 7-day tiles (three or four) never name the window, and three of them show a 14-day spark beside a 7-day number (the all-time tiles do say "All time"). | F-076, F-100 · with Hoy and Números, later | Every delta states in words what it compares, visibly and for screen readers ("Últimos 7 días · frente a los 7 anteriores"); a spark spans the same window as its number. | Proposed — needs the owner's dated decision |
 | 13 | **The weekly report's four numbers (added).** The pattern fixes calls answered, leads captured, bookings and website visitors; F-078 adds a speed line, F-100 and F-178 swap numbers by pack, and about twelve features want a line. | F-078, F-082, F-100, F-178 · second sitting (decision 24) | Numbers come from the metrics catalogue: up to four headline numbers and at most two lines, by plan and pack. The three rules (words not arrows, omit what was not measured, a quiet week still sends) stay, and also bind the morning brief. Recipients stay on the account, and the field stays the switch. | Proposed — needs the owner's dated decision |
 | 14 | **The booking card.** The pattern asks for a "branded card"; M4b and Phase 7 decided against one. | F-102 · when the public-page kit starts, later | "A branded header, no card": logo, the name as the page's `<h1>`, service area, step dots. | Proposed — needs the owner's dated decision |
 | 15 | **Calm customer surfaces.** The foundations say depth "in both modes" comes from the lit ground and glass. | F-102, F-062 · when the public-page kit starts, later | Customer surfaces carry no lit ground and no glass (Phase 7's decision), with their own derived token layer, 16 px inputs and 44 px targets. | Proposed — needs the owner's dated decision |
 | 16 | **WCAG 2.2 AA in the definition of done.** The definition names a composite contrast test but no WCAG level, and that test certifies `--text-3` at 3:1. | F-103, F-102 · when F-103 starts, later (with decision 26) | Add "Meets WCAG 2.2 AA" for workspace and customer surfaces, backed by a ledger. The axe-core licence (MPL-2.0 against the platform spec's MIT, BSD or Apache rule) is a platform-spec ruling, asked in the same sitting. | Proposed — needs the owner's dated decision |
 | 17 | **The look after the accessibility tokens.** `--text-label`, `--good-text`, `--warn-text` and 3:1 field edges change Northern Lights' quiet look. | F-103 · when F-103 starts, later | Decide by a side-by-side on real screens in both modes, as the blur was; the Label role keeps its size and gains contrast. | Proposed — needs the owner's dated decision |
-| 18 | **Bilingual in the definition of done (added).** The definition names no language; binding constraint 6 is bilingual everywhere. | F-012, F-013, F-014 · first sitting, October 2026 | Add: renders correctly in English and Spanish, survives the pseudo-locale's +35%, sets `lang` correctly, and passes the 7 AM read in both languages. | Proposed — needs the owner's dated decision |
+| 18 | **Bilingual in the definition of done (added).** The definition names no language; binding constraint 6 is bilingual everywhere. | F-012, F-013, F-014 · first sitting, October 2026 | Add: renders correctly in English and Spanish, survives the pseudo-locale's +35%, sets `lang` correctly, and passes the 7 AM read in both languages. | **Decided 2026-10-05 (owner) — added to DESIGN.md's Definition of done in this sitting** (qualified so it does not retroactively fail today's English-only screens). |
 | 19 | **Person and device overrides of the foundations (added).** The foundations fix the lit ground (three glows and a grid) and the Label role at 10 px; F-111's "Más contraste" drops the glows and its larger text sets labels to 12 px; F-110's "lite ground" drops a glow and the grid. | F-111 (in F-096) · the person overrides when F-096's later part starts, later; the lite ground with F-110, future | Allow three named overrides: more contrast (opaque surfaces, strong edges, no glows), larger text (a 112.5% root), and a lite ground adopted only after measurement on a low-end Android. | Proposed — needs the owner's dated decision |
-| 20 | **New v2 sections, each provisional until a real client uses it.** Record page, Visibility, Documents, Money (the `es-US` rule, "USD" where pesos could appear, one status set), Customer surfaces, Accessibility, Bilingual typography, Layout and touch, Offline, Performance, Pending and progress, Provenance, Print and PDF; detail in a proposed `docs/design/patterns/` folder. | F-101 and each feature named · first sitting for the record page, documents and provenance; the rest as each feature starts | Approve section by section as each feature starts, not all at once. | Proposed — needs the owner's dated decision |
+| 20 | **New v2 sections, each provisional until a real client uses it.** Record page, Visibility, Documents, Money (the `es-US` rule, "USD" where pesos could appear, one status set), Customer surfaces, Accessibility, Bilingual typography, Layout and touch, Offline, Performance, Pending and progress, Provenance, Print and PDF; detail in a proposed `docs/design/patterns/` folder. | F-101 and each feature named · first sitting for the record page, documents and provenance; the rest as each feature starts | Approve section by section as each feature starts, not all at once. | **Decided 2026-10-05 (owner) for three sections only:** the record page, documents and provenance sections are amended into DESIGN.md (provisional) in this sitting. The other ten sections in this row stay "Proposed — needs the owner's dated decision", each as its feature starts. |
 | 21 | **"Powered by BIS" removable or replaced.** The booking pattern names the footer. | F-143, F-138 · future | Do not decide now; decide under decision 25 and only if a reseller signs. | Proposed — needs the owner's dated decision |
 | 22 | **Agency sign-in branding.** Rule 9's sign-in exception. | F-138 · future | Do not decide now. A hostname would identify the agency before sign-in, which meets rule 9's condition, but only once a reseller exists; tenant-level sign-in branding is not proposed. | Proposed — needs the owner's dated decision |
 | 23 | **A partner line on the signed-out shell.** Rule 9 makes sign-in carry the platform's mark and accent. | F-145 · when F-145 starts, later | A partner's name and link in the content area, below the platform's mark, with no partner logo or colour; the platform's mark and accent stay. Until ruled, partner links ship without logos. | Proposed — needs the owner's dated decision |
@@ -3075,6 +3075,9 @@ reason, and what it blocks.
 
 #### 19. Does an act the caller asks for count as an AI write? (F-022; binding constraint 5)
 
+- **Decided 2026-10-05 (owner):** the narrow reading, option (a) — acts the
+  caller or visitor asks for and confirms run live, stamped and undoable;
+  everything else, blank-fills included, goes through the review tray.
 - **Today.** Sofía creates contacts, fills blank fields, and books, reschedules and cancels
   appointments directly, with no person approving; only her post-call suggestions wait for a person,
   and her acts carry no author stamp of their own (voice, CRM and booking inventories). The web chat
@@ -3107,6 +3110,9 @@ reason, and what it blocks.
 
 #### 20. Should every assistant say it is an AI, up front? (F-034)
 
+- **Decided 2026-10-05 (owner):** disclose by default, measured first on one
+  account for four weeks before every account gets it; counsel reads the
+  wording before it ships.
 - **Today.** The V1 voice spec lists AI disclosure in the greeting among the demo lessons it ports
   (spec §3.3), but its implementation plan and the shipped prompt tell Sofía not to volunteer it and
   to admit it only when asked (`apps/web/src/lib/voice/system-prompt.ts:63`). The chat shares that
@@ -3125,6 +3131,10 @@ reason, and what it blocks.
 
 #### 21. May Sofía hand a call to a person on a rule, rather than on the caller's request? (F-133, F-084; the call-handoff spec)
 
+- **Decided 2026-10-05 (owner):** keep the spec. An urgent path becomes an
+  offer to connect; "yes" transfers, "no" or no answer files an urgent
+  To-do. Auto-transfer per industry is revisited after F-035 ships failed-
+  transfer handling.
 - **Today.** The handoff spec says "the caller asks. Nothing else". Transfer is off for each company
   until the agency sets a number. The study goes the other way: its guardrail packs carry
   "hot-transfer rules" (study §9.6 item 1), and for law firms Sofía "hot-transfers detention,
@@ -3214,6 +3224,9 @@ reason, and what it blocks.
 
 #### 27. Should BIS designate an exclusive opt-out method under the FCC's revised order?
 
+- **Decided 2026-10-05 (owner; already the recorded position below):** keep
+  honouring any reasonable opt-out method, in either language — no
+  exclusive method is designated.
 - **Today.** The rule in force forbids designating an exclusive means of revocation (47
   CFR 64.1200(a)(10)), and nothing is designated. The draft order released on 9 September 2026, for a
   vote on 30 September, would let a sender name one or more of three methods (a key-press opt-out,
@@ -3298,6 +3311,9 @@ reason, and what it blocks.
 
 #### 33. Ratify the recorded spec positions this plan changes
 
+- **Decided 2026-10-05 (owner):** the first group below ("Needed now") is
+  ratified now, in this one dated sitting. The second group ("Needed when
+  the feature starts") is decided per feature, as each one starts.
 - **Needed now:** the M2 client-access spec's "no member sync", because staff and roles (S-01) must
   populate users and memberships (F-117 too); raising the same spec's five-membership cap for any
   company that needs a fifth login, as the spec itself allows, until F-117's later part prices
@@ -3390,6 +3406,9 @@ reason, and what it blocks.
 
 #### 35. DESIGN.md amendments, in two sittings (F-101)
 
+- **Decided 2026-10-05 (owner):** two dated sittings, October 2026 and
+  January 2027. This PR is the first sitting — rows 1, 10, 11, 18 and 20
+  below, and the `bar-hot`-on-hover code fix.
 - **Today.** DESIGN.md says to stop and flag rather than improvise. Section 6.5 tables the
   amendments the features need.
 - **First sitting, October 2026, for the first release:** new v2 sections for the record page,

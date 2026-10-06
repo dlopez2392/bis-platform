@@ -55,4 +55,21 @@ describe("pickRequestThemeMode", () => {
       providerDefault: "system",
     });
   });
+
+  // Owner decision, 2026-10-06: an operator (the agency's own chrome, which
+  // never has a brand_mode) defaults to dark rather than falling through to
+  // the client-role default of light.
+  it("defaults an operator to dark with no cookie", () => {
+    expect(pickRequestThemeMode(undefined, inputsWithMode(null), true)).toEqual({
+      serverMode: "dark",
+      providerDefault: "dark",
+    });
+  });
+
+  it("still defaults a non-operator to light with no cookie", () => {
+    expect(pickRequestThemeMode(undefined, inputsWithMode(null), false)).toEqual({
+      serverMode: "light",
+      providerDefault: "light",
+    });
+  });
 });
