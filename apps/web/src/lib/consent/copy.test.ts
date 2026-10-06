@@ -64,13 +64,13 @@ describe("the re-hold age cap's words (orchestrator, 2026-09-26)", () => {
 });
 
 describe("PR-2: the spec's own words (§4.2 and §6), verbatim", () => {
-  it("the six customer replies of §4.2's table, with {Business} (mutation: reword any one → FAILS)", () => {
-    expect(m["sms.consentReply.stop.en"]).toBe("{Business}: You won't get any more texts from us. Reply START to get them again.");
-    expect(m["sms.consentReply.stop.es"]).toBe("{Business}: Ya no le enviaremos mensajes. Responda START para volver a recibirlos.");
-    expect(m["sms.consentReply.start.en"]).toBe("{Business}: You'll get our texts again. Reply STOP to stop them.");
-    expect(m["sms.consentReply.start.es"]).toBe("{Business}: Listo, le enviaremos mensajes de nuevo. Responda PARAR para dejarlos.");
-    expect(m["sms.consentReply.help.en"]).toBe("{Business}: Reply STOP to stop texts from us. Call or text this number for help.");
-    expect(m["sms.consentReply.help.es"]).toBe("{Business}: Responda PARAR para dejar de recibir mensajes. Llame o escriba a este numero para recibir ayuda.");
+  it("the six customer replies, carrier-compliant since the 2026-10-05 rewrite (TCR rejection 611 superseded §4.2's original wording; mutation: reword any one → FAILS)", () => {
+    expect(m["sms.consentReply.stop.en"]).toBe("{Business}: You will receive no further messages. Reply START to resubscribe.");
+    expect(m["sms.consentReply.stop.es"]).toBe("{Business}: Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.");
+    expect(m["sms.consentReply.start.en"]).toBe("{Business}: You're opted in to receive texts about your appointments and service. Msg frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to opt out.");
+    expect(m["sms.consentReply.start.es"]).toBe("{Business}: Usted acepta recibir mensajes de citas y servicio. La frecuencia de mensajes puede variar. Pueden aplicar tarifas de mensajes y datos. Responda AYUDA para ayuda, PARAR para cancelar.");
+    expect(m["sms.consentReply.help.en"]).toBe("{Business}: For help, {Contact}. Msg & data rates may apply. Reply STOP to opt out.");
+    expect(m["sms.consentReply.help.es"]).toBe("{Business}: Para ayuda, {Contact}. Pueden aplicar tarifas de mensajes y datos. Responda PARAR para cancelar.");
   });
 
   it("each nameless variant is its named line without the \"{Business}: \" prefix (the text-back's rule; mutation: a nameless line that differs → FAILS)", () => {
@@ -104,11 +104,14 @@ describe("PR-2: the spec's own words (§4.2 and §6), verbatim", () => {
     expect(m["todo.consent.cancel.es"]).toBe("{name} envió {word} y sus mensajes quedaron suspendidos. Revise si también quería cancelar su cita del {date}.");
   });
 
-  it("no PR-2 line exposes a code, a kind, a method or template syntax beyond its own placeholders (DESIGN.md voice; 52 keys, read off messages.ts; mutation: add a line naming 'carrier_block' → FAILS)", () => {
+  it("no PR-2 line exposes a code, a kind, a method or template syntax beyond its own placeholders (DESIGN.md voice; 54 keys, read off messages.ts — the 2026-10-05 carrier-compliance rewrite added the help reply's 2 contact-fallback keys; mutation: add a line naming 'carrier_block' → FAILS)", () => {
     const keys = Object.keys(m).filter((k) => /^(sms\.consentReply|contact\.texts|todo\.consent)\./.test(k));
-    expect(keys.length).toBe(52);
+    expect(keys.length).toBe(54);
     for (const k of keys) {
       const text = m[k as keyof typeof m];
+      // "{Contact}" is a single-brace placeholder, same shape as
+      // "{Business}" always has been — only a DOUBLE-brace "{{...}}" is the
+      // forbidden template-syntax leak.
       expect(text, k).not.toMatch(/\{\{|40300|carrier_block|free_text|backfill|ledger|consent\.|automation\./);
     }
   });

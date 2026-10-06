@@ -1125,26 +1125,46 @@ export const m = {
   // like every other string here — and because a carrier reads it.
   "sms.optOut.en": "Reply STOP to opt out.",
   "sms.optOut.es": "Responde STOP para cancelar.",
-  // The consent replies (spec §4.2's table, verbatim, with the help line's
-  // contact sentence added by spec correction S12): the ONE stop
-  // confirmation, the start confirmation and the help reply. Kept under
-  // sms.* on purpose: a "consent.…" string in a gate-importing file reads as
-  // a message kind to scan 2 (scans.test.ts). No á, í, ó or ú (UCS-2 would
-  // double every one); replies.test.ts measures each at one GSM-7 segment.
-  // "{Business}" is brandDisplayName; a blank name uses the noName line, the
-  // text-back's rule (textback-body.ts).
-  "sms.consentReply.stop.en": "{Business}: You won't get any more texts from us. Reply START to get them again.",
-  "sms.consentReply.stop.es": "{Business}: Ya no le enviaremos mensajes. Responda START para volver a recibirlos.",
-  "sms.consentReply.stop.noName.en": "You won't get any more texts from us. Reply START to get them again.",
-  "sms.consentReply.stop.noName.es": "Ya no le enviaremos mensajes. Responda START para volver a recibirlos.",
-  "sms.consentReply.start.en": "{Business}: You'll get our texts again. Reply STOP to stop them.",
-  "sms.consentReply.start.es": "{Business}: Listo, le enviaremos mensajes de nuevo. Responda PARAR para dejarlos.",
-  "sms.consentReply.start.noName.en": "You'll get our texts again. Reply STOP to stop them.",
-  "sms.consentReply.start.noName.es": "Listo, le enviaremos mensajes de nuevo. Responda PARAR para dejarlos.",
-  "sms.consentReply.help.en": "{Business}: Reply STOP to stop texts from us. Call or text this number for help.",
-  "sms.consentReply.help.es": "{Business}: Responda PARAR para dejar de recibir mensajes. Llame o escriba a este numero para recibir ayuda.",
-  "sms.consentReply.help.noName.en": "Reply STOP to stop texts from us. Call or text this number for help.",
-  "sms.consentReply.help.noName.es": "Responda PARAR para dejar de recibir mensajes. Llame o escriba a este numero para recibir ayuda.",
+  // The consent replies: the ONE stop confirmation, the start/opt-in
+  // confirmation and the help reply. Rewritten 2026-10-05 after TCR rejected
+  // BIS's own 10DLC campaign (MNO_REJECTED, reason 611): the opt-in
+  // confirmation must carry the brand, message classes, "frequency varies"
+  // and "rates may apply" disclosures, HELP and STOP; the opt-out message
+  // must say explicitly that no further messages follow and how to
+  // resubscribe; the help reply must name a real support contact (email,
+  // phone or website), not just "this number". Kept under sms.* on purpose:
+  // a "consent.…" string in a gate-importing file reads as a message kind to
+  // scan 2 (scans.test.ts). No á, í, ó or ú (UCS-2 would double every one,
+  // and this codebase already spells "numero"/"mas" without the accent for
+  // the same reason — see opt-out.ts); replies.test.ts measures each at up
+  // to two GSM-7 segments, compliance now costing more than the one segment
+  // it used to fit. "{Business}" is brandDisplayName; a blank name uses the
+  // noName line, the text-back's rule (textback-body.ts) — carriers still
+  // require a brand name on every one of these, so an account with no brand
+  // name set is not carrier-compliant yet; see replies.ts's comment on why
+  // this does not fall back to `accounts.name` (DESIGN.md rule 8). "{Contact}"
+  // is the help reply's support-contact phrase (replies.ts's
+  // `helpContactPhrase`): the account's own `reply_to_email` when the client
+  // has set one, else BIS's own hello@bis-rgv.com / bis-rgv.com — never BIS's
+  // domain on a client's own text once the client has a contact of its own.
+  "sms.consentReply.stop.en": "{Business}: You will receive no further messages. Reply START to resubscribe.",
+  "sms.consentReply.stop.es": "{Business}: Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.",
+  "sms.consentReply.stop.noName.en": "You will receive no further messages. Reply START to resubscribe.",
+  "sms.consentReply.stop.noName.es": "Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.",
+  "sms.consentReply.start.en": "{Business}: You're opted in to receive texts about your appointments and service. Msg frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to opt out.",
+  "sms.consentReply.start.es": "{Business}: Usted acepta recibir mensajes de citas y servicio. La frecuencia de mensajes puede variar. Pueden aplicar tarifas de mensajes y datos. Responda AYUDA para ayuda, PARAR para cancelar.",
+  "sms.consentReply.start.noName.en": "You're opted in to receive texts about your appointments and service. Msg frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to opt out.",
+  "sms.consentReply.start.noName.es": "Usted acepta recibir mensajes de citas y servicio. La frecuencia de mensajes puede variar. Pueden aplicar tarifas de mensajes y datos. Responda AYUDA para ayuda, PARAR para cancelar.",
+  "sms.consentReply.help.en": "{Business}: For help, {Contact}. Msg & data rates may apply. Reply STOP to opt out.",
+  "sms.consentReply.help.es": "{Business}: Para ayuda, {Contact}. Pueden aplicar tarifas de mensajes y datos. Responda PARAR para cancelar.",
+  "sms.consentReply.help.noName.en": "For help, {Contact}. Msg & data rates may apply. Reply STOP to opt out.",
+  "sms.consentReply.help.noName.es": "Para ayuda, {Contact}. Pueden aplicar tarifas de mensajes y datos. Responda PARAR para cancelar.",
+  // The help reply's support-contact phrase (see replies.ts's
+  // `helpContactPhrase`): BIS's own fallback when an account has not set its
+  // own reply-to email. Not under sms.consentReply.* because it is not a full
+  // reply — it is substituted into "{Contact}" above.
+  "sms.consentReply.help.contact.fallback.en": "email hello@bis-rgv.com or visit bis-rgv.com",
+  "sms.consentReply.help.contact.fallback.es": "escriba a hello@bis-rgv.com o visite bis-rgv.com",
 
   "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
   "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
