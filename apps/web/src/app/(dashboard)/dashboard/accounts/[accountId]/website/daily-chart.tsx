@@ -36,8 +36,14 @@ export function DailyChart({ days, secondSeries, primaryLabel = m["website.tile.
   const max = Math.max(1, ...days.map((d) => d.visitors), ...(secondSeries?.values ?? []));
   // The BUSIEST bar, not the hovered one (DESIGN.md's Charts section: "the
   // busiest bar is bar-hot"). Ties keep the earliest, same as
-  // calls-chart-card.tsx's own `peak`, which this mirrors.
-  const hotIndex = days.reduce((best, d, i) => (d.visitors > days[best]!.visitors ? i : best), 0);
+  // calls-chart-card.tsx's own `peak`, which this mirrors. An all-zero
+  // window has no busiest day to mark — without the `> 0` guard the reduce
+  // still lands on index 0 by construction (0 is never greater than 0, so
+  // `best` never moves off its seed), which put bar-hot's gradient on day
+  // 0's empty stub.
+  const hotIndex = days.some((d) => d.visitors > 0)
+    ? days.reduce((best, d, i) => (d.visitors > days[best]!.visitors ? i : best), 0)
+    : -1;
   const shortDate = (day: string) => formatDateUTC(day).replace(/,.*$/, "");
   const xAt = (i: number) => ((i + 0.5) / days.length) * 100;
   const yAt = (v: number) => 100 - Math.min(100, Math.max(0, (v / max) * 100));

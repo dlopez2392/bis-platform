@@ -64,6 +64,11 @@ describe("DailyChart bars (spec §5)", () => {
     expect(bars[0]).toMatch(/\bbar-hot\b/);
     for (const bar of bars.slice(1)) expect(bar).not.toMatch(/\bbar-hot\b/);
   });
+  it("applies bar-hot to NO bar when every day in the window is zero — there is no busiest stub to mark", () => {
+    const zeroDays = DAYS.map((d) => ({ ...d, visitors: 0 }));
+    const zeroHtml = renderToStaticMarkup(createElement(DailyChart, { days: zeroDays }));
+    expect(zeroHtml).not.toContain("bar-hot");
+  });
 });
 
 describe("DailyChart second series (spec §5): same axis, --accent-2, mono legend", () => {
