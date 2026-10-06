@@ -51,3 +51,44 @@ describe("groupSlots", () => {
     expect(groupSlots([], CHICAGO)).toEqual([]);
   });
 });
+
+/**
+ * Every class the booking page renders has a rule somewhere.
+ *
+ * The step dots and the "Powered by BIS" footer shipped as markup with no CSS
+ * at all, so every booking page — the one framed on bis-rgv.com included —
+ * showed a browser-default numbered list of all three step names and a blue
+ * underlined link, for weeks, with every test green. Read from source rather
+ * than rendered: a class with no rule is invisible to any assertion about the
+ * DOM, which is exactly how it survived.
+ */
+describe("booking page styles", () => {
+  it("styles every bis-booking-* class the markup uses", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const here = path.join(process.cwd(), "src/app/b/[publicId]");
+    const tsx = fs.readFileSync(path.join(here, "booking-page.tsx"), "utf8");
+    const sheets = [
+      tsx.slice(tsx.indexOf("const BOOKING_CSS")),
+      fs.readFileSync(path.join(process.cwd(), "src/styles/public-brand.css"), "utf8"),
+    ].join("\n");
+    const markup = tsx.slice(0, tsx.indexOf("const BOOKING_CSS"));
+
+    const used = new Set<string>();
+    for (const m of markup.matchAll(/className=(?:"([^"]+)"|\{`([^`]+)`\})/g)) {
+      for (const token of (m[1] ?? m[2] ?? "").split(/\s+/)) {
+        const name = token.replace(/\$\{.*$/, "");
+        if (name.startsWith("bis-booking")) used.add(name);
+      }
+    }
+    expect(used.size).toBeGreaterThan(10); // the scan found the markup at all
+    // Named on purpose, not skipped by pattern: a wrapper whose children carry
+    // all the styling (`.bis-booking-row`, `.bis-booking-submit`). Adding a
+    // class here is a decision someone has to write down.
+    const deliberatelyBare = new Set(["bis-booking-form"]);
+    const unstyled = [...used]
+      .filter((c) => !deliberatelyBare.has(c))
+      .filter((c) => !new RegExp(`\\.${c}(?![\\w-])`).test(sheets));
+    expect(unstyled, "classes rendered with no rule in BOOKING_CSS or public-brand.css").toEqual([]);
+  });
+});
