@@ -3,11 +3,11 @@ import { ListChecks } from "lucide-react";
 import {
   listChecklistState, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
-  listCallStartsBetween, listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
+  listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
   sumOpenOpportunities,
   getA2pRegistration, listAccountWork,
 } from "@bis/db";
-import { listLeadInstantsBetween } from "@/lib/reports/weekly-metrics";
+import { listAnsweredCallStartsBetween, listLeadInstantsBetween } from "@/lib/reports/weekly-metrics";
 import { StatTile } from "@/components/stat-tile";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
@@ -111,7 +111,12 @@ export default async function AccountDashboardPage({
     sumOpenOpportunities(db, accountId),
     getVoiceProfile(db, accountId),
     getCalendarForAccount(db, accountId),
-    listCallStartsBetween(db, accountId, window14.fromIso, window14.toIso),
+    // ANSWERED calls only, the Monday report's own definition and read — not
+    // every call row. Until 2026-10-06 this was `listCallStartsBetween`
+    // (every row), so the hero labelled "Calls answered", its spark, the
+    // 14-day chart and the after-hours tile all counted robocalls — on the
+    // BIS account, 123 of 139 calls — and the owner's own test calls.
+    listAnsweredCallStartsBetween(db, accountId, window14.fromIso, window14.toIso),
     listBookingCreationsBetween(db, accountId, window14.fromIso, window14.toIso),
     listOpportunityValuesCreatedBetween(db, accountId, window14.fromIso, window14.toIso),
     // F-076 (now slice): the CRM-only hero ("Leads captured" — owner

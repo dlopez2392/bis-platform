@@ -1,5 +1,6 @@
 // apps/web/src/lib/voice/presence.ts
-import { countCallsSince, hasActiveCallSince, serviceDb } from "@bis/db";
+import { hasActiveCallSince, serviceDb } from "@bis/db";
+import { listAnsweredCallStartsBetween } from "@/lib/reports/weekly-metrics";
 
 export type VoicePresence = { onCall: boolean; weekCount: number };
 
@@ -31,17 +32,20 @@ export async function getVoicePresence(
   // unfinished row must age out, not pin the indicator on forever).
   const oneHourAgo = new Date(now.getTime() - ONE_HOUR_MS).toISOString();
 
-  // weekCount: "calls with `started_at >= start of current week`" — UTC
+  // weekCount: calls ANSWERED since the start of the current week — UTC
   // week, per the brief ("account tz not required... label says 'this
-  // week'"). Reuses the pre-existing countCallsSince (already exactly
-  // `started_at >= sinceIso`) rather than a second bespoke query.
+  // week'"). Through the Monday report's own answered-calls read: the label
+  // says "handled", and until 2026-10-06 this was `countCallsSince` (every
+  // row), which counted robocalls and the agency's test calls as handled.
+  // `countCallsSince` stays what the call CAPS read — those must count every
+  // call that cost money, which is a different question.
   const weekStart = startOfIsoWeekUtc(now).toISOString();
 
-  const [onCall, weekCount] = await Promise.all([
+  const [onCall, answered] = await Promise.all([
     hasActiveCallSince(db, accountId, oneHourAgo),
-    countCallsSince(db, accountId, weekStart),
+    listAnsweredCallStartsBetween(db, accountId, weekStart, now.toISOString()),
   ]);
-  return { onCall, weekCount };
+  return { onCall, weekCount: answered.length };
 }
 
 /**

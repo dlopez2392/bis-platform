@@ -59,9 +59,15 @@ vi.mock("@/lib/branding/tenant-theme-reader", () => ({
 // shared helper the Monday weekly report uses (owner decision) —
 // `listLeadInstantsBetween` lives in `@/lib/reports/weekly-metrics`, not
 // `@bis/db`, so it needs its own mock module separate from the one below.
-const reportMocks = vi.hoisted(() => ({ listLeadInstantsBetween: vi.fn() }));
+// "Calls answered" reads the report's shared answered-calls helper the same
+// way (2026-10-06) — before that, every call row, robocalls included.
+const reportMocks = vi.hoisted(() => ({
+  listLeadInstantsBetween: vi.fn(),
+  listAnsweredCallStartsBetween: vi.fn(),
+}));
 vi.mock("@/lib/reports/weekly-metrics", () => ({
   listLeadInstantsBetween: (...a: unknown[]) => reportMocks.listLeadInstantsBetween(...a),
+  listAnsweredCallStartsBetween: (...a: unknown[]) => reportMocks.listAnsweredCallStartsBetween(...a),
 }));
 
 const dbMocks = vi.hoisted(() => ({
@@ -72,7 +78,6 @@ const dbMocks = vi.hoisted(() => ({
   getCalendarForAccount: vi.fn(),
   listCalls: vi.fn(),
   listRecentEvents: vi.fn(),
-  listCallStartsBetween: vi.fn(),
   listBookingCreationsBetween: vi.fn(),
   listOpportunityValuesCreatedBetween: vi.fn(),
   // Task 5's dashboard row — the same `listAccountWork` read tasks/page.tsx
@@ -102,7 +107,6 @@ vi.mock("@bis/db", () => ({
   getCalendarForAccount: (...a: unknown[]) => dbMocks.getCalendarForAccount(...a),
   listCalls: (...a: unknown[]) => dbMocks.listCalls(...a),
   listRecentEvents: (...a: unknown[]) => dbMocks.listRecentEvents(...a),
-  listCallStartsBetween: (...a: unknown[]) => dbMocks.listCallStartsBetween(...a),
   listBookingCreationsBetween: (...a: unknown[]) => dbMocks.listBookingCreationsBetween(...a),
   listOpportunityValuesCreatedBetween: (...a: unknown[]) => dbMocks.listOpportunityValuesCreatedBetween(...a),
   listAccountWork: (...a: unknown[]) => dbMocks.listAccountWork(...a),
@@ -172,12 +176,13 @@ function resetFixtures() {
   workRowProps.current = null;
   for (const fn of Object.values(dbMocks)) fn.mockReset();
   reportMocks.listLeadInstantsBetween.mockReset();
+  reportMocks.listAnsweredCallStartsBetween.mockReset();
   dbMocks.countContacts.mockResolvedValue(0);
   dbMocks.getVoiceProfile.mockResolvedValue(null);
   dbMocks.getCalendarForAccount.mockResolvedValue(null);
   dbMocks.listCalls.mockResolvedValue([]);
   dbMocks.listRecentEvents.mockResolvedValue([]);
-  dbMocks.listCallStartsBetween.mockResolvedValue([]);
+  reportMocks.listAnsweredCallStartsBetween.mockResolvedValue([]);
   dbMocks.listBookingCreationsBetween.mockResolvedValue([]);
   dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([]);
   reportMocks.listLeadInstantsBetween.mockResolvedValue([]);
@@ -434,7 +439,7 @@ describe("AccountDashboardPage — the hero follows the plan (F-076 now slice)",
     // A distinctly different, non-zero calls source: if the hero wrongly
     // read from calls instead of leads, the value/delta assertions below
     // would see THIS shape, not the leads one.
-    dbMocks.listCallStartsBetween.mockResolvedValue([...CALLS_CURRENT, ...CALLS_PRIOR]);
+    reportMocks.listAnsweredCallStartsBetween.mockResolvedValue([...CALLS_CURRENT, ...CALLS_PRIOR]);
 
     const html = renderToStaticMarkup(await AccountDashboardPage(route()));
     const leadsLine = await expectedSparkPoints([...LEADS_CURRENT, ...LEADS_PRIOR]);
@@ -454,7 +459,7 @@ describe("AccountDashboardPage — the hero follows the plan (F-076 now slice)",
 
   it("an enabled voice profile keeps Calls answered as the hero, with its own real value, delta and sparkline (mutations: value from leads -> FAILS; hard-coded 0 -> FAILS; leads delta/spark reused -> FAILS; flipped current/prior split -> FAILS)", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true });
-    dbMocks.listCallStartsBetween.mockResolvedValue([...CALLS_CURRENT, ...CALLS_PRIOR]);
+    reportMocks.listAnsweredCallStartsBetween.mockResolvedValue([...CALLS_CURRENT, ...CALLS_PRIOR]);
     // A distinctly different, non-zero leads source: if the hero wrongly
     // read from leads instead of calls, the value/delta assertions below
     // would see THIS shape, not the calls one.
@@ -482,6 +487,23 @@ describe("AccountDashboardPage — the hero follows the plan (F-076 now slice)",
 
     expect(reportMocks.listLeadInstantsBetween).toHaveBeenCalledWith(
       expect.anything(), "acct_specific", expect.any(String), expect.any(String),
+    );
+  });
+
+  // 2026-10-06: the hero, its spark, the 14-day chart and the after-hours
+  // tile all read EVERY call row, robocalls and the owner's test calls
+  // included, under a label that says "answered". They now share the Monday
+  // report's answered-calls read; `@bis/db`'s every-row read is not mocked in
+  // this file at all, so a regression to it fails to import, not silently.
+  it("the Calls-answered hero reads the report's answered-calls helper for THIS account's 14-day window", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true });
+
+    await AccountDashboardPage(route("acct_specific"));
+
+    const { localDayWindow } = await import("@/lib/dashboard/metrics");
+    const window14 = localDayWindow(NOW, "America/Chicago", 14);
+    expect(reportMocks.listAnsweredCallStartsBetween).toHaveBeenCalledWith(
+      expect.anything(), "acct_specific", window14.fromIso, window14.toIso,
     );
   });
 });

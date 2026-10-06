@@ -603,6 +603,27 @@ export async function listCallStartsBetween(
 const CALL_OUTCOME_STARTS_PAGE_SIZE = 1000;
 
 /**
+ * The PostgREST `or` filter that drops calls FROM the given numbers, or null
+ * when there is nothing to drop.
+ *
+ * `caller_e164 IS NULL OR caller_e164 NOT IN (...)`, never the bare `NOT IN`:
+ * SQL's `NULL NOT IN (...)` is NULL, not true, so the bare form would silently
+ * drop every call with a withheld number along with the ones it meant to.
+ *
+ * Each value must be strict +E.164 and is quoted besides; anything else
+ * throws. The list comes from the environment, not a visitor, but it is
+ * spliced into a filter string, and a comma or a parenthesis in it would
+ * rewrite the filter rather than fail.
+ */
+function excludeCallersFilter(callers: readonly string[]): string | null {
+  if (callers.length === 0) return null;
+  for (const c of callers) {
+    if (!/^\+[1-9]\d{1,14}$/.test(c)) throw new Error("excludeCallers: every number must be +E.164");
+  }
+  return `caller_e164.is.null,caller_e164.not.in.(${callers.map((c) => `"${c}"`).join(",")})`;
+}
+
+/**
  * Raw `started_at` instants for calls whose `outcome` is one of `outcomes`,
  * in `[fromIso, toIso)` — e.g. the call half of "leads captured"
  * (weekly-metrics.ts's `LEAD_OUTCOME`). `outcomes` is a PARAMETER, not a
@@ -615,11 +636,22 @@ const CALL_OUTCOME_STARTS_PAGE_SIZE = 1000;
  * `sumOpenOpportunities`/`listSubmissionCreationsBetween` are: an unpaged
  * row-returning read silently truncates at PostgREST's row cap once an
  * account crosses it in one window, even a narrower one than "every call".
+ *
+ * `excludeCallers` drops calls from those numbers — the agency's own test
+ * handsets, which the app reads as `agencyHandsets()`
+ * (apps/web/src/lib/voice/caller-reputation.ts). A parameter for the same
+ * reason `outcomes` is: this layer reads no environment and decides no
+ * policy. It belongs on METRICS only — never on the call caps
+ * (`countCallsSince`/`countCallsByCallerSince`), which must count every call
+ * that cost money, and never on the Calls log, which is a record.
  */
 export async function listCallStartsByOutcomeBetween(
   db: SupabaseClient, accountId: string, outcomes: readonly string[],
-  fromIso: string, toIso: string, pageSize: number = CALL_OUTCOME_STARTS_PAGE_SIZE,
+  fromIso: string, toIso: string,
+  opts: { pageSize?: number; excludeCallers?: readonly string[] } = {},
 ): Promise<string[]> {
+  const pageSize = opts.pageSize ?? CALL_OUTCOME_STARTS_PAGE_SIZE;
+  const exclude = excludeCallersFilter(opts.excludeCallers ?? []);
   const result: string[] = [];
   let lastId: string | undefined;
   for (;;) {
@@ -628,6 +660,7 @@ export async function listCallStartsByOutcomeBetween(
       .eq("account_id", accountId).in("outcome", outcomes as string[])
       .gte("started_at", fromIso).lt("started_at", toIso)
       .order("id", { ascending: true });
+    if (exclude) query = query.or(exclude);
     if (lastId !== undefined) query = query.gt("id", lastId);
     const { data, error } = await query.limit(pageSize);
     if (error) throw new Error(`listCallStartsByOutcomeBetween failed: ${error.message}`);

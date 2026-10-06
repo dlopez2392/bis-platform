@@ -23,6 +23,7 @@ function fakeCallsDb(pages: { id: string; started_at: string }[][]) {
   // arguments).
   const gteCalls: Array<[string, unknown]> = [];
   const ltCalls: Array<[string, unknown]> = [];
+  const orCalls: string[] = [];
   let call = 0;
   const builder: Record<string, unknown> = {
     eq: (col: string, val: unknown) => { eqCalls.push([col, val]); return builder; },
@@ -31,6 +32,7 @@ function fakeCallsDb(pages: { id: string; started_at: string }[][]) {
     lt: (col: string, val: unknown) => { ltCalls.push([col, val]); return builder; },
     order: (col: string, opts: unknown) => { orderCalls.push([col, opts]); return builder; },
     gt: (col: string, val: unknown) => { gtCalls.push([col, val]); return builder; },
+    or: (filter: string) => { orCalls.push(filter); return builder; },
     limit: async (n: number) => {
       limitCalls.push(n);
       const data = pages[call] ?? [];
@@ -39,7 +41,7 @@ function fakeCallsDb(pages: { id: string; started_at: string }[][]) {
     },
   };
   const db = { from: () => ({ select: () => builder }) } as unknown as SupabaseClient;
-  return { db, limitCalls, eqCalls, inCalls, orderCalls, gtCalls, gteCalls, ltCalls };
+  return { db, limitCalls, eqCalls, inCalls, orderCalls, gtCalls, gteCalls, ltCalls, orCalls };
 }
 
 describe("listCallStartsByOutcomeBetween (keyset pagination, no row-cap undercount)", () => {
@@ -51,7 +53,7 @@ describe("listCallStartsByOutcomeBetween (keyset pagination, no row-cap undercou
     ]);
 
     const result = await listCallStartsByOutcomeBetween(
-      db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", 5,
+      db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", { pageSize: 5 },
     );
 
     expect(result).toEqual([
@@ -67,7 +69,7 @@ describe("listCallStartsByOutcomeBetween (keyset pagination, no row-cap undercou
       [],
     ]);
 
-    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", 1);
+    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", { pageSize: 1 });
 
     expect(inCalls).toEqual([["outcome", ["lead"]], ["outcome", ["lead"]]]);
   });
@@ -79,7 +81,7 @@ describe("listCallStartsByOutcomeBetween (keyset pagination, no row-cap undercou
       [],
     ]);
 
-    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", 2);
+    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", { pageSize: 2 });
 
     expect(orderCalls).toEqual(limitCalls.map(() => ["id", { ascending: true }]));
   });
@@ -104,7 +106,7 @@ describe("listCallStartsByOutcomeBetween (keyset pagination, no row-cap undercou
       [],
     ]);
 
-    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", 1);
+    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", { pageSize: 1 });
 
     expect(gteCalls).toEqual([
       ["started_at", "2027-01-01T00:00:00.000Z"], ["started_at", "2027-01-01T00:00:00.000Z"],
@@ -124,9 +126,41 @@ describe("listCallStartsByOutcomeBetween (keyset pagination, no row-cap undercou
       [],
     ]);
 
-    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", 1);
+    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", { pageSize: 1 });
 
     expect(limitCalls.length).toBe(3);
     expect(eqCalls).toEqual(limitCalls.map(() => ["account_id", "acct_1"]));
+  });
+
+  // The agency's own test handsets (`agencyHandsets()` in apps/web). The
+  // live suite (voice.test.ts) proves PostgREST reads this filter the way it
+  // is written; these pin the string and its guards without a database.
+  it("no excludeCallers means no caller filter at all", async () => {
+    const { db, orCalls } = fakeCallsDb([[]]);
+    await listCallStartsByOutcomeBetween(db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z", { excludeCallers: [] });
+    expect(orCalls).toEqual([]);
+  });
+
+  it("excludeCallers keeps withheld numbers (IS NULL) and quotes every value, on EVERY page", async () => {
+    const { db, orCalls, limitCalls } = fakeCallsDb([
+      [{ id: "a", started_at: "2027-01-01T00:00:00.000Z" }],
+      [],
+    ]);
+    await listCallStartsByOutcomeBetween(
+      db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z",
+      { pageSize: 1, excludeCallers: ["+19565550101", "+19565550102"] },
+    );
+    expect(orCalls).toEqual(limitCalls.map(
+      () => 'caller_e164.is.null,caller_e164.not.in.("+19565550101","+19565550102")',
+    ));
+  });
+
+  it("refuses a value that is not +E.164 rather than splicing it into the filter", async () => {
+    const { db, limitCalls } = fakeCallsDb([[]]);
+    await expect(listCallStartsByOutcomeBetween(
+      db, "acct_1", ["lead"], "2027-01-01T00:00:00.000Z", "2027-02-01T00:00:00.000Z",
+      { excludeCallers: ["+19565550101),outcome.eq.spam"] },
+    )).rejects.toThrow("+E.164");
+    expect(limitCalls).toEqual([]);
   });
 });

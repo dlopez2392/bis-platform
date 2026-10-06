@@ -290,8 +290,10 @@ export const m = {
   // "{date}"/"{count}"/"{unit}" are the house {placeholder} convention (see
   // setup.progress above); the component .replace()s them, and picks "{unit}"
   // itself (call vs calls) the same way shell.presence.idleOne pins its own
-  // singular case.
-  "dashboard.calls.title": "Calls",
+  // singular case. The bars are ANSWERED calls (the hero's own read, since
+  // 2026-10-06), and the title says so: under a bare "Calls" beside a table
+  // of every recent call, a robocall-free bar would read as a missing call.
+  "dashboard.calls.title": "Calls answered",
   "dashboard.calls.caption": "Last 14 days",
   "dashboard.calls.axis.weekendsMuted": "Weekends muted",
   "dashboard.calls.tooltip": "{date} · {count} {unit}",
