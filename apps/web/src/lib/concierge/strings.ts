@@ -37,6 +37,19 @@ const STRINGS = {
     poweredBy: "Powered by BIS",
     title: "Chat",
     close: "Close",
+    // F-102: the error boundary's button (`app/c/error.tsx`, new — the chat
+    // tree had none before this), in both languages.
+    tryAgain: "Try again",
+    // F-102's not-found page (`app/c/[publicId]/not-found.tsx`) — shown
+    // whether the concierge is off, has no destination form, or the public
+    // id is unknown; the three were deliberately indistinguishable before.
+    notFoundTitle: "This chat isn't available.",
+    notFoundBody: "The link may be out of date. Check with the business that shared it.",
+    // The browser tab title (`generateMetadata`). `{business}` is the
+    // customer-facing name (`brandDisplayName`), substituted by the caller —
+    // never `accounts.name`, the agency's internal label.
+    tabTitleWithBrand: "{business} · Chat",
+    tabTitleNoBrand: "Chat",
   },
   es: {
     placeholder: "Escribe tu mensaje…",
@@ -52,6 +65,11 @@ const STRINGS = {
     poweredBy: "Con tecnología de BIS",
     title: "Chat",
     close: "Cerrar",
+    tryAgain: "Intentar de nuevo",
+    notFoundTitle: "Este chat no está disponible.",
+    notFoundBody: "El enlace podría estar desactualizado. Consulta con el negocio que lo compartió.",
+    tabTitleWithBrand: "{business} · Chat",
+    tabTitleNoBrand: "Chat",
   },
 } as const;
 

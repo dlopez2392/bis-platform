@@ -1,18 +1,38 @@
 "use client";
 
 import { useEffect } from "react";
+import { useSearchParams } from "next/navigation";
+import { normalizeLocale } from "@/lib/forms/public-strings";
+import { bookingStrings } from "@/lib/booking/public-strings";
+import { deadEndTextStyle, deadEndButtonStyle } from "@/components/public/dead-end-style";
 
 /**
  * Error boundary for the `/b` segment — the public, unauthenticated booking
  * route reached directly by a stranger with the link. Same reasoning as
- * `app/f/error.tsx`, adapted: inline CSS, no `m` message catalog (this
- * boundary must render even if the failure is somehow in a message-catalog
- * import), no shadcn primitives, and nothing that names what actually broke.
+ * `app/f/[publicId]/error.tsx`, adapted: inline CSS, no `m` message catalog
+ * (this boundary must render even if the failure is somehow in a message-
+ * catalog import), no shadcn primitives, and nothing that names what
+ * actually broke. Stays at the ROOT of `/b` (unlike `/f`'s and `/c`'s,
+ * which moved — F-102 review round, fix 1): `app/b/layout.tsx` is already
+ * this tree's `<html>` and does no data read of its own, so it cannot
+ * strand the shell the way a moved-down layout's own throw could; this
+ * file sitting above the new `app/b/[publicId]/layout.tsx` still catches
+ * anything that layout or `page.tsx` throws, rendered INSIDE the
+ * already-standing shell.
  *
  * Without this file, a thrown error anywhere in this segment (a failed
  * calendar lookup, `loadTimezone`'s now-rethrown account-read failure — see
  * I3) falls through to Next's raw global error page, on a route a real
  * person is looking at expecting to book an appointment.
+ *
+ * `"use client"` is Next's own requirement for every `error.tsx`, which
+ * makes `useSearchParams()` the sanctioned way to read `?locale=` here
+ * (F-102) — no per-document default to fall back to otherwise (same
+ * reasoning `app/b/not-found.tsx` gives), so "en" stands.
+ *
+ * Colour routes through `deadEndTextStyle`/`deadEndButtonStyle` (F-102
+ * review round, fix 5) instead of the bare hex literals this file used to
+ * carry — see those functions' own comments for why.
  */
 export default function PublicBookingError({
   error,
@@ -21,6 +41,10 @@ export default function PublicBookingError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const params = useSearchParams();
+  const locale = normalizeLocale(params.get("locale") ?? undefined, "en");
+  const strings = bookingStrings(locale);
+
   useEffect(() => {
     // Logged for developer diagnosis only — the raw message and stack are
     // never surfaced to the visitor.
@@ -28,25 +52,12 @@ export default function PublicBookingError({
   }, [error]);
 
   return (
-    <div style={{
-      font: "400 15px/1.5 system-ui, -apple-system, \"Segoe UI\", sans-serif",
-      color: "#18181b", padding: 16, maxWidth: 480, margin: "0 auto",
-    }}>
+    <div lang={locale} style={deadEndTextStyle(params.get("theme"))}>
       <p role="alert" style={{ fontSize: 15, marginBottom: 12 }}>
-        Something went wrong. Please try again.
+        {strings.genericError}
       </p>
-      <button
-        type="button"
-        onClick={() => reset()}
-        style={{
-          // Same invalid shorthand as the cancel page had: `inherit` is only
-          // legal as a whole value, so this button rendered in the UA's
-          // default 13.3px Arial rather than the 15px face set on the wrapper.
-          font: "inherit", fontWeight: 600, border: "none", borderRadius: "0.5rem",
-          background: "#6d28d9", color: "#ffffff", padding: "10px 18px", cursor: "pointer",
-        }}
-      >
-        Try again
+      <button type="button" onClick={() => reset()} style={deadEndButtonStyle()}>
+        {strings.tryAgain}
       </button>
     </div>
   );

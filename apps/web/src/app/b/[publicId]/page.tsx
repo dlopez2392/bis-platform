@@ -1,42 +1,21 @@
 import type { Metadata } from "next";
 import { cache } from "react";
 import { notFound } from "next/navigation";
-import {
-  serviceDb, getCalendarByPublicId, getBranding, brandLogoUrl, type Branding,
-} from "@bis/db";
+import { serviceDb, brandLogoUrl, brandDisplayName, type Branding } from "@bis/db";
 import { signRenderToken, parseAttribution } from "@/lib/forms/guards";
 import { partsInZone } from "@/lib/booking/slots";
 import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
-import { normalizeLocale } from "@/lib/forms/public-strings";
+import { normalizeLocale, publicTabTitle } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
 import { BookingPage } from "./booking-page";
 import { getSlotsAction, submitBookingAction } from "./actions";
+import {
+  loadCalendar, loadCalendarSafe, isCalendarLive, loadCalendarBranding as loadBranding, UNBRANDED,
+} from "./data";
 
 export const dynamic = "force-dynamic";
-
-/**
- * Same `cache()` technique `f/[publicId]/page.tsx` uses and for the same
- * reason: `generateMetadata` and the component below run separately against
- * the SAME request, and both need this row. One query, not two, on a route
- * that is anonymous, `force-dynamic`, and reachable by any stranger who has
- * the link.
- */
-const loadCalendar = cache((publicId: string) => getCalendarByPublicId(serviceDb(), publicId));
-
-/** Null on failure, same reasoning as the sibling form page: without the
- *  calendar there is nothing to render, but without the branding there is
- *  still a bookable calendar. A database blip on the decorative read must
- *  never cost a company a booking. */
-const loadBranding = cache(async (accountId: string, publicId: string) => {
-  try {
-    return await getBranding(serviceDb(), accountId);
-  } catch (e) {
-    console.error(`public booking ${publicId}: branding read failed for account ${accountId}: ${String(e)}`);
-    return null;
-  }
-});
 
 /** `getCalendarByPublicId` selects only the `calendars` row; the account's
  *  timezone — what the day strip and every when-string on this route are
@@ -57,12 +36,6 @@ const loadTimezone = cache(async (accountId: string): Promise<string> => {
   return (data as { timezone?: string } | null)?.timezone ?? "UTC";
 });
 
-const UNBRANDED: Branding = {
-  brandName: null, brandLogoPath: null, brandColor: null,
-  brandNeutral: null, brandCorners: null, brandType: null, brandMode: null,
-  replyToEmail: null,
-};
-
 function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -70,16 +43,38 @@ function pad(n: number): string {
 // Same reasoning as `f/[publicId]/page.tsx`: a booking calendar is reachable
 // only by knowing its opaque publicId, and this URL is never meant to be a
 // discoverable destination.
+//
+// The title (F-102, defect :870) is set only for the live case; a disabled
+// or unknown calendar falls through all the way to the ROOT `app/b/layout.tsx`'s
+// static "Booking" default. A non-root segment layout briefly computed a
+// brand-aware fallback title here instead (F-102 review round, fix 6) —
+// REMOVED (owner decision, second review round): it never actually
+// branded the not-found PAGE (notFound() is caught by `app/b/not-found.tsx`,
+// above this segment, which replaces it — the title changed but the brand
+// chrome never rendered) and cost a real query on every cancel request for
+// a benefit that didn't exist. See `app/b/[publicId]/data.ts`'s own comment
+// for the full writeup. `/b`'s not-found stays NEUTRAL, title included.
+//
+// Uses `loadCalendarSafe`, NOT the page component's own `loadCalendar`
+// below (F-102 review round, fix 1) — see `app/f/[publicId]/page.tsx`'s
+// identical comment: `generateMetadata` has no `error.tsx` boundary to
+// land in.
 export async function generateMetadata(
-  { params }: { params: Promise<{ publicId: string }> },
+  { params, searchParams }: {
+    params: Promise<{ publicId: string }>;
+    searchParams: Promise<Record<string, string | string[] | undefined>>;
+  },
 ): Promise<Metadata> {
   const robots = { index: false, follow: false };
   const { publicId } = await params;
-  const calendar = await loadCalendar(publicId);
-  if (!calendar || !calendar.enabled) return { robots };
+  const calendar = await loadCalendarSafe(publicId);
+  if (!calendar || !isCalendarLive(calendar)) return { robots };
   const branding = await loadBranding(calendar.account_id, publicId);
+  const query = await searchParams;
+  const locale = normalizeLocale(typeof query.locale === "string" ? query.locale : undefined, "en");
   return {
     robots,
+    title: publicTabTitle(bookingStrings(locale), brandDisplayName(branding ?? UNBRANDED)),
     ...(branding?.brandLogoPath ? { icons: { icon: brandLogoUrl(branding.brandLogoPath) } } : {}),
   };
 }
@@ -102,10 +97,12 @@ export default async function PublicBookingPage({
   const query = await searchParams;
   const calendar = await loadCalendar(publicId);
   // A disabled calendar, an archived one and a token that never existed are
-  // all the same 404 — `getCalendarByPublicId` deliberately leaves `enabled`
-  // for this caller to check, the same split `getPublishedFormByPublicId`
-  // draws for `status`.
-  if (!calendar || !calendar.enabled) notFound();
+  // all the same HTTP STATUS (404) — `getCalendarByPublicId` deliberately
+  // leaves `enabled` for this caller to check (via `isCalendarLive`, so
+  // `generateMetadata` above applies the identical check against the SAME
+  // cached row), the same split `getPublishedFormByPublicId` draws for
+  // `status`. Status parity is not look parity — see that function's doc.
+  if (!calendar || !isCalendarLive(calendar)) notFound();
 
   const branding: Branding = (await loadBranding(calendar.account_id, publicId)) ?? UNBRANDED;
   const timezone = await loadTimezone(calendar.account_id);
@@ -138,7 +135,15 @@ export default async function PublicBookingPage({
   const todayKey = `${today.y}-${pad(today.m)}-${pad(today.d)}`;
 
   return (
-    <main className="bis-booking-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
+    // `lang` on this element, not only on `<html>` (F-102 review round, fix
+    // 7): `app/b/layout.tsx`'s `<html lang>` is always "en" (no per-document
+    // default exists to read — see that file's comment), but THIS element
+    // carries the locale actually resolved at render time, including a
+    // `?locale=es` override `<html lang>` can never see. That is the first
+    // server HTML, not a client patch: screen readers and translation tools
+    // that respect the nearest `lang` ancestor read this one correctly even
+    // when the document-level default disagrees.
+    <main lang={locale} className="bis-booking-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
       {darkCss ? <style>{darkCss}</style> : null}
       <PublicBrand
         name={branding.brandName}

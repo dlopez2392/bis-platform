@@ -107,8 +107,20 @@ export async function getForm(
  * Public path. Deliberately takes no accountId: the request that reaches it is
  * unauthenticated and has no tenant context, so the account is read back off
  * the row and must never be taken from the caller. Only published forms are
- * visible — a draft is a 404, indistinguishable from a token that never
- * existed.
+ * visible — a draft or an archived form answers with the same HTTP STATUS
+ * (404) as a public_id that never existed.
+ *
+ * Status parity is not the same claim as "looks the same" (**owner decision,
+ * F-102 review round**): a draft/archived form's not-found page MAY carry the
+ * account's own name, logo and colour, while a public_id that never existed
+ * never does. That is a deliberate, sanctioned distinction, not a leak —
+ * `newPublicId()` mints ~60 bits of random id, so the only way anyone holds
+ * one at all is having gotten the link FROM the business (an owner sharing a
+ * draft form's link too early, say), and a stranger guessing a live account's
+ * id by brute force is not a realistic threat this status code is defending
+ * against. What must still never leak is the FINER distinction a status-404
+ * response cannot reveal anyway: draft vs archived vs disabled are all one
+ *"not available" to the visitor, branded or not.
  */
 export async function getPublishedFormByPublicId(
   db: SupabaseClient, publicId: string,
@@ -117,6 +129,36 @@ export async function getPublishedFormByPublicId(
     .eq("public_id", publicId).eq("status", "published").maybeSingle();
   if (error) throw new Error(error.message);
   return (data as FormRow | null) ?? null;
+}
+
+/**
+ * Public path, ANY status — a draft and an archived form both come back,
+ * only a public_id that never existed returns null. `/f`'s own root layout
+ * (moved to `[publicId]/layout.tsx` for F-102) needs this: deciding the
+ * document's own `lang` and whether to show the account's brand on a
+ * not-found page both have to happen for a draft too, above the page's own
+ * "is this published" check — `getPublishedFormByPublicId` is the one
+ * accessor allowed to fold "draft" into "doesn't exist", and narrowing a
+ * second caller onto it would un-404 every draft on the live page the
+ * moment they shared a query. The status check moves to the caller
+ * (`page.tsx`'s own `notFound()` guard) instead — see that function's own
+ * comment for why a draft/archived form's not-found MAY still be branded.
+ */
+export async function getFormByPublicId(
+  db: SupabaseClient, publicId: string,
+): Promise<FormRow | null> {
+  const { data, error } = await db.from("forms").select(FORM_COLS)
+    .eq("public_id", publicId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as FormRow | null) ?? null;
+}
+
+/** The predicate `getPublishedFormByPublicId`'s SQL filter used to make for
+ *  the caller — now spelled out so `/f`'s layout and page can share the
+ *  SAME row (one query, via React `cache()`) and apply it independently:
+ *  the layout needs it for lang/branding, the page for `notFound()`. */
+export function isFormLive(form: Pick<FormRow, "status">): boolean {
+  return form.status === "published";
 }
 
 export async function updateForm(

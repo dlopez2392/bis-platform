@@ -109,6 +109,20 @@ describe("the header close button's label (Task 6 review fold-in)", () => {
   });
 });
 
+describe("the browser tab title and the not-found page (F-102)", () => {
+  it("keeps the {business} placeholder the caller substitutes, in both languages", () => {
+    expect(EN.tabTitleWithBrand).toContain("{business}");
+    expect(ES.tabTitleWithBrand).toContain("{business}");
+  });
+
+  it("has a not-found title and body distinct from the closed-chat copy, in both languages", () => {
+    expect(EN.notFoundTitle).toBeTruthy();
+    expect(ES.notFoundTitle).toBeTruthy();
+    expect(EN.notFoundTitle).not.toBe(EN.ended);
+    expect(ES.notFoundTitle).not.toBe(ES.ended);
+  });
+});
+
 describe("every concierge string", () => {
   it("carries no milestone codes, template syntax, or vendor jargon", () => {
     for (const strings of [EN, ES]) {

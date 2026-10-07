@@ -6,6 +6,7 @@ import { createForm } from "../forms";
 import { upsertVoiceProfile, getVoiceProfile } from "../voice";
 import {
   enableConcierge, disableConcierge, getVoiceProfileByPublicId,
+  getVoiceProfileAnyStatusByPublicId, isConciergeLive,
   createConciergeConversation, getConciergeConversation, claimConciergeTurn,
   appendConciergeTurns, setConciergeSubmission,
   countConciergeConversationsByIp, countConciergeConversationsForAccount,
@@ -174,6 +175,65 @@ describe("concierge accessors", () => {
         .update({ concierge_form_id: null }).eq("account_id", accountId);
       // MUTATION: drop `.not("concierge_form_id", "is", null)` -- this FAILS.
       expect(await getVoiceProfileByPublicId(db, publicId)).toBeNull();
+    }));
+
+  // F-102: `/c`'s own root layout (moved to `[publicId]/layout.tsx`) needs
+  // the profile's account_id and `languages` for `lang`/branding even while
+  // the concierge is off or has no destination form — the same "lang and
+  // branding decide above the page's own 404 check" shape `getFormByPublicId`
+  // exists for. Same split: this accessor folds nothing, `isConciergeLive`
+  // (and the page's own `notFound()`) apply the "is this actually live"
+  // predicate `getVoiceProfileByPublicId`'s SQL used to apply for the caller.
+  it("getVoiceProfileAnyStatusByPublicId returns the profile even OFF or with no destination form; isConciergeLive tells them apart", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedVoiceProfile(db, accountId);
+      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      const { publicId } = await enableConcierge(db, accountId, form.id);
+
+      const live = await getVoiceProfileAnyStatusByPublicId(db, publicId);
+      expect(live!.account_id).toBe(accountId);
+      // MUTATION: make isConciergeLive always return true -- this FAILS below.
+      expect(isConciergeLive(live!)).toBe(true);
+
+      await disableConcierge(db, accountId);
+      const off = await getVoiceProfileAnyStatusByPublicId(db, publicId);
+      expect(off).not.toBeNull();
+      expect(isConciergeLive(off!)).toBe(false);
+
+      expect(await getVoiceProfileAnyStatusByPublicId(db, "no-such-public-id")).toBeNull();
+    }));
+
+  // Direct, DB-free unit test for the predicate itself (F-102 review round,
+  // fix 2) — a reviewer found that mutating `isConciergeLive` (e.g. dropping
+  // its `concierge_form_id` half) is invisible to every test that only
+  // exercises it indirectly through a page/layout render. The third case —
+  // enabled but no destination form — is reachable in production, not just
+  // in theory: migration 0042's `concierge_form_id` column is
+  // `references forms(id) on delete set null`, so deleting the form a
+  // widget was filing into leaves `concierge_enabled` untouched and nulls
+  // only the pointer.
+  it("isConciergeLive requires BOTH concierge_enabled and a destination form", () => {
+    // MUTATION: drop the `concierge_form_id != null` half -- this FAILS on
+    // the third case (deleting the destination form, 0042:31, leaves
+    // `concierge_enabled` true and only nulls the pointer).
+    expect(isConciergeLive({ concierge_enabled: true, concierge_form_id: "f1" })).toBe(true);
+    expect(isConciergeLive({ concierge_enabled: false, concierge_form_id: "f1" })).toBe(false);
+    expect(isConciergeLive({ concierge_enabled: true, concierge_form_id: null })).toBe(false);
+  });
+
+  it("isConciergeLive: a destination form deleted out from under a live concierge goes not-live (0042:31, on delete set null)", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedVoiceProfile(db, accountId);
+      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      const { publicId } = await enableConcierge(db, accountId, form.id);
+      expect(isConciergeLive((await getVoiceProfileAnyStatusByPublicId(db, publicId))!)).toBe(true);
+
+      await db.from("forms").delete().eq("id", form.id);
+
+      const afterDelete = await getVoiceProfileAnyStatusByPublicId(db, publicId);
+      expect(afterDelete!.concierge_enabled).toBe(true);
+      expect(afterDelete!.concierge_form_id).toBeNull();
+      expect(isConciergeLive(afterDelete!)).toBe(false);
     }));
 
   it("claimConciergeTurn counts up and returns null at the cap", () =>
