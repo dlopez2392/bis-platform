@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NextRequest } from "next/server";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
 // only this route's own work; their calls are asserted where they matter
@@ -67,8 +67,12 @@ const accountRow = {
   brand_mode: "light" as const, reply_to_email: "owner-reply@rio.example", from_email: "hello@rio.example",
 };
 
+// Counts every `serviceDb()` construction, so a refusal can be shown to have
+// done no database work at all — not merely to have skipped one lookup.
+const serviceDbSpy = vi.hoisted(() => vi.fn());
+
 vi.mock("@bis/db", () => ({
-  serviceDb: () => ({
+  serviceDb: () => (serviceDbSpy(), {
     from: (table: string) => {
       dbQuerySpy.fromCalls.push(table);
       return {
@@ -154,6 +158,11 @@ beforeEach(() => {
   delete process.env.PHONE_MAX_CALLS_PER_ACCOUNT_PER_DAY;
   delete process.env.PHONE_SPAM_BLOCK_THRESHOLD;
   delete process.env.PHONE_SPAM_BLOCK_WINDOW_DAYS;
+  // The transition default: no secret, not enforced — every pre-existing
+  // test below runs the route exactly as it behaved before the signature.
+  delete process.env.VOICE_HANDOFF_SECRET;
+  delete process.env.VOICE_HANDOFF_ENFORCE;
+  serviceDbSpy.mockReset();
 
   unwrapMock.mockReset();
   afterMock.mockReset();
@@ -677,6 +686,171 @@ describe("the voice.sip_webhook heartbeat (operational-floor spec §1)", () => {
     delete process.env.OPENAI_API_KEY;
     await POST(req());
     expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.sip_webhook", { ok: false, error: "OPENAI_WEBHOOK_SECRET or OPENAI_API_KEY is not set" });
+  });
+});
+
+// Did the call come through our TeXML answer route? OpenAI's signature (step
+// 2) proves OpenAI sent the event; the numbers this route routes on arrive as
+// SIP headers. The TeXML route signs what it resolved
+// (lib/voice/sip-handoff-signature.ts) and, once enforcement is on, nothing
+// here — no database client, no tenant lookup — runs before that checks out.
+describe("POST /api/voice/incoming — the TeXML-route signature", () => {
+  const SECRET = "k".repeat(48);
+  const TOKEN = "c".repeat(32);
+  const SIGNED_CALLED = "+19565550999"; // PHONE_ROW's number
+  const SIGNED_CALLER = "+19562921696";
+
+  async function signature(opts: { called?: string; caller?: string | null; token?: string; at?: number; secret?: string } = {}) {
+    const { signSipHandoff } = await import("@/lib/voice/sip-handoff-signature");
+    return signSipHandoff(
+      opts.token ?? TOKEN, opts.called ?? SIGNED_CALLED,
+      opts.caller === undefined ? SIGNED_CALLER : opts.caller, opts.at ?? Date.now(),
+      { VOICE_HANDOFF_SECRET: opts.secret ?? SECRET } as unknown as NodeJS.ProcessEnv,
+    )!;
+  }
+
+  /** What arrives from OpenAI: the carrier's From, our three X- headers. */
+  function event(h: { from?: string; called?: string; token?: string | null; sig?: string | null }) {
+    const sip_headers: { name: string; value: string }[] = [
+      { name: "From", value: `sip:${h.from ?? SIGNED_CALLER}@sip.example.com` },
+      { name: "X-BIS-Called", value: h.called ?? SIGNED_CALLED },
+    ];
+    if (h.token !== null) sip_headers.push({ name: "X-BIS-Handoff", value: h.token ?? TOKEN });
+    if (h.sig) sip_headers.push({ name: "X-BIS-Signature", value: h.sig });
+    return {
+      id: "evt_sig", created_at: Math.floor(Date.now() / 1000),
+      type: "realtime.call.incoming", data: { call_id: "call_sig", sip_headers },
+    };
+  }
+
+  /** Nothing past the decline ran: no client, no lookup, no accept, no row. */
+  function expectNoWork() {
+    expect(serviceDbSpy).not.toHaveBeenCalled();
+    expect(getPhoneNumberByE164Mock).not.toHaveBeenCalled();
+    expect(getVoiceProfileMock).not.toHaveBeenCalled();
+    expect(startCallRowMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
+  }
+
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    process.env.VOICE_HANDOFF_SECRET = SECRET;
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    delete process.env.VOICE_HANDOFF_SECRET;
+    delete process.env.VOICE_HANDOFF_ENFORCE;
+    logSpy.mockRestore();
+  });
+
+  describe("enforced (VOICE_HANDOFF_ENFORCE=1)", () => {
+    beforeEach(() => { process.env.VOICE_HANDOFF_ENFORCE = "1"; });
+
+    it("no signature header → declined before any database work (mutation: verify after the tenant lookup → FAILS)", async () => {
+      unwrapMock.mockResolvedValue(event({ sig: null }));
+      const res = await POST(req());
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, declined: "unverified" });
+      expectNoWork();
+      // A stranger, never an outage: no alert for a call that is not ours.
+      expect(stampMock).not.toHaveBeenCalled();
+    });
+
+    it("a signature made with another secret → declined, no database work", async () => {
+      unwrapMock.mockResolvedValue(event({ sig: await signature({ secret: "z".repeat(48) }) }));
+      expect(await (await POST(req())).json()).toEqual({ ok: true, declined: "unverified" });
+      expectNoWork();
+      expect(stampMock).not.toHaveBeenCalled();
+    });
+
+    it("an expired signature → declined, no database work", async () => {
+      unwrapMock.mockResolvedValue(event({ sig: await signature({ at: Date.now() - 10 * 60_000 }) }));
+      expect(await (await POST(req())).json()).toEqual({ ok: true, declined: "unverified" });
+      expectNoWork();
+    });
+
+    it("a signature for another call's handoff token → declined, no database work", async () => {
+      unwrapMock.mockResolvedValue(event({ token: "d".repeat(32), sig: await signature() }));
+      expect(await (await POST(req())).json()).toEqual({ ok: true, declined: "unverified" });
+      expectNoWork();
+    });
+
+    it("the decline log names the reason and never the header's value", async () => {
+      const sig = await signature({ secret: "z".repeat(48) });
+      unwrapMock.mockResolvedValue(event({ sig }));
+      await POST(req());
+      expect(logSpy).toHaveBeenCalledWith("[voice/incoming]", expect.stringContaining("declined: unverified"),
+        expect.objectContaining({ reason: "bad-signature" }));
+      expect(JSON.stringify(logSpy.mock.calls)).not.toContain(sig);
+    });
+
+    it("a valid signature is answered, routed on the SIGNED numbers — a different X-BIS-Called or From is ignored (mutation: route on the SIP headers → FAILS)", async () => {
+      unwrapMock.mockResolvedValue(event({ called: "+19565550123", from: "+19565550777", sig: await signature() }));
+      const res = await POST(req());
+      expect(await res.json()).toEqual({ ok: true });
+      expect(getPhoneNumberByE164Mock).toHaveBeenCalledExactlyOnceWith(expect.anything(), SIGNED_CALLED);
+      expect(countCallsByCallerSinceMock).toHaveBeenCalledWith(expect.anything(), "acct1", SIGNED_CALLER, expect.any(String));
+      expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
+        expect.objectContaining({ callerE164: SIGNED_CALLER, handoffToken: TOKEN }));
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(afterMock).toHaveBeenCalledOnce();
+    });
+
+    it("a withheld caller stays withheld: a From on the SIP leg cannot supply one", async () => {
+      unwrapMock.mockResolvedValue(event({ from: "+19565550777", sig: await signature({ caller: null }) }));
+      await POST(req());
+      expect(countCallsByCallerSinceMock).not.toHaveBeenCalled();
+      expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
+        expect.objectContaining({ callerE164: null }));
+    });
+
+    it("enforced with no secret fails CLOSED, and that is an outage worth an alert — with or without a header (the TeXML route sends none without the secret)", async () => {
+      const sig = await signature();
+      delete process.env.VOICE_HANDOFF_SECRET;
+      for (const h of [{ sig }, { sig: null }]) {
+        stampMock.mockReset();
+        unwrapMock.mockResolvedValue(event(h));
+        expect(await (await POST(req())).json()).toEqual({ ok: true, declined: "unverified" });
+        expectNoWork();
+        expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.sip_webhook",
+          { ok: false, error: "VOICE_HANDOFF_ENFORCE is on but VOICE_HANDOFF_SECRET is not set" });
+      }
+    });
+
+    it("a non-call event is still ignored, never declined", async () => {
+      unwrapMock.mockResolvedValue(nonCallEvent());
+      expect(await (await POST(req())).json()).toEqual({ ok: true });
+      expect(serviceDbSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("not enforced (the rollout's transition)", () => {
+    it("no secret: answered exactly as before, with a loud line saying nothing was verified", async () => {
+      delete process.env.VOICE_HANDOFF_SECRET;
+      unwrapMock.mockResolvedValue(event({ sig: null }));
+      expect(await (await POST(req())).json()).toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(logSpy).toHaveBeenCalledWith("[voice/incoming]",
+        expect.stringContaining("VOICE_HANDOFF_SECRET is not set"), expect.objectContaining({ callId: "call_sig" }));
+    });
+
+    it("an invalid signature is reported, not refused (mutation: enforce by default → FAILS)", async () => {
+      unwrapMock.mockResolvedValue(event({ sig: await signature({ secret: "z".repeat(48) }) }));
+      expect(await (await POST(req())).json()).toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(logSpy).toHaveBeenCalledWith("[voice/incoming]", expect.stringContaining("not enforced"),
+        expect.objectContaining({ result: "bad-signature" }));
+    });
+
+    it("a valid signature is reported with whether the SIP headers agree, and routing stays on the SIP headers until enforcement", async () => {
+      unwrapMock.mockResolvedValue(event({ from: "+19565550777", sig: await signature() }));
+      await POST(req());
+      expect(logSpy).toHaveBeenCalledWith("[voice/incoming]", expect.stringContaining("not enforced"),
+        expect.objectContaining({ result: "ok", calledMatches: true, callerMatches: false }));
+      expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
+        expect.objectContaining({ callerE164: "+19565550777" }));
+    });
   });
 });
 

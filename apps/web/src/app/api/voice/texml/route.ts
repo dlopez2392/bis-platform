@@ -16,6 +16,10 @@
 // Telnyx TELLS US the dialed number (To param) — the SIP leg to OpenAI does
 // not reliably carry it — so we smuggle it onto the SIP URI as X-BIS-Called.
 // URI ?X-headers ride the INVITE and surface in the webhook's sip_headers.
+// On a request Telnyx signed, a third rides with them, `X-BIS-Signature`:
+// this route's signed statement of the called number, the caller and the
+// handoff token, which the webhook verifies before it resolves a tenant
+// (`lib/voice/sip-handoff-signature.ts`).
 // A number we don't know (or one not testing/live) gets a POLITE spoken
 // refusal, never a crash and never another tenant's greeting (spec §7). A
 // DISABLED profile or a caller OVER THE DAILY CAP also gets a spoken refusal
@@ -38,6 +42,7 @@ import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 import { newHandoffToken, resolveHandoffTarget } from "@/lib/voice/handoff";
 import { signFallbackTicket } from "@/lib/voice/fallback-ticket";
+import { SIP_HANDOFF_HEADER, signSipHandoff } from "@/lib/voice/sip-handoff-signature";
 import { FALLBACK_DRILL_SIP_BASE, fallbackDrillActive } from "@/lib/voice/fallback-drill";
 import { configuredOrigin } from "@/lib/email/origin";
 import { stampHeartbeat } from "@/lib/ops/stamp";
@@ -314,7 +319,8 @@ export function forwardXml(to: string, callerId: string | null): string {
  * answered — and its caller can still ask for a person.
  */
 function dialXml(
-  calledE164: string | null, origin: string, cleared?: { accountId: string; callerE164: string | null }, drill = false,
+  calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
+  cleared?: { accountId: string; callerE164: string | null }, drill = false,
 ): string {
   const projectId = process.env.VOICE_OPENAI_PROJECT_ID;
   if (!projectId) {
@@ -327,9 +333,22 @@ function dialXml(
   // what a real call carries, so the drill tests the real path
   // (lib/voice/fallback-drill.ts).
   const base = drill ? FALLBACK_DRILL_SIP_BASE : `sip:${projectId}@sip.api.openai.com;transport=tls`;
+  // The signature the SIP webhook checks before it resolves a tenant
+  // (lib/voice/sip-handoff-signature.ts): this route's statement that the
+  // call came through here, for this called number and this caller. ONLY on
+  // a request Telnyx signed — an unauthenticated request can name any
+  // To/From, and signing its answer would vouch for numbers nobody verified.
+  // Every dial gets it, cleared or not: the webhook is where an uncleared
+  // call is gated, and refusing to sign would turn this route's fail-open
+  // read into a refusal there. Null with no secret (the rollout's first
+  // step); the webhook only refuses an unsigned call once enforcement is on.
+  const signature = authenticated && calledE164
+    ? signSipHandoff(token, calledE164, callerE164, Date.now())
+    : null;
   const params = [
     ...(calledE164 ? [`X-BIS-Called=${encodeURIComponent(calledE164)}`] : []),
     `X-BIS-Handoff=${encodeURIComponent(token)}`,
+    ...(signature ? [`${SIP_HANDOFF_HEADER}=${encodeURIComponent(signature)}`] : []),
   ];
   const uri = `${base}?${params.join("&")}`;
   // The model-down fallback's ticket rides the same URL, and only for a call
@@ -423,8 +442,15 @@ function recordForwardedCallLater(input: ForwardedCallInput): void {
   }
 }
 
-async function respond(calledE164: string | null, callerE164: string | null, origin: string): Promise<NextResponse> {
-  const result = await route(calledE164, callerE164, origin);
+/**
+ * `authenticated` is true only for a POST whose Telnyx signature this route
+ * verified (TELNYX_PUBLIC_KEY set). It decides one thing: whether the bridge
+ * carries the signature the SIP webhook checks (`dialXml`).
+ */
+async function respond(
+  calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
+): Promise<NextResponse> {
+  const result = await route(calledE164, callerE164, origin, authenticated);
   // One stamp per answered request (lib/ops/stamp.ts). The route is down for
   // everyone only when it cannot look a number up; a refusal, a forward and a
   // bridge are all the route working.
@@ -435,7 +461,7 @@ async function respond(calledE164: string | null, callerE164: string | null, ori
 }
 
 async function route(
-  calledE164: string | null, callerE164: string | null, origin: string,
+  calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
 ): Promise<{ response: NextResponse; lookupFailed: boolean }> {
   const done = (response: NextResponse, lookupFailed = false) => ({ response, lookupFailed });
   const forward = forwardTarget();
@@ -524,11 +550,11 @@ async function route(
         : `texml fallback drill NOT engaged on ${calledE164} — the call was not cleared, so Sofía answers`);
     }
     return done(
-      xmlResponse(dialXml(calledE164, origin, cleared, drill)),
+      xmlResponse(dialXml(calledE164, callerE164, origin, authenticated, cleared, drill)),
       result.lookupFailed === true,
     );
   }
-  return done(xmlResponse(dialXml(calledE164, origin)));
+  return done(xmlResponse(dialXml(calledE164, callerE164, origin, authenticated)));
 }
 
 /**
@@ -552,7 +578,8 @@ export async function GET(req: Request): Promise<NextResponse> {
     return new NextResponse(null, { status: 405 });
   }
   const params = new URL(req.url).searchParams;
-  return respond(e164Of(params.get("To")), e164Of(params.get("From")), actionOrigin(req));
+  // Never authenticated: GET only answers while TELNYX_PUBLIC_KEY is unset.
+  return respond(e164Of(params.get("To")), e164Of(params.get("From")), actionOrigin(req), false);
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -599,5 +626,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       return new NextResponse(null, { status: 403 });
     }
   }
-  return respond(e164Of(claimedTo), e164Of(claimedFrom), actionOrigin(req));
+  // Authenticated exactly when the key is set: past this point, with a key,
+  // the signature above has verified.
+  return respond(e164Of(claimedTo), e164Of(claimedFrom), actionOrigin(req), Boolean(publicKey));
 }

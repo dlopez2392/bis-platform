@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractCallerNumber, extractCalledNumber, sipHeaderNames } from "./sip-headers";
+import { extractCallerNumber, extractCalledNumber, extractSipSignature, sipHeaderNames } from "./sip-headers";
 
 const ev = (headers: { name: unknown; value: string }[]) => ({ call_id: "c1", sip_headers: headers });
 
@@ -39,6 +39,21 @@ describe("extractCalledNumber", () => {
   it("degenerate inputs → null", () => {
     for (const bad of [null, undefined, {}, { sip_headers: "nope" }, { sip_headers: [] }, 42, { sip_headers: [null] }]) {
       expect(extractCalledNumber(bad)).toBeNull();
+    }
+  });
+});
+
+describe("extractSipSignature", () => {
+  it("reads X-BIS-Signature verbatim, any case, never coerced to a number", () => {
+    const value = "1790000000000.19565550100.19565550111.abcDEF_-123";
+    expect(extractSipSignature(ev([{ name: "From", value: "<sip:+19565550111@x>" }, { name: "X-BIS-Signature", value }]))).toBe(value);
+    expect(extractSipSignature(ev([{ name: "x-bis-signature", value: ` ${value} ` }]))).toBe(value);
+  });
+  it("absent, blank and degenerate inputs → null", () => {
+    expect(extractSipSignature(ev([{ name: "X-BIS-Handoff", value: "a".repeat(32) }]))).toBeNull();
+    expect(extractSipSignature(ev([{ name: "X-BIS-Signature", value: "  " }]))).toBeNull();
+    for (const bad of [null, undefined, {}, { sip_headers: "nope" }, { sip_headers: [] }, 42, { sip_headers: [null] }]) {
+      expect(extractSipSignature(bad)).toBeNull();
     }
   });
 });
