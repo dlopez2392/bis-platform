@@ -259,3 +259,21 @@ switched and the other not puts the db suite and the web suite on different
 databases), plus `BIS_CI_SUPABASE_REF` in `packages/db/.env` for the CI-only
 tools. A local e2e run and a CI e2e run share the seeded account; before a
 local e2e run, check `gh run list --workflow ci.yml --status in_progress`.
+
+## 10. Reading a red e2e run
+
+CI publishes **no Playwright traces** (since 2026-10-07). This repository is
+public, so its Actions artifacts can be downloaded by any signed-in GitHub
+user, and a trace can contain session cookies. The `playwright-traces` and
+`screenshot-traces` artifacts no longer exist, and
+`apps/web/ci/ci-workflow.test.ts` fails `pnpm check` if a workflow uploads
+`test-results/`, a trace, a Playwright report or a `.auth` state again.
+
+1. Read the e2e job's **Playwright** step log. The list reporter prints each
+   failing test, its assertion and the spec line.
+2. To step through it, reproduce locally (section 9's env, and the
+   in-progress check above): `pnpm --filter web test:e2e`, or one spec with
+   `pnpm --filter web exec playwright test e2e/<name>.spec.ts`. A failed
+   spec's trace stays on your machine in `apps/web/test-results/` (gitignored);
+   open it with `pnpm --filter web exec playwright show-trace <path>/trace.zip`.
+3. Never attach a trace to an issue, a PR or a chat. It is a session.

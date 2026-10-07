@@ -284,21 +284,14 @@ jobs:
       # per-run fixture client and signs each in with a Clerk sign-in ticket,
       # runs every spec serially, and deletes both in teardown. Stale fixtures
       # a killed run left behind are swept at the top of the next run.
+      #
+      # NO TRACE UPLOAD, on purpose (2026-10-07). This repo is public, so its
+      # Actions artifacts are downloadable by any signed-in GitHub user, and a
+      # Playwright trace carries the run's session cookies and network bodies.
+      # A red run is read from this step's own log (the list reporter prints
+      # each failing assertion and its location); to step through a trace,
+      # reproduce locally — `pnpm --filter web test:e2e` keeps failed specs'
+      # traces in apps/web/test-results/ (docs/runbooks/ci-supabase-project.md).
+      # apps/web/ci/ci-workflow.test.ts fails `pnpm check` if one comes back.
       - name: Playwright
         run: pnpm --filter web test:e2e
-
-      # Traces are retained only on failure (playwright.config.ts), so this
-      # is empty on a green run and skipped. v7 (not v4): v4 runs on Node 20,
-      # named alongside pnpm/action-setup@v4 in the same "Node.js 20 is
-      # deprecated" job warning once this step actually runs (a failed e2e
-      # run, 2026-09-25); node24 landed at v6, and v7 only adds an optional
-      # `archive` input this step does not set, so `name`/`path`/
-      # `if-no-files-found`/`retention-days` below behave the same.
-      - name: Upload traces from failed specs
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-traces
-          path: apps/web/test-results/
-          if-no-files-found: ignore
-          retention-days: 7

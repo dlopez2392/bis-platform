@@ -66,6 +66,15 @@ jobs:
       - name: Capture
         run: pnpm --filter web screenshots
 
+      # The PNGs only: pixels of the seeded, outbound-suppressed demo tenant,
+      # made for the public website. The signed-in session that took them is
+      # in screenshots/.auth/, outside this directory, and stays on the runner.
+      #
+      # NO TRACE UPLOAD (2026-10-07), for the reason ci.yml's e2e job gives:
+      # the repo is public, so are its artifacts, and a trace carries session
+      # cookies and network bodies. A failed capture is read from the
+      # Capture step's log, or reproduced locally with
+      # `pnpm --filter web screenshots` (traces land in apps/web/test-results/).
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -73,12 +82,3 @@ jobs:
           path: apps/web/screenshots/out/
           if-no-files-found: error
           retention-days: 14
-
-      # Traces only when something went wrong, same as the e2e job.
-      - uses: actions/upload-artifact@v7
-        if: failure()
-        with:
-          name: screenshot-traces
-          path: apps/web/test-results/
-          if-no-files-found: ignore
-          retention-days: 7
