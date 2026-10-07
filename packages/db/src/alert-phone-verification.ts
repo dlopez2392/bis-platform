@@ -214,12 +214,18 @@ export async function verifyAlertPhoneCode(
     return "wrong_code";
   }
 
-  const { data: consumed, error: consumeError } = await db.from("alert_phone_verifications")
-    .update({ consumed_at: new Date().toISOString() })
-    .eq("id", row.id).is("consumed_at", null)
-    .select("id");
+  // The DATABASE stamps consumed_at (0060, D-107), never this server's
+  // clock: 0036's consumed_check compares it with created_at and expires_at,
+  // which are the database's now(), and a server clock even milliseconds
+  // behind refused genuine codes. Same compare-and-swap as before (`where id
+  // and consumed_at is null`), plus `expires_at > now()` on the database's
+  // clock, so a row this server's clock still calls live but the database
+  // has expired comes back false ("expired") rather than as a CHECK error.
+  const { data: consumed, error: consumeError } = await db.rpc(
+    "consume_alert_phone_verification", { p_id: row.id },
+  );
   if (consumeError) throw new Error(`verifyAlertPhoneCode consume failed: ${consumeError.message}`);
-  if (!consumed?.length) return "expired"; // raced with another verify; nothing left to prove
+  if (consumed !== true) return "expired"; // raced with another verify, or expired; nothing left to prove
 
   await setAlertPhone(db, accountId, phone, actorId);
   return "verified";
