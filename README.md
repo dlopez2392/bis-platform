@@ -51,5 +51,6 @@ framework pinned via apps/web/vercel.json. Push to main = deploy.
 Env vars: see .env.example (service-role + db-url are server-only, never NEXT_PUBLIC).
 Production's values belong on Production only. Preview must hold only the
 Clerk development instance, the CI Supabase project and non-secret config,
-behind Vercel Authentication. The owner's steps to get there, and whether they
-are done, are in docs/runbooks/production-isolation.md.
+behind Vercel Authentication. That has been true since 2026-10-07. How it was
+done, and how to verify or roll it back, is in
+docs/runbooks/production-isolation.md.

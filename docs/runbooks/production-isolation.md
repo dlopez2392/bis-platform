@@ -1,9 +1,10 @@
 # Production isolation: Preview and the development Clerk issuer
 
-**Status, 2026-10-07: Parts A and B DONE; C, D and E NOT CONFIRMED DONE.**
-Every step below changes a setting in Vercel, Supabase or Clerk. Nothing in
-this repository changes those settings. Until Part F records a date for a
-part, assume what that part closes is still open.
+**Status, 2026-10-07: DONE.** Parts A, B, C, D and E1 were done on
+2026-10-07. The owner declined E2. Both paths described below are closed.
+Every step below changes a setting in Vercel, Supabase or Clerk, and nothing
+in this repository changes those settings. The parts stay written out for a
+rebuild, an audit or a rollback.
 
 - **Part A, executed 2026-10-07 by the orchestrator:**
   - `ssoProtection` was off, and previews answered 200 in public, carrying
@@ -17,29 +18,59 @@ part, assume what that part closes is still open.
   - A preview's `/sign-in` now answers 302 to `vercel.com/sso-api`, while
     production answers 200.
   - `ops-health.yml` run 37647811804 was green afterwards.
+- **Part C, done 2026-10-07:**
+  - Preview's `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+    are now the CI project's.
+  - Preview's `SUPABASE_SERVICE_ROLE_KEY` is a `bis-ci` secret key named
+    `preview`.
+  - Preview's `SUPABASE_DB_URL` was deleted.
+  - `VERCEL_API_TOKEN` is on Production only.
+  - Verified: a fresh preview read the CI project (the `bis-ci` edge log
+    shows a request with a `sb_secret_` key, answered 200), and every
+    Production row matched the baseline.
+- **Part D, done 2026-10-07:**
+  - Production Supabase's Third-Party Auth entry for
+    `topical-redfish-40.clerk.accounts.dev` was removed, and
+    `clerk.app.bis-rgv.com` was kept.
+  - Production was verified working, with no runtime errors.
+  - `screenshots.yml` is broken from this point, as Part D accepts, until it
+    moves to the CI project.
+- **Part E1, done 2026-10-07:**
+  - The production Supabase secret key was rotated. The new key is in Vercel
+    Production and the GitHub repository secret, and the old key was
+    deleted. Verified by the edge logs, `ops-health.yml` and a booking page.
+  - The production database password was reset. The GitHub repository
+    secret `SUPABASE_DB_URL` was updated, and Vercel Production's
+    `SUPABASE_DB_URL` was deleted, because the app never reads it.
+  - `VERCEL_API_TOKEN` was rotated to a new team-scoped token, and the old
+    one was deleted. Verified by the token's last-active time after the
+    Settings page's project list loaded.
+  - The D7 `*.prod-backup` files on danlo's machine now hold revoked values.
+- **Part E2, declined by the owner on 2026-10-07.** After Part D, the
+  development Clerk secret key reaches only the development instance and the
+  CI project, so the stakes are low. It stays in the repository secret
+  `CLERK_SECRET_KEY`, on Preview and in the local env files.
 
-What else is known, and from where:
-
-- **Read through the Vercel API on 2026-10-06 (names only, no values).** These
-  variables have Preview ticked: `NEXT_PUBLIC_SUPABASE_URL`,
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
-  `SUPABASE_DB_URL`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`,
-  `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, and `VERCEL_TEAM_ID` and
-  `VERCEL_API_TOKEN`. The last two have Production ticked as well.
-- **Not known:** whether the Supabase and Clerk values on Preview name
-  production or the CI project, and whether production's Supabase still
-  trusts the development Clerk instance.
-  Part A's checks answer each of these without printing a value. A part whose
-  check already passes is skipped. Write down that it was skipped and why.
+Before the work, the Vercel API on 2026-10-06 (names only, no values) listed
+these on Preview: `NEXT_PUBLIC_SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
+`SUPABASE_DB_URL`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`,
+`NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `VERCEL_TEAM_ID` and `VERCEL_API_TOKEN`. The
+last two had Production ticked as well. The sections below describe the
+state before the work, with the dates they were measured. When re-running
+any part, its Skip line and Part A's checks say whether it is needed. Write
+down a skip and its reason.
 
 Who runs this: the owner (danlo), or an agent with Vercel API access, and
 only with the owner's go-ahead for each part. Read the whole runbook before
 starting, because the order matters. Keep the notes from Part A until Part F
 is done: later parts, the rotations and the rollbacks all read them.
 
-## The two paths
+## The two paths (both closed 2026-10-07)
 
-Both let a credential that is not production's reach production's client data.
+Both let a credential that is not production's reach production's client
+data. What follows is the state before Parts C to E. Path 1 was closed by
+Part D. Path 2 was closed by Parts B, C and E1.
 
 **1. Production's Supabase trusts the development Clerk instance.**
 Production's project (`tlbkbmlrfafquucsmsmm`) held two Clerk entries under
@@ -93,10 +124,10 @@ Read off the repository on 2026-10-07 (main at `1e4f0dd2`):
 | `ci-project-setup.yml` | none | `bis-ci` | **No** |
 | `ops-health.yml` (hourly) | none (bearer `OPS_HEALTH_SECRET`) | production, through `https://app.bis-rgv.com/api/ops/health` | **No** |
 | `seed-demo.yml` | none (service role only) | production | **No** |
-| `screenshots.yml` | development (`CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`) | production (`NEXT_PUBLIC_SUPABASE_URL` and the other production repository secrets) | **Yes.** It signs in as the development agency user and reads the demo tenant through `dbForRequest()` |
+| `screenshots.yml` | development (`CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`) | production (`NEXT_PUBLIC_SUPABASE_URL` and the other production repository secrets) | **Yes.** It signs in as the development agency user and reads the demo tenant through `dbForRequest()`. Broken since Part D (2026-10-07) until it moves |
 | Local `pnpm check`, e2e, integration suite | development | refused on production since #135; danlo's machine on `bis-ci` since 2026-10-04 (D7) | **No** |
 | Local `pnpm dev`, `pnpm start`, `pnpm --filter web screenshots` | development | whatever `apps/web/.env.local` names. On danlo's machine that has been `bis-ci` since D7. None of these commands has a production guard | **Only on a machine whose env still names production** |
-| Vercel Preview | development (`pk_test_`, measured 2026-10-07) | unknown (A1, A4) | **Yes, if** Preview reads production; no once Part C is done |
+| Vercel Preview | development (`pk_test_`, measured 2026-10-07) | `bis-ci` since Part C (2026-10-07) | **No**, since Part C |
 | Vercel Production | production (`pk_live_` only, measured 2026-10-07 in A6) | production | **No** |
 
 CI and e2e no longer need it. Since #133 they run on `bis-ci`, whose only
@@ -104,10 +135,11 @@ Third-Party Auth entry is the development instance (`ci-supabase-project.md`,
 section 1 step 2). Nothing in CI fetches a Vercel URL: no workflow names
 `vercel.app` or a preview, and Playwright starts its own server on
 `localhost:3000` (`apps/web/playwright.config.ts`, `webServer`). The ruleset on
-`main` requires only `verify` and `e2e`, not a Vercel check. What still needs
-the dev issuer: Preview, until Part C; and `screenshots.yml`, which Part D
-accepts as broken until it moves (a manual button, so moving it onto the CI
-project is a separate change).
+`main` requires only `verify` and `e2e`, not a Vercel check. Before the work,
+two consumers still needed the dev issuer. Preview stopped needing it at Part
+C. `screenshots.yml` still needs it, and Part D accepted it as broken until
+it moves. It is a manual button, so moving it onto the CI project is a
+separate change.
 
 ## The order, and why
 
@@ -195,9 +227,9 @@ where a value is expected, use the dashboard path given beside each step.]
 
 ## Part A — pre-flight (read only; keep the notes)
 
-**Done 2026-10-07** for A2, A3, A6 and A8's code check (see the status
-block). Re-run A1 (the baseline), A4, A5 and A7 immediately before Part C,
-because Part C changes what they read.
+**Done 2026-10-07** (see the status block). On a re-run, take A1 (the
+baseline), A4, A5 and A7 immediately before Part C, because Part C changes
+what they read.
 
 1. **Env rows, saved as the baseline.**
 
@@ -390,6 +422,8 @@ printf '%s' '{"ssoProtection":null}' | api -X PATCH -H 'content-type: applicatio
 
 ## Part C — Preview onto the CI project, and no production credential on Preview
 
+**Done 2026-10-07** (see the status block).
+
 **Skipping step 4.** Step 4 adds Preview's CI values. It is not needed if A1
 shows `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and
 `SUPABASE_SERVICE_ROLE_KEY` as case (b) and A4 shows only CI accounts.
@@ -550,6 +584,8 @@ as a stopgap.
 
 ## Part D — remove the development Clerk provider from production Supabase
 
+**Done 2026-10-07** (see the status block).
+
 **Skip if** A5 found no development entry and the dev-token check answered
 4xx.
 
@@ -624,6 +660,9 @@ removed, add `https://clerk.app.bis-rgv.com` back the same way, at once.
 ## Part E — rotate
 
 ### E1. The production credentials Preview held
+
+**Done 2026-10-07:** the Supabase secret key, the database password and
+`VERCEL_API_TOKEN` (see the status block).
 
 Rotate only the rows that Part C step 3 recorded. Going by the 2026-10-06
 read, expect:
@@ -711,7 +750,9 @@ case (b1), with a prefix matching a key in A7's list that is not
 Production's, delete that key, and you are done. In every other case, including "cannot
 tell", treat the key as Production's. Create a new key and switch Production
 to it (`sensitive`, Production only). Redeploy, verify the smoke and one
-`ops-health.yml` run, then delete the old key. [assumption: Supabase lists
+`ops-health.yml` run. Reload every tab that was open before the redeploy, or
+wait for those tabs to close (see "Old tabs" below), and only then delete
+the old key. [assumption: Supabase lists
 secret keys by name with a masked prefix, and a `sb_secret_` key can be
 deleted without touching the others. A legacy `eyJ…` service-role key cannot
 be rotated that way, because rotating the JWT secret also changes the anon
@@ -734,7 +775,19 @@ first, then disable the legacy keys.]
 Only after every check passes, revoke the old value. Then confirm it is gone
 from the provider's list.
 
+**Old tabs keep the old build (learned 2026-10-07).** Vercel's skew
+protection pins a tab that was already open to the deployment it loaded
+from. That previous build still carries the OLD key. So after the old
+Supabase key is deleted, every tab opened before the redeploy fails, with
+"Unregistered API key", until it is reloaded. New tabs and reloaded tabs are
+fine. Before deleting an old key, reload the tabs you have open, or wait,
+and expect a client's long-open tab to need one reload.
+
 ### E2. The development Clerk secret key
+
+**Declined by the owner on 2026-10-07.** After Part D, this key reaches only
+the development instance and the CI project, so the stakes are low. The steps
+below stay here for whenever it is rotated.
 
 After Part D this key no longer reaches production. It still opens the
 development instance and, through it, the CI project. It has sat in the
@@ -768,19 +821,23 @@ step 2 names.
 
 ## Part F — record
 
-1. Change this file's status line to the date each part was done, or skipped
-   with its reason. Do the same everywhere else that a dated "not confirmed
-   done" stands:
-   - the "Clerk it trusts" and "Vercel Preview" rows in
-     `ci-supabase-project.md` ("Facts");
-   - the production-isolation bullet in `CLAUDE.md`;
-   - the superseded note in `clerk-setup.md` Part E;
-   - the Vercel bullet in `.claude/agents/bis-platform.md`.
+**Done 2026-10-07.** The status lines in these places were flipped to DONE:
+- this file;
+- the "Clerk it trusts" and "Vercel Preview" rows in
+  `ci-supabase-project.md` ("Facts");
+- the production-isolation bullet in `CLAUDE.md`;
+- the superseded note in `clerk-setup.md` Part E;
+- the Vercel bullet in `.claude/agents/bis-platform.md`.
 
-   `git grep -n -i "not confirmed done" -- CLAUDE.md docs/runbooks .claude/agents`
-   lists them.
+On a future re-run, mark the same places "not confirmed done" while the work
+is open, and flip them back when it is done.
+
+1. Change each status line to the date each part was done, or skipped with
+   its reason.
 2. Ledger line: `ISOLATION DONE <date> — protection on, Preview on bis-ci,
-   dev issuer off production, rotated: <names>`.
+   dev issuer off production, rotated: <names>`. For 2026-10-07 the names
+   are: the Supabase secret key, the database password and
+   `VERCEL_API_TOKEN`. E2 was declined.
 
 ## What may live on Preview
 
@@ -801,7 +858,7 @@ state: Preview is for looking at screens.
 
 ## Not covered here
 
-- **`screenshots.yml`** stops working at Part D. Moving it, and the demo seed
+- **`screenshots.yml`** has not worked since Part D (2026-10-07). Moving it, and the demo seed
   it runs, onto the CI project is its own change.
 - **Local development on another machine.** D7 is done on danlo's machine
   (`ci-supabase-project.md` section 9). Local tests refuse production

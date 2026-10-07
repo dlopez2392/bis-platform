@@ -18,11 +18,11 @@ MCP reads of production).
 | Ref | `odnobiodsftffphuuosz` | `tlbkbmlrfafquucsmsmm` |
 | Region | us-east-1 (same as production, so runner latency matches) | us-east-1 |
 | Schema from | `supabase db push` of the migration files (`db:push:ci`) | the Supabase MCP `apply_migration`, one file at a time |
-| Clerk it trusts | the **development** instance, `topical-redfish-40.clerk.accounts.dev` | production's instance only, once `production-isolation.md` Part D is done. **Not confirmed done as of 2026-10-07:** on 2026-09-14 it trusted the development one too, and nobody has re-read it since (that runbook's A5) |
-| Vercel Preview | the target: Preview's three runtime Supabase values name this project, with a secret key of its own named `preview`, and `SUPABASE_DB_URL` is not on Preview at all (`production-isolation.md` Part C) | never. **Not confirmed done as of 2026-10-07:** Preview still has all four Supabase names, `SUPABASE_DB_URL` included (Vercel API, 2026-10-06); whether they name production is unread (that runbook's A1, A4) |
+| Clerk it trusts | the **development** instance, `topical-redfish-40.clerk.accounts.dev` | production's instance only. **DONE 2026-10-07:** the development entry was removed (`production-isolation.md` Part D) |
+| Vercel Preview | the target: Preview's three runtime Supabase values name this project, with a secret key of its own named `preview`, and `SUPABASE_DB_URL` is not on Preview at all (`production-isolation.md` Part C) | never. **DONE 2026-10-07:** Preview's URL and publishable key are this project's, its secret key is this project's `preview` key, and its `SUPABASE_DB_URL` was deleted (`production-isolation.md` Part C) |
 | URL, ref | literals in `ci.yml` and `ci-project-setup.yml` | Vercel Production |
 | Publishable key | a literal in `ci.yml` (`ci-project-setup.yml` does not use it) | Vercel Production |
-| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel Production; repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml` and `screenshots.yml`); any local env file not yet switched (section 9); and, on danlo's machine, the `*.prod-backup` copies section 9 kept |
+| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel Production (the secret key only; its `SUPABASE_DB_URL` was deleted on 2026-10-07, since the app never reads it); repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml` and `screenshots.yml`); any local env file not yet switched (section 9). The `*.prod-backup` copies section 9 kept on danlo's machine hold the values revoked on 2026-10-07 (`production-isolation.md` Part E1) |
 
 Never edit the three non-`CI_` secrets to point at the CI project. The demo
 seeder and the screenshot run would then "succeed" against the wrong database.

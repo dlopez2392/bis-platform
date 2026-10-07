@@ -184,9 +184,9 @@ session token that production's RLS treats as agency, because
 `app.is_agency()` reads nothing but the `app_role` claim. CI stopped needing
 it when it moved to its own Supabase project (#133). The removal, the few
 consumers that still depend on it and how to verify and roll it back are in
-`docs/runbooks/production-isolation.md`, Part D. Status:
-**not confirmed done** as of 2026-10-07; nobody has re-read production's
-Third-Party Auth list since 2026-09-14 (that runbook's A5 does).
+`docs/runbooks/production-isolation.md`, Part D. Status: **DONE
+2026-10-07.** The development entry was removed, and production's Supabase
+now trusts only `clerk.app.bis-rgv.com`.
 
 ## Part F — your user, and the two accounts
 
