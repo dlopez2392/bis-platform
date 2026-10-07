@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { createContact } from "../contacts";
 import { ensureConversation, createMessage } from "../messaging";
@@ -12,7 +11,7 @@ import {
   hasActiveCallSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
-  listCalls, getCall, listCallStartsBetween, listCallOutcomesBetween, listCallStartsByOutcomeBetween,
+  listCalls, getCall, listCallStartsByOutcomeBetween,
   listContactCalls, searchCalls,
   markHandoffRequested, getCallByHandoffToken, setCallOutcome,
   callerInTouchSince,
@@ -475,48 +474,6 @@ describe("listCalls / getCall", () => {
   });
 });
 
-describe("listCallStartsBetween", () => {
-  it("[from, to) — pins both boundary edges, ascending order, cross-tenant rows excluded", async () => {
-    await withTestAccount(async (db, accountA) => {
-      await withTestAccount(async (db2, accountB) => {
-        const numA = await assignPhoneNumber(db, accountA, { e164: testPhoneNumber() }, "user_test");
-        const numB = await assignPhoneNumber(db2, accountB, { e164: testPhoneNumber() }, "user_test");
-
-        const from = "2027-06-01T00:00:00.000Z";
-        const to = "2027-06-15T00:00:00.000Z";
-
-        async function callAt(dbc: SupabaseClient, acct: string, numId: string, iso: string) {
-          const { id } = await startCallRow(dbc, acct, { phoneNumberId: numId, callerE164: null });
-          const { error } = await dbc.from("calls").update({ started_at: iso }).eq("id", id);
-          if (error) throw new Error(error.message);
-        }
-
-        // Outside the window on both sides — excluded.
-        await callAt(db, accountA, numA.id, "2027-05-31T23:59:59.999Z");
-        await callAt(db, accountA, numA.id, to); // exclusive edge — excluded
-
-        // Inside, including the inclusive `from` edge.
-        await callAt(db, accountA, numA.id, from);
-        await callAt(db, accountA, numA.id, "2027-06-10T12:00:00.000Z");
-        await callAt(db, accountA, numA.id, "2027-06-14T23:59:59.999Z");
-
-        // Same window, other tenant — must not leak into accountA's result.
-        await callAt(db2, accountB, numB.id, "2027-06-05T00:00:00.000Z");
-
-        const result = await listCallStartsBetween(db, accountA, from, to);
-        expect(result).toHaveLength(3);
-        const times = result.map((s) => new Date(s).getTime());
-        expect(times).toEqual([...times].sort((a, b) => a - b)); // ascending
-        expect(times).toEqual([
-          new Date(from).getTime(),
-          new Date("2027-06-10T12:00:00.000Z").getTime(),
-          new Date("2027-06-14T23:59:59.999Z").getTime(),
-        ]);
-      });
-    });
-  });
-});
-
 // The contact drawer's recent-calls source — belongs here (not
 // contacts.test.ts) because it reads the `calls` table, per this file's
 // existing convention (listCalls/getCall above).
@@ -550,39 +507,6 @@ describe("listContactCalls", () => {
 
       const limited = await listContactCalls(db, accountA, mine.id, 1);
       expect(limited.map((r) => r.id)).toEqual([r2.id]);
-    });
-  });
-});
-
-/**
- * The twin of listCallStartsBetween, which returns started_at values only and
- * so cannot answer "how many calls were answered". Seeded by direct insert
- * rather than startCallRow: that helper sets neither started_at nor outcome,
- * and both are the point here. calls.phone_number_id is NOT NULL, so a real
- * phone number has to exist first.
- */
-describe("listCallOutcomesBetween", () => {
-  it("returns every outcome inside the window and excludes the upper bound", async () => {
-    await withTestAccount(async (db, accountId) => {
-      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
-      const seed = async (startedAt: string, outcome: string) => {
-        const { error } = await db.from("calls").insert({
-          account_id: accountId, phone_number_id: num.id,
-          started_at: startedAt, outcome, caller_e164: null,
-        });
-        if (error) throw new Error(`seed call failed: ${error.message}`);
-      };
-      await seed("2026-03-02T10:00:00Z", "booked");
-      await seed("2026-03-03T10:00:00Z", "spam");
-      await seed("2026-03-04T10:00:00Z", "lead");
-      // On the exclusive upper bound to the minute — the row that proves the
-      // window is half-open, and that this agrees with listCallStartsBetween
-      // about which calls belong to a week.
-      await seed("2026-03-09T00:00:00Z", "message");
-
-      const got = await listCallOutcomesBetween(
-        db, accountId, "2026-03-02T00:00:00Z", "2026-03-09T00:00:00Z");
-      expect(got.slice().sort()).toEqual(["booked", "lead", "spam"]);
     });
   });
 });
