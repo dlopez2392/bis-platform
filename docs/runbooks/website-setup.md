@@ -41,7 +41,9 @@ Plan: `docs/superpowers/plans/2026-09-07-website-traffic.md`.
    `VERCEL_TEAM_ID` = `team_8zjV46sJxQDsVzikNQa1JaO2` (Production; Preview is
    fine too, it is an id). Never put the token on Preview: it is team-scoped,
    and a preview runs any pushed branch's code
-   (`production-isolation.md`, "What may live on Preview").
+   (`production-isolation.md`, "What may live on Preview"). The Vercel API
+   on 2026-10-06 showed it on Production AND Preview; that runbook's Part C
+   takes it off Preview and Part E rotates it.
 3. **Redeploy.** Vercel applies environment variables to NEW deployments
    only (docs: "Changes to environment variables are not applied to
    previous deployments"). Deployments → the current production deployment

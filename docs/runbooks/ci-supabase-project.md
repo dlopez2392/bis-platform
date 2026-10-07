@@ -18,11 +18,11 @@ MCP reads of production).
 | Ref | `odnobiodsftffphuuosz` | `tlbkbmlrfafquucsmsmm` |
 | Region | us-east-1 (same as production, so runner latency matches) | us-east-1 |
 | Schema from | `supabase db push` of the migration files (`db:push:ci`) | the Supabase MCP `apply_migration`, one file at a time |
-| Clerk it trusts | the **development** instance, `topical-redfish-40.clerk.accounts.dev` | production's instance only, once `production-isolation.md` Part D is done. **Not done as of 2026-09-26:** it still trusts the development one too |
-| Vercel Preview | the target: Preview's three Supabase values name this project, with a secret key of its own named `preview` (`production-isolation.md` Part B) | never. **Not done as of 2026-09-26:** Preview still names production's database |
+| Clerk it trusts | the **development** instance, `topical-redfish-40.clerk.accounts.dev` | production's instance only, once `production-isolation.md` Part D is done. **Not confirmed done as of 2026-10-07:** on 2026-09-14 it trusted the development one too, and nobody has re-read it since (that runbook's A5) |
+| Vercel Preview | the target: Preview's three Supabase values name this project, with a secret key of its own named `preview` (`production-isolation.md` Part C) | never. **Not confirmed done as of 2026-10-07:** Preview still has all three Supabase names (Vercel API, 2026-10-06); whether they name production is unread (that runbook's A1, A4) |
 | URL, ref | literals in `ci.yml` and `ci-project-setup.yml` | Vercel env |
 | Publishable key | a literal in `ci.yml` (`ci-project-setup.yml` does not use it) | Vercel env |
-| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel env; repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml` and `screenshots.yml`); and any local env file not yet switched (section 9) |
+| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel env; repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml` and `screenshots.yml`); any local env file not yet switched (section 9); and, on danlo's machine, the `*.prod-backup` copies section 9 kept |
 
 Never edit the three non-`CI_` secrets to point at the CI project. The demo
 seeder and the screenshot run would then "succeed" against the wrong database.
@@ -236,7 +236,7 @@ steps above. A lost project is about half an hour.
      `NEXT_PUBLIC_SUPABASE_URL`;
    - `.env.example`, this runbook, `CLAUDE.md`, and the comments that name the
      old ref (`git grep odnobiodsftffphuuosz`);
-   - once Preview is on this project (`production-isolation.md` Part B):
+   - once Preview is on this project (`production-isolation.md` Part C):
      Vercel Preview's `NEXT_PUBLIC_SUPABASE_URL`,
      `NEXT_PUBLIC_SUPABASE_ANON_KEY` and a new `preview` secret key in
      `SUPABASE_SERVICE_ROLE_KEY`, then a new preview build. Vercel is not in

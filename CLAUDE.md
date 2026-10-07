@@ -46,9 +46,13 @@
   Supabase must trust only the production Clerk instance
   (`clerk.app.bis-rgv.com`); Vercel Preview holds the Clerk development
   instance, the CI project and non-secret config, never a production
-  credential, behind Vercel Authentication. **Not done as of 2026-09-26:**
-  production still trusts the development issuer, and Preview still names
-  production's database with protection off. Closing both is
-  owner work in the dashboards — `docs/runbooks/production-isolation.md`.
+  credential, behind Vercel Authentication. **Not confirmed done as of
+  2026-10-07:** the Vercel API on 2026-10-06 (names only) still listed the
+  Supabase and Clerk variables, `SUPABASE_DB_URL` and a team-scoped
+  `VERCEL_API_TOKEN` on Preview. Nobody has read whether those values name production, whether
+  protection is on, or whether production still trusts the development
+  issuer. Treat all three as open. The checks, the order and the rollbacks
+  are in `docs/runbooks/production-isolation.md`, and its status line
+  records what is done.
   Never describe Preview as sharing production's database as intended, and
   never add a production credential to Preview.
