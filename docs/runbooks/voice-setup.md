@@ -140,6 +140,34 @@ retrying it.
 
 ---
 
+## VOICE_HANDOFF_SECRET — call-origin check
+
+The SIP webhook (`/api/voice/incoming`) checks that each call reached OpenAI
+through our Telnyx-signed TeXML answer route: the route adds an
+`X-BIS-Signature` header (an HMAC over the called number, the caller, this
+call's handoff token and a timestamp, valid 2 minutes), and the webhook
+verifies it before it looks anything up. Needs `TELNYX_PUBLIC_KEY` set
+(only Telnyx-signed TeXML requests are signed). Merging the code changes
+nothing; these steps turn it on:
+
+1. Generate a secret: `openssl rand -base64 48`. In Vercel → bis-platform →
+   Production, add `VOICE_HANDOFF_SECRET` as **Sensitive**, then redeploy.
+2. Place a test call to a real number. The `/api/voice/incoming` log must
+   read `TeXML-route signature checked (not enforced) { result: 'ok',
+   calledMatches: true, callerMatches: true }`. Anything else (`absent`,
+   `malformed`, `bad-signature`, `expired`, or `callerMatches: false`):
+   STOP, do not enforce, and read the reason.
+3. Add `VOICE_HANDOFF_ENFORCE=1` (plain) and redeploy. From now on a call
+   without a valid signature is declined (`declined: "unverified"`), and the
+   tenant and caller come only from the signed values.
+4. Verify: a call to the real number, a call to a second tenant's number,
+   the model-down fallback drill, a forward-calls account, and asking for a
+   person mid-call.
+
+Rollback: remove `VOICE_HANDOFF_ENFORCE` and redeploy (back to check-only).
+Never remove the secret while enforcement is on: every call would be
+declined.
+
 ## Step 4 — Buy a TEST number and assign it
 
 1. Telnyx portal → **Numbers → Buy Numbers** → pick any RGV-local number
@@ -533,6 +561,14 @@ default — only touch them if a real call revealed a reason to.
 
 Beyond Step 2's three, these are the ones worth knowing by name:
 
+- **`VOICE_HANDOFF_SECRET`** — the key for the call-origin check (see
+  "VOICE_HANDOFF_SECRET — call-origin check"). Sensitive, at least 32
+  characters. Unset: calls are answered without the check and every call
+  logs that it was not checked.
+- **`VOICE_HANDOFF_ENFORCE`** — `1` makes the SIP webhook decline any call
+  without a valid signature. Set only after a check-only test call logged
+  `result: 'ok'`.
+
 - **`APP_ORIGIN`** — set to `https://app.bis-rgv.com`. Absolute origin used
   to build every link inside outbound email (booking confirmations, staff
   alerts, cron reminders) instead of deriving one from the triggering
@@ -684,6 +720,11 @@ Record the date, the line, the `<status>`, whether the transfer phone rang and w
 the stamp, in the fallback drill log at the bottom of `restore-drill.md`.
 
 ## Troubleshooting quick-reference
+
+- **Every call declined, log says `declined: unverified`:** the call-origin
+  check is enforced and calls are not carrying a valid signature. Remove
+  `VOICE_HANDOFF_ENFORCE`, redeploy, and read the `reason` in the check-only
+  log line (see "VOICE_HANDOFF_SECRET — call-origin check").
 
 - **Your OWN test phone gets the "can't take your call" refusal:** the
   reputation guard, and almost certainly on a NEW client — it counts per
