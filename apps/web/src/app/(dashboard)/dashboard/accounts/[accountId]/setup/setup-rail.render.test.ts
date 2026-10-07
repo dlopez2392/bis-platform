@@ -47,18 +47,21 @@ describe("SetupRail numbering", () => {
     expect(renderedText(html)).toContain("Website assistant");
   });
 
-  // Full plan: the lock graph (website_assistant needs voice_profile done;
-  // test_call needs number+voice_profile done; go_live needs five) makes it
-  // impossible for every one of the ten to be simultaneously undone AND
-  // unlocked — something always has to be marked done to unlock something
-  // later, which hides THAT entry's own number behind a Check icon instead
-  // (the same real constraint the wizard itself has). account, branding and
-  // hours are the three steps nothing ever locks on, so they are the
-  // reliable sample: their numbers must still read 01/02/03, in order, for
-  // the full ten-entry rail — proving the full-plan source (`views` itself,
-  // in `deriveSetupStatus`'s canonical order) still numbers correctly, the
-  // same source the CRM-only case above reads.
-  it("still numbers the full plan's unlockable early steps 01, 02, 03 in order, and renders all ten titles", () => {
+  // Full plan, all ten steps undone: website_assistant, test_call and
+  // go_live are the three LOCKABLE steps (setup-rail.ts's `isLockedStep`),
+  // and with nothing done yet, each of their own prerequisites reads unmet —
+  // website_assistant locks on voice_profile; test_call locks on
+  // number+voice_profile; go_live locks on all five `GO_LIVE_PREREQ_KEYS`.
+  // That promotes all three to `railKindOf`'s "locked" kind, which renders a
+  // Lock icon (setup-rail.tsx's `ICON` map) instead of the step's number —
+  // so those three positions (5th, 9th, 10th) carry NO visible number at
+  // all, while the other seven do, each still reading its own gapless
+  // position in `views` (`stepNumber`): account=01, branding=02, hours=03,
+  // voice_profile=04, (website_assistant locked), number=06, email=07,
+  // forwarding=08, (test_call locked), (go_live locked). This is NOT every
+  // number 01..10 rendering — it is exactly the seven unlockable steps'
+  // numbers, in order, which is the full set this fixture can ever show.
+  it("still numbers the full plan's seven unlockable steps 01,02,03,04,06,07,08 in order, and renders all ten titles", () => {
     const keys: SetupStepView["key"][] = [
       "account", "branding", "hours", "voice_profile", "website_assistant", "number",
       "email", "forwarding", "test_call", "go_live",
@@ -71,6 +74,15 @@ describe("SetupRail numbering", () => {
     ]) {
       expect(text).toContain(title);
     }
-    expect(visibleNumbers(html).slice(0, 3)).toEqual(["01", "02", "03"]);
+    // MUTATION: in setup-rail.ts's `railKindOf`, drop the `isLockedStep`
+    // promotion (`return kind;` unconditionally) -- this FAILS: with no
+    // step ever reading `locked`, website_assistant/test_call/go_live fall
+    // back to rendering their own numbers too (05, 09, 10), producing all
+    // ten "01".."10" instead of the seven-number gapped list below. Indexing
+    // into the full `SETUP_STEP_KEYS` instead of this caller's own `views`
+    // (the CRM-only fixture's mutation above) can NOT be caught here: this
+    // fixture's `views` already IS `SETUP_STEP_KEYS` in the same order, so
+    // both indexing strategies agree.
+    expect(visibleNumbers(html)).toEqual(["01", "02", "03", "04", "06", "07", "08"]);
   });
 });
