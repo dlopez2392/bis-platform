@@ -95,6 +95,19 @@ describe("the SIP handoff signature", () => {
     }
   });
 
+  it("signs 8 to 15 digits — the range e164Of can produce — and nothing outside it (mutation: widen DIGITS to 7 → FAILS)", async () => {
+    const { e164Of } = await import("./phone-number");
+    // sip-headers' regex captures 7 digits, but every capture goes through
+    // e164Of, which never yields fewer than 8: no routed number is 7 digits.
+    expect(e164Of("+1234567")).toBeNull();
+    expect(signSipHandoff(TOKEN, "+1234567", CALLER, NOW, ENV)).toBeNull();
+    expect(signSipHandoff(TOKEN, "+1234567890123456", CALLER, NOW, ENV)).toBeNull();
+    for (const called of ["+12345678", "+123456789012345"]) {
+      const v = signSipHandoff(TOKEN, called, CALLER, NOW, ENV)!;
+      expect(verifySipHandoff(v, TOKEN, NOW, ENV)).toEqual({ ok: true, calledE164: called, callerE164: CALLER });
+    }
+  });
+
   it("refuses to sign what it could not verify", () => {
     expect(signSipHandoff("", CALLED, CALLER, NOW, ENV)).toBeNull();
     expect(signSipHandoff(TOKEN, "19565550100", CALLER, NOW, ENV)).toBeNull();

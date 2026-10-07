@@ -44,6 +44,15 @@ function key(env: NodeJS.ProcessEnv): Buffer | null {
   return createHash("sha256").update(`bis-voice-sip-handoff:${secret}`).digest();
 }
 
+/** True when `VOICE_HANDOFF_SECRET` is usable (set, at least the minimum length). */
+export function sipHandoffSecretConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return key(env) !== null;
+}
+
+// 8–15 digits: exactly what `e164Of` can produce, and every number either
+// side signs or routes on has been through it. `sip-headers.ts`'s regex
+// captures from 7, but a 7-digit capture comes back null from `e164Of`
+// (pinned in its own test), so no routable call is narrower than this.
 const DIGITS = /^[0-9]{8,15}$/;
 
 function mac(k: Buffer, handoffToken: string, payload: string): string {

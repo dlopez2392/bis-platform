@@ -1181,6 +1181,40 @@ describe("the TeXML-route signature on the SIP dial (X-BIS-Signature)", () => {
     expect(sipParams(xml).get("X-BIS-Signature")).toBeTruthy();
   });
 
+  it("secret set but the request NOT Telnyx-signed: an error line naming the gap, and voice.texml stamped not-ok — the call is still bridged (mutation: drop the stamp → FAILS)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const xml = await (await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(TO)}&From=${encodeURIComponent(FROM)}`))).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("X-BIS-Signature");
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("VOICE_HANDOFF_ENFORCE would decline"));
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.texml",
+      { ok: false, error: "VOICE_HANDOFF_SECRET is set but TeXML requests are not Telnyx-signed, so calls carry no signature" });
+  });
+
+  it("secret set and the request signed: one ok stamp, no error line", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await telnyxSigned({ To: TO, From: FROM });
+    expect(err).not.toHaveBeenCalled();
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.texml", { ok: true });
+  });
+
+  it("no secret and an unauthenticated request is today's unhardened mode, not an error (mutation: warn whenever unsigned → FAILS)", async () => {
+    delete process.env.VOICE_HANDOFF_SECRET;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(TO)}&From=${encodeURIComponent(FROM)}`));
+    expect(err).not.toHaveBeenCalled();
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.texml", { ok: true });
+  });
+
+  it("an unauthenticated REFUSAL dials nobody, so it is not the gap: ok stamp (mutation: flag before the routing decision → FAILS)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    lookupMock.mockResolvedValue(null);
+    await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(TO)}&From=${encodeURIComponent(FROM)}`));
+    expect(err).not.toHaveBeenCalled();
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.texml", { ok: true });
+  });
+
   it("a refusal carries no dial and so no signature", async () => {
     lookupMock.mockResolvedValue(null);
     const xml = await (await telnyxSigned({ To: TO, From: FROM })).text();

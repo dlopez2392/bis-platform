@@ -132,7 +132,10 @@ key first and "flip the method after."
    calls failing while you investigate.
 
 **Rollback:** remove `TELNYX_PUBLIC_KEY` from Vercel and redeploy.
-Optionally also flip the TeXML app's Voice Method back to GET — not
+**If `VOICE_HANDOFF_ENFORCE` is set, remove it FIRST and redeploy, or every
+call is declined** — without the key, TeXML requests are no longer
+Telnyx-signed, so no call carries the signature the SIP webhook enforces (see
+"VOICE_HANDOFF_SECRET — call-origin check" below). Optionally also flip the TeXML app's Voice Method back to GET — not
 required (POST without the key set is exactly as safe as GET, just still
 unauthenticated), but it keeps the two systems' configuration matched if
 you're stepping away from hardening for a while rather than actively
@@ -150,13 +153,28 @@ verifies it before it looks anything up. Needs `TELNYX_PUBLIC_KEY` set
 (only Telnyx-signed TeXML requests are signed). Merging the code changes
 nothing; these steps turn it on:
 
+0. **Precondition — the TeXML route must be in hardened mode.** Check all
+   three; if any fails, finish the `TELNYX_PUBLIC_KEY` activation procedure
+   above first:
+   - Vercel → bis-platform → Settings → Environment Variables → Production
+     lists `TELNYX_PUBLIC_KEY`, and the latest Production deployment is newer
+     than it.
+   - Telnyx portal → TeXML Applications → `BIS Platform Voice` → Voice
+     Method reads **POST**.
+   - `curl -i https://app.bis-rgv.com/api/voice/texml` answers
+     **405** (a GET answers 405 only while the key is set; anything else
+     means the key is not live).
 1. Generate a secret: `openssl rand -base64 48`. In Vercel → bis-platform →
    Production, add `VOICE_HANDOFF_SECRET` as **Sensitive**, then redeploy.
 2. Place a test call to a real number. The `/api/voice/incoming` log must
    read `TeXML-route signature checked (not enforced) { result: 'ok',
    calledMatches: true, callerMatches: true }`. Anything else (`absent`,
    `malformed`, `bad-signature`, `expired`, or `callerMatches: false`):
-   STOP, do not enforce, and read the reason.
+   STOP, do not enforce, and read the reason. Also check the
+   `/api/voice/texml` log for that call: the line `texml: VOICE_HANDOFF_SECRET
+   is set but this request was not Telnyx-signed` (with a `voice.texml`
+   heartbeat error) means step 0 does not hold — enforcing would decline
+   every call.
 3. Add `VOICE_HANDOFF_ENFORCE=1` (plain) and redeploy. From now on a call
    without a valid signature is declined (`declined: "unverified"`), and the
    tenant and caller come only from the signed values.
@@ -165,8 +183,8 @@ nothing; these steps turn it on:
    person mid-call.
 
 Rollback: remove `VOICE_HANDOFF_ENFORCE` and redeploy (back to check-only).
-Never remove the secret while enforcement is on: every call would be
-declined.
+Never remove the secret, or `TELNYX_PUBLIC_KEY`, while enforcement is on:
+every call would be declined.
 
 ## Step 4 — Buy a TEST number and assign it
 
