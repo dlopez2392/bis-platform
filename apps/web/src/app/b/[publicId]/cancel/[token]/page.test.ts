@@ -5,14 +5,22 @@ const { lookupBookingByTokenMock, getBrandingMock } = vi.hoisted(() => ({
   getBrandingMock: vi.fn(),
 }));
 vi.mock("./actions", () => ({ lookupBookingByToken: lookupBookingByTokenMock }));
+// `page.tsx`'s own `loadTimezone` calls `serviceDb().from("accounts")...`
+// directly — the component-render tests below need a `serviceDb()` that
+// actually answers that one chained call.
+const fakeDb = {
+  from: () => ({ select: () => ({ eq: () => ({
+    maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }),
+  }) }) }),
+};
 vi.mock("@bis/db", () => ({
-  serviceDb: () => ({}),
+  serviceDb: () => fakeDb,
   getBranding: getBrandingMock,
   brandLogoUrl: () => null,
   brandDisplayName: (b: { brandName: string | null }) => b.brandName?.trim() || "",
 }));
 
-import { generateMetadata } from "./page";
+import CancelBookingPage, { generateMetadata } from "./page";
 
 const BOOKING = { id: "bk1", account_id: "a1", calendar_id: "cal1", contact_id: "c1",
   starts_at: "2026-10-10T15:00:00Z", ends_at: "2026-10-10T16:00:00Z", status: "confirmed",
@@ -68,5 +76,33 @@ describe("/b/[publicId]/cancel/[token] metadata (F-102 — the title was always 
         params: Promise.resolve({ publicId: "pub1", token: "tok123" }), searchParams: noSearchParams,
       }),
     ).resolves.toEqual({ robots: { index: false, follow: false } });
+  });
+});
+
+// F-102 review round, second pass (item 2): removing `lang={locale}` from
+// this element left every test in this file (9) green — nothing asserted
+// it. This is the fix that actually clears defect :881 at the element
+// level for the normal case (a real confirmation/reminder email link).
+describe("CancelBookingPage <main lang>", () => {
+  beforeEach(() => {
+    lookupBookingByTokenMock.mockResolvedValue(BOOKING);
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+  });
+
+  it("defaults to en when ?locale is absent", async () => {
+    const el = await CancelBookingPage({
+      params: Promise.resolve({ publicId: "pub1", token: "tok123" }), searchParams: noSearchParams,
+    });
+    // MUTATION: drop `lang={locale}` from <main> in page.tsx -- this FAILS
+    // (`el.props.lang` is `undefined`).
+    expect(el.props.lang).toBe("en");
+  });
+
+  it("carries ?locale=es — the SAME override a confirmation email's link carries", async () => {
+    const el = await CancelBookingPage({
+      params: Promise.resolve({ publicId: "pub1", token: "tok123" }),
+      searchParams: Promise.resolve({ locale: "es" }),
+    });
+    expect(el.props.lang).toBe("es");
   });
 });

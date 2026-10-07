@@ -6,15 +6,24 @@ const { getCalendarByPublicIdMock, getBrandingMock } = vi.hoisted(() => ({
   getCalendarByPublicIdMock: vi.fn(),
   getBrandingMock: vi.fn(),
 }));
+// `page.tsx`'s own `loadTimezone` calls `serviceDb().from("accounts")...`
+// directly (not through a mocked accessor), unlike `loadCalendarSafe`'s
+// `getCalendarByPublicId` — so the component-render tests below need a
+// `serviceDb()` that actually answers that one chained call.
+const fakeDb = {
+  from: () => ({ select: () => ({ eq: () => ({
+    maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }),
+  }) }) }),
+};
 vi.mock("@bis/db", () => ({
-  serviceDb: () => ({}),
+  serviceDb: () => fakeDb,
   getCalendarByPublicId: getCalendarByPublicIdMock,
   getBranding: getBrandingMock,
   brandLogoUrl: () => null,
   brandDisplayName: (b: { brandName: string | null }) => b.brandName?.trim() || "",
 }));
 
-import { generateMetadata } from "./page";
+import PublicBookingPage, { generateMetadata } from "./page";
 
 const CALENDAR = { id: "cal1", account_id: "a1", enabled: true, max_advance_days: 30 };
 const noSearchParams = Promise.resolve({});
@@ -74,5 +83,36 @@ describe("/b/[publicId] metadata (F-102, defect :870 — the tab title was alway
     await expect(
       generateMetadata({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams }),
     ).resolves.toEqual({ robots: { index: false, follow: false } });
+  });
+});
+
+// F-102 review round, second pass (item 2): removing `lang={locale}` from
+// this element left every test in this file (9) green — nothing asserted
+// it. `<html lang>` (`app/b/layout.tsx`) is always "en" (no per-document
+// default to read), so this element is the ONLY place a `?locale=`
+// override — the exact signal defect :881's confirmation-email links and
+// `embed.js`'s `data-locale` carry — reaches the first server-rendered HTML.
+describe("PublicBookingPage <main lang>", () => {
+  beforeEach(() => {
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-only-key");
+    getCalendarByPublicIdMock.mockResolvedValue(CALENDAR);
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+  });
+
+  it("defaults to en when ?locale is absent", async () => {
+    const el = await PublicBookingPage({
+      params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams,
+    });
+    // MUTATION: drop `lang={locale}` from <main> in page.tsx -- this FAILS
+    // (`el.props.lang` is `undefined`).
+    expect(el.props.lang).toBe("en");
+  });
+
+  it("carries ?locale=es", async () => {
+    const el = await PublicBookingPage({
+      params: Promise.resolve({ publicId: "abc123" }),
+      searchParams: Promise.resolve({ locale: "es" }),
+    });
+    expect(el.props.lang).toBe("es");
   });
 });

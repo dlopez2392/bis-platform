@@ -28,11 +28,11 @@ import PublicFormPage, { generateMetadata } from "./page";
 
 const FIELDS = [{ key: "name", kind: "core.first_name" as const, label: "Name", required: false }];
 
-function form(status: "draft" | "published" | "archived") {
+function form(status: "draft" | "published" | "archived", localeDefault: "en" | "es" = "en") {
   return {
     id: "f1", account_id: "a1", public_id: "abc123", name: "N", status,
     fields: FIELDS, theme: {}, success_mode: "message" as const, success_message: null,
-    redirect_url: null, notify_emails: [], locale_default: "en" as const,
+    redirect_url: null, notify_emails: [], locale_default: localeDefault,
     created_at: "", updated_at: "",
   };
 }
@@ -74,6 +74,34 @@ describe("PublicFormPage (F-102 review round, fix 2)", () => {
     });
     expect(el.type).toBe("main");
     expect(el.props.className).toBe("bis-form-page");
+  });
+
+  // F-102 review round, second pass (item 2): removing `lang={locale}`
+  // from this element left every test in this file (5) green — nothing
+  // asserted it. `<html lang>` (`layout.tsx`) carries the FORM's default,
+  // not a `?locale=` override, so this element is the one place the
+  // override actually reaches the first server-rendered HTML.
+  it("carries lang on <main>, matching the form's own locale_default", async () => {
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-only-key");
+    getFormByPublicIdMock.mockResolvedValue(form("published", "es"));
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+    const el = await PublicFormPage({
+      params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams,
+    });
+    // MUTATION: drop `lang={locale}` from <main> in page.tsx -- this FAILS
+    // (`el.props.lang` is `undefined`).
+    expect(el.props.lang).toBe("es");
+  });
+
+  it("carries lang on <main>, honoring a ?locale= override the form's own default disagrees with", async () => {
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-only-key");
+    getFormByPublicIdMock.mockResolvedValue(form("published", "en"));
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+    const el = await PublicFormPage({
+      params: Promise.resolve({ publicId: "abc123" }),
+      searchParams: Promise.resolve({ locale: "es" }),
+    });
+    expect(el.props.lang).toBe("es");
   });
 });
 

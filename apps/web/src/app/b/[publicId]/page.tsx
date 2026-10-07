@@ -45,10 +45,15 @@ function pad(n: number): string {
 // discoverable destination.
 //
 // The title (F-102, defect :870) is set only for the live case; a disabled
-// or unknown calendar falls through to `app/b/[publicId]/layout.tsx`'s own
-// brand-aware fallback (F-102 review round, fix 6) — not all the way to the
-// ROOT `app/b/layout.tsx`'s static "Booking", which is now the last resort
-// only if the segment layout's own read also fails.
+// or unknown calendar falls through all the way to the ROOT `app/b/layout.tsx`'s
+// static "Booking" default. A non-root segment layout briefly computed a
+// brand-aware fallback title here instead (F-102 review round, fix 6) —
+// REMOVED (owner decision, second review round): it never actually
+// branded the not-found PAGE (notFound() is caught by `app/b/not-found.tsx`,
+// above this segment, which replaces it — the title changed but the brand
+// chrome never rendered) and cost a real query on every cancel request for
+// a benefit that didn't exist. See `app/b/[publicId]/data.ts`'s own comment
+// for the full writeup. `/b`'s not-found stays NEUTRAL, title included.
 //
 // Uses `loadCalendarSafe`, NOT the page component's own `loadCalendar`
 // below (F-102 review round, fix 1) — see `app/f/[publicId]/page.tsx`'s
@@ -94,8 +99,8 @@ export default async function PublicBookingPage({
   // A disabled calendar, an archived one and a token that never existed are
   // all the same HTTP STATUS (404) — `getCalendarByPublicId` deliberately
   // leaves `enabled` for this caller to check (via `isCalendarLive`, so
-  // `app/b/[publicId]/layout.tsx` can apply the identical check against the
-  // SAME cached row), the same split `getPublishedFormByPublicId` draws for
+  // `generateMetadata` above applies the identical check against the SAME
+  // cached row), the same split `getPublishedFormByPublicId` draws for
   // `status`. Status parity is not look parity — see that function's doc.
   if (!calendar || !isCalendarLive(calendar)) notFound();
 

@@ -78,6 +78,16 @@ async function loadTimezone(accountId: string): Promise<string> {
 // own `tabTitle*` — "Cancel your visit with Acme" is a different sentence
 // from "Book with Acme", and `publicTabTitle` is shape-generic over whichever
 // `{with,no}Brand` pair it is handed.
+//
+// For an unknown token, this returns NO `title` key at all (just `robots`),
+// so a bad/stale cancel link's tab falls all the way through to the ROOT
+// `app/b/layout.tsx`'s static "Booking" — generic, but never the WRONG
+// "Book with <business>" wording a sibling route's own `generateMetadata`
+// might otherwise suggest (F-102 review round, second pass): the booking
+// page's `generateMetadata` is scoped to the SEPARATE `/b/[publicId]` route
+// and never applies to this one. There is no longer a `[publicId]`-level
+// segment layout between this page and the root to inject anything else —
+// see `app/b/[publicId]/data.ts`'s comment for why that was removed.
 export async function generateMetadata(
   { params, searchParams }: {
     params: Promise<{ publicId: string; token: string }>;

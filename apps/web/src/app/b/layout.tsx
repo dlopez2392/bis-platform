@@ -44,6 +44,14 @@ export const metadata: Metadata = {
  * `bookings`, or a deliberately re-reviewed carve-out in `proxy.ts`, which
  * `proxy.test.ts` currently pins shut for `/b`, `/f`, `/c` and `/u` as a
  * whole — see that file's own mutation note before touching it).
+ *
+ * `/b`'s not-found page (`app/b/not-found.tsx`) is plainly NEUTRAL —
+ * localized and token-routed, but never carrying the account's logo or
+ * colour the way `/f`'s and `/c`'s do. A non-root segment layout once
+ * attempted that branding and was removed after a reviewer proved it never
+ * actually worked (see `app/b/not-found.tsx`'s and
+ * `app/b/[publicId]/data.ts`'s comments for the full writeup) — branded
+ * `/b` dead ends are a separate, tracked defect, not an open item here.
  */
 export default function PublicBookingLayout({
   children,
