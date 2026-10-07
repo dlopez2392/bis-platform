@@ -9,6 +9,7 @@ loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
 
 const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
+const AGENCY_FIXTURE_FILE = "e2e/.auth/agency-fixture.json";
 
 type ClientFixture = {
   accountId: string;
@@ -91,5 +92,19 @@ teardown("delete the client-access e2e fixture", async () => {
     await clerk.users.deleteUser(fixture.clerkUserId);
   } catch (e) {
     console.error(`e2e teardown: failed to delete Clerk user ${fixture.clerkUserId}: ${String(e)}`);
+  }
+});
+
+// The per-run agency user auth.setup.ts mints. A Clerk user and nothing else:
+// its one org membership is in the SEEDED org, which this run did not create
+// and must not delete, and deleting the user removes the membership with it.
+teardown("delete the agency e2e user", async () => {
+  if (!existsSync(AGENCY_FIXTURE_FILE)) return;
+  const { clerkUserId } = JSON.parse(readFileSync(AGENCY_FIXTURE_FILE, "utf-8")) as { clerkUserId: string };
+  try {
+    const clerk = await clerkClient();
+    await clerk.users.deleteUser(clerkUserId);
+  } catch (e) {
+    console.error(`e2e teardown: failed to delete agency Clerk user ${clerkUserId}: ${String(e)}`);
   }
 });

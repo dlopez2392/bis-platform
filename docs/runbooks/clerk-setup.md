@@ -273,12 +273,19 @@ them.
 
 ## Part H — e2e (a decision, not a step)
 
-`apps/web/e2e/auth.setup.ts` signs in as the one real Clerk user
-(`danlopez508@gmail.com`, overridable via `E2E_ADMIN_EMAIL`) and then creates
-its **own** per-run client user and org through the Clerk Backend API. It only
-ever reads `Test Client One` through the agency path, which matches on
-`is_agency()` and never on `org_id` — so the suite does not depend on Test
-Client One's org id at all.
+`apps/web/e2e/auth.setup.ts` creates its **own** per-run identities through
+the Clerk Backend API and deletes them in teardown: an agency user
+(`e2e-agency-<stamp>@example.com`, `public_metadata.app_role =
+"agency_admin"`) and a client user and org (`e2e-client-<stamp>@example.com`).
+Both sign in by a ticket minted for the user id, never by an email lookup.
+**Until 2026-10-07 the agency identity was the one real person on the
+instance (`danlopez508@gmail.com`)**, so ending that person's sessions ended
+CI mid-run (PR #188, 18:00:02 UTC); the per-run user shares no session with
+anyone. It needs no dashboard setup: the session-token template in Part A
+renders `app_role` from each user's own metadata. It joins Test Client One's
+org (read from the seeded account row) and makes it active, as the person's
+session did, only so `<ActivateSoleOrganization/>` never fires mid-spec; the
+agency path itself matches on `is_agency()` and never on `org_id`.
 
 That means either option works:
 
