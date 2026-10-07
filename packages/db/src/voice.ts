@@ -549,57 +549,6 @@ export async function countCallerHistorySince(
   return { spamCalls: spam.count ?? 0, otherCalls: other.count ?? 0 };
 }
 
-/**
- * Raw `started_at` instants in `[fromIso, toIso)` for the dashboard's 14-day
- * call chart — bucketing (day boundaries, timezone) happens in JS on the
- * caller side, not here. Daily caps are 50/day, so a 14-day window is at
- * most ~700 rows; no pagination needed.
- */
-/**
- * Every call's OUTCOME in a window — the twin of `listCallStartsBetween`
- * below, which returns `started_at` values only and therefore cannot answer
- * "how many calls were answered".
- *
- * Half-open `[from, to)` exactly like its twin, deliberately: the weekly
- * report counts calls and classifies them from these two functions, and a
- * disagreement about which instant belongs to a week would put a call in one
- * number and not the other.
- *
- * Returns outcomes rather than counting server-side because the caller needs
- * two different tallies from one read — answered and leads (`lead`) — and a
- * second round trip to count each would cost more than carrying a few short
- * strings.
- *
- * WHICH OUTCOMES COUNT AS ANSWERED IS NOT DECIDED HERE, and this comment
- * named the set until 2026-09-16, when the handoff feature widened it to four
- * (`booked`/`lead`/`message`/`transferred` — a caller who reached a person
- * was answered by any honest reading) and left the sentence behind. The one
- * definition lives in `ANSWERED_OUTCOMES`
- * (apps/web/src/lib/reports/weekly-metrics.ts) with its own test; this
- * function's job is to hand over every outcome in the window and let that set
- * decide.
- */
-export async function listCallOutcomesBetween(
-  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
-): Promise<string[]> {
-  const { data, error } = await db.from("calls")
-    .select("outcome")
-    .eq("account_id", accountId).gte("started_at", fromIso).lt("started_at", toIso);
-  if (error) throw new Error(`listCallOutcomesBetween failed: ${error.message}`);
-  return (data ?? []).map((r: { outcome: string }) => r.outcome);
-}
-
-export async function listCallStartsBetween(
-  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
-): Promise<string[]> {
-  const { data, error } = await db.from("calls")
-    .select("started_at")
-    .eq("account_id", accountId).gte("started_at", fromIso).lt("started_at", toIso)
-    .order("started_at", { ascending: true });
-  if (error) throw new Error(`listCallStartsBetween failed: ${error.message}`);
-  return (data ?? []).map((r: { started_at: string }) => r.started_at);
-}
-
 const CALL_OUTCOME_STARTS_PAGE_SIZE = 1000;
 
 /**
@@ -630,9 +579,8 @@ function excludeCallersFilter(callers: readonly string[]): string | null {
  * literal filtered in here, so this can never define "lead" (or any other
  * outcome set) differently than the caller that owns that definition —
  * weekly-metrics.ts passes its own `LEAD_OUTCOME` constant, never a second
- * `"lead"` string that could drift from it. Filtered server-side (unlike
- * `listCallOutcomesBetween` above, which hands back every outcome for the
- * caller to filter in JS) and paged by id for the same reason
+ * `"lead"` string that could drift from it. Filtered server-side and paged
+ * by id for the same reason
  * `sumOpenOpportunities`/`listSubmissionCreationsBetween` are: an unpaged
  * row-returning read silently truncates at PostgREST's row cap once an
  * account crosses it in one window, even a narrower one than "every call".
