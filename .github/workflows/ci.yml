@@ -280,10 +280,10 @@ jobs:
           exit 1
 
       # playwright.config.ts builds and starts the production server itself
-      # (`pnpm build && pnpm start`), signs in as the agency admin through a
-      # Clerk sign-in token, creates a per-run fixture client, runs every
-      # spec serially, and deletes the fixture in teardown. Stale fixtures a
-      # killed run left behind are swept at the top of the next run.
+      # (`pnpm build && pnpm start`), creates a per-run agency user and a
+      # per-run fixture client and signs each in with a Clerk sign-in ticket,
+      # runs every spec serially, and deletes both in teardown. Stale fixtures
+      # a killed run left behind are swept at the top of the next run.
       #
       # NO TRACE UPLOAD, on purpose (2026-10-07). This repo is public, so its
       # Actions artifacts are downloadable by any signed-in GitHub user, and a

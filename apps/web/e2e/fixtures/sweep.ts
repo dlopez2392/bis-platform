@@ -180,7 +180,9 @@ export async function sweepClerkUsers(
 ): Promise<void> {
   try {
     const users = await fetchAllPages((page) =>
-      clerk.users.getUserList({ query: "e2e-client-", ...page }));
+      // A server-side prefilter only; FIXTURE_EMAIL_RE below decides. One
+      // query covers both minted users (e2e-client-… and e2e-agency-…).
+      clerk.users.getUserList({ query: "e2e-", ...page }));
     for (const user of users) {
       const email = user.emailAddresses[0]?.emailAddress ?? "";
       if (!isStaleFixture(email, FIXTURE_EMAIL_RE, now, maxAgeMs)) continue;

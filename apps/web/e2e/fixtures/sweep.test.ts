@@ -113,7 +113,7 @@ describe("sweepClerkOrgs", () => {
 
 describe("sweepClerkUsers", () => {
   /** Same two-page shape as fakeOrgs, for the user list's own query param
-   *  (`query: "e2e-client-"`) and email-keyed staleness. */
+   *  (`query: "e2e-"`) and email-keyed staleness. */
   function fakeUsers(staleCount: number) {
     const stale = Array.from({ length: staleCount }, (_, i) => ({
       id: `user_stale_${i}`,
@@ -148,8 +148,8 @@ describe("sweepClerkUsers", () => {
 
     await sweepClerkUsers(clerk, report, NOW, STALE_AFTER_MS, false);
 
-    expect(getUserList).toHaveBeenCalledWith({ query: "e2e-client-", limit: 100, offset: 0 });
-    expect(getUserList).toHaveBeenCalledWith({ query: "e2e-client-", limit: 100, offset: 100 });
+    expect(getUserList).toHaveBeenCalledWith({ query: "e2e-", limit: 100, offset: 0 });
+    expect(getUserList).toHaveBeenCalledWith({ query: "e2e-", limit: 100, offset: 100 });
     expect(report.clerkUsers).toHaveLength(150);
     expect(deleted).toHaveLength(150);
     expect(deleted).not.toContain("user_fresh");

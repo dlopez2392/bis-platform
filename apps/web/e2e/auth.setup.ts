@@ -1,5 +1,5 @@
 import { clerk, clerkSetup } from "@clerk/testing/playwright";
-import { test as setup } from "@playwright/test";
+import { test as setup, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
@@ -8,6 +8,7 @@ import { serviceDb, createAccount, setClientAccess, createContact,
 import { sweepStaleFixtures, formatSweepReport } from "./fixtures/sweep";
 import { refuseProduction } from "./fixtures/production-guard";
 import { saveSignedInState } from "./fixtures/session-state";
+import { SEEDED_ACCOUNT_NAME } from "./support";
 
 // Needed for the client-fixture setup below, which calls serviceDb() and
 // clerkClient() directly from the Playwright test runner process (not
@@ -39,6 +40,48 @@ const CLIENT_AUTH_FILE = "e2e/.auth/client-state.json";
 // project has no test filter, so this fixture is created on every
 // invocation regardless, and a filtered run used to leak it.
 const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
+// The same sidecar idea for the per-run agency user below: auth.teardown.ts
+// reads it to delete that user, whether or not any spec ran.
+const AGENCY_FIXTURE_FILE = "e2e/.auth/agency-fixture.json";
+
+type ClerkBackend = Awaited<ReturnType<typeof clerkClient>>;
+
+/**
+ * Sign `userId` in on `page` with a ticket minted for that id, never a
+ * lookup by email. `clerk.signIn({ emailAddress })` resolves the email
+ * through `users.getUserList`, a search that can lag a user created a second
+ * ago, and on 2026-10-07 it did: "No user found with email e2e-client-..."
+ * failed the setup project before one spec ran. This is the same ticket
+ * strategy @clerk/testing uses internally after its search, minus the
+ * search; its `signInParams` path does not wait for the session the way its
+ * email path does, so the wait is here.
+ */
+async function signInWithTicket(page: Page, clerk_: ClerkBackend, userId: string): Promise<void> {
+  await page.goto("/sign-in");
+  const { token: ticket } = await clerk_.signInTokens.createSignInToken({ userId, expiresInSeconds: 300 });
+  await clerk.signIn({ page, signInParams: { strategy: "ticket", ticket } });
+  await page.waitForFunction(
+    () => Boolean((window as unknown as { Clerk?: { user?: unknown } }).Clerk?.user),
+  );
+}
+
+/**
+ * Make `organizationId` this session's active organization, the same call
+ * Clerk's own <OrganizationSwitcher/> makes. Nothing else sets it: the
+ * instance's force_organization_selection is off, so no "Choose an
+ * organization" task does it during sign-in.
+ */
+async function setActiveOrganization(page: Page, organizationId: string): Promise<void> {
+  await page.evaluate(async (orgId) => {
+    const clerkGlobal = (
+      window as unknown as {
+        Clerk?: { setActive(params: { organization: string }): Promise<void> };
+      }
+    ).Clerk;
+    if (!clerkGlobal) throw new Error("e2e setup: window.Clerk did not load");
+    await clerkGlobal.setActive({ organization: orgId });
+  }, organizationId);
+}
 
 // A real 24x24 solid-blue PNG, built chunk by chunk with valid CRCs. Genuine
 // bytes on purpose: the upload path identifies format by decoded magic bytes,
@@ -50,40 +93,58 @@ const E2E_LOGO_PNG = Buffer.from(
   "base64",
 );
 
-// Runs once before the real specs. Signs in as the one real Clerk user on
-// this dev instance (danlopez508@gmail.com) via a Backend-API-minted
-// sign-in token — no password, no email code, and critically no user is
-// created or modified. That user already carries
-// public_metadata.app_role = "agency_admin" (set by hand in the Clerk
-// Dashboard outside of this codebase), which is what requireAgency()
-// checks for in the session claims.
+// Runs once before the real specs: mints a throwaway agency user for THIS
+// run and signs it in. Until 2026-10-07 the suite signed in as the one real
+// person on this dev instance (danlopez508@gmail.com), so anything that
+// ended that person's sessions ended CI with them: PR #188's run lost the
+// session at 18:00:02 UTC, Clerk's handshake answered __client_uat=0, and
+// every signed-in spec after it rendered the sign-in page. A per-run user
+// shares no session with a person or with a concurrent run.
+//
+// Agency status is ONE claim: app_role === "agency_admin" (lib/auth.ts,
+// app.is_agency() in RLS), rendered into the session token from
+// {{user.public_metadata.app_role}} by the instance's token template
+// (docs/runbooks/clerk-setup.md, Part A). No org is needed for agency
+// access. The user still joins the seeded org and makes it active, exactly
+// as the real person's session did: <ActivateSoleOrganization/> switches a
+// session with no active org and exactly ONE membership and reloads to "/",
+// and blueprints.spec.ts creates an org mid-spec ("Add company" makes the
+// creator a member), which would hand a member-of-nothing user exactly one.
+// Deleted by auth.teardown.ts; a leaked one is swept by its email stamp.
 setup("authenticate as agency_admin", async ({ page }) => {
   await clerkSetup();
+  const clerk_ = await clerkClient();
 
-  const email = process.env.E2E_ADMIN_EMAIL ?? "danlopez508@gmail.com";
+  const stamp = Date.now();
+  const email = `e2e-agency-${stamp}@example.com`;
+  const user = await clerk_.users.createUser({
+    emailAddress: [email],
+    firstName: "E2E",
+    lastName: "Agency",
+    skipPasswordRequirement: true,
+    skipLegalChecks: true,
+    publicMetadata: { app_role: "agency_admin" },
+  });
+  // Recorded before anything else can fail, so teardown always has the id.
+  mkdirSync("e2e/.auth", { recursive: true });
+  writeFileSync(AGENCY_FIXTURE_FILE, JSON.stringify({ clerkUserId: user.id, email }));
 
-  await page.goto("/sign-in");
-  await clerk.signIn({ page, emailAddress: email });
-  await page.goto("/dashboard/accounts");
-
-  // This Clerk dev instance now enforces organization selection as a
-  // pending session task whenever the signed-in user belongs to one or more
-  // organizations and this (fresh, cookie-less) browser context has no
-  // active org yet — middleware redirects to a real, clickable
-  // "Choose an organization" screen (Clerk's own <SignIn/> component,
-  // mounted at the /sign-in catch-all) instead of the target route. The
-  // redirect to /sign-in/tasks (and on from there to
-  // /sign-in/tasks/choose-organization) happens client-side after the initial
-  // goto's load event, so page.url() has to be waited on, not read
-  // immediately. This dev user's only organization is "Test Client One", the
-  // fixture account every other spec assumes exists.
-  await page.waitForURL(
-    (url) => url.pathname === "/dashboard/accounts" || url.pathname.startsWith("/sign-in/tasks"),
-  );
-  if (page.url().includes("/sign-in/tasks")) {
-    await page.getByRole("button", { name: /Test Client One/ }).click();
+  // The seeded account's org, read from the account row rather than pinned
+  // here: one source (the CI seed), no second copy of the id to drift.
+  const { data: seeded, error } = await serviceDb()
+    .from("accounts").select("clerk_org_id").eq("name", SEEDED_ACCOUNT_NAME).limit(2);
+  if (error) throw new Error(`agency setup: reading ${SEEDED_ACCOUNT_NAME} failed: ${error.message}`);
+  const organizationId = seeded?.length === 1 ? seeded[0]?.clerk_org_id : undefined;
+  if (!organizationId) {
+    throw new Error(`agency setup: expected exactly one ${SEEDED_ACCOUNT_NAME} with a Clerk org, found ${seeded?.length ?? 0}`);
   }
+  await clerk_.organizations.createOrganizationMembership({
+    organizationId, userId: user.id, role: "org:member",
+  });
 
+  await signInWithTicket(page, clerk_, user.id);
+  await setActiveOrganization(page, organizationId);
+  await page.goto("/dashboard/accounts");
   await page.waitForURL(/\/dashboard\/accounts$/);
 
   // Without the 60-second session token: every spec's first page load then
@@ -237,29 +298,14 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
                     contactName, brandName, brandLogoPath, brandColor, formPublicId }),
   );
 
-  // Same ticket-based sign-in as the agency flow above: clerk.signIn looks
-  // the user up by email via the Backend API and mints a real sign-in
-  // token — no password, no email code, and no second user is created.
-  await page.goto("/sign-in");
-  await clerk.signIn({ page, emailAddress: email });
+  // By ticket, for the id already in hand: see signInWithTicket.
+  await signInWithTicket(page, clerk_, user.id);
 
-  // force_organization_selection is now false (Task 3), so unlike the
-  // agency flow above, no "Choose an organization" task screen interrupts
-  // sign-in — but that also means nothing sets this session's active
-  // organization automatically. Without an active org, the session token
-  // carries no org_id claim, and every guard in lib/auth.ts that reads
-  // claims.org_id would treat this user as unlinked rather than as this
-  // account's client. Set it explicitly, the same call Clerk's own
-  // <OrganizationSwitcher/> makes when a user picks an org.
-  await page.evaluate(async (organizationId) => {
-    const clerkGlobal = (
-      window as unknown as {
-        Clerk?: { setActive(params: { organization: string }): Promise<void> };
-      }
-    ).Clerk;
-    if (!clerkGlobal) throw new Error("client fixture setup: window.Clerk did not load");
-    await clerkGlobal.setActive({ organization: organizationId });
-  }, org.id);
+  // Nothing sets this session's active organization automatically (see
+  // setActiveOrganization). Without one, the session token carries no
+  // org_id claim, and every guard in lib/auth.ts that reads claims.org_id
+  // would treat this user as unlinked rather than as this account's client.
+  await setActiveOrganization(page, org.id);
 
   await page.goto("/");
   await page.waitForLoadState("networkidle");

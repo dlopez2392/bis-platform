@@ -17,6 +17,7 @@ describe("fixtureStamp", () => {
   it("reads the stamp this suite minted the fixture with", () => {
     expect(fixtureStamp(NAME, FIXTURE_ACCOUNT_RE)).toBe(STAMP);
     expect(fixtureStamp(EMAIL, FIXTURE_EMAIL_RE)).toBe(STAMP);
+    expect(fixtureStamp(`e2e-agency-${STAMP}@example.com`, FIXTURE_EMAIL_RE)).toBe(STAMP);
   });
 
   it("refuses anything that is not exactly the fixture shape", () => {
@@ -48,6 +49,10 @@ describe("fixtureStamp", () => {
       // worth pinning.
       `e2e-client-${STAMP}@examplexcom`,
       `x-e2e-client-${STAMP}@example.com`,
+      // Only the two identities the suite mints; any other e2e-* address is
+      // someone else's and is never swept.
+      `e2e-admin-${STAMP}@example.com`,
+      `e2e-agency-${STAMP}@example.com.evil.test`,
     ]) {
       expect(fixtureStamp(value, FIXTURE_EMAIL_RE), value).toBeNull();
     }
