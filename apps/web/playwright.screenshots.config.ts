@@ -29,7 +29,10 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
-    { name: "setup", testMatch: /auth\.setup\.ts/ },
+    // `teardown` deletes the throwaway agency user the setup mints, after
+    // the capture, pass or fail.
+    { name: "setup", testMatch: /auth\.setup\.ts/, teardown: "teardown" },
+    { name: "teardown", testMatch: /auth\.teardown\.ts/ },
     {
       name: "capture",
       testMatch: /capture\.spec\.ts/,
