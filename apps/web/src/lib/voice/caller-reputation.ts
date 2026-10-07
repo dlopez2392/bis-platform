@@ -81,6 +81,29 @@ function exemptList(raw: string | undefined): readonly string[] {
 }
 
 /**
+ * The same handsets, read for the OTHER question they answer: which calls are
+ * the agency testing rather than a customer calling.
+ *
+ * A call from one of these is real to the guard above (it must never be
+ * refused) and fake to every number a client reads — "calls answered", leads,
+ * the Monday report, the topbar's "N calls handled". On 2026-10-06, 13 of the
+ * BIS account's 16 non-spam calls were the owner's own test phone. One env
+ * var, two readings, deliberately: a handset that is "ours" for one purpose is
+ * ours for both, and a second list would drift from the first the day someone
+ * buys a new phone.
+ *
+ * Same parsing as the guard's, so the same safe direction: unset or junk means
+ * nothing is excluded, and every call counts. A value that is not strict
+ * +E.164 is dropped here rather than passed on, because the metrics reads
+ * splice these into a PostgREST filter string (`excludeCallers` in
+ * packages/db's `listCallStartsByOutcomeBetween`) and only digits after a
+ * plus can never change that filter's meaning.
+ */
+export function agencyHandsets(env: NodeJS.ProcessEnv = process.env): readonly string[] {
+  return exemptList(env.PHONE_SPAM_EXEMPT_CALLERS).filter((n) => /^\+[1-9]\d{1,14}$/.test(n));
+}
+
+/**
  * The floor of the rolling window, as an ISO instant.
  *
  * Rolling, NOT a calendar boundary, and this is load-bearing rather than

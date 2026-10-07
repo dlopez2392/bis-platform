@@ -56,7 +56,7 @@ describe("0047 - the recipe catalogue is eight keys", () => {
   });
 });
 
-describe("0047 - the log accepts thirteen sources and no more", () => {
+describe("0047 - the log accepts these thirteen sources (0054 added a fourteenth, 'textback', proved in consent-ledger-schema.test.ts)", () => {
   it("accepts each of the four new sources", async () => {
     await withTestAccount(async (db, accountId) => {
       for (const source of ["appointment_confirm", "referral_ask", "reactivation", "quote_followup"] as const) {
@@ -151,8 +151,8 @@ describe("0047 - the nine columns exist and carry their constraints", () => {
 
 /**
  * THE CATALOGUE CLAIMS — the two CHECK definitions in full, the nine columns,
- * the NINE index names with their partial predicates, and the
- * no-grant-change claim. `withRollback` + raw SQL, because supabase-js goes
+ * the NINE index names with their partial predicates, and the grant
+ * claims. `withRollback` + raw SQL, because supabase-js goes
  * through PostgREST and PostgREST reaches neither `pg_indexes` nor
  * `information_schema.role_table_grants`: a file that advertises an index
  * claim over PostgREST cannot make it.
@@ -165,7 +165,7 @@ describe("0047 - the nine columns exist and carry their constraints", () => {
  * own transaction.
  */
 describe("0047 - the catalogue, read directly", () => {
-  it("both CHECKs list every value, eight keys and thirteen sources, in one read", async () => {
+  it("both CHECKs list every value, eight keys and fourteen sources (0054 added textback), in one read", async () => {
     // The insert cases above prove one value at a time and cannot see a value
     // that was DROPPED and never re-added unless someone thought to test it.
     // This sees the whole list at once. `pg_get_constraintdef` renders an
@@ -183,7 +183,7 @@ describe("0047 - the catalogue, read directly", () => {
         "CHECK ((source = ANY (ARRAY['reminders'::text, 'followups'::text, 'review_request'::text, "
         + "'no_show_nudge'::text, 'sms_reminder'::text, 'instant_reply'::text, 'weekly_report'::text, "
         + "'concierge'::text, 'voice'::text, 'appointment_confirm'::text, 'referral_ask'::text, "
-        + "'reactivation'::text, 'quote_followup'::text])))");
+        + "'reactivation'::text, 'quote_followup'::text, 'textback'::text])))");
       expect(rows[1]!.def).toBe(
         "CHECK ((recipe_key = ANY (ARRAY['review_request'::text, 'no_show_nudge'::text, "
         + "'sms_reminder'::text, 'instant_reply'::text, 'appointment_confirm'::text, "
@@ -287,7 +287,7 @@ describe("0047 - the catalogue, read directly", () => {
     });
   });
 
-  it("changes no grant: bookings keeps NO client UPDATE, and the two control columns keep exactly four", async () => {
+  it("bookings keeps NO client UPDATE, and the two control columns hold exactly INSERT, SELECT, UPDATE (0053)", async () => {
     await withRollback(async (c) => {
       // THE SHARPEST PIN AVAILABLE. `0016_booking.sql:88` revokes UPDATE on
       // bookings from authenticated and never re-grants it, so the client's
@@ -300,22 +300,21 @@ describe("0047 - the catalogue, read directly", () => {
             and table_name = 'bookings' and privilege_type = 'UPDATE'`);
       expect(bookingUpdates).toEqual([]);
 
-      // contacts and opportunities are the OTHER shape, and 0030's own
-      // appended correction is the in-repo proof of it
-      // (`0030_contacts_sort_name.sql:37-49`): these tables carry TABLE-level
-      // grants, and `information_schema.column_privileges` EXPANDS a
-      // table-level grant into one row per column — so a newly added column
-      // appears automatically with the same four privileges every other
-      // column already has. Both sides are written as LITERALS rather than
-      // one compared to the other: two empty sets are also equal.
+      // contacts and opportunities keep TABLE-level INSERT and SELECT, which
+      // `information_schema.column_privileges` EXPANDS into one row per
+      // column (0030's appended correction, `0030_contacts_sort_name.sql:37-49`,
+      // is the in-repo proof of that expansion). Their UPDATE is a column list
+      // (0053, section 5), and REFERENCES is held by no client role on any
+      // public table (0053, section 7). Both sides are written as LITERALS
+      // rather than one compared to the other: two empty sets are also equal.
       const privs = async (table: string, col: string) => (await c.query<{ p: string }>(
         `select privilege_type as p from information_schema.column_privileges
           where grantee = 'authenticated' and table_schema = 'public'
             and table_name = $1 and column_name = $2 order by privilege_type`,
         [table, col])).rows.map((r) => r.p);
-      const FOUR = ["INSERT", "REFERENCES", "SELECT", "UPDATE"];
-      expect(await privs("contacts", "first_name"), "contacts.first_name (the control)").toEqual(FOUR);
-      expect(await privs("opportunities", "name"), "opportunities.name (the control)").toEqual(FOUR);
+      const OPERATOR_FIELD = ["INSERT", "SELECT", "UPDATE"];
+      expect(await privs("contacts", "first_name"), "contacts.first_name (the control)").toEqual(OPERATOR_FIELD);
+      expect(await privs("opportunities", "name"), "opportunities.name (the control)").toEqual(OPERATOR_FIELD);
 
       // THE POSITIVE CONTROL FOR THE EMPTY SET ABOVE (pre-apply review).
       // `expect(bookingUpdates).toEqual([])` carries two literals nothing else
@@ -323,42 +322,37 @@ describe("0047 - the catalogue, read directly", () => {
       // `privilege_type = 'UPDATE'`. Misspell either and the query returns []
       // for the wrong reason and the assertion is green FOR EVER. The two
       // controls above do not close it: they use a different filter shape and
-      // a different table. This does — bookings.id really does carry three
-      // privileges, so the table name resolves, and UPDATE really is the one
-      // that is absent rather than the query matching nothing at all.
+      // a different table. This does — bookings.id really does carry a
+      // privilege (SELECT; bookings is server-written since 0053), so the
+      // table name resolves and the query is not matching nothing at all.
       expect(await privs("bookings", "id"), "bookings.id (the control for the empty set)")
-        .toEqual(["INSERT", "REFERENCES", "SELECT"]);
+        .toEqual(["SELECT"]);
     });
   });
 
-  // SPLIT OUT OF THE CASE ABOVE ON PURPOSE (2026-09-21, from Task 1's report).
-  // The two live on opposite sides of the apply and must not share an `it`:
+  // A SEPARATE CASE FROM THE ONE ABOVE ON PURPOSE (2026-09-21, from Task 1's
+  // report): one case pins the grant surface's controls, this one pins the
+  // three once-ever stamps, and a failure in one must not hide the other.
   //
-  //   the case above is GREEN BEFORE AND AFTER. That is its whole evidentiary
-  //   value — the grant surface is proven not to have MOVED, and a value that
-  //   does not move is only proof if the assertion could not have been red for
-  //   an unrelated reason. Bundling a red-before assertion into it destroyed
-  //   exactly that property: pre-apply the case failed at the first new
-  //   column, so nothing it claimed about the unmoved grants was demonstrated.
-  //
-  //   this case is RED BEFORE, GREEN AFTER, like every other case in the file:
-  //   `information_schema.column_privileges` returns no rows for a column that
-  //   does not exist yet, so [] !== FOUR until 0047 lands.
-  //
-  // Pre-apply this file is therefore 8 red / 5 green over 13 cases (the split
-  // ADDED a red; it did not turn a green into one), and the plan’s Step 2
-  // postscript says so.
-  it("the three new client-writable columns inherit their table's four privileges", async () => {
+  // The stamps are written by server code only. Since 0053 the client role's
+  // UPDATE on contacts and opportunities is a column list that leaves them
+  // out, so the client role holds INSERT and SELECT on each and nothing more.
+  // A control column that DOES carry UPDATE sits first in the same case, so an
+  // empty read (a misspelled table or privilege) cannot pass for the wrong
+  // reason.
+  it("the three stamps are NOT client-updatable (0053)", async () => {
     await withRollback(async (c) => {
       const privs = async (table: string, col: string) => (await c.query<{ p: string }>(
         `select privilege_type as p from information_schema.column_privileges
           where grantee = 'authenticated' and table_schema = 'public'
             and table_name = $1 and column_name = $2 order by privilege_type`,
         [table, col])).rows.map((r) => r.p);
-      const FOUR = ["INSERT", "REFERENCES", "SELECT", "UPDATE"];
-      expect(await privs("contacts", "reactivation_sent_at"), "contacts.reactivation_sent_at").toEqual(FOUR);
-      expect(await privs("opportunities", "quote_followup_sent_at"), "opportunities.quote_followup_sent_at").toEqual(FOUR);
-      expect(await privs("opportunities", "quote_followup_sms_failed_at"), "opportunities.quote_followup_sms_failed_at").toEqual(FOUR);
+      expect(await privs("contacts", "first_name"), "contacts.first_name (the control)")
+        .toEqual(["INSERT", "SELECT", "UPDATE"]);
+      const STAMP = ["INSERT", "SELECT"];
+      expect(await privs("contacts", "reactivation_sent_at"), "contacts.reactivation_sent_at").toEqual(STAMP);
+      expect(await privs("opportunities", "quote_followup_sent_at"), "opportunities.quote_followup_sent_at").toEqual(STAMP);
+      expect(await privs("opportunities", "quote_followup_sms_failed_at"), "opportunities.quote_followup_sms_failed_at").toEqual(STAMP);
     });
   });
 });

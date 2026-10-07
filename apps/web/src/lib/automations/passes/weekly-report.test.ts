@@ -12,6 +12,7 @@ vi.mock("@/lib/reports/weekly-metrics", () => ({ weeklyMetrics: (...a: unknown[]
 
 import { lastWeekMonday } from "@/lib/reports/weekly-window";
 import type { WeeklyNumbers } from "@/lib/reports/weekly-metrics";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
 import { weeklyClientReportPass } from "./weekly-report";
 
@@ -49,8 +50,7 @@ function ctx(now: Date = TICK): PassContext {
   return {
     db: {} as never, now, origin: ORIGIN,
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
-    quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
+    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
   };
 }
 
@@ -154,5 +154,13 @@ describe("weeklyClientReportPass", () => {
     expect(await weeklyClientReportPass.run(ctx())).toEqual({ ...EMPTY, unresolvableTimezone: 1, sent: 0 });
     expect(emailSend).not.toHaveBeenCalled();
     expect(dbMocks.stampWeeklyReportSent).not.toHaveBeenCalled();
+  });
+
+  it("the send carries kind \"operator.weekly_report\" with the account's own id (consent PR-3; mutation: a customer kind → FAILS)", async () => {
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([row()]);
+    await weeklyClientReportPass.run(ctx());
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "acct_1", kind: "operator.weekly_report",
+    }));
   });
 });

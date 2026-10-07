@@ -66,10 +66,45 @@ describe("toolSchemas", () => {
     expect(names).not.toContain("book_appointment");
   });
 
+  // Booking tools are bound to the caller ID. A declared `phone`
+  // parameter is an invitation to pass whatever number the caller recites;
+  // the tool takes none, and says it only looks up the number they are
+  // calling from.
+  it("find_my_booking takes no phone — no parameters at all — and says it only looks up the calling number", () => {
+    for (const mt of ["in_person", "phone", "video"] as const) {
+      const find = tool(toolSchemas(true, mt, false), "find_my_booking");
+      expect(find.parameters.properties).not.toHaveProperty("phone");
+      expect(find.parameters.properties).toEqual({});
+      expect(find.description).toMatch(/calling from/);
+      expect(find.description).toMatch(/cannot look up any other number/);
+    }
+  });
+
+  it("reschedule and cancel are only for a booking found or booked on this call", () => {
+    for (const name of ["reschedule_appointment", "cancel_appointment"]) {
+      const t = tool(toolSchemas(true, "in_person", false), name);
+      expect(t.description).toMatch(/find_my_booking returned on this call/);
+      expect(t.description).toMatch(/booked on this call/);
+    }
+  });
+
   it("check_availability's contract explains the slot shape: ISO for tools, local for speech", () => {
     const check = tool(toolSchemas(true, "in_person", false), "check_availability");
     expect(check.description).toMatch(/startsAt/);
     expect(check.description).toMatch(/local/);
     expect(check.description).toMatch(/say/i);
+  });
+});
+
+describe("phone parameters say how to write a number (review R1-I4)", () => {
+  it("book_appointment.phone and take_message.callbackNumber ask for the digits as spoken, with no country code the caller did not say (mutation: drop either description → FAILS)", () => {
+    for (const mt of ["in_person", "phone", "video"] as const) {
+      const tools = toolSchemas(true, mt, false) as unknown as Tool[];
+      const book = tools.find((t) => t.name === "book_appointment")!;
+      expect(book.parameters.properties.phone!.description).toBe("Digits as spoken; no country code unless the caller said one.");
+      const msg = tools.find((t) => t.name === "take_message")!;
+      expect(msg.parameters.properties.callbackNumber!.description).toBe("Digits as spoken; no country code unless the caller said one.");
+      expect(tools.find((t) => t.name === "capture_lead")!.description).toMatch(/no country code unless the caller said one/);
+    }
   });
 });

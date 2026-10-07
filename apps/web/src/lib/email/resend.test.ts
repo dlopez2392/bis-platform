@@ -78,3 +78,14 @@ describe("resendEmailProvider", () => {
     expect(sendMock.mock.calls[0]![0].from).toBe("Acme Corp <crm@bis-rgv.com>");
   });
 });
+
+describe("custom headers (consent PR-3; Resend's CreateEmailBaseOptions.headers, plan X1)", () => {
+  it("passes the unsubscribe headers through exactly, and a send without them carries no headers key (mutation: drop the headers spread → FAILS; mutation: always send headers: {} → FAILS)", async () => {
+    const provider = resendEmailProvider("re_test", "crm@bis-rgv.com");
+    const headers = { "List-Unsubscribe": "<https://app.example.com/api/unsubscribe/t>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" };
+    await provider.send({ to: "c@example.com", fromName: "Rio", subject: "Hi", body: "plain", headers });
+    expect(sendMock.mock.calls[0]![0].headers).toEqual(headers);
+    await provider.send({ to: "c@example.com", fromName: "Rio", subject: "Hi", body: "plain" });
+    expect("headers" in sendMock.mock.calls[1]![0]).toBe(false);
+  });
+});

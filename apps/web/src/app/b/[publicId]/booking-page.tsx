@@ -634,6 +634,31 @@ const BOOKING_CSS = `
   --bis-ring: color-mix(in oklab, var(--bis-accent) 35%, transparent);
 }
 
+/* --- Where you are: three dots, the current step named -------------------
+   The markup (\`steps\` above) shipped without a single rule, so every booking
+   page — including the one framed on bis-rgv.com — rendered a browser-default
+   numbered list of all three step names. Now the dots carry the position and
+   only the CURRENT step's name is visible, in a tinted pill; the other two
+   names stay in the accessibility tree, which is what the markup's own
+   comment always promised. A step already passed fills its dot. */
+.bis-booking-steps { list-style: none; margin: 0 0 16px; padding: 0; display: flex; align-items: center; gap: 6px; }
+.bis-booking-step { display: inline-flex; align-items: center; gap: 8px; }
+.bis-booking-step-dot {
+  width: 8px; height: 8px; border-radius: 999px; flex: none;
+  background: color-mix(in oklab, var(--foreground, #18181b) 18%, transparent);
+}
+.bis-booking-step:has(~ .is-current) .bis-booking-step-dot,
+.bis-booking-step.is-current .bis-booking-step-dot { background: var(--bis-accent); }
+.bis-booking-step.is-current { padding: 4px 10px 4px 8px; border-radius: 999px; background: var(--bis-tint); }
+.bis-booking-step-name {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+.bis-booking-step.is-current .bis-booking-step-name {
+  position: static; width: auto; height: auto; margin: 0; overflow: visible; clip-path: none;
+  font-size: 13px; font-weight: 500;
+}
+
 /* --- The month, and the week arrows ------------------------------------- */
 .bis-booking-monthrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .bis-booking-month { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
@@ -799,6 +824,14 @@ const BOOKING_CSS = `
 .bis-booking-success-when { margin: 0 0 12px; font-weight: 600; }
 .bis-booking-success-body { color: var(--muted-foreground, #71717a); margin: 0 0 16px; }
 .bis-booking-cancel-hint { font-size: 13px; color: var(--muted-foreground, #71717a); margin: 0; }
+
+/* --- Ours, quietly ---------------------------------------------------------
+   DESIGN.md's booking page ends on a small "Powered by BIS". It rendered as a
+   browser-default blue underlined link — the loudest thing on a page that is
+   meant to wear the client's brand, not ours. */
+.bis-booking-poweredby { margin: 20px 0 0; text-align: center; font-size: 12px; color: var(--muted-foreground, #71717a); }
+.bis-booking-poweredby a { color: inherit; text-decoration: none; }
+.bis-booking-poweredby a:hover { color: var(--foreground, #18181b); text-decoration: underline; text-underline-offset: 3px; }
 
 @media (prefers-reduced-motion: reduce) {
   .bis-booking *, .bis-booking-skeleton { transition: none !important; animation: none !important; }

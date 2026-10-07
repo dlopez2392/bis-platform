@@ -32,10 +32,12 @@
   #135, LOCAL runs refuse production too: the db suite, the integration
   suite, Playwright and the two live web tests all throw before connecting
   when any Supabase/PG* variable names production's ref, naming the
-  variable, never its value. Until `apps/web/.env.local` and
-  `packages/db/.env` are switched to the CI project (runbook section 9,
-  plan step D7), a local `pnpm check` or e2e run on a machine whose env
-  still points at production is REFUSED, not run. Every new migration goes to
+  variable, never its value. danlo's machine has run on the CI project
+  since 2026-10-04 (runbook section 9, plan step D7, done): both
+  `apps/web/.env.local` and `packages/db/.env` name it. Any other machine
+  whose env still points at production is REFUSED, not run, and a local e2e
+  run shares CI's seeded account, so check for an in-progress CI run first.
+  Every new migration goes to
   the CI project FIRST (the `ci-project-setup.yml` workflow), then
   production, then a parity check (`docs/runbooks/ci-supabase-project.md`).
   Booking and calendar-settings specs run on the per-run fixture account —

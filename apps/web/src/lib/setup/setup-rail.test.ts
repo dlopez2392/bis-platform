@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   SETUP_STEP_KEYS, isLockedStep, lockedPrereqKeys, railKindOf,
-  nextStepKey, defaultStepKey, parseStepParam,
+  nextStepKey, defaultStepKey, parseStepParam, stepNumber,
 } from "./setup-rail";
 import type { SetupStepView } from "./setup-view";
+import type { SetupStepKey } from "./setup-status";
 
 const view = (
   key: SetupStepView["key"], over: Partial<SetupStepView> = {},
@@ -106,6 +107,23 @@ describe("lockedPrereqKeys", () => {
   it("still names voice_profile when it is done:true but unknown (a failed read)", () => {
     const v = views({ voice_profile: { done: true, unknown: true } });
     expect(lockedPrereqKeys("website_assistant", v)).toEqual(["voice_profile"]);
+  });
+
+  // DECIDED (review round): a CRM-only account's own `views` carries NO
+  // `voice_profile` entry at all — locking website_assistant against a step
+  // this account doesn't have would need a reason that names something the
+  // rail never shows. The profile requirement is not dropped; it moves
+  // INSIDE this step's own pane instead (row 1,
+  // setup/steps/website-assistant.tsx, via the shared `isVoiceProfileDone`
+  // predicate) — the one surface a CRM-only account actually sees for this
+  // step. Pinned here, against a CRM-only-shaped `views`, so a future change
+  // that tries to "fix" this by reaching past `views` for a profile signal
+  // has to change this test on purpose.
+  it("never locks website_assistant on a CRM-only plan — there is no voice_profile view to name; row 1 inside the pane carries that signal instead", () => {
+    const crmOnlyKeys: SetupStepKey[] = ["account", "branding", "hours", "website_assistant", "email"];
+    const v = crmOnlyKeys.map((k) => view(k));
+    expect(lockedPrereqKeys("website_assistant", v)).toEqual([]);
+    expect(isLockedStep("website_assistant", v)).toBe(false);
   });
 });
 
@@ -253,5 +271,67 @@ describe("parseStepParam", () => {
     expect(parseStepParam(undefined, v)).toBe("branding");
     expect(parseStepParam("not_a_step", v)).toBe("branding");
     expect(parseStepParam("", v)).toBe("branding");
+  });
+});
+
+// A CRM-only account's own `views` never carries a view for the five
+// Sofía-only steps (deriveSetupStatus drops them entirely — see
+// setup-status.ts). A stale bookmark, a shared link, or someone hand-editing
+// the URL can still send `?step=number` here even though this account has no
+// such step at all.
+function crmOnlyViews(done: Partial<Record<SetupStepKey, boolean>> = {}): SetupStepView[] {
+  const keys: SetupStepKey[] = ["account", "branding", "hours", "website_assistant", "email"];
+  return keys.map((k) => view(k, { done: done[k] ?? false }));
+}
+
+describe("parseStepParam — a step absent from THIS account's own views (CRM-only plan)", () => {
+  it("falls back rather than returning a key with no matching view — the full SETUP_STEP_KEYS list still names it, but this account's views do not", () => {
+    const v = crmOnlyViews({ account: true });
+    // MUTATION: check `SETUP_STEP_KEYS.includes(raw)` instead of `views.some(...)`
+    // — this FAILS, since "number" is one of the full canonical ten even
+    // though this account's own `views` has no such entry, and the old
+    // behaviour returned it anyway: setup-shell.tsx's `views.find(v => v.key
+    // === selected)` would then come back `undefined` and render nothing.
+    expect(parseStepParam("number", v)).not.toBe("number");
+    expect(parseStepParam("number", v)).toBe(defaultStepKey(v));
+  });
+
+  it("still accepts a key that IS present in this account's own views", () => {
+    const v = crmOnlyViews();
+    expect(parseStepParam("website_assistant", v)).toBe("website_assistant");
+  });
+});
+
+describe("defaultStepKey — the final fallback when a CRM-only account is fully done", () => {
+  it("falls back to the LAST step in THIS account's views, not the full canonical list's go_live", () => {
+    const v = crmOnlyViews({ account: true, branding: true, hours: true, website_assistant: true, email: true });
+    // MUTATION: fall back to `SETUP_STEP_KEYS[SETUP_STEP_KEYS.length - 1]`
+    // ("go_live") — this FAILS: this account has no go_live view at all, so
+    // selecting it would render a blank pane (setup-shell.tsx's `if (!view)
+    // return null`).
+    expect(defaultStepKey(v)).toBe("email");
+  });
+});
+
+describe("stepNumber", () => {
+  it("is contiguous 01..10 for the full plan, unchanged", () => {
+    const v = views();
+    expect(SETUP_STEP_KEYS.map((k) => stepNumber(k, v))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  });
+
+  // MUTATION: index into SETUP_STEP_KEYS instead of this account's own
+  // `views` — this FAILS, producing [1, 2, 3, 4, 6] (website_assistant sits
+  // at SETUP_STEP_KEYS's index 4, email at index 6) instead of a gapless
+  // count.
+  it("is contiguous 01..05 for a CRM-only plan's five steps, not the full list's 1,2,3,5,7", () => {
+    const keys: SetupStepKey[] = ["account", "branding", "hours", "website_assistant", "email"];
+    const v = crmOnlyViews();
+    expect(keys.map((k) => stepNumber(k, v))).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("is contiguous 01..04 when website_assistant is also dropped (web_concierge off too)", () => {
+    const keys: SetupStepKey[] = ["account", "branding", "hours", "email"];
+    const v = keys.map((k) => view(k));
+    expect(keys.map((k) => stepNumber(k, v))).toEqual([1, 2, 3, 4]);
   });
 });

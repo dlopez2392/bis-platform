@@ -4,7 +4,8 @@ export type { SupabaseClient } from "@supabase/supabase-js";
 export { emit, listRecentEvents, type ActorType, type EventRow } from "./events";
 export { sanitizeSearchTerm } from "./search-term";
 export { createAccount, listAccounts, setClientAccess, renameAccount, getAccountByOrgId,
-         setA2pRegistration, getA2pRegistration, a2pApprovalIsComplete } from "./accounts";
+         setA2pRegistration, getA2pRegistration, a2pApprovalIsComplete,
+         isMessagingProfileId, MessagingProfileTakenError } from "./accounts";
 export type { A2pStatus, A2pRegistration, A2pRegistrationRecord } from "./accounts";
 export { getAlertPhone, setAlertPhone } from "./accounts";
 export { getTransferPhone, setTransferPhone } from "./accounts";
@@ -17,17 +18,26 @@ export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
-export { setMarketingEmailOptOut } from "./contacts";
+export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
+export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
+         appendConsentEventGuarded, newestDecidingRow, readConsentHistory, readConsentEvent,
+         readConsentActions, consentWriteArgs, consentAppendSql, emailLedgerAddress, readBlockedAddresses,
+         CONSENT_METHODS, DECIDING_ACTIONS, CUSTOMER_STOP_METHODS,
+         type ConsentChannel, type ConsentAction, type ConsentMethod, type ConsentRow,
+         type ConsentState, type ConsentEventInput, type ConsentGuard, type ConsentAppend,
+         type PriorDecidingRow, type ConsentHistoryRow, type ConsentEventRow } from "./consent";
 export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
-export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask } from "./activities";
+export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask,
+         ensureConsentTask, completeTasksForConsentEvents, reopenTasks,
+         HoldUndecidedError, holdOpenTaskIds, readTaskContact } from "./activities";
 export { listAccountWork, listAgencyWork, type WorkRow, type WorkSource, type AgencyWorkRow } from "./work-queue";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,
          ensureDefaultPipeline, listPipelinesWithStages, type CustomFieldDef } from "./crm-config";
 export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
          listBoard, listContactOpportunities,
-         listOpportunityValuesCreatedBetween } from "./opportunities";
+         listOpportunityValuesCreatedBetween, sumOpenOpportunities } from "./opportunities";
 export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, findMessageByProviderId, hasRecentOutboundSms,
          listFailedOutboundSms,
@@ -38,8 +48,9 @@ export { ensureConversation, createMessage, updateMessageStatus,
          sumUnreadCount, searchConversations } from "./messaging";
 // NOTE: searchCalls needs no line here — voice is `export * from "./voice"` below.
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
+         getFormByPublicId, isFormLive,
          updateForm, createSubmission, recordRejectedSubmission, countRecentSubmissions,
-         countRealSubmissionsBetween,
+         listSubmissionCreationsBetween,
          shouldRecordRateLimit, findRecentDuplicate, linkSubmissionContact,
          setSubmissionProcessingError, emitFormSubmitted, listSubmissions, listContactSubmissions,
          countFormsMissingNotify,
@@ -51,13 +62,14 @@ export { captureBlueprint, listBlueprints, getBlueprint, blueprintKey, applyBlue
          type BlueprintBundle, type BlueprintRow, type BlueprintSummary, type ApplyReport } from "./blueprints";
 export { listChecklistState, setChecklistItem, addCustomChecklistItem,
          type ChecklistStateRow } from "./checklist";
-export { uploadBrandLogo, removeBrandLogo, brandLogoUrl, setBranding, getBranding, brandDisplayName,
+export { uploadBrandLogo, removeBrandLogo, sweepOrphanedLogos, restoreBrandLogoIfCleared, logoExists,
+         brandLogoUrl, setBranding, getBranding, brandDisplayName,
          type Branding } from "./branding";
 export { getMailingAddress } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,
          listBookedRanges, createBooking, cancelBookingByToken, setBookingStatus,
-         listUpcomingBookings, countRecentBookings, listDueReminders, stampReminderSent,
+         listUpcomingBookings, nextBookedStart, countRecentBookings, listDueReminders, stampReminderSent,
          listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
          newCancelToken, SlotTakenError,
          getDueReminderById, getDueFollowupById,
@@ -101,6 +113,7 @@ export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          type DueSmsReminder, type InstantReplyConfig } from "./automations";
 export * from "./voice";
 export * from "./screened-calls";
+export * from "./forwarded-calls";
 export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampSiteSynced,
          listTrafficDays, listTrafficBreakdown, countTrafficDays, unlinkSite,
          type SiteRow, type TrafficDay, type TrafficDimension, type TrafficBreakdownRow } from "./sites";
@@ -169,3 +182,20 @@ export { recordUsage, reportableFrom, usageRangeFilter, listBilledUsageAccounts,
          USAGE_SOURCE_PREFIX, USAGE_REPORT_WINDOW_MS, USAGE_STALE_AFTER_MS, USAGE_ACCOUNTS_PER_READ,
          USAGE_ACCOUNTS_PER_BOUNDED_READ, USAGE_FUTURE_GRACE_MS, STALE_PROBE_ROWS,
          type UsageInput, type UsageRow, type UsageRange, type BilledUsageAccount } from "./usage";
+
+// Client billing state (0051 account_billing + stripe_webhook_events, 0052
+// billing_links): the webhook mirror, complimentary, links, the event ledger.
+export { SUBSCRIPTION_STATUSES, ENDED_STATUSES, PAST_DUE_STATUSES, isSubscriptionStatus,
+         getAccountBilling, getBillingLink, saveBillingLink, markBillingLinkExpired,
+         decideMirror, mirrorSubscription, MIRROR_ATTEMPTS, markComplimentary, unmarkComplimentary, changeComplimentaryPlan,
+         claimWebhookEvent, markWebhookEventProcessed,
+         type SubscriptionStatus, type AccountBilling, type BillingLink, type BillingLinkWrite,
+         type SubscriptionItemSnapshot, type SubscriptionSnapshot, type MirrorRefusal, type MirrorDecision,
+         type MirrorOutcome, type MirrorPlan } from "./account-billing";
+export { sumUsageSince } from "./usage";
+
+// Heartbeats (0057 ops_heartbeats): written by the cron harness and the
+// webhook routes, read by the alert pass and the health route. See ./ops.ts.
+export { recordHeartbeat, listHeartbeats, markAlerted, HEARTBEAT_KEYS, passHeartbeatKey,
+         HEARTBEAT_KEY_PATTERN, isHeartbeatKey, HEARTBEAT_ERROR_MAX_CHARS, boundHeartbeatError,
+         type HeartbeatRow } from "./ops";

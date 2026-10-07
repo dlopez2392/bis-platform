@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
 import { clerkClient } from "@clerk/nextjs/server";
@@ -138,7 +138,10 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // The checklist is still a live route with its own state — reached
     // directly now rather than by redirect.
     await page.goto(`/dashboard/accounts/${accountId}/checklist`);
-    await expect(page.getByRole("heading", { name: "Activation checklist" })).toBeVisible();
+    // level 1: the page title. Since CardTitle became an h3 (#174), the
+    // checklist card's own "Activation checklist · N remaining" title is a
+    // heading too, and an unscoped name matches both.
+    await expect(page.getByRole("heading", { name: "Activation checklist", level: 1 })).toBeVisible();
 
     // setChecklistItemAction is a raw (unwrapped) form action — clicking submit
     // fires a real POST that Next.js's router intercepts, but page.click() only
@@ -213,6 +216,10 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // cause. Both fields were empty for the refusal, so fill them now.
     await page.getByLabel("Brand ID").fill("BRAND123");
     await page.getByLabel("Campaign ID").fill("CAMP456");
+    // Plan Task 7: approved also needs the business's own messaging profile,
+    // unique across companies, so the run's own random one.
+    const messagingProfileId = crypto.randomUUID();
+    await page.getByLabel("Messaging profile ID").fill(messagingProfileId);
     // Deliberately NOT re-selecting the status: the whole point is that the
     // choice made before the refusal is still the choice being submitted.
     await page.getByRole("button", { name: "Save" }).click();
@@ -223,6 +230,11 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await expect(a2pItem).toHaveAttribute("aria-pressed", "true");
     await page.reload();
     await expect(page.getByLabel("Brand ID")).toHaveValue("BRAND123");
+    // Fix round 1 (opus review, task 7): no test previously read the profile
+    // id BACK — the checklist item ticks from `status` alone, so a save that
+    // silently dropped the column would still show "done" here. Assert the
+    // field itself survived the reload with the value this run actually typed.
+    await expect(page.getByLabel("Messaging profile ID")).toHaveValue(messagingProfileId);
     await expect(page.getByRole("button", { name: "Register A2P 10DLC brand and campaign" }))
       .toHaveAttribute("aria-pressed", "true");
     // The status carries its date — "with the carriers" means one thing a day

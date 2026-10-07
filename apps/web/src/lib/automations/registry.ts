@@ -13,6 +13,7 @@ import { siteTrafficPass } from "./passes/site-traffic";
 import { weeklyClientReportPass } from "./passes/weekly-report";
 import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
 import { usageReportPass } from "./passes/usage-report";
+import { opsWatchPass } from "./passes/ops-watch";
 
 /**
  * Every pass the cron tick runs, IN ORDER. Order is part of the contract:
@@ -45,6 +46,9 @@ import { usageReportPass } from "./passes/usage-report";
  * records its texts' usage as it sends, so running after all of them means
  * a text sent this tick reaches Stripe this tick. Nothing reads what it
  * writes (usage_events.reported_at).
+ * The operational floor's alert pass (opsWatch) runs after EVERYTHING, the
+ * usage report included: it reads the heartbeat each pass above just wrote, so
+ * a pass failing for the second time is reported in the same tick.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass];
+export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass, opsWatchPass];

@@ -178,6 +178,17 @@ test.describe("demo captures", () => {
     await useTheme(pub, "light");
     await pub.goto(`/b/${demo.calendarPublicId}`);
     await settled(pub);
+    // Today is pre-selected, and after about midday its last slot has passed:
+    // the 2026-10-06 run, started at lunchtime, photographed "No times
+    // available this day" for the website. Walk forward to the first day that
+    // has open times, so the capture never depends on what time it was run.
+    const slots = pub.locator(".bis-booking-slot");
+    const days = pub.locator(".bis-booking-day:not(:disabled)");
+    for (let i = 0; (await slots.count()) === 0 && i < (await days.count()); i++) {
+      await days.nth(i).click();
+      await settled(pub);
+    }
+    await expect(slots.first(), "no day this week has an open time — re-seed or check the demo calendar").toBeVisible();
     await shoot(pub, "booking-page.png");
 
     // 6. The Monday email. Not a route — it is a template function, so it is

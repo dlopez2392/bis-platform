@@ -11,25 +11,28 @@ import { m } from "@/lib/messages";
  * text from a number you do not recognise, with no way out of it, is the
  * behaviour this product exists not to have.
  *
- * WHAT THIS IS NOT: the opt-out MECHANISM. Telnyx detects STOP (and STOPALL,
- * UNSUBSCRIBE, CANCEL, END, QUIT) on the way in, adds the number to its own
- * opt-out list, auto-replies, and blocks every later send to it — at the
- * messaging-profile level, before this platform sees anything. Implementing a
- * second opt-out list here would be a race against that one, so we owe the
- * carriers the LANGUAGE and nothing else. Do not "finish the job" by adding
- * keyword handling to the inbound webhook.
+ * WHAT THIS IS NOT: the opt-out MECHANISM. That is the consent ledger (consent
+ * chain PR-2): the inbound webhook reads STOP, START and HELP in English and
+ * Spanish, and stop sentences, and writes them to the ledger the send gate
+ * reads before every text. Telnyx's own keyword handling stays on as the
+ * backstop (spec decision 12): it blocks at the messaging profile and answers
+ * the keywords it knows, and the webhook's `autoresponse_type` tells BIS it
+ * did, so the customer never gets two confirmations (plan G4).
  *
- * WHERE IT IS APPLIED — the two places a message goes out unprompted:
- * `sendAutomationSms` (reminders, review requests, no-show nudges, the form
- * instant reply) and the missed-call text-back. Deliberately NOT applied to
+ * WHERE IT IS APPLIED — by the send gate (lib/consent/gate.ts, step 7), for
+ * every kind whose registry row says `footer: "stop_line"`
+ * (lib/consent/classes.ts): the automation kinds and the missed-call
+ * text-back, exactly the two places that appended it before the registry
+ * existed. Deliberately NOT applied to
  * an operator's own typed reply in Conversations — that is a human in a
  * thread the customer opened, and CTIA asks for the disclosure on programme
  * messages, not on every line of a conversation — nor to the lead alert or
  * the alert-phone verification code, which go to the BUSINESS OWNER about
  * their own account and are not a marketing programme they can leave.
  *
- * Applied where the body is BUILT, not at the provider call, so the message
- * row written to the conversation is the text that was actually sent. An
+ * Applied by the gate BEFORE a caller's `prepare` writes its message row,
+ * and handed to it, so the row written to the conversation is the text that
+ * was actually sent. An
  * operator reading the thread must not see a shorter message than the
  * customer got.
  *
@@ -45,11 +48,10 @@ import { m } from "@/lib/messages";
  * drops the WHOLE message to UCS-2 at 70 characters a segment. "para
  * cancelar" says it without them; "para no recibir más mensajes" would not.
  *
- * The KEYWORD stays the English "STOP" in both languages, which is not an
- * oversight: STOP is what Telnyx recognises by default. PARAR and DETENER
- * work only once they are registered as custom keywords on the messaging
- * profile, and telling a Spanish-speaking customer to reply with a word that
- * does nothing is worse than telling them one that works.
+ * The KEYWORD stays the English "STOP" in both languages: STOP is the word
+ * every carrier, Telnyx and BIS all recognise. PARAR works too (BIS's own
+ * matcher reads it, and step 0 registers it on each profile), but a
+ * disclosure that names the one universal word is the safer promise.
  */
 export function withOptOut(body: string, language: "en" | "es" = "en"): string {
   const trimmed = body.trim();

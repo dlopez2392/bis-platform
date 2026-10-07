@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { createContact } from "../contacts";
-import { ensureConversation } from "../messaging";
+import { ensureConversation, createMessage } from "../messaging";
 import { getOrCreateCalendar, createBooking, setBookingStatus, getCalendarForAccount } from "../booking";
 import {
   assignPhoneNumber, getPhoneNumberByE164, setPhoneNumberStatus,
@@ -12,9 +12,10 @@ import {
   hasActiveCallSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
-  listCalls, getCall, listCallStartsBetween, listCallOutcomesBetween,
+  listCalls, getCall, listCallStartsBetween, listCallOutcomesBetween, listCallStartsByOutcomeBetween,
   listContactCalls, searchCalls,
   markHandoffRequested, getCallByHandoffToken, setCallOutcome,
+  callerInTouchSince,
   type CallOutcome,
 } from "../voice";
 
@@ -587,6 +588,46 @@ describe("listCallOutcomesBetween", () => {
 });
 
 /**
+ * The metrics reads drop the agency's own test handsets (`excludeCallers`).
+ * Live, because the point is how PostgREST reads the `or` filter: a bare
+ * `NOT IN` would also drop every withheld-number call (SQL's NULL NOT IN is
+ * NULL), and only a real database proves the `IS NULL` arm keeps them.
+ */
+describe("listCallStartsByOutcomeBetween excludeCallers", () => {
+  it("drops calls from the listed numbers and keeps withheld and other callers", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const seed = async (startedAt: string, caller: string | null) => {
+        const { error } = await db.from("calls").insert({
+          account_id: accountId, phone_number_id: num.id,
+          started_at: startedAt, outcome: "booked", caller_e164: caller,
+        });
+        if (error) throw new Error(`seed call failed: ${error.message}`);
+      };
+      await seed("2026-03-02T10:00:00Z", "+19565550101"); // the agency handset
+      await seed("2026-03-03T10:00:00Z", "+19565550102"); // a second handset
+      await seed("2026-03-04T10:00:00Z", null);           // withheld number
+      await seed("2026-03-05T10:00:00Z", "+19565550199"); // a customer
+
+      const from = "2026-03-02T00:00:00Z";
+      const to = "2026-03-09T00:00:00Z";
+      const times = (rows: string[]) => rows.map((s) => new Date(s).getTime()).sort((a, b) => a - b);
+
+      const all = await listCallStartsByOutcomeBetween(db, accountId, ["booked"], from, to);
+      expect(all).toHaveLength(4);
+
+      const kept = await listCallStartsByOutcomeBetween(
+        db, accountId, ["booked"], from, to, { excludeCallers: ["+19565550101", "+19565550102"] },
+      );
+      expect(times(kept)).toEqual([
+        new Date("2026-03-04T10:00:00Z").getTime(),
+        new Date("2026-03-05T10:00:00Z").getTime(),
+      ]);
+    });
+  });
+});
+
+/**
  * 0037's call-handoff accessors. Four functions, one shared fixture shape: a
  * real `phone_numbers` row (calls.phone_number_id is NOT NULL) and a call row
  * started through `startCallRow` itself rather than a direct insert, so the
@@ -706,6 +747,80 @@ describe("call handoff accessors", () => {
 
       const ghost = "00000000-0000-0000-0000-000000000000";
       await expect(setCallOutcome(db, ghost, call.id, "booked")).rejects.toThrow(/matched no row/);
+    });
+  });
+});
+
+/**
+ * Consent chain PR-1 (danlo, 2026-09-26): a text-back held overnight is
+ * skipped at 08:00 when the caller has been back in touch since the missed
+ * call. The instant is the database's own `started_at`, so no clock skew.
+ */
+describe("callerInTouchSince", () => {
+  it("the missed call and an outbound text do not count; an inbound TEXT after it does (mutation: drop .eq(\"direction\", \"inbound\") → the text-back's own outbound counts, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const caller = "+19565550401";
+      const contact = await createContact(db, accountId, { firstName: "Ana", phone: caller }, "user_test");
+      const convo = await ensureConversation(db, accountId, contact.id, "user_test");
+      const missed = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      const { data } = await db.from("calls").select("started_at").eq("id", missed.id).single();
+      const since = (data as { started_at: string }).started_at;
+      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "outbound", body: "Sorry we missed your call" }, "user_test");
+      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "inbound", body: "still need a quote" }, "user_test");
+      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(true);
+    });
+  });
+
+  it("a later call from the SAME number counts; one from another number does not (mutation: drop .eq(\"caller_e164\", …) → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const caller = "+19565550402";
+      const contact = await createContact(db, accountId, { firstName: "Luis", phone: caller }, "user_test");
+      const convo = await ensureConversation(db, accountId, contact.id, "user_test");
+      const missed = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      const { data } = await db.from("calls").select("started_at").eq("id", missed.id).single();
+      const since = (data as { started_at: string }).started_at;
+      await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550499" });
+      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
+      await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(true);
+    });
+  });
+
+  it("ignores a later call from the SAME number on ANOTHER account (M1; mutation: drop .eq(\"account_id\", …) → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const caller = "+19565550403";
+      const contact = await createContact(db, accountId, { firstName: "Rosa", phone: caller }, "user_test");
+      const convo = await ensureConversation(db, accountId, contact.id, "user_test");
+      const missed = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      const { data } = await db.from("calls").select("started_at").eq("id", missed.id).single();
+      const since = (data as { started_at: string }).started_at;
+      await withTestAccount(async (otherDb, otherAccountId) => {
+        const otherNum = await assignPhoneNumber(otherDb, otherAccountId, { e164: testPhoneNumber() }, "user_test");
+        // Same caller number, a LATER call — but on a different account.
+        await startCallRow(otherDb, otherAccountId, { phoneNumberId: otherNum.id, callerE164: caller });
+        expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
+      });
+    });
+  });
+
+  it("ignores an inbound message that is not SMS (M7; mutation: drop .eq(\"channel\", \"sms\") → an inbound email counts, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const caller = "+19565550404";
+      const contact = await createContact(db, accountId, { firstName: "Ivan", phone: caller }, "user_test");
+      const convo = await ensureConversation(db, accountId, contact.id, "user_test");
+      const missed = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      const { data } = await db.from("calls").select("started_at").eq("id", missed.id).single();
+      const since = (data as { started_at: string }).started_at;
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "inbound", body: "a reply, by email" }, "user_test");
+      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "inbound", body: "still need a quote" }, "user_test");
+      expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(true);
     });
   });
 });

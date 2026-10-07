@@ -1,6 +1,6 @@
-import type { SupabaseClient, QuietSettings } from "@bis/db";
-import type { EmailProvider } from "@/lib/email/types";
-import type { SmsProvider } from "@/lib/sms/types";
+import type { SupabaseClient } from "@bis/db";
+import type { GatedEmail } from "@/lib/consent/email-gate";
+import type { SmsSender } from "@/lib/consent/gate";
 
 /**
  * What every pass is handed for one cron tick.
@@ -21,21 +21,23 @@ export type PassContext = {
   /** APP_ORIGIN when set, else the request's own origin — for links in
    *  customer mail. See origin.ts for why APP_ORIGIN must win. */
   origin: string;
-  /** Constructed once per tick by the harness. In production this THROWS at
-   *  construction when RESEND_API_KEY/EMAIL_FROM are unset — loudly, before
-   *  any query, which is the designed failure. */
-  email: EmailProvider;
-  /** LAZY, unlike `email`. `getSmsProvider()` throws in production when
-   *  TELNYX_API_KEY is unset, and it IS unset today by design (no A2P-approved
-   *  client yet). Constructing it eagerly would fail every tick, reminders
-   *  included. A pass calls this only on the SMS branch of a send it has
-   *  already decided to make, inside that send's own try/catch. Memoised on
-   *  success. */
-  sms: () => SmsProvider;
-  /** The account's quiet-hours window, read once per account per tick
-   *  (harness.ts's `quietSettingsReader`). Lazy like `sms`: an idle tick
-   *  never reads settings. holdOrSend is the only caller. */
-  quiet: (accountId: string) => Promise<QuietSettings>;
+  /** THE EMAIL GATE, bound to this tick's client (consent chain PR-3, spec
+   *  §4.3 "Routing": "the harness's email factory … call the gate's
+   *  sendEmail"). Every automation email names its kind and goes through the
+   *  ledger (the automated classes), the fixed hours and the unsubscribe
+   *  footer; a refusal throws EmailNotSent, which holdOrSend turns into its
+   *  row. Constructed once per tick: in production it THROWS at construction
+   *  when RESEND_API_KEY/EMAIL_FROM are unset — loudly, before any query,
+   *  which is the designed failure. */
+  email: GatedEmail;
+  /** THE SEND GATE, bound to this tick's client (consent chain spec §4.1
+   *  item 4: "the harness's ctx.sms() becomes the gate's sendSms"). Every
+   *  automation text goes through it, via sendAutomationSms. The provider is
+   *  constructed inside the gate only once a send is cleared, so a tick with
+   *  TELNYX_API_KEY unset in production fails only the sends it decides to
+   *  make, never the tick. There is no quiet-hours setting any more: the
+   *  hours are fixed (lib/consent/hours.ts). */
+  sms: SmsSender;
 };
 
 /** Per-pass counters, reported verbatim in the cron's JSON under the pass key. */

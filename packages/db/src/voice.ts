@@ -15,8 +15,19 @@ export type VoiceProfileRow = {
   textback_enabled: boolean; textback_body: string;
   public_id: string | null; concierge_enabled: boolean;
   concierge_form_id: string | null;
+  /** 0058. Send this account's callers straight to `accounts.transfer_phone`
+   *  instead of to the receptionist. Written ONLY by `setForwardCalls`. */
+  forward_calls: boolean;
 };
-export type VoiceProfilePatch = Partial<Omit<VoiceProfileRow, "id" | "account_id">>;
+/**
+ * `forward_calls` is omitted on purpose (0058): `setForwardCalls` is its only
+ * writer, so every change to where this business's calls go records its own
+ * `voice.forward_changed` event with the actor. A general settings save that
+ * could carry it would change routing under a `voice_profile.updated` event
+ * that does not say so. `upsertVoiceProfile` also refuses the key at run time,
+ * for a caller whose patch is not an object literal.
+ */
+export type VoiceProfilePatch = Partial<Omit<VoiceProfileRow, "id" | "account_id" | "forward_calls">>;
 /**
  * The TypeScript twin of `calls_outcome_check` (0019, widened by 0037). The
  * two must hold the same six strings: a value this union admits and the CHECK
@@ -50,7 +61,7 @@ const PHONE_COLS = "id, account_id, e164, telnyx_id, status";
 export const PROFILE_COLS =
   "id, account_id, persona_name, greeting_en, greeting_es, facts, services, " +
   "languages, booking_enabled, after_hours, enabled, textback_enabled, textback_body, " +
-  "public_id, concierge_enabled, concierge_form_id";
+  "public_id, concierge_enabled, concierge_form_id, forward_calls";
 
 export async function getPhoneNumberByE164(
   db: SupabaseClient, e164: string,
@@ -151,6 +162,12 @@ export async function getVoiceProfile(
 export async function upsertVoiceProfile(
   db: SupabaseClient, accountId: string, patch: VoiceProfilePatch, actorId: string, actorType: ActorType = "user",
 ): Promise<VoiceProfileRow> {
+  // The type already omits it; this catches a patch built from a wider
+  // object (a spread row, a parsed form) that the type cannot see. Refused,
+  // not stripped: silently dropping it would hide the caller's bug.
+  if (Object.prototype.hasOwnProperty.call(patch, "forward_calls")) {
+    throw new Error("upsertVoiceProfile cannot write forward_calls; use setForwardCalls");
+  }
   const existing = await getVoiceProfile(db, accountId);
   if (!existing) {
     const { data, error } = await db.from("voice_profiles")
@@ -166,6 +183,41 @@ export async function upsertVoiceProfile(
   if (error || !data) throw new Error(`upsertVoiceProfile update failed: ${error?.message}`);
   await emit(db, accountId, "voice_profile.updated", actorId, { fields: Object.keys(patch) }, actorType);
   return data as unknown as VoiceProfileRow;
+}
+
+/**
+ * The per-account call forward (0058; spec 2026-10-01-operational-floor,
+ * section 3). `on` sends this account's callers straight to
+ * `accounts.transfer_phone` instead of to the receptionist; there is no second
+ * number. The TeXML route decides what happens with no transfer number set
+ * (the receptionist answers), and the deployment-wide `VOICE_FORWARD_TO` still
+ * wins over both.
+ *
+ * The ONLY writer of `voice_profiles.forward_calls` (`VoiceProfilePatch`
+ * omits it). Call it with `serviceDb()` behind the app's agency check:
+ * `authenticated` has no UPDATE on voice_profiles (0019/0020), so a user
+ * client is refused by the database, and that absence is the control.
+ *
+ * Every change records `voice.forward_changed` with `{ forwardCalls }` and the
+ * actor, so the account's history shows who took the phones back and when.
+ * The write comes first and the event only after it succeeded; an account with
+ * no `voice_profiles` row throws, naming the account, and records nothing
+ * (PostgREST reports an UPDATE matching no row as success with no rows, the
+ * setBranding lesson).
+ */
+export async function setForwardCalls(
+  db: SupabaseClient, accountId: string, on: boolean, actorId: string,
+  actorType: "user" | "system" = "user",
+): Promise<void> {
+  // `undefined` would serialise away, update only updated_at, and still record
+  // an event claiming a change.
+  if (typeof on !== "boolean") throw new Error("setForwardCalls: on must be true or false");
+  const { data, error } = await db.from("voice_profiles")
+    .update({ forward_calls: on, updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).select("id");
+  if (error) throw new Error(`setForwardCalls failed: ${error.message}`);
+  if (!data || data.length === 0) throw new Error(`setForwardCalls: no voice profile for account ${accountId}`);
+  await emit(db, accountId, "voice.forward_changed", actorId, { forwardCalls: on }, actorType);
 }
 
 /**
@@ -548,6 +600,77 @@ export async function listCallStartsBetween(
   return (data ?? []).map((r: { started_at: string }) => r.started_at);
 }
 
+const CALL_OUTCOME_STARTS_PAGE_SIZE = 1000;
+
+/**
+ * The PostgREST `or` filter that drops calls FROM the given numbers, or null
+ * when there is nothing to drop.
+ *
+ * `caller_e164 IS NULL OR caller_e164 NOT IN (...)`, never the bare `NOT IN`:
+ * SQL's `NULL NOT IN (...)` is NULL, not true, so the bare form would silently
+ * drop every call with a withheld number along with the ones it meant to.
+ *
+ * Each value must be strict +E.164 and is quoted besides; anything else
+ * throws. The list comes from the environment, not a visitor, but it is
+ * spliced into a filter string, and a comma or a parenthesis in it would
+ * rewrite the filter rather than fail.
+ */
+function excludeCallersFilter(callers: readonly string[]): string | null {
+  if (callers.length === 0) return null;
+  for (const c of callers) {
+    if (!/^\+[1-9]\d{1,14}$/.test(c)) throw new Error("excludeCallers: every number must be +E.164");
+  }
+  return `caller_e164.is.null,caller_e164.not.in.(${callers.map((c) => `"${c}"`).join(",")})`;
+}
+
+/**
+ * Raw `started_at` instants for calls whose `outcome` is one of `outcomes`,
+ * in `[fromIso, toIso)` — e.g. the call half of "leads captured"
+ * (weekly-metrics.ts's `LEAD_OUTCOME`). `outcomes` is a PARAMETER, not a
+ * literal filtered in here, so this can never define "lead" (or any other
+ * outcome set) differently than the caller that owns that definition —
+ * weekly-metrics.ts passes its own `LEAD_OUTCOME` constant, never a second
+ * `"lead"` string that could drift from it. Filtered server-side (unlike
+ * `listCallOutcomesBetween` above, which hands back every outcome for the
+ * caller to filter in JS) and paged by id for the same reason
+ * `sumOpenOpportunities`/`listSubmissionCreationsBetween` are: an unpaged
+ * row-returning read silently truncates at PostgREST's row cap once an
+ * account crosses it in one window, even a narrower one than "every call".
+ *
+ * `excludeCallers` drops calls from those numbers — the agency's own test
+ * handsets, which the app reads as `agencyHandsets()`
+ * (apps/web/src/lib/voice/caller-reputation.ts). A parameter for the same
+ * reason `outcomes` is: this layer reads no environment and decides no
+ * policy. It belongs on METRICS only — never on the call caps
+ * (`countCallsSince`/`countCallsByCallerSince`), which must count every call
+ * that cost money, and never on the Calls log, which is a record.
+ */
+export async function listCallStartsByOutcomeBetween(
+  db: SupabaseClient, accountId: string, outcomes: readonly string[],
+  fromIso: string, toIso: string,
+  opts: { pageSize?: number; excludeCallers?: readonly string[] } = {},
+): Promise<string[]> {
+  const pageSize = opts.pageSize ?? CALL_OUTCOME_STARTS_PAGE_SIZE;
+  const exclude = excludeCallersFilter(opts.excludeCallers ?? []);
+  const result: string[] = [];
+  let lastId: string | undefined;
+  for (;;) {
+    let query = db.from("calls")
+      .select("id, started_at")
+      .eq("account_id", accountId).in("outcome", outcomes as string[])
+      .gte("started_at", fromIso).lt("started_at", toIso)
+      .order("id", { ascending: true });
+    if (exclude) query = query.or(exclude);
+    if (lastId !== undefined) query = query.gt("id", lastId);
+    const { data, error } = await query.limit(pageSize);
+    if (error) throw new Error(`listCallStartsByOutcomeBetween failed: ${error.message}`);
+    const rows = (data ?? []) as { id: string; started_at: string }[];
+    if (rows.length === 0) return result;
+    for (const row of rows) result.push(row.started_at);
+    lastId = rows[rows.length - 1]!.id;
+  }
+}
+
 export async function findUpcomingBookingForPhone(
   db: SupabaseClient, accountId: string, phoneE164: string, nowIso: string,
 ): Promise<{ bookingId: string; startsAt: string } | null> {
@@ -713,4 +836,28 @@ export async function searchCalls(
     .limit(opts.limit ?? 5);
   if (error) throw new Error(`searchCalls failed: ${error.message}`);
   return (data ?? []) as unknown as CallListRow[];
+}
+
+/**
+ * Consent chain PR-1 (danlo, 2026-09-26): a text-back held overnight is not
+ * sent at 08:00 if the caller has been back in touch since the missed call:
+ * a call from the same number that STARTED after `sinceIso`, or an inbound
+ * TEXT in the conversation after it. The missed call itself started before
+ * `sinceIso` (its end), and its own voice message is not a text, so neither
+ * counts. THROWS on a read error; the release turns that into a re-hold.
+ */
+export async function callerInTouchSince(
+  db: SupabaseClient, accountId: string, callerE164: string, conversationId: string, sinceIso: string,
+): Promise<boolean> {
+  const { count: calls, error } = await db.from("calls")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).eq("caller_e164", callerE164).gt("started_at", sinceIso);
+  if (error) throw new Error(`callerInTouchSince calls read failed: ${error.message}`);
+  if ((calls ?? 0) > 0) return true;
+  const { count: texts, error: mErr } = await db.from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).eq("conversation_id", conversationId)
+    .eq("channel", "sms").eq("direction", "inbound").gt("created_at", sinceIso);
+  if (mErr) throw new Error(`callerInTouchSince messages read failed: ${mErr.message}`);
+  return (texts ?? 0) > 0;
 }

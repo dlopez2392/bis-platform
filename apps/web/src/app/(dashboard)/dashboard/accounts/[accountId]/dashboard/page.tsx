@@ -3,9 +3,11 @@ import { ListChecks } from "lucide-react";
 import {
   listChecklistState, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
-  listCallStartsBetween, listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
+  listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
+  sumOpenOpportunities,
   getA2pRegistration, listAccountWork,
 } from "@bis/db";
+import { listAnsweredCallStartsBetween, listLeadInstantsBetween } from "@/lib/reports/weekly-metrics";
 import { StatTile } from "@/components/stat-tile";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
@@ -97,24 +99,34 @@ export default async function AccountDashboardPage({
   const window7FromMs = Date.parse(window7.fromIso);
 
   const [
-    checklistRows, contactsCount, opps,
-    voiceProfile, calendar, callsIso, bookingsIso, oppPairs, recentCalls, recentEvents,
+    checklistRows, contactsCount, openOpps,
+    voiceProfile, calendar, callsIso, bookingsIso, oppPairs, leadInstantsIso, recentCalls, recentEvents,
     a2p, workRows,
   ] = await Promise.all([
     listChecklistState(db, accountId),
     countContacts(db, accountId),
-    // PostgREST caps rows at max_rows (1000). Above that, this sum and count
-    // silently undercount — an accurate figure needs a DB-side aggregate.
-    db
-      .from("opportunities")
-      .select("monetary_value")
-      .eq("account_id", accountId)
-      .eq("status", "open"),
+    // Pages past PostgREST's row cap (max_rows, 1000) internally, so neither
+    // the count nor the sum silently undercounts above it — see
+    // sumOpenOpportunities' own comment.
+    sumOpenOpportunities(db, accountId),
     getVoiceProfile(db, accountId),
     getCalendarForAccount(db, accountId),
-    listCallStartsBetween(db, accountId, window14.fromIso, window14.toIso),
+    // ANSWERED calls only, the Monday report's own definition and read — not
+    // every call row. Until 2026-10-06 this was `listCallStartsBetween`
+    // (every row), so the hero labelled "Calls answered", its spark, the
+    // 14-day chart and the after-hours tile all counted robocalls — on the
+    // BIS account, 123 of 139 calls — and the owner's own test calls.
+    listAnsweredCallStartsBetween(db, accountId, window14.fromIso, window14.toIso),
     listBookingCreationsBetween(db, accountId, window14.fromIso, window14.toIso),
     listOpportunityValuesCreatedBetween(db, accountId, window14.fromIso, window14.toIso),
+    // F-076 (now slice): the CRM-only hero ("Leads captured" — owner
+    // decision, the SAME definition the Monday weekly report uses, not
+    // "every new contact"). Fetched unconditionally (same Promise.all),
+    // same reason the calls/bookings/opportunities reads above are: whether
+    // THIS one feeds the hero isn't known until `showVoiceSub` resolves
+    // below, and a second sequential round-trip just to learn that would
+    // cost latency for nothing.
+    listLeadInstantsBetween(db, accountId, window14.fromIso, window14.toIso),
     // The calls chart card's (Task 6) mini table — the 3 most recent calls
     // ever, not scoped to the 14-day window above.
     listCalls(db, accountId, { limit: 3 }),
@@ -143,13 +155,8 @@ export default async function AccountDashboardPage({
     listAccountWork(db, accountId),
   ]);
 
-  if (opps.error) {
-    throw new Error(`account dashboard: opportunities query failed: ${opps.error.message}`);
-  }
-
-  const open = opps.data ?? [];
-  const openOppsValue = String(open.length);
-  const pipelineValueDisplay = formatCurrency(open.reduce((sum, o) => sum + Number(o.monetary_value), 0));
+  const openOppsValue = String(openOpps.count);
+  const pipelineValueDisplay = formatCurrency(openOpps.value);
 
   const checklistEntries = mergeChecklist(checklistRows, { a2pStatus: a2p?.status });
   const checklistRemaining = checklistEntries.filter((e) => !e.done).length;
@@ -219,6 +226,29 @@ export default async function AccountDashboardPage({
   const bookingsSpark = bucketByLocalDay(bookingsIso, timezone, window14.dayKeys).map((b) => b.count);
   const bookingsDelta = deltaVsPrior(currentBookingsIso.length, priorBookingsIso.length);
 
+  // Leads captured — F-076 (now slice): the CRM-only hero, same split/spark
+  // shape as calls/bookings above. `showVoiceSub` (voice_profiles.enabled —
+  // already resolved above for the greeting subtitle, and the same signal
+  // calls-chart-card.tsx's own `offerVoiceSetup` reads) decides which of
+  // this and the calls metric below leads the KPI row: a CRM-only account
+  // has no receptionist taking calls, so "Calls answered" is structurally
+  // always 0 there and is never the honest headline (crm-features.md
+  // §2.3's defect row). Owner decision: "leads captured" — the SAME
+  // DEFINITION of a lead (a real submission or a `LEAD_OUTCOME` call) the
+  // Monday weekly report uses, read through the one shared function both
+  // call, `listLeadInstantsBetween` (lib/reports/weekly-metrics.ts) — not
+  // "every new contact", and not a second, parallel computation that could
+  // drift from the report's. The NUMBER shown here can still differ from
+  // the email's: this window is a rolling 7 local days ending NOW, while
+  // the email's is the calendar week just finished (Monday 00:00 to the
+  // next Monday 00:00, the account's own zone) — two different windows
+  // over the one shared definition, the same relationship "Calls answered"
+  // already has with the report's own "calls answered".
+  const currentLeadsIso = leadInstantsIso.filter((iso) => Date.parse(iso) >= window7FromMs);
+  const priorLeadsIso = leadInstantsIso.filter((iso) => Date.parse(iso) < window7FromMs);
+  const leadsSpark = bucketByLocalDay(leadInstantsIso, timezone, window14.dayKeys).map((b) => b.count);
+  const leadsDelta = deltaVsPrior(currentLeadsIso.length, priorLeadsIso.length);
+
   // After-hours captured — DATA HONESTY (brief): hidden entirely, not
   // rendered as a zero, when there is no calendar or no configured hours to
   // judge a call against. countAfterHours itself would happily return an
@@ -231,7 +261,12 @@ export default async function AccountDashboardPage({
   // `Object.keys(...).length > 0` check while `countAfterHours` normalizes
   // it down to nothing and judges every call after-hours — the exact
   // "every-call-after-hours" reading this gate exists to prevent.
-  const hasAfterHours = calendar !== null && Object.keys(normalizeOpenHours(calendar.open_hours)).length > 0;
+  // Also gated on `showVoiceSub`: after-hours capture is a property of
+  // calls Sofía takes, so a CRM-only account (no enabled voice profile)
+  // would otherwise show an always-0 tile here too — the same "unmeasured
+  // is hidden, not zeroed" reasoning the hero swap above follows.
+  const hasAfterHours = showVoiceSub
+    && calendar !== null && Object.keys(normalizeOpenHours(calendar.open_hours)).length > 0;
   const afterHoursCurrent = hasAfterHours
     ? countAfterHours(currentCallsIso, timezone, calendar.open_hours)
     : 0;
@@ -272,13 +307,17 @@ export default async function AccountDashboardPage({
         <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
         <WorkRowCard accountId={accountId} total={workTotal} overdue={workOverdue} />
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
+          {/* F-076 (now slice): ONE hero tile (DESIGN.md rule 11), whose
+              metric follows the plan rather than a fixed metric that reads
+              0 forever on a CRM-only account — see the `leadsDelta`
+              comment above. */}
           <StatTile
             hero
-            label={m["dashboard.kpi.callsAnswered"]}
-            value={String(currentCallsIso.length)}
-            delta={callsDelta}
-            spark={callsSpark}
-            valueTestId="kpi-calls-answered"
+            label={showVoiceSub ? m["dashboard.kpi.callsAnswered"] : m["dashboard.kpi.leadsCaptured"]}
+            value={showVoiceSub ? String(currentCallsIso.length) : String(currentLeadsIso.length)}
+            delta={showVoiceSub ? callsDelta : leadsDelta}
+            spark={showVoiceSub ? callsSpark : leadsSpark}
+            valueTestId={showVoiceSub ? "kpi-calls-answered" : "kpi-leads-captured"}
           />
           <StatTile
             label={m["dashboard.kpi.appointmentsBooked"]}

@@ -209,6 +209,22 @@ jobs:
       # refuses a live key before any other step runs.
       # Scoped to this job for the same reason as OPENAI_API_KEY above.
       STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}
+      # NOT a secret: a fixed literal the e2e billing spec signs its own
+      # fixture webhook events with, so the e2e server accepts them. It
+      # verifies nothing anywhere else: production's signing secret is set
+      # on Vercel Production only (M7a PR-3 plan, Task 13).
+      STRIPE_WEBHOOK_SECRET: whsec_bis_ci_e2e_fixture_only
+      # NOT a secret: the PUBLIC half of a fixed test key whose private half
+      # lives in e2e/consent-texts.spec.ts, so the e2e server accepts that
+      # spec's signed SMS webhooks. Production's TELNYX_PUBLIC_KEY is set on
+      # Vercel Production only and is a different key.
+      TELNYX_PUBLIC_KEY: lW4zmAKH3ZvWpUaw9UO78RQpX8fUhVcP0vvuEaUxS0w=
+      # NOT a secret: a fixed literal the e2e server seals its unsubscribe
+      # links with, and e2e/consent-email.spec.ts mints its tokens with, so
+      # the spec can open /u/<token> and POST the one-click endpoint.
+      # Production's CONSENT_TOKEN_SECRET is set on Vercel Production only
+      # (consent PR-3 plan, Task 15) and is a different value.
+      CONSENT_TOKEN_SECRET: bis_ci_e2e_consent_token_fixture_only
     concurrency:
       # Serialized repo-wide and never cancelled; see the header. A new name
       # for the reason verify's has one: branches still on the old ci.yml run
@@ -244,8 +260,24 @@ jobs:
       - name: Seed the CI project
         run: pnpm --filter @bis/db ci:seed
 
+      # Bounded, with one retry. On PR #162 (run 36885435767, attempt 2) this
+      # step hung inside `apt-get update` on an Ubuntu mirror for the job's
+      # whole 30 minutes and was cancelled before a single spec ran; a normal
+      # install takes about a minute. Each attempt gets 6 minutes, a second
+      # attempt covers a mirror that recovers, and the step's own cap makes a
+      # hang a fast, clearly named failure rather than a cancelled job.
       - name: Install Chromium for Playwright
-        run: pnpm --filter web exec playwright install --with-deps chromium
+        timeout-minutes: 14
+        run: |
+          for attempt in 1 2; do
+            if timeout --kill-after=20s 6m pnpm --filter web exec playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::Chromium install attempt $attempt failed or exceeded 6 minutes"
+            sleep 15
+          done
+          echo "::error::Chromium install failed twice; see the apt output above"
+          exit 1
 
       # playwright.config.ts builds and starts the production server itself
       # (`pnpm build && pnpm start`), signs in as the agency admin through a

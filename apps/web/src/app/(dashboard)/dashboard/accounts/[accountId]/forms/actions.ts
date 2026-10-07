@@ -6,7 +6,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { createForm, getForm, updateForm, type FormField, type FormStatus } from "@bis/db";
 import { m } from "@/lib/messages";
-import { isValidFormFieldList, mergeFormTheme } from "@/lib/forms/editor-helpers";
+import { isValidFormFieldList, mergeFormTheme, defaultFormFields } from "@/lib/forms/editor-helpers";
 // The public form's own validator, reused deliberately rather than a second
 // regex — same reasoning settings/actions.ts records for setFromEmailAction.
 import { isValidEmail } from "@/lib/forms/guards";
@@ -18,13 +18,11 @@ export async function createFormAction(accountId: string, formData: FormData): P
 
   const { id } = await createForm(await dbForRequest(), accountId, {
     name,
-    // A form with no fields cannot be published, so seed the three that every
-    // lead form needs rather than opening an empty editor.
-    fields: [
-      { key: "first_name", kind: "core.first_name", label: "Name", required: true },
-      { key: "email", kind: "core.email", label: "Email", required: true },
-      { key: "message", kind: "message", label: "How can we help?", required: false },
-    ],
+    // A form with no fields cannot be published, so seed the fields every
+    // lead form needs rather than opening an empty editor. See
+    // `defaultFormFields`'s own comment for why first/last name are two
+    // fields, not one labeled "Name" (F-047 phase 1 defect fix).
+    fields: defaultFormFields(),
   }, userId);
 
   revalidatePath(`/dashboard/accounts/${accountId}/forms`);

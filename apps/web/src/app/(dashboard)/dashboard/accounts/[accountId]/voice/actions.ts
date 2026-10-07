@@ -27,12 +27,12 @@
 import { revalidatePath } from "next/cache";
 import {
   serviceDb, upsertVoiceProfile, assignPhoneNumber, setPhoneNumberStatus, getVoiceProfile,
-  reassignPhoneNumber, listPhoneNumbersForAccount, setTransferPhone,
-  enableConcierge, disableConcierge,
+  reassignPhoneNumber, listPhoneNumbersForAccount, setTransferPhone, getTransferPhone,
+  enableConcierge, disableConcierge, setForwardCalls,
   type PhoneNumberStatus, type VoiceProfilePatch,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
-import { toE164 } from "@/lib/voice/phone-number";
+import { e164Of } from "@/lib/voice/phone-number";
 import { resolveHandoffTarget } from "@/lib/voice/handoff";
 import { m } from "@/lib/messages";
 
@@ -91,7 +91,7 @@ export async function assignNumberAction(
   const { userId, isAgency } = await requireAccountAccess(accountId);
   if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
 
-  const e164 = toE164(String(formData.get("e164") ?? ""));
+  const e164 = e164Of(String(formData.get("e164") ?? ""));
   if (!e164) return { ok: false, error: m["voice.numbers.badE164"] };
 
   const telnyxId = String(formData.get("telnyxId") ?? "").trim();
@@ -226,7 +226,7 @@ export async function setNumberStatusAction(
  *    second spelling is one this screen and the call path would read
  *    differently. Same rule `setAlertPhoneAction` follows for `alert_phone`.
  *
- * ② WHAT IS STORED IS `toE164(input)` OR NULL, never a raw string. The
+ * ② WHAT IS STORED IS `e164Of(input)` OR NULL, never a raw string. The
  *    handoff TeXML interpolates this column into an XML document UNESCAPED,
  *    which is safe only because every value in it has passed E.164 — the
  *    validation here and the CHECK behind it are that safety, not a nicety.
@@ -254,7 +254,7 @@ export async function setTransferPhoneAction(
   if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
 
   const raw = String(formData.get("transfer_phone") ?? "").trim();
-  const transferPhone = raw ? toE164(raw) : null;
+  const transferPhone = raw ? e164Of(raw) : null;
   if (raw && !transferPhone) return { ok: false, error: m["voice.transfer.badE164"] };
 
   if (transferPhone) {
@@ -353,3 +353,46 @@ export async function disableConciergeAction(accountId: string): Promise<ActionR
   revalidatePath(`/dashboard/accounts/${accountId}/voice`);
   return { ok: true };
 }
+
+/**
+ * "Send calls straight to a person" (operational-floor spec §3): the agency's
+ * lever for taking an account's phones back from Sofía. It writes
+ * `voice_profiles.forward_calls` through `setForwardCalls`, which emits
+ * `voice.forward_changed` with the actor, so the account's history shows who
+ * took the phones back and when. The call path (`/api/voice/texml`) does the
+ * rest: while it is on, a call that would have reached Sofía rings the
+ * account's transfer number instead.
+ *
+ * Turning it ON needs a transfer number, checked here as well as by the
+ * card's disabled switch, because "on" with nothing to dial is a promise the
+ * product cannot keep (the call path would quietly fall back to Sofía).
+ * Turning it OFF is never gated on a read: the off switch must work when
+ * something else is down, for the reason `setTransferPhoneAction` gives.
+ */
+export async function setForwardCallsAction(accountId: string, on: boolean): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
+
+  if (on) {
+    let transferPhone: string | null;
+    try {
+      transferPhone = await getTransferPhone(serviceDb(), accountId);
+    } catch (e) {
+      console.error(`setForwardCallsAction: transfer-number read failed for account ${accountId}: ${String(e)}`);
+      return { ok: false, error: m["voice.forward.saveFailed"] };
+    }
+    if (!transferPhone) return { ok: false, error: m["voice.forward.needsTransfer"] };
+  }
+
+  try {
+    await setForwardCalls(serviceDb(), accountId, on, userId);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`setForwardCallsAction: save failed for account ${accountId}: ${message}`);
+    return { ok: false, error: m["voice.forward.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/voice`);
+  return { ok: true };
+}
+

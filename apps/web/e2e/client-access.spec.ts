@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess } from "@bis/db";
@@ -93,9 +93,12 @@ test("a client sees only their own account, and nothing when access is off", asy
   // the client's behalf. Its own page title, not "Activity" — that word
   // already names the account dashboard's Activity card, a different card
   // (cleanup item 2, same date).
+  // "Billing" is last in Overview, directly after "Website", client-only like
+  // Branding (M7a PR-3 Task 10, G20; nav-groups.test.ts pins its place). It
+  // shows before billing starts too: the page then says it isn't set up yet.
   const CLIENT_NAV = [
-    "Dashboard", "To do", "Website", "Contacts", "Opportunities", "Conversations", "Calls", "What went out", "Forms",
-    "Calendar", "Branding",
+    "Dashboard", "To do", "Website", "Billing", "Contacts", "Opportunities", "Conversations", "Calls", "What went out",
+    "Forms", "Calendar", "Branding",
   ];
   await expect(page.locator("aside nav a")).toHaveText(CLIENT_NAV);
   for (const label of CLIENT_NAV) {
@@ -210,16 +213,25 @@ test("a client sees only their own account, and nothing when access is off", asy
   // column/table grants — a mock DB client is more permissive than the real
   // one, so it proves nothing about what the CLIENT role can actually
   // SELECT). This session is running as this fixture's real Clerk identity
-  // through dbForRequest(), not service role, so the Calls-answered KPI
-  // rendering a NUMBER here — rather than the tile being absent, or the page
-  // throwing — is the only thing in this suite that proves `calls`,
-  // `bookings`, and `opportunities` SELECT actually reach the client role
-  // (the KPI row reads all three; see [accountId]/dashboard/page.tsx). The
-  // fixture has taken zero calls, so "0" is the honest, EXPECTED value, not
-  // a fallback being tolerated — this asserts a numeric string specifically
-  // (not "not empty", not "not an error"), so a read that silently failed
-  // and rendered nothing, or threw past an error boundary, still fails this.
-  await expect(page.getByTestId("kpi-calls-answered")).toHaveText(/^\d+$/);
+  // through dbForRequest(), not service role, so the hero KPI rendering a
+  // NUMBER here — rather than the tile being absent, or the page throwing —
+  // is the only thing in this suite that proves `calls`, `bookings`,
+  // `form_submissions`, and `opportunities` SELECT actually reach the
+  // client role (the KPI row reads all four in the SAME Promise.all; see
+  // [accountId]/dashboard/page.tsx and `listLeadInstantsBetween`,
+  // lib/reports/weekly-metrics.ts — a missing grant on any one of them
+  // throws and takes the whole page down, not just that tile). Asserted via
+  // `data-hero`, not a fixed `kpi-calls-answered` testid: this fixture has
+  // no voice profile (F-076's now slice, crm-features.md §2.3/§6.3), so its
+  // hero is "Leads captured" (`kpi-leads-captured` — the SAME definition the
+  // Monday weekly report sends, owner decision), not "Calls answered" —
+  // `kpi-calls-answered` would not even render here. The fixture has taken
+  // zero calls and zero submissions in-window, so "0" is the honest,
+  // EXPECTED value, not a fallback being tolerated — this asserts a numeric
+  // string specifically (not "not empty", not "not an error"), so a read
+  // that silently failed and rendered nothing, or threw past an error
+  // boundary, still fails this.
+  await expect(page.locator('[data-hero="true"]')).toHaveText(/^\d+$/);
 
   // 6. With client_access_enabled flipped false, they get the no-access
   // page — not an empty CRM. This is what proves design spec sections

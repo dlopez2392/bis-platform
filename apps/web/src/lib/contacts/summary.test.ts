@@ -23,7 +23,8 @@ function real(): ContactSummary {
       { kind: "message", label: "Message", at: "2026-08-29T00:00:00+00:00" },
       { kind: "opportunity", label: "Deal: Deck build ($100)", at: "2026-08-28T00:00:00+00:00" },
     ],
-    marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00",
+    phone_country_unconfirmed: true,
+    phone: "+15512345678",
     zone: { zone: "America/Chicago", guessed: false, label: "America/Chicago" },
   };
 }
@@ -42,11 +43,6 @@ function without(key: keyof ContactSummary): unknown {
 describe("parseContactSummary: the route's own shape", () => {
   it("parses the route's current body, every one of the five kinds included", () => {
     expect(parseContactSummary(wire(real()))).toEqual(real());
-  });
-
-  it("parses a contact who may be emailed (stamp null, present)", () => {
-    const body = { ...real(), marketing_email_opted_out_at: null };
-    expect(parseContactSummary(wire(body))).toEqual(body);
   });
 
   it("parses a contact with no tags and nothing recent", () => {
@@ -114,15 +110,10 @@ describe("parseContactSummary: a required field missing or wrong is null", () =>
     expect(parseContactSummary(wire({ ...real(), recent: [{ kind: "booking", label: "Booked" }] }))).toBeNull();
   });
 
-  it("marketing_email_opted_out_at missing — NOT defaulted to null", () => {
-    // A default would show an opted-out contact as unticked, and one tick
-    // would then write. "Couldn't load" is the honest screen.
-    expect(parseContactSummary(without("marketing_email_opted_out_at"))).toBeNull();
-  });
-
-  it("marketing_email_opted_out_at neither a string nor null", () => {
-    expect(parseContactSummary(wire({ ...real(), marketing_email_opted_out_at: 0 }))).toBeNull();
-    expect(parseContactSummary(wire({ ...real(), marketing_email_opted_out_at: false }))).toBeNull();
+  it("the summary no longer carries 0049's column, and a body that still has it loads (an old server during the deploy; consent PR-3; mutation: keep it required → FAILS)", () => {
+    const parsed = parseContactSummary({ tags: [], recent: [], marketing_email_opted_out_at: "2026-09-01T00:00:00Z" });
+    expect(parsed).not.toBeNull();
+    expect(parsed).not.toHaveProperty("marketing_email_opted_out_at");
   });
 });
 
@@ -168,7 +159,6 @@ describe("parseContactSummary: zone is tolerated, never required", () => {
     expect(parsed).not.toBeNull();
     expect(parsed!.zone).toBeUndefined();
     expect(parsed!.tags).toEqual(real().tags);
-    expect(parsed!.marketing_email_opted_out_at).toBe(real().marketing_email_opted_out_at);
   });
 
   it("malformed parses, with zone undefined", () => {
@@ -193,6 +183,57 @@ describe("parseContactSummary: zone is tolerated, never required", () => {
     }));
     expect(parsed).not.toBeNull();
     expect(parsed!.zone).toBeUndefined();
+  });
+});
+
+describe("parseContactSummary: phone_country_unconfirmed is tolerated, never required (consent chain PR-1)", () => {
+  it("carries true through, so the drawer's Check number row shows (mutation: drop the field from the return → FAILS)", () => {
+    expect(parseContactSummary(wire(real()))?.phone_country_unconfirmed).toBe(true);
+  });
+
+  it("carries false through", () => {
+    expect(parseContactSummary(wire({ ...real(), phone_country_unconfirmed: false }))?.phone_country_unconfirmed).toBe(false);
+  });
+
+  it("missing (a server from before PR-1) is false and the rest still loads (mutation: make it required → null, FAILS)", () => {
+    const parsed = parseContactSummary(without("phone_country_unconfirmed"));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.phone_country_unconfirmed).toBe(false);
+  });
+
+  it("anything but the boolean true is false — never a truthy string (mutation: Boolean(v) → \"false\" shows the row, FAILS)", () => {
+    for (const v of ["true", "false", 1, {}, null]) {
+      expect(parseContactSummary(wire({ ...real(), phone_country_unconfirmed: v }))?.phone_country_unconfirmed).toBe(false);
+    }
+  });
+});
+
+/**
+ * Round 3, review I3: the drawer's Check number row passes THIS field as
+ * the phone the operator SAW — never the list row's `?peek=` stub. TOLERATED
+ * like the flag: missing, or anything but a string, is null (a server from
+ * before round 3 sends none), and the row's pick then fails closed on it
+ * rather than trusting a stub.
+ */
+describe("parseContactSummary: phone (round 3, review I3)", () => {
+  it("carries the stored phone through (mutation: drop the field from the return → FAILS)", () => {
+    expect(parseContactSummary(wire(real()))?.phone).toBe("+15512345678");
+  });
+
+  it("missing (a server from before round 3) is null and the rest still loads (mutation: make it required → null, FAILS)", () => {
+    const parsed = parseContactSummary(without("phone"));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.phone).toBeNull();
+  });
+
+  it("anything but a real string is null — never coerced (mutation: String(v) → FAILS)", () => {
+    for (const v of [1, {}, true]) {
+      expect(parseContactSummary(wire({ ...real(), phone: v }))?.phone).toBeNull();
+    }
+  });
+
+  it("a contact with no phone at all parses to null, not dropped", () => {
+    expect(parseContactSummary(wire({ ...real(), phone: null }))?.phone).toBeNull();
   });
 });
 

@@ -619,14 +619,19 @@ describe("font variable names agree across the three places that hold them", () 
   const read = (relative: string) => readFileSync(
     path.join(path.dirname(fileURLToPath(import.meta.url)), relative), "utf8",
   );
-  // BOTH root layouts. `app/f` is a separate tree with its own <html> and
-  // never sees the dashboard's font declarations, so a face declared in one
-  // and not the other resolves to nothing on that route and the tenant's
-  // typeface falls back with no error anywhere — which is close to how
-  // brand_type managed to be inert for the whole of M4a.
+  // BOTH root layouts. The public trees (`app/f`, `app/b`, `app/c`) are
+  // separate roots with their own `<html>` and never see the dashboard's
+  // font declarations, so a face declared in one and not the other resolves
+  // to nothing on that route and the tenant's typeface falls back with no
+  // error anywhere — which is close to how brand_type managed to be inert
+  // for the whole of M4a. F-102 collapsed what used to be three near-
+  // identical copies of these declarations (one per public tree) into ONE
+  // shared `components/public/public-html.tsx`, so checking it once covers
+  // all three — the risk this test guards against (one tree's copy drifting
+  // from another's) cannot recur now that there is only one copy to drift.
   const layouts = {
     dashboard: read("../../app/(dashboard)/layout.tsx"),
-    publicForm: read("../../app/f/layout.tsx"),
+    publicHtml: read("../../components/public/public-html.tsx"),
   };
 
   it.each(

@@ -72,7 +72,11 @@ vi.mock("@/components/alert-phone-card", () => ({
 }));
 
 // "use server" — cannot be imported into a vitest render.
-vi.mock("./actions", () => ({ setBrandingAction: async () => ({ ok: true }) }));
+vi.mock("./actions", () => ({
+  setBrandingAction: async () => ({ ok: true }),
+  removeBrandLogoAction: async () => ({ ok: true, path: "acct/logo.png" }),
+  restoreBrandLogoAction: async () => ({ ok: true }),
+}));
 
 const { default: BrandingPage } = await import("./page");
 

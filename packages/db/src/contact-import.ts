@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createContact, updateContact, addTagToContacts, listTags, phoneDigits,
+import { createContact, updateContact, addTagToContacts, listTags, phoneDigits, phoneKeyOf,
          type ContactInput } from "./contacts";
 
 /**
@@ -138,7 +138,9 @@ export async function applyImportBatch(
 
   for (const row of rows) {
     const email = row.input.email?.trim().toLowerCase() || undefined;
-    const phoneKey = row.input.phone ? phoneDigits(row.input.phone.trim()) : "";
+    // The key of the phone as it WILL be stored (F-009), so a Mexican number
+    // typed as ten digits meets the +52 contact it belongs to.
+    const phoneKey = row.input.phone ? phoneKeyOf(row.input.phone) : "";
     const hitId = (email && index.byEmail.get(email)) ||
       (phoneKey && index.byPhone.get(phoneKey)) || undefined;
 

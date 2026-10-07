@@ -63,11 +63,16 @@ vi.mock("@/lib/db", () => ({
 const getCallMock = vi.fn();
 const listFailedOutboundSmsMock = vi.fn();
 const listProposalsForCallMock = vi.fn();
+const getContactMock = vi.fn();
 vi.mock("@bis/db", () => ({
   getCall: (...args: unknown[]) => getCallMock(...args),
   listFailedOutboundSms: (...args: unknown[]) => listFailedOutboundSmsMock(...args),
   listProposalsForCall: (...args: unknown[]) => listProposalsForCallMock(...args),
+  getContact: (...args: unknown[]) => getContactMock(...args),
 }));
+// Review R3-M8: the resend reads the same recipient state as the composer.
+const recipientStateMock = vi.fn();
+vi.mock("@/lib/consent/recipient-state", () => ({ smsRecipientState: (...a: unknown[]) => recipientStateMock(...a) }));
 
 /** The screen's resolved zone (lib/zone.ts) — mutable so a test can put the
  *  page into the "guessed" state without a second `vi.mock`. */
@@ -178,6 +183,11 @@ describe("CallDetailPage", () => {
     listFailedOutboundSmsMock.mockClear();
     listProposalsForCallMock.mockClear();
     pipelineStagesMock.mockClear();
+    // Review R3-M8: every existing case in this file exercises a contact who
+    // CAN be texted, so the resend renders exactly as it did before that
+    // review — only the new describe block below overrides these.
+    getContactMock.mockReset().mockResolvedValue({ id: "ct1", phone: "+19565061545", phone_country_unconfirmed: false });
+    recipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
   });
 
   it("renders the header, the summary and both sides of the conversation", async () => {
@@ -566,5 +576,42 @@ describe("CallDetailPage — proposals", () => {
     expect(renderedText(html)).not.toContain(m["proposals.heading"]);
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("proposals read failed"));
     spy.mockRestore();
+  });
+});
+
+describe("\"Send it now\" is closed on render when the number cannot be texted (review R3-M8)", () => {
+  it("a stopped number shows the composer's own stopped line in place of the button (mutation: render the button regardless → FAILS)", async () => {
+    getContactMock.mockResolvedValue({ id: "ct1", phone: "+19565061545", phone_country_unconfirmed: false });
+    recipientStateMock.mockResolvedValue({ kind: "stopped", since: "2026-08-25T21:00:00Z" });
+    const html = await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]);
+    expect(html).not.toContain("Send it now");
+    expect(renderedText(html)).toContain(m["compose.smsStopped"].replace("{date}", "Aug 25, 2026"));
+  });
+
+  it("an ok number keeps the button (the discriminator; mutation: always close it → FAILS)", async () => {
+    getContactMock.mockResolvedValue({ id: "ct1", phone: "+19565061545", phone_country_unconfirmed: false });
+    recipientStateMock.mockResolvedValue({ kind: "ok" });
+    const html = await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]);
+    expect(html).toContain("Send it now");
+  });
+
+  it("a contact read that fails closes it with the unreadable line, never an open button (fails closed; mutation: show the button on error → FAILS)", async () => {
+    getContactMock.mockRejectedValue(new Error("getContact failed"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const html = await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]);
+    expect(html).not.toContain("Send it now");
+    expect(renderedText(html)).toContain(m["compose.smsStateUnknown"]);
+  });
+
+  /** Review fix round 1, item 2: a read that SUCCEEDS but finds no contact
+   *  (the call's `contact_id` pointed at a row that no longer exists) must
+   *  close the same way an error does — the comment on this block already
+   *  claims "fails closed"; `resendClosedLine = null` on a missing contact
+   *  broke that promise by falling through to the open button below. */
+  it("a contact read that succeeds with no contact closes it with the unreadable line too (fails closed; mutation: leave resendClosedLine null on a missing contact → FAILS)", async () => {
+    getContactMock.mockResolvedValue(null);
+    const html = await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]);
+    expect(html).not.toContain("Send it now");
+    expect(renderedText(html)).toContain(m["compose.smsStateUnknown"]);
   });
 });

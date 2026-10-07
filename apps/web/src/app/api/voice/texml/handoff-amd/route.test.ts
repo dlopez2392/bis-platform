@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { POST } from "./route";
+// Heartbeats are mocked out so the `after()` recorders below keep counting
+// only this route's own work; their calls are asserted where they matter
+// (lib/ops/stamp.ts).
+const stampMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 
 const getCallByHandoffTokenMock = vi.hoisted(() => vi.fn());
 const setTransferAnsweredByMock = vi.hoisted(() => vi.fn());
@@ -109,8 +114,9 @@ describe("voice texml handoff-amd route", () => {
   });
 
   it("refuses an unsigned request once TELNYX_PUBLIC_KEY is set", async () => {
-    // The gate is off today (the key is unset in every environment) and this
-    // is what notices the day the runbook's Step 6 turns it on.
+    // The gate is on in production (the key has been set there since
+    // 2026-09-29) and off in the route tests, so this is the case that pins
+    // production's behaviour.
     process.env.TELNYX_PUBLIC_KEY = "not-a-real-key";
     const res = await POST(req("tok_abc", { AnsweredBy: "human" }));
     expect(res.status).toBe(403);

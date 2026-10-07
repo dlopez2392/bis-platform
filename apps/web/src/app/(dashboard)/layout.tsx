@@ -84,10 +84,11 @@ export default async function RootLayout({
   // This layout also wraps /sign-in and /no-access, where there is no tenant
   // to ask -- and, same as the dashboard shell, no tenant for a signed-out
   // caller or the agency either. getRequestTheme (the shared, request-cached
-  // reader in lib/branding/tenant-theme-reader.ts) degrades to "no tenant,
-  // light mode" quietly in all four cases: it never throws and never
-  // redirects, so this layout gains no new failure mode and the redirects
-  // stay owned by dashboard/layout.tsx.
+  // reader in lib/branding/tenant-theme-reader.ts) degrades to "no tenant"
+  // quietly in all four cases -- light for a signed-out caller, dark for the
+  // agency (resolveThemeMode's `isOperator`, owner decision 2026-10-06): it
+  // never throws and never redirects, so this layout gains no new failure
+  // mode and the redirects stay owned by dashboard/layout.tsx.
   //
   // This is the ONLY place either layout resolves a theme mode now: this
   // layout takes `providerDefault` for the class next-themes puts on <html>,

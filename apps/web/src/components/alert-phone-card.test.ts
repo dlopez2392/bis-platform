@@ -218,3 +218,20 @@ describe("AlertPhoneCard — copy", () => {
     expect(m["settings.alertPhoneTooManyCodes"]).toMatch(/hour/i);
   });
 });
+
+describe("AlertPhoneCard — Resend names the pending number's own country (review R3-M6)", () => {
+  it("a +52 pending number is resent under MX, anything else under US (mutation: always \"US\" → the start action answers the mismatch line on every Mexican resend, FAILS)", () => {
+    expect(codeOnly).toContain('formData.set("alertPhoneCountry", pendingPhone.startsWith("+52") ? "MX" : "US")');
+  });
+});
+
+describe("AlertPhoneCard — the country control's wiring (review: two silent mutations would text a stranger)", () => {
+  it("the radio posts under the name the server reads, carrying its own picked value (mutation: rename the input's name to anything else → the server defaults to US, FAILS)", () => {
+    expect(agencyRegion).toContain('name="alertPhoneCountry"');
+    expect(agencyRegion).toContain("value={c}");
+  });
+
+  it("the pending number is the SERVER's echoed E.164, never the raw typed text (mutation: setPendingPhone(raw) → resend sends the raw text under a hard-coded country, FAILS)", () => {
+    expect(agencyRegion).toContain("setPendingPhone(result.phone)");
+  });
+});

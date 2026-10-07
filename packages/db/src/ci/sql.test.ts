@@ -241,6 +241,13 @@ describe("sqlRefusals: read mode", () => {
       .toEqual(['statement 1 uses "pg_read_file", which a read may not use']);
   });
 
+  it("refuses a call of the consent ledger's one write path, whose INSERT a read-only transaction would stop only at run time (consent PR-3: the 0049 fold's write file is refused as a read; mutation: drop append_consent_event from NOT_IN_A_READ → FAILS)", () => {
+    expect(refused("select r.outcome from public.append_consent_event('a', 'email', 'x@y.z', 'revoked', 'backfill_0049', 'none', null, null, null, null, null, '{}'::jsonb, null) r"))
+      .toEqual(['statement 1 uses "append_consent_event", which a read may not use']);
+    expect(refused('select * from public."append_consent_event"(null, null, null, null, null, null, null, null, null, null, null, null, null)'))
+      .toEqual(['statement 1 uses "append_consent_event", which a read may not use']);
+  });
+
   /**
    * Side effects BEGIN READ ONLY does not stop (review of PR #130): for these
    * the lexer is the only defence, so each family is refused.

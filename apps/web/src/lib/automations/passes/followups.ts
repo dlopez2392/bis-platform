@@ -43,6 +43,7 @@ export async function processFollowups(
   let failed = 0;
   let unstamped = 0;
   let held = 0;
+  let blocked = 0;
   let skippedNoEmail = 0;
   let waitingForMorning = 0;
   let unresolvableTimezone = 0;
@@ -119,6 +120,8 @@ export async function processFollowups(
         // `followup.branding.replyToEmail` — that's the whole reason
         // `listDueFollowups` duplicates it there.
         await ctx.email.send({
+          accountId: followup.accountId, kind: "automation.followup", contactId: followup.contactId,
+          origin: ctx.origin, now: ctx.now, accountZone: followup.accountTimezone,
           to: followup.contactEmail!,
           fromName: brand.name,
           fromAddress: followup.fromEmail ?? undefined,
@@ -141,6 +144,10 @@ export async function processFollowups(
           );
         }
       });
+      if (outcome === "skipped") {
+        blocked++;
+        continue;
+      }
       if (outcome === "held") {
         held++;
         continue;
@@ -152,7 +159,7 @@ export async function processFollowups(
     }
   }
 
-  return { sent, failed, unstamped, held, skippedNoEmail, waitingForMorning, unresolvableTimezone };
+  return { sent, failed, unstamped, held, blocked, skippedNoEmail, waitingForMorning, unresolvableTimezone };
 }
 
 /**

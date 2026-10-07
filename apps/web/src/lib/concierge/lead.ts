@@ -25,6 +25,7 @@
 import type { serviceDb as serviceDbType } from "@bis/db";
 import { isValidEmail, isValidPhone } from "@/lib/forms/guards";
 import { splitName } from "@/lib/concierge/prompt";
+import { spokenPhone } from "@/lib/voice/phone-number";
 
 // Same private type route.ts still declares for its own use (`serviceDb() as
 // Db` at the top of the handler) — duplicated on purpose rather than
@@ -83,7 +84,20 @@ export async function fileLead(ctx: {
       // values, but "was told" is not a guarantee, and this value reaches the
       // contact dedupe lookup.
       : kind === "core.email" ? (isValidEmail(lead.email) ? lead.email : "")
-      : kind === "core.phone" ? (isValidPhone(lead.phone) ? lead.phone : "")
+      // AS SAID (review I3): the phone is written by a MODEL from what the
+      // visitor typed, not typed by a human directly, so it can carry a
+      // country code the model added rather than one the visitor gave —
+      // `spokenPhone` drops that leading 1, the same treatment Sofía's own
+      // capture_lead gets, so the contact write can judge it (phoneFields).
+      // `?? lead.phone`, NOT `?? ""` (review, new Important): spokenPhone
+      // returns null for anything it cannot read as a number at all (a bare
+      // 7-digit local number, "44 20 7946 0958" with no leading +) — falling
+      // back to "" DROPPED the answer outright (filtered by the `!== ""`
+      // below), and a visitor who left only a phone number lost their one
+      // contact method. The booking page and forms keep such a number "as
+      // typed, never rejected" (isValidPhone's own gate above); this path
+      // must match, not silently blank what it cannot parse.
+      : kind === "core.phone" ? (isValidPhone(lead.phone) ? (spokenPhone(lead.phone, null) ?? lead.phone) : "")
       : kind === "message" ? lead.need : "";
     const answers = form.fields
       .map((f) => ({ key: f.key, label: f.label, value: value(f.kind) }))
@@ -93,9 +107,9 @@ export async function fileLead(ctx: {
       return false;
     }
 
-    // Item 10 (Branch 2 hardening): the machine intake (#99,
-    // api/intake/[publicId]/route.ts:117-121) writes every CONSENT-kind field
-    // on the form as `{ key, given: false, text: label, at }`, never `[]`
+    // Item 10 (Branch 2 hardening): the machine intake (#99, since retired)
+    // wrote every CONSENT-kind field on the form as
+    // `{ key, given: false, text: label, at }`, never `[]`
     // regardless of whether the form carries one — so an operator reading the
     // row can tell "this form has no consent field at all" from "the visitor
     // never ticked it". A widget conversation cannot tick a box under its

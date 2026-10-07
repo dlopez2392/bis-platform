@@ -1,13 +1,22 @@
+import type { SubscriptionSnapshot } from "@bis/db";
 import {
-  priceCreateParams, meterEventParams, type BillingGateway, type MeterEventInput, type PriceSpec, type StripeMeter,
+  priceCreateParams, meterEventParams, checkoutSessionParams, PORTAL_VERSION, portalFeatureFlags,
+  type BillingGateway, type MeterEventInput, type PriceSpec, type StripeMeter,
+  type CheckoutInput, type CheckoutSession, type CheckoutStatus, type SubscriptionPriceChange,
+  type PortalSessionInput, type PortalConfiguration,
 } from "./stripe-gateway";
 
 export type GatewayOp =
-  | "listActiveMeters" | "createMeter" | "createProduct" | "renameProduct" | "createPrice" | "reportMeterEvent";
+  | "listActiveMeters" | "createMeter" | "createProduct" | "renameProduct" | "createPrice" | "reportMeterEvent"
+  | "createCustomer" | "updateCustomerEmail" | "createCheckoutSession" | "getCheckoutSessionStatus" | "expireCheckoutSession"
+  | "retrieveSubscription" | "updateSubscriptionPrices" | "listPortalConfigurations" | "createPortalConfiguration"
+  | "createPortalSession";
 
-/** Structural equality good enough for the plain (no-array) op inputs this
- *  fake ever stores: PriceSpec and the {planId,name}/{eventName,displayName}
- *  input shapes. Not a general deep-equal utility; do not reuse elsewhere. */
+/** Structural equality good enough for the plain JSON-shaped op inputs this
+ *  fake ever stores: PriceSpec, the {planId,name}/{eventName,displayName}
+ *  shapes, CheckoutInput and SubscriptionPriceChange (an array compares
+ *  index by index, its length through its key count). Not a general
+ *  deep-equal utility; do not reuse elsewhere. */
 function sameInput(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
@@ -15,6 +24,12 @@ function sameInput(a: unknown, b: unknown): boolean {
   const bKeys = Object.keys(b as Record<string, unknown>);
   if (aKeys.length !== bKeys.length) return false;
   return aKeys.every((k) => sameInput((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
+/** What Stripe throws for a request it refuses (the SDK sets `.type` to the
+ *  class name), so a flow's Stripe-error handling is what a test exercises. */
+function invalidRequest(message: string): Error {
+  return Object.assign(new Error(message), { type: "StripeInvalidRequestError", rawType: "invalid_request_error", statusCode: 400 });
 }
 
 /**
@@ -65,8 +80,11 @@ export class FakeGateway implements BillingGateway {
       }
       return seen.value as T;
     }
-    const prefix = op === "createMeter" ? "mtr" : op === "createProduct" ? "prod" : "price";
-    const value = make(`${prefix}_${++this.seq}`);
+    const PREFIX: Partial<Record<GatewayOp, string>> = {
+      createMeter: "mtr", createProduct: "prod", createPrice: "price", createCustomer: "cus",
+      createCheckoutSession: "cs_test", createPortalConfiguration: "bpc",
+    };
+    const value = make(`${PREFIX[op] ?? "obj"}_${++this.seq}`);
     this.replay.set(key, { op, input, value });
     this.created.push({ op, input, id: value.id });
     return value;
@@ -145,5 +163,125 @@ export class FakeGateway implements BillingGateway {
     }
     this.replay.set(key, { op: "reportMeterEvent", input, value: undefined });
     this.meterEvents.push({ ...input });
+  }
+
+  /** Stripe's clock for sessions the fake makes (seconds). */
+  clockSeconds = 1_790_000_000;
+  readonly customers: Array<{ id: string; accountId: string; name: string | null; email: string }> = [];
+  readonly checkoutSessions = new Map<string, CheckoutSession & { status: CheckoutStatus; input: CheckoutInput }>();
+  /** Seed with the subscriptions a test's "Stripe" holds; retrieveSubscription reads here. */
+  readonly subscriptions = new Map<string, SubscriptionSnapshot>();
+  readonly subscriptionChanges: Array<{ change: SubscriptionPriceChange; key: string }> = [];
+  portalConfigurations: PortalConfiguration[] = [];
+  readonly portalSessions: PortalSessionInput[] = [];
+
+  async createCustomer(input: { accountId: string; name: string | null; email: string }, key: string): Promise<{ id: string }> {
+    this.step("createCustomer", input, key);
+    return this.once("createCustomer", key, input, (id) => {
+      this.customers.push({ id, ...input });
+      return { id };
+    });
+  }
+
+  /** Same replay strictness as the creates (A4). A customer the fake does
+   *  not hold is refused as Stripe refuses it ("No such customer"). */
+  async updateCustomerEmail(customerId: string, email: string, key: string): Promise<void> {
+    const input = { customerId, email };
+    this.step("updateCustomerEmail", input, key);
+    const seen = this.replay.get(key);
+    if (seen) {
+      if (seen.op !== "updateCustomerEmail" || !sameInput(seen.input, input)) {
+        throw new Error(`fake Stripe: idempotency key "${key}" was already used with different parameters (A4)`);
+      }
+      return;
+    }
+    const customer = this.customers.find((c) => c.id === customerId);
+    if (!customer) throw invalidRequest(`No such customer: '${customerId}'`);
+    customer.email = email;
+    this.replay.set(key, { op: "updateCustomerEmail", input, value: undefined });
+  }
+
+  async createCheckoutSession(input: CheckoutInput, key: string): Promise<CheckoutSession> {
+    checkoutSessionParams(input);
+    this.step("createCheckoutSession", input, key);
+    return this.once("createCheckoutSession", key, input, (id) => {
+      const session = { id, url: `https://checkout.stripe.test/c/pay/${id}`, expiresAt: this.clockSeconds + 86_400 };
+      this.checkoutSessions.set(id, { ...session, status: "open", input });
+      return session;
+    });
+  }
+
+  async getCheckoutSessionStatus(sessionId: string): Promise<CheckoutStatus> {
+    this.step("getCheckoutSessionStatus", { sessionId });
+    const s = this.checkoutSessions.get(sessionId);
+    if (!s) throw new Error(`fake Stripe: no such checkout session ${sessionId}`);
+    return s.status;
+  }
+
+  async expireCheckoutSession(sessionId: string): Promise<void> {
+    this.step("expireCheckoutSession", { sessionId });
+    const s = this.checkoutSessions.get(sessionId);
+    // Stripe answers a non-open session with an invalid request (assumption:
+    // its API reference says only an open session can be expired; the error
+    // class for it was not observed here).
+    if (!s || s.status !== "open") throw invalidRequest(`fake Stripe: only an open session can be expired (${sessionId})`);
+    s.status = "expired";
+  }
+
+  async retrieveSubscription(subscriptionId: string): Promise<SubscriptionSnapshot> {
+    this.step("retrieveSubscription", { subscriptionId });
+    const s = this.subscriptions.get(subscriptionId);
+    if (!s) throw new Error(`fake Stripe: no such subscription ${subscriptionId}`);
+    return structuredClone(s);
+  }
+
+  /** Same replay strictness as the creates (A4); applies the swap to the
+   *  held subscription so a re-read after it sees the new plan. ALL OR
+   *  NOTHING, like one Stripe request: the subscription and every item are
+   *  checked before anything changes, and the key is recorded only once the
+   *  whole change has applied, so a refused change leaves no trace and its
+   *  same-key retry is refused again. */
+  async updateSubscriptionPrices(change: SubscriptionPriceChange, key: string): Promise<void> {
+    this.step("updateSubscriptionPrices", change, key);
+    const seen = this.replay.get(key);
+    if (seen) {
+      if (seen.op !== "updateSubscriptionPrices" || !sameInput(seen.input, change)) {
+        throw new Error(`fake Stripe: idempotency key "${key}" was already used with different parameters (A4)`);
+      }
+      return;
+    }
+    const sub = this.subscriptions.get(change.subscriptionId);
+    if (!sub) throw new Error(`fake Stripe: no such subscription ${change.subscriptionId}`);
+    const swaps = change.items.map(({ id, price }) => {
+      const item = sub.items.find((i) => i.id === id);
+      if (!item) throw new Error(`fake Stripe: no item ${id} on ${change.subscriptionId}`);
+      return { item, price };
+    });
+    for (const { item, price } of swaps) {
+      item.priceId = price;
+      item.planId = change.planId;
+    }
+    sub.planId = change.planId;
+    this.replay.set(key, { op: "updateSubscriptionPrices", input: change, value: undefined });
+    this.subscriptionChanges.push({ change, key });
+  }
+
+  async listPortalConfigurations(): Promise<PortalConfiguration[]> {
+    this.step("listPortalConfigurations");
+    return this.portalConfigurations.map((c) => ({ ...c }));
+  }
+
+  async createPortalConfiguration(key: string): Promise<{ id: string }> {
+    this.step("createPortalConfiguration", undefined, key);
+    return this.once("createPortalConfiguration", key, { version: PORTAL_VERSION }, (id) => {
+      this.portalConfigurations.push({ id, metadata: { bis_portal: PORTAL_VERSION }, features: portalFeatureFlags() });
+      return { id };
+    });
+  }
+
+  async createPortalSession(input: PortalSessionInput): Promise<{ url: string }> {
+    this.step("createPortalSession", input);
+    this.portalSessions.push(input);
+    return { url: `https://billing.stripe.test/p/session/${input.customerId}` };
   }
 }

@@ -5,6 +5,10 @@ const dbMocks = vi.hoisted(() => ({
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
   fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(), hasRecentOutboundSms: vi.fn(),
   getAlertPhone: vi.fn(), getContact: vi.fn(), recordAutomationLog: vi.fn(), recordUsage: vi.fn(),
+  // The send gate's reads (lib/consent/gate.ts): the text-back and the staff
+  // alert go through the REAL gate, allowed by default.
+  readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
+  recordCarrierBlock: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -32,6 +36,26 @@ const senderMocks = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
 vi.mock("@/lib/sms/sender", async (importOriginal) => ({
   ...(await importOriginal<object>()), resolveSmsSender: senderMocks.resolveSmsSender,
 }));
+// consent PR-3: finish-call.ts now sends the staff alert through the email
+// gate (sendEmailOrThrow), not getEmailProvider() directly. The REAL gate
+// runs (it delegates to the mocked "@/lib/email" above for the actual
+// provider), so every existing emailRefs-based assertion keeps its shape
+// unchanged; this wrapper only RECORDS each request (kind, accountId, …)
+// for the consent-PR-3 case below, which the gate strips before the
+// provider ever sees it.
+const gateCalls = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock("@/lib/consent/email-gate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/consent/email-gate")>();
+  return {
+    ...real,
+    sendEmailOrThrow: (async (req: Parameters<typeof real.sendEmailOrThrow>[0],
+      deps?: Parameters<typeof real.sendEmailOrThrow>[1]) => {
+      gateCalls.push(req as unknown as Record<string, unknown>);
+      return real.sendEmailOrThrow(req, deps);
+    }) as typeof real.sendEmailOrThrow,
+  };
+});
+function gated(): Array<Record<string, unknown>> { return gateCalls; }
 const summaryMocks = vi.hoisted(() => ({ generateSummary: vi.fn() }));
 vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSummary }));
 // A STATIC import in finish-call.ts itself (`import { generateProposals } from
@@ -156,13 +180,16 @@ const textbackCtx: FinishContext = { ...ctx, textbackEnabled: true };
 /** A caller who SPOKE and got nothing — classifyOutcome's "abandoned". */
 const abandonedState = () => withTranscript(emptyCallState(), { role: "caller", text: "uh", at: "t" });
 
-const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T12:00:00Z"), endedAt: new Date("2027-06-01T12:02:00Z") };
+// 12:00-12:02 in Chicago (CDT): inside the text-back's sending hours
+// (08:00-21:00), so the ordinary abandoned call is texted at once.
+const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T17:00:00Z"), endedAt: new Date("2027-06-01T17:02:00Z") };
 
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
   summaryMocks.generateSummary.mockReset().mockResolvedValue("RECORDED — test.");
   emailRefs.providerShouldThrow = false;
   emailRefs.send.mockReset().mockResolvedValue({ providerMessageId: "x" });
+  gateCalls.length = 0;
   smsRefs.providerShouldThrow = false;
   smsRefs.send.mockReset().mockResolvedValue({ providerMessageId: "sm1" });
   senderMocks.resolveSmsSender.mockReset().mockResolvedValue({
@@ -183,6 +210,10 @@ beforeEach(() => {
   dbMocks.getAlertPhone.mockResolvedValue(null);
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
   dbMocks.recordUsage.mockResolvedValue("recorded");
+  dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
+  dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
+  dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
+  dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   // The ordinary case: a contact with all four allow-listed columns already
   // filled, so `blankFields` computes to `[]` unless a test deliberately
   // leaves one of these blank to exercise the propagation.
@@ -196,6 +227,17 @@ beforeEach(() => {
 });
 
 describe("finishCall", () => {
+  it("a lead's callback number is stored AS SAID so the contact write can flag it; the caller ID repeated stays the caller ID (review R2-C1; mutation: phone: e164Of(callbackNumber) → \"+15512345678\", FAILS)", async () => {
+    const said = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "55 1234 5678" } });
+    await finishCall(said, ctx, meta);
+    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ phone: "55 1234 5678" }), "voice", "ai");
+    const repeated = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "956 292 1696" } });
+    await finishCall(repeated, ctx, meta);
+    expect(dbMocks.createContact).toHaveBeenLastCalledWith({}, "a1", expect.objectContaining({ phone: "+19562921696" }), "voice", "ai");
+  });
+
   it("a lead call runs the full treatment: contact → conversation → message(voice) → unread → alert → row", async () => {
     const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
       { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
@@ -212,6 +254,14 @@ describe("finishCall", () => {
     expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
       expect.objectContaining({ outcome: "lead", contactId: "ct1", conversationId: "cv1", durationSecs: 120 }));
   });
+  it("the call alert to staff goes as operator.call_alert for the call's account (consent PR-3; mutation: a customer kind → a footer on a staff alert, FAILS)", async () => {
+    const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
+    await finishCall(s, ctx, meta);
+    expect(gated().length).toBeGreaterThan(0);
+    expect(gated().every((r) => r.kind === "operator.call_alert" && typeof r.accountId === "string")).toBe(true);
+  });
+
   it("an abandoned call records the row but creates nothing and alerts nobody", async () => {
     const s = withTranscript(emptyCallState(), { role: "caller", text: "uh", at: "t" });
     const r = await finishCall(s, ctx, meta);
@@ -248,16 +298,19 @@ describe("finishCall", () => {
     expect(dbMocks.finishCallRow).toHaveBeenCalled();
     errSpy.mockRestore();
   });
-  it("lead path dedupe onto an existing contact backfills blanks (rejection still stores + alerts)", async () => {
+  it("lead path dedupe onto the caller's own contact backfills blanks, never the phone (rejection still stores + alerts)", async () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    // beforeEach's contact has phone +19562921696 — the caller ID: their own.
     dbMocks.fillContactBlanks.mockRejectedValue(new Error("db down"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
       { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
     const r = await finishCall(s, ctx, meta);
     errSpy.mockRestore();
+    expect(dbMocks.getContact).toHaveBeenCalledWith({}, "a1", "ct1");
     expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
-      { firstName: "Ana", lastName: "Ruiz", email: undefined, phone: "+19562921696" }, "voice", "ai");
+      { firstName: "Ana", lastName: "Ruiz", email: undefined }, "voice", "ai");
+    expect(dbMocks.fillContactBlanks.mock.calls[0]![3]).not.toHaveProperty("phone");
     expect(r).toMatchObject({ stored: true, notified: true, outcome: "lead" });
     // Pins the LOCAL try/catch around fillContactBlanks: without it, the
     // rejection propagates to the outer per-leg catch and silently skips
@@ -267,6 +320,59 @@ describe("finishCall", () => {
     expect(dbMocks.ensureConversation).toHaveBeenCalled();
     expect(dbMocks.createMessage).toHaveBeenCalled();
   });
+  // The lead's email or callback number can match SOMEONE ELSE's contact
+  // (the dedupe matches email first, then phone). The lead still lands on
+  // that contact, but nothing of this caller's is written onto it unless its
+  // stored phone is the caller ID.
+  describe("lead path backfill is only for the caller's own contact", () => {
+    const leadWithEmail = () => withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
+      { fields: { fullName: "Ana Ruiz", need: "roof quote", email: "ana@example.com", callbackNumber: "(956) 555-0100" } });
+
+    it("stored \"(956) 292-1696\" is the caller ID +19562921696 — the fill runs (name + email only)", async () => {
+      dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+      dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Caller", last_name: null, email: null, phone: "(956) 292-1696" });
+      await finishCall(leadWithEmail(), ctx, meta);
+      expect(dbMocks.fillContactBlanks).toHaveBeenCalledWith({}, "a1", "ct1",
+        { firstName: "Ana", lastName: "Ruiz", email: "ana@example.com" }, "voice", "ai");
+    });
+
+    it.each([
+      ["a different number (the recited callback number matched someone else)", "+19565550100"],
+      ["no phone at all (an email-only match)", null],
+    ])("an existing contact with %s gets NOTHING filled — the lead still lands on it", async (_label, storedPhone) => {
+      dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+      dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Bea", last_name: null, email: null, phone: storedPhone });
+      const r = await finishCall(leadWithEmail(), ctx, meta);
+      expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+      expect(r).toMatchObject({ stored: true, outcome: "lead" });
+      expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
+        expect.objectContaining({ outcome: "lead", contactId: "ct1" }));
+    });
+
+    it("caller ID withheld: an existing contact gets NOTHING filled — the lead still lands on it", async () => {
+      dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+      dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Bea", last_name: null, email: null, phone: null });
+      const r = await finishCall(leadWithEmail(), { ...ctx, callerNumber: null }, meta);
+      expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+      expect(r).toMatchObject({ stored: true, outcome: "lead" });
+      expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
+        expect.objectContaining({ contactId: "ct1" }));
+    });
+
+    it("a failing contact read fills nothing, is logged by contact id, and the lead treatment carries on", async () => {
+      dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+      dbMocks.getContact.mockRejectedValue(new Error("db blip"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const r = await finishCall(leadWithEmail(), ctx, meta);
+      const logs = errSpy.mock.calls.map((c) => String(c[0] ?? ""));
+      errSpy.mockRestore();
+      expect(dbMocks.fillContactBlanks).not.toHaveBeenCalled();
+      expect(logs.some((l) => /finishCall fillContactBlanks failed for ct1/.test(l))).toBe(true);
+      expect(r).toMatchObject({ stored: true, notified: true, outcome: "lead" });
+      expect(dbMocks.createMessage).toHaveBeenCalled();
+    });
+  });
+
   it("caller-ID-only path (no lead) backfills the bare phone on dedupe, symmetric shape", async () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
     const s = withMessage(emptyCallState(), { body: "call me", at: "t" });
@@ -298,6 +404,21 @@ describe("finishCall", () => {
 });
 
 describe("finishCall — missed-call text-back", () => {
+  it("a call that ENDS at 22:00 CDT is held until 08:00 on the call's own row, and no message row is written (review R2-I3; mutation: callId: null → nothing held, FAILS; now: new Date() → judged at test time, FAILS)", async () => {
+    // startedAt is INSIDE the sending hours (20:00 CDT) and endedAt is
+    // OUTSIDE them (22:00 CDT): if the code judged the hours from startedAt
+    // instead of endedAt (I3c), this call would be sent, not held, and the
+    // assertions below would catch it — both used to fall outside the
+    // hours, so that swap was unobservable.
+    const night = { callRowId: "call1", startedAt: new Date("2027-06-02T01:00:00Z"), endedAt: new Date("2027-06-02T03:00:00Z") };
+    await finishCall(abandonedState(), textbackCtx, night);
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith({}, expect.objectContaining({
+      source: "textback", subjectKey: "call:call1", status: "held", heldUntil: "2027-06-02T13:00:00.000Z",
+    }));
+    expect(dbMocks.createMessage).not.toHaveBeenCalledWith({}, "a1", expect.objectContaining({ channel: "sms" }), "voice", "ai");
+    expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
   it("texts back an ABANDONED caller when the toggle is on, and creates the contact", async () => {
     // abandoned = the caller SPOKE but produced no booking, lead or message
     // (call-state.ts:31). That is the follow-up target.
@@ -675,12 +796,12 @@ describe("finishCall — text-back cooldown", () => {
     expect(smsRefs.send).toHaveBeenCalledOnce();
   });
 
-  it("asks about THIS account and THIS conversation only, over a 24-hour window", async () => {
+  it("asks about THIS account and THIS conversation only, over a 24-hour window judged from the call's own end (M4; mutation: Date.now() instead of r.now → FAILS)", async () => {
     // Tenant scope is the load-bearing half: a conversation id is a bare uuid,
     // and this read must never be satisfiable by another tenant's messages.
-    const before = Date.now();
+    // The window is judged from the call's OWN end (`meta.endedAt`), never
+    // the wall clock — a replay against a fixed fixture must be deterministic.
     await finishCall(abandonedState(), textbackCtx, meta);
-    const after = Date.now();
 
     expect(dbMocks.hasRecentOutboundSms).toHaveBeenCalledOnce();
     const [db, accountId, conversationId, since] = dbMocks.hasRecentOutboundSms.mock.calls[0]!;
@@ -688,8 +809,7 @@ describe("finishCall — text-back cooldown", () => {
     expect(accountId).toBe("a1");
     expect(conversationId).toBe("cv1");
     const windowMs = 24 * 60 * 60 * 1000;
-    expect((since as Date).getTime()).toBeGreaterThanOrEqual(before - windowMs);
-    expect((since as Date).getTime()).toBeLessThanOrEqual(after - windowMs);
+    expect((since as Date).getTime()).toBe(meta.endedAt.getTime() - windowMs);
   });
 
   it("is consulted only AFTER the gate — a refused account is never even asked", async () => {

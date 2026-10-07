@@ -134,21 +134,43 @@ describe("form guards", () => {
     expect(isValidEmail("trailing@dot.")).toBe(false);
   });
 
-  it("email validation rejects SQL ILIKE wildcards, which the dedupe lookup matches as patterns", () => {
-    // Verified live against the old regex: all four of these passed it, and
-    // `%`/`_` are wildcards to the ILIKE the value reaches in
-    // packages/db/src/contacts.ts#findDuplicate — a stranger submitting one of
-    // these on a public form could dedupe onto an arbitrary existing contact.
-    expect(isValidEmail("%@%.com")).toBe(false);
-    expect(isValidEmail("%@example.com")).toBe(false);
-    expect(isValidEmail("a%@bis-rgv.com")).toBe(false);
-    expect(isValidEmail("_@example.com")).toBe(false);
-    // An ordinary address with none of the excluded characters still passes.
-    // (Note this regex excludes `_` entirely, including inside an otherwise
-    // normal local part like "john_doe@example.com" — a deliberate, accepted
-    // tradeoff against a real, if less common, address shape, made because
-    // `_` reaches the same ILIKE dedupe lookup as `%` does.)
+  it("email validation lifts `_` in the LOCAL part only (F-047 phase 1); `%` stays refused everywhere, and `_` stays refused after the @", () => {
+    // Was: both `_` and `%` were rejected everywhere, because the dedupe
+    // lookup this value reaches (`findDuplicate` in packages/db/src/contacts.ts)
+    // used to match it with SQL ILIKE, where both are live pattern wildcards.
+    // That lookup moved to an exact `.eq("email_key", …)` comparison on a
+    // generated column in migrations 0033/0034 — proven against a real
+    // database by packages/db/src/test/contacts.test.ts's "createContact
+    // treats % and _ in email as literal characters, not ILIKE wildcards" —
+    // so `_` in the LOCAL part no longer buys any dedupe safety, and was
+    // refusing a real, common address shape on every public form, the
+    // booking page, the web chat and Sofía's video booking
+    // (docs/crm-features.md §2.3).
+    //
+    // `%` stays refused everywhere (owner decision, 2026-10-05): Resend's own
+    // acceptance of a literal `%` in an address is unverified, a failed
+    // `replyTo` would break every lead alert, and production carries zero
+    // such addresses today — nothing to gain by lifting it before that is
+    // checked. `_` also stays refused in the DOMAIN part: a domain label
+    // cannot legally contain one, and `isValidEmail` is the only gate this
+    // value ever passes through for the surfaces the defect names — public
+    // form pages render with `noValidate`, and the web chat/Sofía paths have
+    // no browser form validation behind them at all.
+    expect(isValidEmail("john_doe@example.com")).toBe(true);
     expect(isValidEmail("maria@example.com")).toBe(true);
+    expect(isValidEmail("a%b@example.com")).toBe(false);
+    expect(isValidEmail("a@ex_ample.com")).toBe(false);
+    expect(isValidEmail("%@%.com")).toBe(false);
+    expect(isValidEmail("_@_.com")).toBe(false);
+  });
+
+  it("email validation still rejects the characters that break a PostgREST filter, even combined with a now-allowed local `_`", () => {
+    // The characters `findDuplicate`'s own block comment calls out as the
+    // OTHER bug class (a value that breaks out of PostgREST's `.or()` filter
+    // grammar: `"`, `'`, `,`, `<`, `>`, and whitespace) are not touched by
+    // this decision and stay rejected, local-part `_` or not.
+    expect(isValidEmail('ma"ria_doe@example.com')).toBe(false);
+    expect(isValidEmail("a,b_c@example.com")).toBe(false);
   });
 
   it("phone validation accepts real-world formats and rejects junk", () => {

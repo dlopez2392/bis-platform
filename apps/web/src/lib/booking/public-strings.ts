@@ -70,6 +70,20 @@ const STRINGS = {
     step1: "Pick a time",
     step2: "Your details",
     step3: "Confirmed",
+    // F-102: the error boundary's button (`app/b/error.tsx`), in both
+    // languages — it used to be an English literal baked into the JSX.
+    tryAgain: "Try again",
+    // F-102's not-found page (`app/b/not-found.tsx`) — shown for a
+    // disabled calendar, a stale cancel link, or an unknown public id alike.
+    notFoundTitle: "We can't find this page.",
+    notFoundBody: "The link may be out of date. Check with the business that shared it.",
+    // The browser tab titles (`generateMetadata`). `{business}` is the
+    // customer-facing name (`brandDisplayName`), substituted by the caller —
+    // never `accounts.name`, the agency's internal label.
+    tabTitleWithBrand: "Book with {business}",
+    tabTitleNoBrand: "Book an appointment",
+    cancelTabTitleWithBrand: "Cancel your visit with {business}",
+    cancelTabTitleNoBrand: "Cancel your appointment",
   },
   es: {
     noSlots: "No hay horarios disponibles este día.",
@@ -111,6 +125,13 @@ const STRINGS = {
     step1: "Elige un horario",
     step2: "Tus datos",
     step3: "Confirmado",
+    tryAgain: "Intentar de nuevo",
+    notFoundTitle: "No encontramos esta página.",
+    notFoundBody: "El enlace podría estar desactualizado. Consulta con el negocio que lo compartió.",
+    tabTitleWithBrand: "Reserva con {business}",
+    tabTitleNoBrand: "Reservar una cita",
+    cancelTabTitleWithBrand: "Cancela tu cita con {business}",
+    cancelTabTitleNoBrand: "Cancelar una cita",
   },
 } as const;
 

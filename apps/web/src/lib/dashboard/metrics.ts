@@ -2,10 +2,11 @@
 //
 // Pure dashboard-metrics math: windows, day-bucketing, deltas, sparkline
 // geometry, and after-hours counting. No React, no @bis/db, no I/O — a
-// module a unit test can hold entirely. Sits between the db layer (Task 2's
-// `listCallStartsBetween` etc. — raw ISO strings in, ascending) and the UI
-// (Task 4 consumes `sparklinePath`/`deltaVsPrior`; Task 5 consumes
-// `localDayWindow`/`bucketByLocalDay`/`countAfterHours`).
+// module a unit test can hold entirely. Sits between the reads (the
+// answered-calls read in reports/weekly-metrics.ts etc. — raw ISO strings
+// in, any order) and the UI (Task 4 consumes `sparklinePath`/
+// `deltaVsPrior`; Task 5 consumes `localDayWindow`/`bucketByLocalDay`/
+// `countAfterHours`).
 //
 // Zone-correct primitives are reused verbatim from the booking package —
 // `dayKeyInZone` (availability.ts) and `zonedTimeToUtc`/`partsInZone`

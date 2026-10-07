@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
-import { setBrandingAction } from "./actions";
+import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -95,6 +95,8 @@ export default async function BrandingPage({
         brandMode={branding.brandMode}
         logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
         action={setBrandingAction.bind(null, accountId)}
+        removeLogoAction={removeBrandLogoAction.bind(null, accountId)}
+        restoreLogoAction={restoreBrandLogoAction.bind(null, accountId)}
       />
       <AlertPhoneCard
         isAgency={false}

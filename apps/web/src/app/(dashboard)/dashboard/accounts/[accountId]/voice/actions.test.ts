@@ -11,6 +11,7 @@ const dbMocks = vi.hoisted(() => ({
   setPhoneNumberStatus: vi.fn(), getVoiceProfile: vi.fn(),
   reassignPhoneNumber: vi.fn(), listPhoneNumbersForAccount: vi.fn(),
   setTransferPhone: vi.fn(), enableConcierge: vi.fn(), disableConcierge: vi.fn(),
+  getTransferPhone: vi.fn(), setForwardCalls: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -51,7 +52,7 @@ import { m } from "@/lib/messages";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import {
   saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, moveNumberAction,
-  setTransferPhoneAction, enableConciergeAction, disableConciergeAction,
+  setTransferPhoneAction, enableConciergeAction, disableConciergeAction, setForwardCallsAction,
 } from "./actions";
 
 const fd = (o: Record<string, string>) => {
@@ -483,3 +484,47 @@ describe("disableConciergeAction", () => {
     errSpy.mockRestore();
   });
 });
+
+describe("setForwardCallsAction (operational-floor spec §3)", () => {
+  beforeEach(() => {
+    guardFixture.isAgency = true;
+    dbMocks.getTransferPhone.mockReset().mockResolvedValue("+19562921696");
+    dbMocks.setForwardCalls.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("the agency turns it on: written through setForwardCalls with the actor, so history shows who took the phones back", async () => {
+    expect(await setForwardCallsAction("acct_1", true)).toEqual({ ok: true });
+    expect(dbMocks.setForwardCalls).toHaveBeenCalledWith(expect.anything(), "acct_1", true, "user_1");
+  });
+
+  it("a client cannot reach it, and nothing is read or written (mutation: drop the isAgency check → FAILS)", async () => {
+    guardFixture.isAgency = false;
+    expect(await setForwardCallsAction("acct_1", true)).toEqual({ ok: false, error: m["voice.agencyOnly"] });
+    expect(dbMocks.getTransferPhone).not.toHaveBeenCalled();
+    expect(dbMocks.setForwardCalls).not.toHaveBeenCalled();
+  });
+
+  it("on with no transfer number is refused on the server, not only by the disabled switch (mutation: skip the check → FAILS)", async () => {
+    dbMocks.getTransferPhone.mockResolvedValue(null);
+    expect(await setForwardCallsAction("acct_1", true)).toEqual({ ok: false, error: m["voice.forward.needsTransfer"] });
+    expect(dbMocks.setForwardCalls).not.toHaveBeenCalled();
+  });
+
+  it("off is never gated on a read: it works while the transfer-number read is down", async () => {
+    dbMocks.getTransferPhone.mockRejectedValue(new Error("db down"));
+    expect(await setForwardCallsAction("acct_1", false)).toEqual({ ok: true });
+    expect(dbMocks.getTransferPhone).not.toHaveBeenCalled();
+    expect(dbMocks.setForwardCalls).toHaveBeenCalledWith(expect.anything(), "acct_1", false, "user_1");
+  });
+
+  it("a failed read or write is one plain sentence, never the error", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.getTransferPhone.mockRejectedValue(new Error("db down"));
+    expect(await setForwardCallsAction("acct_1", true)).toEqual({ ok: false, error: m["voice.forward.saveFailed"] });
+    dbMocks.getTransferPhone.mockResolvedValue("+19562921696");
+    dbMocks.setForwardCalls.mockRejectedValue(new Error("no voice profile for this account"));
+    expect(await setForwardCallsAction("acct_1", true)).toEqual({ ok: false, error: m["voice.forward.saveFailed"] });
+    vi.restoreAllMocks();
+  });
+});
+

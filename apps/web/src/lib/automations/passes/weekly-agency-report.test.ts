@@ -47,8 +47,7 @@ function ctx(now: Date = TICK): PassContext {
   return {
     db: {} as never, now, origin: ORIGIN,
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
-    sms: () => ({ isFake: true, send: () => Promise.reject(new Error("not used by this pass")) }),
-    quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
+    sms: async () => { throw new Error("not used by this pass"); },
   };
 }
 
@@ -101,6 +100,15 @@ describe("weeklyAgencyReportPass", () => {
     expect(await weeklyAgencyReportPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
     expect(metricsMock.weeklyMetrics).toHaveBeenCalledWith(expect.anything(), "acct_a", windowA, false);
     expect(metricsMock.weeklyMetrics).toHaveBeenCalledWith(expect.anything(), "acct_b", windowB, false);
+  });
+
+  it("the send carries kind \"operator.agency_report\" with accountId null (consent PR-3; mutation: a customer kind → FAILS)", async () => {
+    dbMocks.getAgencyReportTarget.mockResolvedValue(target());
+    dbMocks.listAccountsForWeeklyRollup.mockResolvedValue([acct()]);
+    await weeklyAgencyReportPass.run(ctx());
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: null, kind: "operator.agency_report",
+    }));
   });
 
   it("skips when already stamped for this week", async () => {

@@ -9,16 +9,17 @@ import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, se
          startAlertPhoneVerification, verifyAlertPhoneCode, countRecentAlertPhoneVerifications,
          discardAlertPhoneVerification,
          ALERT_CODE_MAX_SENDS_PER_HOUR } from "@bis/db";
-import { getEmailProvider } from "@/lib/email";
+import { operatorMailer } from "@/lib/consent/email-gate";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 // The public form's own validator, reused deliberately rather than a second
 // regex — the same reasoning branding/actions.ts records: one email regex
 // that drifts from another is worse than one that is strict.
 import { isValidEmail } from "@/lib/forms/guards";
-import { toE164 } from "@/lib/voice/phone-number";
+import { normalisePhone, phoneForCountry, type PhoneCountry } from "@bis/db/phone";
 import { resolveSmsSender, refusesAlertLoop } from "@/lib/sms/sender";
 import { composeAlertPhoneVerificationSms } from "@/lib/sms/alerts";
-import { getSmsProvider } from "@/lib/sms";
+import { sendSms } from "@/lib/consent/gate";
+import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
@@ -177,7 +178,7 @@ export async function setFromEmailAction(
     // the only place the ordering can be proven.
     const db = serviceDb();
     await saveVerifiedFromAddress(
-      getEmailProvider(), raw, adminEmail,
+      operatorMailer("operator.sender_check", accountId), raw, adminEmail,
       (address) => setFromEmail(db, accountId, address, userId),
     );
   } catch (e) {
@@ -300,12 +301,29 @@ export async function setAlertPhoneAction(
  */
 export async function startAlertPhoneVerificationAction(
   accountId: string, formData: FormData,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; phone: string } | { ok: false; error: string }> {
   await requireAgencyOnlyAccountAccess(accountId);
 
+  // The card sends the number AND its country (US +1 / Mexico +52, spec §6),
+  // so an alert number is never ambiguous: a missing or unrecognised country
+  // is refused outright rather than assumed as US (review: fail closed) —
+  // an assumed US would text a Mexican number's own code to a stranger in
+  // the NANP plan — and a typed +52 under "US (+1)" gets the mismatch line
+  // (below) rather than being settled for the agency.
   const raw = String(formData.get("alertPhone") ?? "").trim();
-  const normalized = toE164(raw);
-  if (!normalized) return { ok: false, error: m["settings.alertPhoneBad"] };
+  const countryField = formData.get("alertPhoneCountry");
+  if (countryField !== "US" && countryField !== "MX") {
+    return { ok: false, error: m["settings.alertPhoneBad"] };
+  }
+  const country: PhoneCountry = countryField;
+  const normalized = phoneForCountry(raw, country);
+  if (!normalized) {
+    // A number that reads under the OTHER country carries its own code, and
+    // it disagrees with the pick: say so, rather than "enter a phone number"
+    // (review R3-M4).
+    const other: PhoneCountry = country === "MX" ? "US" : "MX";
+    return { ok: false, error: m[phoneForCountry(raw, other) ? "settings.alertPhoneCountryMismatch" : "settings.alertPhoneBad"] };
+  }
 
   const db = serviceDb();
   const gate = await resolveSmsSender(db, accountId);
@@ -320,20 +338,38 @@ export async function startAlertPhoneVerificationAction(
   }
 
   const { id, code } = await startAlertPhoneVerification(db, accountId, normalized);
+  // THROUGH THE SEND GATE (kind `operator.alert_phone_code`, no hours): a
+  // number that texted STOP to this business line gets no code (decision 2),
+  // and the agency is told how the owner turns texts back on (spec §6).
+  let result: Awaited<ReturnType<typeof sendSms>>;
   try {
-    await getSmsProvider().send({
-      to: normalized, from: gate.from, body: composeAlertPhoneVerificationSms(code),
+    result = await sendSms(db, {
+      accountId, kind: "operator.alert_phone_code", to: normalized, body: composeAlertPhoneVerificationSms(code),
     });
   } catch (e) {
-    console.error(`alert phone verification send failed for account ${accountId}: ${String(e)}`);
-    // No text went out, so this row must not count toward
-    // ALERT_CODE_MAX_SENDS_PER_HOUR — otherwise five carrier failures lock
-    // the number out for an hour with nothing ever delivered, which is
-    // exactly the cost that limit exists to bound.
+    // A throw here would otherwise keep the row and spend a rate-limit slot
+    // with nothing sent (review R3-M3). Logged BEFORE the discard: a
+    // throwing discard must not swallow the original error (review).
+    console.error(`alert phone verification send threw for account ${accountId}: ${loggableError(e)}`);
     await discardAlertPhoneVerification(db, id);
     return { ok: false, error: m["settings.alertPhoneSendFailed"] };
   }
-  return { ok: true };
+  if (result.kind !== "sent") {
+    // No text went out, so this row must not count toward
+    // ALERT_CODE_MAX_SENDS_PER_HOUR — otherwise five failures lock the number
+    // out for an hour with nothing ever delivered.
+    await discardAlertPhoneVerification(db, id);
+    // In PR-1 the ledger learns of a stop from the carrier's refusal (40300),
+    // so the FIRST attempt to a stopped phone is failed + carrierBlocked, not
+    // blocked: it gets the same line (review R3-I3).
+    if ((result.kind === "blocked" && result.reason === "stopped") || (result.kind === "failed" && result.carrierBlocked)) {
+      return { ok: false, error: m["settings.alertPhoneStopped"] };
+    }
+    const why = result.kind === "blocked" ? result.reason : result.kind === "failed" ? result.error : "deferred";
+    console.error(`alert phone verification send failed for account ${accountId}: ${why}`);
+    return { ok: false, error: m["settings.alertPhoneSendFailed"] };
+  }
+  return { ok: true, phone: normalized };
 }
 
 /**
@@ -355,8 +391,10 @@ export async function confirmAlertPhoneVerificationAction(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireAgencyOnlyAccountAccess(accountId);
 
+  // The E.164 the start action returned (the card echoes it back); kept as
+  // given, since it carries its country code.
   const raw = String(formData.get("alertPhone") ?? "").trim();
-  const normalized = toE164(raw);
+  const normalized = normalisePhone(raw)?.e164 ?? null;
   if (!normalized) return { ok: false, error: m["settings.alertPhoneBad"] };
   const code = String(formData.get("code") ?? "").trim();
 

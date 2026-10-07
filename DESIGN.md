@@ -8,6 +8,16 @@
 ## Identity
 
 - Dark-first operator UI; light theme is the default for client-role users.
+  **Decided 2026-10-06 (owner):** operators (agency staff) default to dark,
+  client-role users default to light, and a person's own stored choice (the
+  `bis-theme` cookie, written on toggle or recorded once from the OS when a
+  tenant says "follow") always outranks either default — F-096's per-person
+  preferences store is where that choice eventually lives. The code only
+  matched the client-role half of this line until this date: the agency's
+  own chrome carries no tenant theme to default from (it is never themed),
+  so with no role check it fell through to the client-role default of light.
+  `resolveThemeMode`'s `isOperator` parameter is the fix, pinned in
+  `theme-mode.test.ts` and `tenant-theme-reader.test.ts`.
 - Violet accent, violet-biased neutrals (no pure grays anywhere).
 - Second accent `--accent-2` (cyan by default; derived from the brand hue when
   a brand color is active). Used only where §3.3 of the Northern Lights spec
@@ -34,8 +44,10 @@ mockup parity; danlo then decided on the A/B measurement — blurred vs not on
 the real dashboard, 23.2% of pixels differ at all but by a mean of 2.3/765 and
 only 0.07% past 8/765, because a card sits over the lit ground's smooth
 gradients and the blur has nothing to resolve. The sidebar and overlays sit
-over real content and never scroll, so they keep it), and `--shadow-card` — never gray
-blur shadows in either mode; ambient light is accent-tinted, which is why
+over real content and never scroll, so they keep it), and `--shadow-card` — never a gray
+blur shadow; in light mode the card shadow is accent-tinted (ambient light),
+and in dark mode it is the mockup's own deep black drop under the glass
+highlight (`docs/design/northern-lights.html`'s `--card-shadow`), which is why
 `--shadow-card` and `--shadow-overlay` are declared on `*`, not `:root`.
 
 **Type roles (3, no exceptions):**
@@ -55,13 +67,19 @@ blur shadows in either mode; ambient light is accent-tinted, which is why
 - All aligned digits get `font-variant-numeric: tabular-nums`.
 
 **Shape & motion:** radii are 8px (controls, `--radius-ctl` / the mockup's
-`--r-ctl`), 12px (cards, `--radius-card` / `--r-card`; `--radius` is
+`--r-ctl`), 12px (cards and floating overlay panels — popovers, menus, the select dropdown, the command palette — `--radius-card` / `--r-card`; `--radius` is
 `0.75rem` so `rounded-lg` and `rounded-xl` finally agree), 999px (pills) —
-no other values. Spacing on a 4px grid. Motion: 150ms hovers, 250ms panels,
-`prefers-reduced-motion` respected, and NOTHING animates on scroll.
+no other values, with two sanctioned small-control exceptions (owner
+decision, 2026-10-04): the checkbox box at 4px and the dialog/sheet close (X)
+button at 2px, because a 16px checkbox at 8px reads as a pill (pinned in
+`components/ui/material.test.ts`). Spacing on a 4px grid. Motion: 150ms
+hovers, 250ms panels, `prefers-reduced-motion` respected, and NOTHING
+animates on scroll.
 
 **Tenant seam:** `deriveTheme`/`themeStyle` override the semantic surfaces
-(`--background`, `--card`, `--popover`, `--muted`, `--secondary`, `--border`,
+(`--background`, `--foreground`, `--card`, `--card-foreground`, `--popover`,
+`--popover-foreground`, `--primary`, `--primary-foreground`, `--secondary`,
+`--secondary-foreground`, `--muted`, `--muted-foreground`, `--border`,
 `--input`, `--ring`, the four `--sidebar*` names, `--radius`, `--font-sans`)
 and the whole accent family (`--accent`, `--accent-strong`, `--accent-dim`,
 `--ring-glow`, `--accent-2`, `--accent-2-dim`, `--ring-glow-2`,
@@ -111,11 +129,15 @@ they re-resolve against the accent each element inherits.
    authentication (2026-09-11).
 10. Sidebar: middle nav scrolls, footer cluster (Settings + setup meter) is
     pinned and visible at every viewport height.
-11. One hero gradient per screen, named in the screen's spec and marked in
-    code (`data-hero`); all other numbers are text-colored. The Website
-    sentence panel's emphasised clause is the one sanctioned second gradient
-    moment — the mockup gives it its OWN, deeper pair (`--gradient-em`, the
-    mockup's `--em-bg`) and reserves `--gradient-hero` for the KPI.
+11. **At most one** hero gradient per screen (amended 2026-10: changed from
+    "one" to "at most one" — a screen with no single headline metric, such
+    as a record page, a work queue or a settings page, names none rather
+    than forcing one), named in the screen's spec when it has one and
+    marked in code (`data-hero`); all other numbers are text-colored. The
+    Website sentence panel's emphasised clause is the one sanctioned second
+    gradient moment — the mockup gives it its OWN, deeper pair
+    (`--gradient-em`, the mockup's `--em-bg`) and reserves `--gradient-hero`
+    for the KPI.
 
 ## Key patterns
 
@@ -173,6 +195,13 @@ they re-resolve against the accent each element inherits.
   embed and direct link.
 - **AI presence:** topbar indicator — "● Sofía · on a call" (pulse) /
   "✓ N calls handled this week" (idle).
+- **The module contract (added 2026-10):** a new module's UI arrives through
+  existing surfaces only — a card on the record, one entry in an existing
+  list, a place in the one box, one settings section, its work routed to the
+  work queue and its news to the record's timeline, any AI write into the
+  one review tray, and customer visibility off by default. A module earns a
+  new top-level surface only by amending this file first — it is never a
+  side effect of shipping the module.
 
 ## Charts
 
@@ -186,6 +215,32 @@ period — thin by parity when the width will not take them all, never down to
 three. The busiest bar is `bar-hot`: the sanctioned violet→cyan gradient, not
 the accent bar brightened. Text on charts uses text tokens, never the series
 color.
+
+## Record page, documents and provenance (v2, amended 2026-10, provisional until a real client uses it)
+
+New sections, approved for the first release only (`docs/crm-features.md`
+§6.5 row 20); each stays provisional — subject to revision once a real
+client's use of it is observed — until that happens.
+
+**Record page.** One page per customer. Three columns on a desk — who
+they are, what is happening, what they have. A record page names **no
+hero** (rule 11). Its summary states a checked fact first; anything
+generated carries "Generated by AI" and a Regenerate action, never
+presented as a fact on its own. Every card loads, empties and fails on
+its own, each behind its own boundary — one card's fault never blanks
+the page (rule 5 extended to the card, not just the screen).
+
+**Documents.** Each file states its source ("the client uploaded it"),
+version, expiry in words ("expires in 12 days") and who can see it.
+Deleting moves a file to the trash **at once, with an undo** (rule 6);
+only a typed name confirms a PERMANENT purge — the move is reversible,
+the purge is not, and the two must not share one confirmation.
+
+**Provenance.** Every timeline row states who did what and when, with an
+author mark from one closed set: a named person, "Sofía · AI", an
+automation, the customer, or an import. A row with no mark is a defect:
+the same principle as rule 3's dot-and-word, applied to authorship
+instead of status — who did it is never left to be inferred.
 
 ## Installation status (2026-08-31 — Phase 1 COMPLETE, tokens import LIVE)
 
@@ -250,4 +305,9 @@ shadcn-`--accent` case asserts the new `@theme inline` mapping directly.
 - [ ] Loaded, empty, and error states implemented
 - [ ] Keyboard: focus ring visible, Esc closes overlays, row nav works
 - [ ] Copy passes the "landscaper at 7 AM" read
+- [ ] (added 2026-10) Renders correctly in English and Spanish, survives
+      the pseudo-locale's +35% length, sets `lang` correctly, and passes
+      the 7 AM read in both languages — once a surface carries bilingual
+      copy at all; this item does not retroactively fail today's
+      English-only screens
 - [ ] `/styleguide` page updated if a new component/variant was added

@@ -118,7 +118,7 @@ export const weeklyClientReportPass: Pass = {
         let anySent = false;
         for (const to of row.reportEmails) {
           try {
-            await ctx.email.send({ to, fromName: brand.name, replyTo, subject, body: text, html });
+            await ctx.email.send({ accountId: row.accountId, kind: "operator.weekly_report", to, fromName: brand.name, replyTo, subject, body: text, html });
             c.sent++;
             anySent = true;
           } catch (e) {

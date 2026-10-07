@@ -10,7 +10,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Inbox } from "lucide-react";
-import { Card } from "./card";
+import { Card, CardTitle } from "./card";
 import { Skeleton } from "./skeleton";
 import { Notice } from "./notice";
 import { EmptyState } from "../empty-state";
@@ -40,6 +40,25 @@ describe("Card is glass (spec §4)", () => {
   it("keeps bg-card (a tenant's --card must still win) and adds the glass utility", () => {
     expect(html).toMatch(/class="[^"]*\bbg-card\b[^"]*\bglass\b/);
     expect(html).not.toMatch(/shadow-sm/);
+  });
+});
+
+// Found 2026-10-04: CardTitle rendered a plain <div>, so screen-reader users
+// navigating by heading never heard a section's name. Every PageHeader route
+// already owns the page's <h1>, so a card title is the next level down — h3
+// was the smallest-risk default (no call site surveyed uses CardTitle beside
+// its own hand-rolled <h2>, so h2 would have been safe too, but h3 keeps a
+// clean h1 -> h3 skip rather than risking a future h2 collision on a page
+// that grows one).
+describe("CardTitle is a real heading for screen readers (2026-10-04)", () => {
+  it("renders an <h3>, not a <div> (mutation: as = 'h3' -> as = 'div' → FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(CardTitle, null, "Section"));
+    expect(html).toMatch(/^<h3[^>]*data-slot="card-title"/);
+  });
+  it("keeps its visual classes unchanged", () => {
+    const html = renderToStaticMarkup(createElement(CardTitle, null, "Section"));
+    expect(html).toContain("leading-none");
+    expect(html).toContain("font-semibold");
   });
 });
 
@@ -627,6 +646,11 @@ describe("wave 2 — styleguide carries this pass's variants (DESIGN.md DoD)", (
     // renders them.
     expect(s).toContain('(["yes", "no"] as const).map((a) => <DotPill key={a} {...CONFIRM_REPLY_TREATMENTS[a]} dense />)');
   });
+  it("indexes the client Billing page's Manage billing button and its client-only 'Payment processing' pill (M7a PR-3 Task 10) (mutation: drop either specimen → FAILS)", () => {
+    expect(s).toContain('import { ManageBillingButton } from "../accounts/[accountId]/billing/manage-billing-button";');
+    expect(s).toContain('<ManageBillingButton open={styleguidePortalFailed} help={m["billing.page.manageHelp"]} />');
+    expect(s).toContain('<DotPill {...PAYMENT_PROCESSING} data-status="payment_processing" />');
+  });
 });
 
 // DESIGN.md Shape: radii are 8px (controls, `--radius-ctl`), 12px (cards),
@@ -641,5 +665,117 @@ describe("one control radius, spelled as the token", () => {
       .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f))
       .filter((f) => readFileSync(path.join(root, f), "utf8").includes("rounded-[8px]"));
     expect(offenders).toEqual([]);
+  });
+});
+
+// DESIGN.md's "no other values" sentence names exactly two sanctioned
+// small-control exceptions (owner decision, 2026-10-04): the checkbox box at
+// 4px and the dialog/sheet close (X) button at 2px — a 16px checkbox at 8px
+// reads as a pill. Anything else still has to be 8/12/999.
+//
+// `data-slot="dialog-close"`/`data-slot="sheet-close"` carry a bare
+// `className="..."` string, not `className={cn(...)}` — classLiteralAfter
+// above assumes the latter, so these read the quoted literal directly.
+const quotedClassAfter = (text: string, anchor: string) => {
+  const start = text.indexOf(anchor);
+  expect(start, `anchor not found: ${anchor}`).toBeGreaterThan(-1);
+  const open = text.indexOf('className="', start);
+  expect(open, `no className="..." after: ${anchor}`).toBeGreaterThan(-1);
+  const valueStart = open + 'className="'.length;
+  const close = text.indexOf('"', valueStart);
+  expect(close, `unterminated className after: ${anchor}`).toBeGreaterThan(-1);
+  return text.slice(valueStart, close);
+};
+
+// Found 2026-10-04: tooltip.tsx's content panel carried the bare shadcn
+// `rounded-md` (10px), not one of DESIGN.md's three sanctioned radii. The
+// mockup's only tooltip-shaped thing (`.bar.hot::after`, the chart's hot-bar
+// annotation) is a different component with its own `--tip-*` token family
+// and a 7px radius that belongs to that annotation, not to this generic
+// hover tooltip — so there is no mockup-defined tooltip radius to defer to,
+// and the content converges on the control radius like every other overlay
+// edge case already does.
+describe("TooltipContent converges on --radius-ctl, not the bare rounded-md (2026-10-04)", () => {
+  it("mutation: rounded-[var(--radius-ctl)] -> rounded-md → FAILS", () => {
+    const literal = classLiteralAfter(src("./tooltip.tsx"), 'data-slot="tooltip-content"');
+    expect(literal).toContain("rounded-[var(--radius-ctl)]");
+    expect(literal).not.toContain("rounded-md");
+  });
+});
+
+// Found 2026-10-04: CommandInput's own className carries `rounded-md` with
+// no border and no background on that element — the wrapper div around it
+// is what paints the border, so the radius never renders anywhere. A dead
+// class that also happened to be the shape #1's test above now forbids.
+// Owner decision 2026-10-04: the five floating overlay panels were shadcn's
+// 10px (`rounded-md`), between the sanctioned 8px and 12px. They are panels,
+// not controls, so they take the card radius.
+describe("overlay panels use the 12px card radius (owner decision 2026-10-04)", () => {
+  const panels: Array<[string, string]> = [
+    ["./popover.tsx", 'data-slot="popover-content"'],
+    ["./dropdown-menu.tsx", 'data-slot="dropdown-menu-content"'],
+    ["./dropdown-menu.tsx", 'data-slot="dropdown-menu-sub-content"'],
+    ["./select.tsx", 'data-slot="select-content"'],
+    ["./command.tsx", 'data-slot="command"'],
+  ];
+  it.each(panels)("%s %s (mutation: restore rounded-md → FAILS)", (file, slot) => {
+    const literal = classLiteralAfter(src(file), slot);
+    expect(literal).toContain("rounded-[var(--radius-card)]");
+    expect(literal).not.toContain("rounded-md");
+  });
+});
+
+describe("CommandInput carries no dead rounded-md (2026-10-04)", () => {
+  it("mutation: delete `rounded-md ` from the class list -> restoring it → test FAILS", () => {
+    const literal = classLiteralAfter(src("./command.tsx"), 'data-slot="command-input"');
+    expect(literal).not.toContain("rounded-md");
+  });
+});
+
+describe("the two sanctioned small-control radius exceptions (DESIGN.md Shape & motion)", () => {
+  it("the checkbox box is 4px (mutation: rounded-[4px] -> rounded-[var(--radius-ctl)] → FAILS)", () => {
+    const literal = classLiteralAfter(src("./checkbox.tsx"), 'data-slot="checkbox"');
+    expect(literal).toContain("rounded-[4px]");
+  });
+  it("the dialog's close button is 2px, Tailwind's rounded-xs (mutation: rounded-xs -> rounded-md → FAILS)", () => {
+    const literal = quotedClassAfter(src("./dialog.tsx"), 'data-slot="dialog-close"');
+    expect(literal).toContain("rounded-xs");
+  });
+  it("the sheet's close button is 2px too, the same exception as the dialog's (mutation: rounded-xs -> rounded-md → FAILS)", () => {
+    const literal = quotedClassAfter(src("./sheet.tsx"), "SheetPrimitive.Close");
+    expect(literal).toContain("rounded-xs");
+  });
+});
+
+// Found 2026-10-04 on production (computed styles): shadcn's bare `rounded-md`
+// (10px, calc(var(--radius) - 2px)) and the sidebar collapse button's bare
+// `rounded` (4px, Tailwind's static default — this app's --radius-sm/md/lg
+// theme keys never touch the unsuffixed utility) both drift from the 8px
+// `--radius-ctl` DESIGN.md pins for every control. Fixed by spelling every
+// one of these controls' radius as the same `rounded-[var(--radius-ctl)]`
+// idiom already used by input/textarea/select-trigger/notice/branding-panel
+// (see the describe block above) rather than inventing a second spelling.
+describe("control radius converges on --radius-ctl, not rounded-md/rounded-sm/bare rounded (2026-10-04)", () => {
+  it("Button: every variant/size shares the base rounded-md and must lose it", () => {
+    const btn = src("./button.tsx");
+    expect(btn).not.toContain("rounded-md");
+    expect(btn).toContain("rounded-[var(--radius-ctl)]");
+  });
+  it("inline-field's click-to-edit trigger", () => {
+    const f = src("../inline-field.tsx");
+    expect(f).not.toContain("rounded-md");
+    expect(f).toContain("rounded-[var(--radius-ctl)]");
+  });
+  it("account-switcher's popover trigger ('Switch company')", () => {
+    const a = src("../account-switcher.tsx");
+    expect(a).not.toContain("rounded-md border border-sidebar-border");
+    expect(a).toContain("rounded-[var(--radius-ctl)] border border-sidebar-border");
+  });
+  it("sidebar: the 'Collapse sidebar' toggle and the footer setup-meter link", () => {
+    const s = src("../app-sidebar.tsx");
+    expect(s).not.toContain('className="rounded p-1.5');
+    expect(s).toContain("rounded-[var(--radius-ctl)] p-1.5");
+    expect(s).not.toContain("flex flex-col gap-1.5 rounded-md");
+    expect(s).toContain("flex flex-col gap-1.5 rounded-[var(--radius-ctl)]");
   });
 });

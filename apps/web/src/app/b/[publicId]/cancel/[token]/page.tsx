@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 import { cache } from "react";
 import { notFound } from "next/navigation";
 import {
-  serviceDb, getBranding, brandLogoUrl, type Branding,
+  serviceDb, getBranding, brandLogoUrl, brandDisplayName, type Branding,
 } from "@bis/db";
 import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
 import { safeZone, formatWhen } from "@/lib/booking/time";
-import { normalizeLocale } from "@/lib/forms/public-strings";
+import { normalizeLocale, publicTabTitle } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
@@ -23,6 +23,23 @@ export const dynamic = "force-dynamic";
  * anonymous, `force-dynamic`, and reachable by anyone holding the link.
  */
 const loadBooking = cache((token: string) => lookupBookingByToken(serviceDb(), token));
+
+/**
+ * `generateMetadata` below goes through THIS, not `loadBooking` directly
+ * (F-102 review round, fix 1 — see `app/f/[publicId]/page.tsx`'s identical
+ * comment for the full reasoning, confirmed by a live build+curl check).
+ * `generateMetadata` has no `error.tsx` boundary of its own to land in; the
+ * page component below is the one place on this route allowed to throw
+ * (via the real `loadBooking`), since `app/b/error.tsx` can catch it there.
+ */
+async function loadBookingSafe(token: string): ReturnType<typeof loadBooking> {
+  try {
+    return await loadBooking(token);
+  } catch (e) {
+    console.error(`cancel/${token}: booking read failed: ${String(e)}`);
+    return null;
+  }
+}
 
 const UNBRANDED: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
@@ -56,16 +73,41 @@ async function loadTimezone(accountId: string): Promise<string> {
 
 // Same reasoning as the sibling booking page: reachable only by an opaque
 // token in an email link, never a discoverable destination.
+//
+// The title (F-102) uses the `cancelTabTitle*` pair, not the booking page's
+// own `tabTitle*` — "Cancel your visit with Acme" is a different sentence
+// from "Book with Acme", and `publicTabTitle` is shape-generic over whichever
+// `{with,no}Brand` pair it is handed.
+//
+// For an unknown token, this returns NO `title` key at all (just `robots`),
+// so a bad/stale cancel link's tab falls all the way through to the ROOT
+// `app/b/layout.tsx`'s static "Booking" — generic, but never the WRONG
+// "Book with <business>" wording a sibling route's own `generateMetadata`
+// might otherwise suggest (F-102 review round, second pass): the booking
+// page's `generateMetadata` is scoped to the SEPARATE `/b/[publicId]` route
+// and never applies to this one. There is no longer a `[publicId]`-level
+// segment layout between this page and the root to inject anything else —
+// see `app/b/[publicId]/data.ts`'s comment for why that was removed.
 export async function generateMetadata(
-  { params }: { params: Promise<{ publicId: string; token: string }> },
+  { params, searchParams }: {
+    params: Promise<{ publicId: string; token: string }>;
+    searchParams: Promise<Record<string, string | string[] | undefined>>;
+  },
 ): Promise<Metadata> {
   const robots = { index: false, follow: false };
   const { publicId, token } = await params;
-  const row = await loadBooking(token);
+  const row = await loadBookingSafe(token);
   if (!row) return { robots };
   const branding = await loadBranding(row.account_id, publicId, token);
+  const query = await searchParams;
+  const locale = normalizeLocale(typeof query.locale === "string" ? query.locale : undefined, "en");
+  const strings = bookingStrings(locale);
   return {
     robots,
+    title: publicTabTitle(
+      { tabTitleWithBrand: strings.cancelTabTitleWithBrand, tabTitleNoBrand: strings.cancelTabTitleNoBrand },
+      brandDisplayName(branding ?? UNBRANDED),
+    ),
     ...(branding?.brandLogoPath ? { icons: { icon: brandLogoUrl(branding.brandLogoPath) } } : {}),
   };
 }
@@ -123,7 +165,16 @@ export default async function CancelBookingPage({
   const isPast = row.status === "completed" || row.status === "no_show";
 
   return (
-    <main className="bis-cancel-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
+    // `lang` on this element (F-102 review round, fix 7) — the one fix that
+    // actually clears defect :881 at the element level: `<html lang>` on
+    // this tree is always "en" (no per-document default; see
+    // `app/b/layout.tsx`'s comment), but `locale` here is the SAME value a
+    // confirmation/reminder email's `?locale=es` already resolves on this
+    // very page, so the visible, screen-reader-relevant content now carries
+    // the correct language at first paint even though the document-level
+    // default still does not. See this task's report for the nuance between
+    // the two.
+    <main lang={locale} className="bis-cancel-page" style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
       {darkCss ? <style>{darkCss}</style> : null}
       <style>{CANCEL_CSS}</style>
       <PublicBrand

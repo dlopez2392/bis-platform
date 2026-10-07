@@ -98,9 +98,33 @@ export const getTenantThemeInputs = cache(async (): Promise<ThemeInputs> => {
 export function pickRequestThemeMode(
   cookie: string | undefined,
   inputs: ThemeInputs,
+  // Owner decision, 2026-10-06: operators default to dark, client-role
+  // users keep light -- see resolveThemeMode's own doc comment.
+  isOperator = false,
 ): { serverMode: "light" | "dark"; providerDefault: "light" | "dark" | "system" } {
-  return resolveThemeMode(cookie, inputs.mode);
+  return resolveThemeMode(cookie, inputs.mode, isOperator);
 }
+
+/**
+ * Whether this request's caller is the agency (an operator), resolved once
+ * and shared via the same `getTenantAccessState()` cache() getRequestTheme
+ * already reads. A separate cache() wrapper, not a return value bolted onto
+ * getTenantThemeInputs: that function's degrade-to-"no tenant" path already
+ * discards `state.status` on purpose (it is branding-shaped, not
+ * operator-shaped), and ThemeInputs is the one shape a future client-side
+ * Settings preview may construct by hand (see this module's own doc
+ * comment), where "is this request an operator" has no meaning.
+ */
+export const getIsOperator = cache(async (): Promise<boolean> => {
+  try {
+    const state = await getTenantAccessState();
+    return state.status === "agency";
+  } catch (e) {
+    unstable_rethrow(e);
+    console.error(`tenant-theme: operator check failed: ${String(e)}`);
+    return false;
+  }
+});
 
 export type RequestTheme = {
   inputs: ThemeInputs;
@@ -147,6 +171,10 @@ export const getRequestTheme = cache(async (): Promise<RequestTheme> => {
   // Nothing here needs catching. getTenantThemeInputs already degrades to
   // "no tenant" on a real fault of its own and re-throws Next's signals, and
   // a cookie read has no failure mode of its own worth a fallback.
-  const [cookieStore, inputs] = await Promise.all([cookies(), getTenantThemeInputs()]);
-  return { inputs, ...pickRequestThemeMode(cookieStore.get(THEME_COOKIE)?.value, inputs) };
+  const [cookieStore, inputs, isOperator] = await Promise.all([
+    cookies(),
+    getTenantThemeInputs(),
+    getIsOperator(),
+  ]);
+  return { inputs, ...pickRequestThemeMode(cookieStore.get(THEME_COOKIE)?.value, inputs, isOperator) };
 });

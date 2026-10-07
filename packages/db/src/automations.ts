@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { brandDisplayName, type Branding } from "./branding";
 import { loadSendableRows, ownAccountEmbedsOnly, type AccountBrandInfo, type DueLookup } from "./booking";
+import { emailLedgerAddress } from "./email-address";
+import { readBlockedAddresses, readConsentState } from "./consent";
 
 /**
  * The automations spine. Config is GENERIC — one row per (account, recipe)
@@ -972,13 +974,6 @@ export type DueReferralAsk = {
    *  `listEnabled` read, because the gate is pure and cannot query. */
   reviewRequestEnabled: boolean;
   contactId: string; contactEmail: string | null; contactPhone: string | null;
-  /** Migration 0049: the operator recorded that this contact asked not to
-   *  get marketing email. CARRIED, NOT FILTERED: the query cannot know the
-   *  channel's consequence, and an SMS-channel ask still goes (a text's
-   *  opt-out is the carrier's STOP list). The pass skips an EMAIL-channel row
-   *  with this set. Safe as a pass-level skip because this due-list is a
-   *  bounded booking window, unlike reactivation's walk. */
-  contactMarketingEmailOptedOut: boolean;
   brandName: string; branding: Branding; accountTimezone: string;
   fromEmail: string | null; replyToEmail: string | null;
   /** Migration 0048: the account's postal address, as stored (null = not
@@ -996,7 +991,7 @@ export type DueReferralAsk = {
 // then fails `tsc` with "neither type sufficiently overlaps". Every other
 // *_SELECT in this file is one literal for the same reason.
 const REFERRAL_ASK_SELECT =
-  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(account_id, email, phone, marketing_email_opted_out_at)";
+  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(account_id, email, phone)";
 
 function toDueReferralAsk(
   r: any, info: AccountBrandInfo, auto: EnabledRecipe, reviewRequestEnabled: boolean,
@@ -1013,7 +1008,6 @@ function toDueReferralAsk(
     contactId: r.contact_id,
     contactEmail: r.contacts?.email ?? null,
     contactPhone: r.contacts?.phone ?? null,
-    contactMarketingEmailOptedOut: r.contacts?.marketing_email_opted_out_at != null,
     brandName: brandDisplayName(info.branding),
     branding: info.branding,
     accountTimezone: info.accountTimezone,
@@ -1482,13 +1476,6 @@ export async function listDueReactivations(
       .in("account_id", accountIds)
       .lte("last_message_at", widest.toISOString())
       .is("contacts.reactivation_sent_at", null)
-      // THE MARKETING-EMAIL OPT-OUT (0049), IN THE QUERY and never as a skip
-      // in the pass. An opted-out contact is never sent to, so never stamped:
-      // skipped per row, it would come back on every tick at the head of this
-      // oldest-first walk and refill the survivor window, starving every
-      // other account (the #118 I1 trap, one contact at a time). Here it
-      // never enters a page at all.
-      .is("contacts.marketing_email_opted_out_at", null)
       .not("contacts.email", "is", null)
       .order("last_message_at", { ascending: true })
       .order("id", { ascending: true })
@@ -1511,9 +1498,24 @@ export async function listDueReactivations(
     // then happens to B's customer under A's brand. There is no composite
     // `(account_id, contact_id)` key on `conversations` (0050 covered only
     // bookings and opportunities), so it is expressed here.
-    const candidates = rows.filter(
+    const inWindow = rows.filter(
       (c) => c.contacts.account_id === c.account_id
         && new Date(c.last_message_at).getTime() <= cutoffs.get(c.account_id)!.cutoff.getTime());
+
+    // THE EMAIL STOP (the ledger, consent PR-3; 0049's column is no longer
+    // read), IN THE WALK and never as a skip in the pass. A stopped contact is
+    // never sent to, so never stamped: skipped per row it would come back on
+    // every tick at the head of this oldest-first walk and refill the survivor
+    // window, starving every other account (the #118 I1 trap). Here it is
+    // dropped before it can count as a survivor. It still takes a slot in
+    // the page it arrived in (Known residuals). A ledger that cannot be read
+    // THROWS out of the walk: nothing is sent on a guess.
+    const keyed = inWindow.map((c) => ({ c, address: emailLedgerAddress(c.contacts.email) }));
+    const blocked = await readBlockedAddresses(db, "email",
+      keyed.flatMap(({ c, address }) => (address ? [{ accountId: c.account_id, address }] : [])));
+    const candidates = keyed
+      .filter(({ c, address }) => address !== null && !blocked.has(`${c.account_id}|${address}`))
+      .map(({ c }) => c);
 
     if (candidates.length > 0) {
       // THE ANTI-BLAST RULE. Not "a contact", not "a lead" — someone whose
@@ -1615,13 +1617,16 @@ export async function getDueReactivationById(
   const { data: contact, error } = await db.from("contacts")
     .select("id, account_id, first_name, last_name, email, reactivation_sent_at")
     .eq("id", contactId).is("reactivation_sent_at", null)
-    // The opt-out (0049), same as the walk's: a hold released after the
-    // operator recorded "stop" answers `gone` and leaves the queue unsent.
-    .is("marketing_email_opted_out_at", null)
     .not("email", "is", null).maybeSingle();
   if (error) throw new Error(`getDueReactivationById failed: ${error.message}`);
   if (!contact) return { due: null, why: "gone" };
   const accountId = (contact as { account_id: string }).account_id;
+  // The email stop, same as the walk's: a hold released after the customer
+  // unsubscribed (or staff stopped their email) answers `gone` and leaves the
+  // queue unsent. A ledger read error THROWS (the release retries it).
+  const address = emailLedgerAddress((contact as { email: string }).email);
+  if (!address) return { due: null, why: "gone" };
+  if ((await readConsentState(db, accountId, "email", address)).state !== "allowed") return { due: null, why: "gone" };
 
   const auto = await enabledRecipeFor(db, accountId, "reactivation");
   if (!auto) return { due: null, why: "off" };
@@ -1710,14 +1715,12 @@ export async function conversationQuietSince(
  *  the off switch that outlives the toggle: turning the recipe off mid-drain
  *  strands nothing, because the stamp is permanent.
  *
- *  "EVER" is enforced AGAINST THE CRON, not against the client role.
- *  `contacts` carries a table-level UPDATE grant to `authenticated` and
- *  `contacts_member_all` is ALL to `authenticated`, so a logged-in user of
- *  the account can clear `reactivation_sent_at` and make the contact
- *  sendable again — unlike every earlier permanent stamp, which sat on
- *  `bookings`, whose `authenticated` UPDATE 0016 revoked. Same for
- *  `opportunities.quote_followup_sent_at`. 0047's header records the grants
- *  this rests on. */
+ *  "EVER" holds against the account's own users too, not only the cron:
+ *  since 0053 the client role's UPDATE on contacts and opportunities is a
+ *  column list without the once-ever stamps (0053, section 5), so only
+ *  server code writes `reactivation_sent_at`. Same for
+ *  `opportunities.quote_followup_sent_at` and
+ *  `opportunities.quote_followup_sms_failed_at`. */
 export async function stampReactivationSent(db: SupabaseClient, contactId: string): Promise<void> {
   const { error } = await db.from("contacts")
     .update({ reactivation_sent_at: new Date().toISOString() })

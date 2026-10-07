@@ -1,12 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const smsFactory = vi.hoisted(() => ({ getSmsProvider: vi.fn() }));
-vi.mock("@/lib/sms", () => ({ getSmsProvider: () => smsFactory.getSmsProvider() }));
-vi.mock("@/lib/email", () => ({
-  getEmailProvider: () => ({ isFake: true, send: async () => ({ providerMessageId: "e" }) }),
-}));
+const gate = vi.hoisted(() => ({ smsSenderFor: vi.fn() }));
+vi.mock("@/lib/consent/gate", () => gate);
+const emailGate = vi.hoisted(() => ({ emailSenderFor: vi.fn() }));
+vi.mock("@/lib/consent/email-gate", () => emailGate);
 
-import { buildPassContext, runPasses, lazySmsProvider } from "./harness";
+import { buildPassContext, runPasses } from "./harness";
 import type { Pass, PassContext } from "./context";
 
 function ctx(): PassContext {
@@ -16,7 +15,8 @@ function ctx(): PassContext {
 }
 
 beforeEach(() => {
-  smsFactory.getSmsProvider.mockReset();
+  gate.smsSenderFor.mockReset().mockReturnValue(vi.fn());
+  emailGate.emailSenderFor.mockReset().mockReturnValue({ isFake: true, send: vi.fn() });
 });
 
 describe("runPasses — independent error isolation, the finishCall-legs pattern", () => {
@@ -50,46 +50,14 @@ describe("runPasses — independent error isolation, the finishCall-legs pattern
   });
 });
 
-describe("buildPassContext — the SMS provider is LAZY", () => {
-  it("does not construct the SMS provider until a pass asks, so a throwing factory cannot fail the tick", async () => {
-    // getSmsProvider() throws in production when TELNYX_API_KEY is unset —
-    // and it IS unset today, by design. An eager construction would 500 every
-    // tick, reminders included. Mutation: make `sms` eager in
-    // buildPassContext and this must fail.
-    smsFactory.getSmsProvider.mockImplementation(() => {
-      throw new Error("TELNYX_API_KEY is required in production");
-    });
-    const c = ctx();
-    expect(smsFactory.getSmsProvider).not.toHaveBeenCalled();
-    expect(() => c.sms()).toThrow(/TELNYX_API_KEY/);
-    const results = await runPasses([{ key: "emailOnly", run: async () => ({ sent: 0 }) }], c);
-    expect(results).toEqual({ emailOnly: { sent: 0 } });
-  });
-
-  it("memoises the SMS provider after the first successful construction", () => {
-    const provider = { isFake: true, send: async () => ({ providerMessageId: "s" }) };
-    smsFactory.getSmsProvider.mockReturnValue(provider);
-    const c = ctx();
-    expect(c.sms()).toBe(provider);
-    expect(c.sms()).toBe(provider);
-    expect(smsFactory.getSmsProvider).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("quietSettingsReader — one read per account per tick", () => {
-  it("memoises per account and drops a rejected read so the next caller retries", async () => {
-    const { quietSettingsReader } = await import("./harness");
-    let calls = 0;
-    const db = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => {
-      calls++;
-      if (calls === 1) return { data: null, error: { message: "boom" } };
-      return { data: { quiet_enabled: true, quiet_start: "22:00:00", quiet_end: "07:00:00" }, error: null };
-    } }) }) }) } as never;
-    const quiet = quietSettingsReader(db);
-    await expect(quiet("a1")).rejects.toThrow(/boom/);
-    expect(await quiet("a1")).toEqual({ enabled: true, start: "22:00", end: "07:00" });
-    expect(await quiet("a1")).toEqual({ enabled: true, start: "22:00", end: "07:00" });
-    expect(calls).toBe(2);   // mutation: memoise the rejection too → 1, and the second await rejects
+describe("buildPassContext — texts go through the send gate, bound to the tick", () => {
+  it("ctx.sms IS the gate bound to this tick's own client, and building it constructs no SMS provider (mutation: bind the gate to another client → FAILS)", () => {
+    const bound = vi.fn();
+    gate.smsSenderFor.mockReturnValue(bound);
+    const db = { tick: "db" } as never;
+    const c = buildPassContext({ db, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com" });
+    expect(gate.smsSenderFor).toHaveBeenCalledWith(db);
+    expect(c.sms).toBe(bound);
   });
 });
 
@@ -102,24 +70,50 @@ describe("PassContext — structurally cannot carry the agency's internal label"
   });
 });
 
-describe("lazySmsProvider — ONE definition of lazy, shared by the cron and the inline recipe", () => {
-  it("constructs nothing until called, then once — the second call returns the same provider", () => {
-    // Mutation: make it eager (`const sms = getSmsProvider(); return () => sms`).
-    smsFactory.getSmsProvider.mockReturnValue({ isFake: true, send: async () => ({ providerMessageId: "s" }) });
-    const sms = lazySmsProvider();
-    expect(smsFactory.getSmsProvider).not.toHaveBeenCalled();
-    const first = sms();
-    expect(sms()).toBe(first);
-    expect(smsFactory.getSmsProvider).toHaveBeenCalledTimes(1);
+describe("buildPassContext — email goes through the email gate, bound to the tick (consent PR-3)", () => {
+  it("ctx.email IS the email gate's sender for this tick's client (mutation: build it from getEmailProvider again → emailSenderFor is never called, FAILS)", () => {
+    const db = { tag: "tick-db" } as never;
+    const sender = { isFake: false, send: vi.fn() };
+    emailGate.emailSenderFor.mockReturnValue(sender);
+    const c = buildPassContext({ db, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com" });
+    expect(c.email).toBe(sender);
+    expect(emailGate.emailSenderFor).toHaveBeenCalledWith(db);
+  });
+});
+
+describe("runPasses — the operational floor's heartbeats (spec §1)", () => {
+  it("writes one heartbeat per pass, ok or error, then cron.tick, in order (mutation: drop the per-pass beat → FAILS)", async () => {
+    const beats: [string, unknown][] = [];
+    const beat = async (_c: PassContext, key: string, outcome: unknown) => { beats.push([key, outcome]); };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom: Pass = { key: "boom", run: async () => { throw new Error("db exploded"); } };
+    const fine: Pass = { key: "fine", run: async () => ({ sent: 1 }) };
+
+    await runPasses([boom, fine], ctx(), beat);
+
+    expect(beats).toEqual([
+      ["cron.pass.boom", { ok: false, error: "Error: db exploded" }],
+      ["cron.pass.fine", { ok: true }],
+      ["cron.tick", { ok: true }],
+    ]);
+    spy.mockRestore();
   });
 
-  it("a throwing factory is retried on the next call rather than cached as a failure", () => {
-    smsFactory.getSmsProvider
-      .mockImplementationOnce(() => { throw new Error("TELNYX_API_KEY unset"); })
-      .mockReturnValue({ isFake: true, send: async () => ({ providerMessageId: "s" }) });
-    const sms = lazySmsProvider();
-    expect(() => sms()).toThrow("TELNYX_API_KEY unset");
-    expect(sms().isFake).toBe(true);
-    expect(smsFactory.getSmsProvider).toHaveBeenCalledTimes(2);
+  it("a heartbeat writer that throws never fails a pass or the tick (mutation: drop safeBeat's try → FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const beat = async () => { throw new Error("heartbeat table gone"); };
+    const fine: Pass = { key: "fine", run: async () => ({ sent: 3 }) };
+
+    await expect(runPasses([fine], ctx(), beat)).resolves.toEqual({ fine: { sent: 3 } });
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("heartbeat cron.pass.fine not written"));
+    spy.mockRestore();
+  });
+
+  it("the heartbeat for a pass is written AFTER that pass and BEFORE the next one runs, so the alert pass (last) reads this tick", async () => {
+    const order: string[] = [];
+    const beat = async (_c: PassContext, key: string) => { order.push(`beat:${key}`); };
+    const mk = (key: string): Pass => ({ key, run: async () => { order.push(`run:${key}`); return {}; } });
+    await runPasses([mk("a"), mk("b")], ctx(), beat);
+    expect(order).toEqual(["run:a", "beat:cron.pass.a", "run:b", "beat:cron.pass.b", "beat:cron.tick"]);
   });
 });

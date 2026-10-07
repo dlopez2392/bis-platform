@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { DueReferralAsk, AutomationLogRow, QuietSettings } from "@bis/db";
+import type { DueReferralAsk, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listDueReferralAsks: vi.fn(), getDueReferralAskById: vi.fn(),
@@ -16,7 +16,9 @@ const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => senderMock.resolveSmsSender(...a) }));
 
 import { m } from "@/lib/messages";
-import { AUTOMATION_DAILY_CAP } from "../caps";
+import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
+import { EmailNotSent } from "@/lib/consent/email-gate";
 import type { PassContext } from "../context";
 import { referralAskPass, releaseReferralAsk } from "./referral-ask";
 
@@ -33,9 +35,6 @@ function row(over: Partial<DueReferralAsk> = {}): DueReferralAsk {
     reviewRequestedAt: "2027-09-23T14:05:00.000Z",     // NOT equal to followupSentAt
     smsFailedAt: null, reviewRequestEnabled: true,
     contactId: "ct_1", contactEmail: "maria@example.com", contactPhone: "(956) 555-0112",
-    // NOT opted out: every existing case is about something else. The
-    // opt-out cases set it, one channel at a time.
-    contactMarketingEmailOptedOut: false,
     brandName: "Rio Roofing",
     // The two replyToEmails are DIFFERENT and neither is null, copying
     // `review-request.test.ts:39` and `:42` exactly (and its assertions at
@@ -69,20 +68,18 @@ function heldRow(over: Partial<AutomationLogRow> = {}): AutomationLogRow {
 
 const emailSend = vi.fn();
 const smsSend = vi.fn();
-const QUIET_OFF: QuietSettings = { enabled: false, start: "21:00", end: "08:00" };
-function ctx(now: Date = TICK, quiet: QuietSettings = QUIET_OFF): PassContext {
+function ctx(now: Date = TICK): PassContext {
   return {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
-    quiet: async () => quiet,
+    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
   };
 }
 const EMPTY = {
-  sent: 0, failed: 0, unstamped: 0, held: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
   skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
   waitingForMorning: 0, waitingForReviewRequest: 0, unresolvableTimezone: 0,
-  skippedNoMailingAddress: 0, skippedNoReplyTo: 0, skippedOptedOut: 0,
+  skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
 };
 const skippedReasons = () => dbMocks.recordAutomationLog.mock.calls
   .filter((c) => c[1].status === "skipped").map((c) => c[1].reason as string);
@@ -186,6 +183,15 @@ describe("the referral EMAIL: the footer, the address and reply-to it needs, and
   const email = (over: Partial<DueReferralAsk> = {}) => row({ config: { channel: "email" }, ...over });
   const sentEmail = () => emailSend.mock.calls[0]![0] as Record<string, string>;
 
+  it("the email goes through the gate as automation.referral_ask, for this account and contact, at the tick's instant (consent PR-3; mutation: kind \"automation.reactivation\" → FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([email()]);
+    await referralAskPass.run(ctx());
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "acct_1", kind: "automation.referral_ask", contactId: "ct_1", origin: "https://app.example.com",
+      now: TICK, accountZone: "America/Chicago",
+    }));
+  });
+
   it("the email carries the footer — the brand's line, then the account's postal address — after the body, in both parts", async () => {
     // Mutation: hand the template `mailingAddress: ""` (or `footerReason: ""`)
     // in sendEmail → this reds BY NAME.
@@ -235,12 +241,10 @@ describe("the referral EMAIL: the footer, the address and reply-to it needs, and
     expect(dbMocks.stampReferralAsked).not.toHaveBeenCalled();
   });
 
-  it("a contact who asked not to get marketing email is skipped on the EMAIL channel: logged, not sent, not stamped", async () => {
-    // Mutation: delete the opt-out skip → this reds BY NAME. The reason is
-    // one the client reads on the Activity page.
-    dbMocks.listDueReferralAsks.mockResolvedValue([email({ contactMarketingEmailOptedOut: true })]);
-    expect(await referralAskPass.run(ctx())).toEqual({ ...EMPTY, skippedOptedOut: 1 });
-    expect(emailSend).not.toHaveBeenCalled();
+  it("an email-stopped customer (the ledger, via the gate) is skipped on the EMAIL channel: logged with the reason the client reads, not stamped (consent PR-3: the pass no longer reads 0049's column; mutation: count a gate refusal as sent → FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([email()]);
+    emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
+    expect(await referralAskPass.run(ctx())).toEqual({ ...EMPTY, blocked: 1 });
     expect(dbMocks.stampReferralAsked).not.toHaveBeenCalled();
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       source: "referral_ask", channel: "email", subjectKey: "booking:bk_r1", contactId: "ct_1",
@@ -248,25 +252,22 @@ describe("the referral EMAIL: the footer, the address and reply-to it needs, and
     }));
   });
 
-  it("the SMS channel needs no address, no reply-to, and ignores the EMAIL opt-out — the text still goes", async () => {
+  it("the SMS channel needs no address and no reply-to — the text still goes", async () => {
     // A text's opt-out is the carrier's STOP list, and it carries no footer.
-    // Mutation: run any of the three checks for the SMS channel too → this
-    // reds BY NAME.
+    // Mutation: run either address/reply-to check for the SMS channel too →
+    // this reds BY NAME.
     dbMocks.listDueReferralAsks.mockResolvedValue([row({
-      mailingAddress: null, replyToEmail: null, contactMarketingEmailOptedOut: true,
+      mailingAddress: null, replyToEmail: null,
     })]);
     expect(await referralAskPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
     expect(smsSend).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampReferralAsked).toHaveBeenCalledWith(expect.anything(), "bk_r1");
   });
 
-  it("released from a hold, an email row whose contact opted out DURING the hold is skipped — and leaves the queue", async () => {
-    // The release goes through the same loop (`releaseReferralAsk` →
-    // `processReferralAsks`). Mutation: delete the opt-out skip → this reds
-    // BY NAME with "sent".
-    dbMocks.getDueReferralAskById.mockResolvedValue({ due: email({ contactMarketingEmailOptedOut: true }) });
+  it("released from a hold, an email row whose customer unsubscribed DURING the hold is skipped by the gate — and leaves the queue (mutation: rethrow the refusal → the release reports failed, FAILS)", async () => {
+    dbMocks.getDueReferralAskById.mockResolvedValue({ due: email() });
+    emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
     expect(await releaseReferralAsk(ctx(), heldRow({ channel: "email" }))).toBe("skipped");
-    expect(emailSend).not.toHaveBeenCalled();
     expect(skippedReasons()).toEqual([OPTED_OUT_REASON]);
   });
 
@@ -278,20 +279,18 @@ describe("the referral EMAIL: the footer, the address and reply-to it needs, and
     expect(skippedReasons()).toEqual([ADDRESS_REASON]);
   });
 
-  it("rows that cannot go spend NONE of the tick's ten attempts — another booking's email still goes", async () => {
-    // Each skipped row is never stamped and stays due all window. Checked
-    // AFTER the caps, eleven of them ahead of a sendable row would burn
-    // AUTOMATION_TICK_CAP on every tick of the morning. Mutation: move the
-    // address/reply-to checks (or the opt-out skip) below the caps → this
-    // reds BY NAME.
+  it("rows that cannot go spend NONE of the tick's ten attempts — another booking's email still goes (mutation: move the address/reply-to checks below the caps, or stop giving back the cap place on a gate refusal → this reds BY NAME)", async () => {
     const noAddress = Array.from({ length: 11 }, (_, n) =>
       email({ bookingId: `bk_addr_${n}`, accountId: "acct_stuck", mailingAddress: null }));
     const optedOut = Array.from({ length: 11 }, (_, n) =>
-      email({ bookingId: `bk_out_${n}`, contactId: `ct_out_${n}`, contactMarketingEmailOptedOut: true }));
+      email({ bookingId: `bk_out_${n}`, contactId: `ct_out_${n}` }));
+    emailSend.mockImplementation(async (input: { contactId?: string }) => {
+      if (input.contactId?.startsWith("ct_out_")) throw new EmailNotSent({ kind: "blocked", reason: "stopped" });
+      return { providerMessageId: "re_ok" };
+    });
     dbMocks.listDueReferralAsks.mockResolvedValue([...noAddress, ...optedOut, email({ bookingId: "bk_ok" })]);
     expect(await referralAskPass.run(ctx()))
-      .toEqual({ ...EMPTY, sent: 1, skippedNoMailingAddress: 11, skippedOptedOut: 11 });
-    expect(emailSend).toHaveBeenCalledTimes(1);
+      .toEqual({ ...EMPTY, sent: 1, skippedNoMailingAddress: 11, blocked: 11 });
     expect(dbMocks.stampReferralAsked).toHaveBeenCalledWith(expect.anything(), "bk_ok");
   });
 });
@@ -364,16 +363,14 @@ describe("the referral ask's caps and cooldown", () => {
 });
 
 describe("the referral ask and quiet hours", () => {
-  // 21:00 → 12:00 puts the whole morning band inside the window, which a
-  // window ending at 08:00 cannot do: the band OPENS at 08:00, so a
-  // band-gated recipe never meets the default window at all.
-  const UNTIL_NOON: QuietSettings = { enabled: true, start: "21:00", end: "12:00" };
+  // The gate defers the text to noon, as it does a marketing text on a
+  // Sunday morning (lib/consent/hours.ts); the band and the hours compose.
   const NOON = new Date("2027-09-24T17:00:00.000Z");   // 12:00 CDT the same day
 
-  it("inside the window it HOLDS: no send, no stamp, one held row ending at noon", async () => {
+  it("when the gate defers the text to noon it HOLDS: no send, no stamp, one held row ending at noon", async () => {
     // Mutation: bypass holdOrSend and send directly → this reds.
     dbMocks.listDueReferralAsks.mockResolvedValue([row()]);
-    expect(await referralAskPass.run(ctx(TICK, UNTIL_NOON))).toEqual({ ...EMPTY, held: 1 });
+    expect(await referralAskPass.run({ ...ctx(TICK), sms: fakeSmsGate({ decide: () => ({ kind: "deferred", until: NOON, zone: "America/Chicago" }) }) })).toEqual({ ...EMPTY, held: 1 });
     expect(smsSend).not.toHaveBeenCalled();
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
     expect(dbMocks.stampReferralAsked).not.toHaveBeenCalled();
@@ -387,7 +384,7 @@ describe("the referral ask and quiet hours", () => {
     // Mutation: apply the morning-band gate on a release → this reds, and
     // every row held overnight would wait a whole extra day.
     dbMocks.getDueReferralAskById.mockResolvedValue({ due: row() });
-    expect(await releaseReferralAsk(ctx(NOON, UNTIL_NOON), heldRow())).toBe("sent");
+    expect(await releaseReferralAsk(ctx(NOON), heldRow())).toBe("sent");
     expect(smsSend).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampReferralAsked).toHaveBeenCalledWith(expect.anything(), "bk_r1");
     expect(dbMocks.recordAutomationLog).toHaveBeenLastCalledWith(expect.anything(),
@@ -445,7 +442,7 @@ describe("releasing a held referral ask", () => {
     // band, which is the whole point of `released`.
     const noon = new Date("2027-09-24T17:00:00.000Z");
     expect(await releaseReferralAsk(
-      ctx(noon, { enabled: true, start: "21:00", end: "12:00" }), heldRow())).toBe("skipped");
+      ctx(noon), heldRow())).toBe("skipped");
     expect(smsSend).not.toHaveBeenCalled();
     expect(dbMocks.stampReferralAsked).not.toHaveBeenCalled();
     // A REAL row, never left untouched: an untouched released row keeps its
@@ -484,5 +481,71 @@ describe("releasing a held referral ask", () => {
     dbMocks.getDueReferralAskById.mockResolvedValue({ due: row({ config: null }) });
     expect(await releaseReferralAsk(ctx(), heldRow())).toBe("skipped");
     expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Review R2-I2: a text the gate refuses sends nothing, so it must not use up
+ * AUTOMATION_TICK_CAP (one counter across EVERY account) or the account's
+ * daily count. Refused rows are never stamped and come back every tick; without
+ * the give-back ten flagged contacts at the head of the list starve everyone.
+ */
+describe("referralAskPass: a refusal gives back its tick slot and its daily count", () => {
+  const refuseFirst = (n: number) => {
+    let seen = 0;
+    return fakeSmsGate({ send: (m) => smsSend(m), decide: () => (seen++ < n ? { kind: "blocked", reason: "stopped" } : null) });
+  };
+
+  it("ten rows refused by the gate, then one allowed: {blocked: 10, sent: 1} (mutation: drop `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
+    const result = await referralAskPass.run({ ...ctx(), sms: refuseFirst(AUTOMATION_TICK_CAP) });
+    expect(result).toEqual({ ...EMPTY, blocked: AUTOMATION_TICK_CAP, sent: 1 });
+  });
+
+  it("one short of the daily cap: a refused row, then an allowed one, still sends (mutation: drop the sentToday give-back → the second is capped, FAILS)", async () => {
+    dbMocks.countReferralAsksSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
+    dbMocks.listDueReferralAsks.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
+    const result = await referralAskPass.run({ ...ctx(), sms: refuseFirst(1) });
+    expect(result).toEqual({ ...EMPTY, blocked: 1, sent: 1 });
+  });
+});
+
+describe("referralAskPass hands the gate its own kind (review R2 minor)", () => {
+  it("the gate is asked for automation.referral_ask, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([row()]);
+    const gate = fakeSmsGate();
+    await referralAskPass.run({ ...ctx(), sms: gate });
+    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.referral_ask"]);
+  });
+});
+
+/**
+ * Task 9 review, concern 1 (orchestrator, 2026-09-27): a HELD text sends
+ * nothing this tick, so it gives back its TICK slot; its DAILY count stays
+ * taken, because a held row is that day's send. On a Sunday morning ten
+ * accounts' marketing texts held until noon must not use up
+ * AUTOMATION_TICK_CAP (one counter across EVERY account) while another
+ * account's could go now.
+ */
+describe("referralAskPass: a hold gives back its tick slot, never its daily count", () => {
+  const holdFirst = (n: number) => {
+    let seen = 0;
+    return fakeSmsGate({
+      send: (m) => smsSend(m),
+      decide: () => (seen++ < n ? { kind: "deferred", until: new Date("2030-01-06T18:00:00.000Z"), zone: "America/Chicago" } : null),
+    });
+  };
+
+  it("ten rows HELD by the gate, then one sendable: {held: 10, sent: 1} (mutation: drop the held branch's `attemptsThisTick--` → the eleventh hits the tick cap, FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue(Array.from({ length: AUTOMATION_TICK_CAP + 1 }, (_, i) => row({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
+    const result = await referralAskPass.run({ ...ctx(), sms: holdFirst(AUTOMATION_TICK_CAP) });
+    expect(result).toEqual({ ...EMPTY, held: AUTOMATION_TICK_CAP, sent: 1 });
+  });
+
+  it("one short of the daily cap: a HELD row keeps today's count, so the next row is capped (mutation: give the daily count back on a hold → it sends, FAILS)", async () => {
+    dbMocks.countReferralAsksSince.mockResolvedValue(AUTOMATION_DAILY_CAP - 1);
+    dbMocks.listDueReferralAsks.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
+    const result = await referralAskPass.run({ ...ctx(), sms: holdFirst(1) });
+    expect(result).toEqual({ ...EMPTY, held: 1, skippedCap: 1 });
   });
 });

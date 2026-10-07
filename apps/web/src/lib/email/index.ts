@@ -1,9 +1,11 @@
 import { fakeEmailProvider } from "./fake";
 import { resendEmailProvider } from "./resend";
 import type { EmailProvider } from "./types";
+import { isProductionEnv } from "./environment";
 
 export type { EmailProvider, SendEmailInput, SendEmailResult } from "./types";
 export { fakeEmailProvider } from "./fake";
+export { isProductionEnv } from "./environment";
 
 /**
  * Chooses the email provider for the current environment.
@@ -28,7 +30,7 @@ export function getEmailProvider(env: NodeJS.ProcessEnv = process.env): EmailPro
   // (never from the injectable `env` param above) — Next.js hardcodes
   // NODE_ENV=development under `next dev` and refuses to let a `.env` file
   // override it, so it cannot be pulled or spoofed the way VERCEL_ENV can.
-  const isProduction = env.VERCEL_ENV === "production" && process.env.NODE_ENV === "production";
+  const isProduction = isProductionEnv(env);
 
   if (isProduction) {
     if (!apiKey || !from) throw new Error("RESEND_API_KEY and EMAIL_FROM are required in production");

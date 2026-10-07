@@ -1,7 +1,7 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
-import { SEEDED_ACCOUNT_NAME, openAccountByName } from "./support";
+import { SEEDED_ACCOUNT_NAME, openAccountByName, readClientFixture } from "./support";
 
 // Playwright's config passes env to the webServer, not to this process, so the
 // service-role credentials have to be loaded explicitly for setup and cleanup.
@@ -138,7 +138,11 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
 
     // --- The public side, as a stranger -------------------------------
     await page.goto(publicPath);
-    await page.getByLabel("Name").fill(leadName);
+    // The default seed now carries First name AND Last name fields (F-047
+    // phase 1 defect fix — a lone field labeled "Name" let a full name land
+    // entirely in first_name) — fill the first-name field specifically,
+    // since "Name" alone would now match both labels' substrings.
+    await page.getByLabel("First name").fill(leadName);
     await page.getByLabel("Email").fill(leadEmail);
     await page.getByLabel(/How can we help/).fill(messageBody);
     await page.getByLabel(consentLabel).check();
@@ -240,6 +244,57 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
   }
 });
 
+test("an embedded form asks for enough height to show its Submit button", async ({ page, baseURL }) => {
+  // The form reported its own element height, and the brand header sits
+  // ABOVE that element — so every embed came out one header short and the
+  // Submit button was clipped at the frame's bottom edge (bis-rgv.com/contact,
+  // 34px, in production). This hosts the form the way a client's site does
+  // and checks the number the host is told against where the button ends.
+  //
+  // On the per-run fixture account, never Test Client One: this writes a form
+  // row. It is inserted directly — the builder is the other specs' subject,
+  // and this one is about the public page alone.
+  const fixture = readClientFixture();
+  test.skip(!fixture, "client fixture file missing — run through the setup project");
+  const db = serviceDb();
+  const publicId = `e2eh${Date.now()}`;
+  const { error } = await db.from("forms").insert({
+    account_id: fixture!.accountId, public_id: publicId, name: `E2E Embed Height ${publicId}`,
+    status: "published",
+    fields: [
+      { key: "first_name", kind: "core.first_name", label: "First name", required: true },
+      { key: "email", kind: "core.email", label: "Email", required: true },
+      { key: "message", kind: "message", label: "Message", required: false },
+    ],
+  });
+  expect(error, error?.message).toBeNull();
+
+  try {
+    await page.setContent(`<!doctype html><body style="margin:0">
+      <script>window.__heights = []; addEventListener("message", (e) => {
+        if (e.data && e.data.type === "bis-form-height") window.__heights.push(e.data.height);
+      });</script>
+      <iframe id="f" src="${new URL(`/f/${publicId}`, baseURL).href}" style="width:420px;height:300px;border:0"></iframe>
+    </body>`);
+
+    const frame = page.frameLocator("#f");
+    const submit = frame.getByRole("button", { name: "Submit" });
+    await expect(submit).toBeVisible({ timeout: 30_000 });
+    // The header this bug was about has to be there, or the check proves nothing.
+    await expect(frame.locator(".bis-brand")).toBeVisible();
+
+    const needed = await submit.evaluate((b) => b.getBoundingClientRect().bottom + window.scrollY);
+    // The observer posts again as layout settles; the host keeps the last one.
+    await expect.poll(async () => {
+      const heights = await page.evaluate(() => (window as unknown as { __heights: number[] }).__heights);
+      return heights.at(-1) ?? 0;
+    }, { message: "the last height posted must reach the Submit button's bottom edge" })
+      .toBeGreaterThanOrEqual(needed);
+  } finally {
+    await db.from("forms").delete().eq("public_id", publicId);
+  }
+});
+
 test("a honeypot submission looks like success and creates nothing", async ({ page }) => {
   const stamp = Date.now();
   const formName = `E2E Spam ${stamp}`;
@@ -249,7 +304,7 @@ test("a honeypot submission looks like success and creates nothing", async ({ pa
     const publicPath = await newPublishedForm(page, formName);
 
     await page.goto(publicPath);
-    await page.getByLabel("Name").fill("Bot");
+    await page.getByLabel("First name").fill("Bot");
     await page.getByLabel("Email").fill(leadEmail);
     // The trap. A human never sees this field — it is positioned off-screen
     // rather than display:none precisely so a bot will find and fill it.

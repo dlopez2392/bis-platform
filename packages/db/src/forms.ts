@@ -107,8 +107,20 @@ export async function getForm(
  * Public path. Deliberately takes no accountId: the request that reaches it is
  * unauthenticated and has no tenant context, so the account is read back off
  * the row and must never be taken from the caller. Only published forms are
- * visible — a draft is a 404, indistinguishable from a token that never
- * existed.
+ * visible — a draft or an archived form answers with the same HTTP STATUS
+ * (404) as a public_id that never existed.
+ *
+ * Status parity is not the same claim as "looks the same" (**owner decision,
+ * F-102 review round**): a draft/archived form's not-found page MAY carry the
+ * account's own name, logo and colour, while a public_id that never existed
+ * never does. That is a deliberate, sanctioned distinction, not a leak —
+ * `newPublicId()` mints ~60 bits of random id, so the only way anyone holds
+ * one at all is having gotten the link FROM the business (an owner sharing a
+ * draft form's link too early, say), and a stranger guessing a live account's
+ * id by brute force is not a realistic threat this status code is defending
+ * against. What must still never leak is the FINER distinction a status-404
+ * response cannot reveal anyway: draft vs archived vs disabled are all one
+ *"not available" to the visitor, branded or not.
  */
 export async function getPublishedFormByPublicId(
   db: SupabaseClient, publicId: string,
@@ -117,6 +129,36 @@ export async function getPublishedFormByPublicId(
     .eq("public_id", publicId).eq("status", "published").maybeSingle();
   if (error) throw new Error(error.message);
   return (data as FormRow | null) ?? null;
+}
+
+/**
+ * Public path, ANY status — a draft and an archived form both come back,
+ * only a public_id that never existed returns null. `/f`'s own root layout
+ * (moved to `[publicId]/layout.tsx` for F-102) needs this: deciding the
+ * document's own `lang` and whether to show the account's brand on a
+ * not-found page both have to happen for a draft too, above the page's own
+ * "is this published" check — `getPublishedFormByPublicId` is the one
+ * accessor allowed to fold "draft" into "doesn't exist", and narrowing a
+ * second caller onto it would un-404 every draft on the live page the
+ * moment they shared a query. The status check moves to the caller
+ * (`page.tsx`'s own `notFound()` guard) instead — see that function's own
+ * comment for why a draft/archived form's not-found MAY still be branded.
+ */
+export async function getFormByPublicId(
+  db: SupabaseClient, publicId: string,
+): Promise<FormRow | null> {
+  const { data, error } = await db.from("forms").select(FORM_COLS)
+    .eq("public_id", publicId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as FormRow | null) ?? null;
+}
+
+/** The predicate `getPublishedFormByPublicId`'s SQL filter used to make for
+ *  the caller — now spelled out so `/f`'s layout and page can share the
+ *  SAME row (one query, via React `cache()`) and apply it independently:
+ *  the layout needs it for lang/branding, the page for `notFound()`. */
+export function isFormLive(form: Pick<FormRow, "status">): boolean {
+  return form.status === "published";
 }
 
 export async function updateForm(
@@ -216,6 +258,51 @@ export async function recordRejectedSubmission(
   return { id: data.id };
 }
 
+const SUBMISSION_CREATIONS_PAGE_SIZE = 1000;
+
+/**
+ * Raw `created_at` instants for REAL (non-spam) submissions in
+ * `[fromIso, toIso)` — the form half of "leads captured". `spam_reason is
+ * null` is the same predicate `listForms` uses for its own counts, kept in
+ * the data layer beside it rather than re-expressed in the web app, so
+ * "what counts as a real submission" has ONE definition. A honeypot hit is
+ * not a lead and must never inflate a number a client is shown.
+ *
+ * This is the ONLY read of `form_submissions` the weekly report's "leads
+ * captured" and the dashboard's CRM-only hero (F-076) both go through —
+ * there used to be a second, count-only function here
+ * (`countRealSubmissionsBetween`) that the report called instead; it was
+ * removed once nothing but this row-returning read fed either caller, so
+ * the predicate above has exactly one place it can drift from. Paged on
+ * `id` (the table's primary key, 0006_forms.sql), stopping only on a
+ * genuinely EMPTY page, the same shape `sumOpenOpportunities`
+ * (opportunities.ts) uses: a row-returning read — unlike the removed
+ * function's `count: "exact", head: true` — truncates at PostgREST's row
+ * cap (max_rows) unless paged.
+ */
+export async function listSubmissionCreationsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+  pageSize: number = SUBMISSION_CREATIONS_PAGE_SIZE,
+): Promise<string[]> {
+  const result: string[] = [];
+  let lastId: string | undefined;
+  for (;;) {
+    let query = db.from("form_submissions")
+      .select("id, created_at")
+      .eq("account_id", accountId)
+      .is("spam_reason", null)
+      .gte("created_at", fromIso).lt("created_at", toIso)
+      .order("id", { ascending: true });
+    if (lastId !== undefined) query = query.gt("id", lastId);
+    const { data, error } = await query.limit(pageSize);
+    if (error) throw new Error(`listSubmissionCreationsBetween failed: ${error.message}`);
+    const rows = (data ?? []) as { id: string; created_at: string }[];
+    if (rows.length === 0) return result;
+    for (const row of rows) result.push(row.created_at);
+    lastId = rows[rows.length - 1]!.id;
+  }
+}
+
 /**
  * Rate-limit counter. DB-backed, not in-process: on Vercel an in-process
  * counter is per-lambda, so it would reset unpredictably under concurrency and
@@ -224,31 +311,6 @@ export async function recordRejectedSubmission(
  *
  * Takes no accountId: the caller has the form, not a tenant context.
  */
-/**
- * Real submissions across the whole account in a window — the weekly report's
- * "leads captured", form half.
- *
- * `spam_reason is null` is the same predicate `listForms` uses for its own
- * counts, kept in the data layer beside it rather than re-expressed in the web
- * app, so "what counts as a real submission" has ONE definition. A honeypot
- * hit is not a lead and must never inflate a number a client is shown.
- *
- * Half-open `[from, to)`, matching `listCallOutcomesBetween` and
- * `listBookingCreationsBetween`, so all three agree about which instants
- * belong to a week.
- */
-export async function countRealSubmissionsBetween(
-  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
-): Promise<number> {
-  const { count, error } = await db.from("form_submissions")
-    .select("id", { count: "exact", head: true })
-    .eq("account_id", accountId)
-    .is("spam_reason", null)
-    .gte("created_at", fromIso).lt("created_at", toIso);
-  if (error) throw new Error(`countRealSubmissionsBetween failed: ${error.message}`);
-  return count ?? 0;
-}
-
 export async function countRecentSubmissions(
   db: SupabaseClient, formId: string, ipHash: string, sinceIso: string,
 ): Promise<number> {

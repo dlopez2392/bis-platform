@@ -24,6 +24,15 @@ describe("parseCaptureLead", () => {
     expect(CAPTURE_LEAD_TOOL.function.name).toBe("capture_lead");
     expect(JSON.stringify(CAPTURE_LEAD_TOOL)).not.toContain("book");
   });
+
+  // Review I3: the phone is written by a MODEL from what the visitor typed,
+  // not typed by a human directly — the same "no country code unless they
+  // said one" contract voice's own tool schemas carry (mutation: drop the
+  // sentence → FAILS).
+  it("tells the model to write the phone as the visitor typed it, no invented country code", () => {
+    expect(CAPTURE_LEAD_TOOL.function.parameters.properties.phone.description)
+      .toMatch(/no country code unless they gave one/);
+  });
 });
 
 describe("splitName", () => {

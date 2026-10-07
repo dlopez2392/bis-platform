@@ -15,6 +15,7 @@ vi.mock("./sms-reminder", () => ({ releaseSmsReminder: (...a: unknown[]) => rele
 vi.mock("../instant-reply", () => ({ releaseInstantReply: (...a: unknown[]) => releasers.instant(...a) }));
 vi.mock("./quote-followup", () => ({ releaseQuoteFollowup: (...a: unknown[]) => releasers.quoteFollowup(...a) }));
 
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
 import { releaseHeldPass, RELEASERS, RELEASE_BATCH, RELEASE_BUDGET_MS } from "./release-held";
 
@@ -25,8 +26,7 @@ const row = (source: AutomationLogRow["source"], key: string): AutomationLogRow 
 });
 const ctx: PassContext = {
   db: {} as never, now: NOW, origin: "https://app.example.com",
-  email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: () => ({ isFake: true, send: async () => ({ providerMessageId: "s" }) }),
-  quiet: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
+  email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate(),
 };
 
 beforeEach(() => {

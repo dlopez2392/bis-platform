@@ -31,11 +31,12 @@ import type { Pass, PassContext } from "../context";
  *     first so nobody starves.
  *   - ONCE PER CONTACT, EVER. `contacts.reactivation_sent_at` is permanent,
  *     which is also why turning the recipe off mid-drain strands nothing.
- *   - NEVER TO A CONTACT WHO ASKED NOT TO (0049, B21). There is NO check for
- *     it in this pass, on purpose: both `listDueReactivations` and
- *     `getDueReactivationById` filter `marketing_email_opted_out_at is null`
- *     in the QUERY, so an opted-out contact never reaches this loop on a
- *     tick or on a release (a contact who opts out during a hold answers
+ *   - NEVER TO A CONTACT WHO ASKED NOT TO. There is NO check for it in this
+ *     pass, on purpose: `listDueReactivations` and `getDueReactivationById`
+ *     leave out an email-stopped contact (the ledger, consent PR-3), in the
+ *     walk, never as a skip here (the #118 I1 trap), so a stopped contact
+ *     never reaches this loop on a tick or on a release (a contact who stops
+ *     during a hold answers
  *     "no longer due"). A skip here instead would leave the row unstamped
  *     in the walk's 50-survivor window every tick and starve other
  *     accounts — the #118 I1 trap. The referral ask, whose due-list is a
@@ -63,7 +64,7 @@ export async function processReactivations(
   ctx: PassContext, due: DueReactivation[], opts: ProcessOptions,
 ) {
   const c = {
-    sent: 0, failed: 0, unstamped: 0, held: 0,
+    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
     skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
     skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
   };
@@ -195,6 +196,8 @@ export async function processReactivations(
           footerReason: marketingFooterReason(row.brandName),
         });
         await ctx.email.send({
+          accountId: row.accountId, kind: "automation.reactivation", contactId: row.contactId,
+          origin: ctx.origin, now: ctx.now, accountZone: row.accountTimezone,
           to: row.contactEmail,
           fromName: brand.name,
           fromAddress: row.fromEmail ?? undefined,
@@ -210,6 +213,10 @@ export async function processReactivations(
           );
         }
       });
+      if (outcome === "skipped") {
+        c.blocked++;
+        continue;
+      }
       if (outcome === "held") {
         c.held++;
         continue;

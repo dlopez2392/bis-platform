@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { withTestAccount } from "./fixtures";
-import { createContact, setMarketingEmailOptOut } from "../contacts";
+import { createContact, getContact } from "../contacts";
+import { appendConsentEvent, appendConsentEventGuarded } from "../consent";
 import { setBranding } from "../branding";
 import { createForm, createSubmission } from "../forms";
 import {
@@ -36,6 +37,22 @@ import {
 import { ensureConversation, createMessage } from "../messaging";
 import { ensureDefaultPipeline, listPipelinesWithStages } from "../crm-config";
 import { createOpportunity } from "../opportunities";
+
+/** Stops a contact's EMAIL in the ledger the way staff's "Stop emails" does, and lifts it with a noted Resume. */
+async function stopEmail(db: Parameters<typeof appendConsentEvent>[0], accountId: string, contactId: string): Promise<string> {
+  const email = (await getContact(db, accountId, contactId))!.email!;
+  return (await appendConsentEvent(db, {
+    accountId, channel: "email", address: email.trim().toLowerCase(), action: "revoked", method: "staff", actorId: "user_test",
+  })).id;
+}
+async function resumeEmail(db: Parameters<typeof appendConsentEvent>[0], accountId: string, contactId: string, stopId: string): Promise<void> {
+  const email = (await getContact(db, accountId, contactId))!.email!;
+  const r = await appendConsentEventGuarded(db, {
+    accountId, channel: "email", address: email.trim().toLowerCase(), action: "resubscribed", method: "staff",
+    actorId: "user_test", note: "asked on the phone",
+  }, { ifNewest: stopId });
+  if (r.outcome !== "appended") throw new Error(`resumeEmail: ${r.outcome}`);
+}
 
 const HOUR = 60 * 60 * 1000;
 
@@ -134,7 +151,9 @@ describe("automations accessors", () => {
       expect(row.brandName).toBe("Fixture Brand");
       expect(row).not.toHaveProperty("accountName");
       expect(row.contactEmail).toBe("rev@example.com");
-      expect(row.contactPhone).toBe("(956) 555-0101");   // raw; the pass normalises
+      // As STORED: since F-009 createContact stores E.164 (phoneFields), and the
+      // accessor returns the column untouched.
+      expect(row.contactPhone).toBe("+19565550101");
       expect(row.contactId).toBe(contactId);
       expect(new Date(row.endsAt).getTime()).toBe(new Date("2027-03-10T10:00:00Z").getTime());
       expect(row.followupSentAt).toBeNull();
@@ -328,7 +347,7 @@ describe("no-show nudge — data layer", () => {
       expect(row.calendarEnabled).toBe(false);            // the lazily created calendar starts disabled
       expect(row.contactId).toBe(contactId);
       expect(row.contactEmail).toBe("miss@example.com");
-      expect(row.contactPhone).toBe("(956) 555-0102");    // raw; the pass normalises
+      expect(row.contactPhone).toBe("+19565550102");    // as stored: E.164 since F-009
       expect(typeof row.accountTimezone).toBe("string");
       expect(row.fromEmail).toBeNull();
       expect(row.replyToEmail).toBeNull();
@@ -427,7 +446,7 @@ describe("sms reminder — data layer", () => {
       expect(new Date(row.startsAt).getTime()).toBe(now.getTime() + 2 * HOUR);
       expect(row.bookerTimezone).toBe("America/Los_Angeles");
       expect(row.contactId).toBe(contactId);
-      expect(row.contactPhone).toBe("(956) 555-0103");
+      expect(row.contactPhone).toBe("+19565550103");    // as stored: E.164 since F-009
       expect(typeof row.accountTimezone).toBe("string");
       expect(row.body).toBe("See you soon!");
       expect(row.smsFailedAt).toBeNull();
@@ -630,7 +649,7 @@ describe("appointment confirm — data layer", () => {
       expect(row).not.toHaveProperty("contactEmail");   // SMS only: no address it must not use
       expect(row).not.toHaveProperty("smsFailedAt");    // written, never read back
       expect(row.bookerTimezone).toBe("America/Los_Angeles");
-      expect(row.contactPhone).toBe("(956) 555-0107");
+      expect(row.contactPhone).toBe("+19565550107");    // as stored: E.164 since F-009
       expect(row.body).toBe("Any questions, just reply.");
     });
   });
@@ -862,7 +881,7 @@ describe("referral ask — data layer", () => {
       expect(row.config).toEqual({ channel: "sms" });
       expect(row.contactId).toBe(contactId);
       expect(row.contactEmail).toBe("ref@example.com");
-      expect(row.contactPhone).toBe("(956) 555-0112");
+      expect(row.contactPhone).toBe("+19565550112");    // as stored: E.164 since F-009
       // EVERY LADDER COLUMN BY VALUE, never `not.toBeNull()`: a column
       // dropped from REFERRAL_ASK_SELECT comes back `undefined`, and
       // `expect(undefined).not.toBeNull()` PASSES. Task 6's gate reads all
@@ -1009,21 +1028,17 @@ describe("referral ask — data layer", () => {
       // Unset: `false` and `null` BY VALUE (`toBe`, not falsy): a field the
       // builder forgot reads `undefined` and fails both.
       for (const row of await both()) {
-        expect(row.contactMarketingEmailOptedOut).toBe(false);
         expect(row.mailingAddress).toBeNull();
       }
 
-      await setMarketingEmailOptOut(db, accountId, contactId, true, "user_test");
       await setBranding(db, accountId, { mailingAddress: "9 Referral Rd\nMcAllen, TX 78501" }, "user_test");
-      // Mutation: drop `marketing_email_opted_out_at` from REFERRAL_ASK_SELECT,
-      // or hard-code `contactMarketingEmailOptedOut: false` → reds. Mutation:
-      // hard-code `mailingAddress: null` in toDueReferralAsk → reds. And the
-      // opted-out row is STILL DUE here: the query must not filter it, or an
-      // SMS-channel ask would stop reaching a contact who only refused email.
+      // Mutation: hard-code `mailingAddress: null` in toDueReferralAsk → reds.
       for (const row of await both()) {
-        expect(row.contactMarketingEmailOptedOut).toBe(true);
         expect(row.mailingAddress).toBe("9 Referral Rd\nMcAllen, TX 78501");
       }
+      // PR-3: the row carries no opt-out of its own any more; the email gate
+      // reads the ledger at send time. Mutation: put the field back → reds.
+      for (const row of await both()) expect("contactMarketingEmailOptedOut" in row).toBe(false);
     });
   });
 
@@ -1476,12 +1491,11 @@ describe("reactivation — data layer", () => {
     });
   });
 
-  // Migration 0049: the per-contact marketing-email opt-out. Excluded IN THE
-  // QUERY, never skipped in the pass: an opted-out contact is never stamped,
-  // so a pass-level skip would hand the same row back every tick and refill
-  // the survivor window with it (the starvation case below, one contact at a
-  // time). One case per read, so each filter reds on its own name.
-  it("an opted-out contact is never in the walk, and is back in it once the opt-out is cleared", async () => {
+  // The email stop (the ledger; 0049's column no longer read, consent PR-3).
+  // Left out IN THE WALK, never skipped in the pass: a stopped contact is never
+  // stamped, so a pass-level skip would hand the same row back every tick and
+  // refill the survivor window with it (the #118 I1 trap). One case per read.
+  it("an email-stopped contact is never in the walk, and is back in it once the stop is lifted", async () => {
     await withTestAccount(async (db, accountId) => {
       const contactId = await quietCustomer(db, accountId);
       await setBranding(db, accountId, SEND_READY, "user_test");
@@ -1489,27 +1503,36 @@ describe("reactivation — data layer", () => {
         (await listDueReactivations(db, new Date("2027-09-21T12:00:00Z").toISOString())).map((r) => r.contactId);
       // The positive first, or the negative below is vacuous.
       expect(await ids()).toContain(contactId);
-      await setMarketingEmailOptOut(db, accountId, contactId, true, "user_test");
-      // Mutation: drop `.is("contacts.marketing_email_opted_out_at", null)`
-      // from listDueReactivations → this reds.
+      const stop = await stopEmail(db, accountId, contactId);
+      // Mutation: drop the readBlockedAddresses filter from listDueReactivations → this reds.
       expect(await ids()).not.toContain(contactId);
-      await setMarketingEmailOptOut(db, accountId, contactId, false, "user_test");
+      await resumeEmail(db, accountId, contactId, stop);
       expect(await ids()).toContain(contactId);
     });
   });
 
-  it("by id, an opted-out contact answers `gone`, and is due again once the opt-out is cleared", async () => {
+  it("by id, an email-stopped contact answers `gone`, and is due again once the stop is lifted", async () => {
     await withTestAccount(async (db, accountId) => {
       const contactId = await quietCustomer(db, accountId);
       expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
-      await setMarketingEmailOptOut(db, accountId, contactId, true, "user_test");
-      // The WHOLE answer: a released hold for this contact leaves the queue
-      // on the releaser's `gone` path. Mutation: drop
-      // `.is("marketing_email_opted_out_at", null)` from
-      // getDueReactivationById → this reds.
+      const stop = await stopEmail(db, accountId, contactId);
+      // Mutation: drop the readConsentState check from getDueReactivationById → this reds.
       expect(await getDueReactivationById(db, contactId)).toEqual({ due: null, why: "gone" });
-      await setMarketingEmailOptOut(db, accountId, contactId, false, "user_test");
+      await resumeEmail(db, accountId, contactId, stop);
       expect((await getDueReactivationById(db, contactId)).due?.contactId).toBe(contactId);
+    });
+  });
+
+  it("the 0049 column no longer decides anything: a contact stamped by the old switch but NOT stopped in the ledger is in the walk (mutation: leave `.is(\"contacts.marketing_email_opted_out_at\", null)` in the query → this reds)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const contactId = await quietCustomer(db, accountId);
+      await setBranding(db, accountId, SEND_READY, "user_test");
+      const { error } = await db.from("contacts")
+        .update({ marketing_email_opted_out_at: new Date("2026-09-01T00:00:00Z").toISOString() })
+        .eq("id", contactId).eq("account_id", accountId);
+      expect(error).toBeNull();
+      const ids = (await listDueReactivations(db, new Date("2027-09-21T12:00:00Z").toISOString())).map((r) => r.contactId);
+      expect(ids).toContain(contactId);
     });
   });
 

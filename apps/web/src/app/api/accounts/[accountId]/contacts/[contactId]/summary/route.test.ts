@@ -79,13 +79,8 @@ describe("contact summary route", () => {
     expect(body.recent[1].kind).toBe("note");
   });
 
-  /**
-   * The drawer's "No marketing emails" switch reads its starting state from
-   * HERE, not from the list row: a `?peek=` deep link to a contact on another
-   * page of the list has only a stub row (contacts-table.tsx's missingRow,
-   * every field null), which would show an opted-out contact as unticked.
-   */
-  describe("marketing_email_opted_out_at", () => {
+  // Consent chain PR-1 (spec §6, F-009): the drawer's Check number row.
+  describe("phone_country_unconfirmed", () => {
     function emptySources() {
       access.mockResolvedValue({ userId: "u1", isAgency: true });
       for (const k of ["listContactTags", "listNotes", "listContactSubmissions",
@@ -93,21 +88,52 @@ describe("contact summary route", () => {
         dbMocks[k].mockResolvedValue([]);
       }
     }
-
-    it("carries the contact's opt-out stamp", async () => {
+    const flagOf = async (contact: Record<string, unknown>) => {
       emptySources();
-      dbMocks.getContact.mockResolvedValue({
-        id: "c1", marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00",
-      });
-      const body = await (await GET(req(), ctx())).json();
-      expect(body.marketing_email_opted_out_at).toBe("2026-09-23T12:00:00+00:00");
+      dbMocks.getContact.mockResolvedValue({ id: "c1", ...contact });
+      return (await (await GET(req(), ctx())).json()).phone_country_unconfirmed;
+    };
+
+    it("is true when the contact's flag is set (mutation: drop the flag half of the OR → FAILS)", async () => {
+      expect(await flagOf({ phone: "+15512345678", phone_country_unconfirmed: true })).toBe(true);
     });
 
-    it("is null (not absent) for a contact who may be emailed", async () => {
+    it("is true for a number saved before the backfill that reads both ways, flag still false (mutation: drop the normaliser half → FAILS)", async () => {
+      expect(await flagOf({ phone: "55 1234 5678", phone_country_unconfirmed: false })).toBe(true);
+    });
+
+    it("is false for a plainly US number, a plainly Mexican one, and no number", async () => {
+      expect(await flagOf({ phone: "(956) 292-1696", phone_country_unconfirmed: false })).toBe(false);
+      expect(await flagOf({ phone: "+528999221234", phone_country_unconfirmed: false })).toBe(false);
+      expect(await flagOf({ phone: null, phone_country_unconfirmed: false })).toBe(false);
+    });
+  });
+
+  /**
+   * Round 3, review I3: the raw stored phone, so the drawer can pass the
+   * number the operator actually SAW to the Check number row's pick — never
+   * the list row's `?peek=` stub.
+   */
+  describe("phone (round 3)", () => {
+    function emptySources() {
+      access.mockResolvedValue({ userId: "u1", isAgency: true });
+      for (const k of ["listContactTags", "listNotes", "listContactSubmissions",
+        "listContactMessages", "listContactOpportunities", "listContactCalls"] as const) {
+        dbMocks[k].mockResolvedValue([]);
+      }
+    }
+    it("is the stored phone, verbatim (mutation: drop the field from the body → FAILS)", async () => {
       emptySources();
-      dbMocks.getContact.mockResolvedValue({ id: "c1", marketing_email_opted_out_at: null });
+      dbMocks.getContact.mockResolvedValue({ id: "c1", phone: "+15512345678" });
       const body = await (await GET(req(), ctx())).json();
-      expect(body).toHaveProperty("marketing_email_opted_out_at", null);
+      expect(body.phone).toBe("+15512345678");
+    });
+
+    it("is null (not absent) for a contact with no phone", async () => {
+      emptySources();
+      dbMocks.getContact.mockResolvedValue({ id: "c1", phone: null });
+      const body = await (await GET(req(), ctx())).json();
+      expect(body).toHaveProperty("phone", null);
     });
   });
 });
@@ -120,7 +146,7 @@ describe("contact summary route", () => {
 describe("contact summary route: timezone", () => {
   function emptySources() {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
-    dbMocks.getContact.mockResolvedValue({ id: "c1", marketing_email_opted_out_at: null });
+    dbMocks.getContact.mockResolvedValue({ id: "c1" });
     for (const k of ["listContactTags", "listNotes", "listContactSubmissions",
       "listContactMessages", "listContactOpportunities", "listContactCalls"] as const) {
       dbMocks[k].mockResolvedValue([]);
@@ -162,7 +188,7 @@ describe("contact summary route: timezone", () => {
 describe("contact summary route: what it sends, the drawer's parser accepts", () => {
   it("parses to exactly the body sent", async () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
-    dbMocks.getContact.mockResolvedValue({ id: "c1", marketing_email_opted_out_at: "2026-09-23T12:00:00+00:00" });
+    dbMocks.getContact.mockResolvedValue({ id: "c1" });
     dbMocks.listContactTags.mockResolvedValue([{ id: "t1", name: "vip" }]);
     dbMocks.listContactCalls.mockResolvedValue([{ id: "k1", started_at: "2026-09-05T10:00:00+00:00", outcome: "booked" }]);
     dbMocks.listNotes.mockResolvedValue([{ id: "n1", body: "hi", created_at: "2026-09-04T10:00:00.000Z" }]);

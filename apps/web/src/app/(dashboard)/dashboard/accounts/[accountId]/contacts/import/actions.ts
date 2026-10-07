@@ -6,6 +6,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { mapRows, type ParsedRow } from "@/lib/contacts/csv";
 import { m } from "@/lib/messages";
+import { loggableError } from "@/lib/loggable-error";
 
 /**
  * The server's own ceiling on one call. The wizard slices at BATCH_SIZE (200),
@@ -55,8 +56,11 @@ export async function importContactsBatchAction(
     // outcome of the write.)
     try {
       await emit(db, accountId, "contact.imported", userId, { created, updated });
-    } catch {
-      // deliberately swallowed — see above
+    } catch (e) {
+      // The outcome is deliberately NOT swallowed into silence — see above
+      // for why the import still reports success — but a missing ledger row
+      // should still be visible somewhere.
+      console.error(`contacts import: ledger write failed for account ${accountId}: ${loggableError(e)}`);
     }
 
     revalidatePath(`/dashboard/accounts/${accountId}/contacts`);

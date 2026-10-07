@@ -6,7 +6,7 @@ import {
   countRecentBookings, ensureConversation, createMessage,
   incrementUnreadCount,
 } from "@bis/db";
-import { getEmailProvider } from "@/lib/email";
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { getMeetingProvider } from "@/lib/meetings/provider";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { originFrom } from "@/lib/email/origin";
@@ -19,13 +19,13 @@ import {
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
   verifyRenderToken, hashIp, isValidEmail, isValidPhone, parseAttribution,
 } from "@/lib/forms/guards";
-import { toE164 } from "@/lib/voice/phone-number";
 // The SAME helper the sibling public-form action uses, not a re-implementation
 // (I3) — see its docstring in that file for why it is exported.
 import { setAttribution } from "@/lib/forms/enrich";
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { bookingConfirmationSubject } from "@/lib/email/templates/booking";
+import { recordBookingGrant } from "@/lib/consent/grants";
 
 export type BookingResult =
   | { ok: true; cancelUrl: string }
@@ -289,10 +289,11 @@ export async function submitBookingAction(publicId: string, formData: FormData):
 
     const created = await createContact(db, calendar.account_id, {
       firstName, lastName: lastName || undefined, email,
-      // Voice stores E.164; storing web input as-typed made the same person
-      // two contacts and hid web bookings from find_my_booking. Parseable →
-      // E.164, unparseable → as typed (never mangled, never rejected here).
-      phone: phone ? (toE164(phone) ?? phone) : undefined,
+      // AS TYPED (review R2-C1): createContact's phoneFields stores the
+      // E.164 when it parses, as typed when it does not, and flags ten digits
+      // that could be Mexican or US. Pre-normalising here would store
+      // "55 1234 5678" as a confirmed +1 and the gate would text it.
+      phone: phone || undefined,
       source: "booking",
     }, ACTOR_ID, ACTOR_TYPE);
     const contactId = created.id;
@@ -325,6 +326,11 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }
       throw e;
     }
+
+    // Consent chain PR-2 (decision 8): a booking made with a phone is a grant.
+    // Evidence only, never throws (lib/consent/grants.ts). As typed, so the
+    // ledger keys the number the contact row stores.
+    await recordBookingGrant(db, { accountId: calendar.account_id, bookingId, contactId, phoneAsTyped: phone || null });
 
     const contactName = [firstName, lastName].filter(Boolean).join(" ").trim() || email;
 
@@ -379,9 +385,9 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       : "";
 
     // Everything below is best-effort, structurally, not just by convention:
-    // `getEmailProvider()` THROWS the moment RESEND_API_KEY/EMAIL_FROM is
-    // missing or rotated in production (see `preflight.ts`). Uncaught, that
-    // exception used to reach the outer catch at the bottom of this function
+    // a send through the email gate THROWS (`EmailNotSent`) when the
+    // provider is missing or refuses (consent PR-3; `sendEmailOrThrow`).
+    // Uncaught, that exception used to reach the outer catch at the bottom of this function
     // and turn an already-committed booking into a reported "Something went
     // wrong" — the booking stayed real, the booker was told it wasn't, and
     // nobody (not the client's staff, not the booker) was ever notified. One
@@ -398,7 +404,6 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       });
 
       const origin = originFrom(h);
-      const provider = getEmailProvider();
 
       if (calendar.notify_emails.length > 0) {
         const contactUrl = origin ? `${origin}/dashboard/accounts/${calendar.account_id}/contacts/${contactId}` : null;
@@ -412,7 +417,8 @@ export async function submitBookingAction(publicId: string, formData: FormData):
             // alert (spec §3) — this message goes to the CLIENT'S OWN staff,
             // and sending client-domain-to-client-domain through a third-party
             // sender is the shape corporate filters treat as spoofing.
-            await provider.send({
+            await sendEmailOrThrow({
+              accountId: calendar.account_id, kind: "operator.booking_alert",
               to, fromName: brand.name,
               // Time first (spec §6): the operator triages a list of these,
               // and the time is what they scan for, not the name.
@@ -433,7 +439,11 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       const { html, text } = bookingConfirmationEmail({
         brand, locale, whenBookerZone, whenCompanyZone: whenCompanyZoneForBooker, cancelUrl, meetingUrl,
       });
-      await provider.send({
+      await sendEmailOrThrow({
+        // The customer-initiated kind (spec §4.3): it answers what the booker
+        // just did, so an unsubscribe never stops it — and it still carries
+        // the way out (consent PR-3).
+        accountId: calendar.account_id, kind: "booking.confirmation", contactId, language: locale, origin,
         to: email, fromName: brand.name, fromAddress: account?.from_email ?? undefined,
         replyTo: normalizeReplyTo(account?.reply_to_email), subject: bookingConfirmationSubject(locale),
         body: text, html,

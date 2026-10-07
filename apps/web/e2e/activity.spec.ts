@@ -1,7 +1,7 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { readFileSync, existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
-import { serviceDb, setClientAccess, saveQuietSettings, recordAutomationLog, DEFAULT_QUIET_SETTINGS } from "@bis/db";
+import { serviceDb, setClientAccess, recordAutomationLog } from "@bis/db";
 
 // Same two paths, same reason, as every spec that talks to Supabase from the
 // runner process rather than through a Next request.
@@ -27,29 +27,20 @@ test.beforeAll(async () => {
 });
 
 test.describe("quiet hours (agency)", () => {
-  test("set a window that is NOT the default, reload, read it back — the round trip through serviceDb and the authenticated-role read", async ({ page }) => {
+  test("the sending hours are stated, read-only, in the account's zone — there is nothing to save (consent chain PR-1)", async ({ page }) => {
     const { accountId } = fixture();
-    try {
-      await page.goto(`/dashboard/accounts/${accountId}/automations`);
-      const card = page.getByTestId("quiet-hours-card");
-      await expect(card.getByText("Quiet hours", { exact: true })).toBeVisible();
-      // 22:30 → 06:15: neither value is a default, so a page that rendered
-      // DEFAULT_QUIET_SETTINGS after the save could not pass this.
-      await card.getByLabel("From").fill("22:30");
-      await card.getByLabel("Until").fill("06:15");
-      await expect(card.getByTestId("quiet-hours-preview")).toContainText("10:30 PM – 6:15 AM");
-      await card.getByRole("button", { name: "Save quiet hours" }).click();
-      await expect(page.getByText("Quiet hours saved")).toBeVisible();
-
-      await page.reload();
-      const after = page.getByTestId("quiet-hours-card");
-      await expect(after.getByLabel("From")).toHaveValue("22:30");
-      await expect(after.getByLabel("Until")).toHaveValue("06:15");
-      await expect(after.getByRole("checkbox")).toBeChecked();
-      await expect(after).toContainText("Times are in America/Chicago");
-    } finally {
-      await saveQuietSettings(serviceDb(), accountId, DEFAULT_QUIET_SETTINGS, "e2e-cleanup");
-    }
+    await page.goto(`/dashboard/accounts/${accountId}/automations`);
+    const card = page.getByTestId("quiet-hours-card");
+    await expect(card.getByText("Quiet hours", { exact: true })).toBeVisible();
+    // The fixture account is created with no zone (auth.setup.ts), so the
+    // column default America/Chicago (0001) applies and the sentence names
+    // it; a card that dropped the {zone} replace would show "{zone}".
+    await expect(card.getByTestId("quiet-hours-fixed")).toContainText("between 8 a.m. and 9 p.m. in your time zone (America/Chicago)");
+    await expect(card.getByTestId("quiet-hours-fixed")).toContainText("on Sundays until noon");
+    // The old form is gone: no time inputs, no switch, no Save.
+    await expect(card.getByRole("button")).toHaveCount(0);
+    await expect(card.getByRole("textbox")).toHaveCount(0);
+    await expect(card.getByRole("checkbox")).toHaveCount(0);
   });
 
   test("the Automations page links to What went out", async ({ page }) => {

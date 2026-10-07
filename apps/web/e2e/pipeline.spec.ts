@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { SEEDED_ACCOUNT_NAME, openAccountByName } from "./support";
 
 // Two full drag round-trips, each ending in a reload against the shared

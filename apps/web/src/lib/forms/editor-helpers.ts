@@ -50,6 +50,30 @@ export function mergeFormTheme(
   };
 }
 
+/**
+ * The fields a brand-new form starts with (F-047 phase 1 defect fix,
+ * docs/crm-features.md §2.3: "the seeded Name field"). The old seed carried
+ * one name field — kind `core.first_name`, labeled plainly "Name" — and
+ * nowhere for a last name to go. A visitor reads "Name" and types a full
+ * name; it all lands in `first_name`, and `fileLead` in
+ * `lib/concierge/lead.ts` (the web chat's own lead-filing path) does the
+ * same thing deliberately WHEN a form has no `core.last_name` field: it
+ * stuffs the whole name in rather than silently dropping half of it. That
+ * fallback is correct for a form that truly has no surname field; the bug
+ * was the default form never having one. Seeding both, labeled truthfully,
+ * is the same shape the demo form already uses
+ * (packages/db/src/demo/seed.ts:810-811) and makes `fileLead`'s split-by-
+ * kind path (`hasSurnameField`) actually split going forward.
+ */
+export function defaultFormFields(): FormField[] {
+  return [
+    { key: "first_name", kind: "core.first_name", label: "First name", required: true },
+    { key: "last_name", kind: "core.last_name", label: "Last name", required: false },
+    { key: "email", kind: "core.email", label: "Email", required: true },
+    { key: "message", kind: "message", label: "How can we help?", required: false },
+  ];
+}
+
 function isValidFormField(value: unknown): value is FormField {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;

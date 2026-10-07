@@ -36,6 +36,7 @@ import { NextResponse, after } from "next/server";
 // Type-only: erased at compile time, so it does not put `@bis/db` back at
 // module scope (see the lazy imports in the handler below).
 import type { serviceDb as serviceDbType, Branding, ConciergeConversationRow } from "@bis/db";
+import { plainText } from "@/lib/concierge/plain-text";
 import { buildSystemPrompt } from "@/lib/voice/system-prompt";
 import { originFrom } from "@/lib/email/origin";
 import {
@@ -421,7 +422,9 @@ export async function POST(
         } }[];
       };
       const message = data?.choices?.[0]?.message;
-      reply = message?.content ?? "";
+      // Plain text before it goes anywhere: the bubble shows markdown as
+      // stray symbols, and the transcript is what the operator reads later.
+      reply = plainText(message?.content ?? "");
       const call = message?.tool_calls?.find((c) => c.function?.name === "capture_lead");
       toolArgs = call?.function?.arguments ?? null;
     } catch (e) {
@@ -461,9 +464,8 @@ export async function POST(
           // "null" — which flowed straight into `enrich`'s dashboard link
           // in the lead-alert email as "null/dashboard/accounts/…".
           // `lib/email/origin.ts` checks APP_ORIGIN FIRST for exactly this
-          // reason, and the other two `enrich` callers
-          // (api/intake/[publicId]/route.ts, f/[publicId]/actions.ts)
-          // already use this helper.
+          // reason, and the other `enrich` caller (f/[publicId]/actions.ts)
+          // already uses this helper.
           origin: originFrom(req.headers), lead,
         });
       } else {

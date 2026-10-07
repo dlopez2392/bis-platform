@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import { CONCIERGE_MAX_MESSAGE_CHARS } from "@/lib/concierge/guards";
 import type { ConciergeStrings } from "@/lib/concierge/strings";
@@ -139,6 +139,51 @@ export function brandMessage(accent: string, accentForeground: string) {
   return { type: "bis-concierge-brand" as const, accent, accentForeground };
 }
 
+/**
+ * A question asked FROM the host page (2026-10-05, the website's "Ask BIS"
+ * panel): the host draws suggested questions beside the frame and, when a
+ * visitor taps one, posts `{ type: "bis-concierge-ask", text }` here. The
+ * frame sends it exactly as if the visitor had typed it — same composer path,
+ * same render token, honeypot, length cap and server-side rate limits — so
+ * nothing a host can post does anything a visitor typing could not.
+ *
+ * Shape only here; WHO may ask is `askAllowedFrom`'s decision. The text is
+ * trimmed, empty is refused, and anything longer than the composer allows is
+ * refused rather than silently cut — a host should never put words in a
+ * visitor's mouth that it did not show them.
+ */
+export const ASK_MESSAGE_TYPE = "bis-concierge-ask";
+
+export function parseAskMessage(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const { type, text } = data as { type?: unknown; text?: unknown };
+  if (type !== ASK_MESSAGE_TYPE || typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > CONCIERGE_MAX_MESSAGE_CHARS) return null;
+  return trimmed;
+}
+
+/**
+ * Who may ask: only the page this chat was opened on. Every host already
+ * hands the frame its own url as the `page` attribution parameter (embed.js
+ * sets it from `window.location.href`; the BIS website builds it the same
+ * way), so the origin of THAT url is the one origin a question may come from.
+ * The caller has already checked `event.source === window.parent`; this
+ * stops a different origin that somehow holds the parent's window handle.
+ * No `page`, or one that does not parse, refuses: closed by default.
+ */
+export function askAllowedFrom(origin: string, pageUrl: string | undefined): boolean {
+  // An opaque origin ("null": a sandboxed frame, a data: or file: page) is
+  // never an identity, and `new URL("about:blank").origin` is "null" too —
+  // matching them would let any opaque sender through.
+  if (!pageUrl || origin === "null") return false;
+  try {
+    return new URL(pageUrl).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
 // `useSyncExternalStore`, not `useEffect` + `useState` (IMPORTANT 1, fix
 // round 2): `window.parent !== window` has no server-side answer and nothing
 // ever changes it within a session — the same "resolve on mount, without a
@@ -171,7 +216,7 @@ function getServerFramed(): false {
  */
 export function ConciergeChat({
   publicId, greeting, locale, strings, renderToken, attribution,
-  brandAccent, brandAccentForeground,
+  brandAccent, brandAccentForeground, brand = null, bare = false,
 }: {
   publicId: string; greeting: string; locale: "en" | "es";
   strings: ConciergeStrings; renderToken: string;
@@ -180,6 +225,18 @@ export function ConciergeChat({
    *  page is already painting the composer's send button with, forwarded to
    *  the host page's launcher via `bis-concierge-brand`. */
   brandAccent: string; brandAccentForeground: string;
+  /** The tenant's brand header (`<PublicBrand>`), drawn in the same row as
+   *  the close button. The page passes it in rather than rendering it as a
+   *  sibling: as a sibling it was a row of its own, so the × — which only
+   *  this component can draw, because only it knows whether it is framed —
+   *  fell onto a second line under the business name. */
+  brand?: ReactNode;
+  /** `?chrome=bare`: the host draws its own header and close (the BIS
+   *  website's Ask BIS panel), so a FRAMED page drops its header row rather
+   *  than stacking a second brand and a second × under the host's. A direct
+   *  visit ignores it — there is no host chrome to stand in. Esc still
+   *  posts the close either way. */
+  bare?: boolean;
 }) {
   // The greeting IS the empty state. It is the tenant's own copy, from their
   // own profile row — there is nothing to invent here.
@@ -240,9 +297,12 @@ export function ConciergeChat({
     window.parent.postMessage(CLOSE_MESSAGE, "*");
   }
 
-  async function send(e: React.FormEvent) {
+  function send(e: React.FormEvent) {
     e.preventDefault();
-    const text = draft.trim();
+    void sendText(draft.trim());
+  }
+
+  async function sendText(text: string) {
     if (!text || pending || ended) return;
     setDraft("");
     setError(null);
@@ -300,37 +360,46 @@ export function ConciergeChat({
     }
   }
 
+  // Latest `sendText` for the host-question listener, which is bound
+  // once and must not send through a stale closure (old `pending`/`ended`).
+  const sendRef = useRef<(text: string) => Promise<void>>(async () => {});
+  useEffect(() => { sendRef.current = sendText; });
+
+  useEffect(() => {
+    if (window.parent === window) return;
+    function onMessage(event: MessageEvent) {
+      if (event.source !== window.parent) return;
+      if (!askAllowedFrom(event.origin, attribution.page)) return;
+      const text = parseAskMessage(event.data);
+      if (text) void sendRef.current(text);
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [attribution.page]);
+
   return (
     <div className="bis-concierge-panel">
-      {/* A small header close button (ghost, tokens only) — the panel's own
-          producer for bis-concierge-close. Not in concierge.css: inline
-          `var(--token, fallback)` values, the same technique `page.tsx`
-          already uses for the whole token set on <main>. No outline is set
-          here on purpose — the browser's own default :focus-visible ring
-          stays, which is what DESIGN.md's "visible focus ring" asks for.
-
-          Rendered only when `framed` — the whole row, not just the button,
-          so a direct visit to this route never shows an empty flex row
-          where a control that does nothing used to sit. */}
-      {framed && (
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            onClick={closeChat}
-            aria-label={strings.close}
-            style={{
-              background: "transparent",
-              border: 0,
-              cursor: "pointer",
-              color: "var(--muted-foreground, #71717a)",
-              padding: 4,
-              borderRadius: "var(--radius-ctl, 8px)",
-              fontSize: 18,
-              lineHeight: 1,
-            }}
-          >
-            ×
-          </button>
+      {/* The header row: the tenant's brand, and — only when framed — the
+          close button beside it, the panel's own producer for
+          bis-concierge-close. One row, so the × sits level with the name
+          instead of wrapping under it. A direct visit to this route has no
+          close button (there is nothing to close), and an unbranded tenant
+          that is not framed renders no row at all rather than an empty one.
+          The button keeps the browser's own :focus-visible ring, which is
+          what DESIGN.md's "visible focus ring" asks for. */}
+      {(brand || framed) && !(bare && framed) && (
+        <div className="bis-concierge-header">
+          <div className="bis-concierge-header-brand">{brand}</div>
+          {framed && (
+            <button
+              type="button"
+              className="bis-concierge-close"
+              onClick={closeChat}
+              aria-label={strings.close}
+            >
+              ×
+            </button>
+          )}
         </div>
       )}
       <ol className="bis-concierge-log" aria-live="polite">

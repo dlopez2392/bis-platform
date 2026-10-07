@@ -5,25 +5,29 @@ import { fileURLToPath } from "node:url";
 
 /**
  * "Nothing new sends" made structural. A pass receives its providers on
- * `ctx`; it never imports a provider or a provider factory. The harness is
- * the ONLY module allowed to, and the production guard (VERCEL_ENV AND
- * NODE_ENV, in the two factories) is therefore the only thing any automation
- * send ever goes through. Test files are exempt: they mock those modules.
+ * `ctx`; it never imports a provider or a provider factory. NO module here
+ * may import the EMAIL factory or the SMS factory (consent PR-1 and PR-3:
+ * both go through their gates, `ctx.sms` and `ctx.email`) — not even the
+ * harness any more — ctx.email is the email gate (lib/consent/
+ * email-gate.ts), and scan 1 pins it as the only importer. Test files are
+ * exempt: they mock those modules.
  *
- * Mutation: add `import { getSmsProvider } from "@/lib/sms"` to any pass file.
+ * Mutations: add `import { getEmailProvider } from "@/lib/email"` to
+ * harness.ts → FAILS; add the email factory to a pass file → FAILS.
  */
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 // Static `from "…"` and dynamic `import("…")` alike; `/index` spelled out
-// or not; `.tsx` as well as `.ts`.
-const FORBIDDEN: readonly RegExp[] = [
+// or not; `.tsx` as well as `.ts`. Each rule names the files allowed past it.
+const FORBIDDEN: readonly { rule: RegExp; allowed: readonly string[] }[] = [
   // The factories, by alias OR by relative path (`../../email` from passes/),
   // with or without `/index` and a `.js`/`.ts` suffix.
-  /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)email(?:\/index)?(?:\.[jt]s)?["']/,
-  /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)sms(?:\/index)?(?:\.[jt]s)?["']/,
-  /(?:from\s+|import\s*\(\s*)["'][^"']*\/resend["']/,              // the real email provider
-  /(?:from\s+|import\s*\(\s*)["'][^"']*\/telnyx["']/,              // the real sms provider
+  // Consent PR-3: not even the harness any more — ctx.email is the email
+  // gate (lib/consent/email-gate.ts), and scan 1 pins it as the only importer.
+  { rule: /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)email(?:\/index)?(?:\.[jt]s)?["']/, allowed: [] },
+  { rule: /(?:from\s+|import\s*\(\s*)["'](?:@\/lib\/|(?:\.\.\/)+)sms(?:\/index)?(?:\.[jt]s)?["']/, allowed: [] },
+  { rule: /(?:from\s+|import\s*\(\s*)["'][^"']*\/resend["']/, allowed: [] },   // the real email provider
+  { rule: /(?:from\s+|import\s*\(\s*)["'][^"']*\/telnyx["']/, allowed: [] },              // the real sms provider
 ];
-const ALLOWED = new Set(["harness.ts"]);
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -37,12 +41,13 @@ function walk(dir: string): string[] {
 const rel = (file: string) => file.slice(ROOT.length).replace(/\\/g, "/");
 
 describe("automations — providers come from ctx, never from imports", () => {
-  it("no module under lib/automations except the harness imports a provider or a factory", () => {
+  it("only the harness imports the email factory, and NO module here imports the SMS factory or Telnyx", () => {
     const offenders: string[] = [];
     for (const file of walk(ROOT)) {
-      if (ALLOWED.has(rel(file))) continue;
       const src = readFileSync(file, "utf-8");
-      for (const rule of FORBIDDEN) if (rule.test(src)) offenders.push(`${rel(file)}: ${rule}`);
+      for (const { rule, allowed } of FORBIDDEN) {
+        if (!allowed.includes(rel(file)) && rule.test(src)) offenders.push(`${rel(file)}: ${rule}`);
+      }
     }
     expect(offenders).toEqual([]);
   });

@@ -4,7 +4,7 @@ import {
   type DueAppointmentConfirm,
 } from "@bis/db";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
-import { toE164 } from "@/lib/voice/phone-number";
+import { normalisePhone } from "@bis/db/phone";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
@@ -12,7 +12,7 @@ import { appointmentConfirmDeadline, tooCloseToAsk } from "../appointment-confir
 import { composeAppointmentConfirm } from "../appointment-confirm-copy";
 import { sendAutomationSms, markAutomationSmsSent } from "../send-sms";
 import {
-  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
+  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type SmsHoldSubject, type Releaser,
 } from "../hold-or-send";
 import type { Pass, PassContext } from "../context";
 
@@ -39,15 +39,15 @@ import type { Pass, PassContext } from "../context";
  * marker is still written, so the operator can see it; this pass never reads
  * it back.
  *
- * THE DEADLINE. The subject carries `starts_at − 24h15m`: at or before the
- * quiet window's end, holdOrSend sends now rather than holding past
- * usefulness. 24h15m and not a flat 24h because that is the instant the
+ * THE DEADLINE. The subject carries `starts_at − 24h15m`: when the sending
+ * hours open only at or after it, holdOrSend does NOT send and logs "Not
+ * sent: quiet hours ran past the appointment" (consent chain choice 21). 24h15m and not a flat 24h because that is the instant the
  * EMAIL reminder becomes eligible (REMINDER_WINDOW_END_MS, booking.ts:384)
  * — the collision is one text and one email, not two texts; the SMS
- * reminder's own window is 90–135 minutes and never meets this. The deadline
- * is reachable only under a quiet window of nearly 23 hours (the ask is due
- * two days out), and it is declared because the rule is "never hold
- * something past the point it helps". What actually bites is
+ * reminder's own window is 90–135 minutes and never meets this. With the
+ * fixed night (21:00-08:00) and an ask due two days out it rarely bites; it
+ * is declared because the rule is "never send something past the point it
+ * helps". What actually bites is
  * `releaseAppointmentConfirm`'s own `tooCloseToAsk` re-check.
  *
  * The time is rendered in the BOOKER's zone (safeZone, the email reminder's
@@ -61,16 +61,16 @@ export const appointmentConfirmPass: Pass = {
 };
 
 export type AppointmentConfirmCounters = {
-  sent: number; failed: number; unstamped: number; held: number;
+  sent: number; failed: number; unstamped: number; held: number; blocked: number;
   skippedNoAddress: number; skippedSmsGate: number; unresolvableTimezone: number;
 };
 
 /** No `ProcessOptions`: this recipe has no morning band, so a release has
  *  nothing to skip. `releaseSmsReminder` is the precedent. */
-function subjectFor(r: DueAppointmentConfirm): HoldSubject {
+function subjectFor(r: DueAppointmentConfirm): SmsHoldSubject {
   return {
     accountId: r.accountId, accountTimezone: r.accountTimezone,
-    source: "appointment_confirm", channel: "sms",
+    source: "appointment_confirm", channel: "sms", smsKind: "automation.appointment_confirm",
     subjectKey: `booking:${r.bookingId}`, contactId: r.contactId,
     deadline: appointmentConfirmDeadline(new Date(r.startsAt)),
   };
@@ -80,7 +80,7 @@ export async function processAppointmentConfirms(
   ctx: PassContext, due: DueAppointmentConfirm[],
 ): Promise<AppointmentConfirmCounters> {
   const c: AppointmentConfirmCounters = {
-    sent: 0, failed: 0, unstamped: 0, held: 0,
+    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
     skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0,
   };
   const smsGates = new Map<string, SmsGate>();
@@ -99,9 +99,9 @@ export async function processAppointmentConfirms(
     // `held_until` and parking the head of the release queue for ever.
     //
     // The ACCOUNT's zone, not the composed one, and a valid BOOKER zone does
-    // not rescue it: `holdOrSend` needs the account's zone to know whether
-    // this account is in its quiet window at all, and sends with no window
-    // when it cannot resolve one. An account whose zone is junk has a
+    // not rescue it: `holdOrSend` reads the fixed sending hours in the
+    // account's zone, and in America/Chicago's when it cannot resolve one,
+    // which is a guess about somebody's night. An account whose zone is junk has a
     // configuration problem an operator can fix, and this is the row that
     // tells them so.
     if (resolveAccountZone(row.accountTimezone) === null) {
@@ -114,7 +114,7 @@ export async function processAppointmentConfirms(
       continue;
     }
 
-    const to = toE164(row.contactPhone);
+    const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
     if (!to) {
       c.skippedNoAddress++;
       await logSkipped(ctx, subject, REASONS.noPhone);
@@ -142,8 +142,6 @@ export async function processAppointmentConfirms(
       );
       continue;
     }
-    const from = gate.from;
-
     try {
       // Still inside the per-row try, though the guard above now takes the
       // only input that could make `formatWhen` throw: an unresolvable
@@ -155,7 +153,8 @@ export async function processAppointmentConfirms(
         row.brandName, formatWhen(new Date(row.startsAt), zone), row.body);
       const outcome = await holdOrSend(ctx, subject, async () => {
         const smsRow = await sendAutomationSms(ctx, {
-          accountId: row.accountId, contactId: row.contactId, to, from, body,
+          accountId: row.accountId, contactId: row.contactId, to, body,
+          kind: subject.smsKind, accountTimezone: row.accountTimezone,
           onProviderFailure: () => stampAppointmentConfirmSmsFailed(ctx.db, row.bookingId),
         });
         // SEND-THEN-STAMP; the stamp before the row's status, as everywhere.
@@ -169,6 +168,10 @@ export async function processAppointmentConfirms(
         }
         await markAutomationSmsSent(ctx, row.accountId, smsRow, "appointment confirm");
       });
+      if (outcome === "skipped") {
+        c.blocked++;
+        continue;
+      }
       if (outcome === "held") {
         c.held++;
         continue;

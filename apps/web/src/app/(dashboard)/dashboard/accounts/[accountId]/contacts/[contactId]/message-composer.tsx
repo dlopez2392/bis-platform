@@ -18,13 +18,15 @@ export function MessageComposer({
   contactHasEmail,
   contactHasPhone,
   smsGate,
+  smsBlockedLine,
+  emailNoticeLine,
   noteAction,
   emailAction,
   smsAction,
 }: {
   contactId: string;
   contactHasEmail: boolean;
-  // Mirrors contactHasEmail: whether toE164(contact.phone) resolves to a
+  // Mirrors contactHasEmail: whether e164Of(contact.phone) resolves to a
   // usable number — the same notion sendSmsAction itself gates on. Without
   // this, SMS let an operator compose an entire text to a phone-less
   // contact and only fail on submit, where email already blocks up front.
@@ -34,6 +36,15 @@ export function MessageComposer({
   // query the database itself. `resolveSmsSender` is THE gate; nothing here
   // re-derives it.
   smsGate: SmsGate;
+  // The recipient's consent line (spec §6), decided on the server from the
+  // same two facts the send gate reads: texts stopped, on hold, or a number
+  // that could be Mexican or US. The form is not rendered while it is set;
+  // the action says the same line after an attempt from a stale tab.
+  smsBlockedLine: string | null;
+  // The email composer's one line (spec §6, choice 22): set when the
+  // contact's email is stopped. The form STILL shows — a person replying
+  // about their own matter is not automated mail.
+  emailNoticeLine: string | null;
   noteAction: (formData: FormData) => Promise<void>;
   emailAction: (formData: FormData) => Promise<void>;
   smsAction: (formData: FormData) => Promise<void>;
@@ -123,6 +134,8 @@ export function MessageComposer({
         </p>
       ) : isSms && !contactHasPhone ? (
         <p className="text-xs text-muted-foreground">{m["compose.noPhoneOnContact"]}</p>
+      ) : isSms && smsBlockedLine ? (
+        <p className="text-xs text-muted-foreground" data-testid="composer-sms-blocked">{smsBlockedLine}</p>
       ) : (
         <form
           key={mode}
@@ -132,6 +145,9 @@ export function MessageComposer({
           aria-label={isEmail ? m["compose.email"] : isSms ? m["compose.sms"] : m["compose.note"]}
         >
           <input type="hidden" name="contactId" value={contactId} />
+          {isEmail && emailNoticeLine ? (
+            <p role="note" className="text-xs text-muted-foreground" data-testid="composer-email-notice">{emailNoticeLine}</p>
+          ) : null}
           {isEmail ? (
             <Input name="subject" placeholder={m["compose.subject"]} className="text-sm" />
           ) : null}

@@ -17,10 +17,12 @@
 // It still answers 200 with valid TeXML on every one of those. A 5xx to
 // Telnyx mid-call is worse than a clean hangup: the carrier's own error
 // handling is what the caller would hear, and it is not words.
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { resolveHandoffTarget } from "@/lib/voice/handoff";
+import { verifyFallbackTicket } from "@/lib/voice/fallback-ticket";
 import { configuredOrigin } from "@/lib/email/origin";
+import { stampHeartbeat } from "@/lib/ops/stamp";
 import { xmlText } from "../xml";
 
 export const runtime = "nodejs";
@@ -126,8 +128,12 @@ const MAX_TRANSFER_SECONDS = 3600;
  * and a refusal to overwrite an outcome that outranks `transferred`, so a
  * replay is a no-op. The two ceilings are deliberately different quantities —
  * ten minutes to DIAL a person, four hours to RECORD a conversation that had
- * to happen first. `TELNYX_PUBLIC_KEY` is unset today, so there is no second
- * gate underneath either of them.
+ * to happen first. Underneath both sits the Telnyx signature: `TELNYX_PUBLIC_KEY`
+ * has been set in production since 2026-09-29 (runbook `a2p-registration.md`),
+ * so a logged URL alone no longer gets a request in — it also needs a
+ * five-minute-fresh Telnyx signature over its body. The signature does NOT
+ * cover the query string, so the token is still what binds a request to its
+ * call, and these ceilings still matter.
  *
  * Why ten and not two: the legitimate fetch happens seconds after the stamp —
  * Sofía says her line, the socket closes, Telnyx fetches this URL. But the
@@ -144,6 +150,22 @@ const MAX_TRANSFER_SECONDS = 3600;
  * consumption is ever wanted it belongs at the END of the result route.
  */
 const MAX_TOKEN_AGE_MS = 10 * 60_000;
+
+/**
+ * The `DialCallStatus` values that mean the SIP leg to Sofía NEVER CONNECTED
+ * (operational-floor spec §3, the model-down fallback). Telnyx documents the
+ * enum — completed, busy, no-answer, canceled, failed — but not which
+ * failure produces which value, so this is the set that cannot mean a
+ * conversation happened:
+ *   - `completed` is excluded: the leg connected, and an ordinary call ends
+ *     that way.
+ *   - `canceled` is excluded: the CALLER hung up while it rang, and dialling
+ *     the business then rings a person for nobody.
+ * The spec's "or DialCallDuration of 0" clause is deliberately not used:
+ * Telnyx documents that field as conditional, so it can be absent, and a
+ * `completed` leg is connected whatever its duration says.
+ */
+export const NEVER_CONNECTED = new Set(["failed", "busy", "no-answer"]);
 
 const HANGUP = `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>`;
 
@@ -165,7 +187,110 @@ function xmlResponse(body: string): NextResponse {
  * belonging to a different account would be a real human answering a call
  * they have no relationship with, with no error anywhere.
  */
-async function decide(token: string, origin: string): Promise<string | null> {
+/**
+ * THE MODEL-DOWN FALLBACK (operational-floor spec §3, decision 2): Sofía's
+ * line did not connect, so ring the account's transfer number instead of
+ * hanging up on the caller.
+ *
+ * Reached only when the token found NO call row — that row is written by
+ * Sofía's own webhook, which never runs when OpenAI is unreachable — and only
+ * on a signed ticket the TeXML route wrote for a call EVERY guard cleared
+ * (`lib/voice/fallback-ticket.ts`). The ticket is the whole of the tenancy
+ * here, exactly as the call row is for a requested handoff: the account and
+ * the dialled number come from it and nothing else in the request.
+ *
+ * What it does NOT do, and why:
+ *   - It does not stamp the call `transferred`: there is no call row to
+ *     stamp. The record is the `voice.sip_webhook` error heartbeat below,
+ *     which is what emails BIS that Sofía was unreachable, plus the log line.
+ *   - It does not detect a machine or point a result route at the outcome:
+ *     both read the call row, which does not exist.
+ *   - It does not run for a webhook that DECLINED the call: the webhook
+ *     declines by never accepting, which looks the same from here, but it
+ *     runs the same guards the TeXML route already passed before signing the
+ *     ticket. A decline after a clearance is the two reads racing, not a
+ *     robot slipping through.
+ *
+ * Stamped as an error whether or not a transfer number exists: the outage is
+ * Sofía being unreachable, and BIS needs to hear about it either way.
+ */
+async function modelDownFallback(
+  token: string, ticketRaw: string | null, dialStatus: string | null,
+): Promise<string | null> {
+  if (!dialStatus || !NEVER_CONNECTED.has(dialStatus)) {
+    // The status is logged because it is the one fact a fallback drill exists
+    // to measure (lib/voice/fallback-drill.ts): a leg that failed some way
+    // outside NEVER_CONNECTED lands HERE, and without it the log says nothing
+    // about why. Only a short lower-case word is echoed, never raw input.
+    const shown = dialStatus && /^[a-z-]{1,20}$/.test(dialStatus) ? dialStatus : "none";
+    console.log(`handoff: no call for this token (DialCallStatus ${shown}) — hanging up`);
+    return null;
+  }
+  const ticket = verifyFallbackTicket(ticketRaw, token, Date.now());
+  if (!ticket.ok) {
+    console.log(`handoff: Sofía's leg did not connect (${dialStatus}) and there is no usable fallback ticket (${ticket.reason}) — hanging up`);
+    return null;
+  }
+  const accountId = ticket.accountId;
+  stampHeartbeat("voice.sip_webhook", { ok: false, error: `Sofia's line did not connect (DialCallStatus ${dialStatus})` });
+
+  const {
+    serviceDb, getTransferPhone, listPhoneNumbersForAccount, getPhoneNumberByE164, recordForwardedCall,
+  } = await import("@bis/db");
+  const db = serviceDb();
+  const [transferPhone, ownedRows] = await Promise.all([
+    getTransferPhone(db, accountId),
+    listPhoneNumbersForAccount(db, accountId),
+  ]);
+  const usable = ownedRows.filter((n) => n.status === "testing" || n.status === "live");
+  const target = resolveHandoffTarget(transferPhone, usable.map((n) => n.e164));
+  if (!target.available) {
+    console.log(`handoff: Sofía's leg did not connect (${dialStatus}) and there is no transfer target (${target.reason}) — hanging up, accountId ${accountId}`);
+    return null;
+  }
+  // ANY BIS line, not only this account's: while Sofía is down for everyone,
+  // two accounts whose transfer numbers are each other's lines would hand a
+  // caller back and forth through this fallback. A number we own is never
+  // a person's phone.
+  if (await getPhoneNumberByE164(db, target.to)) {
+    console.log(`handoff: Sofía's leg did not connect (${dialStatus}) and the transfer number is a BIS line — hanging up, accountId ${accountId}`);
+    return null;
+  }
+  // The number the caller dialled, when it is still one of this account's
+  // usable lines; otherwise the same live-then-testing fallback the
+  // requested handoff uses below, for the same reason (Telnyx refuses a
+  // caller id we do not own).
+  const callerId = (usable.find((n) => n.e164 === ticket.calledE164)
+    ?? usable.find((n) => n.status === "live")
+    ?? usable.find((n) => n.status === "testing"))?.e164 ?? null;
+  const cid = callerId ? ` callerId="${xmlText(callerId)}"` : "";
+  console.log(`handoff: Sofía's leg did not connect (${dialStatus}) — ringing the transfer number instead, accountId ${accountId}`);
+  // Counted toward the daily caps the TeXML route applies (0059): while Sofía
+  // is down EVERY cleared call lands here, and none of them gets a `calls`
+  // row, so without this a robot would ring the transfer number unbounded
+  // for the whole outage. The caller comes from the SIGNED ticket, never the
+  // callback body. Best-effort in `after()`, like the texml writes: a
+  // failed write under-counts one call and never costs this caller the dial.
+  const phoneNumberId = usable.find((n) => n.e164 === ticket.calledE164)?.id ?? null;
+  try {
+    after(async () => {
+      try {
+        await recordForwardedCall(db, {
+          accountId, phoneNumberId, calledE164: ticket.calledE164, callerE164: ticket.callerE164, kind: "model-down",
+        });
+      } catch (e) {
+        console.error(`handoff: forwarded-call write failed (model-down), accountId ${accountId}: ${String(e)}`);
+      }
+    });
+  } catch (e) {
+    console.error(`handoff: could not schedule the forwarded-call write (model-down), accountId ${accountId}: ${String(e)}`);
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial${cid} timeout="${RING_SECONDS}" timeLimit="${MAX_TRANSFER_SECONDS}" passDiversionHeader="true">${xmlText(target.to)}</Dial></Response>`;
+}
+
+async function decide(
+  token: string, origin: string, ticketRaw: string | null = null, dialStatus: string | null = null,
+): Promise<string | null> {
   // Lazy import: a module-scope DB import breaks `next build` during
   // page-data collection (the documented trap this whole directory obeys).
   const {
@@ -177,10 +302,7 @@ async function decide(token: string, origin: string): Promise<string | null> {
   //    account-scoped (see its doc comment in packages/db/src/voice.ts) —
   //    which is exactly why its result is the ONLY source of tenancy below.
   const call = await getCallByHandoffToken(db, token);
-  if (!call) {
-    console.log("handoff: no call for this token — hanging up");
-    return null;
-  }
+  if (!call) return modelDownFallback(token, ticketRaw, dialStatus);
   const accountId = call.account_id;
 
   // 2. The token says WHICH call; `handoff_requested_at` says the caller
@@ -330,8 +452,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     console.error(`handoff: failed to read request body: ${String(e)}`);
   }
   // Identical gate to `/api/voice/texml`'s POST, deliberately duplicated
-  // rather than inferred, so the two cannot drift when TELNYX_PUBLIC_KEY is
-  // finally set (runbook Step 6). Unset today means validation is OFF.
+  // rather than inferred, so the two cannot drift. TELNYX_PUBLIC_KEY is set in
+  // production (since 2026-09-29); unset — local runs and the route tests —
+  // means validation is OFF.
   const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
   if (publicKey) {
     const timestamp = req.headers.get("telnyx-timestamp");
@@ -349,7 +472,8 @@ export async function POST(req: Request): Promise<NextResponse> {
   // The token comes from THIS request's own query string — the one we wrote
   // into the `action` URL ourselves. Never from the body, which is the
   // carrier's call-status form and is not ours.
-  const token = new URL(req.url).searchParams.get("t")?.trim();
+  const query = new URL(req.url).searchParams;
+  const token = query.get("t")?.trim();
   if (!token) {
     console.log("handoff: no token on the action URL — hanging up");
     return xmlResponse(HANGUP);
@@ -358,7 +482,15 @@ export async function POST(req: Request): Promise<NextResponse> {
   try {
     // Never log the token itself: unlike a call id or a dialed number, this
     // value IS the authorisation.
-    const xml = await decide(token, configuredOrigin() ?? new URL(req.url).origin);
+    // The carrier's status decides only WHETHER the fallback may run; who it
+    // rings comes from the signed ticket. With TELNYX_PUBLIC_KEY set (as in
+    // production) the status arrives in a Telnyx-signed body, so a holder of
+    // a logged action URL cannot simply claim `failed`. Where the key is unset
+    // they could, for the ticket's ten minutes, and read back the transfer
+    // number — the same disclosure, and the same window, the handoff token
+    // documents above (MAX_TOKEN_AGE_MS).
+    const dialStatus = new URLSearchParams(rawBody).get("DialCallStatus")?.trim().toLowerCase() || null;
+    const xml = await decide(token, configuredOrigin() ?? new URL(req.url).origin, query.get("f"), dialStatus);
     return xmlResponse(xml ?? HANGUP);
   } catch (e) {
     console.error(`handoff: failed, hanging up rather than dialling: ${String(e)}`);

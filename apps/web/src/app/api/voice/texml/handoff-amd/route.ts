@@ -64,9 +64,9 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
 
   // Identical gate to `/api/voice/texml`, `/handoff` and `/handoff-result`,
-  // deliberately duplicated rather than shared, so the four cannot drift when
-  // TELNYX_PUBLIC_KEY is finally set (runbook Step 6). Unset today means
-  // validation is OFF.
+  // deliberately duplicated rather than shared, so the four cannot drift.
+  // TELNYX_PUBLIC_KEY is set in production (since 2026-09-29); unset — local
+  // runs and the route tests — means validation is OFF.
   const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
   if (publicKey) {
     const timestamp = req.headers.get("telnyx-timestamp");

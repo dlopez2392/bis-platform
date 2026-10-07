@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { Braces, SlidersHorizontal } from "lucide-react";
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding, getMailingAddress,
@@ -6,11 +7,12 @@ import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClientAdminAction,
          setFromEmailAction, setReportEmailsAction, setAlertPhoneAction,
          startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction } from "./actions";
-import { setBrandingAction } from "../branding/actions";
+import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
 import { SendingAddressCard } from "./sending-address-card";
 import { WeeklyReportCard } from "./weekly-report-card";
+import { BillingSection, BillingCardSkeleton } from "./billing-section";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { LinkSiteCard, type VercelProjectOption } from "../website/link-site-card";
 import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "../website/actions";
@@ -157,6 +159,8 @@ export default async function CrmSettingsPage({
   const boundInvite = inviteClientAdminAction.bind(null, accountId);
   // accountId is bound here, server-side. It must never travel as a form field.
   const boundSetBranding = setBrandingAction.bind(null, accountId);
+  const boundRemoveLogo = removeBrandLogoAction.bind(null, accountId);
+  const boundRestoreLogo = restoreBrandLogoAction.bind(null, accountId);
   const boundSetFromEmail = setFromEmailAction.bind(null, accountId);
   const boundSetReportEmails = setReportEmailsAction.bind(null, accountId);
   const boundSetAlertPhone = setAlertPhoneAction.bind(null, accountId);
@@ -183,6 +187,12 @@ export default async function CrmSettingsPage({
           setAccessAction={boundSetAccess}
           inviteAction={boundInvite}
         />
+        {/* Billing (M7a step 3): streamed in its own boundary so a slow
+            billing read never holds the rest of Settings, and a failed one
+            renders its own error card (billing-section.tsx). */}
+        <Suspense fallback={<BillingCardSkeleton />}>
+          <BillingSection accountId={accountId} />
+        </Suspense>
         <BrandingPanel
           // Remount when the ACCOUNT changes, so the panel's own state cannot
           // carry one account's values into another's fields on a client-side
@@ -207,6 +217,8 @@ export default async function CrmSettingsPage({
           brandMode={branding.brandMode}
           logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
           action={boundSetBranding}
+          removeLogoAction={boundRemoveLogo}
+          restoreLogoAction={boundRestoreLogo}
         />
         <SendingAddressCard
           fromEmail={sendingIdentity.fromEmail}

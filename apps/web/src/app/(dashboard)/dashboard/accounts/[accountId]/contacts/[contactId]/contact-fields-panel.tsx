@@ -20,10 +20,14 @@ import { InlineField } from "@/components/inline-field";
 import { m } from "@/lib/messages";
 import { SubmitButton } from "../../../submit-button";
 import { updateContactAction, addTagAction, removeTagAction } from "./actions";
-import { updateContactFieldAction } from "../actions";
+import { updateContactFieldAction, undoInlinePhoneEditAction } from "../actions";
 import { FIELDS } from "../contact-drawer";
-import { MarketingOptOutSwitch } from "../marketing-optout-switch";
-import type { OptOutZone } from "@/lib/contacts/marketing-optout";
+import { useRouter } from "next/navigation";
+import { EmailRow } from "../email-row";
+import type { EmailLoad } from "@/lib/consent/email-row";
+import { TextsRow } from "../texts-row";
+import type { TextsLoad } from "@/lib/consent/texts-row";
+import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
@@ -35,16 +39,21 @@ export function ContactFieldsPanel({
   contact,
   tags,
   fieldDefs,
-  zone,
+  email,
+  texts,
 }: {
   accountId: string;
   contactId: string;
   contact: Contact;
   tags: Tag[];
   fieldDefs: CustomFieldDef[];
-  /** The account's resolved zone (`renderZone`), for the opt-out's "Off since" date. */
-  zone: OptOutZone;
+  /** The Email row (consent PR-3), read on the server by page.tsx. */
+  email: EmailLoad;
+  /** The Texts row, read on the server page (which has the normaliser and
+   *  the ledger read; this client component ships neither). */
+  texts: TextsLoad;
 }) {
+  const router = useRouter();
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const boundUpdateContact = updateContactAction.bind(null, accountId);
@@ -69,18 +78,32 @@ export function ContactFieldsPanel({
                     inputType={type}
                     value={(contact[field] as string | null) ?? null}
                     save={(v) => updateContactFieldAction(accountId, contactId, field, v)}
+                    {...(field === "phone" ? {
+                      undoPhone: (undo: PhoneInlineUndo) => undoInlinePhoneEditAction(accountId, contactId, undo),
+                    } : {})}
                   />
                 </dd>
               </div>
             ))}
           </dl>
 
-          <MarketingOptOutSwitch
-            key={contactId}
+          <TextsRow
             accountId={accountId}
             contactId={contactId}
-            optedOutAt={contact.marketing_email_opted_out_at}
-            zone={zone}
+            load={texts}
+            // The composer on this page reads the same ledger: refresh it too.
+            onChanged={() => router.refresh()}
+            onRetry={() => router.refresh()}
+          />
+
+          <EmailRow
+            accountId={accountId}
+            contactId={contactId}
+            load={email}
+            showTitle={texts.status === "ready" && texts.view.kind === "no_number"}
+            // The composer on this page reads the same ledger: refresh it too.
+            onChanged={() => router.refresh()}
+            onRetry={() => router.refresh()}
           />
 
           {fieldDefs.length > 0 ? (

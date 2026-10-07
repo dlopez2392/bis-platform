@@ -3,21 +3,20 @@ import type { DueFollowup, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listDueFollowups: vi.fn(), stampFollowupSent: vi.fn(), getDueFollowupById: vi.fn(), recordAutomationLog: vi.fn(),
-  getAutomationLogEntry: vi.fn(),
+  getAutomationLogEntry: vi.fn(), readConsentState: vi.fn(), readAccountTimezone: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
+const emailFactory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
+vi.mock("@/lib/email", async (importOriginal) => ({ ...(await importOriginal<object>()), ...emailFactory }));
 
 import type { PassContext } from "../context";
 import { followupsPass, releaseFollowup } from "./followups";
+import { EmailNotSent, emailSenderFor } from "@/lib/consent/email-gate";
 
 // 09:00 CDT on Sept 22 — inside the 08:00–11:00 band, the day after a meeting that ended Sept 21.
 const MORNING = new Date("2026-09-22T14:00:00Z");
 // 03:00 CDT on Sept 22 — NOT in the band, and inside the default quiet window.
 const SMALL_HOURS = new Date("2026-09-22T08:00:00Z");
-const ON = { enabled: true, start: "21:00", end: "08:00" };
-const OFF = { ...ON, enabled: false };
-// A window ending at NOON: the band (08–11) is entirely inside it, so a follow-up due at 09:00 is held until 12:00.
-const UNTIL_NOON = { enabled: true, start: "21:00", end: "12:00" };
 const NOON = new Date("2026-09-22T17:00:00Z");
 
 function row(overrides: Partial<DueFollowup> = {}): DueFollowup {
@@ -35,14 +34,14 @@ const heldRow = (): AutomationLogRow => ({
   subject_key: "booking:bk_f1", status: "held", reason: "Held until 12:00 PM — quiet hours", held_until: NOON.toISOString(), payload: {}, occurred_at: MORNING.toISOString(),
 });
 const emailSend = vi.fn();
-function ctx(now: Date, quiet = OFF): PassContext {
+function ctx(now: Date): PassContext {
   return {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
-    sms: () => { throw new Error("follow-ups never text"); }, quiet: async () => quiet,
+    sms: async () => { throw new Error("follow-ups never text"); },
   };
 }
-const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0 };
+const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0 };
 const logCalls = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
 
 beforeEach(() => {
@@ -57,7 +56,7 @@ beforeEach(() => {
 });
 
 describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN IT GOES", () => {
-  it("in the band, quiet off: sent and stamped, one sent row", async () => {
+  it("in the band: sent and stamped, one sent row", async () => {
     dbMocks.listDueFollowups.mockResolvedValue([row()]);
     expect(await followupsPass.run(ctx(MORNING))).toEqual({ ...EMPTY, sent: 1 });
     expect(dbMocks.stampFollowupSent).toHaveBeenCalledWith(expect.anything(), "bk_f1");
@@ -66,21 +65,13 @@ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN I
 
   it("outside the band the gate still waits — no row, no send, whatever the window says (mutation: skip the gate on the normal tick → FAILS)", async () => {
     dbMocks.listDueFollowups.mockResolvedValue([row()]);
-    expect(await followupsPass.run(ctx(SMALL_HOURS, OFF))).toEqual({ ...EMPTY, waitingForMorning: 1 });
+    expect(await followupsPass.run(ctx(SMALL_HOURS))).toEqual({ ...EMPTY, waitingForMorning: 1 });
     expect(logCalls()).toEqual([]);
-  });
-
-  it("in the band but inside a window that ends at noon: HELD until 12:00 (the band and the window compose; mutation: bypass holdOrSend → FAILS)", async () => {
-    dbMocks.listDueFollowups.mockResolvedValue([row()]);
-    expect(await followupsPass.run(ctx(MORNING, UNTIL_NOON))).toEqual({ ...EMPTY, held: 1 });
-    expect(emailSend).not.toHaveBeenCalled();
-    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
-    expect(logCalls()).toEqual([expect.objectContaining({ status: "held", heldUntil: NOON.toISOString(), reason: "Held until 12:00 PM — quiet hours" })]);
   });
 
   it("release at noon: the band is CLOSED, and the release sends anyway because the band was satisfied at hold time (mutation: apply the gate on release → FAILS)", async () => {
     dbMocks.getDueFollowupById.mockResolvedValue({ due: row() });
-    expect(await releaseFollowup(ctx(NOON, UNTIL_NOON), heldRow())).toBe("sent");
+    expect(await releaseFollowup(ctx(NOON), heldRow())).toBe("sent");
     expect(emailSend).toHaveBeenCalledTimes(1);
     expect(dbMocks.stampFollowupSent).toHaveBeenCalledWith(expect.anything(), "bk_f1");
   });
@@ -92,7 +83,7 @@ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN I
     dbMocks.getDueFollowupById.mockResolvedValue({ due: row({
       startsAt: "2026-09-20T19:00:00.000Z", endsAt: "2026-09-20T20:00:00.000Z",   // 45h before NOON
     }) });
-    expect(await releaseFollowup(ctx(NOON, UNTIL_NOON), heldRow())).toBe("skipped");
+    expect(await releaseFollowup(ctx(NOON), heldRow())).toBe("skipped");
     expect(emailSend).not.toHaveBeenCalled();
     expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
     // ONE row, replacing the held one on the same (account, source, subject):
@@ -129,5 +120,50 @@ describe("follow-ups: the band decides WHEN IT IS DUE, the window decides WHEN I
     expect(emailSend).not.toHaveBeenCalled();
     expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
     expect(logCalls()).toEqual([expect.objectContaining({ accountId: "acct_2", status: "skipped", reason: "No longer due" })]);
+  });
+});
+
+describe("consent PR-3: the email goes through the gate", () => {
+  it("the email goes through the gate as automation.followup, for this account and contact, at the tick's instant (mutation: kind \"automation.reminder\" → FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+    await followupsPass.run(ctx(MORNING));
+    expect(emailSend).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: "acct_1", kind: "automation.followup", contactId: "ct_1", origin: "https://app.example.com",
+      now: MORNING, accountZone: "America/Chicago",
+    }));
+  });
+
+  it("an unsubscribed customer: the gate refuses, the row is skipped with the reason the client reads, nothing is stamped, and the tick's cap place is given back (decision 7, G13; mutation: count it sent → FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+    emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
+    expect(await followupsPass.run(ctx(MORNING))).toEqual({ ...EMPTY, blocked: 1 });
+    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+  });
+});
+
+describe("the REAL email gate, end to end, for a stopped customer (item 3, follow-up)", () => {
+  const providerSend = vi.fn();
+
+  function realCtx(now: Date): PassContext {
+    return {
+      db: {} as never, now, origin: "https://app.example.com",
+      email: emailSenderFor({} as never),
+      sms: async () => { throw new Error("follow-ups never text"); },
+    };
+  }
+
+  beforeEach(() => {
+    providerSend.mockReset().mockResolvedValue({ providerMessageId: "re_1" });
+    emailFactory.getEmailProvider.mockReset().mockReturnValue({ isFake: true, send: providerSend });
+    dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "stopped", since: "2026-09-01T00:00:00Z", method: "unsubscribe_link", eventId: "e1" });
+    dbMocks.readAccountTimezone.mockReset().mockResolvedValue("America/Chicago");
+  });
+
+  it("the provider's send is NEVER called, and the booking is NOT stamped sent, for a customer the ledger says is stopped (mutation: treat kind 'automation.followup' as customer_initiated so the gate skips the ledger read → FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+    const result = await followupsPass.run(realCtx(MORNING));
+    expect(providerSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+    expect(result).toEqual({ ...EMPTY, blocked: 1 });
   });
 });

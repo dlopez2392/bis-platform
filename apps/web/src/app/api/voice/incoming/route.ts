@@ -65,6 +65,7 @@
 // A stray 5xx here would only obscure the real failure, which is always
 // visible in the `[voice/incoming]` log line at the point it happened.
 import { NextRequest, NextResponse, after } from "next/server";
+import { stampHeartbeat } from "@/lib/ops/stamp";
 import OpenAI from "openai";
 import WebSocket from "ws";
 import {
@@ -714,6 +715,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!secret || !apiKey) {
     log("missing OPENAI_WEBHOOK_SECRET or OPENAI_API_KEY — refusing to run open");
+    // Every call fails while this is unset: Sofía's outage, so it is stamped
+    // (operational-floor spec §1, voice.sip_webhook).
+    stampHeartbeat("voice.sip_webhook", { ok: false, error: "OPENAI_WEBHOOK_SECRET or OPENAI_API_KEY is not set" });
     return NextResponse.json({ error: "server not configured" }, { status: 500 });
   }
 
@@ -1016,6 +1020,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       await acceptCall(callId, apiKey, sessionConfig);
     } catch (e) {
       log("failed to accept call", { callId, error: String(e) });
+      // Sofía could not take a call she was offered. The error's type only:
+      // OpenAI's message can quote the call.
+      stampHeartbeat("voice.sip_webhook", { ok: false, error: `OpenAI did not accept the call (${e instanceof Error ? e.name : typeof e})` });
       // Important #2: an unaccepted call was never actually answered — its
       // row (opened fail-open at step 10, before we knew accept would
       // succeed) must not litter the dashboard or count against the
@@ -1032,6 +1039,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: true });
     }
     log("call accepted", { callId });
+    // The one ok stamp: Sofía answered. It is also what clears the model-down
+    // fallback's error (texml/handoff) once she is reachable again.
+    stampHeartbeat("voice.sip_webhook", { ok: true });
     after(() => runCallLifecycle({
       callId, apiKey, greeting, languages: profile.languages,
       callRowId, startedAt: now, toolCtx, finishCtx,
@@ -1040,6 +1050,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true });
   } catch (e) {
     log("unexpected failure handling incoming call", { error: String(e) });
+    stampHeartbeat("voice.sip_webhook", { ok: false, error: `incoming call handling failed (${e instanceof Error ? e.name : typeof e})` });
     return NextResponse.json({ ok: true });
   }
 }

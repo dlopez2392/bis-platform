@@ -5,6 +5,7 @@ import { EmbedSnippet } from "@/components/embed-snippet";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import type { StateKind } from "@/lib/setup/setup-view";
+import { isVoiceProfileDone } from "@/lib/setup/setup-status";
 import { STEP_PATH, TONE, type StepDetailProps } from "./step-shared";
 
 /**
@@ -93,18 +94,31 @@ function Row({
 }
 
 export function WebsiteAssistantStep({
-  base, views, conciergeProfile, publishedFormCount, conciergeSiteConversation, origin,
+  base, views, conciergeProfile, profileReadFailed, publishedFormCount, conciergeSiteConversation, origin,
 }: StepDetailProps): React.ReactNode {
   // Read voice_profile's OWN done/unknown off the views this render already
   // computed — never re-derived here (setup-status.ts:3-7's whole promise:
-  // one computation, everywhere the answer is needed).
+  // one computation, everywhere the answer is needed) — WHEN that step
+  // exists at all. On a CRM-only plan `deriveSetupStatus` drops
+  // `voice_profile` entirely (it is a Sofía-only step), so there is no view
+  // to read: row 1 falls back to asking the SAME question directly, off the
+  // SAME `voice_profiles` row this pane already has as `conciergeProfile`
+  // (review round, Important 1 — before this fix, row 1 read "To do"
+  // forever on a CRM-only account, because `voiceProfileView` was always
+  // `undefined` there, and a failed profile read showed "To do" too, not
+  // "Couldn't check").
   const voiceProfileView = views.find((v) => v.key === "voice_profile");
-  const voiceProfileDone = voiceProfileView?.done === true;
+  const voiceProfileDone = voiceProfileView
+    ? voiceProfileView.done === true
+    : isVoiceProfileDone(conciergeProfile);
   // READS_BEHIND.voice_profile is `["profile"]` alone (setup-view.ts), so
   // this is exactly "did the profile read fail" — the same signal rows 3
   // and 4 need for the SAME row (they read the same voice_profiles row),
-  // with no second flag to keep in sync.
-  const profileUnknown = voiceProfileView?.unknown === true;
+  // with no second flag to keep in sync, when `voice_profile` has a view
+  // to carry it. When it doesn't (CRM-only), `profileReadFailed` —
+  // `failed.profile` passed straight through — is that same signal with
+  // nowhere else to live.
+  const profileUnknown = voiceProfileView ? voiceProfileView.unknown === true : profileReadFailed;
 
   const conciergeEnabled = conciergeProfile?.concierge_enabled === true;
   const publicId = conciergeProfile?.public_id ?? null;

@@ -3,12 +3,13 @@ import {
   getContact, listContactTags, listNotes, listContactSubmissions,
   listContactMessages, listContactOpportunities, listContactCalls,
 } from "@bis/db";
+import { normalisePhone } from "@bis/db/phone";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { formatCurrency } from "@/lib/format";
 import { m } from "@/lib/messages";
-import type { OptOutZone } from "@/lib/contacts/marketing-optout";
+import type { ZoneLabel } from "@/lib/zone";
 import { OUTCOMES } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/format";
 
 export const dynamic = "force-dynamic";
@@ -20,14 +21,21 @@ export type ContactSummary = {
     label: string;
     at: string;
   }[];
-  /** `contacts.marketing_email_opted_out_at` (0049), for the drawer's "No
-   *  marketing emails" switch. Read here rather than off the list row because
-   *  a deep link to a contact on another page has only a stub row. */
-  marketing_email_opted_out_at: string | null;
+  /** F-009 (consent chain spec §6): the number could be Mexican or US, so
+   *  the drawer's Texts row asks which. True when the contact's flag is set
+   *  OR the stored number itself reads both ways — a number saved before the
+   *  backfill ran is still ambiguous, and the send gate refuses it either
+   *  way (gate.ts step 5), so the drawer must offer the fix either way. */
+  phone_country_unconfirmed: boolean;
+  /** The stored phone itself (round 3, review I3): the Check number row's
+   *  pick is judged against the number the OPERATOR SAW, and in the drawer
+   *  that must be this — a real read — never the list row's stub (a
+   *  `?peek=` deep link's row is all-null). */
+  phone: string | null;
   /** The account's zone, resolved by `renderZone` like every other date
    *  screen — the drawer prints the opt-out's "Off since" date in it, and
    *  names the zone on that line when it was `guessed` (#123 m3). */
-  zone: OptOutZone;
+  zone: ZoneLabel;
 };
 
 const RECENT_LIMIT = 5;
@@ -100,7 +108,9 @@ export async function GET(
   const body: ContactSummary = {
     tags,
     recent: items.slice(0, RECENT_LIMIT),
-    marketing_email_opted_out_at: contact.marketing_email_opted_out_at ?? null,
+    phone_country_unconfirmed:
+      contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true,
+    phone: contact.phone ?? null,
     zone: { zone: zone.zone, guessed: zone.guessed, label: zone.label },
   };
   return NextResponse.json(body);

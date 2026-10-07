@@ -24,8 +24,16 @@ const FILES = [
   "parity/fingerprint.sql",
   "parity/fingerprint-detail.sql",
   "parity/migration-history.sql",
+  "backfills/0054-phone-country-candidates.sql",
+  "backfills/0054-dnd-preflight.sql",
+  "backfills/0055-telnyx-optout-owners.sql",
+  "backfills/0049-fold-count.sql",
+  "drill/restore-check.sql",
 ];
-const READS = FILES.filter((f) => f.startsWith("parity/"));
+/** Backfills that WRITE (through the ledger's function): the same byte rules,
+ *  refused as a read, and no transaction control of their own. */
+const WRITES = ["backfills/0049-fold-write.sql"];
+const READS = FILES.filter((f) => f.startsWith("parity/") || f.startsWith("backfills/") || f.startsWith("drill/"));
 
 const oneLine = (s: string) => s.replace(/--[^\n]*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -209,5 +217,23 @@ describe("the parity fingerprint", () => {
     it("compares only event triggers postgres owns", () => {
       expect(branch("event_trigger")).toContain("where e.evtowner = 'postgres'::regrole");
     });
+  });
+});
+
+describe("CI SQL files: the backfills that write", () => {
+  it.each(WRITES)("%s is ASCII only and has no backslash (the MCP apply rule; mutation: an E'' escape → FAILS)", (f) => {
+    const text = read(f);
+    expect([...text].filter((ch) => ch.charCodeAt(0) > 0x7e || (ch.charCodeAt(0) < 0x20 && ch !== "\n" && ch !== "\r"))).toEqual([]);
+    expect(text.includes(String.fromCharCode(0x5c))).toBe(false);
+  });
+
+  it.each(WRITES)("%s is refused as a read, and runs with --allow-write (no transaction control; mutation: add `commit;` → FAILS)", (f) => {
+    expect(sqlRefusals(read(f), { allowWrite: false }).length).toBeGreaterThan(0);
+    expect(sqlRefusals(read(f), { allowWrite: true })).toEqual([]);
+  });
+
+  it.each(WRITES)("%s is ONE statement, so execute_sql shows its whole answer (review R1-M3's lesson; mutation: split it in two → FAILS)", (f) => {
+    const statements = read(f).replace(/--[^\n]*/g, "").split(";").map((s) => s.trim()).filter(Boolean);
+    expect(statements).toHaveLength(1);
   });
 });

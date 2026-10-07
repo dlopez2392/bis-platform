@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures/test";
 import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
@@ -437,39 +437,6 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     // locator resolves to nothing. Assert straight on the reopened drawer.
     await page.reload();
     await expect(page.getByRole("dialog").getByText("Painted Proof LLC")).toBeVisible();
-  });
-
-  test("No marketing emails: tick saves for real - reload proves it - untick clears it", async ({ page }) => {
-    const optedOutAt = async () => {
-      const { data, error } = await serviceDb().from("contacts")
-        .select("marketing_email_opted_out_at").eq("id", optOutId).single();
-      if (error) throw new Error(`contacts-drawer e2e: read opt-out failed: ${error.message}`);
-      return (data as { marketing_email_opted_out_at: string | null }).marketing_email_opted_out_at;
-    };
-    const box = () => page.getByRole("dialog")
-      .getByRole("checkbox", { name: m["contact.marketingOptOut.label"] });
-
-    await page.goto(`${base()}/contacts?q=OptOut`);
-    await page.getByRole("row").filter({ hasText: "OptOut Target" }).first().click();
-    await expect(box()).toHaveAttribute("aria-checked", "false");
-
-    await box().click();
-    // The toast only appears once the action has resolved, so the write has
-    // landed before the reload below (and before the db read).
-    await expect(page.getByText(m["contact.marketingOptOut.onToast"])).toBeVisible();
-    expect(await optedOutAt()).not.toBeNull();
-
-    // `?peek=` is still on the URL, so the reload re-opens the same drawer
-    // (the inline-edit test above says why a row re-click would hang); the
-    // box's state now comes from the server, not from the click.
-    await expect(page).toHaveURL(/[?&]peek=/);
-    await page.reload();
-    await expect(box()).toHaveAttribute("aria-checked", "true");
-
-    await box().click();
-    await expect(page.getByText(m["contact.marketingOptOut.offToast"])).toBeVisible();
-    await expect(box()).toHaveAttribute("aria-checked", "false");
-    expect(await optedOutAt()).toBeNull();
   });
 
   test("keyboard: focused row opens on Enter, arrows move focus", async ({ page }) => {

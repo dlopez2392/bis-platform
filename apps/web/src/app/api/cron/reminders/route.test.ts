@@ -117,14 +117,31 @@ vi.mock("@bis/db", () => ({
   createMessage: async () => ({ id: "msg" }),
   updateMessageStatus: async () => undefined,
   REVIEW_REQUEST_MAX_AGE_MS: 61 * 60 * 60 * 1000,
-  // Task 3 (part C): the reminder and follow-up passes now read the account's
-  // quiet window on every send and write the automation log. Off here so
-  // the 30 route tests keep their exact bodies; the log write is a no-op.
-  readQuietSettings: async () => ({ enabled: false, start: "21:00", end: "08:00" }),
+  // Task 3 (part C): the reminder and follow-up passes write the automation
+  // log on every send; a no-op here. Their hours are FIXED since consent
+  // PR-1 (08:00-21:00, lib/consent/hours.ts) and every tick in this suite
+  // falls inside them, so the 30 route tests keep their exact bodies.
   recordAutomationLog: async () => undefined,
   // The release pass (Part C, Task 6): first in the registry, every tick.
   // Nothing is ever held in this suite's fixtures, so its queue is empty.
   listReleasableHolds: async () => [],
+  // Consent chain PR-1: the send gate's reads and the text-back release's
+  // (Global Constraint "vi.mock factories"). No text is due and nothing is
+  // held in this suite, so none is ever asked; one that were would fail
+  // closed and change the exact counts below.
+  // Consent PR-3: the reminder and follow-up EMAILS read the ledger through
+  // the email gate now, so this answers — allowed — rather than throwing
+  // (a throw would fail closed into a re-hold and change every count below).
+  // Still no text is due in this suite.
+  readConsentState: async () => ({ state: "allowed" as const }),
+  // Decision P1: the email gate reads the postal address for the review
+  // request, quote follow-up and no-show nudge. None is due here (their lists
+  // answer []), but the gate imports it, so the bare factory carries it.
+  getMailingAddress: async () => null,
+  readPhoneCountryFlag: async () => { throw new Error("route.test: no text is due"); },
+  readAccountTimezone: async () => { throw new Error("route.test: no text is due"); },
+  recordCarrierBlock: async () => { throw new Error("route.test: no text is due"); },
+  callerInTouchSince: async () => { throw new Error("route.test: nothing is held"); },
   // The usage report (client billing), LAST in the registry. No account is
   // billed in this suite, so it reads account_billing once and returns its
   // idle counters. The rest THROW, this file's convention for a thing that
@@ -136,6 +153,18 @@ vi.mock("@bis/db", () => ({
   countExpiredUsage: async () => { throw new Error("route.test: no account is billed"); },
   // markAutomationSmsSent records each billable text's segments.
   recordUsage: async () => "recorded" as const,
+  // M7a PR-3: `stripe-gateway.ts` (reached from `usage-report.ts`) spreads
+  // this into a module-level const at IMPORT time (`PRICE_KEYS`), so a bare
+  // factory mock has to carry it even though nothing in this suite ever
+  // dereferences it through a call. The real value, from `packages/db/src/billing.ts`.
+  METER_KEYS: ["voice_minutes", "sms", "ai_chats"] as const,
+  // The operational floor (spec §1–2). The harness writes a heartbeat per
+  // pass and one per tick; the alert pass, now LAST, reads them. Nothing is
+  // failing in this suite, so it reads no rows and sends nothing; markAlerted
+  // THROWS, this file's convention, so an edit that alerts here fails loudly.
+  recordHeartbeat: async () => undefined,
+  listHeartbeats: async () => [],
+  markAlerted: async () => { throw new Error("route.test: nothing is failing"); },
 }));
 
 const sendMock = vi.fn();
@@ -232,23 +261,24 @@ function bookerZoneWhen(startsAt: string, timeZone: string): string {
 
 const EMPTY_RELEASE = { examined: 0, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 };
 const EMPTY_FOLLOWUPS = {
-  sent: 0, failed: 0, unstamped: 0, held: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
   skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
 };
 const EMPTY_REVIEW_REQUESTS = {
-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedCap: 0, waitingForMorning: 0, unresolvableTimezone: 0,
   skippedRecentFailure: 0,
 };
 const EMPTY_REFERRAL_ASKS = {
-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
   waitingForMorning: 0, waitingForReviewRequest: 0, unresolvableTimezone: 0,
-  // B21: the email channel's three marketing-email skips.
-  skippedNoMailingAddress: 0, skippedNoReplyTo: 0, skippedOptedOut: 0,
+  // B21: the email channel's two marketing-email skips (the email stop
+  // itself is the email gate's, consent PR-3, counted `blocked`).
+  skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
 };
 const EMPTY_NO_SHOW_NUDGES = {
-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0, skippedCalendarOff: 0,
   waitingForMorning: 0, unresolvableTimezone: 0,
 };
@@ -260,19 +290,19 @@ const EMPTY_WEEKLY_CLIENT = { sent: 0, failed: 0, skippedNotMonday: 0, skippedAl
 const EMPTY_WEEKLY_AGENCY = { sent: 0, failed: 0, skippedNoRecipient: 1, skippedNotMonday: 0, skippedAlreadySent: 0, unresolvableTimezone: 0, unstamped: 0 };
 const EMPTY_SITE_TRAFFIC = { synced: 0, daysSynced: 0, failed: 0, skippedNotYet: 0, skippedUpToDate: 0, skippedCap: 0, unresolvableTimezone: 0 };
 const EMPTY_SMS_REMINDERS = {
-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0,
 };
 const EMPTY_APPOINTMENT_CONFIRMS = {
-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0,
   unresolvableTimezone: 0,
 };
 const EMPTY_REACTIVATIONS = {
-  sent: 0, failed: 0, unstamped: 0, held: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
   skippedCap: 0, skippedHeardBack: 0, waitingForMorning: 0, unresolvableTimezone: 0,
   skippedNoMailingAddress: 0, skippedNoReplyTo: 0,
 };
 const EMPTY_QUOTE_FOLLOWUPS = {
-  sent: 0, failed: 0, unstamped: 0, held: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
+  sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedInvalidConfig: 0, skippedNoAddress: 0,
   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
   waitingForMorning: 0, unresolvableTimezone: 0,
 };
@@ -280,6 +310,7 @@ const EMPTY_USAGE_REPORT = {
   reported: 0, alreadyAtStripe: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,
   skippedNoStripe: 0, stoppedOnCap: 0, stoppedOnError: 0, stoppedOnBudget: 0,
 };
+const EMPTY_OPS_WATCH = { alerted: 0, recovered: 0, sent: 0, failed: 0, unmarked: 0 };
 
 /**
  * The route reads `new Date()` to decide whether a follow-up's morning has
@@ -345,7 +376,7 @@ describe("GET /api/cron/reminders", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
+    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_ok");
     expect(stampReminderSentMock).not.toHaveBeenCalledWith(expect.anything(), "bk_fail");
@@ -368,7 +399,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -391,7 +422,7 @@ describe("GET /api/cron/reminders", () => {
 
     // Counted as sent, never as failed: folding the stamp into the outer catch
     // would misreport a stamp failure as a send failure in triage.
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -407,7 +438,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_fail");
   });
@@ -500,7 +531,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT });
+    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
     expect(sendMock).not.toHaveBeenCalled();
     expect(stampReminderSentMock).not.toHaveBeenCalled();
   });
@@ -516,10 +547,10 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
 
     expect(res.status).toBe(200);
     expect(body).toEqual({
-      sent: 0, failed: 0, unstamped: 0, held: 0,
+      sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
       releaseHeld: EMPTY_RELEASE,
       followups: {
-        sent: 1, failed: 0, unstamped: 0, held: 0,
+        sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0,
         skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
       },
       reviewRequests: EMPTY_REVIEW_REQUESTS,
@@ -533,6 +564,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
       weeklyClientReport: EMPTY_WEEKLY_CLIENT,
       weeklyAgencyReport: EMPTY_WEEKLY_AGENCY,
       usageReport: EMPTY_USAGE_REPORT,
+      opsWatch: EMPTY_OPS_WATCH,
     });
     expect(sendMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -557,10 +589,10 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const body = await res.json();
 
     expect(body).toEqual({
-      sent: 1, failed: 0, unstamped: 0, held: 0,
+      sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0,
       releaseHeld: EMPTY_RELEASE,
       followups: {
-        sent: 1, failed: 0, unstamped: 0, held: 0,
+        sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0,
         skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
       },
       reviewRequests: EMPTY_REVIEW_REQUESTS,
@@ -574,6 +606,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
       weeklyClientReport: EMPTY_WEEKLY_CLIENT,
       weeklyAgencyReport: EMPTY_WEEKLY_AGENCY,
       usageReport: EMPTY_USAGE_REPORT,
+      opsWatch: EMPTY_OPS_WATCH,
     });
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_r1");
     expect(stampFollowupSentMock).toHaveBeenCalledWith(expect.anything(), "bk_f1");
@@ -592,7 +625,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 0, failed: 1, unstamped: 0, held: 0,
+      sent: 0, failed: 1, unstamped: 0, held: 0, blocked: 0,
       skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
     });
     expect(stampFollowupSentMock).not.toHaveBeenCalled();
@@ -611,7 +644,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     // 37h backward window ages it out, so it is never a "failure" to report.
     // (It was 25h under the daily cron; the Pro cadence re-derived it.)
     expect(body.followups).toEqual({
-      sent: 0, failed: 0, unstamped: 0, held: 0,
+      sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
       skippedNoEmail: 1, waitingForMorning: 0, unresolvableTimezone: 0,
     });
     expect(sendMock).not.toHaveBeenCalled();
@@ -633,7 +666,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 0, held: 0,
+      sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0,
       skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
     });
     expect(stampFollowupSentMock).toHaveBeenCalledTimes(2);
@@ -649,7 +682,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 1, held: 0,
+      sent: 1, failed: 0, unstamped: 1, held: 0, blocked: 0,
       skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0,
     });
     expect(stampFollowupSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
@@ -712,7 +745,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 0, failed: 0, unstamped: 0, held: 0,
+      sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
       skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
     });
     expect(sendMock).not.toHaveBeenCalled();
@@ -739,7 +772,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 0, held: 0,
+      sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0,
       skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
     });
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -798,7 +831,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 0, failed: 0, unstamped: 0, held: 0,
+      sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
       skippedNoEmail: 0, waitingForMorning: 1, unresolvableTimezone: 0,
     });
   });
@@ -846,7 +879,7 @@ describe("GET /api/cron/reminders — follow-ups wait for the next morning", () 
     const body = await res.json();
 
     expect(body.followups).toEqual({
-      sent: 1, failed: 0, unstamped: 0, held: 0, skippedNoEmail: 0,
+      sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoEmail: 0,
       waitingForMorning: 0, unresolvableTimezone: 1,
     });
     expect(sendMock).toHaveBeenCalledTimes(1);

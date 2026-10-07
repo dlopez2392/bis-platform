@@ -1,5 +1,5 @@
 import type { ContactSummary } from "@/app/api/accounts/[accountId]/contacts/[contactId]/summary/route";
-import type { OptOutZone } from "@/lib/contacts/marketing-optout";
+import type { ZoneLabel } from "@/lib/zone";
 
 /**
  * What the drawer can rely on after parsing the summary GET's body. The
@@ -7,7 +7,7 @@ import type { OptOutZone } from "@/lib/contacts/marketing-optout";
  * same shape with `zone` possibly undefined, because the drawer tolerates a
  * missing zone (a server from before #124 sent none) rather than refusing.
  */
-export type ParsedContactSummary = Omit<ContactSummary, "zone"> & { zone: OptOutZone | undefined };
+export type ParsedContactSummary = Omit<ContactSummary, "zone"> & { zone: ZoneLabel | undefined };
 
 type Kind = ContactSummary["recent"][number]["kind"];
 
@@ -41,7 +41,7 @@ function usableZone(zone: string): boolean {
   }
 }
 
-function parseZone(v: unknown): OptOutZone | undefined {
+function parseZone(v: unknown): ZoneLabel | undefined {
   if (!isRecord(v)) return undefined;
   if (typeof v.zone !== "string" || typeof v.guessed !== "boolean" || typeof v.label !== "string") return undefined;
   if (!usableZone(v.zone)) return undefined;
@@ -55,10 +55,8 @@ function parseZone(v: unknown): OptOutZone | undefined {
  * boundary, so a throw during render over one missing field replaces the
  * whole dashboard.
  *
- * - `tags`, `recent` and `marketing_email_opted_out_at` are REQUIRED: any of
- *   them missing or the wrong shape answers null, and the drawer shows its
- *   "couldn't load" state. The stamp is not defaulted to null: that would
- *   show an opted-out contact as unticked, and one tick would then write.
+ * - `tags` and `recent` are REQUIRED: either missing or the wrong shape
+ *   answers null, and the drawer shows its "couldn't load" state.
  * - A `recent` item that is not an object, or whose `label` or `at` is not a
  *   string, is a malformed body: null. Those two are what the drawer renders.
  * - A `recent` item whose `kind` this bundle does not know is DROPPED, and the
@@ -96,10 +94,21 @@ export function parseContactSummary(json: unknown): ParsedContactSummary | null 
     recent.push({ kind: r.kind, label: r.label, at: r.at });
   }
 
-  const stamp = json.marketing_email_opted_out_at;
-  if (stamp !== null && typeof stamp !== "string") return null;
-
-  return { tags, recent, marketing_email_opted_out_at: stamp, zone: parseZone(json.zone) };
+  return {
+    tags, recent,
+    // Consent chain PR-1 (F-009): TOLERATED, never required — anything but
+    // the literal boolean true is false, and a server from before this PR
+    // sends none at all, which must still load (no Check number row, not a
+    // refused summary). The send gate still refuses an ambiguous number
+    // either way; a missing/false row loses a shortcut, never a guard.
+    phone_country_unconfirmed: json.phone_country_unconfirmed === true,
+    // TOLERATED like the flag above: missing, or anything but a string, is
+    // null — a server from before round 3 sends none, and the drawer's
+    // Check number row then has nothing to pass as `seenPhone` (its pick
+    // fails closed rather than trusting a stub).
+    phone: typeof json.phone === "string" ? json.phone : null,
+    zone: parseZone(json.zone),
+  };
 }
 
 /** The drawer's load outcome for one contact. */

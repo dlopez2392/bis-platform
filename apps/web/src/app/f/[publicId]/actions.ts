@@ -15,6 +15,7 @@ import {
   isValidEmail, isValidPhone,
 } from "@/lib/forms/guards";
 import { publicStrings, normalizeLocale } from "@/lib/forms/public-strings";
+import { recordFormGrants } from "@/lib/consent/grants";
 import type { SubmitResult } from "./submit-result";
 
 const CONSENT_KIND = "consent";
@@ -196,6 +197,13 @@ export async function submitFormAction(
       console.error(`form submit failed before the row existed: ${String(e)}`);
       return { status: "error" };
     }
+
+    // Consent chain PR-2 (decision 8): a ticked consent field is a grant, per
+    // address given, recorded before enrichment sends anything. Evidence
+    // only, never throws (lib/consent/grants.ts).
+    await recordFormGrants(db, {
+      accountId, formId: form.id, submissionId, fields: form.fields, answers, consent: base.consent,
+    });
 
     // --- Enrichment: best-effort from here on. A failure here must never
     // change what the submitter sees — the lead is already durably saved, and

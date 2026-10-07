@@ -3,8 +3,9 @@ import { Client } from "pg";
 import { withTestAccount } from "./fixtures";
 import { withRollback, actAs } from "./db";
 import {
-  newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId, updateForm,
-  countFormsMissingNotify, countRealSubmissionsBetween,
+  newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
+  getFormByPublicId, isFormLive, updateForm,
+  countFormsMissingNotify, listSubmissionCreationsBetween,
 } from "../forms";
 
 const FIELDS = [
@@ -61,6 +62,44 @@ describe("forms", () => {
       await updateForm(db, accountId, id, { status: "archived" }, "user_test");
       expect(await getPublishedFormByPublicId(db, publicId)).toBeNull();
     }));
+
+  // F-102: the public `/f/<publicId>` layout needs a document's own
+  // account_id and locale_default to paint a branded, correctly-`lang`
+  // not-found page EVEN for a draft or archived form — `lang` and
+  // branding decisions happen above the page's own status check (see
+  // `app/f/[publicId]/layout.tsx`), so they need the row regardless of
+  // status. `getPublishedFormByPublicId` cannot be reused for this: it
+  // is the one accessor allowed to 404-before-the-caller-sees-it, and
+  // widening ITS filter would un-404 every draft form on the live page.
+  it("getFormByPublicId returns a draft or archived form (unlike getPublishedFormByPublicId), but still null for an unknown id", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id, publicId } = await createForm(
+        db, accountId, { name: "Quote Request", fields: FIELDS }, "user_test");
+
+      // MUTATION: add `.eq("status", "published")` to getFormByPublicId's
+      // query (copy getPublishedFormByPublicId's filter) -- this FAILS.
+      const draft = await getFormByPublicId(db, publicId);
+      expect(draft!.status).toBe("draft");
+      expect(draft!.account_id).toBe(accountId);
+      expect(draft!.locale_default).toBe("en");
+
+      await updateForm(db, accountId, id, { status: "archived" }, "user_test");
+      expect((await getFormByPublicId(db, publicId))!.status).toBe("archived");
+
+      expect(await getFormByPublicId(db, "no-such-public-id")).toBeNull();
+    }));
+
+  // Direct, DB-free unit test for the predicate `page.tsx` and
+  // `layout.tsx` both apply against the SAME row returned by
+  // `getFormByPublicId` (F-102 review round, fix 2) — a reviewer found that
+  // mutating this one function is invisible to every test that only
+  // exercises it indirectly through a page/layout render.
+  it("isFormLive is true only for status 'published'", () => {
+    // MUTATION: `return true;` unconditionally -- this FAILS on both lines.
+    expect(isFormLive({ status: "published" })).toBe(true);
+    expect(isFormLive({ status: "draft" })).toBe(false);
+    expect(isFormLive({ status: "archived" })).toBe(false);
+  });
 
   it("listForms reports a submission count", () =>
     withTestAccount(async (db, accountId) => {
@@ -156,12 +195,15 @@ describe("forms", () => {
 });
 
 /**
- * The weekly report's "leads captured", form half. A honeypot hit is not a
- * lead and must never inflate a number a client is shown, so the spam
+ * The weekly report's "leads captured" AND the dashboard's CRM-only hero
+ * (F-076) both reach `form_submissions` through this one function now —
+ * `countRealSubmissionsBetween`, a head-count-only twin with the same
+ * predicate, was removed once nothing else called it. A honeypot hit is not
+ * a lead and must never inflate a number a client is shown, so the spam
  * predicate is the same one `listForms` already uses for its counts.
  */
-describe("countRealSubmissionsBetween", () => {
-  it("counts real submissions in the window, never spam, never the upper bound", async () => {
+describe("listSubmissionCreationsBetween", () => {
+  it("real submissions in [from, to), never spam, never the upper bound", async () => {
     await withTestAccount(async (db, accountId) => {
       const { id: formId } = await createForm(
         db, accountId, { name: "Weekly", fields: [] }, "user_test");
@@ -179,8 +221,17 @@ describe("countRealSubmissionsBetween", () => {
       await seed("2026-03-05T10:00:00Z", "honeypot");  // spam, must not count
       await seed("2026-03-09T00:00:00Z", null);        // on the exclusive bound
 
-      expect(await countRealSubmissionsBetween(
-        db, accountId, "2026-03-02T00:00:00Z", "2026-03-09T00:00:00Z")).toBe(2);
+      const result = await listSubmissionCreationsBetween(
+        db, accountId, "2026-03-02T00:00:00Z", "2026-03-09T00:00:00Z");
+      // Epoch-ms comparison, not a string match (same reason
+      // booking.test.ts's `listBookingCreationsBetween` suite does this):
+      // PostgREST returns a `+00:00`-suffixed timestamp, a different
+      // lexical form of the same instant than the ISO string this test
+      // seeded with.
+      const times = result.map((s) => new Date(s).getTime()).sort();
+      expect(times).toEqual([
+        new Date("2026-03-02T10:00:00Z").getTime(), new Date("2026-03-04T10:00:00Z").getTime(),
+      ].sort());
     });
   });
 });

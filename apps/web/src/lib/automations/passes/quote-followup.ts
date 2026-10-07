@@ -7,7 +7,7 @@ import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { quoteFollowupEmail } from "@/lib/email/templates/quote-followup";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
-import { toE164 } from "@/lib/voice/phone-number";
+import { normalisePhone } from "@bis/db/phone";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { shouldSendQuoteFollowupNow } from "../quote-followup-gate";
@@ -15,12 +15,12 @@ import { defaultQuoteFollowupBody, quoteFollowupSubject } from "../quote-followu
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP, DAILY_CAP_WINDOW_MS } from "../caps";
 import { sendAutomationSms, markAutomationSmsSent, smsCooldownActive, type SentSms } from "../send-sms";
 import {
-  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
+  holdOrSend, logSkipped, subjectOf, verdict, REASONS, type SmsHoldSubject, type Releaser,
 } from "../hold-or-send";
 import type { Pass, PassContext } from "../context";
 
 type Target =
-  | { channel: "sms"; to: string; from: string }
+  | { channel: "sms"; to: string }
   | { channel: "email"; to: string };
 
 /**
@@ -54,7 +54,7 @@ export async function processQuoteFollowups(
   ctx: PassContext, due: DueQuoteFollowup[], opts: ProcessOptions,
 ) {
   const c = {
-    sent: 0, failed: 0, unstamped: 0, held: 0,
+    sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0,
     skippedInvalidConfig: 0, skippedNoAddress: 0, skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0,
     waitingForMorning: 0, unresolvableTimezone: 0,
   };
@@ -84,9 +84,9 @@ export async function processQuoteFollowups(
       continue;
     }
 
-    const subject: HoldSubject = {
+    const subject: SmsHoldSubject = {
       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "quote_followup",
-      channel: config.channel, subjectKey: `opportunity:${row.opportunityId}`, contactId: row.contactId,
+      channel: config.channel, smsKind: "automation.quote_followup", subjectKey: `opportunity:${row.opportunityId}`, contactId: row.contactId,
     };
 
     if (resolveAccountZone(row.accountTimezone) === null) {
@@ -125,7 +125,7 @@ export async function processQuoteFollowups(
 
     let target: Target;
     if (config.channel === "sms") {
-      const to = toE164(row.contactPhone);
+      const to = normalisePhone(row.contactPhone) ? row.contactPhone : null;
       if (!to) {
         c.skippedNoAddress++;
         console.error(`quote follow-up skipped, no textable phone on file for opportunity ${row.opportunityId}`);
@@ -165,7 +165,7 @@ export async function processQuoteFollowups(
         if (opts.released) await logSkipped(ctx, subject, REASONS.smsCooldown);
         continue;
       }
-      target = { channel: "sms", to, from: gate.from };
+      target = { channel: "sms", to };
     } else {
       if (!row.contactEmail) {
         c.skippedNoAddress++;
@@ -206,7 +206,8 @@ export async function processQuoteFollowups(
           // NO composer and NO trailing link: the quote is a document the
           // operator already sent, and there is nowhere for a link to point.
           smsRow = await sendAutomationSms(ctx, {
-            accountId: row.accountId, contactId: row.contactId, to: target.to, from: target.from,
+            accountId: row.accountId, contactId: row.contactId, to: target.to,
+            kind: subject.smsKind, accountTimezone: row.accountTimezone,
             body,
             onProviderFailure: () => stampQuoteFollowupSmsFailed(ctx.db, row.opportunityId),
           });
@@ -225,7 +226,23 @@ export async function processQuoteFollowups(
         }
         if (smsRow) await markAutomationSmsSent(ctx, row.accountId, smsRow, "quote follow-up");
       });
+      if (outcome === "skipped") {
+        // The gate refused it and nothing was sent: give back the tick slot and
+        // today's count taken above (review R2-I2). Otherwise ten refused rows at
+        // the head of the list use up AUTOMATION_TICK_CAP, which is ONE counter
+        // across every account, and starve everyone behind them.
+        attemptsThisTick--;
+        sentToday.set(row.accountId, (sentToday.get(row.accountId) ?? 1) - 1);
+        c.blocked++;
+        continue;
+      }
       if (outcome === "held") {
+        // Nothing went this tick, so the tick slot taken above goes back (the
+        // Task 9 review, concern 1): ten accounts' texts held until noon on a
+        // Sunday must not use up AUTOMATION_TICK_CAP, ONE counter across every
+        // account, while another account's could go now. Today's count stays
+        // taken: a held row IS that day's send.
+        attemptsThisTick--;
         c.held++;
         continue;
       }
@@ -292,6 +309,8 @@ async function sendEmail(
     brand, subject: quoteFollowupSubject(row.brandName), body,
   });
   await ctx.email.send({
+    accountId: row.accountId, kind: "automation.quote_followup", contactId: row.contactId,
+    origin: ctx.origin, now: ctx.now, accountZone: row.accountTimezone,
     to,
     fromName: brand.name,
     fromAddress: row.fromEmail ?? undefined,

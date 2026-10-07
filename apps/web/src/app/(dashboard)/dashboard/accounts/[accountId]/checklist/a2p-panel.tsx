@@ -75,7 +75,7 @@ export function A2pPanel({
   // A missing row is not a state the operator can be in on this page — the
   // account had to exist to reach it — but the read is nullable, so this
   // renders the same thing a fresh account shows rather than crashing.
-  const current = registration ?? { brandId: null, campaignId: null, status: "not_started" as const };
+  const current = registration ?? { brandId: null, campaignId: null, status: "not_started" as const, messagingProfileId: null };
 
   // CONTROLLED, not defaultValue — and this is load-bearing, not style.
   // React resets an uncontrolled `<form action={fn}>` once the action
@@ -89,6 +89,7 @@ export function A2pPanel({
   // reason. Do not revert these to defaultValue.
   const [brandId, setBrandId] = useState(current.brandId ?? "");
   const [campaignId, setCampaignId] = useState(current.campaignId ?? "");
+  const [messagingProfileId, setMessagingProfileId] = useState(current.messagingProfileId ?? "");
   const [status, setStatus] = useState<A2pStatus>(current.status);
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
@@ -99,7 +100,11 @@ export function A2pPanel({
   });
 
   return (
-    <Card>
+    // id targeted by the checklist's own a2p_registration row
+    // (checklist-panel.tsx: "Go to the A2P card", href="#a2p-registration") —
+    // this card sits below the whole checklist and was hard to find by
+    // scrolling alone.
+    <Card id="a2p-registration">
       <CardHeader>
         <CardTitle>{m["a2p.title"]}</CardTitle>
         <CardDescription>{m["a2p.body"]}</CardDescription>
@@ -166,6 +171,14 @@ export function A2pPanel({
                 value={campaignId} onChange={(e) => setCampaignId(e.target.value)}
               />
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="a2pMessagingProfileId">{m["a2p.messagingProfileId"]}</Label>
+            <Input
+              id="a2pMessagingProfileId" name="messagingProfileId" aria-describedby="a2pMessagingProfileIdHint"
+              value={messagingProfileId} onChange={(e) => setMessagingProfileId(e.target.value)}
+            />
+            <p id="a2pMessagingProfileIdHint" className="text-xs text-muted-foreground">{m["a2p.messagingProfileIdHint"]}</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="a2pStatus">{m["a2p.status"]}</Label>

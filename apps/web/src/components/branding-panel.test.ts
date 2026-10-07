@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { renderedText } from "@/lib/rendered-text";
 import { m } from "@/lib/messages";
 import { BrandingPanel } from "./branding-panel";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const panelSource = readFileSync(path.join(here, "./branding-panel.tsx"), "utf8");
 
 /**
  * The mailing-address field (migration 0048): a real render of the panel,
@@ -27,6 +33,29 @@ function render(
     brandMode: null,
     logoUrl: null,
     action: async () => ({ ok: true as const }),
+  }));
+}
+
+function renderWithLogo(
+  logoUrl: string | null,
+  extra: Partial<{
+    removeLogoAction: () => Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+    restoreLogoAction: (path: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  }> = {},
+): string {
+  return renderToStaticMarkup(createElement(BrandingPanel, {
+    audience: "client",
+    brandName: "Rio Roofing",
+    replyToEmail: "hello@rioroofing.com",
+    mailingAddress: null,
+    brandColor: null,
+    brandNeutral: null,
+    brandCorners: null,
+    brandType: null,
+    brandMode: null,
+    logoUrl,
+    action: async () => ({ ok: true as const }),
+    ...extra,
   }));
 }
 
@@ -70,5 +99,44 @@ describe("BrandingPanel — mailing address", () => {
   it("carries the hint in the reader's own voice (mutation: hardcode the agency hint → FAILS on the client's page)", () => {
     expect(renderedText(render(null, "client"))).toContain(m["branding.clientMailingAddressHint"]);
     expect(renderedText(render(null, "agency"))).toContain(m["branding.mailingAddressHint"]);
+  });
+});
+
+describe("BrandingPanel — Remove logo (DESIGN rule 6, rule 8)", () => {
+  const ok = async () => ({ ok: true as const, path: "acct_1/logo.png" });
+  const okUndo = async () => ({ ok: true as const });
+
+  it("shows no Remove-logo button when there is no logo (mutation: render it unconditionally → FAILS)", () => {
+    const html = renderWithLogo(null, { removeLogoAction: ok, restoreLogoAction: okUndo });
+    expect(renderedText(html)).not.toContain(m["branding.removeLogo"]);
+  });
+
+  it("shows the Remove-logo button, as a ghost <button type='button'>, once a logo is set (mutation: drop type='button' → the browser would submit the Save form; mutation: drop variant='ghost' → FAILS)", () => {
+    const html = renderWithLogo("https://cdn.example.com/acct_1/logo.png", {
+      removeLogoAction: ok, restoreLogoAction: okUndo,
+    });
+    expect(renderedText(html)).toContain(m["branding.removeLogo"]);
+    const match = html.match(/<button[^>]*>\s*Remove logo\s*<\/button>/);
+    expect(match, "a <button> literally containing the Remove-logo label").not.toBeNull();
+    expect(match![0]).toContain('type="button"');
+    expect(match![0]).toContain('data-variant="ghost"');
+    // The default variant's own class (button.tsx) — the card's Save button
+    // already carries it, and rule 8 forbids a second primary in one view.
+    expect(match![0]).not.toContain("btn-primary");
+  });
+
+  it("never renders the button at all without BOTH actions wired (mutation: show it with only removeLogoAction set → FAILS)", () => {
+    const html = renderWithLogo("https://cdn.example.com/acct_1/logo.png", { removeLogoAction: ok });
+    expect(renderedText(html)).not.toContain(m["branding.removeLogo"]);
+  });
+
+  // M4 (review, 2026-10-04): a double-click guard, the same `runGuarded`
+  // pattern the Texts/Email rows share (lib/ui/guarded-run.ts, its own
+  // test proves the guard logic itself) — this only pins that THIS button
+  // actually goes through it rather than firing `runRemoveLogo` bare.
+  it("runs the click through runGuarded's busy-ref guard, and disables the button while pending (mutation: call runRemoveLogo directly, or drop the disabled prop → FAILS)", () => {
+    expect(panelSource).toContain('from "@/lib/ui/guarded-run"');
+    expect(panelSource).toMatch(/runGuarded\(removeBusy, startRemoveTransition,/);
+    expect(panelSource).toMatch(/<Button type="button" variant="ghost" size="sm" onClick=\{removeLogo\} disabled=\{removePending\}>/);
   });
 });

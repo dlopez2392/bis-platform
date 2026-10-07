@@ -26,7 +26,8 @@ export type NavIconKey =
   | "checklist"
   | "work"
   | "screened"
-  | "plans";
+  | "plans"
+  | "billing";
 
 export type NavItemSpec = {
   href: string;
@@ -120,6 +121,13 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
         ...(isAgency
           ? ([{ href: `${base}/checklist`, labelKey: "nav.checklist", iconKey: "checklist" }] satisfies NavItemSpec[])
           : []),
+        // Clients only (G20), like Branding: the agency sees billing on the
+        // account's Settings card. Shown before billing starts too (DECISION
+        // 4; the page says what will appear). The route itself works for the
+        // agency; hiding a link is not authorization (requireAccountAccess is).
+        ...(isAgency
+          ? []
+          : ([{ href: `${base}/billing`, labelKey: "nav.billing", iconKey: "billing" }] satisfies NavItemSpec[])),
       ],
     },
     {

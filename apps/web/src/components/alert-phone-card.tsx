@@ -11,9 +11,10 @@ import { Notice } from "@/components/ui/notice";
 import { NumberChip } from "@/app/(dashboard)/dashboard/accounts/[accountId]/setup/steps/step-shared";
 import { m } from "@/lib/messages";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
-import { toE164 } from "@/lib/voice/phone-number";
 
 export type AlertPhoneActionResult = { ok: true } | { ok: false; error: string };
+/** The start action's answer carries the E.164 it texted the code to. */
+export type AlertPhoneStartResult = { ok: true; phone: string } | { ok: false; error: string };
 
 /**
  * Where a text goes when work arrives — `accounts.alert_phone`
@@ -105,9 +106,9 @@ export function AlertPhoneCard({
    *  card's own doc comment. Present only on the agency's editable card. */
   clearAction?: (formData: FormData) => Promise<AlertPhoneActionResult>;
   /** Opens a claim on a NEW number: draws a code, texts it, returns
-   *  `{ok:true}` with no code attached. Also used to RESEND, with the same
-   *  claimed number, from the pending phase. */
-  startVerificationAction?: (formData: FormData) => Promise<AlertPhoneActionResult>;
+   *  `{ok:true, phone}` (the E.164 it texted) with no code attached. Also
+   *  used to RESEND, with the same claimed number, from the pending phase. */
+  startVerificationAction?: (formData: FormData) => Promise<AlertPhoneStartResult>;
   /** Consumes a code against the claimed number and, only on a match, writes
    *  `accounts.alert_phone`. */
   confirmVerificationAction?: (formData: FormData) => Promise<AlertPhoneActionResult>;
@@ -117,6 +118,9 @@ export function AlertPhoneCard({
   // rendered with. Initialized from the server prop so an untouched field
   // still shows the account's own number.
   const [phone, setPhone] = useState(alertPhone ?? "");
+  // The country the typed number belongs to (spec §6: US (+1) / Mexico (+52)),
+  // so an alert number is never ambiguous. Starts from the saved number's own.
+  const [country, setCountry] = useState<"US" | "MX">(alertPhone?.startsWith("+52") ? "MX" : "US");
   const [phase, setPhase] = useState<"idle" | "pending">("idle");
   const [pendingPhone, setPendingPhone] = useState("");
   const [code, setCode] = useState("");
@@ -142,7 +146,7 @@ export function AlertPhoneCard({
     }
 
     if (!startVerificationAction) return;
-    let result: AlertPhoneActionResult;
+    let result: AlertPhoneStartResult;
     try {
       result = await startVerificationAction(formData);
     } catch {
@@ -154,10 +158,9 @@ export function AlertPhoneCard({
       return;
     }
     toast.success(m["settings.alertPhoneCodeSent"]);
-    // Displayed via NumberChip in the pending phase below — normalized the
-    // same way the server just normalized it, for the same reason the
-    // client branch never shows a raw, unformatted number.
-    setPendingPhone(toE164(raw) ?? raw);
+    // Displayed via NumberChip in the pending phase below: the E.164 the
+    // SERVER normalised and texted, never a client-side guess at it.
+    setPendingPhone(result.phone);
     setCode("");
     setPhase("pending");
   });
@@ -189,6 +192,9 @@ export function AlertPhoneCard({
     try {
       const formData = new FormData();
       formData.set("alertPhone", pendingPhone);
+      // The pending number carries its country code; the start action checks
+      // it against the country named, so name the matching one.
+      formData.set("alertPhoneCountry", pendingPhone.startsWith("+52") ? "MX" : "US");
       const result = await startVerificationAction(formData);
       if (!result.ok) {
         toast.error(result.error);
@@ -229,6 +235,22 @@ export function AlertPhoneCard({
       <CardContent>
         {isAgency && phase === "idle" ? (
           <form onSubmit={onSendSubmit} className="flex flex-col gap-3">
+            <fieldset className="flex flex-wrap items-center gap-4">
+              <legend className="sr-only">{m["settings.alertPhoneCountry"]}</legend>
+              {(["US", "MX"] as const).map((c) => (
+                <label key={c} className="flex items-center gap-2 text-sm text-card-foreground">
+                  <input
+                    type="radio"
+                    name="alertPhoneCountry"
+                    value={c}
+                    checked={country === c}
+                    onChange={() => setCountry(c)}
+                    className="size-4 accent-[var(--accent)]"
+                  />
+                  {c === "US" ? m["settings.alertPhoneCountryUs"] : m["settings.alertPhoneCountryMx"]}
+                </label>
+              ))}
+            </fieldset>
             <Label htmlFor="alertPhone" className="sr-only">{m["settings.alertPhone"]}</Label>
             <Input
               id="alertPhone"

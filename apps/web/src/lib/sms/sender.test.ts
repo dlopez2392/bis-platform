@@ -58,15 +58,23 @@ describe("resolveSmsSender", () => {
   });
 
   it("refuses when approved but no live number exists", async () => {
-    a2p.mockResolvedValue({ status: "approved", brandId: "B", campaignId: "C", updatedAt: null });
+    a2p.mockResolvedValue({ status: "approved", brandId: "B", campaignId: "C", messagingProfileId: "740572b6-099c-44a1-89b9-6c92163bc68d", updatedAt: null });
     const gate = await resolveSmsSender(dbReturning([]), "acc");
     expect(gate).toEqual({ ok: false, reason: "no_live_number" });
+  });
+
+  it("refuses an APPROVED account with no messaging profile of its own recorded — texting waits for step 0 (plan Task 7; mutation: drop the profile check → the live number is returned, FAILS)", async () => {
+    a2p.mockResolvedValue({ status: "approved", brandId: "B", campaignId: "C", messagingProfileId: null, updatedAt: null });
+    const gate = await resolveSmsSender(
+      dbReturning([{ e164: "+15551112222", status: "live", created_at: "2026-01-01" }]), "acc",
+    );
+    expect(gate).toEqual({ ok: false, reason: "a2p_not_approved" });
   });
 
   // A `testing` row alone (mid-provisioning, no `live` row yet) must still
   // refuse — `from` can only ever be a LIVE number.
   it("refuses when only a testing-status row exists — testing is owned, not sendable", async () => {
-    a2p.mockResolvedValue({ status: "approved", brandId: "B", campaignId: "C", updatedAt: null });
+    a2p.mockResolvedValue({ status: "approved", brandId: "B", campaignId: "C", messagingProfileId: "740572b6-099c-44a1-89b9-6c92163bc68d", updatedAt: null });
     const gate = await resolveSmsSender(
       dbReturning([{ e164: "+15551112222", status: "testing", created_at: "2026-01-01" }]), "acc",
     );
@@ -74,7 +82,7 @@ describe("resolveSmsSender", () => {
   });
 
   it("returns the OLDEST live number when approved", async () => {
-    a2p.mockResolvedValue({ status: "approved", brandId: "B", campaignId: "C", updatedAt: null });
+    a2p.mockResolvedValue({ status: "approved", brandId: "B", campaignId: "C", messagingProfileId: "740572b6-099c-44a1-89b9-6c92163bc68d", updatedAt: null });
     const captured: { order?: OrderCall; in?: InCall } = {};
     const gate = await resolveSmsSender(dbReturning([
       { e164: "+15550001111", status: "live", created_at: "2026-01-01" },
@@ -94,7 +102,7 @@ describe("resolveSmsSender", () => {
   // testing row (mutation: pick the testing row for `from` → FAILS, since it
   // would no longer equal the live one below), but `ownedNumbers` carries it.
   it("includes a testing-status row in ownedNumbers, but never as `from` (mutation: fold testing into `from` → FAILS)", async () => {
-    a2p.mockResolvedValue({ status: "approved", brandId: "B", campaignId: "C", updatedAt: null });
+    a2p.mockResolvedValue({ status: "approved", brandId: "B", campaignId: "C", messagingProfileId: "740572b6-099c-44a1-89b9-6c92163bc68d", updatedAt: null });
     const captured: { order?: OrderCall; in?: InCall } = {};
     const gate = await resolveSmsSender(dbReturning([
       { e164: "+15550001111", status: "testing", created_at: "2026-01-01" },

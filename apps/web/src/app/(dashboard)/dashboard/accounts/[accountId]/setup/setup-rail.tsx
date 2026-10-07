@@ -4,7 +4,7 @@ import { AlertTriangle, Check, Lock, Minus } from "lucide-react";
 import type { SetupStepKey } from "@/lib/setup/setup-status";
 import type { SetupStepView } from "@/lib/setup/setup-view";
 import {
-  SETUP_STEP_KEYS, lockedPrereqKeys, railKindOf, type RailKind,
+  lockedPrereqKeys, railKindOf, stepNumber, type RailKind,
 } from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
@@ -132,9 +132,18 @@ export function SetupRail({
       // reader announce "Client setup" twice for two different things.
       aria-label={m["setup.railLabel"]}
     >
-      {SETUP_STEP_KEYS.map((key, index) => {
-        const view = views.find((v) => v.key === key);
-        if (!view) return null; // SETUP_STEP_KEYS and `views` always agree in practice
+      {views.map((view) => {
+        // Enumerating `views` itself — THIS account's own steps, in the
+        // canonical order `deriveSetupStatus` already walks them in — not
+        // `SETUP_STEP_KEYS`, which always lists the full ten even for a
+        // CRM-only account whose `views` is shorter. Indexing into the full
+        // list left a CRM-only account's rail numbered "01, 02, 03, 05, 07"
+        // (website_assistant/email's positions in the FULL ten) instead of a
+        // gapless "01, 02, 03, 04, 05" — `stepNumber` (lib/setup/setup-rail.ts)
+        // is the one shared source for that number, so the rail and the pane
+        // header (setup-shell.tsx) can never show two different numbers for
+        // the same step.
+        const key = view.key;
         const kind = railKindOf(view, key === nextKey, views);
         const tone = STATE_TONE[kind];
         const Icon = ICON[kind];
@@ -212,7 +221,7 @@ export function SetupRail({
                   tone.marker,
                 )}
               >
-                {Icon ? <Icon className="size-3.5" /> : String(index + 1).padStart(2, "0")}
+                {Icon ? <Icon className="size-3.5" /> : String(stepNumber(key, views)).padStart(2, "0")}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium text-foreground">

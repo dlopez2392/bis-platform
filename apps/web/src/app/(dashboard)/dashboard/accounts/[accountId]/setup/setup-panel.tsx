@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import { Rocket } from "lucide-react";
 import type { VoiceProfileRow } from "@bis/db";
-import type { SetupStepKey } from "@/lib/setup/setup-status";
+import { reduceSetupProgress, type SetupStepKey } from "@/lib/setup/setup-status";
 import { GO_LIVE_PREREQ_KEYS, kindOf, type SetupStepView, type AssignedNumber } from "@/lib/setup/setup-view";
 import { nextStepKey } from "@/lib/setup/setup-rail";
 import { cn } from "@/lib/utils";
@@ -39,9 +39,10 @@ import { SetupShell } from "./setup-shell";
  *
  * What stays server-side, unchanged from before: everything here is still
  * computed once, from props already in hand, with no client round trip.
- * Only WHICH of the ten pre-rendered nodes gets placed into the DOM is a
- * client decision now (./setup-shell.tsx) — the nodes themselves, and every
- * write action bound to them, are exactly what this file already built.
+ * Only WHICH of this account's pre-rendered step nodes gets placed into the
+ * DOM is a client decision now (./setup-shell.tsx) — the nodes themselves,
+ * and every write action bound to them, are exactly what this file already
+ * built.
  */
 
 // Re-exported so the four write-islands (setup-tick-button.tsx,
@@ -72,7 +73,7 @@ const STEP_DETAIL: Record<SetupStepKey, (p: StepDetailProps) => React.ReactNode>
 export function SetupPanel({
   accountId, steps, prereqsMet, assignedNumber, movableNumbers, hasVoiceProfile, accountName,
   tickAction, goLiveAction, moveNumberAction, enableTestCallsAction, renameAction,
-  conciergeProfile, publishedFormCount, conciergeSiteConversation, origin,
+  conciergeProfile, profileReadFailed, publishedFormCount, conciergeSiteConversation, origin,
 }: {
   accountId: string;
   steps: SetupStepView[];
@@ -116,20 +117,37 @@ export function SetupPanel({
    *  them, same as `assignedNumber`/`movableNumbers` above. See
    *  `StepDetailProps`'s own doc comments (steps/step-shared.tsx) for what
    *  each carries and why. */
-  conciergeProfile: Pick<VoiceProfileRow, "concierge_enabled" | "concierge_form_id" | "public_id"> | null;
+  conciergeProfile: Pick<
+    VoiceProfileRow,
+    "concierge_enabled" | "concierge_form_id" | "public_id"
+    | "facts" | "greeting_en" | "greeting_es" | "languages"
+  > | null;
+  /** `failed.profile` off `gatherSetupInputs`, passed straight through —
+   *  review round, Important 1. `./steps/website-assistant.tsx` alone
+   *  reads it, and only for a CRM-only plan (see `StepDetailProps`'s own
+   *  doc comment). */
+  profileReadFailed: boolean;
   publishedFormCount: number | "unknown";
   conciergeSiteConversation: boolean | "unknown";
   origin: string;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
 
-  // A skipped step leaves the denominator rather than sitting in it forever:
-  // the email identity is genuinely optional, and a meter that could never
-  // reach the end for an account that is fully live would be lying in the
-  // other direction.
+  // The SAME reduction the sidebar's setup meter uses (shell-actions.ts's
+  // `readSetupProgress` → `reduceSetupProgress`, lib/setup/setup-status.ts) —
+  // this pane used to carry its own copy (`steps.filter(s => !s.skipped)
+  // .length` / `steps.filter(s => s.done).length`), and a change to one
+  // formula without the other is exactly how a live tenant who skipped email
+  // once read "9 of 9" on this pane while the sidebar stuck at "9 of 10"
+  // forever (docs/crm-features.md:884). One function now, so the two can
+  // never drift again.
   //
-  // Counted on `s.done` alone, and that stays unknown-safe for a reason that
-  // has nothing to do with how many reads sit behind a step: in
+  // `total` excludes a SKIPPED step from the denominator: the email identity
+  // is genuinely optional, and a meter that could never reach the end for an
+  // account that is fully live would be lying in the other direction.
+  //
+  // `done` counts `s.done` alone, and that stays unknown-safe for a reason
+  // that has nothing to do with how many reads sit behind a step: in
   // deriveSetupStatus (setup-status.ts), `done` is a CONJUNCTION over every
   // read named in that step's READS_BEHIND entry (setup-view.ts) for every
   // key except `email`. A read that threw feeds deriveSetupStatus a neutral
@@ -147,8 +165,7 @@ export function SetupPanel({
   // verified `done` even while the tick read failed and its own card renders
   // "couldn't check" — `done: true` and `unknown: true` at once, which no
   // other step can do. Counting it here is right, not a leak.
-  const total = steps.filter((s) => !s.skipped).length;
-  const doneCount = steps.filter((s) => s.done).length;
+  const { done: doneCount, total } = reduceSetupProgress(steps);
 
   // The one step the pane badges "Next up" and the rail rings "Current" —
   // and, through `defaultStepKey`, the one the wizard OPENS on when no
@@ -180,11 +197,13 @@ export function SetupPanel({
         blocked.map((s) => STEP_COPY[s.key].title).join(", "),
       );
 
-  // One pre-rendered node per step, from props already in hand — same
-  // props every module always received (StepDetailProps), computed for all
-  // ten regardless of which one ends up selected. setup-shell.tsx places
-  // only the selected key's node into the tree; the other nine are real
-  // React elements that are simply never mounted.
+  // One pre-rendered node per step THIS ACCOUNT HAS, from props already in
+  // hand — same props every module always received (StepDetailProps),
+  // computed for every step in `steps` regardless of which one ends up
+  // selected (ten on the full plan, fewer on a CRM-only one —
+  // `deriveSetupStatus`). setup-shell.tsx places only the selected key's
+  // node into the tree; every other one is a real React element that is
+  // simply never mounted.
   const details = {} as Record<SetupStepKey, React.ReactNode>;
   for (const step of steps) {
     const kind = kindOf(step, step.key === nextKey);
@@ -210,6 +229,7 @@ export function SetupPanel({
         renameAction={renameAction}
         views={steps}
         conciergeProfile={conciergeProfile}
+        profileReadFailed={profileReadFailed}
         publishedFormCount={publishedFormCount}
         conciergeSiteConversation={conciergeSiteConversation}
         origin={origin}

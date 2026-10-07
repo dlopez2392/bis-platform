@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Branding } from "@bis/db";
 import { emailBrand } from "./shell";
+import { withoutUnsubscribeMarker } from "./test-helpers";
 import { bookingFollowupEmail, DEFAULT_FOLLOWUP_BODY } from "./followup";
 
 const UNBRANDED: Branding = {
@@ -67,6 +68,10 @@ describe("bookingFollowupEmail", () => {
   it("adds no button and no footer (restrained, letter-like, same as outboundEmail)", () => {
     const { html } = bookingFollowupEmail({ brand, body: "hello" });
     expect(html).not.toContain("border-radius:6px;text-decoration:none");
-    expect(html.toLowerCase()).not.toContain("unsubscribe");
+    // Consent PR-3 (plan G7): shell() now emits one invisible HTML comment,
+    // `UNSUBSCRIBE_MARKER`, as the card's last row, for the email gate to
+    // replace later. Strip it before asserting: this test is about VISIBLE
+    // footer content.
+    expect(withoutUnsubscribeMarker(html)).not.toContain("unsubscribe");
   });
 });

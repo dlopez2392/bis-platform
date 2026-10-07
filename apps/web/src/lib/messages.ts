@@ -29,6 +29,7 @@ export const m = {
   "nav.accounts": "Companies",
   "nav.blueprints": "Blueprints",
   "nav.plans": "Plans",
+  "nav.billing": "Billing",
   // Work Queue Task 6 — the agency-wide queue, top level beside Companies
   // and Blueprints. "Work queue" rather than reusing "To do" (nav.tasks):
   // that label already names the per-account screen one level down, and the
@@ -149,6 +150,10 @@ export const m = {
   "branding.tooLarge": "That file is larger than 512 KB.",
   "branding.noLogo": "No logo set",
   "branding.currentLogo": "Current logo",
+  "branding.removeLogo": "Remove logo",
+  "branding.logoRemoved": "Logo removed",
+  "branding.noLogoToRemove": "There's no logo to remove.",
+  "branding.logoGone": "That logo can't be brought back. Upload it again.",
   "branding.color": "Brand color",
   "branding.colorHint": "Used for buttons and highlights on their lead forms and in their sidebar. Leave blank for the default.",
   "branding.badColor": "Enter a color as a hex code, like #0f766e.",
@@ -266,6 +271,16 @@ export const m = {
   // none of these four need a `period` caption the way the "All time" row
   // below them does.
   "dashboard.kpi.callsAnswered": "Calls answered",
+  // F-076 (now slice): the hero on a CRM-only account (no enabled voice
+  // profile) — "Calls answered" is structurally always 0 with no
+  // receptionist taking calls, so it is never the right headline there
+  // (crm-features.md §2.3, §6.3). Owner decision: this is the SAME "leads
+  // captured" the Monday weekly report sends (lib/reports/weekly-metrics.ts
+  // — a real submission or a lead-outcome call), not "every new contact";
+  // the weekly report's own email copy (lib/email/templates/weekly-report.ts)
+  // spells it lowercase inline rather than through a messages.ts key, so
+  // there was no existing key to reuse here.
+  "dashboard.kpi.leadsCaptured": "Leads captured",
   "dashboard.kpi.appointmentsBooked": "Appointments booked",
   "dashboard.kpi.afterHoursCaptured": "After-hours captured",
   "dashboard.kpi.pipelineAdded": "Pipeline added",
@@ -275,8 +290,10 @@ export const m = {
   // "{date}"/"{count}"/"{unit}" are the house {placeholder} convention (see
   // setup.progress above); the component .replace()s them, and picks "{unit}"
   // itself (call vs calls) the same way shell.presence.idleOne pins its own
-  // singular case.
-  "dashboard.calls.title": "Calls",
+  // singular case. The bars are ANSWERED calls (the hero's own read, since
+  // 2026-10-06), and the title says so: under a bare "Calls" beside a table
+  // of every recent call, a robocall-free bar would read as a missing call.
+  "dashboard.calls.title": "Calls answered",
   "dashboard.calls.caption": "Last 14 days",
   "dashboard.calls.axis.weekendsMuted": "Weekends muted",
   "dashboard.calls.tooltip": "{date} · {count} {unit}",
@@ -305,6 +322,8 @@ export const m = {
   "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
   "dashboard.activity.formSubmitted": "A new lead came in through your form.",
   "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
+  "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of Sofía.",
+  "dashboard.activity.forwardOff": "Sofía started answering calls again.",
   // Rule 5 (designed empty states): one sentence, verbatim from the brief.
   // No action link — the brief pins this one deliberately link-less.
   "dashboard.activity.empty": "Bookings, form leads, and call outcomes appear here as they happen.",
@@ -403,6 +422,13 @@ export const m = {
   "bulk.deletedSkipped": "Deleted {count} · skipped {skipped} linked to bookings, deals, or conversations",
 
   "pipeline.title": "Opportunities",
+  // The header badge used to read "N · $X" — the same shape the per-column
+  // subtotals use, which count every status (open+won+lost). Saying "open"
+  // plainly tells the two apart instead of relying on the reader to notice
+  // this one number landed above the columns rather than inside one.
+  // "{count}"/"{value}" are the house {placeholder} convention (see
+  // setup.progress above); the page .replace()s them.
+  "pipeline.openTotal": "{count} open · {value}",
   "pipeline.add": "Add opportunity",
   "pipeline.moveFailed": "Could not move that opportunity. Refresh and try again.",
   "pipeline.updateFailed": "Could not save that opportunity. Try again.",
@@ -435,27 +461,99 @@ export const m = {
   "contact.noOpportunities": "None yet.",
   "contact.noName": "(no name)",
 
-  // The "No marketing emails" switch (drawer + full contact page, migration
-  // 0049). Flipped by the operator when a customer replies "stop" to a
-  // check-in or a referral ask; those two are the only emails it holds back.
-  "contact.marketingOptOut.label": "No marketing emails",
-  "contact.marketingOptOut.hint": "Check-ins and referral asks won't be emailed to this contact. Quotes and appointment emails still go.",
-  "contact.marketingOptOut.onToast": "Marketing emails turned off for this contact",
-  "contact.marketingOptOut.offToast": "Marketing emails turned back on for this contact",
-  "contact.marketingOptOut.failed": "Couldn't save that — please try again.",
-  // Under the ticked switch: the day the stop was recorded, in the account's
-  // zone — the operator's answer to "when did they ask?".
-  "contact.marketingOptOut.since": "Off since {date}",
-  // The same line when the account's own timezone could not be used and the
-  // date is printed in a stand-in zone (`renderZone`'s `guessed`) — so a
-  // date that may be a day off says which zone it is in. Not a full zone
-  // note: that is one per screen, and this is one line under a checkbox.
-  "contact.marketingOptOut.sinceGuessed": "Off since {date} ({zone})",
-  // Undo clicked while the last tick is still saving: the toast (and its
-  // Undo) is gone once clicked, so the operator is told what to do instead.
-  // "{label}" is `contact.marketingOptOut.label` above, .replace()d by
-  // `flipMarketingOptOut`, so the box is always named by what it says.
-  "contact.marketingOptOut.undoBusy": "Your last change is still saving. Use the “{label}” box to change it back.",
+  // The contact's "Messages" block (consent chain spec §6). PR-1 ships only
+  // the Texts row's Check number state (F-009); the rest lands in PR-2/PR-3.
+  // "line", "mx" and "us" are the spec's words, verbatim.
+  "contact.messages.title": "Messages",
+  "contact.messages.texts": "Texts",
+  // Consent chain PR-3: the Email row (spec §6; plan G14). "Stop emails" /
+  // "Resume emails…" mirror the Texts row's words.
+  "contact.messages.email": "Email",
+  "contact.email.allowed": "Allowed",
+  "contact.email.stopped": "Stopped",
+  "contact.email.since": "Since {date}",
+  "contact.email.how.unsubscribeLink": "unsubscribe link",
+  "contact.email.how.staff": "you recorded it",
+  "contact.email.how.backfill0049": "you marked them “No marketing emails”",
+  "contact.email.stopEmails": "Stop emails",
+  "contact.email.stoppedToast": "Emails stopped.",
+  "contact.email.resume": "Resume emails…",
+  "contact.email.resumeNoteLabel": "What did they ask for? (required)",
+  "contact.email.resumeSubmit": "Resume emails",
+  "contact.email.resumeCancel": "Cancel",
+  "contact.email.resumeNoteRequired": "Write what they asked for before you turn emails back on.",
+  "contact.email.resumedToast": "Emails are back on. To stop them again, use Stop emails.",
+  "contact.email.customerOnly": "They can resubscribe from the unsubscribe link in any email from you.",
+  "contact.email.loadFailed": "Couldn't load their email settings. Try again.",
+  "contact.email.changed": "Their emails changed while you were looking. This is where they stand now.",
+  "contact.email.failed": "Couldn't save that — please try again.",
+  "contact.email.noEmail": "They have no email address.",
+  "contact.email.undoBusy": "Your last change is still saving. Try again in a moment.",
+  "contact.email.undoExpired": "That can no longer be undone here. Use Stop emails or Resume emails instead.",
+  "contact.phoneCountry.word": "Check number",
+  "contact.phoneCountry.line": "This number could be Mexican or US.",
+  "contact.phoneCountry.mx": "Mexico (+52)",
+  "contact.phoneCountry.us": "US (+1)",
+  "contact.phoneCountry.mxToast": "Saved as a Mexican number",
+  "contact.phoneCountry.usToast": "Saved as a US number",
+  "contact.phoneCountry.failed": "Couldn't save that — please try again.",
+  "contact.phoneCountry.changed": "Their number changed while you were choosing. Reload to see it.",
+  "contact.phoneCountry.unreadable": "That number can't be read as a US or Mexican number. Edit it instead.",
+  "contact.phoneCountry.undoBusy": "Your last change is still saving. Edit the number itself to change it back.",
+  "contact.phoneCountry.inlineChanged": "Their number changed since your edit. Reload to see it.",
+  // The rest of the Texts row (consent chain PR-2, spec §6). Status words are
+  // a dot + word (rule 3). "{date}" is a calendar day in the account's zone;
+  // "{word}" is the keyword as staff read it (keywordDisplay); "{excerpt}" is
+  // what the customer wrote, cut at 60 characters; "{name}" is the staff
+  // member's first name (plan G14).
+  "contact.texts.allowed": "Allowed",
+  "contact.texts.stopped": "Stopped",
+  "contact.texts.held": "On hold",
+  "contact.texts.since": "Since {date}",
+  "contact.texts.how.keyword": "they texted {word}",
+  "contact.texts.how.freeTextBy": "they wrote “{excerpt}”, confirmed by {name}",
+  "contact.texts.how.freeText": "they wrote “{excerpt}”, confirmed by your team",
+  "contact.texts.how.staff": "you recorded it",
+  "contact.texts.how.carrier": "the carrier blocked it",
+  "contact.texts.how.unsubscribeLink": "unsubscribe link",
+  "contact.texts.stopTexts": "Stop texts",
+  "contact.texts.stoppedToast": "Texts stopped.",
+  "contact.texts.resume": "Resume texts…",
+  "contact.texts.resumeNoteLabel": "What did they ask for? (required)",
+  "contact.texts.resumeSubmit": "Resume texts",
+  "contact.texts.resumeCancel": "Cancel",
+  "contact.texts.resumeNoteRequired": "Write what they asked for before you turn texts back on.",
+  "contact.texts.resumedToast": "Texts are back on. To stop them again, use Stop texts.",
+  "contact.texts.customerOnly": "They can text START to get texts again.",
+  "contact.texts.heldLine": "They wrote “{excerpt}”. Texts are on hold.",
+  "contact.texts.confirmStop": "Confirm stop",
+  "contact.texts.notAStop": "Not a stop",
+  "contact.texts.confirmedToast": "Stop confirmed. Texts to them are stopped.",
+  "contact.texts.releasedToast": "Hold lifted. Texts to them are back on.",
+  "contact.texts.loadFailed": "Couldn't load their message settings. Try again.",
+  "contact.texts.changed": "Their texts changed while you were looking. This is where they stand now.",
+  "contact.texts.failed": "Couldn't save that — please try again.",
+  "contact.texts.noNumber": "They have no number to text.",
+  "contact.texts.undoBusy": "Your last change is still saving. Try again in a moment.",
+  "contact.texts.undoExpired": "That can no longer be undone here. Use Stop texts or Resume texts instead.",
+  // The consent To-do rows (spec §6). The English line is written into
+  // tasks.title when the To-do is made (plan G8); the Spanish lines wait for an
+  // operator locale. "{date}" is the appointment's calendar day in the account's zone.
+  "todo.consent.hold.en": "{name} may have asked to stop texts: “{excerpt}”. Texts to them are on hold.",
+  "todo.consent.hold.es": "{name} quizá pidió dejar de recibir mensajes: “{excerpt}”. Los mensajes están en pausa.",
+  "todo.consent.hold.confirm.es": "Confirmar",
+  "todo.consent.hold.notStop.es": "No era eso",
+  "todo.consent.cancel.en": "{name} texted {word}, so their texts are stopped. Check whether they also meant their appointment on {date}.",
+  "todo.consent.cancel.es": "{name} envió {word} y sus mensajes quedaron suspendidos. Revise si también quería cancelar su cita del {date}.",
+  "todo.consent.decided": "This one was already decided. Open the contact to see where their texts stand.",
+  "todo.consent.decideFirst": "Decide this one with Confirm stop or Not a stop.",
+  // The contact timeline's line in place of Done for an open To-do whose
+  // number is still on hold (review R3-N1). It points at the To do page, the
+  // one place that can always close it: after a phone correction the Texts
+  // row no longer shows the old number's hold (review M3), and a CANCEL
+  // To-do the fail-closed read marks keeps its Done there (review M4).
+  "todo.consent.timelineHint": "Close this one from the To do page.",
+  "todo.consent.failed": "Couldn't save that — please try again.",
 
   // The contact drawer's recent-activity feed (Task 2's summary route,
   // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
@@ -483,7 +581,7 @@ export const m = {
   "settings.customFields": "Custom fields",
   "settings.customFieldsBody": "Extra fields captured on every contact.",
   "settings.customValues": "Custom values",
-  "settings.customValuesBody": "Template variables, referenced as {{custom_values.key}} from M1c on.",
+  "settings.customValuesBody": "Details about this business — like its service area or license number — that messages and pages can fill in automatically.",
   "settings.fieldName": "Field name",
   "settings.fieldKey": "field_key",
   "settings.dataType": "Type",
@@ -581,6 +679,15 @@ export const m = {
   // FROM yet.
   "settings.alertPhoneNotClearedToSend": "Texting isn't turned on for this account yet, so no verification code can go out. See the Checklist page.",
   "settings.alertPhoneTooManyCodes": "Too many codes have been requested for this number in the last hour. Try again in about an hour.",
+  // The alert phone's country (consent chain PR-1, F-009): never ambiguous.
+  "settings.alertPhoneCountry": "Country of this number",
+  "settings.alertPhoneCountryUs": "US (+1)",
+  "settings.alertPhoneCountryMx": "Mexico (+52)",
+  // A number typed WITH a country code that is not the country picked
+  // (review R3-M4): never texted, never silently re-coded.
+  "settings.alertPhoneCountryMismatch": "That number starts with a different country code than the one picked. Pick the matching country, or type just the ten digits.",
+  // Spec §6, verbatim: the code could not go because that phone texted STOP.
+  "settings.alertPhoneStopped": "This number has stopped texts from your business line. Text START to it from that phone to turn them back on.",
   "settings.alertPhoneSendFailed": "The verification code couldn't be sent. Try again in a moment.",
   "settings.alertPhoneCodeSent": "Code sent — check that phone for a text.",
   // Deliberately does not say the number was right or wrong — only that
@@ -639,6 +746,18 @@ export const m = {
   // Says WHO is holding it up and what unblocks it, rather than "unavailable".
   "compose.smsBlockedA2p": "Texting is off until this company's A2P registration is approved",
   "compose.smsBlockedNoNumber": "Texting needs a live phone number on this company",
+  // The consent gate (lib/consent/composer-state.ts): the one line the text
+  // composer shows in place of its form, and the toast a refused send gives.
+  "compose.smsStopped": "They stopped texts on {date}. You can't text this number until they text START.",
+  "compose.smsStoppedUndated": "They stopped texts from you. You can't text this number until they text START.",
+  "compose.smsHeld": "Texts to them are on hold while you check whether they asked to stop.",
+  "compose.smsCheckNumber": "This number could be Mexican or US. Pick its country on their contact before you text it.",
+  "compose.smsStateUnknown": "Couldn't check whether they can get texts. Reload the page to try again.",
+  // Consent chain PR-3 (spec §6, choice 22; plan G15): the email composer
+  // stays usable and says why the operator should keep it to their matter.
+  "compose.emailUnsubscribed": "They unsubscribed from your emails on {date}. Write only about something they asked you for.",
+  "compose.emailStoppedByYou": "You stopped emails to them on {date}. Write only about something they asked you for.",
+  "compose.emailStateUnknown": "Couldn't check whether they unsubscribed. Write only about something they asked you for.",
   // {n} segments — SMS bills per segment, and a single non-GSM character
   // (an accent, a curly apostrophe) drops the whole message to 70 per segment.
   "compose.smsSegments": "{chars} characters · {segments} message(s)",
@@ -749,7 +868,7 @@ export const m = {
   // tell daily.
   "checklist.phone_number.title": "Buy a phone number",
   "checklist.phone_number.help":
-    "Done in Telnyx. Calling and SMS arrive in M2 — until then this is a record that the number exists.",
+    "Done in Telnyx. Calling and texting are both built and work once the rest of this checklist is done.",
   "checklist.a2p_registration.title": "Register A2P 10DLC brand and campaign",
   // Names where the gather list lives rather than carrying it: this line
   // renders inside a seven-item list, on the account dashboard as well as the
@@ -758,6 +877,19 @@ export const m = {
   // because ChecklistPanel is reusable and must not say "below".
   "checklist.a2p_registration.help":
     "Done with the carriers via Telnyx. Expect days to weeks; start it early because nothing you do here speeds it up. The A2P registration panel on this company's checklist lists what to collect from them first.",
+  // The three steps learned setting up BIS's own texting (2026-09-29): a
+  // messaging profile is per BUSINESS (a STOP blocks every number on the
+  // profile, and a profile has one reply text), so one company's rename or
+  // one company's opt-out must never touch another's.
+  "checklist.messaging_profile.title": "Give the number its own messaging profile",
+  "checklist.messaging_profile.help":
+    "Done in Telnyx. Every company needs its own messaging profile — a STOP blocks every number on a profile, so a shared one would block a company's number over another company's opt-out. Set the inbound webhook to https://app.bis-rgv.com/api/sms/inbound on API v2, put only this company's number on it, turn AI/opt-out detection off, and under Keywords → Global set the STOP, START and HELP replies signed with the company's name exactly as it's set on their account — renaming the company later means redoing these replies. Then paste the profile's ID into the Messaging profile ID field on the A2P registration card below.",
+  "checklist.campaign_numbers.title": "Assign the number to the approved campaign",
+  "checklist.campaign_numbers.help":
+    "Done in Telnyx, after the carriers approve the campaign. Open the campaign and use Assign numbers to put this company's number on it — skipping this step means carriers quietly filter the texts even though everything else reads approved.",
+  "checklist.sms_live_check.title": "Test STOP, START and HELP from a phone",
+  "checklist.sms_live_check.help":
+    "From a real phone that isn't this account's alert phone, text STOP, then START, then HELP to the company's number. Check each reply arrives and the contact's Texts row changes (Stopped → Texting on) before telling the client texting is live.",
   "checklist.email_domain.title": "Add a sending subdomain, DKIM and DMARC",
   "checklist.email_domain.help":
     "Done in Resend, then the DNS records at the domain host. DKIM alone is not enough — without a DMARC record the receiving server accepts the mail and may discard it, and every system here will still say delivered. Check the domain's Insights in Resend before the client sends anything real. A subdomain keeps this client's sending reputation separate. Once the domain is verified, set it as the Sending address in this company's Settings — until you do, their mail still goes out from the platform address.",
@@ -765,7 +897,7 @@ export const m = {
   "checklist.form_notify.help":
     "Done here. Forms applied from a blueprint deliberately start with an empty notify list so leads cannot reach the previous client.",
   "checklist.gbp_connect.title": "Connect Google Business Profile",
-  "checklist.gbp_connect.help": "Done in Google. Review management arrives in M5.",
+  "checklist.gbp_connect.help": "Done in Google. Review management isn't built yet — for now this is just a record that the profile is connected.",
   "checklist.invite_owner.title": "Invite the business owner",
   "checklist.invite_owner.help": "Done in this company's Settings, under Client access. Turn access on, then invite them by email.",
   // Not external: this is done in this app, on the Voice page. No href — the
@@ -784,6 +916,12 @@ export const m = {
   "checklist.complete": "Everything on the checklist is done.",
   "checklist.remaining": "remaining",
   "checklist.open": "Open",
+  // The A2P row's link to its own card further down this same page — added
+  // because the card sits below the whole checklist and was hard to find by
+  // scrolling. Distinct copy from checklist.open (which always leaves the
+  // app) so a keyboard/screen-reader user isn't told "Open" twice for two
+  // different destinations on the same row.
+  "checklist.goToA2pCard": "Go to the A2P card",
   "checklist.reviewLink": "Checklist complete — review",
   // The dashboard's compact row (checklist-row.tsx), not the full panel — it
   // sits under checklist.title as the row's own count, mirroring
@@ -806,6 +944,12 @@ export const m = {
   "a2p.body": "What the carriers have approved for this company. Texting stays off until the campaign is approved.",
   "a2p.brandId": "Brand ID",
   "a2p.campaignId": "Campaign ID",
+  // Plan Task 7: the business's own Telnyx messaging profile (spec §5).
+  "a2p.messagingProfileId": "Messaging profile ID",
+  "a2p.messagingProfileIdHint": "In Telnyx, open Messaging, then Profiles. Every company needs its own, with its stop words and replies set up, before it can text.",
+  "a2p.approvedNeedsProfile": "This company's own messaging profile ID is needed before marking this approved",
+  "a2p.profileMalformed": "That doesn't look like a messaging profile ID. Copy it from Telnyx.",
+  "a2p.profileTaken": "Another company already uses that messaging profile. Every company needs its own.",
   "a2p.status": "Status",
   "a2p.status.not_started": "Not started",
   "a2p.status.pending": "With the carriers",
@@ -983,9 +1127,54 @@ export const m = {
   // like every other string here — and because a carrier reads it.
   "sms.optOut.en": "Reply STOP to opt out.",
   "sms.optOut.es": "Responde STOP para cancelar.",
+  // The consent replies: the ONE stop confirmation, the start/opt-in
+  // confirmation and the help reply. Rewritten 2026-10-05 after TCR rejected
+  // BIS's own 10DLC campaign (MNO_REJECTED, reason 611): the opt-in
+  // confirmation must carry the brand, message classes, "frequency varies"
+  // and "rates may apply" disclosures, HELP and STOP; the opt-out message
+  // must say explicitly that no further messages follow and how to
+  // resubscribe; the help reply must name a real support contact (email,
+  // phone or website), not just "this number". Kept under sms.* on purpose:
+  // a "consent.…" string in a gate-importing file reads as a message kind to
+  // scan 2 (scans.test.ts). No á, í, ó or ú (UCS-2 would double every one,
+  // and this codebase already spells "numero"/"mas" without the accent for
+  // the same reason — see opt-out.ts); replies.test.ts measures each at up
+  // to two GSM-7 segments, compliance now costing more than the one segment
+  // it used to fit. "{Business}" is brandDisplayName; a blank name uses the
+  // noName line, the text-back's rule (textback-body.ts) — carriers still
+  // require a brand name on every one of these, so an account with no brand
+  // name set is not carrier-compliant yet; see replies.ts's comment on why
+  // this does not fall back to `accounts.name` (DESIGN.md rule 8). "{Contact}"
+  // is the help reply's support-contact phrase (replies.ts's
+  // `helpContactPhrase`): the account's own `reply_to_email` when the client
+  // has set one, else BIS's own hello@bis-rgv.com / bis-rgv.com — never BIS's
+  // domain on a client's own text once the client has a contact of its own.
+  "sms.consentReply.stop.en": "{Business}: You will receive no further messages. Reply START to resubscribe.",
+  "sms.consentReply.stop.es": "{Business}: Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.",
+  "sms.consentReply.stop.noName.en": "You will receive no further messages. Reply START to resubscribe.",
+  "sms.consentReply.stop.noName.es": "Ya no le enviaremos mas mensajes. Responda START para volver a recibirlos.",
+  "sms.consentReply.start.en": "{Business}: You're opted in to receive texts about your appointments and service. Msg frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to opt out.",
+  "sms.consentReply.start.es": "{Business}: Usted acepta recibir mensajes de citas y servicio. La frecuencia de mensajes puede variar. Pueden aplicar tarifas de mensajes y datos. Responda AYUDA para ayuda, PARAR para cancelar.",
+  "sms.consentReply.start.noName.en": "You're opted in to receive texts about your appointments and service. Msg frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to opt out.",
+  "sms.consentReply.start.noName.es": "Usted acepta recibir mensajes de citas y servicio. La frecuencia de mensajes puede variar. Pueden aplicar tarifas de mensajes y datos. Responda AYUDA para ayuda, PARAR para cancelar.",
+  "sms.consentReply.help.en": "{Business}: For help, {Contact}. Msg & data rates may apply. Reply STOP to opt out.",
+  "sms.consentReply.help.es": "{Business}: Para ayuda, {Contact}. Pueden aplicar tarifas de mensajes y datos. Responda PARAR para cancelar.",
+  "sms.consentReply.help.noName.en": "For help, {Contact}. Msg & data rates may apply. Reply STOP to opt out.",
+  "sms.consentReply.help.noName.es": "Para ayuda, {Contact}. Pueden aplicar tarifas de mensajes y datos. Responda PARAR para cancelar.",
+  // The help reply's support-contact phrase (see replies.ts's
+  // `helpContactPhrase`): BIS's own fallback when an account has not set its
+  // own reply-to email. Not under sms.consentReply.* because it is not a full
+  // reply — it is substituted into "{Contact}" above.
+  "sms.consentReply.help.contact.fallback.en": "email hello@bis-rgv.com or visit bis-rgv.com",
+  "sms.consentReply.help.contact.fallback.es": "escriba a hello@bis-rgv.com o visite bis-rgv.com",
 
   "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
   "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
+  // A text-back HELD overnight and sent at 08:00 (consent chain PR-1, danlo
+  // 2026-09-26): "just now" would be false the next morning. Spanish needs no
+  // variant; its default never said "just now".
+  "voice.textback.defaultBodyHeldEn": "Hi, this is {name}. Sorry we missed your call, reply here and we'll help.",
+  "voice.textback.defaultBodyHeldNoNameEn": "Sorry we missed your call, reply here and we'll help.",
   "voice.textback.defaultBodyEs": "Hola, somos {name}. No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   "voice.textback.defaultBodyNoNameEs": "No pudimos contestar su llamada, responda este mensaje y le ayudamos.",
   // Same class of note as `automations.optOutCounted` (the count above
@@ -1041,6 +1230,22 @@ export const m = {
   "voice.transfer.badE164": "Enter a real phone number, or leave it blank to keep taking messages.",
   "voice.transfer.ownNumber": "That's this client's own number, so the call would ring straight back to Sofía. Use a number that reaches a person.",
   "voice.transfer.saveFailed": "Could not save the transfer number.",
+
+  // Send calls straight to a person (operational-floor spec §3): the agency's
+  // lever for taking the phones back from Sofía. It rings the SAME number as
+  // the transfer above — there is no second number to keep in step — so the
+  // copy shows that number rather than asking for one. `needsTransfer` names
+  // where to fix it, `noTransferOn` says what callers get meanwhile.
+  "voice.forward.title": "Send calls straight to a person",
+  "voice.forward.body": "Sofía steps aside and the calls she would have answered ring your transfer number instead. Numbers already marked as spam are still turned away.",
+  "voice.forward.toggleLabel": "Send calls straight to a person",
+  "voice.forward.rings": "When this is on, calls ring {number}.",
+  "voice.forward.needsTransfer": "Add a transfer number above first. That's the number calls will ring.",
+  "voice.forward.noProfile": "Set up Sofía first. This switch hands her calls to a person, so she needs to be set up.",
+  "voice.forward.noTransferOn": "There's no transfer number, so Sofía is answering calls until you add one.",
+  "voice.forward.onToast": "Calls now ring {number} instead of Sofía",
+  "voice.forward.offToast": "Sofía is answering calls again",
+  "voice.forward.saveFailed": "Could not change where calls go. Nothing was changed.",
 
   // ── Website assistant — the same receptionist, answering on the website
   // instead of the phone. Copy here avoids the internal words for this
@@ -1422,16 +1627,21 @@ export const m = {
 
   // Part C — the Quiet hours card (agency, on the Automations page).
   "automations.quiet.title": "Quiet hours",
-  "automations.quiet.body": "No automated texts or emails go to your customers between these hours. Anything due overnight waits and goes at the end. Your phone and website assistant still answer.",
-  "automations.quiet.enabled": "Use quiet hours",
-  "automations.quiet.from": "From",
-  "automations.quiet.to": "Until",
-  "automations.quiet.zone": "Times are in {zone}",
-  "automations.quiet.save": "Save quiet hours",
-  "automations.quiet.saved": "Quiet hours saved",
-  "automations.quiet.saveFailed": "Could not save quiet hours.",
-  "automations.quiet.invalidTime": "Enter both times as hours and minutes, like 9:00 PM.",
-  "automations.quiet.readFailed": "Couldn't load the current quiet hours. Reload the page before changing them.",
+  // Spec §6, verbatim: the fixed sending hours, read-only (decision 4).
+  "automations.quiet.fixed": "Automated texts and emails go out between 8 a.m. and 9 p.m. in your time zone ({zone}). Marketing texts wait until 9 a.m., and on Sundays until noon. Anything due overnight goes out when the window opens, unless it's a reminder that would arrive after the appointment.",
+  // Consent chain PR-1: the Activity page's reasons this PR adds. REASONS in
+  // lib/automations/hold-or-send.ts points at these; its older lines stay
+  // there (the automation engine's precedent, Global Constraints).
+  "automations.reason.ledgerRetry": "Waiting a few minutes: couldn't check whether they can get texts",
+  "automations.reason.emailLedgerRetry": "Waiting a few minutes: couldn't check whether they can get emails",
+  "automations.reason.emailSetupRetry": "Waiting a few minutes: the unsubscribe link couldn't be added",
+  "automations.reason.textsStopped": "They stopped texts from this business",
+  "automations.reason.textsHeld": "Texts to them are on hold",
+  "automations.reason.numberUnconfirmed": "Their number could be Mexican or US. Pick its country on their contact",
+  // The re-hold age cap (orchestrator, 2026-09-26): an outage never produces
+  // "Sorry we missed your call" days later.
+  "automations.reason.tooLongAfterCall": "Not sent: too long after the call",
+  "automations.reason.tooLongAfterWriteIn": "Not sent: too long after they wrote in",
   "automations.activityLink": "See what went out",
   // The page's four group headings, in the order the customer lives it; the
   // last group is the one rule that holds every automation back.
@@ -1484,6 +1694,7 @@ export const m = {
   "activity.source.weekly_report": "Weekly report",
   "activity.source.concierge": "Website assistant",
   "activity.source.voice": "Phone assistant",
+  "activity.source.textback": "Missed-call text-back",
 
   // The client-facing Calls log — /dashboard/accounts/<id>/calls. BOTH
   // audiences: this is the client's own business data (who rang, what the
@@ -1622,7 +1833,7 @@ export const m = {
     "Greeting, business facts, and persona for Sofía.",
   "setup.step.website_assistant.title": "Website assistant",
   "setup.step.website_assistant.help":
-    "Put the same receptionist on the website. It answers questions and takes names around the clock, and files them into a form you choose. The last row turns done the first time a visitor uses it from your site.",
+    "A text assistant for the website. It answers questions and takes names around the clock, and files them into a form you choose. The last row turns done the first time a visitor uses it from your site.",
   "setup.step.website_assistant.row1.title": "Write the greeting and facts",
   "setup.step.website_assistant.row2.title": "Publish a form for its leads",
   "setup.step.website_assistant.row2.body":
@@ -1751,6 +1962,7 @@ export const m = {
   "palette.settings.customFields": "Custom fields",
   "palette.settings.customValues": "Custom values",
   "palette.settings.alertPhone": "Alert texts",
+  "palette.settings.billing": "Billing",
 
   // ── /styleguide ────────────────────────────────────────────────────────
   "styleguide.title": "Style guide",
@@ -2198,6 +2410,123 @@ export const m = {
   "plans.stripe.live_key_outside_production": "This deployment holds a live Stripe key but isn't production, so plans are switched off here. The live key belongs only on the live site; a copy of the app that uses the test database takes a test key (sk_test_).",
   "plans.stripe.test_key_on_production_data": "This copy of the app uses the live database, so it won't save plans with a Stripe test key (sk_test_). Stripe couldn't bill a plan made that way. Create and edit plans on the live site.",
   "plans.stripe.not_a_secret_key": "STRIPE_SECRET_KEY isn't a Stripe secret key. It should start with sk_test_ (or sk_live_ in production).",
+  // Client billing, rollout step 3: the agency's Billing card (account
+  // Settings, agency only), the client's Billing page, the payment-failed
+  // banner and Checkout's landing page (/billing-done, signed out). The
+  // billing.error.noOrigin line names an env var because only the agency
+  // ever sees it (the plans.stripe.* precedent).
+  "billing.card.title": "Billing",
+  "billing.card.empty": "Send a billing link to start charging this client, or mark them complimentary.",
+  "billing.card.noPlans": "Create a plan first. Then you can send this client a billing link.",
+  "billing.card.error": "Billing couldn't load just now. Refresh to try again.",
+  "billing.card.noStripe": "Stripe isn't connected on this site, so billing can't change here. The Plans page says why.",
+  "billing.card.noWebhook": "Stripe's webhook isn't set up on this site yet, so billing links are off. The Stripe billing runbook says how to set it up.",
+  "billing.status.active": "Active",
+  "billing.status.payment_failed": "Payment failed",
+  "billing.status.paused": "Paused",
+  "billing.status.canceled": "Canceled",
+  "billing.status.complimentary": "Complimentary",
+  "billing.status.link_sent": "Link sent",
+  "billing.status.unbilled": "Unbilled",
+  "billing.price": "{price}/month",
+  "billing.includes": "It includes {list} each month.",
+  "billing.includes.minutes": "{n} minutes of calls",
+  "billing.includes.sms": "{n} texts",
+  "billing.includes.chats": "{n} website chats",
+  "billing.includes.none": "This plan doesn't include any calls, texts or website chats up front.",
+  "billing.usage.minutes": "{used} of {included} minutes",
+  "billing.usage.sms": "{used} of {included} texts",
+  "billing.usage.chats": "{used} of {included} website chats",
+  "billing.usage.minutes.none": "{used} minutes (none included)",
+  "billing.usage.sms.none": "{used} texts (none included)",
+  "billing.usage.chats.none": "{used} website chats (none included)",
+  "billing.usage.since": "Since {date}",
+  "billing.usage.chatsNote": "A website chat counts once Sofía first replies.",
+  "billing.nextInvoice": "Next invoice {date}",
+  "billing.link.sentTo": "Billing link sent to {email}. It works until {date}.",
+  "billing.link.copy": "Copy link",
+  "billing.link.copied": "Link copied.",
+  "billing.link.copyFailed": "Your browser didn't let us copy it. Here's the link to copy yourself:",
+  "billing.send": "Send billing link",
+  "billing.send.title": "Send a billing link",
+  "billing.send.body": "They'll get an email with a secure Stripe page to add a card. Their plan starts when they finish.",
+  "billing.send.plan": "Plan",
+  "billing.send.email": "Send to",
+  "billing.send.done": "Billing link sent.",
+  "billing.changePlan": "Change plan",
+  "billing.changePlan.bodyPaid": "The new plan starts now. Stripe adjusts this month's price on the next invoice.",
+  "billing.changePlan.bodyComplimentary": "The new plan's features and allowances apply right away. Nothing is charged.",
+  "billing.changePlan.done": "Plan changed.",
+  "billing.comp.mark": "Mark complimentary",
+  "billing.comp.markBody": "They get the plan's features and allowances and are never charged.",
+  "billing.comp.done": "Marked complimentary.",
+  "billing.comp.stop": "Stop complimentary",
+  "billing.comp.stopped": "No longer complimentary.",
+  "billing.comp.stoppedLinkOpen": "No longer complimentary. The billing link you sent is still open, so they can still pay with it.",
+  "billing.error.noStripe": "Stripe isn't connected here, so billing can't change. The Plans page says why.",
+  "billing.error.noWebhook": "Stripe's webhook isn't set up on this site yet, so billing links can't be sent. The Stripe billing runbook says how to set it up.",
+  "billing.error.noOrigin": "This deployment doesn't know its own web address (APP_ORIGIN), so no link can be made.",
+  "billing.error.plan": "Pick an active plan.",
+  "billing.error.email": "Enter one email address.",
+  "billing.error.alreadySubscribed": "This client already has a subscription. Use Change plan instead.",
+  "billing.error.checkoutFinished": "This client already finished checkout. Their plan shows here within a minute.",
+  "billing.error.alreadyBilled": "This client is already on a plan.",
+  "billing.error.stripeFailed": "Stripe didn't accept that. Nothing was charged. Try again in a minute.",
+  "billing.error.subscriptionEdited": "This client's subscription was changed in Stripe directly, so the plan can't be switched here.",
+  "billing.error.changePlanUnconfirmed": "Stripe didn't confirm the change, and it may still go through. Refresh in a minute and check the plan shown here before you try again.",
+  "billing.error.emailFailed": "The link was made, but the email didn't send. Use Copy link to send it yourself.",
+  "billing.error.stale": "Something changed. Refresh and try again.",
+  "billing.page.title": "Billing",
+  "billing.page.subtitle": "Your plan, what you've used, and your next invoice.",
+  "billing.page.empty.title": "Billing isn't set up yet",
+  "billing.page.empty.body": "When your plan starts, your usage and next invoice show here.",
+  "billing.page.usage": "Your usage",
+  "billing.page.manage": "Manage billing",
+  "billing.page.manageHelp": "Update your card and see your past invoices on our secure payment page.",
+  "billing.page.manageHelp.canceled": "See and download your past invoices on our secure payment page.",
+  "billing.page.status.processing": "Payment processing",
+  "billing.page.complimentary": "Your plan is complimentary. There's nothing to pay.",
+  "billing.page.canceled": "Your subscription has ended.",
+  "billing.page.portalFailed": "Billing couldn't open just now. Try again in a minute.",
+  "billing.banner.client": "Your payment didn't go through. Update your card to keep automations running.",
+  "billing.banner.clientAction": "Go to Billing",
+  "billing.banner.agency": "This client's last payment didn't go through.",
+  "billing.banner.agencyAction": "See billing",
+  "billing.done.success.title": "You're all set",
+  "billing.done.success.body": "Your plan starts as soon as your payment is confirmed, usually within a minute. You can close this tab.",
+  "billing.done.cancelled.title": "Checkout wasn't finished",
+  "billing.done.cancelled.body": "Nothing was charged. Use the link you were sent to try again.",
+
+  // Consent chain PR-3: the footer every customer email carries (spec §4.3),
+  // in the email's language. The link text is the second key.
+  "email.unsubscribe.lead.en": "Don't want these emails?",
+  "email.unsubscribe.link.en": "Unsubscribe",
+  "email.unsubscribe.lead.es": "¿No quiere recibir estos correos?",
+  "email.unsubscribe.link.es": "Cancelar suscripción",
+  // The public /u/[token] page (spec §6). English and Spanish stacked: the
+  // token carries no language. {Business} is the brand name, or the
+  // business/el negocio when it is blank (always, for a bad link: a token
+  // that does not open names no business). Decision Q1: the page asks, and
+  // its one primary button records; decision P2: the button says "Stop
+  // emails", as the title asks.
+  "unsubscribe.pageTitle": "Email preferences",
+  "unsubscribe.confirm.en": "Stop emails from {Business}?",
+  "unsubscribe.confirm.es": "¿Dejar de recibir correos de {Business}?",
+  "unsubscribe.confirmBody.en": "{Business} will stop sending you automated emails. You'll still get a confirmation when you book or ask for something.",
+  "unsubscribe.confirmBody.es": "{Business} dejará de enviarle correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.",
+  "unsubscribe.button": "Stop emails / Dejar de recibir correos",
+  "unsubscribe.done.en": "You're unsubscribed. {Business} won't send you any more automated emails. You'll still get a confirmation when you book or ask for something.",
+  "unsubscribe.done.es": "Listo. {Business} ya no le enviará correos automáticos. Si reserva o pide algo, sí recibirá la confirmación.",
+  "unsubscribe.resubscribe": "Resubscribe / Volver a suscribirme",
+  "unsubscribe.resubscribed.en": "You'll get emails from {Business} again.",
+  "unsubscribe.resubscribed.es": "Volverá a recibir correos de {Business}.",
+  "unsubscribe.badLink.en": "This unsubscribe link doesn't work. Contact {Business} directly and ask them to stop.",
+  "unsubscribe.badLink.es": "Este enlace no funciona. Comuníquese directamente con {Business} y pida que dejen de escribirle.",
+  "unsubscribe.failed.en": "Something went wrong on our side. Try the link again in a few minutes.",
+  "unsubscribe.failed.es": "Algo falló de nuestro lado. Vuelva a abrir el enlace en unos minutos.",
+  "unsubscribe.business.en": "the business",
+  "unsubscribe.business.es": "el negocio",
+  "unsubscribe.poweredBy": "Powered by BIS",
 } as const;
 
 export type MessageKey = keyof typeof m;

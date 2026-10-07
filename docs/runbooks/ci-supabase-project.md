@@ -64,9 +64,9 @@ point checks the same env before connecting and throws, naming the variable
   the real `serviceDb` (call proposals, returning lead), plus a scan that
   fails `pnpm check` if a live test ever skips the guard.
 
-Until `apps/web/.env.local` and `packages/db/.env` are switched to the CI
-project (section 9), a local `pnpm check` or e2e run on a machine whose env
-still points at production is refused, not run.
+A local `pnpm check` or e2e run on a machine whose `apps/web/.env.local` or
+`packages/db/.env` still points at production is refused, not run; switching
+both files to the CI project (section 9) is what lets it run.
 
 ### How the steps are run
 
@@ -249,11 +249,14 @@ steps above. A lost project is about half an hour.
 
 ## 9. Local development
 
-**Status, 2026-09-24: NOT done** (plan step D7). The local env files on
-danlo's machine still point at production, so a local `pnpm check` or e2e run
-there is refused before it connects; see "Local runs refuse production too"
-above. Switching the env files below is what lets these runs actually
-proceed, against the CI project instead.
+**Status, 2026-10-04: DONE on danlo's machine** (plan step D7). Both env
+files hold the CI project's four Supabase values, and `packages/db/.env`
+holds `BIS_CI_SUPABASE_REF`. It was proven live that day: the db suite's
+`voice-schema.test.ts` (5/5, through the session-pooler DB URL) and
+`opportunities.test.ts` (8/8, through the secret key). The production values
+were kept beside each file as `*.prod-backup`, which the `.env*` ignore rule
+covers. Any other machine is still refused until it is switched the same way;
+see "Local runs refuse production too" above.
 
 Local runs of `pnpm check` and `pnpm --filter web test:e2e` create and delete
 rows exactly as CI does, so they belong on the CI project too: the four

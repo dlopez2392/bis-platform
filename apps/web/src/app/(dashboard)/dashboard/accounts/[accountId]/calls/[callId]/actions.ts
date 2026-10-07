@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import {
   getProposal, markProposalDecided, addTask, fillContactBlanks, getContact,
-  moveOpportunityToStage, type ContactFieldPayload, type SupabaseClient,
+  moveOpportunityToStage, serviceDb, type ContactFieldPayload, type SupabaseClient,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
@@ -33,6 +33,7 @@ function isBlank(v: unknown): boolean {
  * only invoke this when they know the write did not land. Best-effort: if
  * the revert itself fails, the accept was already going to report failure
  * either way — this only logs so an operator can find the stranded row.
+ * Runs on the service client (0053).
  */
 async function revertToPending(
   db: SupabaseClient, accountId: string, proposalId: string, decidedBy: string,
@@ -84,7 +85,7 @@ async function revertToPending(
  * The write helper's own call threw AFTER the compare-and-swap already
  * stamped the proposal `accepted` — this can only mean the write is
  * AMBIGUOUS. `addTask`, `fillContactBlanks` and `moveOpportunityToStage`
- * each perform their real write, THEN a separate `emit` insert into
+ * each perform their real write, THEN a separate `emit` append to
  * `events`, as two non-transactional round-trips (`addTask`,
  * packages/db/src/activities.ts:23-36): a throw from the second leaves the
  * first's row sitting in the database while the caller sees a failure.
@@ -125,11 +126,18 @@ export async function acceptProposal(
   // never be mistaken for a failed write and claw the proposal back to
   // pending, which would let a second accept create a duplicate record.
   let db: SupabaseClient | undefined;
+  let writer: SupabaseClient | undefined;
   let decided = false;
   let written = false;
 
   try {
     db = await dbForRequest();
+    // 0053: call_proposals is server-written. getProposal below, on the
+    // request client under RLS, is what authorises this decision; the
+    // decision itself, and any revert of it, goes through the service
+    // client, scoped by account_id + id + the status compare-and-swap.
+    // The CRM writes stay on `db` so their RLS applies.
+    writer = serviceDb();
 
     // Existence AND status. Two reviewers racing this line can both read
     // "pending" and both reach the CAS below, which is what actually
@@ -199,7 +207,7 @@ export async function acceptProposal(
     // two reviewers racing produce exactly one winner. Writing the CRM
     // record first and stamping afterwards would let a double-click create
     // two tasks and then stamp one row twice.
-    if (!await markProposalDecided(db, accountId, proposalId, "accepted", userId)) {
+    if (!await markProposalDecided(writer, accountId, proposalId, "accepted", userId)) {
       return { ok: false, error: m["proposals.gone"] };
     }
     decided = true;
@@ -233,7 +241,7 @@ export async function acceptProposal(
     } else if (proposal.kind === "contact_field") {
       const p = proposal.payload;
       if (!proposal.contactId) {
-        await revertToPending(db, accountId, proposalId, userId);
+        await revertToPending(writer, accountId, proposalId, userId);
         return { ok: false, error: m["proposals.failed"] };
       }
       // Read the field's CURRENT value before the re-check below so an
@@ -261,7 +269,7 @@ export async function acceptProposal(
         return stranded(proposalId, callId, accountId, e);
       }
       if (filled.length === 0) {
-        await revertToPending(db, accountId, proposalId, userId);
+        await revertToPending(writer, accountId, proposalId, userId);
         return {
           ok: false,
           error: alreadyFilled ? m["proposals.contactFilled"] : m["proposals.contactMismatch"],
@@ -290,8 +298,8 @@ export async function acceptProposal(
     // to-do list") — the agency-only roll-up above is a different screen.
     revalidatePath(`/dashboard/accounts/${accountId}/tasks`);
   } catch (e) {
-    if (decided && !written && db) {
-      await revertToPending(db, accountId, proposalId, userId);
+    if (decided && !written && writer) {
+      await revertToPending(writer, accountId, proposalId, userId);
     }
     // Whether the compare-and-swap already ran, and whether the write
     // landed, are the two facts an operator needs before touching this row
@@ -334,7 +342,9 @@ export async function dismissProposal(
     if (!proposal || proposal.callId !== callId) {
       return { ok: false, error: m["proposals.gone"] };
     }
-    if (!await markProposalDecided(db, accountId, proposalId, "dismissed", userId)) {
+    // 0053: the decision is server-written, like acceptProposal's; the read
+    // above, under RLS, is what authorises it.
+    if (!await markProposalDecided(serviceDb(), accountId, proposalId, "dismissed", userId)) {
       return { ok: false, error: m["proposals.gone"] };
     }
     dismissed = true;

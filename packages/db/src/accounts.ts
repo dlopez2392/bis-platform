@@ -92,7 +92,22 @@ export type A2pRegistration = {
   brandId: string | null;
   campaignId: string | null;
   status: A2pStatus;
+  /** This business's OWN Telnyx messaging profile (0056, plan Task 7): lowercase uuid. */
+  messagingProfileId: string | null;
 };
+
+/** A Telnyx messaging profile id as 0056's CHECK accepts it: a lowercase uuid. */
+export function isMessagingProfileId(v: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
+}
+
+/** Another account already recorded this profile (0056's unique index). */
+export class MessagingProfileTakenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MessagingProfileTakenError";
+  }
+}
 
 export type A2pRegistrationRecord = A2pRegistration & {
   /** When the outcome was last recorded. Surfaced because "with the carriers"
@@ -113,7 +128,7 @@ export type A2pRegistrationRecord = A2pRegistration & {
  * Phase 1b's send path included — inherits it.
  */
 export function a2pApprovalIsComplete(patch: A2pRegistration): boolean {
-  return patch.status !== "approved" || Boolean(patch.brandId && patch.campaignId);
+  return patch.status !== "approved" || Boolean(patch.brandId && patch.campaignId && patch.messagingProfileId);
 }
 
 /**
@@ -135,16 +150,20 @@ export async function setA2pRegistration(
   db: SupabaseClient, accountId: string, patch: A2pRegistration, actorId: string,
 ): Promise<void> {
   if (!a2pApprovalIsComplete(patch)) {
-    throw new Error("setA2pRegistration: approved requires a brand id and a campaign id");
+    throw new Error("setA2pRegistration: approved requires a brand id, a campaign id and a messaging profile id");
   }
   const { data, error } = await db.from("accounts")
     .update({
       a2p_brand_id: patch.brandId,
       a2p_campaign_id: patch.campaignId,
       a2p_status: patch.status,
+      telnyx_messaging_profile_id: patch.messagingProfileId,
       a2p_updated_at: new Date().toISOString(),
     })
     .eq("id", accountId).select("id");
+  if (error?.code === "23505") {
+    throw new MessagingProfileTakenError(`setA2pRegistration: messaging profile ${patch.messagingProfileId} is another account's`);
+  }
   if (error) throw new Error(`setA2pRegistration failed: ${error.message}`);
   if (!data?.length) throw new Error(`setA2pRegistration: no account ${accountId}`);
   // The identifiers ride the event too, not just the status: this is the
@@ -153,6 +172,7 @@ export async function setA2pRegistration(
   // WHICH campaign".
   await emit(db, accountId, "account.a2p_updated", actorId, {
     status: patch.status, brandId: patch.brandId, campaignId: patch.campaignId,
+    messagingProfileId: patch.messagingProfileId,
   });
 }
 
@@ -160,13 +180,14 @@ export async function getA2pRegistration(
   db: SupabaseClient, accountId: string,
 ): Promise<A2pRegistrationRecord | null> {
   const { data, error } = await db.from("accounts")
-    .select("a2p_brand_id, a2p_campaign_id, a2p_status, a2p_updated_at")
+    .select("a2p_brand_id, a2p_campaign_id, a2p_status, a2p_updated_at, telnyx_messaging_profile_id")
     .eq("id", accountId).maybeSingle();
   if (error) throw new Error(`getA2pRegistration failed: ${error.message}`);
   if (!data) return null;
   return {
     brandId: data.a2p_brand_id, campaignId: data.a2p_campaign_id,
     status: data.a2p_status as A2pStatus,
+    messagingProfileId: (data as { telnyx_messaging_profile_id: string | null }).telnyx_messaging_profile_id,
     updatedAt: data.a2p_updated_at,
   };
 }

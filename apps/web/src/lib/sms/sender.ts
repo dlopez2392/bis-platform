@@ -31,7 +31,11 @@ export async function resolveSmsSender(
   db: SupabaseClient, accountId: string,
 ): Promise<SmsGate> {
   const a2p = await getA2pRegistration(db, accountId);
-  if (a2p?.status !== "approved") return { ok: false, reason: "a2p_not_approved" };
+  // Approved AND the business's own messaging profile recorded (0056, plan
+  // Task 7): spec §5's go-live precondition, enforced where every send path
+  // already asks. The A2P card refuses "approved" without it; this is the
+  // same rule for a row written any other way.
+  if (a2p?.status !== "approved" || !a2p.messagingProfileId) return { ok: false, reason: "a2p_not_approved" };
 
   const { data, error } = await db.from("phone_numbers")
     .select("e164, status, created_at")

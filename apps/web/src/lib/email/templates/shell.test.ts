@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Branding } from "@bis/db";
-import { emailBrand, escapeHtml, shell, button } from "./shell";
+import { emailBrand, escapeHtml, shell, button, UNSUBSCRIBE_MARKER } from "./shell";
 
 const UNBRANDED: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
@@ -79,5 +79,23 @@ describe("button", () => {
     expect(html).toContain(`background-color:${brand.accent.accent}`);
     expect(html).toContain(`color:${brand.accent.accentForeground}`);
     expect(html).toContain('href="https://example.com/x"');
+  });
+});
+
+describe("the unsubscribe marker (consent PR-3, plan G7)", () => {
+  const brand = emailBrand({ ...UNBRANDED, brandName: "Rio Roofing" });
+
+  it("shell() emits the marker exactly once, AFTER the body row and INSIDE the card, so the gate's footer row lands under the message (mutation: emit it before the body → FAILS)", () => {
+    const html = shell(brand, "<p>Hello</p>");
+    expect(html.split(UNSUBSCRIBE_MARKER)).toHaveLength(2);
+    const at = html.indexOf(UNSUBSCRIBE_MARKER);
+    expect(at).toBeGreaterThan(html.indexOf("<p>Hello</p>"));
+    expect(at).toBeLessThan(html.indexOf("</table>\n  </td></tr>"));
+  });
+
+  it("text the operator or customer wrote cannot forge a second marker, or even the start of one: escapeHtml neutralises it (mutation: drop escapeHtml's `<` replace → the body holds `<!--bis:unsubscribe--&gt;`, a second `<!--bis:` opener, FAILS; the whole-marker count alone would stay green under that mutation, because `>` is still escaped: review R2-m2)", () => {
+    const html = shell(brand, `<p>${escapeHtml(UNSUBSCRIBE_MARKER)}</p>`);
+    expect(html.split(UNSUBSCRIBE_MARKER)).toHaveLength(2);
+    expect(html.split("<!--bis:")).toHaveLength(2);
   });
 });

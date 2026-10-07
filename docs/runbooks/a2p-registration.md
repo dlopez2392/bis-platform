@@ -50,6 +50,21 @@ approved.
 
 ---
 
+## Platform prerequisite (once, not per business)
+
+Inbound texts are refused with a 401 (invalid signature) unless
+`TELNYX_PUBLIC_KEY` is set in Vercel production — the webhook every
+messaging profile is configured to call (`/api/sms/inbound`, see "The
+messaging profile" step below) verifies Telnyx's signature and has nowhere
+to check it against without this key. Setting it
+also hardens the voice routes, since the same env var gates both; follow
+`docs/runbooks/voice-setup.md`'s "TELNYX_PUBLIC_KEY — hardened activation
+procedure" section, in its order (TeXML app's Voice Method flipped to POST
+**first**, then the key set in Vercel — reversing that order breaks every
+live call). **Completed for production on 2026-09-29.**
+
+---
+
 ## Step 1 — Collect from the client
 
 Nothing starts until all of it is in hand. Send this list verbatim.
@@ -198,23 +213,115 @@ the traffic is a rejection reason.
 confirmation. The help reply must name the brand and give customer care
 contact details; the opt-out reply must confirm no further messages.
 
-**Telnyx implements these, not us.** It detects STOP, STOPALL, UNSUBSCRIBE,
-CANCEL, END and QUIT on the way in, adds the number to its own opt-out list,
-auto-replies, and blocks every later send to it — at the messaging-profile
-level, before the platform sees anything. So do not add keyword handling to
-`/api/sms/inbound`: a second opt-out list would be racing the real one. What
-the platform owes is the LANGUAGE, and `lib/sms/opt-out.ts` appends it to
-every programme message (the text-back and everything through
-`sendAutomationSms`), which is also what makes the sample messages below match
-real traffic.
+**Both Telnyx and the platform implement these.** Telnyx detects its default
+keywords (STOP, STOPALL, STOP ALL, UNSUBSCRIBE, CANCEL, END, QUIT; START,
+UNSTOP; HELP), blocks a STOP at the messaging-profile level, and answers with
+the profile's configured reply. Since consent chain PR-2 the platform ALSO
+reads every inbound text (`/api/sms/inbound`): the same English words plus
+REVOKE, OPT OUT, OPTOUT and the Spanish PARAR, DETENER, ALTO, CANCELAR, BAJA,
+NO MAS, and stop sentences, and records each in the consent ledger that the
+send gate reads before every text. When Telnyx already answered (the webhook's
+`autoresponse_type`), the platform sends nothing more, so a customer never
+gets two confirmations. `lib/sms/opt-out.ts` still appends the opt-out
+LANGUAGE to every programme message, which is what makes the sample messages
+below match real traffic.
 
 The default auto-responses are generic. Custom ones naming the brand are worth
 setting per profile — `POST /v2/messaging_profiles/{id}/autoresp_configs` with
 `op` of `stop`, `help` or `start` — and the HELP reply in particular should
 carry the brand name and a contact, because that is what the campaign promises
-it will say. Spanish keywords (PARAR, DETENER) work only once registered that
-way, which is why the platform's Spanish disclosure still tells the customer to
-reply STOP.
+it will say. Registering the Spanish keywords (PARAR, DETENER) is what gets
+Telnyx's OWN block and branded reply to fire on them — the platform's own
+matcher reads them regardless of registration, same as it reads STOP. The
+disclosure still names STOP because it is the one word every carrier and
+Telnyx recognise with no registration at all.
+
+---
+
+## The messaging profile (per business)
+
+Learned setting up BIS's own texting (2026-09-29): nothing in this app
+tracked this step, and without it the number cannot text at all.
+
+**Every business needs its OWN messaging profile — never share one across
+companies.** A STOP blocks every number on a profile, and a profile has only
+one set of reply texts. Sharing a profile means one company's opt-out or
+rename reaches into another's.
+
+Telnyx portal → **Messaging → Programmable Messaging → Profiles → Create
+profile** (<https://portal.telnyx.com/#/programmable-messaging/profiles>):
+
+1. **Inbound tab** — webhook URL: `https://app.bis-rgv.com/api/sms/inbound`,
+   API version **v2**.
+2. **Outbound tab** — leave everything off, including Smart Encoding.
+3. **Senders** — add ONLY this business's number. No other business's
+   number ever goes on this profile.
+4. **Settings** — turn AI/opt-out detection **off**; the platform's own
+   consent ledger (`/api/sms/inbound`) already reads every inbound text for
+   STOP/START/HELP and the Spanish equivalents, so Telnyx's own detection
+   would be a second, uncoordinated opinion on the same message.
+5. **Keywords tab, Global section** — set the opt-out (STOP), opt-in
+   (START) and HELP keywords, each with its reply text signed with the
+   business's name **exactly as set on its account** (its brand name), and
+   the HELP reply carrying its support contact (the account's own
+   `reply_to_email` when it has one, else BIS's). Take the exact wording
+   from `telnyxReplyText(op, brandName, supportEmail)` in
+   `apps/web/src/lib/consent/replies.ts` rather than retyping it — it is one
+   English line naming the business plus a Spanish line, e.g. for a business
+   named "Example Co" with no support email of its own,
+   `telnyxReplyText("stop", "Example Co")` renders:
+   > Example Co: You will receive no further messages. Reply START to
+   > resubscribe. Ya no le enviaremos mas mensajes. Responda START para
+   > volver a recibirlos.
+
+   Renaming the business later means redoing these replies — the reply text
+   is not derived from the account, it is typed once into Telnyx.
+
+   **Rewritten 2026-10-05** (TCR rejection, reason 611 — see this runbook's
+   history and `apps/web/src/lib/messages.ts`'s `sms.consentReply.*`
+   comment): the opt-in/STOP/HELP wording changed to carry the frequency,
+   rates, HELP/STOP and "no further messages" disclosures TCR requires. A
+   reply-text change in the app does **not** reach Telnyx or TCR on its
+   own — `telnyxReplyText`'s output is typed into each profile by hand, and
+   the keywords tab is the ONLY place it lives once set. Whenever the
+   wording in `replies.ts`/`messages.ts` changes:
+   1. Re-run `telnyxReplyText` for every LIVE business and retype its three
+      keyword replies (STOP, START, HELP) on that business's OWN messaging
+      profile in the Telnyx portal — there is no bulk edit, and a profile
+      still carrying the old wording means that business's customers keep
+      getting the old, non-compliant text even though the app's own records
+      (and any NEW profile) are current.
+   2. Resubmit the campaign's Opt-in message, Opt-out message and Help
+      message fields in TCR with the new wording for every campaign that
+      wording was submitted under — a campaign's approval is pinned to the
+      exact text it was approved with, same as the sample-message rule
+      above.
+
+   BIS's own profile (`4001a0ee-bd95-4fb6-b2b7-6e8d66a9834a`) needed exactly
+   this on 2026-10-05: it still carried the pre-rejection wording at the
+   time of the fix PR, so its three keyword replies and TCR's three MT
+   fields both needed retyping from the new `telnyxReplyText`/catalogue
+   output — not just the code.
+
+Once created, paste the profile's ID into the **Messaging profile ID** field
+on this account's **A2P registration** card
+(`/dashboard/accounts/<accountId>/checklist#a2p-registration`) — the app
+refuses to text without it (`resolveSmsSender`).
+
+### After approval: assign the number to the campaign
+
+This is Step 5 below, and it is easy to forget once the carriers approve the
+campaign: without it, carriers quietly filter the texts even though
+everything reads approved.
+
+### Before telling the client texting is live
+
+From a real phone that is **not** this account's alert phone: text STOP,
+then START, then HELP to the business's number. Confirm each reply arrives
+and that the contact's Texts row changes (Stopped → Texting on) between the
+STOP and the START. This is `sms_live_check` on the checklist — a stored
+tick, not something the app can verify for itself, because a recorded
+profile ID does not prove the keywords/replies above are actually configured.
 
 ---
 

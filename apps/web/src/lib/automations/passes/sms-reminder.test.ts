@@ -13,6 +13,7 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => send
 import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { formatWhen } from "@/lib/booking/time";
 import { AUTOMATION_TICK_CAP } from "../caps";
+import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
 import type { AutomationLogRow } from "@bis/db";
 import { smsReminderPass, releaseSmsReminder } from "./sms-reminder";
@@ -37,17 +38,14 @@ function row(overrides: Partial<DueSmsReminder> = {}): DueSmsReminder {
 
 const smsSend = vi.fn();
 const emailSend = vi.fn();
-const QUIET_OFF = { enabled: false, start: "21:00", end: "08:00" };
-const QUIET_ON = { ...QUIET_OFF, enabled: true };
-function ctx(now: Date = TICK, quiet = QUIET_OFF): PassContext {
+function ctx(now: Date = TICK): PassContext {
   return {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
-    sms: () => ({ isFake: true, send: (...a: unknown[]) => smsSend(...a) }),
-    quiet: async () => quiet,
+    sms: fakeSmsGate({ send: (m) => smsSend(m) }),
   };
 }
-const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
+const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
 
 beforeEach(() => {
   for (const fn of Object.values(dbMocks)) fn.mockReset();
@@ -176,7 +174,7 @@ describe("sms reminder pass — UNCAPPED, like the email reminder it pairs with"
   });
 });
 
-describe("sms reminder pass — quiet hours", () => {
+describe("sms reminder pass — the fixed automated hours (08:00-21:00)", () => {
   // 06:30 CDT for an 08:30 CDT appointment: due (inside 90–135 min), inside the window, and the appointment is AFTER the window ends.
   const EARLY = new Date("2026-09-22T11:30:00Z");
   const APPT_0830 = "2026-09-22T13:30:00.000Z";
@@ -186,9 +184,9 @@ describe("sms reminder pass — quiet hours", () => {
     subject_key: "booking:bk_s1", status: "held", reason: "Held until 8:00 AM — quiet hours", held_until: END, payload: {}, occurred_at: EARLY.toISOString(),
   });
 
-  it("inside the window with the appointment after its end: NOT sent, NO message row, NOT stamped, one held row (mutation: bypass holdOrSend → FAILS)", async () => {
+  it("before 08:00 with the appointment after 08:00: NOT sent, NO message row, NOT stamped, one held row (mutation: bypass holdOrSend → FAILS)", async () => {
     dbMocks.listDueSmsReminders.mockResolvedValue([row({ startsAt: APPT_0830, accountTimezone: "America/Chicago" })]);
-    expect(await smsReminderPass.run(ctx(EARLY, QUIET_ON))).toEqual({ ...EMPTY, held: 1 });
+    expect(await smsReminderPass.run(ctx(EARLY))).toEqual({ ...EMPTY, held: 1 });
     expect(smsSend).not.toHaveBeenCalled();
     expect(dbMocks.createMessage).not.toHaveBeenCalled();
     expect(dbMocks.stampSmsReminderSent).not.toHaveBeenCalled();
@@ -197,11 +195,15 @@ describe("sms reminder pass — quiet hours", () => {
     }));
   });
 
-  it("the exemption: 05:30 for a 07:30 job — before the window ends — sends now (mutation: drop `deadline` → FAILS)", async () => {
+  it("choice 21: 05:30 for a 07:30 job is NOT texted, and not held past the job; a skipped row says why (mutation: drop `deadline` → held, FAILS)", async () => {
     const fiveThirty = new Date("2026-09-22T10:30:00Z");
     dbMocks.listDueSmsReminders.mockResolvedValue([row({ startsAt: "2026-09-22T12:30:00.000Z", accountTimezone: "America/Chicago" })]);
-    expect(await smsReminderPass.run(ctx(fiveThirty, QUIET_ON))).toEqual({ ...EMPTY, sent: 1 });
-    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect(await smsReminderPass.run(ctx(fiveThirty))).toEqual({ ...EMPTY, blocked: 1 });
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "booking:bk_s1", status: "skipped", reason: "Not sent: quiet hours ran past the appointment",
+    }));
   });
 
   it("no textable phone / gate refused: a skipped row with the plain reason (mutation: drop either logSkipped → FAILS)", async () => {
@@ -248,5 +250,14 @@ describe("sms reminder pass — quiet hours", () => {
     dbMocks.getDueSmsReminderById.mockResolvedValue({ due: null, why: "off" });
     expect(await releaseSmsReminder(ctx(), heldRow())).toBe("skipped");
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This automation was turned off" }));
+  });
+});
+
+describe("smsReminderPass hands the gate its own kind (review R2 minor)", () => {
+  it("the gate is asked for automation.sms_reminder, which picks its class, hours and footer (mutation: pass another automation kind → FAILS)", async () => {
+    dbMocks.listDueSmsReminders.mockResolvedValue([row()]);
+    const gate = fakeSmsGate();
+    await smsReminderPass.run({ ...ctx(), sms: gate });
+    expect(gate.calls.map((r) => r.kind)).toEqual(["automation.sms_reminder"]);
   });
 });

@@ -7,16 +7,13 @@ import {
   getContact, ensureConversation, createMessage, updateMessageStatus,
   clearUnreadCount, serviceDb,
 } from "@bis/db";
-import { getEmailProvider } from "@/lib/email";
+import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { outboundEmail } from "@/lib/email/templates/outbound";
-import { resolveSmsSender } from "@/lib/sms/sender";
-import { getSmsProvider } from "@/lib/sms";
-import type { SmsProvider } from "@/lib/sms/types";
-import { segmentsFor } from "@/lib/sms/segments";
-import { recordUsageSafely, smsBillable } from "@/lib/billing/usage";
-import { toE164 } from "@/lib/voice/phone-number";
+import { sendSms } from "@/lib/consent/gate";
+import { composerBlockedLine } from "@/lib/consent/composer-state";
+import { recordUsageSafely } from "@/lib/billing/usage";
 import { m } from "@/lib/messages";
 // A prefix on `.message` rather than an Error subclass: thrown Errors are
 // serialized across the server-action boundary and do not keep a custom
@@ -36,11 +33,17 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
   if (!contact) rejectSend("contact not in account");
   if (!contact.email) rejectSend("contact has no email address");
 
-  const convo = await ensureConversation(db, accountId, contactId, userId);
+  // 0053: conversations and messages are written by server code only. The
+  // read above ran as the signed-in user under RLS, so `contact` is known to
+  // belong to THIS account; that is what authorises the writes below, which
+  // go through the service client scoped to the same accountId.
+  const writer = serviceDb();
+
+  const convo = await ensureConversation(writer, accountId, contactId, userId);
 
   // Write-then-send: the row exists before anything leaves the building, so a
   // provider failure is a visible `failed` message rather than a silent gap.
-  const { id: messageId } = await createMessage(db, accountId, {
+  const { id: messageId } = await createMessage(writer, accountId, {
     conversationId: convo.id, channel: "email", direction: "outbound",
     subject: subject || undefined, body,
   }, userId);
@@ -74,7 +77,11 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
   // id the delivery webhook needs to correlate against.
   let providerMessageId: string;
   try {
-    ({ providerMessageId } = await getEmailProvider().send({
+    ({ providerMessageId } = await sendEmailOrThrow({
+      // A person's own reply (choice 22): the gate does not read the ledger
+      // for it, and — (decision Q4) — it carries no unsubscribe footer. The composer
+      // shows the notice when they unsubscribed (Task 12).
+      accountId, kind: "staff.composer_email", contactId,
       to: contact.email,
       // The BRAND name. `accounts.name` is the agency's internal label for this
       // company ("Rio Roofing — trial") and was reaching the customer's From
@@ -98,7 +105,7 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
     }));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
-    await updateMessageStatus(db, accountId, messageId, "failed", { error: message }, userId);
+    await updateMessageStatus(writer, accountId, messageId, "failed", { error: message }, userId);
     // The failed row must be visible without a manual reload — the toast
     // that follows this throw says exactly that.
     revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
@@ -106,7 +113,7 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
     throw e;
   }
 
-  await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
+  await updateMessageStatus(writer, accountId, messageId, "sent", { providerMessageId }, userId);
 
   revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
@@ -118,89 +125,83 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
   const body = String(formData.get("body") ?? "").trim();
   if (!contactId || !body) rejectSend("contactId and body required");
 
-  // dbForRequest(), not serviceDb(): every read this action needs is already
-  // granted to `authenticated` under RLS. 0013 only column-scoped UPDATE on
-  // accounts (0023's a2p_* columns were never added to that grant list, on
-  // purpose — an agency-only write, done elsewhere via serviceDb()), and
-  // never touched SELECT; 0019/0020 grant `authenticated` SELECT on
-  // phone_numbers with a tenant-scoped RLS policy. Both reads resolveSmsSender
-  // makes are covered, so this stays on the RLS-enforced client like
-  // sendEmailAction above, per lib/db.ts's own rule against serviceDb() on
-  // the in-account surface.
+  // The contact is read as the signed-in user under RLS: that read is what
+  // proves the contact belongs to THIS account, and it authorises the
+  // service-client writes below (0053).
   const db = await dbForRequest();
-
-  // THE gate, and the only one. Never re-derive this.
-  //
-  // The refusal is mapped to operator copy, NOT passed through raw: the
-  // composer already renders the reason server-side, so reaching here means a
-  // stale tab or a tampered post, and "a2p_not_approved" is not a sentence a
-  // business owner should ever see on their screen.
-  const gate = await resolveSmsSender(db, accountId);
-  if (!gate.ok) {
-    rejectSend(gate.reason === "a2p_not_approved"
-      ? m["compose.smsBlockedA2p"] : m["compose.smsBlockedNoNumber"]);
-  }
-
   const contact = await getContact(db, accountId, contactId);
   if (!contact) rejectSend("contact not in account");
-  // contacts.phone is free-form (only trimmed on write) — operator-typed and
-  // web-form contacts routinely arrive as "9562921696" or "(956) 292-1696".
-  // toE164 (lib/voice/phone-number.ts) is live-verified: Telnyx rejects every
-  // shape except "+19562921696", and every number leaving this app is
-  // required to go through it. A null here means the contact has nothing we
-  // can actually text, not just that the field is empty.
-  const to = toE164(contact.phone);
-  if (!to) rejectSend(m["compose.noPhoneOnContact"]);
 
-  const convo = await ensureConversation(db, accountId, contactId, userId);
+  // Since 0053, conversations and messages are written by server code only,
+  // in the service-after-requireAccountAccess shape. Built here, before any
+  // row exists, so a missing service key refuses the whole send rather than
+  // letting the text out with nothing recorded.
+  const writer = serviceDb();
 
-  // WRITE THEN SEND: the row exists before anything leaves the building, so a
-  // provider failure is a visible `failed` message rather than a silent gap.
-  // Same ordering as sendEmailAction, same reason.
-  const { id: messageId } = await createMessage(db, accountId, {
-    conversationId: convo.id, channel: "sms", direction: "outbound", body,
-  }, userId);
+  // THE SEND GATE (consent chain PR-1, kind `staff.composer_sms`): the A2P
+  // sender, the ledger (a stopped or held number), the number's country, and
+  // no hours — a person replying in a thread may do so at any hour. It
+  // decides BEFORE `prepare` writes the conversation and the message row,
+  // so a refused text leaves nothing in the thread; the composer already
+  // shows the same reason on render (composer-state.ts), so reaching a
+  // refusal here means a stale tab. Every refusal maps to operator copy,
+  // never a raw reason code.
+  const row: { conversationId: string | null; messageId: string | null } = { conversationId: null, messageId: null };
+  const result = await sendSms(writer, {
+    accountId, kind: "staff.composer_sms", to: contact.phone, body, contactId,
+  }, {
+    prepare: async ({ body: sentBody }) => {
+      const convo = await ensureConversation(writer, accountId, contactId, userId);
+      row.conversationId = convo.id;
+      // WRITE THEN SEND: the row exists before anything leaves the building,
+      // so a provider failure is a visible `failed` message, not a gap.
+      row.messageId = (await createMessage(writer, accountId, {
+        conversationId: convo.id, channel: "sms", direction: "outbound", body: sentBody,
+      }, userId)).id;
+    },
+  });
 
-  // Only the send itself is guarded: once send() has succeeded the text is
-  // gone and irrevocably out the door, so a failure recording that (a rare
-  // DB error) must never be re-labeled "failed" here — that would tell the
-  // operator a delivered text didn't go out, invite a duplicate send to a
-  // real phone, and drop the provider message id the delivery webhook needs
-  // to correlate against. Same hazard, same fix, as sendEmailAction above.
-  let providerMessageId: string;
-  let provider: SmsProvider;
-  try {
-    provider = getSmsProvider();
-    ({ providerMessageId } = await provider.send({ to, from: gate.from, body }));
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "unknown send failure";
-    await updateMessageStatus(db, accountId, messageId, "failed", { error: message }, userId);
+  if (result.kind === "blocked") {
+    switch (result.reason) {
+      case "a2p_not_approved": rejectSend(m["compose.smsBlockedA2p"]);
+      case "no_live_number": rejectSend(m["compose.smsBlockedNoNumber"]);
+      case "no_number": rejectSend(m["compose.noPhoneOnContact"]);
+      // The render's own words for an unreadable state (review R3-M2): never
+      // worded as the customer's choice, and never an open form.
+      case "ledger_unavailable": rejectSend(m["compose.smsStateUnknown"]);
+      default: rejectSend(composerBlockedLine(result.reason));
+    }
+  }
+  if (result.kind === "deferred") throw new Error("a staff text was deferred, which its kind never is");
+  if (result.kind === "failed") {
+    // A provider refusal after the row was written: mark it failed so the
+    // thread shows it, then throw so the toast says it failed.
+    if (row.messageId) {
+      await updateMessageStatus(writer, accountId, row.messageId, "failed", { error: result.error }, userId);
+    }
     revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
     revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
-    throw e;
+    // In PR-1 the ledger learns of a STOP from the carrier's refusal (40300),
+    // so the FIRST attempt to a stopped number lands here, not as blocked:
+    // say the stopped line now, not on the retry (review R3-I3). The gate
+    // has already recorded the stop.
+    if (result.carrierBlocked) rejectSend(composerBlockedLine("stopped"));
+    throw new Error(result.error);
   }
+  const messageId = row.messageId;
+  if (messageId === null) throw new Error("the gate sent without writing the message row");
 
   // The `sent` write FIRST, straight after the send: it stores the provider
-  // id the delivery webhook correlates against, and a webhook that lands
-  // before it finds no row and is lost for good, so nothing may sit in that
-  // gap. It is allowed to throw (the action rejects), so the usage write
-  // sits in its `finally`, where a delivered text still bills.
-  //
-  // USAGE (client billing): the text is out the door to the customer, so its
-  // segments bill. On serviceDb(), not `db`: 0051 lets only service_role
-  // write usage_events (a client must not be able to write, or skip, its own
-  // bill), the same service-after-requireAccountAccess shape
-  // automations/actions.ts uses for its service-only table. The account is
-  // the one requireAccountAccess passed above and the message id is the row
-  // this action just wrote. Passed as a GETTER so a missing service key is
-  // caught inside recordUsageSafely too; it never throws, so it cannot
-  // replace the `sent` write's error.
+  // id the delivery webhook correlates against. It is allowed to throw (the
+  // action rejects), so the usage write sits in its `finally`, where a
+  // delivered text still bills (on the service client: 0051 lets only
+  // service_role write usage_events).
   try {
-    await updateMessageStatus(db, accountId, messageId, "sent", { providerMessageId }, userId);
+    await updateMessageStatus(writer, accountId, messageId, "sent", { providerMessageId: result.providerMessageId }, userId);
   } finally {
-    if (smsBillable(provider)) {
-      await recordUsageSafely(() => serviceDb(), {
-        accountId, meter: "sms", quantity: segmentsFor(body).segments,
+    if (result.billable) {
+      await recordUsageSafely(writer, {
+        accountId, meter: "sms", quantity: result.segments,
         occurredAt: new Date(), sourceRef: `message:${messageId}`,
       }, `sendSmsAction ${messageId}`);
     }
@@ -214,6 +215,10 @@ export async function markConversationReadAction(
   accountId: string, conversationId: string,
 ): Promise<void> {
   await requireAccountAccess(accountId);
-  await clearUnreadCount(await dbForRequest(), accountId, conversationId);
+  // 0053: conversations are server-written. clearUnreadCount matches on
+  // account_id AND id, and accountId is the one requireAccountAccess just
+  // authorised, so another account's conversation id matches no row
+  // (messaging.test.ts pins that with two real accounts).
+  await clearUnreadCount(serviceDb(), accountId, conversationId);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
 }

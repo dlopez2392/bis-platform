@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { Branding } from "@bis/db";
 import { m } from "@/lib/messages";
 import { emailBrand } from "./shell";
+import { withoutUnsubscribeMarker } from "./test-helpers";
 import { reactivationEmail } from "./reactivation";
 
 /**
@@ -65,7 +66,11 @@ describe("reactivationEmail", () => {
     const { html, text } = reactivationEmail({ brand, subject: SUBJECT, body: "Anything need looking at?", mailingAddress: ADDRESS, footerReason: REASON });
     expect(html).not.toContain("href=");
     expect(html).not.toContain("border-radius:6px;text-decoration:none");
-    expect(html.toLowerCase()).not.toContain("unsubscribe");
+    // Consent PR-3 (plan G7): shell() now emits one invisible HTML comment,
+    // `UNSUBSCRIBE_MARKER`, as the card's last row, for the email gate to
+    // replace later. Strip it before asserting: this test is about VISIBLE
+    // content — the way out here is a reply, not a link.
+    expect(withoutUnsubscribeMarker(html)).not.toContain("unsubscribe");
     expect(text.toLowerCase()).not.toContain("unsubscribe");
   });
 

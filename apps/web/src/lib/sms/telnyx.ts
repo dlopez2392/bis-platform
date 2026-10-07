@@ -1,4 +1,4 @@
-import type { SmsProvider, SendSmsInput, SendSmsResult } from "./types";
+import { SmsProviderError, type SmsProvider, type SendSmsInput, type SendSmsResult } from "./types";
 
 const TELNYX_MESSAGES_URL = "https://api.telnyx.com/v2/messages";
 
@@ -29,7 +29,7 @@ class TelnyxSmsProvider implements SmsProvider {
         signal: controller.signal,
       });
       const text = await res.text();
-      if (!res.ok) throw new Error(`telnyx send failed (${res.status}): ${text}`);
+      if (!res.ok) throw new SmsProviderError(`telnyx send failed (${res.status}): ${text}`, res.status, errorCodes(text));
       const parsed = JSON.parse(text) as { data?: { id?: string } };
       const id = parsed.data?.id;
       if (!id) throw new Error(`telnyx send returned no message id: ${text}`);
@@ -37,6 +37,21 @@ class TelnyxSmsProvider implements SmsProvider {
     } finally {
       clearTimeout(timer);
     }
+  }
+}
+
+/**
+ * Telnyx error codes from a refused send's body, `{"errors":[{"code":"40300",…}]}`
+ * (developers.telnyx.com/docs/messaging/messages/advanced-opt-in-out, read
+ * 2026-09-26). Never throws: a body that is not that shape has no codes.
+ */
+export function errorCodes(text: string): string[] {
+  try {
+    const parsed = JSON.parse(text) as { errors?: { code?: unknown }[] };
+    if (!Array.isArray(parsed.errors)) return [];
+    return parsed.errors.map((e) => e?.code).filter((c) => typeof c === "string" || typeof c === "number").map(String);
+  } catch {
+    return [];
   }
 }
 
