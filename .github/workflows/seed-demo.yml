@@ -4,7 +4,7 @@ name: Seed demo tenant
 #
 # `pnpm --filter @bis/db db:seed-demo` needs Node, a clone, and the service-role
 # key. Every one of those is already sitting on a GitHub runner, and the key is
-# already a repository secret — so the only thing standing between the demo
+# already a secret of the `production` environment — so the only thing standing between the demo
 # tenant and existing was somebody's laptop. This removes that.
 #
 # MANUAL ONLY. There is no `push:` trigger and there must never be one: this
@@ -31,6 +31,11 @@ jobs:
   seed:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The two production secrets below are held by the `production`
+    # environment, not the repository, and that environment admits the `main`
+    # branch only: dispatched from any other branch, this job is refused
+    # before it starts.
+    environment: production
     env:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -53,7 +58,7 @@ jobs:
             if [ -z "${!name}" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::Missing repository secret(s):$missing — add them under Settings > Secrets and variables > Actions."
+            echo "::error::Missing secret(s):$missing — add them to the production environment under Settings > Environments > production."
             exit 1
           fi
 

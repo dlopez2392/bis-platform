@@ -13,9 +13,11 @@ name: Ops health
 #
 # WHAT IT HOLDS. One secret, OPS_HEALTH_SECRET, a value that opens
 # /api/ops/health and NOTHING else (it is not CRON_SECRET, which runs the
-# passes). No database URL, no service-role key, no production credential:
-# CI never touches production (CLAUDE.md), and a reader of this file can
-# confirm it in one glance. The URL is the public app origin.
+# passes). No database URL, no service-role key: CI never touches
+# production's database (CLAUDE.md), and a reader of this file can confirm it
+# in one glance. The URL is the public app origin. The secret still opens a
+# production endpoint, so it lives in the `production` environment (main
+# only), not among the repository-wide secrets.
 #
 # FAILS LOUD WHEN UNCONFIGURED. Without the secret the request is a 401, which
 # fails the job, so a forgotten setup step shows up as a red run rather than
@@ -38,6 +40,11 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # OPS_HEALTH_SECRET is held by the `production` environment, not the
+    # repository, and that environment admits the `main` branch only. The
+    # schedule always runs on main; a dispatch from any other branch is
+    # refused before the job starts.
+    environment: production
     steps:
       - name: Ask production whether the cron is alive
         env:

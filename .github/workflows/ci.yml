@@ -14,7 +14,9 @@ name: CI
 # exists only for CI, `bis-ci` (BIS_CI_SUPABASE_REF below), built from the
 # migration files by .github/workflows/ci-project-setup.yml and seeded by
 # `ci:seed`. Of the workflows on main, only seed-demo.yml and
-# screenshots.yml still reach production, through the non-CI_ secrets. (A
+# screenshots.yml still reach production's database, through the non-CI_
+# secrets held by the `production` environment (main only); neither job here
+# declares that environment, so neither can read them. (A
 # LOCAL test runs now refuse production too, since #135: they throw before
 # connecting when their env files name production's ref.)
 # Rebuilding, restoring or re-seeding the CI project:
@@ -24,7 +26,7 @@ name: CI
 # .github/scripts/ci-target-guard.sh straight after checkout: it refuses any
 # value that names production, a DB URL that is not the CI project's Session
 # pooler user, a Clerk key from the production instance, and a secret key
-# that does not open the CI project's REST API. The repository secrets that
+# that does not open the CI project's REST API. The secrets that
 # hold production's values — the ones NAMED NEXT_PUBLIC_SUPABASE_URL,
 # SUPABASE_SERVICE_ROLE_KEY and SUPABASE_DB_URL — are never read here;
 # apps/web/ci/ci-workflow.test.ts fails `pnpm check` if one ever is.
