@@ -237,11 +237,24 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
                     contactName, brandName, brandLogoPath, brandColor, formPublicId }),
   );
 
-  // Same ticket-based sign-in as the agency flow above: clerk.signIn looks
-  // the user up by email via the Backend API and mints a real sign-in
-  // token — no password, no email code, and no second user is created.
+  // A ticket minted for the user id already in hand — never a lookup by
+  // email. `clerk.signIn({ emailAddress })` resolves the email through
+  // `users.getUserList`, a search that can lag a user created a second ago,
+  // and on 2026-10-07 it did: "No user found with email e2e-client-…" failed
+  // the whole run before one spec started (PR #188's re-run). The agency
+  // sign-in above keeps the email form on purpose: that user is years old,
+  // so the search always has it. Same ticket strategy @clerk/testing uses
+  // internally, minus the search; and since its `signInParams` path does
+  // not wait for the session the way its email path does, the wait is here.
   await page.goto("/sign-in");
-  await clerk.signIn({ page, emailAddress: email });
+  const { token: ticket } = await clerk_.signInTokens.createSignInToken({
+    userId: user.id,
+    expiresInSeconds: 300,
+  });
+  await clerk.signIn({ page, signInParams: { strategy: "ticket", ticket } });
+  await page.waitForFunction(
+    () => Boolean((window as unknown as { Clerk?: { user?: unknown } }).Clerk?.user),
+  );
 
   // force_organization_selection is now false (Task 3), so unlike the
   // agency flow above, no "Choose an organization" task screen interrupts
