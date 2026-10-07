@@ -1,11 +1,24 @@
 # Production isolation: Preview and the development Clerk issuer
 
-**Status, 2026-10-07: NOT CONFIRMED DONE.** Every step below changes a
-setting in Vercel, Supabase or Clerk. Nothing in this repository changes
-those settings. Until Part F records a date for each part, assume both paths
-described below are open.
+**Status, 2026-10-07: Parts A and B DONE; C, D and E NOT CONFIRMED DONE.**
+Every step below changes a setting in Vercel, Supabase or Clerk. Nothing in
+this repository changes those settings. Until Part F records a date for a
+part, assume what that part closes is still open.
 
-What is known, and from where:
+- **Part A, executed 2026-10-07 by the orchestrator:**
+  - `ssoProtection` was off, and previews answered 200 in public, carrying
+    `pk_test_`.
+  - Production served `pk_live_` only.
+  - The code names no `vercel.app` webhook target.
+  - There were no fork deployments.
+- **Part B, executed 2026-10-07 by the orchestrator:**
+  - `ssoProtection.deploymentType` is now `preview`, and `gitForkProtection`
+    is `true`.
+  - A preview's `/sign-in` now answers 302 to `vercel.com/sso-api`, while
+    production answers 200.
+  - `ops-health.yml` run 37647811804 was green afterwards.
+
+What else is known, and from where:
 
 - **Read through the Vercel API on 2026-10-06 (names only, no values).** These
   variables have Preview ticked: `NEXT_PUBLIC_SUPABASE_URL`,
@@ -14,8 +27,8 @@ What is known, and from where:
   `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, and `VERCEL_TEAM_ID` and
   `VERCEL_API_TOKEN`. The last two have Production ticked as well.
 - **Not known:** whether the Supabase and Clerk values on Preview name
-  production or the CI project, whether Deployment Protection is on, and
-  whether production's Supabase still trusts the development Clerk instance.
+  production or the CI project, and whether production's Supabase still
+  trusts the development Clerk instance.
   Part A's checks answer each of these without printing a value. A part whose
   check already passes is skipped. Write down that it was skipped and why.
 
@@ -47,15 +60,16 @@ every tenant's production data. That key is held by the repository secret
 (`CLERK_SECRET_KEY` is on Preview per the 2026-10-06 read), and by the local
 env files `apps/web/.env.local` and `packages/db/.env`.
 
-**2. Vercel Preview may hold production credentials, and may have no
-Deployment Protection.** On 2026-09-26, Preview's Supabase values were taken
-to name production's project. That is recorded in the M7a billing spec,
-`docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:73`, and it
-was true by construction before #133, when production's project was the only
-one. Nobody has read the values since. On 2026-09-26, measured from outside,
-a preview deployment answered `/` and `/sign-in` with 200 and no Vercel login,
-and its sign-in page carried a `pk_test_` key, which is the development
-instance. `clerk-setup.md` Part G keeps Preview on the development Clerk pair.
+**2. Vercel Preview may hold production credentials, and it had no
+Deployment Protection until Part B on 2026-10-07.** On 2026-09-25, Preview's
+Supabase values were recorded as naming production's project, in the M7a
+billing spec
+(`docs/superpowers/specs/2026-09-24-m7a-client-billing-design.md:73`; #140,
+`5dac86ac`). That was true by construction before #133, when production's
+project was the only one. Nobody has read the values since. Measured from
+outside on 2026-09-26, and again in Part A on 2026-10-07: a preview
+deployment answered `/sign-in` with 200 and no Vercel login, and its sign-in
+page carried a `pk_test_` key, which is the development instance. `clerk-setup.md` Part G keeps Preview on the development Clerk pair.
 That is why Preview needs path 1 for as long as it reads production's
 database.
 
@@ -82,8 +96,8 @@ Read off the repository on 2026-10-07 (main at `1e4f0dd2`):
 | `screenshots.yml` | development (`CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`) | production (`NEXT_PUBLIC_SUPABASE_URL` and the other production repository secrets) | **Yes.** It signs in as the development agency user and reads the demo tenant through `dbForRequest()` |
 | Local `pnpm check`, e2e, integration suite | development | refused on production since #135; danlo's machine on `bis-ci` since 2026-10-04 (D7) | **No** |
 | Local `pnpm dev`, `pnpm start`, `pnpm --filter web screenshots` | development | whatever `apps/web/.env.local` names. On danlo's machine that has been `bis-ci` since D7. None of these commands has a production guard | **Only on a machine whose env still names production** |
-| Vercel Preview | development (`pk_test_`, measured 2026-09-26) | unknown (A1, A4) | **Yes, if** Preview reads production; no once Part C is done |
-| Vercel Production | production (`pk_live_`, measured 2026-09-26; A6 re-measures) | production | **No** |
+| Vercel Preview | development (`pk_test_`, measured 2026-10-07) | unknown (A1, A4) | **Yes, if** Preview reads production; no once Part C is done |
+| Vercel Production | production (`pk_live_` only, measured 2026-10-07 in A6) | production | **No** |
 
 CI and e2e no longer need it. Since #133 they run on `bis-ci`, whose only
 Third-Party Auth entry is the development instance (`ci-supabase-project.md`,
@@ -117,7 +131,8 @@ What this breaks, on purpose:
 
 - **B:** a preview URL now needs a Vercel login. danlo is a team member, so
   the links in Vercel's PR comments still open for him. An agent's browser
-  without that login gets 401.
+  without that login is redirected to a Vercel login (302 to
+  `vercel.com/sso-api`, measured 2026-10-07).
 - **C:** a preview now shows the CI project's fixtures (Test Client One and
   e2e accounts), not real clients. A design review on a preview reviews CI
   data.
@@ -141,22 +156,36 @@ T=team_8zjV46sJxQDsVzikNQa1JaO2               # danlopez508-8452s-projects
 P=bis-platform
 V=https://api.vercel.com
 api() { curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "$@"; }
-# keep(): print only the named top-level fields of a JSON response.
+# keep(): print only the named top-level fields of a JSON response. A create
+# answers {created, failed}: each created row prints on its own line, each
+# failure prints its error code only, and an empty or failed create exits 1.
 keep() { node -e '
   let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
     let j; try { j = JSON.parse(s) } catch { console.error("response was not JSON; nothing printed"); process.exit(1) }
+    if (j === null || typeof j !== "object") { console.error("unexpected response; nothing printed"); process.exit(1) }
     if (j.error) { console.error("API error:", j.error.code ?? "unknown"); process.exit(1) }
     const pick = o => Object.fromEntries(process.argv.slice(1).map(k => [k, o?.[k] ?? null]));
-    console.log(JSON.stringify(pick(j.created ?? j)));
+    const rows = "created" in j ? [].concat(j.created ?? []) : [j];
+    for (const o of rows) console.log(JSON.stringify(pick(o)));
+    const failed = [].concat(j.failed ?? []);
+    for (const f of failed) console.error("failed:", f?.error?.code ?? "unknown", f?.error?.key ?? "");
+    if (failed.length || rows.length === 0) { if (!failed.length) console.error("nothing created"); process.exit(1) }
   })' "$@"; }
-# envs(): one line per env row: KEY, targets, type, id. Never a value.
+# envs(): one line per env row: KEY, targets, type, id, branch. Never a value.
 envs() { api "$V/v10/projects/$P/env?teamId=$T" | node -e '
   let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
     let j; try { j = JSON.parse(s) } catch { console.error("response was not JSON; nothing printed"); process.exit(1) }
-    if (j.error) { console.error("API error:", j.error.code ?? "unknown"); process.exit(1) }
-    for (const e of j.envs ?? []) console.log([e.key, [...(e.target ?? [])].sort().join("+"), e.type, e.id, e.gitBranch ?? ""].join("\t"));
+    if (j?.error) { console.error("API error:", j.error.code ?? "unknown"); process.exit(1) }
+    for (const e of j?.envs ?? []) console.log([e.key, [].concat(e.target ?? []).sort().join("+"), e.type, e.id, e.gitBranch ?? ""].join("\t"));
   })'; }
+# row ID: re-read one row's KEY, targets, type and id, from the LIST. Never
+# use GET /v1/projects/.../env/<id>: that endpoint returns the decrypted value.
+row() { envs | awk -F'\t' -v id="$1" '$4 == id'; }
 ```
+
+A1 saves the full `envs` listing as the baseline. It holds names, targets,
+types and ids, never a value. Keep it outside the repository anyway; it is a
+map of where the secrets live.
 
 [assumption: the endpoint versions, the deployments list's `target` filter
 and the field names (`envs[].target`, `type`, `id`; the project's
@@ -166,23 +195,44 @@ where a value is expected, use the dashboard path given beside each step.]
 
 ## Part A — pre-flight (read only; keep the notes)
 
-1. **Env rows.** Run `envs | sort`, or use the dashboard (bis-platform →
-   Settings → Environment Variables, filtered to Preview, then Development).
-   Note, for every row with `preview` in its targets: the name, its full
-   target list, its type and its id. **A row whose targets include both
-   `production` and `preview` is one value used in both. That alone proves
-   Preview holds Production's value, without reading it.** Compare with the
-   2026-10-06 list in the status block. A name that has appeared since then
-   is checked against "What may live on Preview" below.
+**Done 2026-10-07** for A2, A3, A6 and A8's code check (see the status
+block). Re-run A1 (the baseline), A4, A5 and A7 immediately before Part C,
+because Part C changes what they read.
 
-   For `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_DB_URL`, also note which case
-   applies. Part C deletes the evidence, and Part E needs it:
-   (a) one row shared with Production, so Preview held Production's value;
-   (b) a Preview-only row that is not Sensitive, whose value the owner can
-   reveal in the dashboard. Note the first 14 characters of the key
-   (`sb_secret_` plus four), or the project ref inside the DB URL, nothing
-   more. An agent does not reveal values; it records "(b), unread";
-   (c) a Preview-only Sensitive row, whose value cannot be read back.
+1. **Env rows, saved as the baseline.**
+
+   ```bash
+   B="$HOME/isolation-baseline-$(date +%F).tsv"
+   envs | sort > "$B"; wc -l < "$B"; cat "$B"
+   ```
+
+   The file holds every row: key, targets, type, id and branch, never a
+   value. Part C checks each change against it, and Part C's Verify compares
+   every row whose targets include `production` against it. Dashboard
+   equivalent: bis-platform → Settings → Environment Variables, but the
+   dashboard cannot save a baseline, so Part C's comparison would then be by
+   eye. Compare the Preview rows with the 2026-10-06 list in the status
+   block. A name that has appeared since then is checked against "What may
+   live on Preview" below.
+
+   Every row with `preview` in its targets is one of two cases. The case is
+   decided by the targets alone:
+   - **(a) includes `production`.** One value is used in both, so Preview
+     holds Production's value. That is proved without reading it.
+   - **(b) includes `preview` but not `production`.** This is a separate
+     value. It may also include `development`: a `development+preview` row
+     belongs to this case. Deleting such a row also removes it from
+     Development, so Part C drops `preview` from that row's targets instead
+     of deleting it.
+
+   For `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_DB_URL`, also note what can
+   be learned about a case (b) value. Part C deletes the evidence, and Part E
+   needs it:
+   - (b1) a row that is not Sensitive, whose value the owner can reveal in
+     the dashboard. Note the first 14 characters of the key (`sb_secret_`
+     plus four), or the project ref inside the DB URL, nothing more. An agent
+     does not reveal values; it records "(b1), unread".
+   - (b2) a Sensitive row, whose value cannot be read back.
 2. **Deployment Protection and fork protection.**
 
    ```bash
@@ -199,7 +249,7 @@ where a value is expected, use the dashboard path given beside each step.]
 
    ```bash
    api "$V/v6/deployments?projectId=<id from A2>&target=preview&limit=3&teamId=$T" \
-   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let j;try{j=JSON.parse(s)}catch{console.error("not JSON");process.exit(1)}for(const d of j.deployments??[])console.log(d.url,d.state??d.readyState,new Date(d.created).toISOString(),d.meta?.githubCommitRef??"")})'
+   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let j;try{j=JSON.parse(s)}catch{console.error("not JSON; nothing printed");process.exit(1)}if(j?.error){console.error("API error:",j.error.code??"unknown");process.exit(1)}for(const d of j?.deployments??[])console.log(d.url,d.state??d.readyState,new Date(d.created).toISOString(),d.meta?.githubCommitRef??"")})'
    curl -s -o /dev/null -w '%{http_code}\n' https://<a preview url>/sign-in
    curl -s https://<a preview url>/sign-in | grep -oE "pk_(live|test)_" | sort -u
    ```
@@ -240,21 +290,44 @@ where a value is expected, use the dashboard path given beside each step.]
 7. **Supabase → production project → Settings → API Keys.** Record the NAMES
    of the secret keys and their masked prefixes. Part E uses them to tell
    which key Preview held.
-8. **Where the providers' webhooks point.** Needed only if Part B ends up on
-   Standard Protection, which also covers production's generated
-   `*.vercel.app` URLs. OpenAI (the `realtime.call.incoming` endpoint),
-   Telnyx (TeXML app and messaging profile), Resend and Stripe must each name
-   `https://app.bis-rgv.com/...`, as the runbooks set them up
-   (`voice-setup.md`, `a2p-registration.md`, `stripe-billing.md`). The
-   original voice plan used `bis-platform-six.vercel.app`
+8. **Where the providers' webhooks point, and `APP_ORIGIN`.** This step is
+   needed only if Part B ends up on Standard Protection, which also covers
+   production's generated `*.vercel.app` URLs. Each provider must name
+   `https://app.bis-rgv.com/...`:
+   - OpenAI (the `realtime.call.incoming` endpoint) and Telnyx (the TeXML
+     app and the messaging profile), as `voice-setup.md` and
+     `a2p-registration.md` set them up;
+   - Stripe, as `stripe-billing.md` sets it up;
+   - Resend, whose webhook was registered during M1b (2026-07-29,
+     `docs/superpowers/plans/2026-07-29-m1b-messaging.md`) and is not in any
+     runbook, so read its URL in Resend's dashboard.
+
+   The original voice plan used `bis-platform-six.vercel.app`
    (`docs/superpowers/plans/2026-08-24-voice-core.md:2614-2616`), so any
-   endpoint still on that host would be blocked. Move it to `app.bis-rgv.com` before
-   Part B.
+   endpoint still on that host would be blocked. Move it to
+   `app.bis-rgv.com` before Part B.
+
+   Also confirm, by name in A1's baseline, that `APP_ORIGIN` has `production`
+   in its targets. Without it, these fall back to the deployment's own
+   `vercel.app` origin, which Standard Protection blocks:
+   - the TeXML `<Dial action>` and status callbacks Telnyx calls back on
+     (`apps/web/src/app/api/voice/texml/route.ts:541-543`);
+   - the cron's links (`apps/web/src/app/api/cron/reminders/route.ts:54`);
+   - the voice webhook's email links
+     (`apps/web/src/app/api/voice/incoming/route.ts:999`).
+
+   With either check failing, use only "Only Preview Deployments".
 
 ## Part B — Deployment Protection for Preview
 
-**Skip if** A2 already shows `ssoProtection.deploymentType` of `preview` or
-`prod_deployment_urls_and_all_previews`, and A3's preview answered 401.
+**Done 2026-10-07** (see the status block). Kept for a rebuild or a
+rollback.
+
+**Skip if** A2 already shows `ssoProtection.deploymentType` of `preview`,
+`prod_deployment_urls_and_all_previews` or `all_except_custom_domains`
+[assumption: the last is the API's name for a scope covering every
+deployment URL except custom domains; treat it like Standard Protection and
+do A8], and A3's preview answered 401 or redirected to a Vercel login.
 
 1. Turn on Vercel Authentication, scope **Only Preview Deployments**.
 
@@ -295,9 +368,16 @@ unchanged. Then, at least 45 minutes after the change, read the next hourly
 `ops-health.yml` run, or start one with `gh workflow run ops-health.yml`. It
 is green only if a cron tick has completed in the last 45 minutes, so green
 proves that Vercel's cron still reaches the app. With Standard Protection,
-also confirm that a Telnyx, Resend or Stripe webhook has landed since the
-change (Vercel's runtime logs for `/api/sms/inbound`, `/api/webhooks/resend`,
-`/api/webhooks/stripe`).
+also confirm, in Vercel's runtime logs, that each provider A8 covered has
+landed a request since the change and was not answered 401:
+- OpenAI on `/api/voice/incoming`;
+- Telnyx on `/api/voice/texml` (and its `<Dial action>` callbacks under
+  `/api/voice/texml/`) and on `/api/sms/inbound`;
+- Resend on `/api/webhooks/resend`;
+- Stripe on `/api/webhooks/stripe`.
+
+A provider that has sent nothing since the change is not yet verified. Say
+so in the notes rather than counting it as passed.
 
 **Roll back.**
 
@@ -310,8 +390,25 @@ printf '%s' '{"ssoProtection":null}' | api -X PATCH -H 'content-type: applicatio
 
 ## Part C — Preview onto the CI project, and no production credential on Preview
 
-**Skip the Supabase half if** A1 shows the three Supabase rows as
-Preview-only, and A4 shows only CI accounts. Do the rest anyway.
+**Skipping step 4.** Step 4 adds Preview's CI values. It is not needed if A1
+shows `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and
+`SUPABASE_SERVICE_ROLE_KEY` as case (b) and A4 shows only CI accounts.
+**Never skip these:**
+- taking `SUPABASE_DB_URL` off Preview and recording its case. A4 cannot see
+  it, because the app never reads it, so only A1's targets say what it was;
+- the rest of steps 2 and 3, for every other name that does not belong on
+  Preview.
+
+**Before every PATCH or DELETE below,** re-read the row and compare it with
+its baseline line:
+
+```bash
+row <id>; grep -F "<id>" "$B"
+```
+
+The two lines must name the same key and the same targets, and that key must
+be the one you mean to change. If anything differs, STOP. A mis-copied id
+changes some other variable, and a DELETE cannot be undone from the notes.
 
 The CI project (`bis-ci`, ref `odnobiodsftffphuuosz`) already exists. It is
 kept in parity with production (`ci-supabase-project.md` section 5), and it
@@ -323,12 +420,18 @@ unless that changes.
 1. **Supabase → `bis-ci` → Settings → API Keys →** create a secret key named
    `preview`. Give Preview a key of its own, not the `ci` key, so that either
    can be revoked without breaking the other.
-2. **Shared rows: take Preview off, and Production keeps its value.** For
-   each row A1 found shared with Production that must leave Preview
-   (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
-   `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`, `VERCEL_API_TOKEN`, and
-   the Clerk pair if A3 printed `pk_live_`), set its targets to Production
-   only:
+2. **Rows that must leave Preview but have another target: drop `preview`
+   from their targets.** Production, and Development, keep their value. This
+   covers every case (a) row that must leave Preview, and every case (b) row
+   that also targets `development`. The names that must leave Preview are:
+   - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and
+     `SUPABASE_SERVICE_ROLE_KEY`, unless step 4 is skipped;
+   - `SUPABASE_DB_URL` and `VERCEL_API_TOKEN`, always;
+   - the Clerk pair, if A3 printed `pk_live_`;
+   - every name in "Never on Preview" and "Leave unset on Preview" below
+     (for example `APP_ORIGIN`).
+
+   Send the row's baseline targets minus `preview`:
 
    ```bash
    printf '%s' '{"target":["production"]}' \
@@ -336,23 +439,33 @@ unless that changes.
    | keep key target type
    ```
 
+   For a `development+preview+production` row, the body is
+   `["development","production"]`; for `development+preview`, it is
+   `["development"]`.
    [assumption: a PATCH may carry `target` without `value`, Sensitive rows
-   included. If it refuses, add a Production-only row with the same value
-   BEFORE deleting the shared one, so that Production is never without it.
-   Only the owner can do that, because it needs the value.]
+   included. If it refuses, first add a row with the same value and the
+   remaining targets, then delete the old one, so that Production is never
+   without it. Only the owner can do that, because it needs the value.]
    `VERCEL_TEAM_ID` may stay shared: it is an id, not a credential.
-3. **Preview-only rows that name production: delete them.**
+3. **Rows whose targets are exactly `preview`: delete them,** for the same
+   list of names as step 2.
 
    ```bash
    api -X DELETE "$V/v9/projects/$P/env/<id>?teamId=$T" | keep key target
    ```
 
-   Do this for `SUPABASE_DB_URL` whatever it names: no running code reads it.
-   Only the test suites and the CI tools do. Do it for every name in "Never
-   on Preview" below. Write down which rows held production values (from A1:
-   case (a), or a case (b) the owner revealed as production's, or a case (c)
-   that cannot be told apart). Part E rotates exactly those, and treats
-   "cannot tell" as production's.
+   Never DELETE a row whose targets include anything besides `preview`:
+   that removes it from Production or Development too. Use step 2 for it.
+   `SUPABASE_DB_URL` leaves Preview whatever it names: no running code reads
+   it, only the test suites and the CI tools do.
+
+   Write down which rows held production values:
+   - every case (a) row;
+   - a case (b1) row the owner revealed as production's;
+   - a case (b1) or (b2) row that cannot be told apart. Part E treats
+     "cannot tell" as production's.
+
+   Part E rotates exactly those.
 4. **Add Preview's CI values.** Vercel refuses a second row with the same
    name and target (`ENV_ALREADY_EXISTS`). The dashboard's "Add New" fails
    silently in the same case, so the old row comes out first (steps 2 and 3).
@@ -387,12 +500,32 @@ unless that changes.
 
 **Verify.**
 
-- `envs | sort`: every row with `preview` in its targets is in the first
-  three rows of "What may live on Preview" below. None is in "Never on
-  Preview". The three Supabase rows and `CLERK_SECRET_KEY` are `preview` only.
-- Every row A1 recorded as shared still has `production` in its targets. A
-  lost Production row breaks nothing until the next push to main, which is
-  why it is checked now.
+- **No row was lost from Production or Development.** Compare every name
+  that had a `production` (then `development`) row in the baseline against
+  the listing now:
+
+  ```bash
+  envs | sort > "$B.after"
+  lost() { awk -F'\t' -v t="$1" '
+    function has(s) { return ("+" s "+") ~ ("\\+" t "\\+") }
+    NR == FNR { if (has($2)) { want[$1] = 1; id[$4] = $1 } ; next }
+    has($2) { have[$1] = 1; still[$4] = 1 }
+    END {
+      for (k in want) if (!(k in have)) { print "LOST from " t ": " k; bad = 1 }
+      for (i in id) if (!(i in still)) print "note: " t " row " id[i] " (" i ") changed id"
+      exit bad }' "$B" "$B.after"; }
+  lost production && lost development && echo "baseline Production and Development names all still present"
+  ```
+
+  Any `LOST` line is a variable that a mis-copied id took away. Restore it
+  before the next push to main, because a lost Production row breaks nothing
+  until the next production build. A `changed id` note is expected only
+  where step 2's add-then-delete fallback was used.
+- `awk -F'\t' '("+" $2 "+") ~ /\+preview\+/' "$B.after"` lists the rows
+  that are still on Preview. Every one of them is in the first three rows of "What may
+  live on Preview" below, and none is in "Never on Preview" or "Leave unset
+  on Preview". The three Supabase rows and `CLERK_SECRET_KEY` are `preview`
+  only, and no `SUPABASE_DB_URL` row has `preview`.
 - On the new preview, sign in and open `/dashboard/accounts`. It lists Test
   Client One and any e2e fixture accounts, and none of the real clients'
   accounts. It has no row named Bespoke Intelligent Solutions, a production
@@ -410,10 +543,9 @@ Test Client One (the same rule `CLAUDE.md` sets for specs), and check
 disposable (`ci-supabase-project.md` section 8): a rebuild drops anything
 created from a preview.
 
-**Roll back.** PATCH the step-2 rows back to
-`{"target":["production","preview"]}`, delete the step-4 rows, and build a
-new preview. Rows deleted in step 3 cannot be restored from the notes,
-because the notes hold names only. Rolling back re-opens path 2, so treat it
+**Roll back.** PATCH the step-2 rows back to their targets in the baseline
+file, delete the step-4 rows, and build a new preview. Rows deleted in step 3
+cannot be restored from the baseline, because it holds no values. Rolling back re-opens path 2, so treat it
 as a stopgap.
 
 ## Part D — remove the development Clerk provider from production Supabase
@@ -444,7 +576,9 @@ is the same literal that `screenshots.yml` uses. The request reads one
 account id and prints only the status. The token is minted and spent in one
 line because Clerk session tokens are short-lived [assumption: about 60
 seconds]. If the console reports a CORS error, run the same request with
-`curl` straight after minting the token.
+`curl` straight after minting the token. Hand the token over through a
+variable read with `read -rs`. Never paste the token into a chat or a log:
+until it expires, it is a working session.
 
 | | Development tab | Production tab |
 |---|---|---|
@@ -525,12 +659,13 @@ was retired with the shared-secret intake route (#156). If A1 finds it
 anywhere, delete it, from Production too, and from the bis-website project.
 Nothing reads it, so there is nothing to rotate.
 
-**Single-value secrets are an outage window.** Four of the credentials above
+**Single-value secrets are an outage window.** Six of the credentials above
 have one live value on each side: `OPENAI_WEBHOOK_SECRET`,
-`RESEND_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_SECRET` and `SOFIA_WEB_SECRET`. For
-those, the time between the provider change and the production redeploy is
-an outage for that path. Do them outside business hours, one at a time, with
-the redeploy ready before the provider change.
+`RESEND_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_SECRET`, `SOFIA_WEB_SECRET`,
+`CRON_SECRET` and `OPS_HEALTH_SECRET`. For those, the time between the
+change on the other side and the production redeploy is an outage for that
+path. Do them outside business hours, one at a time, with the redeploy ready
+before the change.
 - With `OPENAI_WEBHOOK_SECRET` stale, every inbound call is refused with 400
   (`apps/web/src/app/api/voice/incoming/route.ts:731-736`). [assumption: an
   OpenAI project can hold a second webhook endpoint for the same URL. If so,
@@ -540,26 +675,40 @@ the redeploy ready before the provider change.
   only delay.
 - `SOFIA_WEB_SECRET` fails the website's "Talk to Sofía" until BOTH projects
   are redeployed.
+- With `CRON_SECRET` mismatched, `/api/cron/reminders` answers 401 and that
+  tick's passes do not run. The next tick, 15 minutes later, recovers once
+  both sides agree. [assumption: Vercel's cron sends the project's current
+  `CRON_SECRET`, which can differ from the one the running deployment checks
+  until the redeploy.]
+- With `OPS_HEALTH_SECRET` mismatched, the hourly `ops-health.yml` run goes
+  red with a 401. Nothing breaks for clients, but the alarm is wrong. Update
+  the repository secret straight after the redeploy, then run
+  `gh workflow run ops-health.yml`.
 
-**Rotating the Supabase secret key has three more effects.** While
-`FORM_TOKEN_SECRET` is unset, the render-token key is derived from that key
-(`apps/web/src/lib/forms/guards.ts:36-42`), and so is the voice fallback
-ticket's key (`apps/web/src/lib/voice/fallback-ticket.ts:38`). Changing
-the key therefore has these effects:
-- Every render token issued before the redeploy becomes invalid. Tokens live
+**Rotating the Supabase secret key has three more effects.** Two keys are
+derived from it:
+- The render-token key is derived from it while `FORM_TOKEN_SECRET` is unset
+  (`apps/web/src/lib/forms/guards.ts:36-42`).
+- The voice fallback ticket's key is ALWAYS derived from it, with no override
+  (`apps/web/src/lib/voice/fallback-ticket.ts:37-40`).
+
+Changing the Supabase secret key therefore has these effects:
+- Unless `FORM_TOKEN_SECRET` is set, every render token issued before the
+  redeploy becomes invalid. Tokens live
   30 minutes (`guards.ts:19`), and they fail silently. A form submitted from
   an old page is filed as spam behind a success message. A booking returns
   the same fake success and books nothing
   (`apps/web/src/app/b/[publicId]/actions.ts:222-236`). A website chat
   refuses to start
   (`apps/web/src/app/api/concierge/[publicId]/turn/route.ts:206-244`).
-- The IP-hash rate-limit counts restart (`guards.ts:128-130`).
-- A model-down fallback ticket minted in the 10 minutes before the redeploy
-  stops verifying.
+- Unless `FORM_TOKEN_SECRET` is set, the IP-hash rate-limit counts restart
+  (`guards.ts:128-130`).
+- Always: a model-down fallback ticket minted in the 10 minutes before the
+  redeploy stops verifying (`fallback-ticket.ts:35`).
 
 Rotate outside business hours. Which Supabase key to replace: only in A1's
-case (b), with a prefix matching a key in A7's list that is not Production's,
-delete that key, and you are done. In every other case, including "cannot
+case (b1), with a prefix matching a key in A7's list that is not
+Production's, delete that key, and you are done. In every other case, including "cannot
 tell", treat the key as Production's. Create a new key and switch Production
 to it (`sensitive`, Production only). Redeploy, verify the smoke and one
 `ops-health.yml` run, then delete the old key. [assumption: Supabase lists
@@ -576,8 +725,14 @@ first, then disable the legacy keys.]
   a freshly loaded page, on an account made for the purpose, never a live
   client's.
 - For a voice or SMS credential: one test call or text.
+- For `VERCEL_API_TOKEN`: on the redeployed production, open the Website
+  page of an account with a linked site. It still shows visitor numbers. If
+  instead it shows no projects, the new token is missing or lacks the team
+  scope (`website-setup.md` Part A). Check this BEFORE revoking the old
+  token.
 
-Then confirm the old value is gone from the provider's list.
+Only after every check passes, revoke the old value. Then confirm it is gone
+from the provider's list.
 
 ### E2. The development Clerk secret key
 
@@ -592,8 +747,9 @@ repository secret, on Preview and in local env files, so it is rotated too.
 2. Put the new key in these places:
    - The repository secret `CLERK_SECRET_KEY`: Remove, then add. Paste it
      straight into GitHub, never into a chat.
-   - Vercel Preview's `CLERK_SECRET_KEY`: delete the Preview row, then
-     `add CLERK_SECRET_KEY sensitive`.
+   - Vercel Preview's `CLERK_SECRET_KEY`: re-read the row with `row <id>`
+     as Part C requires, delete it only if its targets are exactly
+     `preview`, then `add CLERK_SECRET_KEY sensitive`.
    - Vercel's Development environment, if A1 found the key there.
    - The local `apps/web/.env.local` and `packages/db/.env` (the integration
      suite reads the key from the latter). That is owner work: no agent
