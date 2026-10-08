@@ -1,10 +1,11 @@
 import { MessagesSquare } from "lucide-react";
-import { listConversations, listMessages } from "@bis/db";
+import { listConversations, getConversationSummary, listMessages } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { contactDisplayName } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
 import { cn } from "@/lib/utils";
+import { parseCursor, encodeCursor } from "@/lib/cursor";
 import { m } from "@/lib/messages";
 import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
@@ -15,19 +16,32 @@ import { sendEmailAction, markConversationReadAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
+/** One page of the inbox. A full page back is the only signal there may be
+ *  more — `listConversations` returns rows, not a total — so it also
+ *  decides whether the "Older" link renders (same idiom as calls/activity). */
+const PAGE_SIZE = 50;
+
 export default async function ConversationsPage({
   params,
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ c?: string }>;
+  searchParams: Promise<{ c?: string; before?: string }>;
 }) {
   const { accountId } = await params;
-  const { c } = await searchParams;
+  const { c, before } = await searchParams;
   const db = await dbForRequest();
-  const conversations = await listConversations(db, accountId);
+  // Validated once: an unparseable `?before=` reads as "no cursor" (page
+  // one) rather than throwing on a hand-editable URL — `parseCursor`'s own
+  // contract (lib/cursor.ts).
+  const cursor = parseCursor(before);
+  const conversations = await listConversations(db, accountId, { limit: PAGE_SIZE, before: cursor });
 
-  if (conversations.length === 0) {
+  // The COLD-START reading of zero rows: no `?before=` cursor, so this is
+  // page one and there is nothing behind it either — an account that has
+  // genuinely never had a conversation. A cursored zero (below, inside the
+  // normal render) means real history, just none older than the cursor.
+  if (conversations.length === 0 && !cursor) {
     return (
       <>
         <PageHeader title={m["nav.conversations"]} />
@@ -43,12 +57,27 @@ export default async function ConversationsPage({
   }
 
   const base = `/dashboard/accounts/${accountId}/conversations`;
+  const last = conversations[conversations.length - 1];
+  const olderHref = conversations.length === PAGE_SIZE && last
+    ? `${base}?${new URLSearchParams({ before: encodeCursor({ v: last.lastMessageAt, id: last.id }) })}`
+    : undefined;
+  const newerHref = cursor ? base : undefined;
+
   // No auto-selection. Falling back to conversations[0] meant that simply
   // landing on this screen opened the newest thread, which — now that opening a
   // thread clears its unread count — marked the newest inbound lead as read
   // before anyone had chosen to look at it. The badge is only worth anything if
   // it survives until a real open.
-  const active = c ? conversations.find((conversation) => conversation.id === c) : undefined;
+  //
+  // `getConversationSummary` is the fallback, not the first read: a link
+  // naming a conversation (an unread badge, a search hit) has no idea which
+  // PAGE of this now-paged list it would fall on, and the common case — the
+  // thread IS on the page already in hand — costs nothing extra by checking
+  // there first.
+  const active = c
+    ? (conversations.find((conversation) => conversation.id === c)
+      ?? (await getConversationSummary(db, accountId, c)) ?? undefined)
+    : undefined;
   const messages = active ? await listMessages(db, accountId, active.id) : [];
 
   return (
@@ -62,7 +91,13 @@ export default async function ConversationsPage({
             thread (with its own Back link) once something is — `lg:block`
             brings the list back for the real two-column layout. */}
         <div className={cn(active ? "hidden lg:block" : "block")}>
-          <ConversationList conversations={conversations} base={base} activeId={active?.id} />
+          <ConversationList
+            conversations={conversations}
+            base={base}
+            activeId={active?.id}
+            olderHref={olderHref}
+            newerHref={newerHref}
+          />
         </div>
         {active ? (
           <div className="min-w-0 space-y-3">

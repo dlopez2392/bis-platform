@@ -790,6 +790,10 @@ export const m = {
   "conversations.status.opened": "Opened",
   "conversations.status.bounced": "Bounced",
   "conversations.status.failed": "Failed",
+  // D-019's pager (DESIGN.md "Paged lists"): exactly one, Older/Newer,
+  // carrying `?before=`.
+  "conversations.older": "Older",
+  "conversations.newer": "Newer",
   // D-017: the plain-language reason shown next to a bounced/failed
   // message, never the provider's own words (DESIGN.md's "no provider
   // jargon/codes" rule) — see lib/email/failure-reason.ts, the one place
