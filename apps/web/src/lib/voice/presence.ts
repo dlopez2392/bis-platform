@@ -1,6 +1,7 @@
 // apps/web/src/lib/voice/presence.ts
 import { hasActiveCallSince, serviceDb } from "@bis/db";
 import { listAnsweredCallStartsBetween } from "@/lib/reports/weekly-metrics";
+import { lastWeekMonday, weekWindow } from "@/lib/reports/weekly-window";
 
 export type VoicePresence = { onCall: boolean; weekCount: number };
 
@@ -21,9 +22,17 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
  * this stays testable with a mocked `@bis/db` — the same house shape
  * registry.test.ts uses (mock the specific @bis/db reads this function
  * calls, not a chainable fake supabase client). See presence.test.ts.
+ *
+ * `zone` (D-075): the ACCOUNT's own IANA zone, not UTC. Until 2026-10-08
+ * "this week" rolled over at UTC midnight Monday regardless of the account's
+ * own clock, so a Chicago client's week could already have turned over
+ * locally — or not yet have, five hours either side of UTC's own boundary —
+ * while the topbar disagreed. The caller resolves the zone (same fallback
+ * discipline `resolveAccountZone`/`renderZone` use elsewhere); this function
+ * only consumes it.
  */
 export async function getVoicePresence(
-  db: ReturnType<typeof serviceDb>, accountId: string, now: Date,
+  db: ReturnType<typeof serviceDb>, accountId: string, now: Date, zone: string,
 ): Promise<VoicePresence> {
   // onCall: "a `calls` row with `ended_at IS NULL AND started_at > now-1h`"
   // (brief's own predicate) — delegated to hasActiveCallSince
@@ -32,40 +41,26 @@ export async function getVoicePresence(
   // unfinished row must age out, not pin the indicator on forever).
   const oneHourAgo = new Date(now.getTime() - ONE_HOUR_MS).toISOString();
 
-  // weekCount: calls ANSWERED since the start of the current week — UTC
-  // week, per the brief ("account tz not required... label says 'this
-  // week'"). Through the Monday report's own answered-calls read: the label
-  // says "handled", and until 2026-10-06 this was `countCallsSince` (every
+  // weekCount: calls ANSWERED since the start of the current week, in the
+  // ACCOUNT's own zone (D-075) — through the Monday report's own
+  // answered-calls read, so "handled" means what the report's "calls
+  // answered" means. Until 2026-10-06 this was `countCallsSince` (every
   // row), which counted robocalls and the agency's test calls as handled.
   // `countCallsSince` stays what the call CAPS read — those must count every
   // call that cost money, which is a different question.
-  const weekStart = startOfIsoWeekUtc(now).toISOString();
+  //
+  // The boundary itself is `weekly-window.ts`'s own Monday-start convention,
+  // re-derived rather than re-implemented: `lastWeekMonday(now, zone)` is the
+  // Monday of the week that has just ENDED (last week's, if `now` sits
+  // inside the current week), and `weekWindow(...).toIso` is local midnight
+  // of the Monday SEVEN DAYS after that — i.e. the start of `now`'s own
+  // current week. Sharing this with the Monday report's own window math is
+  // what keeps the two from drifting into two different week-boundary rules.
+  const weekStart = weekWindow(lastWeekMonday(now, zone), zone).toIso;
 
   const [onCall, answered] = await Promise.all([
     hasActiveCallSince(db, accountId, oneHourAgo),
     listAnsweredCallStartsBetween(db, accountId, weekStart, now.toISOString()),
   ]);
   return { onCall, weekCount: answered.length };
-}
-
-/**
- * Midnight UTC on the Monday of `now`'s UTC week — ISO-8601's Monday-start
- * convention, chosen because no week-boundary convention already exists
- * anywhere else in this tree to match (booking-page.tsx's own `weekStart` is
- * a rolling 7-day window from "today", not a calendar week) and the label
- * ("this week") is generic enough that any single consistent choice
- * satisfies it. Pinned by presence.test.ts's own boundary cases — changing
- * the day this resets on is a deliberate, visible diff there, not silent
- * drift.
- *
- * Built off `getUTCDay()`, never a locale-aware API: Intl formats in the
- * SYSTEM zone (the repo's own recorded timezone-test lesson), and this must
- * be pinned to UTC regardless of the machine's zone or the account's.
- */
-function startOfIsoWeekUtc(now: Date): Date {
-  const day = now.getUTCDay(); // Sun=0 .. Sat=6
-  const daysSinceMonday = day === 0 ? 6 : day - 1;
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  start.setUTCDate(start.getUTCDate() - daysSinceMonday);
-  return start;
 }

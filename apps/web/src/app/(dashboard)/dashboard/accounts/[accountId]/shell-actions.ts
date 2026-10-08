@@ -6,6 +6,7 @@ import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { deriveSetupStatus, reduceSetupProgress } from "@/lib/setup/setup-status";
 import type { ReadKey } from "@/lib/setup/setup-view";
 import { getVoicePresence, type VoicePresence } from "@/lib/voice/presence";
+import { resolveAccountZone } from "@/lib/booking/followup-timing";
 
 /**
  * Exactly the reads `deriveSetupStatus`'s `done` computations touch (fix-round
@@ -148,7 +149,19 @@ async function readPresence(
   try {
     const profile = await getVoiceProfile(db, accountId);
     if (!profile || !profile.enabled) return null;
-    return await getVoicePresence(db, accountId, new Date());
+    // D-075: "this week" is measured in the ACCOUNT's own zone, not UTC —
+    // read only now that a presence read is actually going to happen (an
+    // account with no enabled voice profile never pays for this query).
+    // `resolveAccountZone` falls back to `null` on an unusable value; "UTC"
+    // here is the SAME clamp the old UTC-only implementation effectively
+    // always used, so a broken zone keeps today's behavior rather than
+    // throwing. Not `renderZone`'s heavier agency-zone escalation — that
+    // queries a second table for a topbar indicator whose own contract is
+    // "degrade to null on any failure", not a KPI screen several numbers
+    // must agree with to the hour.
+    const { data: account } = await db.from("accounts").select("timezone").eq("id", accountId).maybeSingle();
+    const zone = resolveAccountZone((account as { timezone: string | null } | null)?.timezone) ?? "UTC";
+    return await getVoicePresence(db, accountId, new Date(), zone);
   } catch (error) {
     console.error(
       `getShellSnapshot: presence read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,
