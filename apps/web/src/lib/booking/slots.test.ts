@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { computeSlots, zonedTimeToUtc, partsInZone, normalizeOpenHours, type SlotConfig, type OpenHours, type Range } from "./slots";
+import { computeSlots, bookableRange, zonedTimeToUtc, partsInZone, normalizeOpenHours, type SlotConfig, type OpenHours, type Range } from "./slots";
 
 const CFG: SlotConfig = {
   timezone: "America/Chicago", slotDurationMinutes: 60, bufferMinutes: 0,
@@ -94,6 +94,9 @@ describe("computeSlots", () => {
     ]);
   });
 
+  // The walk carries an iteration cap and fails CLOSED when it trips, so if the
+  // forward-only guard below is ever removed this test goes red (no slots)
+  // instead of hanging the worker. Mutation: drop the guard → [] → FAILS.
   it("D-028: a re-anchor that would step BACKWARDS on the wall clock (fall-back) still moves forward and terminates", () => {
     // Candidate 01:50 CDT (06:50Z) runs into a booking that ends at 01:10 CST
     // (07:10Z). Read on the wall clock, "the booking's end" is 01:10 — EARLIER
@@ -110,6 +113,21 @@ describe("computeSlots", () => {
       const overlaps = s.startsAt.getTime() < booking.endsAt.getTime() && booking.startsAt.getTime() < s.endsAt.getTime();
       expect(overlaps).toBe(false);
     }
+  });
+
+  it("D-028: a 120-minute slot after a 60-minute booking re-anchors BEFORE the next grid point (10:15, not 11:00)", () => {
+    // The re-anchor (10:15) is earlier than the grid step (09:00 + 120 = 11:00).
+    // Mutation: compare the re-anchor against the NEXT grid point instead of
+    // this candidate (`next > candMinutes`) → 11:00, 13:00, 15:00 → FAILS.
+    const mon9 = zonedTimeToUtc(2026, 9, 7, 9, 0, CFG.timezone)!;
+    const mon10 = zonedTimeToUtc(2026, 9, 7, 10, 0, CFG.timezone)!;
+    const slots = computeSlots({ ...CFG, slotDurationMinutes: 120, bufferMinutes: 15 },
+      [{ startsAt: mon9, endsAt: mon10 }], NOW);
+    const monday = slots
+      .map((s) => partsInZone(s.startsAt, CFG.timezone))
+      .filter((p) => p.d === 7)
+      .map((p) => `${String(p.hh).padStart(2, "0")}:${String(p.mi).padStart(2, "0")}`);
+    expect(monday).toEqual(["10:15", "12:15", "14:15"]);
   });
 
   it("skips the nonexistent DST hour and handles the repeated one once", () => {
@@ -309,5 +327,78 @@ describe("computeSlots", () => {
     const cfg = { ...CFG, timezone: "Not/AZone" };
     expect(() => computeSlots(cfg, [], NOW)).not.toThrow();
     expect(computeSlots(cfg, [], NOW)).toEqual([]);
+  });
+});
+
+/**
+ * Review of D-028: the picker and the submit-time recheck must not disagree.
+ * Both submit paths used to accept only a start in computeSlots' CURRENT
+ * output, and since D-028 a booking earlier in the day re-anchors the later
+ * grid points — so a visitor who picked a still-free 13:00 was told "just
+ * taken" the moment someone else booked 09:00. `bookableRange` is the submit
+ * check now: the start is free (buffer both sides), fits the open hours with
+ * its whole duration, respects notice and horizon, and is a start the engine
+ * offers under SOME state of the day — the base grid, or a booking's
+ * end-plus-buffer re-anchor point and that point's own grid continuation.
+ */
+describe("bookableRange — the one submit-time predicate", () => {
+  const cfg: SlotConfig = { ...CFG, bufferMinutes: 15 };
+  const at = (h: number, mi = 0, d = 7) => zonedTimeToUtc(2026, 9, d, h, mi, CFG.timezone)!;
+  const nineToTen: Range = { startsAt: at(9), endsAt: at(10) };
+
+  it("THE scenario: 13:00 was offered, someone books 09:00, submitting 13:00 is still accepted (mutation: grid-membership-only check → FAILS)", () => {
+    expect(computeSlots(cfg, [], NOW).some((s) => s.startsAt.getTime() === at(13).getTime())).toBe(true);
+    // The engine itself no longer OFFERS 13:00 after the 09:00 booking (it
+    // offers 13:15) — which is exactly why grid membership cannot be the check.
+    expect(computeSlots(cfg, [nineToTen], NOW).some((s) => s.startsAt.getTime() === at(13).getTime())).toBe(false);
+    expect(bookableRange(cfg, [nineToTen], NOW, at(13))).toEqual({ startsAt: at(13), endsAt: at(14) });
+  });
+
+  it("accepts a re-anchor point and its continuation (10:15, 11:15 after a 09:00 booking)", () => {
+    expect(bookableRange(cfg, [nineToTen], NOW, at(10, 15))).toEqual({ startsAt: at(10, 15), endsAt: at(11, 15) });
+    expect(bookableRange(cfg, [nineToTen], NOW, at(11, 15))).not.toBeNull();
+  });
+
+  it("refuses what is not free: overlapping the booking, or inside its buffer on either side", () => {
+    expect(bookableRange(cfg, [nineToTen], NOW, at(9))).toBeNull();
+    expect(bookableRange(cfg, [nineToTen], NOW, at(10))).toBeNull();                         // inside the trailing buffer
+    expect(bookableRange(cfg, [{ startsAt: at(11), endsAt: at(12) }], NOW, at(10))).toBeNull(); // ends inside the leading buffer
+  });
+
+  it("refuses a start no state of the day would offer (a real slot + 17 minutes)", () => {
+    expect(bookableRange(cfg, [], NOW, at(13, 17))).toBeNull();
+    expect(bookableRange(cfg, [nineToTen], NOW, at(13, 17))).toBeNull();
+  });
+
+  it("refuses a slot that spills past the close, a closed day, inside notice, past the horizon, or a non-instant", () => {
+    expect(bookableRange(cfg, [], NOW, at(16, 30))).toBeNull();                               // ends 17:30
+    expect(bookableRange(cfg, [], NOW, zonedTimeToUtc(2026, 9, 9, 13, 0, CFG.timezone)!)).toBeNull(); // Wednesday: closed
+    expect(bookableRange({ ...cfg, minNoticeHours: 24 * 5 + 1 }, [], NOW, at(9))).toBeNull(); // Mon 09:00 is 4d20h out
+    expect(bookableRange({ ...cfg, maxAdvanceDays: 3 }, [], NOW, at(13))).toBeNull();         // Mon is day 5
+    expect(bookableRange(cfg, [], NOW, new Date(NaN))).toBeNull();
+    expect(bookableRange(cfg, [], NOW, new Date(at(13).getTime() + 30_000))).toBeNull();      // not a whole minute
+  });
+
+  it("fails closed on the same bad input the engine does (Invalid Date booking, NaN buffer, bad zone)", () => {
+    expect(bookableRange(cfg, [{ startsAt: new Date(NaN), endsAt: new Date(NaN) }], NOW, at(13))).toBeNull();
+    expect(bookableRange({ ...cfg, bufferMinutes: NaN }, [], NOW, at(13))).toBeNull();
+    expect(bookableRange({ ...cfg, timezone: "Not/AZone" }, [], NOW, at(13))).toBeNull();
+  });
+
+  it("every slot the engine offers passes it, across states and a fall-back day — picker ⊆ submit, so they cannot disagree", () => {
+    const fallBack: SlotConfig = { ...CFG, bufferMinutes: 15, minNoticeHours: 0, maxAdvanceDays: 30, openHours: { sun: [["00:00", "06:00"]] } };
+    const cases: [SlotConfig, Range[], Date][] = [
+      [cfg, [], NOW],
+      [cfg, [nineToTen], NOW],
+      [cfg, [nineToTen, { startsAt: at(12, 15), endsAt: at(13, 15) }], NOW],
+      [{ ...cfg, slotDurationMinutes: 120 }, [nineToTen], NOW],
+      [{ ...cfg, slotDurationMinutes: 45, bufferMinutes: 10 }, [{ startsAt: at(10, 7), endsAt: at(10, 52), }], NOW],
+      [fallBack, [{ startsAt: new Date("2026-11-01T07:00:00Z"), endsAt: new Date("2026-11-01T08:00:00Z") }], new Date("2026-10-31T12:00:00Z")],
+    ];
+    for (const [c, booked, now] of cases) {
+      const offered = computeSlots(c, booked, now);
+      expect(offered.length).toBeGreaterThan(0);
+      for (const s of offered) expect(bookableRange(c, booked, now, s.startsAt)).toEqual(s);
+    }
   });
 });

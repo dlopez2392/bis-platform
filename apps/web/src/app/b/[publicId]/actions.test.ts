@@ -571,6 +571,57 @@ describe("submitBookingAction — I1: the two previously-unpinned guards", () =>
     expect(createBookingMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * D-028's review, end to end through the REAL engine and predicate: the
+   * visitor picks a slot; before they submit, someone books an earlier time
+   * that same day, which (with a buffer) re-anchors every later grid point —
+   * the picker would no longer list the one they chose. It is still free, so
+   * the submit must take it, not answer "just taken".
+   */
+  it("D-028 review: a picked slot that is still free is accepted after an earlier booking re-anchors the day (mutation: back to list membership → FAILS)", async () => {
+    const cal = calendarRow({ buffer_minutes: 15 });
+    getCalendarByPublicIdMock.mockResolvedValue(cal);
+    const config: SlotConfig = {
+      timezone: accountRow.timezone, slotDurationMinutes: cal.slot_duration_minutes,
+      bufferMinutes: 15, minNoticeHours: cal.min_notice_hours, maxAdvanceDays: cal.max_advance_days,
+      openHours: cal.open_hours as SlotConfig["openHours"],
+    };
+    const base = computeSlots(config, [], new Date());
+    // A pick with an earlier same-day booking that removes it from the list.
+    let picked: { startsAt: Date; endsAt: Date } | null = null;
+    let earlier: { startsAt: Date; endsAt: Date } | null = null;
+    for (let k = 8; k < base.length && !picked; k++) {
+      const candidate = { startsAt: base[k - 4]!.startsAt, endsAt: base[k - 4]!.endsAt };
+      const after = computeSlots(config, [candidate], new Date());
+      if (!after.some((s) => s.startsAt.getTime() === base[k]!.startsAt.getTime())) {
+        picked = base[k]!;
+        earlier = candidate;
+      }
+    }
+    expect(picked, "precondition: some pick is re-anchored away by an earlier booking").not.toBeNull();
+    listBookedRangesMock.mockResolvedValue([
+      { starts_at: earlier!.startsAt.toISOString(), ends_at: earlier!.endsAt.toISOString() },
+    ]);
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ slotStartsAt: picked!.startsAt.toISOString() }));
+
+    expect(result).toMatchObject({ ok: true });
+    expect(createBookingMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT_ID,
+      expect.objectContaining({ startsAt: picked!.startsAt, endsAt: picked!.endsAt }), "public", "system");
+  });
+
+  it("a pick that the earlier booking's buffer really does cover is still refused", async () => {
+    getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ buffer_minutes: 15 }));
+    // Booked right up to the picked slot's start: the 15-minute buffer covers it.
+    listBookedRangesMock.mockResolvedValue([{
+      starts_at: new Date(slot.startsAt.getTime() - 30 * 60_000).toISOString(),
+      ends_at: slot.startsAt.toISOString(),
+    }]);
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").slotTaken, slotTaken: true });
+    expect(createBookingMock).not.toHaveBeenCalled();
+  });
+
   it("calendar disabled by submit time: generic error, no contact created (mutation: drop the enabled check → FAILS)", async () => {
     getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ enabled: false }));
 

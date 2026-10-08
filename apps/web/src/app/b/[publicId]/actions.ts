@@ -14,7 +14,7 @@ import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingAlertEmail, bookingConfirmationEmail } from "@/lib/email/templates/booking";
 import { composeBookingAlertSms, sendAlertSms } from "@/lib/sms/alerts";
 import { safeZone, formatWhen } from "@/lib/booking/time";
-import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
+import { computeAllSlots, bookableSlot, dayKeyInZone } from "@/lib/booking/availability";
 import {
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
   verifyRenderToken, hashIp, isValidEmail, isValidPhone, parseAttribution,
@@ -88,7 +88,7 @@ const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
  *
  *  THROWS on a query error rather than silently falling back to UTC — this
  *  row's `timezone` feeds BOTH the picker (`getSlotsAction`) and the
- *  submit-time recheck (`computeAllSlots` in `submitBookingAction`), so a
+ *  submit-time recheck (`bookableSlot` in `submitBookingAction`), so a
  *  transient failure that fell back quietly would make picker and recheck
  *  agree on the wrong zone rather than disagree: a 09:00-17:00 business
  *  becomes bookable at 03:00 local with nothing to catch it, because both
@@ -250,22 +250,22 @@ export async function submitBookingAction(publicId: string, formData: FormData):
 
     const startsAt = new Date(startsAtRaw);
     if (Number.isNaN(startsAt.getTime())) return { ok: false, error: s.genericError };
-    const endsAt = new Date(startsAt.getTime() + calendar.slot_duration_minutes * 60_000);
 
     // App-level re-check BEFORE any write (I2): a rejected instant must never
     // leave a contact row behind. This used to run after `createContact`,
     // which meant every "just taken" reply still injected a CRM row — no
     // booking, no trail beyond a name/email/phone written by whoever last hit
-    // the button, 5-10 minutes apart, one IP. Friendly message with fresh
-    // slots, computed the exact same way the picker itself was;
-    // `bookings_no_overlap` below is the actual guarantee against a race that
-    // lands between this check and the insert — this only saves a doomed
-    // write in the common case.
+    // the button, 5-10 minutes apart, one IP. `bookableSlot` is the one
+    // submit-time rule every booking path runs: free, fits, notice, horizon,
+    // and a start the engine offers under some state of the day — NOT "is it
+    // in the picker's current list", which a booking earlier in the day can
+    // shift (D-028's review). `bookings_no_overlap` below is the actual
+    // guarantee against a race that lands between this check and the insert —
+    // this only saves a doomed write in the common case.
     const now = new Date();
-    const stillFree = (await computeAllSlots(db, calendar, timezone, now)).some(
-      (s) => s.startsAt.getTime() === startsAt.getTime() && s.endsAt.getTime() === endsAt.getTime(),
-    );
-    if (!stillFree) return { ok: false, error: s.slotTaken, slotTaken: true };
+    const bookable = await bookableSlot(db, calendar, timezone, now, startsAt);
+    if (!bookable) return { ok: false, error: s.slotTaken, slotTaken: true };
+    const { endsAt } = bookable;
 
     // Video room, minted before the booking row exists (Task 3). No
     // ordering requirement forces this after `createBooking`: the real
