@@ -676,6 +676,41 @@ export async function removeTagFromContacts(
   if (error) throw new Error(error.message);
 }
 
+/**
+ * Every tag name for each of `contactIds`, as one comma-joined, alphabetized
+ * string per contact — `lib/contacts/csv.ts`'s own `splitTags` delimiter, so
+ * the CSV export's "tags" column round-trips through re-import unchanged
+ * (D-008: that column used to be hard-coded blank because no bulk read
+ * existed — only `listContactTags`, one contact at a time, which an export
+ * of thousands of rows cannot afford as an N+1). ONE query for however many
+ * ids the caller names. A contactId with no tags is simply ABSENT from the
+ * returned map, never an empty-string entry, so `.get(id) ?? ""` at the call
+ * site is the only place "no tags" turns into a blank cell.
+ */
+export async function listTagNamesForContacts(
+  db: SupabaseClient, accountId: string, contactIds: string[],
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (contactIds.length === 0) return result;
+  const { data, error } = await db.from("contact_tags")
+    .select("contact_id, tags(name)")
+    .eq("account_id", accountId)
+    .in("contact_id", contactIds);
+  if (error) throw new Error(`listTagNamesForContacts failed: ${error.message}`);
+  const byContact = new Map<string, string[]>();
+  for (const row of (data ?? []) as { contact_id: string; tags: { name: string } | null }[]) {
+    const name = row.tags?.name;
+    if (!name) continue;
+    const names = byContact.get(row.contact_id) ?? [];
+    names.push(name);
+    byContact.set(row.contact_id, names);
+  }
+  for (const [contactId, names] of byContact) {
+    result.set(contactId, [...names].sort().join(","));
+  }
+  return result;
+}
+
 /** The account's tag vocabulary, for pickers. Alphabetical. */
 export async function listTags(
   db: SupabaseClient, accountId: string,

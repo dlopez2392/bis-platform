@@ -6,7 +6,8 @@ import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
-         deleteContacts, addTagToContacts, removeTagFromContacts, listTags } from "../contacts";
+         deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
+         listTagNamesForContacts } from "../contacts";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -523,6 +524,20 @@ describe("bulk contact ops", () => {
       expect(await listContactTags(db, accountId, a.id)).toHaveLength(1);
       expect(await listContactTags(db, accountId, b.id)).toHaveLength(0);
       expect(await listContactTags(db, accountId, c.id)).toHaveLength(0);
+    }));
+
+  it("listTagNamesForContacts batches every contact's tags in ONE call, comma-joined and sorted, and omits an untagged contact entirely (D-008, mutation: return '' for every id → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId, { firstName: "A" }, "user_test");
+      const b = await createContact(db, accountId, { firstName: "B" }, "user_test");
+      const c = await createContact(db, accountId, { firstName: "C" }, "user_test"); // no tags
+      await addTagToContact(db, accountId, a.id, "urgent");
+      await addTagToContact(db, accountId, a.id, "vip");
+      await addTagToContact(db, accountId, b.id, "vip");
+      const map = await listTagNamesForContacts(db, accountId, [a.id, b.id, c.id]);
+      expect(map.get(a.id)).toBe("urgent,vip");
+      expect(map.get(b.id)).toBe("vip");
+      expect(map.has(c.id)).toBe(false);
     }));
 
   it("deleteContacts deletes unblocked ids and skips one linked to an opportunity", () =>
