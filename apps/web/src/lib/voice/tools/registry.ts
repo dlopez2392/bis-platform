@@ -537,12 +537,14 @@ export async function runTool(
       }
 
       // Book the NEW slot first — never leave the caller with nothing.
+      // D-035: the new row names the one it replaces (the same id cancelled
+      // just below), so every "bookings" count leaves the reschedule out.
       let newId: string; let newCancelToken: string;
       try {
         ({ id: newId, cancelToken: newCancelToken } = await createBooking(ctx.db, ctx.accountId, {
           calendarId: old.calendar_id, contactId: old.contact_id,
           startsAt: slot.startsAt, endsAt: slot.endsAt,
-          meetingUrl,
+          meetingUrl, rescheduledFromId: bookingId,
         }, "voice", "ai"));
       } catch (e) {
         if (e instanceof SlotTakenError) return { state, result: { ok: false, slotTaken: true, error: "that time was just taken" } };
