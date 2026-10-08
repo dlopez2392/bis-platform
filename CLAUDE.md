@@ -26,9 +26,14 @@
   developer's own machine before the server has to; it is a courtesy, not
   the control, and it does not exist in a fresh clone until that command is
   run.
-- CI (`verify` and `e2e`) runs on a separate Free Supabase project,
-  `odnobiodsftffphuuosz` (`bis-ci`), never on production's
-  (`tlbkbmlrfafquucsmsmm`); a guard in both jobs refuses production. Since
+- CI's `e2e` runs on a separate Supabase project, `odnobiodsftffphuuosz`
+  (`bis-ci`), never on production's (`tlbkbmlrfafquucsmsmm`). Since
+  2026-10-08 `verify` runs on neither: it starts a throwaway Supabase stack
+  inside its own runner (`.github/scripts/ci-local-supabase.sh`, bootstrap
+  then migrations), so it joins no repo-wide queue and branches' verify runs
+  go in parallel (~6 min, was 13–21 plus up to an hour of queue). A guard in
+  both jobs refuses production; in verify it refuses any cloud Supabase
+  value at all. Since
   #135, LOCAL runs refuse production too: the db suite, the integration
   suite, Playwright and the two live web tests all throw before connecting
   when any Supabase/PG* variable names production's ref, naming the
@@ -40,6 +45,11 @@
   Every new migration goes to
   the CI project FIRST (the `ci-project-setup.yml` workflow), then
   production, then a parity check (`docs/runbooks/ci-supabase-project.md`).
+  Since 2026-10-08 the `e2e` job enforces the first part: it fails, naming
+  each file, when a migration in the branch is not in the CI project's
+  history (`.github/scripts/ci-migrations-applied.sh`). verify no longer
+  can, because it builds its own database from the branch. Production and
+  parity are still checked by hand.
   Booking and calendar-settings specs run on the per-run fixture account —
   never point mutating specs at `Test Client One` or any live account.
 - **Only production credentials reach production data. DONE 2026-10-07.**
@@ -48,7 +58,7 @@
   Preview holds the Clerk development instance, the CI project (`bis-ci`)
   and non-secret config, behind Vercel Authentication, and never a
   production credential. The production credentials Preview had held were
-  rotated. `screenshots.yml` has been broken since then, until it moves to
-  the CI project. How it was done, how to verify it and how to roll it back:
+  rotated. `screenshots.yml` captures on the CI project since #197
+  (2026-10-08). How it was done, how to verify it and how to roll it back:
   `docs/runbooks/production-isolation.md`. Never describe Preview as sharing
   production's database, and never add a production credential to Preview.
