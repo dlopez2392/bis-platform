@@ -2,7 +2,7 @@
 
 import { headers } from "next/headers";
 import {
-  serviceDb, getCalendarByPublicId, createContact, createBooking, SlotTakenError,
+  serviceDb, getCalendarByPublicId, createContact, fillContactBlanks, createBooking, SlotTakenError,
   countRecentBookings, ensureConversation, createMessage,
   incrementUnreadCount,
 } from "@bis/db";
@@ -313,6 +313,26 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       console.error(`booking ${publicId}: setAttribution failed for contact ${contactId}: ${String(e)}`);
     }
 
+    // D-031: a RETURNING booker's new details fill the blanks on the contact
+    // the dedupe found — a first phone number, a surname — and never
+    // overwrite what is there. The forms path's rule (`fillBlanks`,
+    // lib/forms/enrich.ts), through its exported twin in @bis/db. The phone
+    // goes AS TYPED, the same R2-C1 rule as `createContact` above: the
+    // write's own `phoneFields` judges it. A value that DIFFERS from the one
+    // on file is not written; the thread below carries what was typed, so it
+    // is not lost either. Best-effort, its own try, for the same reason as
+    // the attribution above: it belongs to the contact, not the booking, and
+    // must never cost anyone their booking.
+    if (created.existing) {
+      try {
+        await fillContactBlanks(db, calendar.account_id, contactId, {
+          firstName, lastName: lastName || undefined, email, phone: phone || undefined,
+        }, ACTOR_ID, ACTOR_TYPE);
+      } catch (e) {
+        console.error(`booking ${publicId}: fillContactBlanks failed for contact ${contactId}: ${String(e)}`);
+      }
+    }
+
     let bookingId: string;
     let cancelToken: string;
     try {
@@ -352,7 +372,16 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       whenBookerZone = formatWhen(startsAt, bookerZone, locale);
       whenCompanyZoneForBooker = formatWhen(startsAt, timezone, locale);
       const convo = await ensureConversation(db, calendar.account_id, contactId, ACTOR_ID, ACTOR_TYPE);
-      const body = [`Booking: ${whenCompanyZone}`, ...(note ? [`Note: ${note}`] : [])].join("\n");
+      // The details as the booker TYPED them (D-031), the way a form
+      // submission's thread lists every answer: for a returning booker these
+      // can differ from what the contact holds, and the fill above never
+      // overwrites — this line is where staff see the difference.
+      const body = [
+        `Booking: ${whenCompanyZone}`,
+        `Email: ${email}`,
+        ...(phone ? [`Phone: ${phone}`] : []),
+        ...(note ? [`Note: ${note}`] : []),
+      ].join("\n");
       await createMessage(db, calendar.account_id, {
         conversationId: convo.id, channel: "form", direction: "inbound",
         subject: "Booking", body,

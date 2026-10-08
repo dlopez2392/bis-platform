@@ -6,6 +6,7 @@ const getCalendarByPublicIdMock = vi.fn();
 const listBookedRangesMock = vi.fn();
 const countRecentBookingsMock = vi.fn();
 const createContactMock = vi.fn();
+const fillContactBlanksMock = vi.fn();
 const createBookingMock = vi.fn();
 const ensureConversationMock = vi.fn();
 const createMessageMock = vi.fn();
@@ -115,6 +116,7 @@ vi.mock("@bis/db", () => ({
   listBookedRanges: (...a: unknown[]) => listBookedRangesMock(...a),
   countRecentBookings: (...a: unknown[]) => countRecentBookingsMock(...a),
   createContact: (...a: unknown[]) => createContactMock(...a),
+  fillContactBlanks: (...a: unknown[]) => fillContactBlanksMock(...a),
   createBooking: (...a: unknown[]) => createBookingMock(...a),
   ensureConversation: (...a: unknown[]) => ensureConversationMock(...a),
   createMessage: (...a: unknown[]) => createMessageMock(...a),
@@ -253,6 +255,7 @@ beforeEach(() => {
   listBookedRangesMock.mockReset().mockResolvedValue([]);
   countRecentBookingsMock.mockReset().mockResolvedValue(0);
   createContactMock.mockReset().mockResolvedValue({ id: "contact_1", existing: false });
+  fillContactBlanksMock.mockReset().mockResolvedValue([]);
   createBookingMock.mockReset().mockResolvedValue({ id: "booking_1", cancelToken: "tok_1" });
   ensureConversationMock.mockReset().mockResolvedValue({ id: "convo_1", created: true });
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
@@ -390,6 +393,75 @@ describe("submitBookingAction — happy path", () => {
     const body = createMessageMock.mock.calls[0]![2].body as string;
     expect(body).toMatch(/^Booking: /);
     expect(body).toContain("Please call ahead");
+  });
+});
+
+/**
+ * D-031. `createContact` returns the EXISTING contact when the email or phone
+ * matches, and writes nothing to it — so a returning booker's first phone
+ * number (or a name they never gave before) was dropped on the floor. The
+ * rule is the forms path's (`fillBlanks` in lib/forms/enrich.ts): fill what
+ * is blank, never overwrite what is there. Its exported twin in @bis/db,
+ * `fillContactBlanks`, is what this action calls. A value that DIFFERS from
+ * the one on file is not written — and is not lost either: the booking's
+ * thread carries the email and phone exactly as the booker typed them, the
+ * way a form submission's thread lists every answer.
+ */
+describe("submitBookingAction — D-031: a returning booker's new details fill the blanks", () => {
+  it("a returning booker: fillContactBlanks gets this booking's details, phone AS TYPED, with the public/system pair (mutation: drop the call → FAILS)", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ phone: "(956) 555-0199" }));
+
+    expect(result.ok).toBe(true);
+    expect(fillContactBlanksMock).toHaveBeenCalledTimes(1);
+    expect(fillContactBlanksMock).toHaveBeenCalledWith(
+      expect.anything(), ACCOUNT_ID, "contact_existing",
+      { firstName: "Maria", lastName: "Lopez", email: "maria@example.com", phone: "(956) 555-0199" },
+      "public", "system",
+    );
+    // Filled before the booking exists, beside the attribution write: both
+    // belong to the CONTACT, not to this booking.
+    expect(fillContactBlanksMock.mock.invocationCallOrder[0]!)
+      .toBeLessThan(createBookingMock.mock.invocationCallOrder[0]!);
+  });
+
+  it("a new contact: nothing to fill — createContact already wrote every field", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(fillContactBlanksMock).not.toHaveBeenCalled();
+  });
+
+  it("blank optional fields are not passed as values (an absent phone never reaches the fill)", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+    await submitBookingAction(PUBLIC_ID, validFormData({ phone: "", lastName: "" }));
+    const input = fillContactBlanksMock.mock.calls[0]![3] as Record<string, unknown>;
+    expect(input.phone).toBeUndefined();
+    expect(input.lastName).toBeUndefined();
+  });
+
+  it("a fill failure never costs the booking — still ok:true, booking still created", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+    fillContactBlanksMock.mockRejectedValueOnce(new Error("db down"));
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(createBookingMock).toHaveBeenCalled();
+  });
+
+  it("the thread carries the email and phone as the booker typed them, so a number that differs from the one on file is not lost (mutation: drop the lines → FAILS)", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+    await submitBookingAction(PUBLIC_ID, validFormData({ phone: "(956) 555-0199" }));
+    const body = createMessageMock.mock.calls[0]![2].body as string;
+    expect(body).toMatch(/^Booking: /);
+    expect(body.split("\n")).toContain("Email: maria@example.com");
+    expect(body.split("\n")).toContain("Phone: (956) 555-0199");
+  });
+
+  it("no phone given, no Phone line", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData({ phone: "" }));
+    const body = createMessageMock.mock.calls[0]![2].body as string;
+    expect(body).not.toMatch(/^Phone:/m);
   });
 });
 
