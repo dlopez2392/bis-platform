@@ -503,16 +503,17 @@ describe("POST /api/voice/incoming — the counting seam exists for real", () =>
     expect(typeof real.countCallerHistorySince).toBe("function");
 
     // A chainable Supabase stub: every builder method returns the chain, and
-    // awaiting it yields a count response. The SPAM query is the one that
-    // never calls `.neq`, so the two halves are told apart by the query the
-    // real function actually builds rather than by call order.
+    // awaiting it yields a count response. The three counts are told apart by
+    // the query the real function actually builds rather than by call order:
+    // OTHER calls `.neq`, ANSWERED calls `.in`, SPAM calls neither. Each gets
+    // a distinct count, so a field wired to the wrong query fails here.
     const makeChain = () => {
       const seen: (string | symbol)[] = [];
       const chain: unknown = new Proxy({}, {
         get(_t, prop) {
           if (prop === "then") {
-            const isOther = seen.includes("neq");
-            return (resolve: (v: unknown) => void) => resolve({ count: isOther ? 0 : 2, error: null });
+            const count = seen.includes("neq") ? 0 : seen.includes("in") ? 5 : 2;
+            return (resolve: (v: unknown) => void) => resolve({ count, error: null });
           }
           return (...args: unknown[]) => { seen.push(prop); void args; return chain; };
         },
@@ -523,7 +524,7 @@ describe("POST /api/voice/incoming — the counting seam exists for real", () =>
 
     await expect(
       real.countCallerHistorySince(stubDb, "acct1", "+19562921696", new Date().toISOString()),
-    ).resolves.toEqual({ spamCalls: 2, otherCalls: 0 });
+    ).resolves.toEqual({ spamCalls: 2, otherCalls: 0, answeredCalls: 5 });
   });
 });
 
