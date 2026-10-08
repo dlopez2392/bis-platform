@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { assertCiTarget, assertPgResolvesTo, describeCiTarget, PRODUCTION_SUPABASE_REF } from "./target";
+import {
+  assertCiTarget, assertLocalStackTarget, assertPgResolvesTo, describeCiTarget, describeLocalStackTarget,
+  PRODUCTION_SUPABASE_REF,
+} from "./target";
 
 /**
  * The one guard between a CI-only write tool (`db:push:ci`, `ci:seed`) and the
@@ -342,6 +345,96 @@ describe("assertPgResolvesTo", () => {
   it("does not echo the URL", () => {
     let message = "";
     try { assertPgResolvesTo(`${base.replace(":pw@", ":Secretpass123@")}?host=evil.example`, want); } catch (e) { message = (e as Error).message; }
+    expect(message).not.toBe("");
+    expect(message).not.toContain("Secretpass123");
+    expect(message).not.toContain("evil.example");
+  });
+});
+
+/**
+ * The e2e job's database since 2026-10-08: a throwaway stack `supabase start`
+ * runs inside the job's own runner (.github/scripts/ci-local-supabase.sh), so
+ * `ci:seed --local-stack` writes the seeded account THERE. Its only allowlist
+ * is the runner's loopback, in the exact form `supabase status` prints: any
+ * cloud project, the CI project included, is refused, because a local-stack
+ * seed that reached a shared project would be the e2e job writing to bis-ci
+ * again behind everyone's back.
+ */
+describe("assertLocalStackTarget", () => {
+  const LOCAL_API = "http://127.0.0.1:54321";
+  const LOCAL_DB = "postgresql://postgres:Localpass456@127.0.0.1:54322/postgres";
+  const local = { url: LOCAL_API, dbUrl: LOCAL_DB };
+
+  it("accepts the stack's API and database on the loopback, and describes them without the password", () => {
+    const target = assertLocalStackTarget(local);
+    expect(target).toEqual({ url: LOCAL_API, dbHost: "127.0.0.1:54322" });
+    const text = describeLocalStackTarget(target);
+    expect(text).toContain("local Supabase stack");
+    expect(text).toContain("127.0.0.1:54322");
+    expect(text).not.toContain("Localpass456");
+  });
+
+  it("accepts localhost as well as 127.0.0.1", () => {
+    expect(assertLocalStackTarget({
+      url: "http://localhost:54321", dbUrl: "postgres://postgres:pw@localhost:54322/postgres",
+    }).dbHost).toBe("localhost:54322");
+  });
+
+  it("refuses a missing API URL", () => {
+    expect(() => assertLocalStackTarget({ ...local, url: undefined })).toThrow(/NEXT_PUBLIC_SUPABASE_URL is not set/);
+  });
+
+  it("refuses a missing DB URL", () => {
+    expect(() => assertLocalStackTarget({ ...local, dbUrl: "  " })).toThrow(/SUPABASE_DB_URL is not set/);
+  });
+
+  it("refuses production's API URL, by its own message", () => {
+    expect(() => assertLocalStackTarget({ ...local, url: apiUrl(PROD) }))
+      .toThrow(/NEXT_PUBLIC_SUPABASE_URL points at production/);
+  });
+
+  it("refuses the CI project's API URL: a local-stack seed never writes a cloud project (mutation: accept any https URL → FAILS)", () => {
+    expect(() => assertLocalStackTarget({ ...local, url: apiUrl(CI_REF) }))
+      .toThrow(/NEXT_PUBLIC_SUPABASE_URL is not a local Supabase stack's API/);
+  });
+
+  it.each([
+    "http://127.0.0.1:54321/",
+    "http://127.0.0.1",
+    "https://127.0.0.1:54321",
+    "http://127.0.0.1.evil.example:54321",
+    "http://user@127.0.0.1:54321",
+  ])("refuses an API URL that is not exactly http://<loopback>:<port>: %s", (url) => {
+    expect(() => assertLocalStackTarget({ ...local, url })).toThrow(/NEXT_PUBLIC_SUPABASE_URL is not a local Supabase stack's API/);
+  });
+
+  it("refuses production's DB URL, by its own message", () => {
+    expect(() => assertLocalStackTarget({ ...local, dbUrl: poolerUrl(PROD) }))
+      .toThrow(/SUPABASE_DB_URL points at production/);
+  });
+
+  it("refuses the CI project's pooler URL (mutation: check only the API URL → FAILS)", () => {
+    expect(() => assertLocalStackTarget({ ...local, dbUrl: poolerUrl(CI_REF) }))
+      .toThrow(/SUPABASE_DB_URL is not the local Supabase stack's database/);
+  });
+
+  it.each([
+    // An @ after the host: "the host after the last @" reads 127.0.0.1 here.
+    "postgresql://postgres:pw@evil.example:5432/x@127.0.0.1:54322/postgres",
+    // node-pg obeys a host= in the query string over the URI's own host.
+    "postgresql://postgres:pw@127.0.0.1:54322/postgres?host=evil.example",
+    "postgresql://postgres:pw@127.0.0.1:54322/postgres#frag",
+    "POSTGRESQL://postgres:pw@127.0.0.1:54322/postgres",
+    "postgresql://postgres:pw@127.0.0.2:54322/postgres",
+  ])("refuses a DB URL that is not the stack's own loopback database: %s", (dbUrl) => {
+    expect(() => assertLocalStackTarget({ ...local, dbUrl })).toThrow(/SUPABASE_DB_URL is not the local Supabase stack's database/);
+  });
+
+  it("does not echo a DB URL it refuses", () => {
+    let message = "";
+    try {
+      assertLocalStackTarget({ ...local, dbUrl: "postgresql://postgres:Secretpass123@evil.example:5432/postgres" });
+    } catch (e) { message = (e as Error).message; }
     expect(message).not.toBe("");
     expect(message).not.toContain("Secretpass123");
     expect(message).not.toContain("evil.example");

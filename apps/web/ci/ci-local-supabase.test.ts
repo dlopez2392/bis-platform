@@ -60,6 +60,7 @@ case "$1" in
     for a in "$@"; do [ "$prev" = "--workdir" ] && wd="$a"; prev="$a"; done
     n=$(ls -A "$wd/supabase/migrations" 2>/dev/null | wc -l | tr -d ' ')
     cfg=no; [ -f "$wd/supabase/config.toml" ] && cfg=yes
+    [ "$cfg" = yes ] && cp "$wd/supabase/config.toml" "$FAKE_DIR/started-config.toml"
     log "supabase $* [migrations=$n config=$cfg]"
     exit "\${FAKE_START_EXIT:-0}" ;;
   status)
@@ -83,11 +84,13 @@ done
 exit 0
 `;
 
-// Logs argv; answers a read of Kong's admin API (port 8001) with FAKE_KONG_ADMIN.
+// Logs argv; answers a read of Kong's admin API (port 8001) with FAKE_KONG_ADMIN,
+// and `docker inspect` (a container's environment) with FAKE_REST_ENV.
 const FAKE_DOCKER = `#!/usr/bin/env bash
 printf 'docker %s\\n' "$*" >> "$FAKE_DIR/log"
 case "$*" in
   *8001*) printf '%s' "$FAKE_KONG_ADMIN" ;;
+  inspect*) printf '%s' "$FAKE_REST_ENV" ;;
 esac
 exit "\${FAKE_DOCKER_EXIT:-0}"
 `;
@@ -141,14 +144,49 @@ afterAll(() => {
 let runnerTemp = "";
 beforeEach(() => {
   fs.rmSync(path.join(fakeDir, "log"), { force: true });
+  fs.rmSync(path.join(fakeDir, "started-config.toml"), { force: true });
   runnerTemp = fs.mkdtempSync(path.join(fakeDir, "runner-temp-"));
 });
 
-type Run = { status: number | null; output: string; log: string[]; githubEnv: string; githubPath: string };
+/**
+ * A development instance's publishable key: `pk_test_` + base64 of its
+ * Frontend API domain and a `$`, which is how Clerk builds one (the e2e job's
+ * real key decodes to `topical-redfish-40.clerk.accounts.dev$`).
+ */
+const clerkKey = (decoded: string, prefix = "pk_test_") =>
+  `${prefix}${Buffer.from(decoded).toString("base64").replace(/=+$/, "")}`;
+const CLERK_DOMAIN = "unit-test-41.clerk.accounts.dev";
+const CLERK_PK = clerkKey(`${CLERK_DOMAIN}$`);
+const TRUST_CLERK = "--trust-clerk-dev-instance";
 
-function run(script: string, extraEnv: Record<string, string> = {}): Run {
+/**
+ * PostgREST's environment as `docker inspect` lists it. CLI 2.109.1 hands
+ * PostgREST ONE JWKS (PGRST_JWT_SECRET): the third-party issuer's keys, fetched
+ * at `supabase start`, followed by the stack's own HS256 secret as an `oct`
+ * key (pkg/config ResolveJWKS). Without a third-party issuer only the `oct`
+ * key is there.
+ */
+const OCT_KEY = `{"kty":"oct","k":"c3VwZXItc2VjcmV0"}`;
+const RSA_KEY = `{"use":"sig","kty":"RSA","kid":"ins_unit_test","alg":"RS256","n":"xyz","e":"AQAB"}`;
+const restEnv = (keys: string[]) =>
+  `PGRST_DB_ANON_ROLE=anon\nPGRST_JWT_SECRET={"keys":[${keys.join(",")}]}\nPGRST_ADMIN_SERVER_PORT=3001\n`;
+
+type Run = {
+  status: number | null; output: string; log: string[]; githubEnv: string; githubPath: string;
+  /** The config.toml the stack was started with, or "" if it never started. */
+  startedConfig: string;
+};
+
+function run(script: string, extraEnv: Record<string, string> = {}, args: string[] = []): Run {
+  // Per run, not per case: a case that runs the script twice must not read
+  // the first run's calls as the second's.
+  fs.rmSync(path.join(fakeDir, "log"), { force: true });
+  fs.rmSync(path.join(fakeDir, "started-config.toml"), { force: true });
   const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const name of ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL"]) {
+  for (const name of [
+    "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL",
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+  ]) {
     delete env[name];
   }
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
@@ -161,24 +199,30 @@ function run(script: string, extraEnv: Record<string, string> = {}): Run {
     FAKE_DIR: toBashPath(fakeDir),
     FAKE_STATUS: statusEnv(),
     FAKE_KONG_ADMIN: KONG_ADMIN(0),
+    FAKE_REST_ENV: restEnv([RSA_KEY, OCT_KEY]),
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: CLERK_PK,
     RUNNER_TEMP: toBashPath(runnerTemp),
     GITHUB_ENV: toBashPath(githubEnv),
     GITHUB_PATH: toBashPath(githubPath),
     ...extraEnv,
   });
-  const r = spawnSync(bash, [script], { env, encoding: "utf8", cwd: REPO });
+  const r = spawnSync(bash, [script, ...args], { env, encoding: "utf8", cwd: REPO });
   if (r.error) throw r.error;
   const logFile = path.join(fakeDir, "log");
+  const startedFile = path.join(fakeDir, "started-config.toml");
   const output = `${r.stdout}${r.stderr}`;
-  // No case may print the stack's service key or DB password.
+  // No case may print the stack's service key or DB password, or the Clerk
+  // key (a repository secret: GitHub would mask it, a derived string it would not).
   expect(output.includes(SERVICE_KEY), "printed the service key").toBe(false);
   expect(output.includes(DB_PASSWORD), "printed the DB password").toBe(false);
+  expect(output.includes(String(env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || "\u0000")), "printed the Clerk key").toBe(false);
   return {
     status: r.status,
     output,
     log: fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim().split("\n") : [],
     githubEnv: fs.readFileSync(githubEnv, "utf8"),
     githubPath: fs.readFileSync(githubPath, "utf8"),
+    startedConfig: fs.existsSync(startedFile) ? fs.readFileSync(startedFile, "utf8") : "",
   };
 }
 
@@ -306,6 +350,96 @@ describe("ci-local-supabase.sh: every failure is loud, and leaves verify no valu
     expect(r.status).not.toBe(0);
     expect(r.githubEnv).toBe("");
   });
+});
+
+/** The non-comment lines of config.toml's `[auth.third_party.clerk]` table. */
+function clerkSection(toml: string): string[] {
+  const lines = toml.replace(/\r\n/g, "\n").split("\n");
+  const at = lines.indexOf("[auth.third_party.clerk]");
+  if (at < 0) return [];
+  const rest = lines.slice(at + 1);
+  const end = rest.findIndex((l) => l.startsWith("["));
+  return (end < 0 ? rest : rest.slice(0, end)).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+}
+
+// The e2e job (2026-10-08) runs on its own stack too, and it signs in for
+// real: every in-account page reads through userDb(), which sends the Clerk
+// session token as the Bearer, and PostgREST must verify it. CLI 2.109.1 does
+// that for a stack whose config.toml enables `[auth.third_party.clerk]`: at
+// `supabase start` it fetches `https://<domain>/.well-known/openid-configuration`,
+// then that document's jwks_uri, and hands PostgREST those keys plus the
+// stack's own secret as one JWKS (PGRST_JWT_SECRET; pkg/config ResolveJWKS,
+// internal/start). Kong passes any Bearer that is not an `sb_` key through
+// untouched. [External: read from the supabase/cli source at tag v2.109.1.]
+//
+// The domain is the Clerk instance's Frontend API, which the publishable key
+// carries (base64 of `<domain>$`), so the stack trusts exactly the instance
+// the app signs in with. Only a development instance's domain is accepted.
+describe("ci-local-supabase.sh --trust-clerk-dev-instance: the e2e stack trusts the Clerk development instance its sessions come from", () => {
+  it("starts the stack with [auth.third_party.clerk] enabled for the domain the publishable key names, and says which (mutation: leave the copied config.toml unedited → FAILS)", () => {
+    const r = run(STACK_SCRIPT, {}, [TRUST_CLERK]);
+    expect(r.status, r.output).toBe(0);
+    expect(clerkSection(r.startedConfig)).toEqual(["enabled = true", `domain = "${CLERK_DOMAIN}"`]);
+    expect(r.output).toContain(CLERK_DOMAIN);
+  });
+
+  it("without the flag (verify), the stack is started with the repository's config.toml byte for byte: no third-party issuer, no call to Clerk", () => {
+    const r = run(STACK_SCRIPT);
+    expect(r.status, r.output).toBe(0);
+    expect(r.startedConfig).toBe(fs.readFileSync(path.join(REPO, "packages/db/supabase/config.toml"), "utf8"));
+    expect(clerkSection(r.startedConfig)).toEqual(["enabled = false"]);
+    expect(indexOf(r.log, /^docker inspect /)).toBe(-1);
+  });
+
+  it("reads PostgREST's RUNNING JWKS after the stack starts and before anything is applied, and refuses a stack holding only its own secret (mutation: trust the config edit without reading PostgREST's environment → FAILS)", () => {
+    const ok = run(STACK_SCRIPT, {}, [TRUST_CLERK]);
+    const start = indexOf(ok.log, /^supabase start /);
+    const inspect = indexOf(ok.log, /^docker inspect .*supabase_rest_db/);
+    expect(inspect).toBeGreaterThan(start);
+    expect(indexOf(ok.log, BOOTSTRAP)).toBeGreaterThan(inspect);
+
+    const r = run(STACK_SCRIPT, { FAKE_REST_ENV: restEnv([OCT_KEY]) }, [TRUST_CLERK]);
+    expect(r.status).not.toBe(0);
+    expect(r.output).toMatch(/::error::.*PostgREST.*Clerk/);
+    expect(indexOf(r.log, BOOTSTRAP)).toBe(-1);
+    expect(r.githubEnv).toBe("");
+  });
+
+  it("refuses a production instance's key (pk_live_) before starting anything", () => {
+    const r = run(STACK_SCRIPT, { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: clerkKey("clerk.app.bis-rgv.com$", "pk_live_") }, [TRUST_CLERK]);
+    expect(r.status).not.toBe(0);
+    expect(r.output).toMatch(/::error::.*NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY.*production/);
+    expect(indexOf(r.log, /^supabase start /)).toBe(-1);
+    expect(r.githubEnv).toBe("");
+  });
+
+  it.each([
+    ["a custom (production-style) Frontend API domain", "clerk.example.com$"],
+    ["a domain with no trailing $", `${CLERK_DOMAIN}`],
+    ["a domain that only ends like a development one", `x.clerk.accounts.dev.evil.example$`],
+  ])("refuses a key that decodes to %s, before starting anything", (_label, decoded) => {
+    const r = run(STACK_SCRIPT, { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: clerkKey(decoded) }, [TRUST_CLERK]);
+    expect(r.status).not.toBe(0);
+    expect(r.output).toMatch(/::error::.*NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY.*development instance/);
+    expect(indexOf(r.log, /^supabase start /)).toBe(-1);
+  });
+
+  it("refuses a missing key, naming it, before starting anything", () => {
+    const r = run(STACK_SCRIPT, { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "" }, [TRUST_CLERK]);
+    expect(r.status).not.toBe(0);
+    expect(r.output).toMatch(/::error::.*NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY.*(empty|missing)/);
+    expect(indexOf(r.log, /^supabase start /)).toBe(-1);
+  });
+
+  it.each([[["--trust-clerk"]], [[TRUST_CLERK, TRUST_CLERK]], [["--local-stack"]]])(
+    "refuses any other argument list before starting anything, so a typo never selects verify's stack for e2e: %j",
+    (args) => {
+      const r = run(STACK_SCRIPT, {}, args);
+      expect(r.status).not.toBe(0);
+      expect(r.output).toMatch(/::error::.*--trust-clerk-dev-instance/);
+      expect(r.log).toEqual([]);
+    },
+  );
 });
 
 describe("ci-supabase-cli.sh: one pinned CLI, checked before it runs", () => {

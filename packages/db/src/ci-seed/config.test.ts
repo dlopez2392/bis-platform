@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { planCiSeed, CI_BASELINE, CI_SEED_CONTACT } from "./config";
+import { planCiSeed, ciSeedMode, CI_BASELINE, CI_SEED_CONTACT } from "./config";
 import { PRODUCTION_SUPABASE_REF } from "../ci/target";
 import { isTestOrgId } from "../org-id";
 import { DEMO_PHONE_RE } from "../demo/fiction";
@@ -89,5 +89,64 @@ describe("the baseline's constants", () => {
 
   it("stays out of the demo tenant's +1 956 555 01xx partition", () => {
     expect(DEMO_PHONE_RE.test(CI_BASELINE.phoneE164)).toBe(false);
+  });
+});
+
+/**
+ * Since 2026-10-08 the e2e job seeds a throwaway stack inside its own runner
+ * (`ci:seed --local-stack`), not the shared CI project. The flag is the ONLY
+ * way into that mode, and the mode accepts only the runner's loopback
+ * (../ci/target.ts assertLocalStackTarget): a CI-project env handed to it is
+ * refused rather than seeded, and so is anything else on the command line.
+ */
+describe("ci:seed's mode, chosen by its one optional flag", () => {
+  it("is the CI project with no argument, as ci-project-setup.yml's seed step runs it", () => {
+    expect(ciSeedMode([])).toBe("ci-project");
+  });
+
+  it("is the local stack with --local-stack, as ci.yml's e2e job runs it", () => {
+    expect(ciSeedMode(["--local-stack"])).toBe("local-stack");
+  });
+
+  it.each([["--local"], ["--local-stack", "--local-stack"], ["--ci-project"]])(
+    "refuses anything else, naming a plain flag (mutation: ignore unknown arguments → FAILS): %s",
+    (...argv) => {
+      expect(() => ciSeedMode(argv)).toThrow(/ci:seed takes no argument or --local-stack/);
+    },
+  );
+
+  it("never repeats an argument that is not a plain flag (it may be a DB URL, password included)", () => {
+    let message = "";
+    try { ciSeedMode(["postgresql://postgres:Secretpass123@127.0.0.1:54322/postgres"]); } catch (e) { message = (e as Error).message; }
+    expect(message).toMatch(/ci:seed takes no argument or --local-stack/);
+    expect(message).not.toContain("Secretpass123");
+  });
+});
+
+describe("planCiSeed on the local stack", () => {
+  const localEnv = {
+    NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
+    SUPABASE_DB_URL: "postgresql://postgres:Localpass456@127.0.0.1:54322/postgres",
+  };
+
+  it("seeds the same baseline on the runner's loopback, and says so without the password", () => {
+    const plan = planCiSeed(localEnv, "local-stack");
+    expect(plan.spec).toEqual(CI_BASELINE);
+    expect(plan.summary).toContain("local Supabase stack");
+    expect(plan.summary).toContain("Test Client One");
+    expect(plan.summary).not.toContain("Localpass456");
+  });
+
+  it("refuses the CI project's values: the local-stack seed never writes a shared project (mutation: plan local-stack with assertCiTarget → FAILS)", () => {
+    expect(() => planCiSeed(ciEnv, "local-stack")).toThrow(/NEXT_PUBLIC_SUPABASE_URL is not a local Supabase stack's API/);
+  });
+
+  it("refuses production, by production's own message", () => {
+    expect(() => planCiSeed({ ...localEnv, NEXT_PUBLIC_SUPABASE_URL: `https://${PROD}.supabase.co` }, "local-stack"))
+      .toThrow(/NEXT_PUBLIC_SUPABASE_URL points at production/);
+  });
+
+  it("and the CI-project mode still refuses the local stack, so neither mode can stand in for the other", () => {
+    expect(() => planCiSeed({ ...localEnv, BIS_CI_SUPABASE_REF: CI_REF })).toThrow(/NEXT_PUBLIC_SUPABASE_URL is not the CI project's API URL/);
   });
 });

@@ -1,14 +1,36 @@
 #!/usr/bin/env bash
-# Starts verify's database: a throwaway Supabase stack inside this runner,
+# Starts a CI job's database: a throwaway Supabase stack inside this runner,
 # built from the branch's own migration files, then hands its four values to
-# the later steps through GITHUB_ENV.
+# the later steps through GITHUB_ENV. Both CI jobs run it: verify with no
+# argument, e2e with --trust-clerk-dev-instance (below).
 #
 # Why (2026-10-08): until this date every verify run, on every branch, ran the
 # db suite against ONE shared cloud project (bis-ci), so verify was serialized
 # repo-wide in one concurrency group and three or four queued runs meant the
 # last waited about 45 minutes before it started. A stack per run shares
-# nothing, so verify needs no repo-wide group. e2e still runs on the shared
-# project (it signs in through real Clerk, which that project trusts).
+# nothing, so verify needs no repo-wide group. e2e followed the same day, for
+# the same reason: its own repo-wide queue, and specs that timed out under
+# contention on the shared project.
+#
+# --trust-clerk-dev-instance (e2e only). e2e signs in for real: every
+# in-account page reads through userDb(), which sends the Clerk session token
+# as the Bearer, and PostgREST must verify it, as bis-ci does through its
+# Third-Party Auth entry for the Clerk development instance. CLI 2.109.1 does
+# the same for a local stack whose config.toml enables
+# [auth.third_party.clerk]: at `supabase start` it fetches
+# https://<domain>/.well-known/openid-configuration, then its jwks_uri, and
+# hands PostgREST those keys plus the stack's own secret as one JWKS
+# (PGRST_JWT_SECRET). Kong passes any Bearer that is not an `sb_` key through
+# untouched. [External: read from the supabase/cli source at tag v2.109.1,
+# pkg/config ResolveJWKS and internal/start.] The domain is the instance's
+# Frontend API, which NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY carries
+# (pk_test_ + base64 of "<domain>$"), so the stack trusts exactly the instance
+# the app signs in with, and only a development instance's
+# (*.clerk.accounts.dev) is accepted. The edit is made to the COPY of
+# config.toml in the workdir, never the repository's. After the start, the
+# running PostgREST's JWKS is read back (docker inspect) and must hold an RSA
+# key: the stack's own secret is an `oct` key, so an RSA key can only have
+# come from the issuer. Without the flag nothing about Clerk is touched.
 #
 # THE ORDER IS THE POINT, and it is the CI project's own order
 # (docs/runbooks/ci-supabase-project.md sections 2 and 3):
@@ -44,6 +66,16 @@
 { set +x; } 2>/dev/null
 set -euo pipefail
 
+# The argument is never echoed: it names a mode, and anything else is refused
+# before anything starts, so a typo can never hand e2e verify's stack.
+trust_clerk=0
+if [ "$#" -eq 1 ] && [ "$1" = "--trust-clerk-dev-instance" ]; then
+  trust_clerk=1
+elif [ "$#" -ne 0 ]; then
+  echo "::error::ci-local-supabase.sh takes no argument (verify) or --trust-clerk-dev-instance (e2e), once. Nothing was started."
+  exit 1
+fi
+
 : "${RUNNER_TEMP:?RUNNER_TEMP is not set: this script runs on a GitHub Actions runner}"
 : "${GITHUB_ENV:?GITHUB_ENV is not set: this script runs on a GitHub Actions runner}"
 
@@ -66,10 +98,62 @@ for tool in supabase psql docker; do
   fi
 done
 
+# The Clerk development instance's Frontend API domain, from its publishable
+# key, before anything starts. Never printed: the key (a repository secret,
+# which GitHub masks); printed: the domain (public, served to every browser).
+clerk_domain=""
+if [ "$trust_clerk" = 1 ]; then
+  pk="${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}"
+  case "$pk" in
+    "")
+      echo "::error::NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is empty or missing; it comes from repository secret NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY. The stack would not trust any Clerk session. Nothing was started."
+      exit 1 ;;
+    pk_live_*)
+      echo "::error::NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is a pk_live_ key: the production Clerk instance. The e2e stack trusts the development instance only. Nothing was started."
+      exit 1 ;;
+    pk_test_*) ;;
+    *)
+      echo "::error::NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is not a Clerk development instance's publishable key (pk_test_). Nothing was started."
+      exit 1 ;;
+  esac
+  b64="${pk#pk_test_}"
+  while [ $(( ${#b64} % 4 )) -ne 0 ]; do b64="$b64="; done
+  decoded="$(printf '%s' "$b64" | base64 -d 2>/dev/null || true)"
+  candidate="${decoded%\$}"
+  if [ "$decoded" = "$candidate" ] || ! [[ "$candidate" =~ ^[a-z0-9-]+(\.[a-z0-9-]+)*\.clerk\.accounts\.dev$ ]]; then
+    echo "::error::NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY does not name a Clerk development instance: it must decode to \"<name>.clerk.accounts.dev\$\". Nothing was started."
+    exit 1
+  fi
+  clerk_domain="$candidate"
+fi
+
 work="$RUNNER_TEMP/bis-local-supabase"
 rm -rf "$work"
 mkdir -p "$work/supabase/migrations"
 cp "$DB_DIR/config.toml" "$work/supabase/config.toml"
+
+if [ "$trust_clerk" = 1 ]; then
+  # In the copy only: [auth.third_party.clerk] gets `enabled = true` and the
+  # domain, in place of its `enabled = false` and commented example. Then read
+  # back: the table must hold exactly those two settings, or nothing starts.
+  cfg="$work/supabase/config.toml"
+  awk -v domain="$clerk_domain" '
+    /^\[/ { in_clerk = ($0 == "[auth.third_party.clerk]") }
+    in_clerk && /^#? *domain *=/ { next }
+    in_clerk && /^enabled *=/ { print "enabled = true"; print "domain = \"" domain "\""; done = 1; next }
+    { print }
+    END { if (!done) exit 3 }
+  ' "$DB_DIR/config.toml" > "$cfg" || {
+    echo "::error::$DB_DIR/config.toml has no [auth.third_party.clerk] table with an enabled line to switch on. Nothing was started."
+    exit 1
+  }
+  got="$(awk '/^\[/ { in_clerk = ($0 == "[auth.third_party.clerk]"); next } in_clerk && /^[a-z_]+ *=/ { print }' "$cfg")"
+  want="$(printf 'enabled = true\ndomain = "%s"' "$clerk_domain")"
+  if [ "$got" != "$want" ]; then
+    echo "::error::The stack's copy of config.toml does not enable [auth.third_party.clerk] for $clerk_domain exactly. Nothing was started."
+    exit 1
+  fi
+fi
 
 started_at=$SECONDS
 supabase start --workdir "$work" --exclude "$EXCLUDE"
@@ -105,6 +189,22 @@ done
 if [ "$pool" != "0" ]; then
   echo "::error::Kong ($kong) still reports upstream_keepalive_pool_size=${pool:-<unreadable>} after the reload, so POSTs through it can fail with a sporadic 502. Nothing was applied. If the pinned CLI changed how Kong is built, see this script's KONG note."
   exit 1
+fi
+
+# CLERK: what the RUNNING PostgREST verifies tokens with, not what the config
+# file says. Its JWKS must hold an RSA key; the stack's own secret is `oct`.
+trust_note=""
+if [ "$trust_clerk" = 1 ]; then
+  rest="supabase_rest_${project_id}"
+  jwks="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$rest" 2>/dev/null | sed -n 's/^PGRST_JWT_SECRET=//p' || true)"
+  # `|| true` inside: with pipefail, grep finding nothing would end the script
+  # here, silently, instead of at the message below.
+  rsa="$({ printf '%s' "$jwks" | grep -oE '"kty" *: *"RSA"' || true; } | wc -l | tr -d ' ')"
+  if [ "${rsa:-0}" -lt 1 ]; then
+    echo "::error::PostgREST ($rest) holds no RSA key in PGRST_JWT_SECRET, so it would refuse every Clerk session token ($clerk_domain) and every in-account page would come back empty. Nothing was applied. If the pinned CLI changed how it hands third-party keys to PostgREST, see this script's header."
+    exit 1
+  fi
+  trust_note=" PostgREST trusts the Clerk development instance $clerk_domain ($rsa RSA key(s))."
 fi
 
 # KEY="value" lines; anything else the CLI prints is ignored. Values are read,
@@ -154,4 +254,4 @@ schema_seconds=$((SECONDS - schema_at))
   echo "SUPABASE_DB_URL=$db_url"
 } >> "$GITHUB_ENV"
 
-echo "::notice::Local Supabase stack (Postgres $got_major): supabase start ${start_seconds}s, bootstrap and migrations ${schema_seconds}s."
+echo "::notice::Local Supabase stack (Postgres $got_major): supabase start ${start_seconds}s, bootstrap and migrations ${schema_seconds}s.${trust_note}"

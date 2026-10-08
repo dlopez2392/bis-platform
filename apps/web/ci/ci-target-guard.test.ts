@@ -499,13 +499,16 @@ describe("the guard never prints a secret value", () => {
   });
 });
 
-// verify runs on a Supabase stack it starts inside its own runner
-// (.github/scripts/ci-local-supabase.sh), so its four Supabase values do not
-// exist when the job starts. It runs the guard twice: once straight after
-// checkout, where it must hold NO cloud Supabase value at all (they belong to
-// e2e's job env, and a leaked one would aim the suites at a shared project),
-// and once after the stack is up, where every value must name that stack on
-// the runner's loopback and nothing else.
+// verify and e2e (both since 2026-10-08) each run on a Supabase stack they
+// start inside their own runner (.github/scripts/ci-local-supabase.sh), so
+// their four Supabase values do not exist when the job starts. Each runs the
+// guard twice: once straight after checkout, where it must hold NO cloud
+// Supabase value at all (a leaked one would aim the suites or the app at a
+// shared project), and once after the stack is up, where every value must
+// name that stack on the runner's loopback and nothing else. The one
+// CI-project value ci.yml still reads, the migration check's
+// BIS_CI_SUPABASE_DB_URL, is scoped to that step alone, so neither guard run
+// may ever see it.
 const CLERK_ONLY: Partial<Record<AnyVar, string>> = {
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: CLERK_PUBLISHABLE,
   CLERK_SECRET_KEY: CLERK_SECRET,
@@ -529,7 +532,9 @@ const before = (overrides: Partial<Record<AnyVar, string | undefined>> = {}, cur
 const local = (overrides: Partial<Record<AnyVar, string | undefined>> = {}, curl: Curl = {}) =>
   runGuard(overrides, curl, {}, { args: ["--local-stack"], base: LOCAL });
 
-describe("ci-target-guard.sh --before-local-stack: verify's preflight, before its own stack exists", () => {
+const CI_HISTORY_DB_URL = dbUrl(`postgres.${REF}`);
+
+describe("ci-target-guard.sh --before-local-stack: verify's and e2e's preflight, before the job's own stack exists", () => {
   it("passes with the Clerk development keys and no Supabase value at all, and sends nothing anywhere", () => {
     const r = before();
     expect(r.output).not.toContain("::error::");
@@ -537,10 +542,18 @@ describe("ci-target-guard.sh --before-local-stack: verify's preflight, before it
     expect(r.curlCalled).toBe(false);
   });
 
-  it.each(SUPABASE_VARS)("refuses %s when it is already set, naming it and the e2e job it belongs to (mutation: skip this mode's emptiness loop → exit 0, FAILS)", (name) => {
+  it.each(SUPABASE_VARS)("refuses %s when it is already set, naming it and where a CI-project value may live instead (mutation: skip this mode's emptiness loop → exit 0, FAILS)", (name) => {
     const r = before({ [name]: VALID[name] });
     expect(r.status).toBe(1);
-    expect(r.output).toMatch(new RegExp(`::error::${name} is set before verify's local Supabase stack exists.*e2e`));
+    expect(r.output).toMatch(new RegExp(`::error::${name} is set before this job's local Supabase stack exists.*migration check`));
+    expect(r.curlCalled).toBe(false);
+  });
+
+  it("refuses the migration check's BIS_CI_SUPABASE_DB_URL in the job's scope: it belongs to that one step (mutation: leave it off this mode's list → FAILS)", () => {
+    const r = runGuard({}, {}, { BIS_CI_SUPABASE_DB_URL: CI_HISTORY_DB_URL }, { args: ["--before-local-stack"], base: CLERK_ONLY });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::BIS_CI_SUPABASE_DB_URL is set before this job's local Supabase stack exists/);
+    expect(r.output).not.toContain(DB_PASSWORD);
     expect(r.curlCalled).toBe(false);
   });
 
@@ -569,7 +582,18 @@ describe("ci-target-guard.sh --before-local-stack: verify's preflight, before it
   });
 });
 
-describe("ci-target-guard.sh --local-stack: verify, once its stack is up", () => {
+describe("ci-target-guard.sh --local-stack: verify and e2e, once the job's stack is up", () => {
+  it.each([
+    ["BIS_CI_SUPABASE_REF", REF],
+    ["BIS_CI_SUPABASE_DB_URL", CI_HISTORY_DB_URL],
+  ])("refuses %s beside the stack's values: no CI-project value may be in the scope the app and the suites run in (mutation: no such check in --local-stack → FAILS)", (name, value) => {
+    const r = runGuard({}, {}, { [name]: value }, { args: ["--local-stack"], base: LOCAL });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(new RegExp(`::error::${name} is set beside the local stack`));
+    expect(r.output).not.toContain(DB_PASSWORD);
+    expect(r.curlCalled).toBe(false);
+  });
+
   it("passes on the stack's loopback values, and probes that stack's REST API once", () => {
     const r = local();
     expect(r.output).not.toContain("::error::");
@@ -596,7 +620,7 @@ describe("ci-target-guard.sh --local-stack: verify, once its stack is up", () =>
     },
   );
 
-  it("refuses the CI project's cloud URL: verify never runs on a shared project (mutation: accept any https URL → FAILS)", () => {
+  it("refuses the CI project's cloud URL: neither job runs on a shared project (mutation: accept any https URL → FAILS)", () => {
     const r = local({ NEXT_PUBLIC_SUPABASE_URL: `https://${REF}.supabase.co` });
     expect(r.status).toBe(1);
     expect(r.output).toMatch(/::error::NEXT_PUBLIC_SUPABASE_URL is not the local stack's API/);
