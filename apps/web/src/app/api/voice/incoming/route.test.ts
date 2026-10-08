@@ -381,7 +381,7 @@ describe("POST /api/voice/incoming — step 8: caller reputation", () => {
   // route only speaks words, and this one is the binding gate: batch the reads
   // and decide afterwards, and one rejected read fails the whole batch open,
   // silently taking the per-number abuse cap down with it at the authoritative
-  // layer. `countCallerHistorySince` runs two counts over 30 days against the
+  // layer. `countCallerHistorySince` runs three counts over 30 days against the
   // cap's one same-day count, so it is the read most likely to time out alone.
   it("step 8: caps exceeded AND the history read throwing → still declined per-number", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
@@ -401,7 +401,7 @@ describe("POST /api/voice/incoming — step 8: caller reputation", () => {
   // direction was safe, but it is the inverse of what the block's own comment
   // advertises, and it is the more valuable guard: the caps re-allow the same
   // robot tomorrow, a reputation block does not, and `countCallerHistorySince`
-  // — two counts over 30 days against the cap's one same-day count — is the
+  // — three counts over 30 days against the cap's one same-day count — is the
   // read most likely to fail on its own, not least likely.
   //
   // Each read therefore gets its OWN try/catch. Neither can take the other
@@ -503,16 +503,17 @@ describe("POST /api/voice/incoming — the counting seam exists for real", () =>
     expect(typeof real.countCallerHistorySince).toBe("function");
 
     // A chainable Supabase stub: every builder method returns the chain, and
-    // awaiting it yields a count response. The SPAM query is the one that
-    // never calls `.neq`, so the two halves are told apart by the query the
-    // real function actually builds rather than by call order.
+    // awaiting it yields a count response. The three counts are told apart by
+    // the query the real function actually builds rather than by call order:
+    // OTHER calls `.neq`, ANSWERED calls `.in`, SPAM calls neither. Each gets
+    // a distinct count, so a field wired to the wrong query fails here.
     const makeChain = () => {
       const seen: (string | symbol)[] = [];
       const chain: unknown = new Proxy({}, {
         get(_t, prop) {
           if (prop === "then") {
-            const isOther = seen.includes("neq");
-            return (resolve: (v: unknown) => void) => resolve({ count: isOther ? 0 : 2, error: null });
+            const count = seen.includes("neq") ? 0 : seen.includes("in") ? 5 : 2;
+            return (resolve: (v: unknown) => void) => resolve({ count, error: null });
           }
           return (...args: unknown[]) => { seen.push(prop); void args; return chain; };
         },
@@ -523,7 +524,7 @@ describe("POST /api/voice/incoming — the counting seam exists for real", () =>
 
     await expect(
       real.countCallerHistorySince(stubDb, "acct1", "+19562921696", new Date().toISOString()),
-    ).resolves.toEqual({ spamCalls: 2, otherCalls: 0 });
+    ).resolves.toEqual({ spamCalls: 2, otherCalls: 0, answeredCalls: 5 });
   });
 });
 
