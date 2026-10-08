@@ -36,10 +36,18 @@
 // bridge is emitted — a refusal costs nothing, a bridge starts billing — and
 // hears the SAME sentence as any other refusal; only the log line names the
 // reason.
+// The press-1 screen (`lib/voice/call-screen.ts`) sits after every refusal
+// and BEFORE the per-account forward and the bridge: on a number listed in
+// VOICE_SCREEN_NUMBERS, a first-time caller on a cleared call is asked to
+// press 1 (`<Gather>`), and only the keypress, at `./screen`, builds the
+// bridge — through this file's own `answer()` with the screen skipped, so
+// there is one copy of the dial markup, not two. Unlisted, nothing changes.
 import { NextResponse, after } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
-import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { callAnswerable } from "@/lib/voice/accept-gate";
+import { agencyHandsets } from "@/lib/voice/caller-reputation";
+import { decideScreen, readScreenConfig } from "@/lib/voice/call-screen";
+import { logFormFields, readTelnyxForm } from "./telnyx-request";
 import { newHandoffToken, resolveHandoffTarget } from "@/lib/voice/handoff";
 import { signFallbackTicket } from "@/lib/voice/fallback-ticket";
 import { SIP_HANDOFF_HEADER, signSipHandoff, sipHandoffSecretConfigured } from "@/lib/voice/sip-handoff-signature";
@@ -51,7 +59,7 @@ import type { ScreenedCallInput, ForwardedCallInput } from "@bis/db";
 
 export const runtime = "nodejs";
 
-type Languages = "en" | "es" | "both";
+export type Languages = "en" | "es" | "both";
 /**
  * `dial` carries what the route learned on the way there:
  *   - `accountId` / `forwardCalls`: the account the called number resolved
@@ -65,11 +73,16 @@ type Languages = "en" | "es" | "both";
  *     is this route's own outage, stamped as such.
  *   - `phoneNumberId`: the called line's row, on a cleared call only — what
  *     a forwarded call's record (0059) points at.
+ *   - `languages` / `firstTimeCaller`: on a cleared call only, for the
+ *     press-1 screen — the profile's languages for its question, and whether
+ *     this caller has NO answered call in the reputation window. Read from
+ *     the same history batch as Guard 2, so the screen adds no DB read.
  */
 type Routability =
   | {
     kind: "dial"; accountId?: string; phoneNumberId?: string; forwardCalls?: boolean;
     cleared?: boolean; lookupFailed?: boolean;
+    languages?: Languages; firstTimeCaller?: boolean;
   }
   | { kind: "refuse"; languages: Languages; screened: ScreenedCallInput }
   | { kind: "cap"; languages: Languages; screened: ScreenedCallInput }
@@ -94,11 +107,96 @@ const COPY = {
   },
 } as const;
 
-function sayXml(languages: Languages, copy: { en: string; es: string }): string {
+/** The `<Say>` elements for one sentence in the profile's languages — English
+ *  first when both, because order matters to a caller hearing it live. */
+function says(languages: Languages, copy: { en: string; es: string }): string {
   const en = `<Say>${copy.en}</Say>`;
   const es = `<Say language="es-MX">${copy.es}</Say>`;
-  const says = languages === "es" ? es : languages === "both" ? en + es : en;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${says}<Hangup/></Response>`;
+  return languages === "es" ? es : languages === "both" ? en + es : en;
+}
+
+function sayXml(languages: Languages, copy: { en: string; es: string }): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${says(languages, copy)}<Hangup/></Response>`;
+}
+
+// The press-1 screen's words. A caller who hears these has done nothing
+// wrong, so they say what to do and nothing about why.
+const SCREEN_COPY = {
+  prompt: {
+    en: "Thanks for calling. To be connected, please press 1.",
+    es: "Gracias por llamar. Para comunicarse, oprima 1.",
+  },
+  goodbye: {
+    en: "Sorry, we didn't get that. Please call again anytime. Goodbye.",
+    es: "Lo sentimos, no recibimos su respuesta. Puede llamar de nuevo cuando guste. Adiós.",
+  },
+} as const;
+
+/**
+ * Seconds Telnyx waits for the key after the question finishes. Telnyx's
+ * `<Gather>` `timeout`: "Time in seconds between digits before the digits
+ * are sent to your action URL. Telnyx will wait until all nested verbs have
+ * been executed before beginning the timeout period." Range 1–120, default 5.
+ */
+export const SCREEN_TIMEOUT_SECONDS = 6;
+
+/**
+ * Where the keypress goes, WITHOUT the ask marker (`screenAsk` appends it).
+ * `l` carries the profile's languages so the action route can speak without a
+ * database read; `a` carries the account id for its log lines only. Neither
+ * is trusted for anything else: the keypress re-runs this file's whole
+ * routing, guards included.
+ */
+export function screenActionUrl(origin: string, languages: Languages, accountId: string): string {
+  return `${origin}/api/voice/texml/screen?l=${languages}&a=${encodeURIComponent(accountId)}`;
+}
+
+/**
+ * One ask. Every attribute is one Telnyx documents for `<Gather>`
+ * (https://developers.telnyx.com/docs/voice/programmable-voice/texml-verbs/gather):
+ * `action`, `numDigits`, `timeout` — and NO `method`: Telnyx documents none
+ * for `<Gather>`, and sends the action with the TeXML application's own method
+ * (POST once TELNYX_PUBLIC_KEY is set; `./screen` answers both). An attribute
+ * Telnyx rejects would mean no call at all, so nothing undocumented goes in.
+ * `<Say>` is a documented child of `<Gather>`; both languages sit inside ONE
+ * Gather so a key pressed during either sentence counts.
+ *
+ * `n` on the action URL says which ask this was, and that is ALL it decides:
+ * which words `./screen` plays next. It is not covered by the carrier's
+ * signature and is trusted for nothing else.
+ */
+function screenAsk(languages: Languages, action: string, n: 1 | 2): string {
+  return `<Gather action="${xmlText(`${action}&n=${n}`)}" numDigits="1" timeout="${SCREEN_TIMEOUT_SECONDS}">${says(languages, SCREEN_COPY.prompt)}</Gather>`;
+}
+
+/**
+ * The question: ASKED TWICE, then the goodbye — under either thing the
+ * carrier might do when an ask times out with no key, because Telnyx's docs
+ * do not say which it does:
+ *   A. It falls through to the next verb: this document's second ask (n=2),
+ *      then its goodbye and hang-up. Nothing reaches `./screen`, so nothing
+ *      is logged after the "asking" line — the logs cannot see this decline.
+ *   B. It fetches the action with no `Digits`: `./screen` answers the first
+ *      ask (n=1) with `screenSecondAskXml` — the second ask — and only the
+ *      second (n=2) with the goodbye, logged `declined (no-keypress)`.
+ * Either way the caller hears the question twice and then the goodbye; never
+ * once, never three times, never dead air. A person still lifting the phone
+ * from their ear gets a second chance, and a recording loses only a few
+ * seconds of carrier time (no AI minutes — nothing reaches Sofía until 1).
+ */
+export function screenXml(languages: Languages, action: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${screenAsk(languages, action, 1)}${screenAsk(languages, action, 2)}${says(languages, SCREEN_COPY.goodbye)}<Hangup/></Response>`;
+}
+
+/** `./screen`'s answer to a first ask with no key or a wrong one: the second
+ *  ask, falling through to the goodbye if the carrier does. */
+export function screenSecondAskXml(languages: Languages, action: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${screenAsk(languages, action, 2)}${says(languages, SCREEN_COPY.goodbye)}<Hangup/></Response>`;
+}
+
+/** What `./screen` answers a caller who pressed nothing, or another key. */
+export function screenGoodbyeXml(languages: Languages): string {
+  return sayXml(languages, SCREEN_COPY.goodbye);
 }
 
 async function classify(calledE164: string, callerE164: string | null): Promise<Routability> {
@@ -186,6 +284,7 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
     // The incoming webhook makes the opposite trade for the opposite reason:
     // it binds, it is not on the carrier's clock, and its two reads each carry
     // their own try/catch so neither can take the other down.
+    let firstTimeCaller = false;
     try {
       const now = new Date();
       const dayStart = utcDayStart(now);
@@ -197,9 +296,13 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
       const [callsForAccount, callsForNumber, history, forwarded] = await Promise.all([
         countCallsSince(db, row.account_id, dayStart),
         callerE164 ? countCallsByCallerSince(db, row.account_id, callerE164, dayStart) : Promise.resolve(0),
+        // A withheld caller has no history: zero of everything, which the
+        // press-1 screen reads as first-time. Deliberate — there is nothing
+        // to vouch for them, and a withheld number is common on exactly the
+        // calls that screen exists for.
         callerE164
           ? countCallerHistorySince(db, row.account_id, callerE164, windowStart(now, repCfg.windowDays))
-          : Promise.resolve({ spamCalls: 0, otherCalls: 0 }),
+          : Promise.resolve({ spamCalls: 0, otherCalls: 0, answeredCalls: 0 }),
         countForwardedCallsSince(db, row.account_id, callerE164, dayStart),
       ]);
       // A call put through to a person writes no `calls` row (Sofía's webhook
@@ -242,6 +345,9 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
           },
         };
       }
+      // Strictly `=== 0`: a history that did not say (undefined) is NOT a
+      // first-time caller. Unknown means bridge, never the question.
+      firstTimeCaller = history.answeredCalls === 0;
     } catch (e) {
       console.error(`texml cap/reputation count failed for ${calledE164}: ${String(e)}`); // fail open
       return { kind: "dial", accountId: row.account_id, forwardCalls: profile.forward_calls === true, cleared: false };
@@ -249,6 +355,7 @@ async function classify(calledE164: string, callerE164: string | null): Promise<
     return {
       kind: "dial", accountId: row.account_id, phoneNumberId: row.id,
       forwardCalls: profile.forward_calls === true, cleared: true,
+      languages: profile.languages, firstTimeCaller,
     };
   } catch (e) {
     console.error(`texml lookup failed for ${calledE164}: ${String(e)}`);
@@ -341,7 +448,7 @@ function dialXml(
   // happens with TELNYX_PUBLIC_KEY unset), so nothing below may sign it. With
   // VOICE_HANDOFF_ENFORCE on, the webhook declines every such call as
   // `absent` — and that reason is a stranger's, so the webhook raises no
-  // alert. This line, and the voice.texml error stamp `respond` makes from
+  // alert. This line, and the voice.texml error stamp `answer` makes from
   // the flag, are where that outage becomes visible.
   const unsignedBridge = !authenticated && sipHandoffSecretConfigured();
   if (unsignedBridge) {
@@ -387,7 +494,7 @@ function dialXml(
   };
 }
 
-function xmlResponse(body: string): NextResponse {
+export function xmlResponse(body: string): NextResponse {
   return new NextResponse(body, {
     status: 200,
     headers: { "Content-Type": "application/xml; charset=utf-8" },
@@ -468,11 +575,18 @@ function recordForwardedCallLater(input: ForwardedCallInput): void {
  * `authenticated` is true only for a POST whose Telnyx signature this route
  * verified (TELNYX_PUBLIC_KEY set). It decides one thing: whether the bridge
  * carries the signature the SIP webhook checks (`dialXml`).
+ *
+ * Exported for ONE other caller, the press-1 action (`./screen/route.ts`),
+ * which calls it with `skipScreen` once the caller has pressed 1: every guard
+ * re-runs, the forward is honoured, and the bridge is minted here with its own
+ * token, signature and ticket — the same document this route would have sent
+ * had the screen not been asked.
  */
-async function respond(
+export async function answer(
   calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
+  opts: { skipScreen?: boolean } = {},
 ): Promise<NextResponse> {
-  const result = await route(calledE164, callerE164, origin, authenticated);
+  const result = await route(calledE164, callerE164, origin, authenticated, opts.skipScreen === true);
   // One stamp per answered request (lib/ops/stamp.ts). The route is down for
   // everyone only when it cannot look a number up; a refusal, a forward and a
   // bridge are all the route working. The second error is a bridge sent
@@ -486,8 +600,22 @@ async function respond(
   return result.response;
 }
 
+/**
+ * The last resort of the press-1 action (`./screen/route.ts`) when something
+ * in it throws: the plain bridge, uncleared — no ticket, no forward, no drill
+ * — exactly the document this route sends when its own reads fail. The SIP
+ * webhook still gates the call. Same `dialXml`, so still one copy of the
+ * markup.
+ */
+export function bridgeAfterFailure(
+  calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
+): NextResponse {
+  return xmlResponse(dialXml(calledE164, callerE164, origin, authenticated).body);
+}
+
 async function route(
   calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
+  skipScreen = false,
 ): Promise<{ response: NextResponse; lookupFailed: boolean; unsignedBridge: boolean }> {
   const done = (response: NextResponse, lookupFailed = false, unsignedBridge = false) =>
     ({ response, lookupFailed, unsignedBridge });
@@ -520,7 +648,7 @@ async function route(
         // `after()` itself has synchronous throw paths distinct from the
         // callback rejecting (no work store; `errorWaitUntilNotAvailable`).
         // Neither is caught by the try/catch INSIDE the callback below, so
-        // scheduling gets its own — otherwise the throw escapes `respond()`
+        // scheduling gets its own — otherwise the throw escapes `answer()`
         // (there is no enclosing catch in GET/POST) and Telnyx gets a 500
         // instead of the refusal document: dead air instead of the sentence
         // this whole branch exists to speak.
@@ -544,7 +672,37 @@ async function route(
     // bridge: a refusal costs nothing, a bridge starts billing.
     if (result.kind === "blocked") return done(xmlResponse(sayXml(result.languages, COPY.refuse)));
     if (result.kind === "cap") return done(xmlResponse(sayXml(result.languages, COPY.cap)));
-    // kind === "dial": the per-account forward, if the agency turned it on,
+    // kind === "dial". The press-1 screen comes FIRST, ahead of the
+    // per-account forward: a recording the screen exists to stop must not be
+    // rung through to somebody's personal phone either. Only on a cleared
+    // call (`decideScreen` owns that check, forced callers included), and
+    // never on the keypress's own re-run.
+    if (!skipScreen && result.accountId) {
+      const accountId = result.accountId;
+      const languages = result.languages ?? "en";
+      let verdict: ReturnType<typeof decideScreen> = { screen: false };
+      try {
+        verdict = decideScreen({
+          calledE164, callerE164, cleared: result.cleared === true,
+          firstTimeCaller: result.firstTimeCaller === true,
+          drill: fallbackDrillActive(calledE164, callerE164),
+          handsets: agencyHandsets(),
+        }, readScreenConfig());
+      } catch (e) {
+        // Pure code today; the catch is the contract that an env or parse
+        // failure on the screen path can only ever mean "bridge".
+        console.error(`texml screen check failed — bridging, accountId ${accountId}: ${String(e)}`);
+      }
+      if (verdict.screen) {
+        // FORCED is logged on every call it engages, for the drill's reason:
+        // the failure it invites is leaving it on.
+        console.log(verdict.why === "forced"
+          ? `texml screen FORCED on ${calledE164} from ${callerE164} — VOICE_SCREEN_ALWAYS_FROM is set, accountId ${accountId}`
+          : `texml screen asking ${calledE164}, caller ${callerE164 ?? "unknown"} to press 1 (first-time), accountId ${accountId}`);
+        return done(xmlResponse(screenXml(languages, screenActionUrl(origin, languages, accountId))));
+      }
+    }
+    // The per-account forward, if the agency turned it on,
     // takes the place of the bridge; otherwise the same dial path as
     // calledE164 === null, carrying the fallback ticket when cleared.
     // Only a CLEARED call: a forwarded call never reaches Sofía's webhook, so
@@ -590,7 +748,7 @@ async function route(
  * `email/origin.ts` and in the incoming webhook (`incoming/route.ts:891`).
  * The fallback is still correct, just uglier in a log line.
  */
-function actionOrigin(req: Request): string {
+export function actionOrigin(req: Request): string {
   return configuredOrigin() ?? new URL(req.url).origin;
 }
 
@@ -605,54 +763,22 @@ export async function GET(req: Request): Promise<NextResponse> {
   }
   const params = new URL(req.url).searchParams;
   // Never authenticated: GET only answers while TELNYX_PUBLIC_KEY is unset.
-  return respond(e164Of(params.get("To")), e164Of(params.get("From")), actionOrigin(req), false);
+  return answer(e164Of(params.get("To")), e164Of(params.get("From")), actionOrigin(req), false);
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  // req.text() FIRST, always — req.formData() consumes the body and the
-  // Telnyx signature covers the exact raw bytes, not a re-serialized form.
-  // Guarded: a body-read failure must not 500 where the old code fell
-  // through to a dial — treat it as an empty body instead. That then flows
-  // correctly either way: with the key set, an empty body fails the
-  // signature check → 403 (fail-closed, correct for the auth path); with
-  // the key unset, an empty body parses to no To/From → dial (the old
-  // fail-open behavior, unchanged).
-  let rawBody = "";
-  try {
-    rawBody = await req.text();
-  } catch (e) {
-    console.error(`texml: failed to read request body: ${String(e)}`);
-  }
-  const form = new URLSearchParams(rawBody);
-  // Attacker-claimed values, parsed before the signature check below has a
-  // chance to pass — they're only trustworthy once it does, but they're
-  // still worth logging on rejection so a 403 line says who claimed to be
-  // calling whom. Named claimedTo/claimedFrom to keep that honest.
-  const claimedTo = form.get("To") || null;
-  const claimedFrom = form.get("From") || null;
-  const publicKey = process.env.TELNYX_PUBLIC_KEY?.trim();
-  if (publicKey) {
-    const timestamp = req.headers.get("telnyx-timestamp");
-    const signatureB64 = req.headers.get("telnyx-signature-ed25519");
-    // Sanitized through e164Of before logging — claimedTo/claimedFrom are
-    // still unauthenticated at this point (that's the whole reason we're
-    // rejecting), so raw interpolation would let a prober inject newlines or
-    // control characters into the log stream and forge fake decline lines of
-    // unbounded length. e164Of collapses anything that isn't a real phone
-    // number to null, logged as "none".
-    const safeTo = e164Of(claimedTo) ?? "none";
-    const safeFrom = e164Of(claimedFrom) ?? "none";
-    if (!timestamp || !signatureB64) {
-      console.error(`texml: rejected request (missing-headers), claimedTo ${safeTo}, claimedFrom ${safeFrom}`);
-      return new NextResponse(null, { status: 403 });
-    }
-    const ok = verifyTelnyxSignature({ rawBody, timestamp, signatureB64, publicKeyB64: publicKey });
-    if (!ok) {
-      console.error(`texml: rejected request (invalid-signature), claimedTo ${safeTo}, claimedFrom ${safeFrom}`);
-      return new NextResponse(null, { status: 403 });
-    }
-  }
-  // Authenticated exactly when the key is set: past this point, with a key,
-  // the signature above has verified.
-  return respond(e164Of(claimedTo), e164Of(claimedFrom), actionOrigin(req), Boolean(publicKey));
+  // The body read and the signature gate live in `./telnyx-request`, shared
+  // with the press-1 action so the two cannot drift. A body-read failure is
+  // an empty body: with the key set that is a 403 (closed, correct for the
+  // auth path); with it unset it parses to no To/From → dial (fail open).
+  const read = await readTelnyxForm(req, "texml");
+  if (!read.ok) return read.response;
+  // Observation only, and only past the signature check: which fields does
+  // Telnyx send, and is a caller-ID attestation among them? Unproven until a
+  // real call's log says so — nothing may be built on it yet.
+  logFormFields("texml", read.form);
+  return answer(
+    e164Of(read.form.get("To") || null), e164Of(read.form.get("From") || null),
+    actionOrigin(req), read.authenticated,
+  );
 }

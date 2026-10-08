@@ -232,11 +232,11 @@ describe("voice accessors", () => {
       await finish(c.id, "booked", 12);
 
       expect(await countCallerHistorySince(db, accountId, robot, since))
-        .toEqual({ spamCalls: 2, otherCalls: 0 });
+        .toEqual({ spamCalls: 2, otherCalls: 0, answeredCalls: 0 });
       // Scoped to ONE caller: the human's booking must not appear in the
       // robot's history, or the block would never fire.
       expect(await countCallerHistorySince(db, accountId, human, since))
-        .toEqual({ spamCalls: 0, otherCalls: 1 });
+        .toEqual({ spamCalls: 0, otherCalls: 1, answeredCalls: 1 });
     });
   });
 
@@ -264,7 +264,7 @@ describe("voice accessors", () => {
       });
 
       expect(await countCallerHistorySince(db, accountId, caller, since))
-        .toEqual({ spamCalls: 1, otherCalls: 0 });
+        .toEqual({ spamCalls: 1, otherCalls: 0, answeredCalls: 0 });
     });
   });
 
@@ -290,7 +290,7 @@ describe("voice accessors", () => {
 
       const future = new Date(Date.now() + 86_400_000).toISOString();
       expect(await countCallerHistorySince(db, accountId, caller, future))
-        .toEqual({ spamCalls: 0, otherCalls: 0 });
+        .toEqual({ spamCalls: 0, otherCalls: 0, answeredCalls: 0 });
 
       // A fabricated other account must see nothing — the tenancy guard is a
       // security property, not an optimisation. Both counts are exercised:
@@ -299,7 +299,7 @@ describe("voice accessors", () => {
       expect(await countCallerHistorySince(
         db, "00000000-0000-0000-0000-000000000099", caller,
         new Date(Date.now() - 86_400_000).toISOString(),
-      )).toEqual({ spamCalls: 0, otherCalls: 0 });
+      )).toEqual({ spamCalls: 0, otherCalls: 0, answeredCalls: 0 });
     });
   });
 
@@ -325,7 +325,7 @@ describe("voice accessors", () => {
       const sinceIso = (row as { started_at: string }).started_at;
 
       expect(await countCallerHistorySince(db, accountId, caller, sinceIso))
-        .toEqual({ spamCalls: 0, otherCalls: 1 });
+        .toEqual({ spamCalls: 0, otherCalls: 1, answeredCalls: 1 });
     });
   });
 
@@ -339,8 +339,50 @@ describe("voice accessors", () => {
       // as "other" and therefore CLEARS the caller. That is the safe direction
       // — toward letting a call through — and it is intended, not incidental.
       await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: caller });
+      // …and NOT as answered: an unfinished row must never vouch for a caller
+      // at the press-1 screen, which reads `answeredCalls` alone.
       expect(await countCallerHistorySince(db, accountId, caller, since))
-        .toEqual({ spamCalls: 0, otherCalls: 1 });
+        .toEqual({ spamCalls: 0, otherCalls: 1, answeredCalls: 0 });
+    });
+  });
+
+  // The press-1 screen's question: has this caller EVER been answered here?
+  // Not the same question as `otherCalls`: a talking robocall is stamped
+  // `abandoned`, which `otherCalls` counts, so a robot's second call from one
+  // number would read as a returning customer. `answeredCalls` counts only
+  // ANSWERED_CALL_OUTCOMES.
+  it("countCallerHistorySince: answeredCalls counts booked/lead/message/transferred and never abandoned or spam", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const since = new Date(Date.now() - 86_400_000).toISOString();
+      const customer = "+19565550307";
+      const robot = "+19565550308";
+      const finish = async (callerE164: string, outcome: CallOutcome, turnCount: number) => {
+        const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164 });
+        await finishCallRow(db, accountId, id, {
+          outcome, endedAt: new Date(), durationSecs: 30, turnCount,
+          transcript: [], summary: "", language: "en",
+        });
+      };
+      for (const outcome of ["booked", "lead", "message", "transferred"] as const) {
+        await finish(customer, outcome, 4);
+      }
+      // A talking robot: several turns, hung up, stamped abandoned — twice.
+      await finish(robot, "abandoned", 5);
+      await finish(robot, "abandoned", 5);
+      await finish(robot, "spam", 1);
+
+      expect(await countCallerHistorySince(db, accountId, customer, since))
+        .toEqual({ spamCalls: 0, otherCalls: 4, answeredCalls: 4 });
+      expect(await countCallerHistorySince(db, accountId, robot, since))
+        .toEqual({ spamCalls: 1, otherCalls: 2, answeredCalls: 0 });
+      // The third query carries the same tenancy guard and window floor as
+      // the other two — the rows above are answered, so a dropped guard on
+      // THIS query is what these two lines would catch.
+      expect((await countCallerHistorySince(db, "00000000-0000-0000-0000-000000000099", customer, since)).answeredCalls)
+        .toBe(0);
+      expect((await countCallerHistorySince(db, accountId, customer, new Date(Date.now() + 86_400_000).toISOString())).answeredCalls)
+        .toBe(0);
     });
   });
 });
