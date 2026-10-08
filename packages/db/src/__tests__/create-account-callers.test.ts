@@ -20,7 +20,8 @@ import path from "node:path";
  *
  * Scope is `apps/web/src` alone, deliberately. `packages/db/src/demo/seed.ts`
  * also calls `createAccount`, but only through `demo/run.ts` — a manual
- * `db:seed-demo`, never CI and never a deploy — and behind its own
+ * `db:seed-demo` or the demo-screenshot workflow on the CI project, never a
+ * gate and never a deploy — and behind its own
  * `assertSeedableOrgId` gate, whose regex admits ONLY `org_demo_`/`org_test_`
  * ids. A live Clerk id cannot reach it, so it is not a door onto production
  * and does not belong in this list.

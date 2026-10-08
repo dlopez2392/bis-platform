@@ -14,7 +14,7 @@ MCP reads of production).
 
 | | CI project | Production |
 |---|---|---|
-| Name / org | `bis-ci`, in the Free organization `bis-ci` | the paid organization |
+| Name / org | `bis-ci`, moved into the paid organization (owner, 2026-10-08; it began in the Free organization `bis-ci`, and the move kept its ref and URL) | the paid organization |
 | Ref | `odnobiodsftffphuuosz` | `tlbkbmlrfafquucsmsmm` |
 | Region | us-east-1 (same as production, so runner latency matches) | us-east-1 |
 | Schema from | `supabase db push` of the migration files (`db:push:ci`) | the Supabase MCP `apply_migration`, one file at a time |
@@ -22,10 +22,10 @@ MCP reads of production).
 | Vercel Preview | the target: Preview's three runtime Supabase values name this project, with a secret key of its own named `preview`, and `SUPABASE_DB_URL` is not on Preview at all (`production-isolation.md` Part C) | never. **DONE 2026-10-07:** Preview's URL and publishable key are this project's, its secret key is this project's `preview` key, and its `SUPABASE_DB_URL` was deleted (`production-isolation.md` Part C) |
 | URL, ref | literals in `ci.yml` and `ci-project-setup.yml` | Vercel Production |
 | Publishable key | a literal in `ci.yml` (`ci-project-setup.yml` does not use it) | Vercel Production |
-| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel Production (the secret key only; its `SUPABASE_DB_URL` was deleted on 2026-10-07, since the app never reads it); repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml` and `screenshots.yml`); any local env file not yet switched (section 9). The `*.prod-backup` copies section 9 kept on danlo's machine hold the values revoked on 2026-10-07 (`production-isolation.md` Part E1) |
+| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel Production (the secret key only; its `SUPABASE_DB_URL` was deleted on 2026-10-07, since the app never reads it); repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml`, which refreshes the demo tenant production keeps for live demos; `screenshots.yml` has captured on THIS project since 2026-10-08, #197); any local env file not yet switched (section 9). The `*.prod-backup` copies section 9 kept on danlo's machine hold the values revoked on 2026-10-07 (`production-isolation.md` Part E1) |
 
 Never edit the three non-`CI_` secrets to point at the CI project. The demo
-seeder and the screenshot run would then "succeed" against the wrong database.
+seeder (`seed-demo.yml`) would then "succeed" against the wrong database.
 
 `CI_SUPABASE_DB_URL` is always the **Session pooler** URI (Supabase dashboard >
 Connect > Session pooler; host `aws-0-us-east-1.pooler.supabase.com:5432`,
@@ -207,8 +207,10 @@ otherwise ready.
 
 ## 7. Restore from a pause
 
-Free projects pause after about a week without traffic [assumption: Supabase's
-published Free-plan behaviour]. Every CI push is traffic, so this bites only
+**Applies only while the project sits in a Free organization.** Since
+2026-10-08 it is in the paid one, where projects do not pause. Kept for the
+day it moves back. Free projects pause after about a week without traffic
+[assumption: Supabase's published Free-plan behaviour]. Every CI push is traffic, so this bites only
 after a quiet week. The symptom is the guard's first step failing with
 "Could not reach … the project is paused" (or another non-200 status).
 

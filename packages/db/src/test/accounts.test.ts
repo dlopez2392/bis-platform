@@ -28,6 +28,28 @@ describe("accounts service", () => {
     }
   });
 
+  it("createAccount with outboundSuppressed inserts the account already suppressed — never readable as contactable (mutation: drop the spread from the insert → FAILS)", async () => {
+    const db = serviceDb();
+    const orgId = `org_test_${suffix()}`;
+    const { id } = await createAccount(db, { clerkOrgId: orgId, name: "Test Co", actorId: "user_test", outboundSuppressed: true });
+    try {
+      const { data } = await db.from("accounts").select("outbound_suppressed").eq("id", id).single();
+      expect(data?.outbound_suppressed).toBe(true);
+      // And absent means the default: a real account is never born suppressed.
+      const plain = await createAccount(db, { clerkOrgId: `org_test_${suffix()}`, name: "Test Co", actorId: "user_test" });
+      try {
+        const { data: d2 } = await db.from("accounts").select("outbound_suppressed").eq("id", plain.id).single();
+        expect(d2?.outbound_suppressed).toBe(false);
+      } finally {
+        await db.from("events").delete().eq("account_id", plain.id);
+        await db.from("accounts").delete().eq("id", plain.id);
+      }
+    } finally {
+      await db.from("events").delete().eq("account_id", id);
+      await db.from("accounts").delete().eq("id", id);
+    }
+  });
+
   it("createAccount seeds brand_name from the name it is given — no account is ever nameless to a customer", async () => {
     // Mutation: drop `brand_name: input.name` from the insert.
     await withTestAccount(async (db, accountId) => {
