@@ -601,13 +601,26 @@ export async function finishCall(
   // robocall" is the visibility the robocall week asked for — and "calls
   // handled" on the Activity page counts the sent rows. Its own try/catch,
   // like every other leg.
+  //
+  // `abandoned` is ALSO `skipped`, not `sent` (D-065): nobody picked up, so
+  // it is not a call this receptionist "handled" by any reading the Monday
+  // report's own `ANSWERED_OUTCOMES` would recognise — that set is
+  // booked/lead/message/transferred, and `isMeaningful`/`transferred` above
+  // already narrow `meaningful`/alert-worthy outcomes the same way. Logging
+  // every non-spam outcome `sent` (the previous shape) let an abandoned call
+  // inflate "Calls handled" on the Activity page while the Monday report,
+  // reading the SAME account's calls through `listAnsweredCallStartsBetween`,
+  // correctly left it out — two numbers, two answers, same call.
   if (meta.callRowId) {
     try {
+      const skipReason = outcome === "spam" ? REASONS.robocall
+        : outcome === "abandoned" ? REASONS.callerHungUp
+        : "";
       await recordAutomationLog(ctx.db, {
         accountId: ctx.accountId, source: "voice", channel: "ai", contactId,
         subjectKey: `call:${meta.callRowId}`,
-        status: outcome === "spam" ? "skipped" : "sent",
-        reason: outcome === "spam" ? REASONS.robocall : "",
+        status: skipReason ? "skipped" : "sent",
+        reason: skipReason,
       });
     } catch (e) {
       console.error(`finishCall ${meta.callRowId}: automation log write failed: ${String(e)}`);

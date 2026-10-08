@@ -1485,6 +1485,21 @@ describe("finishCall — the automation log row", () => {
     }));
   });
 
+  // D-065: the Activity page's "Calls handled" (callsHandled, countAutomationUsage
+  // — status 'sent' AND source 'voice') must count the SAME calls the Monday
+  // report's "calls answered" does (ANSWERED_OUTCOMES: booked/lead/message/
+  // transferred). An abandoned call — nobody picked up — was writing `status:
+  // "sent"` here (every non-spam outcome did), so it counted as "handled"
+  // while the report correctly excluded it. Mirrors the spam case just above:
+  // not sent, and the reason matches the dashboard's own "hung up" copy.
+  it("an abandoned call writes a skipped row, not a sent one — it must not count as 'handled' when the report's answered-calls definition excludes it (mutation: log abandoned as sent → FAILS)", async () => {
+    const r = await finishCall(abandonedState(), ctx, meta);
+    expect(r.outcome).toBe("abandoned");
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "voice", status: "skipped", reason: "The caller hung up before anyone could help",
+    }));
+  });
+
   it("no call row id → no log row; a log write that throws changes nothing about the result", async () => {
     const bookedState = withBooking(emptyCallState(), { id: "bk1", contactName: "Ana", startsAt: "x", endsAt: "y" });
     await finishCall(bookedState, ctx, { ...meta, callRowId: null });
