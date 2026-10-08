@@ -177,6 +177,12 @@ export async function updateMessageStatus(
  */
 export async function updateMessageStatusByProviderId(
   db: SupabaseClient, providerMessageId: string, status: MessageStatus,
+  // D-016: lets the Resend webhook record a spam complaint distinctly from
+  // a plain bounce (a marker string in `error`, never the provider's own
+  // words — see apps/web's lib/email/failure-reason.ts, the one reader) in
+  // the SAME write as the status, rather than a second round trip the
+  // out-of-order guard below would then have to reason about separately.
+  patch: { error?: string } = {},
 ): Promise<{ updated: boolean }> {
   const { data, error } = await db.from("messages")
     .select("id, account_id, status")
@@ -187,14 +193,17 @@ export async function updateMessageStatusByProviderId(
   if (!data) return { updated: false };
 
   // Out-of-order or replayed event: the row already reflects an equal or
-  // later point in the lifecycle. Leave it alone — no write, no event —
-  // rather than regress the status or log a duplicate.
+  // later point in the lifecycle. Leave it alone — no write, no event, and
+  // (D-016) no patch either, even if this call carried one — rather than
+  // regress the status or log a duplicate.
   if (STATUS_RANK[status] <= STATUS_RANK[data.status as MessageStatus]) {
     return { updated: true };
   }
 
+  const row: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
+  if (patch.error !== undefined) row.error = patch.error;
   const { error: updateErr } = await db.from("messages")
-    .update({ status, updated_at: new Date().toISOString() })
+    .update(row)
     .eq("id", data.id);
   if (updateErr) throw new Error(`updateMessageStatusByProviderId failed: ${updateErr.message}`);
 

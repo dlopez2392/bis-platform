@@ -45,6 +45,18 @@ describe("resend webhook", () => {
     expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.resend_webhook", { ok: true });
   });
 
+  // D-016: a spam complaint stayed a "bounced" message status (0005's CHECK
+  // constraint has no "complained" value, and adding one needs a migration
+  // this fix does not make — see failure-reason.ts) but is no longer
+  // INDISTINGUISHABLE from a plain bounce: it carries the one marker
+  // lib/email/failure-reason.ts recognises, in the SAME write as the status.
+  it("maps a complaint event to the bounced status, carrying the complaint marker (mutation: drop the error patch → FAILS)", async () => {
+    verifyMock.mockReturnValue({ type: "email.complained", data: { email_id: "prov_c" } });
+    const res = await POST(req({}));
+    expect(res.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith(expect.anything(), "prov_c", "bounced", { error: "complained" });
+  });
+
   it("maps a failed event to the failed status", async () => {
     verifyMock.mockReturnValue({ type: "email.failed", data: { email_id: "prov_fail" } });
     const res = await POST(req({}));

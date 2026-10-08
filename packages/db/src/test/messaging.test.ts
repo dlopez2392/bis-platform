@@ -499,6 +499,61 @@ describe("messaging", () => {
       expect(msg!.status).toBe("opened");
     }));
 
+  // D-016: the Resend webhook records a spam complaint distinctly from a
+  // plain bounce by writing a marker into `error` alongside the "bounced"
+  // status (no new status value exists without a migration — see
+  // apps/web's lib/email/failure-reason.ts). The optional 4th argument is
+  // what lets it do that in the SAME write as the status, rather than a
+  // second round trip the out-of-order guard below would then have to
+  // reason about separately.
+  it("updateMessageStatusByProviderId can set an error marker alongside the status (D-016)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
+      }, "user_test");
+      const providerMessageId = testProviderMessageId();
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId }, "user_test");
+
+      await updateMessageStatusByProviderId(db, providerMessageId, "bounced", { error: "complained" });
+
+      const [msg] = await listMessages(db, accountId, convo.id);
+      expect(msg!.status).toBe("bounced");
+      expect(msg!.error).toBe("complained");
+    }));
+
+  it("updateMessageStatusByProviderId's out-of-order guard also withholds the error patch, not only the status (mutation: write the patch unconditionally → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
+      }, "user_test");
+      const providerMessageId = testProviderMessageId();
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId }, "user_test");
+
+      // "opened" already outranks "bounced" on STATUS_RANK's scale (3 vs 4 is
+      // backwards here — bounced/failed share rank 4, the TOP, so this picks
+      // "delivered" instead, which genuinely ranks BELOW bounced, to prove a
+      // stale complaint event replayed after a terminal status is dropped
+      // whole, patch included).
+      await updateMessageStatusByProviderId(db, providerMessageId, "bounced", { error: "complained" });
+      // A DIFFERENT value than the first call's, deliberately: if the guard
+      // only withheld the status column (and wrote the patch regardless),
+      // `error` would still end up "complained" by coincidence — matching
+      // the first call's own value — and this test would pass without
+      // proving anything. A distinct value makes "the patch landed anyway"
+      // and "the patch was correctly withheld" read as different outcomes.
+      await updateMessageStatusByProviderId(db, providerMessageId, "delivered", { error: "should_not_land" });
+
+      const [msg] = await listMessages(db, accountId, convo.id);
+      expect(msg!.status).toBe("bounced");
+      // The second call's patch must not have landed — proves the guard
+      // skips the WHOLE write, not just the status column.
+      expect(msg!.error).toBe("complained");
+    }));
+
   it("updateMessageStatusByProviderId treats a replayed event as a true no-op: no second event row", () =>
     withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
