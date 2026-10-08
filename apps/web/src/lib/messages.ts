@@ -794,7 +794,12 @@ export const m = {
   "compose.smsSegments": "{chars} characters · {segments} message(s)",
 
   "conversations.empty.title": "No conversations yet",
-  "conversations.empty.body": "Email a contact from their timeline and the thread will appear here.",
+  // Named against every real ensureConversation() caller: voice
+  // (finish-call.ts, textback.ts, tools/registry.ts), sms/inbound's route,
+  // bookings and cancellations (b/[publicId]'s actions), and forms/enrich.ts
+  // — web chat (c/[publicId]) creates none. Rule 5: what appears + the
+  // action that causes it.
+  "conversations.empty.body": "Calls, texts, emails, bookings and form submissions with a contact show up here.",
   "conversations.pickThread": "Select a conversation to read it.",
   "conversations.status.queued": "Queued",
   "conversations.status.sent": "Sent",
@@ -802,6 +807,22 @@ export const m = {
   "conversations.status.opened": "Opened",
   "conversations.status.bounced": "Bounced",
   "conversations.status.failed": "Failed",
+  // D-019's pager (DESIGN.md "Paged lists"): exactly one, Older/Newer,
+  // carrying `?before=`.
+  "conversations.older": "Older",
+  "conversations.newer": "Newer",
+  "conversations.pagesLabel": "Pages",
+  // D-017: the plain-language reason shown next to a bounced/failed
+  // message, never the provider's own words (DESIGN.md's "no provider
+  // jargon/codes" rule) — see lib/email/failure-reason.ts, the one place
+  // that reads messages.error and chooses between these.
+  // Says only what IS true today: the complaint is recorded, nothing yet
+  // stops a later send to this address (suppression is deferred — see
+  // failure-reason.ts's own doc comment for what it needs). A promise this
+  // code does not keep would be a worse defect than the one D-016 fixed.
+  "conversations.failureReason.complained": "They marked this email as spam.",
+  "conversations.failureReason.bounced": "This address couldn't be reached.",
+  "conversations.failureReason.failed": "This didn't go through.",
 
   "forms.title": "Forms",
   "forms.add": "New form",

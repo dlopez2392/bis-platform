@@ -42,10 +42,10 @@ export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
 export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, findMessageByProviderId, hasRecentOutboundSms,
          listFailedOutboundSms,
-         listConversations, listMessages,
+         listConversations, getConversationSummary, listMessages,
          listContactMessages, incrementUnreadCount, clearUnreadCount,
          type MessageStatus, type NewMessage, type ConversationSummary,
-         type FailedOutboundSms, type TextbackWindow,
+         type ConversationCursor, type FailedOutboundSms, type TextbackWindow,
          sumUnreadCount, searchConversations } from "./messaging";
 // NOTE: searchCalls needs no line here — voice is `export * from "./voice"` below.
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,

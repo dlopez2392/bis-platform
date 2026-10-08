@@ -268,6 +268,23 @@ describe("sendEmailAction — the customer sees the brand, never the internal la
     expect(sent.fromName).toBe("Rio Roofing");
   });
 
+  // Review fix. Same CRLF normalization as sendSmsAction's own (a real
+  // browser's form-data-set algorithm writes `\r\n` for a textarea's line
+  // breaks on submit): outboundEmail's html conversion is
+  // `body.replace(/\n/g, "<br />")`, which only matches the `\n` half of an
+  // un-normalized CRLF and leaves a stray `\r` sitting in front of every
+  // `<br />` in the html part, and in the text part verbatim.
+  it("normalizes a CRLF line break (what a real browser's form submit sends) to a bare \\n before sending, in both parts (mutation: skip the normalize → FAILS)", async () => {
+    await sendEmailAction("acct_1", fd({
+      contactId: "contact_1", subject: "Hi", body: "line one\r\nline two",
+    }));
+
+    const sent = sendMock.mock.calls[0]![0];
+    expect(sent.body).toBe("line one\nline two");
+    expect(sent.html).toContain("line one<br />line two");
+    expect(sent.html).not.toContain("\r");
+  });
+
   // Was "falls back to the account name when no brand name is set". There is
   // no fallback any more: `emailBrand` takes the branding and nothing else, and
   // this action no longer even selects `name`. An account with no brand name
@@ -433,6 +450,26 @@ describe("sendSmsAction — usage (client billing)", () => {
   it("a 161-character text bills two segments (mutation: bill 1 per text → FAILS)", async () => {
     await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "a".repeat(161) }));
     expect(recordUsageMock).toHaveBeenCalledWith(svc.db, expect.objectContaining({ quantity: 2 }));
+  });
+
+  // Review fix. A real browser's form-data-set algorithm normalizes a
+  // textarea's line breaks to CRLF on submit (HTML spec), even though the
+  // operator only ever typed (and the live segment counter in
+  // message-composer.tsx only ever saw) a bare \n. segments.ts counts \r as
+  // its own GSM-7 septet, so an un-normalized CRLF line break costs TWO
+  // septets instead of one. The line break sits in the MIDDLE, not at an
+  // edge: `sendSmsAction` already `.trim()`s the body, which would eat a
+  // trailing CRLF on its own and prove nothing about the normalize this
+  // fix adds. 80 + 79 'a's plus one mid-string line break: 160 septets (1
+  // segment) normalized, 161 (2 segments) if the \r survives — the FormData
+  // built by `fd()` here already carries the literal CRLF a real browser
+  // submit would; this is not a browser simulation, it is the exact bytes
+  // `formData.get("body")` returns either way.
+  it("a near-160-character text with a mid-string CRLF line break (what a real browser's form submit sends) bills ONE segment, matching what the operator's own counter showed (mutation: skip the CRLF normalize → FAILS)", async () => {
+    await sendSmsAction("acct_1", fd({
+      contactId: "contact_1", body: `${"a".repeat(80)}\r\n${"a".repeat(79)}`,
+    }));
+    expect(recordUsageMock).toHaveBeenCalledWith(svc.db, expect.objectContaining({ quantity: 1 }));
   });
 
   it("a text the carrier refused records nothing (mutation: record before the send → FAILS)", async () => {

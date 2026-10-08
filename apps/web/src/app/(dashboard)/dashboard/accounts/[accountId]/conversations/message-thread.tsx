@@ -1,6 +1,7 @@
 import type { listMessages } from "@bis/db";
 import { formatDateTime } from "@/lib/format";
 import { MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
+import { messageFailureReason } from "@/lib/email/failure-reason";
 import { cn } from "@/lib/utils";
 
 type Message = Awaited<ReturnType<typeof listMessages>>[number];
@@ -62,6 +63,15 @@ export function MessageThread({
                 <> · {MESSAGE_STATUS_LABEL[message.status] ?? message.status}</>
               ) : null}
             </p>
+            {/* D-017: the thread recorded WHY an outbound message bounced or
+                failed (messages.error) and never showed it — the dot-and-word
+                status alone told an operator something went wrong, never
+                what to tell the customer. Plain language only
+                (messageFailureReason never echoes the raw, provider-worded
+                column). */}
+            {message.direction === "outbound" && messageFailureReason(message) ? (
+              <p className="mt-1 text-xs text-[var(--crit)]">{messageFailureReason(message)}</p>
+            ) : null}
           </div>
         ))}
       </div>

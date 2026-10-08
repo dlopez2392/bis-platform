@@ -1,12 +1,21 @@
 import { Webhook } from "svix";
 import { serviceDb, updateMessageStatusByProviderId, type MessageStatus } from "@bis/db";
 import { stampHeartbeat } from "@/lib/ops/stamp";
+import { COMPLAINT_ERROR_MARKER } from "@/lib/email/failure-reason";
 
 const STATUS_BY_EVENT: Record<string, MessageStatus> = {
   "email.sent": "sent",
   "email.delivered": "delivered",
   "email.opened": "opened",
   "email.bounced": "bounced",
+  // D-016: a spam complaint is not a plain bounce, even though both still
+  // land on the one "bounced" status (0005_messaging.sql's CHECK constraint
+  // has no "complained" value, and adding one is a migration — out of
+  // scope here). COMPLAINT_ERROR_MARKER below is what keeps it tellable
+  // apart: a hard bounce, a soft bounce and a complaint are different
+  // things to do about an address, and only recording THIS one as itself
+  // is what this fix does — see failure-reason.ts's own doc comment for
+  // what the suppression half (refusing later mail) still needs.
   "email.complained": "bounced",
   "email.failed": "failed",
 };
@@ -48,8 +57,18 @@ export async function POST(request: Request): Promise<Response> {
   // Not found is also a 200 — a message we do not have is not an error the
   // provider can fix by retrying. A throw is a 500 Resend retries, and an
   // error heartbeat: the error's type only, since a message can quote data.
+  //
+  // The marker is passed ONLY for a complaint — every other event keeps the
+  // original 3-argument call, so a plain bounce's `error` is left exactly
+  // as it was (unset, unless some other path wrote one).
   try {
-    await updateMessageStatusByProviderId(serviceDb(), providerMessageId, status);
+    if (event.type === "email.complained") {
+      await updateMessageStatusByProviderId(
+        serviceDb(), providerMessageId, status, { error: COMPLAINT_ERROR_MARKER },
+      );
+    } else {
+      await updateMessageStatusByProviderId(serviceDb(), providerMessageId, status);
+    }
   } catch (e) {
     stampHeartbeat("email.resend_webhook", { ok: false, error: `status write failed: ${e instanceof Error ? e.name : typeof e}` });
     throw e;

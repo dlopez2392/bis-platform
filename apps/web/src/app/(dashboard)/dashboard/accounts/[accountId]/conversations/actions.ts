@@ -21,11 +21,30 @@ import { m } from "@/lib/messages";
 // because a "use server" file may only export async functions.
 import { sendRejected as rejectSend } from "./send-errors";
 
+/**
+ * Review fix. A real browser's form-data-set algorithm normalizes a
+ * textarea's line breaks to CRLF when a `<form>` submits (the HTML spec's
+ * own rule for constructing the entry list) — the operator only ever typed
+ * (and the live segment counter message-composer.tsx renders only ever
+ * saw) a bare `\n`, but `formData.get("body")` in THIS action sees `\r\n`.
+ * Two things went wrong with that un-normalized value reaching sendEmail/
+ * sendSms unchanged: `outboundEmail`'s html conversion
+ * (`body.replace(/\n/g, "<br />")`) only matches the `\n` half, leaving a
+ * stray `\r` in front of every line break in the html part; and SMS's
+ * segments.ts counts `\r` as its own GSM-7 septet, so a line break cost TWO
+ * septets instead of one — enough to silently bill a second segment on a
+ * text the operator's own counter showed fitting in one. Normalized once,
+ * here, before either body reaches anything that counts or sends it.
+ */
+function normalizeLineBreaks(raw: string): string {
+  return raw.replace(/\r\n/g, "\n");
+}
+
 export async function sendEmailAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAccountAccess(accountId);
   const contactId = String(formData.get("contactId") ?? "");
   const subject = String(formData.get("subject") ?? "").trim();
-  const body = String(formData.get("body") ?? "").trim();
+  const body = normalizeLineBreaks(String(formData.get("body") ?? "")).trim();
   if (!contactId || !body) rejectSend("contactId and body required");
 
   const db = await dbForRequest();
@@ -122,7 +141,7 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
 export async function sendSmsAction(accountId: string, formData: FormData): Promise<void> {
   const { userId } = await requireAccountAccess(accountId);
   const contactId = String(formData.get("contactId") ?? "");
-  const body = String(formData.get("body") ?? "").trim();
+  const body = normalizeLineBreaks(String(formData.get("body") ?? "")).trim();
   if (!contactId || !body) rejectSend("contactId and body required");
 
   // The contact is read as the signed-in user under RLS: that read is what

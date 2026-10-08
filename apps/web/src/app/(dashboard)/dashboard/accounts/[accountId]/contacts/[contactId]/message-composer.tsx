@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { isSendRejected, sendRejectedReason } from "../../conversations/send-errors";
@@ -151,19 +152,31 @@ export function MessageComposer({
           {isEmail ? (
             <Input name="subject" placeholder={m["compose.subject"]} className="text-sm" />
           ) : null}
-          <div className="flex gap-2">
-            <Input
-              name="body"
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder={
-                isEmail ? m["compose.emailPlaceholder"]
-                  : isSms ? m["compose.smsPlaceholder"]
-                    : m["contact.addNote"]
-              }
-              className="flex-1"
-              required
-            />
+          {/* Textarea, not a single-line Input (D-015): an `<input>` cannot
+              hold a typed Enter at all, so no note, email or text sent from
+              here could ever carry a paragraph break. Enter inserts a
+              newline, as a textarea always does — nothing here intercepts
+              it — so the button below is the one way to submit. */}
+          <Textarea
+            name="body"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder={
+              isEmail ? m["compose.emailPlaceholder"]
+                : isSms ? m["compose.smsPlaceholder"]
+                  : m["contact.addNote"]
+            }
+            rows={isEmail || isSms ? 3 : 2}
+            required
+          />
+          <div className="flex items-center justify-between gap-2">
+            {isSms ? (
+              <p className="text-xs text-muted-foreground">
+                {m["compose.smsSegments"]
+                  .replace("{chars}", String(segmentsFor(body).chars))
+                  .replace("{segments}", String(segmentsFor(body).segments))}
+              </p>
+            ) : <span />}
             {/* Disables while pending. The note form this replaced had that
                 protection via SubmitButton; sending is the slowest action in
                 the app and the only one that texts or mails a real person, so
@@ -175,13 +188,6 @@ export function MessageComposer({
               pending={pending}
             />
           </div>
-          {isSms ? (
-            <p className="text-xs text-muted-foreground">
-              {m["compose.smsSegments"]
-                .replace("{chars}", String(segmentsFor(body).chars))
-                .replace("{segments}", String(segmentsFor(body).segments))}
-            </p>
-          ) : null}
         </form>
       )}
     </div>

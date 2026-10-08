@@ -2,6 +2,7 @@
 
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { m } from "@/lib/messages";
 import { isSendRejected } from "./send-errors";
 import { EmailSendButton } from "./send-button";
@@ -41,13 +42,18 @@ export function EmailComposer({
     >
       <input type="hidden" name="contactId" value={contactId} />
       <Input name="subject" placeholder={m["compose.subject"]} className="text-sm" />
-      <div className="flex gap-2">
-        <Input
-          name="body"
-          placeholder={m["compose.emailPlaceholder"]}
-          className="flex-1"
-          required
-        />
+      {/* Textarea, not a single-line Input (D-015): an `<input>` cannot hold
+          a typed Enter at all, so no email sent from here could ever carry a
+          paragraph break. Enter inserts a newline, as a textarea always
+          does — nothing here intercepts it — so the Send button below is the
+          one way to submit. */}
+      <Textarea
+        name="body"
+        placeholder={m["compose.emailPlaceholder"]}
+        rows={3}
+        required
+      />
+      <div className="flex justify-end">
         <EmailSendButton pending={pending} />
       </div>
     </form>
