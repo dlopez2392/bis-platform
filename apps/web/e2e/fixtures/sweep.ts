@@ -4,10 +4,16 @@
  * The problem it solves: `auth.teardown.ts` is a Playwright teardown project,
  * so it runs only when a suite COMPLETES. Ctrl-C, a crashed dev server, or a
  * process-level timeout each strand a real Clerk user, a real Clerk org, real
- * Postgres rows, and a **public** object in Storage — in the shared dev
- * environment, permanently, because nothing else knows they exist. Two such
+ * Postgres rows, and a **public** object in Storage — permanently, because
+ * nothing else knows they exist, WHEN the run was pointed at a project that
+ * outlives the run. That is a LOCAL run, against bis-ci (shared with every
+ * other local run and with CI's own migration-parity check) — two such
  * leftovers are on a human's to-do list right now, which is what makes this
- * worth building rather than remembering.
+ * worth building rather than remembering. CI itself (since 2026-10-08) seeds
+ * and tears down its own per-run local Supabase stack regardless (gone when
+ * the runner is), but still runs this pass: a run that dies mid-suite still
+ * leaves its fixtures for the rest of THAT run's own specs, and nothing here
+ * assumes which kind of project it was given.
  *
  * Cleaning up BEFORE a run is what makes cleanup unconditional. Teardown stays
  * exactly as it is — it is still the fast path, and it deletes by known id
@@ -15,13 +21,14 @@
  *
  * ⚠️ This runs against whatever database and bucket the run's env points at,
  * and the Clerk DEVELOPMENT instance. That database holds `Test Client One`
- * wherever it is: on the separate CI Supabase project it is created by
- * `pnpm --filter @bis/db ci:seed`. Production is refused before this module
- * is reached (auth.setup.ts, sweep.setup.ts and playwright.config.ts run
- * ./production-guard.ts first), but the Clerk instance holds danlo's own
- * identity in every case (production still signs in against it), and a
- * developer may point a run at a project of
- * their own. So the care below does not relax on the CI project: every
+ * wherever it is: on bis-ci (every local run) it is created by
+ * `pnpm --filter @bis/db ci:seed`; on CI's own per-run local stack it is
+ * created by `pnpm --filter @bis/db ci:seed:local`. Production is refused
+ * before this module is reached (auth.setup.ts, sweep.setup.ts and
+ * playwright.config.ts run ./production-guard.ts first), but the Clerk
+ * instance holds danlo's own identity in every case (production still signs
+ * in against it), and a developer may point a run at a project of their own.
+ * So the care below does not relax on which project a run targets: every
  * decision about what to delete is delegated to
  * `stale.ts`, which is pure and directly tested; this module does no matching
  * of its own. It also reports before it deletes, and `dryRun` is the default

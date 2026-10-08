@@ -113,12 +113,15 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   // Clean up before creating, because cleaning up after is optional.
   // auth.teardown only runs when a suite COMPLETES, so every Ctrl-C, crashed
   // dev server or process-level timeout strands a real Clerk user, a real
-  // Clerk org, real rows and a PUBLIC Storage object in the shared dev
-  // environment — permanently, since nothing afterwards knows they existed.
-  // This is the pass that makes those bounded: it deletes only names this
-  // suite mints and only after 30 minutes, so a concurrently-running suite's
-  // fixture is never touched (see fixtures/stale.ts, which owns that
-  // decision and is unit-tested).
+  // Clerk org, real rows and a PUBLIC Storage object — permanently, on a
+  // LOCAL run (bis-ci, shared with every other local run), since nothing
+  // afterwards knows they existed. CI's own per-run local stack (since
+  // 2026-10-08) dies with the runner regardless, but still runs this pass,
+  // because a mid-suite death still leaves fixtures for the REST of that
+  // same run's own specs. This is the pass that makes those bounded: it
+  // deletes only names this suite mints and only after 30 minutes, so a
+  // concurrently-running suite's fixture is never touched (see
+  // fixtures/stale.ts, which owns that decision and is unit-tested).
   //
   // Wrapped so a sweep failure can never fail a run that would otherwise
   // pass. Housekeeping must not become a new way for the suite to go red.
@@ -253,7 +256,15 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   await setActiveOrganization(page, org.id);
 
   await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  // `networkidle` is discouraged by Playwright (any long-poll, analytics
+  // beacon or HMR socket keeps the network "busy" forever) and was the
+  // literal cause of run 37849086442's red setup: 30s with nothing to wait
+  // for ever going idle, 3.7-4.1s normally. The actual readiness signal is
+  // narrower than "no network traffic" — it's the server-side redirect this
+  // very page load triggers: `/` calls resolveClientAccount() off the fresh
+  // token this navigation mints (see comment below) and redirects to this
+  // account's own dashboard the moment it resolves.
+  await page.waitForURL(/\/dashboard\/accounts\/[^/]+\/dashboard$/);
 
   // Same as the agency state above: no session token. The active organization
   // set above lives on the Clerk session, not in the token, so the token the
