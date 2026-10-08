@@ -1,11 +1,14 @@
 # The CI Supabase project (`bis-ci`)
 
 CI does not run on production's database. Both CI jobs (`verify` and `e2e` in
-`.github/workflows/ci.yml`) create and delete rows and Clerk users, so since
-2026-09-24 they run on a separate project that exists only for tests. This
-runbook covers creating it, bringing its schema up to date, seeding it,
-checking it matches production, restoring it after a pause, and rebuilding it
-from nothing.
+`.github/workflows/ci.yml`) create and delete rows, and e2e creates Clerk
+users, so since 2026-09-24 they have run on a separate project that exists
+only for tests. **Since 2026-10-08 only `e2e` does:** `verify` runs on a
+throwaway Supabase stack started inside its own runner (section 11), so it
+shares no database with any other run and no longer waits in a repo-wide
+queue. This runbook covers creating the CI project, bringing its schema up to
+date, seeding it, checking it matches production, restoring it after a pause,
+rebuilding it from nothing, and verify's local stack.
 
 Audience: danlo (dashboard steps) and the orchestrator (workflow dispatches,
 MCP reads of production).
@@ -20,8 +23,8 @@ MCP reads of production).
 | Schema from | `supabase db push` of the migration files (`db:push:ci`) | the Supabase MCP `apply_migration`, one file at a time |
 | Clerk it trusts | the **development** instance, `topical-redfish-40.clerk.accounts.dev` | production's instance only. **DONE 2026-10-07:** the development entry was removed (`production-isolation.md` Part D) |
 | Vercel Preview | the target: Preview's three runtime Supabase values name this project, with a secret key of its own named `preview`, and `SUPABASE_DB_URL` is not on Preview at all (`production-isolation.md` Part C) | never. **DONE 2026-10-07:** Preview's URL and publishable key are this project's, its secret key is this project's `preview` key, and its `SUPABASE_DB_URL` was deleted (`production-isolation.md` Part C) |
-| URL, ref | literals in `ci.yml` and `ci-project-setup.yml` | Vercel Production |
-| Publishable key | a literal in `ci.yml` (`ci-project-setup.yml` does not use it) | Vercel Production |
+| URL, ref | literals in `ci.yml` (the `e2e` job's env), `screenshots.yml` and `ci-project-setup.yml` | Vercel Production |
+| Publishable key | a literal in `ci.yml`'s `e2e` job env and in `screenshots.yml` (`ci-project-setup.yml` does not use it) | Vercel Production |
 | Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel Production (the secret key only; its `SUPABASE_DB_URL` was deleted on 2026-10-07, since the app never reads it); repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml`, which refreshes the demo tenant production keeps for live demos; `screenshots.yml` has captured on THIS project since 2026-10-08, #197); any local env file not yet switched (section 9). The `*.prod-backup` copies section 9 kept on danlo's machine hold the values revoked on 2026-10-07 (`production-isolation.md` Part E1) |
 
 Never edit the three non-`CI_` secrets to point at the CI project. The demo
@@ -37,11 +40,14 @@ is IPv6-only, and GitHub's runners have no IPv6.
 In CI, and in the CI-only tools, a check names the CI project by
 `BIS_CI_SUPABASE_REF` and refuses anything else before anything connects:
 
-- `.github/scripts/ci-target-guard.sh`: the first step of both CI jobs. It
-  refuses production's ref anywhere, an API URL that is not exactly
+- `.github/scripts/ci-target-guard.sh`: the first step of both CI jobs. In
+  e2e it refuses production's ref anywhere, an API URL that is not exactly
   `https://<ref>.supabase.co`, a DB URL whose user is not `postgres.<ref>`, a
   `pk_live_`/`sk_live_` Clerk key, and a secret key that does not open the
-  project's REST API. Tested by `apps/web/ci/ci-target-guard.test.ts`.
+  project's REST API. In verify it runs twice (section 11):
+  `--before-local-stack` refuses any Supabase value at all before the stack
+  exists, and `--local-stack` refuses an API or DB URL that is not on the
+  runner's loopback. Tested by `apps/web/ci/ci-target-guard.test.ts`.
 - `packages/db/src/ci/target.ts` (`assertCiTarget`), inside `db:push:ci`,
   `db:migrations:ci`, `ci:sql` and `ci:seed`: a narrower check of the ref, the
   API URL and the DB URL only (refuses production's ref, a URL or DB user for
@@ -200,10 +206,27 @@ CI first, then production.
 8. Merge.
 
 Append-only applies here too: a migration changed after its CI push is a new
-migration, not a re-push. And a grant change pushed to the CI project turns
-every OTHER branch's grant-pinning tests red until this branch merges, because
-the CI project is main's database now. Push to CI only when the branch is
-otherwise ready.
+migration, not a re-push. Push to CI only when the branch is otherwise ready:
+the CI project is main's database, and e2e on every other branch runs on it.
+
+What changed on 2026-10-08: `verify` (the db suite, including every
+grant-pinning test) builds its own database from the branch's migration
+files on every run (section 11), so it tests a new migration before step 2,
+and a migration pushed to the CI project no longer turns other branches'
+`verify` red.
+
+**What enforces step 2 now.** Until that date, skipping step 2 turned
+`verify` red, because its db suite ran here. It no longer does, so the `e2e`
+job carries the gate: its step "Check that the CI project has every
+migration in this branch" (`.github/scripts/ci-migrations-applied.sh`) runs
+before anything writes here, compares every
+`packages/db/supabase/migrations/<version>_<name>.sql` in the branch with this
+project's `supabase_migrations.schema_migrations` by version, and fails
+naming each file that is missing, with this section as the fix. A version
+this project holds that the branch lacks (another branch pushed first) is
+reported as a notice, never a failure. It does not check production (e2e
+holds no production credential, and must not): steps 5 and 6 are still the
+orchestrator's.
 
 ## 7. Restore from a pause
 
@@ -211,8 +234,9 @@ otherwise ready.
 2026-10-08 it is in the paid one, where projects do not pause. Kept for the
 day it moves back. Free projects pause after about a week without traffic
 [assumption: Supabase's published Free-plan behaviour]. Every CI push is traffic, so this bites only
-after a quiet week. The symptom is the guard's first step failing with
+after a quiet week. The symptom is the e2e job's guard step failing with
 "Could not reach … the project is paused" (or another non-200 status).
+`verify` does not touch the CI project, so it stays green through a pause.
 
 1. Supabase dashboard > project `bis-ci` > **Restore project**. Wait until it
    reports healthy.
@@ -231,7 +255,7 @@ steps above. A lost project is about half an hour.
 
 1. Section 1, a new project. It gets a new ref.
 2. If the ref changed, one PR changes it everywhere it is a literal:
-   - `.github/workflows/ci.yml` env: `BIS_CI_SUPABASE_REF`,
+   - `.github/workflows/ci.yml`, the `e2e` job's env: `BIS_CI_SUPABASE_REF`,
      `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` (the new
      project's publishable key);
    - `.github/workflows/ci-project-setup.yml` env: `BIS_CI_SUPABASE_REF`,
@@ -247,7 +271,8 @@ steps above. A lost project is about half an hour.
    Merge it before step 3, since the setup workflow runs from the ref you
    dispatch.
 3. Sections 2, 3, 5 and 4, in that order: bootstrap, push, parity, seed.
-4. Push any branch; both CI jobs green on its head SHA is the proof.
+4. Push any branch; e2e green on its head SHA is the proof (verify does not
+   use this project).
 
 ## 9. Local development
 
@@ -261,7 +286,9 @@ covers. Any other machine is still refused until it is switched the same way;
 see "Local runs refuse production too" above.
 
 Local runs of `pnpm check` and `pnpm --filter web test:e2e` create and delete
-rows exactly as CI does, so they belong on the CI project too: the four
+rows exactly as CI does, so they belong on the CI project too (CI's own
+`pnpm check` runs on a local stack since 2026-10-08, section 11, but this
+machine has no Docker to start one): the four
 Supabase values in BOTH `apps/web/.env.local` and `packages/db/.env` (one
 switched and the other not puts the db suite and the web suite on different
 databases), plus `BIS_CI_SUPABASE_REF` in `packages/db/.env` for the CI-only
@@ -285,3 +312,59 @@ user, and a trace can contain session cookies. The `playwright-traces` and
    spec's trace stays on your machine in `apps/web/test-results/` (gitignored);
    open it with `pnpm --filter web exec playwright show-trace <path>/trace.zip`.
 3. Never attach a trace to an issue, a PR or a chat. It is a session.
+
+## 11. verify's local stack (since 2026-10-08)
+
+`verify` no longer uses this project. Every verify run starts its own
+Supabase stack inside its runner, runs `pnpm check` and the build against it,
+and the stack is gone with the runner. Nothing is shared between runs, so
+verify has no repo-wide concurrency group and branches' verify runs go in
+parallel. (Until this date every verify waited in one line, `verify-ci-supabase`,
+for this project: with three or four runs queued, the last waited about 45
+minutes before starting.)
+
+What runs, in order (each script's header has the reasons):
+
+1. `ci-target-guard.sh --before-local-stack`: no Supabase value may be in
+   scope yet. The CI project's values live in the `e2e` job's env, never the
+   workflow-level env, so verify never holds this project's secret key.
+2. `.github/scripts/ci-supabase-cli.sh`: the Supabase CLI at the version
+   `pnpm-lock.yaml` pins for `packages/db` (2.109.1), from its release
+   tarball, refused unless its sha256 matches the one pinned in the script.
+   Bumping it means changing both; `ci-local-supabase.test.ts` fails if they
+   disagree.
+3. `.github/scripts/ci-local-supabase.sh`: `supabase start` from a temporary
+   workdir holding `packages/db/supabase/config.toml` and **no migrations**,
+   excluding the services no suite reaches (realtime, studio, edge
+   functions, analytics and the rest; the database, gateway, PostgREST,
+   Storage and auth stay — auth only because the CLI prints no API keys
+   without it). Then section 2's bootstrap, in one transaction, then the
+   branch's migrations by `supabase db push --local`: the same order this
+   project was built in, because grants attach when a table is created and
+   the CLI starts a stack whose default privileges grant the API roles
+   nothing. It refuses a Postgres major other than `config.toml`'s
+   `major_version` (17, production's), and only then writes the stack's
+   URL, keys and DB URL to `GITHUB_ENV`.
+4. `ci-target-guard.sh --local-stack`: the API and DB URL must be on the
+   runner's loopback, and the stack's REST API must answer.
+
+Reading a red one:
+
+- **Install the Supabase CLI** red on the checksum: re-run once (a truncated
+  download). Red again means the release asset changed after it was pinned;
+  that is a finding, not something to re-pin without looking.
+- **Start a local Supabase stack** red: its log shows which part failed.
+  `supabase start` failing is Docker or an image pull on the runner; the
+  bootstrap or a migration failing names the SQL error, and since the stack
+  is built from the branch's own files, that error is the branch's.
+- **Check that verify targets its local Supabase stack** red with 404: the
+  migrations did not reach PostgREST; with 403, the bootstrap's default
+  privileges did not take effect before the migrations.
+- **pnpm check** red: as before, except that a db test can no longer fail
+  from another branch's run, so a failure that moves between re-runs is not
+  contention any more. Read it as a real one.
+
+What stays on this project: `e2e` (it signs in through the Clerk development
+instance, which this project trusts and a local stack does not), `ci:seed`,
+the parity checks, and section 6's rule that every new migration comes here
+before production, which e2e's migration check now enforces (section 6).
