@@ -790,6 +790,13 @@ export const m = {
   "conversations.status.opened": "Opened",
   "conversations.status.bounced": "Bounced",
   "conversations.status.failed": "Failed",
+  // D-017: the plain-language reason shown next to a bounced/failed
+  // message, never the provider's own words (DESIGN.md's "no provider
+  // jargon/codes" rule) — see lib/email/failure-reason.ts, the one place
+  // that reads messages.error and chooses between these.
+  "conversations.failureReason.complained": "They marked this as spam, so it won't reach them again.",
+  "conversations.failureReason.bounced": "This address couldn't be reached.",
+  "conversations.failureReason.failed": "This didn't go through.",
 
   "forms.title": "Forms",
   "forms.add": "New form",
