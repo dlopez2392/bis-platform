@@ -104,6 +104,33 @@ describe("contacts service", () => {
       // for the same input, because they have no "list everything" meaning.
       expect(await listContacts(db, accountId, { search: "%" })).toHaveLength(2);
 
+      // D-009: an underscore in the search box used to be DELETED, turning
+      // "john_doe" into "johndoe" — not even a substring of "john_doe"
+      // itself, so a real username never matched. It is now escaped
+      // (`\_`) instead, so it is read literally: a contact whose name
+      // merely has SOME OTHER character in that position ("johnXdoe") must
+      // NOT match, proving `_` isn't acting as ILIKE's "any one character"
+      // wildcard.
+      await createContact(db, accountId, { firstName: "john_doe" }, "user_test");
+      await createContact(db, accountId, { firstName: "johnXdoe" }, "user_test");
+      const underscoreHits = await listContacts(db, accountId, { search: "john_doe" });
+      expect(underscoreHits).toHaveLength(1);
+      expect(underscoreHits![0]!.first_name).toBe("john_doe");
+
+      // D-009: a phone search must match regardless of formatting. The
+      // stored value is E.164 ("+19565550199"), which contains none of the
+      // punctuation a typed, formatted number does — so even a perfect,
+      // unescaped pass-through of "(956) 555-0199" could never appear as a
+      // literal substring of it. Matched on DIGITS (phone_key, 0033)
+      // instead: the parens/space/dash never need to survive sanitization
+      // at all.
+      await createContact(db, accountId, { firstName: "Phone", phone: "956-555-0199" }, "user_test");
+      const phoneHits = await listContacts(db, accountId, { search: "(956) 555-0199" });
+      expect(phoneHits).toHaveLength(1);
+      expect(phoneHits![0]!.first_name).toBe("Phone");
+      // A bare, unformatted digit run must find the same row.
+      expect(await listContacts(db, accountId, { search: "9565550199" })).toHaveLength(1);
+
       await addTagToContact(db, accountId, id, "vip");
       await addTagToContact(db, accountId, id, "vip"); // idempotent
       const tags = await listContactTags(db, accountId, id);

@@ -14,11 +14,21 @@ describe("sanitizeSearchTerm", () => {
     expect(sanitizeSearchTerm(`ro"se,(x)`)).toBe("rosex");
   });
 
-  it("strips ILIKE and PostgREST wildcards so a query matches literally", () => {
-    // % and _ are ILIKE wildcards; * is PostgREST's own alias for %. A user
+  it("strips % and * (ILIKE/PostgREST wildcards) so a query matches literally", () => {
+    // % is an ILIKE wildcard and * is PostgREST's own alias for it. A user
     // typing one must not silently turn their search into "match everything".
-    expect(sanitizeSearchTerm("a%b_c*d")).toBe("abcd");
+    expect(sanitizeSearchTerm("a%b*d")).toBe("abd");
     expect(sanitizeSearchTerm("back\\slash")).toBe("backslash");
+  });
+
+  // D-009: `_` is ALSO an ILIKE wildcard (matches any one character), but
+  // deleting it — the old behaviour — turned "john_doe" into "johndoe",
+  // which is not even a substring of "john_doe" (there's a character
+  // between "john" and "doe"), so the search for a real username NEVER
+  // matched it. Escaping it instead (`\_`, ILIKE's own default escape
+  // convention) keeps it literal without having to delete it.
+  it("escapes an underscore for ILIKE instead of deleting it, so a literal '_' still matches (D-009, mutation: delete it like % → FAILS)", () => {
+    expect(sanitizeSearchTerm("john_doe")).toBe("john\\_doe");
   });
 
   it("trims, collapses inner whitespace, and caps length", () => {

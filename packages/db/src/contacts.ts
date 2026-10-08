@@ -522,13 +522,30 @@ export type ContactCursor = { v: string | null; id: string };
  * this file's own comment block above findDuplicate). Harmless while only
  * a deliberate CRM search reached it; P6 put this call behind every keystroke
  * of the ⌘K palette.
+ *
+ * D-009's phone half: `phone` is stored E.164 ("+19565550199"), which
+ * contains none of the punctuation a typed, formatted number does — "(956)
+ * 555-0199" is not a literal substring of it no matter how faithfully the
+ * typed term survives sanitizing. Matched on DIGITS instead (`phoneDigits`,
+ * this file's own normalisation and `phone_key`'s, 0033): extracted from the
+ * RAW `search`, not `s` — by the time `s` exists the generic sanitizer above
+ * has already dropped the parens/dash, so reading off `s` would have worked
+ * too, but reading `search` keeps this branch legible without depending on
+ * what the OTHER branches' sanitizer happened to leave behind. Guarded on a
+ * non-empty digit string: an all-letters term has none, and an unconditional
+ * `phone_key.ilike.%%` would match every contact with ANY phone — turning a
+ * name search into "list everyone with a phone" via `.or()`'s union.
  */
 function withSearch<T>(q: T, search?: string): T {
   const s = search ? sanitizeSearchTerm(search) : undefined;
   if (!s) return q;
-  return (q as { or: (f: string) => T }).or(
-    `first_name.ilike.%${s}%,last_name.ilike.%${s}%,email.ilike.%${s}%,phone.ilike.%${s}%`,
-  );
+  const clauses = [
+    `first_name.ilike.%${s}%`, `last_name.ilike.%${s}%`,
+    `email.ilike.%${s}%`, `phone.ilike.%${s}%`,
+  ];
+  const digits = search ? phoneDigits(search).slice(0, 20) : "";
+  if (digits) clauses.push(`phone_key.ilike.%${digits}%`);
+  return (q as { or: (f: string) => T }).or(clauses.join(","));
 }
 
 export async function listContacts(

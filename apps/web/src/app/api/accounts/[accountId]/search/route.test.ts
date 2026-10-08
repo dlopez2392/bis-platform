@@ -56,11 +56,21 @@ describe("account search route", () => {
     // MATCHED "%%" — a lie about a search, and inconsistent with its two
     // siblings, which return [].
     access.mockResolvedValue({ userId: "u1", isAgency: true });
-    for (const hostile of ["%%", "()", "__", "**", `""`]) {
+    // D-009: "__" dropped out of this list — an underscore is now ESCAPED,
+    // not deleted, so "__" sanitizes to the real two-character query "\_\_"
+    // and clears the floor like any other short literal term (pinned in its
+    // own test below), rather than vanishing like these four still do.
+    for (const hostile of ["%%", "()", "**", `""`]) {
       const body = await (await GET(req(hostile), ctx())).json();
       expect(body, `query ${hostile}`).toEqual({ contacts: [], calls: [], conversations: [] });
     }
     expect(dbMocks.listContacts).not.toHaveBeenCalled();
+  });
+
+  it("D-009: an underscore query is escaped, not deleted, so it clears the floor and reaches the database literally", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    await GET(req("__"), ctx());
+    expect(dbMocks.listContacts).toHaveBeenCalledWith({}, "a1", { search: "\\_\\_", limit: 5 });
   });
 
   it("measures the query floor after sanitizing, not before", async () => {
