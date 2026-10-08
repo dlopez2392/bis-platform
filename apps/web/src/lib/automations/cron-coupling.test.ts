@@ -6,6 +6,7 @@ import {
   SMS_REMINDER_WINDOW_START_MS, SMS_REMINDER_WINDOW_END_MS,
   APPOINTMENT_CONFIRM_WINDOW_START_MS, APPOINTMENT_CONFIRM_WINDOW_END_MS,
   APPOINTMENT_CONFIRM_MIN_LEAD_MS,
+  LATE_REMINDER_WINDOW_START_MS, LATE_REMINDER_WINDOW_END_MS, LATE_REMINDER_MIN_AGE_MS,
 } from "@bis/db";
 import { FOLLOWUP_MAX_AGE_MS } from "@/lib/booking/followup-timing";
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
@@ -95,6 +96,22 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     // the bug this case was rewritten to catch.
     expect(APPOINTMENT_CONFIRM_MIN_LEAD_MS).toBe(24 * 60 * MINUTE + 15 * MINUTE);
     expect(APPOINTMENT_CONFIRM_MIN_LEAD_MS).toBeGreaterThanOrEqual(REMINDER_WINDOW_END_MS);
+  });
+
+  it("D-029: the late email reminder is wider than one tick, fires 3h-4h15m ahead, never shares a tick with the day-before window, and clears the text reminder by more than a tick", () => {
+    // Mutation: change any one constant alone → red.
+    const tick = tickIntervalMs(entry!.schedule);
+    expect(LATE_REMINDER_WINDOW_END_MS - LATE_REMINDER_WINDOW_START_MS).toBeGreaterThan(tick);
+    expect([LATE_REMINDER_WINDOW_START_MS, LATE_REMINDER_WINDOW_END_MS, LATE_REMINDER_MIN_AGE_MS])
+      .toEqual([180 * MINUTE, 255 * MINUTE, 60 * MINUTE]);
+    // Disjoint from the day-before window on starts_at: one tick cannot list
+    // a booking under both, which is half of "cannot double-send" (the other
+    // half is reminder_sent_at, pinned in packages/db's booking.test.ts).
+    expect(LATE_REMINDER_WINDOW_END_MS).toBeLessThan(REMINDER_WINDOW_START_MS);
+    // The latest the late email can go (starts_at - 3h) is more than one tick
+    // before the earliest the text reminder can (starts_at - 2h15m): never an
+    // email and a text in the same quarter hour.
+    expect(LATE_REMINDER_WINDOW_START_MS - SMS_REMINDER_WINDOW_END_MS).toBeGreaterThan(tick);
   });
 
   it("the no-show nudge cap is the follow-up cap: same derivation, nothing to defer to", () => {

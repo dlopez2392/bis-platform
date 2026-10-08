@@ -415,6 +415,27 @@ export const REMINDER_WINDOW_START_MS = 23 * 60 * 60 * 1000;
 export const REMINDER_WINDOW_END_MS = (24 * 60 + 15) * 60 * 1000;
 export const FOLLOWUP_QUERY_WINDOW_MS = 37 * 60 * 60 * 1000;
 
+/**
+ * D-029, the LATE reminder: a booking made less than the day-before window's
+ * span ahead (`created_at > starts_at - REMINDER_WINDOW_END_MS`) may never have
+ * been inside that window on any tick, so it gets ONE reminder 3h-4h15m
+ * before it starts instead — provided it was made at least
+ * `LATE_REMINDER_MIN_AGE_MS` before the tick that sends it, because the
+ * confirmation already went out at booking time and a reminder minutes later
+ * is noise. In practice: booked at least ~4 hours ahead → reminded ~3-4
+ * hours ahead; booked closer than that → the confirmation is the reminder.
+ *
+ * 75 minutes wide for the same tick-tolerance reason as the day-before
+ * window. It closes 45 minutes before the SMS reminder's window opens
+ * (`SMS_REMINDER_WINDOW_END_MS`, 2h15m), so an email and a text never land
+ * in the same quarter hour; and it ends far below `REMINDER_WINDOW_START_MS`,
+ * so one tick can never list a booking under both windows. Both relations are
+ * pinned in apps/web's cron-coupling.test.ts.
+ */
+export const LATE_REMINDER_WINDOW_START_MS = 3 * 60 * 60 * 1000;
+export const LATE_REMINDER_WINDOW_END_MS = (4 * 60 + 15) * 60 * 1000;
+export const LATE_REMINDER_MIN_AGE_MS = 60 * 60 * 1000;
+
 export type AccountBrandInfo = {
   accountTimezone: string; branding: Branding;
   fromEmail: string | null; replyToEmail: string | null;
@@ -635,9 +656,26 @@ export async function listDueReminders(
     .order("starts_at", { ascending: true });
   if (error) throw new Error(`listDueReminders failed: ${error.message}`);
 
+  // D-029: the late window (see LATE_REMINDER_WINDOW_START_MS). Disjoint from
+  // the day-before window on `starts_at` at any one `now`, so no row can come
+  // back from both reads. "Made late" compares two columns of the same row,
+  // which a PostgREST filter cannot express, so it is applied here; the
+  // window and the minimum age bound the read itself.
+  const { data: lateData, error: lateError } = await db.from("bookings")
+    .select(`${REMINDER_SELECT}, created_at`)
+    .eq("status", "booked").is("reminder_sent_at", null)
+    .gte("starts_at", new Date(now + LATE_REMINDER_WINDOW_START_MS).toISOString())
+    .lte("starts_at", new Date(now + LATE_REMINDER_WINDOW_END_MS).toISOString())
+    .lte("created_at", new Date(now - LATE_REMINDER_MIN_AGE_MS).toISOString())
+    .order("starts_at", { ascending: true });
+  if (lateError) throw new Error(`listDueReminders (late) failed: ${lateError.message}`);
+  const late = ((lateData ?? []) as any[]).filter((r) =>
+    new Date(r.created_at).getTime() > new Date(r.starts_at).getTime() - REMINDER_WINDOW_END_MS);
+
   // The contact AND the calendar (whose public id is the reschedule link)
-  // must be this booking's own account's (ownAccountEmbedsOnly).
-  const rows = ownAccountEmbedsOnly((data ?? []) as any[], "listDueReminders", "booking", ["contacts", "calendars"]);
+  // must be this booking's own account's (ownAccountEmbedsOnly). Late rows
+  // first: their appointments are hours away, the day-before rows' a day.
+  const rows = ownAccountEmbedsOnly([...late, ...((data ?? []) as any[])], "listDueReminders", "booking", ["contacts", "calendars"]);
   if (rows.length === 0) return [];
 
   // One `accounts` read per distinct account (in practice always one) for

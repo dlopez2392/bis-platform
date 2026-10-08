@@ -254,6 +254,62 @@ describe("booking accessors", () => {
   });
 
   /**
+   * D-029. The day-before window ([now+23h, now+24h15m]) can only ever see a
+   * booking that existed ~24h before it starts, so anything booked less than
+   * about a day ahead never got a reminder at all. The rule now: a booking
+   * made LATE — less than the day-before window's full span ahead, so that
+   * window may never have seen it — gets one reminder 3h-4h15m before it
+   * starts, provided it was made at least an hour before that tick (the
+   * confirmation went out at booking time; a reminder minutes later is
+   * noise).
+   *
+   * Why it cannot double-send: the late window ends at now+4h15m and the
+   * day-before window starts at now+23h, so one tick can never list a booking
+   * twice; and across ticks `reminder_sent_at` dedupes exactly as it already
+   * does for the day-before window. A booking made a day or more ahead is not
+   * late, so a day-before reminder that was sent, skipped or blocked is never
+   * repeated by this path. Past appointments are below the window's start.
+   *
+   * `created_at` is backdated by a direct update (the column defaults to the
+   * real now(), and every instant here is pinned). Filtered to this account,
+   * because the due list is global and the shared project is not.
+   */
+  it("D-029: a booking made less than a day ahead is reminded 3h-4h15m before it starts, once, and only if made at least an hour before", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Late", email: "late-booker@example.com" }, "user_test");
+      const now = new Date("2027-04-05T14:00:00Z");
+      const H = 60 * 60 * 1000;
+      const mk = async (startsAt: string, createdAgoMs: number) => {
+        const b = await createBooking(db, accountId,
+          { calendarId: cal.id, contactId, startsAt: new Date(startsAt),
+            endsAt: new Date(new Date(startsAt).getTime() + 10 * 60 * 1000) }, "user_test");
+        const { error } = await db.from("bookings")
+          .update({ created_at: new Date(now.getTime() - createdAgoMs).toISOString() }).eq("id", b.id);
+        if (error) throw new Error(error.message);
+        return b.id;
+      };
+      const lowerEdge = await mk("2027-04-05T17:00:00Z", 6 * H);    // exactly now+3h, booked 9h ahead
+      const late = await mk("2027-04-05T17:30:00Z", 6 * H);         // 3h30m out, booked 9h30m ahead — the defect's row
+      await mk("2027-04-05T17:45:00Z", 0.5 * H);                    // booked 30 min ago: the confirmation is enough
+      await mk("2027-04-05T18:00:00Z", 48 * H);                     // booked 2 days ahead: the day-before window owned it
+      const upperEdge = await mk("2027-04-05T18:15:00Z", 6 * H);    // exactly now+4h15m — inclusive upper edge
+      await mk("2027-04-05T18:30:00Z", 6 * H);                      // 4h30m — a later tick's job
+      await mk("2027-04-05T16:30:00Z", 6 * H);                      // 2h30m — an earlier tick's job
+      await mk("2027-04-05T13:00:00Z", 6 * H);                      // already started — never remind after start
+
+      const mine = async () => (await listDueReminders(db, now.toISOString()))
+        .filter((d) => d.accountId === accountId).map((d) => d.bookingId);
+      expect(await mine()).toEqual([lowerEdge, late, upperEdge]);
+
+      // Once stamped, never again — the same dedupe the day-before window uses.
+      await stampReminderSent(db, late);
+      expect(await mine()).toEqual([lowerEdge, upperEdge]);
+    });
+  });
+
+  /**
    * The tenant boundary behind the operator-facing `setBookingStatus` action
    * — previously untested. `.eq("account_id", accountId)` on the update is
    * what makes a wrong accountId match zero rows rather than someone else's

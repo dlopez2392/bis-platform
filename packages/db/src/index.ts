@@ -76,6 +76,7 @@ export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, upda
          REMINDER_WINDOW_START_MS, REMINDER_WINDOW_END_MS, FOLLOWUP_QUERY_WINDOW_MS,
          type CalendarRow, type BookingRow, type BookingStatus, type CalendarSettingsPatch,
          type CreateBookingInput, type DueReminder, type DueFollowup, type DueLookup } from "./booking";
+export { LATE_REMINDER_WINDOW_START_MS, LATE_REMINDER_WINDOW_END_MS, LATE_REMINDER_MIN_AGE_MS } from "./booking";
 export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
          REVIEW_REQUEST_MAX_AGE_MS,
