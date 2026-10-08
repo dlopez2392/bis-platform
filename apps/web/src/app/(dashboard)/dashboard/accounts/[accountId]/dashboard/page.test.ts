@@ -564,9 +564,10 @@ describe("AccountDashboardPage — the hero follows the plan (F-076 now slice)",
 
 /**
  * D-077: the three OTHER 7-day KPI tiles with a sparkline (hero is covered
- * above) must trace the SAME 7-day window their own number counts, and
- * every 7-day tile — sparked or not — must say so in words, not leave the
- * window to be inferred from the delta/spark alone (DESIGN.md rule 1).
+ * above) must trace the SAME 7-day window their own number counts. The
+ * window itself is named in words, not left to be inferred from the
+ * delta/spark alone (DESIGN.md rule 1) — as ONE caption above the whole
+ * row (design review follow-up), not a suffix on each tile's own label.
  */
 describe("AccountDashboardPage — the 7-day KPI tiles name their window and their sparklines match it (D-077)", () => {
   const NOW = new Date("2026-06-15T12:00:00.000Z");
@@ -619,23 +620,40 @@ describe("AccountDashboardPage — the 7-day KPI tiles name their window and the
     expect(html).toContain(`points="${expectedLine}"`);
   });
 
-  it("every 7-day KPI tile names its own window in words — delta and sparkline alone never say 'last 7 days' on screen (mutation: drop the period suffix from any of the four labels → FAILS)", async () => {
+  // Design review follow-up: a suffix on each of the four labels wrapped at
+  // xl width (251.6px of Geist Mono at the Label role for "After-hours
+  // captured · Last 7 days" in a ~234px tile) and misaligned the row, and
+  // the mockup never puts a period in a tile label. ONE row-level caption
+  // instead — rendered ONCE, not per tile, and the tile labels themselves
+  // carry no suffix.
+  it("names the row's window with ONE caption above the grid, not a suffix on each tile's own label (mutation: drop the caption → FAILS)", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true });
     dbMocks.getCalendarForAccount.mockResolvedValue({ open_hours: { mon: [["09:00", "17:00"]] } } as never);
 
     const html = renderToStaticMarkup(await AccountDashboardPage(route()));
     const text = renderedText(html);
 
+    // Exactly once: not absent, and not once per tile either.
+    expect(html.match(/Last 7 days/g)?.length).toBe(1);
+    // The four labels themselves are now bare — no tile-level suffix.
     for (const labelKey of [
       "dashboard.kpi.callsAnswered", "dashboard.kpi.appointmentsBooked",
       "dashboard.kpi.afterHoursCaptured", "dashboard.kpi.pipelineAdded",
     ] as const) {
-      // Every one of these four labels must be immediately followed by the
-      // period it covers somewhere in the rendered text — not merely that
-      // "Last 7 days" appears ONCE anywhere on the page (that would pass if
-      // only one of the four tiles carried it).
-      expect(text).toMatch(new RegExp(`${m[labelKey]}[^A-Za-z]*Last 7 days`));
+      expect(text).not.toMatch(new RegExp(`${m[labelKey]}[^A-Za-z]*Last 7 days`));
     }
+  });
+
+  it("the row caption reuses StatTile's own exported LABEL_ROLE class string, never a second hand-copied one (mutation: hard-code a literal class string for the caption → FAILS)", async () => {
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+    const { LABEL_ROLE } = await import("@/components/stat-tile");
+    // The caption's own <p> carries every class in LABEL_ROLE, in a single
+    // class attribute — not merely that the string appears somewhere (a
+    // comment or an unrelated node would also satisfy a bare `.toContain`).
+    const captionMatch = html.match(/<p class="([^"]*)">Last 7 days<\/p>/);
+    expect(captionMatch).not.toBeNull();
+    const captionClasses = captionMatch![1]!.split(/\s+/);
+    for (const cls of LABEL_ROLE.split(/\s+/)) expect(captionClasses).toContain(cls);
   });
 });
 

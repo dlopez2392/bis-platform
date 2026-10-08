@@ -275,10 +275,7 @@ export const m = {
   // The KPI row (Task 5): rolling 7-local-day metrics, each with a delta vs
   // the prior 7 days and a sparkline over that SAME 7 days (D-077: three of
   // the four used to spark a 14-day trend beside a 7-day number — a lie by
-  // omission about which span the picture showed). DESIGN.md rule 1 asks for
-  // "a delta, sparkline, OR period label", but a delta/spark alone never
-  // SAYS which window they cover, so every one of these four now also
-  // carries `dashboard.kpi.last7Days` in its own label text.
+  // omission about which span the picture showed).
   "dashboard.kpi.callsAnswered": "Calls answered",
   // F-076 (now slice): the hero on a CRM-only account (no enabled voice
   // profile) — "Calls answered" is structurally always 0 with no
@@ -293,11 +290,11 @@ export const m = {
   "dashboard.kpi.appointmentsBooked": "Appointments booked",
   "dashboard.kpi.afterHoursCaptured": "After-hours captured",
   "dashboard.kpi.pipelineAdded": "Pipeline added",
-  // D-077: appended to each of the four labels above (page.tsx), not a
-  // separate StatTile slot — the foot row's right-hand slot is delta-pill
-  // left / (sparkline OR a `.sub` caption) right, one or the other
-  // (northern-lights.html:85-95), so naming the window alongside an
-  // existing spark means the label itself has to carry it.
+  // D-077, design review follow-up: ONE caption for the whole KPI row
+  // (page.tsx, rendered with StatTile's own exported `LABEL_ROLE` class
+  // string), not a suffix on each of the four labels above — a suffix
+  // wrapped in the xl tile width and misaligned the row, and the mockup
+  // never puts a period in a tile label (northern-lights.html:85-95).
   "dashboard.kpi.last7Days": "Last 7 days",
 
   // The 14-day calls chart card (Task 6) — CSS bars, hover tooltip on every

@@ -178,6 +178,13 @@ export const REASONS = {
    *  (weekly-metrics.ts's `ABANDONED_OUTCOME`) in substance, worded for a
    *  single call rather than a count. */
   callerHungUp: "The caller hung up before anyone could help",
+  /** handoff-result/route.ts's own "nobody picked up" branch (D-065 follow-
+   *  up): `finishCall` already wrote this call's automation_log row `sent`
+   *  the moment the caller ASKED for a person (`wasServed`'s optimistic
+   *  bet, made before the dial was even attempted) — but the dial rang out,
+   *  so the row has to say so, same as a true hang-up would have, had the
+   *  caller never asked at all. */
+  transferNoAnswer: "Nobody answered the transfer",
 } as const;
 
 async function record(db: PassContext["db"], w: AutomationLogWrite): Promise<void> {

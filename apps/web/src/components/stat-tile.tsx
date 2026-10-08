@@ -38,7 +38,12 @@ function deltaAriaLabel(delta: StatTileDelta): string {
   return m[key].replace("{value}", delta.label);
 }
 
-const LABEL_ROLE = "font-mono text-[10px] font-medium tracking-[0.14em] uppercase text-muted-foreground";
+// Exported (design review, D-077 follow-up): the dashboard's 7-day KPI row
+// caption (dashboard/page.tsx) reuses this EXACT class string for
+// "Last 7 days" rather than a second, hand-copied one — the tile's own
+// Label role (DESIGN.md: Geist Mono 500, 10px, +0.14em, uppercase), never a
+// new hard-coded value.
+export const LABEL_ROLE = "font-mono text-[10px] font-medium tracking-[0.14em] uppercase text-muted-foreground";
 
 export function StatTile({
   label,

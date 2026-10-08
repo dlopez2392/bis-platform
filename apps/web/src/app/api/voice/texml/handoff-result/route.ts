@@ -276,6 +276,40 @@ async function decide(token: string, status: string): Promise<string> {
   // asking: before the handoff shipped they got the text-back, and afterwards
   // they got an apology and silence. Observed on a real call, 2026-09-17.
   console.log(`handoff-result: call ${call.id} reached nobody (${status}), accountId ${accountId}`);
+
+  // D-065 follow-up (design/code review round 2): `finishCall` already wrote
+  // this call's automation_log row "sent" at socket close — `wasServed`'s
+  // optimistic bet, made the instant the caller ASKED for a person, before
+  // this dial was even attempted (finish-call.ts's own comment on that
+  // gate). The bet did not pay off: the call STAYS `abandoned` ("the socket's
+  // own point of view", this route's file doc above), and the row has to
+  // say so, same as a true hang-up would have.
+  //
+  // Scoped to `call.outcome === "abandoned"` ONLY — a caller who booked,
+  // left a lead, or left a message on this same call despite the failed
+  // transfer earned a real `sent` row that must not be downgraded; a
+  // `finishCall` write for any of those outcomes is unconditionally `sent`
+  // (finish-call.ts), not the optimistic `wasServed` bet this corrects.
+  // Idempotent the same way the success write is: `recordAutomationLog`
+  // upserts on (account_id, source, subject_key), so a replayed "no-answer"
+  // callback (a carrier retry) writes the same values again, never a second
+  // row. Its own try/catch: a logging failure must not cost the caller the
+  // spoken apology below.
+  if (call.outcome === "abandoned") {
+    try {
+      // Lazy, same rule as the `@bis/db` import above: `hold-or-send.ts`
+      // itself imports `@bis/db` at module scope, so a STATIC import here
+      // would pull that into this route's own build-time graph.
+      const { REASONS } = await import("@/lib/automations/hold-or-send");
+      await recordAutomationLog(db, {
+        accountId, source: "voice", channel: "ai", contactId: call.contact_id,
+        subjectKey: `call:${call.id}`, status: "skipped", reason: REASONS.transferNoAnswer,
+      });
+    } catch (e) {
+      console.error(`handoff-result: call ${call.id} reached nobody but the automation log did not update: ${String(e)}, accountId ${accountId}`);
+    }
+  }
+
   let languages: "en" | "es" | "both" = "en";
   let profile: Awaited<ReturnType<typeof getVoiceProfile>> = null;
   try {

@@ -11,7 +11,7 @@ import {
   listAnsweredCallStartsBetween, listLeadInstantsBetween, listSpamCallStartsBetween,
   listAbandonedCallStartsBetween,
 } from "@/lib/reports/weekly-metrics";
-import { StatTile } from "@/components/stat-tile";
+import { StatTile, LABEL_ROLE } from "@/components/stat-tile";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
@@ -38,17 +38,6 @@ import { WorkRowCard } from "./work-row";
 // bookings still surfaces both bookings, instead of the feed silently
 // emptying because the newest 8 RAW rows all happened to be skipped types.
 const RECENT_EVENTS_FETCH_LIMIT = 50;
-
-// D-077: every 7-day KPI tile below names its own window in its label text —
-// a delta or a sparkline alone never SAYS "last 7 days" on screen, and three
-// of the four used to pair a 7-day number with a 14-day sparkline besides.
-// Not a new StatTile prop: the mockup's `.foot` row is delta-pill left,
-// (sparkline OR a `.sub` caption) right — one or the other
-// (northern-lights.html:85-95) — so a tile that already carries a spark has
-// nowhere else to put the period but its own label.
-function kpiLabel(label: string): string {
-  return `${label} · ${m["dashboard.kpi.last7Days"]}`;
-}
 
 export const dynamic = "force-dynamic";
 
@@ -337,12 +326,21 @@ export default async function AccountDashboardPage({
             ungated, and a row that vanished at zero would read as a broken
             feature (work-row.tsx's own doc comment, spec §4.3), so this
             renders at every count including zero. */}
-        {/* Above the KPI tiles, because it qualifies every period label in
-            them: "Last 7 days" is seven of WHOSE days. It also sits above the
+        {/* Above the KPI tiles, because it qualifies BOTH the row caption
+            right below it ("Last 7 days" is seven of WHOSE days) and the
             work row that follows, which `bucketWork` measures against those
             same midnights. */}
         <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
         <WorkRowCard accountId={accountId} total={workTotal} overdue={workOverdue} />
+        {/* D-077, design review follow-up: a suffix on each of the four
+            tile's own labels ("Appointments booked · Last 7 days",
+            251.6px of Geist Mono at the Label role) wrapped in the ~234px
+            xl tile and misaligned the row — the mockup never puts a period
+            in a tile label (northern-lights.html:85-95). ONE caption for
+            the whole row instead, reusing StatTile's own exported
+            `LABEL_ROLE` class string rather than a second hand-copied one —
+            tokens only, no new hard-coded value. */}
+        <p className={LABEL_ROLE}>{m["dashboard.kpi.last7Days"]}</p>
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           {/* F-076 (now slice): ONE hero tile (DESIGN.md rule 11), whose
               metric follows the plan rather than a fixed metric that reads
@@ -350,27 +348,27 @@ export default async function AccountDashboardPage({
               comment above. */}
           <StatTile
             hero
-            label={kpiLabel(showVoiceSub ? m["dashboard.kpi.callsAnswered"] : m["dashboard.kpi.leadsCaptured"])}
+            label={showVoiceSub ? m["dashboard.kpi.callsAnswered"] : m["dashboard.kpi.leadsCaptured"]}
             value={showVoiceSub ? String(currentCallsIso.length) : String(currentLeadsIso.length)}
             delta={showVoiceSub ? callsDelta : leadsDelta}
             spark={showVoiceSub ? callsSpark : leadsSpark}
             valueTestId={showVoiceSub ? "kpi-calls-answered" : "kpi-leads-captured"}
           />
           <StatTile
-            label={kpiLabel(m["dashboard.kpi.appointmentsBooked"])}
+            label={m["dashboard.kpi.appointmentsBooked"]}
             value={String(currentBookingsIso.length)}
             delta={bookingsDelta}
             spark={bookingsSpark}
           />
           {hasAfterHours ? (
             <StatTile
-              label={kpiLabel(m["dashboard.kpi.afterHoursCaptured"])}
+              label={m["dashboard.kpi.afterHoursCaptured"]}
               value={String(afterHoursCurrent)}
               delta={afterHoursDelta}
             />
           ) : null}
           <StatTile
-            label={kpiLabel(m["dashboard.kpi.pipelineAdded"])}
+            label={m["dashboard.kpi.pipelineAdded"]}
             value={formatCurrency(currentPipelineValue)}
             delta={pipelineDelta}
             spark={pipelineSpark}
