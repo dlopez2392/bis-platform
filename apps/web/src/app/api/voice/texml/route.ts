@@ -16,6 +16,10 @@
 // Telnyx TELLS US the dialed number (To param) — the SIP leg to OpenAI does
 // not reliably carry it — so we smuggle it onto the SIP URI as X-BIS-Called.
 // URI ?X-headers ride the INVITE and surface in the webhook's sip_headers.
+// On a request Telnyx signed, a third rides with them, `X-BIS-Signature`:
+// this route's signed statement of the called number, the caller and the
+// handoff token, which the webhook verifies before it resolves a tenant
+// (`lib/voice/sip-handoff-signature.ts`).
 // A number we don't know (or one not testing/live) gets a POLITE spoken
 // refusal, never a crash and never another tenant's greeting (spec §7). A
 // DISABLED profile or a caller OVER THE DAILY CAP also gets a spoken refusal
@@ -38,6 +42,7 @@ import { verifyTelnyxSignature } from "@/lib/voice/telnyx-signature";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 import { newHandoffToken, resolveHandoffTarget } from "@/lib/voice/handoff";
 import { signFallbackTicket } from "@/lib/voice/fallback-ticket";
+import { SIP_HANDOFF_HEADER, signSipHandoff, sipHandoffSecretConfigured } from "@/lib/voice/sip-handoff-signature";
 import { FALLBACK_DRILL_SIP_BASE, fallbackDrillActive } from "@/lib/voice/fallback-drill";
 import { configuredOrigin } from "@/lib/email/origin";
 import { stampHeartbeat } from "@/lib/ops/stamp";
@@ -309,27 +314,60 @@ export function forwardXml(to: string, callerId: string | null): string {
  * action route can never find the call: a silent, unloggable dead end. That
  * equality is pinned by a test, not left to reading.
  *
- * It rides the dial with no `To` as well. The webhook can still resolve a
- * tenant from the To/Diversion fallbacks on such a call, so it can still be
- * answered — and its caller can still ask for a person.
+ * It rides the dial with no `To` as well. ONLY WHILE VOICE_HANDOFF_ENFORCE IS
+ * OFF can the webhook still resolve a tenant from its To/Diversion fallbacks
+ * on such a call, and so answer it (and let its caller ask for a person).
+ * With enforcement on, a call with no `To` carries no signature (there is no
+ * called number to sign) and the webhook declines it.
+ *
+ * `unsignedBridge` is true when the secret is set but this request was not
+ * Telnyx-signed, so the bridge goes out with no signature: the gap that
+ * silently turns enforcement into "decline every call" (see below).
  */
 function dialXml(
-  calledE164: string | null, origin: string, cleared?: { accountId: string; callerE164: string | null }, drill = false,
-): string {
+  calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
+  cleared?: { accountId: string; callerE164: string | null }, drill = false,
+): { body: string; unsignedBridge: boolean } {
   const projectId = process.env.VOICE_OPENAI_PROJECT_ID;
   if (!projectId) {
     // Speak the misconfig: a broken deploy should be audible on a test call,
     // never silent dead air (demo lesson).
-    return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say>Configuration error: the project identifier is not set.</Say><Hangup/></Response>`;
+    return {
+      body: `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say>Configuration error: the project identifier is not set.</Say><Hangup/></Response>`,
+      unsignedBridge: false,
+    };
+  }
+  // The secret is set, but this request was not Telnyx-signed (that only
+  // happens with TELNYX_PUBLIC_KEY unset), so nothing below may sign it. With
+  // VOICE_HANDOFF_ENFORCE on, the webhook declines every such call as
+  // `absent` — and that reason is a stranger's, so the webhook raises no
+  // alert. This line, and the voice.texml error stamp `respond` makes from
+  // the flag, are where that outage becomes visible.
+  const unsignedBridge = !authenticated && sipHandoffSecretConfigured();
+  if (unsignedBridge) {
+    console.error("texml: VOICE_HANDOFF_SECRET is set but this request was not Telnyx-signed (TELNYX_PUBLIC_KEY is unset) — this call carries no X-BIS-Signature, so VOICE_HANDOFF_ENFORCE would decline it at the SIP webhook");
   }
   const token = newHandoffToken();
   // The drill swaps ONLY the address: token, ticket and action URL below are
   // what a real call carries, so the drill tests the real path
   // (lib/voice/fallback-drill.ts).
   const base = drill ? FALLBACK_DRILL_SIP_BASE : `sip:${projectId}@sip.api.openai.com;transport=tls`;
+  // The signature the SIP webhook checks before it resolves a tenant
+  // (lib/voice/sip-handoff-signature.ts): this route's statement that the
+  // call came through here, for this called number and this caller. ONLY on
+  // a request Telnyx signed — an unauthenticated request can name any
+  // To/From, and signing its answer would vouch for numbers nobody verified.
+  // Every dial gets it, cleared or not: the webhook is where an uncleared
+  // call is gated, and refusing to sign would turn this route's fail-open
+  // read into a refusal there. Null with no secret (the rollout's first
+  // step); the webhook only refuses an unsigned call once enforcement is on.
+  const signature = authenticated && calledE164
+    ? signSipHandoff(token, calledE164, callerE164, Date.now())
+    : null;
   const params = [
     ...(calledE164 ? [`X-BIS-Called=${encodeURIComponent(calledE164)}`] : []),
     `X-BIS-Handoff=${encodeURIComponent(token)}`,
+    ...(signature ? [`${SIP_HANDOFF_HEADER}=${encodeURIComponent(signature)}`] : []),
   ];
   const uri = `${base}?${params.join("&")}`;
   // The model-down fallback's ticket rides the same URL, and only for a call
@@ -343,7 +381,10 @@ function dialXml(
     + (ticket ? `&f=${encodeURIComponent(ticket)}` : "");
   // xmlText on BOTH: the URI's `&` separators are the live bug, and the
   // action URL is one appended query parameter away from the same one.
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial answerOnBridge="true" action="${xmlText(action)}" method="POST"><Sip>${xmlText(uri)}</Sip></Dial></Response>`;
+  return {
+    body: `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Dial answerOnBridge="true" action="${xmlText(action)}" method="POST"><Sip>${xmlText(uri)}</Sip></Dial></Response>`,
+    unsignedBridge,
+  };
 }
 
 function xmlResponse(body: string): NextResponse {
@@ -423,21 +464,33 @@ function recordForwardedCallLater(input: ForwardedCallInput): void {
   }
 }
 
-async function respond(calledE164: string | null, callerE164: string | null, origin: string): Promise<NextResponse> {
-  const result = await route(calledE164, callerE164, origin);
+/**
+ * `authenticated` is true only for a POST whose Telnyx signature this route
+ * verified (TELNYX_PUBLIC_KEY set). It decides one thing: whether the bridge
+ * carries the signature the SIP webhook checks (`dialXml`).
+ */
+async function respond(
+  calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
+): Promise<NextResponse> {
+  const result = await route(calledE164, callerE164, origin, authenticated);
   // One stamp per answered request (lib/ops/stamp.ts). The route is down for
   // everyone only when it cannot look a number up; a refusal, a forward and a
-  // bridge are all the route working.
+  // bridge are all the route working. The second error is a bridge sent
+  // unsigned while the secret is set (`dialXml`): this route's own
+  // configuration failing every call it bridges once enforcement is on.
   stampHeartbeat("voice.texml", result.lookupFailed
     ? { ok: false, error: "the called number could not be looked up" }
-    : { ok: true });
+    : result.unsignedBridge
+      ? { ok: false, error: "VOICE_HANDOFF_SECRET is set but TeXML requests are not Telnyx-signed, so calls carry no signature" }
+      : { ok: true });
   return result.response;
 }
 
 async function route(
-  calledE164: string | null, callerE164: string | null, origin: string,
-): Promise<{ response: NextResponse; lookupFailed: boolean }> {
-  const done = (response: NextResponse, lookupFailed = false) => ({ response, lookupFailed });
+  calledE164: string | null, callerE164: string | null, origin: string, authenticated: boolean,
+): Promise<{ response: NextResponse; lookupFailed: boolean; unsignedBridge: boolean }> {
+  const done = (response: NextResponse, lookupFailed = false, unsignedBridge = false) =>
+    ({ response, lookupFailed, unsignedBridge });
   const forward = forwardTarget();
   if (forward) {
     // Logged on EVERY forwarded call, not once at boot. This mode bypasses
@@ -523,12 +576,11 @@ async function route(
         ? `texml FALLBACK DRILL on ${calledE164} from ${callerE164} — Sofía is deliberately unreachable on this call while VOICE_FALLBACK_DRILL_TO/FROM are set`
         : `texml fallback drill NOT engaged on ${calledE164} — the call was not cleared, so Sofía answers`);
     }
-    return done(
-      xmlResponse(dialXml(calledE164, origin, cleared, drill)),
-      result.lookupFailed === true,
-    );
+    const dial = dialXml(calledE164, callerE164, origin, authenticated, cleared, drill);
+    return done(xmlResponse(dial.body), result.lookupFailed === true, dial.unsignedBridge);
   }
-  return done(xmlResponse(dialXml(calledE164, origin)));
+  const dial = dialXml(calledE164, callerE164, origin, authenticated);
+  return done(xmlResponse(dial.body), false, dial.unsignedBridge);
 }
 
 /**
@@ -552,7 +604,8 @@ export async function GET(req: Request): Promise<NextResponse> {
     return new NextResponse(null, { status: 405 });
   }
   const params = new URL(req.url).searchParams;
-  return respond(e164Of(params.get("To")), e164Of(params.get("From")), actionOrigin(req));
+  // Never authenticated: GET only answers while TELNYX_PUBLIC_KEY is unset.
+  return respond(e164Of(params.get("To")), e164Of(params.get("From")), actionOrigin(req), false);
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -599,5 +652,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       return new NextResponse(null, { status: 403 });
     }
   }
-  return respond(e164Of(claimedTo), e164Of(claimedFrom), actionOrigin(req));
+  // Authenticated exactly when the key is set: past this point, with a key,
+  // the signature above has verified.
+  return respond(e164Of(claimedTo), e164Of(claimedFrom), actionOrigin(req), Boolean(publicKey));
 }

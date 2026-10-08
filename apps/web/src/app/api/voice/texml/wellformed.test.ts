@@ -26,8 +26,9 @@
 // and every `&` starting a legal reference. It is itself proven by the
 // negative controls in the first describe block: a checker nobody has watched
 // reject a bad document is not evidence either.
+import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { GET as texmlGET } from "./route";
+import { GET as texmlGET, POST as texmlPOST } from "./route";
 import { POST as handoffPOST } from "./handoff/route";
 import { POST as handoffResultPOST } from "./handoff-result/route";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
@@ -368,6 +369,31 @@ describe("every emitted TeXML document parses", () => {
     expect(xml).toContain("&amp;f=");
     parseXmlStrict(xml);
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  });
+
+  it("the bridge carrying the TeXML-route signature (a THIRD SIP-URI parameter, on a Telnyx-signed POST)", async () => {
+    process.env.VOICE_HANDOFF_SECRET = "h".repeat(48);
+    const raw = new URLSearchParams({ To: LIVE_TO, From: CALLER }).toString();
+    const ts = String(Math.floor(Date.now() / 1000));
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const spki = publicKey.export({ format: "der", type: "spki" }) as Buffer;
+    process.env.TELNYX_PUBLIC_KEY = spki.subarray(spki.length - 32).toString("base64");
+    try {
+      const res = await texmlPOST(new Request("https://x.example/api/voice/texml", {
+        method: "POST", body: raw,
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "telnyx-timestamp": ts,
+          "telnyx-signature-ed25519": cryptoSign(null, Buffer.from(`${ts}|${raw}`, "utf8"), privateKey).toString("base64"),
+        },
+      }));
+      const xml = await res.text();
+      expect(xml).toContain("&amp;X-BIS-Signature=");
+      parseXmlStrict(xml);
+    } finally {
+      delete process.env.VOICE_HANDOFF_SECRET;
+      delete process.env.TELNYX_PUBLIC_KEY;
+    }
   });
 
   it("the per-account forward to a person", async () => {

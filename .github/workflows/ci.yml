@@ -40,18 +40,46 @@ name: CI
 #           cancelled: every run shares the one seeded account ("Test Client
 #           One") and specs drag its pipeline card, create forms and leads on
 #           it and read its unread counts, so two runs at once race each
-#           other. A second push while one e2e run is live waits for it.
-#           (GitHub keeps at most one pending run per group, so a THIRD push
-#           within the same window cancels the second's e2e job — re-run it
-#           from the Actions tab if that ever bites.)
+#           other. A second push while one e2e run is live waits for it, in
+#           a FIFO line (`queue: max`) — since 2026-10-07 a push on another
+#           branch no longer cancels a job that is waiting.
 #
 # Both jobs REFUSE to run without their credentials, naming what is missing
 # (the guard's check 1). A gate that quietly skips when it cannot run is how
 # the pre-CI state came about in the first place.
+#
+# The one sanctioned skip (2026-10-07): a push to a branch whose WHOLE diff
+# against main is docs still runs both jobs to a green end, but stops after
+# the guard and .github/scripts/ci-docs-only.sh — no install, no suites, no
+# build, no Playwright, so no Supabase traffic. It is loud (a ::notice:: on
+# the run), never applies to a push to main, and any doubt means the full run.
 
 on:
   push:
   workflow_dispatch:
+
+# WHO MAY CANCEL WHOM (2026-10-07). Two layers, because GitHub's concurrency
+# groups can either queue or cancel, never both in one group (`queue: max`
+# with `cancel-in-progress: true` is a validation error).
+#
+#   This one, per run: one group per branch ref, cancelling. A newer push to a
+#   branch stops that SAME branch's older run, running or waiting, and with it
+#   the Supabase traffic it was making (a cancelled run's fixtures are swept by
+#   a later run once they are an hour old). Another branch is another group,
+#   so it is never touched. On main every run is its own group (the run id)
+#   and nothing cancels it: main's run is the checked state of the commit
+#   being deployed (#62 and #64 each had theirs killed by the next merge).
+#   Re-running an OLD run of a branch joins that branch's group too, so it
+#   cancels the branch's current run; re-run the newest one instead.
+#
+#   The jobs' own groups (below), repo-wide and queueing: different branches
+#   wait in line for the one CI database, FIFO, up to 100 deep. Until this
+#   date they used the default `queue: single`, which keeps ONE waiting entry
+#   and cancels it when another arrives, so a push on any branch cancelled
+#   whichever other branch's job was waiting (about five times that day).
+concurrency:
+  group: ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   # Not secrets. Only what the gates actually need to RUN belongs here.
@@ -111,21 +139,27 @@ jobs:
       # push on one branch kill a DIFFERENT branch's verify mid-db-suite; and
       # a cancelled run on main means the commit being DEPLOYED never
       # finished being checked (#62 and #64 each had their main run killed by
-      # the next merge). GitHub keeps at most one PENDING run per group, so
-      # the worst case is one running plus one waiting.
+      # the next merge). Superseding a branch's OWN stale run is done one
+      # level up, by the workflow's per-branch group (top of this file).
+      #
+      # Why `queue: max` (2026-10-07): the default keeps ONE waiting job per
+      # group and cancels it when another arrives, so a push on any branch
+      # cancelled a different branch's waiting verify. Now up to 100 wait,
+      # first in, first out.
       #
       # Why a new name: a branch that has not merged main yet still carries
       # the old ci.yml, which runs on production's project under the old
       # group names. The two queues no longer share a database, so they must
       # not block each other.
       #
-      # Next (plan stage 2, only after two concurrent runs are measured on
-      # the CI project): a per-branch group, cancelling superseded runs on
-      # branches but never on main. It is safe now in a way it was not on
-      # production — a cancelled run's stranded fixtures land in the CI
-      # project, where the next run's sweep reclaims them.
+      # Next (only after two concurrent runs are measured on the CI project):
+      # a per-branch group here, so branches run in parallel instead of in
+      # line. Not before: the fixture ids do not collide, but the suite also
+      # touches rows every run shares (plans, ops_heartbeats' cron.tick, reads
+      # of Test Client One), and the contention above is what failed.
       group: verify-ci-supabase
       cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@v5
 
@@ -133,6 +167,20 @@ jobs:
       # only bash and curl. Names every problem it finds, prints no value.
       - name: Check that CI targets the CI Supabase project
         run: bash .github/scripts/ci-target-guard.sh
+
+      # DOCS-ONLY PUSHES END HERE, GREEN. Writes docs_only=true only for a
+      # push to a branch other than main whose WHOLE diff against main is
+      # docs (*.md, docs/**, .claude/**, LICENSE, .github/ISSUE_TEMPLATE/**,
+      # never a code extension, never a workflow); every step below is then
+      # skipped and the job still ends `success` on the head SHA, which is
+      # what the ruleset on main requires. Anything else, any doubt and any
+      # error mean `false`: the full run. Why it exists, and why a step and
+      # not a path filter or a job-level `if:`: the script's header.
+      # Every later step carries the same condition, written `!= 'true'` so a
+      # missing output runs everything (pinned by ci-workflow.test.ts).
+      - name: Decide whether this push changes only docs
+        id: scope
+        run: bash .github/scripts/ci-docs-only.sh
 
       # Reads the pinned version from package.json's "packageManager" field, so
       # bumping pnpm is one edit, not two. v6 (not v4): v4 runs its own code on
@@ -142,24 +190,29 @@ jobs:
       # the warning is gone rather than papered over. v5/v6 changed nothing
       # this bare (no-`with:`) usage relies on.
       - uses: pnpm/action-setup@v6
+        if: steps.scope.outputs.docs_only != 'true'
 
       - uses: actions/setup-node@v5
+        if: steps.scope.outputs.docs_only != 'true'
         with:
           node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+        if: steps.scope.outputs.docs_only != 'true'
 
       # `pnpm check` = typecheck + lint + every package's vitest suite,
       # verbatim from CLAUDE.md. The db suite and one web test are live
       # against the CI project and clean up after themselves.
       - name: pnpm check
+        if: steps.scope.outputs.docs_only != 'true'
         run: pnpm check
 
       # Catches the class `tsc` cannot: Next evaluates route modules during
       # page-data collection. Vercel builds only on main, so without this a
       # branch can look green and break the production deploy on merge.
       - name: Production build
+        if: steps.scope.outputs.docs_only != 'true'
         run: pnpm --filter web build
 
   e2e:
@@ -231,8 +284,12 @@ jobs:
       # e2e on production's project under `e2e-shared-supabase` (which the
       # seed-demo and screenshots workflows also take), and this queue must
       # neither wait for nor block theirs.
+      # `queue: max` for the reason verify's group has it. Parallel e2e is
+      # NOT safe — every run shares Test Client One — so the line stays one
+      # repo-wide queue; it just no longer drops the job waiting in it.
       group: e2e-ci-supabase
       cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@v5
 
@@ -241,14 +298,24 @@ jobs:
       - name: Check that CI targets the CI Supabase project
         run: bash .github/scripts/ci-target-guard.sh
 
+      # The same decision as verify's, made again here rather than read from
+      # verify's outputs, so each job's skip is visible in its own log. Same
+      # inputs (the event, the ref, the branch's diff against main), same answer.
+      - name: Decide whether this push changes only docs
+        id: scope
+        run: bash .github/scripts/ci-docs-only.sh
+
       - uses: pnpm/action-setup@v6
+        if: steps.scope.outputs.docs_only != 'true'
 
       - uses: actions/setup-node@v5
+        if: steps.scope.outputs.docs_only != 'true'
         with:
           node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+        if: steps.scope.outputs.docs_only != 'true'
 
       # The account every run shares ("Test Client One", its contact, its
       # "Sales" pipeline and card, its custom field, one inert number). Adds
@@ -258,6 +325,7 @@ jobs:
       # here, not a run of specs that skip. Runs its own target check first
       # (packages/db/src/ci/target.ts).
       - name: Seed the CI project
+        if: steps.scope.outputs.docs_only != 'true'
         run: pnpm --filter @bis/db ci:seed
 
       # Bounded, with one retry. On PR #162 (run 36885435767, attempt 2) this
@@ -267,6 +335,7 @@ jobs:
       # attempt covers a mirror that recovers, and the step's own cap makes a
       # hang a fast, clearly named failure rather than a cancelled job.
       - name: Install Chromium for Playwright
+        if: steps.scope.outputs.docs_only != 'true'
         timeout-minutes: 14
         run: |
           for attempt in 1 2; do
@@ -294,4 +363,5 @@ jobs:
       # traces in apps/web/test-results/ (docs/runbooks/ci-supabase-project.md).
       # apps/web/ci/ci-workflow.test.ts fails `pnpm check` if one comes back.
       - name: Playwright
+        if: steps.scope.outputs.docs_only != 'true'
         run: pnpm --filter web test:e2e

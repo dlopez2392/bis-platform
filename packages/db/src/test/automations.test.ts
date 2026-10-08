@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { withTestAccount } from "./fixtures";
+import { sweepAbandonedFixtures } from "./sweep-fixtures";
 import { createContact, getContact } from "../contacts";
 import { appendConsentEvent, appendConsentEventGuarded } from "../consent";
 import { setBranding } from "../branding";
@@ -1310,6 +1311,20 @@ describe("reactivation — data layer", () => {
 
   it("walks past a page of contacts that can never qualify — the oldest-first window is not parked by leads", async () => {
     await withTestAccount(async (db, accountId) => {
+      // THE WALK IS PLATFORM-WIDE BY DESIGN (see listDueReactivations's own
+      // doc comment), so a fixture account that a KILLED earlier run never
+      // reached its `finally` for can sit in this project with reactivation
+      // enabled and its own 2020-01/02/03-dated conversations — the exact
+      // window this test depends on being its own. `withTestAccount`'s
+      // `finally` cleans the happy path; it cannot clean a process that was
+      // killed. Swept here, not just once in globalSetup, because pollution
+      // written by a DIFFERENT run after this process's own startup is not
+      // bounded by when global setup happened to run; this is a live
+      // reproduction, not a hypothetical — see this task's report. Only rows
+      // older than `ABANDONED_AFTER_MS` go, so the account this test is
+      // about to build is never at risk of sweeping itself.
+      await sweepAbandonedFixtures(db);
+
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       await upsertAutomation(db, accountId, "reactivation",
         { enabled: true, body: "", config: { months: 9 } }, "user_test");
