@@ -25,6 +25,18 @@ jobs:
   capture:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The three Supabase secrets below are production's and are held by the
+    # `production` environment (main only), not the repository. The two Clerk
+    # keys are still the repository's development-instance keys.
+    #
+    # KNOWN BROKEN since 2026-10-07: this signs in through the Clerk
+    # development instance, which production no longer trusts, so the
+    # capture cannot sign in. Fixing it needs production Clerk credentials
+    # held in this environment under their own names (never the repository's
+    # dev-instance CLERK_SECRET_KEY / NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY, which
+    # the CI gates read), and a sign-in identity on the production instance
+    # for the demo tenant. Until then a run fails at its sign-in step.
+    environment: production
     env:
       NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
       NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_h2GmSCjLzD74RotkQAvMbA_BL6FAI4k
@@ -41,7 +53,7 @@ jobs:
             if [ -z "${!name}" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::Missing repository secret(s):$missing"
+            echo "::error::Missing secret(s):$missing (the Supabase ones belong to the production environment, the Clerk ones to the repository)"
             exit 1
           fi
 
