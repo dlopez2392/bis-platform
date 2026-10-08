@@ -15,12 +15,12 @@ vi.mock("./contacts-table", () => ({ ContactsTable: () => null }));
 vi.mock("./add-contact-dialog", () => ({ AddContactDialog: () => null }));
 vi.mock("./actions", () => ({ createContactAction: vi.fn() }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
-const listContactsMock = vi.fn(async () => [{
+const listContactsMock = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => [{
   id: "c1", first_name: "Ana", last_name: null, email: null, phone: null,
   company_name: null, source: null, sort_name: "ana", created_at: "2026-01-01T00:00:00Z",
 }]);
-const countContactsMock = vi.fn(async () => 1);
-const listTagsMock = vi.fn(async () => []);
+const countContactsMock = vi.fn<(...args: unknown[]) => Promise<number>>(async () => 1);
+const listTagsMock = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => []);
 vi.mock("@bis/db", () => ({
   listContacts: (...a: unknown[]) => listContactsMock(...a),
   countContacts: (...a: unknown[]) => countContactsMock(...a),

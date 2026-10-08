@@ -19,7 +19,7 @@ vi.mock("@/lib/db", () => ({
   })),
 }));
 const completeTask = vi.hoisted(() => vi.fn());
-const addTask = vi.hoisted(() => vi.fn(async () => ({})));
+const addTask = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({})));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), completeTask, addTask }));
 
 import { HoldUndecidedError } from "@bis/db";

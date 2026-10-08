@@ -715,8 +715,14 @@ export async function listTagNamesForContacts(
     .in("contact_id", contactIds);
   if (error) throw new Error(`listTagNamesForContacts failed: ${error.message}`);
   const byContact = new Map<string, string[]>();
-  for (const row of (data ?? []) as { contact_id: string; tags: { name: string } | null }[]) {
-    const name = row.tags?.name;
+  // Same `any` shape `listContactTags` above already uses for this exact
+  // one-row-per-tag join: the generic `SupabaseClient` type (no generated
+  // Database schema) infers a nested `tags(...)` select as an array, but a
+  // `contact_tags` row carries exactly one `tag_id`, so the real value at
+  // runtime is a single object (proven by this function's own db test
+  // against the real database, not merely asserted here).
+  for (const row of (data ?? []) as any[]) {
+    const name = row.tags?.name as string | undefined;
     if (!name) continue;
     const names = byContact.get(row.contact_id) ?? [];
     names.push(name);
