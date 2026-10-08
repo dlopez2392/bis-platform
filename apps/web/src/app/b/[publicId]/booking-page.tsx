@@ -127,6 +127,28 @@ type Props = {
   submit: (formData: FormData) => Promise<BookingResult>;
 };
 
+/**
+ * What the success screen may SAY (D-033). It used to promise "We've sent a
+ * confirmation to your email" and point the cancel hint at that email
+ * whatever happened to the send. Now the claim follows the action's
+ * `confirmationSent`: with no email, the body says so and the link on this
+ * screen — the only copy left — is what the hint asks the booker to keep.
+ * Pure, so the decision is tested without driving the whole form.
+ */
+export function successCopy(
+  strings: BookingStrings, result: { cancelUrl: string; confirmationSent: boolean },
+): { body: string; cancelHint: string; cancelHref: string | null } {
+  const cancelHref = result.cancelUrl || null;
+  if (result.confirmationSent) {
+    return { body: strings.successBody, cancelHint: strings.cancelHint, cancelHref };
+  }
+  return {
+    body: strings.successBodyNoEmail,
+    cancelHint: cancelHref ? strings.cancelHintNoEmail : strings.cancelHintNoEmailNoLink,
+    cancelHref,
+  };
+}
+
 export function BookingPage({
   locale, strings, todayKey, maxAdvanceDays, renderToken, attribution, getSlots, submit,
 }: Props) {
@@ -366,6 +388,7 @@ export function BookingPage({
   );
 
   if (result?.ok) {
+    const copy = successCopy(strings, result);
     return (
       <div className="bis-booking" ref={rootRef}>
         <style>{BOOKING_CSS}</style>
@@ -390,11 +413,11 @@ export function BookingPage({
               }).format(new Date(selectedSlot))}
             </p>
           ) : null}
-          <p className="bis-booking-success-body">{strings.successBody}</p>
-          {result.cancelUrl ? (
-            <p className="bis-booking-cancel-hint"><a href={result.cancelUrl}>{strings.cancelHint}</a></p>
+          <p className="bis-booking-success-body">{copy.body}</p>
+          {copy.cancelHref ? (
+            <p className="bis-booking-cancel-hint"><a href={copy.cancelHref}>{copy.cancelHint}</a></p>
           ) : (
-            <p className="bis-booking-cancel-hint">{strings.cancelHint}</p>
+            <p className="bis-booking-cancel-hint">{copy.cancelHint}</p>
           )}
         </div>
         {poweredBy}

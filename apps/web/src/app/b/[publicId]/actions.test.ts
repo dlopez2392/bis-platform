@@ -261,7 +261,12 @@ beforeEach(() => {
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
   incrementUnreadCountMock.mockReset();
   setAttributionMock.mockReset().mockResolvedValue(undefined);
-  sendMock.mockReset().mockResolvedValue(undefined);
+  // The provider contract (`SendEmailResult`, lib/email/fake.ts): a send
+  // resolves `{ providerMessageId }`. This used to resolve `undefined`, which
+  // the real gate destructures and reports as a FAILED send — so every
+  // email in this suite was a swallowed failure, invisible until D-033 made
+  // the action report whether the confirmation went.
+  sendMock.mockReset().mockResolvedValue({ providerMessageId: "msg_test" });
   vi.mocked(sendEmailOrThrow).mockClear();
   getMeetingProviderMock.mockReset().mockReturnValue(null);
   createMeetingRoomMock.mockReset();
@@ -276,7 +281,7 @@ describe("submitBookingAction — spam gates (each mutation named)", () => {
   it("honeypot filled: fake success, zero writes, zero sends (mutation: skip the honeypot check → FAILS)", async () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ [HONEYPOT_FIELD]: "gotcha" }));
 
-    expect(result).toEqual({ ok: true, cancelUrl: "" });
+    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: true });
     expect(createContactMock).not.toHaveBeenCalled();
     expect(createBookingMock).not.toHaveBeenCalled();
     expect(ensureConversationMock).not.toHaveBeenCalled();
@@ -288,7 +293,7 @@ describe("submitBookingAction — spam gates (each mutation named)", () => {
     const freshToken = signRenderToken(Date.now(), PUBLIC_ID); // elapsed ~0ms, under MIN_FILL_MS
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ [RENDER_TOKEN_FIELD]: freshToken }));
 
-    expect(result).toEqual({ ok: true, cancelUrl: "" });
+    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: true });
     expect(createContactMock).not.toHaveBeenCalled();
     expect(createBookingMock).not.toHaveBeenCalled();
     expect(ensureConversationMock).not.toHaveBeenCalled();
@@ -465,6 +470,41 @@ describe("submitBookingAction — D-031: a returning booker's new details fill t
   });
 });
 
+/**
+ * D-033. The success screen said "We've sent a confirmation to your email"
+ * whatever happened to the send — including when the provider refused it, or
+ * was never configured. The action now reports `confirmationSent`, true only
+ * once the email gate said the confirmation itself was SENT (the alert to the
+ * company is a different email and decides nothing here). The spam branches'
+ * fake success says `true`, so it stays indistinguishable from a real one.
+ */
+describe("submitBookingAction — D-033: the result says whether the confirmation actually went", () => {
+  it("the confirmation sent: confirmationSent is true (mutation: hard-code false → FAILS)", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toMatchObject({ ok: true, confirmationSent: true });
+    expect(sendMock.mock.calls.map((c) => (c[0] as { to: string }).to)).toContain("maria@example.com");
+  });
+
+  it("the provider refuses the booker's confirmation: still booked, but confirmationSent is false (mutation: hard-code true → FAILS)", async () => {
+    sendMock.mockImplementation(async (input: { to: string }) => {
+      if (input.to === "maria@example.com") throw new Error("provider said no");
+      return { providerMessageId: "m_1" };
+    });
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toMatchObject({ ok: true, confirmationSent: false });
+    expect(createBookingMock).toHaveBeenCalled();
+  });
+
+  it("the company's alert fails but the confirmation goes: confirmationSent is still true", async () => {
+    sendMock.mockImplementation(async (input: { to: string }) => {
+      if (input.to === "owner@acme.com") throw new Error("alert bounced");
+      return { providerMessageId: "m_2" };
+    });
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toMatchObject({ ok: true, confirmationSent: true });
+  });
+});
+
 describe("submitBookingAction — I3: attribution the embed lifted off the host page", () => {
   it("a submit carrying utm_source calls setAttribution with it, after createContact, before createBooking", async () => {
     const order: string[] = [];
@@ -575,7 +615,7 @@ describe("submitBookingAction — C3: an expired render token is a real failure,
   it("a malformed token (not expired, just invalid) keeps the shared fake success", async () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ [RENDER_TOKEN_FIELD]: "not-a-token" }));
 
-    expect(result).toEqual({ ok: true, cancelUrl: "" });
+    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: true });
     expect(createContactMock).not.toHaveBeenCalled();
   });
 });
@@ -643,7 +683,7 @@ describe("submitBookingAction — a post-insert email failure never reaches the 
     // No `host` header in this suite's default `headers()` mock, so
     // `originFrom` returns null and `cancelUrl` is the already-handled empty
     // string — still `ok:true`, never the outer catch's generic error.
-    expect(result).toEqual({ ok: true, cancelUrl: "" });
+    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: false });
     expect(createContactMock).toHaveBeenCalled();
     expect(createBookingMock).toHaveBeenCalled();
     expect(ensureConversationMock).toHaveBeenCalled();

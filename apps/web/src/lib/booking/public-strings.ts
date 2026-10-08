@@ -49,6 +49,12 @@ const STRINGS = {
     successTitle: "You're booked in.",
     successBody: "We've sent a confirmation to your email.",
     cancelHint: "Need to cancel or reschedule? Use the link in your confirmation email.",
+    // D-033: the confirmation email did NOT go (the provider refused it, or
+    // none is set up). The booking is real; say only what is true, and make
+    // the link on this screen — now the only copy — the thing to keep.
+    successBodyNoEmail: "We couldn't email you a confirmation, so please note the time above.",
+    cancelHintNoEmail: "Save this link to cancel or reschedule later.",
+    cancelHintNoEmailNoLink: "To cancel or reschedule, please contact us directly.",
     // The cancel-by-link page — `/b/<publicId>/cancel/<token>`, reached from
     // the confirmation and reminder emails.
     cancelConfirmTitle: "Cancel this booking?",
@@ -115,6 +121,9 @@ const STRINGS = {
     successTitle: "Tu cita quedó agendada.",
     successBody: "Te enviamos una confirmación a tu correo.",
     cancelHint: "¿Necesitas cancelar o reprogramar? Usa el enlace de tu correo de confirmación.",
+    successBodyNoEmail: "No pudimos enviarte la confirmación por correo, así que anota el horario de arriba.",
+    cancelHintNoEmail: "Guarda este enlace para cancelar o reprogramar más tarde.",
+    cancelHintNoEmailNoLink: "Para cancelar o reprogramar, comunícate directamente con nosotros.",
     cancelConfirmTitle: "¿Cancelar esta cita?",
     cancelConfirmButton: "Cancelar cita",
     cancelAlreadyCancelledTitle: "Esta cita ya fue cancelada.",

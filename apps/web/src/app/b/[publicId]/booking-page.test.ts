@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { partOfDay, groupSlots } from "./booking-page";
+import { partOfDay, groupSlots, successCopy } from "./booking-page";
+import { bookingStrings } from "@/lib/booking/public-strings";
 
 /**
  * The grouping is read in the BOOKER's zone, which is the same zone the time
@@ -90,5 +91,51 @@ describe("booking page styles", () => {
       .filter((c) => !deliberatelyBare.has(c))
       .filter((c) => !new RegExp(`\\.${c}(?![\\w-])`).test(sheets));
     expect(unstyled, "classes rendered with no rule in BOOKING_CSS or public-brand.css").toEqual([]);
+  });
+});
+
+/**
+ * D-033. The success screen said "We've sent a confirmation to your email"
+ * even when the send failed — and then told the booker to cancel "with the
+ * link in your confirmation email", an email that did not exist. The screen
+ * now says only what is true, from the action's `confirmationSent`.
+ */
+describe("successCopy — the success screen says only what is true (D-033)", () => {
+  for (const locale of ["en", "es"] as const) {
+    const s = bookingStrings(locale);
+
+    it(`${locale}: a sent confirmation keeps the email copy and links the cancel hint`, () => {
+      expect(successCopy(s, { cancelUrl: "https://x/b/p/cancel/t", confirmationSent: true })).toEqual({
+        body: s.successBody, cancelHint: s.cancelHint, cancelHref: "https://x/b/p/cancel/t",
+      });
+    });
+
+    it(`${locale}: a failed send never claims an email (mutation: ignore confirmationSent → FAILS)`, () => {
+      const copy = successCopy(s, { cancelUrl: "https://x/b/p/cancel/t", confirmationSent: false });
+      expect(copy.body).toBe(s.successBodyNoEmail);
+      expect(copy.body).not.toBe(s.successBody);
+      // The link on this screen is now the ONLY way to cancel: the hint says
+      // to keep it, and is not the one that points at an email.
+      expect(copy.cancelHint).toBe(s.cancelHintNoEmail);
+      expect(copy.cancelHint).not.toBe(s.cancelHint);
+      expect(copy.cancelHref).toBe("https://x/b/p/cancel/t");
+    });
+
+    it(`${locale}: no email and no link says to contact the business, with nothing to click`, () => {
+      expect(successCopy(s, { cancelUrl: "", confirmationSent: false })).toEqual({
+        body: s.successBodyNoEmail, cancelHint: s.cancelHintNoEmailNoLink, cancelHref: null,
+      });
+    });
+
+    it(`${locale}: a sent confirmation with no link still points at the email, unlinked (the existing shape)`, () => {
+      expect(successCopy(s, { cancelUrl: "", confirmationSent: true })).toEqual({
+        body: s.successBody, cancelHint: s.cancelHint, cancelHref: null,
+      });
+    });
+  }
+
+  it("the no-email copy mentions no sent email in either language", () => {
+    expect(bookingStrings("en").successBodyNoEmail).not.toMatch(/we've sent|we sent/i);
+    expect(bookingStrings("es").successBodyNoEmail).not.toMatch(/te enviamos/i);
   });
 });

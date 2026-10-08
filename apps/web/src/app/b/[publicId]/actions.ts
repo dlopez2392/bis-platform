@@ -28,7 +28,10 @@ import { bookingConfirmationSubject } from "@/lib/email/templates/booking";
 import { recordBookingGrant } from "@/lib/consent/grants";
 
 export type BookingResult =
-  | { ok: true; cancelUrl: string }
+  /** `confirmationSent` (D-033): true only once the email gate said the
+   *  booker's confirmation was SENT. The success screen claims an email only
+   *  when it is true. */
+  | { ok: true; cancelUrl: string; confirmationSent: boolean }
   | { ok: false; error: string; slotTaken?: true };
 
 // Every db mutation this action makes passes this pair. The trailing
@@ -215,8 +218,9 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       // a response that flips on the honeypot learns nothing. There is no
       // real booking, so no real cancelUrl exists to hand back; empty is
       // harmless here because a person filling this form in good faith does
-      // not hit this branch.
-      return { ok: true, cancelUrl: "" };
+      // not hit this branch. `confirmationSent: true` for the same reason:
+      // a real accept nearly always says true, so the fake says it too.
+      return { ok: true, cancelUrl: "", confirmationSent: true };
     }
 
     const token = verifyRenderToken(str(formData, RENDER_TOKEN_FIELD), Date.now(), publicId);
@@ -233,10 +237,10 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }
       // `malformed`/`bad_signature` stay folded into the shared fake success —
       // unlike `expired`, there is no real visitor on the other end of those.
-      return { ok: true, cancelUrl: "" };
+      return { ok: true, cancelUrl: "", confirmationSent: true };
     }
     if (token.elapsedMs < MIN_FILL_MS) {
-      return { ok: true, cancelUrl: "" };
+      return { ok: true, cancelUrl: "", confirmationSent: true };
     }
 
     // --- The booking --------------------------------------------------
@@ -424,6 +428,12 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // ANY post-insert failure here — not just a single recipient's send,
     // which already has its own catch below — from ever reaching that outer
     // catch again.
+    //
+    // D-033: whether the CONFIRMATION went is the one fact out of this block
+    // the booker is told about. It flips only after `sendEmailOrThrow`
+    // returns for that send (it throws on every not-sent answer), so a throw
+    // anywhere earlier in the block leaves it false too.
+    let confirmationSent = false;
     try {
       const brand = emailBrand({
         brandName: account?.brand_name ?? null, brandLogoPath: account?.brand_logo_path ?? null,
@@ -477,6 +487,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
         replyTo: normalizeReplyTo(account?.reply_to_email), subject: bookingConfirmationSubject(locale),
         body: text, html,
       });
+      confirmationSent = true;
     } catch (e) {
       console.error("booking emails failed", e);
     }
@@ -507,7 +518,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       console.error(`booking ${bookingId} alert SMS failed: ${String(e)}`);
     }
 
-    return { ok: true, cancelUrl };
+    return { ok: true, cancelUrl, confirmationSent };
   } catch (e) {
     console.error(`submitBookingAction ${publicId} failed: ${String(e)}`);
     return { ok: false, error: s.genericError };
