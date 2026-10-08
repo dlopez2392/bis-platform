@@ -43,12 +43,13 @@ async function withTestAccount(fn: (accountId: string) => Promise<void>) {
   }
 }
 
-/** A fake, globally-unique E.164 — the same `+999…` test-number shape
- *  `testPhoneNumber()` (packages/db's own fixtures, not importable here) uses,
- *  so this can never collide with a real number. Twelve random digits, as
- *  there: the old `+999${Date.now()}…`.slice(0, 15) kept only the timestamp's
- *  leading digits and threw the random part away, so two numbers minted in
- *  the same 100 ms collided on phone_numbers_e164_key. */
+/** A fake E.164 — the same `+999` + twelve random digits `testPhoneNumber()`
+ *  (packages/db's own fixtures, not importable here) uses, so this can never
+ *  collide with a real number. It used to be `+999${Date.now()}${random}`
+ *  cut to 15 characters, which cut the random part off entirely: what was
+ *  left was the clock in tenths of a second, so numA and numB, assigned one
+ *  round trip apart, matched whenever that trip took under 100 ms, and
+ *  `phone_numbers_e164_key` failed `verify` on main (run 37810478057). */
 function fakePhoneNumber(): string {
   return `+999${String(randomInt(0, 1_000_000_000_000)).padStart(12, "0")}`;
 }
