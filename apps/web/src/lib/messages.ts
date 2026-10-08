@@ -782,7 +782,7 @@ export const m = {
   "compose.smsSegments": "{chars} characters · {segments} message(s)",
 
   "conversations.empty.title": "No conversations yet",
-  "conversations.empty.body": "Email a contact from their timeline and the thread will appear here.",
+  "conversations.empty.body": "Email or text a contact, or get a reply on one of your forms, and the conversation shows up here.",
   "conversations.pickThread": "Select a conversation to read it.",
   "conversations.status.queued": "Queued",
   "conversations.status.sent": "Sent",
