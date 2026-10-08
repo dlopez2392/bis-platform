@@ -224,21 +224,33 @@ export function sparklinePath(
  * The calls chart card's empty-state selection (#182 follow-up). Before
  * this, the card's "nothing yet" copy fired whenever `answeredCount` (the
  * ANSWERED_OUTCOMES, test-handset-excluded read every "calls answered"
- * number already shares) was zero — even on a window with 93 spam calls, 2
- * abandoned ones and a transferred test call sitting in the SAME window,
- * right above a call list that plainly had rows. "Nothing yet" is honest
- * only when `totalCount` — every call row in the window, any outcome, any
- * caller — is itself zero; otherwise calls came in and were screened out,
+ * number already shares) was zero — even on a window with 93 spam calls and
+ * 2 abandoned ones sitting in the SAME window, right above a call list that
+ * plainly had rows. "Nothing yet" is honest only when the window had no
+ * nameable call at all; otherwise calls came in and were screened out,
  * which is a different, nameable fact.
  *
- * `totalCount` is checked BEFORE `answeredCount`: a window can have
- * `answeredCount === 0` for either reason, and only `totalCount === 0`
- * answers "were there calls at all".
+ * DEFECT in the first version of this fix (caught before merge, not left as
+ * a lesson in this comment alone): that version added a `totalCount` —
+ * every call row in the window, ANY outcome, any caller — and computed
+ * `otherCount = totalCount - spamCount`. That residual still over-counted,
+ * because it swept in the agency's own test-handset calls (excluded from
+ * `answeredCount` by `excludeCallers`, but still a row `totalCount`
+ * counted regardless of caller) and any in-progress row. A window whose
+ * ONLY calls were the agency's own test calls therefore got
+ * `totalCount > 0`, `spamCount === 0`, and reported "1 caller hung up
+ * before Sofía could help" when nobody had — false, next to a client.
  *
- * `otherCount` is `totalCount` minus `spamCount` (never `totalCount` on its
- * own) — the residual non-spam, non-answered calls: abandoned callers, plus
- * the agency's own test calls, which an answered-outcome row can still be
- * when its caller is excluded from `answeredCount` by `excludeCallers`.
+ * The fix: take `spamCount` and `abandonedCount` as two counts the caller
+ * already computes from the SAME test-handset-excluded convention every
+ * other "calls" number on this page uses (`listSpamCallStartsBetween`
+ * reasonably counts every caller — a spam call was never a real customer
+ * regardless of which number placed it; `listAbandonedCallStartsBetween`
+ * defaults `excludeCallers` to `agencyHandsets()`, same convention as
+ * `listAnsweredCallStartsBetween`). A window whose only calls are the
+ * agency's own test calls now surfaces as `spamCount === 0` AND
+ * `abandonedCount === 0` — all-zero, not a stray nonzero residual — so
+ * "none" is reached honestly, with no subtraction involved at all.
  */
 export type CallsChartState =
   | { kind: "none" }
@@ -247,12 +259,14 @@ export type CallsChartState =
 
 export function resolveCallsChartState(counts: {
   answeredCount: number;
-  totalCount: number;
   spamCount: number;
+  abandonedCount: number;
 }): CallsChartState {
-  if (counts.totalCount === 0) return { kind: "none" };
   if (counts.answeredCount > 0) return { kind: "answered" };
-  return { kind: "screened", spamCount: counts.spamCount, otherCount: counts.totalCount - counts.spamCount };
+  if (counts.spamCount > 0 || counts.abandonedCount > 0) {
+    return { kind: "screened", spamCount: counts.spamCount, otherCount: counts.abandonedCount };
+  }
+  return { kind: "none" };
 }
 
 export function countAfterHours(isoTimes: string[], timezone: string, openHours: OpenHours): number {

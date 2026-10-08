@@ -50,6 +50,10 @@ export const LEAD_OUTCOME = ["lead"] as const;
  *  in the same 14-day window). */
 export const SPAM_OUTCOME = ["spam"] as const;
 
+/** The calls chart's fallback "N caller(s) hung up before Sofía could
+ *  help" line, when there is no spam to lead with. */
+export const ABANDONED_OUTCOME = ["abandoned"] as const;
+
 export function countFromOutcomes(outcomes: string[], wanted: readonly string[]): number {
   return outcomes.filter((o) => wanted.includes(o)).length;
 }
@@ -116,6 +120,21 @@ export async function listSpamCallStartsBetween(
   db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
 ): Promise<string[]> {
   return listCallStartsByOutcomeBetween(db, accountId, SPAM_OUTCOME, fromIso, toIso);
+}
+
+/**
+ * The raw instants behind the dashboard calls chart's "N caller(s) hung up
+ * before Sofía could help" copy (calls-chart-card.tsx,
+ * `resolveCallsChartState`'s `otherCount`). `excludeCallers` defaults to
+ * `agencyHandsets()` — same convention as `listAnsweredCallStartsBetween`
+ * above: the agency's own test handset hanging up on itself is not a
+ * customer walking away, and must not be counted as one.
+ */
+export async function listAbandonedCallStartsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+  excludeCallers: readonly string[] = agencyHandsets(),
+): Promise<string[]> {
+  return listCallStartsByOutcomeBetween(db, accountId, ABANDONED_OUTCOME, fromIso, toIso, { excludeCallers });
 }
 
 /**

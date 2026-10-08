@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
-  countFromOutcomes, ANSWERED_OUTCOMES, LEAD_OUTCOME, listLeadInstantsBetween, weeklyMetrics,
-  listAnsweredCallStartsBetween,
+  countFromOutcomes, ANSWERED_OUTCOMES, LEAD_OUTCOME, ABANDONED_OUTCOME, listLeadInstantsBetween, weeklyMetrics,
+  listAnsweredCallStartsBetween, listAbandonedCallStartsBetween,
   type WeeklyWindow,
 } from "./weekly-metrics";
 
@@ -155,6 +155,20 @@ describe("the agency's own test calls are not client activity", () => {
     await listLeadInstantsBetween({} as never, "acct_1", "from-iso", "to-iso");
     expect(dbMocks.listCallStartsByOutcomeBetween).toHaveBeenCalledWith(
       expect.anything(), "acct_1", LEAD_OUTCOME, "from-iso", "to-iso",
+      { excludeCallers: ["+19565550101", "+19565550102"] },
+    );
+  });
+
+  // #182 follow-up to #182: the calls chart card's "screened" state reads
+  // `listAbandonedCallStartsBetween` for its fallback "N caller(s) hung up"
+  // line — the agency's own test handset hanging up on itself must not
+  // count as a customer walking away, same convention as "calls answered"
+  // and "leads" above (mutation: drop `excludeCallers` from the call ->
+  // FAILS, since the call would then carry no 3rd argument at all).
+  it("the abandoned-calls read behind the calls chart's fallback line leaves them out too", async () => {
+    await listAbandonedCallStartsBetween({} as never, "acct_1", "from-iso", "to-iso");
+    expect(dbMocks.listCallStartsByOutcomeBetween).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", ABANDONED_OUTCOME, "from-iso", "to-iso",
       { excludeCallers: ["+19565550101", "+19565550102"] },
     );
   });

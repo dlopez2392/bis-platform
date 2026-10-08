@@ -4,11 +4,12 @@ import {
   listChecklistState, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
   listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
-  sumOpenOpportunities, countCallsBetween,
+  sumOpenOpportunities,
   getA2pRegistration, listAccountWork,
 } from "@bis/db";
 import {
   listAnsweredCallStartsBetween, listLeadInstantsBetween, listSpamCallStartsBetween,
+  listAbandonedCallStartsBetween,
 } from "@/lib/reports/weekly-metrics";
 import { StatTile } from "@/components/stat-tile";
 import { PageHeader } from "@/components/page-header";
@@ -103,7 +104,7 @@ export default async function AccountDashboardPage({
   const [
     checklistRows, contactsCount, openOpps,
     voiceProfile, calendar, callsIso, bookingsIso, oppPairs, leadInstantsIso, recentCalls, recentEvents,
-    a2p, workRows, totalCallsInWindow, spamCallsIso,
+    a2p, workRows, spamCallsIso, abandonedCallsIso,
   ] = await Promise.all([
     listChecklistState(db, accountId),
     countContacts(db, accountId),
@@ -156,14 +157,16 @@ export default async function AccountDashboardPage({
     // either, unlike the checklist row below it.
     listAccountWork(db, accountId),
     // The calls chart card's "screened, not empty" state (#182 follow-up):
-    // whether the window had ANY calls at all, any outcome, any caller —
-    // see resolveCallsChartState's own doc comment (lib/dashboard/metrics.ts)
-    // for why `callsIso.length` (answered only) can't answer that question
-    // on its own. Added to this same Promise.all rather than a follow-up
-    // sequential read: one more parallel query in the batch this page
-    // already issues, not a second round trip.
-    countCallsBetween(db, accountId, window14.fromIso, window14.toIso),
+    // whether the window had a nameable call at all beyond the answered
+    // ones — see resolveCallsChartState's own doc comment
+    // (lib/dashboard/metrics.ts) for why `callsIso.length` (answered only)
+    // can't answer that question on its own, and why these two counts (not
+    // a single "every row, any outcome" total) are what answer it honestly.
+    // Added to this same Promise.all rather than a follow-up sequential
+    // read: two more parallel queries in the batch this page already
+    // issues, not a second round trip.
     listSpamCallStartsBetween(db, accountId, window14.fromIso, window14.toIso),
+    listAbandonedCallStartsBetween(db, accountId, window14.fromIso, window14.toIso),
   ]);
 
   const openOppsValue = String(openOpps.count);
@@ -369,8 +372,8 @@ export default async function AccountDashboardPage({
             recentCalls={recentCalls}
             isAgency={isAgency}
             voiceEnabled={showVoiceSub}
-            totalCallsInWindow={totalCallsInWindow}
             spamCount={spamCallsIso.length}
+            abandonedCount={abandonedCallsIso.length}
           />
           {/* Both audiences (see the `listRecentEvents` call above's own
               grants comment) — no isAgency gate, unlike the checklist row

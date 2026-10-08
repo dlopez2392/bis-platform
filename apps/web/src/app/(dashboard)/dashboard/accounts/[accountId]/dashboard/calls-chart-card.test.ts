@@ -48,15 +48,15 @@ function render(opts: {
   timezone?: string;
   isAgency?: boolean;
   voiceEnabled?: boolean;
-  totalCallsInWindow?: number;
   spamCount?: number;
+  abandonedCount?: number;
 } = {}) {
-  // Defaults sum the answered buckets by construction, never a stray
-  // mismatched literal: BUCKETS' own counts already sum to the "answered"
-  // side of every pre-existing (non-screened) test below, so leaving
-  // `totalCallsInWindow` unset keeps `resolveCallsChartState` on the same
-  // branch those tests already pinned, rather than silently flipping them
-  // to the new "screened" state.
+  // `spamCount`/`abandonedCount` default to 0, never derived from
+  // `dayBuckets`: every pre-existing (non-screened) test below relies on
+  // its `dayBuckets` summing to a nonzero `answeredCount`, which
+  // `resolveCallsChartState` checks FIRST regardless of these two counts —
+  // leaving them at 0 keeps those tests on the same "answered" branch they
+  // already pinned.
   const dayBuckets = opts.dayBuckets ?? BUCKETS;
   return renderToStaticMarkup(
     createElement(CallsChartCard, {
@@ -66,9 +66,8 @@ function render(opts: {
       recentCalls: opts.recentCalls ?? [CALL],
       isAgency: opts.isAgency ?? true,
       voiceEnabled: opts.voiceEnabled ?? true,
-      totalCallsInWindow:
-        opts.totalCallsInWindow ?? dayBuckets.reduce((sum, b) => sum + b.count, 0),
       spamCount: opts.spamCount ?? 0,
+      abandonedCount: opts.abandonedCount ?? 0,
     }),
   );
 }
@@ -237,20 +236,33 @@ describe("CallsChartCard", () => {
   // a call list that plainly had rows — see metrics.test.ts's
   // `resolveCallsChartState` suite for the pure-logic cases this renders.
   it("screened state (spam present): leads with the spam count, never the plain empty-state copy", () => {
-    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], totalCallsInWindow: 96, spamCount: 93 });
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 93, abandonedCount: 3 });
     expect(html).toContain("No customer calls in the last 14 days. Sofía screened out 93 spam calls.");
     expect(html).not.toContain("When Sofía answers, every call lands here with its outcome.");
     expect(html).not.toContain("Aug 18 ·");
   });
 
-  it("screened state (no spam, just abandoned/excluded-test calls): the plain \"callers hung up\" line, singular when the count is 1", () => {
-    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], totalCallsInWindow: 1, spamCount: 0 });
+  it("screened state (no spam, just abandoned calls): the plain \"callers hung up\" line, singular when the count is 1", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 0, abandonedCount: 1 });
     expect(html).toContain("No customer calls in the last 14 days. 1 caller hung up before Sofía could help.");
   });
 
-  it("screened state (no spam, 2 non-answered calls): plural", () => {
-    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], totalCallsInWindow: 2, spamCount: 0 });
+  it("screened state (no spam, 2 abandoned calls): plural", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 0, abandonedCount: 2 });
     expect(html).toContain("No customer calls in the last 14 days. 2 callers hung up before Sofía could help.");
+  });
+
+  // The defect this fix removes: a window whose only calls were the
+  // agency's own excluded test calls used to report "N callers hung up"
+  // (via a `totalCount` that counted the test call regardless of outcome
+  // or caller — metrics.ts's own doc comment on `resolveCallsChartState`).
+  // With no spam and no (test-handset-excluded) abandoned calls, this must
+  // render the plain, honest "nothing yet" copy, not a screened line.
+  it("zero spam, zero abandoned (a window whose only calls were the agency's own excluded test calls): the plain empty-state copy, never a false \"caller hung up\" line", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 0, abandonedCount: 0 });
+    expect(html).toContain("When Sofía answers, every call lands here with its outcome.");
+    expect(html).not.toContain("caller hung up");
+    expect(html).not.toContain("callers hung up");
   });
 
   it("a quiet 14-day window with real OLDER history shows the empty-state copy AND the mini table — recentCalls is the 3 most recent ever, not scoped to the window", () => {

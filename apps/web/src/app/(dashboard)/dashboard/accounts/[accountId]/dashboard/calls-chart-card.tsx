@@ -51,8 +51,8 @@ export function CallsChartCard({
   recentCalls,
   isAgency,
   voiceEnabled,
-  totalCallsInWindow,
   spamCount,
+  abandonedCount,
 }: {
   accountId: string;
   /** The ACCOUNT's IANA zone — the mini table's local time column reads it,
@@ -69,19 +69,19 @@ export function CallsChartCard({
    *  to — see the comment beside `ctaHref` below. */
   isAgency: boolean;
   voiceEnabled: boolean;
-  /** Every call row in the SAME 14-day window, any outcome, any caller —
-   *  `resolveCallsChartState`'s own doc comment explains why this, not
-   *  `dayBuckets`' answered-only sum, decides "none" vs "screened". */
-  totalCallsInWindow: number;
-  /** Calls with outcome `spam` in the same window — the dominant case the
-   *  "screened" copy leads with when present (metrics.ts doc comment). */
+  /** Calls with outcome `spam` in the same 14-day window — the dominant
+   *  case the "screened" copy leads with when present (metrics.ts doc
+   *  comment on `resolveCallsChartState`). */
   spamCount: number;
+  /** Calls with outcome `abandoned` in the same window, test-handset
+   *  callers already excluded (`listAbandonedCallStartsBetween`'s own
+   *  `excludeCallers` default) — the fallback "N caller(s) hung up" line
+   *  when there's no spam to lead with. */
+  abandonedCount: number;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
   const answeredCount = dayBuckets.reduce((sum, bucket) => sum + bucket.count, 0);
-  const chartState = resolveCallsChartState({
-    answeredCount, totalCount: totalCallsInWindow, spamCount,
-  });
+  const chartState = resolveCallsChartState({ answeredCount, spamCount, abandonedCount });
 
   // The Voice page is agency-only (`requireAgencyOnlyAccountAccess` —
   // voice/page.tsx's own doc comment: "the nav item is hidden from clients").
