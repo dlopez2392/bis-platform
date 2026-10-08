@@ -317,26 +317,6 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       console.error(`booking ${publicId}: setAttribution failed for contact ${contactId}: ${String(e)}`);
     }
 
-    // D-031: a RETURNING booker's new details fill the blanks on the contact
-    // the dedupe found — a first phone number, a surname — and never
-    // overwrite what is there. The forms path's rule (`fillBlanks`,
-    // lib/forms/enrich.ts), through its exported twin in @bis/db. The phone
-    // goes AS TYPED, the same R2-C1 rule as `createContact` above: the
-    // write's own `phoneFields` judges it. A value that DIFFERS from the one
-    // on file is not written; the thread below carries what was typed, so it
-    // is not lost either. Best-effort, its own try, for the same reason as
-    // the attribution above: it belongs to the contact, not the booking, and
-    // must never cost anyone their booking.
-    if (created.existing) {
-      try {
-        await fillContactBlanks(db, calendar.account_id, contactId, {
-          firstName, lastName: lastName || undefined, email, phone: phone || undefined,
-        }, ACTOR_ID, ACTOR_TYPE);
-      } catch (e) {
-        console.error(`booking ${publicId}: fillContactBlanks failed for contact ${contactId}: ${String(e)}`);
-      }
-    }
-
     let bookingId: string;
     let cancelToken: string;
     try {
@@ -349,6 +329,27 @@ export async function submitBookingAction(publicId: string, formData: FormData):
         return { ok: false, error: s.slotTaken, slotTaken: true };
       }
       throw e;
+    }
+
+    // D-031: a RETURNING booker's new details fill the blanks on the contact
+    // the dedupe found — a first phone number, a surname — and never
+    // overwrite what is there. The forms path's rule (`fillBlanks`,
+    // lib/forms/enrich.ts), through its exported twin in @bis/db. The phone
+    // goes AS TYPED, the same R2-C1 rule as `createContact` above: the
+    // write's own `phoneFields` judges it. A value that DIFFERS from the one
+    // on file is not written; the thread below carries what was typed, so it
+    // is not lost either. Only AFTER the insert succeeded (review minor): a
+    // booker who loses the slot race made no booking, so nothing of theirs is
+    // written onto a contact the dedupe matched. Best-effort, its own try:
+    // the booking is already real and must never become a reported failure.
+    if (created.existing) {
+      try {
+        await fillContactBlanks(db, calendar.account_id, contactId, {
+          firstName, lastName: lastName || undefined, email, phone: phone || undefined,
+        }, ACTOR_ID, ACTOR_TYPE);
+      } catch (e) {
+        console.error(`booking ${publicId}: fillContactBlanks failed for contact ${contactId}: ${String(e)}`);
+      }
     }
 
     // Consent chain PR-2 (decision 8): a booking made with a phone is a grant.

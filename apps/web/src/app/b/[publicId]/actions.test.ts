@@ -425,10 +425,18 @@ describe("submitBookingAction — D-031: a returning booker's new details fill t
       { firstName: "Maria", lastName: "Lopez", email: "maria@example.com", phone: "(956) 555-0199" },
       "public", "system",
     );
-    // Filled before the booking exists, beside the attribution write: both
-    // belong to the CONTACT, not to this booking.
+    // Filled only AFTER the booking insert succeeded (review minor): a booker
+    // who loses the slot race must not have written onto someone's contact.
     expect(fillContactBlanksMock.mock.invocationCallOrder[0]!)
-      .toBeLessThan(createBookingMock.mock.invocationCallOrder[0]!);
+      .toBeGreaterThan(createBookingMock.mock.invocationCallOrder[0]!);
+  });
+
+  it("a slot taken at insert (SlotTakenError) fills nothing (mutation: fill before the insert → FAILS)", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+    createBookingMock.mockRejectedValue(new SlotTakenError());
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ phone: "(956) 555-0199" }));
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").slotTaken, slotTaken: true });
+    expect(fillContactBlanksMock).not.toHaveBeenCalled();
   });
 
   it("a new contact: nothing to fill — createContact already wrote every field", async () => {
