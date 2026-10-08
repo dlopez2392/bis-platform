@@ -106,8 +106,19 @@ test.describe("the command palette, as the agency", () => {
   test("a settings section jumps to its own anchor, and the anchor exists", async ({ page }) => {
     await openAccountByName(page, SEEDED_ACCOUNT_NAME);
     await page.keyboard.press("ControlOrMeta+k");
-    await page.getByRole(PALETTE).getByRole("combobox").fill("custom fields");
-    await page.getByRole("option", { name: "Custom fields" }).click();
+    const palette = page.getByRole(PALETTE);
+    const options = palette.getByRole("option");
+    await palette.getByRole("combobox").fill("custom fields");
+    // Same guard as the keyboard case above: fill() returns before cmdk's
+    // fuzzy filter has re-rendered the list, and a .click() issued into the
+    // unsettled list can land its mousedown/mouseup on two different nodes
+    // (the list re-renders between them) so no click ever actually fires —
+    // the run just sits on whatever page openAccountByName already landed
+    // on. Waiting for exactly one, correctly-named option first removes that
+    // window.
+    await expect(options).toHaveCount(1);
+    await expect(options.first()).toHaveAccessibleName("Custom fields");
+    await options.first().click();
     await expect(page).toHaveURL(/\/settings#custom-fields$/);
     // A registry entry pointing at a missing id looks exactly like the palette
     // doing nothing at all, so the anchor itself is the assertion.
