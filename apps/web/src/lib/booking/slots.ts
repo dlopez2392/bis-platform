@@ -103,6 +103,19 @@ function addCalendarDays(y: number, m: number, d: number, delta: number) {
   return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
 }
 
+/** D-028's re-anchor point: the instant `clearAtMs` (a booking's end plus the
+ *  buffer), rounded UP to a whole minute, read as minutes-past-midnight on
+ *  calendar day `cal` in `timeZone`. An instant on a LATER day answers 1440,
+ *  which no interval can fit a slot after; one on an earlier day (or no
+ *  instant at all) answers -Infinity, which the caller treats as "no
+ *  re-anchor, take the ordinary grid step". */
+function reanchorMinutes(clearAtMs: number, cal: { y: number; m: number; d: number }, timeZone: string): number {
+  if (!Number.isFinite(clearAtMs)) return -Infinity;
+  const p = partsInZone(new Date(Math.ceil(clearAtMs / 60_000) * 60_000), timeZone);
+  if (p.y === cal.y && p.m === cal.m && p.d === cal.d) return p.hh * 60 + p.mi;
+  return Date.UTC(p.y, p.m - 1, p.d) > Date.UTC(cal.y, cal.m - 1, cal.d) ? 1440 : -Infinity;
+}
+
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function minutesOf(s: string): number {
@@ -239,17 +252,47 @@ export function computeSlots(config: SlotConfig, booked: Range[], now: Date): Ra
             : 1440; // rolled into the next calendar day — treat as end-of-day
           if (endMinutes > toMinutes) continue;
 
-          const conflicts = booked.some((b) => {
+          // The latest `end + buffer` among the bookings this candidate runs
+          // into, or -Infinity when it runs into none.
+          let clearAt = -Infinity;
+          let conflicts = false;
+          for (const b of booked) {
             const bStart = b.startsAt.getTime();
             const bEnd = b.endsAt.getTime();
             // An unresolvable (non-finite) booked range fails CLOSED: it
             // blocks the slot it's compared against rather than silently
             // passing every NaN comparison as false and offering a slot
-            // that might actually be taken.
-            if (!Number.isFinite(bStart) || !Number.isFinite(bEnd)) return true;
-            return candStart.getTime() < bEnd + bufferMs && bStart < candEnd.getTime() + bufferMs;
-          });
-          if (conflicts) continue;
+            // that might actually be taken. It offers no re-anchor point
+            // (clearAt stays as it was), so the walk falls back to the
+            // ordinary grid step and every later candidate is blocked too.
+            if (!Number.isFinite(bStart) || !Number.isFinite(bEnd)) { conflicts = true; continue; }
+            if (candStart.getTime() < bEnd + bufferMs && bStart < candEnd.getTime() + bufferMs) {
+              conflicts = true;
+              clearAt = Math.max(clearAt, bEnd + bufferMs);
+            }
+          }
+          if (conflicts) {
+            // D-028: START-AFTER-BUFFER, not a fixed grid. The next candidate
+            // starts where the booking's buffer runs out, rather than at the
+            // next grid point — on a fixed grid any buffer at all cost a whole
+            // slot (60-minute jobs, a 15-minute buffer and a 09:00 booking
+            // removed 10:00 and offered 11:00). Measured in REAL time and read
+            // back onto this day's wall clock, so a fall-back day's repeated
+            // hour cannot land the re-anchor on top of the booking.
+            //
+            // It may land BEFORE the next grid point (a 120-minute slot after
+            // a 60-minute booking) or after it (a long booking); either way
+            // every grid point it skips would have run into the same booking.
+            const next = reanchorMinutes(clearAt, cal, timezone);
+            // Only ever forward of THIS candidate (`candMinutes` was already
+            // stepped past it above). On a fall-back day "the booking's end"
+            // can read EARLIER on the wall clock than this candidate (it ends
+            // in the second 01:xx); re-anchoring there would loop forever, so
+            // the ordinary grid step stands instead. Strictly increasing
+            // `candMinutes` is what guarantees the walk terminates.
+            if (next > candMinutes - slotDurationMinutes) candMinutes = next;
+            continue;
+          }
 
           results.push({ startsAt: candStart, endsAt: candEnd });
         }

@@ -124,6 +124,11 @@ already-booked ranges, and an injected `now`.
   buffer` and `bookedStart < candEnd + buffer` — buffer on both sides,
   deliberately conservative (corrected during Task 3 review to match the
   implementation and its tests).
+- Candidates step by the slot length from the open time, EXCEPT after a
+  conflict: the next candidate then starts at the conflicting booking's end
+  plus the buffer (start-after-buffer, D-028, 2026-10-08). Before that rule a
+  fixed grid meant any buffer cost a whole slot — 60-minute jobs, a 15-minute
+  buffer and a 09:00 booking offered 11:00 next instead of 10:15.
 - DST transition days get explicit test cases: the nonexistent hour, the
   repeated hour, and a booking spanning neither.
 
