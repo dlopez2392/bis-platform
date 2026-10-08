@@ -64,10 +64,16 @@ vi.mock("@/lib/branding/tenant-theme-reader", () => ({
 const reportMocks = vi.hoisted(() => ({
   listLeadInstantsBetween: vi.fn(),
   listAnsweredCallStartsBetween: vi.fn(),
+  // The calls chart card's "screened, not empty" state (#182 follow-up) —
+  // this file only needs the Promise.all to resolve, never throw; the real
+  // state-selection logic is calls-chart-card.test.ts/metrics.test.ts's job
+  // (CallsChartCard itself is mocked out below).
+  listSpamCallStartsBetween: vi.fn(),
 }));
 vi.mock("@/lib/reports/weekly-metrics", () => ({
   listLeadInstantsBetween: (...a: unknown[]) => reportMocks.listLeadInstantsBetween(...a),
   listAnsweredCallStartsBetween: (...a: unknown[]) => reportMocks.listAnsweredCallStartsBetween(...a),
+  listSpamCallStartsBetween: (...a: unknown[]) => reportMocks.listSpamCallStartsBetween(...a),
 }));
 
 const dbMocks = vi.hoisted(() => ({
@@ -84,6 +90,7 @@ const dbMocks = vi.hoisted(() => ({
   // already makes; mocked here in this file's own vi.fn() shape.
   listAccountWork: vi.fn(),
   sumOpenOpportunities: vi.fn(),
+  countCallsBetween: vi.fn(),
 }));
 // mergeChecklist (@/lib/checklist-catalogue) is NOT mocked — the real
 // CHECKLIST_CATALOGUE (its length read below, never hard-coded here) is
@@ -111,6 +118,7 @@ vi.mock("@bis/db", () => ({
   listOpportunityValuesCreatedBetween: (...a: unknown[]) => dbMocks.listOpportunityValuesCreatedBetween(...a),
   listAccountWork: (...a: unknown[]) => dbMocks.listAccountWork(...a),
   sumOpenOpportunities: (...a: unknown[]) => dbMocks.sumOpenOpportunities(...a),
+  countCallsBetween: (...a: unknown[]) => dbMocks.countCallsBetween(...a),
 }));
 
 vi.mock("./calls-chart-card", () => ({ CallsChartCard: () => null }));
@@ -177,6 +185,7 @@ function resetFixtures() {
   for (const fn of Object.values(dbMocks)) fn.mockReset();
   reportMocks.listLeadInstantsBetween.mockReset();
   reportMocks.listAnsweredCallStartsBetween.mockReset();
+  reportMocks.listSpamCallStartsBetween.mockReset();
   dbMocks.countContacts.mockResolvedValue(0);
   dbMocks.getVoiceProfile.mockResolvedValue(null);
   dbMocks.getCalendarForAccount.mockResolvedValue(null);
@@ -188,6 +197,8 @@ function resetFixtures() {
   reportMocks.listLeadInstantsBetween.mockResolvedValue([]);
   dbMocks.listAccountWork.mockResolvedValue([]);
   dbMocks.sumOpenOpportunities.mockResolvedValue({ count: 0, value: 0 });
+  dbMocks.countCallsBetween.mockResolvedValue(0);
+  reportMocks.listSpamCallStartsBetween.mockResolvedValue([]);
   // Default: one item ticked, A2P not approved — mirrors blueprints.spec.ts's
   // own GAP 3 fixture shape (1 ticked, A2P rejected).
   dbMocks.listChecklistState.mockResolvedValue([row("phone_number")]);

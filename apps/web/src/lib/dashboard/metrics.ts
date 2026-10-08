@@ -220,6 +220,41 @@ export function sparklinePath(
  * entirely when `open_hours` is empty is Task 5's call, composed on top of
  * this function's honest count, not this function's job.
  */
+/**
+ * The calls chart card's empty-state selection (#182 follow-up). Before
+ * this, the card's "nothing yet" copy fired whenever `answeredCount` (the
+ * ANSWERED_OUTCOMES, test-handset-excluded read every "calls answered"
+ * number already shares) was zero — even on a window with 93 spam calls, 2
+ * abandoned ones and a transferred test call sitting in the SAME window,
+ * right above a call list that plainly had rows. "Nothing yet" is honest
+ * only when `totalCount` — every call row in the window, any outcome, any
+ * caller — is itself zero; otherwise calls came in and were screened out,
+ * which is a different, nameable fact.
+ *
+ * `totalCount` is checked BEFORE `answeredCount`: a window can have
+ * `answeredCount === 0` for either reason, and only `totalCount === 0`
+ * answers "were there calls at all".
+ *
+ * `otherCount` is `totalCount` minus `spamCount` (never `totalCount` on its
+ * own) — the residual non-spam, non-answered calls: abandoned callers, plus
+ * the agency's own test calls, which an answered-outcome row can still be
+ * when its caller is excluded from `answeredCount` by `excludeCallers`.
+ */
+export type CallsChartState =
+  | { kind: "none" }
+  | { kind: "screened"; spamCount: number; otherCount: number }
+  | { kind: "answered" };
+
+export function resolveCallsChartState(counts: {
+  answeredCount: number;
+  totalCount: number;
+  spamCount: number;
+}): CallsChartState {
+  if (counts.totalCount === 0) return { kind: "none" };
+  if (counts.answeredCount > 0) return { kind: "answered" };
+  return { kind: "screened", spamCount: counts.spamCount, otherCount: counts.totalCount - counts.spamCount };
+}
+
 export function countAfterHours(isoTimes: string[], timezone: string, openHours: OpenHours): number {
   const normalized = normalizeOpenHours(openHours);
   let afterHours = 0;

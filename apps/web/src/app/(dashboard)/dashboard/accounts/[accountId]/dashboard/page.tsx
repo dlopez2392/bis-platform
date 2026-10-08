@@ -4,10 +4,12 @@ import {
   listChecklistState, countContacts,
   getVoiceProfile, getCalendarForAccount, listCalls, listRecentEvents,
   listBookingCreationsBetween, listOpportunityValuesCreatedBetween,
-  sumOpenOpportunities,
+  sumOpenOpportunities, countCallsBetween,
   getA2pRegistration, listAccountWork,
 } from "@bis/db";
-import { listAnsweredCallStartsBetween, listLeadInstantsBetween } from "@/lib/reports/weekly-metrics";
+import {
+  listAnsweredCallStartsBetween, listLeadInstantsBetween, listSpamCallStartsBetween,
+} from "@/lib/reports/weekly-metrics";
 import { StatTile } from "@/components/stat-tile";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
@@ -101,7 +103,7 @@ export default async function AccountDashboardPage({
   const [
     checklistRows, contactsCount, openOpps,
     voiceProfile, calendar, callsIso, bookingsIso, oppPairs, leadInstantsIso, recentCalls, recentEvents,
-    a2p, workRows,
+    a2p, workRows, totalCallsInWindow, spamCallsIso,
   ] = await Promise.all([
     listChecklistState(db, accountId),
     countContacts(db, accountId),
@@ -153,6 +155,15 @@ export default async function AccountDashboardPage({
     // (nav-groups.ts) — this compact row must not be gated behind `isAgency`
     // either, unlike the checklist row below it.
     listAccountWork(db, accountId),
+    // The calls chart card's "screened, not empty" state (#182 follow-up):
+    // whether the window had ANY calls at all, any outcome, any caller —
+    // see resolveCallsChartState's own doc comment (lib/dashboard/metrics.ts)
+    // for why `callsIso.length` (answered only) can't answer that question
+    // on its own. Added to this same Promise.all rather than a follow-up
+    // sequential read: one more parallel query in the batch this page
+    // already issues, not a second round trip.
+    countCallsBetween(db, accountId, window14.fromIso, window14.toIso),
+    listSpamCallStartsBetween(db, accountId, window14.fromIso, window14.toIso),
   ]);
 
   const openOppsValue = String(openOpps.count);
@@ -358,6 +369,8 @@ export default async function AccountDashboardPage({
             recentCalls={recentCalls}
             isAgency={isAgency}
             voiceEnabled={showVoiceSub}
+            totalCallsInWindow={totalCallsInWindow}
+            spamCount={spamCallsIso.length}
           />
           {/* Both audiences (see the `listRecentEvents` call above's own
               grants comment) — no isAgency gate, unlike the checklist row

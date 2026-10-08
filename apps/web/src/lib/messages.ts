@@ -304,6 +304,17 @@ export const m = {
   "dashboard.calls.empty": "When Sofía answers, every call lands here with its outcome.",
   "dashboard.calls.emptySetupVoice": "Set up your voice receptionist",
   "dashboard.calls.emptyViewCalls": "View all calls",
+  // The "screened, not empty" state (#182 follow-up): the window had calls,
+  // just none that counted as answered. Spam is the dominant, common case
+  // (the BIS account: 93 spam calls, 2 abandoned, 1 excluded test call, and
+  // the card used to say "nothing yet") so it leads alone when present;
+  // abandoned/excluded-test calls get the plainer fallback line. Both take
+  // "{count}"/"{unit}", the same replace-by-hand convention as the tooltip
+  // strings above.
+  "dashboard.calls.screenedSpam": "No customer calls in the last 14 days. Sofía screened out {count} spam {unit}.",
+  "dashboard.calls.screenedOther": "No customer calls in the last 14 days. {count} {unit} hung up before Sofía could help.",
+  "dashboard.calls.unit.caller": "caller",
+  "dashboard.calls.unit.callers": "callers",
 
   // The activity feed card (Task 7) — the events ledger's first READ
   // consumer. Each `dashboard.activity.*` line is a CURATED, generic

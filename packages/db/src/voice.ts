@@ -475,6 +475,27 @@ export async function countCallsSince(
 }
 
 /**
+ * Total calls in `[fromIso, toIso)`, any outcome, any caller — the dashboard
+ * calls chart's "did anything happen at all" check (calls-chart-card.tsx,
+ * `resolveCallsChartState`), which must tell a genuinely empty window apart
+ * from one where calls came in but none were answered. `countCallsSince`
+ * above has no upper bound, which every one of ITS callers reads correctly
+ * as "since X, up to right now" with no future row to exclude; a WINDOWED
+ * read needs the explicit bound instead, because the window's own `toIso`
+ * and the literal "now" at query time can drift apart by the few
+ * milliseconds between resolving the window and this query running.
+ */
+export async function countCallsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+): Promise<number> {
+  const { count, error } = await db.from("calls")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).gte("started_at", fromIso).lt("started_at", toIso);
+  if (error) throw new Error(`countCallsBetween failed: ${error.message}`);
+  return count ?? 0;
+}
+
+/**
  * Whether the account has any call still IN PROGRESS as of `sinceIso` — a
  * `calls` row with no `ended_at` (finishCallRow never ran) whose
  * `started_at` is after `sinceIso`. The topbar Sofía presence indicator

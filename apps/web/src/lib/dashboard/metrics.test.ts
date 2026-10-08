@@ -16,6 +16,7 @@ import {
   deltaVsPrior,
   sparklinePath,
   countAfterHours,
+  resolveCallsChartState,
 } from "./metrics";
 import type { OpenHours } from "@/lib/booking/slots";
 
@@ -347,4 +348,52 @@ describe("countAfterHours", () => {
     expect(countAfterHours([instant], "Pacific/Auckland", mondayOnlyHours)).toBe(0);
     expect(countAfterHours([instant], "America/Chicago", mondayOnlyHours)).toBe(1);
   });
+});
+
+// The calls chart card's empty-state selection (#182 follow-up): "nothing
+// yet" used to render whenever ANSWERED calls were zero, even when 93 spam
+// calls and a couple of abandoned/test ones landed in the exact same window
+// — a misleading "nothing here" next to a call list that plainly had rows.
+// Three states, resolved from three counts the caller already has (or can
+// get from the existing outcome-filtered reads) — no new shape, no I/O.
+describe("resolveCallsChartState", () => {
+  it(
+    "zero calls at all in the window: \"none\", regardless of spam/answered " +
+      "(mutation: checking answeredCount===0 before totalCount===0 -> wrongly " +
+      "reports \"screened\" at a genuinely empty window)",
+    () => {
+      expect(resolveCallsChartState({ answeredCount: 0, totalCount: 0, spamCount: 0 }))
+        .toEqual({ kind: "none" });
+    },
+  );
+
+  it(
+    "any real answered call wins even when spam is also present in the same window " +
+      "(mutation: testing spamCount>0 before answeredCount>0 -> wrongly reports " +
+      "\"screened\" despite 3 real answered calls)",
+    () => {
+      expect(resolveCallsChartState({ answeredCount: 3, totalCount: 10, spamCount: 5 }))
+        .toEqual({ kind: "answered" });
+    },
+  );
+
+  it(
+    "calls came in, none answered, mostly spam: \"screened\", spam and \"other\" split " +
+      "from the real counts (mutation: otherCount = totalCount instead of totalCount - " +
+      "spamCount -> double-counts the 93 spam calls into \"other\" too)",
+    () => {
+      expect(resolveCallsChartState({ answeredCount: 0, totalCount: 96, spamCount: 93 }))
+        .toEqual({ kind: "screened", spamCount: 93, otherCount: 3 });
+    },
+  );
+
+  it(
+    "calls came in, none answered, no spam at all: \"screened\" with spamCount 0 and " +
+      "every non-answered call landing in \"other\" (mutation: otherCount hard-coded " +
+      "to totalCount - 1 -> FAILS on this exact count)",
+    () => {
+      expect(resolveCallsChartState({ answeredCount: 0, totalCount: 2, spamCount: 0 }))
+        .toEqual({ kind: "screened", spamCount: 0, otherCount: 2 });
+    },
+  );
 });

@@ -48,15 +48,27 @@ function render(opts: {
   timezone?: string;
   isAgency?: boolean;
   voiceEnabled?: boolean;
+  totalCallsInWindow?: number;
+  spamCount?: number;
 } = {}) {
+  // Defaults sum the answered buckets by construction, never a stray
+  // mismatched literal: BUCKETS' own counts already sum to the "answered"
+  // side of every pre-existing (non-screened) test below, so leaving
+  // `totalCallsInWindow` unset keeps `resolveCallsChartState` on the same
+  // branch those tests already pinned, rather than silently flipping them
+  // to the new "screened" state.
+  const dayBuckets = opts.dayBuckets ?? BUCKETS;
   return renderToStaticMarkup(
     createElement(CallsChartCard, {
       accountId: "acct1",
       timezone: opts.timezone ?? "America/Chicago",
-      dayBuckets: opts.dayBuckets ?? BUCKETS,
+      dayBuckets,
       recentCalls: opts.recentCalls ?? [CALL],
       isAgency: opts.isAgency ?? true,
       voiceEnabled: opts.voiceEnabled ?? true,
+      totalCallsInWindow:
+        opts.totalCallsInWindow ?? dayBuckets.reduce((sum, b) => sum + b.count, 0),
+      spamCount: opts.spamCount ?? 0,
     }),
   );
 }
@@ -218,6 +230,27 @@ describe("CallsChartCard", () => {
     const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], isAgency: true, voiceEnabled: true });
     expect(html).toContain("/dashboard/accounts/acct1/calls");
     expect(html).not.toContain("/dashboard/accounts/acct1/voice");
+  });
+
+  // #182 follow-up: "nothing yet" used to render whenever zero calls were
+  // ANSWERED, even with 93 spam calls sitting in the same window right above
+  // a call list that plainly had rows — see metrics.test.ts's
+  // `resolveCallsChartState` suite for the pure-logic cases this renders.
+  it("screened state (spam present): leads with the spam count, never the plain empty-state copy", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], totalCallsInWindow: 96, spamCount: 93 });
+    expect(html).toContain("No customer calls in the last 14 days. Sofía screened out 93 spam calls.");
+    expect(html).not.toContain("When Sofía answers, every call lands here with its outcome.");
+    expect(html).not.toContain("Aug 18 ·");
+  });
+
+  it("screened state (no spam, just abandoned/excluded-test calls): the plain \"callers hung up\" line, singular when the count is 1", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], totalCallsInWindow: 1, spamCount: 0 });
+    expect(html).toContain("No customer calls in the last 14 days. 1 caller hung up before Sofía could help.");
+  });
+
+  it("screened state (no spam, 2 non-answered calls): plural", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], totalCallsInWindow: 2, spamCount: 0 });
+    expect(html).toContain("No customer calls in the last 14 days. 2 callers hung up before Sofía could help.");
   });
 
   it("a quiet 14-day window with real OLDER history shows the empty-state copy AND the mini table — recentCalls is the 3 most recent ever, not scoped to the window", () => {

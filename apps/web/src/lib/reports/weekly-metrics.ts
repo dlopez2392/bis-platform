@@ -44,6 +44,12 @@ export const ANSWERED_OUTCOMES = ["booked", "lead", "message", "transferred"] as
 /** The call half of "leads captured". A lead taken at 9pm is still a lead. */
 export const LEAD_OUTCOME = ["lead"] as const;
 
+/** The dashboard calls chart's "screened out" copy (calls-chart-card.tsx)
+ *  leads with this count when it's nonzero — the common, dominant case
+ *  (the BIS account: 93 spam calls to 2 abandoned and 1 excluded test call
+ *  in the same 14-day window). */
+export const SPAM_OUTCOME = ["spam"] as const;
+
 export function countFromOutcomes(outcomes: string[], wanted: readonly string[]): number {
   return outcomes.filter((o) => wanted.includes(o)).length;
 }
@@ -97,6 +103,19 @@ export async function listAnsweredCallStartsBetween(
   excludeCallers: readonly string[] = agencyHandsets(),
 ): Promise<string[]> {
   return listCallStartsByOutcomeBetween(db, accountId, ANSWERED_OUTCOMES, fromIso, toIso, { excludeCallers });
+}
+
+/**
+ * The raw instants behind the dashboard calls chart's "Sofía screened out N
+ * spam calls" copy (calls-chart-card.tsx, `resolveCallsChartState`). No
+ * `excludeCallers`, unlike `listAnsweredCallStartsBetween` above: a spam
+ * call was never a real customer regardless of which number placed it, so
+ * there is no test-handset carve-out to apply here.
+ */
+export async function listSpamCallStartsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+): Promise<string[]> {
+  return listCallStartsByOutcomeBetween(db, accountId, SPAM_OUTCOME, fromIso, toIso);
 }
 
 /**
