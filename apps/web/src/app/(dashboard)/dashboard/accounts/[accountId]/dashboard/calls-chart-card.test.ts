@@ -235,21 +235,50 @@ describe("CallsChartCard", () => {
   // ANSWERED, even with 93 spam calls sitting in the same window right above
   // a call list that plainly had rows — see metrics.test.ts's
   // `resolveCallsChartState` suite for the pure-logic cases this renders.
-  it("screened state (spam present): leads with the spam count, never the plain empty-state copy", () => {
-    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 93, abandonedCount: 3 });
-    expect(html).toContain("No customer calls in the last 14 days. Sofía screened out 93 spam calls.");
+  //
+  // Review fix: the lead sentence now states only what was measured ("No
+  // calls answered"), never "No customer calls" (spam is a guess from what
+  // was said, not a confirmed fact about the caller), and names spam as a
+  // FLAG ("flagged … as likely spam"), never a screened-out certainty.
+  it("screened state (spam present, no abandoned): leads with the spam count alone, never the plain empty-state copy", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 93, abandonedCount: 0 });
+    expect(html).toContain("No calls answered in the last 14 days. Sofía flagged 93 calls as likely spam.");
     expect(html).not.toContain("When Sofía answers, every call lands here with its outcome.");
     expect(html).not.toContain("Aug 18 ·");
   });
 
+  it("screened state (1 spam call, singular)", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 1, abandonedCount: 0 });
+    expect(html).toContain("No calls answered in the last 14 days. Sofía flagged 1 call as likely spam.");
+  });
+
   it("screened state (no spam, just abandoned calls): the plain \"callers hung up\" line, singular when the count is 1", () => {
     const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 0, abandonedCount: 1 });
-    expect(html).toContain("No customer calls in the last 14 days. 1 caller hung up before Sofía could help.");
+    expect(html).toContain("No calls answered in the last 14 days. 1 caller hung up before Sofía could help.");
   });
 
   it("screened state (no spam, 2 abandoned calls): plural", () => {
     const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 0, abandonedCount: 2 });
-    expect(html).toContain("No customer calls in the last 14 days. 2 callers hung up before Sofía could help.");
+    expect(html).toContain("No calls answered in the last 14 days. 2 callers hung up before Sofía could help.");
+  });
+
+  // Review fix: BOTH spam and a real abandoned caller can land in the SAME
+  // window — the first version of this copy led with spam alone whenever
+  // it was present, which silently hid a real caller who hung up behind
+  // the spam line. Both must be named in one sentence.
+  it("screened state (BOTH spam and abandoned present in the same window): one sentence naming both, the abandoned caller never hidden behind the spam line", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 93, abandonedCount: 2 });
+    expect(html).toContain(
+      "No calls answered in the last 14 days. Sofía flagged 93 calls as likely spam, and 2 callers hung up before she could help.",
+    );
+    expect(html).not.toContain("When Sofía answers, every call lands here with its outcome.");
+  });
+
+  it("screened state (both present, each singular)", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 1, abandonedCount: 1 });
+    expect(html).toContain(
+      "No calls answered in the last 14 days. Sofía flagged 1 call as likely spam, and 1 caller hung up before she could help.",
+    );
   });
 
   // The defect this fix removes: a window whose only calls were the

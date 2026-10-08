@@ -69,14 +69,16 @@ export function CallsChartCard({
    *  to — see the comment beside `ctaHref` below. */
   isAgency: boolean;
   voiceEnabled: boolean;
-  /** Calls with outcome `spam` in the same 14-day window — the dominant
-   *  case the "screened" copy leads with when present (metrics.ts doc
-   *  comment on `resolveCallsChartState`). */
+  /** Calls with outcome `spam` in the same 14-day window, test-handset
+   *  callers already excluded (`listSpamCallStartsBetween`'s own
+   *  `excludeCallers` default — a silent or connect-timeout call on the
+   *  agency's own test handset is stamped `spam` exactly like a real one,
+   *  so this must exclude them too, same as `abandonedCount` below). */
   spamCount: number;
   /** Calls with outcome `abandoned` in the same window, test-handset
    *  callers already excluded (`listAbandonedCallStartsBetween`'s own
-   *  `excludeCallers` default) — the fallback "N caller(s) hung up" line
-   *  when there's no spam to lead with. */
+   *  `excludeCallers` default) — named ALONGSIDE `spamCount` when both are
+   *  nonzero (`screenedCopy`'s "both" case), never hidden behind it. */
   abandonedCount: number;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
@@ -140,21 +142,35 @@ function callsUnit(count: number): string {
   return count === 1 ? m["dashboard.calls.unit.call"] : m["dashboard.calls.unit.calls"];
 }
 
-/** The one-sentence explanation for the "screened" state — spam leads when
- *  present (the common, dominant case per metrics.ts's own doc comment);
- *  otherwise the plainer "callers hung up" line covers abandoned calls and
- *  the agency's own excluded test calls alike, without naming test calls to
- *  a reader this card is also shown to (the client role). */
-function screenedCopy(state: { spamCount: number; otherCount: number }): string {
+/** "1 caller" / "2 callers" — same singular/plural shape as `callsUnit`
+ *  above, for the abandoned-callers line. */
+function callerUnit(count: number): string {
+  return count === 1 ? m["dashboard.calls.unit.caller"] : m["dashboard.calls.unit.callers"];
+}
+
+/** The one-sentence explanation for the "screened" state — three variants,
+ *  never collapsed into one: spam alone, abandoned alone, or BOTH named in
+ *  the same sentence when both are nonzero in the same window, so a real
+ *  caller who hung up is never hidden behind the spam line (review fix —
+ *  the first version of this copy led with spam alone whenever it was
+ *  present, silently dropping a real abandoned caller from the same
+ *  window). */
+function screenedCopy(state: { spamCount: number; abandonedCount: number }): string {
+  if (state.spamCount > 0 && state.abandonedCount > 0) {
+    return m["dashboard.calls.screenedBoth"]
+      .replace("{spamCount}", String(state.spamCount))
+      .replace("{spamUnit}", callsUnit(state.spamCount))
+      .replace("{otherCount}", String(state.abandonedCount))
+      .replace("{otherUnit}", callerUnit(state.abandonedCount));
+  }
   if (state.spamCount > 0) {
     return m["dashboard.calls.screenedSpam"]
       .replace("{count}", String(state.spamCount))
       .replace("{unit}", callsUnit(state.spamCount));
   }
-  const unit = state.otherCount === 1 ? m["dashboard.calls.unit.caller"] : m["dashboard.calls.unit.callers"];
-  return m["dashboard.calls.screenedOther"]
-    .replace("{count}", String(state.otherCount))
-    .replace("{unit}", unit);
+  return m["dashboard.calls.screenedAbandoned"]
+    .replace("{count}", String(state.abandonedCount))
+    .replace("{unit}", callerUnit(state.abandonedCount));
 }
 
 /**

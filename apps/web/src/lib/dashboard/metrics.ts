@@ -205,22 +205,6 @@ export function sparklinePath(
 }
 
 /**
- * A call is after-hours when its LOCAL time (in `timezone`) falls outside
- * that local day's `open_hours` window. Reuses `normalizeOpenHours` (the
- * booking availability code's own defensive shape validation — dropping
- * malformed intervals, `"24:00"` handling) exactly as `computeSlots` itself
- * does, rather than re-validating the shape here; this function only adds
- * the trivial "HH:MM" -> minutes-of-day arithmetic needed to compare a
- * local clock reading against an already-validated interval.
- *
- * DATA HONESTY (pinned by the brief): a day with NO configured window
- * (either because that weekday's key is absent, or because `openHours` is
- * entirely empty) still gets an answer from this function — every call on
- * that day counts as after-hours. Whether to HIDE the after-hours tile
- * entirely when `open_hours` is empty is Task 5's call, composed on top of
- * this function's honest count, not this function's job.
- */
-/**
  * The calls chart card's empty-state selection (#182 follow-up). Before
  * this, the card's "nothing yet" copy fired whenever `answeredCount` (the
  * ANSWERED_OUTCOMES, test-handset-excluded read every "calls answered"
@@ -243,18 +227,27 @@ export function sparklinePath(
  *
  * The fix: take `spamCount` and `abandonedCount` as two counts the caller
  * already computes from the SAME test-handset-excluded convention every
- * other "calls" number on this page uses (`listSpamCallStartsBetween`
- * reasonably counts every caller — a spam call was never a real customer
- * regardless of which number placed it; `listAbandonedCallStartsBetween`
- * defaults `excludeCallers` to `agencyHandsets()`, same convention as
- * `listAnsweredCallStartsBetween`). A window whose only calls are the
+ * other "calls" number on this page uses — `listSpamCallStartsBetween` AND
+ * `listAbandonedCallStartsBetween` both default `excludeCallers` to
+ * `agencyHandsets()`, same convention as `listAnsweredCallStartsBetween`
+ * (review fix: the first version of THIS fix left `listSpamCallStartsBetween`
+ * unexcluded on the theory that "a spam call was never a real customer" —
+ * true, but irrelevant, because `classifyOutcome` (lib/voice/call-state.ts)
+ * stamps `spam` on any call the caller never spoke on, and a connect-timeout
+ * stamps `spam` too, either of which the agency's OWN test handset can
+ * produce exactly like a real caller). A window whose only calls are the
  * agency's own test calls now surfaces as `spamCount === 0` AND
  * `abandonedCount === 0` — all-zero, not a stray nonzero residual — so
  * "none" is reached honestly, with no subtraction involved at all.
+ *
+ * The "screened" case carries BOTH counts, never collapsed into one: a
+ * window can hold spam AND a real abandoned caller at once, and a real
+ * caller who hung up must never be hidden behind the spam line (the card's
+ * `screenedCopy` names both when both are nonzero).
  */
 export type CallsChartState =
   | { kind: "none" }
-  | { kind: "screened"; spamCount: number; otherCount: number }
+  | { kind: "screened"; spamCount: number; abandonedCount: number }
   | { kind: "answered" };
 
 export function resolveCallsChartState(counts: {
@@ -264,11 +257,27 @@ export function resolveCallsChartState(counts: {
 }): CallsChartState {
   if (counts.answeredCount > 0) return { kind: "answered" };
   if (counts.spamCount > 0 || counts.abandonedCount > 0) {
-    return { kind: "screened", spamCount: counts.spamCount, otherCount: counts.abandonedCount };
+    return { kind: "screened", spamCount: counts.spamCount, abandonedCount: counts.abandonedCount };
   }
   return { kind: "none" };
 }
 
+/**
+ * A call is after-hours when its LOCAL time (in `timezone`) falls outside
+ * that local day's `open_hours` window. Reuses `normalizeOpenHours` (the
+ * booking availability code's own defensive shape validation — dropping
+ * malformed intervals, `"24:00"` handling) exactly as `computeSlots` itself
+ * does, rather than re-validating the shape here; this function only adds
+ * the trivial "HH:MM" -> minutes-of-day arithmetic needed to compare a
+ * local clock reading against an already-validated interval.
+ *
+ * DATA HONESTY (pinned by the brief): a day with NO configured window
+ * (either because that weekday's key is absent, or because `openHours` is
+ * entirely empty) still gets an answer from this function — every call on
+ * that day counts as after-hours. Whether to HIDE the after-hours tile
+ * entirely when `open_hours` is empty is Task 5's call, composed on top of
+ * this function's honest count, not this function's job.
+ */
 export function countAfterHours(isoTimes: string[], timezone: string, openHours: OpenHours): number {
   const normalized = normalizeOpenHours(openHours);
   let afterHours = 0;

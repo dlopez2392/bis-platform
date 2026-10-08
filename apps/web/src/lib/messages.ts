@@ -305,14 +305,19 @@ export const m = {
   "dashboard.calls.emptySetupVoice": "Set up your voice receptionist",
   "dashboard.calls.emptyViewCalls": "View all calls",
   // The "screened, not empty" state (#182 follow-up): the window had calls,
-  // just none that counted as answered. Spam is the dominant, common case
-  // (the BIS account: 93 spam calls, 2 abandoned, 1 excluded test call, and
-  // the card used to say "nothing yet") so it leads alone when present;
-  // abandoned/excluded-test calls get the plainer fallback line. Both take
-  // "{count}"/"{unit}", the same replace-by-hand convention as the tooltip
-  // strings above.
-  "dashboard.calls.screenedSpam": "No customer calls in the last 14 days. Sofía screened out {count} spam {unit}.",
-  "dashboard.calls.screenedOther": "No customer calls in the last 14 days. {count} {unit} hung up before Sofía could help.",
+  // just none that counted as answered. Review fix: the lead sentence used
+  // to claim "No customer calls" — more than this card measures. Spam is a
+  // GUESS from what was (or wasn't) said, not a confirmed fact about who
+  // called, so the lead sentence states only what was actually measured —
+  // zero ANSWERED calls — and the two outcomes that follow are named as
+  // what they are, never conflated. Three variants: spam alone, abandoned
+  // alone, and both in the SAME window (named together, so a real caller
+  // who hung up is never hidden behind the spam line). All three take
+  // "{count}"/"{unit}" (the "both" variant takes two of each, spam first),
+  // the same replace-by-hand convention as the tooltip strings above.
+  "dashboard.calls.screenedSpam": "No calls answered in the last 14 days. Sofía flagged {count} {unit} as likely spam.",
+  "dashboard.calls.screenedAbandoned": "No calls answered in the last 14 days. {count} {unit} hung up before Sofía could help.",
+  "dashboard.calls.screenedBoth": "No calls answered in the last 14 days. Sofía flagged {spamCount} {spamUnit} as likely spam, and {otherCount} {otherUnit} hung up before she could help.",
   "dashboard.calls.unit.caller": "caller",
   "dashboard.calls.unit.callers": "callers",
 

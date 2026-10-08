@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
-  countFromOutcomes, ANSWERED_OUTCOMES, LEAD_OUTCOME, ABANDONED_OUTCOME, listLeadInstantsBetween, weeklyMetrics,
-  listAnsweredCallStartsBetween, listAbandonedCallStartsBetween,
+  countFromOutcomes, ANSWERED_OUTCOMES, LEAD_OUTCOME, ABANDONED_OUTCOME, SPAM_OUTCOME,
+  listLeadInstantsBetween, weeklyMetrics,
+  listAnsweredCallStartsBetween, listAbandonedCallStartsBetween, listSpamCallStartsBetween,
   type WeeklyWindow,
 } from "./weekly-metrics";
 
@@ -169,6 +170,23 @@ describe("the agency's own test calls are not client activity", () => {
     await listAbandonedCallStartsBetween({} as never, "acct_1", "from-iso", "to-iso");
     expect(dbMocks.listCallStartsByOutcomeBetween).toHaveBeenCalledWith(
       expect.anything(), "acct_1", ABANDONED_OUTCOME, "from-iso", "to-iso",
+      { excludeCallers: ["+19565550101", "+19565550102"] },
+    );
+  });
+
+  // Review fix: `classifyOutcome` (lib/voice/call-state.ts) stamps `spam` on
+  // any call the caller never spoke on, and the connect-timeout path in
+  // api/voice/incoming/route.ts stamps `spam` on a call that never even
+  // connected — either can happen on the agency's OWN test handset (a
+  // silent test call, a dropped test connection), not just a real robocall.
+  // Without this exclusion a client would see "Sofía flagged 1 call as
+  // likely spam" for the agency's own dead-air test (mutation: drop
+  // `excludeCallers` from the call -> FAILS, since the call would then
+  // carry no 3rd argument at all).
+  it("the spam-calls read behind the calls chart's \"flagged as likely spam\" line leaves them out too", async () => {
+    await listSpamCallStartsBetween({} as never, "acct_1", "from-iso", "to-iso");
+    expect(dbMocks.listCallStartsByOutcomeBetween).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", SPAM_OUTCOME, "from-iso", "to-iso",
       { excludeCallers: ["+19565550101", "+19565550102"] },
     );
   });

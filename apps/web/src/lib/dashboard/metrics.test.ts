@@ -364,11 +364,15 @@ describe("countAfterHours", () => {
 // whose only calls were the agency's own test calls therefore got
 // `totalCount > 0`, `spamCount === 0`, and reported "N callers hung up"
 // when nobody had. This resolver instead takes `spamCount` and
-// `abandonedCount` directly — each already the test-handset-excluded
-// output of `listSpamCallStartsBetween`/`listAbandonedCallStartsBetween`
-// (the latter via `listCallStartsByOutcomeBetween`'s own `excludeCallers`,
-// same convention as `listAnsweredCallStartsBetween`) — so a test-only
-// window surfaces as all-zero counts, not a stray nonzero residual.
+// `abandonedCount` directly — BOTH now the test-handset-excluded output of
+// `listSpamCallStartsBetween`/`listAbandonedCallStartsBetween`
+// (`listCallStartsByOutcomeBetween`'s own `excludeCallers`, same
+// convention as `listAnsweredCallStartsBetween` for both reads since the
+// review fix that caught `listSpamCallStartsBetween` NOT excluding them —
+// a silent or connect-timeout call on the agency's own test handset is
+// stamped `spam` exactly like a real one, call-state.ts's own comment) —
+// so a test-only window surfaces as all-zero counts, not a stray nonzero
+// residual.
 describe("resolveCallsChartState", () => {
   it(
     "zero calls at all in the window: \"none\" — this is also the shape a " +
@@ -394,24 +398,39 @@ describe("resolveCallsChartState", () => {
   );
 
   it(
-    "calls came in, none answered, mostly spam: \"screened\", spam and " +
-      "abandoned kept as SEPARATE counts, never merged into one residual " +
-      "(mutation: otherCount = spamCount + abandonedCount -> reports 96, " +
-      "double-counting the 93 spam calls into \"other\" too, instead of 3)",
+    "calls came in, none answered, mostly spam, no abandoned: \"screened\" " +
+      "with spamCount carried straight through and abandonedCount 0 " +
+      "(mutation: spamCount hard-coded to spamCount - 1 -> FAILS on this " +
+      "exact count)",
     () => {
-      expect(resolveCallsChartState({ answeredCount: 0, spamCount: 93, abandonedCount: 3 }))
-        .toEqual({ kind: "screened", spamCount: 93, otherCount: 3 });
+      expect(resolveCallsChartState({ answeredCount: 0, spamCount: 93, abandonedCount: 0 }))
+        .toEqual({ kind: "screened", spamCount: 93, abandonedCount: 0 });
     },
   );
 
   it(
     "calls came in, none answered, no spam at all, 2 abandoned: \"screened\" " +
-      "with spamCount 0 and abandonedCount carried straight through as " +
-      "otherCount (mutation: otherCount hard-coded to abandonedCount - 1 -> " +
-      "FAILS on this exact count)",
+      "with spamCount 0 and abandonedCount carried straight through " +
+      "(mutation: abandonedCount hard-coded to abandonedCount - 1 -> FAILS " +
+      "on this exact count)",
     () => {
       expect(resolveCallsChartState({ answeredCount: 0, spamCount: 0, abandonedCount: 2 }))
-        .toEqual({ kind: "screened", spamCount: 0, otherCount: 2 });
+        .toEqual({ kind: "screened", spamCount: 0, abandonedCount: 2 });
+    },
+  );
+
+  // Review fix: the FIRST version of this fix collapsed both counts into a
+  // single `otherCount`, which hid a real abandoned caller behind the spam
+  // line whenever both were nonzero. Both counts must survive untouched —
+  // the CARD decides how to word it (screenedCopy's "both" case), but the
+  // resolver itself must never merge or drop either one.
+  it(
+    "calls came in, none answered, BOTH spam and abandoned present: " +
+      "\"screened\" carries BOTH counts, neither merged nor dropped " +
+      "(mutation: spamCount only, abandonedCount omitted/zeroed -> FAILS)",
+    () => {
+      expect(resolveCallsChartState({ answeredCount: 0, spamCount: 93, abandonedCount: 2 }))
+        .toEqual({ kind: "screened", spamCount: 93, abandonedCount: 2 });
     },
   );
 });

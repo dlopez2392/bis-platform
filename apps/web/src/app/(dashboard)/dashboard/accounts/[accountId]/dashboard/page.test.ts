@@ -121,7 +121,22 @@ vi.mock("@bis/db", () => ({
   sumOpenOpportunities: (...a: unknown[]) => dbMocks.sumOpenOpportunities(...a),
 }));
 
-vi.mock("./calls-chart-card", () => ({ CallsChartCard: () => null }));
+// Review fix: this used to mock the card down to `() => null`, so nothing
+// here ever asserted what page.tsx actually COMPUTED for it — swapping
+// spamCount/abandonedCount at the call site, or hard-coding both to 0,
+// left this whole file (95/95) green. Captured rather than rendered, same
+// idiom as `checklistRowProps`/`workRowProps` below: the page-level wiring
+// is under test here, not calls-chart-card.tsx's own markup (that's
+// calls-chart-card.test.ts's job).
+const callsChartCardProps = vi.hoisted(() => ({
+  current: null as { spamCount: number; abandonedCount: number } | null,
+}));
+vi.mock("./calls-chart-card", () => ({
+  CallsChartCard: (props: { spamCount: number; abandonedCount: number }) => {
+    callsChartCardProps.current = { spamCount: props.spamCount, abandonedCount: props.abandonedCount };
+    return null;
+  },
+}));
 vi.mock("./activity-card", () => ({ ActivityCard: () => null }));
 
 // The one component under real test-of-integration here: captured rather
@@ -182,6 +197,7 @@ function resetFixtures() {
   authFixture.isAgency = true;
   checklistRowProps.current = null;
   workRowProps.current = null;
+  callsChartCardProps.current = null;
   for (const fn of Object.values(dbMocks)) fn.mockReset();
   reportMocks.listLeadInstantsBetween.mockReset();
   reportMocks.listAnsweredCallStartsBetween.mockReset();
@@ -316,6 +332,26 @@ describe("AccountDashboardPage — the work row (unlike the checklist row, both 
     await renderToStaticMarkup(await AccountDashboardPage(route()));
 
     expect(workRowProps.current).toEqual({ accountId: "acct1", total: 0, overdue: 0 });
+  });
+});
+
+// Review fix: `CallsChartCard` was mocked to `() => null` with no assertion
+// on what page.tsx computed and handed it — the real "which state renders"
+// logic is calls-chart-card.test.ts/metrics.test.ts's job, but THIS page's
+// job is handing the card the right two lengths, from the right two reads,
+// and that part had zero coverage.
+describe("AccountDashboardPage — the calls chart card's spam/abandoned counts (review fix)", () => {
+  beforeEach(resetFixtures);
+
+  it("hands CallsChartCard spamCount/abandonedCount as the LENGTHS of the two reads, never swapped and never hard-coded (mutations below prove both)", async () => {
+    reportMocks.listSpamCallStartsBetween.mockResolvedValue([
+      "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z",
+    ]);
+    reportMocks.listAbandonedCallStartsBetween.mockResolvedValue(["2026-01-03T00:00:00Z"]);
+
+    await renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(callsChartCardProps.current).toEqual({ spamCount: 2, abandonedCount: 1 });
   });
 });
 
