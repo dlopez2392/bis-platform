@@ -840,6 +840,104 @@ describe("listBookingCreationsBetween", () => {
   });
 });
 
+/**
+ * D-035 (migration 0061). Sofía's reschedule cancels the old booking and
+ * creates a new one, and the new one names the old through
+ * `rescheduled_from_id`. A reschedule is not a new booking, so the creation
+ * count — the dashboard's bookings number and chart, the Monday report and
+ * the agency roll-up, all of which read `listBookingCreationsBetween` — leaves
+ * linked rows out, while the ORIGINAL keeps the bar it earned when it was made
+ * (it is cancelled afterwards, and a cancel never erased a capture).
+ */
+describe("reschedule link (0061, D-035)", () => {
+  it("createBooking writes rescheduledFromId when given, and null when not", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const original = await createBooking(db, accountId, {
+        calendarId: cal.id, contactId,
+        startsAt: new Date("2029-02-01T15:00:00Z"), endsAt: new Date("2029-02-01T16:00:00Z"),
+      }, "voice", "ai");
+      const moved = await createBooking(db, accountId, {
+        calendarId: cal.id, contactId,
+        startsAt: new Date("2029-02-02T15:00:00Z"), endsAt: new Date("2029-02-02T16:00:00Z"),
+        rescheduledFromId: original.id,
+      }, "voice", "ai");
+      const { data, error } = await db.from("bookings").select("id, rescheduled_from_id")
+        .in("id", [original.id, moved.id]);
+      if (error) throw new Error(error.message);
+      const byId = Object.fromEntries((data ?? []).map((r) => [r.id, r.rescheduled_from_id]));
+      expect(byId).toEqual({ [original.id]: null, [moved.id]: original.id });
+    });
+  });
+
+  it("createBooking refuses a link to another account's booking (the composite FK, surfaced by name)", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (db2, accountB) => {
+        const calA = await getOrCreateCalendar(db, accountA, "user_test");
+        const calB = await getOrCreateCalendar(db2, accountB, "user_test");
+        const { id: contactA } = await createContact(db, accountA, { firstName: "A" }, "user_test");
+        const { id: contactB } = await createContact(db2, accountB, { firstName: "B" }, "user_test");
+        const theirs = await createBooking(db2, accountB, {
+          calendarId: calB.id, contactId: contactB,
+          startsAt: new Date("2029-03-01T15:00:00Z"), endsAt: new Date("2029-03-01T16:00:00Z"),
+        }, "user_test");
+        await expect(createBooking(db, accountA, {
+          calendarId: calA.id, contactId: contactA,
+          startsAt: new Date("2029-03-02T15:00:00Z"), endsAt: new Date("2029-03-02T16:00:00Z"),
+          rescheduledFromId: theirs.id,
+        }, "voice", "ai")).rejects.toThrow(/bookings_rescheduled_from_fkey/);
+        // Nothing was written on A.
+        const { count } = await db.from("bookings").select("id", { count: "exact", head: true })
+          .eq("account_id", accountA);
+        expect(count).toBe(0);
+      });
+    });
+  });
+
+  it("listBookingCreationsBetween counts the original and leaves its replacement out", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const from = "2027-07-01T00:00:00.000Z";
+      const to = "2027-07-08T00:00:00.000Z";
+      const stamp = async (id: string, createdIso: string) => {
+        const { error } = await db.from("bookings").update({ created_at: createdIso }).eq("id", id);
+        if (error) throw new Error(error.message);
+      };
+
+      // The reschedule exactly as the receptionist does it: the new slot is
+      // booked first, naming the old; then the old is cancelled.
+      const original = await createBooking(db, accountId, {
+        calendarId: cal.id, contactId,
+        startsAt: new Date("2029-04-01T15:00:00Z"), endsAt: new Date("2029-04-01T16:00:00Z"),
+      }, "user_test");
+      await stamp(original.id, "2027-07-02T10:00:00.000Z");
+      const moved = await createBooking(db, accountId, {
+        calendarId: cal.id, contactId,
+        startsAt: new Date("2029-04-03T15:00:00Z"), endsAt: new Date("2029-04-03T16:00:00Z"),
+        rescheduledFromId: original.id,
+      }, "voice", "ai");
+      await setBookingStatus(db, accountId, original.id, "cancelled", "voice", "ai");
+      await stamp(moved.id, "2027-07-04T10:00:00.000Z");
+
+      // The control: an unlinked booking in the same window still counts, so
+      // the result is not "everything after the first row" or "nothing new".
+      const fresh = await createBooking(db, accountId, {
+        calendarId: cal.id, contactId,
+        startsAt: new Date("2029-04-05T15:00:00Z"), endsAt: new Date("2029-04-05T16:00:00Z"),
+      }, "user_test");
+      await stamp(fresh.id, "2027-07-05T10:00:00.000Z");
+
+      const result = await listBookingCreationsBetween(db, accountId, from, to);
+      expect(result.map((s) => new Date(s).toISOString())).toEqual([
+        "2027-07-02T10:00:00.000Z", // the original, though it is now cancelled
+        "2027-07-05T10:00:00.000Z", // the unrelated new booking
+      ]);
+    });
+  });
+});
+
 // The reminder and the follow-up reach the customer and the calendar through
 // `bookings.contact_id` / `bookings.calendar_id`. Since 0050 both are composite
 // FKs onto `(account_id, id)`, so a booking on another account's contact or
