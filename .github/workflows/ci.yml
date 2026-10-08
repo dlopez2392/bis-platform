@@ -51,7 +51,9 @@ name: CI
 #           disagree about what "green" means. The guard runs and the stack
 #           in front of them are preflights, not gates.
 #
-#   e2e     seeds the CI project (idempotent; a no-op once seeded), then the
+#   e2e     checks that the CI project holds every migration in the branch
+#           (the "CI project FIRST" rule's gate since verify left that
+#           project), seeds it (idempotent; a no-op once seeded), then the
 #           Playwright journey. Serialized ACROSS THE WHOLE REPO, never
 #           cancelled: every run shares the one seeded account ("Test Client
 #           One") and specs drag its pipeline card, create forms and leads on
@@ -332,6 +334,19 @@ jobs:
       - name: Decide whether this push changes only docs
         id: scope
         run: bash .github/scripts/ci-docs-only.sh
+
+      # "Every new migration goes to the CI project FIRST" (CLAUDE.md). Until
+      # verify moved to its own stack (2026-10-08), verify's db suite ran on
+      # the CI project and went red when a branch's migration had not reached
+      # it. verify now builds its database from the branch's files, so THIS is
+      # the gate: every migration file in the branch must be in the CI
+      # project's history, or the job fails naming each one and the fix. A
+      # migration the CI project has and the branch lacks (another branch
+      # applied first) is not a failure. Before anything writes to the
+      # project; needs only bash and psql.
+      - name: Check that the CI project has every migration in this branch
+        if: steps.scope.outputs.docs_only != 'true'
+        run: bash .github/scripts/ci-migrations-applied.sh
 
       - uses: pnpm/action-setup@v6
         if: steps.scope.outputs.docs_only != 'true'

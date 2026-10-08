@@ -26,6 +26,8 @@ const GUARD_LOCAL = `${GUARD} --local-stack`;
 /** verify's database: a throwaway stack in its own runner (ci-local-supabase.test.ts). */
 const INSTALL_CLI = "bash .github/scripts/ci-supabase-cli.sh";
 const START_STACK = "bash .github/scripts/ci-local-supabase.sh";
+/** e2e's check that the CI project holds every migration of the branch (ci-migrations-applied.test.ts). */
+const MIGRATIONS_APPLIED = "bash .github/scripts/ci-migrations-applied.sh";
 /** The names the code reads to find Supabase. verify gets them from its own stack only. */
 const SUPABASE_NAMES = [
   "BIS_CI_SUPABASE_REF", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY",
@@ -384,6 +386,22 @@ describe("ci.yml's jobs", () => {
     guarded("verify", "pnpm check");
     guarded("e2e", "pnpm --filter @bis/db ci:seed");
     guarded("e2e", "pnpm --filter web test:e2e");
+  });
+
+  // PR #200 review: verify used to fail a branch whose new migration had not
+  // reached the CI project, because its db suite ran there. It no longer
+  // does (it builds its own database), so e2e checks it instead, straight
+  // after its guard and before it writes anything to that project.
+  it("e2e checks every branch migration is on the CI project after its guard and before it seeds (mutation: drop the step, or move it after ci:seed → FAILS)", () => {
+    const all = steps(job("e2e"));
+    const runs = all.map((s) => s.run ?? "");
+    const check = runs.indexOf(MIGRATIONS_APPLIED);
+    expect(check, "migration check step").toBeGreaterThan(runs.indexOf(GUARD));
+    expect(check).toBeGreaterThan(runs.indexOf(SCOPE));
+    expect(check).toBeLessThan(runs.indexOf("pnpm --filter @bis/db ci:seed"));
+    expect(all[check]?.if).toBe(DOCS_ONLY_IF);
+    // verify must not: it holds no CI-project credential to check with.
+    expect(steps(job("verify")).map((s) => s.run)).not.toContain(MIGRATIONS_APPLIED);
   });
 
   it("e2e seeds the CI project after the install and before Playwright", () => {

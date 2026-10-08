@@ -636,6 +636,11 @@ describe("ci-target-guard.sh --local-stack: verify, once its stack is up", () =>
     ["a host that only starts with the loopback address", `postgresql://postgres:${LOCAL_DB_PASSWORD}@127.0.0.1.evil.example:54322/postgres`],
     ["a query string, where node-pg reads a host= override", `postgresql://postgres:${LOCAL_DB_PASSWORD}@127.0.0.1:54322/postgres?host=evil.example`],
     ["not a postgres URI", "eyJ_pasted_into_the_wrong_box"],
+    // PR #200 review: the host was read after the LAST @, so an @ in the PATH
+    // or the FRAGMENT put the loopback there while the real host stayed evil.
+    ["a loopback host hidden in the path after an @", `postgresql://u@evil.example/x@127.0.0.1:54322/postgres`],
+    ["a loopback host hidden in the fragment after #@", `postgresql://u@evil.example#@127.0.0.1:54322/postgres`],
+    ["no database name", `postgresql://postgres:${LOCAL_DB_PASSWORD}@127.0.0.1:54322`],
   ])("refuses a DB URL that is not the local stack's: %s (mutation: drop the DB URL check → FAILS)", (_label, value) => {
     const r = local({ SUPABASE_DB_URL: value });
     expect(r.status).toBe(1);

@@ -213,7 +213,20 @@ What changed on 2026-10-08: `verify` (the db suite, including every
 grant-pinning test) builds its own database from the branch's migration
 files on every run (section 11), so it tests a new migration before step 2,
 and a migration pushed to the CI project no longer turns other branches'
-`verify` red. Step 2 is still required, for `e2e`.
+`verify` red.
+
+**What enforces step 2 now.** Until that date, skipping step 2 turned
+`verify` red, because its db suite ran here. It no longer does, so the `e2e`
+job carries the gate: its step "Check that the CI project has every
+migration in this branch" (`.github/scripts/ci-migrations-applied.sh`) runs
+before anything writes here, compares every
+`packages/db/supabase/migrations/<version>_<name>.sql` in the branch with this
+project's `supabase_migrations.schema_migrations` by version, and fails
+naming each file that is missing, with this section as the fix. A version
+this project holds that the branch lacks (another branch pushed first) is
+reported as a notice, never a failure. It does not check production (e2e
+holds no production credential, and must not): steps 5 and 6 are still the
+orchestrator's.
 
 ## 7. Restore from a pause
 
@@ -354,4 +367,4 @@ Reading a red one:
 What stays on this project: `e2e` (it signs in through the Clerk development
 instance, which this project trusts and a local stack does not), `ci:seed`,
 the parity checks, and section 6's rule that every new migration comes here
-before production.
+before production, which e2e's migration check now enforces (section 6).

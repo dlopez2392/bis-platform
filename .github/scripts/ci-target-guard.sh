@@ -179,20 +179,13 @@ if [ "$mode" = "local-stack" ] && [ -n "$url" ]; then
 fi
 
 # --- 3L. the local stack's database, on the runner's loopback -------------------
+# The WHOLE URL is anchored, as `supabase status` prints it: userinfo with no
+# @ / ? # in it, the loopback host, an optional port, a database name, and
+# nothing after. Taking the host "after the last @" let an @ in the path or
+# the fragment carry a loopback address while the real host was elsewhere
+# (PR #200 review); and a query string can carry host=, which node-pg obeys.
 if [ "$mode" = "local-stack" ] && [ -n "$db" ]; then
-  db_ok=0
-  case "$db" in
-    postgres://* | postgresql://*)
-      rest="${db#*://}"
-      hostpart="${rest##*@}"      # after the LAST @, so a password cannot move it
-      hostport="${hostpart%%/*}"
-      case "$rest" in
-        *"?"*) ;;                  # a query string can carry host=, which node-pg obeys
-        *) [[ "$hostport" =~ ^(127\.0\.0\.1|localhost)(:[0-9]{1,5})?$ ]] && db_ok=1 ;;
-      esac
-      ;;
-  esac
-  if [ "$db_ok" -ne 1 ]; then
+  if ! [[ "$db" =~ ^postgres(ql)?://[^@/?#]+@(127\.0\.0\.1|localhost)(:[0-9]{1,5})?/[A-Za-z0-9_]+$ ]]; then
     fail "SUPABASE_DB_URL is not the local stack's database: it must be a postgres:// URI on 127.0.0.1 (or localhost) with no query string, as \`supabase status\` prints it. verify never connects to a cloud project."
   fi
 fi
