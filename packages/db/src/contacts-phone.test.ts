@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { phoneFields, phoneKeyOf, createContact, updateContact, fillContactBlanks,
-         setContactPhoneCountry, phoneDigits } from "./contacts";
+         setContactPhoneCountry, phoneDigits, phoneSearchDigits } from "./contacts";
 import { applyImportBatch, type MatchIndex } from "./contact-import";
 
 /**
@@ -46,6 +46,38 @@ describe("phoneKeyOf — the dedupe key of the number as it will be stored", () 
   it("blank is the empty key", () => {
     expect(phoneKeyOf("")).toBe("");
     expect(phoneKeyOf(undefined)).toBe("");
+  });
+});
+
+/**
+ * Review finding (first pass at D-009's phone half): `withSearch` used to
+ * extract digits from ANY search term and add a `phone_key` clause whenever
+ * the result was non-empty — "maria5@example.com" or "Suite 9" each carry
+ * one digit, and a contact whose phone happens to contain that digit (an
+ * extremely common coincidence; most ten-digit phones contain any given
+ * digit) matched a completely unrelated search via `.or()`'s union. This
+ * gate decides whether a term is even WORTH treating as a phone search at
+ * all, before any digits are extracted for the query.
+ */
+describe("phoneSearchDigits — gates withSearch's phone_key clause on the term actually looking like a phone", () => {
+  it("a term with letters in it never looks like a phone, however many digits it carries (mutation: drop the shape check → FAILS)", () => {
+    expect(phoneSearchDigits("maria5@example.com")).toBe("");
+    expect(phoneSearchDigits("Suite 9")).toBe("");
+    // The two above carry fewer than 4 digits, so the digit floor alone
+    // already rejects them; these carry 4+ digits and only the SHAPE check
+    // stands between them and a phone_key match on every phone holding 1234.
+    expect(phoneSearchDigits("john2026@x.com")).toBe("");
+    expect(phoneSearchDigits("Unit 1234 Main")).toBe("");
+  });
+
+  it("fewer than 4 digits doesn't look like a real phone search, even in pure phone-shaped punctuation (mutation: drop the digit floor → FAILS)", () => {
+    expect(phoneSearchDigits("99")).toBe("");
+    expect(phoneSearchDigits("(99)")).toBe("");
+  });
+
+  it("a real, formatted phone search returns its bare digits, folding a leading NANP 1 off just like phone_key itself does", () => {
+    expect(phoneSearchDigits("(956) 555-0199")).toBe("9565550199");
+    expect(phoneSearchDigits("+1 956 555 0199")).toBe("9565550199");
   });
 });
 

@@ -13,7 +13,11 @@ vi.mock("@/lib/auth", () => ({ requireAccountAccess: (...a: unknown[]) => access
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 
 const listContacts = vi.fn();
-vi.mock("@bis/db", () => ({ listContacts: (...a: unknown[]) => listContacts(...a) }));
+const listTagNamesForContacts = vi.fn();
+vi.mock("@bis/db", () => ({
+  listContacts: (...a: unknown[]) => listContacts(...a),
+  listTagNamesForContacts: (...a: unknown[]) => listTagNamesForContacts(...a),
+}));
 
 const { GET } = await import("./route");
 
@@ -53,7 +57,9 @@ function dataLines(body: string): string[] {
 beforeEach(() => {
   access.mockReset();
   listContacts.mockReset();
+  listTagNamesForContacts.mockReset();
   access.mockResolvedValue({ userId: "u1", isAgency: true });
+  listTagNamesForContacts.mockResolvedValue(new Map());
 });
 
 describe("contacts CSV export route (GET)", () => {
@@ -98,14 +104,28 @@ describe("contacts CSV export route (GET)", () => {
     expect(Array.from(bytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
   });
 
-  it("emits an empty tags column per row — no bulk tag read exists yet (see task report)", async () => {
+  it("D-008: fills the tags column from the bulk tag read, per row", async () => {
+    listContacts.mockResolvedValueOnce([
+      { id: "c1", first_name: "Ana", last_name: null, email: null, phone: null,
+        company_name: null, source: null, sort_name: "ana", created_at: "2026-01-01T00:00:00Z" },
+      { id: "c2", first_name: "Bo", last_name: null, email: null, phone: null,
+        company_name: null, source: null, sort_name: "bo", created_at: "2026-01-01T00:00:00Z" },
+    ]);
+    listTagNamesForContacts.mockResolvedValueOnce(new Map([["c1", "urgent,vip"]]));
+    const res = await GET(req(), ctx());
+    expect(await text(res)).toBe(
+      "first_name,last_name,email,phone,company_name,source,tags\n"
+      + "Ana,,,,,,\"urgent,vip\"\nBo,,,,,,");
+  });
+
+  it("D-008: reads tags for exactly this chunk's ids, in one batched call", async () => {
     listContacts.mockResolvedValueOnce([{
       id: "c1", first_name: "Ana", last_name: null, email: null, phone: null,
       company_name: null, source: null, sort_name: "ana", created_at: "2026-01-01T00:00:00Z",
     }]);
-    const res = await GET(req(), ctx());
-    expect(await text(res)).toBe(
-      "first_name,last_name,email,phone,company_name,source,tags\nAna,,,,,,");
+    await GET(req(), ctx());
+    expect(listTagNamesForContacts).toHaveBeenCalledTimes(1);
+    expect(listTagNamesForContacts).toHaveBeenCalledWith({}, "a1", ["c1"]);
   });
 
   it.each([
@@ -125,6 +145,13 @@ describe("contacts CSV export route (GET)", () => {
 
       const res = await GET(req(`?sort=${sortKey}`), ctx());
 
+      // Drain the stream BEFORE inspecting the mocks: the chunk loop now
+      // awaits `listTagNamesForContacts` too (D-008), one more suspension
+      // point per chunk than `await GET(...)` alone resolves past — reading
+      // the body is what actually runs the loop to completion, same as the
+      // real client downloading the file.
+      const body = await text(res);
+
       expect(listContacts).toHaveBeenCalledTimes(2);
       expect(listContacts).toHaveBeenNthCalledWith(2, {}, "a1", {
         search: undefined, limit: 500,
@@ -138,7 +165,7 @@ describe("contacts CSV export route (GET)", () => {
       // complete export from a truncated one — a chunk-loop bug that stops
       // after the first page would still produce those very same arguments
       // right before it stops.
-      const rows = dataLines(await text(res));
+      const rows = dataLines(body);
       const names = rows.map((l) => l.split(",")[0]);
       const expectedNames = [...chunk1, ...chunk2].map((r) => r.first_name);
       expect(names).toHaveLength(504);

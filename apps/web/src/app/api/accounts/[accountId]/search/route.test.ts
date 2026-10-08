@@ -7,14 +7,14 @@ vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 const dbMocks = {
   listContacts: vi.fn(), searchCalls: vi.fn(), searchConversations: vi.fn(),
 };
-// The three READS are mocked; `sanitizeSearchTerm` is the REAL one. Stubbing
-// it would make this file assert against a sanitizer of its own invention —
-// the "a mock more permissive than the real thing proves nothing" trap — and
-// the query-floor tests below exist precisely to pin the real one's behaviour
-// at this boundary.
+// The three READS are mocked; `sanitizeSearchTerm`/`searchTermLength` are
+// the REAL ones. Stubbing them would make this file assert against a
+// sanitizer of its own invention — the "a mock more permissive than the
+// real thing proves nothing" trap — and the query-floor tests below exist
+// precisely to pin the real ones' behaviour at this boundary.
 vi.mock("@bis/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@bis/db")>();
-  return { ...dbMocks, sanitizeSearchTerm: actual.sanitizeSearchTerm };
+  return { ...dbMocks, sanitizeSearchTerm: actual.sanitizeSearchTerm, searchTermLength: actual.searchTermLength };
 });
 
 const { GET } = await import("./route");
@@ -56,10 +56,31 @@ describe("account search route", () => {
     // MATCHED "%%" — a lie about a search, and inconsistent with its two
     // siblings, which return [].
     access.mockResolvedValue({ userId: "u1", isAgency: true });
-    for (const hostile of ["%%", "()", "__", "**", `""`]) {
+    // D-009: "__" dropped out of this list — an underscore is now ESCAPED,
+    // not deleted, so "__" sanitizes to the real two-character query "\_\_"
+    // and clears the floor like any other short literal term (pinned in its
+    // own test below), rather than vanishing like these four still do.
+    for (const hostile of ["%%", "()", "**", `""`]) {
       const body = await (await GET(req(hostile), ctx())).json();
       expect(body, `query ${hostile}`).toEqual({ contacts: [], calls: [], conversations: [] });
     }
+    expect(dbMocks.listContacts).not.toHaveBeenCalled();
+  });
+
+  it("D-009: an underscore query is escaped, not deleted, so it clears the floor and reaches the database literally", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    await GET(req("__"), ctx());
+    expect(dbMocks.listContacts).toHaveBeenCalledWith({}, "a1", { search: "\\_\\_", limit: 5 });
+  });
+
+  // Review correction: the floor used to be measured on `sanitizeSearchTerm`'s
+  // ESCAPED output, and a lone "_" escapes to "\_" — two characters — which
+  // cleared a two-character floor on exactly one real character typed. It is
+  // now measured with `searchTermLength`, on the term BEFORE that escape.
+  it("D-009 (review correction): a single underscore does NOT clear the floor, even though it escapes to two characters (mutation: measure q.length instead → FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    const body = await (await GET(req("_"), ctx())).json();
+    expect(body).toEqual({ contacts: [], calls: [], conversations: [] });
     expect(dbMocks.listContacts).not.toHaveBeenCalled();
   });
 

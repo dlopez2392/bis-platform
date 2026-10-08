@@ -6,7 +6,8 @@ import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
-         deleteContacts, addTagToContacts, removeTagFromContacts, listTags } from "../contacts";
+         deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
+         listTagNamesForContacts } from "../contacts";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -103,10 +104,60 @@ describe("contacts service", () => {
       // for the same input, because they have no "list everything" meaning.
       expect(await listContacts(db, accountId, { search: "%" })).toHaveLength(2);
 
+      // D-009: an underscore in the search box used to be DELETED, turning
+      // "john_doe" into "johndoe" — not even a substring of "john_doe"
+      // itself, so a real username never matched. It is now escaped
+      // (`\_`) instead, so it is read literally: a contact whose name
+      // merely has SOME OTHER character in that position ("johnXdoe") must
+      // NOT match, proving `_` isn't acting as ILIKE's "any one character"
+      // wildcard.
+      await createContact(db, accountId, { firstName: "john_doe" }, "user_test");
+      await createContact(db, accountId, { firstName: "johnXdoe" }, "user_test");
+      const underscoreHits = await listContacts(db, accountId, { search: "john_doe" });
+      expect(underscoreHits).toHaveLength(1);
+      expect(underscoreHits![0]!.first_name).toBe("john_doe");
+
+      // D-009: a phone search must match regardless of formatting. The
+      // stored value is E.164 ("+19565550199"), which contains none of the
+      // punctuation a typed, formatted number does — so even a perfect,
+      // unescaped pass-through of "(956) 555-0199" could never appear as a
+      // literal substring of it. Matched on DIGITS (phone_key, 0033)
+      // instead: the parens/space/dash never need to survive sanitization
+      // at all.
+      await createContact(db, accountId, { firstName: "Phone", phone: "956-555-0199" }, "user_test");
+      const phoneHits = await listContacts(db, accountId, { search: "(956) 555-0199" });
+      expect(phoneHits).toHaveLength(1);
+      expect(phoneHits![0]!.first_name).toBe("Phone");
+      // A bare, unformatted digit run must find the same row.
+      expect(await listContacts(db, accountId, { search: "9565550199" })).toHaveLength(1);
+
+      // Review (first pass): the phone_key clause must be gated on the term
+      // LOOKING LIKE A PHONE, not merely containing a digit — an unconditional
+      // digit extraction turned "maria5@example.com" into "5" and matched
+      // "Phone" above (whose number is full of 5s) via `.or()`'s union, even
+      // though Phone's email/name have nothing to do with that search.
+      await createContact(db, accountId, { firstName: "Maria5", email: "maria5@example.com" }, "user_test");
+      const emailWithDigit = await listContacts(db, accountId, { search: "maria5@example.com" });
+      expect(emailWithDigit).toHaveLength(1);
+      expect(emailWithDigit![0]!.first_name).toBe("Maria5");
+
       await addTagToContact(db, accountId, id, "vip");
       await addTagToContact(db, accountId, id, "vip"); // idempotent
       const tags = await listContactTags(db, accountId, id);
       expect(tags.map(t => t.name)).toEqual(["vip"]);
+
+      // Review (D-008 round-trip): the export comma-joins a contact's tag
+      // names and the importer (lib/contacts/csv.ts's splitTags) comma-
+      // SPLITS that column back apart — a tag name that itself contains a
+      // comma would export fine and re-import as two tags. The comma is
+      // refused at creation (not quoted/escaped on export), so the stored
+      // name never has one to round-trip badly in the first place.
+      await addTagToContact(db, accountId, id, "smith, john");
+      const afterComma = await listContactTags(db, accountId, id);
+      const stored = afterComma.map((t) => t.name).find((n) => n !== "vip");
+      expect(stored).toBeDefined();
+      expect(stored).not.toContain(",");
+      expect(stored).toBe("smith john");
     }));
 
   it("createContact tolerates PostgREST filter syntax in email AND phone", () =>
@@ -504,6 +555,58 @@ describe("bulk contact ops", () => {
       await removeTagFromContacts(db, accountId, [a.id, b.id], r1.tagId);
       expect(await listContactTags(db, accountId, a.id)).toHaveLength(0);
       expect(await listContactTags(db, accountId, b.id)).toHaveLength(0);
+    }));
+
+  it("addTagToContacts reports only the ids that did NOT already carry the tag, so undo can skip the rest (D-007, mutation: return contactIds instead of the pre-read addedIds → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId, { firstName: "A" }, "user_test");
+      const b = await createContact(db, accountId, { firstName: "B" }, "user_test");
+      const c = await createContact(db, accountId, { firstName: "C" }, "user_test");
+      // a already has VIP before the bulk tag below is applied to a, b and c.
+      const pre = await addTagToContacts(db, accountId, [a.id], "VIP");
+      const r = await addTagToContacts(db, accountId, [a.id, b.id, c.id], "VIP");
+      expect(r.tagId).toBe(pre.tagId);
+      expect(r.applied).toBe(3);
+      expect([...r.addedIds].sort()).toEqual([b.id, c.id].sort());
+      expect(r.addedIds).not.toContain(a.id);
+      // Undo with ONLY addedIds: a keeps the tag, b and c lose it.
+      await removeTagFromContacts(db, accountId, r.addedIds, r.tagId);
+      expect(await listContactTags(db, accountId, a.id)).toHaveLength(1);
+      expect(await listContactTags(db, accountId, b.id)).toHaveLength(0);
+      expect(await listContactTags(db, accountId, c.id)).toHaveLength(0);
+    }));
+
+  it("listTagNamesForContacts reports every contact's tags, comma-joined and sorted, and omits an untagged contact entirely (D-008, mutation: return '' for every id → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId, { firstName: "A" }, "user_test");
+      const b = await createContact(db, accountId, { firstName: "B" }, "user_test");
+      const c = await createContact(db, accountId, { firstName: "C" }, "user_test"); // no tags
+      await addTagToContact(db, accountId, a.id, "urgent");
+      await addTagToContact(db, accountId, a.id, "vip");
+      await addTagToContact(db, accountId, b.id, "vip");
+      const map = await listTagNamesForContacts(db, accountId, [a.id, b.id, c.id]);
+      expect(map.get(a.id)).toBe("urgent,vip");
+      expect(map.get(b.id)).toBe("vip");
+      expect(map.has(c.id)).toBe(false);
+    }));
+
+  // Review (first pass): a single `.in("contact_id", …)` with 400-500
+  // UUIDs — exactly an export chunk's size (export/route.ts's
+  // CHUNK_SIZE=500) — builds a request URL long enough that `fetch` itself
+  // throws (`TypeError: fetch failed`), not a Postgres or RLS error, which
+  // the export route's own `controller.error` then turns into an aborted
+  // download. 500 contacts, bulk-seeded (not 500 individual `createContact`
+  // calls, which would cost 500 events and make this test itself the slow
+  // one) proves the batching actually ran rather than merely compiling.
+  it("doesn't blow the request URL on a full export chunk's worth of ids (500) — batches instead of one unbounded .in() (mutation: one batch → fetch failed, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ids: string[] = await seedContacts(db, accountId, 500, "2026-01-01T00:00:00Z");
+      await addTagToContact(db, accountId, ids[0]!, "vip");
+      await addTagToContact(db, accountId, ids[499]!, "urgent");
+      const map = await listTagNamesForContacts(db, accountId, ids);
+      expect(map.get(ids[0]!)).toBe("vip");
+      expect(map.get(ids[499]!)).toBe("urgent");
+      expect(map.has(ids[1]!)).toBe(false);
     }));
 
   it("deleteContacts deletes unblocked ids and skips one linked to an opportunity", () =>

@@ -174,11 +174,20 @@ export default async function ContactsPage({
               <Upload className="size-4" aria-hidden />
               {m["contacts.import"]}
             </Link>
-            <AddContactDialog action={boundCreateContact} />
+            <AddContactDialog accountId={accountId} action={boundCreateContact} />
           </>
         }
         search={
+          // D-009: a plain GET form only carries the fields IT names — with
+          // no hidden sort/dir, pressing Enter in the search box dropped
+          // whatever column/direction the operator had the list sorted by
+          // and silently reset it to the default (created, desc). sort/dir
+          // ride along as hidden fields so "search" and "sort" stay the two
+          // independent axes this list's own contract (DESIGN.md's paged-
+          // lists pattern) says they are.
           <form action={base}>
+            <input type="hidden" name="sort" value={sort} />
+            <input type="hidden" name="dir" value={dir} />
             <Input
               name="q"
               defaultValue={q ?? ""}

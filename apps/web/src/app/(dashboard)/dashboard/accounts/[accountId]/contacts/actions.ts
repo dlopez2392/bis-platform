@@ -13,14 +13,57 @@ import { m } from "@/lib/messages";
 import { EDITABLE_FIELDS, FIELD_TO_INPUT_KEY, normalizeFieldInput,
          type EditableField } from "@/lib/contacts/field-input";
 
-export async function createContactAction(accountId: string, formData: FormData): Promise<void> {
+/**
+ * D-013: Add contact used to save an all-blank contact (no name, email or
+ * phone — nothing a person could ever find it by again), never checked an
+ * email or phone's SHAPE at all (a typo like "not-an-email" saved as typed),
+ * and on a dedupe match `createContact` already silently returned
+ * (`{ existing: true, id }`) the dialog just closed as if a NEW contact had
+ * been made — the operator learns nothing and the existing record goes
+ * unlinked. `normalizeFieldInput` (lib/contacts/field-input.ts) is the SAME
+ * shape check inline editing and the CSV importer already use — reused
+ * here, not re-implemented, so "what looks like an email" has one answer
+ * everywhere it's asked.
+ */
+export type CreateContactResult =
+  | { kind: "created" }
+  | { kind: "existing"; contactId: string }
+  | { kind: "invalid"; error: string };
+
+export async function createContactAction(
+  accountId: string, formData: FormData,
+): Promise<CreateContactResult> {
   const { userId } = await requireAccountAccess(accountId);
-  const val = (k: string) => String(formData.get(k) ?? "").trim() || undefined;
-  await createContact(await dbForRequest(), accountId, {
-    firstName: val("firstName"), lastName: val("lastName"),
-    email: val("email"), phone: val("phone"),
+  const val = (k: string) => String(formData.get(k) ?? "").trim();
+  const firstName = val("firstName");
+  const lastName = val("lastName");
+  if (!firstName && !lastName && !val("email") && !val("phone")) {
+    return { kind: "invalid", error: m["contacts.add.blank"] };
+  }
+  const email = normalizeFieldInput("email", val("email"));
+  if (!email.ok) return { kind: "invalid", error: email.error };
+  // Named `phoneField`, not `phone`: this file's OWN scan (F-009,
+  // scans.test.ts) tracks a "local that carries a normaliser's number" by
+  // name across the WHOLE FILE, not per function — `setPhoneCountryAction`,
+  // `undoPhoneCountryAction` and `undoInlinePhoneEditAction` below each have
+  // their own local named `phone` that genuinely IS a normaliser's number
+  // (PHONE_KEY_ONLY, allowed there, under a phone KEY rather than handed to
+  // a contact write). A local here ALSO named `phone` collided with those
+  // three across the file and made the scan misread this write — which
+  // hands `createContact` the number exactly as `normalizeFieldInput`
+  // returned it (trimmed, unvalidated-shape-only, never normalised; the
+  // SAME value `updateContactFieldAction`'s own `norm.value` below writes)
+  // — as if it carried one of theirs.
+  const phoneField = normalizeFieldInput("phone", val("phone"));
+  if (!phoneField.ok) return { kind: "invalid", error: phoneField.error };
+
+  const result = await createContact(await dbForRequest(), accountId, {
+    firstName: firstName || undefined, lastName: lastName || undefined,
+    email: email.value || undefined, phone: phoneField.value || undefined,
   }, userId);
+  if (result.existing) return { kind: "existing", contactId: result.id };
   revalidatePath(`/dashboard/accounts/${accountId}/contacts`);
+  return { kind: "created" };
 }
 
 const contactsPath = (accountId: string) => `/dashboard/accounts/${accountId}/contacts`;
@@ -85,7 +128,10 @@ export async function updateContactFieldAction(
 
 export async function bulkAddTagAction(
   accountId: string, contactIds: string[], tagName: string,
-): Promise<{ ok: true; tagId: string; applied: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; tagId: string; applied: number; addedIds: string[] }
+  | { ok: false; error: string }
+> {
   await requireAccountAccess(accountId);
   if (contactIds.length === 0 || !tagName.trim()) return { ok: false, error: "Nothing selected." };
   try {

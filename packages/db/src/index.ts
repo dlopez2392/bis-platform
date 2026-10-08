@@ -2,7 +2,7 @@ export { serviceDb } from "./service";
 export { userDb } from "./user-client";
 export type { SupabaseClient } from "@supabase/supabase-js";
 export { emit, listRecentEvents, type ActorType, type EventRow } from "./events";
-export { sanitizeSearchTerm } from "./search-term";
+export { sanitizeSearchTerm, searchTermLength } from "./search-term";
 export { createAccount, listAccounts, setClientAccess, renameAccount, getAccountByOrgId,
          setA2pRegistration, getA2pRegistration, a2pApprovalIsComplete,
          isMessagingProfileId, MessagingProfileTakenError } from "./accounts";
@@ -17,6 +17,7 @@ export { ALERT_CODE_DIGITS, ALERT_CODE_MAX_ATTEMPTS, ALERT_CODE_TTL_MINUTES,
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
+         listTagNamesForContacts,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
 export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
 export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,

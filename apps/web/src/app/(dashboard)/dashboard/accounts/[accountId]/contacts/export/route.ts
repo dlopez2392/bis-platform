@@ -1,4 +1,4 @@
-import { listContacts, type SortKey, type SortDir } from "@bis/db";
+import { listContacts, listTagNamesForContacts, type SortKey, type SortDir } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
@@ -124,10 +124,15 @@ export async function GET(
           const chunk = await listContacts(db, accountId,
             { search: q, limit: CHUNK_SIZE, before: cursor, sort: { key: sort, dir } });
           if (chunk.length === 0) break;
-          // No bulk "tags for many contacts" read exists today — only
-          // listContactTags, one contact at a time (see this task's
-          // report). An empty column here over an N+1 query per row.
-          const withTags = chunk.map((r: Record<string, unknown>) => ({ ...r, tags: "" }));
+          // D-008: the export's own "tags" column was always blank — this
+          // used to read "no bulk 'tags for many contacts' read exists
+          // today", so `listTagNamesForContacts` (packages/db/src/contacts.ts)
+          // is ONE query per chunk, not an N+1 over listContactTags.
+          const tagNames = await listTagNamesForContacts(
+            db, accountId, chunk.map((r: Record<string, unknown>) => r.id as string));
+          const withTags = chunk.map((r: Record<string, unknown>) => ({
+            ...r, tags: tagNames.get(r.id as string) ?? "",
+          }));
           controller.enqueue(encoder.encode("\n" + rowLines(withTags)));
           // Fewer rows than asked for means this was the last page — skips
           // one wasted trailing query in the common case. The one edge case

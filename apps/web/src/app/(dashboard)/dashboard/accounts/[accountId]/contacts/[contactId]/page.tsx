@@ -125,6 +125,7 @@ export default async function ContactDetailPage({
           messages={messages}
           emailAction={sendEmailAction.bind(null, accountId)}
           smsAction={sendSmsAction.bind(null, accountId)}
+          timezone={zone.zone}
         />
         <aside className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
           <p className="mb-2 text-[13.5px] font-semibold text-card-foreground">

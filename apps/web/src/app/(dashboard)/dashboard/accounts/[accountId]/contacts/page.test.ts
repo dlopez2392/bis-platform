@@ -1,8 +1,33 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildExportHref, buildNewerHref, buildOlderHref } from "./page";
+import { renderToStaticMarkup } from "react-dom/server";
+
+// D-009's search-form describe block below renders the WHOLE page (the
+// hidden sort/dir fields live in page.tsx's own JSX, not in a pure
+// extracted helper) — these three stubs keep that render isolated to the
+// search form's own markup, same reason tasks/page.test.ts stubs out
+// anything below what one test actually pins. ContactsTable/AddContactDialog
+// are "use client" and reach useRouter/useFormSubmit, neither available
+// under renderToStaticMarkup.
+vi.mock("./contacts-table", () => ({ ContactsTable: () => null }));
+vi.mock("./add-contact-dialog", () => ({ AddContactDialog: () => null }));
+vi.mock("./actions", () => ({ createContactAction: vi.fn() }));
+vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
+const listContactsMock = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => [{
+  id: "c1", first_name: "Ana", last_name: null, email: null, phone: null,
+  company_name: null, source: null, sort_name: "ana", created_at: "2026-01-01T00:00:00Z",
+}]);
+const countContactsMock = vi.fn<(...args: unknown[]) => Promise<number>>(async () => 1);
+const listTagsMock = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => []);
+vi.mock("@bis/db", () => ({
+  listContacts: (...a: unknown[]) => listContactsMock(...a),
+  countContacts: (...a: unknown[]) => countContactsMock(...a),
+  listTags: (...a: unknown[]) => listTagsMock(...a),
+}));
+
+const { default: ContactsPage, buildExportHref, buildNewerHref, buildOlderHref } = await import("./page");
 
 const page = readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), "page.tsx"), "utf8");
@@ -146,5 +171,35 @@ describe("buildExportHref", () => {
   it("never carries a before cursor — export walks the whole list itself, not one page of it", () => {
     const href = buildExportHref("/dashboard/accounts/a1/contacts", "trevino", "name", "asc");
     expect(href).not.toContain("before=");
+  });
+});
+
+// D-009: submitting the search box (a plain GET <form>) used to carry ONLY
+// `q` — the browser drops any query param the form itself doesn't name, so
+// pressing Enter while sorted by company/asc silently reset the list to the
+// default order (created, desc). The fix lives in page.tsx's own JSX
+// (hidden sort/dir fields), not in an extracted pure helper like
+// buildNewerHref/buildOlderHref above, so this renders the real page.
+describe("the search form (D-009)", () => {
+  it("carries the current sort and dir as hidden fields, so Enter doesn't reset the order (mutation: drop the hidden inputs → FAILS)", async () => {
+    const html = renderToStaticMarkup(
+      await ContactsPage({
+        params: Promise.resolve({ accountId: "a1" }),
+        searchParams: Promise.resolve({ sort: "company", dir: "asc" }),
+      }),
+    );
+    expect(html).toContain('<input type="hidden" name="sort" value="company"');
+    expect(html).toContain('<input type="hidden" name="dir" value="asc"');
+  });
+
+  it("carries the default sort/dir too, when none was given in the URL", async () => {
+    const html = renderToStaticMarkup(
+      await ContactsPage({
+        params: Promise.resolve({ accountId: "a1" }),
+        searchParams: Promise.resolve({}),
+      }),
+    );
+    expect(html).toContain('<input type="hidden" name="sort" value="created"');
+    expect(html).toContain('<input type="hidden" name="dir" value="desc"');
   });
 });

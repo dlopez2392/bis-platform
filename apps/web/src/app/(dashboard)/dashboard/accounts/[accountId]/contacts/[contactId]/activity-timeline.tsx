@@ -9,10 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/empty-state";
-import { formatCurrency, formatDate, formatDateUTC, formatDateTime } from "@/lib/format";
+import { formatCurrency, formatDate, formatDateInZone, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
+import { STATUS_LABEL, MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
 
 // Exhaustively typed to the real channel union (see labels.ts's own
 // MESSAGE_CHANNEL_LABEL comment) so a new channel is a compile error here
@@ -57,6 +57,7 @@ export function ActivityTimeline({
   messages,
   emailAction,
   smsAction,
+  timezone,
 }: {
   accountId: string;
   contactId: string;
@@ -87,6 +88,17 @@ export function ActivityTimeline({
   messages: ContactMessage[];
   emailAction: (formData: FormData) => Promise<void>;
   smsAction: (formData: FormData) => Promise<void>;
+  /** The account's RESOLVED zone (`renderZone`, already computed by this
+   *  page for the Texts/Email rows' own dates) — review finding: a task's
+   *  due date is now saved as midnight in the ACCOUNT's own zone (D-006,
+   *  actions.ts's `dueAtInAccountZone`), and this card used to render it
+   *  with `formatDateUTC` — correct for a zone WEST of UTC (where that
+   *  instant's UTC calendar day still matches), wrong for one EAST of it
+   *  (Berlin, Tokyo: midnight there is already the PREVIOUS day in UTC), so
+   *  the To do screen and this card could disagree about which day a task
+   *  was due. `formatDateInZone` with the SAME zone the instant was built
+   *  from always round-trips to the same day, in any zone. */
+  timezone: string;
 }) {
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const boundAddTask = addTaskAction.bind(null, accountId);
@@ -203,7 +215,7 @@ export function ActivityTimeline({
                       <Separator className="flex-1" />
                     </div>
                   ) : null}
-                  <TimelineRow item={item} hidden={hidden} completeAction={boundCompleteTask} />
+                  <TimelineRow item={item} hidden={hidden} completeAction={boundCompleteTask} timezone={timezone} />
                 </li>
               );
             })}
@@ -227,14 +239,32 @@ export function ActivityTimeline({
   );
 }
 
+/** A task's own due date, in the SAME account zone it was saved from
+ *  (D-006's `dueAtInAccountZone`) — never UTC, which reads as the previous
+ *  day for any zone east of it. Degrades to no date rather than throwing on
+ *  a genuinely unparseable stored value, matching `tasks/work-list.tsx`'s
+ *  own `rowDateText`: a bad date must not take the whole card down with
+ *  it. `timezone` itself is never the cause of a throw here — it is
+ *  `renderZone`'s resolved zone, total by construction. */
+function taskDueDateText(dueAt: string, timezone: string): string | null {
+  try {
+    return formatDateInZone(dueAt, timezone);
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
+    return null;
+  }
+}
+
 function TimelineRow({
   item,
   hidden,
   completeAction,
+  timezone,
 }: {
   item: TimelineItem;
   hidden: React.ReactNode;
   completeAction: (formData: FormData) => Promise<void>;
+  timezone: string;
 }) {
   if (item.kind === "note") {
     return (
@@ -260,10 +290,10 @@ function TimelineRow({
           </p>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span>{formatDateTime(item.at)}</span>
-            {item.dueAt ? (
+            {item.dueAt && taskDueDateText(item.dueAt, timezone) ? (
               <span className="flex items-center gap-1">
                 <CalendarClock className="size-3" aria-hidden />
-                {formatDateUTC(item.dueAt)}
+                {taskDueDateText(item.dueAt, timezone)}
               </span>
             ) : null}
           </div>
@@ -305,8 +335,15 @@ function TimelineRow({
             {formatDateTime(item.at)}
             {/* The status is the honest part: "sent" is what the provider
                 accepted, and a `failed` message must not look delivered on
-                the record the operator trusts. */}
-            {outbound ? ` · ${item.status}` : ""}
+                the record the operator trusts. D-014: the raw column value
+                ("failed", "sent") is not a word a business owner reads at
+                7 AM — labeled through MESSAGE_STATUS_LABEL (lib/labels.ts),
+                the same map conversations.spec's own status chip uses,
+                with the raw value as a fallback (matching the opportunity
+                row below's own `STATUS_LABEL[...] ?? item.status`) so an
+                unmapped future status still shows SOMETHING rather than
+                going blank. */}
+            {outbound ? ` · ${MESSAGE_STATUS_LABEL[item.status] ?? item.status}` : ""}
           </p>
         </div>
       </div>
