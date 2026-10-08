@@ -85,7 +85,10 @@ export async function updateContactFieldAction(
 
 export async function bulkAddTagAction(
   accountId: string, contactIds: string[], tagName: string,
-): Promise<{ ok: true; tagId: string; applied: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; tagId: string; applied: number; addedIds: string[] }
+  | { ok: false; error: string }
+> {
   await requireAccountAccess(accountId);
   if (contactIds.length === 0 || !tagName.trim()) return { ok: false, error: "Nothing selected." };
   try {

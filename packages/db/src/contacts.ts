@@ -639,20 +639,31 @@ export async function countContacts(
  */
 export async function addTagToContacts(
   db: SupabaseClient, accountId: string, contactIds: string[], tagName: string,
-): Promise<{ tagId: string; applied: number }> {
+): Promise<{ tagId: string; applied: number; addedIds: string[] }> {
   const name = tagName.trim().toLowerCase();
   if (!name || contactIds.length === 0) throw new Error("addTagToContacts: nothing to do");
   const { data: tag, error: tErr } = await db.from("tags")
     .upsert({ account_id: accountId, name }, { onConflict: "account_id,name" })
     .select("id").single();
   if (tErr || !tag) throw new Error(`tag upsert failed: ${tErr?.message}`);
+  // D-007: a bulk tag's Undo must strip the tag only from contacts that did
+  // NOT already carry it — never the whole original selection, or Undo
+  // removes it from contacts that had it before this call too. Read who
+  // already has it BEFORE the upsert below adds it to everyone, so the
+  // caller (bulk-action-bar.tsx's Undo toast) can pass `addedIds` instead of
+  // the full `contactIds`.
+  const { data: already, error: alreadyErr } = await db.from("contact_tags")
+    .select("contact_id").eq("account_id", accountId).eq("tag_id", tag.id).in("contact_id", contactIds);
+  if (alreadyErr) throw new Error(`contact_tags pre-read failed: ${alreadyErr.message}`);
+  const alreadyHad = new Set((already ?? []).map((r: { contact_id: string }) => r.contact_id));
+  const addedIds = contactIds.filter((id) => !alreadyHad.has(id));
   const rows = contactIds.map((contactId) => ({
     contact_id: contactId, tag_id: tag.id, account_id: accountId,
   }));
   const { error } = await db.from("contact_tags")
     .upsert(rows, { onConflict: "contact_id,tag_id" });
   if (error) throw new Error(`contact_tags bulk upsert failed: ${error.message}`);
-  return { tagId: tag.id, applied: contactIds.length };
+  return { tagId: tag.id, applied: contactIds.length, addedIds };
 }
 
 /** Undo for addTagToContacts: strip ONE tag from the same id set. */

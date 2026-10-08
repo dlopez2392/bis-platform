@@ -108,10 +108,10 @@ describe("bulkDeleteContactsAction", () => {
 });
 
 describe("bulkAddTagAction", () => {
-  it("returns ok:true and spreads the tagId/applied from addTagToContacts", async () => {
-    dbMocks.addTagToContacts.mockResolvedValue({ tagId: "t9", applied: 2 });
+  it("returns ok:true and spreads the tagId/applied/addedIds from addTagToContacts", async () => {
+    dbMocks.addTagToContacts.mockResolvedValue({ tagId: "t9", applied: 2, addedIds: ["c2"] });
     const r = await bulkAddTagAction("a1", ["c1", "c2"], "urgent");
-    expect(r).toEqual({ ok: true, tagId: "t9", applied: 2 });
+    expect(r).toEqual({ ok: true, tagId: "t9", applied: 2, addedIds: ["c2"] });
   });
   it("returns ok:false instead of throwing when the db op throws", async () => {
     dbMocks.addTagToContacts.mockRejectedValue(new Error("boom"));

@@ -506,6 +506,25 @@ describe("bulk contact ops", () => {
       expect(await listContactTags(db, accountId, b.id)).toHaveLength(0);
     }));
 
+  it("addTagToContacts reports only the ids that did NOT already carry the tag, so undo can skip the rest (D-007, mutation: return contactIds instead of the pre-read addedIds → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId, { firstName: "A" }, "user_test");
+      const b = await createContact(db, accountId, { firstName: "B" }, "user_test");
+      const c = await createContact(db, accountId, { firstName: "C" }, "user_test");
+      // a already has VIP before the bulk tag below is applied to a, b and c.
+      const pre = await addTagToContacts(db, accountId, [a.id], "VIP");
+      const r = await addTagToContacts(db, accountId, [a.id, b.id, c.id], "VIP");
+      expect(r.tagId).toBe(pre.tagId);
+      expect(r.applied).toBe(3);
+      expect([...r.addedIds].sort()).toEqual([b.id, c.id].sort());
+      expect(r.addedIds).not.toContain(a.id);
+      // Undo with ONLY addedIds: a keeps the tag, b and c lose it.
+      await removeTagFromContacts(db, accountId, r.addedIds, r.tagId);
+      expect(await listContactTags(db, accountId, a.id)).toHaveLength(1);
+      expect(await listContactTags(db, accountId, b.id)).toHaveLength(0);
+      expect(await listContactTags(db, accountId, c.id)).toHaveLength(0);
+    }));
+
   it("deleteContacts deletes unblocked ids and skips one linked to an opportunity", () =>
     withTestAccount(async (db, accountId) => {
       const free = await createContact(db, accountId, { firstName: "Free" }, "user_test");

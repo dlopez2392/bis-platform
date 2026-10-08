@@ -14,6 +14,31 @@ import {
 import { m } from "@/lib/messages";
 import { bulkAddTagAction, bulkRemoveTagAction, bulkDeleteContactsAction } from "./actions";
 
+/**
+ * D-007: a bulk tag's Undo must strip the tag only from the contacts that
+ * did NOT already carry it — never the whole original selection, or Undo
+ * removes the tag from contacts that already had it before this bulk-tag
+ * ran. `addTagToContacts` (packages/db/src/contacts.ts) now reports exactly
+ * that set as `addedIds`; this function is the one place that decision gets
+ * wired into the Undo action, pulled out of the component below so the
+ * wiring itself — not a trivial passthrough — is unit-testable without
+ * going through the DropdownMenu it is triggered from (no DOM renderer in
+ * apps/web; see contact-drawer.wiring.test.ts's own doc comment).
+ */
+export async function applyBulkTag(
+  accountId: string,
+  ids: string[],
+  name: string,
+): Promise<
+  | { ok: true; applied: number; undo: () => Promise<{ ok: true } | { ok: false; error: string }> }
+  | { ok: false; error: string }
+> {
+  const r = await bulkAddTagAction(accountId, ids, name).catch(
+    () => ({ ok: false as const, error: m["inline.crashed"] }));
+  if (!r.ok) return r;
+  return { ok: true, applied: r.applied, undo: () => bulkRemoveTagAction(accountId, r.addedIds, r.tagId) };
+}
+
 export function BulkActionBar({
   accountId, selectedIds, existingTags, onDone,
 }: {
@@ -33,8 +58,7 @@ export function BulkActionBar({
 
   async function applyTag(name: string) {
     const ids = [...selectedIds];
-    const r = await bulkAddTagAction(accountId, ids, name).catch(
-      () => ({ ok: false as const, error: m["inline.crashed"] }));
+    const r = await applyBulkTag(accountId, ids, name);
     if (!r.ok) { toast.error(r.error); return; }
     onDone();
     toast.success(
@@ -44,7 +68,7 @@ export function BulkActionBar({
       {
         action: {
           label: m["common.undo"],
-          onClick: () => void bulkRemoveTagAction(accountId, ids, r.tagId)
+          onClick: () => void r.undo()
             .then((u) => { if (!u.ok) toast.error(u.error); })
             .catch(() => toast.error(m["inline.crashed"])),
         },
