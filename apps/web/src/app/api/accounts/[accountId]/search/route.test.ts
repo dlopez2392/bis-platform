@@ -7,14 +7,14 @@ vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 const dbMocks = {
   listContacts: vi.fn(), searchCalls: vi.fn(), searchConversations: vi.fn(),
 };
-// The three READS are mocked; `sanitizeSearchTerm` is the REAL one. Stubbing
-// it would make this file assert against a sanitizer of its own invention —
-// the "a mock more permissive than the real thing proves nothing" trap — and
-// the query-floor tests below exist precisely to pin the real one's behaviour
-// at this boundary.
+// The three READS are mocked; `sanitizeSearchTerm`/`searchTermLength` are
+// the REAL ones. Stubbing them would make this file assert against a
+// sanitizer of its own invention — the "a mock more permissive than the
+// real thing proves nothing" trap — and the query-floor tests below exist
+// precisely to pin the real ones' behaviour at this boundary.
 vi.mock("@bis/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@bis/db")>();
-  return { ...dbMocks, sanitizeSearchTerm: actual.sanitizeSearchTerm };
+  return { ...dbMocks, sanitizeSearchTerm: actual.sanitizeSearchTerm, searchTermLength: actual.searchTermLength };
 });
 
 const { GET } = await import("./route");
@@ -71,6 +71,17 @@ describe("account search route", () => {
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     await GET(req("__"), ctx());
     expect(dbMocks.listContacts).toHaveBeenCalledWith({}, "a1", { search: "\\_\\_", limit: 5 });
+  });
+
+  // Review correction: the floor used to be measured on `sanitizeSearchTerm`'s
+  // ESCAPED output, and a lone "_" escapes to "\_" — two characters — which
+  // cleared a two-character floor on exactly one real character typed. It is
+  // now measured with `searchTermLength`, on the term BEFORE that escape.
+  it("D-009 (review correction): a single underscore does NOT clear the floor, even though it escapes to two characters (mutation: measure q.length instead → FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    const body = await (await GET(req("_"), ctx())).json();
+    expect(body).toEqual({ contacts: [], calls: [], conversations: [] });
+    expect(dbMocks.listContacts).not.toHaveBeenCalled();
   });
 
   it("measures the query floor after sanitizing, not before", async () => {

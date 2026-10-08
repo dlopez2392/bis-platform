@@ -34,11 +34,34 @@ function ids(accountId: string, formData: FormData) {
  * in the account's own zone" (`zonedTimeToUtc`) instead of a bare
  * `new Date()` parse: midnight of the PICKED calendar day, converted from
  * the account's own zone to UTC. Falls back to the old UTC-midnight instant
- * only if the account's zone is unresolvable to a usable one at all (never
- * happens today — `renderZone` is total by construction) or the picked wall
- * time doesn't exist in that zone (midnight is never inside a US DST gap,
- * which lands at 2 a.m.) — degrade, don't drop the date the operator typed.
+ * only when the date string itself isn't the plain `YYYY-MM-DD` the picker
+ * sends (never happens from that `<Input type="date">`, but a hand-edited
+ * form post is not a 500 the operator has to report). The account's zone
+ * read failing, or being unusable, is handled separately below — neither
+ * degrades to a guess here.
+ *
+ * MIDNIGHT IS NOT NEVER IN A DST GAP (review correction of this comment's
+ * own earlier claim, which was true only for US-style zones): most zones
+ * move their clocks at 2 a.m. local, where midnight is always safely on the
+ * near side of the jump, but Cuba (2027-03-14) and Chile (2026-09-06, among
+ * others) spring forward AT midnight, so 00:00 through the jump's length
+ * are not real wall-clock times on that date at all. `firstValidInstant`
+ * below is the fallback for exactly that case: the first minute of the
+ * picked day that genuinely exists, found by trying forward minute by
+ * minute rather than re-deriving each zone's own transition rule.
  */
+function firstValidInstant(y: number, mo: number, d: number, zone: string): Date {
+  for (let minutes = 0; minutes < 4 * 60; minutes++) {
+    const at = zonedTimeToUtc(y, mo, d, Math.floor(minutes / 60), minutes % 60, zone);
+    if (at) return at;
+  }
+  // Every minute in a four-hour window was unrepresentable — unreachable
+  // for any real IANA zone (no DST jump is anywhere near that long).
+  // Returning rather than throwing: a termination guarantee for a loop
+  // that should never need one, not a guess being passed off as real.
+  return new Date(Date.UTC(y, mo - 1, d));
+}
+
 async function dueAtInAccountZone(
   db: Awaited<ReturnType<typeof dbForRequest>>,
   accountId: string,
@@ -50,10 +73,18 @@ async function dueAtInAccountZone(
   const y = Number(yStr);
   const mo = Number(mStr);
   const d = Number(dStr);
-  const { data } = await db.from("accounts").select("timezone").eq("id", accountId).maybeSingle();
+  // Review correction: this read's `.error` used to be silently dropped,
+  // which fell through to `renderZone(undefined)` — the AGENCY's zone,
+  // guessed, for an account whose own read genuinely failed rather than
+  // genuinely having no timezone set. A failed read is surfaced, not
+  // treated as "no timezone".
+  const { data, error } = await db.from("accounts").select("timezone").eq("id", accountId).maybeSingle();
+  if (error) {
+    throw new Error(`dueAtInAccountZone: account ${accountId} timezone read failed: ${error.message}`);
+  }
   const zone = await renderZone((data as { timezone: string | null } | null)?.timezone ?? undefined);
-  const at = zonedTimeToUtc(y, mo, d, 0, 0, zone.zone);
-  return (at ?? new Date(dueAt)).toISOString();
+  const at = zonedTimeToUtc(y, mo, d, 0, 0, zone.zone) ?? firstValidInstant(y, mo, d, zone.zone);
+  return at.toISOString();
 }
 
 export async function updateContactAction(accountId: string, formData: FormData): Promise<void> {

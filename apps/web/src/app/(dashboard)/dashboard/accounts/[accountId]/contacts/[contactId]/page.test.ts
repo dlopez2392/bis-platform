@@ -204,6 +204,17 @@ describe("ContactDetailPage: the recipient's texts state", () => {
     expect(String(timelineProps.mock.calls[0]![0].smsBlockedLine)).toContain("Oct 3");
   });
 
+  // Review: the timeline's own task due dates used to render in UTC
+  // (formatDateUTC), which only reads back the right day for a zone WEST
+  // of UTC. It now takes the account's resolved zone as a prop — the SAME
+  // one already threaded to the composer lines above — and renders every
+  // task's due date in it instead (activity-timeline.tsx's
+  // `taskDueDateText`).
+  it("passes the account's resolved zone to the timeline, the same one the composer lines use (mutation: drop the timezone prop → FAILS)", async () => {
+    await render();
+    expect(timelineProps.mock.calls[0]![0]).toMatchObject({ timezone: "America/Chicago" });
+  });
+
   it("an ok recipient: no line, the form shows (mutation: always pass the held line → FAILS)", async () => {
     await render();
     expect(timelineProps.mock.calls[0]![0]).toMatchObject({ smsBlockedLine: null });

@@ -131,10 +131,33 @@ describe("contacts service", () => {
       // A bare, unformatted digit run must find the same row.
       expect(await listContacts(db, accountId, { search: "9565550199" })).toHaveLength(1);
 
+      // Review (first pass): the phone_key clause must be gated on the term
+      // LOOKING LIKE A PHONE, not merely containing a digit — an unconditional
+      // digit extraction turned "maria5@example.com" into "5" and matched
+      // "Phone" above (whose number is full of 5s) via `.or()`'s union, even
+      // though Phone's email/name have nothing to do with that search.
+      await createContact(db, accountId, { firstName: "Maria5", email: "maria5@example.com" }, "user_test");
+      const emailWithDigit = await listContacts(db, accountId, { search: "maria5@example.com" });
+      expect(emailWithDigit).toHaveLength(1);
+      expect(emailWithDigit![0]!.first_name).toBe("Maria5");
+
       await addTagToContact(db, accountId, id, "vip");
       await addTagToContact(db, accountId, id, "vip"); // idempotent
       const tags = await listContactTags(db, accountId, id);
       expect(tags.map(t => t.name)).toEqual(["vip"]);
+
+      // Review (D-008 round-trip): the export comma-joins a contact's tag
+      // names and the importer (lib/contacts/csv.ts's splitTags) comma-
+      // SPLITS that column back apart — a tag name that itself contains a
+      // comma would export fine and re-import as two tags. The comma is
+      // refused at creation (not quoted/escaped on export), so the stored
+      // name never has one to round-trip badly in the first place.
+      await addTagToContact(db, accountId, id, "smith, john");
+      const afterComma = await listContactTags(db, accountId, id);
+      const stored = afterComma.map((t) => t.name).find((n) => n !== "vip");
+      expect(stored).toBeDefined();
+      expect(stored).not.toContain(",");
+      expect(stored).toBe("smith john");
     }));
 
   it("createContact tolerates PostgREST filter syntax in email AND phone", () =>
@@ -553,7 +576,7 @@ describe("bulk contact ops", () => {
       expect(await listContactTags(db, accountId, c.id)).toHaveLength(0);
     }));
 
-  it("listTagNamesForContacts batches every contact's tags in ONE call, comma-joined and sorted, and omits an untagged contact entirely (D-008, mutation: return '' for every id → FAILS)", () =>
+  it("listTagNamesForContacts reports every contact's tags, comma-joined and sorted, and omits an untagged contact entirely (D-008, mutation: return '' for every id → FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const a = await createContact(db, accountId, { firstName: "A" }, "user_test");
       const b = await createContact(db, accountId, { firstName: "B" }, "user_test");
@@ -565,6 +588,25 @@ describe("bulk contact ops", () => {
       expect(map.get(a.id)).toBe("urgent,vip");
       expect(map.get(b.id)).toBe("vip");
       expect(map.has(c.id)).toBe(false);
+    }));
+
+  // Review (first pass): a single `.in("contact_id", …)` with 400-500
+  // UUIDs — exactly an export chunk's size (export/route.ts's
+  // CHUNK_SIZE=500) — builds a request URL long enough that `fetch` itself
+  // throws (`TypeError: fetch failed`), not a Postgres or RLS error, which
+  // the export route's own `controller.error` then turns into an aborted
+  // download. 500 contacts, bulk-seeded (not 500 individual `createContact`
+  // calls, which would cost 500 events and make this test itself the slow
+  // one) proves the batching actually ran rather than merely compiling.
+  it("doesn't blow the request URL on a full export chunk's worth of ids (500) — batches instead of one unbounded .in() (mutation: one batch → fetch failed, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ids: string[] = await seedContacts(db, accountId, 500, "2026-01-01T00:00:00Z");
+      await addTagToContact(db, accountId, ids[0]!, "vip");
+      await addTagToContact(db, accountId, ids[499]!, "urgent");
+      const map = await listTagNamesForContacts(db, accountId, ids);
+      expect(map.get(ids[0]!)).toBe("vip");
+      expect(map.get(ids[499]!)).toBe("urgent");
+      expect(map.has(ids[1]!)).toBe(false);
     }));
 
   it("deleteContacts deletes unblocked ids and skips one linked to an opportunity", () =>

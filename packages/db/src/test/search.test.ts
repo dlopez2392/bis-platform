@@ -4,7 +4,7 @@
 // account of its own, because blueprints.test.ts is contention-marginal and
 // one extra withTestAccount cycle tips it into a 20s timeout.
 import { describe, it, expect } from "vitest";
-import { sanitizeSearchTerm } from "../search-term";
+import { sanitizeSearchTerm, searchTermLength } from "../search-term";
 
 describe("sanitizeSearchTerm", () => {
   it("strips every character that breaks PostgREST's filter grammar", () => {
@@ -38,5 +38,31 @@ describe("sanitizeSearchTerm", () => {
 
   it("returns empty string for whitespace-only input", () => {
     expect(sanitizeSearchTerm("   ")).toBe("");
+  });
+
+  // Review correction: whitespace collapse used to run BEFORE character
+  // removal, so "a ( b" — a single space on each side of a lone "(" —
+  // removed the "(" and left the two now-adjacent spaces uncollapsed
+  // ("a  b"), since each one was already a single-space run when the
+  // collapse ran.
+  it("collapses whitespace AFTER removing characters, not before (mutation: swap the order back → FAILS)", () => {
+    expect(sanitizeSearchTerm("a ( b")).toBe("a b");
+  });
+});
+
+describe("searchTermLength", () => {
+  // The floor every "long enough to search" caller (the ⌘K palette,
+  // api/accounts/[accountId]/search's own MIN_QUERY) must measure instead
+  // of `sanitizeSearchTerm(value).length` — see that function's own doc
+  // comment for why: a lone "_" escapes to TWO characters ("\_"), which
+  // would clear a 2-character floor measured on the escaped form.
+  it("measures the term BEFORE the underscore escape, not after (mutation: measure sanitizeSearchTerm's output instead → FAILS)", () => {
+    expect(searchTermLength("_")).toBe(1);
+    expect(searchTermLength("__")).toBe(2);
+  });
+
+  it("agrees with sanitizeSearchTerm everywhere there's no underscore to escape", () => {
+    expect(searchTermLength("rosa")).toBe(sanitizeSearchTerm("rosa").length);
+    expect(searchTermLength(`ro"se,(x)`)).toBe(sanitizeSearchTerm(`ro"se,(x)`).length);
   });
 });

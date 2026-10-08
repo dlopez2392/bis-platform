@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 // The SUBPATH, not "@bis/db": that barrel pulls in @supabase/supabase-js, and
 // this is a client component. search-term.ts is a standalone pure module.
-import { sanitizeSearchTerm } from "@bis/db/search-term";
+import { sanitizeSearchTerm, searchTermLength } from "@bis/db/search-term";
 import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
 import {
   buildPaletteEntries, filterEntries, type PaletteEntry,
@@ -93,8 +93,13 @@ export function CommandPalette({ isAgency }: { isAgency: boolean }) {
   // come back empty, and print "Nothing matches “(a)”" when the honest answer
   // was "keep typing". The two sides must agree or the palette lies about
   // which of them rejected the query.
+  //
+  // REVIEW CORRECTION: `searchTermLength(query)`, not `q.length` — `q` is
+  // sanitizeSearchTerm's ESCAPED form (an underscore becomes two characters,
+  // "\_"), which cleared this floor on a single real character. The route
+  // measures the same way, off the same raw query.
   const q = sanitizeSearchTerm(query);
-  const wantsLive = accountId !== null && q.length >= MIN_QUERY;
+  const wantsLive = accountId !== null && searchTermLength(query) >= MIN_QUERY;
   /** Only a settled response FOR THIS EXACT QUERY counts. Anything else —
    *  never fetched, still debouncing, in flight, or answering an older
    *  query — leaves this null, which is precisely the pending state. No

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listContacts, searchCalls, searchConversations, sanitizeSearchTerm } from "@bis/db";
+import { listContacts, searchCalls, searchConversations, sanitizeSearchTerm, searchTermLength } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { callerLabel, OUTCOMES } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/format";
@@ -59,8 +59,8 @@ export async function GET(
   // 404 for both no-access and unknown account — never confirm existence.
   if (!access) return NextResponse.json({}, { status: 404 });
 
-  // The floor is applied to the SANITIZED term, not the raw one, and that
-  // distinction is load-bearing twice over.
+  // The floor is applied to the SANITIZED term's length, not the raw one,
+  // and that distinction is load-bearing twice over.
   //
   // `listContacts` is a LIST function with an optional search — an empty term
   // legitimately means "no filter, return the list", which is what the
@@ -73,9 +73,16 @@ export async function GET(
   //
   // It also closes the raw-length hole: "(a)" is three characters and clears
   // a raw floor, but carries one character of actual query.
+  //
+  // REVIEW CORRECTION: measured with `searchTermLength`, not `q.length` —
+  // `q` is the ESCAPED form `sanitizeSearchTerm` hands to the database, and
+  // a lone "_" escapes to "\_" (two characters), which cleared this floor
+  // on one real character. The palette (command-palette.tsx) measures the
+  // SAME way, off the same raw query, so the two sides still agree on which
+  // of them rejected it.
   const raw = (new URL(req.url).searchParams.get("q") ?? "").trim();
   const q = sanitizeSearchTerm(raw);
-  if (q.length < MIN_QUERY) return NextResponse.json(EMPTY);
+  if (searchTermLength(raw) < MIN_QUERY) return NextResponse.json(EMPTY);
 
   const db = await dbForRequest(); // RLS-scoped — NEVER serviceDb here
   const base = `/dashboard/accounts/${accountId}`;

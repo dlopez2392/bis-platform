@@ -531,11 +531,32 @@ export type ContactCursor = { v: string | null; id: string };
  * RAW `search`, not `s` — by the time `s` exists the generic sanitizer above
  * has already dropped the parens/dash, so reading off `s` would have worked
  * too, but reading `search` keeps this branch legible without depending on
- * what the OTHER branches' sanitizer happened to leave behind. Guarded on a
- * non-empty digit string: an all-letters term has none, and an unconditional
- * `phone_key.ilike.%%` would match every contact with ANY phone — turning a
- * name search into "list everyone with a phone" via `.or()`'s union.
+ * what the OTHER branches' sanitizer happened to leave behind.
+ *
+ * GATED ON THE TERM LOOKING LIKE A PHONE (`phoneSearchDigits` below), not
+ * merely on having any digit in it at all — review finding (first pass):
+ * "maria5@example.com" or "Suite 9" each carry one digit, and an
+ * unconditional `phone_key.ilike.%5%`/`%9%` matched almost every contact
+ * with a phone containing that digit, turning a name/email search into a
+ * near-random phone hit via `.or()`'s union. Shape AND a 4-digit floor
+ * (field-input.ts's own `PHONE_CHARS`, reused rather than re-declared) are
+ * both required: a term built entirely of phone punctuation and digits,
+ * with enough of them that a short, common digit run ("2026", a year
+ * someone types in an unrelated note) can't alone light up every phone
+ * ending the same way by accident.
  */
+const PHONE_SEARCH_SHAPE = /^[+()\-. \d]+$/;
+const MIN_PHONE_SEARCH_DIGITS = 4;
+
+// Exported for its own pure, DB-free test (contacts-phone.test.ts) — not
+// barrelled through index.ts, which is the public @bis/db surface; this is
+// an internal search-building helper, not part of that contract.
+export function phoneSearchDigits(raw: string): string {
+  if (!PHONE_SEARCH_SHAPE.test(raw)) return "";
+  const digits = phoneDigits(raw);
+  return digits.length >= MIN_PHONE_SEARCH_DIGITS ? digits.slice(0, 20) : "";
+}
+
 function withSearch<T>(q: T, search?: string): T {
   const s = search ? sanitizeSearchTerm(search) : undefined;
   if (!s) return q;
@@ -543,7 +564,7 @@ function withSearch<T>(q: T, search?: string): T {
     `first_name.ilike.%${s}%`, `last_name.ilike.%${s}%`,
     `email.ilike.%${s}%`, `phone.ilike.%${s}%`,
   ];
-  const digits = search ? phoneDigits(search).slice(0, 20) : "";
+  const digits = search ? phoneSearchDigits(search) : "";
   if (digits) clauses.push(`phone_key.ilike.%${digits}%`);
   return (q as { or: (f: string) => T }).or(clauses.join(","));
 }
@@ -602,10 +623,29 @@ export async function getContact(db: SupabaseClient, accountId: string, contactI
   return data;
 }
 
+/**
+ * Review (D-008 round-trip): the CSV export's "tags" column comma-joins a
+ * contact's tag names (`listTagNamesForContacts`), and the importer's
+ * `splitTags` (lib/contacts/csv.ts) comma-SPLITS that same column back
+ * apart — a tag name that itself contains a comma ("smith, john") exports
+ * fine but re-imports as two tags, silently inventing one that was never
+ * created. Chosen fix: refuse the comma at creation, not quote/escape it
+ * on export — tag names are short labels, not sentences, and this keeps
+ * the export/import contract (one plain comma-joined column) unchanged
+ * for every other reader of it, rather than teaching the importer a
+ * quoting rule it does not otherwise need. A stripped comma can leave
+ * extra whitespace behind ("smith, john" → "smith john"), which the
+ * surrounding `.trim()` only catches at the ends — an inner double space
+ * is cosmetic, not a round-trip hazard, so it is left alone.
+ */
+function normalizeTagName(tagName: string): string {
+  return tagName.replace(/,/g, "").trim().toLowerCase();
+}
+
 export async function addTagToContact(
   db: SupabaseClient, accountId: string, contactId: string, tagName: string,
 ): Promise<void> {
-  const name = tagName.trim().toLowerCase();
+  const name = normalizeTagName(tagName);
   if (!name) return;
   const { data: tag, error: tErr } = await db.from("tags")
     .upsert({ account_id: accountId, name }, { onConflict: "account_id,name" })
@@ -657,7 +697,7 @@ export async function countContacts(
 export async function addTagToContacts(
   db: SupabaseClient, accountId: string, contactIds: string[], tagName: string,
 ): Promise<{ tagId: string; applied: number; addedIds: string[] }> {
-  const name = tagName.trim().toLowerCase();
+  const name = normalizeTagName(tagName);
   if (!name || contactIds.length === 0) throw new Error("addTagToContacts: nothing to do");
   const { data: tag, error: tErr } = await db.from("tags")
     .upsert({ account_id: accountId, name }, { onConflict: "account_id,name" })
@@ -669,6 +709,16 @@ export async function addTagToContacts(
   // already has it BEFORE the upsert below adds it to everyone, so the
   // caller (bulk-action-bar.tsx's Undo toast) can pass `addedIds` instead of
   // the full `contactIds`.
+  //
+  // NOT TRANSACTIONAL, noted rather than fixed here: the pre-read and the
+  // upsert below are two separate round trips, so a second bulk-tag of the
+  // SAME tag onto an overlapping selection, racing in between, could read
+  // stale "already had it" data and report an id as newly-added when the
+  // other request's upsert got there first (or vice versa) — Undo would
+  // then strip a tag the other request's own Undo also owns, or leave one
+  // on a contact that should have lost it. Accepted for this bulk-action
+  // UI (one operator, one browser tab, a toast-click undo a few seconds
+  // later) rather than wrapped in a transaction or `select ... for update`.
   const { data: already, error: alreadyErr } = await db.from("contact_tags")
     .select("contact_id").eq("account_id", accountId).eq("tag_id", tag.id).in("contact_id", contactIds);
   if (alreadyErr) throw new Error(`contact_tags pre-read failed: ${alreadyErr.message}`);
@@ -694,39 +744,57 @@ export async function removeTagFromContacts(
 }
 
 /**
+ * One `.in("contact_id", …)` batch's worth of ids. Review finding (first
+ * pass at this function): the export route hands this a whole 500-row
+ * chunk, and a single `.in()` with 400-500 UUIDs (~37 chars each) built a
+ * request URL long enough that `fetch` itself threw — `TypeError: fetch
+ * failed`, not a Postgres or RLS error — which the export's own
+ * `controller.error` then turned into an aborted download for an account
+ * that used to export fine (with a blank tags column) before D-008. 200
+ * UUIDs is a safely short URL in every environment this runs in; chosen
+ * conservatively rather than measured to the exact limit, since the cost of
+ * one more round trip per chunk is negligible next to a failed export.
+ */
+const TAG_LOOKUP_BATCH_SIZE = 200;
+
+/**
  * Every tag name for each of `contactIds`, as one comma-joined, alphabetized
  * string per contact — `lib/contacts/csv.ts`'s own `splitTags` delimiter, so
  * the CSV export's "tags" column round-trips through re-import unchanged
  * (D-008: that column used to be hard-coded blank because no bulk read
  * existed — only `listContactTags`, one contact at a time, which an export
- * of thousands of rows cannot afford as an N+1). ONE query for however many
- * ids the caller names. A contactId with no tags is simply ABSENT from the
- * returned map, never an empty-string entry, so `.get(id) ?? ""` at the call
- * site is the only place "no tags" turns into a blank cell.
+ * of thousands of rows cannot afford as an N+1). BATCHED, not one query for
+ * however many ids the caller names (see `TAG_LOOKUP_BATCH_SIZE`'s own
+ * comment). A contactId with no tags is simply ABSENT from the returned
+ * map, never an empty-string entry, so `.get(id) ?? ""` at the call site is
+ * the only place "no tags" turns into a blank cell.
  */
 export async function listTagNamesForContacts(
   db: SupabaseClient, accountId: string, contactIds: string[],
 ): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   if (contactIds.length === 0) return result;
-  const { data, error } = await db.from("contact_tags")
-    .select("contact_id, tags(name)")
-    .eq("account_id", accountId)
-    .in("contact_id", contactIds);
-  if (error) throw new Error(`listTagNamesForContacts failed: ${error.message}`);
   const byContact = new Map<string, string[]>();
-  // Same `any` shape `listContactTags` above already uses for this exact
-  // one-row-per-tag join: the generic `SupabaseClient` type (no generated
-  // Database schema) infers a nested `tags(...)` select as an array, but a
-  // `contact_tags` row carries exactly one `tag_id`, so the real value at
-  // runtime is a single object (proven by this function's own db test
-  // against the real database, not merely asserted here).
-  for (const row of (data ?? []) as any[]) {
-    const name = row.tags?.name as string | undefined;
-    if (!name) continue;
-    const names = byContact.get(row.contact_id) ?? [];
-    names.push(name);
-    byContact.set(row.contact_id, names);
+  for (let i = 0; i < contactIds.length; i += TAG_LOOKUP_BATCH_SIZE) {
+    const batch = contactIds.slice(i, i + TAG_LOOKUP_BATCH_SIZE);
+    const { data, error } = await db.from("contact_tags")
+      .select("contact_id, tags(name)")
+      .eq("account_id", accountId)
+      .in("contact_id", batch);
+    if (error) throw new Error(`listTagNamesForContacts failed: ${error.message}`);
+    // Same `any` shape `listContactTags` above already uses for this exact
+    // one-row-per-tag join: the generic `SupabaseClient` type (no generated
+    // Database schema) infers a nested `tags(...)` select as an array, but a
+    // `contact_tags` row carries exactly one `tag_id`, so the real value at
+    // runtime is a single object (proven by this function's own db test
+    // against the real database, not merely asserted here).
+    for (const row of (data ?? []) as any[]) {
+      const name = row.tags?.name as string | undefined;
+      if (!name) continue;
+      const names = byContact.get(row.contact_id) ?? [];
+      names.push(name);
+      byContact.set(row.contact_id, names);
+    }
   }
   for (const [contactId, names] of byContact) {
     result.set(contactId, [...names].sort().join(","));
