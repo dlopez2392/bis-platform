@@ -63,9 +63,11 @@ function timeRange(startsAt: string, endsAt: string, timeZone: string): string {
 }
 
 function StatusActions({
-  booking, statusAction,
+  booking, started, statusAction,
 }: {
   booking: Booking;
+  /** D-030: the appointment's start is at or before the page's `nowIso`. */
+  started: boolean;
   statusAction: (bookingId: string, status: BookingStatus) => Promise<ActionResult>;
 }) {
   const [pending, startTransition] = useTransition();
@@ -84,12 +86,19 @@ function StatusActions({
 
   return (
     <div className="flex flex-wrap gap-2">
-      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => run("completed")}>
-        {m["calendar.bookings.markCompleted"]}
-      </Button>
-      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => run("no_show")}>
-        {m["calendar.bookings.markNoShow"]}
-      </Button>
+      {/* D-030: outcomes exist only once the appointment has started. The
+          server action refuses them before that too (`startedBy`); hiding
+          them here is the courtesy, not the control. */}
+      {started ? (
+        <>
+          <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => run("completed")}>
+            {m["calendar.bookings.markCompleted"]}
+          </Button>
+          <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => run("no_show")}>
+            {m["calendar.bookings.markNoShow"]}
+          </Button>
+        </>
+      ) : null}
       <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => run("cancelled")}>
         {m["calendar.bookings.cancel"]}
       </Button>
@@ -98,13 +107,17 @@ function StatusActions({
 }
 
 export function BookingsList({
-  accountId, timezone, bookings, statusAction,
+  accountId, timezone, bookings, nowIso, statusAction,
 }: {
   accountId: string;
   /** The ACCOUNT zone (spec: grouped by day in the account zone, not the
    *  browser's or the booker's own). */
   timezone: string;
   bookings: Booking[];
+  /** The server's clock at render, the same instant the page listed from.
+   *  Decides which rows have STARTED (D-030). A prop, never `Date.now()` in
+   *  here: the server render and the hydrated client must agree. */
+  nowIso: string;
   statusAction: (bookingId: string, status: BookingStatus) => Promise<ActionResult>;
 }) {
   const groups = new Map<string, { heading: string; items: Booking[] }>();
@@ -189,7 +202,11 @@ export function BookingsList({
                           {b.note}
                         </p>
                       ) : null}
-                      <StatusActions booking={b} statusAction={statusAction} />
+                      <StatusActions
+                        booking={b}
+                        started={new Date(b.starts_at).getTime() <= new Date(nowIso).getTime()}
+                        statusAction={statusAction}
+                      />
                     </li>
                   ))}
                 </ul>

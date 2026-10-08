@@ -51,7 +51,7 @@ const BASE: Booking = {
 function render(booking: Booking): string {
   return renderToStaticMarkup(
     createElement(BookingsList, {
-      accountId: "a1", timezone: "America/Chicago", bookings: [booking],
+      accountId: "a1", timezone: "America/Chicago", bookings: [booking], nowIso: "2026-09-30T12:00:00Z",
       statusAction: async () => ({ ok: true as const }),
     }),
   );
@@ -176,5 +176,45 @@ describe("BookingsList — the confirmation answer", () => {
     expect(no.tag).not.toMatch(/bg-warning\//);
     expect(no.dot).toContain("bg-[var(--warn)]");
     expect(no.dot).not.toContain(STATUS_TREATMENTS.skipped.dot);
+  });
+});
+
+/**
+ * D-030. "Mark completed" and "No-show" are outcomes, and an appointment has
+ * an outcome only once it has started. They used to show on every `booked`
+ * row of a list that held only appointments that had NOT started — the
+ * exact inverse. `nowIso` is the server's clock, passed from the page, so the
+ * server render and the hydrated client agree on which rows have started.
+ * Cancel is not an outcome and stays on every booked row.
+ */
+describe("BookingsList — outcome buttons only once the appointment has started (D-030)", () => {
+  const renderAt = (nowIso: string, booking: Booking = BASE) => renderedText(renderToStaticMarkup(
+    createElement(BookingsList, {
+      accountId: "a1", timezone: "America/Chicago", bookings: [booking], nowIso,
+      statusAction: async () => ({ ok: true as const }),
+    }),
+  ));
+
+  it("a booking that has not started offers Cancel, and neither Completed nor No-show (mutation: drop the started check → FAILS)", () => {
+    const text = renderAt("2026-10-01T14:59:00Z"); // one minute before BASE starts
+    expect(text).toContain(m["calendar.bookings.cancel"]);
+    expect(text).not.toContain(m["calendar.bookings.markCompleted"]);
+    expect(text).not.toContain(m["calendar.bookings.markNoShow"]);
+  });
+
+  it("a booking that has started offers Completed and No-show (and Cancel)", () => {
+    for (const nowIso of ["2026-10-01T15:00:00Z", "2026-10-01T15:30:00Z", "2026-10-03T09:00:00Z"]) {
+      const text = renderAt(nowIso);
+      expect(text).toContain(m["calendar.bookings.markCompleted"]);
+      expect(text).toContain(m["calendar.bookings.markNoShow"]);
+      expect(text).toContain(m["calendar.bookings.cancel"]);
+    }
+  });
+
+  it("a row that already has an outcome offers nothing", () => {
+    const text = renderAt("2026-10-03T09:00:00Z", { ...BASE, status: "completed" });
+    expect(text).toContain(m["calendar.bookings.status.completed"]);
+    expect(text).not.toContain(m["calendar.bookings.markCompleted"]);
+    expect(text).not.toContain(m["calendar.bookings.cancel"]);
   });
 });

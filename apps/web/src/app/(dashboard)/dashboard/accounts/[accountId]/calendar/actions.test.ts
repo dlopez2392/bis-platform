@@ -6,12 +6,16 @@ vi.mock("@/lib/auth", () => ({
 }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 
-const dbMocks = vi.hoisted(() => ({ updateCalendarSettings: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({
+  updateCalendarSettings: vi.fn(), setBookingStatus: vi.fn(), serviceDb: vi.fn(() => ({})),
+}));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
 }));
 
-import { updateCalendarSettingsAction } from "./actions";
+import { updateCalendarSettingsAction, setBookingStatusAction } from "./actions";
+import { BookingNotStartedError } from "@bis/db";
+import { m } from "@/lib/messages";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
 
 /** The minimum a submission needs beyond `followupBody` for the action to
@@ -75,5 +79,48 @@ describe("updateCalendarSettingsAction — follow-up body normalization", () => 
     expect(dbMocks.updateCalendarSettings).toHaveBeenCalledWith(
       {}, "acct_1", expect.objectContaining({ followupBody: "" }), "user_1",
     );
+  });
+});
+
+/**
+ * D-030: the server action, not just the button. "Completed" and "No-show"
+ * are outcomes; the action asks the write itself to refuse one for an
+ * appointment that has not started (`startedBy: now`), so a stale page, a
+ * crafted request or the To do screen's close-out (which calls this action)
+ * cannot mark a future job — a no-show on a future job would arm the no-show
+ * nudge to the customer.
+ */
+describe("setBookingStatusAction — an outcome only once the appointment has started (D-030)", () => {
+  beforeEach(() => {
+    dbMocks.setBookingStatus.mockReset();
+    dbMocks.setBookingStatus.mockResolvedValue(undefined);
+  });
+
+  it("asks the write to refuse completed/no-show before the start, with the server's own clock (mutation: drop the startedBy option → FAILS)", async () => {
+    const before = Date.now();
+    for (const status of ["completed", "no_show"] as const) {
+      expect(await setBookingStatusAction("acct_1", "bk_1", status)).toEqual({ ok: true });
+    }
+    for (const call of dbMocks.setBookingStatus.mock.calls) {
+      const opts = call[6] as { startedBy?: string } | undefined;
+      expect(opts?.startedBy).toBeDefined();
+      const t = new Date(opts!.startedBy!).getTime();
+      expect(t).toBeGreaterThanOrEqual(before);
+      expect(t).toBeLessThanOrEqual(Date.now());
+    }
+    expect(dbMocks.setBookingStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers a not-yet-started refusal in words that say so, not the generic failure", async () => {
+    dbMocks.setBookingStatus.mockRejectedValue(new BookingNotStartedError());
+    const result = await setBookingStatusAction("acct_1", "bk_1", "no_show");
+    expect(result).toEqual({ ok: false, error: m["calendar.bookings.notStartedYet"] });
+    expect(m["calendar.bookings.notStartedYet"]).not.toBe(m["calendar.bookings.statusUpdateFailed"]);
+  });
+
+  it("any other failure keeps the generic message", async () => {
+    dbMocks.setBookingStatus.mockRejectedValue(new Error("db down"));
+    const result = await setBookingStatusAction("acct_1", "bk_1", "completed");
+    expect(result).toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
   });
 });

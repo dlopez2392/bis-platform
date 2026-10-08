@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, updateCalendarSettings, setBookingStatus,
+  serviceDb, updateCalendarSettings, setBookingStatus, BookingNotStartedError,
   type BookingStatus, type CalendarSettingsPatch,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -115,8 +115,17 @@ export async function setBookingStatusAction(
   const { userId } = await requireAccountAccess(accountId);
 
   try {
-    await setBookingStatus(serviceDb(), accountId, bookingId, status, userId);
+    // D-030: `startedBy` is the server's own clock, never the page's. An
+    // outcome (completed / no_show) on an appointment that has not started is
+    // refused by the write itself — the button is hidden too, but a stale page
+    // or a crafted request reaches this action all the same, and so does the
+    // To do screen's close-out, which calls it.
+    await setBookingStatus(serviceDb(), accountId, bookingId, status, userId, "user",
+      { startedBy: new Date().toISOString() });
   } catch (e) {
+    if (e instanceof BookingNotStartedError) {
+      return { ok: false, error: m["calendar.bookings.notStartedYet"] };
+    }
     console.error(`setBookingStatusAction: ${status} failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
     return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   }

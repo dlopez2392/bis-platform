@@ -39,6 +39,9 @@ export default async function CalendarPage({
   // account scope).
   const calendar = await getOrCreateCalendar(serviceDb(), accountId, userId);
 
+  // ONE instant for the list and for the rows' "has it started?" (D-030), so
+  // a row the list carries as started always offers its outcome buttons.
+  const nowIso = new Date().toISOString();
   const [account, bookings, h] = await Promise.all([
     db.from("accounts").select("timezone").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
@@ -46,7 +49,7 @@ export default async function CalendarPage({
         if (!data) throw new Error("calendar: account not found");
         return data as { timezone: string };
       }),
-    listUpcomingBookings(db, accountId, new Date().toISOString()),
+    listUpcomingBookings(db, accountId, nowIso),
     headers(),
   ]);
 
@@ -70,6 +73,7 @@ export default async function CalendarPage({
             accountId={accountId}
             timezone={account.timezone}
             bookings={bookings}
+            nowIso={nowIso}
             statusAction={boundSetStatus}
           />
         </div>

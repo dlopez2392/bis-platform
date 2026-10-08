@@ -8,7 +8,7 @@ import {
   createBooking, cancelBookingByToken, setBookingStatus,
   listBookedRanges, listUpcomingBookings, listDueReminders, stampReminderSent,
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
-  SlotTakenError,
+  SlotTakenError, BookingNotStartedError,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -306,6 +306,80 @@ describe("booking accessors", () => {
       // Once stamped, never again — the same dedupe the day-before window uses.
       await stampReminderSent(db, late);
       expect(await mine()).toEqual([lowerEdge, upperEdge]);
+    });
+  });
+
+  /**
+   * D-030. "Completed" and "no-show" are outcomes, and an appointment has an
+   * outcome only once it has STARTED. Marking a future job no-show was not
+   * just wrong on screen: it stamps no_show_at, which arms the no-show nudge
+   * to the customer. The guard is the `startedBy` option, which the operator
+   * action passes; omitted (seed, tests, the voice receptionist's cancel), the
+   * write is unchanged. Cancel is never an outcome and is never refused.
+   */
+  it("D-030: setBookingStatus with startedBy refuses completed/no_show on a booking that has not started, leaves it booked, and allows both once it has", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Outcome" }, "user_test");
+      const future = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-05-10T15:00:00Z"),
+          endsAt: new Date("2027-05-10T16:00:00Z") }, "user_test");
+      const started = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-05-09T15:00:00Z"),
+          endsAt: new Date("2027-05-09T16:00:00Z") }, "user_test");
+      const startedBy = "2027-05-09T15:30:00Z"; // in the middle of `started`, a day before `future`
+      const statusOf = async (id: string) => {
+        const { data, error } = await db.from("bookings").select("status, completed_at, no_show_at").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return data as { status: string; completed_at: string | null; no_show_at: string | null };
+      };
+
+      for (const outcome of ["completed", "no_show"] as const) {
+        await expect(setBookingStatus(db, accountId, future.id, outcome, "user_test", "user", { startedBy }))
+          .rejects.toBeInstanceOf(BookingNotStartedError);
+      }
+      expect(await statusOf(future.id)).toEqual({ status: "booked", completed_at: null, no_show_at: null });
+
+      await setBookingStatus(db, accountId, started.id, "no_show", "user_test", "user", { startedBy });
+      expect((await statusOf(started.id)).status).toBe("no_show");
+      await setBookingStatus(db, accountId, started.id, "completed", "user_test", "user", { startedBy });
+      expect((await statusOf(started.id)).status).toBe("completed");
+
+      // Cancel is not an outcome: a future booking is cancellable under the guard.
+      await setBookingStatus(db, accountId, future.id, "cancelled", "user_test", "user", { startedBy });
+      expect((await statusOf(future.id)).status).toBe("cancelled");
+
+      // The wrong account is still "no booking", not "not started".
+      await expect(setBookingStatus(db, "00000000-0000-0000-0000-000000000000", started.id, "completed",
+        "user_test", "user", { startedBy })).rejects.toThrow(/no booking/);
+    });
+  });
+
+  /**
+   * D-030's other half: the operator's list began at `now` on `starts_at`, so
+   * an appointment vanished from it the moment it started — exactly when it
+   * could first be marked. It now also carries every appointment that has
+   * started and is still `booked` (in progress, or over and waiting for an
+   * outcome — the same rows the To do screen's stale-booking source lists),
+   * while past rows that already HAVE an outcome stay off it.
+   */
+  it("D-030: listUpcomingBookings carries started bookings still waiting for an outcome, and leaves out past ones that have one", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "List" }, "user_test");
+      const mk = (startsAt: string, endsAt: string) => createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(startsAt), endsAt: new Date(endsAt) }, "user_test");
+      const now = "2027-06-10T12:00:00.000Z";
+      const waiting = await mk("2027-06-08T15:00:00Z", "2027-06-08T16:00:00Z");     // over, still booked
+      const done = await mk("2027-06-08T17:00:00Z", "2027-06-08T18:00:00Z");        // over, completed
+      await setBookingStatus(db, accountId, done.id, "completed", "user_test");
+      const gone = await mk("2027-06-09T09:00:00Z", "2027-06-09T10:00:00Z");        // over, cancelled
+      await setBookingStatus(db, accountId, gone.id, "cancelled", "user_test");
+      const inProgress = await mk("2027-06-10T11:30:00Z", "2027-06-10T12:30:00Z");  // started 30 min ago
+      const upcoming = await mk("2027-06-11T09:00:00Z", "2027-06-11T10:00:00Z");
+
+      const ids = (await listUpcomingBookings(db, accountId, now)).map((b) => b.id);
+      expect(ids).toEqual([waiting.id, inProgress.id, upcoming.id]);
     });
   });
 
