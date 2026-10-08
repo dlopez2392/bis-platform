@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { describe, it, expect, beforeAll } from "vitest";
 import { config as loadEnv } from "dotenv";
 import { refuseProduction } from "../../../e2e/fixtures/production-guard";
@@ -44,9 +45,12 @@ async function withTestAccount(fn: (accountId: string) => Promise<void>) {
 
 /** A fake, globally-unique E.164 — the same `+999…` test-number shape
  *  `testPhoneNumber()` (packages/db's own fixtures, not importable here) uses,
- *  so this can never collide with a real number. */
+ *  so this can never collide with a real number. Twelve random digits, as
+ *  there: the old `+999${Date.now()}…`.slice(0, 15) kept only the timestamp's
+ *  leading digits and threw the random part away, so two numbers minted in
+ *  the same 100 ms collided on phone_numbers_e164_key. */
 function fakePhoneNumber(): string {
-  return `+999${Date.now()}${Math.floor(Math.random() * 1_000_000)}`.slice(0, 15);
+  return `+999${String(randomInt(0, 1_000_000_000_000)).padStart(12, "0")}`;
 }
 
 beforeAll(() => {
