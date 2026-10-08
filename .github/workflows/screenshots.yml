@@ -15,37 +15,52 @@ on:
         type: boolean
         default: true
 
-# Takes the e2e job's OWN lock. This drives a browser through the shared
-# Supabase project and, when re-seeding, rewrites a whole account in it.
+# Runs on the CI Supabase project, not production (2026-10-08). The demo
+# tenant is fiction, so it never needed production's database, and production
+# no longer accepts the development Clerk instance's tokens: the 5 AM capture
+# that day photographed four "Something went wrong" screens because every
+# user-scoped read was refused. Since #189 each CI run mints a development
+# agency_admin user, so production trusting that instance would hand those
+# users production's data; it must not. The CI project trusts exactly that
+# instance, and so does this capture now.
+#
+# Takes ci.yml's e2e lock, `e2e-ci-supabase`, queued and never cancelled:
+# this drives a browser through the CI project and, when re-seeding,
+# rewrites a whole account in it, so it must neither run beside an e2e job
+# nor knock one out of the queue. (`e2e-shared-supabase`, the name this file
+# used to take, is production's old lock; ci.yml left it in #194.)
 concurrency:
-  group: e2e-shared-supabase
+  group: e2e-ci-supabase
   cancel-in-progress: false
+  queue: max
 
 jobs:
   capture:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The CI project, exactly as ci.yml names it: literals for what is not
+    # secret (ci-workflow.test.ts pins that the two files agree), the CI_*
+    # secrets mapped onto the names the code reads, and no production secret
+    # at all. The guard step below refuses the run if any of it names
+    # production.
     env:
       NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_h2GmSCjLzD74RotkQAvMbA_BL6FAI4k
+      BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
+      NEXT_PUBLIC_SUPABASE_URL: https://odnobiodsftffphuuosz.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_TjstwU6y9KPtV8XD4BSFrw_WaNtv0Qc
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
       CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
     steps:
-      - name: Check that the repository secrets are configured
-        run: |
-          missing=""
-          for name in NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY NEXT_PUBLIC_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
-            if [ -z "${!name}" ]; then missing="$missing $name"; fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secret(s):$missing"
-            exit 1
-          fi
-
       - uses: actions/checkout@v5
+
+      # ci.yml's own guard: every value present, none naming production, the
+      # URL exactly the ref's, the DB URL the CI project's pooler. This job
+      # re-seeds an account and mints a Clerk user, so it gets the same check.
+      - name: Check that the capture targets the CI Supabase project
+        run: bash .github/scripts/ci-target-guard.sh
+
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v5
         with:

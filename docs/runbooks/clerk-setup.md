@@ -178,6 +178,16 @@ two Clerk providers at once** — both show ENABLED side by side. That is what
 lets e2e stay on the development instance (Part H), and removing the dev entry
 before the key swap would take production down immediately.
 
+**Superseded, 2026-10-08: production no longer accepts development tokens, and
+must not again.** The demo capture that morning got `No suitable key or wrong
+key type` on every user-scoped read from production. Since #189 every CI run
+mints a throwaway development user with `app_role = "agency_admin"`, and
+anyone holding the CI Clerk secret can mint more. A production that trusted
+the development instance would hand all of them production's data. Nothing
+needs it now: e2e and the demo capture both run on the CI project
+(`ci-supabase-project.md`), which trusts the development instance and holds
+no real data. Do not re-add the development entry to production.
+
 ## Part F — your user, and the two accounts
 
 The production instance starts empty. Recreate, in this order:

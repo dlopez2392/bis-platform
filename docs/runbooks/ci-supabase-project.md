@@ -14,14 +14,14 @@ MCP reads of production).
 
 | | CI project | Production |
 |---|---|---|
-| Name / org | `bis-ci`, in the Free organization `bis-ci` | the paid organization |
+| Name / org | `bis-ci`, moved into the paid organization (owner, 2026-10-08; it began in the Free organization `bis-ci`, and the move kept its ref and URL) | the paid organization |
 | Ref | `odnobiodsftffphuuosz` | `tlbkbmlrfafquucsmsmm` |
 | Region | us-east-1 (same as production, so runner latency matches) | us-east-1 |
 | Schema from | `supabase db push` of the migration files (`db:push:ci`) | the Supabase MCP `apply_migration`, one file at a time |
-| Clerk it trusts | the **development** instance, `topical-redfish-40.clerk.accounts.dev` | production's instance, and the development one too (`clerk-setup.md`) |
+| Clerk it trusts | the **development** instance, `topical-redfish-40.clerk.accounts.dev` | production's instance. **Observed 2026-10-08: production refuses the development instance's tokens** (`No suitable key or wrong key type` on every user-scoped read), though `clerk-setup.md` Part E recorded both. Keep it that way: since #189 every CI run mints a development `agency_admin` user. |
 | URL, ref | literals in `ci.yml` and `ci-project-setup.yml` | Vercel env |
 | Publishable key | a literal in `ci.yml` (`ci-project-setup.yml` does not use it) | Vercel env |
-| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel env; repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml` and `screenshots.yml`); and any local env file not yet switched (section 9) |
+| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel env; repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml`, which refreshes the demo tenant production keeps for live demos; `screenshots.yml` captures on THIS project since 2026-10-08); and any local env file not yet switched (section 9) |
 
 Never edit the three non-`CI_` secrets to point at the CI project. The demo
 seeder and the screenshot run would then "succeed" against the wrong database.
@@ -206,8 +206,10 @@ otherwise ready.
 
 ## 7. Restore from a pause
 
-Free projects pause after about a week without traffic [assumption: Supabase's
-published Free-plan behaviour]. Every CI push is traffic, so this bites only
+**Applies only while the project sits in a Free organization.** Since
+2026-10-08 it is in the paid one, where projects do not pause. Kept for the
+day it moves back. Free projects pause after about a week without traffic
+[assumption: Supabase's published Free-plan behaviour]. Every CI push is traffic, so this bites only
 after a quiet week. The symptom is the guard's first step failing with
 "Could not reach … the project is paused" (or another non-200 status).
 
