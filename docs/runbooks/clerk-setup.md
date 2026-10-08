@@ -335,6 +335,17 @@ switched (that runbook's section 9). It also means Part E's reason for keeping
 the development entry on PRODUCTION's project is gone; see
 `docs/runbooks/production-isolation.md`.
 
+**2026-10-08:** CI's e2e now runs on a throwaway Supabase stack inside its own
+runner, not on `bis-ci`, and that stack trusts the same **development**
+instance: `.github/scripts/ci-local-supabase.sh --trust-clerk-dev-instance`
+decodes the Frontend API domain from `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`,
+refuses anything but a `*.clerk.accounts.dev` domain, and enables
+`[auth.third_party.clerk]` in the stack's copy of `config.toml`
+(`ci-supabase-project.md` section 11). The committed `config.toml` keeps
+`enabled = false`. If CI's Clerk secrets ever move to another development
+instance, the stack follows the key; `bis-ci`'s dashboard entry (section 1
+step 2 of that runbook) does not, and Preview would need it changed by hand.
+
 ## Part I — verify, in this order, and stop at the first failure
 
 **Steps 1–3 gate Part H2.** Do not touch the database until all three pass;
