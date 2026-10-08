@@ -42,3 +42,13 @@
   production, then a parity check (`docs/runbooks/ci-supabase-project.md`).
   Booking and calendar-settings specs run on the per-run fixture account —
   never point mutating specs at `Test Client One` or any live account.
+- **Only production credentials reach production data. DONE 2026-10-07.**
+  Production's Supabase trusts only the production Clerk instance
+  (`clerk.app.bis-rgv.com`); the development issuer was removed. Vercel
+  Preview holds the Clerk development instance, the CI project (`bis-ci`)
+  and non-secret config, behind Vercel Authentication, and never a
+  production credential. The production credentials Preview had held were
+  rotated. `screenshots.yml` has been broken since then, until it moves to
+  the CI project. How it was done, how to verify it and how to roll it back:
+  `docs/runbooks/production-isolation.md`. Never describe Preview as sharing
+  production's database, and never add a production credential to Preview.

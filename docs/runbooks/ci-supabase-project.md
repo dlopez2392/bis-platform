@@ -18,10 +18,11 @@ MCP reads of production).
 | Ref | `odnobiodsftffphuuosz` | `tlbkbmlrfafquucsmsmm` |
 | Region | us-east-1 (same as production, so runner latency matches) | us-east-1 |
 | Schema from | `supabase db push` of the migration files (`db:push:ci`) | the Supabase MCP `apply_migration`, one file at a time |
-| Clerk it trusts | the **development** instance, `topical-redfish-40.clerk.accounts.dev` | production's instance, and the development one too (`clerk-setup.md`) |
-| URL, ref | literals in `ci.yml` and `ci-project-setup.yml` | Vercel env |
-| Publishable key | a literal in `ci.yml` (`ci-project-setup.yml` does not use it) | Vercel env |
-| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel env; repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml` and `screenshots.yml`); and any local env file not yet switched (section 9) |
+| Clerk it trusts | the **development** instance, `topical-redfish-40.clerk.accounts.dev` | production's instance only. **DONE 2026-10-07:** the development entry was removed (`production-isolation.md` Part D) |
+| Vercel Preview | the target: Preview's three runtime Supabase values name this project, with a secret key of its own named `preview`, and `SUPABASE_DB_URL` is not on Preview at all (`production-isolation.md` Part C) | never. **DONE 2026-10-07:** Preview's URL and publishable key are this project's, its secret key is this project's `preview` key, and its `SUPABASE_DB_URL` was deleted (`production-isolation.md` Part C) |
+| URL, ref | literals in `ci.yml` and `ci-project-setup.yml` | Vercel Production |
+| Publishable key | a literal in `ci.yml` (`ci-project-setup.yml` does not use it) | Vercel Production |
+| Secret key, DB URL | repository secrets `CI_SUPABASE_SECRET_KEY`, `CI_SUPABASE_DB_URL` | Vercel Production (the secret key only; its `SUPABASE_DB_URL` was deleted on 2026-10-07, since the app never reads it); repository secrets `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL` (read only by `seed-demo.yml` and `screenshots.yml`); any local env file not yet switched (section 9). The `*.prod-backup` copies section 9 kept on danlo's machine hold the values revoked on 2026-10-07 (`production-isolation.md` Part E1) |
 
 Never edit the three non-`CI_` secrets to point at the CI project. The demo
 seeder and the screenshot run would then "succeed" against the wrong database.
@@ -234,7 +235,12 @@ steps above. A lost project is about half an hour.
    - `.github/workflows/ci-project-setup.yml` env: `BIS_CI_SUPABASE_REF`,
      `NEXT_PUBLIC_SUPABASE_URL`;
    - `.env.example`, this runbook, `CLAUDE.md`, and the comments that name the
-     old ref (`git grep odnobiodsftffphuuosz`).
+     old ref (`git grep odnobiodsftffphuuosz`);
+   - once Preview is on this project (`production-isolation.md` Part C):
+     Vercel Preview's `NEXT_PUBLIC_SUPABASE_URL`,
+     `NEXT_PUBLIC_SUPABASE_ANON_KEY` and a new `preview` secret key in
+     `SUPABASE_SERVICE_ROLE_KEY`, then a new preview build. Vercel is not in
+     the repository, so the PR cannot do this part.
    `apps/web/ci/ci-workflow.test.ts` fails if the two workflows disagree.
    Merge it before step 3, since the setup workflow runs from the ref you
    dispatch.
