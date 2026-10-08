@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -14,8 +15,10 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Notice } from "@/components/ui/notice";
 import { m } from "@/lib/messages";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
+import type { CreateContactResult } from "./actions";
 
 function Submit({ pending }: { pending: boolean }) {
   return (
@@ -26,21 +29,45 @@ function Submit({ pending }: { pending: boolean }) {
 }
 
 export function AddContactDialog({
+  accountId,
   action,
 }: {
-  action: (formData: FormData) => Promise<void>;
+  accountId: string;
+  action: (formData: FormData) => Promise<CreateContactResult>;
 }) {
   const [open, setOpen] = useState(false);
+  // D-013: a dedupe match is neither a save nor a failure — the dialog
+  // stays open with a plain sentence and a link to the record that already
+  // exists, instead of closing silently as if a new contact had been made.
+  const [existingContactId, setExistingContactId] = useState<string | null>(null);
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    let result: CreateContactResult;
     try {
-      await action(formData);
-      setOpen(false);
+      result = await action(formData);
     } catch {
       toast.error(m["contacts.createFailed"]);
+      return;
     }
+    if (result.kind === "invalid") {
+      setExistingContactId(null);
+      toast.error(result.error);
+      return;
+    }
+    if (result.kind === "existing") {
+      setExistingContactId(result.contactId);
+      return;
+    }
+    setExistingContactId(null);
+    setOpen(false);
   });
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setExistingContactId(null);
+      }}
+    >
       <DialogTrigger asChild>
         <Button>
           <Plus className="size-4" aria-hidden />
@@ -77,6 +104,17 @@ export function AddContactDialog({
             <Label htmlFor="phone">{m["contacts.phone"]}</Label>
             <Input id="phone" name="phone" />
           </div>
+          {existingContactId ? (
+            <Notice tone="warn">
+              {m["contacts.add.existing"]}{" "}
+              <Link
+                href={`/dashboard/accounts/${accountId}/contacts/${existingContactId}`}
+                className="underline underline-offset-2"
+              >
+                {m["contacts.add.viewContact"]}
+              </Link>
+            </Notice>
+          ) : null}
           <DialogFooter>
             <Submit pending={pending} />
           </DialogFooter>

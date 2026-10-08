@@ -414,6 +414,9 @@ export const m = {
   "contacts.email": "Email",
   "contacts.phone": "Phone",
   "contacts.createFailed": "Could not add that contact. Check the details and try again.",
+  "contacts.add.blank": "Add a name, email, or phone number.",
+  "contacts.add.existing": "This person is already in your contacts.",
+  "contacts.add.viewContact": "View contact",
 
   // The contacts table's bulk-action bar (DESIGN.md rule 4 — checkboxes
   // never render without bulk actions). "{count}"/"{tag}"/"{skipped}" are

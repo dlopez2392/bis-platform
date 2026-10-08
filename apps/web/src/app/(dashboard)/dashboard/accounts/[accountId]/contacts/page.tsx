@@ -174,7 +174,7 @@ export default async function ContactsPage({
               <Upload className="size-4" aria-hidden />
               {m["contacts.import"]}
             </Link>
-            <AddContactDialog action={boundCreateContact} />
+            <AddContactDialog accountId={accountId} action={boundCreateContact} />
           </>
         }
         search={

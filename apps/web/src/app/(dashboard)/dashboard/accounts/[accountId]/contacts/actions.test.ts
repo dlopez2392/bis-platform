@@ -23,7 +23,7 @@ vi.mock("@bis/db", () => dbMocks);
 const {
   updateContactFieldAction, bulkDeleteContactsAction, bulkAddTagAction, bulkRemoveTagAction,
   setPhoneCountryAction, undoPhoneCountryAction,
-  undoInlinePhoneEditAction,
+  undoInlinePhoneEditAction, createContactAction,
 } = await import("./actions");
 const { m } = await import("@/lib/messages");
 
@@ -440,5 +440,58 @@ describe("undoInlinePhoneEditAction", () => {
       { expectedPhone: "+14155551234", phone: "+15512345678", unconfirmed: true },
       "user_1",
     );
+  });
+});
+
+// D-013: Add contact used to save an all-blank contact, never checked an
+// email/phone's SHAPE, and closed the dialog silently on a dedupe match.
+const addForm = (fields: Record<string, string>) => {
+  const f = new FormData();
+  for (const [k, v] of Object.entries(fields)) f.set(k, v);
+  return f;
+};
+
+describe("createContactAction (D-013)", () => {
+  it("refuses an all-blank submission without ever calling createContact (mutation: drop the blank guard → FAILS)", async () => {
+    const r = await createContactAction("a1", addForm({}));
+    expect(r.kind).toBe("invalid");
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+  });
+
+  it("refuses a malformed email, reusing the SAME shape check inline editing uses (mutation: skip the email check → FAILS)", async () => {
+    const r = await createContactAction("a1", addForm({ firstName: "Jo", email: "not-an-email" }));
+    expect(r.kind).toBe("invalid");
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+  });
+
+  it("refuses a malformed phone (mutation: skip the phone check → FAILS)", async () => {
+    const r = await createContactAction("a1", addForm({ firstName: "Jo", phone: "call after 5" }));
+    expect(r.kind).toBe("invalid");
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+  });
+
+  it("a name alone is enough — email/phone are not required", async () => {
+    dbMocks.createContact.mockResolvedValueOnce({ existing: false, id: "new1" });
+    const r = await createContactAction("a1", addForm({ firstName: "Jo" }));
+    expect(r.kind).toBe("created");
+    expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a dedupe match plainly instead of closing silently (mutation: ignore result.existing → FAILS)", async () => {
+    dbMocks.createContact.mockResolvedValueOnce({ existing: true, id: "existing1" });
+    const r = await createContactAction("a1", addForm({ firstName: "Jo", email: "jo@x.com" }));
+    expect(r).toEqual({ kind: "existing", contactId: "existing1" });
+  });
+
+  it("a real save revalidates the contacts list", async () => {
+    dbMocks.createContact.mockResolvedValueOnce({ existing: false, id: "new1" });
+    await createContactAction("a1", addForm({ firstName: "Jo" }));
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
+  });
+
+  it("does not revalidate on a dedupe match — nothing changed to show", async () => {
+    dbMocks.createContact.mockResolvedValueOnce({ existing: true, id: "existing1" });
+    await createContactAction("a1", addForm({ firstName: "Jo" }));
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });
