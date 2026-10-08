@@ -163,4 +163,34 @@ describe("weeklyClientReportPass", () => {
       accountId: "acct_1", kind: "operator.weekly_report",
     }));
   });
+
+  // D-063 (wiring, review follow-up): weeklyReportEmail.ts's own suite proves
+  // the TEMPLATE honours `receptionistName`; nothing proved this PASS actually
+  // reads `profile.persona_name` and threads it through — deleting
+  // `receptionistName: profile?.persona_name` from this file left every test
+  // above green, because none of them exercise a quiet week (the only body
+  // that ever names the receptionist). A quiet week is required here on
+  // purpose: `WEEK`'s non-zero fixture never reaches `quietBody` at all.
+  it("a quiet week's reassurance names THIS account's own configured persona, not a hard-coded 'Sofía' (mutation: delete receptionistName from the reassurance object → FAILS)", async () => {
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([row()]);
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true, textback_enabled: false, persona_name: "Max" });
+    metricsMock.weeklyMetrics.mockResolvedValue({ calls: 0, leads: 0, bookings: 0, visitors: null });
+
+    await weeklyClientReportPass.run(ctx());
+
+    const sent = emailSend.mock.calls[0]![0] as { body: string };
+    expect(sent.body).toContain("Max is still answering");
+    expect(sent.body).not.toContain("Sofía");
+  });
+
+  it("no voice profile at all still sends a quiet week, with no receptionist claim (reassurance.receptionist must be false, not a falsy persona_name read)", async () => {
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([row()]);
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    metricsMock.weeklyMetrics.mockResolvedValue({ calls: 0, leads: 0, bookings: 0, visitors: null });
+
+    await weeklyClientReportPass.run(ctx());
+
+    const sent = emailSend.mock.calls[0]![0] as { body: string };
+    expect(sent.body).not.toMatch(/still answering/i);
+  });
 });

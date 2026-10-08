@@ -472,12 +472,18 @@ describe("AccountDashboardPage — the hero follows the plan (F-076 now slice)",
 
   /** The EXACT sparkline geometry `page.tsx` should hand `StatTile` for a
    *  given source array — computed with the real `bucketByLocalDay`/
-   *  `sparklinePath` (never re-implemented here), the same window14 the
-   *  page itself derives from the pinned `NOW` and this fixture's zone. */
+   *  `sparklinePath` (never re-implemented here).
+   *
+   *  D-077: window7, NOT window14. The hero's NUMBER is a rolling 7-day
+   *  count (`currentCallsIso.length`/`currentLeadsIso.length`), so its
+   *  sparkline must trace the SAME 7 days — a 14-day trend line beside a
+   *  7-day number let the two disagree about what span was even being
+   *  shown (three KPI tiles did this: the hero, "Appointments booked" and
+   *  "Pipeline added"). */
   async function expectedSparkPoints(sourceIso: string[]): Promise<string> {
     const { localDayWindow, bucketByLocalDay, sparklinePath } = await import("@/lib/dashboard/metrics");
-    const window14 = localDayWindow(NOW, "America/Chicago", 14);
-    const counts = bucketByLocalDay(sourceIso, "America/Chicago", window14.dayKeys).map((b) => b.count);
+    const window7 = localDayWindow(NOW, "America/Chicago", 7);
+    const counts = bucketByLocalDay(sourceIso, "America/Chicago", window7.dayKeys).map((b) => b.count);
     return sparklinePath(counts, 84, 26).line;
   }
 
@@ -557,6 +563,101 @@ describe("AccountDashboardPage — the hero follows the plan (F-076 now slice)",
 });
 
 /**
+ * D-077: the three OTHER 7-day KPI tiles with a sparkline (hero is covered
+ * above) must trace the SAME 7-day window their own number counts. The
+ * window itself is named in words, not left to be inferred from the
+ * delta/spark alone (DESIGN.md rule 1) — as ONE caption above the whole
+ * row (design review follow-up), not a suffix on each tile's own label.
+ */
+describe("AccountDashboardPage — the 7-day KPI tiles name their window and their sparklines match it (D-077)", () => {
+  const NOW = new Date("2026-06-15T12:00:00.000Z");
+
+  // Deliberately TWO weeks of source rows for both metrics: a point inside
+  // the current 7-day window (June 9-15) and one OUTSIDE it but still
+  // within the OLD 14-day span (June 2-8). A spark built over window14
+  // would show both; one built over window7 (the fix) must show only the
+  // first — bucketByLocalDay silently drops a dayKey outside the window it
+  // is handed, which is exactly the mechanism this test leans on.
+  const BOOKINGS_IN_WINDOW7 = ["2026-06-11T12:00:00.000Z"];
+  const BOOKINGS_OUTSIDE_WINDOW7 = ["2026-06-04T12:00:00.000Z"];
+  const OPP_IN_WINDOW7 = [{ createdAt: "2026-06-12T12:00:00.000Z", monetaryValue: 500 }];
+  const OPP_OUTSIDE_WINDOW7 = [{ createdAt: "2026-06-03T12:00:00.000Z", monetaryValue: 9000 }];
+
+  beforeEach(() => {
+    resetFixtures();
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("Appointments booked's sparkline traces the SAME 7 days as its own number, not a 14-day trend (mutation: bucket the spark over window14 → FAILS)", async () => {
+    dbMocks.listBookingCreationsBetween.mockResolvedValue([...BOOKINGS_IN_WINDOW7, ...BOOKINGS_OUTSIDE_WINDOW7]);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    const { localDayWindow, bucketByLocalDay, sparklinePath } = await import("@/lib/dashboard/metrics");
+    const window7 = localDayWindow(NOW, "America/Chicago", 7);
+    const counts = bucketByLocalDay(
+      [...BOOKINGS_IN_WINDOW7, ...BOOKINGS_OUTSIDE_WINDOW7], "America/Chicago", window7.dayKeys,
+    ).map((b) => b.count);
+    const expectedLine = sparklinePath(counts, 84, 26).line;
+    expect(html).toContain(`points="${expectedLine}"`);
+  });
+
+  it("Pipeline added's sparkline traces the SAME 7 days as its own number, not a 14-day trend (mutation: bucket the spark over window14 → FAILS)", async () => {
+    dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([...OPP_IN_WINDOW7, ...OPP_OUTSIDE_WINDOW7]);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    const { localDayWindow, bucketValueByLocalDay, sparklinePath } = await import("@/lib/dashboard/metrics");
+    const window7 = localDayWindow(NOW, "America/Chicago", 7);
+    const values = bucketValueByLocalDay(
+      [...OPP_IN_WINDOW7, ...OPP_OUTSIDE_WINDOW7], "America/Chicago", window7.dayKeys,
+    ).map((b) => b.value);
+    const expectedLine = sparklinePath(values, 84, 26).line;
+    expect(html).toContain(`points="${expectedLine}"`);
+  });
+
+  // Design review follow-up: a suffix on each of the four labels wrapped at
+  // xl width (251.6px of Geist Mono at the Label role for "After-hours
+  // captured · Last 7 days" in a ~234px tile) and misaligned the row, and
+  // the mockup never puts a period in a tile label. ONE row-level caption
+  // instead — rendered ONCE, not per tile, and the tile labels themselves
+  // carry no suffix.
+  it("names the row's window with ONE caption above the grid, not a suffix on each tile's own label (mutation: drop the caption → FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true });
+    dbMocks.getCalendarForAccount.mockResolvedValue({ open_hours: { mon: [["09:00", "17:00"]] } } as never);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+    const text = renderedText(html);
+
+    // Exactly once: not absent, and not once per tile either.
+    expect(html.match(/Last 7 days/g)?.length).toBe(1);
+    // The four labels themselves are now bare — no tile-level suffix.
+    for (const labelKey of [
+      "dashboard.kpi.callsAnswered", "dashboard.kpi.appointmentsBooked",
+      "dashboard.kpi.afterHoursCaptured", "dashboard.kpi.pipelineAdded",
+    ] as const) {
+      expect(text).not.toMatch(new RegExp(`${m[labelKey]}[^A-Za-z]*Last 7 days`));
+    }
+  });
+
+  it("the row caption reuses StatTile's own exported LABEL_ROLE class string, never a second hand-copied one (mutation: hard-code a literal class string for the caption → FAILS)", async () => {
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+    const { LABEL_ROLE } = await import("@/components/stat-tile");
+    // The caption's own <p> carries every class in LABEL_ROLE, in a single
+    // class attribute — not merely that the string appears somewhere (a
+    // comment or an unrelated node would also satisfy a bare `.toContain`).
+    const captionMatch = html.match(/<p class="([^"]*)">Last 7 days<\/p>/);
+    expect(captionMatch).not.toBeNull();
+    const captionClasses = captionMatch![1]!.split(/\s+/);
+    for (const cls of LABEL_ROLE.split(/\s+/)) expect(captionClasses).toContain(cls);
+  });
+});
+
+/**
  * Minor fix from code review: "After-hours captured" is a property of calls
  * Sofía takes, so a CRM-only account (no enabled voice profile) showed an
  * always-0 tile there too, the same unmeasured-not-zeroed defect the hero
@@ -584,5 +685,39 @@ describe("AccountDashboardPage — After-hours captured is hidden without voice 
     const html = renderToStaticMarkup(await AccountDashboardPage(route()));
 
     expect(renderedText(html)).toContain(m["dashboard.kpi.afterHoursCaptured"]);
+  });
+});
+
+/**
+ * D-063 follow-up (cheap, same defect as the weekly report's): the greeting
+ * subtitle hard-coded "Sofía is answering your calls." regardless of this
+ * account's own configured persona (voice_profiles.persona_name).
+ */
+describe("AccountDashboardPage — the voice sub-line names the account's own configured persona (D-063 follow-up)", () => {
+  beforeEach(resetFixtures);
+
+  it("an account with a renamed persona reads its OWN name, not 'Sofía' (mutation: hard-code the greeting to 'Sofía' → FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true, persona_name: "Max" });
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(renderedText(html)).toContain("Max is answering your calls.");
+    expect(renderedText(html)).not.toContain("Sofía");
+  });
+
+  it("falls back to 'Sofía' when the profile carries no persona name", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true });
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(renderedText(html)).toContain("Sofía is answering your calls.");
+  });
+
+  it("no enabled voice profile renders no sub-line at all, and never reads a persona name for it", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(renderedText(html)).not.toContain("is answering your calls.");
   });
 });

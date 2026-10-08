@@ -41,6 +41,31 @@ export type ConversationSummary = {
   unreadCount: number;
 };
 
+/** A row's position in `listConversations`'s ordering (last_message_at
+ *  desc, id desc as the tiebreaker) — `v` is the last row's own
+ *  `last_message_at` (null when that conversation has none), `id` the
+ *  tiebreaker that makes a shared timestamp still total. Structurally
+ *  identical to apps/web's `RowCursor` (lib/cursor.ts) and to this
+ *  package's own `ContactCursor` (contacts.ts); redeclared rather than
+ *  imported because @bis/db's own contacts module is not this file's to
+ *  reach into, and apps/web is not this package's to import from. */
+export type ConversationCursor = { v: string | null; id: string };
+
+/**
+ * Escapes a value for embedding inside a PostgREST `.or()` filter string —
+ * byte-for-byte the same rule as contacts.ts's own `quoteFilterValue`
+ * (duplicated rather than imported: that helper is private to its module,
+ * and the escaping rule itself is PostgREST's, not this package's to
+ * centralise further). `v` arrives from a hand-editable `?before=` query
+ * parameter (apps/web's `parseCursor` validates only its SHAPE — a
+ * string-or-null paired with a real uuid — never its content), so it must
+ * be treated as attacker-controlled text, not as the ISO timestamp this
+ * module itself always writes there.
+ */
+function quoteFilterValue(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 const MESSAGE_COLS =
   "id, conversation_id, channel, direction, status, provider_message_id, subject, body, error, created_at";
 
@@ -177,6 +202,12 @@ export async function updateMessageStatus(
  */
 export async function updateMessageStatusByProviderId(
   db: SupabaseClient, providerMessageId: string, status: MessageStatus,
+  // D-016: lets the Resend webhook record a spam complaint distinctly from
+  // a plain bounce (a marker string in `error`, never the provider's own
+  // words — see apps/web's lib/email/failure-reason.ts, the one reader) in
+  // the SAME write as the status, rather than a second round trip the
+  // out-of-order guard below would then have to reason about separately.
+  patch: { error?: string } = {},
 ): Promise<{ updated: boolean }> {
   const { data, error } = await db.from("messages")
     .select("id, account_id, status")
@@ -187,14 +218,17 @@ export async function updateMessageStatusByProviderId(
   if (!data) return { updated: false };
 
   // Out-of-order or replayed event: the row already reflects an equal or
-  // later point in the lifecycle. Leave it alone — no write, no event —
-  // rather than regress the status or log a duplicate.
+  // later point in the lifecycle. Leave it alone — no write, no event, and
+  // (D-016) no patch either, even if this call carried one — rather than
+  // regress the status or log a duplicate.
   if (STATUS_RANK[status] <= STATUS_RANK[data.status as MessageStatus]) {
     return { updated: true };
   }
 
+  const row: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
+  if (patch.error !== undefined) row.error = patch.error;
   const { error: updateErr } = await db.from("messages")
-    .update({ status, updated_at: new Date().toISOString() })
+    .update(row)
     .eq("id", data.id);
   if (updateErr) throw new Error(`updateMessageStatusByProviderId failed: ${updateErr.message}`);
 
@@ -533,47 +567,130 @@ export async function sumUnreadCount(
   return (data ?? []).reduce((sum, row) => sum + (row.unread_count ?? 0), 0);
 }
 
+/**
+ * D-019. Cursor-paged (DESIGN.md "Paged lists": `?before=`, never offset),
+ * the same `{v, id}` idiom contacts.ts's `listContacts` already uses —
+ * `last_message_at` desc, `id` desc as the tiebreaker, so two conversations
+ * whose last message landed in the same instant (a batch of messages
+ * written inside one transaction, say) still page without a repeat or a
+ * skip.
+ */
 export async function listConversations(
   db: SupabaseClient, accountId: string,
+  opts: { limit?: number; before?: ConversationCursor } = {},
 ): Promise<ConversationSummary[]> {
-  const { data, error } = await db.from("conversations")
+  const limit = opts.limit ?? 50;
+  let q = db.from("conversations")
     .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name)")
     .eq("account_id", accountId)
-    .order("last_message_at", { ascending: false, nullsFirst: false });
+    .order("last_message_at", { ascending: false, nullsFirst: false })
+    .order("id", { ascending: false })
+    .limit(limit);
+
+  if (opts.before) {
+    const { v, id } = opts.before;
+    if (v === null) {
+      // Already inside the null block (every remaining row shares a null
+      // last_message_at too — nulls sort last in this ordering regardless
+      // of direction) — only the id tiebreaker advances.
+      q = q.or(`and(last_message_at.is.null,id.lt.${id})`);
+    } else {
+      const value = quoteFilterValue(v);
+      // Everything strictly past (last_message_at, id) in the ordering
+      // above, PLUS every null row — nulls sort last, so they are still
+      // "not yet shown" the moment `v` is a real value.
+      q = q.or(`last_message_at.lt.${value},and(last_message_at.eq.${value},id.lt.${id}),last_message_at.is.null`);
+    }
+  }
+
+  const { data, error } = await q;
   if (error) throw new Error(error.message);
 
   const rows = (data ?? []) as any[];
   if (rows.length === 0) return [];
 
-  // One query for the previews rather than one per thread. Ordered newest
-  // first, so the first row seen for a conversation is its latest message.
+  // One query PER CONVERSATION on this page, not one shared query across
+  // all of them — bounded by `limit` (this page's row count), same shape as
+  // `listFailedOutboundSms`'s own per-call-id reads. The query this
+  // replaced fetched every message across every id on the page in ONE read
+  // ordered newest-first and took the first-seen row per conversation,
+  // which was correct only while the combined message count on that page
+  // stayed under PostgREST's max_rows cap (1000) — a chatty conversation
+  // could push a quiet one's own latest message past that cap, and the
+  // quiet one came back with NO preview despite genuinely having one. A
+  // query scoped to one conversation and `limit(1)` cannot be pushed out by
+  // another conversation's volume, at any scale.
   //
-  // This does fetch more rows than it strictly needs. PostgREST caps results
-  // at max_rows (1000), so at a few hundred conversations with long histories
-  // the tail of the previews would be truncated. Correct fix at that scale is
-  // a DB-side lateral join or a denormalised last_message_preview column;
-  // neither is warranted for one operator, and N+1 queries are worse.
-  const ids = rows.map((r) => r.id);
-  const { data: msgs, error: msgErr } = await db.from("messages")
-    .select("conversation_id, body")
-    .eq("account_id", accountId).in("conversation_id", ids)
-    .order("created_at", { ascending: false });
-  if (msgErr) throw new Error(msgErr.message);
+  // This IS `limit` round trips per page (bounded, parallel via
+  // Promise.all, never unbounded `N+1`-over-the-whole-account the way the
+  // replaced query's own doc comment warned against). Review note: at
+  // today's scale (one operator, pages of 50) this is the right trade —
+  // a DB-side lateral join or a denormalised preview column would be the
+  // fix if a page's load time ever became the bottleneck instead.
+  const previews = await Promise.all(rows.map((r) => fetchConversationPreview(db, accountId, r.id)));
 
-  const preview = new Map<string, string>();
-  for (const row of (msgs ?? []) as any[]) {
-    if (!preview.has(row.conversation_id)) preview.set(row.conversation_id, row.body);
-  }
-
-  return rows.map((r) => ({
+  return rows.map((r, i) => ({
     id: r.id,
     contactId: r.contact_id,
     contactFirstName: r.contacts?.first_name ?? null,
     contactLastName: r.contacts?.last_name ?? null,
     lastMessageAt: r.last_message_at,
-    lastMessagePreview: preview.get(r.id) ?? null,
+    lastMessagePreview: previews[i] ?? null,
     unreadCount: r.unread_count ?? 0,
   }));
+}
+
+/** One conversation's own latest message body, or null when it has none —
+ *  shared by `listConversations` and `getConversationSummary` below so the
+ *  "scoped to one conversation, cannot be pushed out by another's volume"
+ *  property lives in exactly one place. */
+async function fetchConversationPreview(
+  db: SupabaseClient, accountId: string, conversationId: string,
+): Promise<string | null> {
+  const { data: msg, error: msgErr } = await db.from("messages")
+    .select("body")
+    .eq("account_id", accountId).eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (msgErr) throw new Error(`conversation preview failed: ${msgErr.message}`);
+  return (msg as { body: string } | null)?.body ?? null;
+}
+
+/**
+ * ONE conversation, by id — the deep-link escape hatch D-019's pagination
+ * needs and the unpaged `listConversations` never did. A link to a specific
+ * thread (an unread badge, a search hit, a bookmark) names a conversation
+ * id with no idea which PAGE of the now-paged list it would fall on; if
+ * that id is not on the page the list happens to be showing,
+ * `conversations/page.tsx`'s own `conversations.find(...)` misses it, and
+ * the thread that link promised would silently not open. This is the
+ * fallback read for exactly that miss — never a substitute for
+ * `listConversations` itself, which still serves the list the operator
+ * actually pages through.
+ *
+ * Returns null for a conversation that does not exist in this account,
+ * same "miss is not an error" shape as `findMessageByProviderId`.
+ */
+export async function getConversationSummary(
+  db: SupabaseClient, accountId: string, conversationId: string,
+): Promise<ConversationSummary | null> {
+  const { data, error } = await db.from("conversations")
+    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name)")
+    .eq("account_id", accountId).eq("id", conversationId)
+    .maybeSingle();
+  if (error) throw new Error(`getConversationSummary failed: ${error.message}`);
+  if (!data) return null;
+  const r = data as any;
+  return {
+    id: r.id,
+    contactId: r.contact_id,
+    contactFirstName: r.contacts?.first_name ?? null,
+    contactLastName: r.contacts?.last_name ?? null,
+    lastMessageAt: r.last_message_at,
+    lastMessagePreview: await fetchConversationPreview(db, accountId, r.id),
+    unreadCount: r.unread_count ?? 0,
+  };
 }
 
 /**

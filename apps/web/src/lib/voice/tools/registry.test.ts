@@ -280,6 +280,15 @@ describe("book_appointment", () => {
     expect(dbMocks.createContact).not.toHaveBeenCalled();
   });
 
+  // D-035: only a reschedule links rows; a fresh booking must still count.
+  it("D-035: a plain booking is never marked as a reschedule", async () => {
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(dbMocks.createBooking).toHaveBeenCalledTimes(1);
+    expect(dbMocks.createBooking.mock.calls[0]![2]).not.toHaveProperty("rescheduledFromId");
+  });
+
   it("D-028 review: asks the submit-time rule for the requested instant — a free start the CURRENT list no longer carries is still booked (mutation: back to list membership → FAILS)", async () => {
     computeAllSlotsMock.mockResolvedValue([]); // a booking since re-anchored the list past 14:00
     bookableSlotMock.mockResolvedValue(slot);   // ...but 14:00 is still free
@@ -585,6 +594,23 @@ describe("reschedule / cancel", () => {
     expect(state.bookings.find((b) => b.id === "old1")).toBeUndefined(); // replaced, not duplicated
     expect(state.bookings.find((b) => b.id === "new1")).toMatchObject({ status: "booked" });
     expect(state.served).toEqual(["rescheduled"]);
+  });
+  // D-035: the new row names the one it replaces, so the dashboard, the
+  // Monday report and the agency roll-up (all `listBookingCreationsBetween`)
+  // stop counting a reschedule as one more booking.
+  it("D-035: the replacement booking carries rescheduledFromId = the booking it replaces (mutation: drop it → FAILS)", async () => {
+    computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") }]);
+    dbMocks.getBookingById.mockResolvedValue({ id: "old1", contact_id: "ct1", calendar_id: "cal1",
+      starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
+    dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
+    dbMocks.setBookingStatus.mockResolvedValue(undefined);
+    const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+      { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+    expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+    expect(dbMocks.createBooking).toHaveBeenCalledTimes(1);
+    expect(dbMocks.createBooking.mock.calls[0]![2]).toMatchObject({ rescheduledFromId: "old1" });
+    // The SAME id the reschedule then cancels.
+    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "a1", "old1", "cancelled", "voice", "ai");
   });
   it("D-028 review: reschedule asks the submit-time rule for the requested instant — a free start that the CURRENT list no longer carries is still taken (mutation: back to list membership → FAILS)", async () => {
     const wantedSlot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") };

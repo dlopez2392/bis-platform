@@ -104,6 +104,10 @@ export const weeklyClientReportPass: Pass = {
           reassurance: {
             receptionist: profile?.enabled ?? false,
             textBack: profile?.textback_enabled ?? false,
+            // D-063: this account's own configured persona, not a hard-coded
+            // "Sofía" — `weeklyReportEmail` itself falls back to that name
+            // only when this is omitted or blank.
+            receptionistName: profile?.persona_name,
           },
         });
         const subject = weeklyReportSubject(now);

@@ -11,7 +11,7 @@ import {
   listAnsweredCallStartsBetween, listLeadInstantsBetween, listSpamCallStartsBetween,
   listAbandonedCallStartsBetween,
 } from "@/lib/reports/weekly-metrics";
-import { StatTile } from "@/components/stat-tile";
+import { StatTile, LABEL_ROLE } from "@/components/stat-tile";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
@@ -222,22 +222,32 @@ export default async function AccountDashboardPage({
   const greetingText = m[greetingKey].replace("{name}", () => greetingName);
   const dateText = formatLocalLongDate(now, timezone);
   const showVoiceSub = voiceProfile?.enabled === true;
+  // D-063 follow-up: the account's own configured persona, not a hard-coded
+  // "Sofía" — a function replacer for the same reason the greeting's own
+  // {name} substitution just above uses one (a persona containing `$&` must
+  // not be re-interpreted as a replacement pattern).
+  const voiceSubText = showVoiceSub
+    ? m["dashboard.sub.voice"].replace("{name}", () => voiceProfile?.persona_name?.trim() || "Sofía")
+    : "";
 
   // Calls answered — split the one 14-day fetch on window7's boundary
-  // rather than issuing a second query. Bucketed once and reused by both the
-  // KPI tile's spark (Task 5) and the calls chart card's bars (Task 6) —
-  // same values either way, just avoiding a second identical
-  // `bucketByLocalDay` pass over the same `callsIso`/`window14.dayKeys`.
+  // rather than issuing a second query. `callsDayBuckets` (14 days) feeds
+  // ONLY the calls chart card's bars (Task 6); the KPI tile's own spark
+  // (D-077) is bucketed SEPARATELY over `window7.dayKeys` so it traces the
+  // exact same 7 days `currentCallsIso.length` counts — the chart's 14-day
+  // picture and the KPI's 7-day one are two different questions and must
+  // not share one bucket pass.
   const currentCallsIso = callsIso.filter((iso) => Date.parse(iso) >= window7FromMs);
   const priorCallsIso = callsIso.filter((iso) => Date.parse(iso) < window7FromMs);
   const callsDayBuckets = bucketByLocalDay(callsIso, timezone, window14.dayKeys);
-  const callsSpark = callsDayBuckets.map((b) => b.count);
+  const callsSpark = bucketByLocalDay(callsIso, timezone, window7.dayKeys).map((b) => b.count);
   const callsDelta = deltaVsPrior(currentCallsIso.length, priorCallsIso.length);
 
-  // Appointments booked — same split/spark shape as calls.
+  // Appointments booked — same split/spark shape as calls, spark over the
+  // SAME 7-day window as the number (D-077; was window14).
   const currentBookingsIso = bookingsIso.filter((iso) => Date.parse(iso) >= window7FromMs);
   const priorBookingsIso = bookingsIso.filter((iso) => Date.parse(iso) < window7FromMs);
-  const bookingsSpark = bucketByLocalDay(bookingsIso, timezone, window14.dayKeys).map((b) => b.count);
+  const bookingsSpark = bucketByLocalDay(bookingsIso, timezone, window7.dayKeys).map((b) => b.count);
   const bookingsDelta = deltaVsPrior(currentBookingsIso.length, priorBookingsIso.length);
 
   // Leads captured — F-076 (now slice): the CRM-only hero, same split/spark
@@ -260,7 +270,8 @@ export default async function AccountDashboardPage({
   // already has with the report's own "calls answered".
   const currentLeadsIso = leadInstantsIso.filter((iso) => Date.parse(iso) >= window7FromMs);
   const priorLeadsIso = leadInstantsIso.filter((iso) => Date.parse(iso) < window7FromMs);
-  const leadsSpark = bucketByLocalDay(leadInstantsIso, timezone, window14.dayKeys).map((b) => b.count);
+  // Spark over the SAME 7-day window as the number (D-077; was window14).
+  const leadsSpark = bucketByLocalDay(leadInstantsIso, timezone, window7.dayKeys).map((b) => b.count);
   const leadsDelta = deltaVsPrior(currentLeadsIso.length, priorLeadsIso.length);
 
   // After-hours captured — DATA HONESTY (brief): hidden entirely, not
@@ -294,7 +305,8 @@ export default async function AccountDashboardPage({
   // must not change what a past 7-day window already captured.
   const currentOppPairs = oppPairs.filter((p) => Date.parse(p.createdAt) >= window7FromMs);
   const priorOppPairs = oppPairs.filter((p) => Date.parse(p.createdAt) < window7FromMs);
-  const pipelineSpark = bucketValueByLocalDay(oppPairs, timezone, window14.dayKeys).map((b) => b.value);
+  // Spark over the SAME 7-day window as the value below (D-077; was window14).
+  const pipelineSpark = bucketValueByLocalDay(oppPairs, timezone, window7.dayKeys).map((b) => b.value);
   const currentPipelineValue = currentOppPairs.reduce((sum, p) => sum + p.monetaryValue, 0);
   const priorPipelineValue = priorOppPairs.reduce((sum, p) => sum + p.monetaryValue, 0);
   const pipelineDelta = deltaVsPrior(currentPipelineValue, priorPipelineValue);
@@ -306,7 +318,7 @@ export default async function AccountDashboardPage({
           `--surface-1` fill over the aurora's brightest glow. */}
       <PageHeader
         title={greetingText}
-        subtitle={`${dateText}${showVoiceSub ? ` · ${m["dashboard.sub.voice"]}` : ""}`}
+        subtitle={`${dateText}${showVoiceSub ? ` · ${voiceSubText}` : ""}`}
       />
       <div className="space-y-6 p-6">
         {/* Above the KPI tiles (Task 5) — both audiences, unlike the
@@ -314,12 +326,21 @@ export default async function AccountDashboardPage({
             ungated, and a row that vanished at zero would read as a broken
             feature (work-row.tsx's own doc comment, spec §4.3), so this
             renders at every count including zero. */}
-        {/* Above the KPI tiles, because it qualifies every period label in
-            them: "Last 7 days" is seven of WHOSE days. It also sits above the
+        {/* Above the KPI tiles, because it qualifies BOTH the row caption
+            right below it ("Last 7 days" is seven of WHOSE days) and the
             work row that follows, which `bucketWork` measures against those
             same midnights. */}
         <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
         <WorkRowCard accountId={accountId} total={workTotal} overdue={workOverdue} />
+        {/* D-077, design review follow-up: a suffix on each of the four
+            tile's own labels ("Appointments booked · Last 7 days",
+            251.6px of Geist Mono at the Label role) wrapped in the ~234px
+            xl tile and misaligned the row — the mockup never puts a period
+            in a tile label (northern-lights.html:85-95). ONE caption for
+            the whole row instead, reusing StatTile's own exported
+            `LABEL_ROLE` class string rather than a second hand-copied one —
+            tokens only, no new hard-coded value. */}
+        <p className={LABEL_ROLE}>{m["dashboard.kpi.last7Days"]}</p>
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           {/* F-076 (now slice): ONE hero tile (DESIGN.md rule 11), whose
               metric follows the plan rather than a fixed metric that reads

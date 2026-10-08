@@ -13,6 +13,7 @@ import { formatCurrency, formatDate, formatDateInZone, formatDateTime } from "@/
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { STATUS_LABEL, MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
+import { messageFailureReason } from "@/lib/email/failure-reason";
 
 // Exhaustively typed to the real channel union (see labels.ts's own
 // MESSAGE_CHANNEL_LABEL comment) so a new channel is a compile error here
@@ -39,7 +40,7 @@ type TimelineItem =
   | { kind: "submission"; id: string; at: string; formName: string;
       answers: { key: string; label: string; value: string }[] }
   | { kind: "message"; id: string; at: string; direction: string; subject: string | null;
-      body: string; status: string; channel: string };
+      body: string; status: string; channel: string; error: string | null };
 
 export function ActivityTimeline({
   accountId,
@@ -147,6 +148,7 @@ export function ActivityTimeline({
         body: msg.body,
         status: msg.status,
         channel: msg.channel,
+        error: msg.error,
       }),
     ),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
@@ -271,7 +273,7 @@ function TimelineRow({
       <div className="flex gap-3 py-[7px]">
         <StickyNote className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
-          <p className="text-sm text-card-foreground">{item.body}</p>
+          <p className="whitespace-pre-wrap break-words text-sm text-card-foreground">{item.body}</p>
           <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(item.at)}</p>
         </div>
       </div>
@@ -345,6 +347,12 @@ function TimelineRow({
                 going blank. */}
             {outbound ? ` · ${MESSAGE_STATUS_LABEL[item.status] ?? item.status}` : ""}
           </p>
+          {/* D-017: same reason the thread shows (lib/email/failure-reason.ts)
+              — the stored failure was never shown here either, on the one
+              other screen that carries this message. */}
+          {outbound && messageFailureReason(item) ? (
+            <p className="mt-1 text-xs text-[var(--crit)]">{messageFailureReason(item)}</p>
+          ) : null}
         </div>
       </div>
     );

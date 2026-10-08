@@ -54,6 +54,13 @@ export type CalendarSettingsPatch = Partial<{
 export type CreateBookingInput = {
   calendarId: string; contactId: string; startsAt: Date; endsAt: Date;
   note?: string; bookerTimezone?: string; ipHash?: string; meetingUrl?: string;
+  /** D-035 (0061): the booking this one replaces, when it is made by
+   *  rescheduling. The caller still cancels the old row itself. A linked row
+   *  is left out of `listBookingCreationsBetween`, so a reschedule is not
+   *  counted as a new booking. Must be one of the SAME account's bookings
+   *  (composite FK `bookings_rescheduled_from_fkey`); another account's id
+   *  throws, naming that constraint. */
+  rescheduledFromId?: string;
 };
 
 export type DueReminder = {
@@ -256,6 +263,7 @@ export async function createBooking(
       booker_timezone: input.bookerTimezone ?? null,
       ip_hash: input.ipHash ?? null,
       meeting_url: input.meetingUrl ?? null,
+      rescheduled_from_id: input.rescheduledFromId ?? null,
     })
     .select("id").single();
 
@@ -427,6 +435,11 @@ export async function nextBookedStart(
  * Deliberately no status filter, unlike `listBookedRanges`: "pipeline
  * added"-style capture is the CREATED count, so a later cancel must not
  * erase a bar this account already earned.
+ *
+ * D-035 (0061): a row with `rescheduled_from_id` set is a reschedule, not a
+ * new booking, and is left out; the original it replaced keeps its bar. This
+ * is the ONE read behind every "bookings" count (the dashboard's number and
+ * chart, the Monday report, the agency roll-up), so they all agree.
  */
 export async function listBookingCreationsBetween(
   db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
@@ -434,6 +447,7 @@ export async function listBookingCreationsBetween(
   const { data, error } = await db.from("bookings")
     .select("created_at")
     .eq("account_id", accountId).gte("created_at", fromIso).lt("created_at", toIso)
+    .is("rescheduled_from_id", null)
     .order("created_at", { ascending: true });
   if (error) throw new Error(`listBookingCreationsBetween failed: ${error.message}`);
   return (data ?? []).map((r: { created_at: string }) => r.created_at);

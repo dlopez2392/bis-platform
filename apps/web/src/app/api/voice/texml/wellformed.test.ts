@@ -239,6 +239,11 @@ vi.mock("@bis/db", () => ({
   recordScreenedCall: (...a: unknown[]) => recordScreenedCallMock(...a),
   countForwardedCallsSince: (...a: unknown[]) => countForwardedMock(...a),
   recordForwardedCall: async () => undefined,
+  // D-065 follow-up: handoff-result's own REACHED_A_PERSON branch now also
+  // flips the call's automation_log row — named here only so vitest's mock
+  // validator doesn't throw on the destructure; this file's own tests never
+  // reach that branch with a status this suite exercises against it.
+  recordAutomationLog: async () => undefined,
 }));
 vi.mock("next/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("next/server")>();

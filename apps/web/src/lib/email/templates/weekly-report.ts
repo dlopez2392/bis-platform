@@ -10,8 +10,16 @@ export type WeeklyReportInput = {
   dashboardUrl: string | null;
   /** Each flag is claimed in the quiet-week copy ONLY when it is true of this
    *  account. Telling a client their receptionist is still answering when they
-   *  do not have one is worse than saying nothing. */
-  reassurance: { receptionist: boolean; textBack: boolean };
+   *  do not have one is worse than saying nothing.
+   *
+   *  `receptionistName` (D-063): the account's OWN configured persona
+   *  (`voice_profiles.persona_name`) — some clients rename their
+   *  receptionist, and a quiet-week email that says "Sofía is still
+   *  answering" regardless is wrong for every one of them. Falls back to
+   *  "Sofía" (the column's own default, 0019_voice_core.sql) only when the
+   *  caller omits it or passes an empty string — never silently to a blank
+   *  sentence. */
+  reassurance: { receptionist: boolean; textBack: boolean; receptionistName?: string };
 };
 
 /**
@@ -52,9 +60,10 @@ function lines(input: WeeklyReportInput): Line[] {
 }
 
 function quietBody(input: WeeklyReportInput): { html: string; text: string } {
-  const { receptionist, textBack } = input.reassurance;
+  const { receptionist, textBack, receptionistName } = input.reassurance;
+  const persona = receptionistName?.trim() || "Sofía";
   const running = [
-    receptionist ? "Sofía is still answering" : null,
+    receptionist ? `${persona} is still answering` : null,
     textBack ? "your missed-call text-back is still on" : null,
   ].filter(Boolean) as string[];
 

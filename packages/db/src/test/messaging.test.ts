@@ -5,7 +5,7 @@ import {
   ensureConversation, createMessage, updateMessageStatus,
   updateMessageStatusByProviderId, findMessageByProviderId, hasRecentOutboundSms,
   listFailedOutboundSms,
-  listConversations, listMessages,
+  listConversations, listMessages, getConversationSummary,
   incrementUnreadCount, clearUnreadCount, sumUnreadCount, searchConversations,
 } from "../messaging";
 
@@ -499,6 +499,61 @@ describe("messaging", () => {
       expect(msg!.status).toBe("opened");
     }));
 
+  // D-016: the Resend webhook records a spam complaint distinctly from a
+  // plain bounce by writing a marker into `error` alongside the "bounced"
+  // status (no new status value exists without a migration — see
+  // apps/web's lib/email/failure-reason.ts). The optional 4th argument is
+  // what lets it do that in the SAME write as the status, rather than a
+  // second round trip the out-of-order guard below would then have to
+  // reason about separately.
+  it("updateMessageStatusByProviderId can set an error marker alongside the status (D-016)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
+      }, "user_test");
+      const providerMessageId = testProviderMessageId();
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId }, "user_test");
+
+      await updateMessageStatusByProviderId(db, providerMessageId, "bounced", { error: "complained" });
+
+      const [msg] = await listMessages(db, accountId, convo.id);
+      expect(msg!.status).toBe("bounced");
+      expect(msg!.error).toBe("complained");
+    }));
+
+  it("updateMessageStatusByProviderId's out-of-order guard also withholds the error patch, not only the status (mutation: write the patch unconditionally → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
+      }, "user_test");
+      const providerMessageId = testProviderMessageId();
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId }, "user_test");
+
+      // "opened" already outranks "bounced" on STATUS_RANK's scale (3 vs 4 is
+      // backwards here — bounced/failed share rank 4, the TOP, so this picks
+      // "delivered" instead, which genuinely ranks BELOW bounced, to prove a
+      // stale complaint event replayed after a terminal status is dropped
+      // whole, patch included).
+      await updateMessageStatusByProviderId(db, providerMessageId, "bounced", { error: "complained" });
+      // A DIFFERENT value than the first call's, deliberately: if the guard
+      // only withheld the status column (and wrote the patch regardless),
+      // `error` would still end up "complained" by coincidence — matching
+      // the first call's own value — and this test would pass without
+      // proving anything. A distinct value makes "the patch landed anyway"
+      // and "the patch was correctly withheld" read as different outcomes.
+      await updateMessageStatusByProviderId(db, providerMessageId, "delivered", { error: "should_not_land" });
+
+      const [msg] = await listMessages(db, accountId, convo.id);
+      expect(msg!.status).toBe("bounced");
+      // The second call's patch must not have landed — proves the guard
+      // skips the WHOLE write, not just the status column.
+      expect(msg!.error).toBe("complained");
+    }));
+
   it("updateMessageStatusByProviderId treats a replayed event as a true no-op: no second event row", () =>
     withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
@@ -603,6 +658,161 @@ describe("messaging", () => {
       expect(convos[0]!.id).toBe(cb.id);
       expect(convos[1]!.id).toBe(ca.id);
     }));
+
+  // D-019: the inbox list was unpaged — `listConversations` returned every
+  // conversation the account had, in one unbounded read. Cursor-paged now,
+  // the same `{v, id}` idiom `listContacts` already uses (contacts.ts), with
+  // id as the tiebreaker so two conversations sharing a last_message_at
+  // (forced below, exactly as a real same-millisecond write can) still page
+  // without a repeat or a skip.
+  it("listConversations pages past its limit and never repeats or skips a row, including when last_message_at collides", () =>
+    withTestAccount(async (db, accountId) => {
+      const ids: string[] = [];
+      for (let i = 0; i < 12; i++) {
+        const { id: contactId } = await createContact(db, accountId, { firstName: `C${i}` }, "user_test");
+        const convo = await ensureConversation(db, accountId, contactId, "user_test");
+        await createMessage(db, accountId, {
+          conversationId: convo.id, channel: "email", direction: "outbound", body: `msg ${i}`,
+        }, "user_test");
+        ids.push(convo.id);
+      }
+      // Forced collision: every row shares ONE last_message_at, exactly what
+      // a batch of messages written inside the same transaction would leave
+      // behind, and exactly what a timestamp-only cursor cannot page through.
+      const at = "2026-10-08T12:00:00.000Z";
+      const { error } = await db.from("conversations").update({ last_message_at: at })
+        .in("id", ids);
+      expect(error, `forcing the collision failed: ${error?.message}`).toBeNull();
+
+      const seen: string[] = [];
+      let before: { v: string | null; id: string } | undefined;
+      for (let page = 0; page < 10; page++) {
+        const rows = await listConversations(db, accountId, { limit: 5, before });
+        if (rows.length === 0) break;
+        seen.push(...rows.map((r) => r.id));
+        const last = rows[rows.length - 1]!;
+        before = { v: last.lastMessageAt, id: last.id };
+      }
+
+      expect(seen.length).toBe(12);
+      expect(new Set(seen).size).toBe(12); // no repeats
+      expect([...seen].sort()).toEqual([...ids].sort()); // no skips
+    }));
+
+  // MEASURED, not guessed: ~4s alone on an idle machine (one bulk insert of
+  // 1005 rows, one network round trip). The heaviest test in this file
+  // besides listFailedOutboundSms's own; covered by the package's
+  // testTimeout.
+  //
+  // PostgREST caps a single select's rows at its project's max_rows (1000 on
+  // this project, per the doc comment `listConversations` carried before
+  // this fix). The OLD preview read fetched every message across every
+  // conversation id on the page in ONE query ordered newest-first and took
+  // the first-seen row per conversation — correct only while the account's
+  // combined message count on that page stayed under the cap. A chatty
+  // conversation could push a quiet one's own latest message past position
+  // 1000, and the quiet one would come back with NO preview at all, despite
+  // genuinely having one. The fix reads each conversation's own latest
+  // message on its own, so no conversation's preview can ever be pushed out
+  // by another conversation's volume, at any scale.
+  it("a conversation's preview is its OWN latest message even when another conversation on the same page has pushed the account's message count past PostgREST's 1000-row select cap (D-019)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: quietContactId } = await createContact(db, accountId, { firstName: "Quiet" }, "user_test");
+      const quiet = await ensureConversation(db, accountId, quietContactId, "user_test");
+      await createMessage(db, accountId, {
+        conversationId: quiet.id, channel: "email", direction: "outbound", body: "quiet's only message",
+      }, "user_test");
+
+      const { id: loudContactId } = await createContact(db, accountId, { firstName: "Loud" }, "user_test");
+      const loud = await ensureConversation(db, accountId, loudContactId, "user_test");
+      // One bulk insert, 1004 rows — ONE round trip, not 1004. Every one of
+      // them gets a LATER created_at than quiet's single message above
+      // (that write already completed, and `now()` only advances), so a
+      // global "take the first 1000 rows ordered by created_at desc" read
+      // would return 1000 of THESE and exactly zero of quiet's.
+      const rows = Array.from({ length: 1004 }, (_, i) => ({
+        account_id: accountId, conversation_id: loud.id, channel: "email",
+        direction: "outbound", body: `loud message ${i}`,
+      }));
+      const { error: bulkErr } = await db.from("messages").insert(rows);
+      expect(bulkErr, `bulk insert failed: ${bulkErr?.message}`).toBeNull();
+      // last_message_at is normally set by createMessage's own touch; the
+      // bulk insert above bypassed that helper, so it is set directly here —
+      // after quiet's, so both conversations still sort onto the one page
+      // `listConversations`'s default limit (50) already covers.
+      const { error: touchErr } = await db.from("conversations")
+        .update({ last_message_at: new Date().toISOString() }).eq("id", loud.id);
+      expect(touchErr, `touching loud's conversation failed: ${touchErr?.message}`).toBeNull();
+
+      const [loudSummary, quietSummary] = await listConversations(db, accountId);
+      expect(loudSummary!.id).toBe(loud.id);
+      expect(loudSummary!.lastMessagePreview).toContain("loud message");
+      // THE ASSERTION. Before this fix this came back `null` — the quiet
+      // conversation's one message, 1005th-oldest out of 1005 total, was
+      // outside the global query's first 1000 rows.
+      expect(quietSummary!.id).toBe(quiet.id);
+      expect(quietSummary!.lastMessagePreview).toBe("quiet's only message");
+    }), 20_000);
+
+  // Review fix (messaging.ts:602). A conversation that has never been
+  // messaged (`ensureConversation` alone, no `createMessage` — the 'note'
+  // tab, say, or a race between the two) has a NULL last_message_at. SQL's
+  // `<` and `=` are never true against NULL, so once a cursor's `v` is a
+  // real timestamp, the two normal OR-branches can never match a null row
+  // at all — the explicit `,last_message_at.is.null` branch is what keeps
+  // it reachable on a LATER page rather than silently dropping it forever.
+  it("pages a conversation with no messages yet (null last_message_at) onto a later page, never dropping it (mutation: remove the `is.null` OR branch → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: withMsgContact } = await createContact(db, accountId, { firstName: "Messaged" }, "user_test");
+      const withMsg = await ensureConversation(db, accountId, withMsgContact, "user_test");
+      await createMessage(db, accountId, {
+        conversationId: withMsg.id, channel: "email", direction: "outbound", body: "hi",
+      }, "user_test");
+
+      const { id: noMsgContact } = await createContact(db, accountId, { firstName: "Never messaged" }, "user_test");
+      const noMsg = await ensureConversation(db, accountId, noMsgContact, "user_test");
+
+      // Page 1, limit 1: the messaged conversation sorts first (non-null
+      // last_message_at outranks null in this ordering), so it alone fills
+      // the page and hands back a cursor whose `v` is a REAL timestamp —
+      // exactly the branch that must still reach the null row next.
+      const page1 = await listConversations(db, accountId, { limit: 1 });
+      expect(page1).toHaveLength(1);
+      expect(page1[0]!.id).toBe(withMsg.id);
+
+      const page2 = await listConversations(
+        db, accountId, { limit: 1, before: { v: page1[0]!.lastMessageAt, id: page1[0]!.id } });
+      expect(page2).toHaveLength(1);
+      expect(page2[0]!.id).toBe(noMsg.id);
+      expect(page2[0]!.lastMessageAt).toBeNull();
+    }));
+
+  // D-019's deep-link escape hatch: a link naming a conversation id has no
+  // idea which page of the now-paged list it would fall on.
+  // `getConversationSummary` finds it directly, regardless of where (or
+  // whether) it would appear in `listConversations`'s own paged order.
+  it("getConversationSummary finds one conversation by id with its own preview, and null for a miss or another account's row", () =>
+    withTestAccount(async (db, accountId) =>
+      withTestAccount(async (otherDb, otherAccountId) => {
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
+        const convo = await ensureConversation(db, accountId, contactId, "user_test");
+        await createMessage(db, accountId, {
+          conversationId: convo.id, channel: "email", direction: "outbound", body: "deep-linked",
+        }, "user_test");
+
+        const summary = await getConversationSummary(db, accountId, convo.id);
+        expect(summary).not.toBeNull();
+        expect(summary!.id).toBe(convo.id);
+        expect(summary!.contactId).toBe(contactId);
+        expect(summary!.contactFirstName).toBe("Ada");
+        expect(summary!.lastMessagePreview).toBe("deep-linked");
+
+        // A real id, but not THIS account's: the tenant boundary.
+        expect(await getConversationSummary(otherDb, otherAccountId, convo.id)).toBeNull();
+        // Drawn and never written.
+        expect(await getConversationSummary(db, accountId, "00000000-0000-0000-0000-000000000000"))
+          .toBeNull();
+      })));
 
   it("sumUnreadCount adds unread_count across every conversation in the account", () =>
     withTestAccount(async (db, accountId) => {

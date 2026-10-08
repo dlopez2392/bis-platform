@@ -59,7 +59,11 @@ export const m = {
   // ("never color alone — dot + word"). "{count}" is the house {placeholder}
   // convention (see setup.progress above) — the ✓ ships as plain text, not a
   // separate icon element, since idle carries no color-only signal to back up.
-  "shell.presence.onCall": "Sofía · on a call",
+  // "{name}" (D-063 follow-up): the account's own configured receptionist
+  // persona (voice_profiles.persona_name), never a hard-coded "Sofía" — some
+  // clients rename theirs. The caller falls back to "Sofía" only when the
+  // persona name is missing or blank.
+  "shell.presence.onCall": "{name} · on a call",
   "shell.presence.idle": "✓ {count} calls handled this week",
   // Singular pair: "✓ 1 calls" is a real state for exactly the young voice
   // accounts that get demoed. "handled" restores DESIGN.md's own wording.
@@ -262,14 +266,16 @@ export const m = {
   "dashboard.greeting.evening": "Good evening, {name}",
   // Sub-line, appended only when the account has an ENABLED voice profile —
   // never a blanket claim about what the receptionist did (that isn't
-  // honestly derivable this phase; see the task brief).
-  "dashboard.sub.voice": "Sofía is answering your calls.",
+  // honestly derivable this phase; see the task brief). "{name}" (D-063
+  // follow-up): this account's own configured persona
+  // (voice_profiles.persona_name), not a hard-coded "Sofía" — page.tsx falls
+  // back to "Sofía" only when the persona name is missing or blank.
+  "dashboard.sub.voice": "{name} is answering your calls.",
 
   // The KPI row (Task 5): rolling 7-local-day metrics, each with a delta vs
-  // the prior 7 days and (except after-hours) a 14-day sparkline — DESIGN.md
-  // rule 1's context requirement, carried by the delta/spark themselves, so
-  // none of these four need a `period` caption the way the "All time" row
-  // below them does.
+  // the prior 7 days and a sparkline over that SAME 7 days (D-077: three of
+  // the four used to spark a 14-day trend beside a 7-day number — a lie by
+  // omission about which span the picture showed).
   "dashboard.kpi.callsAnswered": "Calls answered",
   // F-076 (now slice): the hero on a CRM-only account (no enabled voice
   // profile) — "Calls answered" is structurally always 0 with no
@@ -284,6 +290,12 @@ export const m = {
   "dashboard.kpi.appointmentsBooked": "Appointments booked",
   "dashboard.kpi.afterHoursCaptured": "After-hours captured",
   "dashboard.kpi.pipelineAdded": "Pipeline added",
+  // D-077, design review follow-up: ONE caption for the whole KPI row
+  // (page.tsx, rendered with StatTile's own exported `LABEL_ROLE` class
+  // string), not a suffix on each of the four labels above — a suffix
+  // wrapped in the xl tile width and misaligned the row, and the mockup
+  // never puts a period in a tile label (northern-lights.html:85-95).
+  "dashboard.kpi.last7Days": "Last 7 days",
 
   // The 14-day calls chart card (Task 6) — CSS bars, hover tooltip on every
   // mark (DESIGN.md's chart section), a recent-calls mini table beneath it.
@@ -782,7 +794,12 @@ export const m = {
   "compose.smsSegments": "{chars} characters · {segments} message(s)",
 
   "conversations.empty.title": "No conversations yet",
-  "conversations.empty.body": "Email a contact from their timeline and the thread will appear here.",
+  // Named against every real ensureConversation() caller: voice
+  // (finish-call.ts, textback.ts, tools/registry.ts), sms/inbound's route,
+  // bookings and cancellations (b/[publicId]'s actions), and forms/enrich.ts
+  // — web chat (c/[publicId]) creates none. Rule 5: what appears + the
+  // action that causes it.
+  "conversations.empty.body": "Calls, texts, emails, bookings and form submissions with a contact show up here.",
   "conversations.pickThread": "Select a conversation to read it.",
   "conversations.status.queued": "Queued",
   "conversations.status.sent": "Sent",
@@ -790,6 +807,22 @@ export const m = {
   "conversations.status.opened": "Opened",
   "conversations.status.bounced": "Bounced",
   "conversations.status.failed": "Failed",
+  // D-019's pager (DESIGN.md "Paged lists"): exactly one, Older/Newer,
+  // carrying `?before=`.
+  "conversations.older": "Older",
+  "conversations.newer": "Newer",
+  "conversations.pagesLabel": "Pages",
+  // D-017: the plain-language reason shown next to a bounced/failed
+  // message, never the provider's own words (DESIGN.md's "no provider
+  // jargon/codes" rule) — see lib/email/failure-reason.ts, the one place
+  // that reads messages.error and chooses between these.
+  // Says only what IS true today: the complaint is recorded, nothing yet
+  // stops a later send to this address (suppression is deferred — see
+  // failure-reason.ts's own doc comment for what it needs). A promise this
+  // code does not keep would be a worse defect than the one D-016 fixed.
+  "conversations.failureReason.complained": "They marked this email as spam.",
+  "conversations.failureReason.bounced": "This address couldn't be reached.",
+  "conversations.failureReason.failed": "This didn't go through.",
 
   "forms.title": "Forms",
   "forms.add": "New form",

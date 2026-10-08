@@ -65,3 +65,20 @@ describe("messages", () => {
     }
   });
 });
+
+/**
+ * D-020. Threads also start from a text and from a form submission
+ * (sms/inbound's route, forms/enrich.ts both call ensureConversation), not
+ * only from an operator's own email — the empty state's one sentence said
+ * otherwise (DESIGN.md rule 5: "one sentence of what appears here + the
+ * action that causes it", and this one named only ONE of the real actions,
+ * as if it were the only one).
+ */
+describe("conversations.empty.body (D-020)", () => {
+  it("does not claim a thread starts only from an operator's own email, and names the real ways one starts", () => {
+    const body = m["conversations.empty.body"];
+    expect(body).not.toContain("Email a contact from their timeline");
+    expect(body.toLowerCase()).toMatch(/\btext/);
+    expect(body.toLowerCase()).toMatch(/\bform/);
+  });
+});
