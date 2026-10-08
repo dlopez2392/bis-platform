@@ -153,6 +153,9 @@ describe("booking accessors", () => {
       expect(due[0]!.fromEmail).toBeNull();
       // No meetingUrl was given to this booking — in_person default, so null.
       expect(due[0]!.meetingUrl).toBeNull();
+      // Booked months ahead: the day-before window owns it, so not "late" —
+      // its reminder keeps the appointment itself as its deadline.
+      expect(due[0]!.late).toBe(false);
       // The agency's internal label has no field on this row and no column
       // behind it: ACCOUNT_BRAND_COLS does not select `name` at all. Same pin
       // the three newer due-row shapes carry in automations.test.ts.
@@ -291,6 +294,13 @@ describe("booking accessors", () => {
         return b.id;
       };
       const lowerEdge = await mk("2027-04-05T17:00:00Z", 6 * H);    // exactly now+3h, booked 9h ahead
+      // THE "made late" boundary is the day-before window's whole span,
+      // 24h15m (REMINDER_WINDOW_END_MS), not its start (23h). A booking made
+      // 23h10m ahead may have missed the day-before window, so it is late; one
+      // made 24h20m ahead was inside it, so it is not. Mutation: compare
+      // against REMINDER_WINDOW_START_MS → the 23h10m row drops → FAILS.
+      const boundaryLate = await mk("2027-04-05T17:10:00Z", 20 * H);   // booked 23h10m ahead → listed
+      await mk("2027-04-05T17:20:00Z", 21 * H);                         // booked 24h20m ahead → not listed
       const late = await mk("2027-04-05T17:30:00Z", 6 * H);         // 3h30m out, booked 9h30m ahead — the defect's row
       await mk("2027-04-05T17:45:00Z", 0.5 * H);                    // booked 30 min ago: the confirmation is enough
       await mk("2027-04-05T18:00:00Z", 48 * H);                     // booked 2 days ahead: the day-before window owned it
@@ -301,11 +311,15 @@ describe("booking accessors", () => {
 
       const mine = async () => (await listDueReminders(db, now.toISOString()))
         .filter((d) => d.accountId === accountId).map((d) => d.bookingId);
-      expect(await mine()).toEqual([lowerEdge, late, upperEdge]);
+      expect(await mine()).toEqual([lowerEdge, boundaryLate, late, upperEdge]);
+      // Every row this window lists is flagged late — the reminders pass reads
+      // the flag to give it the earlier deadline (see reminderDeadline).
+      expect((await listDueReminders(db, now.toISOString())).filter((d) => d.accountId === accountId)
+        .every((d) => d.late)).toBe(true);
 
       // Once stamped, never again — the same dedupe the day-before window uses.
       await stampReminderSent(db, late);
-      expect(await mine()).toEqual([lowerEdge, upperEdge]);
+      expect(await mine()).toEqual([lowerEdge, boundaryLate, upperEdge]);
     });
   });
 

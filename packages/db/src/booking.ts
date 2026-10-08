@@ -72,6 +72,11 @@ export type DueReminder = {
    *  whose provider failed) -- the reminder route passes this straight into
    *  `bookingReminderEmail`, never re-derives it. */
   meetingUrl: string | null;
+  /** D-029: booked less than the day-before window's span ahead
+   *  (`isLateBooking`). The reminders pass gives such a reminder an earlier
+   *  deadline (`reminderDeadline` in apps/web) so a held one cannot be
+   *  released beside the text reminder. Set on every row, by-id reads too. */
+  late: boolean;
 };
 
 export type DueFollowup = {
@@ -475,15 +480,38 @@ export const FOLLOWUP_QUERY_WINDOW_MS = 37 * 60 * 60 * 1000;
  * hours ahead; booked closer than that → the confirmation is the reminder.
  *
  * 75 minutes wide for the same tick-tolerance reason as the day-before
- * window. It closes 45 minutes before the SMS reminder's window opens
- * (`SMS_REMINDER_WINDOW_END_MS`, 2h15m), so an email and a text never land
- * in the same quarter hour; and it ends far below `REMINDER_WINDOW_START_MS`,
- * so one tick can never list a booking under both windows. Both relations are
- * pinned in apps/web's cron-coupling.test.ts.
+ * window, and it ends far below `REMINDER_WINDOW_START_MS`, so one tick can
+ * never list a booking under both windows.
+ *
+ * THE TEXT REMINDER. Inside the sending hours (08:00-21:00, the email's AND
+ * the text's) the late window closes 45 minutes before the text reminder's
+ * opens (`SMS_REMINDER_WINDOW_END_MS`, 2h15m). That alone does NOT keep them
+ * apart: OUTSIDE the hours both are held and both are released at 08:00 — a
+ * 09:00 appointment booked at 19:00 the evening before had its email (due
+ * 05:45) and its text (due 06:45-07:30) land together at 08:00. So every
+ * reminder row carries `late` (`isLateBooking`), and the reminders pass gives
+ * a late one an earlier deadline — the start minus 2h15m
+ * (`reminderDeadline`, apps/web/src/lib/booking/reminder-timing.ts) — past
+ * which a held email is dropped instead of released.
+ *
+ * ACCEPTED, and the price of that rule: a late-booked appointment at or
+ * before about 10:15 whose late window falls before 08:00 — an early-morning
+ * appointment booked the evening before — gets NO separate reminder email;
+ * the confirmation is its reminder (plus the text, where texting is on).
+ * Both the no-collision property and that exact cost are proved by a sweep
+ * over a whole day of appointments and booking times, through the real
+ * sending-hours functions, in apps/web's cron-coupling.test.ts.
  */
 export const LATE_REMINDER_WINDOW_START_MS = 3 * 60 * 60 * 1000;
 export const LATE_REMINDER_WINDOW_END_MS = (4 * 60 + 15) * 60 * 1000;
 export const LATE_REMINDER_MIN_AGE_MS = 60 * 60 * 1000;
+
+/** "Made late" (D-029): booked less than the day-before window's whole span
+ *  (24h15m) ahead, so that window may never have seen it. The ONE rule both
+ *  the late window's filter and `DueReminder.late` use. */
+export function isLateBooking(createdAtIso: string, startsAtIso: string): boolean {
+  return new Date(createdAtIso).getTime() > new Date(startsAtIso).getTime() - REMINDER_WINDOW_END_MS;
+}
 
 export type AccountBrandInfo = {
   accountTimezone: string; branding: Branding;
@@ -677,7 +705,7 @@ export function ownAccountEmbedsOnly<T>(
   });
 }
 
-const REMINDER_SELECT = `id, account_id, contact_id, starts_at, booker_timezone, cancel_token, meeting_url,
+const REMINDER_SELECT = `id, account_id, contact_id, starts_at, created_at, booker_timezone, cancel_token, meeting_url,
              calendars(account_id, public_id), contacts(account_id, first_name, last_name, email)`;
 
 function toDueReminder(r: any, info: AccountBrandInfo): DueReminder {
@@ -688,6 +716,7 @@ function toDueReminder(r: any, info: AccountBrandInfo): DueReminder {
     calendarPublicId: r.calendars?.public_id, contactEmail: r.contacts?.email ?? null,
     contactName: contactName || "Unknown", accountTimezone: info.accountTimezone,
     branding: info.branding, fromEmail: info.fromEmail, meetingUrl: r.meeting_url ?? null,
+    late: isLateBooking(r.created_at, r.starts_at),
   };
 }
 
@@ -711,7 +740,7 @@ export async function listDueReminders(
   // which a PostgREST filter cannot express, so it is applied here; the
   // window and the minimum age bound the read itself.
   const { data: lateData, error: lateError } = await db.from("bookings")
-    .select(`${REMINDER_SELECT}, created_at`)
+    .select(REMINDER_SELECT)
     .eq("status", "booked").is("reminder_sent_at", null)
     .gte("starts_at", new Date(now + LATE_REMINDER_WINDOW_START_MS).toISOString())
     .lte("starts_at", new Date(now + LATE_REMINDER_WINDOW_END_MS).toISOString())
@@ -719,7 +748,7 @@ export async function listDueReminders(
     .order("starts_at", { ascending: true });
   if (lateError) throw new Error(`listDueReminders (late) failed: ${lateError.message}`);
   const late = ((lateData ?? []) as any[]).filter((r) =>
-    new Date(r.created_at).getTime() > new Date(r.starts_at).getTime() - REMINDER_WINDOW_END_MS);
+    isLateBooking(r.created_at, r.starts_at));
 
   // The contact AND the calendar (whose public id is the reschedule link)
   // must be this booking's own account's (ownAccountEmbedsOnly). Late rows

@@ -6,9 +6,11 @@ import {
   SMS_REMINDER_WINDOW_START_MS, SMS_REMINDER_WINDOW_END_MS,
   APPOINTMENT_CONFIRM_WINDOW_START_MS, APPOINTMENT_CONFIRM_WINDOW_END_MS,
   APPOINTMENT_CONFIRM_MIN_LEAD_MS,
-  LATE_REMINDER_WINDOW_START_MS, LATE_REMINDER_WINDOW_END_MS, LATE_REMINDER_MIN_AGE_MS,
+  LATE_REMINDER_WINDOW_START_MS, LATE_REMINDER_WINDOW_END_MS, LATE_REMINDER_MIN_AGE_MS, isLateBooking,
 } from "@bis/db";
 import { FOLLOWUP_MAX_AGE_MS } from "@/lib/booking/followup-timing";
+import { reminderDeadline } from "@/lib/booking/reminder-timing";
+import { nextOpening, expiresBeforeOpening } from "@/lib/consent/hours";
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
 import { RELEASE_BUDGET_MS } from "./passes/release-held";
 
@@ -98,7 +100,7 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     expect(APPOINTMENT_CONFIRM_MIN_LEAD_MS).toBeGreaterThanOrEqual(REMINDER_WINDOW_END_MS);
   });
 
-  it("D-029: the late email reminder is wider than one tick, fires 3h-4h15m ahead, never shares a tick with the day-before window, and clears the text reminder by more than a tick", () => {
+  it("D-029: the late email reminder is wider than one tick, fires 3h-4h15m ahead, and never shares a tick with the day-before window", () => {
     // Mutation: change any one constant alone → red.
     const tick = tickIntervalMs(entry!.schedule);
     expect(LATE_REMINDER_WINDOW_END_MS - LATE_REMINDER_WINDOW_START_MS).toBeGreaterThan(tick);
@@ -108,10 +110,77 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     // a booking under both, which is half of "cannot double-send" (the other
     // half is reminder_sent_at, pinned in packages/db's booking.test.ts).
     expect(LATE_REMINDER_WINDOW_END_MS).toBeLessThan(REMINDER_WINDOW_START_MS);
-    // The latest the late email can go (starts_at - 3h) is more than one tick
-    // before the earliest the text reminder can (starts_at - 2h15m): never an
-    // email and a text in the same quarter hour.
-    expect(LATE_REMINDER_WINDOW_START_MS - SMS_REMINDER_WINDOW_END_MS).toBeGreaterThan(tick);
+  });
+
+  /**
+   * D-029 review. Comparing the windows' constants proved nothing about the
+   * night: OUTSIDE the sending hours (08:00-21:00) both the late email and
+   * the text reminder are HELD, and both are released at 08:00. This replays
+   * the cron, tick by tick, for every appointment in a day (every quarter
+   * hour) and every booking time from 24h15m to 3h ahead (every 5 minutes),
+   * through the REAL `nextOpening` / `expiresBeforeOpening` and the REAL
+   * deadlines the two passes give holdOrSend (`reminderDeadline` for the
+   * email, the start for the text). At each due tick: inside the hours it
+   * sends; outside, it is dropped if its deadline is at or before the
+   * opening (choice 21, and it is listed again next tick), else held and
+   * released at the opening.
+   *
+   * Pinned: (1) the email and the text never land in the same quarter hour;
+   * (2) no email goes at or after the start; (3) the price, exactly as the
+   * comment on LATE_REMINDER_WINDOW_START_MS states it — an appointment that
+   * loses its late email is one at or before 10:15.
+   * Mutation: give the late email the start as its deadline → the 09:00
+   * appointment's email and text both land at 08:00 → FAILS.
+   */
+  it("D-029 review: held overnight and released at 08:00, the late email and the text reminder never land together", () => {
+    const tick = tickIntervalMs(entry!.schedule);
+    const zone = "America/Chicago";
+    const dayStart = Date.parse("2027-04-06T05:00:00Z"); // 00:00 CDT, no DST edge that day
+    type Landing = number | "never";
+    // The real function, memoised per tick: every case shares the same ~200 ticks.
+    const openings = new Map<number, Date | null>();
+    const openingAt = (t: number) => {
+      if (!openings.has(t)) openings.set(t, nextOpening("automated", new Date(t), zone));
+      return openings.get(t)!;
+    };
+    const land = (dueAt: (t: number) => boolean, deadline: Date, from: number, until: number): Landing => {
+      for (let t = Math.ceil(from / tick) * tick; t < until; t += tick) {
+        if (!dueAt(t)) continue;
+        const opening = openingAt(t);
+        if (!opening) return t;
+        if (expiresBeforeOpening(opening, deadline)) continue; // skipped; listed again next tick
+        return opening.getTime();                               // held; released at the opening
+      }
+      return "never";
+    };
+    let collisions = 0;
+    let emailAfterStart = 0;
+    const droppedStarts = new Set<number>();
+    for (let s = dayStart; s < dayStart + 24 * 60 * MINUTE; s += 15 * MINUTE) {
+      const startsAt = new Date(s).toISOString();
+      for (let lead = 3 * 60; lead <= 24 * 60 + 15; lead += 5) {
+        const b = s - lead * MINUTE;
+        const createdAt = new Date(b).toISOString();
+        if (!isLateBooking(createdAt, startsAt)) continue;
+        const email = land(
+          (t) => s >= t + LATE_REMINDER_WINDOW_START_MS && s <= t + LATE_REMINDER_WINDOW_END_MS
+            && b <= t - LATE_REMINDER_MIN_AGE_MS,
+          reminderDeadline({ startsAt, late: true }), Math.max(b, s - LATE_REMINDER_WINDOW_END_MS), s);
+        const text = land(
+          (t) => s >= t + SMS_REMINDER_WINDOW_START_MS && s <= t + SMS_REMINDER_WINDOW_END_MS,
+          new Date(s), Math.max(b, s - SMS_REMINDER_WINDOW_END_MS), s);
+        if (typeof email === "number" && email >= s) emailAfterStart++;
+        if (typeof email === "number" && typeof text === "number" && Math.abs(email - text) < tick) collisions++;
+        // An email the window reached but the deadline dropped at every due tick.
+        const windowReached = lead * MINUTE >= LATE_REMINDER_WINDOW_START_MS + LATE_REMINDER_MIN_AGE_MS;
+        if (email === "never" && windowReached) droppedStarts.add(s);
+      }
+    }
+    expect(collisions).toBe(0);
+    expect(emailAfterStart).toBe(0);
+    const latestDropped = Math.max(...droppedStarts);
+    expect((latestDropped - dayStart) / MINUTE).toBe(10 * 60 + 15); // the latest that loses it: 10:15 exactly
+    expect(droppedStarts.size).toBeGreaterThan(0); // the price is real, and the sweep sees it
   });
 
   it("the no-show nudge cap is the follow-up cap: same derivation, nothing to defer to", () => {

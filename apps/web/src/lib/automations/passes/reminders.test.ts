@@ -22,7 +22,7 @@ function row(overrides: Partial<DueReminder> = {}): DueReminder {
     contactEmail: "maria@example.com", contactName: "Maria Garcia",
     accountTimezone: "America/Chicago",
     branding: { brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null, brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
-    fromEmail: null, meetingUrl: null,
+    fromEmail: null, meetingUrl: null, late: false,
     ...overrides,
   };
 }
@@ -79,6 +79,32 @@ describe("the email reminder under the fixed hours (08:00-21:00, choice 31)", ()
     expect(logCalls()).toEqual([expect.objectContaining({
       subjectKey: "booking:bk_1", status: "skipped", reason: "Not sent: quiet hours ran past the appointment",
     })]);
+  });
+
+  // D-029 review. A LATE reminder (booked less than a day ahead) for a 09:00
+  // appointment comes due at 05:45, outside the hours. Held to 08:00 it would
+  // land beside the text reminder, itself held from 06:45-07:30 to 08:00. Its
+  // deadline is the start minus 2h15m (reminderDeadline), 06:45 here — before
+  // the 08:00 opening — so it is dropped, not held.
+  it("D-029 review: a LATE reminder whose window is before 08:00 is dropped, not held to land beside the text reminder (mutation: deadline = start → held, FAILS)", async () => {
+    const at0545 = new Date("2026-09-22T10:45:00Z"); // 05:45 CDT
+    dbMocks.listDueReminders.mockResolvedValue([row({ startsAt: "2026-09-22T14:00:00.000Z", late: true })]); // 09:00 CDT
+    expect(await remindersPass.run(ctx(at0545))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 1 });
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(logCalls()).toEqual([expect.objectContaining({ status: "skipped", subjectKey: "booking:bk_1" })]);
+  });
+
+  it("D-029 review: a late reminder for 11:00 is still held to 08:00 (its 08:45 deadline is after the opening) — 45 minutes before the text", async () => {
+    const at0645 = new Date("2026-09-22T11:45:00Z"); // 06:45 CDT
+    dbMocks.listDueReminders.mockResolvedValue([row({ startsAt: "2026-09-22T16:00:00.000Z", late: true })]); // 11:00 CDT
+    expect(await remindersPass.run(ctx(at0645))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 1, blocked: 0 });
+    expect(logCalls()).toEqual([expect.objectContaining({ status: "held", heldUntil: END })]);
+  });
+
+  it("D-029 review: the SAME instant for a day-before (not late) reminder keeps the appointment as its deadline — held, as before", async () => {
+    const at0545 = new Date("2026-09-22T10:45:00Z");
+    dbMocks.listDueReminders.mockResolvedValue([row({ startsAt: "2026-09-22T14:00:00.000Z", late: false })]);
+    expect(await remindersPass.run(ctx(at0545))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 1, blocked: 0 });
   });
 
   it("no email on file: a skipped row with the plain reason, still counted failed as the route always counted it", async () => {

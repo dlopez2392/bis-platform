@@ -4,6 +4,7 @@ import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingReminderEmail } from "@/lib/email/templates/booking";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
+import { reminderDeadline } from "@/lib/booking/reminder-timing";
 import {
   holdOrSend, logSkipped, subjectOf, verdict, REASONS, type HoldSubject, type Releaser,
 } from "../hold-or-send";
@@ -31,7 +32,10 @@ import type { Pass, PassContext } from "../context";
  * will have closed by then and `listDueReminders` would never see it again.
  * The `deadline` is the appointment itself: a reminder for a job that starts
  * before the sending hours open is NOT sent ("Not sent: quiet hours ran past
- * the appointment", consent chain choice 21).
+ * the appointment", consent chain choice 21). A LATE reminder (D-029, booked
+ * less than a day ahead) has an earlier one — the start minus 2h15m — so a
+ * held late email is dropped rather than released at 08:00 beside the text
+ * reminder; `reminderDeadline` (lib/booking/reminder-timing.ts) is the rule.
  */
 export const remindersPass: Pass = {
   key: "reminders",
@@ -45,7 +49,7 @@ export type ReminderCounters = { sent: number; failed: number; unstamped: number
 function subjectFor(r: DueReminder): HoldSubject {
   return {
     accountId: r.accountId, accountTimezone: r.accountTimezone, source: "reminders", channel: "email",
-    subjectKey: `booking:${r.bookingId}`, contactId: r.contactId, deadline: new Date(r.startsAt),
+    subjectKey: `booking:${r.bookingId}`, contactId: r.contactId, deadline: reminderDeadline(r),
   };
 }
 
@@ -83,7 +87,7 @@ export async function processReminders(ctx: PassContext, reminders: DueReminder[
           // tick's instant, choice 21's deadline, and the unsubscribe footer.
           accountId: reminder.accountId, kind: "automation.reminder", contactId: reminder.contactId,
           origin: ctx.origin, now: ctx.now, accountZone: reminder.accountTimezone,
-          deadline: new Date(reminder.startsAt),
+          deadline: reminderDeadline(reminder),
           to,
           fromName: brand.name,
           fromAddress: reminder.fromEmail ?? undefined,
