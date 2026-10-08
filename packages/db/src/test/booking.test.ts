@@ -6,9 +6,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   getOrCreateCalendar, getCalendarByPublicId, updateCalendarSettings,
   createBooking, cancelBookingByToken, setBookingStatus,
-  listBookedRanges, listUpcomingBookings, listDueReminders, stampReminderSent,
+  listBookedRanges, listCalendarBookings, listDueReminders, stampReminderSent,
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
-  SlotTakenError,
+  SlotTakenError, BookingNotStartedError,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -153,6 +153,9 @@ describe("booking accessors", () => {
       expect(due[0]!.fromEmail).toBeNull();
       // No meetingUrl was given to this booking — in_person default, so null.
       expect(due[0]!.meetingUrl).toBeNull();
+      // Booked months ahead: the day-before window owns it, so not "late" —
+      // its reminder keeps the appointment itself as its deadline.
+      expect(due[0]!.late).toBe(false);
       // The agency's internal label has no field on this row and no column
       // behind it: ACCOUNT_BRAND_COLS does not select `name` at all. Same pin
       // the three newer due-row shapes carry in automations.test.ts.
@@ -250,6 +253,147 @@ describe("booking accessors", () => {
       await mk("2027-03-01T13:00:00Z");                     // 1h in the past — never remind after start
       const due = await listDueReminders(db, now.toISOString());
       expect(due.map((d) => d.bookingId)).toEqual([lowerEdge.id, upperEdge.id]);
+    });
+  });
+
+  /**
+   * D-029. The day-before window ([now+23h, now+24h15m]) can only ever see a
+   * booking that existed ~24h before it starts, so anything booked less than
+   * about a day ahead never got a reminder at all. The rule now: a booking
+   * made LATE — less than the day-before window's full span ahead, so that
+   * window may never have seen it — gets one reminder 3h-4h15m before it
+   * starts, provided it was made at least an hour before that tick (the
+   * confirmation went out at booking time; a reminder minutes later is
+   * noise).
+   *
+   * Why it cannot double-send: the late window ends at now+4h15m and the
+   * day-before window starts at now+23h, so one tick can never list a booking
+   * twice; and across ticks `reminder_sent_at` dedupes exactly as it already
+   * does for the day-before window. A booking made a day or more ahead is not
+   * late, so a day-before reminder that was sent, skipped or blocked is never
+   * repeated by this path. Past appointments are below the window's start.
+   *
+   * `created_at` is backdated by a direct update (the column defaults to the
+   * real now(), and every instant here is pinned). Filtered to this account,
+   * because the due list is global and the shared project is not.
+   */
+  it("D-029: a booking made less than a day ahead is reminded 3h-4h15m before it starts, once, and only if made at least an hour before", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId,
+        { firstName: "Late", email: "late-booker@example.com" }, "user_test");
+      const now = new Date("2027-04-05T14:00:00Z");
+      const H = 60 * 60 * 1000;
+      const mk = async (startsAt: string, createdAgoMs: number) => {
+        const b = await createBooking(db, accountId,
+          { calendarId: cal.id, contactId, startsAt: new Date(startsAt),
+            endsAt: new Date(new Date(startsAt).getTime() + 10 * 60 * 1000) }, "user_test");
+        const { error } = await db.from("bookings")
+          .update({ created_at: new Date(now.getTime() - createdAgoMs).toISOString() }).eq("id", b.id);
+        if (error) throw new Error(error.message);
+        return b.id;
+      };
+      const lowerEdge = await mk("2027-04-05T17:00:00Z", 6 * H);    // exactly now+3h, booked 9h ahead
+      // THE "made late" boundary is the day-before window's whole span,
+      // 24h15m (REMINDER_WINDOW_END_MS), not its start (23h). A booking made
+      // 23h10m ahead may have missed the day-before window, so it is late; one
+      // made 24h20m ahead was inside it, so it is not. Mutation: compare
+      // against REMINDER_WINDOW_START_MS → the 23h10m row drops → FAILS.
+      const boundaryLate = await mk("2027-04-05T17:10:00Z", 20 * H);   // booked 23h10m ahead → listed
+      await mk("2027-04-05T17:20:00Z", 21 * H);                         // booked 24h20m ahead → not listed
+      const late = await mk("2027-04-05T17:30:00Z", 6 * H);         // 3h30m out, booked 9h30m ahead — the defect's row
+      await mk("2027-04-05T17:45:00Z", 0.5 * H);                    // booked 30 min ago: the confirmation is enough
+      await mk("2027-04-05T18:00:00Z", 48 * H);                     // booked 2 days ahead: the day-before window owned it
+      const upperEdge = await mk("2027-04-05T18:15:00Z", 6 * H);    // exactly now+4h15m — inclusive upper edge
+      await mk("2027-04-05T18:30:00Z", 6 * H);                      // 4h30m — a later tick's job
+      await mk("2027-04-05T16:30:00Z", 6 * H);                      // 2h30m — an earlier tick's job
+      await mk("2027-04-05T13:00:00Z", 6 * H);                      // already started — never remind after start
+
+      const mine = async () => (await listDueReminders(db, now.toISOString()))
+        .filter((d) => d.accountId === accountId).map((d) => d.bookingId);
+      expect(await mine()).toEqual([lowerEdge, boundaryLate, late, upperEdge]);
+      // Every row this window lists is flagged late — the reminders pass reads
+      // the flag to give it the earlier deadline (see reminderDeadline).
+      expect((await listDueReminders(db, now.toISOString())).filter((d) => d.accountId === accountId)
+        .every((d) => d.late)).toBe(true);
+
+      // Once stamped, never again — the same dedupe the day-before window uses.
+      await stampReminderSent(db, late);
+      expect(await mine()).toEqual([lowerEdge, boundaryLate, upperEdge]);
+    });
+  });
+
+  /**
+   * D-030. "Completed" and "no-show" are outcomes, and an appointment has an
+   * outcome only once it has STARTED. Marking a future job no-show was not
+   * just wrong on screen: it stamps no_show_at, which arms the no-show nudge
+   * to the customer. The guard is the `startedBy` option, which the operator
+   * action passes; omitted (seed, tests, the voice receptionist's cancel), the
+   * write is unchanged. Cancel is never an outcome and is never refused.
+   */
+  it("D-030: setBookingStatus with startedBy refuses completed/no_show on a booking that has not started, leaves it booked, and allows both once it has", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Outcome" }, "user_test");
+      const future = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-05-10T15:00:00Z"),
+          endsAt: new Date("2027-05-10T16:00:00Z") }, "user_test");
+      const started = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date("2027-05-09T15:00:00Z"),
+          endsAt: new Date("2027-05-09T16:00:00Z") }, "user_test");
+      const startedBy = "2027-05-09T15:30:00Z"; // in the middle of `started`, a day before `future`
+      const statusOf = async (id: string) => {
+        const { data, error } = await db.from("bookings").select("status, completed_at, no_show_at").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return data as { status: string; completed_at: string | null; no_show_at: string | null };
+      };
+
+      for (const outcome of ["completed", "no_show"] as const) {
+        await expect(setBookingStatus(db, accountId, future.id, outcome, "user_test", "user", { startedBy }))
+          .rejects.toBeInstanceOf(BookingNotStartedError);
+      }
+      expect(await statusOf(future.id)).toEqual({ status: "booked", completed_at: null, no_show_at: null });
+
+      await setBookingStatus(db, accountId, started.id, "no_show", "user_test", "user", { startedBy });
+      expect((await statusOf(started.id)).status).toBe("no_show");
+      await setBookingStatus(db, accountId, started.id, "completed", "user_test", "user", { startedBy });
+      expect((await statusOf(started.id)).status).toBe("completed");
+
+      // Cancel is not an outcome: a future booking is cancellable under the guard.
+      await setBookingStatus(db, accountId, future.id, "cancelled", "user_test", "user", { startedBy });
+      expect((await statusOf(future.id)).status).toBe("cancelled");
+
+      // The wrong account is still "no booking", not "not started".
+      await expect(setBookingStatus(db, "00000000-0000-0000-0000-000000000000", started.id, "completed",
+        "user_test", "user", { startedBy })).rejects.toThrow(/no booking/);
+    });
+  });
+
+  /**
+   * D-030's other half: the operator's list began at `now` on `starts_at`, so
+   * an appointment vanished from it the moment it started — exactly when it
+   * could first be marked. It now also carries every appointment that has
+   * started and is still `booked` (in progress, or over and waiting for an
+   * outcome — the same rows the To do screen's stale-booking source lists),
+   * while past rows that already HAVE an outcome stay off it.
+   */
+  it("D-030: listCalendarBookings carries started bookings still waiting for an outcome, and leaves out past ones that have one", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "List" }, "user_test");
+      const mk = (startsAt: string, endsAt: string) => createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(startsAt), endsAt: new Date(endsAt) }, "user_test");
+      const now = "2027-06-10T12:00:00.000Z";
+      const waiting = await mk("2027-06-08T15:00:00Z", "2027-06-08T16:00:00Z");     // over, still booked
+      const done = await mk("2027-06-08T17:00:00Z", "2027-06-08T18:00:00Z");        // over, completed
+      await setBookingStatus(db, accountId, done.id, "completed", "user_test");
+      const gone = await mk("2027-06-09T09:00:00Z", "2027-06-09T10:00:00Z");        // over, cancelled
+      await setBookingStatus(db, accountId, gone.id, "cancelled", "user_test");
+      const inProgress = await mk("2027-06-10T11:30:00Z", "2027-06-10T12:30:00Z");  // started 30 min ago
+      const upcoming = await mk("2027-06-11T09:00:00Z", "2027-06-11T10:00:00Z");
+
+      const ids = (await listCalendarBookings(db, accountId, now)).map((b) => b.id);
+      expect(ids).toEqual([waiting.id, inProgress.id, upcoming.id]);
     });
   });
 
@@ -357,13 +501,13 @@ describe("booking accessors", () => {
   });
 
   /**
-   * `listUpcomingBookings`'s own contact-name accessor: joined first/last
+   * `listCalendarBookings`'s own contact-name accessor: joined first/last
    * name for a normal contact, and its documented "Unknown" fallback for a
    * contact with neither — the shape a booking made through the public path
    * (firstName required, lastName optional) can never itself produce, but a
    * direct-insert or blueprint-applied contact could.
    */
-  it("listUpcomingBookings carries the contact's name, falling back to \"Unknown\" when both are blank", async () => {
+  it("listCalendarBookings carries the contact's name, falling back to \"Unknown\" when both are blank", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       const { id: namedContactId } = await createContact(db, accountId,
@@ -378,7 +522,7 @@ describe("booking accessors", () => {
         { calendarId: cal.id, contactId: blankContactId, startsAt: new Date("2027-03-21T15:00:00Z"),
           endsAt: new Date("2027-03-21T16:00:00Z") }, "user_test");
 
-      const upcoming = await listUpcomingBookings(db, accountId, "2027-03-01T00:00:00Z");
+      const upcoming = await listCalendarBookings(db, accountId, "2027-03-01T00:00:00Z");
 
       const namedRow = upcoming.find((b) => b.id === named.id);
       const blankRow = upcoming.find((b) => b.id === blank.id);
@@ -395,7 +539,7 @@ describe("booking accessors", () => {
    * (automations.test.ts, automations-b-schema.test.ts), which stays green
    * however `BOOKING_COLS` is edited. So a later edit that drops either name
    * from that string leaves the whole suite green while
-   * `listUpcomingBookings` quietly returns rows without it — and the
+   * `listCalendarBookings` quietly returns rows without it — and the
    * operator's bookings list, the ONE screen this feature has, stops
    * rendering the pill in production with nothing red anywhere.
    *
@@ -408,7 +552,7 @@ describe("booking accessors", () => {
    * assertion is an instant EQUALITY, not `.not.toBeNull()`: a dropped column
    * comes back `undefined`, and `expect(undefined).not.toBeNull()` passes.
    */
-  it("listUpcomingBookings carries the confirmation answer the SMS webhook wrote (BOOKING_COLS round-trip)", async () => {
+  it("listCalendarBookings carries the confirmation answer the SMS webhook wrote (BOOKING_COLS round-trip)", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       const { id: contactId } = await createContact(db, accountId,
@@ -421,7 +565,7 @@ describe("booking accessors", () => {
       await stampAppointmentConfirmAsked(db, booking.id);
       expect(await applyConfirmationReply(db, accountId, contactId, "YES", now)).toBe("yes");
 
-      const row = (await listUpcomingBookings(db, accountId, "2027-05-01T00:00:00Z"))
+      const row = (await listCalendarBookings(db, accountId, "2027-05-01T00:00:00Z"))
         .find((b) => b.id === booking.id);
       expect(row).toBeDefined();
       expect(row!.confirm_reply).toBe("yes");

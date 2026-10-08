@@ -72,6 +72,11 @@ export type DueReminder = {
    *  whose provider failed) -- the reminder route passes this straight into
    *  `bookingReminderEmail`, never re-derives it. */
   meetingUrl: string | null;
+  /** D-029: booked less than the day-before window's span ahead
+   *  (`isLateBooking`). The reminders pass gives such a reminder an earlier
+   *  deadline (`reminderDeadline` in apps/web) so a held one cannot be
+   *  released beside the text reminder. Set on every row, by-id reads too. */
+  late: boolean;
 };
 
 export type DueFollowup = {
@@ -291,14 +296,33 @@ export async function cancelBookingByToken(
   return row;
 }
 
+/** D-030: an outcome (completed / no_show) asked for an appointment that has
+ *  not started by the caller's `startedBy` instant. Nothing was written. */
+export class BookingNotStartedError extends Error {
+  constructor(message = "booking has not started yet") {
+    super(message);
+    this.name = "BookingNotStartedError";
+  }
+}
+
 /**
  * Operator transitions: cancel, mark completed, mark no-show. Also the phone
  * receptionist's cancel/reschedule, which passes `actorType: "ai"` — omitted,
  * it stays `"user"`, so every operator call site keeps its attribution.
+ *
+ * `opts.startedBy` (D-030): when given, an OUTCOME — completed or no_show —
+ * is written only if the booking's `starts_at` is at or before that instant,
+ * as a predicate on the UPDATE itself, so there is no read-then-write gap.
+ * A refusal throws `BookingNotStartedError` and writes nothing (a no-show on
+ * a future job would arm the no-show nudge to the customer). The operator
+ * action passes it; omitted (the demo seed, the db tests, the receptionist's
+ * cancel) the write is exactly what it was. Cancel is never an outcome and
+ * is never refused by it.
  */
 export async function setBookingStatus(
   db: SupabaseClient, accountId: string, bookingId: string, status: BookingStatus, actorId: string,
   actorType: ActorType = "user",
+  opts: { startedBy?: string } = {},
 ): Promise<void> {
   const nowIso = new Date().toISOString();
   // THE AUTOMATION CLOCKS (0026; spec, "Decisions taken after Milestone A
@@ -311,30 +335,63 @@ export async function setBookingStatus(
   const stamp = status === "completed" ? { completed_at: nowIso }
     : status === "no_show" ? { no_show_at: nowIso }
     : {};
-  const { data, error } = await db.from("bookings")
+  const guarded = opts.startedBy !== undefined && (status === "completed" || status === "no_show");
+  let q = db.from("bookings")
     .update({ status, updated_at: nowIso, ...stamp })
-    .eq("account_id", accountId).eq("id", bookingId)
-    .select("id");
+    .eq("account_id", accountId).eq("id", bookingId);
+  if (guarded) q = q.lte("starts_at", opts.startedBy!);
+  const { data, error } = await q.select("id");
   if (error) throw new Error(`setBookingStatus failed: ${error.message}`);
-  if (!data?.length) throw new Error(`setBookingStatus: no booking ${bookingId} for account ${accountId}`);
+  if (!data?.length) {
+    // Zero rows under the guard is either "not started" or "no such booking
+    // here"; one read tells them apart so the operator is told which.
+    if (guarded) {
+      const { data: row, error: readErr } = await db.from("bookings").select("id")
+        .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
+      if (readErr) throw new Error(`setBookingStatus re-read failed: ${readErr.message}`);
+      if (row) throw new BookingNotStartedError();
+    }
+    throw new Error(`setBookingStatus: no booking ${bookingId} for account ${accountId}`);
+  }
   await emit(db, accountId, "booking.status_changed", actorId, { bookingId, status }, actorType);
 }
+
+/** How many started-but-unmarked bookings the operator's list carries at
+ *  most — the same cap the To do screen's stale-booking source uses. */
+const AWAITING_OUTCOME_LIMIT = 200;
 
 /**
  * The operator's list, `fromIso` forward — no status filter, deliberately:
  * the operator page shows status per row (booked/cancelled/completed/no_show)
  * with actions to change it, so a cancelled booking still needs to be visible
  * as "cancelled", not silently dropped from the list.
+ *
+ * D-030: "forward" is measured on `ends_at`, not `starts_at`, so an
+ * appointment in progress stays on the list; and every appointment that is
+ * over but still `booked` — waiting for its "Completed" or "No-show", the
+ * same rows the To do screen's stale-booking source lists — rides along
+ * too, oldest first. Before this the list dropped an appointment the moment
+ * it started, which is exactly when it could first be given an outcome.
+ *
+ * Named `listCalendarBookings`, not `listUpcomingBookings` (its name until
+ * D-030's review): it returns past rows too, so the old name lied.
  */
-export async function listUpcomingBookings(
+export async function listCalendarBookings(
   db: SupabaseClient, accountId: string, fromIso: string,
 ): Promise<(BookingRow & { contact_name: string; contact_email: string | null })[]> {
-  const { data, error } = await db.from("bookings")
-    .select(`${BOOKING_COLS}, contacts(first_name, last_name, email)`)
-    .eq("account_id", accountId).gte("starts_at", fromIso)
-    .order("starts_at", { ascending: true });
-  if (error) throw new Error(`listUpcomingBookings failed: ${error.message}`);
-  return ((data ?? []) as any[]).map((r) => {
+  const cols = `${BOOKING_COLS}, contacts(first_name, last_name, email)`;
+  const [current, awaiting] = await Promise.all([
+    db.from("bookings").select(cols)
+      .eq("account_id", accountId).gte("ends_at", fromIso)
+      .order("starts_at", { ascending: true }),
+    db.from("bookings").select(cols)
+      .eq("account_id", accountId).eq("status", "booked").lt("ends_at", fromIso)
+      .order("starts_at", { ascending: false }).limit(AWAITING_OUTCOME_LIMIT),
+  ]);
+  if (current.error) throw new Error(`listCalendarBookings failed: ${current.error.message}`);
+  if (awaiting.error) throw new Error(`listCalendarBookings (awaiting outcome) failed: ${awaiting.error.message}`);
+  const data = [...((awaiting.data ?? []) as any[]).reverse(), ...((current.data ?? []) as any[])];
+  return data.map((r) => {
     const { contacts, ...rest } = r;
     const contactName = [contacts?.first_name, contacts?.last_name]
       .filter(Boolean).join(" ").trim();
@@ -414,6 +471,50 @@ export const ACCOUNT_BRAND_COLS =
 export const REMINDER_WINDOW_START_MS = 23 * 60 * 60 * 1000;
 export const REMINDER_WINDOW_END_MS = (24 * 60 + 15) * 60 * 1000;
 export const FOLLOWUP_QUERY_WINDOW_MS = 37 * 60 * 60 * 1000;
+
+/**
+ * D-029, the LATE reminder: a booking made less than the day-before window's
+ * span ahead (`created_at > starts_at - REMINDER_WINDOW_END_MS`) may never have
+ * been inside that window on any tick, so it gets ONE reminder 3h-4h15m
+ * before it starts instead — provided it was made at least
+ * `LATE_REMINDER_MIN_AGE_MS` before the tick that sends it, because the
+ * confirmation already went out at booking time and a reminder minutes later
+ * is noise. In practice: booked at least ~4 hours ahead → reminded ~3-4
+ * hours ahead; booked closer than that → the confirmation is the reminder.
+ *
+ * 75 minutes wide for the same tick-tolerance reason as the day-before
+ * window, and it ends far below `REMINDER_WINDOW_START_MS`, so one tick can
+ * never list a booking under both windows.
+ *
+ * THE TEXT REMINDER. Inside the sending hours (08:00-21:00, the email's AND
+ * the text's) the late window closes 45 minutes before the text reminder's
+ * opens (`SMS_REMINDER_WINDOW_END_MS`, 2h15m). That alone does NOT keep them
+ * apart: OUTSIDE the hours both are held and both are released at 08:00 — a
+ * 09:00 appointment booked at 19:00 the evening before had its email (due
+ * 05:45) and its text (due 06:45-07:30) land together at 08:00. So every
+ * reminder row carries `late` (`isLateBooking`), and the reminders pass gives
+ * a late one an earlier deadline — the start minus 2h15m
+ * (`reminderDeadline`, apps/web/src/lib/booking/reminder-timing.ts) — past
+ * which a held email is dropped instead of released.
+ *
+ * ACCEPTED, and the price of that rule: a late-booked appointment at or
+ * before about 10:15 whose late window falls before 08:00 — an early-morning
+ * appointment booked the evening before — gets NO separate reminder email;
+ * the confirmation is its reminder (plus the text, where texting is on).
+ * Both the no-collision property and that exact cost are proved by a sweep
+ * over a whole day of appointments and booking times, through the real
+ * sending-hours functions, in apps/web's cron-coupling.test.ts.
+ */
+export const LATE_REMINDER_WINDOW_START_MS = 3 * 60 * 60 * 1000;
+export const LATE_REMINDER_WINDOW_END_MS = (4 * 60 + 15) * 60 * 1000;
+export const LATE_REMINDER_MIN_AGE_MS = 60 * 60 * 1000;
+
+/** "Made late" (D-029): booked less than the day-before window's whole span
+ *  (24h15m) ahead, so that window may never have seen it. The ONE rule both
+ *  the late window's filter and `DueReminder.late` use. */
+export function isLateBooking(createdAtIso: string, startsAtIso: string): boolean {
+  return new Date(createdAtIso).getTime() > new Date(startsAtIso).getTime() - REMINDER_WINDOW_END_MS;
+}
 
 export type AccountBrandInfo = {
   accountTimezone: string; branding: Branding;
@@ -607,7 +708,7 @@ export function ownAccountEmbedsOnly<T>(
   });
 }
 
-const REMINDER_SELECT = `id, account_id, contact_id, starts_at, booker_timezone, cancel_token, meeting_url,
+const REMINDER_SELECT = `id, account_id, contact_id, starts_at, created_at, booker_timezone, cancel_token, meeting_url,
              calendars(account_id, public_id), contacts(account_id, first_name, last_name, email)`;
 
 function toDueReminder(r: any, info: AccountBrandInfo): DueReminder {
@@ -618,6 +719,7 @@ function toDueReminder(r: any, info: AccountBrandInfo): DueReminder {
     calendarPublicId: r.calendars?.public_id, contactEmail: r.contacts?.email ?? null,
     contactName: contactName || "Unknown", accountTimezone: info.accountTimezone,
     branding: info.branding, fromEmail: info.fromEmail, meetingUrl: r.meeting_url ?? null,
+    late: isLateBooking(r.created_at, r.starts_at),
   };
 }
 
@@ -635,9 +737,26 @@ export async function listDueReminders(
     .order("starts_at", { ascending: true });
   if (error) throw new Error(`listDueReminders failed: ${error.message}`);
 
+  // D-029: the late window (see LATE_REMINDER_WINDOW_START_MS). Disjoint from
+  // the day-before window on `starts_at` at any one `now`, so no row can come
+  // back from both reads. "Made late" compares two columns of the same row,
+  // which a PostgREST filter cannot express, so it is applied here; the
+  // window and the minimum age bound the read itself.
+  const { data: lateData, error: lateError } = await db.from("bookings")
+    .select(REMINDER_SELECT)
+    .eq("status", "booked").is("reminder_sent_at", null)
+    .gte("starts_at", new Date(now + LATE_REMINDER_WINDOW_START_MS).toISOString())
+    .lte("starts_at", new Date(now + LATE_REMINDER_WINDOW_END_MS).toISOString())
+    .lte("created_at", new Date(now - LATE_REMINDER_MIN_AGE_MS).toISOString())
+    .order("starts_at", { ascending: true });
+  if (lateError) throw new Error(`listDueReminders (late) failed: ${lateError.message}`);
+  const late = ((lateData ?? []) as any[]).filter((r) =>
+    isLateBooking(r.created_at, r.starts_at));
+
   // The contact AND the calendar (whose public id is the reschedule link)
-  // must be this booking's own account's (ownAccountEmbedsOnly).
-  const rows = ownAccountEmbedsOnly((data ?? []) as any[], "listDueReminders", "booking", ["contacts", "calendars"]);
+  // must be this booking's own account's (ownAccountEmbedsOnly). Late rows
+  // first: their appointments are hours away, the day-before rows' a day.
+  const rows = ownAccountEmbedsOnly([...late, ...((data ?? []) as any[])], "listDueReminders", "booking", ["contacts", "calendars"]);
   if (rows.length === 0) return [];
 
   // One `accounts` read per distinct account (in practice always one) for

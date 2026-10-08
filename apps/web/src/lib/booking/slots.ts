@@ -103,6 +103,19 @@ function addCalendarDays(y: number, m: number, d: number, delta: number) {
   return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
 }
 
+/** D-028's re-anchor point: the instant `clearAtMs` (a booking's end plus the
+ *  buffer), rounded UP to a whole minute, read as minutes-past-midnight on
+ *  calendar day `cal` in `timeZone`. An instant on a LATER day answers 1440,
+ *  which no interval can fit a slot after; one on an earlier day (or no
+ *  instant at all) answers -Infinity, which the caller treats as "no
+ *  re-anchor, take the ordinary grid step". */
+function reanchorMinutes(clearAtMs: number, cal: { y: number; m: number; d: number }, timeZone: string): number {
+  if (!Number.isFinite(clearAtMs)) return -Infinity;
+  const p = partsInZone(new Date(Math.ceil(clearAtMs / 60_000) * 60_000), timeZone);
+  if (p.y === cal.y && p.m === cal.m && p.d === cal.d) return p.hh * 60 + p.mi;
+  return Date.UTC(p.y, p.m - 1, p.d) > Date.UTC(cal.y, cal.m - 1, cal.d) ? 1440 : -Infinity;
+}
+
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function minutesOf(s: string): number {
@@ -139,11 +152,25 @@ export function normalizeOpenHours(raw: unknown): OpenHours {
   return out;
 }
 
-/** Turn a calendar's open-hours config + its existing bookings into offerable
- *  slots between `now + minNoticeHours` (inclusive) and `now + maxAdvanceDays`
- *  calendar days, all reckoned in `config.timezone`. Pure: never mutates
- *  `booked`, never touches the network or a clock other than `now`. */
-export function computeSlots(config: SlotConfig, booked: Range[], now: Date): Range[] {
+/** Everything both the engine and the submit-time check derive from a config
+ *  and `now` before looking at a single candidate. ONE derivation, so the
+ *  picker and the submit can never disagree about notice, horizon, hours or
+ *  the buffer. */
+type Prepared = {
+  timezone: string;
+  durationMs: number;
+  slotDurationMinutes: number;
+  bufferMs: number;
+  earliestStartMs: number;
+  horizonEndMs: number;
+  maxAdvanceDays: number;
+  openHours: OpenHours;
+  nowParts: ReturnType<typeof partsInZone>;
+};
+
+/** Null when the config is unusable (fail CLOSED). May throw a RangeError for
+ *  an invalid IANA zone; both callers catch it and fail closed too. */
+function prepare(config: SlotConfig, now: Date): Prepared | null {
   const { timezone, slotDurationMinutes, bufferMinutes, minNoticeHours, maxAdvanceDays } = config;
 
   // Fail CLOSED on a malformed numeric config: NaN comparisons are always
@@ -155,45 +182,99 @@ export function computeSlots(config: SlotConfig, booked: Range[], now: Date): Ra
     !Number.isFinite(slotDurationMinutes) || slotDurationMinutes < 5 ||
     !Number.isFinite(bufferMinutes) || bufferMinutes < 0 ||
     !Number.isFinite(minNoticeHours) || minNoticeHours < 0 ||
-    !Number.isFinite(maxAdvanceDays) || maxAdvanceDays < 0
+    !Number.isFinite(maxAdvanceDays) || maxAdvanceDays < 0 ||
+    !Number.isFinite(now.getTime())
   ) {
-    return [];
+    return null;
   }
 
-  const openHours = normalizeOpenHours(config.openHours);
+  const nowParts = partsInZone(now, timezone);
 
-  const noticeMs = minNoticeHours * 3600_000;
-  const earliestStart = new Date(now.getTime() + noticeMs);
-  const bufferMs = bufferMinutes * 60_000;
+  // Horizon end = midnight starting the day AFTER day `maxAdvanceDays`, i.e.
+  // the whole of day `maxAdvanceDays` is in-horizon. This is a PINNED
+  // DECISION, not an accident of the arithmetic: "book up to N days out"
+  // means all of day N is bookable, because the public picker and the
+  // submit-time revalidation both derive it HERE and must never disagree
+  // about whether a slot on day N is still in range. Computed via pure
+  // calendar-day arithmetic (month/year-safe) then resolved through the zone
+  // once, at midnight — never by adding raw milliseconds across a DST edge.
+  const horizonDay = addCalendarDays(nowParts.y, nowParts.m, nowParts.d, maxAdvanceDays + 1);
+  // Midnight can itself fall inside a spring-forward gap (e.g.
+  // America/Havana, Asia/Beirut, America/Santiago all move their clocks
+  // forward AT midnight on some transition day) — bump forward hour by
+  // hour rather than assert non-null. 4 bumps comfortably clears every
+  // real-world DST jump (the largest observed is 1h, some historical
+  // zones used other offsets; this stays generous).
+  let horizonEnd: Date | null = null;
+  for (let bump = 0; bump < 4 && !horizonEnd; bump++) {
+    horizonEnd = zonedTimeToUtc(horizonDay.y, horizonDay.m, horizonDay.d, bump, 0, timezone);
+  }
+  if (!horizonEnd) return null;
 
-  try {
-    const nowParts = partsInZone(now, timezone);
+  return {
+    timezone,
+    durationMs: slotDurationMinutes * 60_000,
+    slotDurationMinutes,
+    bufferMs: bufferMinutes * 60_000,
+    earliestStartMs: now.getTime() + minNoticeHours * 3600_000,
+    horizonEndMs: horizonEnd.getTime(),
+    maxAdvanceDays,
+    openHours: normalizeOpenHours(config.openHours),
+    nowParts,
+  };
+}
 
-    // Horizon end = midnight starting the day AFTER day `maxAdvanceDays`, i.e.
-    // the whole of day `maxAdvanceDays` is in-horizon. This is a PINNED
-    // DECISION, not an accident of the arithmetic: "book up to N days out"
-    // means all of day N is bookable, because the public picker and the
-    // submit-time revalidation both call this same function and must never
-    // disagree about whether a slot on day N is still in range. Computed via
-    // pure calendar-day arithmetic (month/year-safe) then resolved through
-    // the zone once, at midnight — never by adding raw milliseconds across a
-    // DST edge.
-    const horizonDay = addCalendarDays(nowParts.y, nowParts.m, nowParts.d, maxAdvanceDays + 1);
-    // Midnight can itself fall inside a spring-forward gap (e.g.
-    // America/Havana, Asia/Beirut, America/Santiago all move their clocks
-    // forward AT midnight on some transition day) — bump forward hour by
-    // hour rather than assert non-null. 4 bumps comfortably clears every
-    // real-world DST jump (the largest observed is 1h, some historical
-    // zones used other offsets; this stays generous).
-    let horizonEnd: Date | null = null;
-    for (let bump = 0; bump < 4 && !horizonEnd; bump++) {
-      horizonEnd = zonedTimeToUtc(horizonDay.y, horizonDay.m, horizonDay.d, bump, 0, timezone);
+/** Wall-minute containment and real-ms containment can DISAGREE across a
+ *  spring-forward gap: 00:00–02:00 open, a 120min slot starting 00:00 passes
+ *  the minute check (0+120<=120) but the gap eats an hour of real time, so the
+ *  candidate actually ENDS at 03:00 wall — past the 02:00 close. This reads
+ *  the candidate's real in-zone wall-clock end explicitly. */
+function endsByClose(candEnd: Date, cal: { m: number; d: number }, toMinutes: number, timeZone: string): boolean {
+  const endParts = partsInZone(candEnd, timeZone);
+  const endMinutes = endParts.d === cal.d && endParts.m === cal.m
+    ? endParts.hh * 60 + endParts.mi
+    : 1440; // rolled into the next calendar day — treat as end-of-day
+  return endMinutes <= toMinutes;
+}
+
+/** Whether `[startMs, endMs)` runs into any booked range with the buffer on
+ *  BOTH sides (spec §4), and the latest `end + buffer` among those it runs
+ *  into (-Infinity when none). An unresolvable (non-finite) booked range
+ *  fails CLOSED: it blocks every candidate rather than silently passing every
+ *  NaN comparison as false and offering a slot that might actually be taken.
+ *  It offers no re-anchor point (`clearAt` is untouched by it). */
+function conflictScan(startMs: number, endMs: number, booked: Range[], bufferMs: number): { conflicts: boolean; clearAt: number } {
+  let clearAt = -Infinity;
+  let conflicts = false;
+  for (const b of booked) {
+    const bStart = b.startsAt.getTime();
+    const bEnd = b.endsAt.getTime();
+    if (!Number.isFinite(bStart) || !Number.isFinite(bEnd)) { conflicts = true; continue; }
+    if (startMs < bEnd + bufferMs && bStart < endMs + bufferMs) {
+      conflicts = true;
+      clearAt = Math.max(clearAt, bEnd + bufferMs);
     }
-    if (!horizonEnd) return [];
+  }
+  return { conflicts, clearAt };
+}
+
+/** Thrown by the walk when it exceeds its iteration cap; caught by
+ *  `computeSlots`, which then fails CLOSED. */
+class WalkCapExceeded extends Error {}
+
+/** Turn a calendar's open-hours config + its existing bookings into offerable
+ *  slots between `now + minNoticeHours` (inclusive) and `now + maxAdvanceDays`
+ *  calendar days, all reckoned in `config.timezone`. Pure: never mutates
+ *  `booked`, never touches the network or a clock other than `now`. */
+export function computeSlots(config: SlotConfig, booked: Range[], now: Date): Range[] {
+  try {
+    const prep = prepare(config, now);
+    if (!prep) return [];
+    const { timezone, slotDurationMinutes, durationMs, bufferMs, earliestStartMs, horizonEndMs, openHours, nowParts } = prep;
 
     const results: Range[] = [];
 
-    for (let i = 0; i <= maxAdvanceDays; i++) {
+    for (let i = 0; i <= prep.maxAdvanceDays; i++) {
       // Resolve calendar day `now + i` days (pure UTC calendar math, DST-safe).
       const cal = addCalendarDays(nowParts.y, nowParts.m, nowParts.d, i);
       // Weekday of `cal` in the account zone, derived WITHOUT an Intl
@@ -210,46 +291,49 @@ export function computeSlots(config: SlotConfig, booked: Range[], now: Date): Ra
       if (!intervals || intervals.length === 0) continue;
 
       for (const [from, to] of intervals) {
-        const fromParts = parseHHMM(from);
-        const toParts = parseHHMM(to);
-        const toMinutes = toParts.hh * 60 + toParts.mi;
-
-        let candMinutes = fromParts.hh * 60 + fromParts.mi;
+        const toMinutes = minutesOf(to);
+        let candMinutes = minutesOf(from);
+        // ITERATION CAP. Every pass of this loop moves `candMinutes` forward
+        // by at least one minute (the grid step is >= 5; a re-anchor is
+        // taken only when strictly forward), so a day can never need more
+        // than 1440 passes. Tripping the cap means that invariant broke —
+        // the walk fails CLOSED (no slots at all) rather than spinning
+        // forever and hanging the request (or a test worker).
+        let passes = 0;
         while (candMinutes + slotDurationMinutes <= toMinutes) {
-          const startHH = Math.floor(candMinutes / 60);
-          const startMI = candMinutes % 60;
-          const candStart = zonedTimeToUtc(cal.y, cal.m, cal.d, startHH, startMI, timezone);
+          if (++passes > 1440) throw new WalkCapExceeded();
+          const candStart = zonedTimeToUtc(cal.y, cal.m, cal.d, Math.floor(candMinutes / 60), candMinutes % 60, timezone);
           candMinutes += slotDurationMinutes;
           if (!candStart) continue; // inside a DST gap — skip, never shift
 
-          const candEnd = new Date(candStart.getTime() + slotDurationMinutes * 60_000);
+          const candEnd = new Date(candStart.getTime() + durationMs);
+          if (candStart.getTime() < earliestStartMs) continue;
+          if (candEnd.getTime() > horizonEndMs) continue;
+          if (!endsByClose(candEnd, cal, toMinutes, timezone)) continue;
 
-          if (candStart.getTime() < earliestStart.getTime()) continue;
-          if (candEnd.getTime() > horizonEnd.getTime()) continue;
-
-          // Wall-minute containment (`candMinutes <= toMinutes` above) and
-          // real-ms containment can DISAGREE across a spring-forward gap:
-          // 00:00–02:00 open, a 120min slot starting 00:00 passes the minute
-          // check (0+120<=120) but the gap eats an hour of real time, so the
-          // candidate actually ENDS at 03:00 wall — past the 02:00 close.
-          // Verify the candidate's real in-zone wall-clock end explicitly.
-          const endParts = partsInZone(candEnd, timezone);
-          const endMinutes = endParts.d === cal.d && endParts.m === cal.m
-            ? endParts.hh * 60 + endParts.mi
-            : 1440; // rolled into the next calendar day — treat as end-of-day
-          if (endMinutes > toMinutes) continue;
-
-          const conflicts = booked.some((b) => {
-            const bStart = b.startsAt.getTime();
-            const bEnd = b.endsAt.getTime();
-            // An unresolvable (non-finite) booked range fails CLOSED: it
-            // blocks the slot it's compared against rather than silently
-            // passing every NaN comparison as false and offering a slot
-            // that might actually be taken.
-            if (!Number.isFinite(bStart) || !Number.isFinite(bEnd)) return true;
-            return candStart.getTime() < bEnd + bufferMs && bStart < candEnd.getTime() + bufferMs;
-          });
-          if (conflicts) continue;
+          const { conflicts, clearAt } = conflictScan(candStart.getTime(), candEnd.getTime(), booked, bufferMs);
+          if (conflicts) {
+            // D-028: START-AFTER-BUFFER, not a fixed grid. The next candidate
+            // starts where the booking's buffer runs out, rather than at the
+            // next grid point — on a fixed grid any buffer at all cost a whole
+            // slot (60-minute jobs, a 15-minute buffer and a 09:00 booking
+            // removed 10:00 and offered 11:00). Measured in REAL time and read
+            // back onto this day's wall clock, so a fall-back day's repeated
+            // hour cannot land the re-anchor on top of the booking.
+            //
+            // It may land BEFORE the next grid point (a 120-minute slot after
+            // a 60-minute booking) or after it (a long booking); either way
+            // every grid point it skips would have run into the same booking.
+            const next = reanchorMinutes(clearAt, cal, timezone);
+            // Only ever forward of THIS candidate (`candMinutes` was already
+            // stepped past it above). On a fall-back day "the booking's end"
+            // can read EARLIER on the wall clock than this candidate (it ends
+            // in the second 01:xx); re-anchoring there would loop forever, so
+            // the ordinary grid step stands instead. Strictly increasing
+            // `candMinutes` is what guarantees the walk terminates.
+            if (next > candMinutes - slotDurationMinutes) candMinutes = next;
+            continue;
+          }
 
           results.push({ startsAt: candStart, endsAt: candEnd });
         }
@@ -268,6 +352,83 @@ export function computeSlots(config: SlotConfig, booked: Range[], now: Date): Ra
     });
   } catch (err) {
     if (err instanceof RangeError) return []; // e.g. an invalid IANA timezone
+    if (err instanceof WalkCapExceeded) {
+      // Unreachable on a real calendar (each pass advances at least a minute,
+      // so a day needs at most ~1,436), and returning no slots hides EVERY day
+      // of this calendar: log it so a tripped cap is an outage someone sees.
+      console.error(`computeSlots: slot walk exceeded its pass cap, offering no slots (${String(err.message)})`);
+      return [];
+    }
+    throw err;
+  }
+}
+
+/**
+ * THE SUBMIT-TIME CHECK — the one predicate the public booking submit and the
+ * phone receptionist's book/reschedule all run (through `bookableSlot` in
+ * ./availability.ts). Returns the range to book, or null.
+ *
+ * Not "is it in computeSlots' current output": since D-028 a booking earlier
+ * in the day re-anchors every later grid point, so a visitor who picked a
+ * still-free 13:00 would be refused the moment someone else booked 09:00.
+ * Instead a start is bookable when it is
+ *
+ *   - FREE: no booked range within the buffer on either side (the engine's
+ *     own `conflictScan`; the database's `bookings_no_overlap` remains the
+ *     guarantee against a race past this check);
+ *   - FITS: inside one open interval of its own account-zone day with its
+ *     whole duration, wall clock AND real time (`endsByClose`);
+ *   - inside NOTICE and HORIZON (`prepare`'s instants);
+ *   - a start the engine offers under SOME state of the day: on the base
+ *     grid (the interval's open + k × duration), or on a booking's
+ *     end-plus-buffer re-anchor point or that point's own continuation
+ *     (+ k × duration). So a crafted "real slot + 17 minutes" is still
+ *     refused, and so is anything not on a whole minute. The wall time must
+ *     also resolve back to this exact instant, which is how the engine picks
+ *     between the two readings of a fall-back day's repeated hour.
+ *
+ * Every slot `computeSlots` offers passes this (pinned in slots.test.ts), so
+ * a slot the picker showed can only be refused here if it really was taken.
+ */
+export function bookableRange(config: SlotConfig, booked: Range[], now: Date, startsAt: Date): Range | null {
+  try {
+    const prep = prepare(config, now);
+    if (!prep) return null;
+    const { timezone, slotDurationMinutes, durationMs, bufferMs, earliestStartMs, horizonEndMs, openHours } = prep;
+
+    const t = startsAt.getTime();
+    if (!Number.isFinite(t) || t % 60_000 !== 0) return null;
+    const end = t + durationMs;
+    if (t < earliestStartMs || end > horizonEndMs) return null;
+
+    const p = partsInZone(startsAt, timezone);
+    const cal = { y: p.y, m: p.m, d: p.d };
+    const m = p.hh * 60 + p.mi;
+    const resolved = zonedTimeToUtc(cal.y, cal.m, cal.d, p.hh, p.mi, timezone);
+    if (!resolved || resolved.getTime() !== t) return null;
+
+    if (conflictScan(t, end, booked, bufferMs).conflicts) return null;
+
+    const weekday = WEEKDAYS[new Date(Date.UTC(cal.y, cal.m - 1, cal.d)).getUTCDay()]!;
+    // Re-anchor points on this day: every booking's end plus the buffer, read
+    // onto this day's wall clock exactly the way the engine reads them.
+    const anchors = booked
+      .map((b) => reanchorMinutes(b.endsAt.getTime() + bufferMs, cal, timezone))
+      .filter((a) => Number.isFinite(a) && a < 1440);
+    const onStep = (origin: number) => origin <= m && (m - origin) % slotDurationMinutes === 0;
+
+    for (const [from, to] of openHours[weekday] ?? []) {
+      const fromMinutes = minutesOf(from);
+      const toMinutes = minutesOf(to);
+      if (m < fromMinutes || m + slotDurationMinutes > toMinutes) continue;
+      if (!endsByClose(new Date(end), cal, toMinutes, timezone)) continue;
+      if (onStep(fromMinutes) || anchors.some((a) => a >= fromMinutes && onStep(a))) {
+        return { startsAt: new Date(t), endsAt: new Date(end) };
+      }
+    }
+    return null;
+  } catch (err) {
+    if (err instanceof RangeError) return null; // e.g. an invalid IANA timezone
     throw err;
   }
 }

@@ -8,7 +8,7 @@ import {
   ensureConversation, createMessage, incrementUnreadCount,
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
-import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
+import { computeAllSlots, bookableSlot, dayKeyInZone } from "@/lib/booking/availability";
 import { e164Of, isCallerIdNumber, spokenPhone } from "../phone-number";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { getMeetingProvider } from "@/lib/meetings/provider";
@@ -393,8 +393,10 @@ export async function runTool(
       }
 
       const wanted = String(args?.startsAt ?? "");
-      const all = await computeAllSlots(ctx.db, ctx.calendar, ctx.timezone, now);
-      const slot = all.find((s) => s.startsAt.toISOString() === new Date(wanted).toISOString());
+      // The one submit-time rule (`bookableSlot`): a start the caller was
+      // offered stays bookable while it is free, even if a booking made since
+      // re-anchored the day's later grid (D-028's review).
+      const slot = await bookableSlot(ctx.db, ctx.calendar, ctx.timezone, now, new Date(wanted));
       if (!slot) return { state, result: { ok: false, error: "that time isn't available — offer one from check_availability" } };
 
       let contactId = state.contactId;
@@ -509,8 +511,10 @@ export async function runTool(
       if (!owner.owned) return { state, result: { ok: false, error: owner.error } };
 
       const wanted = String(args?.startsAt ?? "");
-      const all = await computeAllSlots(ctx.db, ctx.calendar, ctx.timezone, now);
-      const slot = all.find((s) => s.startsAt.toISOString() === new Date(wanted).toISOString());
+      // Same one submit-time rule as book_appointment. The booking being
+      // moved is still `booked` here, so it still blocks its own range — the
+      // same answer the slot list gave before this rule existed.
+      const slot = await bookableSlot(ctx.db, ctx.calendar, ctx.timezone, now, new Date(wanted));
       if (!slot) return { state, result: { ok: false, error: "that time isn't available" } };
 
       // Video calendars need a NEW room sized to the NEW slot — the old

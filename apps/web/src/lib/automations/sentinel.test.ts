@@ -73,7 +73,7 @@ const branding = {
 const REMINDER_ROW: DueReminder = {
   bookingId: "bk_rem", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-10T14:00:00.000Z", bookerTimezone: null,
   cancelToken: "tok", calendarPublicId: "cal", contactEmail: "a@example.com", contactName: "A",
-  accountTimezone: "America/New_York", branding, fromEmail: null, meetingUrl: null,
+  accountTimezone: "America/New_York", branding, fromEmail: null, meetingUrl: null, late: false,
 };
 const FOLLOWUP_ROW: DueFollowup = {
   bookingId: "bk_fu", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T22:00:00.000Z",

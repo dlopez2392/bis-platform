@@ -2,7 +2,7 @@
 
 import { headers } from "next/headers";
 import {
-  serviceDb, getCalendarByPublicId, createContact, createBooking, SlotTakenError,
+  serviceDb, getCalendarByPublicId, createContact, fillContactBlanks, createBooking, SlotTakenError,
   countRecentBookings, ensureConversation, createMessage,
   incrementUnreadCount,
 } from "@bis/db";
@@ -14,7 +14,7 @@ import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingAlertEmail, bookingConfirmationEmail } from "@/lib/email/templates/booking";
 import { composeBookingAlertSms, sendAlertSms } from "@/lib/sms/alerts";
 import { safeZone, formatWhen } from "@/lib/booking/time";
-import { computeAllSlots, dayKeyInZone } from "@/lib/booking/availability";
+import { computeAllSlots, bookableSlot, dayKeyInZone } from "@/lib/booking/availability";
 import {
   HONEYPOT_FIELD, RENDER_TOKEN_FIELD, MIN_FILL_MS, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS,
   verifyRenderToken, hashIp, isValidEmail, isValidPhone, parseAttribution,
@@ -28,7 +28,10 @@ import { bookingConfirmationSubject } from "@/lib/email/templates/booking";
 import { recordBookingGrant } from "@/lib/consent/grants";
 
 export type BookingResult =
-  | { ok: true; cancelUrl: string }
+  /** `confirmationSent` (D-033): true only once the email gate said the
+   *  booker's confirmation was SENT. The success screen claims an email only
+   *  when it is true. */
+  | { ok: true; cancelUrl: string; confirmationSent: boolean }
   | { ok: false; error: string; slotTaken?: true };
 
 // Every db mutation this action makes passes this pair. The trailing
@@ -85,7 +88,7 @@ const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
  *
  *  THROWS on a query error rather than silently falling back to UTC — this
  *  row's `timezone` feeds BOTH the picker (`getSlotsAction`) and the
- *  submit-time recheck (`computeAllSlots` in `submitBookingAction`), so a
+ *  submit-time recheck (`bookableSlot` in `submitBookingAction`), so a
  *  transient failure that fell back quietly would make picker and recheck
  *  agree on the wrong zone rather than disagree: a 09:00-17:00 business
  *  becomes bookable at 03:00 local with nothing to catch it, because both
@@ -215,8 +218,9 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       // a response that flips on the honeypot learns nothing. There is no
       // real booking, so no real cancelUrl exists to hand back; empty is
       // harmless here because a person filling this form in good faith does
-      // not hit this branch.
-      return { ok: true, cancelUrl: "" };
+      // not hit this branch. `confirmationSent: true` for the same reason:
+      // a real accept nearly always says true, so the fake says it too.
+      return { ok: true, cancelUrl: "", confirmationSent: true };
     }
 
     const token = verifyRenderToken(str(formData, RENDER_TOKEN_FIELD), Date.now(), publicId);
@@ -233,10 +237,10 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }
       // `malformed`/`bad_signature` stay folded into the shared fake success —
       // unlike `expired`, there is no real visitor on the other end of those.
-      return { ok: true, cancelUrl: "" };
+      return { ok: true, cancelUrl: "", confirmationSent: true };
     }
     if (token.elapsedMs < MIN_FILL_MS) {
-      return { ok: true, cancelUrl: "" };
+      return { ok: true, cancelUrl: "", confirmationSent: true };
     }
 
     // --- The booking --------------------------------------------------
@@ -246,22 +250,22 @@ export async function submitBookingAction(publicId: string, formData: FormData):
 
     const startsAt = new Date(startsAtRaw);
     if (Number.isNaN(startsAt.getTime())) return { ok: false, error: s.genericError };
-    const endsAt = new Date(startsAt.getTime() + calendar.slot_duration_minutes * 60_000);
 
     // App-level re-check BEFORE any write (I2): a rejected instant must never
     // leave a contact row behind. This used to run after `createContact`,
     // which meant every "just taken" reply still injected a CRM row — no
     // booking, no trail beyond a name/email/phone written by whoever last hit
-    // the button, 5-10 minutes apart, one IP. Friendly message with fresh
-    // slots, computed the exact same way the picker itself was;
-    // `bookings_no_overlap` below is the actual guarantee against a race that
-    // lands between this check and the insert — this only saves a doomed
-    // write in the common case.
+    // the button, 5-10 minutes apart, one IP. `bookableSlot` is the one
+    // submit-time rule every booking path runs: free, fits, notice, horizon,
+    // and a start the engine offers under some state of the day — NOT "is it
+    // in the picker's current list", which a booking earlier in the day can
+    // shift (D-028's review). `bookings_no_overlap` below is the actual
+    // guarantee against a race that lands between this check and the insert —
+    // this only saves a doomed write in the common case.
     const now = new Date();
-    const stillFree = (await computeAllSlots(db, calendar, timezone, now)).some(
-      (s) => s.startsAt.getTime() === startsAt.getTime() && s.endsAt.getTime() === endsAt.getTime(),
-    );
-    if (!stillFree) return { ok: false, error: s.slotTaken, slotTaken: true };
+    const bookable = await bookableSlot(db, calendar, timezone, now, startsAt);
+    if (!bookable) return { ok: false, error: s.slotTaken, slotTaken: true };
+    const { endsAt } = bookable;
 
     // Video room, minted before the booking row exists (Task 3). No
     // ordering requirement forces this after `createBooking`: the real
@@ -327,6 +331,27 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       throw e;
     }
 
+    // D-031: a RETURNING booker's new details fill the blanks on the contact
+    // the dedupe found — a first phone number, a surname — and never
+    // overwrite what is there. The forms path's rule (`fillBlanks`,
+    // lib/forms/enrich.ts), through its exported twin in @bis/db. The phone
+    // goes AS TYPED, the same R2-C1 rule as `createContact` above: the
+    // write's own `phoneFields` judges it. A value that DIFFERS from the one
+    // on file is not written; the thread below carries what was typed, so it
+    // is not lost either. Only AFTER the insert succeeded (review minor): a
+    // booker who loses the slot race made no booking, so nothing of theirs is
+    // written onto a contact the dedupe matched. Best-effort, its own try:
+    // the booking is already real and must never become a reported failure.
+    if (created.existing) {
+      try {
+        await fillContactBlanks(db, calendar.account_id, contactId, {
+          firstName, lastName: lastName || undefined, email, phone: phone || undefined,
+        }, ACTOR_ID, ACTOR_TYPE);
+      } catch (e) {
+        console.error(`booking ${publicId}: fillContactBlanks failed for contact ${contactId}: ${String(e)}`);
+      }
+    }
+
     // Consent chain PR-2 (decision 8): a booking made with a phone is a grant.
     // Evidence only, never throws (lib/consent/grants.ts). As typed, so the
     // ledger keys the number the contact row stores.
@@ -352,7 +377,16 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       whenBookerZone = formatWhen(startsAt, bookerZone, locale);
       whenCompanyZoneForBooker = formatWhen(startsAt, timezone, locale);
       const convo = await ensureConversation(db, calendar.account_id, contactId, ACTOR_ID, ACTOR_TYPE);
-      const body = [`Booking: ${whenCompanyZone}`, ...(note ? [`Note: ${note}`] : [])].join("\n");
+      // The details as the booker TYPED them (D-031), the way a form
+      // submission's thread lists every answer: for a returning booker these
+      // can differ from what the contact holds, and the fill above never
+      // overwrites — this line is where staff see the difference.
+      const body = [
+        `Booking: ${whenCompanyZone}`,
+        `Email: ${email}`,
+        ...(phone ? [`Phone: ${phone}`] : []),
+        ...(note ? [`Note: ${note}`] : []),
+      ].join("\n");
       await createMessage(db, calendar.account_id, {
         conversationId: convo.id, channel: "form", direction: "inbound",
         subject: "Booking", body,
@@ -395,6 +429,12 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // ANY post-insert failure here — not just a single recipient's send,
     // which already has its own catch below — from ever reaching that outer
     // catch again.
+    //
+    // D-033: whether the CONFIRMATION went is the one fact out of this block
+    // the booker is told about. It flips only after `sendEmailOrThrow`
+    // returns for that send (it throws on every not-sent answer), so a throw
+    // anywhere earlier in the block leaves it false too.
+    let confirmationSent = false;
     try {
       const brand = emailBrand({
         brandName: account?.brand_name ?? null, brandLogoPath: account?.brand_logo_path ?? null,
@@ -448,6 +488,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
         replyTo: normalizeReplyTo(account?.reply_to_email), subject: bookingConfirmationSubject(locale),
         body: text, html,
       });
+      confirmationSent = true;
     } catch (e) {
       console.error("booking emails failed", e);
     }
@@ -478,7 +519,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       console.error(`booking ${bookingId} alert SMS failed: ${String(e)}`);
     }
 
-    return { ok: true, cancelUrl };
+    return { ok: true, cancelUrl, confirmationSent };
   } catch (e) {
     console.error(`submitBookingAction ${publicId} failed: ${String(e)}`);
     return { ok: false, error: s.genericError };

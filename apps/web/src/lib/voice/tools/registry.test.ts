@@ -2,9 +2,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const computeAllSlotsMock = vi.fn();
+const bookableSlotMock = vi.fn();
 vi.mock("@/lib/booking/availability", async (importOriginal) => {
   const real = await importOriginal<object>();
-  return { ...real, computeAllSlots: (...a: unknown[]) => computeAllSlotsMock(...a) };
+  return {
+    ...real,
+    computeAllSlots: (...a: unknown[]) => computeAllSlotsMock(...a),
+    bookableSlot: (...a: unknown[]) => bookableSlotMock(...a),
+  };
 });
 const dbMocks = vi.hoisted(() => ({
   findUpcomingBookingForPhone: vi.fn(),
@@ -78,6 +83,13 @@ const markHandoffRequestedMock = dbMocks.markHandoffRequested;
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
   computeAllSlotsMock.mockReset();
+  // By default the submit-time check answers from the same slot list the
+  // tests already set up: a start is bookable when the list carries it. The
+  // real rule (`bookableRange`) is pinned in booking/slots.test.ts; the
+  // D-028-review tests below override this to prove the tools ASK it.
+  bookableSlotMock.mockReset().mockImplementation(async (db: unknown, cal: unknown, tz: unknown, now: unknown, startsAt: Date) =>
+    (((await computeAllSlotsMock(db, cal, tz, now)) ?? []) as { startsAt: Date; endsAt: Date }[])
+      .find((s) => s.startsAt.getTime() === startsAt.getTime()) ?? null);
   meetingProviderMock.mockReset().mockReturnValue(null);
   providerSetup.fails = false;
   gateCalls.length = 0;
@@ -266,6 +278,25 @@ describe("book_appointment", () => {
     expect(String((result as { error?: string }).error)).toMatch(/email confirmation/);
     expect(dbMocks.createBooking).not.toHaveBeenCalled();
     expect(dbMocks.createContact).not.toHaveBeenCalled();
+  });
+
+  it("D-028 review: asks the submit-time rule for the requested instant — a free start the CURRENT list no longer carries is still booked (mutation: back to list membership → FAILS)", async () => {
+    computeAllSlotsMock.mockResolvedValue([]); // a booking since re-anchored the list past 14:00
+    bookableSlotMock.mockResolvedValue(slot);   // ...but 14:00 is still free
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(bookableSlotMock.mock.calls[0]![4]).toEqual(slot.startsAt);
+    expect(dbMocks.createBooking).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ startsAt: slot.startsAt, endsAt: slot.endsAt }), "voice", "ai");
+  });
+
+  it("refuses a start the submit-time rule refuses", async () => {
+    bookableSlotMock.mockResolvedValue(null);
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+    expect(result).toMatchObject({ ok: false });
+    expect(dbMocks.createBooking).not.toHaveBeenCalled();
   });
 
   it("books phone-only once the model attests the caller declined email", async () => {
@@ -554,6 +585,19 @@ describe("reschedule / cancel", () => {
     expect(state.bookings.find((b) => b.id === "old1")).toBeUndefined(); // replaced, not duplicated
     expect(state.bookings.find((b) => b.id === "new1")).toMatchObject({ status: "booked" });
     expect(state.served).toEqual(["rescheduled"]);
+  });
+  it("D-028 review: reschedule asks the submit-time rule for the requested instant — a free start that the CURRENT list no longer carries is still taken (mutation: back to list membership → FAILS)", async () => {
+    const wantedSlot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") };
+    computeAllSlotsMock.mockResolvedValue([]); // the list re-anchored past 14:00
+    bookableSlotMock.mockResolvedValue(wantedSlot); // ...but 14:00 is still free
+    dbMocks.getBookingById.mockResolvedValue({ id: "old1", contact_id: "ct1", calendar_id: "cal1",
+      starts_at: "2027-06-01T14:00:00Z", ends_at: "2027-06-01T15:00:00Z", status: "booked" });
+    dbMocks.createBooking.mockResolvedValue({ id: "new1", cancelToken: "t" });
+    dbMocks.setBookingStatus.mockResolvedValue(undefined);
+    const { result } = await runTool(emptyCallState(), ctx, "reschedule_appointment",
+      { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+    expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+    expect(bookableSlotMock.mock.calls[0]![4]).toEqual(wantedSlot.startsAt);
   });
   it("cancel marks status and mirrors", async () => {
     dbMocks.getBookingById.mockResolvedValue({ id: "b1", contact_id: "ct1", calendar_id: "cal1",

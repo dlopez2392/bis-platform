@@ -249,11 +249,14 @@ export type BookingReminderInput = {
 };
 
 /**
- * The reminder a booker gets ~24h before their booking.
+ * The reminder a booker gets ~24h before their booking — or, for a booking
+ * made less than a day ahead, ~3-4h before it (D-029, `LATE_REMINDER_*` in
+ * packages/db/src/booking.ts). The copy therefore never says "tomorrow": it
+ * names the time and nothing relative.
  *
  * The confirmation minus the company-zone line and minus the "you're booked"
  * novelty: the booker already knows they're booked, so the subject here is
- * "this is tomorrow", not a repeat of the original news. The video link, when
+ * "this is coming up", not a repeat of the original news. The video link, when
  * present, gets the same `button()` treatment as the confirmation's — it IS
  * the meeting, so it outweighs the plain cancel link here too.
  */

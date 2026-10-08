@@ -6,6 +6,7 @@ const getCalendarByPublicIdMock = vi.fn();
 const listBookedRangesMock = vi.fn();
 const countRecentBookingsMock = vi.fn();
 const createContactMock = vi.fn();
+const fillContactBlanksMock = vi.fn();
 const createBookingMock = vi.fn();
 const ensureConversationMock = vi.fn();
 const createMessageMock = vi.fn();
@@ -115,6 +116,7 @@ vi.mock("@bis/db", () => ({
   listBookedRanges: (...a: unknown[]) => listBookedRangesMock(...a),
   countRecentBookings: (...a: unknown[]) => countRecentBookingsMock(...a),
   createContact: (...a: unknown[]) => createContactMock(...a),
+  fillContactBlanks: (...a: unknown[]) => fillContactBlanksMock(...a),
   createBooking: (...a: unknown[]) => createBookingMock(...a),
   ensureConversation: (...a: unknown[]) => ensureConversationMock(...a),
   createMessage: (...a: unknown[]) => createMessageMock(...a),
@@ -253,12 +255,18 @@ beforeEach(() => {
   listBookedRangesMock.mockReset().mockResolvedValue([]);
   countRecentBookingsMock.mockReset().mockResolvedValue(0);
   createContactMock.mockReset().mockResolvedValue({ id: "contact_1", existing: false });
+  fillContactBlanksMock.mockReset().mockResolvedValue([]);
   createBookingMock.mockReset().mockResolvedValue({ id: "booking_1", cancelToken: "tok_1" });
   ensureConversationMock.mockReset().mockResolvedValue({ id: "convo_1", created: true });
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
   incrementUnreadCountMock.mockReset();
   setAttributionMock.mockReset().mockResolvedValue(undefined);
-  sendMock.mockReset().mockResolvedValue(undefined);
+  // The provider contract (`SendEmailResult`, lib/email/fake.ts): a send
+  // resolves `{ providerMessageId }`. This used to resolve `undefined`, which
+  // the real gate destructures and reports as a FAILED send — so every
+  // email in this suite was a swallowed failure, invisible until D-033 made
+  // the action report whether the confirmation went.
+  sendMock.mockReset().mockResolvedValue({ providerMessageId: "msg_test" });
   vi.mocked(sendEmailOrThrow).mockClear();
   getMeetingProviderMock.mockReset().mockReturnValue(null);
   createMeetingRoomMock.mockReset();
@@ -273,7 +281,7 @@ describe("submitBookingAction — spam gates (each mutation named)", () => {
   it("honeypot filled: fake success, zero writes, zero sends (mutation: skip the honeypot check → FAILS)", async () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ [HONEYPOT_FIELD]: "gotcha" }));
 
-    expect(result).toEqual({ ok: true, cancelUrl: "" });
+    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: true });
     expect(createContactMock).not.toHaveBeenCalled();
     expect(createBookingMock).not.toHaveBeenCalled();
     expect(ensureConversationMock).not.toHaveBeenCalled();
@@ -285,7 +293,7 @@ describe("submitBookingAction — spam gates (each mutation named)", () => {
     const freshToken = signRenderToken(Date.now(), PUBLIC_ID); // elapsed ~0ms, under MIN_FILL_MS
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ [RENDER_TOKEN_FIELD]: freshToken }));
 
-    expect(result).toEqual({ ok: true, cancelUrl: "" });
+    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: true });
     expect(createContactMock).not.toHaveBeenCalled();
     expect(createBookingMock).not.toHaveBeenCalled();
     expect(ensureConversationMock).not.toHaveBeenCalled();
@@ -393,6 +401,118 @@ describe("submitBookingAction — happy path", () => {
   });
 });
 
+/**
+ * D-031. `createContact` returns the EXISTING contact when the email or phone
+ * matches, and writes nothing to it — so a returning booker's first phone
+ * number (or a name they never gave before) was dropped on the floor. The
+ * rule is the forms path's (`fillBlanks` in lib/forms/enrich.ts): fill what
+ * is blank, never overwrite what is there. Its exported twin in @bis/db,
+ * `fillContactBlanks`, is what this action calls. A value that DIFFERS from
+ * the one on file is not written — and is not lost either: the booking's
+ * thread carries the email and phone exactly as the booker typed them, the
+ * way a form submission's thread lists every answer.
+ */
+describe("submitBookingAction — D-031: a returning booker's new details fill the blanks", () => {
+  it("a returning booker: fillContactBlanks gets this booking's details, phone AS TYPED, with the public/system pair (mutation: drop the call → FAILS)", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ phone: "(956) 555-0199" }));
+
+    expect(result.ok).toBe(true);
+    expect(fillContactBlanksMock).toHaveBeenCalledTimes(1);
+    expect(fillContactBlanksMock).toHaveBeenCalledWith(
+      expect.anything(), ACCOUNT_ID, "contact_existing",
+      { firstName: "Maria", lastName: "Lopez", email: "maria@example.com", phone: "(956) 555-0199" },
+      "public", "system",
+    );
+    // Filled only AFTER the booking insert succeeded (review minor): a booker
+    // who loses the slot race must not have written onto someone's contact.
+    expect(fillContactBlanksMock.mock.invocationCallOrder[0]!)
+      .toBeGreaterThan(createBookingMock.mock.invocationCallOrder[0]!);
+  });
+
+  it("a slot taken at insert (SlotTakenError) fills nothing (mutation: fill before the insert → FAILS)", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+    createBookingMock.mockRejectedValue(new SlotTakenError());
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ phone: "(956) 555-0199" }));
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").slotTaken, slotTaken: true });
+    expect(fillContactBlanksMock).not.toHaveBeenCalled();
+  });
+
+  it("a new contact: nothing to fill — createContact already wrote every field", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(fillContactBlanksMock).not.toHaveBeenCalled();
+  });
+
+  it("blank optional fields are not passed as values (an absent phone never reaches the fill)", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+    await submitBookingAction(PUBLIC_ID, validFormData({ phone: "", lastName: "" }));
+    const input = fillContactBlanksMock.mock.calls[0]![3] as Record<string, unknown>;
+    expect(input.phone).toBeUndefined();
+    expect(input.lastName).toBeUndefined();
+  });
+
+  it("a fill failure never costs the booking — still ok:true, booking still created", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+    fillContactBlanksMock.mockRejectedValueOnce(new Error("db down"));
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    expect(createBookingMock).toHaveBeenCalled();
+  });
+
+  it("the thread carries the email and phone as the booker typed them, so a number that differs from the one on file is not lost (mutation: drop the lines → FAILS)", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_existing", existing: true });
+    await submitBookingAction(PUBLIC_ID, validFormData({ phone: "(956) 555-0199" }));
+    const body = createMessageMock.mock.calls[0]![2].body as string;
+    expect(body).toMatch(/^Booking: /);
+    expect(body.split("\n")).toContain("Email: maria@example.com");
+    expect(body.split("\n")).toContain("Phone: (956) 555-0199");
+  });
+
+  it("no phone given, no Phone line", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData({ phone: "" }));
+    const body = createMessageMock.mock.calls[0]![2].body as string;
+    expect(body).not.toMatch(/^Phone:/m);
+  });
+});
+
+/**
+ * D-033. The success screen said "We've sent a confirmation to your email"
+ * whatever happened to the send — including when the provider refused it, or
+ * was never configured. The action now reports `confirmationSent`, true only
+ * once the email gate said the confirmation itself was SENT (the alert to the
+ * company is a different email and decides nothing here). The spam branches'
+ * fake success says `true`, so it stays indistinguishable from a real one.
+ */
+describe("submitBookingAction — D-033: the result says whether the confirmation actually went", () => {
+  it("the confirmation sent: confirmationSent is true (mutation: hard-code false → FAILS)", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toMatchObject({ ok: true, confirmationSent: true });
+    expect(sendMock.mock.calls.map((c) => (c[0] as { to: string }).to)).toContain("maria@example.com");
+  });
+
+  it("the provider refuses the booker's confirmation: still booked, but confirmationSent is false (mutation: hard-code true → FAILS)", async () => {
+    sendMock.mockImplementation(async (input: { to: string }) => {
+      if (input.to === "maria@example.com") throw new Error("provider said no");
+      return { providerMessageId: "m_1" };
+    });
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toMatchObject({ ok: true, confirmationSent: false });
+    expect(createBookingMock).toHaveBeenCalled();
+  });
+
+  it("the company's alert fails but the confirmation goes: confirmationSent is still true", async () => {
+    sendMock.mockImplementation(async (input: { to: string }) => {
+      if (input.to === "owner@acme.com") throw new Error("alert bounced");
+      return { providerMessageId: "m_2" };
+    });
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toMatchObject({ ok: true, confirmationSent: true });
+  });
+});
+
 describe("submitBookingAction — I3: attribution the embed lifted off the host page", () => {
   it("a submit carrying utm_source calls setAttribution with it, after createContact, before createBooking", async () => {
     const order: string[] = [];
@@ -459,6 +579,57 @@ describe("submitBookingAction — I1: the two previously-unpinned guards", () =>
     expect(createBookingMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * D-028's review, end to end through the REAL engine and predicate: the
+   * visitor picks a slot; before they submit, someone books an earlier time
+   * that same day, which (with a buffer) re-anchors every later grid point —
+   * the picker would no longer list the one they chose. It is still free, so
+   * the submit must take it, not answer "just taken".
+   */
+  it("D-028 review: a picked slot that is still free is accepted after an earlier booking re-anchors the day (mutation: back to list membership → FAILS)", async () => {
+    const cal = calendarRow({ buffer_minutes: 15 });
+    getCalendarByPublicIdMock.mockResolvedValue(cal);
+    const config: SlotConfig = {
+      timezone: accountRow.timezone, slotDurationMinutes: cal.slot_duration_minutes,
+      bufferMinutes: 15, minNoticeHours: cal.min_notice_hours, maxAdvanceDays: cal.max_advance_days,
+      openHours: cal.open_hours as SlotConfig["openHours"],
+    };
+    const base = computeSlots(config, [], new Date());
+    // A pick with an earlier same-day booking that removes it from the list.
+    let picked: { startsAt: Date; endsAt: Date } | null = null;
+    let earlier: { startsAt: Date; endsAt: Date } | null = null;
+    for (let k = 8; k < base.length && !picked; k++) {
+      const candidate = { startsAt: base[k - 4]!.startsAt, endsAt: base[k - 4]!.endsAt };
+      const after = computeSlots(config, [candidate], new Date());
+      if (!after.some((s) => s.startsAt.getTime() === base[k]!.startsAt.getTime())) {
+        picked = base[k]!;
+        earlier = candidate;
+      }
+    }
+    expect(picked, "precondition: some pick is re-anchored away by an earlier booking").not.toBeNull();
+    listBookedRangesMock.mockResolvedValue([
+      { starts_at: earlier!.startsAt.toISOString(), ends_at: earlier!.endsAt.toISOString() },
+    ]);
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ slotStartsAt: picked!.startsAt.toISOString() }));
+
+    expect(result).toMatchObject({ ok: true });
+    expect(createBookingMock).toHaveBeenCalledWith(expect.anything(), ACCOUNT_ID,
+      expect.objectContaining({ startsAt: picked!.startsAt, endsAt: picked!.endsAt }), "public", "system");
+  });
+
+  it("a pick that the earlier booking's buffer really does cover is still refused", async () => {
+    getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ buffer_minutes: 15 }));
+    // Booked right up to the picked slot's start: the 15-minute buffer covers it.
+    listBookedRangesMock.mockResolvedValue([{
+      starts_at: new Date(slot.startsAt.getTime() - 30 * 60_000).toISOString(),
+      ends_at: slot.startsAt.toISOString(),
+    }]);
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toEqual({ ok: false, error: bookingStrings("en").slotTaken, slotTaken: true });
+    expect(createBookingMock).not.toHaveBeenCalled();
+  });
+
   it("calendar disabled by submit time: generic error, no contact created (mutation: drop the enabled check → FAILS)", async () => {
     getCalendarByPublicIdMock.mockResolvedValue(calendarRow({ enabled: false }));
 
@@ -503,7 +674,7 @@ describe("submitBookingAction — C3: an expired render token is a real failure,
   it("a malformed token (not expired, just invalid) keeps the shared fake success", async () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ [RENDER_TOKEN_FIELD]: "not-a-token" }));
 
-    expect(result).toEqual({ ok: true, cancelUrl: "" });
+    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: true });
     expect(createContactMock).not.toHaveBeenCalled();
   });
 });
@@ -571,7 +742,7 @@ describe("submitBookingAction — a post-insert email failure never reaches the 
     // No `host` header in this suite's default `headers()` mock, so
     // `originFrom` returns null and `cancelUrl` is the already-handled empty
     // string — still `ok:true`, never the outer catch's generic error.
-    expect(result).toEqual({ ok: true, cancelUrl: "" });
+    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: false });
     expect(createContactMock).toHaveBeenCalled();
     expect(createBookingMock).toHaveBeenCalled();
     expect(ensureConversationMock).toHaveBeenCalled();
