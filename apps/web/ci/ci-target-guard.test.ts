@@ -162,6 +162,9 @@ function runGuard(
   overrides: Partial<Record<AnyVar, string | undefined>> = {},
   curl: { status?: string; exit?: number } = {},
   extraEnv: Record<string, string> = {},
+  // The mode argument (none = the CI project, as e2e runs it) and the values
+  // a case starts from before its overrides (VALID = the CI project's).
+  opts: { args?: string[]; base?: Partial<Record<AnyVar, string>> } = {},
 ): Run {
   for (const f of ["argv", "stdin"]) fs.rmSync(path.join(fakeDir, f), { force: true });
 
@@ -172,7 +175,9 @@ function runGuard(
   // Optional variables are stripped too, so an ambient Stripe key (a
   // developer's .env, CI's e2e job) can never leak into a case.
   for (const name of [...GUARD_VARS, ...OPTIONAL_VARS]) delete env[name];
-  const merged: Partial<Record<AnyVar, string | undefined>> = { ...VALID, ...VALID_OPTIONAL, ...overrides };
+  const merged: Partial<Record<AnyVar, string | undefined>> = {
+    ...(opts.base ?? VALID), ...VALID_OPTIONAL, ...overrides,
+  };
   for (const name of [...GUARD_VARS, ...OPTIONAL_VARS]) {
     const value = merged[name];
     if (value !== undefined) env[name] = value;
@@ -185,7 +190,7 @@ function runGuard(
   env.FAKE_CURL_EXIT = String(curl.exit ?? 0);
   Object.assign(env, extraEnv);
 
-  const r = spawnSync(bash, [SCRIPT], { env, encoding: "utf8" });
+  const r = spawnSync(bash, [SCRIPT, ...(opts.args ?? [])], { env, encoding: "utf8" });
   if (r.error) throw r.error;
   const read = (f: string) => {
     const p = path.join(fakeDir, f);
@@ -491,5 +496,193 @@ describe("the guard never prints a secret value", () => {
   ])("%s", (_label, overrides, curl) => {
     const r = runGuard(overrides, curl);
     for (const secret of secrets) expect(r.output).not.toContain(secret);
+  });
+});
+
+// verify runs on a Supabase stack it starts inside its own runner
+// (.github/scripts/ci-local-supabase.sh), so its four Supabase values do not
+// exist when the job starts. It runs the guard twice: once straight after
+// checkout, where it must hold NO cloud Supabase value at all (they belong to
+// e2e's job env, and a leaked one would aim the suites at a shared project),
+// and once after the stack is up, where every value must name that stack on
+// the runner's loopback and nothing else.
+const CLERK_ONLY: Partial<Record<AnyVar, string>> = {
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: CLERK_PUBLISHABLE,
+  CLERK_SECRET_KEY: CLERK_SECRET,
+};
+const SUPABASE_VARS = [
+  "BIS_CI_SUPABASE_REF", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL",
+] as const;
+const LOCAL_SECRET_KEY = "eyJUNIT.TEST.LOCAL_SERVICE_ROLE_JWT_2c9d";
+const LOCAL_DB_PASSWORD = "UnitTestLocalDbPassword_51fe";
+const LOCAL: Partial<Record<AnyVar, string>> = {
+  ...CLERK_ONLY,
+  NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: "eyJUNIT.TEST.LOCAL_ANON_JWT",
+  SUPABASE_SERVICE_ROLE_KEY: LOCAL_SECRET_KEY,
+  SUPABASE_DB_URL: `postgresql://postgres:${LOCAL_DB_PASSWORD}@127.0.0.1:54322/postgres`,
+};
+type Curl = { status?: string; exit?: number };
+const before = (overrides: Partial<Record<AnyVar, string | undefined>> = {}, curl: Curl = {}) =>
+  runGuard(overrides, curl, {}, { args: ["--before-local-stack"], base: CLERK_ONLY });
+const local = (overrides: Partial<Record<AnyVar, string | undefined>> = {}, curl: Curl = {}) =>
+  runGuard(overrides, curl, {}, { args: ["--local-stack"], base: LOCAL });
+
+describe("ci-target-guard.sh --before-local-stack: verify's preflight, before its own stack exists", () => {
+  it("passes with the Clerk development keys and no Supabase value at all, and sends nothing anywhere", () => {
+    const r = before();
+    expect(r.output).not.toContain("::error::");
+    expect(r.status).toBe(0);
+    expect(r.curlCalled).toBe(false);
+  });
+
+  it.each(SUPABASE_VARS)("refuses %s when it is already set, naming it and the e2e job it belongs to (mutation: skip this mode's emptiness loop → exit 0, FAILS)", (name) => {
+    const r = before({ [name]: VALID[name] });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(new RegExp(`::error::${name} is set before verify's local Supabase stack exists.*e2e`));
+    expect(r.curlCalled).toBe(false);
+  });
+
+  it("still names production when the leaked value is production's", () => {
+    const r = before({ NEXT_PUBLIC_SUPABASE_URL: `https://${PROD_REF}.supabase.co` });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*NEXT_PUBLIC_SUPABASE_URL.*production/);
+  });
+
+  it.each(["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"] as const)("refuses to run when %s is missing", (name) => {
+    const r = before({ [name]: "" });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(new RegExp(`::error::.*${name}.*(empty|missing)`));
+  });
+
+  it("refuses a production Clerk key", () => {
+    const r = before({ CLERK_SECRET_KEY: "sk_live_UNIT_TEST_LIVE_SK" });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*CLERK_SECRET_KEY.*production/);
+  });
+
+  it("refuses a live Stripe key here too", () => {
+    const r = before({ STRIPE_SECRET_KEY: STRIPE_LIVE });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*STRIPE_SECRET_KEY.*live-mode/);
+  });
+});
+
+describe("ci-target-guard.sh --local-stack: verify, once its stack is up", () => {
+  it("passes on the stack's loopback values, and probes that stack's REST API once", () => {
+    const r = local();
+    expect(r.output).not.toContain("::error::");
+    expect(r.status).toBe(0);
+    expect(r.curlArgv).toContain("http://127.0.0.1:54321/rest/v1/agencies?select=id&limit=1");
+  });
+
+  it("hands the key to curl on stdin only, as both apikey and bearer, with -q first", () => {
+    const r = local();
+    expect(r.status).toBe(0);
+    expect(r.curlStdin).toContain(`apikey: ${LOCAL_SECRET_KEY}`);
+    expect(r.curlStdin).toContain(`Authorization: Bearer ${LOCAL_SECRET_KEY}`);
+    expect(r.curlArgv).not.toContain(LOCAL_SECRET_KEY);
+    expect(r.curlArgv.split("\n")[0]).toBe("-q");
+  });
+
+  it.each(["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL"] as const)(
+    "refuses to run when %s is missing, naming the step that writes it",
+    (name) => {
+      const r = local({ [name]: "" });
+      expect(r.status).toBe(1);
+      expect(r.output).toMatch(new RegExp(`::error::${name} is empty or missing.*ci-local-supabase\\.sh`));
+      expect(r.curlCalled).toBe(false);
+    },
+  );
+
+  it("refuses the CI project's cloud URL: verify never runs on a shared project (mutation: accept any https URL → FAILS)", () => {
+    const r = local({ NEXT_PUBLIC_SUPABASE_URL: `https://${REF}.supabase.co` });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::NEXT_PUBLIC_SUPABASE_URL is not the local stack's API/);
+    expect(r.curlCalled).toBe(false);
+  });
+
+  it("refuses production's URL, naming production", () => {
+    const r = local({ NEXT_PUBLIC_SUPABASE_URL: `https://${PROD_REF}.supabase.co` });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*NEXT_PUBLIC_SUPABASE_URL.*production/);
+    expect(r.curlCalled).toBe(false);
+  });
+
+  it.each([
+    "http://127.0.0.1.evil.example:54321",
+    "http://127.0.0.1:54321/",
+    "http://127.0.0.1:54321@evil.example",
+    "https://127.0.0.1:54321",
+    "http://10.0.0.5:54321",
+  ])("refuses an API URL that is not exactly http://<loopback>:<port>: %s", (url) => {
+    const r = local({ NEXT_PUBLIC_SUPABASE_URL: url });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::NEXT_PUBLIC_SUPABASE_URL/);
+    expect(r.curlCalled).toBe(false);
+  });
+
+  it("accepts localhost as the loopback name", () => {
+    const r = local({
+      NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321",
+      SUPABASE_DB_URL: `postgresql://postgres:${LOCAL_DB_PASSWORD}@localhost:54322/postgres`,
+    });
+    expect(r.status).toBe(0);
+  });
+
+  it.each([
+    ["the CI project's pooler", dbUrl(`postgres.${REF}`)],
+    ["a host that only starts with the loopback address", `postgresql://postgres:${LOCAL_DB_PASSWORD}@127.0.0.1.evil.example:54322/postgres`],
+    ["a query string, where node-pg reads a host= override", `postgresql://postgres:${LOCAL_DB_PASSWORD}@127.0.0.1:54322/postgres?host=evil.example`],
+    ["not a postgres URI", "eyJ_pasted_into_the_wrong_box"],
+  ])("refuses a DB URL that is not the local stack's: %s (mutation: drop the DB URL check → FAILS)", (_label, value) => {
+    const r = local({ SUPABASE_DB_URL: value });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::SUPABASE_DB_URL is not the local stack's database/);
+    expect(r.curlCalled).toBe(false);
+  });
+
+  it("refuses a publishable key in the secret key's place", () => {
+    const r = local({ SUPABASE_SERVICE_ROLE_KEY: "sb_publishable_UNIT_TEST_WRONG_BOX" });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*SUPABASE_SERVICE_ROLE_KEY.*publishable/);
+  });
+
+  it("refuses a production Clerk key", () => {
+    const r = local({ NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_live_UNIT_TEST_LIVE_PK" });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY.*production/);
+  });
+
+  it.each<[string, RegExp]>([
+    ["401", /::error::.*401.*local stack/],
+    ["403", /::error::.*403.*(grant|privilege)/],
+    ["404", /::error::.*404.*migrations/],
+    ["000", /::error::.*(reach|start)/],
+  ])("names a %s from the local stack in its own terms, never as a paused cloud project", (status, message) => {
+    const r = local({}, { status, exit: status === "000" ? 7 : 0 });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(message);
+    expect(r.output).not.toMatch(/Restore|dashboard/);
+  });
+
+  it.each<[string, Partial<Record<AnyVar, string>>, Curl]>([
+    ["passing", {}, {}],
+    ["probe 401", {}, { status: "401" }],
+    ["DB URL refused", { SUPABASE_DB_URL: `postgresql://postgres:${LOCAL_DB_PASSWORD}@evil.example:5432/postgres` }, {}],
+  ])("prints none of the local stack's secrets: %s", (_label, overrides, curl) => {
+    const r = local(overrides, curl);
+    expect(r.output).not.toContain(LOCAL_SECRET_KEY);
+    expect(r.output).not.toContain(LOCAL_DB_PASSWORD);
+  });
+});
+
+describe("ci-target-guard.sh refuses an argument it does not know", () => {
+  it.each([[["--local"]], [["--local-stack", "extra"]], [["local-stack"]]])("refuses %j, so a typo can never pick a mode (mutation: ignore unknown arguments → runs the CI-project checks and exits 0, FAILS)", (args) => {
+    const r = runGuard({}, {}, {}, { args });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::ci-target-guard\.sh takes no argument, --before-local-stack or --local-stack/);
+    expect(r.curlCalled).toBe(false);
   });
 });

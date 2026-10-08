@@ -10,32 +10,46 @@ name: CI
 # runs the packages/db suite (hundreds of live tests that create and delete
 # their own rows), and e2e creates a fixture client and drives a real browser
 # through it. Until 2026-09-24 that database was PRODUCTION's project,
-# because it was the only one. They now run on a separate Free project that
-# exists only for CI, `bis-ci` (BIS_CI_SUPABASE_REF below), built from the
-# migration files by .github/workflows/ci-project-setup.yml and seeded by
-# `ci:seed`. Of the workflows on main, only seed-demo.yml and
-# screenshots.yml still reach production's database, through the non-CI_
-# secrets held by the `production` environment (main only); neither job here
-# declares that environment, so neither can read them. (A
-# LOCAL test runs now refuse production too, since #135: they throw before
-# connecting when their env files name production's ref.)
-# Rebuilding, restoring or re-seeding the CI project:
+# because it was the only one. Since then:
+#
+#   verify  (since 2026-10-08) a throwaway Supabase stack started INSIDE its
+#           own runner by `supabase start`, built from the branch's own
+#           migration files in the CI project's order (bootstrap, then
+#           migrations; .github/scripts/ci-local-supabase.sh), and gone when
+#           the runner is. It shares nothing with any other run, so it waits
+#           for nobody (no job-level concurrency group, below).
+#   e2e     the separate Free project that exists only for CI, `bis-ci`
+#           (BIS_CI_SUPABASE_REF in e2e's env), built from the migration files
+#           by .github/workflows/ci-project-setup.yml and seeded by `ci:seed`.
+#           It stays there because it signs in through the Clerk development
+#           instance, which that project trusts and a local stack does not.
+#
+# Of the workflows on main, only seed-demo.yml and screenshots.yml still
+# reach production's database, through the non-CI_ secrets held by the
+# `production` environment (main only); neither job here declares that
+# environment, so neither can read them. (LOCAL test runs refuse production
+# too, since #135: they throw before connecting when their env files name
+# production's ref.) Rebuilding, restoring or re-seeding the CI project:
 # docs/runbooks/ci-supabase-project.md.
 #
-# The switch is enforced, not assumed. Every job runs
-# .github/scripts/ci-target-guard.sh straight after checkout: it refuses any
-# value that names production, a DB URL that is not the CI project's Session
-# pooler user, a Clerk key from the production instance, and a secret key
-# that does not open the CI project's REST API. The secrets that
-# hold production's values — the ones NAMED NEXT_PUBLIC_SUPABASE_URL,
-# SUPABASE_SERVICE_ROLE_KEY and SUPABASE_DB_URL — are never read here;
-# apps/web/ci/ci-workflow.test.ts fails `pnpm check` if one ever is.
+# The targets are enforced, not assumed, by .github/scripts/ci-target-guard.sh
+# straight after checkout in both jobs. In e2e it refuses any value that
+# names production, a DB URL that is not the CI project's Session pooler user,
+# a Clerk key from the production instance, and a secret key that does not
+# open the CI project's REST API. In verify it runs twice: first
+# (--before-local-stack) it refuses ANY Supabase value already in scope, so
+# no cloud credential reaches verify at all, and then, once the stack is up
+# (--local-stack), it refuses any API or DB URL that is not on the runner's
+# loopback. The secrets that hold production's values — the ones NAMED
+# NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and SUPABASE_DB_URL —
+# are never read here; apps/web/ci/ci-workflow.test.ts fails `pnpm check` if
+# one ever is.
 #
 #   verify  typecheck + lint + unit tests + production build. This is exactly
 #           `pnpm check` and `pnpm --filter web build` from CLAUDE.md, no
 #           more and no less, so CI and a contributor's terminal cannot
-#           disagree about what "green" means. The guard in front of them is
-#           a preflight, not a gate.
+#           disagree about what "green" means. The guard runs and the stack
+#           in front of them are preflights, not gates.
 #
 #   e2e     seeds the CI project (idempotent; a no-op once seeded), then the
 #           Playwright journey. Serialized ACROSS THE WHOLE REPO, never
@@ -74,11 +88,21 @@ on:
 #   Re-running an OLD run of a branch joins that branch's group too, so it
 #   cancels the branch's current run; re-run the newest one instead.
 #
-#   The jobs' own groups (below), repo-wide and queueing: different branches
-#   wait in line for the one CI database, FIFO, up to 100 deep. Until this
-#   date they used the default `queue: single`, which keeps ONE waiting entry
-#   and cancels it when another arrives, so a push on any branch cancelled
+#   e2e's own group (below), repo-wide and queueing: different branches wait
+#   in line for the one CI database, FIFO, up to 100 deep. Until this date it
+#   used the default `queue: single`, which keeps ONE waiting entry and
+#   cancels it when another arrives, so a push on any branch cancelled
 #   whichever other branch's job was waiting (about five times that day).
+#
+#   verify has NO group of its own since 2026-10-08. It had one,
+#   `verify-ci-supabase`, repo-wide, because every verify ran its db suite
+#   against the one shared cloud project and two at once failed on wall clock
+#   (2026-09-17: two branches overlapped 13.5 minutes and both failed inside
+#   `pnpm check`). That made it the bottleneck: with three or four runs
+#   queued, the last waited about 45 minutes before starting. Each verify now
+#   runs on a stack inside its own runner, so there is nothing to contend for
+#   and branches' verify runs go in parallel. The per-branch group above
+#   still supersedes a branch's own stale run, and still never cancels main.
 concurrency:
   group: ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -92,83 +116,39 @@ env:
   # pointed the e2e run's cancel links at the production domain instead of the
   # local server. A gate must test the code, not the deployment's settings.
   NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
-  # The CI project, as literals so the target is visible in review. The ref is
-  # the one allowlist every CI-only tool checks against (the guard, ci:seed,
-  # db:push:ci); the URL must be exactly https://<ref>.supabase.co. The
-  # publishable key is publishable by design. All three must name the same
-  # project as ci-project-setup.yml's env (pinned by ci-workflow.test.ts).
-  BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
-  NEXT_PUBLIC_SUPABASE_URL: https://odnobiodsftffphuuosz.supabase.co
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_TjstwU6y9KPtV8XD4BSFrw_WaNtv0Qc
-  # Secrets. Sending is FAKE everywhere except VERCEL_ENV=production
-  # (.env.example), so a CI run never emails a real address. The secret key
-  # and DB URL are the CI project's (CI_* secrets; SUPABASE_DB_URL is its
-  # Session pooler URI, since runners have no IPv6), mapped onto the names the
-  # code reads; the db suite, one web test, ci:seed and the e2e fixture setup
-  # use them to create and delete their own rows. Clerk stays the development
-  # instance, which the guard enforces.
+  # Secrets both jobs need. Sending is FAKE everywhere except
+  # VERCEL_ENV=production (.env.example), so a CI run never emails a real
+  # address. Clerk stays the development instance, which the guard enforces.
+  #
+  # NO Supabase value lives here (since 2026-10-08). verify reads its four
+  # from the stack it starts; the CI project's are in e2e's own env. A value
+  # here would reach verify too: ci-target-guard.sh --before-local-stack
+  # refuses that at run time, and ci-workflow.test.ts in review.
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
   CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}
-  SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    # 35, not 20. The first green run spent 15m30s in `pnpm check` alone —
-    # the packages/db suite is live network work against Supabase, and a
-    # runner is a slower, more distant client than a dev machine (the same
-    # command takes ~3 minutes locally). 20 left under four minutes of
-    # headroom, which is a gate that eventually fails on wall clock and
-    # trains everyone to re-run red CI without reading it. The CI project is
-    # a Free project on the smallest compute; it has not been timed there yet.
+    # 35, not 20, set when the db suite ran against the shared cloud project:
+    # the first green run spent 15m30s in `pnpm check` alone, because every
+    # db test was a round trip to us-east-1 from a runner. On the local stack
+    # (2026-10-08) those round trips are loopback; lower this once enough
+    # runs have been timed there to know the new headroom.
     timeout-minutes: 35
-    concurrency:
-      # ONE group for the whole repo, never cancelled — the same semantics
-      # this job had on production's project, under a new name.
-      #
-      # Why one group: two db suites against one project at once is
-      # contention, and contention fails on wall clock. On 2026-09-17
-      # `feat/sms-opt-out` and `feat/call-handoff` overlapped for 13.5 minutes
-      # and BOTH failed inside `pnpm check`; a re-run failed on a DIFFERENT
-      # test, which is the signature of contention rather than a defect (db
-      # round trips measured 10-20s contended, ~2.2s alone). The fixture data
-      # itself does not collide — ids are random and the sweep only takes
-      # rows older than an hour — so this is about capacity, and the Free
-      # project has less of it than production had.
-      #
-      # Why never cancelled: a group is repo-wide, so cancelling would let a
-      # push on one branch kill a DIFFERENT branch's verify mid-db-suite; and
-      # a cancelled run on main means the commit being DEPLOYED never
-      # finished being checked (#62 and #64 each had their main run killed by
-      # the next merge). Superseding a branch's OWN stale run is done one
-      # level up, by the workflow's per-branch group (top of this file).
-      #
-      # Why `queue: max` (2026-10-07): the default keeps ONE waiting job per
-      # group and cancels it when another arrives, so a push on any branch
-      # cancelled a different branch's waiting verify. Now up to 100 wait,
-      # first in, first out.
-      #
-      # Why a new name: a branch that has not merged main yet still carries
-      # the old ci.yml, which runs on production's project under the old
-      # group names. The two queues no longer share a database, so they must
-      # not block each other.
-      #
-      # Next (only after two concurrent runs are measured on the CI project):
-      # a per-branch group here, so branches run in parallel instead of in
-      # line. Not before: the fixture ids do not collide, but the suite also
-      # touches rows every run shares (plans, ops_heartbeats' cron.tick, reads
-      # of Test Client One), and the contention above is what failed.
-      group: verify-ci-supabase
-      cancel-in-progress: false
-      queue: max
+    # NO `concurrency:` here, on purpose (2026-10-08). verify used to join one
+    # repo-wide group, `verify-ci-supabase`, because every run shared one cloud
+    # database; see the header. Its database is now its own, so it runs the
+    # moment a runner is free. ci-workflow.test.ts fails if a group returns.
     steps:
       - uses: actions/checkout@v5
 
       # Before `pnpm install` and before anything touches a database. Needs
-      # only bash and curl. Names every problem it finds, prints no value.
-      - name: Check that CI targets the CI Supabase project
-        run: bash .github/scripts/ci-target-guard.sh
+      # only bash. Names every problem it finds, prints no value. Here it
+      # refuses any Supabase value at all: verify has none until its own
+      # stack writes them, three steps below.
+      - name: Check that verify holds no cloud Supabase credential
+        run: bash .github/scripts/ci-target-guard.sh --before-local-stack
 
       # DOCS-ONLY PUSHES END HERE, GREEN. Writes docs_only=true only for a
       # push to a branch other than main whose WHOLE diff against main is
@@ -203,9 +183,32 @@ jobs:
       - run: pnpm install --frozen-lockfile
         if: steps.scope.outputs.docs_only != 'true'
 
+      # The Supabase CLI at the version pnpm-lock.yaml pins for packages/db,
+      # from its release tarball, refused unless its sha256 is the one pinned
+      # in the script. Not an action: see the script's header.
+      - name: Install the Supabase CLI
+        if: steps.scope.outputs.docs_only != 'true'
+        run: bash .github/scripts/ci-supabase-cli.sh
+
+      # verify's database, inside this runner: `supabase start` with no
+      # migrations, then the CI project's bootstrap, then the branch's own
+      # migrations by `supabase db push`, in that order (grants attach when a
+      # table is created). Writes the stack's URL, keys and DB URL to
+      # GITHUB_ENV for the steps below, and reports how long each part took.
+      - name: Start a local Supabase stack
+        if: steps.scope.outputs.docs_only != 'true'
+        run: bash .github/scripts/ci-local-supabase.sh
+
+      # The same guard, now on the values the suites will actually read: the
+      # API and DB URL must be this runner's loopback, and the stack's REST
+      # API must answer with its service key.
+      - name: Check that verify targets its local Supabase stack
+        if: steps.scope.outputs.docs_only != 'true'
+        run: bash .github/scripts/ci-target-guard.sh --local-stack
+
       # `pnpm check` = typecheck + lint + every package's vitest suite,
-      # verbatim from CLAUDE.md. The db suite and one web test are live
-      # against the CI project and clean up after themselves.
+      # verbatim from CLAUDE.md. The db suite and the live web tests run
+      # against the local stack and clean up after themselves.
       - name: pnpm check
         if: steps.scope.outputs.docs_only != 'true'
         run: pnpm check
@@ -245,18 +248,39 @@ jobs:
     # e2e waits instead of running alongside. The gain is that "green" means
     # something. And e2e no longer runs at all when verify is already red, so
     # it stops burning a runner on a commit that cannot merge.
+    #
+    # Since 2026-10-08 verify no longer touches the CI project at all (it runs
+    # on a stack in its own runner), so the contention above is gone; `needs`
+    # stays for the last reason alone. Starting e2e alongside verify is a
+    # separate decision, not made here.
     needs: verify
-    # The one e2e test that calls the model (concierge.spec.ts, "a visitor's
-    # message comes back with a reply") skips itself when this is unset — so
-    # until 2026-09-21 no machine had ever proved a real answer comes back
-    # (the first proof was a person, in a browser, on Test Client One).
-    # Scoped to THIS job on purpose: the unit suites under `verify` stub or
-    # clear the key themselves, and a job that never talks to OpenAI should
-    # not carry the credential. The secret is a separate CI key (`bis-ci`),
-    # revocable on its own; the cost is one short model call per run. When
-    # the secret is absent the expression is an empty string, which the
-    # test treats as unset, so this line is safe to merge ahead of the key.
     env:
+      # The CI project, as literals so the target is visible in review. The
+      # ref is the one allowlist every CI-only tool checks against (the guard,
+      # ci:seed, db:push:ci); the URL must be exactly https://<ref>.supabase.co.
+      # The publishable key is publishable by design. All three must name the
+      # same project as ci-project-setup.yml's env (pinned by
+      # ci-workflow.test.ts). In THIS job's env, not the workflow's, since
+      # 2026-10-08: verify runs on its own stack and must not hold them.
+      BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz
+      NEXT_PUBLIC_SUPABASE_URL: https://odnobiodsftffphuuosz.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_TjstwU6y9KPtV8XD4BSFrw_WaNtv0Qc
+      # The CI project's secret key and DB URL (CI_* secrets; SUPABASE_DB_URL
+      # is its Session pooler URI, since runners have no IPv6), mapped onto
+      # the names the code reads; ci:seed and the e2e fixture setup use them
+      # to create and delete their own rows.
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}
+      # The one e2e test that calls the model (concierge.spec.ts, "a visitor's
+      # message comes back with a reply") skips itself when this is unset — so
+      # until 2026-09-21 no machine had ever proved a real answer comes back
+      # (the first proof was a person, in a browser, on Test Client One).
+      # Scoped to THIS job on purpose: the unit suites under `verify` stub or
+      # clear the key themselves, and a job that never talks to OpenAI should
+      # not carry the credential. The secret is a separate CI key (`bis-ci`),
+      # revocable on its own; the cost is one short model call per run. When
+      # the secret is absent the expression is an empty string, which the
+      # test treats as unset, so this line is safe to merge ahead of the key.
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       # Stripe TEST mode only. e2e/plans.spec.ts creates a product and four
       # prices with it, and skips itself with a ::warning when it is unset.
@@ -282,13 +306,15 @@ jobs:
       CONSENT_TOKEN_SECRET: bis_ci_e2e_consent_token_fixture_only
     concurrency:
       # Serialized repo-wide and never cancelled; see the header. A new name
-      # for the reason verify's has one: branches still on the old ci.yml run
-      # e2e on production's project under `e2e-shared-supabase` (which the
+      # (2026-09-24) because branches still on the older ci.yml ran e2e on
+      # production's project under `e2e-shared-supabase` (which the
       # seed-demo and screenshots workflows also take), and this queue must
       # neither wait for nor block theirs.
-      # `queue: max` for the reason verify's group has it. Parallel e2e is
-      # NOT safe — every run shares Test Client One — so the line stays one
-      # repo-wide queue; it just no longer drops the job waiting in it.
+      # `queue: max` (2026-10-07): the default keeps ONE waiting job per group
+      # and cancels it when another arrives, so a push on any branch cancelled
+      # a different branch's waiting e2e. Parallel e2e is NOT safe — every run
+      # shares Test Client One — so the line stays one repo-wide queue; it
+      # just no longer drops the job waiting in it.
       group: e2e-ci-supabase
       cancel-in-progress: false
       queue: max

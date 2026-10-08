@@ -20,6 +20,17 @@ const PROD_REF = "tlbkbmlrfafquucsmsmm";
 /** Production's publishable key's prefix, the literal ci.yml carried until the switch. */
 const PROD_PUBLISHABLE_PREFIX = "sb_publishable_h2Gm";
 const GUARD = "bash .github/scripts/ci-target-guard.sh";
+/** verify's two guard runs: before its own Supabase stack exists, and once it is up. */
+const GUARD_BEFORE_LOCAL = `${GUARD} --before-local-stack`;
+const GUARD_LOCAL = `${GUARD} --local-stack`;
+/** verify's database: a throwaway stack in its own runner (ci-local-supabase.test.ts). */
+const INSTALL_CLI = "bash .github/scripts/ci-supabase-cli.sh";
+const START_STACK = "bash .github/scripts/ci-local-supabase.sh";
+/** The names the code reads to find Supabase. verify gets them from its own stack only. */
+const SUPABASE_NAMES = [
+  "BIS_CI_SUPABASE_REF", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL",
+];
 /** The docs-only decision (its behaviour is tested in ci-docs-only.test.ts). */
 const SCOPE = "bash .github/scripts/ci-docs-only.sh";
 /** The ONE condition a command step in verify or e2e may carry. */
@@ -173,10 +184,23 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(found).toEqual([]);
   });
 
-  it("maps the CI project's secrets onto the names the code reads", () => {
-    expect(ciEnv.SUPABASE_SERVICE_ROLE_KEY).toBe("${{ secrets.CI_SUPABASE_SECRET_KEY }}");
-    expect(ciEnv.SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
-    expect(ciEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY).toMatch(/^sb_publishable_/);
+  it("maps the CI project's secrets onto the names the code reads, in the e2e job's own env", () => {
+    const e2eEnv = jobEnv(job("e2e"));
+    expect(e2eEnv.SUPABASE_SERVICE_ROLE_KEY).toBe("${{ secrets.CI_SUPABASE_SECRET_KEY }}");
+    expect(e2eEnv.SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
+    expect(e2eEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY).toMatch(/^sb_publishable_/);
+  });
+
+  // verify runs on a stack it starts in its own runner (2026-10-08). A cloud
+  // value in the workflow-level env would reach verify too: it would hand
+  // verify the CI project's secret key for nothing, and depending on how
+  // GitHub orders `env:` against GITHUB_ENV it could aim verify's suites back
+  // at the shared project. The guard's --before-local-stack refuses that at
+  // run time; this refuses it in review.
+  it("gives verify no cloud Supabase value: none in the workflow-level env, none in its own (mutation: move NEXT_PUBLIC_SUPABASE_URL back to the top-level env → FAILS)", () => {
+    expect(SUPABASE_NAMES.filter((n) => n in ciEnv)).toEqual([]);
+    expect(SUPABASE_NAMES.filter((n) => n in jobEnv(job("verify")))).toEqual([]);
+    expect(job("verify").filter((l) => /secrets\.CI_SUPABASE_/.test(l))).toEqual([]);
   });
 
   it("hands the Stripe TEST key to the e2e job only, as STRIPE_SECRET_KEY (mutation: move it to the top-level env, or drop it → FAILS)", () => {
@@ -201,12 +225,13 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(ciLines.filter((l) => l.includes("STRIPE_WEBHOOK_SECRET") && !l.trim().startsWith("#"))).toHaveLength(1);
   });
 
-  it("names the same CI project as the setup workflow that builds it, as a literal URL", () => {
+  it("names the same CI project as the setup workflow that builds it, as a literal URL, in e2e's env", () => {
     // The project ci-project-setup.yml bootstraps, pushes and seeds is the one
-    // the gates must run on. A rebuilt project changes both files together.
+    // e2e must run on. A rebuilt project changes both files together.
+    const e2eEnv = jobEnv(job("e2e"));
     expect(setupEnv.BIS_CI_SUPABASE_REF).toMatch(/^[a-z0-9]{20}$/);
-    expect(ciEnv.BIS_CI_SUPABASE_REF).toBe(setupEnv.BIS_CI_SUPABASE_REF);
-    expect(ciEnv.NEXT_PUBLIC_SUPABASE_URL).toBe(`https://${setupEnv.BIS_CI_SUPABASE_REF}.supabase.co`);
+    expect(e2eEnv.BIS_CI_SUPABASE_REF).toBe(setupEnv.BIS_CI_SUPABASE_REF);
+    expect(e2eEnv.NEXT_PUBLIC_SUPABASE_URL).toBe(`https://${setupEnv.BIS_CI_SUPABASE_REF}.supabase.co`);
   });
 });
 
@@ -225,10 +250,13 @@ describe("ci.yml's jobs", () => {
     expect(keys.filter((k) => ["name", "if", "continue-on-error"].includes(k))).toEqual([]);
   });
 
-  it.each(["verify", "e2e"])("%s runs the target guard straight after checkout, before anything else", (id) => {
+  it.each([
+    ["verify", GUARD_BEFORE_LOCAL],
+    ["e2e", GUARD],
+  ])("%s runs the target guard straight after checkout, before anything else", (id, guard) => {
     const [first, second] = steps(job(id));
     expect(first?.uses ?? "").toMatch(/^actions\/checkout@/);
-    expect(second?.run).toBe(GUARD);
+    expect(second?.run).toBe(guard);
     // Nothing else on the step: an `if:` could skip it and a
     // `continue-on-error:` could let a refusal pass.
     expect([...(second?.keys ?? [])].sort()).toEqual(["name", "run"]);
@@ -241,9 +269,16 @@ describe("ci.yml's jobs", () => {
     expect(all.filter((s) => s.run && s.keys.includes("if") && s.if !== DOCS_ONLY_IF)).toEqual([]);
   });
 
-  it("verify runs exactly the guard, the docs-only decision, the install, pnpm check and the build, in that order", () => {
+  it("verify runs exactly the guard, the docs-only decision, the install, its own Supabase stack, the guard again on that stack, pnpm check and the build, in that order (mutation: drop the --local-stack guard step → FAILS)", () => {
+    // pnpm check and the build are still exactly CLAUDE.md's gates; what is
+    // new is where their database comes from, and that the guard checks it
+    // after it exists and before anything uses it.
     const runs = steps(job("verify")).flatMap((s) => (s.run ? [s.run] : []));
-    expect(runs).toEqual([GUARD, SCOPE, "pnpm install --frozen-lockfile", "pnpm check", "pnpm --filter web build"]);
+    expect(runs).toEqual([
+      GUARD_BEFORE_LOCAL, SCOPE, "pnpm install --frozen-lockfile",
+      INSTALL_CLI, START_STACK, GUARD_LOCAL,
+      "pnpm check", "pnpm --filter web build",
+    ]);
   });
 
   // The docs-only gate. A docs-only push must still END each required job
@@ -304,13 +339,20 @@ describe("ci.yml's jobs", () => {
     expect(playwright, "Playwright step").toBeGreaterThan(seed);
   });
 
-  it.each([
-    ["verify", "verify-ci-supabase"],
-    ["e2e", "e2e-ci-supabase"],
-  ])("%s queues in its own CI-project group and is never cancelled", (id, group) => {
-    const text = job(id).join("\n");
-    expect(/^\s+group: (\S+)\s*$/m.exec(text)?.[1]).toBe(group);
+  it("e2e queues in its own CI-project group and is never cancelled", () => {
+    const text = job("e2e").join("\n");
+    expect(/^\s+group: (\S+)\s*$/m.exec(text)?.[1]).toBe("e2e-ci-supabase");
     expect(/^\s+cancel-in-progress: (\S+)\s*$/m.exec(text)?.[1]).toBe("false");
+  });
+
+  // 2026-10-08: verify shares no database with any other run (its stack lives
+  // and dies in its own runner), so it waits for nobody. Its old repo-wide
+  // group, `verify-ci-supabase`, serialized every branch behind one cloud
+  // project. A branch's own stale run is still superseded by the
+  // workflow-level per-branch group, which this does not touch.
+  it("verify joins no job-level concurrency group, so branches' verify runs go in parallel (mutation: re-add `group: verify-ci-supabase` → FAILS)", () => {
+    expect(jobKeys(job("verify"))).not.toContain("concurrency");
+    expect(job("verify").filter((l) => /^\s+(group|queue|cancel-in-progress):/.test(l))).toEqual([]);
   });
 
   // Cross-branch cancellation (2026-10-07). A concurrency group holds one
@@ -318,12 +360,11 @@ describe("ci.yml's jobs", () => {
   // pending job replaces the older one. Both groups above are repo-wide, so
   // any push on any branch cancelled whichever other branch's job was
   // waiting (~5 times that day). `queue: max` lets up to 100 wait, FIFO
-  // (GitHub docs, "Queueing multiple pending runs"). The groups stay
-  // repo-wide because neither job is shown safe to run twice at once: e2e
-  // shares Test Client One by design, and two db suites have failed on wall
-  // clock together (verify's group comment).
-  it.each(["verify", "e2e"])("%s lets every other branch's job wait in line instead of replacing it (mutation: drop `queue: max` → FAILS)", (id) => {
-    const text = job(id).join("\n");
+  // (GitHub docs, "Queueing multiple pending runs"). e2e's group stays
+  // repo-wide because it is not safe to run twice at once: every run shares
+  // Test Client One by design. (verify left its group on 2026-10-08, above.)
+  it("e2e lets every other branch's job wait in line instead of replacing it (mutation: drop `queue: max` → FAILS)", () => {
+    const text = job("e2e").join("\n");
     expect(/^\s+queue: (\S+)\s*$/m.exec(text)?.[1]).toBe("max");
   });
 

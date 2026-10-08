@@ -38,6 +38,30 @@
 # The probe runs last on purpose: the secret key is only ever sent to a host
 # the static checks have already accepted.
 #
+# MODES (2026-10-08). The checks above are the DEFAULT, with no argument: the
+# e2e job, which runs on the shared CI project. The verify job runs on a
+# throwaway Supabase stack it starts inside its own runner
+# (.github/scripts/ci-local-supabase.sh), so it has no CI-project value to
+# check, and runs this script twice instead:
+#
+#   --before-local-stack  straight after checkout, before that stack exists.
+#       The Clerk keys must be present and the development instance's (check
+#       4), a Stripe key must be a test key (check 6), and NONE of the five
+#       Supabase values above may be set at all: verify holds no cloud
+#       project's credential, so one that is set leaked in from ci.yml's env
+#       (they belong to e2e's job env) and would aim the suites at a shared
+#       project. Sends nothing anywhere.
+#   --local-stack  once the stack is up and has written its values to
+#       GITHUB_ENV. The four values the code reads must all be present;
+#       NEXT_PUBLIC_SUPABASE_URL must be exactly http://<loopback>:<port>
+#       and SUPABASE_DB_URL a postgres URI on the loopback with no query
+#       string (node-pg reads a `host=` there over the URI's own host);
+#       production's ref may appear nowhere, Clerk is checked as above, and
+#       the probe goes to that loopback API with the stack's service key.
+#
+# Any other argument, or more than one, is refused before anything is
+# checked, so a typo can never select a weaker mode.
+#
 # NEVER prints a value: every message names a variable, never its content.
 # Tested by apps/web/ci/ci-target-guard.test.ts (collected by `pnpm check`).
 
@@ -58,12 +82,36 @@ fail() {
   failed=1
 }
 
+# --- mode ---------------------------------------------------------------------
+# The argument is never echoed: it names a mode, and anything else is refused.
+mode="ci-project"
+if [ "$#" -gt 1 ]; then
+  mode="unknown"
+else
+  case "${1:-}" in
+    "") ;;
+    --before-local-stack) mode="before-local-stack" ;;
+    --local-stack) mode="local-stack" ;;
+    *) mode="unknown" ;;
+  esac
+fi
+if [ "$mode" = "unknown" ]; then
+  echo "::error::ci-target-guard.sh takes no argument, --before-local-stack or --local-stack (one at most). Nothing was checked and nothing was sent."
+  exit 1
+fi
+
 # Where a missing value comes from, so the message names the fix.
 source_of() {
   case "$1" in
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY | CLERK_SECRET_KEY) echo "repository secret $1"; return ;;
+  esac
+  if [ "$mode" = "local-stack" ]; then
+    echo "the step that starts verify's local Supabase stack (.github/scripts/ci-local-supabase.sh), which writes it to GITHUB_ENV from \`supabase status\`"
+    return
+  fi
+  case "$1" in
     SUPABASE_SERVICE_ROLE_KEY) echo "repository secret CI_SUPABASE_SECRET_KEY" ;;
     SUPABASE_DB_URL) echo "repository secret CI_SUPABASE_DB_URL" ;;
-    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY | CLERK_SECRET_KEY) echo "repository secret $1" ;;
     *) echo "a literal in the env block of .github/workflows/ci.yml" ;;
   esac
 }
@@ -78,12 +126,29 @@ clerk_sk="${CLERK_SECRET_KEY:-}"
 stripe_key="${STRIPE_SECRET_KEY:-}"
 
 # --- 1. present -------------------------------------------------------------
-for name in BIS_CI_SUPABASE_REF NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY \
-  SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY; do
+case "$mode" in
+  ci-project)
+    required="BIS_CI_SUPABASE_REF NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY" ;;
+  before-local-stack)
+    required="NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY" ;;
+  local-stack)
+    required="NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY" ;;
+esac
+for name in $required; do
   if [ -z "${!name:-}" ]; then
     fail "$name is empty or missing; it comes from $(source_of "$name")."
   fi
 done
+
+# --- 1b. before the local stack: no Supabase value at all ----------------------
+if [ "$mode" = "before-local-stack" ]; then
+  for name in BIS_CI_SUPABASE_REF NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY \
+    SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL; do
+    if [ -n "${!name:-}" ]; then
+      fail "$name is set before verify's local Supabase stack exists. verify runs on a stack it starts inside its own runner and holds no cloud project's value; the CI project's values belong in the e2e job's env in .github/workflows/ci.yml, never the workflow-level env."
+    fi
+  done
+fi
 
 # --- 2. the CI project, never production -----------------------------------
 for name in BIS_CI_SUPABASE_REF NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY \
@@ -96,7 +161,7 @@ for name in BIS_CI_SUPABASE_REF NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_AN
   esac
 done
 
-if [ -n "$ref" ]; then
+if [ "$mode" = "ci-project" ] && [ -n "$ref" ]; then
   if ! [[ "$ref" =~ ^[a-z0-9]{20}$ ]]; then
     fail "BIS_CI_SUPABASE_REF is not shaped like a Supabase project ref (20 lowercase letters and digits)."
   elif [ -n "$url" ] && [ "$url" != "https://$ref.supabase.co" ]; then
@@ -104,8 +169,36 @@ if [ -n "$ref" ]; then
   fi
 fi
 
+# --- 2L. the local stack's API, on the runner's loopback ------------------------
+# Exactly http://<loopback>:<port>, the form `supabase status` prints: no path
+# (the probe appends one), no userinfo, no TLS (the local stack has none).
+if [ "$mode" = "local-stack" ] && [ -n "$url" ]; then
+  if ! [[ "$url" =~ ^http://(127\.0\.0\.1|localhost):[0-9]{1,5}$ ]]; then
+    fail "NEXT_PUBLIC_SUPABASE_URL is not the local stack's API: it must be exactly http://127.0.0.1:<port> (or localhost), as \`supabase status\` prints it. verify never runs on a cloud project."
+  fi
+fi
+
+# --- 3L. the local stack's database, on the runner's loopback -------------------
+if [ "$mode" = "local-stack" ] && [ -n "$db" ]; then
+  db_ok=0
+  case "$db" in
+    postgres://* | postgresql://*)
+      rest="${db#*://}"
+      hostpart="${rest##*@}"      # after the LAST @, so a password cannot move it
+      hostport="${hostpart%%/*}"
+      case "$rest" in
+        *"?"*) ;;                  # a query string can carry host=, which node-pg obeys
+        *) [[ "$hostport" =~ ^(127\.0\.0\.1|localhost)(:[0-9]{1,5})?$ ]] && db_ok=1 ;;
+      esac
+      ;;
+  esac
+  if [ "$db_ok" -ne 1 ]; then
+    fail "SUPABASE_DB_URL is not the local stack's database: it must be a postgres:// URI on 127.0.0.1 (or localhost) with no query string, as \`supabase status\` prints it. verify never connects to a cloud project."
+  fi
+fi
+
 # --- 3. the CI project's Session pooler user --------------------------------
-if [ -n "$db" ] && [ -n "$ref" ]; then
+if [ "$mode" = "ci-project" ] && [ -n "$db" ] && [ -n "$ref" ]; then
   case "$db" in
     postgres://* | postgresql://*)
       rest="${db#*://}"
@@ -154,11 +247,50 @@ if [ "$failed" -ne 0 ]; then
   exit 1
 fi
 
+if [ "$mode" = "before-local-stack" ]; then
+  echo "CI target guard: no cloud Supabase value in scope before verify's local stack starts, and the Clerk development instance, confirmed. The stack's own values are checked by --local-stack once it is up."
+  exit 0
+fi
+
 # The key travels on stdin (`--header @-`), never on curl's command line,
 # where any process on the machine could read it. `-q` must stay curl's FIRST
 # argument: it stops curl reading ~/.curlrc (or $CURL_HOME/.curlrc), where a
 # `verbose` line would print the request headers, key included.
 probe="$url/rest/v1/agencies?select=id&limit=1"
+
+if [ "$mode" = "local-stack" ]; then
+  # The local stack's service key is a JWT, which PostgREST reads from the
+  # Authorization header; the gateway wants it as apikey too, as supabase-js
+  # sends it.
+  status="$(printf 'apikey: %s\nAuthorization: Bearer %s\n' "$key" "$key" |
+    curl -q --silent --show-error --output /dev/null --write-out '%{http_code}' \
+      --max-time 20 --retry 2 --header @- "$probe")" || true
+
+  case "$status" in
+    200)
+      echo "CI target guard: verify's local Supabase stack on this runner's loopback, and the Clerk development instance, confirmed."
+      exit 0
+      ;;
+    401)
+      fail "The local stack's REST API answered 401 to SUPABASE_SERVICE_ROLE_KEY: it is not this local stack's service-role key. .github/scripts/ci-local-supabase.sh maps it from \`supabase status\`; check which variable it read."
+      ;;
+    403)
+      fail "The local stack's REST API answered 403: the key was accepted but has no privilege on public.agencies. The bootstrap's default privileges (packages/db/supabase/bootstrap/ci-project.sql) did not take effect before the migrations; see the step that starts the stack."
+      ;;
+    404)
+      fail "The local stack's REST API answered 404 for public.agencies: the migrations were not applied to the local stack. See the step that starts it."
+      ;;
+    000 | "")
+      fail "Could not reach the local stack's API at all: \`supabase start\` did not finish, or the stack has stopped. See the step that starts it."
+      ;;
+    *)
+      fail "The local stack's REST API answered $status: the stack is unhealthy. See the step that starts it."
+      ;;
+  esac
+  echo "CI target guard: refused."
+  exit 1
+fi
+
 status="$(printf 'apikey: %s\n' "$key" |
   curl -q --silent --show-error --output /dev/null --write-out '%{http_code}' \
     --max-time 20 --retry 2 --header @- "$probe")" || true
