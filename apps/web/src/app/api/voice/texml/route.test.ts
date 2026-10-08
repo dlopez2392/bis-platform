@@ -1095,3 +1095,130 @@ describe("a per-account forward is recorded (0059)", () => {
     expect(await res.text()).toContain(">+19565550123</Dial>");
   });
 });
+
+// The signature the SIP webhook verifies (lib/voice/sip-handoff-signature.ts).
+// It is only worth anything if THIS request was itself authenticated: an
+// unauthenticated TeXML request can name any To/From, so signing its answer
+// would hand out valid signatures for numbers nobody verified.
+describe("the TeXML-route signature on the SIP dial (X-BIS-Signature)", () => {
+  const SECRET = "h".repeat(48);
+  const TO = "+19565550999";
+  const FROM = "+19565550111";
+
+  function telnyxSigned(params: Record<string, string>) {
+    const raw = new URLSearchParams(params).toString();
+    const ts = String(Math.floor(Date.now() / 1000));
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const sig = cryptoSign(null, Buffer.from(`${ts}|${raw}`, "utf8"), privateKey);
+    const spki = publicKey.export({ format: "der", type: "spki" }) as Buffer;
+    process.env.TELNYX_PUBLIC_KEY = spki.subarray(spki.length - 32).toString("base64");
+    return POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: raw,
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "telnyx-timestamp": ts, "telnyx-signature-ed25519": sig.toString("base64"),
+      },
+    }));
+  }
+
+  /** The `<Sip>` URI's `?X-…=` parameters, decoded the way a SIP stack reads them. */
+  function sipParams(xml: string): URLSearchParams {
+    const uri = /<Sip>([^<]*)<\/Sip>/.exec(xml)![1]!.replaceAll("&amp;", "&");
+    return new URLSearchParams(uri.slice(uri.indexOf("?") + 1));
+  }
+
+  beforeEach(() => { process.env.VOICE_HANDOFF_SECRET = SECRET; });
+  afterEach(() => {
+    delete process.env.VOICE_HANDOFF_SECRET;
+    delete process.env.TELNYX_PUBLIC_KEY;
+    vi.restoreAllMocks();
+  });
+
+  it("a Telnyx-signed request's dial carries a signature over ITS called number, caller and handoff token (mutation: drop the parameter → FAILS)", async () => {
+    const { verifySipHandoff } = await import("@/lib/voice/sip-handoff-signature");
+    const xml = await (await telnyxSigned({ To: TO, From: FROM })).text();
+    const p = sipParams(xml);
+    expect(p.get("X-BIS-Signature")).toBeTruthy();
+    expect(verifySipHandoff(p.get("X-BIS-Signature"), p.get("X-BIS-Handoff"), Date.now()))
+      .toEqual({ ok: true, calledE164: TO, callerE164: FROM });
+  });
+
+  it("a withheld caller signs as no caller, never as someone else's number", async () => {
+    const { verifySipHandoff } = await import("@/lib/voice/sip-handoff-signature");
+    const xml = await (await telnyxSigned({ To: TO, From: "anonymous" })).text();
+    const p = sipParams(xml);
+    expect(verifySipHandoff(p.get("X-BIS-Signature"), p.get("X-BIS-Handoff"), Date.now()))
+      .toEqual({ ok: true, calledE164: TO, callerE164: null });
+  });
+
+  it("an UNAUTHENTICATED request is never signed, secret or not (mutation: sign every dial → FAILS)", async () => {
+    // No TELNYX_PUBLIC_KEY: GET answers and POST is unverified — the
+    // documented unhardened mode, where anyone can name any To/From.
+    const viaGet = await (await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(TO)}&From=${encodeURIComponent(FROM)}`))).text();
+    const viaPost = await (await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: new URLSearchParams({ To: TO, From: FROM }),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    }))).text();
+    for (const xml of [viaGet, viaPost]) {
+      expect(xml).toContain("<Sip>");
+      expect(xml).not.toContain("X-BIS-Signature");
+    }
+  });
+
+  it("no secret, no signature — and the dial is otherwise the same bridge", async () => {
+    delete process.env.VOICE_HANDOFF_SECRET;
+    const xml = await (await telnyxSigned({ To: TO, From: FROM })).text();
+    expect(xml).toContain("sip:proj_test123@sip.api.openai.com;transport=tls?X-BIS-Called=%2B19565550999");
+    expect(xml).toContain("X-BIS-Handoff=");
+    expect(xml).not.toContain("X-BIS-Signature");
+  });
+
+  it("a dial whose guard reads failed is still signed: the webhook is where that call is gated (mutation: sign only cleared calls → FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    countCallerHistorySinceMock.mockRejectedValue(new Error("db down"));
+    const xml = await (await telnyxSigned({ To: TO, From: FROM })).text();
+    expect(xml).not.toContain("&amp;f="); // not cleared: no fallback ticket
+    expect(sipParams(xml).get("X-BIS-Signature")).toBeTruthy();
+  });
+
+  it("secret set but the request NOT Telnyx-signed: an error line naming the gap, and voice.texml stamped not-ok — the call is still bridged (mutation: drop the stamp → FAILS)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const xml = await (await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(TO)}&From=${encodeURIComponent(FROM)}`))).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("X-BIS-Signature");
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("VOICE_HANDOFF_ENFORCE would decline"));
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.texml",
+      { ok: false, error: "VOICE_HANDOFF_SECRET is set but TeXML requests are not Telnyx-signed, so calls carry no signature" });
+  });
+
+  it("secret set and the request signed: one ok stamp, no error line", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await telnyxSigned({ To: TO, From: FROM });
+    expect(err).not.toHaveBeenCalled();
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.texml", { ok: true });
+  });
+
+  it("no secret and an unauthenticated request is today's unhardened mode, not an error (mutation: warn whenever unsigned → FAILS)", async () => {
+    delete process.env.VOICE_HANDOFF_SECRET;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(TO)}&From=${encodeURIComponent(FROM)}`));
+    expect(err).not.toHaveBeenCalled();
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.texml", { ok: true });
+  });
+
+  it("an unauthenticated REFUSAL dials nobody, so it is not the gap: ok stamp (mutation: flag before the routing decision → FAILS)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    lookupMock.mockResolvedValue(null);
+    await GET(new Request(`https://x.example/api/voice/texml?To=${encodeURIComponent(TO)}&From=${encodeURIComponent(FROM)}`));
+    expect(err).not.toHaveBeenCalled();
+    expect(stampMock).toHaveBeenCalledExactlyOnceWith("voice.texml", { ok: true });
+  });
+
+  it("a refusal carries no dial and so no signature", async () => {
+    lookupMock.mockResolvedValue(null);
+    const xml = await (await telnyxSigned({ To: TO, From: FROM })).text();
+    expect(xml).not.toContain("<Dial");
+    expect(xml).not.toContain("X-BIS-Signature");
+  });
+});
