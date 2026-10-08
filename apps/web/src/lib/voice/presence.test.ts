@@ -102,5 +102,24 @@ describe("getVoicePresence", () => {
         db, "acct1", "2027-05-31T00:00:00.000Z", now.toISOString(),
       );
     });
+
+    // Spring-forward week: 2027-03-14 is the US DST jump (America/Chicago
+    // CST → CDT at 02:00 local). The week Monday 2027-03-08 through Sunday
+    // 2027-03-14 is 167 real hours, not 168 — adding `7 * 24 * 3600_000` ms
+    // to that Monday's local midnight lands ONE HOUR into the wrong side of
+    // the jump (2027-03-15T06:00:00.000Z) instead of the real local midnight
+    // of the following Monday (2027-03-15T05:00:00.000Z, now CDT). This
+    // proves `getVoicePresence` re-derives the boundary through
+    // `weekly-window.ts`'s own zone-correct instant resolution
+    // (`lastWeekMonday`/`weekWindow`) rather than any ms-arithmetic shortcut
+    // (mutation: replace the boundary with `now - 7*24*3600_000` → FAILS,
+    // off by exactly one hour).
+    it("a week spanning the US spring-forward jump still resolves to the REAL local midnight, not a 168-hour ms shortcut", async () => {
+      const now = new Date("2027-03-18T18:00:00.000Z"); // Thu 13:00 CDT, inside the week right after the jump
+      await getVoicePresence(db, "acct1", now, "America/Chicago");
+      expect(reportMocks.listAnsweredCallStartsBetween).toHaveBeenCalledWith(
+        db, "acct1", "2027-03-15T05:00:00.000Z", now.toISOString(),
+      );
+    });
   });
 });

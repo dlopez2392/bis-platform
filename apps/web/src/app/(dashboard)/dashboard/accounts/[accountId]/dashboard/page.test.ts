@@ -669,3 +669,37 @@ describe("AccountDashboardPage — After-hours captured is hidden without voice 
     expect(renderedText(html)).toContain(m["dashboard.kpi.afterHoursCaptured"]);
   });
 });
+
+/**
+ * D-063 follow-up (cheap, same defect as the weekly report's): the greeting
+ * subtitle hard-coded "Sofía is answering your calls." regardless of this
+ * account's own configured persona (voice_profiles.persona_name).
+ */
+describe("AccountDashboardPage — the voice sub-line names the account's own configured persona (D-063 follow-up)", () => {
+  beforeEach(resetFixtures);
+
+  it("an account with a renamed persona reads its OWN name, not 'Sofía' (mutation: hard-code the greeting to 'Sofía' → FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true, persona_name: "Max" });
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(renderedText(html)).toContain("Max is answering your calls.");
+    expect(renderedText(html)).not.toContain("Sofía");
+  });
+
+  it("falls back to 'Sofía' when the profile carries no persona name", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true });
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(renderedText(html)).toContain("Sofía is answering your calls.");
+  });
+
+  it("no enabled voice profile renders no sub-line at all, and never reads a persona name for it", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(renderedText(html)).not.toContain("is answering your calls.");
+  });
+});

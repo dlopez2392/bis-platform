@@ -158,7 +158,7 @@ function failedXml(languages: "en" | "es" | "both"): string {
 async function decide(token: string, status: string): Promise<string> {
   // Lazy import: a module-scope DB import breaks `next build` during
   // page-data collection (the documented trap this whole directory obeys).
-  const { serviceDb, getCallByHandoffToken, getVoiceProfile, setCallOutcome } = await import("@bis/db");
+  const { serviceDb, getCallByHandoffToken, getVoiceProfile, setCallOutcome, recordAutomationLog } = await import("@bis/db");
   const db = serviceDb();
 
   // 1. The token is the credential, and this lookup is the only source of
@@ -236,6 +236,28 @@ async function decide(token: string, status: string): Promise<string> {
       console.log(`handoff-result: call ${call.id} reached a person (${status}), accountId ${accountId}`);
     } catch (e) {
       console.error(`handoff-result: call ${call.id} transferred but the outcome did not save: ${String(e)}, accountId ${accountId}`);
+      return HANGUP;
+    }
+
+    // D-065 follow-up (review): `finishCall` wrote this call's automation_log
+    // row `skipped`/"The caller hung up before anyone could help" at socket
+    // close, because from the socket's point of view the caller DID leave
+    // abandoned — Sofía could not have known yet that the dial she was about
+    // to place would succeed. Now that it has, the row has to say so, or
+    // "Calls handled" keeps undercounting the exact call this whole feature
+    // exists to serve. Scoped to THIS call's own account and subject key, and
+    // idempotent by construction: `recordAutomationLog` upserts on
+    // (account_id, source, subject_key), so a replayed callback (guarded
+    // above by OUTRANKS_TRANSFERRED anyway) would simply write the same
+    // values again, never a second row. Its own try/catch: a logging failure
+    // must not cost the call its outcome stamp above, which already landed.
+    try {
+      await recordAutomationLog(db, {
+        accountId, source: "voice", channel: "ai", contactId: call.contact_id,
+        subjectKey: `call:${call.id}`, status: "sent", reason: "",
+      });
+    } catch (e) {
+      console.error(`handoff-result: call ${call.id} transferred but the automation log did not update: ${String(e)}, accountId ${accountId}`);
     }
     return HANGUP;
   }

@@ -1500,6 +1500,42 @@ describe("finishCall — the automation log row", () => {
     }));
   });
 
+  // D-065 FOLLOW-UP (review caught a regression in the fix above): plain
+  // `outcome === "abandoned"` skipped EVERY abandoned call, including the
+  // ones where Sofía plainly did something — a transfer ask, a cancel, a
+  // reschedule, a booking lookup. All four are `wasServed(state)`, and
+  // "The caller hung up before anyone could help" is false for every one of
+  // them. Only `abandoned && !wasServed` — a caller who spoke and got
+  // NOTHING — is a true hang-up.
+  it("a caller who asked for a person (and was routed, even before the dial's result is known) writes a SENT row, not skipped — Sofía answered (mutation: skip on outcome === 'abandoned' alone → FAILS)", async () => {
+    const s = withTransferred(abandonedState());
+    const r = await finishCall(s, ctx, meta);
+    expect(r.outcome).toBe("abandoned"); // classifyOutcome itself is unchanged; handoff-result upgrades it later
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "voice", status: "sent", reason: "",
+    }));
+  });
+
+  it.each(["cancelled", "rescheduled", "booking_found"] as const)(
+    "a caller served by a %s action writes a SENT row, not skipped, even though the call classifies abandoned (mutation: skip on outcome === 'abandoned' alone → FAILS)",
+    async (action) => {
+      const s = withServed(abandonedState(), action);
+      const r = await finishCall(s, ctx, meta);
+      expect(r.outcome).toBe("abandoned");
+      expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        source: "voice", status: "sent", reason: "",
+      }));
+    },
+  );
+
+  it("a TRUE hang-up — the caller spoke and nothing was done for them — still writes skipped (negative control: wasServed must gate something, not pass vacuously)", async () => {
+    const r = await finishCall(abandonedState(), ctx, meta);
+    expect(r.outcome).toBe("abandoned");
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: "voice", status: "skipped", reason: "The caller hung up before anyone could help",
+    }));
+  });
+
   it("no call row id → no log row; a log write that throws changes nothing about the result", async () => {
     const bookedState = withBooking(emptyCallState(), { id: "bk1", contactName: "Ana", startsAt: "x", endsAt: "y" });
     await finishCall(bookedState, ctx, { ...meta, callRowId: null });

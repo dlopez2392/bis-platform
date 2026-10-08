@@ -233,6 +233,13 @@ export default async function AccountDashboardPage({
   const greetingText = m[greetingKey].replace("{name}", () => greetingName);
   const dateText = formatLocalLongDate(now, timezone);
   const showVoiceSub = voiceProfile?.enabled === true;
+  // D-063 follow-up: the account's own configured persona, not a hard-coded
+  // "Sofía" — a function replacer for the same reason the greeting's own
+  // {name} substitution just above uses one (a persona containing `$&` must
+  // not be re-interpreted as a replacement pattern).
+  const voiceSubText = showVoiceSub
+    ? m["dashboard.sub.voice"].replace("{name}", () => voiceProfile?.persona_name?.trim() || "Sofía")
+    : "";
 
   // Calls answered — split the one 14-day fetch on window7's boundary
   // rather than issuing a second query. `callsDayBuckets` (14 days) feeds
@@ -322,7 +329,7 @@ export default async function AccountDashboardPage({
           `--surface-1` fill over the aurora's brightest glow. */}
       <PageHeader
         title={greetingText}
-        subtitle={`${dateText}${showVoiceSub ? ` · ${m["dashboard.sub.voice"]}` : ""}`}
+        subtitle={`${dateText}${showVoiceSub ? ` · ${voiceSubText}` : ""}`}
       />
       <div className="space-y-6 p-6">
         {/* Above the KPI tiles (Task 5) — both audiences, unlike the

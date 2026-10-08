@@ -41,7 +41,12 @@ export function TopbarPresence() {
             the whole shell re-tints for themed clients and a hardcoded
             violet dot would be the one off-brand element. */}
         <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary animate-pulse shadow-[0_0_0_4px_color-mix(in_srgb,var(--good)_22%,transparent)]" />
-        {m["shell.presence.onCall"]}
+        {/* D-063 follow-up: the account's own configured persona
+            (voice_profiles.persona_name), not a hard-coded "Sofía" — some
+            clients rename theirs. A function replacer for the same reason
+            page.tsx's own {name} substitutions use one (a persona
+            containing "$&" must not be re-interpreted as a pattern). */}
+        {m["shell.presence.onCall"].replace("{name}", () => presence.personaName?.trim() || "Sofía")}
       </span>
     );
   }
