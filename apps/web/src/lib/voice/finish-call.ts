@@ -601,13 +601,32 @@ export async function finishCall(
   // robocall" is the visibility the robocall week asked for — and "calls
   // handled" on the Activity page counts the sent rows. Its own try/catch,
   // like every other leg.
+  //
+  // `abandoned` is `skipped`, not `sent`, ONLY when NOBODY was served
+  // (D-065, then the review that caught its own regression): plain
+  // `outcome === "abandoned"` skipped EVERY abandoned call, including one
+  // where Sofía cancelled a booking, rebooked it, read back an appointment
+  // time, or routed the caller to a person — `wasServed(state)` is true in
+  // every one of those, and "nobody picked up" is false for all four; she
+  // did something, it just isn't a booking/lead/message of its own. Only a
+  // caller who spoke and got NOTHING (`abandoned && !wasServed`) is a true
+  // hang-up. A `transferred` ask is `wasServed` the moment the caller asks
+  // (`withTransferred`, mid-call) — before the dial that follows is even
+  // attempted — so this already marks it `sent` optimistically, same bet
+  // `finishCall`'s text-back gate below makes; `handoff-result/route.ts`
+  // re-asserts `sent` once the dial's real result is known, which is a
+  // no-op here but the ground truth there if this heuristic and that result
+  // ever disagree.
   if (meta.callRowId) {
     try {
+      const skipReason = outcome === "spam" ? REASONS.robocall
+        : outcome === "abandoned" && !wasServed(state) ? REASONS.callerHungUp
+        : "";
       await recordAutomationLog(ctx.db, {
         accountId: ctx.accountId, source: "voice", channel: "ai", contactId,
         subjectKey: `call:${meta.callRowId}`,
-        status: outcome === "spam" ? "skipped" : "sent",
-        reason: outcome === "spam" ? REASONS.robocall : "",
+        status: skipReason ? "skipped" : "sent",
+        reason: skipReason,
       });
     } catch (e) {
       console.error(`finishCall ${meta.callRowId}: automation log write failed: ${String(e)}`);

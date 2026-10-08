@@ -12,6 +12,10 @@ vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMo
 const getCallByHandoffTokenMock = vi.hoisted(() => vi.fn());
 const setCallOutcomeMock = vi.hoisted(() => vi.fn());
 const getVoiceProfileMock = vi.hoisted(() => vi.fn());
+// D-065 follow-up: once a transfer is confirmed, this route's own write must
+// flip the call's automation_log row to `sent` too — `finishCall` stamped it
+// at socket close, before the dial's real result was known.
+const recordAutomationLogMock = vi.hoisted(() => vi.fn());
 // Registered ONLY so that "this route does not read the transcript" is an
 // assertion rather than an absence. The route used to call `getCall` to read
 // one enum, which selects CALL_DETAIL_COLS — a JSONB transcript and the
@@ -40,6 +44,10 @@ vi.mock("@bis/db", () => ({
   getCall: (...a: unknown[]) => {
     events.push("call");
     return getCallMock(...a);
+  },
+  recordAutomationLog: (...a: unknown[]) => {
+    events.push("log");
+    return recordAutomationLogMock(...a);
   },
   // Read only on the FAILED branch, for the customer-facing name the text is
   // signed with. Never accounts.name.
@@ -143,6 +151,7 @@ beforeEach(() => {
   events.length = 0;
   getCallByHandoffTokenMock.mockReset().mockResolvedValue(REQUESTED);
   setCallOutcomeMock.mockReset().mockResolvedValue(undefined);
+  recordAutomationLogMock.mockReset().mockResolvedValue(undefined);
   getVoiceProfileMock.mockReset().mockResolvedValue(PROFILE);
   getCallMock.mockReset().mockResolvedValue({ id: "c1", account_id: "acct1", outcome: "abandoned" });
   transferFailedLineMock.mockReset().mockImplementation((l: "en" | "es" | "both") => realLine.fn!(l));
@@ -159,6 +168,104 @@ describe("voice texml handoff-result route", () => {
   it("a completed transfer stamps the call `transferred`", async () => {
     await post("tok_abc", { DialCallStatus: "completed" });
     expect(setCallOutcomeMock).toHaveBeenCalledWith(expect.anything(), "acct1", "c1", "transferred");
+  });
+
+  // D-065 follow-up: `finishCall` wrote this call's automation_log row at
+  // socket close, before the dial that follows was even attempted — this
+  // write is what makes that row say the truth once the dial actually
+  // succeeds. Scoped to the TOKEN's own account/call, same as the outcome
+  // stamp beside it.
+  it("a completed transfer also flips the call's automation_log row to sent (D-065 follow-up)", async () => {
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, contact_id: "ct9" });
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(recordAutomationLogMock).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "acct1", source: "voice", channel: "ai", contactId: "ct9",
+      subjectKey: "call:c1", status: "sent", reason: "",
+    });
+  });
+
+  it("an answered transfer flips the log row too — a person picked up either way", async () => {
+    await post("tok_abc", { DialCallStatus: "answered" });
+    expect(recordAutomationLogMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      subjectKey: "call:c1", status: "sent",
+    }));
+  });
+
+  // D-065 follow-up (minor, design/code review round 2): `finishCall` already
+  // wrote this call's automation_log row "sent" at socket close — the
+  // optimistic bet `wasServed` makes the moment the caller ASKS for a
+  // person, before the dial that follows is even attempted. When the dial
+  // rings out, the call STAYS `abandoned` (REQUESTED's own default), and the
+  // row has to say so: `skipped`, same as a true hang-up, because nobody
+  // was served after all.
+  it.each(["no-answer", "busy", "failed"])(
+    "%s flips the automation_log row to skipped — the optimistic 'sent' finishCall wrote did not pan out (mutation: leave it 'sent' → FAILS)",
+    async (status) => {
+      getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, contact_id: "ct9" });
+      await post("tok_abc", { DialCallStatus: status });
+      expect(recordAutomationLogMock).toHaveBeenCalledWith(expect.anything(), {
+        accountId: "acct1", source: "voice", channel: "ai", contactId: "ct9",
+        subjectKey: "call:c1", status: "skipped", reason: "Nobody answered the transfer",
+      });
+    },
+  );
+
+  it.each(["booked", "lead", "message"])(
+    "%s is left ALONE — the caller got something real despite the failed transfer, and the log must not be downgraded",
+    async (outcome) => {
+      getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, outcome });
+      await post("tok_abc", { DialCallStatus: "no-answer" });
+      expect(recordAutomationLogMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a log-write failure in the 'nobody answered' branch still returns valid TeXML (never a 5xx)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    recordAutomationLogMock.mockRejectedValue(new Error("boom"));
+    const res = await POST(req("tok_abc", { DialCallStatus: "no-answer" }));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<Say");
+    errSpy.mockRestore();
+  });
+
+  it("a replayed 'no-answer' callback does not write the log again with different values — recordAutomationLog's own upsert makes it idempotent", async () => {
+    await post("tok_abc", { DialCallStatus: "no-answer" });
+    await post("tok_abc", { DialCallStatus: "no-answer" });
+    expect(recordAutomationLogMock).toHaveBeenCalledTimes(2);
+    expect(recordAutomationLogMock.mock.calls[0]).toEqual(recordAutomationLogMock.mock.calls[1]);
+  });
+
+  it("an already-transferred row (replayed callback) does not write the log again — OUTRANKS_TRANSFERRED short-circuits before either write", async () => {
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, outcome: "transferred" });
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(recordAutomationLogMock).not.toHaveBeenCalled();
+  });
+
+  it("the outcome write happens before the log write (ordering)", async () => {
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(events.indexOf("outcome")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("log")).toBeGreaterThan(events.indexOf("outcome"));
+  });
+
+  it("a stamping failure skips the log write too — the outcome never saved, so the log must not claim 'sent' either", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    setCallOutcomeMock.mockRejectedValue(new Error("boom"));
+    await post("tok_abc", { DialCallStatus: "completed" });
+    expect(recordAutomationLogMock).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("a log-write failure still returns valid TeXML and does not disturb the outcome stamp that already landed", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    recordAutomationLogMock.mockRejectedValue(new Error("boom"));
+    const res = await POST(req("tok_abc", { DialCallStatus: "completed" }));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<Hangup");
+    expect(setCallOutcomeMock).toHaveBeenCalledWith(expect.anything(), "acct1", "c1", "transferred");
+    const written = errSpy.mock.calls.flat().map(String).join(" ");
+    expect(written).toContain("transferred but the automation log did not update");
+    expect(written).toContain("c1");
+    errSpy.mockRestore();
   });
 
   it("an answered transfer stamps it too — a person picked up either way", async () => {

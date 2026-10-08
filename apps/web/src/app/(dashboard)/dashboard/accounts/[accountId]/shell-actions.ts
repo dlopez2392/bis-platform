@@ -6,6 +6,7 @@ import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { deriveSetupStatus, reduceSetupProgress } from "@/lib/setup/setup-status";
 import type { ReadKey } from "@/lib/setup/setup-view";
 import { getVoicePresence, type VoicePresence } from "@/lib/voice/presence";
+import { resolveAccountZone } from "@/lib/booking/followup-timing";
 
 /**
  * Exactly the reads `deriveSetupStatus`'s `done` computations touch (fix-round
@@ -26,7 +27,12 @@ const COUNT_DEPENDS_ON: readonly ReadKey[] = [
 export type ShellSnapshot = {
   unreadTotal: number;
   setup: { done: number; total: number } | null;
-  presence: VoicePresence | null;
+  // `personaName` (D-063 follow-up): the topbar's own "{name} · on a call"
+  // needs the account's configured persona too, carried alongside
+  // `VoicePresence` rather than folded into that type — `getVoicePresence`
+  // (lib/voice/presence.ts) is about CALL COUNTS, and this read already has
+  // the profile in hand from the `profile.enabled` gate just above it.
+  presence: (VoicePresence & { personaName: string }) | null;
 };
 
 /**
@@ -144,11 +150,40 @@ async function readSetupProgress(
 
 async function readPresence(
   db: ReturnType<typeof serviceDb>, accountId: string,
-): Promise<VoicePresence | null> {
+): Promise<(VoicePresence & { personaName: string }) | null> {
   try {
     const profile = await getVoiceProfile(db, accountId);
     if (!profile || !profile.enabled) return null;
-    return await getVoicePresence(db, accountId, new Date());
+    // D-075: "this week" is measured in the ACCOUNT's own zone, not UTC —
+    // read only now that a presence read is actually going to happen (an
+    // account with no enabled voice profile never pays for this query).
+    // `resolveAccountZone` falls back to `null` on an unusable value; "UTC"
+    // here is the SAME clamp the old UTC-only implementation effectively
+    // always used, so a broken zone keeps today's behavior rather than
+    // throwing. Not `renderZone`'s heavier agency-zone escalation — that
+    // queries a second table for a topbar indicator whose own contract is
+    // "degrade to null on any failure", not a KPI screen several numbers
+    // must agree with to the hour.
+    const { data: account, error: accountError } = await db.from("accounts")
+      .select("timezone").eq("id", accountId).maybeSingle();
+    // A real query error is NOT "no usable timezone" — `resolveAccountZone`
+    // would clamp either one to "UTC" the same way, so the fallback below is
+    // right either way, but a DB hiccup silently wearing the same "UTC" as a
+    // genuinely blank timezone would hide the former from anyone watching
+    // the logs. Degrade (never throw out of this leg; the outer try/catch
+    // would blank presence ENTIRELY for a one-column read failing), but say
+    // so.
+    if (accountError) {
+      console.error(
+        `getShellSnapshot: presence zone read failed for account ${accountId}: ${accountError.message}`,
+      );
+    }
+    const zone = resolveAccountZone((account as { timezone: string | null } | null)?.timezone) ?? "UTC";
+    const presence = await getVoicePresence(db, accountId, new Date(), zone);
+    // D-063 follow-up: the topbar's own "{name} · on a call" needs this
+    // account's configured persona too — already in hand from the
+    // `profile.enabled` gate above, never a second read.
+    return { ...presence, personaName: profile.persona_name };
   } catch (error) {
     console.error(
       `getShellSnapshot: presence read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,

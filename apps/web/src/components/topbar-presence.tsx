@@ -10,6 +10,21 @@ import { m } from "@/lib/messages";
 import { useShellData } from "@/components/shell-data";
 
 /**
+ * "{name} · on a call" with THIS account's own configured persona
+ * (voice_profiles.persona_name), never a hard-coded "Sofía" — some clients
+ * rename theirs (D-063 follow-up). Pulled out of the component as a pure
+ * function so it has a unit-test seam that doesn't need a render harness —
+ * the repo has no .tsx test convention today (stat-tile.tsx's own
+ * `hasStatContext` carries the identical note). A function replacer, not a
+ * plain string, for the same reason dashboard/page.tsx's own {name}
+ * substitutions use one: a persona containing "$&" must not be
+ * re-interpreted as a replacement pattern.
+ */
+export function onCallText(personaName: string | null | undefined): string {
+  return m["shell.presence.onCall"].replace("{name}", () => personaName?.trim() || "Sofía");
+}
+
+/**
  * DESIGN.md's "AI presence" key pattern: "● Sofía · on a call" (pulse) /
  * "✓ N calls handled this week" (idle) — rendered inside Topbar (still a
  * server component; this is the small "use client" child it mounts, per
@@ -41,7 +56,7 @@ export function TopbarPresence() {
             the whole shell re-tints for themed clients and a hardcoded
             violet dot would be the one off-brand element. */}
         <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary animate-pulse shadow-[0_0_0_4px_color-mix(in_srgb,var(--good)_22%,transparent)]" />
-        {m["shell.presence.onCall"]}
+        {onCallText(presence.personaName)}
       </span>
     );
   }

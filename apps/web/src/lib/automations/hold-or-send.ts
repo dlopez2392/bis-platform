@@ -170,6 +170,21 @@ export const REASONS = {
   outsideRegion: "Number is outside the US, Canada or Mexico",
   consentWithheld: "They didn't agree to texts",
   robocall: "Screened as a robocall",
+  /** finish-call.ts's own automation-log row for an `abandoned` outcome
+   *  (D-065): the caller spoke but left with no booking, lead or message, so
+   *  this must not count as "handled" alongside `robocall` above — both are
+   *  `skipped`, never `sent`. Matches the dashboard calls chart's own
+   *  "N caller(s) hung up before Sofía could help" line
+   *  (weekly-metrics.ts's `ABANDONED_OUTCOME`) in substance, worded for a
+   *  single call rather than a count. */
+  callerHungUp: "The caller hung up before anyone could help",
+  /** handoff-result/route.ts's own "nobody picked up" branch (D-065 follow-
+   *  up): `finishCall` already wrote this call's automation_log row `sent`
+   *  the moment the caller ASKED for a person (`wasServed`'s optimistic
+   *  bet, made before the dial was even attempted) — but the dial rang out,
+   *  so the row has to say so, same as a true hang-up would have, had the
+   *  caller never asked at all. */
+  transferNoAnswer: "Nobody answered the transfer",
 } as const;
 
 async function record(db: PassContext["db"], w: AutomationLogWrite): Promise<void> {
