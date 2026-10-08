@@ -6,7 +6,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   getOrCreateCalendar, getCalendarByPublicId, updateCalendarSettings,
   createBooking, cancelBookingByToken, setBookingStatus,
-  listBookedRanges, listUpcomingBookings, listDueReminders, stampReminderSent,
+  listBookedRanges, listCalendarBookings, listDueReminders, stampReminderSent,
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
   SlotTakenError, BookingNotStartedError,
 } from "../booking";
@@ -377,7 +377,7 @@ describe("booking accessors", () => {
    * outcome — the same rows the To do screen's stale-booking source lists),
    * while past rows that already HAVE an outcome stay off it.
    */
-  it("D-030: listUpcomingBookings carries started bookings still waiting for an outcome, and leaves out past ones that have one", async () => {
+  it("D-030: listCalendarBookings carries started bookings still waiting for an outcome, and leaves out past ones that have one", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       const { id: contactId } = await createContact(db, accountId, { firstName: "List" }, "user_test");
@@ -392,7 +392,7 @@ describe("booking accessors", () => {
       const inProgress = await mk("2027-06-10T11:30:00Z", "2027-06-10T12:30:00Z");  // started 30 min ago
       const upcoming = await mk("2027-06-11T09:00:00Z", "2027-06-11T10:00:00Z");
 
-      const ids = (await listUpcomingBookings(db, accountId, now)).map((b) => b.id);
+      const ids = (await listCalendarBookings(db, accountId, now)).map((b) => b.id);
       expect(ids).toEqual([waiting.id, inProgress.id, upcoming.id]);
     });
   });
@@ -501,13 +501,13 @@ describe("booking accessors", () => {
   });
 
   /**
-   * `listUpcomingBookings`'s own contact-name accessor: joined first/last
+   * `listCalendarBookings`'s own contact-name accessor: joined first/last
    * name for a normal contact, and its documented "Unknown" fallback for a
    * contact with neither — the shape a booking made through the public path
    * (firstName required, lastName optional) can never itself produce, but a
    * direct-insert or blueprint-applied contact could.
    */
-  it("listUpcomingBookings carries the contact's name, falling back to \"Unknown\" when both are blank", async () => {
+  it("listCalendarBookings carries the contact's name, falling back to \"Unknown\" when both are blank", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       const { id: namedContactId } = await createContact(db, accountId,
@@ -522,7 +522,7 @@ describe("booking accessors", () => {
         { calendarId: cal.id, contactId: blankContactId, startsAt: new Date("2027-03-21T15:00:00Z"),
           endsAt: new Date("2027-03-21T16:00:00Z") }, "user_test");
 
-      const upcoming = await listUpcomingBookings(db, accountId, "2027-03-01T00:00:00Z");
+      const upcoming = await listCalendarBookings(db, accountId, "2027-03-01T00:00:00Z");
 
       const namedRow = upcoming.find((b) => b.id === named.id);
       const blankRow = upcoming.find((b) => b.id === blank.id);
@@ -539,7 +539,7 @@ describe("booking accessors", () => {
    * (automations.test.ts, automations-b-schema.test.ts), which stays green
    * however `BOOKING_COLS` is edited. So a later edit that drops either name
    * from that string leaves the whole suite green while
-   * `listUpcomingBookings` quietly returns rows without it — and the
+   * `listCalendarBookings` quietly returns rows without it — and the
    * operator's bookings list, the ONE screen this feature has, stops
    * rendering the pill in production with nothing red anywhere.
    *
@@ -552,7 +552,7 @@ describe("booking accessors", () => {
    * assertion is an instant EQUALITY, not `.not.toBeNull()`: a dropped column
    * comes back `undefined`, and `expect(undefined).not.toBeNull()` passes.
    */
-  it("listUpcomingBookings carries the confirmation answer the SMS webhook wrote (BOOKING_COLS round-trip)", async () => {
+  it("listCalendarBookings carries the confirmation answer the SMS webhook wrote (BOOKING_COLS round-trip)", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       const { id: contactId } = await createContact(db, accountId,
@@ -565,7 +565,7 @@ describe("booking accessors", () => {
       await stampAppointmentConfirmAsked(db, booking.id);
       expect(await applyConfirmationReply(db, accountId, contactId, "YES", now)).toBe("yes");
 
-      const row = (await listUpcomingBookings(db, accountId, "2027-05-01T00:00:00Z"))
+      const row = (await listCalendarBookings(db, accountId, "2027-05-01T00:00:00Z"))
         .find((b) => b.id === booking.id);
       expect(row).toBeDefined();
       expect(row!.confirm_reply).toBe("yes");

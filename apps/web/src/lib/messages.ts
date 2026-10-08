@@ -1071,10 +1071,10 @@ export const m = {
   "calendar.settings.saveFailed": "Could not save booking settings.",
   "calendar.settings.saveCrashed": "Could not save — this page may be out of date. Reload it and try again.",
 
-  // Not "Upcoming": since D-030 the list also carries appointments that are
+  // Not "Upcoming": since D-030 the list (listCalendarBookings) also carries appointments that are
   // over and still waiting for "Mark completed" or "No-show".
   "calendar.bookings.title": "Bookings",
-  "calendar.bookings.empty": "No upcoming bookings.",
+  "calendar.bookings.empty": "Nothing here yet. Bookings from your booking page show up here and stay until you mark them completed or no-show.",
   "calendar.bookings.note": "Note",
   "calendar.bookings.join": "Join",
   "calendar.bookings.cancel": "Cancel",

@@ -372,8 +372,11 @@ const AWAITING_OUTCOME_LIMIT = 200;
  * same rows the To do screen's stale-booking source lists — rides along
  * too, oldest first. Before this the list dropped an appointment the moment
  * it started, which is exactly when it could first be given an outcome.
+ *
+ * Named `listCalendarBookings`, not `listUpcomingBookings` (its name until
+ * D-030's review): it returns past rows too, so the old name lied.
  */
-export async function listUpcomingBookings(
+export async function listCalendarBookings(
   db: SupabaseClient, accountId: string, fromIso: string,
 ): Promise<(BookingRow & { contact_name: string; contact_email: string | null })[]> {
   const cols = `${BOOKING_COLS}, contacts(first_name, last_name, email)`;
@@ -385,8 +388,8 @@ export async function listUpcomingBookings(
       .eq("account_id", accountId).eq("status", "booked").lt("ends_at", fromIso)
       .order("starts_at", { ascending: false }).limit(AWAITING_OUTCOME_LIMIT),
   ]);
-  if (current.error) throw new Error(`listUpcomingBookings failed: ${current.error.message}`);
-  if (awaiting.error) throw new Error(`listUpcomingBookings (awaiting outcome) failed: ${awaiting.error.message}`);
+  if (current.error) throw new Error(`listCalendarBookings failed: ${current.error.message}`);
+  if (awaiting.error) throw new Error(`listCalendarBookings (awaiting outcome) failed: ${awaiting.error.message}`);
   const data = [...((awaiting.data ?? []) as any[]).reverse(), ...((current.data ?? []) as any[])];
   return data.map((r) => {
     const { contacts, ...rest } = r;

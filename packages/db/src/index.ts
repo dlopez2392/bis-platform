@@ -69,7 +69,7 @@ export { getMailingAddress } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,
          listBookedRanges, createBooking, cancelBookingByToken, setBookingStatus,
-         listUpcomingBookings, nextBookedStart, countRecentBookings, listDueReminders, stampReminderSent,
+         listCalendarBookings, nextBookedStart, countRecentBookings, listDueReminders, stampReminderSent,
          listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
          newCancelToken, SlotTakenError,
          getDueReminderById, getDueFollowupById,

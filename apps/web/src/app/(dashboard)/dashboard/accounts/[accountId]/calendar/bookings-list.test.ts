@@ -218,3 +218,15 @@ describe("BookingsList — outcome buttons only once the appointment has started
     expect(text).not.toContain(m["calendar.bookings.cancel"]);
   });
 });
+
+describe("BookingsList — the empty state (D-030 review)", () => {
+  it("says what appears here — not only upcoming bookings, since the list also keeps ones waiting for an outcome (mutation: restore \"No upcoming bookings.\" → FAILS)", () => {
+    const text = renderedText(renderToStaticMarkup(createElement(BookingsList, {
+      accountId: "a1", timezone: "America/Chicago", bookings: [], nowIso: "2026-09-30T12:00:00Z",
+      statusAction: async () => ({ ok: true as const }),
+    })));
+    expect(text).toContain(m["calendar.bookings.empty"]);
+    expect(m["calendar.bookings.empty"]).not.toMatch(/upcoming/i);
+    expect(m["calendar.bookings.empty"]).toMatch(/completed or no-show/i);
+  });
+});

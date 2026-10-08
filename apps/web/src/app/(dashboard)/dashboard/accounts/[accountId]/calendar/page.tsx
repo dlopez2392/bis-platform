@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { serviceDb, getOrCreateCalendar, listUpcomingBookings } from "@bis/db";
+import { serviceDb, getOrCreateCalendar, listCalendarBookings } from "@bis/db";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAccountAccess } from "@/lib/auth";
@@ -49,7 +49,7 @@ export default async function CalendarPage({
         if (!data) throw new Error("calendar: account not found");
         return data as { timezone: string };
       }),
-    listUpcomingBookings(db, accountId, nowIso),
+    listCalendarBookings(db, accountId, nowIso),
     headers(),
   ]);
 
