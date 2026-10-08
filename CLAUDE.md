@@ -45,6 +45,11 @@
   Every new migration goes to
   the CI project FIRST (the `ci-project-setup.yml` workflow), then
   production, then a parity check (`docs/runbooks/ci-supabase-project.md`).
+  Since 2026-10-08 the `e2e` job enforces the first part: it fails, naming
+  each file, when a migration in the branch is not in the CI project's
+  history (`.github/scripts/ci-migrations-applied.sh`). verify no longer
+  can, because it builds its own database from the branch. Production and
+  parity are still checked by hand.
   Booking and calendar-settings specs run on the per-run fixture account —
   never point mutating specs at `Test Client One` or any live account.
 - **Only production credentials reach production data. DONE 2026-10-07.**
