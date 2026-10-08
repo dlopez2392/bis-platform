@@ -63,6 +63,11 @@ describe("phoneSearchDigits — gates withSearch's phone_key clause on the term 
   it("a term with letters in it never looks like a phone, however many digits it carries (mutation: drop the shape check → FAILS)", () => {
     expect(phoneSearchDigits("maria5@example.com")).toBe("");
     expect(phoneSearchDigits("Suite 9")).toBe("");
+    // The two above carry fewer than 4 digits, so the digit floor alone
+    // already rejects them; these carry 4+ digits and only the SHAPE check
+    // stands between them and a phone_key match on every phone holding 1234.
+    expect(phoneSearchDigits("john2026@x.com")).toBe("");
+    expect(phoneSearchDigits("Unit 1234 Main")).toBe("");
   });
 
   it("fewer than 4 digits doesn't look like a real phone search, even in pure phone-shaped punctuation (mutation: drop the digit floor → FAILS)", () => {
