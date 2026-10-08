@@ -472,12 +472,18 @@ describe("AccountDashboardPage — the hero follows the plan (F-076 now slice)",
 
   /** The EXACT sparkline geometry `page.tsx` should hand `StatTile` for a
    *  given source array — computed with the real `bucketByLocalDay`/
-   *  `sparklinePath` (never re-implemented here), the same window14 the
-   *  page itself derives from the pinned `NOW` and this fixture's zone. */
+   *  `sparklinePath` (never re-implemented here).
+   *
+   *  D-077: window7, NOT window14. The hero's NUMBER is a rolling 7-day
+   *  count (`currentCallsIso.length`/`currentLeadsIso.length`), so its
+   *  sparkline must trace the SAME 7 days — a 14-day trend line beside a
+   *  7-day number let the two disagree about what span was even being
+   *  shown (three KPI tiles did this: the hero, "Appointments booked" and
+   *  "Pipeline added"). */
   async function expectedSparkPoints(sourceIso: string[]): Promise<string> {
     const { localDayWindow, bucketByLocalDay, sparklinePath } = await import("@/lib/dashboard/metrics");
-    const window14 = localDayWindow(NOW, "America/Chicago", 14);
-    const counts = bucketByLocalDay(sourceIso, "America/Chicago", window14.dayKeys).map((b) => b.count);
+    const window7 = localDayWindow(NOW, "America/Chicago", 7);
+    const counts = bucketByLocalDay(sourceIso, "America/Chicago", window7.dayKeys).map((b) => b.count);
     return sparklinePath(counts, 84, 26).line;
   }
 
@@ -553,6 +559,83 @@ describe("AccountDashboardPage — the hero follows the plan (F-076 now slice)",
     expect(reportMocks.listAnsweredCallStartsBetween).toHaveBeenCalledWith(
       expect.anything(), "acct_specific", window14.fromIso, window14.toIso,
     );
+  });
+});
+
+/**
+ * D-077: the three OTHER 7-day KPI tiles with a sparkline (hero is covered
+ * above) must trace the SAME 7-day window their own number counts, and
+ * every 7-day tile — sparked or not — must say so in words, not leave the
+ * window to be inferred from the delta/spark alone (DESIGN.md rule 1).
+ */
+describe("AccountDashboardPage — the 7-day KPI tiles name their window and their sparklines match it (D-077)", () => {
+  const NOW = new Date("2026-06-15T12:00:00.000Z");
+
+  // Deliberately TWO weeks of source rows for both metrics: a point inside
+  // the current 7-day window (June 9-15) and one OUTSIDE it but still
+  // within the OLD 14-day span (June 2-8). A spark built over window14
+  // would show both; one built over window7 (the fix) must show only the
+  // first — bucketByLocalDay silently drops a dayKey outside the window it
+  // is handed, which is exactly the mechanism this test leans on.
+  const BOOKINGS_IN_WINDOW7 = ["2026-06-11T12:00:00.000Z"];
+  const BOOKINGS_OUTSIDE_WINDOW7 = ["2026-06-04T12:00:00.000Z"];
+  const OPP_IN_WINDOW7 = [{ createdAt: "2026-06-12T12:00:00.000Z", monetaryValue: 500 }];
+  const OPP_OUTSIDE_WINDOW7 = [{ createdAt: "2026-06-03T12:00:00.000Z", monetaryValue: 9000 }];
+
+  beforeEach(() => {
+    resetFixtures();
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("Appointments booked's sparkline traces the SAME 7 days as its own number, not a 14-day trend (mutation: bucket the spark over window14 → FAILS)", async () => {
+    dbMocks.listBookingCreationsBetween.mockResolvedValue([...BOOKINGS_IN_WINDOW7, ...BOOKINGS_OUTSIDE_WINDOW7]);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    const { localDayWindow, bucketByLocalDay, sparklinePath } = await import("@/lib/dashboard/metrics");
+    const window7 = localDayWindow(NOW, "America/Chicago", 7);
+    const counts = bucketByLocalDay(
+      [...BOOKINGS_IN_WINDOW7, ...BOOKINGS_OUTSIDE_WINDOW7], "America/Chicago", window7.dayKeys,
+    ).map((b) => b.count);
+    const expectedLine = sparklinePath(counts, 84, 26).line;
+    expect(html).toContain(`points="${expectedLine}"`);
+  });
+
+  it("Pipeline added's sparkline traces the SAME 7 days as its own number, not a 14-day trend (mutation: bucket the spark over window14 → FAILS)", async () => {
+    dbMocks.listOpportunityValuesCreatedBetween.mockResolvedValue([...OPP_IN_WINDOW7, ...OPP_OUTSIDE_WINDOW7]);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    const { localDayWindow, bucketValueByLocalDay, sparklinePath } = await import("@/lib/dashboard/metrics");
+    const window7 = localDayWindow(NOW, "America/Chicago", 7);
+    const values = bucketValueByLocalDay(
+      [...OPP_IN_WINDOW7, ...OPP_OUTSIDE_WINDOW7], "America/Chicago", window7.dayKeys,
+    ).map((b) => b.value);
+    const expectedLine = sparklinePath(values, 84, 26).line;
+    expect(html).toContain(`points="${expectedLine}"`);
+  });
+
+  it("every 7-day KPI tile names its own window in words — delta and sparkline alone never say 'last 7 days' on screen (mutation: drop the period suffix from any of the four labels → FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true });
+    dbMocks.getCalendarForAccount.mockResolvedValue({ open_hours: { mon: [["09:00", "17:00"]] } } as never);
+
+    const html = renderToStaticMarkup(await AccountDashboardPage(route()));
+    const text = renderedText(html);
+
+    for (const labelKey of [
+      "dashboard.kpi.callsAnswered", "dashboard.kpi.appointmentsBooked",
+      "dashboard.kpi.afterHoursCaptured", "dashboard.kpi.pipelineAdded",
+    ] as const) {
+      // Every one of these four labels must be immediately followed by the
+      // period it covers somewhere in the rendered text — not merely that
+      // "Last 7 days" appears ONCE anywhere on the page (that would pass if
+      // only one of the four tiles carried it).
+      expect(text).toMatch(new RegExp(`${m[labelKey]}[^A-Za-z]*Last 7 days`));
+    }
   });
 });
 
