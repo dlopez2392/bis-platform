@@ -1293,10 +1293,15 @@ describe("the press-1 screen (VOICE_SCREEN_NUMBERS)", () => {
   it("the action URL names the profile's languages and the account, both escaped into the attribute", async () => {
     process.env.VOICE_SCREEN_NUMBERS = LINE;
     const xml = await (await call()).text();
-    const action = new URL(/<Gather action="([^"]+)"/.exec(xml)![1]!.replaceAll("&amp;", "&"));
-    expect(action.pathname).toBe("/api/voice/texml/screen");
-    expect(action.searchParams.get("l")).toBe("en");
-    expect(action.searchParams.get("a")).toBe(ACCOUNT);
+    const actions = [...xml.matchAll(/<Gather action="([^"]+)"/g)].map((m) => new URL(m[1]!.replaceAll("&amp;", "&")));
+    // Two asks in the one document, marked 1 then 2 (see screen/route.test.ts
+    // for why both carrier behaviours then ask exactly twice).
+    expect(actions.map((a) => a.searchParams.get("n"))).toEqual(["1", "2"]);
+    for (const action of actions) {
+      expect(action.pathname).toBe("/api/voice/texml/screen");
+      expect(action.searchParams.get("l")).toBe("en");
+      expect(action.searchParams.get("a")).toBe(ACCOUNT);
+    }
     expect(xml).toContain("&amp;a=");
   });
 
@@ -1480,6 +1485,20 @@ describe("observation: which form fields Telnyx sends (POST)", () => {
       method: "POST", body: raw, headers: { "content-type": "application/x-www-form-urlencoded" },
     }));
     expect(logSpy).toHaveBeenCalledWith("texml form fields: To,From (+1 unprintable); attestation: none");
+  });
+
+  it("the line is BOUNDED: past 60 distinct names it counts the rest, so an oversized body cannot become an oversized log line (mutation: drop the cap → FAILS)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const fields = new URLSearchParams({ To: "+19565550999" });
+    for (let i = 0; i < 200; i++) fields.append(`f${i}`, "x");
+    for (let i = 0; i < 50; i++) fields.append("f1", "dup"); // repeats are not new names
+    await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: fields, headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
+    const line = logSpy.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith("texml form fields:"))!;
+    const listed = line.slice("texml form fields: ".length, line.indexOf(" …+"));
+    expect(listed.split(",")).toHaveLength(60);
+    expect(line).toContain(" …+141 more; attestation: none");
   });
 
   it("an attestation value that looks like a phone number is redacted", async () => {

@@ -561,13 +561,26 @@ describe("every emitted TeXML document parses", () => {
       parseXmlStrict(xml);
     });
 
-    it("the goodbye after another key, in both languages", async () => {
-      const res = await screenPOST(new Request(`https://x.example/api/voice/texml/screen?l=both&a=a1`, {
+    it("the goodbye after another key on the second ask, in both languages", async () => {
+      const res = await screenPOST(new Request(`https://x.example/api/voice/texml/screen?l=both&a=a1&n=2`, {
         method: "POST", body: new URLSearchParams({ Digits: "2", To: LIVE_TO, From: CALLER }),
         headers: { "content-type": "application/x-www-form-urlencoded" },
       }));
       const xml = await res.text();
       expect(xml).toContain("Adiós");
+      expect(xml).not.toContain("<Gather");
+      parseXmlStrict(xml);
+    });
+
+    it("the second ask (no key on the first), in both languages, when the origin carries a query string and a quote", async () => {
+      process.env.APP_ORIGIN = 'https://x.example?a=1&b=2&c="3"';
+      const res = await screenPOST(new Request(`https://x.example/api/voice/texml/screen?l=both&a=a1&n=1`, {
+        method: "POST", body: new URLSearchParams({ To: LIVE_TO, From: CALLER }),
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+      }));
+      const xml = await res.text();
+      expect(xml).toContain("<Gather");
+      expect(xml).toContain("&amp;n=2");
       parseXmlStrict(xml);
     });
 

@@ -63,6 +63,8 @@ export async function readTelnyxForm(req: Request, tag: string): Promise<TelnyxF
 const FIELD_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 const ATTESTATION_FIELD = /attest|shaken|stir|verstat/i;
 const SAFE_VALUE = /^[A-Za-z0-9 _.:-]{0,64}$/;
+const MAX_LISTED = 60;
+const MAX_ATTESTATION = 10;
 
 /**
  * OBSERVATION ONLY: one line naming every form field this request carried,
@@ -76,9 +78,15 @@ const SAFE_VALUE = /^[A-Za-z0-9 _.:-]{0,64}$/;
  * only when it is short and plain, and redacted when it holds a long run of
  * digits. A name that could carry a newline or other log-forging character is
  * counted, not printed.
+ *
+ * BOUNDED, because with TELNYX_PUBLIC_KEY unset this runs on an unsigned body
+ * of any size: one pass over the fields with a Set (linear, not quadratic),
+ * at most MAX_LISTED names and MAX_ATTESTATION values printed, and the rest
+ * counted. A real TeXML request carries a couple of dozen fields.
  */
 export function logFormFields(tag: string, form: URLSearchParams): void {
-  const names: string[] = [];
+  const seen = new Set<string>();
+  const listed: string[] = [];
   const attestation: string[] = [];
   let unprintable = 0;
   for (const [name, value] of form) {
@@ -86,13 +94,15 @@ export function logFormFields(tag: string, form: URLSearchParams): void {
       unprintable++;
       continue;
     }
-    if (names.includes(name)) continue;
-    names.push(name);
-    if (ATTESTATION_FIELD.test(name)) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    if (listed.length < MAX_LISTED) listed.push(name);
+    if (attestation.length < MAX_ATTESTATION && ATTESTATION_FIELD.test(name)) {
       const shown = !SAFE_VALUE.test(value) ? "(unprintable)" : /\d{7,}/.test(value) ? "(redacted)" : value;
       attestation.push(`${name}=${shown}`);
     }
   }
+  const more = seen.size > listed.length ? ` …+${seen.size - listed.length} more` : "";
   const extra = unprintable > 0 ? ` (+${unprintable} unprintable)` : "";
-  console.log(`${tag} form fields: ${names.join(",") || "none"}${extra}; attestation: ${attestation.join(",") || "none"}`);
+  console.log(`${tag} form fields: ${listed.join(",") || "none"}${more}${extra}; attestation: ${attestation.join(",") || "none"}`);
 }

@@ -381,7 +381,7 @@ describe("POST /api/voice/incoming — step 8: caller reputation", () => {
   // route only speaks words, and this one is the binding gate: batch the reads
   // and decide afterwards, and one rejected read fails the whole batch open,
   // silently taking the per-number abuse cap down with it at the authoritative
-  // layer. `countCallerHistorySince` runs two counts over 30 days against the
+  // layer. `countCallerHistorySince` runs three counts over 30 days against the
   // cap's one same-day count, so it is the read most likely to time out alone.
   it("step 8: caps exceeded AND the history read throwing → still declined per-number", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
@@ -401,7 +401,7 @@ describe("POST /api/voice/incoming — step 8: caller reputation", () => {
   // direction was safe, but it is the inverse of what the block's own comment
   // advertises, and it is the more valuable guard: the caps re-allow the same
   // robot tomorrow, a reputation block does not, and `countCallerHistorySince`
-  // — two counts over 30 days against the cap's one same-day count — is the
+  // — three counts over 30 days against the cap's one same-day count — is the
   // read most likely to fail on its own, not least likely.
   //
   // Each read therefore gets its OWN try/catch. Neither can take the other

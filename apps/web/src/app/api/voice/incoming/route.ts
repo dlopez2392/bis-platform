@@ -860,7 +860,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // here while TeXML batches the same three in a `Promise.all`: TeXML only
     // owes the caller words and sits on a carrier answer deadline, whereas
     // this is the layer that binds, and `Promise.all` rejects as a whole —
-    // one slow `countCallerHistorySince` (two counts over 30 days, against the
+    // one slow `countCallerHistorySince` (three counts over 30 days, against the
     // cap's one same-day count) would fail the abuse cap open right here.
     //
     // TWO `try` BLOCKS, NOT ONE, AND THE SECOND ONE IS WHY. With both reads

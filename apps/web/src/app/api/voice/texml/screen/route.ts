@@ -32,7 +32,10 @@
 // path ignores both and re-resolves the account itself.
 import { NextResponse } from "next/server";
 import { e164Of } from "@/lib/voice/phone-number";
-import { actionOrigin, answer, bridgeAfterFailure, screenGoodbyeXml, type Languages } from "../route";
+import {
+  actionOrigin, answer, bridgeAfterFailure, screenActionUrl, screenGoodbyeXml, screenSecondAskXml, xmlResponse,
+  type Languages,
+} from "../route";
 import { logFormFields, readTelnyxForm } from "../telnyx-request";
 
 export const runtime = "nodejs";
@@ -43,13 +46,6 @@ const ACCOUNT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 function languagesOf(raw: string | null): Languages {
   return raw === "es" || raw === "both" ? raw : "en";
-}
-
-function xmlResponse(body: string): NextResponse {
-  return new NextResponse(body, {
-    status: 200,
-    headers: { "Content-Type": "application/xml; charset=utf-8" },
-  });
 }
 
 /**
@@ -75,11 +71,26 @@ async function decide(
       return await answer(calledE164, callerE164, origin, authenticated, { skipScreen: true });
     }
     if (digits === "" || ONE_KEY.test(digits)) {
+      const why = digits === "" ? "no-keypress" : "wrong-key";
+      const languages = languagesOf(query.get("l"));
+      // Which ask this was (`n`, written by us onto the action URL) decides
+      // which words play next and NOTHING else. Anything but "2" is the first
+      // ask, so a missing or unknown marker can only buy the caller one more
+      // ask, never cost them one. The second ask's own action says n=2, so
+      // this asks at most once more: no loop.
+      //
+      // A WRONG key on the first ask is asked again too, not declined: a key
+      // pressed at all is far more often a person than a recording, and a
+      // person hung up on is the worst outcome this screen can produce.
+      if (query.get("n") !== "2") {
+        console.log(`texml screen asking again (${why}) ${who}`);
+        return xmlResponse(screenSecondAskXml(languages, screenActionUrl(origin, languages, accountLabel)));
+      }
       // The decline. Log only for now: `screened_calls.reason` is a closed
       // set (0039's CHECK), and a reason for this lands in its own migration
       // once the screen has been heard on a real call.
-      console.log(`texml screen declined (${digits === "" ? "no-keypress" : "wrong-key"}) ${who}`);
-      return xmlResponse(screenGoodbyeXml(languagesOf(query.get("l"))));
+      console.log(`texml screen declined (${why}) ${who}`);
+      return xmlResponse(screenGoodbyeXml(languages));
     }
     // Not a key at all. Never echoed: it is request input.
     console.log(`texml screen: the keypress value is not a key — bridging ${who}`);

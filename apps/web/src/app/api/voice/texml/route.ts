@@ -141,17 +141,18 @@ const SCREEN_COPY = {
 export const SCREEN_TIMEOUT_SECONDS = 6;
 
 /**
- * Where the keypress goes. `l` carries the profile's languages so the action
- * route can say goodbye in them without a database read; `a` carries the
- * account id for its log lines only. Neither is trusted for anything else:
- * the keypress re-runs this file's whole routing, guards included.
+ * Where the keypress goes, WITHOUT the ask marker (`screenAsk` appends it).
+ * `l` carries the profile's languages so the action route can speak without a
+ * database read; `a` carries the account id for its log lines only. Neither
+ * is trusted for anything else: the keypress re-runs this file's whole
+ * routing, guards included.
  */
-function screenActionUrl(origin: string, languages: Languages, accountId: string): string {
+export function screenActionUrl(origin: string, languages: Languages, accountId: string): string {
   return `${origin}/api/voice/texml/screen?l=${languages}&a=${encodeURIComponent(accountId)}`;
 }
 
 /**
- * The question. Every attribute is one Telnyx documents for `<Gather>`
+ * One ask. Every attribute is one Telnyx documents for `<Gather>`
  * (https://developers.telnyx.com/docs/voice/programmable-voice/texml-verbs/gather):
  * `action`, `numDigits`, `timeout` — and NO `method`: Telnyx documents none
  * for `<Gather>`, and sends the action with the TeXML application's own method
@@ -160,15 +161,37 @@ function screenActionUrl(origin: string, languages: Languages, accountId: string
  * `<Say>` is a documented child of `<Gather>`; both languages sit inside ONE
  * Gather so a key pressed during either sentence counts.
  *
- * Asked TWICE before the goodbye: a person who is still lifting the phone
- * from their ear, or finding the keypad, gets a second chance, and a
- * recording loses nothing but a few seconds of carrier time (no AI minutes —
- * nothing reaches Sofía until the key is pressed). If no key comes, the
- * document falls through to the goodbye and a hang-up, never to dead air.
+ * `n` on the action URL says which ask this was, and that is ALL it decides:
+ * which words `./screen` plays next. It is not covered by the carrier's
+ * signature and is trusted for nothing else.
+ */
+function screenAsk(languages: Languages, action: string, n: 1 | 2): string {
+  return `<Gather action="${xmlText(`${action}&n=${n}`)}" numDigits="1" timeout="${SCREEN_TIMEOUT_SECONDS}">${says(languages, SCREEN_COPY.prompt)}</Gather>`;
+}
+
+/**
+ * The question: ASKED TWICE, then the goodbye — under either thing the
+ * carrier might do when an ask times out with no key, because Telnyx's docs
+ * do not say which it does:
+ *   A. It falls through to the next verb: this document's second ask (n=2),
+ *      then its goodbye and hang-up. Nothing reaches `./screen`, so nothing
+ *      is logged after the "asking" line — the logs cannot see this decline.
+ *   B. It fetches the action with no `Digits`: `./screen` answers the first
+ *      ask (n=1) with `screenSecondAskXml` — the second ask — and only the
+ *      second (n=2) with the goodbye, logged `declined (no-keypress)`.
+ * Either way the caller hears the question twice and then the goodbye; never
+ * once, never three times, never dead air. A person still lifting the phone
+ * from their ear gets a second chance, and a recording loses only a few
+ * seconds of carrier time (no AI minutes — nothing reaches Sofía until 1).
  */
 export function screenXml(languages: Languages, action: string): string {
-  const gather = `<Gather action="${xmlText(action)}" numDigits="1" timeout="${SCREEN_TIMEOUT_SECONDS}">${says(languages, SCREEN_COPY.prompt)}</Gather>`;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${gather}${gather}${says(languages, SCREEN_COPY.goodbye)}<Hangup/></Response>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${screenAsk(languages, action, 1)}${screenAsk(languages, action, 2)}${says(languages, SCREEN_COPY.goodbye)}<Hangup/></Response>`;
+}
+
+/** `./screen`'s answer to a first ask with no key or a wrong one: the second
+ *  ask, falling through to the goodbye if the carrier does. */
+export function screenSecondAskXml(languages: Languages, action: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>${screenAsk(languages, action, 2)}${says(languages, SCREEN_COPY.goodbye)}<Hangup/></Response>`;
 }
 
 /** What `./screen` answers a caller who pressed nothing, or another key. */
@@ -471,7 +494,7 @@ function dialXml(
   };
 }
 
-function xmlResponse(body: string): NextResponse {
+export function xmlResponse(body: string): NextResponse {
   return new NextResponse(body, {
     status: 200,
     headers: { "Content-Type": "application/xml; charset=utf-8" },

@@ -742,23 +742,34 @@ the stamp, in the fallback drill log at the bottom of `restore-drill.md`.
 **What it does.** On a number listed in `VOICE_SCREEN_NUMBERS`, a caller with no answered call
 (booked, lead, message, transferred) on that account in the reputation window (30 days by default,
 `PHONE_SPAM_BLOCK_WINDOW_DAYS`) hears "Thanks for calling. To be connected, please press 1." Pressing
-1 connects them exactly as before. Pressing nothing (they are asked twice) or another key gets a
-goodbye and a hang-up before Sofía, so no AI minutes are spent. Agency handsets
-(`PHONE_SPAM_EXEMPT_CALLERS`), calls whose screening reads failed, the fallback drill and
-`VOICE_FORWARD_TO` are never asked. Anything unexpected on the screen's own route connects the call.
+1 connects them exactly as before. A caller who presses nothing, or another key, is asked once more;
+nothing or a wrong key the second time gets a goodbye and a hang-up before Sofía, so no AI minutes
+are spent. Agency handsets (`PHONE_SPAM_EXEMPT_CALLERS`), calls whose screening reads failed, the
+fallback drill and `VOICE_FORWARD_TO` are never asked. Anything unexpected on the screen's own route connects the call.
 
 1. **Prove it first, on the BIS line only.** In Vercel (Production) set `VOICE_SCREEN_NUMBERS` = the
    BIS line and `VOICE_SCREEN_ALWAYS_FROM` = your phone (E.164), then redeploy.
 2. **Call and press 1.** Sofía answers. Logs, in order: `texml screen FORCED on …`,
    `texml screen form fields: …Digits,To,From…`, `texml screen passed for …`.
-3. **Call and press nothing.** You hear the question twice, then the goodbye. Log:
-   `texml screen declined (no-keypress) …`. Call again and press 2: `declined (wrong-key)`.
+3. **Call and press nothing.** You hear the question twice, then the goodbye ("Sorry, we didn't get
+   that…"), then the line hangs up. The logs show `texml screen FORCED on …` and then ONE of two
+   things — **write down which**, because Telnyx's docs do not say what its carrier does when a
+   keypress prompt times out:
+   - `texml screen asking again (no-keypress) for …`, then `texml screen declined (no-keypress) for …`
+     (the carrier asked our server after each silence), or
+   - nothing more after the `FORCED` line (the carrier played the second question and the goodbye
+     itself; the caller hears the same thing, but this decline cannot appear in the logs).
+
+   **Call again, press 2, then press 2 again.** You hear the question, then the question again, then
+   the goodbye. Logs: `texml screen asking again (wrong-key) for …`, then
+   `texml screen declined (wrong-key) for …`. A first wrong key is never hung up on.
 4. **Remove `VOICE_SCREEN_ALWAYS_FROM` and redeploy.** Only then consider adding client numbers.
 5. **Rollback:** unset `VOICE_SCREEN_NUMBERS` and redeploy. Nothing else changes.
 
 **If it fails:**
-- Pressing 1 gives the goodbye: the key arrived under a field name other than `Digits` — read the
-  `texml screen form fields` line, then roll back.
+- Pressing 1 asks the question again (and pressing 1 again gives the goodbye), with
+  `asking again (no-keypress)` in the logs: the key arrived under a field name other than `Digits` —
+  read the `texml screen form fields` line, then roll back.
 - Silence after pressing: look for `texml screen: rejected request …` (signature) or a 405 (the TeXML
   app is on GET while `TELNYX_PUBLIC_KEY` is set). Roll back.
 - Turned-away calls do not appear on the Calls screen yet; they are in the logs only.

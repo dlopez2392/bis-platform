@@ -5,6 +5,7 @@
 import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { GET, POST } from "./route";
+import { GET as texmlGET } from "../route";
 
 const stampMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
@@ -77,7 +78,10 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); });
 
-const URL_BASE = `https://x.example/api/voice/texml/screen?l=en&a=${ACCOUNT}`;
+// The SECOND ask (`n=2`): where a missing or wrong key is final. The first
+// ask re-asks instead — see "asked twice" below.
+const URL_BASE = `https://x.example/api/voice/texml/screen?l=en&a=${ACCOUNT}&n=2`;
+const FIRST_ASK = `https://x.example/api/voice/texml/screen?l=en&a=${ACCOUNT}&n=1`;
 
 function press(fields: Record<string, string>, url = URL_BASE): Promise<Response> {
   return POST(new Request(url, {
@@ -152,7 +156,7 @@ describe("pressed 1: the bridge the main route would have sent", () => {
   });
 });
 
-describe("pressed nothing, or another key: goodbye", () => {
+describe("pressed nothing, or another key, on the SECOND ask: goodbye", () => {
   it("another key → the goodbye and a hang-up, no bridge, no database read, and one declined line (mutation: bridge on any key → FAILS)", async () => {
     const xml = await (await press({ Digits: "2", To: LINE, From: STRANGER })).text();
     expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>${GOODBYE_EN}<Hangup/></Response>`);
@@ -181,18 +185,18 @@ describe("pressed nothing, or another key: goodbye", () => {
   });
 
   it("the goodbye speaks the profile's languages from the action URL: es", async () => {
-    const xml = await (await press({ Digits: "2", To: LINE, From: STRANGER }, `https://x.example/api/voice/texml/screen?l=es&a=${ACCOUNT}`)).text();
+    const xml = await (await press({ Digits: "2", To: LINE, From: STRANGER }, `https://x.example/api/voice/texml/screen?l=es&a=${ACCOUNT}&n=2`)).text();
     expect(xml).toContain(GOODBYE_ES);
     expect(xml).not.toContain("<Say>Sorry");
   });
 
   it("the goodbye in both languages, English first", async () => {
-    const xml = await (await press({ To: LINE, From: STRANGER }, `https://x.example/api/voice/texml/screen?l=both&a=${ACCOUNT}`)).text();
+    const xml = await (await press({ To: LINE, From: STRANGER }, `https://x.example/api/voice/texml/screen?l=both&a=${ACCOUNT}&n=2`)).text();
     expect(xml).toContain(GOODBYE_EN + GOODBYE_ES);
   });
 
   it("an unknown language value falls back to English, and a non-uuid account is logged as unknown", async () => {
-    const xml = await (await press({ Digits: "2", To: LINE, From: STRANGER }, "https://x.example/api/voice/texml/screen?l=fr&a=bad%0Aline")).text();
+    const xml = await (await press({ Digits: "2", To: LINE, From: STRANGER }, "https://x.example/api/voice/texml/screen?l=fr&a=bad%0Aline&n=2")).text();
     expect(xml).toContain(GOODBYE_EN);
     expect(logSpy).toHaveBeenCalledWith(`texml screen declined (wrong-key) for ${LINE}, caller ${STRANGER}, accountId unknown`);
   });
@@ -276,5 +280,105 @@ describe("GET mirrors the main route: closed with the key set, answered without 
     expect(one).toContain("<Sip>");
     const two = await (await GET(new Request(`${URL_BASE}&Digits=2&To=${encodeURIComponent(LINE)}&From=${encodeURIComponent(STRANGER)}`))).text();
     expect(two).toContain(GOODBYE_EN);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ASKED TWICE, whatever the carrier does on a timeout. Telnyx's docs do not
+// say whether a `<Gather>` that times out with no key fetches its action URL
+// (with no `Digits`) or falls through to the next verb. The question document
+// is built so both lead to the same call: ask (n=1), ask again (n=2), goodbye.
+// ---------------------------------------------------------------------------
+
+/** Every `<Gather>`'s action URL in a document, unescaped, in order. */
+function gathers(xml: string): URL[] {
+  return [...xml.matchAll(/<Gather action="([^"]+)"/g)].map((m) => new URL(m[1]!.replaceAll("&amp;", "&")));
+}
+const PROMPT = "<Say>Thanks for calling. To be connected, please press 1.</Say>";
+
+describe("pressed nothing, or another key, on the FIRST ask: asked once more", () => {
+  it("no key on the first ask → the question again (n=2), then the goodbye as its fall-through, and NO decline yet (mutation: say goodbye on the first ask → FAILS)", async () => {
+    const xml = await (await press({ To: LINE, From: STRANGER }, FIRST_ASK)).text();
+    const asks = gathers(xml);
+    expect(asks).toHaveLength(1);
+    expect(asks[0]!.pathname).toBe("/api/voice/texml/screen");
+    expect(asks[0]!.searchParams.get("n")).toBe("2");
+    expect(asks[0]!.searchParams.get("l")).toBe("en");
+    expect(asks[0]!.searchParams.get("a")).toBe(ACCOUNT);
+    expect(xml).toContain(`>${PROMPT}</Gather>${GOODBYE_EN}<Hangup/></Response>`);
+    expect(xml).not.toContain("<Dial");
+    expect(logSpy).toHaveBeenCalledWith(`texml screen asking again (no-keypress) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("declined"));
+  });
+
+  it("a WRONG key on the first ask is asked once more too — a person who pressed the wrong key is still a person (mutation: decline a wrong key on the first ask → FAILS)", async () => {
+    const xml = await (await press({ Digits: "2", To: LINE, From: STRANGER }, FIRST_ASK)).text();
+    expect(gathers(xml).map((u) => u.searchParams.get("n"))).toEqual(["2"]);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen asking again (wrong-key) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("declined"));
+  });
+
+  it("the second ask speaks the profile's languages from the action URL", async () => {
+    const xml = await (await press({ To: LINE, From: STRANGER }, `https://x.example/api/voice/texml/screen?l=es&a=${ACCOUNT}&n=1`)).text();
+    expect(xml).toContain("<Say language=\"es-MX\">Gracias por llamar. Para comunicarse, oprima 1.</Say></Gather>");
+    expect(xml).toContain(GOODBYE_ES);
+    expect(gathers(xml)[0]!.searchParams.get("l")).toBe("es");
+  });
+
+  it("a missing or unknown marker is a FIRST ask: the marker can only ever buy a caller one more ask, never cost them one", async () => {
+    for (const url of [`https://x.example/api/voice/texml/screen?l=en&a=${ACCOUNT}`, `${FIRST_ASK.replace("n=1", "n=7")}`]) {
+      const xml = await (await press({ To: LINE, From: STRANGER }, url)).text();
+      expect(gathers(xml), url).toHaveLength(1);
+      expect(xml).not.toContain("<Dial");
+    }
+  });
+
+  it("the marker decides nothing but which words to play: 1 bridges on either ask, or with no marker at all", async () => {
+    for (const url of [FIRST_ASK, URL_BASE, `https://x.example/api/voice/texml/screen?l=en&a=${ACCOUNT}`]) {
+      const xml = await (await press({ Digits: "1", To: LINE, From: STRANGER }, url)).text();
+      expect(xml, url).toContain("<Sip>sip:proj_test123@sip.api.openai.com");
+    }
+  });
+});
+
+describe("asked exactly twice under EITHER carrier behaviour on a timeout", () => {
+  const question = async () => (await texmlGET(new Request(
+    `https://x.example/api/voice/texml?To=${encodeURIComponent(LINE)}&From=${encodeURIComponent(STRANGER)}`,
+  ))).text();
+
+  it("A — the carrier falls through to the next verb: the question document itself asks twice (n=1, n=2), then says goodbye (mutation: delete the second ask → FAILS)", async () => {
+    const xml = await question();
+    expect(gathers(xml).map((u) => u.searchParams.get("n"))).toEqual(["1", "2"]);
+    // Two asks, then the goodbye and the hang-up — nothing between them.
+    expect(xml).toContain(`${PROMPT}</Gather>${GOODBYE_EN}<Hangup/></Response>`);
+    expect(xml.split(PROMPT)).toHaveLength(3);
+  });
+
+  it("B — the carrier fetches the action on every timeout: ask (n=1), fetch, ask again (n=2), fetch, goodbye — and the decline is logged on the second fetch (mutation: say goodbye on the first ask → FAILS)", async () => {
+    let asked = 0;
+    // The first ask of the question document is heard, then it times out
+    // and the carrier fetches ITS action, with no Digits.
+    let xml = await question();
+    let action = gathers(xml)[0]!;
+    asked++;
+    for (let fetches = 0; fetches < 5; fetches++) {
+      xml = await (await press({ To: LINE, From: STRANGER }, action.toString())).text();
+      const next = gathers(xml);
+      if (next.length === 0) break;
+      asked++;
+      action = next[0]!;
+    }
+    expect(asked).toBe(2);
+    expect(xml).toBe(`<?xml version="1.0" encoding="UTF-8"?>\n<Response>${GOODBYE_EN}<Hangup/></Response>`);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (no-keypress) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
+  });
+
+  it("B, with a wrong key both times: asked twice, then declined (wrong-key)", async () => {
+    const first = gathers(await question())[0]!;
+    const second = gathers(await (await press({ Digits: "5", To: LINE, From: STRANGER }, first.toString())).text())[0]!;
+    const last = await (await press({ Digits: "5", To: LINE, From: STRANGER }, second.toString())).text();
+    expect(gathers(last)).toHaveLength(0);
+    expect(last).toContain(GOODBYE_EN);
+    expect(logSpy).toHaveBeenCalledWith(`texml screen declined (wrong-key) for ${LINE}, caller ${STRANGER}, accountId ${ACCOUNT}`);
   });
 });
