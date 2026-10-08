@@ -12,7 +12,7 @@ import { EmptyState } from "@/components/empty-state";
 import { formatCurrency, formatDate, formatDateUTC, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
-import { STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
+import { STATUS_LABEL, MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
 
 // Exhaustively typed to the real channel union (see labels.ts's own
 // MESSAGE_CHANNEL_LABEL comment) so a new channel is a compile error here
@@ -305,8 +305,15 @@ function TimelineRow({
             {formatDateTime(item.at)}
             {/* The status is the honest part: "sent" is what the provider
                 accepted, and a `failed` message must not look delivered on
-                the record the operator trusts. */}
-            {outbound ? ` · ${item.status}` : ""}
+                the record the operator trusts. D-014: the raw column value
+                ("failed", "sent") is not a word a business owner reads at
+                7 AM — labeled through MESSAGE_STATUS_LABEL (lib/labels.ts),
+                the same map conversations.spec's own status chip uses,
+                with the raw value as a fallback (matching the opportunity
+                row below's own `STATUS_LABEL[...] ?? item.status`) so an
+                unmapped future status still shows SOMETHING rather than
+                going blank. */}
+            {outbound ? ` · ${MESSAGE_STATUS_LABEL[item.status] ?? item.status}` : ""}
           </p>
         </div>
       </div>
