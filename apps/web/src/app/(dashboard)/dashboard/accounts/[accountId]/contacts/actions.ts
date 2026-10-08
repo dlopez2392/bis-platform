@@ -42,12 +42,24 @@ export async function createContactAction(
   }
   const email = normalizeFieldInput("email", val("email"));
   if (!email.ok) return { kind: "invalid", error: email.error };
-  const phone = normalizeFieldInput("phone", val("phone"));
-  if (!phone.ok) return { kind: "invalid", error: phone.error };
+  // Named `phoneField`, not `phone`: this file's OWN scan (F-009,
+  // scans.test.ts) tracks a "local that carries a normaliser's number" by
+  // name across the WHOLE FILE, not per function — `setPhoneCountryAction`,
+  // `undoPhoneCountryAction` and `undoInlinePhoneEditAction` below each have
+  // their own local named `phone` that genuinely IS a normaliser's number
+  // (PHONE_KEY_ONLY, allowed there, under a phone KEY rather than handed to
+  // a contact write). A local here ALSO named `phone` collided with those
+  // three across the file and made the scan misread this write — which
+  // hands `createContact` the number exactly as `normalizeFieldInput`
+  // returned it (trimmed, unvalidated-shape-only, never normalised; the
+  // SAME value `updateContactFieldAction`'s own `norm.value` below writes)
+  // — as if it carried one of theirs.
+  const phoneField = normalizeFieldInput("phone", val("phone"));
+  if (!phoneField.ok) return { kind: "invalid", error: phoneField.error };
 
   const result = await createContact(await dbForRequest(), accountId, {
     firstName: firstName || undefined, lastName: lastName || undefined,
-    email: email.value || undefined, phone: phone.value || undefined,
+    email: email.value || undefined, phone: phoneField.value || undefined,
   }, userId);
   if (result.existing) return { kind: "existing", contactId: result.id };
   revalidatePath(`/dashboard/accounts/${accountId}/contacts`);
