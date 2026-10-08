@@ -26,32 +26,35 @@
   developer's own machine before the server has to; it is a courtesy, not
   the control, and it does not exist in a fresh clone until that command is
   run.
-- CI's `e2e` runs on a separate Supabase project, `odnobiodsftffphuuosz`
-  (`bis-ci`), never on production's (`tlbkbmlrfafquucsmsmm`). Since
-  2026-10-08 `verify` runs on neither: it starts a throwaway Supabase stack
-  inside its own runner (`.github/scripts/ci-local-supabase.sh`, bootstrap
-  then migrations), so it joins no repo-wide queue and branches' verify runs
-  go in parallel (~6 min, was 13–21 plus up to an hour of queue). A guard in
-  both jobs refuses production; in verify it refuses any cloud Supabase
-  value at all. Since
+- CI runs on neither production's Supabase (`tlbkbmlrfafquucsmsmm`) nor,
+  since 2026-10-08, the shared CI project (`odnobiodsftffphuuosz`, `bis-ci`):
+  `verify` and `e2e` each start a throwaway Supabase stack inside their own
+  runner (`.github/scripts/ci-local-supabase.sh`, bootstrap then migrations;
+  e2e's with `--trust-clerk-dev-instance`, so its PostgREST verifies the
+  Clerk development instance's tokens as bis-ci does) and e2e seeds its own
+  (`ci:seed:local`). Neither joins a repo-wide queue and e2e starts beside
+  verify: a push is green in about 8–9 minutes (was ~14 serialized, plus up
+  to an hour of queue). A red verify still blocks a merge, because both are
+  required checks. A guard in both jobs refuses production and any cloud
+  Supabase value for the suites or the app. The ONE read of bis-ci in CI is
+  e2e's migration check: read-only, its DB URL scoped to that step. Since
   #135, LOCAL runs refuse production too: the db suite, the integration
   suite, Playwright and the two live web tests all throw before connecting
   when any Supabase/PG* variable names production's ref, naming the
   variable, never its value. danlo's machine has run on the CI project
   since 2026-10-04 (runbook section 9, plan step D7, done): both
   `apps/web/.env.local` and `packages/db/.env` name it. Any other machine
-  whose env still points at production is REFUSED, not run, and a local e2e
-  run shares CI's seeded account, so check for an in-progress CI run first.
-  Every new migration goes to
-  the CI project FIRST (the `ci-project-setup.yml` workflow), then
-  production, then a parity check (`docs/runbooks/ci-supabase-project.md`).
-  Since 2026-10-08 the `e2e` job enforces the first part: it fails, naming
-  each file, when a migration in the branch is not in the CI project's
-  history (`.github/scripts/ci-migrations-applied.sh`). verify no longer
-  can, because it builds its own database from the branch. Production and
-  parity are still checked by hand.
-  Booking and calendar-settings specs run on the per-run fixture account —
-  never point mutating specs at `Test Client One` or any live account.
+  whose env still points at production is REFUSED, not run. A local e2e run
+  shares bis-ci's seeded account with Vercel Preview and the screenshot
+  capture (no longer with CI), so check for an in-progress `screenshots.yml`
+  run first. Every new migration goes to the CI project FIRST (the
+  `ci-project-setup.yml` workflow), then production, then a parity check
+  (`docs/runbooks/ci-supabase-project.md`). The `e2e` job enforces the
+  first part: it fails, naming each file, when a migration in the branch is
+  not in the CI project's history (`.github/scripts/ci-migrations-applied.sh`).
+  Production and parity are still checked by hand. Booking and
+  calendar-settings specs run on the per-run fixture account — never point
+  mutating specs at `Test Client One` or any live account.
 - **Only production credentials reach production data. DONE 2026-10-07.**
   Production's Supabase trusts only the production Clerk instance
   (`clerk.app.bis-rgv.com`); the development issuer was removed. Vercel
