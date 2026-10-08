@@ -532,22 +532,44 @@ export async function countCallsByCallerSince(
  * `finishCallRow`) carries the column default `abandoned` and so counts as
  * `otherCalls`. That errs toward letting the caller through, which is the
  * direction every gate in this path errs.
+ *
+ * `answeredCalls` is a THIRD count, for a different reader: the TeXML route's
+ * press-1 screen asks whether this caller has EVER been answered here, and
+ * `otherCalls` cannot answer that — a talking robocall is stamped `abandoned`,
+ * which `otherCalls` counts, so a robot's second call from the same number
+ * would read as a returning customer. It rides the same `Promise.all`, so it
+ * costs no wall-clock, and `spamCalls`/`otherCalls` are unchanged, so the
+ * repeat-offender guard reads exactly what it read before. An unfinished row
+ * (`abandoned` by default) is NOT answered: it never vouches for a caller.
  */
 export async function countCallerHistorySince(
   db: SupabaseClient, accountId: string, callerE164: string, sinceIso: string,
-): Promise<{ spamCalls: number; otherCalls: number }> {
-  const [spam, other] = await Promise.all([
+): Promise<{ spamCalls: number; otherCalls: number; answeredCalls: number }> {
+  const [spam, other, answered] = await Promise.all([
     db.from("calls").select("id", { count: "exact", head: true })
       .eq("account_id", accountId).eq("caller_e164", callerE164)
       .gte("started_at", sinceIso).eq("outcome", "spam").gte("turn_count", 1),
     db.from("calls").select("id", { count: "exact", head: true })
       .eq("account_id", accountId).eq("caller_e164", callerE164)
       .gte("started_at", sinceIso).neq("outcome", "spam"),
+    db.from("calls").select("id", { count: "exact", head: true })
+      .eq("account_id", accountId).eq("caller_e164", callerE164)
+      .gte("started_at", sinceIso).in("outcome", [...ANSWERED_CALL_OUTCOMES]),
   ]);
   if (spam.error) throw new Error(`countCallerHistorySince failed: ${spam.error.message}`);
   if (other.error) throw new Error(`countCallerHistorySince failed: ${other.error.message}`);
-  return { spamCalls: spam.count ?? 0, otherCalls: other.count ?? 0 };
+  if (answered.error) throw new Error(`countCallerHistorySince failed: ${answered.error.message}`);
+  return { spamCalls: spam.count ?? 0, otherCalls: other.count ?? 0, answeredCalls: answered.count ?? 0 };
 }
+
+/**
+ * The outcomes that mean a caller was ANSWERED: they reached Sofía or a person
+ * and something came of it. The same four as the weekly report's
+ * `ANSWERED_OUTCOMES` (`apps/web/src/lib/reports/weekly-metrics.ts`), declared
+ * here because this package must not import from the app; a test in
+ * `apps/web/src/app/api/voice/texml/route.test.ts` pins the two equal.
+ */
+export const ANSWERED_CALL_OUTCOMES = ["booked", "lead", "message", "transferred"] as const satisfies readonly CallOutcome[];
 
 const CALL_OUTCOME_STARTS_PAGE_SIZE = 1000;
 

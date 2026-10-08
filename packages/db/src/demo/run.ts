@@ -1,10 +1,11 @@
 /**
  * Seeds the demo tenant. `pnpm --filter @bis/db db:seed-demo`.
  *
- * Deliberately NOT wired into CI, `pnpm check`, or any deploy. It writes to
- * whichever Supabase project `SUPABASE_SERVICE_ROLE_KEY` points at, which
- * today is the same project production runs on, so it is a thing a person
- * runs on purpose and never a thing that happens as a side effect.
+ * Deliberately NOT wired into the gates (`pnpm check`, ci.yml) or any
+ * deploy. It writes to whichever Supabase project `SUPABASE_SERVICE_ROLE_KEY`
+ * points at: production's for `seed-demo.yml` (the demo kept for live
+ * demos), the CI project's for `screenshots.yml` since 2026-10-08. Either
+ * way it is a thing a person runs on purpose, never a side effect.
  *
  * Re-running is safe and is the intended way to refresh the demo: the
  * previous demo account is dropped and rebuilt from the same seed, so the

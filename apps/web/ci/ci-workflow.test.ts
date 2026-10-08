@@ -154,8 +154,9 @@ const setupEnv = mapping(topLevelBlock(codeLines(read("../../../.github/workflow
 
 describe("ci.yml points the gates at the CI Supabase project, never production's", () => {
   it("references none of the production Supabase secrets", () => {
-    // Those three names still mean production for seed-demo.yml and
-    // screenshots.yml. The CI project's credentials are the CI_* secrets.
+    // Those three names still mean production for seed-demo.yml (the demo
+    // tenant production keeps for live demos). The CI project's credentials
+    // are the CI_* secrets.
     // Case-insensitive: GitHub resolves context properties regardless of case,
     // so `secrets.supabase_db_url` reads the same secret.
     const found = ciLines.filter((line) =>
@@ -232,6 +233,62 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(setupEnv.BIS_CI_SUPABASE_REF).toMatch(/^[a-z0-9]{20}$/);
     expect(e2eEnv.BIS_CI_SUPABASE_REF).toBe(setupEnv.BIS_CI_SUPABASE_REF);
     expect(e2eEnv.NEXT_PUBLIC_SUPABASE_URL).toBe(`https://${setupEnv.BIS_CI_SUPABASE_REF}.supabase.co`);
+  });
+});
+
+// The demo screenshot capture runs on the CI project (2026-10-08). Production
+// no longer accepts the development Clerk instance's tokens, and must not:
+// since #189 every CI run mints a development agency_admin user, so trusting
+// that instance would hand those users production's data. The 5 AM capture
+// that day photographed four error screens for exactly that reason.
+describe("screenshots.yml captures on the CI project, never production's", () => {
+  const shotLines = codeLines(read("../../../.github/workflows/screenshots.yml"));
+  const shotJobs = jobs(shotLines);
+  const capture = shotJobs.capture;
+  if (!capture) throw new Error('screenshots.yml has no job "capture"');
+  const env = jobEnv(capture);
+
+  it("references none of the production Supabase secrets (mutation: map SUPABASE_SERVICE_ROLE_KEY back to secrets.SUPABASE_SERVICE_ROLE_KEY → FAILS)", () => {
+    const found = shotLines.filter((line) =>
+      /secrets\.(NEXT_PUBLIC_SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_DB_URL)\b/i.test(line));
+    expect(found).toEqual([]);
+    expect(shotLines.filter((line) => line.includes(PROD_REF) || line.includes(PROD_PUBLISHABLE_PREFIX))).toEqual([]);
+  });
+
+  it("names the same CI project as ci.yml's e2e job, with the CI_* secrets mapped onto the names the code reads", () => {
+    // ci.yml holds the CI project's literals in e2e's job env since
+    // 2026-10-08 (verify runs on its own stack and holds none). Compared to
+    // a defined value, so the two can never "agree" by both being absent.
+    const e2eEnv = jobEnv(job("e2e"));
+    expect(e2eEnv.BIS_CI_SUPABASE_REF).toMatch(/^[a-z0-9]{20}$/);
+    expect(env.BIS_CI_SUPABASE_REF).toBe(e2eEnv.BIS_CI_SUPABASE_REF);
+    expect(env.NEXT_PUBLIC_SUPABASE_URL).toBe(e2eEnv.NEXT_PUBLIC_SUPABASE_URL);
+    expect(env.NEXT_PUBLIC_SUPABASE_ANON_KEY).toBe(e2eEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+    expect(env.SUPABASE_SERVICE_ROLE_KEY).toBe("${{ secrets.CI_SUPABASE_SECRET_KEY }}");
+    expect(env.SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
+  });
+
+  it("runs ci.yml's target guard before it seeds or captures anything (mutation: drop the guard step → FAILS)", () => {
+    const runs = steps(capture).map((step) => step.run ?? step.uses ?? "");
+    const guard = runs.indexOf(GUARD);
+    expect(guard).toBeGreaterThanOrEqual(0);
+    const seed = runs.findIndex((r) => r.includes("db:seed-demo"));
+    const shoot = runs.findIndex((r) => r.includes("screenshots"));
+    expect(seed).toBeGreaterThan(guard);
+    expect(shoot).toBeGreaterThan(guard);
+  });
+
+  it("declares no environment, like the CI gates: it reads nothing the production environment holds (mutation: re-add `environment: production` → FAILS)", () => {
+    expect(jobKeys(capture)).not.toContain("environment");
+  });
+
+  it("queues on ci.yml's e2e lock, never cancelling (mutation: back to e2e-shared-supabase → FAILS)", () => {
+    const lock = mapping(topLevelBlock(shotLines, "concurrency"));
+    const e2eLock = job("e2e").join("\n").match(/group: (\S+)/)?.[1];
+    expect(e2eLock).toBe("e2e-ci-supabase");
+    expect(lock.group).toBe(e2eLock);
+    expect(lock["cancel-in-progress"]).toBe("false");
+    expect(lock.queue).toBe("max");
   });
 });
 
@@ -663,7 +720,11 @@ describe("production secrets are reachable only from jobs that declare the produ
     expect(allJobs.map((j) => j.where)).toEqual(expect.arrayContaining([
       "ci.yml:verify", "ci.yml:e2e", "ops-health.yml:check", "screenshots.yml:capture", "seed-demo.yml:seed",
     ]));
-    expect(allJobs.filter((j) => j.production.length > 0).length).toBeGreaterThanOrEqual(3);
+    // Exactly these, so a job that starts or stops reading production shows
+    // up here. screenshots.yml:capture left this list on 2026-10-08 (#197):
+    // it captures on the CI project now.
+    expect(allJobs.filter((j) => j.production.length > 0).map((j) => j.where).sort())
+      .toEqual(["ops-health.yml:check", "seed-demo.yml:seed"]);
   });
 
   it("names every secret by `secrets.NAME`, and every NAME is classified here on purpose (a new secret must be added to one of the two sets, with its reason)", () => {

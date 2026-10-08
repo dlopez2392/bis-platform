@@ -264,8 +264,15 @@ export async function seedDemoTenant(
 
   const replacedExisting = await dropDemoAccount(db, orgId);
 
+  // Born suppressed: the flag is in the INSERT, so no reader ever sees this
+  // account contactable, even for the two round trips a create-then-suppress
+  // left open. That gap mattered once the demo moved onto the shared CI
+  // project (2026-10-08), where demo-seed.test.ts reads the live demo while a
+  // capture may be re-seeding it. suppressAndVerify still runs: it is the
+  // check that the flag actually held, not the thing that sets it.
   const { id: accountId } = await createAccount(db, {
     clerkOrgId: orgId, name: DEMO_ACCOUNT_NAME, timezone: DEMO_TIMEZONE, actorId: ACTOR,
+    outboundSuppressed: true,
   });
   await suppressAndVerify(db, accountId);
 

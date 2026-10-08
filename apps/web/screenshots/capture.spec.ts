@@ -5,6 +5,7 @@ import { config as loadEnv } from "dotenv";
 import { serviceDb, getBranding, getVoiceProfile, brandDisplayName,
          DEMO_TIMEZONE } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
+import { m } from "@/lib/messages";
 import { weeklyReportEmail } from "@/lib/email/templates/weekly-report";
 import { weeklyMetrics } from "@/lib/reports/weekly-metrics";
 import { lastWeekMonday, weekWindow } from "@/lib/reports/weekly-window";
@@ -103,6 +104,11 @@ async function useTheme(page: Page, theme: "light" | "dark") {
 async function settled(page: Page) {
   await page.waitForLoadState("networkidle");
   await expect(page.locator('[data-skeleton], .animate-pulse')).toHaveCount(0, { timeout: 20_000 });
+  // An error boundary is a settled page too, which is how the 2026-10-08
+  // capture passed while photographing four "Something went wrong" screens
+  // (every user-scoped read was refused by the database). A capture of an
+  // error is a failed capture: fail here, naming the page, never upload it.
+  await expect(page.getByText(m["error.title"]), `${page.url()} rendered the error boundary`).toHaveCount(0);
   // Fonts, so no capture lands mid-swap with a fallback face.
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(250);

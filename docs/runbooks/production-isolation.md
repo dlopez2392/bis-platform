@@ -34,7 +34,9 @@ rebuild, an audit or a rollback.
     `clerk.app.bis-rgv.com` was kept.
   - Production was verified working, with no runtime errors.
   - `screenshots.yml` is broken from this point, as Part D accepts, until it
-    moves to the CI project.
+    moves to the CI project. **Moved 2026-10-08 (#197):** it now captures on
+    the CI project with the `CI_*` secrets and ci.yml's target guard, and
+    reads no production secret.
 - **Part E1, done 2026-10-07:**
   - The production Supabase secret key was rotated. The new key is in Vercel
     Production and the GitHub repository secret, and the old key was
