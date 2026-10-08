@@ -64,10 +64,18 @@ vi.mock("@/lib/branding/tenant-theme-reader", () => ({
 const reportMocks = vi.hoisted(() => ({
   listLeadInstantsBetween: vi.fn(),
   listAnsweredCallStartsBetween: vi.fn(),
+  // The calls chart card's "screened, not empty" state (#182 follow-up) —
+  // this file only needs the Promise.all to resolve, never throw; the real
+  // state-selection logic is calls-chart-card.test.ts/metrics.test.ts's job
+  // (CallsChartCard itself is mocked out below).
+  listSpamCallStartsBetween: vi.fn(),
+  listAbandonedCallStartsBetween: vi.fn(),
 }));
 vi.mock("@/lib/reports/weekly-metrics", () => ({
   listLeadInstantsBetween: (...a: unknown[]) => reportMocks.listLeadInstantsBetween(...a),
   listAnsweredCallStartsBetween: (...a: unknown[]) => reportMocks.listAnsweredCallStartsBetween(...a),
+  listSpamCallStartsBetween: (...a: unknown[]) => reportMocks.listSpamCallStartsBetween(...a),
+  listAbandonedCallStartsBetween: (...a: unknown[]) => reportMocks.listAbandonedCallStartsBetween(...a),
 }));
 
 const dbMocks = vi.hoisted(() => ({
@@ -113,7 +121,22 @@ vi.mock("@bis/db", () => ({
   sumOpenOpportunities: (...a: unknown[]) => dbMocks.sumOpenOpportunities(...a),
 }));
 
-vi.mock("./calls-chart-card", () => ({ CallsChartCard: () => null }));
+// Review fix: this used to mock the card down to `() => null`, so nothing
+// here ever asserted what page.tsx actually COMPUTED for it — swapping
+// spamCount/abandonedCount at the call site, or hard-coding both to 0,
+// left this whole file (95/95) green. Captured rather than rendered, same
+// idiom as `checklistRowProps`/`workRowProps` below: the page-level wiring
+// is under test here, not calls-chart-card.tsx's own markup (that's
+// calls-chart-card.test.ts's job).
+const callsChartCardProps = vi.hoisted(() => ({
+  current: null as { spamCount: number; abandonedCount: number } | null,
+}));
+vi.mock("./calls-chart-card", () => ({
+  CallsChartCard: (props: { spamCount: number; abandonedCount: number }) => {
+    callsChartCardProps.current = { spamCount: props.spamCount, abandonedCount: props.abandonedCount };
+    return null;
+  },
+}));
 vi.mock("./activity-card", () => ({ ActivityCard: () => null }));
 
 // The one component under real test-of-integration here: captured rather
@@ -174,9 +197,12 @@ function resetFixtures() {
   authFixture.isAgency = true;
   checklistRowProps.current = null;
   workRowProps.current = null;
+  callsChartCardProps.current = null;
   for (const fn of Object.values(dbMocks)) fn.mockReset();
   reportMocks.listLeadInstantsBetween.mockReset();
   reportMocks.listAnsweredCallStartsBetween.mockReset();
+  reportMocks.listSpamCallStartsBetween.mockReset();
+  reportMocks.listAbandonedCallStartsBetween.mockReset();
   dbMocks.countContacts.mockResolvedValue(0);
   dbMocks.getVoiceProfile.mockResolvedValue(null);
   dbMocks.getCalendarForAccount.mockResolvedValue(null);
@@ -188,6 +214,8 @@ function resetFixtures() {
   reportMocks.listLeadInstantsBetween.mockResolvedValue([]);
   dbMocks.listAccountWork.mockResolvedValue([]);
   dbMocks.sumOpenOpportunities.mockResolvedValue({ count: 0, value: 0 });
+  reportMocks.listSpamCallStartsBetween.mockResolvedValue([]);
+  reportMocks.listAbandonedCallStartsBetween.mockResolvedValue([]);
   // Default: one item ticked, A2P not approved — mirrors blueprints.spec.ts's
   // own GAP 3 fixture shape (1 ticked, A2P rejected).
   dbMocks.listChecklistState.mockResolvedValue([row("phone_number")]);
@@ -304,6 +332,26 @@ describe("AccountDashboardPage — the work row (unlike the checklist row, both 
     await renderToStaticMarkup(await AccountDashboardPage(route()));
 
     expect(workRowProps.current).toEqual({ accountId: "acct1", total: 0, overdue: 0 });
+  });
+});
+
+// Review fix: `CallsChartCard` was mocked to `() => null` with no assertion
+// on what page.tsx computed and handed it — the real "which state renders"
+// logic is calls-chart-card.test.ts/metrics.test.ts's job, but THIS page's
+// job is handing the card the right two lengths, from the right two reads,
+// and that part had zero coverage.
+describe("AccountDashboardPage — the calls chart card's spam/abandoned counts (review fix)", () => {
+  beforeEach(resetFixtures);
+
+  it("hands CallsChartCard spamCount/abandonedCount as the LENGTHS of the two reads, never swapped and never hard-coded (mutations below prove both)", async () => {
+    reportMocks.listSpamCallStartsBetween.mockResolvedValue([
+      "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z",
+    ]);
+    reportMocks.listAbandonedCallStartsBetween.mockResolvedValue(["2026-01-03T00:00:00Z"]);
+
+    await renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(callsChartCardProps.current).toEqual({ spamCount: 2, abandonedCount: 1 });
   });
 });
 

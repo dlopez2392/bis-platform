@@ -32,6 +32,7 @@ import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { longDayLabel, shortDayLabel } from "@/lib/dashboard/day-label";
+import { resolveCallsChartState } from "@/lib/dashboard/metrics";
 import { callerLabel, formatDuration } from "../calls/format";
 import { OutcomePill } from "../calls/outcome-pill";
 
@@ -50,6 +51,8 @@ export function CallsChartCard({
   recentCalls,
   isAgency,
   voiceEnabled,
+  spamCount,
+  abandonedCount,
 }: {
   accountId: string;
   /** The ACCOUNT's IANA zone — the mini table's local time column reads it,
@@ -66,10 +69,21 @@ export function CallsChartCard({
    *  to — see the comment beside `ctaHref` below. */
   isAgency: boolean;
   voiceEnabled: boolean;
+  /** Calls with outcome `spam` in the same 14-day window, test-handset
+   *  callers already excluded (`listSpamCallStartsBetween`'s own
+   *  `excludeCallers` default — a silent or connect-timeout call on the
+   *  agency's own test handset is stamped `spam` exactly like a real one,
+   *  so this must exclude them too, same as `abandonedCount` below). */
+  spamCount: number;
+  /** Calls with outcome `abandoned` in the same window, test-handset
+   *  callers already excluded (`listAbandonedCallStartsBetween`'s own
+   *  `excludeCallers` default) — named ALONGSIDE `spamCount` when both are
+   *  nonzero (`screenedCopy`'s "both" case), never hidden behind it. */
+  abandonedCount: number;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
-  const totalCalls = dayBuckets.reduce((sum, bucket) => sum + bucket.count, 0);
-  const isEmpty = totalCalls === 0;
+  const answeredCount = dayBuckets.reduce((sum, bucket) => sum + bucket.count, 0);
+  const chartState = resolveCallsChartState({ answeredCount, spamCount, abandonedCount });
 
   // The Voice page is agency-only (`requireAgencyOnlyAccountAccess` —
   // voice/page.tsx's own doc comment: "the nav item is hidden from clients").
@@ -94,10 +108,10 @@ export function CallsChartCard({
         </span>
       </div>
 
-      {isEmpty ? (
+      {chartState.kind !== "answered" ? (
         <EmptyState
           icon={PhoneIncoming}
-          title={m["dashboard.calls.empty"]}
+          title={chartState.kind === "none" ? m["dashboard.calls.empty"] : screenedCopy(chartState)}
           action={
             <Link href={ctaHref} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
               {ctaLabel}
@@ -126,6 +140,37 @@ export function CallsChartCard({
  *  about which noun ("call" vs "calls") a given count takes. */
 function callsUnit(count: number): string {
   return count === 1 ? m["dashboard.calls.unit.call"] : m["dashboard.calls.unit.calls"];
+}
+
+/** "1 caller" / "2 callers" — same singular/plural shape as `callsUnit`
+ *  above, for the abandoned-callers line. */
+function callerUnit(count: number): string {
+  return count === 1 ? m["dashboard.calls.unit.caller"] : m["dashboard.calls.unit.callers"];
+}
+
+/** The one-sentence explanation for the "screened" state — three variants,
+ *  never collapsed into one: spam alone, abandoned alone, or BOTH named in
+ *  the same sentence when both are nonzero in the same window, so a real
+ *  caller who hung up is never hidden behind the spam line (review fix —
+ *  the first version of this copy led with spam alone whenever it was
+ *  present, silently dropping a real abandoned caller from the same
+ *  window). */
+function screenedCopy(state: { spamCount: number; abandonedCount: number }): string {
+  if (state.spamCount > 0 && state.abandonedCount > 0) {
+    return m["dashboard.calls.screenedBoth"]
+      .replace("{spamCount}", String(state.spamCount))
+      .replace("{spamUnit}", callsUnit(state.spamCount))
+      .replace("{otherCount}", String(state.abandonedCount))
+      .replace("{otherUnit}", callerUnit(state.abandonedCount));
+  }
+  if (state.spamCount > 0) {
+    return m["dashboard.calls.screenedSpam"]
+      .replace("{count}", String(state.spamCount))
+      .replace("{unit}", callsUnit(state.spamCount));
+  }
+  return m["dashboard.calls.screenedAbandoned"]
+    .replace("{count}", String(state.abandonedCount))
+    .replace("{unit}", callerUnit(state.abandonedCount));
 }
 
 /**

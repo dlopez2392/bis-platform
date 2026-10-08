@@ -205,6 +205,64 @@ export function sparklinePath(
 }
 
 /**
+ * The calls chart card's empty-state selection (#182 follow-up). Before
+ * this, the card's "nothing yet" copy fired whenever `answeredCount` (the
+ * ANSWERED_OUTCOMES, test-handset-excluded read every "calls answered"
+ * number already shares) was zero — even on a window with 93 spam calls and
+ * 2 abandoned ones sitting in the SAME window, right above a call list that
+ * plainly had rows. "Nothing yet" is honest only when the window had no
+ * nameable call at all; otherwise calls came in and were screened out,
+ * which is a different, nameable fact.
+ *
+ * DEFECT in the first version of this fix (caught before merge, not left as
+ * a lesson in this comment alone): that version added a `totalCount` —
+ * every call row in the window, ANY outcome, any caller — and computed
+ * `otherCount = totalCount - spamCount`. That residual still over-counted,
+ * because it swept in the agency's own test-handset calls (excluded from
+ * `answeredCount` by `excludeCallers`, but still a row `totalCount`
+ * counted regardless of caller) and any in-progress row. A window whose
+ * ONLY calls were the agency's own test calls therefore got
+ * `totalCount > 0`, `spamCount === 0`, and reported "1 caller hung up
+ * before Sofía could help" when nobody had — false, next to a client.
+ *
+ * The fix: take `spamCount` and `abandonedCount` as two counts the caller
+ * already computes from the SAME test-handset-excluded convention every
+ * other "calls" number on this page uses — `listSpamCallStartsBetween` AND
+ * `listAbandonedCallStartsBetween` both default `excludeCallers` to
+ * `agencyHandsets()`, same convention as `listAnsweredCallStartsBetween`
+ * (review fix: the first version of THIS fix left `listSpamCallStartsBetween`
+ * unexcluded on the theory that "a spam call was never a real customer" —
+ * true, but irrelevant, because `classifyOutcome` (lib/voice/call-state.ts)
+ * stamps `spam` on any call the caller never spoke on, and a connect-timeout
+ * stamps `spam` too, either of which the agency's OWN test handset can
+ * produce exactly like a real caller). A window whose only calls are the
+ * agency's own test calls now surfaces as `spamCount === 0` AND
+ * `abandonedCount === 0` — all-zero, not a stray nonzero residual — so
+ * "none" is reached honestly, with no subtraction involved at all.
+ *
+ * The "screened" case carries BOTH counts, never collapsed into one: a
+ * window can hold spam AND a real abandoned caller at once, and a real
+ * caller who hung up must never be hidden behind the spam line (the card's
+ * `screenedCopy` names both when both are nonzero).
+ */
+export type CallsChartState =
+  | { kind: "none" }
+  | { kind: "screened"; spamCount: number; abandonedCount: number }
+  | { kind: "answered" };
+
+export function resolveCallsChartState(counts: {
+  answeredCount: number;
+  spamCount: number;
+  abandonedCount: number;
+}): CallsChartState {
+  if (counts.answeredCount > 0) return { kind: "answered" };
+  if (counts.spamCount > 0 || counts.abandonedCount > 0) {
+    return { kind: "screened", spamCount: counts.spamCount, abandonedCount: counts.abandonedCount };
+  }
+  return { kind: "none" };
+}
+
+/**
  * A call is after-hours when its LOCAL time (in `timezone`) falls outside
  * that local day's `open_hours` window. Reuses `normalizeOpenHours` (the
  * booking availability code's own defensive shape validation — dropping

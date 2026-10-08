@@ -44,6 +44,18 @@ export const ANSWERED_OUTCOMES = ["booked", "lead", "message", "transferred"] as
 /** The call half of "leads captured". A lead taken at 9pm is still a lead. */
 export const LEAD_OUTCOME = ["lead"] as const;
 
+/** The dashboard calls chart's "Sofía flagged N as likely spam" copy
+ *  (calls-chart-card.tsx) — the common, dominant case in the same 14-day
+ *  window as `ABANDONED_OUTCOME` below (the BIS account: 93 spam calls to
+ *  2 abandoned ones). */
+export const SPAM_OUTCOME = ["spam"] as const;
+
+/** The calls chart's "N caller(s) hung up before Sofía could help" line —
+ *  named alongside the spam line when both are present in the same window
+ *  (`resolveCallsChartState`'s "screened" case carries both counts), or
+ *  alone when spam is 0. */
+export const ABANDONED_OUTCOME = ["abandoned"] as const;
+
 export function countFromOutcomes(outcomes: string[], wanted: readonly string[]): number {
   return outcomes.filter((o) => wanted.includes(o)).length;
 }
@@ -97,6 +109,44 @@ export async function listAnsweredCallStartsBetween(
   excludeCallers: readonly string[] = agencyHandsets(),
 ): Promise<string[]> {
   return listCallStartsByOutcomeBetween(db, accountId, ANSWERED_OUTCOMES, fromIso, toIso, { excludeCallers });
+}
+
+/**
+ * The raw instants behind the dashboard calls chart's "Sofía flagged N as
+ * likely spam" copy (calls-chart-card.tsx, `resolveCallsChartState`).
+ *
+ * `excludeCallers` defaults to `agencyHandsets()` — same convention as
+ * `listAnsweredCallStartsBetween`/`listAbandonedCallStartsBetween` — and
+ * here it is NOT optional in practice, unlike it might look from "a spam
+ * call was never a real customer": `classifyOutcome` (lib/voice/call-state.ts)
+ * stamps `spam` on any call where the caller never spoke,
+ * and `api/voice/incoming/route.ts`'s connect-timeout path stamps a call
+ * that never even connected `spam` too. Either can happen on the agency's
+ * own test handset (a silent test call, a dropped test connection) exactly
+ * as it can on a real caller, and without this exclusion a client would
+ * see "Sofía flagged 1 call as likely spam" for the agency's own dead-air
+ * test — production has produced this case.
+ */
+export async function listSpamCallStartsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+  excludeCallers: readonly string[] = agencyHandsets(),
+): Promise<string[]> {
+  return listCallStartsByOutcomeBetween(db, accountId, SPAM_OUTCOME, fromIso, toIso, { excludeCallers });
+}
+
+/**
+ * The raw instants behind the dashboard calls chart's "N caller(s) hung up
+ * before Sofía could help" copy (calls-chart-card.tsx,
+ * `resolveCallsChartState`'s `abandonedCount`). `excludeCallers` defaults
+ * to `agencyHandsets()` — same convention as `listAnsweredCallStartsBetween`
+ * above: the agency's own test handset hanging up on itself is not a
+ * customer walking away, and must not be counted as one.
+ */
+export async function listAbandonedCallStartsBetween(
+  db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
+  excludeCallers: readonly string[] = agencyHandsets(),
+): Promise<string[]> {
+  return listCallStartsByOutcomeBetween(db, accountId, ABANDONED_OUTCOME, fromIso, toIso, { excludeCallers });
 }
 
 /**
