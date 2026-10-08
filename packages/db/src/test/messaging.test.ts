@@ -754,6 +754,39 @@ describe("messaging", () => {
       expect(quietSummary!.lastMessagePreview).toBe("quiet's only message");
     }), 20_000);
 
+  // Review fix (messaging.ts:602). A conversation that has never been
+  // messaged (`ensureConversation` alone, no `createMessage` — the 'note'
+  // tab, say, or a race between the two) has a NULL last_message_at. SQL's
+  // `<` and `=` are never true against NULL, so once a cursor's `v` is a
+  // real timestamp, the two normal OR-branches can never match a null row
+  // at all — the explicit `,last_message_at.is.null` branch is what keeps
+  // it reachable on a LATER page rather than silently dropping it forever.
+  it("pages a conversation with no messages yet (null last_message_at) onto a later page, never dropping it (mutation: remove the `is.null` OR branch → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: withMsgContact } = await createContact(db, accountId, { firstName: "Messaged" }, "user_test");
+      const withMsg = await ensureConversation(db, accountId, withMsgContact, "user_test");
+      await createMessage(db, accountId, {
+        conversationId: withMsg.id, channel: "email", direction: "outbound", body: "hi",
+      }, "user_test");
+
+      const { id: noMsgContact } = await createContact(db, accountId, { firstName: "Never messaged" }, "user_test");
+      const noMsg = await ensureConversation(db, accountId, noMsgContact, "user_test");
+
+      // Page 1, limit 1: the messaged conversation sorts first (non-null
+      // last_message_at outranks null in this ordering), so it alone fills
+      // the page and hands back a cursor whose `v` is a REAL timestamp —
+      // exactly the branch that must still reach the null row next.
+      const page1 = await listConversations(db, accountId, { limit: 1 });
+      expect(page1).toHaveLength(1);
+      expect(page1[0]!.id).toBe(withMsg.id);
+
+      const page2 = await listConversations(
+        db, accountId, { limit: 1, before: { v: page1[0]!.lastMessageAt, id: page1[0]!.id } });
+      expect(page2).toHaveLength(1);
+      expect(page2[0]!.id).toBe(noMsg.id);
+      expect(page2[0]!.lastMessageAt).toBeNull();
+    }));
+
   // D-019's deep-link escape hatch: a link naming a conversation id has no
   // idea which page of the now-paged list it would fall on.
   // `getConversationSummary` finds it directly, regardless of where (or

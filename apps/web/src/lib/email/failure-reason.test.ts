@@ -39,4 +39,16 @@ describe("messageFailureReason", () => {
     expect(messageFailureReason({ status: "bounced", error: raw }))
       .toBe(m["conversations.failureReason.bounced"]);
   });
+
+  // The marker check is an EXACT match, not a substring test — a raw
+  // provider string that merely happens to CONTAIN the word "complained"
+  // (one did complain about something unrelated to spam, say) must not be
+  // mistaken for the webhook's own curated marker (mutation: match with
+  // `.includes(COMPLAINT_ERROR_MARKER)` instead of `===` → FAILS).
+  it("a provider string merely CONTAINING the word \"complained\" is not the marker, and gets the generic bounce line", () => {
+    const raw = "the customer complained to support about an unrelated billing issue";
+    expect(raw.includes(COMPLAINT_ERROR_MARKER)).toBe(true); // the trap this guards
+    expect(messageFailureReason({ status: "bounced", error: raw }))
+      .toBe(m["conversations.failureReason.bounced"]);
+  });
 });

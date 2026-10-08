@@ -57,6 +57,12 @@ export default async function ConversationsPage({
   }
 
   const base = `/dashboard/accounts/${accountId}/conversations`;
+  // The CURRENT page's cursor, re-usable on this render's own links (review
+  // fix: DESIGN.md's "Selection survives a page change"). Not the raw
+  // `before` unconditionally — an unparseable one already fell back to
+  // page one above, and carrying the garbage forward into every row's own
+  // link would propagate it rather than let it drop.
+  const currentBefore = cursor ? before : undefined;
   const last = conversations[conversations.length - 1];
   const olderHref = conversations.length === PAGE_SIZE && last
     ? `${base}?${new URLSearchParams({ before: encodeCursor({ v: last.lastMessageAt, id: last.id }) })}`
@@ -97,11 +103,12 @@ export default async function ConversationsPage({
             activeId={active?.id}
             olderHref={olderHref}
             newerHref={newerHref}
+            before={currentBefore}
           />
         </div>
         {active ? (
           <div className="min-w-0 space-y-3">
-            <ConversationBack base={base} />
+            <ConversationBack base={base} before={currentBefore} />
             <MarkRead
               conversationId={active.id}
               unreadCount={active.unreadCount}

@@ -57,6 +57,22 @@ describe("resend webhook", () => {
     expect(updateMock).toHaveBeenCalledWith(expect.anything(), "prov_c", "bounced", { error: "complained" });
   });
 
+  // A PLAIN bounce must NEVER carry the complaint marker — the two are
+  // different things to do about an address (failure-reason.ts's own doc
+  // comment). `toHaveBeenCalledWith` checks the EXACT argument list,
+  // including count: a widened branch that also matches "email.bounced"
+  // (e.g. `event.type === "email.complained" || event.type ===
+  // "email.bounced"`) would pass a 4th argument here and fail this
+  // assertion, where the pre-existing "maps a delivered event..." test
+  // above — which never checks for the ABSENCE of a 4th argument on any
+  // event this fix touches — would not have caught it.
+  it("maps a plain bounce to the bounced status with NO error patch (mutation: widen the complaint check to include bounced → FAILS)", async () => {
+    verifyMock.mockReturnValue({ type: "email.bounced", data: { email_id: "prov_b" } });
+    const res = await POST(req({}));
+    expect(res.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith(expect.anything(), "prov_b", "bounced");
+  });
+
   it("maps a failed event to the failed status", async () => {
     verifyMock.mockReturnValue({ type: "email.failed", data: { email_id: "prov_fail" } });
     const res = await POST(req({}));

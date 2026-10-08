@@ -620,6 +620,13 @@ export async function listConversations(
   // quiet one came back with NO preview despite genuinely having one. A
   // query scoped to one conversation and `limit(1)` cannot be pushed out by
   // another conversation's volume, at any scale.
+  //
+  // This IS `limit` round trips per page (bounded, parallel via
+  // Promise.all, never unbounded `N+1`-over-the-whole-account the way the
+  // replaced query's own doc comment warned against). Review note: at
+  // today's scale (one operator, pages of 50) this is the right trade —
+  // a DB-side lateral join or a denormalised preview column would be the
+  // fix if a page's load time ever became the bottleneck instead.
   const previews = await Promise.all(rows.map((r) => fetchConversationPreview(db, accountId, r.id)));
 
   return rows.map((r, i) => ({

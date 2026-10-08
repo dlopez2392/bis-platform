@@ -91,6 +91,30 @@ describe("ConversationsPage's pagination (D-019)", () => {
     expect(getConversationSummaryMock).not.toHaveBeenCalled();
   });
 
+  // DESIGN.md "Paged lists": "Selection survives a page change." Review
+  // fix: opening a thread from page 2 used to lose the page entirely —
+  // neither the row link that opened it nor the Back link it rendered
+  // carried `before`, so Back silently returned to page one.
+  it("carries the current page's `before` cursor on both the row links and the open thread's Back link (mutation: drop `before` from either → FAILS)", async () => {
+    const cursor = encodeCursor({ v: "2026-10-01T00:00:00Z", id: "00000000-0000-0000-0000-000000000000" });
+    listConversationsMock.mockResolvedValueOnce([row(0), row(1)]);
+    const html = await markup({ before: cursor, c: "convo1" });
+    // The OTHER row's link (convo0 — row 1 of the two), not the one
+    // currently open: every row needs this, not only the active one.
+    expect(html).toContain(`href="/dashboard/accounts/acct1/conversations?before=${cursor}&amp;c=convo0"`);
+    // The Back link: returning from the thread must land back on THIS
+    // page, not page one.
+    expect(html).toContain(`href="/dashboard/accounts/acct1/conversations?before=${cursor}"`);
+  });
+
+  it("carries no `before` on row links or the Back link when on page one", async () => {
+    listConversationsMock.mockResolvedValueOnce([row(0), row(1)]);
+    const html = await markup({ c: "convo1" });
+    expect(html).toContain('href="/dashboard/accounts/acct1/conversations?c=convo0"');
+    expect(html).toContain('href="/dashboard/accounts/acct1/conversations"');
+    expect(html).not.toContain("before=");
+  });
+
   it("shows the full-page empty state only on a COLD START (zero rows, no cursor) — a cursored zero falls through to the normal list view", async () => {
     listConversationsMock.mockResolvedValueOnce([]);
     const cold = await markup({});

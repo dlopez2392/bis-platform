@@ -9,7 +9,10 @@ import { ConversationList } from "./conversation-list";
  * DESIGN.md's "Paged lists" rule is explicit: Older/Newer carrying
  * `?before=`, and exactly ONE pager. This is the one place it renders.
  */
-function render(over: { olderHref?: string; newerHref?: string } = {}): string {
+function render(over: {
+  olderHref?: string; newerHref?: string; before?: string;
+  conversations?: unknown[];
+} = {}): string {
   return renderToStaticMarkup(createElement(ConversationList, {
     conversations: [],
     base: "/dashboard/accounts/a1/conversations",
@@ -17,6 +20,11 @@ function render(over: { olderHref?: string; newerHref?: string } = {}): string {
     ...over,
   } as never));
 }
+
+const ROW = {
+  id: "convo1", contactId: "contact1", contactFirstName: "Ada", contactLastName: "Lovelace",
+  lastMessageAt: "2026-10-08T10:00:00Z", lastMessagePreview: "hi", unreadCount: 0,
+};
 
 describe("ConversationList's pager (D-019)", () => {
   it("renders no pager when neither href is given (a short, unpaged list)", () => {
@@ -36,5 +44,19 @@ describe("ConversationList's pager (D-019)", () => {
   it("renders a Newer link when given one", () => {
     const html = render({ newerHref: "/dashboard/accounts/a1/conversations" });
     expect(html).toContain(m["conversations.newer"]);
+  });
+
+  // DESIGN.md "Paged lists": "Selection survives a page change." A row's
+  // link carried only `?c=<id>` — opening a thread from page 2 of the
+  // inbox and then going Back (ConversationBack's own href) landed on
+  // page one, silently losing the operator's place in the list.
+  it("carries the current `before` cursor on every row link, so opening a thread does not lose the page (mutation: drop `before` from the row href → FAILS)", () => {
+    const html = render({ conversations: [ROW], before: "CURSOR123" });
+    expect(html).toContain('href="/dashboard/accounts/a1/conversations?before=CURSOR123&amp;c=convo1"');
+  });
+
+  it("falls back to the bare `?c=<id>` link when there is no cursor (page one)", () => {
+    const html = render({ conversations: [ROW] });
+    expect(html).toContain('href="/dashboard/accounts/a1/conversations?c=convo1"');
   });
 });

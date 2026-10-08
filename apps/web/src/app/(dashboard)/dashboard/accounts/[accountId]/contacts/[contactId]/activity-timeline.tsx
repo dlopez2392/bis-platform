@@ -273,7 +273,7 @@ function TimelineRow({
       <div className="flex gap-3 py-[7px]">
         <StickyNote className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
-          <p className="text-sm text-card-foreground">{item.body}</p>
+          <p className="whitespace-pre-wrap break-words text-sm text-card-foreground">{item.body}</p>
           <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(item.at)}</p>
         </div>
       </div>

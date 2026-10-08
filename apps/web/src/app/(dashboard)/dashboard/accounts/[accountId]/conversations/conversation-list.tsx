@@ -13,6 +13,7 @@ export function ConversationList({
   activeId,
   olderHref,
   newerHref,
+  before,
 }: {
   conversations: ConversationSummary[];
   base: string;
@@ -23,6 +24,13 @@ export function ConversationList({
    *  already knows has no more/no fewer rows behind it. */
   olderHref?: string;
   newerHref?: string;
+  /** The page currently in view (review fix: DESIGN.md's "Selection
+   *  survives a page change"). A row's link carried only `?c=<id>` — opening
+   *  a thread from page 2 of the inbox landed, on Back, at page one, because
+   *  nothing on the row's own href said which page it came from. Carried on
+   *  EVERY row, not only the active one: any row on this page could be
+   *  opened next. */
+  before?: string;
 }) {
   return (
     <div className="space-y-3">
@@ -32,10 +40,13 @@ export function ConversationList({
             first_name: conversation.contactFirstName,
             last_name: conversation.contactLastName,
           });
+          const rowParams = new URLSearchParams();
+          if (before) rowParams.set("before", before);
+          rowParams.set("c", conversation.id);
           return (
             <Link
               key={conversation.id}
-              href={`${base}?c=${conversation.id}`}
+              href={`${base}?${rowParams}`}
               className={cn(
                 "flex flex-col gap-0.5 px-3 py-2.5 text-sm transition-colors hover:bg-[var(--surface-3)]",
                 LIST_ROW,
@@ -73,7 +84,7 @@ export function ConversationList({
         })}
       </ListPanel>
       {olderHref || newerHref ? (
-        <nav className="flex justify-end gap-2" aria-label="Pages">
+        <nav className="flex justify-end gap-2" aria-label={m["conversations.pagesLabel"]}>
           {newerHref ? (
             <Link href={newerHref} className={buttonVariants({ variant: "ghost", size: "sm" })}>
               {m["conversations.newer"]}
