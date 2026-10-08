@@ -285,7 +285,13 @@ anyone. It needs no dashboard setup: the session-token template in Part A
 renders `app_role` from each user's own metadata. It joins Test Client One's
 org (read from the seeded account row) and makes it active, as the person's
 session did, only so `<ActivateSoleOrganization/>` never fires mid-spec; the
-agency path itself matches on `is_agency()` and never on `org_id`.
+agency path itself matches on `is_agency()` and never on `org_id`. The
+demo capture (`apps/web/screenshots/auth.setup.ts`) mints its own throwaway
+agency user the same way (shared helpers in
+`apps/web/e2e/fixtures/clerk-identities.ts`), joins no organization, and
+deletes the user in its own teardown project; a leaked one is swept by the
+next e2e run, which shares the Clerk instance and the `e2e-agency-<stamp>`
+shape.
 
 That means either option works:
 

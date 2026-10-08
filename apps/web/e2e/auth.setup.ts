@@ -1,5 +1,5 @@
-import { clerk, clerkSetup } from "@clerk/testing/playwright";
-import { test as setup, type Page } from "@playwright/test";
+import { clerkSetup } from "@clerk/testing/playwright";
+import { test as setup } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
@@ -9,6 +9,7 @@ import { sweepStaleFixtures, formatSweepReport } from "./fixtures/sweep";
 import { refuseProduction } from "./fixtures/production-guard";
 import { saveSignedInState } from "./fixtures/session-state";
 import { SEEDED_ACCOUNT_NAME } from "./support";
+import { createAgencyUser, setActiveOrganization, signInWithTicket } from "./fixtures/clerk-identities";
 
 // Needed for the client-fixture setup below, which calls serviceDb() and
 // clerkClient() directly from the Playwright test runner process (not
@@ -44,45 +45,6 @@ const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
 // reads it to delete that user, whether or not any spec ran.
 const AGENCY_FIXTURE_FILE = "e2e/.auth/agency-fixture.json";
 
-type ClerkBackend = Awaited<ReturnType<typeof clerkClient>>;
-
-/**
- * Sign `userId` in on `page` with a ticket minted for that id, never a
- * lookup by email. `clerk.signIn({ emailAddress })` resolves the email
- * through `users.getUserList`, a search that can lag a user created a second
- * ago, and on 2026-10-07 it did: "No user found with email e2e-client-..."
- * failed the setup project before one spec ran. This is the same ticket
- * strategy @clerk/testing uses internally after its search, minus the
- * search; its `signInParams` path does not wait for the session the way its
- * email path does, so the wait is here.
- */
-async function signInWithTicket(page: Page, clerk_: ClerkBackend, userId: string): Promise<void> {
-  await page.goto("/sign-in");
-  const { token: ticket } = await clerk_.signInTokens.createSignInToken({ userId, expiresInSeconds: 300 });
-  await clerk.signIn({ page, signInParams: { strategy: "ticket", ticket } });
-  await page.waitForFunction(
-    () => Boolean((window as unknown as { Clerk?: { user?: unknown } }).Clerk?.user),
-  );
-}
-
-/**
- * Make `organizationId` this session's active organization, the same call
- * Clerk's own <OrganizationSwitcher/> makes. Nothing else sets it: the
- * instance's force_organization_selection is off, so no "Choose an
- * organization" task does it during sign-in.
- */
-async function setActiveOrganization(page: Page, organizationId: string): Promise<void> {
-  await page.evaluate(async (orgId) => {
-    const clerkGlobal = (
-      window as unknown as {
-        Clerk?: { setActive(params: { organization: string }): Promise<void> };
-      }
-    ).Clerk;
-    if (!clerkGlobal) throw new Error("e2e setup: window.Clerk did not load");
-    await clerkGlobal.setActive({ organization: orgId });
-  }, organizationId);
-}
-
 // A real 24x24 solid-blue PNG, built chunk by chunk with valid CRCs. Genuine
 // bytes on purpose: the upload path identifies format by decoded magic bytes,
 // so a renamed or hand-waved blob would be rejected exactly as an attacker's
@@ -94,18 +56,10 @@ const E2E_LOGO_PNG = Buffer.from(
 );
 
 // Runs once before the real specs: mints a throwaway agency user for THIS
-// run and signs it in. Until 2026-10-07 the suite signed in as the one real
-// person on this dev instance (danlopez508@gmail.com), so anything that
-// ended that person's sessions ended CI with them: PR #188's run lost the
-// session at 18:00:02 UTC, Clerk's handshake answered __client_uat=0, and
-// every signed-in spec after it rendered the sign-in page. A per-run user
-// shares no session with a person or with a concurrent run.
-//
-// Agency status is ONE claim: app_role === "agency_admin" (lib/auth.ts,
-// app.is_agency() in RLS), rendered into the session token from
-// {{user.public_metadata.app_role}} by the instance's token template
-// (docs/runbooks/clerk-setup.md, Part A). No org is needed for agency
-// access. The user still joins the seeded org and makes it active, exactly
+// run and signs it in (fixtures/clerk-identities.ts says why it is never a
+// person). A per-run user shares no session with a person or with a
+// concurrent run. No org is needed for agency access. The user still joins
+// the seeded org and makes it active, exactly
 // as the real person's session did: <ActivateSoleOrganization/> switches a
 // session with no active org and exactly ONE membership and reloads to "/",
 // and blueprints.spec.ts creates an org mid-spec ("Add company" makes the
@@ -115,19 +69,10 @@ setup("authenticate as agency_admin", async ({ page }) => {
   await clerkSetup();
   const clerk_ = await clerkClient();
 
-  const stamp = Date.now();
-  const email = `e2e-agency-${stamp}@example.com`;
-  const user = await clerk_.users.createUser({
-    emailAddress: [email],
-    firstName: "E2E",
-    lastName: "Agency",
-    skipPasswordRequirement: true,
-    skipLegalChecks: true,
-    publicMetadata: { app_role: "agency_admin" },
-  });
+  const { userId, email } = await createAgencyUser(clerk_, { firstName: "E2E", lastName: "Agency" });
   // Recorded before anything else can fail, so teardown always has the id.
   mkdirSync("e2e/.auth", { recursive: true });
-  writeFileSync(AGENCY_FIXTURE_FILE, JSON.stringify({ clerkUserId: user.id, email }));
+  writeFileSync(AGENCY_FIXTURE_FILE, JSON.stringify({ clerkUserId: userId, email }));
 
   // The seeded account's org, read from the account row rather than pinned
   // here: one source (the CI seed), no second copy of the id to drift.
@@ -139,10 +84,10 @@ setup("authenticate as agency_admin", async ({ page }) => {
     throw new Error(`agency setup: expected exactly one ${SEEDED_ACCOUNT_NAME} with a Clerk org, found ${seeded?.length ?? 0}`);
   }
   await clerk_.organizations.createOrganizationMembership({
-    organizationId, userId: user.id, role: "org:member",
+    organizationId, userId, role: "org:member",
   });
 
-  await signInWithTicket(page, clerk_, user.id);
+  await signInWithTicket(page, clerk_, userId);
   await setActiveOrganization(page, organizationId);
   await page.goto("/dashboard/accounts");
   await page.waitForURL(/\/dashboard\/accounts$/);

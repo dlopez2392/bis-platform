@@ -68,6 +68,15 @@ export function extractHandoffToken(eventData: unknown): string | null {
   return rawHeader(headers(eventData), "x-bis-handoff");
 }
 
+/**
+ * The signature our TeXML route put on the SIP URI as `X-BIS-Signature`
+ * (`sip-handoff-signature.ts`), read verbatim for the same reason the handoff
+ * token is. Null when absent. Never logged.
+ */
+export function extractSipSignature(eventData: unknown): string | null {
+  return rawHeader(headers(eventData), "x-bis-signature");
+}
+
 export function sipHeaderNames(eventData: unknown): string[] {
   return headers(eventData)
     .filter((h): h is Header & { name: string } => h && typeof h === "object" && typeof h.name === "string")

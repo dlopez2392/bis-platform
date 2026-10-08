@@ -57,7 +57,11 @@
 //         a cost optimisation must never cut off a paying customer.
 //
 //     Signature verification and account resolution are NOT fail-open —
-//     those gate who gets to talk to a tenant's AI at all.
+//     those gate who gets to talk to a tenant's AI at all. Neither is the
+//     TeXML-route signature (step 4) once VOICE_HANDOFF_ENFORCE is on: it is
+//     what ties the numbers this route acts on to a call that came through
+//     our own answer route, and with enforcement on, no secret means every
+//     call is declined.
 //
 // Every branch past the initial config/signature checks acks the webhook
 // with 200, `declined` or not: OpenAI's incoming-call webhook is not usefully
@@ -75,8 +79,9 @@ import {
   type Branding,
 } from "@bis/db";
 import {
-  extractCallerNumber, extractCalledNumber, extractHandoffToken, sipHeaderNames,
+  extractCallerNumber, extractCalledNumber, extractHandoffToken, extractSipSignature, sipHeaderNames,
 } from "@/lib/voice/sip-headers";
+import { verifySipHandoff, sipHandoffEnforced } from "@/lib/voice/sip-handoff-signature";
 import { resolveHandoffTarget, type HandoffTarget } from "@/lib/voice/handoff";
 import { callAnswerable } from "@/lib/voice/accept-gate";
 import { buildRealtimeSessionConfig, type VoicePromptInput } from "@/lib/voice/session-config";
@@ -748,10 +753,60 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     const now = new Date();
 
-    // --- Step 4: extract routing info, log NAMES never VALUES ------------
+    // --- Step 4: did the call come through our TeXML answer route? --------
+    // OpenAI's signature above proves OpenAI sent this event. It does not say
+    // how the call reached OpenAI's SIP endpoint, and the two numbers this
+    // route acts on — the dialled number (which picks the tenant) and the
+    // caller — arrive as SIP headers. The TeXML route, whose own requests
+    // Telnyx signs, signs both onto the SIP URI (`X-BIS-Signature`, bound to
+    // this call's handoff token, two-minute window). Checked HERE, before a
+    // database client exists, so a call that fails it costs nothing.
+    //
+    // Enforced only with VOICE_HANDOFF_ENFORCE (sip-handoff-signature.ts):
+    // until then the result is logged and routing is exactly what it was, so
+    // a real call can show the header arriving before anything depends on
+    // it. Enforced, the SIGNED numbers are the only ones used — the SIP From
+    // and X-BIS-Called are not read for routing at all.
     const callId = event.data.call_id;
-    const callerNumber = extractCallerNumber(event.data);
-    const calledNumber = extractCalledNumber(event.data);
+    const handoffCheck = verifySipHandoff(
+      extractSipSignature(event.data), extractHandoffToken(event.data), now.getTime(),
+    );
+    let callerNumber: string | null;
+    let calledNumber: string | null;
+    if (sipHandoffEnforced()) {
+      if (!handoffCheck.ok) {
+        // Same shape as every other decline: 200, never accepted. Logged
+        // with the reason only — the header value is a credential.
+        log("declined: unverified — no valid TeXML-route signature", { callId, reason: handoffCheck.reason });
+        if (handoffCheck.reason === "no-key") {
+          // Every call is refused while this lasts: Sofía's outage, so it is
+          // stamped like the missing-secret case in step 1. Any other reason
+          // is a call that did not come through us — never an alert.
+          stampHeartbeat("voice.sip_webhook", { ok: false, error: "VOICE_HANDOFF_ENFORCE is on but VOICE_HANDOFF_SECRET is not set" });
+        }
+        return NextResponse.json({ ok: true, declined: "unverified" });
+      }
+      calledNumber = handoffCheck.calledE164;
+      callerNumber = handoffCheck.callerE164;
+    } else {
+      callerNumber = extractCallerNumber(event.data);
+      calledNumber = extractCalledNumber(event.data);
+      if (handoffCheck.ok) {
+        // The evidence the enforcement step waits on: the header arrived
+        // intact, and whether the carrier's own headers agree with it.
+        log("TeXML-route signature checked (not enforced)", {
+          callId, result: "ok",
+          calledMatches: handoffCheck.calledE164 === calledNumber,
+          callerMatches: handoffCheck.callerE164 === callerNumber,
+        });
+      } else if (handoffCheck.reason === "no-key") {
+        log("VOICE_HANDOFF_SECRET is not set — this call is answered without checking it came through the TeXML route", { callId });
+      } else {
+        log("TeXML-route signature checked (not enforced)", { callId, result: handoffCheck.reason });
+      }
+    }
+
+    // --- Step 4b: log routing info, header NAMES never VALUES ------------
     log("incoming call", { callId, callerNumber, calledNumber, sipHeaderNames: sipHeaderNames(event.data) });
 
     // --- Step 5: unroutable ------------------------------------------------
@@ -790,10 +845,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // Reputation is the SAME predicate the TeXML route speaks its refusal
     // from (`caller-reputation.ts`), enforced here. TeXML is the UX layer and
     // gives the caller words; this is the layer that makes the decision
-    // binding — exactly the split `callAnswerable` already documents, and the
-    // reason the OpenAI SIP endpoint being reachable by anyone who knows the
-    // project id does not matter. A decline is expressed by never accepting,
-    // so nothing is billed.
+    // binding — exactly the split `callAnswerable` already documents. (Which
+    // caller and which number these counts are read for is only as good as
+    // step 4: enforced, both are the TeXML route's signed values.) A decline
+    // is expressed by never accepting, so nothing is billed.
     //
     // The two verdicts read OPPOSITE senses — `decideLimit` reports `allowed`,
     // `decideReputation` reports `blocked` — so each is read on its own field
