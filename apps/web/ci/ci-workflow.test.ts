@@ -20,6 +20,10 @@ const PROD_REF = "tlbkbmlrfafquucsmsmm";
 /** Production's publishable key's prefix, the literal ci.yml carried until the switch. */
 const PROD_PUBLISHABLE_PREFIX = "sb_publishable_h2Gm";
 const GUARD = "bash .github/scripts/ci-target-guard.sh";
+/** The docs-only decision (its behaviour is tested in ci-docs-only.test.ts). */
+const SCOPE = "bash .github/scripts/ci-docs-only.sh";
+/** The ONE condition a command step in verify or e2e may carry. */
+const DOCS_ONLY_IF = "steps.scope.outputs.docs_only != 'true'";
 
 function read(relative: string): string {
   return fs.readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8").replace(/\r\n/g, "\n");
@@ -73,7 +77,7 @@ function jobs(lines: string[]): Record<string, string[]> {
  * from an assertion that only looked at `run`), and its `uses` and one-line
  * `run` values.
  */
-type Step = { keys: string[]; uses?: string; run?: string };
+type Step = { keys: string[]; uses?: string; run?: string; if?: string; id?: string };
 
 /** A job's steps in order. */
 function steps(job: string[]): Step[] {
@@ -100,7 +104,7 @@ function steps(job: string[]): Step[] {
     const step = out[out.length - 1];
     if (!step || !key) continue;
     step.keys.push(key);
-    if ((key === "uses" || key === "run") && value) step[key] = value.trim();
+    if ((key === "uses" || key === "run" || key === "if" || key === "id") && value) step[key] = value.trim();
   }
   return out;
 }
@@ -230,16 +234,64 @@ describe("ci.yml's jobs", () => {
     expect([...(second?.keys ?? [])].sort()).toEqual(["name", "run"]);
   });
 
-  it.each(["verify", "e2e"])("%s lets no step fail quietly or skip a command on a condition", (id) => {
+  it.each(["verify", "e2e"])("%s lets no step fail quietly, and skips a command on no condition but the docs-only one (mutation: `if: always()` on pnpm check → FAILS)", (id) => {
     const all = steps(job(id));
     expect(all.length).toBeGreaterThan(3);
     expect(all.filter((s) => s.keys.includes("continue-on-error"))).toEqual([]);
-    expect(all.filter((s) => s.run && s.keys.includes("if"))).toEqual([]);
+    expect(all.filter((s) => s.run && s.keys.includes("if") && s.if !== DOCS_ONLY_IF)).toEqual([]);
   });
 
-  it("verify runs exactly the guard, the install, pnpm check and the build, in that order", () => {
+  it("verify runs exactly the guard, the docs-only decision, the install, pnpm check and the build, in that order", () => {
     const runs = steps(job("verify")).flatMap((s) => (s.run ? [s.run] : []));
-    expect(runs).toEqual([GUARD, "pnpm install --frozen-lockfile", "pnpm check", "pnpm --filter web build"]);
+    expect(runs).toEqual([GUARD, SCOPE, "pnpm install --frozen-lockfile", "pnpm check", "pnpm --filter web build"]);
+  });
+
+  // The docs-only gate. A docs-only push must still END each required job
+  // `success` on the head SHA, so the gate is a step, never a job-level `if:`
+  // (asserted above) and never a workflow path filter (asserted here).
+  // GitHub's docs: a workflow skipped by path filtering leaves its checks
+  // "Pending" and a PR that requires them "will be blocked from merging";
+  // a job skipped by `if:` "will report its status as Success" — but its
+  // check run's conclusion reads `skipped`, which is not what this repo's
+  // head-SHA check-run reading expects to see, and e2e's `needs: verify`
+  // would inherit the skip.
+  it("the workflow has no path, branch or tag filter, so every push gets both required checks (mutation: `paths-ignore: ['**/*.md']` under push → FAILS)", () => {
+    const on = topLevelBlock(ciLines, "on").map((l) => l.trim()).filter(Boolean);
+    expect(on).toEqual(["push:", "workflow_dispatch:"]);
+  });
+
+  it.each(["verify", "e2e"])("%s decides docs-only third, right after the guard, on no condition of its own (mutation: give the decision step an `if:` → FAILS)", (id) => {
+    const third = steps(job(id))[2];
+    expect(third?.run).toBe(SCOPE);
+    expect(third?.id).toBe("scope");
+    expect([...(third?.keys ?? [])].sort()).toEqual(["id", "name", "run"]);
+  });
+
+  it.each(["verify", "e2e"])("%s skips nothing up to the decision, and every step after it on exactly the docs-only condition (mutation: drop the `if:` from one later step, or reword it to `== 'false'` → FAILS)", (id) => {
+    const all = steps(job(id));
+    const decision = all.findIndex((s) => s.run === SCOPE);
+    expect(decision).toBe(2);
+    // Checkout, the target guard and the decision itself always run: the
+    // guard refuses a production target whether or not anything follows it.
+    expect(all.slice(0, decision + 1).filter((s) => s.keys.includes("if"))).toEqual([]);
+    const after = all.slice(decision + 1);
+    expect(after.length).toBeGreaterThan(3);
+    // `!= 'true'`, never `== 'false'`: when the decision writes nothing (a
+    // crash, a renamed output), the condition still holds and the suites RUN.
+    // The default is the full run.
+    expect(after.map((s) => s.if)).toEqual(after.map(() => DOCS_ONLY_IF));
+  });
+
+  it("the docs-only condition guards the Supabase-touching commands themselves: pnpm check, ci:seed and Playwright (mutation: drop the seed step's `if:`, or `if: always()` on pnpm check → FAILS)", () => {
+    const guarded = (id: string, run: string) => {
+      const all = steps(job(id));
+      const at = all.findIndex((s) => s.run === run);
+      expect(at, `${id}: ${run}`).toBeGreaterThan(all.findIndex((s) => s.run === SCOPE));
+      expect(all[at]?.if, `${id}: ${run}`).toBe(DOCS_ONLY_IF);
+    };
+    guarded("verify", "pnpm check");
+    guarded("e2e", "pnpm --filter @bis/db ci:seed");
+    guarded("e2e", "pnpm --filter web test:e2e");
   });
 
   it("e2e seeds the CI project after the install and before Playwright", () => {
@@ -259,6 +311,125 @@ describe("ci.yml's jobs", () => {
     const text = job(id).join("\n");
     expect(/^\s+group: (\S+)\s*$/m.exec(text)?.[1]).toBe(group);
     expect(/^\s+cancel-in-progress: (\S+)\s*$/m.exec(text)?.[1]).toBe("false");
+  });
+
+  // Cross-branch cancellation (2026-10-07). A concurrency group holds one
+  // running and, by default (`queue: single`), ONE pending entry: a newer
+  // pending job replaces the older one. Both groups above are repo-wide, so
+  // any push on any branch cancelled whichever other branch's job was
+  // waiting (~5 times that day). `queue: max` lets up to 100 wait, FIFO
+  // (GitHub docs, "Queueing multiple pending runs"). The groups stay
+  // repo-wide because neither job is shown safe to run twice at once: e2e
+  // shares Test Client One by design, and two db suites have failed on wall
+  // clock together (verify's group comment).
+  it.each(["verify", "e2e"])("%s lets every other branch's job wait in line instead of replacing it (mutation: drop `queue: max` → FAILS)", (id) => {
+    const text = job(id).join("\n");
+    expect(/^\s+queue: (\S+)\s*$/m.exec(text)?.[1]).toBe("max");
+  });
+
+  it("a newer push supersedes only ITS OWN branch's older run, and a run on main is never superseded (mutation: group `ci-${{ github.ref }}` → main's runs replace each other → FAILS; cancel-in-progress `true` → FAILS)", () => {
+    // Workflow level, one group per branch ref, cancelling: a second push to
+    // a branch stops that branch's stale run (and the Supabase traffic it was
+    // making); another branch's ref is another group. On main, every run is
+    // its own group (the run id) and nothing cancels it: main's run is the
+    // checked state of the commit being deployed.
+    const top = mapping(topLevelBlock(ciLines, "concurrency"));
+    expect(top.group).toBe("ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}");
+    expect(top["cancel-in-progress"]).toBe("${{ github.ref != 'refs/heads/main' }}");
+    expect(Object.keys(top).sort()).toEqual(["cancel-in-progress", "group"]);
+  });
+});
+
+// This repository is PUBLIC, and so is every Actions artifact it publishes:
+// any signed-in GitHub user can download one. A Playwright trace records the
+// browser's network traffic, cookies and storage — a Clerk session for the
+// dev instance and whatever the database rendered — and the storage-state
+// files under e2e/.auth and screenshots/.auth ARE sessions. Until 2026-10-07
+// ci.yml's e2e job and screenshots.yml both uploaded apps/web/test-results/
+// (where Playwright writes trace.zip) on every failure; 13 such artifacts
+// were deleted by hand that day. Traces are now local-only: a failed run
+// locally leaves them in apps/web/test-results/.
+//
+// These cases read EVERY workflow, not just ci.yml, because the next upload
+// can arrive in any of them.
+describe("no workflow publishes Playwright traces, sessions or build output as an artifact", () => {
+  const workflowDir = new URL("../../../.github/workflows/", import.meta.url);
+  const workflowFiles = fs.readdirSync(fileURLToPath(workflowDir))
+    .filter((f) => /\.ya?ml$/.test(f))
+    .sort();
+
+  type Upload = { file: string; name: string; paths: string[] };
+
+  /**
+   * Every upload-artifact step in one workflow, with its `with: name` and
+   * every entry of its `with: path` (one-line or a `|` block). A step is the
+   * lines from its `- ` dash up to the next line at or left of that dash.
+   */
+  function uploads(file: string, text: string): Upload[] {
+    const lines = codeLines(text);
+    const out: Upload[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const dash = /^(\s*)- /.exec(lines[i]!);
+      if (!dash) continue;
+      const indent = dash[1]!.length;
+      const rest = lines.slice(i + 1);
+      const end = rest.findIndex((l) => l.trim() !== "" && l.search(/\S/) <= indent);
+      const block = [lines[i]!, ...(end < 0 ? rest : rest.slice(0, end))];
+      if (!block.some((l) => /^\s*(- )?uses:\s*\S*upload-artifact@/.test(l))) continue;
+      let name = "";
+      const paths: string[] = [];
+      block.forEach((line, j) => {
+        const nameMatch = /^\s+name:\s*(.+)$/.exec(line);
+        if (nameMatch && j > 0 && block.slice(0, j).some((l) => /^\s+with:\s*$/.test(l))) {
+          name = nameMatch[1]!.trim();
+        }
+        const pathMatch = /^(\s+)path:\s*(.*)$/.exec(line);
+        if (!pathMatch) return;
+        const value = pathMatch[2]!.trim();
+        if (value && value !== "|" && value !== ">") {
+          paths.push(value);
+          return;
+        }
+        const keyIndent = pathMatch[1]!.length;
+        for (const next of block.slice(j + 1)) {
+          if (next.trim() !== "" && next.search(/\S/) <= keyIndent) break;
+          if (next.trim()) paths.push(next.trim());
+        }
+      });
+      out.push({ file, name, paths });
+    }
+    return out;
+  }
+
+  const all = workflowFiles.flatMap((f) => uploads(f, read(`../../../.github/workflows/${f}`)));
+
+  it("finds the workflows and the uploads it is guarding (the parser is not reading nothing)", () => {
+    expect(workflowFiles).toEqual(expect.arrayContaining(["ci.yml", "screenshots.yml", "ci-project-setup.yml"]));
+    expect(all.length).toBeGreaterThan(0);
+    expect(all.every((u) => u.paths.length > 0)).toBe(true);
+  });
+
+  it("ci.yml uploads no artifact at all (mutation: re-add the e2e job's `playwright-traces` upload of apps/web/test-results/ → FAILS)", () => {
+    expect(all.filter((u) => u.file === "ci.yml")).toEqual([]);
+  });
+
+  it("no upload-artifact step's name or path names traces, test-results, a Playwright report, auth/storage state, .next or an env file (mutation: re-add screenshots.yml's `screenshot-traces` upload → FAILS)", () => {
+    const forbidden = /trace|test-results|playwright-report|\.auth|storage|\.next|\.env/i;
+    const offenders = all.filter((u) => forbidden.test(u.name) || u.paths.some((p) => forbidden.test(p)));
+    expect(offenders).toEqual([]);
+  });
+
+  it("uploads only the two artifacts reviewed as safe to publish (a new upload must be added here, on purpose, with its reason)", () => {
+    // demo-screenshots: PNG pixels of the seeded, outbound-suppressed demo
+    //   tenant, made FOR the public marketing site. The session that took them
+    //   lives in screenshots/.auth/, outside this directory.
+    // ci-project-<step>: catalog rows (schema, policies, grants, bucket
+    //   settings, migration names) of the CI project, all of which the public
+    //   migrations already spell out.
+    expect(all.map((u) => `${u.file} ${u.paths.join(",")}`).sort()).toEqual([
+      "ci-project-setup.yml ${{ runner.temp }}/ci-project-setup/${{ inputs.step }}.tsv",
+      "screenshots.yml apps/web/screenshots/out/",
+    ]);
   });
 });
 

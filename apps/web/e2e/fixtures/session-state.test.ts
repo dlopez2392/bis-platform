@@ -100,6 +100,12 @@ const written = vi.hoisted(() => ({ files: {} as Record<string, string> }));
 const registered = vi.hoisted(() => ({
   tests: [] as { title: string; fn: (args: { page: unknown }) => Promise<void> }[],
 }));
+// What the setup asked Clerk to create, so the agency identity's one
+// load-bearing property (its app_role) is asserted, not assumed.
+const clerkCalls = vi.hoisted(() => ({
+  createUser: [] as Record<string, unknown>[],
+  createOrganizationMembership: [] as Record<string, unknown>[],
+}));
 
 vi.mock("node:fs", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:fs")>();
@@ -119,12 +125,31 @@ vi.mock("@playwright/test", () => ({
 vi.mock("@clerk/testing/playwright", () => ({ clerk: { signIn: vi.fn() }, clerkSetup: vi.fn() }));
 vi.mock("@clerk/nextjs/server", () => ({
   clerkClient: async () => ({
-    users: { createUser: async () => ({ id: "user_UNIT", publicMetadata: {} }) },
-    organizations: { createOrganization: async () => ({ id: "org_UNIT" }) },
+    users: {
+      createUser: async (params: Record<string, unknown>) => {
+        clerkCalls.createUser.push(params);
+        return { id: "user_UNIT", publicMetadata: {} };
+      },
+    },
+    organizations: {
+      createOrganization: async () => ({ id: "org_UNIT" }),
+      createOrganizationMembership: async (params: Record<string, unknown>) => {
+        clerkCalls.createOrganizationMembership.push(params);
+        return {};
+      },
+    },
+    signInTokens: { createSignInToken: async () => ({ token: "ticket_UNIT_TEST_ONLY" }) },
   }),
 }));
 vi.mock("@bis/db", () => ({
-  serviceDb: () => ({}),
+  // Only the agency setup reads through this: the seeded account's org.
+  serviceDb: () => ({
+    from: () => ({
+      select: () => ({
+        eq: () => ({ limit: async () => ({ data: [{ clerk_org_id: "org_SEEDED_UNIT" }], error: null }) }),
+      }),
+    }),
+  }),
   createAccount: async () => ({ id: "acc_UNIT" }),
   setClientAccess: vi.fn(), createContact: vi.fn(), setBranding: vi.fn(),
   uploadBrandLogo: async () => "acc_UNIT/logo.png",
@@ -145,7 +170,7 @@ function fakePage() {
     storageState: async (opts?: unknown) => { storageStateCalls.push(opts); return signedInState(); },
   };
   const page = {
-    goto: vi.fn(), waitForURL: vi.fn(), waitForLoadState: vi.fn(), evaluate: vi.fn(),
+    goto: vi.fn(), waitForURL: vi.fn(), waitForLoadState: vi.fn(), evaluate: vi.fn(), waitForFunction: vi.fn(),
     url: () => "http://localhost:3000/dashboard/accounts",
     getByRole: () => ({ click: vi.fn() }),
     context: () => context,
@@ -167,6 +192,8 @@ async function runSetup(title: RegExp) {
 describe("auth.setup.ts", () => {
   beforeEach(() => {
     written.files = {};
+    clerkCalls.createUser = [];
+    clerkCalls.createOrganizationMembership = [];
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://odnobiodsftffphuuosz.supabase.invalid");
     vi.stubEnv("SUPABASE_DB_URL", undefined);
   });
@@ -180,6 +207,21 @@ describe("auth.setup.ts", () => {
     expect(names(saved!)).not.toContain("__session");
     expect(names(saved!)).not.toContain("__session_5lB98H6L");
     expect(names(saved!)).toContain("__client_uat_5lB98H6L");
+  });
+
+  // The agency is a per-run user, not a person (2026-10-07). Agency status
+  // is the app_role claim and nothing else, so creating the user without it
+  // would sign every agency spec in as a client.
+  it("mints a per-run agency user with app_role agency_admin, in the seeded org, recorded for teardown", async () => {
+    await runSetup(/agency_admin/);
+    expect(clerkCalls.createUser).toHaveLength(1);
+    const params = clerkCalls.createUser[0]!;
+    expect(params.publicMetadata).toEqual({ app_role: "agency_admin" });
+    expect(String((params.emailAddress as string[])[0])).toMatch(/^e2e-agency-\d{13}@example\.com$/);
+    expect(clerkCalls.createOrganizationMembership).toEqual([
+      { organizationId: "org_SEEDED_UNIT", userId: "user_UNIT", role: "org:member" },
+    ]);
+    expect(written.files["e2e/.auth/agency-fixture.json"]).toContain("user_UNIT");
   });
 
   it("saves the client state without a session token", async () => {

@@ -205,6 +205,68 @@ describe("verifyAlertPhoneCode — an expired code", () => {
   });
 });
 
+// D-107 (CI run 37517575687, 2026-10-06): `created_at` and `expires_at` are
+// the DATABASE's now(), and the consume used to stamp the APP server's
+// `new Date()`. A server clock even milliseconds behind tripped 0036's
+// `consumed_at >= created_at` and refused a genuine code. These two run the
+// real flow with the app clock deliberately set behind — only `Date` is faked,
+// so the network and every timer stay real — which turns "a few ms of skew,
+// sometimes" into a deterministic red on the old code. 0060's
+// consume_alert_phone_verification stamps now() instead, so the app's clock
+// no longer reaches consumed_at at all.
+describe("verifyAlertPhoneCode — the app server's clock is not the database's", () => {
+  async function withAppClockBehind(ms: number, fn: () => Promise<void>) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(Date.now() - ms));
+    try { await fn(); } finally { vi.useRealTimers(); }
+  }
+
+  it("verifies a genuine code even when the app server's clock runs behind the database's, and the stamp is the database's (mutation: restore `.update({ consumed_at: new Date().toISOString() })` → 'violates check constraint alert_phone_verifications_consumed_check', FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const phone = testPhoneNumber();
+      const { id, code } = await startAlertPhoneVerification(db, accountId, phone);
+
+      await withAppClockBehind(60_000, async () => {
+        expect(await verifyAlertPhoneCode(db, accountId, phone, code, "user_test")).toBe("verified");
+      });
+      expect(await getAlertPhone(db, accountId)).toBe(phone);
+
+      const { data, error } = await db.from("alert_phone_verifications")
+        .select("created_at, consumed_at").eq("id", id).single();
+      expect(error, `read failed: ${error?.message}`).toBeNull();
+      // On or after the row's own created_at — i.e. the database's clock, not
+      // the app clock that was a minute behind it.
+      expect(Date.parse(data!.consumed_at!)).toBeGreaterThanOrEqual(Date.parse(data!.created_at));
+    });
+  });
+
+  it("reports expired — not a consume error — for a code the DATABASE's clock has expired though the app's slow clock still calls it live (mutation: restore the app-clock update → 'verifyAlertPhoneCode consume failed', FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const phone = testPhoneNumber();
+      const { id, code } = await startAlertPhoneVerification(db, accountId, phone);
+      // The existing expired test's shape: expires_at one millisecond after
+      // the row's OWN created_at, so it is in the past by the database's
+      // clock by the time verify runs.
+      const { data: before } = await db.from("alert_phone_verifications")
+        .select("created_at").eq("id", id).single();
+      const { error: updateError } = await db.from("alert_phone_verifications")
+        .update({ expires_at: new Date(Date.parse(before!.created_at) + 1).toISOString() })
+        .eq("id", id);
+      expect(updateError, `update failed: ${updateError?.message}`).toBeNull();
+
+      // An hour behind: the lookup's own `expires_at > <app now>` still finds
+      // the row, so the consume is the step that has to say no.
+      await withAppClockBehind(60 * 60_000, async () => {
+        expect(await verifyAlertPhoneCode(db, accountId, phone, code, "user_test")).toBe("expired");
+      });
+      expect(await getAlertPhone(db, accountId)).toBeNull();
+      const { data } = await db.from("alert_phone_verifications")
+        .select("consumed_at").eq("id", id).single();
+      expect(data!.consumed_at).toBeNull();
+    });
+  });
+});
+
 describe("verifyAlertPhoneCode — an earlier pending attempt survives a new one", () => {
   it("lets the NEWEST live attempt for the same number succeed even with an older one still pending", async () => {
     await withTestAccount(async (db, accountId) => {
