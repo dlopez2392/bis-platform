@@ -26,8 +26,9 @@
 # database neither the CI project nor production is.
 #
 # Needs: `supabase` on PATH (.github/scripts/ci-supabase-cli.sh puts the pinned
-# one there), `psql` (on GitHub's ubuntu runners), Docker, RUNNER_TEMP,
-# GITHUB_ENV, and the repository root as the working directory.
+# one there), `psql` (on GitHub's ubuntu runners), Docker (`docker` on PATH,
+# also used to turn off Kong's upstream keep-alive, see KONG below),
+# RUNNER_TEMP, GITHUB_ENV, and the repository root as the working directory.
 #
 # Writes to GITHUB_ENV, only after every step above succeeded:
 #   NEXT_PUBLIC_SUPABASE_URL       <- API_URL
@@ -58,7 +59,7 @@ BOOTSTRAP="$DB_DIR/bootstrap/ci-project.sql"
 # costs no extra pull: `supabase start` pulls it anyway for the auth schema.
 EXCLUDE="realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor"
 
-for tool in supabase psql; do
+for tool in supabase psql docker; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "::error::$tool is not on PATH. verify installs the Supabase CLI in the step before this one (.github/scripts/ci-supabase-cli.sh); psql ships with GitHub's ubuntu runners."
     exit 1
@@ -73,6 +74,38 @@ cp "$DB_DIR/config.toml" "$work/supabase/config.toml"
 started_at=$SECONDS
 supabase start --workdir "$work" --exclude "$EXCLUDE"
 start_seconds=$((SECONDS - started_at))
+
+# KONG: NO UPSTREAM KEEP-ALIVE. Run 37813770089 (2026-10-08) passed 1580 of
+# 1581 db tests; the one failure was a POST answered by Kong's own 502, "An
+# invalid response was received from the upstream server". Kong 2.8.1 keeps
+# an idle upstream connection up to 60s; PostgREST v14.14 (what CLI 2.109.1
+# runs) closes idle ones sooner, and after a HEAD response (every
+# `{ count: 'exact', head: true }`) closes without saying so. nginx retries a
+# dead pooled connection only for idempotent methods, so a POST or PATCH
+# fails, on a different test each run. [External: supabase/cli issue #6674
+# and its thread. Fixed upstream in PostgREST v14.15, i.e. CLI >= 2.110.0,
+# which also moved the CLI's database commands to a new implementation, so a
+# bump is its own change.] With pool size 0 (Kong: "disables upstream
+# keepalive connections") every proxied request opens its own loopback
+# connection, and none can land on one PostgREST already closed.
+#
+# The file edit and reload are not trusted: the RUNNING node's configuration
+# is read back from Kong's admin API (inside the container only) until it
+# says 0, and anything else stops the job here, before any schema exists.
+project_id="$(sed -nE 's/^project_id *= *"([^"]+)".*/\1/p' "$DB_DIR/config.toml")"
+kong="supabase_kong_${project_id}"
+docker exec "$kong" sh -c "sed -i 's/^upstream_keepalive_pool_size = .*/upstream_keepalive_pool_size = 0/' /usr/local/kong/.kong_env && kong reload"
+pool=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  admin="$(docker exec "$kong" sh -c "curl -fsS http://127.0.0.1:8001/ 2>/dev/null || wget -qO- http://127.0.0.1:8001/" || true)"
+  pool="$(printf '%s' "$admin" | grep -oE '"upstream_keepalive_pool_size": ?[0-9]+' | grep -oE '[0-9]+$' || true)"
+  [ "$pool" = "0" ] && break
+  sleep 1
+done
+if [ "$pool" != "0" ]; then
+  echo "::error::Kong ($kong) still reports upstream_keepalive_pool_size=${pool:-<unreadable>} after the reload, so POSTs through it can fail with a sporadic 502. Nothing was applied. If the pinned CLI changed how Kong is built, see this script's KONG note."
+  exit 1
+fi
 
 # KEY="value" lines; anything else the CLI prints is ignored. Values are read,
 # never echoed: a missing one is named by its KEY.

@@ -83,6 +83,17 @@ done
 exit 0
 `;
 
+// Logs argv; answers a read of Kong's admin API (port 8001) with FAKE_KONG_ADMIN.
+const FAKE_DOCKER = `#!/usr/bin/env bash
+printf 'docker %s\\n' "$*" >> "$FAKE_DIR/log"
+case "$*" in
+  *8001*) printf '%s' "$FAKE_KONG_ADMIN" ;;
+esac
+exit "\${FAKE_DOCKER_EXIT:-0}"
+`;
+const KONG_ADMIN = (pool: number) =>
+  `{"version":"2.8.1","configuration":{"upstream_keepalive_idle_timeout":60,"upstream_keepalive_pool_size":${pool},"upstream_keepalive_max_requests":100}}`;
+
 // Writes whatever FAKE_CURL_BODY says to the file named by -o, and logs argv.
 const FAKE_CURL = `#!/usr/bin/env bash
 printf 'curl %s\\n' "$*" >> "$FAKE_DIR/log"
@@ -113,7 +124,9 @@ function bashExecutable(): string {
 beforeAll(() => {
   fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-local-supabase-"));
   fs.mkdirSync(path.join(fakeDir, "bin"));
-  for (const [name, body] of [["supabase", FAKE_SUPABASE], ["psql", FAKE_PSQL], ["curl", FAKE_CURL]] as const) {
+  for (const [name, body] of [
+    ["supabase", FAKE_SUPABASE], ["psql", FAKE_PSQL], ["curl", FAKE_CURL], ["docker", FAKE_DOCKER],
+  ] as const) {
     fs.writeFileSync(path.join(fakeDir, "bin", name), body, { mode: 0o755 });
   }
   bash = bashExecutable();
@@ -147,6 +160,7 @@ function run(script: string, extraEnv: Record<string, string> = {}): Run {
   Object.assign(env, {
     FAKE_DIR: toBashPath(fakeDir),
     FAKE_STATUS: statusEnv(),
+    FAKE_KONG_ADMIN: KONG_ADMIN(0),
     RUNNER_TEMP: toBashPath(runnerTemp),
     GITHUB_ENV: toBashPath(githubEnv),
     GITHUB_PATH: toBashPath(githubPath),
@@ -211,6 +225,36 @@ describe("ci-local-supabase.sh: a stack whose schema is built in the CI project'
     expect(excluded.length).toBeGreaterThan(0);
     for (const kept of ["kong", "postgrest", "storage-api", "gotrue"]) expect(excluded).not.toContain(kept);
     expect(excluded).toEqual(expect.arrayContaining(["studio", "realtime", "edge-runtime"]));
+  });
+
+  // Run 37813770089 (2026-10-08): 1580 of 1581 db tests green, and one POST
+  // answered by Kong's own 502, "An invalid response was received from the
+  // upstream server". Kong 2.8.1 reuses an upstream connection for up to 60s
+  // idle; PostgREST v14.14 (what CLI 2.109.1 runs) closes idle connections
+  // sooner, and after a HEAD — every `{ count: 'exact', head: true }` —
+  // closes without saying so. nginx retries a dead pooled connection only
+  // for idempotent methods, so a POST or PATCH fails. [External: supabase/cli
+  // issue #6674 and its thread; fixed upstream only in PostgREST v14.15,
+  // i.e. CLI >= 2.110.0, which also moved the CLI's database commands to a
+  // new implementation.] With no upstream keep-alive, no request ever lands
+  // on a connection PostgREST already closed.
+  it("turns Kong's upstream keep-alive off (pool size 0) and reloads it, after the stack starts and before anything is applied (mutation: drop the docker exec → FAILS)", () => {
+    const r = run(STACK_SCRIPT);
+    expect(r.status, r.output).toBe(0);
+    const start = indexOf(r.log, /^supabase start /);
+    const set = indexOf(r.log, /^docker exec supabase_kong_db .*upstream_keepalive_pool_size = 0.*kong reload/);
+    const confirm = indexOf(r.log, /^docker exec supabase_kong_db .*127\.0\.0\.1:8001/);
+    expect(set).toBeGreaterThan(start);
+    expect(confirm).toBeGreaterThan(set);
+    expect(indexOf(r.log, BOOTSTRAP)).toBeGreaterThan(confirm);
+  });
+
+  it("refuses to go on when the RUNNING Kong still reports a keep-alive pool, naming the setting, applying nothing (mutation: trust the file edit without reading the admin API → FAILS)", () => {
+    const r = run(STACK_SCRIPT, { FAKE_KONG_ADMIN: KONG_ADMIN(60) });
+    expect(r.status).not.toBe(0);
+    expect(r.output).toMatch(/::error::.*upstream_keepalive_pool_size/);
+    expect(indexOf(r.log, BOOTSTRAP)).toBe(-1);
+    expect(r.githubEnv).toBe("");
   });
 
   it("writes exactly the four values the code reads to GITHUB_ENV, mapped from the stack's own status", () => {
