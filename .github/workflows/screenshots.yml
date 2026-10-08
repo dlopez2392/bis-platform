@@ -47,7 +47,12 @@ jobs:
     # secret (ci-workflow.test.ts pins that the two files agree), the CI_*
     # secrets mapped onto the names the code reads, and no production secret
     # at all. The guard step below refuses the run if any of it names
-    # production.
+    # production. No `environment:` either: #192 put production's Supabase
+    # secrets in the `production` environment and marked this capture known
+    # broken there (production stopped trusting the development Clerk
+    # instance on 2026-10-07); running on the CI project is the fix the
+    # owner chose (2026-10-08), so this job needs nothing that environment
+    # holds.
     env:
       NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
       BIS_CI_SUPABASE_REF: odnobiodsftffphuuosz

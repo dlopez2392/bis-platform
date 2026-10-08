@@ -66,8 +66,8 @@ only on a deployment made AFTER it was added (step 4).
 2. **The signing secret.** Copy the endpoint's signing secret (`whsec_…`) into
    Vercel → project `bis-platform` → Settings → Environment Variables →
    `STRIPE_WEBHOOK_SECRET`:
-   - **Production only.** Never Preview (it shares production's database) and
-     never Development;
+   - **Production only.** Never Preview (no production credential belongs
+     there, `production-isolation.md`) and never Development;
    - marked **Sensitive**;
    - if the name already exists, **Remove it, then Add it.** "Add New" on an
      existing name silently does nothing.

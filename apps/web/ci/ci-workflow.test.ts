@@ -248,6 +248,10 @@ describe("screenshots.yml captures on the CI project, never production's", () =>
     expect(shoot).toBeGreaterThan(guard);
   });
 
+  it("declares no environment, like the CI gates: it reads nothing the production environment holds (mutation: re-add `environment: production` → FAILS)", () => {
+    expect(jobKeys(capture)).not.toContain("environment");
+  });
+
   it("queues on ci.yml's e2e lock, never cancelling (mutation: back to e2e-shared-supabase → FAILS)", () => {
     const lock = mapping(topLevelBlock(shotLines, "concurrency"));
     const e2eLock = job("e2e").join("\n").match(/group: (\S+)/)?.[1];
@@ -597,4 +601,120 @@ describe("ci-project-setup.yml scopes the service-role secret to the dispatch th
       expect(offenders).toEqual([]);
     },
   );
+});
+
+// Production credentials live in a GitHub Environment named `production`
+// whose deployment branch policy admits `main` only, never as repository-wide
+// secrets. A job can read an environment's secrets only by declaring
+// `environment: production`, and GitHub refuses that declaration on any other
+// ref, so a workflow edited on a branch cannot reach them. These cases read
+// EVERY workflow: each secret it names must be classified below on purpose,
+// each job that names a production secret must declare the environment, and
+// no job may declare it without needing it (the CI gates least of all).
+describe("production secrets are reachable only from jobs that declare the production environment", () => {
+  /** The secrets that open production: they live in the `production` environment only. */
+  const PRODUCTION_SECRETS = new Set([
+    "NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL", "OPS_HEALTH_SECRET",
+  ]);
+  /**
+   * Everything else a workflow may read, and why it is not production's: the
+   * CI_* secrets open the `bis-ci` project; the two Clerk keys are the
+   * development instance's (ci-target-guard.sh refuses pk_live_/sk_live_);
+   * OPENAI_API_KEY is the separate, revocable CI key.
+   */
+  const NON_PRODUCTION_SECRETS = new Set([
+    "CI_SUPABASE_SECRET_KEY", "CI_SUPABASE_DB_URL", "CI_STRIPE_SECRET_KEY",
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY", "OPENAI_API_KEY",
+  ]);
+  const DECLARES_PRODUCTION = /^ {4}environment: production\s*$/;
+
+  const workflowDir = new URL("../../../.github/workflows/", import.meta.url);
+  const workflows = fs.readdirSync(fileURLToPath(workflowDir))
+    .filter((f) => /\.ya?ml$/.test(f))
+    .sort()
+    .map((file) => ({ file, lines: codeLines(read(`../../../.github/workflows/${file}`)) }));
+
+  /**
+   * The parts of a line GitHub evaluates as an expression, where the secrets
+   * context can be read: every `${{ … }}`, and a bare `if:` value. Prose such
+   * as a step named "Check that the repository secrets are configured" is
+   * neither, so it is not mistaken for a read.
+   */
+  function expressions(line: string): string[] {
+    const wrapped = [...line.matchAll(/\$\{\{(.*?)\}\}/g)].map((m) => m[1] ?? "");
+    const bareIf = /^\s*(?:- )?if:\s*(.+)$/.exec(line)?.[1];
+    return bareIf && wrapped.length === 0 ? [bareIf] : wrapped;
+  }
+
+  /** Every `secrets.X` name on some lines, and every expression mention of the context that is not that shape. */
+  function secretMentions(lines: string[]): { names: string[]; malformed: string[] } {
+    const names: string[] = [];
+    const malformed: string[] = [];
+    for (const line of lines) {
+      for (const m of expressions(line).flatMap((e) => [...e.matchAll(/\bsecrets\b(\.[A-Za-z0-9_]+)?/gi)])) {
+        if (m[0].slice(0, 8) === "secrets." && m[1]) names.push(m[1].slice(1));
+        else malformed.push(line.trim());
+      }
+    }
+    return { names, malformed };
+  }
+
+  type JobInfo = { where: string; production: string[]; declares: boolean; anyEnvironment: boolean };
+  const allJobs: JobInfo[] = workflows.flatMap(({ file, lines }) =>
+    Object.entries(jobs(lines)).map(([id, jobLines]) => ({
+      where: `${file}:${id}`,
+      production: secretMentions(jobLines).names.filter((n) => PRODUCTION_SECRETS.has(n)),
+      declares: jobLines.some((l) => DECLARES_PRODUCTION.test(l)),
+      anyEnvironment: jobKeys(jobLines).includes("environment"),
+    })));
+
+  it("finds the workflows and jobs it is guarding (the parser is not reading nothing)", () => {
+    expect(workflows.map((w) => w.file)).toEqual(
+      expect.arrayContaining(["ci.yml", "ops-health.yml", "screenshots.yml", "seed-demo.yml"]));
+    expect(allJobs.map((j) => j.where)).toEqual(expect.arrayContaining([
+      "ci.yml:verify", "ci.yml:e2e", "ops-health.yml:check", "screenshots.yml:capture", "seed-demo.yml:seed",
+    ]));
+    // Exactly these, so a job that starts or stops reading production shows
+    // up here. screenshots.yml:capture left this list on 2026-10-08 (#197):
+    // it captures on the CI project now.
+    expect(allJobs.filter((j) => j.production.length > 0).map((j) => j.where).sort())
+      .toEqual(["ops-health.yml:check", "seed-demo.yml:seed"]);
+  });
+
+  it("names every secret by `secrets.NAME`, and every NAME is classified here on purpose (a new secret must be added to one of the two sets, with its reason)", () => {
+    const unclassified = workflows.flatMap(({ file, lines }) => {
+      const { names, malformed } = secretMentions(lines);
+      return [
+        ...names.filter((n) => !PRODUCTION_SECRETS.has(n) && !NON_PRODUCTION_SECRETS.has(n)).map((n) => `${file}: ${n}`),
+        ...malformed.map((l) => `${file}: ${l}`),
+      ];
+    });
+    expect(unclassified).toEqual([]);
+  });
+
+  it("names no production secret outside a job, where no environment can scope it (mutation: put `SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}` in seed-demo.yml's top-level env → FAILS)", () => {
+    const outside = workflows.flatMap(({ file, lines }) => {
+      const jobsAt = lines.indexOf("jobs:");
+      const before = jobsAt < 0 ? lines : lines.slice(0, jobsAt);
+      return secretMentions(before).names.filter((n) => PRODUCTION_SECRETS.has(n)).map((n) => `${file}: ${n}`);
+    });
+    expect(outside).toEqual([]);
+  });
+
+  it("every job that names a production secret declares `environment: production` (mutation: drop it from ops-health.yml's check job → FAILS)", () => {
+    const undeclared = allJobs.filter((j) => j.production.length > 0 && !j.declares).map((j) => j.where);
+    expect(undeclared).toEqual([]);
+  });
+
+  it("no job declares the production environment without naming a production secret (mutation: add `environment: production` to ci-project-setup.yml's setup job → FAILS)", () => {
+    const needless = allJobs.filter((j) => j.declares && j.production.length === 0).map((j) => j.where);
+    expect(needless).toEqual([]);
+  });
+
+  it("the CI gates, verify and e2e, declare no environment at all and name no production secret (mutation: add `environment: production` to e2e, or `OPS_HEALTH_SECRET: ${{ secrets.OPS_HEALTH_SECRET }}` to its env → FAILS)", () => {
+    const gates = allJobs.filter((j) => j.where === "ci.yml:verify" || j.where === "ci.yml:e2e");
+    expect(gates).toHaveLength(2);
+    expect(gates.filter((j) => j.anyEnvironment || j.production.length > 0).map((j) => j.where)).toEqual([]);
+    expect(secretMentions(ciLines).names.filter((n) => PRODUCTION_SECRETS.has(n))).toEqual([]);
+  });
 });
