@@ -65,6 +65,11 @@ beforeEach(() => {
   delete process.env.TELNYX_PUBLIC_KEY;
   delete process.env.PHONE_SPAM_BLOCK_THRESHOLD;
   delete process.env.PHONE_SPAM_BLOCK_WINDOW_DAYS;
+  // The press-1 screen's three inputs. Unset is the shipped default (off),
+  // and every test that predates the screen relies on it.
+  delete process.env.VOICE_SCREEN_NUMBERS;
+  delete process.env.VOICE_SCREEN_ALWAYS_FROM;
+  delete process.env.PHONE_SPAM_EXEMPT_CALLERS;
   lookupMock.mockReset().mockResolvedValue({ id: "pn1", account_id: "a1", e164: "+19565550999", telnyx_id: null, status: "live" });
   // Default: enabled, under the (default 5/day) cap — the pre-existing "dial"
   // tests below never mention a profile or caps, so they need this to still
@@ -74,7 +79,10 @@ beforeEach(() => {
   countCallsByCallerSinceMock.mockReset().mockResolvedValue(0);
   // A clean caller by default, so every pre-existing test above still reaches
   // the verdict it was written for now that classify() also reads reputation.
-  countCallerHistorySinceMock.mockReset().mockResolvedValue({ spamCalls: 0, otherCalls: 0 });
+  // `answeredCalls: 0` is a FIRST-TIME caller: the screen's tests below rely
+  // on that default, and the screen being off by default is what keeps every
+  // older test here on the bridge.
+  countCallerHistorySinceMock.mockReset().mockResolvedValue({ spamCalls: 0, otherCalls: 0, answeredCalls: 0 });
   recordScreenedCallMock.mockReset().mockResolvedValue(undefined);
   transferPhoneMock.mockReset().mockResolvedValue("+19565550123");
   ownedNumbersMock.mockReset().mockResolvedValue([{ id: "pn1", account_id: "a1", e164: "+19565550999", telnyx_id: null, status: "live" }]);
@@ -1220,5 +1228,285 @@ describe("the TeXML-route signature on the SIP dial (X-BIS-Signature)", () => {
     const xml = await (await telnyxSigned({ To: TO, From: FROM })).text();
     expect(xml).not.toContain("<Dial");
     expect(xml).not.toContain("X-BIS-Signature");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The press-1 screen (VOICE_SCREEN_NUMBERS). A recording cannot press a key,
+// so a FIRST-TIME caller to a listed number is asked to press 1 before the
+// bridge is built. A real customer hung up on is the worse failure, so every
+// test below that expects the bridge is as important as the ones that expect
+// the question.
+// ---------------------------------------------------------------------------
+describe("the press-1 screen (VOICE_SCREEN_NUMBERS)", () => {
+  const ACCOUNT = "0b2cbb04-b46c-4fed-a377-d377a1a201eb";
+  const LINE = "+19565550999";
+  const STRANGER = "+19565550444";
+  const HANDSET = "+19565550111";
+  const call = (from: string | null = STRANGER) => GET(new Request(
+    `https://x.example/api/voice/texml?To=${encodeURIComponent(LINE)}${from ? `&From=${encodeURIComponent(from)}` : ""}`,
+  ));
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    delete process.env.APP_ORIGIN;
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-fixture";
+    lookupMock.mockImplementation(async (_db: unknown, e164: string) =>
+      (e164 === LINE ? { id: "pn1", account_id: ACCOUNT, e164: LINE, telnyx_id: null, status: "live" } : null));
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT });
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.VOICE_FORWARD_TO;
+    delete process.env.VOICE_FALLBACK_DRILL_TO;
+    delete process.env.VOICE_FALLBACK_DRILL_FROM;
+  });
+
+  it("OFF BY DEFAULT: with VOICE_SCREEN_NUMBERS unset, a first-time caller gets today's bridge and no question (mutation: screen every cleared first-time call → FAILS)", async () => {
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>sip:proj_test123@sip.api.openai.com;transport=tls?X-BIS-Called=%2B19565550999");
+    expect(xml).not.toContain("<Gather");
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("texml screen"));
+  });
+
+  it("an empty, blank or junk VOICE_SCREEN_NUMBERS is off too — nothing malformed turns the screen on", async () => {
+    for (const value of ["", "   ", ",", "9565550999", "+1 956 555 0999x", "anything"]) {
+      process.env.VOICE_SCREEN_NUMBERS = value;
+      const xml = await (await call()).text();
+      expect(xml, `VOICE_SCREEN_NUMBERS=${JSON.stringify(value)}`).toContain("<Sip>");
+      expect(xml).not.toContain("<Gather");
+    }
+  });
+
+  it("a FIRST-TIME caller to a listed number is asked to press 1, and nothing is bridged yet (mutation: drop the gate → FAILS)", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    const xml = await (await call()).text();
+    expect(xml).toMatch(/<Gather action="https:\/\/x\.example\/api\/voice\/texml\/screen\?[^"]*" numDigits="1" timeout="\d+">/);
+    expect(xml).toContain("<Say>Thanks for calling. To be connected, please press 1.</Say>");
+    expect(xml).not.toContain("<Dial");
+    expect(xml).not.toContain("<Sip>");
+    // No input: a goodbye and a hang-up after the question, never dead air.
+    expect(xml).toMatch(/<\/Gather><Say>[^<]+<\/Say><Hangup\/><\/Response>$/);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`texml screen asking ${LINE}, caller ${STRANGER} to press 1 (first-time), accountId ${ACCOUNT}`));
+  });
+
+  it("the action URL names the profile's languages and the account, both escaped into the attribute", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    const xml = await (await call()).text();
+    const action = new URL(/<Gather action="([^"]+)"/.exec(xml)![1]!.replaceAll("&amp;", "&"));
+    expect(action.pathname).toBe("/api/voice/texml/screen");
+    expect(action.searchParams.get("l")).toBe("en");
+    expect(action.searchParams.get("a")).toBe(ACCOUNT);
+    expect(xml).toContain("&amp;a=");
+  });
+
+  it("listing is per number: an unlisted line is bridged as before", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = "+19565550998";
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("<Gather");
+  });
+
+  it("a list of several numbers, with spaces, still finds this one", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = ` +19565550998 , ${LINE} `;
+    expect(await (await call()).text()).toContain("<Gather");
+  });
+
+  it("a RETURNING caller (one answered call in the window) is bridged without the question (mutation: never consult answeredCalls → FAILS)", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 0, otherCalls: 1, answeredCalls: 1 });
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("<Gather");
+  });
+
+  it("a caller whose only history is ABANDONED calls is still first-time — that is what a talking robocall leaves behind (mutation: gate on otherCalls === 0 → FAILS)", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 0, otherCalls: 2, answeredCalls: 0 });
+    expect(await (await call()).text()).toContain("<Gather");
+  });
+
+  it("a history read that is missing answeredCalls is NOT treated as first-time: unknown means bridge", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 0, otherCalls: 0 });
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("<Gather");
+  });
+
+  it("a caller with NO caller ID is asked too", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    const xml = await (await call(null)).text();
+    expect(xml).toContain("<Gather");
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`texml screen asking ${LINE}, caller unknown to press 1 (first-time)`));
+  });
+
+  it("the agency's own handsets (PHONE_SPAM_EXEMPT_CALLERS) are never asked (mutation: drop the handset exemption → FAILS)", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    process.env.PHONE_SPAM_EXEMPT_CALLERS = HANDSET;
+    const xml = await (await call(HANDSET)).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("<Gather");
+  });
+
+  it("a call the guards could NOT vouch for (a read failed) is bridged, never asked: the screen only runs on a cleared call (mutation: drop decideScreen's cleared check → FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    countCallerHistorySinceMock.mockRejectedValue(new Error("statement timeout"));
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("<Gather");
+    // …and that includes a FORCED caller: an uncleared call carries no
+    // first-time verdict, so ALWAYS_FROM is the one input that could still
+    // reach the question, and the cleared check is all that stops it.
+    process.env.VOICE_SCREEN_ALWAYS_FROM = STRANGER;
+    const forced = await (await call()).text();
+    expect(forced).toContain("<Sip>");
+    expect(forced).not.toContain("<Gather");
+  });
+
+  it("a number that could not be looked up is bridged, never asked", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    lookupMock.mockRejectedValue(new Error("db down"));
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("<Gather");
+  });
+
+  it("VOICE_FORWARD_TO wins: the deployment-wide forward rings the person, no question asked", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    process.env.VOICE_FORWARD_TO = "+19565550777";
+    const xml = await (await call()).text();
+    expect(xml).toContain(">+19565550777</Dial>");
+    expect(xml).not.toContain("<Gather");
+  });
+
+  it("the fallback drill is never screened: the drill caller's call is drilled as before (mutation: ignore the drill in the screen → FAILS)", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    process.env.VOICE_FALLBACK_DRILL_TO = LINE;
+    process.env.VOICE_FALLBACK_DRILL_FROM = STRANGER;
+    const xml = await (await call()).text();
+    expect(xml).toContain("fallback-drill.invalid");
+    expect(xml).not.toContain("<Gather");
+  });
+
+  it("the question comes BEFORE the per-account forward: a first-time caller is asked rather than rung through to a person (mutation: forward before the screen → FAILS)", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Gather");
+    expect(xml).not.toContain("+19565550123");
+    expect(transferPhoneMock).not.toHaveBeenCalled();
+  });
+
+  it("a returning caller on a forwarded account is forwarded exactly as before", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, forward_calls: true });
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 0, otherCalls: 3, answeredCalls: 3 });
+    expect(await (await call()).text()).toContain(">+19565550123</Dial>");
+  });
+
+  it("the refusals still answer first: a listed line over the cap speaks the cap sentence, not the question", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    countCallsByCallerSinceMock.mockResolvedValue(9);
+    const xml = await (await call()).text();
+    expect(xml).toContain("can't take more calls today");
+    expect(xml).not.toContain("<Gather");
+  });
+
+  it("VOICE_SCREEN_ALWAYS_FROM forces the question for a RETURNING caller, and logs it on every call (mutation: ignore ALWAYS_FROM → FAILS)", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    process.env.VOICE_SCREEN_ALWAYS_FROM = STRANGER;
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 0, otherCalls: 9, answeredCalls: 9 });
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Gather");
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`texml screen FORCED on ${LINE} from ${STRANGER}`));
+  });
+
+  it("VOICE_SCREEN_ALWAYS_FROM outranks the handset exemption — that is how the owner proves it from his own phone", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    process.env.PHONE_SPAM_EXEMPT_CALLERS = HANDSET;
+    process.env.VOICE_SCREEN_ALWAYS_FROM = HANDSET;
+    expect(await (await call(HANDSET)).text()).toContain("<Gather");
+  });
+
+  it("VOICE_SCREEN_ALWAYS_FROM does nothing on an UNLISTED number: the screen is off there", async () => {
+    process.env.VOICE_SCREEN_ALWAYS_FROM = STRANGER;
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Sip>");
+    expect(xml).not.toContain("<Gather");
+  });
+
+  it("Spanish-only profile: the question is in Spanish, es-MX, and English is absent", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, languages: "es" });
+    const xml = await (await call()).text();
+    expect(xml).toContain("<Say language=\"es-MX\">Gracias por llamar. Para comunicarse, oprima 1.</Say>");
+    expect(xml).not.toContain("<Say>Thanks");
+    expect(new URL(/<Gather action="([^"]+)"/.exec(xml)![1]!.replaceAll("&amp;", "&")).searchParams.get("l")).toBe("es");
+  });
+
+  it("bilingual profile: English then Spanish, both inside the same Gather so either answer counts", async () => {
+    process.env.VOICE_SCREEN_NUMBERS = LINE;
+    profileMock.mockResolvedValue({ ...ENABLED_PROFILE, account_id: ACCOUNT, languages: "both" });
+    const xml = await (await call()).text();
+    expect(xml).toMatch(/<Gather [^>]*><Say>Thanks for calling\. To be connected, please press 1\.<\/Say><Say language="es-MX">Gracias por llamar\. Para comunicarse, oprima 1\.<\/Say><\/Gather>/);
+  });
+});
+
+describe("observation: which form fields Telnyx sends (POST)", () => {
+  afterEach(() => { vi.restoreAllMocks(); delete process.env.TELNYX_PUBLIC_KEY; });
+
+  it("logs the NAMES of every field, never their values, plus the value of an attestation-like field", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const body = new URLSearchParams({
+      To: "+19565550999", From: "+19562921696", CallSid: "v3:secret-call-id",
+      StirShakenAttestation: "A", Verstat: "TN-Validation-Passed",
+    });
+    await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body, headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
+    const line = logSpy.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith("texml form fields:"));
+    expect(line).toBe("texml form fields: To,From,CallSid,StirShakenAttestation,Verstat; attestation: StirShakenAttestation=A,Verstat=TN-Validation-Passed");
+    expect(line).not.toContain("+1956");
+    expect(line).not.toContain("secret-call-id");
+  });
+
+  it("says so when no attestation-like field arrived, and a field name that could forge a log line is counted, not printed", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const raw = "To=%2B19565550999&From=%2B19562921696&bad%0Aname=1";
+    await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: raw, headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
+    expect(logSpy).toHaveBeenCalledWith("texml form fields: To,From (+1 unprintable); attestation: none");
+  });
+
+  it("an attestation value that looks like a phone number is redacted", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: new URLSearchParams({ To: "+19565550999", StirShakenOrig: "19562921696" }),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
+    expect(logSpy).toHaveBeenCalledWith("texml form fields: To,StirShakenOrig; attestation: StirShakenOrig=(redacted)");
+  });
+
+  it("a request the signature check REFUSES logs no field line — nothing unauthenticated is described", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    process.env.TELNYX_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const res = await POST(new Request("https://x.example/api/voice/texml", {
+      method: "POST", body: "To=%2B19565550999", headers: { "content-type": "application/x-www-form-urlencoded" },
+    }));
+    expect(res.status).toBe(403);
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("form fields"));
+  });
+});
+
+describe("ANSWERED_CALL_OUTCOMES (packages/db) and ANSWERED_OUTCOMES (weekly report) are one list", () => {
+  it("the screen's 'answered' and the Monday report's 'calls answered' cannot drift apart", async () => {
+    const { ANSWERED_CALL_OUTCOMES } = await vi.importActual<typeof import("@bis/db")>("@bis/db");
+    const { ANSWERED_OUTCOMES } = await import("@/lib/reports/weekly-metrics");
+    expect([...ANSWERED_CALL_OUTCOMES].sort()).toEqual([...ANSWERED_OUTCOMES].sort());
   });
 });

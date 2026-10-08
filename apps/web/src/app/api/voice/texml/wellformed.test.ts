@@ -27,10 +27,11 @@
 // negative controls in the first describe block: a checker nobody has watched
 // reject a bad document is not evidence either.
 import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { GET as texmlGET, POST as texmlPOST } from "./route";
 import { POST as handoffPOST } from "./handoff/route";
 import { POST as handoffResultPOST } from "./handoff-result/route";
+import { POST as screenPOST } from "./screen/route";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
 // only this route's own work; their calls are asserted where they matter
 // (lib/ops/stamp.ts).
@@ -523,5 +524,61 @@ describe("every emitted TeXML document parses", () => {
     const xml = await handoffResult("tok_abc");
     expect(xml).toContain("<Hangup");
     parseXmlStrict(xml);
+  });
+
+  // ── The press-1 screen: the question, the goodbye, and the keypress's
+  // bridge. The question carries an action URL with TWO query parameters —
+  // the separator that broke the bridge once — inside an attribute.
+  describe("the press-1 screen", () => {
+    beforeEach(() => {
+      process.env.VOICE_SCREEN_NUMBERS = LIVE_TO;
+      countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 0, otherCalls: 0, answeredCalls: 0 });
+      vi.spyOn(console, "log").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      delete process.env.VOICE_SCREEN_NUMBERS;
+      vi.restoreAllMocks();
+    });
+
+    it("the question, in English", async () => {
+      const xml = await texml({ To: LIVE_TO, From: CALLER });
+      expect(xml).toContain("<Gather");
+      expect(xml).toContain("&amp;a=");
+      parseXmlStrict(xml);
+    });
+
+    it("the question in both languages (accented Spanish, language attribute, inside the Gather)", async () => {
+      profileMock.mockResolvedValue({ ...PROFILE, languages: "both" });
+      const xml = await texml({ To: LIVE_TO, From: CALLER });
+      expect(xml).toContain("es-MX");
+      parseXmlStrict(xml);
+    });
+
+    it("the question when the configured origin carries a query string and a quote", async () => {
+      process.env.APP_ORIGIN = 'https://x.example?a=1&b=2&c="3"';
+      const xml = await texml({ To: LIVE_TO, From: CALLER });
+      expect(xml).toContain("<Gather");
+      parseXmlStrict(xml);
+    });
+
+    it("the goodbye after another key, in both languages", async () => {
+      const res = await screenPOST(new Request(`https://x.example/api/voice/texml/screen?l=both&a=a1`, {
+        method: "POST", body: new URLSearchParams({ Digits: "2", To: LIVE_TO, From: CALLER }),
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+      }));
+      const xml = await res.text();
+      expect(xml).toContain("Adiós");
+      parseXmlStrict(xml);
+    });
+
+    it("the bridge after the caller pressed 1", async () => {
+      const res = await screenPOST(new Request(`https://x.example/api/voice/texml/screen?l=en&a=a1`, {
+        method: "POST", body: new URLSearchParams({ Digits: "1", To: LIVE_TO, From: CALLER }),
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+      }));
+      const xml = await res.text();
+      expect(xml).toContain("<Sip>");
+      parseXmlStrict(xml);
+    });
   });
 });
