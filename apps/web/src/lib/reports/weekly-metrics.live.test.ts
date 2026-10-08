@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { describe, it, expect, beforeAll } from "vitest";
 import { config as loadEnv } from "dotenv";
 import { refuseProduction } from "../../../e2e/fixtures/production-guard";
@@ -42,11 +43,15 @@ async function withTestAccount(fn: (accountId: string) => Promise<void>) {
   }
 }
 
-/** A fake, globally-unique E.164 — the same `+999…` test-number shape
- *  `testPhoneNumber()` (packages/db's own fixtures, not importable here) uses,
- *  so this can never collide with a real number. */
+/** A fake E.164 — the same `+999` + twelve random digits `testPhoneNumber()`
+ *  (packages/db's own fixtures, not importable here) uses, so this can never
+ *  collide with a real number. It used to be `+999${Date.now()}${random}`
+ *  cut to 15 characters, which cut the random part off entirely: what was
+ *  left was the clock in tenths of a second, so numA and numB, assigned one
+ *  round trip apart, matched whenever that trip took under 100 ms, and
+ *  `phone_numbers_e164_key` failed `verify` on main (run 37810478057). */
 function fakePhoneNumber(): string {
-  return `+999${Date.now()}${Math.floor(Math.random() * 1_000_000)}`.slice(0, 15);
+  return `+999${String(randomInt(0, 1_000_000_000_000)).padStart(12, "0")}`;
 }
 
 beforeAll(() => {
