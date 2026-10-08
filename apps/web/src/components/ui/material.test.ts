@@ -450,7 +450,13 @@ describe("wave 2 — conversations", () => {
   });
   it("the pick-a-thread pane is the sanctioned EmptyState, not a bare dashed box", () => {
     const page = src(`${ACCT}/conversations/page.tsx`);
-    expect(page).toContain('<EmptyState icon={MessagesSquare} title={m["conversations.pickThread"]} />');
+    // D-021 (mobile list/thread one-pane rule) gave this element a third
+    // prop (`className="hidden lg:flex"`) and spread it across lines, so the
+    // single-line literal this pinned no longer matches byte for byte — the
+    // regex below still requires EmptyState with BOTH the same icon and the
+    // same title, in either prop order, so a future edit dropping either
+    // still fails this test.
+    expect(page).toMatch(/<EmptyState\s+icon=\{MessagesSquare\}\s+title=\{m\["conversations\.pickThread"\]\}/);
     expect(page).not.toContain("rounded-lg border border-dashed border-border p-6");
   });
 });

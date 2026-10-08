@@ -4,11 +4,13 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { contactDisplayName } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
+import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
 import { EmailComposer } from "./email-composer";
 import { MarkRead } from "./mark-read";
+import { ConversationBack } from "./conversation-back";
 import { sendEmailAction, markConversationReadAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -53,9 +55,18 @@ export default async function ConversationsPage({
     <>
       <PageHeader title={m["nav.conversations"]} />
       <div className="grid gap-4 p-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <ConversationList conversations={conversations} base={base} activeId={active?.id} />
+        {/* D-021: below `lg` the two columns above stack into one scroll, so
+            showing BOTH panes at once there meant a selected thread rendered
+            below the whole list, with no way back to just the list. Below
+            `lg`, show exactly one pane: the list when nothing is open, the
+            thread (with its own Back link) once something is — `lg:block`
+            brings the list back for the real two-column layout. */}
+        <div className={cn(active ? "hidden lg:block" : "block")}>
+          <ConversationList conversations={conversations} base={base} activeId={active?.id} />
+        </div>
         {active ? (
-          <div className="min-w-0">
+          <div className="min-w-0 space-y-3">
+            <ConversationBack base={base} />
             <MarkRead
               conversationId={active.id}
               unreadCount={active.unreadCount}
@@ -79,8 +90,15 @@ export default async function ConversationsPage({
           /* A bare dashed box was the one empty state on this route that did
              not carry the sanctioned treatment (the accent radial + icon).
              `EmptyState` is already imported for the no-conversations case
-             eight lines up; this pane now reads as the same design. */
-          <EmptyState icon={MessagesSquare} title={m["conversations.pickThread"]} />
+             eight lines up; this pane now reads as the same design.
+             `hidden lg:flex`: below `lg` the list above is this screen's
+             whole content — a second "pick a thread" pane under it would be
+             the stacking D-021 exists to end, just for the empty case. */
+          <EmptyState
+            icon={MessagesSquare}
+            title={m["conversations.pickThread"]}
+            className="hidden lg:flex"
+          />
         )}
       </div>
     </>
