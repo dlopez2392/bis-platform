@@ -72,6 +72,26 @@ describe("weeklyReportEmail", () => {
     expect(on.text).toMatch(/still answering/i);
   });
 
+  // D-063: the quiet-week reassurance names whichever persona THIS account
+  // configured, not a hard-coded "Sofía" — some clients rename their
+  // receptionist on the voice profile (persona_name).
+  it("names the account's OWN configured receptionist persona, not a hard-coded 'Sofía'", () => {
+    const { text } = weeklyReportEmail({
+      brand, now: quiet, prior: null, dashboardUrl: null,
+      reassurance: { receptionist: true, textBack: false, receptionistName: "Max" },
+    });
+    expect(text).toMatch(/Max is still answering/);
+    expect(text).not.toMatch(/Sofía/);
+  });
+
+  it("falls back to 'Sofía' when no persona name is given (e.g. a null voice profile)", () => {
+    const { text } = weeklyReportEmail({
+      brand, now: quiet, prior: null, dashboardUrl: null,
+      reassurance: { receptionist: true, textBack: false },
+    });
+    expect(text).toMatch(/Sofía is still answering/);
+  });
+
   it("carries both an html and a text part — never html alone", () => {
     const out = weeklyReportEmail({
       brand, now: week, prior: null, dashboardUrl: null, reassurance: nothingOn,
