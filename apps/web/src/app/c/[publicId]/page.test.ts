@@ -135,6 +135,39 @@ describe("ConciergePage (F-102 review round, fix 2)", () => {
   });
 });
 
+// F-102 review round, second pass (item 2, backfilled): removing
+// `lang={locale}` from this element left every test in this file green —
+// nothing asserted it, the same gap `/f`'s and `/b`'s own `<main lang>`
+// suites were backfilled for. `<html lang>` (`app/c/[publicId]/layout.tsx`)
+// carries no per-document default of its own to read here, so this element
+// is the one place a `?locale=` override reaches the first server-rendered
+// HTML, same reasoning as the other two public routes.
+describe("ConciergePage <main lang>", () => {
+  beforeEach(() => {
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-only-key");
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+  });
+
+  it("carries lang on <main>, matching the profile's own language default", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue({ ...PROFILE, languages: "es" });
+    const el = await ConciergePage({
+      params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams,
+    });
+    // MUTATION: drop `lang={locale}` from <main> in page.tsx -- this FAILS
+    // (`el.props.lang` is `undefined`).
+    expect(el.props.lang).toBe("es");
+  });
+
+  it("carries lang on <main>, honoring a ?locale= override the profile's own default disagrees with", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue({ ...PROFILE, languages: "en" });
+    const el = await ConciergePage({
+      params: Promise.resolve({ publicId: "abc123" }),
+      searchParams: Promise.resolve({ locale: "es" }),
+    });
+    expect(el.props.lang).toBe("es");
+  });
+});
+
 // F-102 review round, fix 1 (widened) — see
 // `app/f/[publicId]/page.test.ts`'s identical test.
 describe("generateMetadata never throws, even when the underlying read fails", () => {

@@ -15,10 +15,10 @@ import { deadEndTextStyle, deadEndButtonStyle } from "@/components/public/dead-e
  * actually broke. Stays at the ROOT of `/b` (unlike `/f`'s and `/c`'s,
  * which moved — F-102 review round, fix 1): `app/b/layout.tsx` is already
  * this tree's `<html>` and does no data read of its own, so it cannot
- * strand the shell the way a moved-down layout's own throw could; this
- * file sitting above the new `app/b/[publicId]/layout.tsx` still catches
- * anything that layout or `page.tsx` throws, rendered INSIDE the
- * already-standing shell.
+ * strand the shell the way a moved-down layout's own throw could. There is
+ * no `app/b/[publicId]/layout.tsx` — `/b` never grew one — so this file
+ * sitting at the segment root still catches anything `page.tsx` throws,
+ * rendered INSIDE the already-standing shell.
  *
  * Without this file, a thrown error anywhere in this segment (a failed
  * calendar lookup, `loadTimezone`'s now-rethrown account-read failure — see
