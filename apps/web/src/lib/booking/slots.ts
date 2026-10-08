@@ -352,7 +352,13 @@ export function computeSlots(config: SlotConfig, booked: Range[], now: Date): Ra
     });
   } catch (err) {
     if (err instanceof RangeError) return []; // e.g. an invalid IANA timezone
-    if (err instanceof WalkCapExceeded) return [];
+    if (err instanceof WalkCapExceeded) {
+      // Unreachable on a real calendar (each pass advances at least a minute,
+      // so a day needs at most ~1,436), and returning no slots hides EVERY day
+      // of this calendar: log it so a tripped cap is an outage someone sees.
+      console.error(`computeSlots: slot walk exceeded its pass cap, offering no slots (${String(err.message)})`);
+      return [];
+    }
     throw err;
   }
 }
