@@ -28,7 +28,12 @@ on:
 # this drives a browser through the CI project and, when re-seeding,
 # rewrites a whole account in it, so it must neither run beside an e2e job
 # nor knock one out of the queue. (`e2e-shared-supabase`, the name this file
-# used to take, is production's old lock; ci.yml left it in #194.)
+# used to take, is production's old lock; ci.yml left it in #194.) A job
+# holds one group, so a re-seed can overlap a `verify` job: accepted, since
+# the capture runs rarely, the seeder bounds itself to 12 writes in flight,
+# and the one live reader of the demo there (demo-seed.test.ts) can no longer
+# catch it half-built: the account is born suppressed (createAccount's
+# outboundSuppressed).
 concurrency:
   group: e2e-ci-supabase
   cancel-in-progress: false

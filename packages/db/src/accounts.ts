@@ -4,7 +4,17 @@ import { assertUsableZone } from "./timezone";
 
 export async function createAccount(
   db: SupabaseClient,
-  input: { clerkOrgId: string; name: string; timezone?: string; actorId: string },
+  input: {
+    clerkOrgId: string; name: string; timezone?: string; actorId: string;
+    /**
+     * Born with outbound suppressed, in the INSERT itself. For the demo
+     * tenant only: created and then suppressed, it existed contactable for
+     * two round trips, and on the shared CI project a test reading the live
+     * demo in that gap saw an unsuppressed account. Absent means the column's
+     * default (not suppressed), as for every real account.
+     */
+    outboundSuppressed?: boolean;
+  },
 ): Promise<{ id: string }> {
   // BEFORE the agency read, so an unusable zone costs no round trip and — more
   // to the point — no half-made account. This is the ONLY write path for
@@ -21,7 +31,10 @@ export async function createAccount(
 
   const { data: account, error } = await db
     .from("accounts")
-    .insert({ agency_id: agency.id, clerk_org_id: input.clerkOrgId, name: input.name, brand_name: input.name, timezone })
+    .insert({
+      agency_id: agency.id, clerk_org_id: input.clerkOrgId, name: input.name, brand_name: input.name, timezone,
+      ...(input.outboundSuppressed ? { outbound_suppressed: true } : {}),
+    })
     .select("id")
     .single();
   if (error || !account) throw new Error(`createAccount failed: ${error?.message}`);
