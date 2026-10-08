@@ -200,12 +200,16 @@ describe("ci-local-supabase.sh: a stack whose schema is built in the CI project'
     expect(line).toContain(DB_URL);
   });
 
-  it("keeps the database, the gateway, PostgREST and Storage (demo-seed.test.ts uploads a logo) and excludes only services no suite reaches", () => {
+  it("keeps the database, the gateway, PostgREST, Storage (demo-seed.test.ts uploads a logo) and auth, and excludes only services no suite reaches (mutation: exclude gotrue → FAILS)", () => {
+    // gotrue stays although no suite signs in: CLI 2.109.1 prints no
+    // ANON_KEY or SERVICE_ROLE_KEY in `status -o env` when it is excluded
+    // (run 37813077940, 2026-10-08), and it costs no extra image pull — the
+    // CLI pulls it anyway to initialise the auth schema.
     const r = run(STACK_SCRIPT);
     const start = r.log.find((l) => l.startsWith("supabase start ")) ?? "";
     const excluded = /--exclude (\S+)/.exec(start)?.[1]?.split(",") ?? [];
     expect(excluded.length).toBeGreaterThan(0);
-    for (const kept of ["kong", "postgrest", "storage-api"]) expect(excluded).not.toContain(kept);
+    for (const kept of ["kong", "postgrest", "storage-api", "gotrue"]) expect(excluded).not.toContain(kept);
     expect(excluded).toEqual(expect.arrayContaining(["studio", "realtime", "edge-runtime"]));
   });
 

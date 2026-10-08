@@ -50,11 +50,13 @@ DB_DIR="packages/db/supabase"
 BOOTSTRAP="$DB_DIR/bootstrap/ci-project.sql"
 
 # Services no suite reaches. Kept: the database, kong (the API gateway every
-# client goes through), postgrest, and storage-api (demo-seed.test.ts uploads
-# a logo). gotrue is out because nothing in `pnpm check` signs in: the db
-# suite sets request.jwt.claims itself and the one Clerk-token test is the
-# integration suite, which verify does not run.
-EXCLUDE="gotrue,realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor"
+# client goes through), postgrest, storage-api (demo-seed.test.ts uploads a
+# logo) and gotrue. Nothing in `pnpm check` signs in (the db suite sets
+# request.jwt.claims itself; the one Clerk-token test is the integration
+# suite, which verify does not run), but with gotrue excluded CLI 2.109.1
+# prints no ANON_KEY or SERVICE_ROLE_KEY at all (run 37813077940), and it
+# costs no extra pull: `supabase start` pulls it anyway for the auth schema.
+EXCLUDE="realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor"
 
 for tool in supabase psql; do
   if ! command -v "$tool" >/dev/null 2>&1; then
