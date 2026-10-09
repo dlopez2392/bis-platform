@@ -643,9 +643,10 @@ Beyond Step 2's three, these are the ones worth knowing by name:
   `spam`, because that is what happened, and rewriting the outcome would
   put false data in a client's call log and in the KPIs the weekly report
   is built from. It does not lift the per-caller daily cap either
-  (`PHONE_MAX_CALLS_PER_CALLER_PER_DAY`) — different guard, different
-  purpose. Unset behavior: nobody is exempt, which is how the guard
-  shipped.
+  (`PHONE_MAX_CALLS_PER_NUMBER_PER_DAY`, where "number" is the CALLING
+  number: five calls per caller per account per UTC day by default) —
+  different guard, different purpose. Unset behavior: nobody is exempt,
+  which is how the guard shipped.
 
 ## Taking the phones back
 
