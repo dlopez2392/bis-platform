@@ -39,13 +39,19 @@ async function seed(
   const { rows: [account] } = await c.query(
     "insert into accounts (agency_id, clerk_org_id, name) values ($1, $2, 'Fixture GL') returning id",
     [agency.id, `org_GL_${label}_${RUN}`]);
+  // updated_at is back-dated a day: inside one withRollback transaction the
+  // column's default IS now(), so a row seeded with it would already read as
+  // "stamped by go_live" whether or not go_live stamped it.
   if (opts.profile) {
-    await c.query("insert into public.voice_profiles (account_id, enabled) values ($1, false)", [account.id]);
+    await c.query(
+      "insert into public.voice_profiles (account_id, enabled, updated_at) values ($1, false, now() - interval '1 day')",
+      [account.id]);
   }
   const numberIds: string[] = [];
   for (const status of opts.numbers) {
     const { rows: [n] } = await c.query(
-      "insert into public.phone_numbers (account_id, e164, status) values ($1, $2, $3) returning id",
+      `insert into public.phone_numbers (account_id, e164, status, updated_at)
+       values ($1, $2, $3, now() - interval '1 day') returning id`,
       [account.id, testPhoneNumber(), status]);
     numberIds.push(n.id as string);
   }
@@ -144,11 +150,14 @@ describe("0063 go_live: what it writes", () => {
             payload: { phoneNumberId: n, status: "live" } },
         ],
       });
+      // seed() back-dated both rows a day, so these read true only if go_live
+      // itself stamped them with the database's now() (mutation: drop either
+      // `updated_at = pg_catalog.now()` assignment -> FAILS, naming which).
       const { rows: [t] } = await c.query(
-        `select bool_and(p.updated_at = now()) and bool_and(n.updated_at = now()) as stamped
-           from public.voice_profiles p, public.phone_numbers n where p.account_id = $1 and n.id = $2`,
+        `select (select updated_at = now() from public.voice_profiles where account_id = $1) as profile_stamped,
+                (select updated_at = now() from public.phone_numbers where id = $2) as number_stamped`,
         [accountId, n]);
-      expect(t.stamped).toBe(true);
+      expect(t).toEqual({ profile_stamped: true, number_stamped: true });
     }));
 
   it("takes a provisioned number straight to live, the wizard's other ordinary case", () =>
