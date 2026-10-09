@@ -167,7 +167,11 @@ const TRUST_CLERK = "--trust-clerk-dev-instance";
  * key is there.
  */
 const OCT_KEY = `{"kty":"oct","k":"c3VwZXItc2VjcmV0"}`;
-const RSA_KEY = `{"use":"sig","kty":"RSA","kid":"ins_unit_test","alg":"RS256","n":"xyz","e":"AQAB"}`;
+// Clerk names its signing key after the instance: kid `ins_<base62 id>`.
+const CLERK_KID = "ins_2UnitTestKid0000000000000";
+const rsaKey = (kidField: string) =>
+  `{"use":"sig","kty":"RSA",${kidField}"alg":"RS256","n":"xyz","e":"AQAB"}`;
+const RSA_KEY = rsaKey(`"kid":"${CLERK_KID}",`);
 const restEnv = (keys: string[]) =>
   `PGRST_DB_ANON_ROLE=anon\nPGRST_JWT_SECRET={"keys":[${keys.join(",")}]}\nPGRST_ADMIN_SERVER_PORT=3001\n`;
 
@@ -403,6 +407,32 @@ describe("ci-local-supabase.sh --trust-clerk-dev-instance: the e2e stack trusts 
     expect(r.output).toMatch(/::error::.*PostgREST.*Clerk/);
     expect(indexOf(r.log, BOOTSTRAP)).toBe(-1);
     expect(r.githubEnv).toBe("");
+  });
+
+  // Review M-5 (2026-10-08): "an RSA key" proved only that SOME issuer's key
+  // reached PostgREST. Clerk names its signing key after the instance (kid
+  // `ins_…`), so the check now needs an RSA key carrying that kid, in the
+  // SAME key object: a Clerk-shaped kid on the `oct` key and a foreign RSA key
+  // beside it is not a Clerk key.
+  it.each([
+    ["an RSA key with another issuer's kid", [rsaKey(`"kid":"8f2c1e7a-other-issuer",`), OCT_KEY]],
+    ["an RSA key with no kid at all", [rsaKey(""), OCT_KEY]],
+    ["a kid that only starts like Clerk's", [rsaKey(`"kid":"ins_",`), OCT_KEY]],
+    ["Clerk's kid on the oct key, beside a foreign RSA key", [
+      rsaKey(`"kid":"other",`), `{"kty":"oct","kid":"${CLERK_KID}","k":"c3VwZXItc2VjcmV0"}`,
+    ]],
+  ])("refuses a JWKS holding %s, naming the Clerk instance, applying nothing (mutation: accept any RSA key → FAILS)", (_label, keys) => {
+    const r = run(STACK_SCRIPT, { FAKE_REST_ENV: restEnv(keys) }, [TRUST_CLERK]);
+    expect(r.status).not.toBe(0);
+    expect(r.output).toMatch(/::error::.*PostgREST.*ins_.*Clerk/);
+    expect(indexOf(r.log, BOOTSTRAP)).toBe(-1);
+    expect(r.githubEnv).toBe("");
+  });
+
+  it("accepts Clerk's RSA key whichever order its fields come in", () => {
+    const reordered = `{"kid":"${CLERK_KID}","alg":"RS256","e":"AQAB","n":"xyz","kty":"RSA","use":"sig"}`;
+    const r = run(STACK_SCRIPT, { FAKE_REST_ENV: restEnv([OCT_KEY, reordered]) }, [TRUST_CLERK]);
+    expect(r.status, r.output).toBe(0);
   });
 
   it("refuses a production instance's key (pk_live_) before starting anything", () => {

@@ -29,8 +29,9 @@
 # (*.clerk.accounts.dev) is accepted. The edit is made to the COPY of
 # config.toml in the workdir, never the repository's. After the start, the
 # running PostgREST's JWKS is read back (docker inspect) and must hold an RSA
-# key: the stack's own secret is an `oct` key, so an RSA key can only have
-# come from the issuer. Without the flag nothing about Clerk is touched.
+# key whose kid is a Clerk instance id (`ins_…`): the stack's own secret is an
+# `oct` key, and the kid is what ties the RSA key to Clerk rather than to
+# whatever issuer answered. Without the flag nothing about Clerk is touched.
 #
 # THE ORDER IS THE POINT, and it is the CI project's own order
 # (docs/runbooks/ci-supabase-project.md sections 2 and 3):
@@ -192,19 +193,30 @@ if [ "$pool" != "0" ]; then
 fi
 
 # CLERK: what the RUNNING PostgREST verifies tokens with, not what the config
-# file says. Its JWKS must hold an RSA key; the stack's own secret is `oct`.
+# file says. Its JWKS must hold an RSA key whose kid is Clerk's shape, the
+# instance id (`ins_` + letters and digits), in the SAME key object: "some
+# RSA key" would prove only that some issuer's key got there (review M-5,
+# 2026-10-08). The stack's own secret is an `oct` key. A JWK is a flat object,
+# so each `{…}` with no brace inside it is one key, judged on its own.
 trust_note=""
 if [ "$trust_clerk" = 1 ]; then
   rest="supabase_rest_${project_id}"
   jwks="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$rest" 2>/dev/null | sed -n 's/^PGRST_JWT_SECRET=//p' || true)"
   # `|| true` inside: with pipefail, grep finding nothing would end the script
   # here, silently, instead of at the message below.
-  rsa="$({ printf '%s' "$jwks" | grep -oE '"kty" *: *"RSA"' || true; } | wc -l | tr -d ' ')"
-  if [ "${rsa:-0}" -lt 1 ]; then
-    echo "::error::PostgREST ($rest) holds no RSA key in PGRST_JWT_SECRET, so it would refuse every Clerk session token ($clerk_domain) and every in-account page would come back empty. Nothing was applied. If the pinned CLI changed how it hands third-party keys to PostgREST, see this script's header."
+  clerk_keys=0
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    if printf '%s' "$key" | grep -qE '"kty" *: *"RSA"' \
+      && printf '%s' "$key" | grep -qE '"kid" *: *"ins_[A-Za-z0-9]+"'; then
+      clerk_keys=$((clerk_keys + 1))
+    fi
+  done < <(printf '%s' "$jwks" | grep -oE '\{[^{}]*\}' || true)
+  if [ "$clerk_keys" -lt 1 ]; then
+    echo "::error::PostgREST ($rest) holds no RSA key with a Clerk instance kid (ins_...) in PGRST_JWT_SECRET, so it would refuse every Clerk session token ($clerk_domain) and every in-account page would come back empty. Nothing was applied. If the pinned CLI changed how it hands third-party keys to PostgREST, see this script's header."
     exit 1
   fi
-  trust_note=" PostgREST trusts the Clerk development instance $clerk_domain ($rsa RSA key(s))."
+  trust_note=" PostgREST trusts the Clerk development instance $clerk_domain ($clerk_keys RSA key(s) with a Clerk kid)."
 fi
 
 # KEY="value" lines; anything else the CLI prints is ignored. Values are read,
