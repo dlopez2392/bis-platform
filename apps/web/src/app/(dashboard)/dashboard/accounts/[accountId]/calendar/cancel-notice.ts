@@ -36,6 +36,11 @@ import type { NoticeAvailability } from "./cancel-flow";
  *
  * Durable follow-up (not built): a pending-notice column on bookings, swept
  * by the reminders cron, so a notice survives the process that queued it.
+ * That sweep must CLAIM the booking's pending-notice column (or the cancel's
+ * version, as `claimCancelNotice` does) before it sends, and must NEVER find
+ * work by scanning `messages.status = 'queued'`: a queued row can belong to
+ * an email that already went (a failed "sent" mark leaves it queued, M-c),
+ * so such a sweep would email the customer twice.
  */
 export type { NoticeAvailability };
 
@@ -44,8 +49,10 @@ export type { NoticeAvailability };
  * two suppression facts exactly as the email gate does: the account's
  * `outbound_suppressed` (D-061) and the address's hard-bounce/complaint
  * suppression (D-016, `readEmailSuppression` keyed by `emailLedgerAddress`).
- * THROWS on any read error: the caller refuses rather than promise an email
- * nobody could check.
+ * THROWS on any read error. Both callers then fail OPEN to the reversible
+ * action: the button cancels at once with no notice, and
+ * `cancelBookingAction` cancels without it and answers "none", so no email is
+ * promised that nobody could check.
  */
 export async function cancelNoticeAvailability(
   readDb: SupabaseClient, writer: SupabaseClient, accountId: string, bookingId: string,

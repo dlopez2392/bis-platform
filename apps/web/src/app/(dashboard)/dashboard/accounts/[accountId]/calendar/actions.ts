@@ -190,6 +190,9 @@ export async function setBookingStatusAction(
  * sends, an address that has not hard-bounced or complained.) Only
  * "available" opens the dialog; anything else cancels at once with the
  * matching toast, so the dialog is never a bare "Are you sure?" (rule 6).
+ * A read that fails answers `{ ok: false }`; its `error` string is shown
+ * nowhere: `runCancelButton` treats any failure as "no notice" and cancels
+ * at once with the we-haven't-told-them toast.
  */
 export async function cancelNoticeOptionAction(
   accountId: string, bookingId: string,
