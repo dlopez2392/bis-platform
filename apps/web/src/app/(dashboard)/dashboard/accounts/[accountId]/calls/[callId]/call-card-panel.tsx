@@ -7,6 +7,7 @@
 import type { CallCard } from "@bis/db";
 import { normalisePhone } from "@bis/db/phone";
 import { m } from "@/lib/messages";
+import { aiAuthorMark } from "@/lib/voice/provenance";
 import { CARD, CARD_HEAD } from "./card";
 
 /** A card of three nulls is no card: a call from before cards existed, a spam
@@ -52,7 +53,7 @@ export function CallCardPanel({
         {/* DESIGN.md, Provenance: who wrote this is never left to be
             inferred. Every line on this card is the receptionist's — what
             she wrote down on the call, or her reading of it. */}
-        <span>{m["provenance.ai"].replace("{name}", () => personaName)}</span>
+        <span>{aiAuthorMark(personaName)}</span>
       </div>
       <dl className="grid gap-x-6 gap-y-3 p-5 sm:grid-cols-[max-content_minmax(0,1fr)]">
         <dt className={LABEL}>{m["calls.card.who"]}</dt>

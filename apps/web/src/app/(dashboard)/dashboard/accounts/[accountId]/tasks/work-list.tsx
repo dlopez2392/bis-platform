@@ -34,6 +34,7 @@ import type { TextsActionResult } from "@/lib/consent/staff-actions";
 // four/five-entry map is not worth reaching across a route boundary for).
 import { STATUS_TREATMENT, type ResolvedStage } from "../calls/[callId]/proposals";
 import { CARD, CARD_HEAD } from "../calls/[callId]/card";
+import { aiAuthorMark } from "@/lib/voice/provenance";
 
 /** The four Task 4 actions, bound to one `accountId` by `WorkList` and
  *  threaded down through `WorkRowItem` into the "use client" boundary. */
@@ -306,7 +307,11 @@ function WorkRowItem({
 }) {
   const treatment = BUCKET_TREATMENT[bucket];
   const primary = primaryLabel(row, contactName);
-  const secondary = secondaryLine(row, contactName);
+  // DESIGN.md, Provenance: a callback To do a call left (`callId`, 0064) is
+  // the receptionist's, and says so beside the person it is about. A To do
+  // a person typed carries no mark here, as before.
+  const secondary = [secondaryLine(row, contactName), row.source === "task" && row.callId ? aiAuthorMark() : null]
+    .filter(Boolean).join(" · ") || null;
   const dateText = rowDateText(row, timezone);
 
   const body = (

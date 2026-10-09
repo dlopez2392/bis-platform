@@ -40,7 +40,7 @@ export async function addTask(
 
 export async function listContactTasks(db: SupabaseClient, accountId: string, contactId: string) {
   const { data, error } = await db.from("tasks")
-    .select("id, title, due_at, completed_at, created_at, consent_event_id")
+    .select("id, title, due_at, completed_at, created_at, consent_event_id, call_id")
     .eq("account_id", accountId).eq("contact_id", contactId)
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
