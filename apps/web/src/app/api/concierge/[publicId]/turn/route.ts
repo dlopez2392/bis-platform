@@ -53,7 +53,7 @@ import {
   CAPTURE_LEAD_TOOL, parseCaptureLead, budgetNotice,
 } from "@/lib/concierge/prompt";
 import { conciergeStrings } from "@/lib/concierge/strings";
-import { fileLead } from "@/lib/concierge/lead";
+import { fileLead, leadHasContact } from "@/lib/concierge/lead";
 
 export const runtime = "nodejs";
 /** One model call with a 20s ceiling, plus the reads around it. Nothing here
@@ -65,8 +65,66 @@ export const maxDuration = 30;
  *  facts block is not a reasoning workload. */
 const MODEL = "gpt-4o-mini";
 const MODEL_TIMEOUT_MS = 20_000;
+/** D-047's second call, the one that hears the capture's result. Shorter
+ *  than the first: it writes one sentence from a known outcome. */
+const FOLLOWUP_TIMEOUT_MS = 8_000;
+/** Below this, the follow-up is skipped rather than started: a call that is
+ *  certain to time out only delays the fixed fallback line. */
+const FOLLOWUP_MIN_MS = 2_000;
+/** Everything this handler does must finish inside `maxDuration` (30s);
+ *  three seconds are left for the reads and writes after the model. */
+const TURN_BUDGET_MS = 27_000;
+
+type ModelMessage = {
+  content?: string | null;
+  tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[];
+};
 
 type Db = ReturnType<typeof serviceDbType>;
+
+/** What happened to one capture_lead call. `already_on_file` covers both a
+ *  conversation that filed its one lead on an earlier turn and a turn that
+ *  lost the race to another tab: either way a lead is on file and THESE
+ *  details were not added. */
+type CaptureOutcome = "filed" | "needs_contact" | "already_on_file" | "unusable" | "failed";
+
+/**
+ * The tool result the model hears (D-047), worded to match exactly what the
+ * code did. Model-facing, not customer copy: the visitor reads whatever the
+ * model writes from it.
+ *
+ * `needs_contact` (danlo, 2026-10-09): a name with no valid email and no
+ * valid phone is HELD, not filed (`leadHasContact`, lib/concierge/lead.ts), so
+ * the conversation's one lead slot stays free. The model is told to ask for
+ * one; the next capture that carries it files normally, name included. A
+ * visitor who never gives one leaves no lead.
+ */
+function captureResult(outcome: CaptureOutcome): { ok: boolean; result?: string; error?: string } {
+  switch (outcome) {
+    case "filed":
+      return { ok: true, result: "Recorded. The team will follow up with them." };
+    case "needs_contact":
+      return { ok: false, error: "Not recorded yet: the team needs an email address or a phone number to reach them. Ask the visitor for one, then call capture_lead again with it. If they would rather not give one, nothing is recorded; do not say the team will follow up." };
+    case "already_on_file":
+      return { ok: true, result: "A lead from this chat was already recorded earlier; these new details were not added." };
+    case "unusable":
+      return { ok: false, error: "Not recorded: their name is missing. Ask for it." };
+    case "failed":
+      return { ok: false, error: "Not recorded: their details could not be saved just now. Do not say they were passed on or that anyone will follow up." };
+  }
+}
+
+/** The only assistant line stored for a turn that was NOT an answer (an
+ *  empty completion, `spoken`'s fallback), in either language. */
+const UNANSWERED_LINES: ReadonlySet<string> = new Set([
+  conciergeStrings("en").unavailable, conciergeStrings("es").unavailable,
+]);
+
+/** Whether an earlier turn of this conversation was already answered, and so
+ *  already billed (the usage leg below). */
+function hadAnsweredTurn(transcript: { role: string; text: string }[]): boolean {
+  return transcript.some((t) => t.role === "assistant" && !UNANSWERED_LINES.has(t.text));
+}
 
 function log(msg: string, extra: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ at: "concierge/turn", msg, ...extra }));
@@ -94,6 +152,7 @@ function quiet(conversationId: string, reply: string, ended = false, closing = "
 export async function POST(
   req: Request, { params }: { params: Promise<{ publicId: string }> },
 ): Promise<Response> {
+  const startedAt = Date.now();
   const { publicId } = await params;
 
   let body: Record<string, unknown>;
@@ -127,6 +186,18 @@ export async function POST(
   const origin = req.headers.get("origin");
   const priorId = typeof body.conversationId === "string" && body.conversationId
     ? body.conversationId : null;
+
+  // D-050: the conversation THIS request opened, once its row exists. A turn
+  // 1 that fails after that point (the model call, or any read after the
+  // insert) used to answer a bare 503, so the page retried as a first turn:
+  // a second row, a second count against the visitor's 3-per-10-minutes, for
+  // one question. Every failure past the insert hands the id back, and the
+  // page continues on it. Refusals before the insert have no id to give.
+  let openedId: string | null = null;
+  const unavailable = () => NextResponse.json(
+    openedId ? { error: "unavailable", conversationId: openedId } : { error: "unavailable" },
+    { status: 503 },
+  );
 
   try {
     const db = serviceDb() as Db;
@@ -291,6 +362,7 @@ export async function POST(
         ipHash, locale, attribution, origin,
       });
       conversationId = created.id;
+      openedId = created.id;
       // Part C: one `ai` row per conversation START — "website chats" on
       // the client's Activity page is the count of these. Isolated leg.
       try {
@@ -391,14 +463,16 @@ export async function POST(
       { role: "user", content: text },
     ];
 
-    let reply = "";
-    let toolArgs: string | null = null;
-    try {
+    // One chat-completions call. Throws on a transport failure, a non-2xx,
+    // or the timeout; the two callers below decide what a throw costs.
+    async function complete(
+      msgs: unknown[], timeoutMs: number, extra: Record<string, unknown> = {},
+    ): Promise<ModelMessage | undefined> {
       const r = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: MODEL, messages, tools: [CAPTURE_LEAD_TOOL],
+          model: MODEL, messages: msgs, tools: [CAPTURE_LEAD_TOOL],
           // I2 (whole-branch review): with no bound here, gpt-4o-mini can
           // emit up to 16,384 output tokens, and every reply is replayed
           // into every LATER turn's transcript — unbounded, a single
@@ -407,29 +481,33 @@ export async function POST(
           // arithmetic; `proposals/generate.ts` already answered this same
           // question for its own OpenAI call.
           max_tokens: CONCIERGE_MAX_REPLY_TOKENS,
+          ...extra,
         }),
         // A hung connection never rejects and never resolves; without this the
         // invocation stalls until Vercel kills it and the visitor sees
         // nothing. Same defence `summary-service.ts` already runs in
         // production.
-        signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!r.ok) throw new Error(`openai ${r.status}`);
-      const data = await r.json() as {
-        choices?: { message?: {
-          content?: string | null;
-          tool_calls?: { function?: { name?: string; arguments?: string } }[];
-        } }[];
-      };
-      const message = data?.choices?.[0]?.message;
+      const data = await r.json() as { choices?: { message?: ModelMessage }[] };
+      return data?.choices?.[0]?.message;
+    }
+
+    let reply = "";
+    let toolArgs: string | null = null;
+    let toolCallId = "";
+    try {
+      const message = await complete(messages, MODEL_TIMEOUT_MS);
       // Plain text before it goes anywhere: the bubble shows markdown as
       // stray symbols, and the transcript is what the operator reads later.
       reply = plainText(message?.content ?? "");
       const call = message?.tool_calls?.find((c) => c.function?.name === "capture_lead");
       toolArgs = call?.function?.arguments ?? null;
+      toolCallId = call?.id ?? "";
     } catch (e) {
       log("model call failed", { error: String(e) });
-      return NextResponse.json({ error: "unavailable" }, { status: 503 });
+      return unavailable();
     }
 
     // Lead capture, at most once per conversation, and BEFORE `spoken` is
@@ -443,9 +521,21 @@ export async function POST(
     // an earlier turn is genuinely captured, even on a turn that does not
     // call the tool again.
     let filed = !!conversation.submission_id;
+    // What the tool result tells the model when it did NOT file (D-047): a
+    // capture with no usable name is a different thing to say to the visitor
+    // than a save that failed.
+    // ONE outcome per capture, and the tool result below says exactly that
+    // (review of D-047): the result text must match what the code did.
+    let outcome: CaptureOutcome = "already_on_file";
     if (toolArgs && !conversation.submission_id) {
       const lead = parseCaptureLead(toolArgs);
-      if (lead) {
+      outcome = "unusable";
+      if (lead && !leadHasContact(lead)) {
+        // HELD, not filed (danlo, 2026-10-09): the one lead slot stays free
+        // for the capture that carries a way to reach them.
+        outcome = "needs_contact";
+        log("capture_lead held: no email or phone", { conversationId });
+      } else if (lead) {
         filed = await fileLead({
           db, accountId: profile.account_id,
           // conversation.form_id, NOT profile.concierge_form_id (I1,
@@ -468,8 +558,61 @@ export async function POST(
           // already uses this helper.
           origin: originFrom(req.headers), lead,
         });
+        if (filed) {
+          outcome = "filed";
+        } else {
+          // `fileLead` answers false for a failed save AND for a lost race
+          // (two tabs on one conversation: the other turn claimed the one
+          // submission slot first). One re-read tells them apart; a lead on
+          // file is a lead on file, whichever turn wrote it.
+          const after = await getConciergeConversation(db, conversationId).catch(() => null);
+          if (after?.submission_id) { outcome = "already_on_file"; filed = true; }
+          else outcome = "failed";
+        }
       } else {
         log("capture_lead ignored: unusable arguments", { conversationId });
+      }
+    }
+
+    // D-047: THE CAPTURE'S RESULT GOES BACK TO THE MODEL before the visitor
+    // reads a word. Whatever the model wrote alongside its capture_lead call
+    // was written BEFORE anything was filed, so it is discarded, never shown:
+    // "I have passed your details on" beside a capture that failed is the
+    // defect. A second completion carries the real result as the tool's
+    // answer (`tool_choice: "none"`: it may not call the tool again) and its
+    // words are the reply. The prompt's own rule ("never say you have ...
+    // passed anything on unless capture_lead came back successful",
+    // lib/voice/system-prompt.ts) is satisfiable now, because the result
+    // finally comes back.
+    //
+    // Bounded by what is left of this invocation (`maxDuration` 30s, the first
+    // call alone may take 20s). Too little left, or the call fails: no second
+    // reply, and `spoken` below falls back to the fixed line for what really
+    // happened, never to the pre-result words.
+    if (toolArgs) {
+      reply = "";
+      const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt);
+      const followupTimeout = Math.min(FOLLOWUP_TIMEOUT_MS, timeLeft);
+      if (followupTimeout >= FOLLOWUP_MIN_MS) {
+        const result = captureResult(outcome);
+        try {
+          const message = await complete([
+            ...messages,
+            {
+              role: "assistant", content: null,
+              tool_calls: [{
+                id: toolCallId, type: "function",
+                function: { name: "capture_lead", arguments: toolArgs },
+              }],
+            },
+            { role: "tool", tool_call_id: toolCallId, content: JSON.stringify(result) },
+          ], followupTimeout, { tool_choice: "none" });
+          reply = plainText(message?.content ?? "");
+        } catch (e) {
+          log("capture follow-up failed", { conversationId, filed, error: String(e) });
+        }
+      } else {
+        log("capture follow-up skipped: no time left", { conversationId, filed, timeLeft });
       }
     }
 
@@ -526,9 +669,16 @@ export async function POST(
     // model wrote a reply, or a lead was filed this turn; an empty completion
     // that fell back to `strings.unavailable` is not an answer.
     //
-    // Turn 1 only (`!priorId`): a later turn never attempts it. The unique
-    // (meter, source_ref) on `conversation:<id>` is the backstop, not the
-    // gate. In `after()`, once the response is sent (the voice routes'
+    // The conversation's FIRST ANSWERED turn, whichever request that is. It
+    // used to be turn 1 only (`!priorId`), which stopped being the same thing
+    // once D-050 let a failed first reply's retry arrive WITH the id: that
+    // chat was never billed. A failed turn appends nothing (every failure
+    // returns above the append), but an EMPTY completion appends an
+    // exchange whose assistant line is the 'unavailable' sentence, so the
+    // question is "has any earlier assistant line been an answer", not "is
+    // the transcript empty". The unique (meter, source_ref) on
+    // `conversation:<id>` is the backstop, not the gate. In `after()`, once
+    // the response is sent (the voice routes'
     // precedent): the visitor is waiting on this reply, and a stalled ledger
     // write could otherwise hold it up to recordUsageSafely's 5 s.
     // recordUsageSafely never throws, and the LAZY import (this handler's
@@ -536,7 +686,7 @@ export async function POST(
     // scope) sits inside the callback's own try, so neither a ledger failure
     // nor a failed import rejects the background work.
     const answered = Boolean(reply || (toolArgs && filed));
-    if (!priorId && answered) {
+    if (answered && !hadAnsweredTurn(conversation.transcript)) {
       after(async () => {
         try {
           const { recordUsageSafely } = await import("@/lib/billing/usage");
@@ -555,6 +705,6 @@ export async function POST(
     // Anything the reads above threw. A refusal, so it costs nothing — and
     // never an unhandled 500 with a stack in it.
     log("refused: turn failed", { publicId, error: String(e) });
-    return NextResponse.json({ error: "unavailable" }, { status: 503 });
+    return unavailable();
   }
 }

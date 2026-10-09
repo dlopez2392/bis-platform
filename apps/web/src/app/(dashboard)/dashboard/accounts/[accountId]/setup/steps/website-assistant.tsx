@@ -5,7 +5,7 @@ import { EmbedSnippet } from "@/components/embed-snippet";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import type { StateKind } from "@/lib/setup/setup-view";
-import { isVoiceProfileDone } from "@/lib/setup/setup-status";
+import { isVoiceProfileDone, isSpanishGreetingTheGap } from "@/lib/setup/setup-status";
 import { STEP_PATH, TONE, type StepDetailProps } from "./step-shared";
 
 /**
@@ -152,7 +152,11 @@ export function WebsiteAssistantStep({
 
   return (
     <div className="mt-3">
-      <Row n={1} kind={row1Kind} word={genericWord(row1Kind)} title={m["setup.step.website_assistant.row1.title"]} href={voiceProfileHref} />
+      <Row n={1} kind={row1Kind} word={genericWord(row1Kind)} title={m["setup.step.website_assistant.row1.title"]} href={voiceProfileHref}>
+        {row1Kind === "open" && isSpanishGreetingTheGap(conciergeProfile) ? (
+          <p className="text-xs text-muted-foreground">{m["setup.profile.spanishGreetingMissing"]}</p>
+        ) : null}
+      </Row>
       <Row n={2} kind={row2Kind} word={genericWord(row2Kind)} title={m["setup.step.website_assistant.row2.title"]} href={`${base}/forms?from=setup`}>
         <p className="text-xs text-muted-foreground">{m["setup.step.website_assistant.row2.body"]}</p>
       </Row>

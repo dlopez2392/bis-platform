@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  pickTurnUpdate, pickErrorUpdate, conversationStore, type TurnResult,
+  pickTurnUpdate, pickErrorUpdate, errorConversationId, conversationStore, recordTurn, type TurnResult,
   CLOSE_MESSAGE, brandMessage, shouldCloseOnKey,
   ASK_MESSAGE_TYPE, parseAskMessage, askAllowedFrom,
 } from "./concierge-chat";
@@ -135,6 +135,26 @@ describe("pickErrorUpdate", () => {
 });
 
 /**
+ * D-050: a first turn whose reply failed AFTER its conversation row existed
+ * now answers `{ error, conversationId }`. The page keeps that id, so the
+ * visitor's retry continues the same conversation instead of opening a
+ * second one (and spending a second of their three starts).
+ */
+describe("errorConversationId", () => {
+  it("reads the id a failed first reply hands back", () => {
+    expect(errorConversationId({ error: "unavailable", conversationId: "c1" })).toBe("c1");
+  });
+
+  it("is null when the refusal carries none, or the body is not JSON-shaped", () => {
+    expect(errorConversationId({ error: "rate_limited" })).toBeNull();
+    expect(errorConversationId({ error: "unavailable", conversationId: "" })).toBeNull();
+    expect(errorConversationId({ conversationId: 42 })).toBeNull();
+    expect(errorConversationId(null)).toBeNull();
+    expect(errorConversationId("oops")).toBeNull();
+  });
+});
+
+/**
  * `conversationStore` is the persistence Item 1 (page half) adds:
  * `conversationId` moves out of a bare `useRef` into `sessionStorage` keyed
  * by `publicId`, so a page reload mid-conversation continues it instead of
@@ -186,6 +206,105 @@ describe("conversationStore", () => {
     conversationStore("pub2", () => storage).write("conv-B");
     expect(conversationStore("pub1", () => storage).read()).toBe("conv-A");
     expect(conversationStore("pub2", () => storage).read()).toBe("conv-B");
+  });
+
+  // D-049: the id survived a page change but the visible conversation did
+  // not, so every page of the client's site showed the greeting alone over a
+  // conversation the server was still carrying on.
+  const TURNS = [
+    { role: "assistant" as const, text: "Hi! How can I help?" },
+    { role: "visitor" as const, text: "Do you build benches?" },
+    { role: "assistant" as const, text: "Yes, we do." },
+  ];
+
+  it("round-trips the rendered turns for the stored conversation", () => {
+    const storage = fakeStorage();
+    const store = conversationStore("pub1", () => storage);
+    store.write("conv-123");
+    store.writeTurns("conv-123", TURNS);
+    expect(store.readTurns()).toEqual(TURNS);
+  });
+
+  it("never restores turns that belong to a different conversation than the stored id", () => {
+    const storage = fakeStorage();
+    const store = conversationStore("pub1", () => storage);
+    store.writeTurns("conv-OLD", TURNS);
+    store.write("conv-NEW");
+    expect(store.readTurns()).toBeNull();
+  });
+
+  it("clear() drops the turns with the id", () => {
+    const storage = fakeStorage();
+    const store = conversationStore("pub1", () => storage);
+    store.write("conv-123");
+    store.writeTurns("conv-123", TURNS);
+    store.clear();
+    expect(store.readTurns()).toBeNull();
+  });
+
+  it("reads anything malformed as no turns, and never throws on blocked storage", () => {
+    const storage = fakeStorage();
+    const store = conversationStore("pub1", () => storage);
+    store.write("conv-123");
+    for (const raw of [
+      "not json", "null", "[]", JSON.stringify({ id: "conv-123", messages: "x" }),
+      JSON.stringify({ id: "conv-123", messages: [{ role: "system", text: "x" }] }),
+      JSON.stringify({ id: "conv-123", messages: [{ role: "visitor", text: 4 }] }),
+      JSON.stringify({ id: "conv-123", messages: [] }),
+    ]) {
+      storage.setItem("bis-concierge:pub1:turns", raw);
+      expect(store.readTurns()).toBeNull();
+    }
+    const blocked = conversationStore("pub1", () => { throw new Error("SecurityError"); });
+    expect(blocked.readTurns()).toBeNull();
+    expect(() => blocked.writeTurns("conv-123", TURNS)).not.toThrow();
+  });
+});
+
+/**
+ * D-049: what a turn response does to the visitor's session store, pulled
+ * out of `sendText` so the wiring itself is under test, not only the store.
+ */
+describe("recordTurn", () => {
+  function memoryStore() {
+    const calls: string[] = [];
+    let id: string | null = null;
+    let turns: unknown = null;
+    return {
+      calls,
+      get id() { return id; }, get turns() { return turns; },
+      read: () => id,
+      write: (v: string) => { calls.push("write"); id = v; },
+      clear: () => { calls.push("clear"); id = null; turns = null; },
+      readTurns: () => null,
+      writeTurns: (v: string, m: unknown) => { calls.push("writeTurns"); turns = { id: v, m }; },
+    };
+  }
+  const shown = [
+    { role: "assistant" as const, text: "Hi!" },
+    { role: "visitor" as const, text: "Benches?" },
+    { role: "assistant" as const, text: "Yes." },
+  ];
+
+  it("an answered turn stores the id AND the turns now on screen", () => {
+    const store = memoryStore();
+    recordTurn(store, { conversationId: "c1", reply: "Yes.", ended: false, closing: "" }, shown);
+    expect(store.id).toBe("c1");
+    expect(store.turns).toEqual({ id: "c1", m: shown });
+  });
+
+  it("an ended conversation clears both, so a new page starts fresh", () => {
+    const store = memoryStore();
+    store.write("c1");
+    recordTurn(store, { conversationId: "c1", reply: "", ended: true, closing: "Bye." }, shown);
+    expect(store.id).toBeNull();
+    expect(store.calls).not.toContain("writeTurns");
+  });
+
+  it("a response with no conversation (the too-fast notice) stores nothing", () => {
+    const store = memoryStore();
+    recordTurn(store, { conversationId: "", reply: "", ended: false, closing: "slow down" }, shown);
+    expect(store.calls).toEqual([]);
   });
 });
 

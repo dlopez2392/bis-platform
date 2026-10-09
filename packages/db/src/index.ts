@@ -145,6 +145,7 @@ export {
 } from "./call-proposals";
 export * from "./voice-web-sessions";
 export * from "./concierge";
+export * from "./profile-ready";
 
 // The account-teardown cascade. Exported not for the app — nothing in
 // apps/web's PRODUCTION code should ever delete an account this way — but for
