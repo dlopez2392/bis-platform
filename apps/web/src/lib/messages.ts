@@ -1265,6 +1265,8 @@ export const m = {
   "voice.numbers.statusUpdated": "Status updated",
   "voice.numbers.statusUpdateFailed": "Could not update this number's status.",
   "voice.numbers.goLiveNeedsProfile": "Fill in the voice profile before going live",
+  // D-042: one active number per account.
+  "voice.numbers.anotherActive": "This client already has an active number. Release it before turning this one back on.",
   "voice.moveFailed": "Couldn't move that number — check it isn't in use and try again.",
   // Server-side twin of the page's own precondition (setup/page.tsx only
   // offers the move list when `assignedNumber === null`): a tampered or
