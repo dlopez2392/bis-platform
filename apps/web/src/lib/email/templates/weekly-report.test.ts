@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emailBrandNamed } from "./shell";
-import { deltaPhrase, weeklyReportEmail } from "./weekly-report";
+import { deltaPhrase, weeklyReportEmail, weeklyReportSubject } from "./weekly-report";
 import type { Branding } from "@bis/db";
 
 const branding: Branding = {
@@ -57,6 +57,29 @@ describe("weeklyReportEmail", () => {
     });
     expect(text).toContain("Nothing came in last week");
     expect(text).not.toMatch(/0 calls answered/);
+  });
+
+  // D-064: a metric we DID measure (real website traffic) must never be
+  // swallowed by the quiet-week copy just because the pipeline metrics
+  // (calls/leads/bookings) all read zero — DESIGN.md's weekly-report rules
+  // say a measured metric is omitted only when it was never taken, and a
+  // quiet week still sends copy honest to what actually happened.
+  it("a week with no calls, leads or bookings but real website visitors is NOT the quiet-week message (mutation: drop visitors from the quiet check → FAILS)", () => {
+    const { text } = weeklyReportEmail({
+      brand, now: { calls: 0, leads: 0, bookings: 0, visitors: 50 }, prior: null,
+      dashboardUrl: null, reassurance: { receptionist: true, textBack: true },
+    });
+    expect(text).not.toContain("Nothing came in last week");
+    expect(text).toMatch(/50/);
+    expect(text).toMatch(/visitors/i);
+  });
+
+  it("a week with zero visitors (measured, genuinely none) and nothing else is still the quiet-week message", () => {
+    const { text } = weeklyReportEmail({
+      brand, now: { calls: 0, leads: 0, bookings: 0, visitors: 0 }, prior: null,
+      dashboardUrl: null, reassurance: nothingOn,
+    });
+    expect(text).toContain("Nothing came in last week");
   });
 
   it("claims the receptionist only when the account actually has one", () => {
@@ -119,5 +142,17 @@ describe("weeklyReportEmail", () => {
     expect(text).toContain("3 more than the week before");
     expect(text).toContain("same as the week before");
     expect(text).toContain("1 fewer than the week before");
+  });
+});
+
+describe("weeklyReportSubject (D-064)", () => {
+  it("says quiet only when every measured metric, visitors included, is zero", () => {
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: 0 })).toBe("Last week was quiet");
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: null })).toBe("Last week was quiet");
+  });
+
+  it("is not quiet when the pipeline is empty but the website had real visitors (mutation: drop visitors from the check → FAILS)", () => {
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: 50 }))
+      .not.toBe("Last week was quiet");
   });
 });

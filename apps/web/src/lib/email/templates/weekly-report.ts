@@ -59,6 +59,19 @@ function lines(input: WeeklyReportInput): Line[] {
   return out;
 }
 
+/**
+ * D-064: a week is quiet only when EVERY metric we actually measured reads
+ * zero — calls, leads and bookings always count, and visitors counts too
+ * whenever a site is linked (`visitors !== null`). Leaving visitors out of
+ * this check let a week with real website traffic get the "Nothing came
+ * in" copy and drop its one honest number, in direct conflict with the
+ * rule that a MEASURED metric is never swallowed, quiet week or not — only
+ * an un-measured one is omitted.
+ */
+function isQuietWeek(now: WeeklyNumbers): boolean {
+  return now.calls === 0 && now.leads === 0 && now.bookings === 0 && (now.visitors === null || now.visitors === 0);
+}
+
 function quietBody(input: WeeklyReportInput): { html: string; text: string } {
   const { receptionist, textBack, receptionistName } = input.reassurance;
   const persona = receptionistName?.trim() || "Sofía";
@@ -95,7 +108,7 @@ function quietBody(input: WeeklyReportInput): { html: string; text: string } {
  */
 export function weeklyReportEmail(input: WeeklyReportInput): { html: string; text: string } {
   const { now } = input;
-  const isQuiet = now.calls === 0 && now.leads === 0 && now.bookings === 0;
+  const isQuiet = isQuietWeek(now);
 
   const body = isQuiet ? quietBody(input) : (() => {
     const rows = lines(input);
@@ -132,6 +145,6 @@ export function weeklyReportEmail(input: WeeklyReportInput): { html: string; tex
 
 /** The subject line. A number is what gets it opened; a quiet week says so. */
 export function weeklyReportSubject(now: WeeklyNumbers): string {
-  if (now.calls === 0 && now.leads === 0 && now.bookings === 0) return "Last week was quiet";
+  if (isQuietWeek(now)) return "Last week was quiet";
   return `Last week: ${now.calls} calls, ${now.leads} new leads`;
 }
