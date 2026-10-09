@@ -5,7 +5,7 @@ import { headers } from "next/headers";
 import { after } from "next/server";
 import {
   serviceDb, updateCalendarSettings, setBookingStatus, undoOperatorCancel,
-  bookingContactEmail, isAccountOutboundSuppressed,
+  discardQueuedNotice, noticeMessageStatus,
   BookingNotStartedError, BookingNotRestorableError, SlotTakenError,
   type BookingStatus, type CalendarSettingsPatch,
 } from "@bis/db";
@@ -18,7 +18,9 @@ import { isValidEmail } from "@/lib/forms/guards";
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { HOURS_FORM_DAYS, rowsToOpenHours, type HoursRow } from "./hours-form";
 import { parseNotifyEmails } from "./notify-emails";
-import { sendCancelNoticeAfterUndo } from "./cancel-notice";
+import {
+  cancelNoticeAvailability, queueCancelNotice, sendQueuedCancelNotice, type NoticeAvailability,
+} from "./cancel-notice";
 import { NOTICE_MESSAGE_MAX } from "./undo-window";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -27,11 +29,18 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
  *  re-checked here: a server action is an endpoint like any other. */
 export type CancelNoticeChoice = { send: boolean; locale: string; message: string };
 
-/** F-048: `version` is the cancel's own, which the Undo hands back;
- *  `noticeScheduled` says whether the customer will be emailed when the Undo
- *  window closes, so the toast tells the owner the truth either way. */
+/** F-048: `version` is the cancel's own, which the Undo hands back.
+ *  `notice` says what the toast may tell the owner: "scheduled" (the
+ *  customer is emailed when the Undo window closes; `noticeMessageId` is its
+ *  queued thread row), "address_blocked" (their address cannot receive email)
+ *  or "none" (nobody was told). */
 export type CancelBookingResult =
-  | { ok: true; version: string; noticeScheduled: boolean }
+  | { ok: true; version: string; notice: "scheduled"; noticeMessageId: string }
+  | { ok: true; version: string; notice: "none" | "address_blocked" }
+  | { ok: false; error: string };
+
+export type CancelNoticeOptionResult =
+  | { ok: true; notice: NoticeAvailability }
   | { ok: false; error: string };
 
 type MeetingType = NonNullable<CalendarSettingsPatch["meetingType"]>;
@@ -176,19 +185,41 @@ export async function setBookingStatusAction(
 }
 
 /**
- * F-048: the Calendar page's Cancel, from its dialog. It cancels AT ONCE (a
- * row that is still booked only, D-036's review) and answers the cancel's
- * version, which the Undo hands back. When the owner asked for the customer
- * notice and it can go (the contact has an address, the account is not
- * marked not to send), the notice is scheduled with `after()` to run once
- * the Undo window has closed (`cancel-notice.ts`): never inside this
- * response, which is what keeps the cancel reversible (DESIGN.md rule 6).
+ * F-048: before the Calendar page opens its Cancel dialog, can a customer
+ * notice go at all? (`cancelNoticeAvailability`: an address, an account that
+ * sends, an address that has not hard-bounced or complained.) Only
+ * "available" opens the dialog; anything else cancels at once with the
+ * matching toast, so the dialog is never a bare "Are you sure?" (rule 6).
+ */
+export async function cancelNoticeOptionAction(
+  accountId: string, bookingId: string,
+): Promise<CancelNoticeOptionResult> {
+  await requireAccountAccess(accountId);
+  try {
+    return { ok: true, notice: await cancelNoticeAvailability(await dbForRequest(), serviceDb(), accountId, bookingId) };
+  } catch (e) {
+    console.error(`cancelNoticeOptionAction: failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
+    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  }
+}
+
+/**
+ * F-048: the Calendar page's Cancel. It cancels AT ONCE (a row that is still
+ * booked only, D-036's review) and answers the cancel's version, which the
+ * Undo hands back.
  *
- * Both checks run BEFORE the cancel, and a read that fails refuses the whole
- * thing: the toast must never say "we'll email the customer" for a notice
- * nobody could check. serviceDb() for the write, for the reason
- * `setBookingStatusAction` gives below; the address is read as the signed-in
- * user (RLS), and the suppression flag the way the composer reads it.
+ * When the owner asked for the customer notice, whether it can go is checked
+ * BEFORE the cancel, and a read that fails refuses the whole thing: the toast
+ * must never promise an email nobody could check. When it can, the email is
+ * composed and its thread row written QUEUED in this request, then the send
+ * is scheduled with `after()` to run once the Undo window has closed
+ * (`cancel-notice.ts`), never inside this response, which is what keeps the
+ * cancel reversible (DESIGN.md rule 6). A notice that cannot be queued after
+ * the cancel committed is not promised: the toast says the customer was not
+ * told.
+ *
+ * serviceDb() for the writes, for the reason `setBookingStatusAction` gives
+ * above; the contact is read as the signed-in user (RLS).
  */
 export async function cancelBookingAction(
   accountId: string, bookingId: string, notice: CancelNoticeChoice,
@@ -199,11 +230,10 @@ export async function cancelBookingAction(
   if (message.length > NOTICE_MESSAGE_MAX) return { ok: false, error: m["calendar.cancelDialog.messageTooLong"] };
   const locale = normalizeLocale(typeof notice?.locale === "string" ? notice.locale : undefined, "en");
 
-  let noticeScheduled = false;
+  let availability: NoticeAvailability | null = null;
   if (notice?.send === true) {
     try {
-      const to = await bookingContactEmail(await dbForRequest(), accountId, bookingId);
-      noticeScheduled = to !== null && !(await isAccountOutboundSuppressed(serviceDb(), accountId));
+      availability = await cancelNoticeAvailability(await dbForRequest(), serviceDb(), accountId, bookingId);
     } catch (e) {
       console.error(`cancelBookingAction: notice check failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
       return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
@@ -220,18 +250,27 @@ export async function cancelBookingAction(
     return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   }
 
-  if (noticeScheduled) {
-    const origin = originFrom(await headers());
-    after(async () => {
-      const outcome = await sendCancelNoticeAfterUndo({ accountId, bookingId, version, userId, locale, message, origin });
-      if (outcome !== "sent" && outcome !== "undone") {
-        console.error(`cancelBookingAction: notice for booking ${bookingId} (account ${accountId}) not sent: ${outcome}`);
-      }
-    });
+  let result: CancelBookingResult = {
+    ok: true, version, notice: availability === "address_blocked" ? "address_blocked" : "none",
+  };
+  if (availability === "available") {
+    try {
+      const origin = originFrom(await headers());
+      const queued = await queueCancelNotice(serviceDb(), { accountId, bookingId, userId, locale, message, origin });
+      after(async () => {
+        const outcome = await sendQueuedCancelNotice({ accountId, bookingId, version, userId, queued });
+        if (outcome === "failed") {
+          console.error(`cancelBookingAction: notice for booking ${bookingId} (account ${accountId}) not sent`);
+        }
+      });
+      result = { ok: true, version, notice: "scheduled", noticeMessageId: queued.messageId };
+    } catch (e) {
+      console.error(`cancelBookingAction: notice for booking ${bookingId} (account ${accountId}) could not be queued: ${String(e)}`);
+    }
   }
 
   revalidatePath(`/dashboard/accounts/${accountId}/calendar`);
-  return { ok: true, version, noticeScheduled };
+  return result;
 }
 
 /**
@@ -239,46 +278,74 @@ export async function cancelBookingAction(
  * reversible action runs at once and offers Undo; typing a name is for
  * destructive deletes, and an "Are you sure?" before it is the reflexive
  * dialog the rule forbids. Cancel here IS reversible: until the F-048 notice
- * goes (after the Undo window) it tells nobody (no staff alert;
- * `setBookingStatus` writes the row and one `booking.status_changed` event,
- * which only the activity feed reads), so putting the row back undoes all of
- * it. `version` (F-048) is the cancel's own: the Undo writes only while the
- * row still carries it, so it can never land after the notice claimed the
- * cancel (`customer_told`).
+ * goes (after the Undo window) it tells nobody, so putting the row back
+ * undoes all of it.
  *
- * `undoOperatorCancel` (packages/db) carries the guards: an un-cancel only
- * (`onlyFrom: "cancelled"` on the write), only of a cancel a PERSON made on
- * the dashboard (never the customer's link or Sofía's call), and never of a
- * booking a reschedule has replaced. The flip re-enters
- * `bookings_no_overlap`; if a customer booked the freed time in the
- * meantime, it refuses with `SlotTakenError`. Each refusal is told in words. serviceDb() for the reason
- * `setBookingStatusAction` gives above: no UPDATE grant on `bookings` exists
- * for `authenticated`, so `requireAccountAccess` is the gate.
+ * `version` (F-048, required) is the cancel's own: the Undo writes only while
+ * the row still carries it, so it can never land after the notice claimed
+ * the cancel. `noticeMessageId` is that notice's queued thread row: a winning
+ * Undo removes it (nothing was sent). A refusal as `superseded` is told from
+ * that row, truthfully: emailed, not emailed, or not known yet.
+ *
+ * `undoOperatorCancel` (packages/db) carries the other guards: an un-cancel
+ * only, only of a cancel a PERSON made on the dashboard, and never of a
+ * booking a reschedule has replaced; a time someone booked in between is
+ * `SlotTakenError`. serviceDb() for the reason `setBookingStatusAction` gives
+ * above.
  */
 export async function undoCancelBookingAction(
-  accountId: string, bookingId: string, version?: string,
+  accountId: string, bookingId: string, version: string, noticeMessageId?: string,
 ): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
+  if (typeof version !== "string" || version === "") {
+    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  }
+  const messageId = typeof noticeMessageId === "string" && noticeMessageId !== "" ? noticeMessageId : null;
 
   try {
-    await undoOperatorCancel(serviceDb(), accountId, bookingId, userId,
-      { version: typeof version === "string" ? version : undefined });
+    await undoOperatorCancel(serviceDb(), accountId, bookingId, userId, version);
   } catch (e) {
     if (e instanceof SlotTakenError) {
       return { ok: false, error: m["calendar.bookings.restoreSlotTaken"] };
     }
     if (e instanceof BookingNotRestorableError) {
+      if (e.reason === "superseded") return { ok: false, error: await supersededWords(accountId, messageId) };
       return {
         ok: false,
-        error: e.reason === "rescheduled" ? m["calendar.bookings.restoreRescheduled"]
-          : e.reason === "customer_told" ? m["calendar.bookings.restoreCustomerTold"]
-          : m["calendar.bookings.restoreNotOurs"],
+        error: e.reason === "rescheduled" ? m["calendar.bookings.restoreRescheduled"] : m["calendar.bookings.restoreNotOurs"],
       };
     }
     console.error(`undoCancelBookingAction: failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
     return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   }
 
+  if (messageId) {
+    // Best effort: the notice's own job also removes it when its claim loses.
+    try {
+      await discardQueuedNotice(serviceDb(), accountId, messageId);
+    } catch (e) {
+      console.error(`undoCancelBookingAction: booking ${bookingId} restored, its queued notice not removed: ${String(e)}`);
+    }
+  }
+
   revalidatePath(`/dashboard/accounts/${accountId}/calendar`);
   return { ok: true };
+}
+
+/** What the owner is told when the Undo lost to a newer write: whether the
+ *  customer was actually emailed is read off the notice's own row, never
+ *  assumed. An unreadable row is "not known", never "emailed". */
+async function supersededWords(accountId: string, messageId: string | null): Promise<string> {
+  if (!messageId) return m["calendar.bookings.restoreChanged"];
+  let status: string | null;
+  try {
+    status = await noticeMessageStatus(serviceDb(), accountId, messageId);
+  } catch (e) {
+    console.error(`undoCancelBookingAction: notice row unreadable for account ${accountId}: ${String(e)}`);
+    status = "queued";
+  }
+  if (status === "sent" || status === "delivered" || status === "opened") return m["calendar.bookings.restoreCustomerTold"];
+  if (status === "failed" || status === "bounced") return m["calendar.bookings.restoreNoticeFailed"];
+  if (status === "queued") return m["calendar.bookings.restoreNoticeUnknown"];
+  return m["calendar.bookings.restoreChanged"];
 }

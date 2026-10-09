@@ -36,14 +36,16 @@ function fakeSchedule() {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const VERSION = "2026-10-09T18:00:00.123Z";
-const cancelled = (noticeScheduled = false) => async () => ({ ok: true as const, version: VERSION, noticeScheduled });
+const cancelled = (noticeScheduled = false) => async () => (noticeScheduled
+  ? { ok: true as const, version: VERSION, notice: "scheduled" as const, noticeMessageId: "msg_1" }
+  : { ok: true as const, version: VERSION, notice: "none" as const });
 
 describe("runCancelWithUndo — Cancel runs at once and the toast carries Undo (D-036, F-048)", () => {
   it("cancels, then toasts with an Undo action that lives exactly the Undo window (mutation: drop the action → FAILS)", async () => {
     const { toast } = fakeToast();
     const cancel = vi.fn(cancelled());
     const undo = vi.fn(async () => ({ ok: true as const }));
-    expect(await runCancelWithUndo(cancel, undo, toast, fakeSchedule().schedule)).toBe(true);
+    expect(await runCancelWithUndo(cancel, undo, toast, { schedule: fakeSchedule().schedule })).toBe(true);
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(undo).not.toHaveBeenCalled();
     expect(toast.success).toHaveBeenCalledWith(
@@ -55,7 +57,7 @@ describe("runCancelWithUndo — Cancel runs at once and the toast carries Undo (
   it("closes its own toast when the window ends, even if the pointer is resting on it, so Undo is never offered after the notice could go (mutation: drop the dismiss → FAILS)", async () => {
     const { toast } = fakeToast();
     const { schedule, jobs } = fakeSchedule();
-    await runCancelWithUndo(cancelled(true), async () => ({ ok: true }), toast, schedule);
+    await runCancelWithUndo(cancelled(true), async () => ({ ok: true }), toast, { schedule });
     expect(jobs.map((j) => j.ms)).toEqual([UNDO_WINDOW_MS]);
     // The server waits longer than the toast lives, so a click in the toast's
     // last instant still reaches the server first (mutation: a zero grace → FAILS).
@@ -67,21 +69,42 @@ describe("runCancelWithUndo — Cancel runs at once and the toast carries Undo (
 
   it("says the customer will be emailed when the notice is scheduled, and that they have NOT been told when it is not (mutation: always the old toast → FAILS)", async () => {
     const a = fakeToast();
-    await runCancelWithUndo(cancelled(true), async () => ({ ok: true }), a.toast, fakeSchedule().schedule);
+    await runCancelWithUndo(cancelled(true), async () => ({ ok: true }), a.toast, { schedule: fakeSchedule().schedule });
     expect(a.toast.success.mock.calls[0]![0]).toBe(m["calendar.bookings.cancelledToastNotice"]);
     const b = fakeToast();
-    await runCancelWithUndo(cancelled(false), async () => ({ ok: true }), b.toast, fakeSchedule().schedule);
+    await runCancelWithUndo(cancelled(false), async () => ({ ok: true }), b.toast, { schedule: fakeSchedule().schedule });
     expect(b.toast.success.mock.calls[0]![0]).toBe(m["calendar.bookings.cancelledToast"]);
   });
 
-  it("Undo hands the cancel's own version back and says the appointment is back (mutation: undo without the version → FAILS)", async () => {
+  it("Undo hands back the cancel's own version and its queued notice row, and says the appointment is back (mutation: undo without the version → FAILS)", async () => {
     const { toast, clickUndo } = fakeToast();
-    const undo = vi.fn<(version: string) => Promise<{ ok: true }>>(async () => ({ ok: true }));
-    await runCancelWithUndo(cancelled(true), undo, toast, fakeSchedule().schedule);
+    const undo = vi.fn<(version: string, noticeMessageId?: string) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+    await runCancelWithUndo(cancelled(true), undo, toast, { schedule: fakeSchedule().schedule });
     clickUndo();
     await flush();
-    expect(undo).toHaveBeenCalledWith(VERSION);
+    expect(undo).toHaveBeenCalledWith(VERSION, "msg_1");
     expect(toast.success).toHaveBeenLastCalledWith(m["calendar.bookings.restored"]);
+  });
+
+  it("an address that cannot receive email says so (M2; mutation: the plain toast → FAILS)", async () => {
+    const { toast } = fakeToast();
+    await runCancelWithUndo(
+      async () => ({ ok: true as const, version: VERSION, notice: "address_blocked" as const }),
+      async () => ({ ok: true }), toast, { schedule: fakeSchedule().schedule },
+    );
+    expect(toast.success.mock.calls[0]![0]).toBe(m["calendar.bookings.cancelledToastAddressBlocked"]);
+  });
+
+  it("a cancel made at once carries the caller's no-notice words, and an Undo with no notice row (I1)", async () => {
+    const { toast, clickUndo } = fakeToast();
+    const undo = vi.fn<(version: string, noticeMessageId?: string) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+    await runCancelWithUndo(cancelled(false), undo, toast, {
+      schedule: fakeSchedule().schedule, noNoticeMessage: m["calendar.bookings.cancelledToastAddressBlocked"],
+    });
+    expect(toast.success.mock.calls[0]![0]).toBe(m["calendar.bookings.cancelledToastAddressBlocked"]);
+    clickUndo();
+    await flush();
+    expect(undo).toHaveBeenCalledWith(VERSION, undefined);
   });
 
   it("an Undo the server refuses shows the server's own words", async () => {
@@ -89,7 +112,7 @@ describe("runCancelWithUndo — Cancel runs at once and the toast carries Undo (
     await runCancelWithUndo(
       cancelled(true),
       async () => ({ ok: false, error: m["calendar.bookings.restoreCustomerTold"] }),
-      toast, fakeSchedule().schedule,
+      toast, { schedule: fakeSchedule().schedule },
     );
     clickUndo();
     await flush();
@@ -98,7 +121,7 @@ describe("runCancelWithUndo — Cancel runs at once and the toast carries Undo (
 
   it("an Undo that throws (a stale tab's server action) still reaches the operator", async () => {
     const { toast, clickUndo } = fakeToast();
-    await runCancelWithUndo(cancelled(), async () => { throw new Error("stale"); }, toast, fakeSchedule().schedule);
+    await runCancelWithUndo(cancelled(), async () => { throw new Error("stale"); }, toast, { schedule: fakeSchedule().schedule });
     clickUndo();
     await flush();
     expect(toast.error).toHaveBeenCalledWith(m["common.actionCrashed"]);
@@ -108,7 +131,7 @@ describe("runCancelWithUndo — Cancel runs at once and the toast carries Undo (
     const { toast } = fakeToast();
     const { schedule, jobs } = fakeSchedule();
     const r = await runCancelWithUndo(
-      async () => ({ ok: false as const, error: "nope" }), async () => ({ ok: true }), toast, schedule,
+      async () => ({ ok: false as const, error: "nope" }), async () => ({ ok: true }), toast, { schedule },
     );
     expect(r).toBe(false);
     expect(toast.error).toHaveBeenCalledWith("nope");
@@ -118,7 +141,7 @@ describe("runCancelWithUndo — Cancel runs at once and the toast carries Undo (
 
   it("a cancel that throws is the generic crash line", async () => {
     const { toast } = fakeToast();
-    const r = await runCancelWithUndo(async () => { throw new Error("x"); }, async () => ({ ok: true }), toast, fakeSchedule().schedule);
+    const r = await runCancelWithUndo(async () => { throw new Error("x"); }, async () => ({ ok: true }), toast, { schedule: fakeSchedule().schedule });
     expect(r).toBe(false);
     expect(toast.error).toHaveBeenCalledWith(m["common.actionCrashed"]);
   });

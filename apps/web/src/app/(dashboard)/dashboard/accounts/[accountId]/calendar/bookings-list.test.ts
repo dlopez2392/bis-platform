@@ -53,7 +53,8 @@ function render(booking: Booking): string {
     createElement(BookingsList, {
       accountId: "a1", timezone: "America/Chicago", bookings: [booking], nowIso: "2026-09-30T12:00:00Z",
       statusAction: async () => ({ ok: true as const }),
-      cancelAction: async () => ({ ok: true as const, version: "v", noticeScheduled: false }),
+      noticeOptionAction: async () => ({ ok: true as const, notice: "available" as const }),
+      cancelAction: async () => ({ ok: true as const, version: "v", notice: "none" as const }),
       undoCancelAction: async () => ({ ok: true as const }),
     }),
   );
@@ -194,7 +195,8 @@ describe("BookingsList — outcome buttons only once the appointment has started
     createElement(BookingsList, {
       accountId: "a1", timezone: "America/Chicago", bookings: [booking], nowIso,
       statusAction: async () => ({ ok: true as const }),
-      cancelAction: async () => ({ ok: true as const, version: "v", noticeScheduled: false }),
+      noticeOptionAction: async () => ({ ok: true as const, notice: "available" as const }),
+      cancelAction: async () => ({ ok: true as const, version: "v", notice: "none" as const }),
       undoCancelAction: async () => ({ ok: true as const }),
     }),
   ));
@@ -228,7 +230,8 @@ describe("BookingsList — the empty state (D-030 review)", () => {
     const text = renderedText(renderToStaticMarkup(createElement(BookingsList, {
       accountId: "a1", timezone: "America/Chicago", bookings: [], nowIso: "2026-09-30T12:00:00Z",
       statusAction: async () => ({ ok: true as const }),
-      cancelAction: async () => ({ ok: true as const, version: "v", noticeScheduled: false }),
+      noticeOptionAction: async () => ({ ok: true as const, notice: "available" as const }),
+      cancelAction: async () => ({ ok: true as const, version: "v", notice: "none" as const }),
       undoCancelAction: async () => ({ ok: true as const }),
     })));
     expect(text).toContain(m["calendar.bookings.empty"]);

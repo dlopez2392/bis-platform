@@ -13,8 +13,9 @@ export type NoticeDraft = { send: boolean; locale: PublicLocale; message: string
 
 const defaultFor = (locale: PublicLocale) => bookingStrings(locale).cancelNoticeDefault;
 
-export function initialDraft(hasEmail: boolean): NoticeDraft {
-  return { send: hasEmail, locale: "en", message: defaultFor("en") };
+/** The dialog opens only when a notice can go (`cancelStep`), so it starts on. */
+export function initialDraft(): NoticeDraft {
+  return { send: true, locale: "en", message: defaultFor("en") };
 }
 
 /** Switching language swaps a message the owner has not touched (or has
@@ -24,8 +25,7 @@ export function withLanguage(draft: NoticeDraft, locale: PublicLocale): NoticeDr
   return { ...draft, locale, message: untouched ? defaultFor(locale) : draft.message };
 }
 
-/** What the server is asked for: a send only when the owner left it on AND
- *  there is an address (the server checks the address again). */
-export function draftToChoice(draft: NoticeDraft, hasEmail: boolean): CancelNoticeChoice {
-  return { send: hasEmail && draft.send, locale: draft.locale, message: draft.message };
+/** What the server is asked for; it checks again whether the notice can go. */
+export function draftToChoice(draft: NoticeDraft): CancelNoticeChoice {
+  return { send: draft.send, locale: draft.locale, message: draft.message };
 }

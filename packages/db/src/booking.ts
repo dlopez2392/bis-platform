@@ -390,10 +390,12 @@ export async function setBookingStatus(
  *  live appointment beside the replacement. `not_operator_cancel`: the last
  *  cancel was the customer's (their link) or Sofía's (a call), not a person
  *  on the dashboard, so it is the customer's decision to reverse, not ours.
- *  `customer_told` (F-048): the cancel's notice has claimed the row, so the
- *  customer has been (or is being) told it is cancelled. */
+ *  `superseded` (F-048): the row is still cancelled but no longer carries
+ *  the version this Undo names: the cancel's customer notice claimed it, or a
+ *  later cancel replaced it. Which one, and whether the email actually went,
+ *  is the caller's to tell (the notice's thread row says). */
 export class BookingNotRestorableError extends Error {
-  constructor(readonly reason: "rescheduled" | "not_operator_cancel" | "customer_told") {
+  constructor(readonly reason: "rescheduled" | "not_operator_cancel" | "superseded") {
     super(`booking cannot be restored: ${reason}`);
     this.name = "BookingNotRestorableError";
   }
@@ -413,15 +415,14 @@ export class BookingNotRestorableError extends Error {
  * with status 'cancelled' (the dashboard, actor 'user'; Sofía, actor 'ai').
  * No event at all is refused too: nothing proves a person did it.
  *
- * `opts.version` (F-048): the cancel's own `updatedAt`. The write then lands
+ * `version` (F-048, REQUIRED): the cancel's own `updatedAt`. The write lands
  * only while the row still carries it, so it can never follow the cancel's
  * customer notice, which claims the row by moving the version on
- * (`claimCancelNotice`). A write refused that way, on a row still cancelled,
- * is `customer_told`. Omitted, the write is exactly D-036's.
+ * (`claimCancelNotice`). A write refused that way, on a row still
+ * cancelled, is `superseded`. There is no unversioned Undo.
  */
 export async function undoOperatorCancel(
-  db: SupabaseClient, accountId: string, bookingId: string, actorId: string,
-  opts: { version?: string } = {},
+  db: SupabaseClient, accountId: string, bookingId: string, actorId: string, version: string,
 ): Promise<void> {
   const { data: replacement, error: replErr } = await db.from("bookings").select("id")
     .eq("account_id", accountId).eq("rescheduled_from_id", bookingId).limit(1);
@@ -441,10 +442,9 @@ export async function undoOperatorCancel(
   }
 
   try {
-    await setBookingStatus(db, accountId, bookingId, "booked", actorId, "user",
-      { onlyFrom: "cancelled", ...(opts.version !== undefined ? { version: opts.version } : {}) });
+    await setBookingStatus(db, accountId, bookingId, "booked", actorId, "user", { onlyFrom: "cancelled", version });
   } catch (e) {
-    if (opts.version === undefined || e instanceof SlotTakenError) throw e;
+    if (e instanceof SlotTakenError) throw e;
     // Zero rows. Told apart by one read, after the fact: still cancelled
     // under a different version means the notice claimed it first.
     const { data: row, error: readErr } = await db.from("bookings").select("status, updated_at")
@@ -452,8 +452,8 @@ export async function undoOperatorCancel(
     if (readErr) throw new Error(`undoOperatorCancel re-read failed: ${readErr.message}`);
     const r = row as { status: BookingStatus; updated_at: string } | null;
     if (r && r.status === "cancelled"
-      && new Date(r.updated_at).getTime() !== new Date(opts.version).getTime()) {
-      throw new BookingNotRestorableError("customer_told");
+      && new Date(r.updated_at).getTime() !== new Date(version).getTime()) {
+      throw new BookingNotRestorableError("superseded");
     }
     throw e;
   }
@@ -467,7 +467,7 @@ export async function undoOperatorCancel(
  * conditional on that same version (`undoOperatorCancel`'s `opts.version`),
  * so Postgres serialises the two on the row and exactly one of them wins:
  * an Undo that landed first leaves nothing to claim (no notice goes), and
- * a claim that landed first refuses the Undo (`customer_told`).
+ * a claim that landed first refuses the Undo (`superseded`).
  *
  * `true` = this caller owns the send. A cancel that was undone, undone and
  * cancelled again (a newer version), or never cancelled answers `false`.
@@ -499,6 +499,42 @@ export async function bookingContactEmail(
   if (error) throw new Error(`bookingContactEmail failed: ${error.message}`);
   const email = (data as { contacts: { email: string | null } | null } | null)?.contacts?.email?.trim();
   return email || null;
+}
+
+/**
+ * F-048: the cancel notice's thread row is written QUEUED in the cancel
+ * itself, before the Undo window (so a notice the server never got to send
+ * stays visible as a stuck queued row instead of vanishing). When the Undo
+ * wins, nothing was sent and the appointment is back on, so the row is
+ * removed rather than marked: the only non-sent status the table has is
+ * `failed`, which would tell the owner something went wrong when nothing
+ * did. Only a QUEUED outbound email of this account is ever removed; a sent
+ * or failed row is the record of what happened. Its `message.created` event
+ * stays; nothing in the app reads that type. `true` when a row went.
+ * THROWS on a delete error.
+ */
+export async function discardQueuedNotice(
+  db: SupabaseClient, accountId: string, messageId: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("messages").delete()
+    .eq("account_id", accountId).eq("id", messageId)
+    .eq("status", "queued").eq("direction", "outbound").eq("channel", "email")
+    .select("id");
+  if (error) throw new Error(`discardQueuedNotice failed: ${error.message}`);
+  return (data?.length ?? 0) > 0;
+}
+
+/** F-048: the cancel notice's thread row's status, or null when there is no
+ *  such row on this account. What an Undo refused as `superseded` reads to
+ *  tell the owner, truthfully, whether the customer was emailed. THROWS on a
+ *  read error. */
+export async function noticeMessageStatus(
+  db: SupabaseClient, accountId: string, messageId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("messages").select("status")
+    .eq("account_id", accountId).eq("id", messageId).maybeSingle();
+  if (error) throw new Error(`noticeMessageStatus failed: ${error.message}`);
+  return (data as { status: string } | null)?.status ?? null;
 }
 
 /** How far `rescheduleChain` walks. A chain only grows by one row per move,

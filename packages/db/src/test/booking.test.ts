@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
+import { ensureConversation, createMessage, updateMessageStatus } from "../messaging";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   getOrCreateCalendar, getCalendarByPublicId, updateCalendarSettings,
@@ -9,7 +10,7 @@ import {
   listBookedRanges, listCalendarBookings, listDueReminders, stampReminderSent,
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
   SlotTakenError, BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel,
-  claimCancelNotice, rescheduleChain, bookingContactEmail,
+  claimCancelNotice, rescheduleChain, bookingContactEmail, discardQueuedNotice, noticeMessageStatus,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -450,25 +451,25 @@ describe("booking accessors", () => {
       };
 
       const own = await createBooking(db, accountId, range("01"), "user_test");
-      await setBookingStatus(db, accountId, own.id, "cancelled", "user_test");
-      expect(await reason(undoOperatorCancel(db, accountId, own.id, "user_test"))).toBe("restored");
+      const ownCancel = await setBookingStatus(db, accountId, own.id, "cancelled", "user_test");
+      expect(await reason(undoOperatorCancel(db, accountId, own.id, "user_test", ownCancel.updatedAt))).toBe("restored");
       expect(await statusOf(own.id)).toBe("booked");
 
       const moved = await createBooking(db, accountId, range("02"), "user_test");
       // A PERSON cancelled it, so only the reschedule check can refuse it.
-      await setBookingStatus(db, accountId, moved.id, "cancelled", "user_test");
+      const movedCancel = await setBookingStatus(db, accountId, moved.id, "cancelled", "user_test");
       await createBooking(db, accountId, { ...range("03"), rescheduledFromId: moved.id }, "user_test");
-      expect(await reason(undoOperatorCancel(db, accountId, moved.id, "user_test"))).toBe("rescheduled");
+      expect(await reason(undoOperatorCancel(db, accountId, moved.id, "user_test", movedCancel.updatedAt))).toBe("rescheduled");
       expect(await statusOf(moved.id)).toBe("cancelled");
 
       const byLink = await createBooking(db, accountId, range("04"), "user_test");
-      await cancelBookingByToken(db, byLink.cancelToken);
-      expect(await reason(undoOperatorCancel(db, accountId, byLink.id, "user_test"))).toBe("not_operator_cancel");
+      const linkRow = await cancelBookingByToken(db, byLink.cancelToken);
+      expect(await reason(undoOperatorCancel(db, accountId, byLink.id, "user_test", (linkRow as unknown as { updated_at: string }).updated_at))).toBe("not_operator_cancel");
       expect(await statusOf(byLink.id)).toBe("cancelled");
 
       const bySofia = await createBooking(db, accountId, range("05"), "user_test");
-      await setBookingStatus(db, accountId, bySofia.id, "cancelled", "voice", "ai");
-      expect(await reason(undoOperatorCancel(db, accountId, bySofia.id, "user_test"))).toBe("not_operator_cancel");
+      const sofiaCancel = await setBookingStatus(db, accountId, bySofia.id, "cancelled", "voice", "ai");
+      expect(await reason(undoOperatorCancel(db, accountId, bySofia.id, "user_test", sofiaCancel.updatedAt))).toBe("not_operator_cancel");
       expect(await statusOf(bySofia.id)).toBe("cancelled");
 
       // "Who cancelled" is THIS booking's newest cancel, never the account's.
@@ -478,15 +479,15 @@ describe("booking accessors", () => {
       // `payload->>bookingId` filter → FAILS).
       const mine = await createBooking(db, accountId, range("06"), "user_test");
       const theirs = await createBooking(db, accountId, range("07"), "user_test");
-      await setBookingStatus(db, accountId, mine.id, "cancelled", "user_test");
+      const mineCancel = await setBookingStatus(db, accountId, mine.id, "cancelled", "user_test");
       await setBookingStatus(db, accountId, theirs.id, "cancelled", "voice", "ai"); // newer, Sofía's
-      expect(await reason(undoOperatorCancel(db, accountId, mine.id, "user_test"))).toBe("restored");
+      expect(await reason(undoOperatorCancel(db, accountId, mine.id, "user_test", mineCancel.updatedAt))).toBe("restored");
 
       const sofias = await createBooking(db, accountId, range("08"), "user_test");
       const later = await createBooking(db, accountId, range("09"), "user_test");
-      await setBookingStatus(db, accountId, sofias.id, "cancelled", "voice", "ai");
+      const sofiasCancel = await setBookingStatus(db, accountId, sofias.id, "cancelled", "voice", "ai");
       await setBookingStatus(db, accountId, later.id, "cancelled", "user_test"); // newer, a person's
-      expect(await reason(undoOperatorCancel(db, accountId, sofias.id, "user_test"))).toBe("not_operator_cancel");
+      expect(await reason(undoOperatorCancel(db, accountId, sofias.id, "user_test", sofiasCancel.updatedAt))).toBe("not_operator_cancel");
       expect(await statusOf(sofias.id)).toBe("cancelled");
     });
   });
@@ -1109,7 +1110,7 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
     });
   });
 
-  it("the claim wins once, only on the version it names, only on a cancelled row of this account, and then the Undo is refused as customer_told (mutation: drop the version predicate from the claim → the second claim also wins, FAILS)", async () => {
+  it("the claim wins once, only on the version it names, only on a cancelled row of this account, and then the Undo is refused as superseded (mutation: drop the version predicate from the claim → the second claim also wins, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       await withTestAccount(async (_db2, otherAccountId) => {
         const cal = await getOrCreateCalendar(db, accountId, "user_test");
@@ -1122,7 +1123,7 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
         expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(true);
         expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(false); // already claimed
 
-        expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test", { version: updatedAt }))).toBe("customer_told");
+        expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test", updatedAt))).toBe("superseded");
         expect((await rowOf(db, b.id)).status).toBe("cancelled");
       });
     });
@@ -1134,7 +1135,7 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Back" }, "user_test");
       const b = await createBooking(db, accountId, range(cal, contactId, "03"), "user_test");
       const { updatedAt } = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
-      expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test", { version: updatedAt }))).toBe("restored");
+      expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test", updatedAt))).toBe("restored");
       expect((await rowOf(db, b.id)).status).toBe("booked");
       expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(false);
     });
@@ -1161,24 +1162,25 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Twice" }, "user_test");
       const b = await createBooking(db, accountId, range(cal, contactId, "04"), "user_test");
       const first = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
-      await undoOperatorCancel(db, accountId, b.id, "user_test", { version: first.updatedAt });
+      await undoOperatorCancel(db, accountId, b.id, "user_test", first.updatedAt);
       const second = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
       expect(await claimCancelNotice(db, accountId, b.id, first.updatedAt)).toBe(false);
       expect(await claimCancelNotice(db, accountId, b.id, second.updatedAt)).toBe(true);
     });
   });
 
-  it("an Undo without a version keeps D-036's behaviour, and the other refusals still win over customer_told", async () => {
+  it("an Undo naming a stale version restores nothing, and the other refusals still win over superseded (M1: the version is required)", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       const { id: contactId } = await createContact(db, accountId, { firstName: "Plain" }, "user_test");
       const b = await createBooking(db, accountId, range(cal, contactId, "05"), "user_test");
       await setBookingStatus(db, accountId, b.id, "cancelled", "user_test");
-      expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test"))).toBe("restored");
+      expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test", "2001-01-01T00:00:00.000Z"))).toBe("superseded");
+      expect((await rowOf(db, b.id)).status).toBe("cancelled");
 
       const sofia = await createBooking(db, accountId, range(cal, contactId, "06"), "user_test");
       const { updatedAt } = await setBookingStatus(db, accountId, sofia.id, "cancelled", "voice", "ai");
-      expect(await outcome(undoOperatorCancel(db, accountId, sofia.id, "user_test", { version: updatedAt }))).toBe("not_operator_cancel");
+      expect(await outcome(undoOperatorCancel(db, accountId, sofia.id, "user_test", updatedAt))).toBe("not_operator_cancel");
     });
   });
 
@@ -1200,17 +1202,47 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
     });
   });
 
-  it("bookingContactEmail answers the booking's own contact's address, trimmed, and null for no address or another account's booking (mutation: drop the account scope → FAILS)", async () => {
+  it("bookingContactEmail answers the booking's own contact's address, trimmed, and null for no address or another account's booking (mutations: drop the account scope, or drop the trim → FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       await withTestAccount(async (_db2, otherAccountId) => {
         const cal = await getOrCreateCalendar(db, accountId, "user_test");
         const { id: withEmail } = await createContact(db, accountId, { firstName: "Em", email: "em@example.com" }, "user_test");
+        // Stored with surrounding whitespace, the way an import or an old row
+        // can hold it, so the trim is what the assertion below proves (M6).
+        const { error: rawErr } = await db.from("contacts").update({ email: "  em@example.com \n" }).eq("id", withEmail);
+        if (rawErr) throw new Error(rawErr.message);
         const { id: noEmail } = await createContact(db, accountId, { firstName: "None" }, "user_test");
         const a = await createBooking(db, accountId, range(cal, withEmail, "15"), "user_test");
         const b = await createBooking(db, accountId, range(cal, noEmail, "16"), "user_test");
         expect(await bookingContactEmail(db, accountId, a.id)).toBe("em@example.com");
         expect(await bookingContactEmail(db, accountId, b.id)).toBeNull();
         expect(await bookingContactEmail(db, otherAccountId, a.id)).toBeNull();
+      });
+    });
+  });
+
+  /**
+   * F-048 fix round: the notice's thread row is written QUEUED in the cancel
+   * itself, before the wait. An Undo that wins removes it (nothing was sent,
+   * and the appointment is back on), but only while it is still queued: a
+   * sent or failed row is the record of what happened and is never removed.
+   */
+  it("discardQueuedNotice removes only a queued outbound email of this account, and noticeMessageStatus reads it back (mutation: drop the queued guard → the sent row is deleted, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Thread" }, "user_test");
+        const convo = await ensureConversation(db, accountId, contactId, "user_test");
+        const queued = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "q" }, "user_test");
+        const sent = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "s" }, "user_test");
+        await updateMessageStatus(db, accountId, sent.id, "sent", { providerMessageId: `re_${sent.id}` }, "user_test");
+
+        expect(await noticeMessageStatus(db, accountId, queued.id)).toBe("queued");
+        expect(await discardQueuedNotice(db, otherAccountId, queued.id)).toBe(false);
+        expect(await discardQueuedNotice(db, accountId, sent.id)).toBe(false);
+        expect(await noticeMessageStatus(db, accountId, sent.id)).toBe("sent");
+        expect(await discardQueuedNotice(db, accountId, queued.id)).toBe(true);
+        expect(await noticeMessageStatus(db, accountId, queued.id)).toBeNull();
+        expect(await noticeMessageStatus(db, otherAccountId, sent.id)).toBeNull();
       });
     });
   });
