@@ -883,11 +883,16 @@ async function seedForm(
  *  is suppressed — but the settings screens are a surface people screenshot,
  *  and an all-off automations page shows a product nobody is using. */
 async function seedAutomations(db: SupabaseClient, accountId: string): Promise<void> {
+  // Plain prose, as an operator writes it (D-058). Nothing in the product
+  // fills template tags: the review pass appends the link after the body
+  // (composeReviewRequestSms) and the reminder pass puts the brand and the
+  // appointment time in a lead BEFORE it (composeSmsReminder). A seeded tag
+  // reached the settings preview as raw template syntax.
   await upsertAutomation(db, accountId, "review_request", {
     enabled: true,
     body:
-      "Hi {{first_name}}, thanks for letting Resaca Air take care of you. " +
-      "If we did right by you, a quick review helps our neighbors find us: {{review_url}}",
+      "Thanks for letting Resaca Air take care of you. " +
+      "If we did right by you, a quick review helps our neighbors find us:",
     // `parseReviewRequestConfig` only accepts http(s), validated on read AND
     // write. example.com is reserved, so this is a URL that resolves nowhere.
     config: { channel: "sms", reviewUrl: "https://example.com/resaca-air/review" },
@@ -895,9 +900,7 @@ async function seedAutomations(db: SupabaseClient, accountId: string): Promise<v
 
   await upsertAutomation(db, accountId, "sms_reminder", {
     enabled: true,
-    body:
-      "Reminder: Resaca Air is scheduled for {{date}} between {{window}}. " +
-      "Reply here if you need to move it.",
+    body: "Reply here if you need to move it.",
     config: {},
   }, ACTOR);
 }

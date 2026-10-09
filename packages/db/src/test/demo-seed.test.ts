@@ -81,6 +81,18 @@ describe("demo tenant seeder", () => {
       // No recipients: the weekly report's own switch, on top of the flag.
       expect(account!.report_emails).toEqual([]);
 
+      // D-058: the recipe bodies are the operator's prose, as the product
+      // stores them — nothing substitutes `{{tags}}` (the link and the date
+      // are composed AROUND the body), so a seeded tag reached the preview
+      // and the settings screens people screenshot as raw template syntax.
+      const { data: recipes } = await db.from("automations")
+        .select("recipe_key, body").eq("account_id", accountId);
+      expect(recipes!.map((a) => a.recipe_key).sort()).toEqual(["review_request", "sms_reminder"]);
+      for (const recipe of recipes!) {
+        expect(recipe.body, recipe.recipe_key).not.toMatch(/\{\{|\}\}/);
+        expect(recipe.body.trim(), recipe.recipe_key).not.toBe("");
+      }
+
       // --- Every stored contact detail is reserved. Read back from the
       //     DATABASE, not from the source list — this is the assertion that
       //     covers a value the seeder built at runtime.
