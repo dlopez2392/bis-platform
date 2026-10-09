@@ -1100,9 +1100,12 @@ export const m = {
   "blueprints.empty.title": "No blueprints yet",
   "blueprints.empty.body": "Set an account up the way you like it, then save its configuration here to reuse on the next client.",
   "blueprints.version": "Version",
-  "blueprints.captured": "Captured",
+  // The LAST capture (D-090), so it agrees with the version beside it.
+  "blueprints.captured": "Last captured",
   "blueprints.applied": "Applied to",
+  // Distinct companies, not applications (D-090, listBlueprints).
   "blueprints.appliedCount": "accounts",
+  "blueprints.appliedCountOne": "account",
   "blueprints.save": "Save as blueprint",
   "blueprints.saveHint": "Copies this account's pipelines, custom fields, tags, custom values and forms. Never contacts, conversations, or anything with a credential in it.",
   "blueprints.name": "Blueprint name",

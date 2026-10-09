@@ -36,7 +36,9 @@ export type BlueprintRow = {
   created_at: string; updated_at: string;
 };
 
-export type BlueprintSummary = Pick<BlueprintRow, "id" | "name" | "version" | "created_at">
+/** `updated_at` is when it was LAST captured (captureBlueprint stamps it on
+ *  every recapture); `appliedCount` is how many ACCOUNTS it reached (D-090). */
+export type BlueprintSummary = Pick<BlueprintRow, "id" | "name" | "version" | "created_at" | "updated_at">
   & { appliedCount: number };
 
 const BLUEPRINT_COLS =
@@ -253,7 +255,7 @@ async function buildBundle(db: SupabaseClient, accountId: string): Promise<Bluep
 
 export async function listBlueprints(db: SupabaseClient): Promise<BlueprintSummary[]> {
   const { data, error } = await db.from("blueprints")
-    .select("id, name, version, created_at").order("created_at", { ascending: false });
+    .select("id, name, version, created_at, updated_at").order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
 
   const rows = (data ?? []) as any[];
@@ -261,20 +263,24 @@ export async function listBlueprints(db: SupabaseClient): Promise<BlueprintSumma
 
   // One query for all apply counts rather than one per blueprint.
   const { data: applied, error: appliedErr } = await db.from("events")
-    .select("payload").eq("type", "blueprint.applied");
+    .select("account_id, payload").eq("type", "blueprint.applied");
   // Fail loud: a transient failure here must not fall through to `?? []`
   // below and silently report `appliedCount: 0` for every blueprint, as
   // though that were a fact rather than a lost query.
   if (appliedErr) throw new Error(`listBlueprints: events query failed: ${appliedErr.message}`);
-  const counts = new Map<string, number>();
+  // DISTINCT accounts per blueprint, not events (D-090): applying again is
+  // the remedy for a partial apply, and it counted that company twice.
+  const reached = new Map<string, Set<string>>();
   for (const e of (applied ?? []) as any[]) {
     const id = e.payload?.blueprintId;
-    if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+    if (!id || !e.account_id) continue;
+    if (!reached.has(id)) reached.set(id, new Set());
+    reached.get(id)!.add(e.account_id);
   }
 
   return rows.map((r) => ({
-    id: r.id, name: r.name, version: r.version, created_at: r.created_at,
-    appliedCount: counts.get(r.id) ?? 0,
+    id: r.id, name: r.name, version: r.version, created_at: r.created_at, updated_at: r.updated_at,
+    appliedCount: reached.get(r.id)?.size ?? 0,
   }));
 }
 
