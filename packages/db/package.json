@@ -6,7 +6,8 @@
     ".": "./src/index.ts",
     "./search-term": "./src/search-term.ts",
     "./phone": "./src/phone.ts",
-    "./email-address": "./src/email-address.ts"
+    "./email-address": "./src/email-address.ts",
+    "./profile-ready": "./src/profile-ready.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

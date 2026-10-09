@@ -1316,6 +1316,10 @@ export const m = {
   "voice.assistant.lockedNoProfile": "Set up the assistant's name and greeting first.",
   "voice.assistant.lockedBlankGreeting": "Write the greeting visitors will see first.",
   "voice.assistant.greetingBlankOn": "The greeting is blank, so visitors see an empty first message. Write one in the assistant's profile above.",
+  // D-108: the facts are the only thing the assistant answers from, so the
+  // switch needs them too (Setup's profile row always did).
+  "voice.assistant.lockedBlankFacts": "Write what the assistant should know about the business first.",
+  "voice.assistant.factsBlankOn": "Nothing is written about the business, so the assistant has nothing to answer questions from. Add it in the assistant's profile above.",
   "voice.assistant.lockedNoSelection": "Choose a form for its leads first.",
   "voice.assistant.noFormTitle": "No published form yet",
   "voice.assistant.noFormBody": "The website assistant needs a form to send its leads to. Publish one, then come back here to turn it on.",

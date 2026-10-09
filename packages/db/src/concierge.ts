@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { newPublicId } from "./forms";
-import { PROFILE_COLS, type VoiceProfileRow } from "./voice";
+import { PROFILE_COLS, getVoiceProfile, type VoiceProfileRow } from "./voice";
+import { assistantProfileGap } from "./profile-ready";
 
 /** One side of one exchange. Same shape as `calls.transcript`'s
  *  TranscriptEvent, so one reader renders both. */
@@ -106,6 +107,21 @@ export function isConciergeLive(
 export async function enableConcierge(
   db: SupabaseClient, accountId: string, formId: string,
 ): Promise<{ publicId: string }> {
+  // D-108: the profile has to be READY (`assistantProfileGap`, the same
+  // predicate the Voice page's toggle and Setup's row read) before the
+  // assistant goes on. The toggle's lock used to be the only thing enforcing
+  // any of it, so a caller that went around the card switched on an
+  // assistant with no greeting or nothing to answer from. Read-then-write:
+  // a greeting blanked between this read and the RPC still lands ON, which
+  // is the same state as blanking it a second after, and the Voice page
+  // warns beside the toggle for that (`greetingBlankOn`/`factsBlankOn`).
+  // "no voice profile" is decided here now too, before the RPC, with the
+  // same message the RPC's null result below still produces.
+  const profile = await getVoiceProfile(db, accountId);
+  if (!profile) throw new Error("enableConcierge failed: no voice profile for this account");
+  const gap = assistantProfileGap(profile);
+  if (gap) throw new Error(`enableConcierge failed: profile not ready (${gap})`);
+
   const { data, error } = await db.rpc("concierge_enable", {
     p_account_id: accountId, p_form_id: formId, p_new_public_id: newPublicId(),
   });

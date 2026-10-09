@@ -8,6 +8,7 @@ import {
   conciergeCanTurnOn, conciergeAttemptReenable, VoiceProfileForm, forwardSwitchState,
 } from "./voice-settings";
 import { m } from "@/lib/messages";
+import { isVoiceProfileDone } from "@/lib/setup/setup-status";
 import { renderedText } from "@/lib/rendered-text";
 
 /**
@@ -27,7 +28,9 @@ import { renderedText } from "@/lib/rendered-text";
  *   - no published form to send leads to
  */
 describe("conciergeLockReason", () => {
-  const readyProfile = { greeting_en: "Hi, thanks for calling.", greeting_es: "", languages: "en" as const };
+  const readyProfile = {
+    greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "We fix roofs.", languages: "en" as const,
+  };
 
   it("locks on a missing profile row before checking anything else", () => {
     expect(conciergeLockReason(null, 3)).toBe("no_profile");
@@ -51,10 +54,24 @@ describe("conciergeLockReason", () => {
     expect(conciergeLockReason({ ...readyProfile, languages: "both", greeting_es: "" }, 3)).toBe("blank_greeting");
   });
 
-  it("a Spanish-only line locks on its OWN greeting being blank, not the unused English one", () => {
+  // D-051: this test used to be named for the right rule and assert the
+  // wrong one: a Spanish-only line with its Spanish greeting written was
+  // LOCKED for want of an English greeting no visitor would ever see.
+  it("a Spanish-only line is unlocked with no English greeting (D-051)", () => {
     expect(
-      conciergeLockReason({ greeting_en: "", greeting_es: "Hola, gracias por llamar.", languages: "es" }, 3),
+      conciergeLockReason({ ...readyProfile, greeting_en: "", greeting_es: "Hola, gracias por llamar.", languages: "es" }, 3),
+    ).toBeNull();
+  });
+
+  it("a Spanish-only line locks on its OWN greeting being blank", () => {
+    expect(
+      conciergeLockReason({ ...readyProfile, greeting_en: "Hi.", greeting_es: "  ", languages: "es" }, 3),
     ).toBe("blank_greeting");
+  });
+
+  // D-108: Setup's row asked for the facts, the toggle never did.
+  it("locks on blank facts once every greeting is written", () => {
+    expect(conciergeLockReason({ ...readyProfile, facts: "   " }, 3)).toBe("blank_facts");
   });
 
   it("locks on no published form once the profile is ready", () => {
@@ -193,6 +210,7 @@ describe("conciergeToggleLocked — the toggle's own disabled state", () => {
   it("locks while off on every pre-existing lock reason", () => {
     expect(conciergeToggleLocked(false, "no_profile", "", false)).toBe(true);
     expect(conciergeToggleLocked(false, "blank_greeting", "", false)).toBe(true);
+    expect(conciergeToggleLocked(false, "blank_facts", "f1", false)).toBe(true);
     expect(conciergeToggleLocked(false, null, "", false)).toBe(true);
   });
 
@@ -228,6 +246,7 @@ describe("conciergeCanTurnOn — the one gate turnOn, the Undo and the checkbox'
   it("refuses on every pre-existing lock reason too", () => {
     expect(conciergeCanTurnOn("no_profile", "", false)).toBe(false);
     expect(conciergeCanTurnOn("blank_greeting", "", false)).toBe(false);
+    expect(conciergeCanTurnOn("blank_facts", "f1", false)).toBe(false);
     expect(conciergeCanTurnOn(null, "", false)).toBe(false);
   });
 
@@ -276,6 +295,39 @@ describe("conciergeAttemptReenable — the disable toast's Undo, sharing turnOn'
     // reason — this FAILS.
     expect(result).toEqual({ ok: false, error: m["voice.assistant.lockedBlankGreeting"] });
   });
+
+  it("names the missing facts when that is the actual reason Undo is refused (D-108)", async () => {
+    const enableAction = vi.fn(async () => ({ ok: true as const, publicId: "pub_x" }));
+    const result = await conciergeAttemptReenable("blank_facts", "f1", false, enableAction);
+    expect(enableAction).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, error: m["voice.assistant.lockedBlankFacts"] });
+  });
+});
+
+/**
+ * D-108: Setup's "write the greeting and facts" row and this toggle used to
+ * ask two different questions of the same profile row, so the assistant
+ * could be switched on while Setup still said To do (and a Spanish-only line
+ * could not be switched on at all, D-051). Both now read
+ * `isAssistantProfileReady` (`@bis/db/profile-ready`); this pins that they
+ * agree on every shape that used to split them.
+ */
+describe("the toggle and Setup's profile row agree (D-108)", () => {
+  const shapes = [
+    { greeting_en: "Hi.", greeting_es: "", facts: "Roofs.", languages: "en" as const },
+    { greeting_en: "", greeting_es: "Hola.", facts: "Techos.", languages: "es" as const },
+    { greeting_en: "Hi.", greeting_es: "", facts: "Roofs.", languages: "both" as const },
+    { greeting_en: "Hi.", greeting_es: "Hola.", facts: "Roofs.", languages: "both" as const },
+    { greeting_en: "Hi.", greeting_es: "Hola.", facts: " ", languages: "both" as const },
+    { greeting_en: "Hi.", greeting_es: "", facts: "", languages: "en" as const },
+  ];
+  for (const p of shapes) {
+    it(`${p.languages} / en=${JSON.stringify(p.greeting_en)} es=${JSON.stringify(p.greeting_es)} facts=${JSON.stringify(p.facts)}`, () => {
+      // A published form exists, so the only thing left to lock on is the
+      // profile itself.
+      expect(conciergeLockReason(p, 1) === null).toBe(isVoiceProfileDone(p));
+    });
+  }
 });
 
 describe("conciergeSnippetPublicId — what the pasteable snippet renders from", () => {
@@ -317,7 +369,9 @@ describe("conciergeSnippetPublicId — what the pasteable snippet renders from",
 describe("ConciergeCard — the render proof", () => {
   const BASE_PROFILE: VoiceProfileRow = {
     id: "vp1", account_id: "a1", persona_name: "Sofía",
-    greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
+    // Facts written: since D-108 the toggle needs them, and every face below
+    // is about something else.
+    greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "We fix roofs.", services: "",
     languages: "en", booking_enabled: true, after_hours: "hours_then_message",
     enabled: true, textback_enabled: false, textback_body: "",
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
@@ -331,10 +385,12 @@ describe("ConciergeCard — the render proof", () => {
     greetingEn?: string;
     /** I5: the server-confirmed public id, once a save has landed. */
     publicId?: string | null;
+    facts?: string;
   }) {
     const profile: VoiceProfileRow = {
       ...BASE_PROFILE, concierge_enabled: opts.enabled, concierge_form_id: opts.storedFormId,
       greeting_en: opts.greetingEn ?? BASE_PROFILE.greeting_en,
+      facts: opts.facts ?? BASE_PROFILE.facts,
       public_id: opts.publicId ?? null,
     };
     const enableAction = vi.fn(async () => ({ ok: true as const, publicId: "pub_x" }));
@@ -412,6 +468,30 @@ describe("ConciergeCard — the render proof", () => {
     expect(text).toContain(m["voice.assistant.greetingBlankOn"]);
     expect(html).toMatch(CHECKED_CHECKBOX);
     expect(html).not.toMatch(DISABLED_CHECKBOX);
+  });
+
+  // D-108: an assistant switched ON whose facts are LATER blanked answers
+  // every question from nothing. Same shape as I3 above: a warning beside a
+  // toggle that stays live, never a lock on the off switch.
+  it("ON with blank facts: the ON sentence says so, and the toggle stays enabled and checked", () => {
+    const html = renderCard({
+      enabled: true, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact us" }],
+      facts: "",
+    });
+    const text = renderedText(html);
+    expect(text).toContain(m["voice.assistant.factsBlankOn"]);
+    expect(text).not.toContain(m["voice.assistant.greetingBlankOn"]);
+    expect(html).toMatch(CHECKED_CHECKBOX);
+    expect(html).not.toMatch(DISABLED_CHECKBOX);
+  });
+
+  it("OFF with blank facts: the toggle locks and the sentence names the facts", () => {
+    const html = renderCard({
+      enabled: false, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact us" }],
+      facts: " ",
+    });
+    expect(html).toMatch(DISABLED_CHECKBOX);
+    expect(renderedText(html)).toContain(m["voice.assistant.lockedBlankFacts"]);
   });
 
   // Whole-branch review, I5: nothing in this file bound the snippet card

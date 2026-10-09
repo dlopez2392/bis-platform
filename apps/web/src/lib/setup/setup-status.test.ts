@@ -169,10 +169,24 @@ describe("voice_profile", () => {
     expect(stepFor(steps, "voice_profile").done).toBe(false);
   });
 
-  it("a 'both' profile also takes the else-branch — done via greeting_en", () => {
+  // D-108: this used to read done on greeting_en alone, while the Voice
+  // page's assistant toggle refused the same profile for its blank Spanish
+  // greeting. One predicate now: a bilingual profile needs both.
+  it("a 'both' profile needs BOTH greetings — not done with only greeting_en", () => {
     const steps = deriveSetupStatus(fullInputs({
       profile: {
         greeting_en: "Hi, thanks for calling!", greeting_es: "",
+        facts: "We fix things.", enabled: true, languages: "both",
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
+      },
+    }));
+    expect(stepFor(steps, "voice_profile").done).toBe(false);
+  });
+
+  it("a 'both' profile is done once both greetings and the facts are written", () => {
+    const steps = deriveSetupStatus(fullInputs({
+      profile: {
+        greeting_en: "Hi, thanks for calling!", greeting_es: "¡Hola, gracias por llamar!",
         facts: "We fix things.", enabled: true, languages: "both",
         concierge_enabled: false, concierge_form_id: null, public_id: null,
       },
@@ -226,6 +240,17 @@ describe("isVoiceProfileDone (the shared predicate row 1 of website_assistant al
 
   it("is not done when there is no profile at all", () => {
     expect(isVoiceProfileDone(null)).toBe(false);
+  });
+
+  // D-108: a bilingual profile shows the Spanish greeting to every Spanish
+  // visitor (the website assistant picks `greeting_es` by locale), so it is
+  // not done with only the English one. The Voice page's toggle already
+  // required both; Setup now asks the same question.
+  it("a bilingual profile is not done with only the English greeting", () => {
+    expect(isVoiceProfileDone({
+      greeting_en: "Hi, thanks for calling!", greeting_es: "",
+      facts: "We fix things.", languages: "both",
+    })).toBe(false);
   });
 });
 

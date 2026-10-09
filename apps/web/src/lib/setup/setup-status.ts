@@ -1,4 +1,5 @@
 import type { CalendarRow, VoiceProfileRow, PhoneNumberRow } from "@bis/db";
+import { isAssistantProfileReady } from "@bis/db/profile-ready";
 
 // Pure module by design: the wizard's whole promise is that step completion
 // is COMPUTED from live rows on every render, never stored as its own flag
@@ -118,12 +119,16 @@ function step(key: SetupStepKey, done: boolean, skipped = false): SetupStepState
  * row 1 to ask on EITHER plan shape, not an over-requirement carried over
  * from the phone-only step.
  */
+//
+// D-108: now ONE predicate with the Voice page's assistant toggle and
+// `enableConcierge` (`isAssistantProfileReady`, @bis/db/profile-ready). The
+// old local rule wanted only the "primary" greeting, so a bilingual profile
+// with no Spanish greeting read done here while the toggle refused it, and a
+// Spanish visitor on that line got an empty first message.
 export function isVoiceProfileDone(
   profile: Pick<VoiceProfileRow, "facts" | "greeting_en" | "greeting_es" | "languages"> | null,
 ): boolean {
-  if (!profile) return false;
-  const primaryGreeting = profile.languages === "es" ? profile.greeting_es : profile.greeting_en;
-  return nonBlank(profile.facts) && nonBlank(primaryGreeting);
+  return isAssistantProfileReady(profile);
 }
 
 // The five steps a CRM-only plan can never reach: each one is either Sofía

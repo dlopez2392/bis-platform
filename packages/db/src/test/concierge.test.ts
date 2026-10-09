@@ -45,7 +45,33 @@ const RUN = Math.random().toString(36).slice(2, 10);
  * before the fix.
  */
 async function seedVoiceProfile(db: Parameters<typeof upsertVoiceProfile>[0], accountId: string) {
-  await upsertVoiceProfile(db, accountId, {}, "user_test");
+  // A READY profile (D-108): `enableConcierge` now refuses one with no
+  // greeting or no facts, and the table's defaults are blank for both.
+  await upsertVoiceProfile(db, accountId, {
+    greeting_en: "Thanks for stopping by.", greeting_es: "Gracias por visitarnos.",
+    facts: "Open weekdays 8 to 5.",
+  }, "user_test");
+}
+
+/** The two columns' worth of ready profile, plus `languages`. */
+const READY_PROFILE = {
+  greeting_en: "Hi.", greeting_es: "Hola.", facts: "Roofs.", languages: "both",
+};
+
+/**
+ * A fake db for the paths that never need a real row: `from(...).select(...)
+ * .eq(...).maybeSingle()` answers with `profile`, and `rpc` is the given
+ * stub, so a test can see whether `concierge_enable` was reached at all.
+ */
+function fakeEnableDb(
+  profile: Record<string, unknown> | null,
+  rpc: (...args: unknown[]) => Promise<{ data: unknown; error: unknown }>,
+) {
+  const chain = {
+    select: () => chain, eq: () => chain,
+    maybeSingle: async () => ({ data: profile, error: null }),
+  };
+  return { from: () => chain, rpc } as unknown as Parameters<typeof enableConcierge>[0];
 }
 
 describe("concierge accessors", () => {
@@ -140,12 +166,10 @@ describe("concierge accessors", () => {
   // `Parameters<typeof fn>[0]` typing precedent this file already uses for
   // `seedVoiceProfile`.
   it("enableConcierge surfaces the TRUE message when the code is 42501 but the text is not ours (a grant regression, not a cross-tenant form)", async () => {
-    const fakeDb = {
-      rpc: async () => ({
-        data: null,
-        error: { code: "42501", message: "permission denied for function concierge_enable" },
-      }),
-    } as unknown as Parameters<typeof enableConcierge>[0];
+    const fakeDb = fakeEnableDb(READY_PROFILE, async () => ({
+      data: null,
+      error: { code: "42501", message: "permission denied for function concierge_enable" },
+    }));
     // MUTATION: revert to `error.code === "42501" ||
     // error.message?.includes("does not belong to this account")` -- this
     // FAILS: the OR matches on the code alone and rewrites the real grant-
@@ -153,6 +177,42 @@ describe("concierge accessors", () => {
     // regression never reaches a log as itself.
     await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
       .rejects.toThrow(/^enableConcierge failed: permission denied for function concierge_enable$/);
+  });
+
+  // D-108: the toggle's lock was the only thing standing between a profile
+  // with no greeting or no facts and a live assistant; a caller that skips
+  // the card (a stale tab, a direct action call) went straight through.
+  it("enableConcierge refuses a profile with blank facts, BEFORE concierge_enable runs", async () => {
+    let rpcCalls = 0;
+    const fakeDb = fakeEnableDb({ ...READY_PROFILE, facts: "  " }, async () => {
+      rpcCalls++;
+      return { data: "pub_1", error: null };
+    });
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
+      .rejects.toThrow(/^enableConcierge failed: profile not ready \(facts\)$/);
+    expect(rpcCalls).toBe(0);
+  });
+
+  it("enableConcierge refuses a bilingual profile with no Spanish greeting", async () => {
+    const fakeDb = fakeEnableDb({ ...READY_PROFILE, greeting_es: "" },
+      async () => ({ data: "pub_1", error: null }));
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
+      .rejects.toThrow(/^enableConcierge failed: profile not ready \(greeting\)$/);
+  });
+
+  // D-051's server half: a Spanish-only profile needs no English greeting.
+  it("enableConcierge accepts a Spanish-only profile with no English greeting", async () => {
+    const fakeDb = fakeEnableDb({ ...READY_PROFILE, languages: "es", greeting_en: "" },
+      async () => ({ data: "pub_1", error: null }));
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1")).resolves.toEqual({ publicId: "pub_1" });
+  });
+
+  it("enableConcierge still names a missing profile row as such, without reaching the RPC", async () => {
+    let rpcCalls = 0;
+    const fakeDb = fakeEnableDb(null, async () => { rpcCalls++; return { data: null, error: null }; });
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
+      .rejects.toThrow(/^enableConcierge failed: no voice profile for this account$/);
+    expect(rpcCalls).toBe(0);
   });
 
   it("getVoiceProfileByPublicId returns null when the concierge is OFF", () =>
