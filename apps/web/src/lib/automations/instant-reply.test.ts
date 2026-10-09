@@ -164,6 +164,23 @@ describe("sendInstantReply — the account-level send switch every scheduled pas
     expect(await sendInstantReply(input())).toEqual({ kind: "skipped", reason: "disabled" });
     expect(dbMocks.isAccountOutboundSuppressed).not.toHaveBeenCalled();
   });
+
+  // Review M1: an unreadable suppression flag must FAIL CLOSED — nothing
+  // sent, nothing stamped — the same posture every other early read in
+  // this function already has (none of them is individually try/caught
+  // either; enrich.ts's own try/catch around the whole call is what turns
+  // this into a recorded `processing_error` rather than a crash). Pinned
+  // here so a later "helpful" try/catch around JUST this one read that
+  // swallows the error and falls through to sending (fail OPEN) reds by
+  // name instead of surviving unnoticed.
+  it("a suppression read that THROWS fails closed: the rejection propagates, nothing is sent, nothing is stamped (mutation: catch the read and treat an error as 'not suppressed' → sent, FAILS)", async () => {
+    dbMocks.isAccountOutboundSuppressed.mockRejectedValue(new Error("pgrst down"));
+    await expect(sendInstantReply(input())).rejects.toThrow("pgrst down");
+    expect(senderMock.resolveSmsSender).not.toHaveBeenCalled();
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampInstantReplySent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
 });
 
 describe("sendInstantReply — the gates", () => {
