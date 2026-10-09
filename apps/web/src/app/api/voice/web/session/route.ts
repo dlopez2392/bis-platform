@@ -183,13 +183,8 @@ export async function POST(req: Request) {
       brandMode: acct.brand_mode, replyToEmail: null,
     });
 
-    const greetingBase = profile.languages === "es" ? profile.greeting_es : profile.greeting_en;
-    const greeting = greetingBase && greetingBase.trim()
-      ? greetingBase
-      : `Thanks for calling ${businessName}. How can I help you today?`;
-
     const promptInput: VoicePromptInput = {
-      personaName: profile.persona_name, businessName, greeting,
+      personaName: profile.persona_name, businessName,
       facts: profile.facts, services: profile.services, languages: profile.languages,
       // FALSE regardless of the tenant's own setting: no tools reach this
       // session, so a prompt that promises booking would promise something

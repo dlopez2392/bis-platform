@@ -4,7 +4,6 @@ import type { VoicePromptInput } from "./session-config";
 
 const base = {
   personaName: "Sofía", businessName: "Rio Roofing",
-  greeting: "Thanks for calling Rio Roofing. How can I help?",
   facts: "- We repair and replace residential roofs in the RGV.",
   services: "Roof repair, full replacement, inspections",
   languages: "both" as const, bookingEnabled: true,

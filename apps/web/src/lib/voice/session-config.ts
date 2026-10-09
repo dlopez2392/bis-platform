@@ -8,7 +8,9 @@ import { bookingMode } from "./booking-mode";
 export const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime";
 
 export type VoicePromptInput = {
-  personaName: string; businessName: string; greeting: string;
+  // No `greeting`: the prompt never embeds one. The phone line's opening is
+  // its own instruction (`openingGreeting`, lib/voice/greeting.ts).
+  personaName: string; businessName: string;
   facts: string; services: string;
   languages: "en" | "es" | "both";
   bookingEnabled: boolean;

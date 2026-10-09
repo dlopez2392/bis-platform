@@ -1,5 +1,6 @@
-// The first thing a caller hears — one place, so the phone route and anything
-// else that greets cannot pick a different rule.
+// The first thing a PHONE caller hears: the incoming route's opening line,
+// decided here and nowhere else. (The system prompt embeds no greeting; the
+// website chat shows its own per-language greeting on its page.)
 import type { VoiceProfileRow } from "@bis/db";
 
 type GreetingProfile = Pick<VoiceProfileRow, "languages" | "greeting_en" | "greeting_es">;
@@ -14,8 +15,8 @@ function spanishGreeting(profile: GreetingProfile, businessName: string): string
 }
 
 /**
- * The opening line, as words (`text`) and as the `response.create`
- * instruction the call socket sends after the greeting delay (`instruction`).
+ * The opening line: the `response.create` instruction the call socket sends
+ * after the greeting delay.
  *
  * - `en` / `es`: that language's greeting, trimmed, in the instruction the
  *   route has always sent ("Greet the caller with exactly: …"). Trimmed is
@@ -35,12 +36,11 @@ function spanishGreeting(profile: GreetingProfile, businessName: string): string
  */
 export function openingGreeting(
   profile: GreetingProfile, businessName: string,
-): { text: string; instruction: string } {
+): { instruction: string } {
   if (profile.languages === "both") {
     const en = englishGreeting(profile, businessName);
     const es = spanishGreeting(profile, businessName);
     return {
-      text: `${en} ${es}`,
       instruction:
         "Greet the caller with these two greetings, word for word, one right after the other: "
         + "first the English one, then the Spanish one. Do not translate, shorten or combine them. "
@@ -52,5 +52,5 @@ export function openingGreeting(
   const text = profile.languages === "es"
     ? spanishGreeting(profile, businessName)
     : englishGreeting(profile, businessName);
-  return { text, instruction: `Greet the caller with exactly: ${text}` };
+  return { instruction: `Greet the caller with exactly: ${text}` };
 }

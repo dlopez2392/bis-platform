@@ -51,10 +51,6 @@ describe("openingGreeting — a bilingual line says both greetings (D-037)", () 
     expect(noEn).toContain('English: "Thanks for calling Rio Roofing Co. How can I help you today?"');
     expect(noEn).toContain(`Spanish: "${ES}"`);
   });
-
-  it("text carries both, in order, for anything that reads the greeting as words", () => {
-    expect(openingGreeting(profile("both"), "Rio Roofing Co").text).toBe(`${EN} ${ES}`);
-  });
 });
 
 // Review minor 4: an operator's greeting can contain quotation marks. Each

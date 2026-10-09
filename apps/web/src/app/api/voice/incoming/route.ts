@@ -1026,10 +1026,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // falls back in its own language, and a bilingual line opens with the
     // English greeting then the Spanish one.
     const opening = openingGreeting(profile, businessName);
-    const greeting = opening.text;
 
     const promptInput: VoicePromptInput = {
-      personaName: profile.persona_name, businessName, greeting,
+      personaName: profile.persona_name, businessName,
       facts: profile.facts, services: profile.services, languages: profile.languages,
       bookingEnabled: profile.booking_enabled, timezone: accountRow.timezone,
       slotDurationMinutes: calendar.slot_duration_minutes, afterHours: profile.after_hours,

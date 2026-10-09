@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildRealtimeSessionConfig } from "./session-config";
 
 const base = {
-  personaName: "Sofía", businessName: "Rio Roofing", greeting: "Hi.",
+  personaName: "Sofía", businessName: "Rio Roofing",
   facts: "-", services: "-", languages: "both" as const, bookingEnabled: true,
   timezone: "America/Chicago", slotDurationMinutes: 60,
   afterHours: "hours_then_message" as const, callerNumber: null,
