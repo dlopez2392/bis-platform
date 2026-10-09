@@ -97,10 +97,13 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
         // Booking tools are bound to the caller ID (tools/registry.ts):
         // with no caller ID, find_my_booking refuses and a booking made
         // before this call cannot be changed. Said up front so the model
-        // does not promise a lookup the tool will refuse. The no-booking
-        // line stays byte-identical.
-        : booking
-          ? `The caller's number is not visible. Ask for a callback number when you need one. Because of that, you cannot look up, change or cancel an existing appointment on this call (one you book during this call can still be changed) — if they ask, ${wouldRatherTalkToAPerson} instead.`
+        // does not promise a lookup the tool will refuse. Keyed on
+        // `manageable` (existing appointments are reachable at all), so a
+        // "message only" call is warned too; the parenthesis only where a
+        // booking CAN be made on this call. The full-booking and no-booking
+        // lines stay byte-identical.
+        : manageable
+          ? `The caller's number is not visible. Ask for a callback number when you need one. Because of that, you cannot look up, change or cancel an existing appointment on this call${booking ? " (one you book during this call can still be changed)" : ""} — if they ask, ${wouldRatherTalkToAPerson} instead.`
           : "The caller's number is not visible. Ask for a callback number when you need one.",
     "",
     `WHAT YOU KNOW ABOUT ${input.businessName.toUpperCase()} (answer from this and nothing else):`,
@@ -236,7 +239,9 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   if (input.afterHours === "message_only") {
     const always = [
       "MESSAGES ONLY — Whatever the time, open or closed, never book a new appointment on this line. For anything new, take a message: their name, the best number to call them back on and what they need, and say the team will call them back. You may answer a quick question from what you know above first.",
-      ...(manageable ? ["If they already have an appointment, you can still look it up, move it or cancel it."] : []),
+      // Not without a caller ID: find_my_booking refuses then, and the
+      // caller-ID line above already says so.
+      ...(manageable && input.callerNumber ? ["If they already have an appointment, you can still look it up, move it or cancel it."] : []),
       ...(input.handoffAvailable ? ["If they ask for a person, or it cannot wait, you can still put them through to someone on the team."] : []),
     ].join(" ");
     lines.push(

@@ -437,3 +437,27 @@ describe("buildSystemPrompt — Always take a message (message_only), on the pho
     expect(p).not.toContain("MESSAGES ONLY");
   });
 });
+
+// Re-review minor: with no caller ID, find_my_booking refuses (tools are bound
+// to the caller ID), so a "message only" call must not promise a look-up.
+describe("buildSystemPrompt — Always take a message with a hidden caller ID", () => {
+  const WARN = "The caller's number is not visible. Ask for a callback number when you need one. Because of that, you cannot look up, change or cancel an existing appointment on this call";
+
+  it("warns that existing appointments cannot be reached, without the book-during-this-call clause (mutation: warn only when new booking is allowed → FAILS)", () => {
+    const p = buildSystemPrompt(baseInput({ afterHours: "message_only", bookingEnabled: true, callerNumber: null }), now);
+    expect(p).toContain(`${WARN} — if they ask, offer to take a message instead.`);
+    expect(p).not.toContain("one you book during this call");
+  });
+
+  it("does not promise to look up, move or cancel an appointment (mutation: keep the promise → FAILS)", () => {
+    const p = buildSystemPrompt(baseInput({ afterHours: "message_only", bookingEnabled: true, callerNumber: null }), now);
+    expect(p).not.toContain("you can still look it up, move it or cancel it");
+  });
+
+  it("with a caller ID the promise stands, and Follow business hours keeps its own line unchanged", () => {
+    const shown = buildSystemPrompt(baseInput({ afterHours: "message_only", bookingEnabled: true }), now);
+    expect(shown).toContain("If they already have an appointment, you can still look it up, move it or cancel it.");
+    const full = buildSystemPrompt(baseInput({ afterHours: "hours_then_message", bookingEnabled: true, callerNumber: null }), now);
+    expect(full).toContain(`${WARN} (one you book during this call can still be changed) — if they ask, offer to take a message instead.`);
+  });
+});
