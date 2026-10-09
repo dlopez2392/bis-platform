@@ -1,4 +1,4 @@
-import { readConsentState, type SupabaseClient } from "@bis/db";
+import { readConsentState, readEmailSuppression, type SupabaseClient } from "@bis/db";
 import { normalisePhone } from "@bis/db/phone";
 import { emailLedgerAddress } from "@bis/db/email-address";
 import { loggableError } from "@/lib/loggable-error";
@@ -45,17 +45,25 @@ export async function emailRecipientState(
   const address = emailLedgerAddress(contact.email);
   if (!address) return { kind: "ok" };
   try {
-    const state = await readConsentState(db, accountId, "email", address);
+    // D-016 review item 4: a suppression (consent.ts's emailSuppressionOf)
+    // is STICKY — only the customer's own resubscribe lifts it, never a
+    // later stop by any other method. readConsentState's generic newest-
+    // row read does not know that: a one-click unsubscribe written AFTER a
+    // bounce/complaint would read as the newest row and say "They
+    // unsubscribed", hiding the suppression the gate still blocks on. Read
+    // in parallel and checked FIRST, so it wins whenever it answers.
+    const [state, suppression] = await Promise.all([
+      readConsentState(db, accountId, "email", address),
+      readEmailSuppression(db, accountId, address),
+    ]);
+    if (suppression) {
+      return {
+        kind: "stopped", since: suppression.since, byCustomer: false,
+        suppressed: suppression.method === "email_bounce" ? "bounced" : "complained",
+      };
+    }
     if (state.state === "allowed") return { kind: "ok" };
-    // D-016 item 4: a hard bounce or a complaint is the SAME ledger's
-    // `revoked` row (0062), so this read already sees it as stopped —
-    // it just needs its own tag for composer-state.ts's own line.
-    const suppressed = state.method === "email_bounce" ? "bounced"
-      : state.method === "email_complaint" ? "complained" : undefined;
-    return {
-      kind: "stopped", since: state.since, byCustomer: CUSTOMER_EMAIL_STOP_METHODS.includes(state.method),
-      ...(suppressed ? { suppressed } : {}),
-    };
+    return { kind: "stopped", since: state.since, byCustomer: CUSTOMER_EMAIL_STOP_METHODS.includes(state.method) };
   } catch (e) {
     console.error(`composer: email consent state unreadable for account ${accountId}: ${loggableError(e)}`);
     return { kind: "unknown" };

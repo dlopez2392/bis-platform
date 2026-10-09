@@ -839,6 +839,9 @@ export const m = {
   "conversations.failureReason.complained": "They marked this email as spam.",
   "conversations.failureReason.bounced": "This address couldn't be reached.",
   "conversations.failureReason.failed": "This didn't go through.",
+  // D-016 review item 4: the gate refused to even try — this address
+  // already bounced or was marked as spam on an earlier message.
+  "conversations.failureReason.suppressed": "Already bounced or marked as spam — nothing was sent.",
 
   "forms.title": "Forms",
   "forms.add": "New form",
