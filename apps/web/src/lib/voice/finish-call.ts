@@ -740,6 +740,10 @@ export async function finishCall(
   //
   // Due at the call's own end (never a fresh clock): an undated To do lands
   // in Waiting, and a callback belongs in Today.
+  // Read by the proposals below (owner ruling 2026-10-09): with the callback
+  // already a To do, they do not also suggest it. True only once the write
+  // (or an existing row) is confirmed.
+  let callbackTodo = false;
   if (meta.callRowId && callbackWanted(state)) {
     const number = callbackNumberOf(state, ctx.callerNumber);
     if (number) {
@@ -749,6 +753,7 @@ export async function finishCall(
           title: callbackTaskTitle(number, recordedReason(state)),
           dueAt: meta.endedAt.toISOString(),
         }, ACTOR_ID, ACTOR_TYPE);
+        callbackTodo = true;
       } catch (e) {
         console.error(`finishCall ${meta.callRowId}: callback To do failed: ${String(e)}`);
       }
@@ -895,6 +900,7 @@ export async function finishCall(
         // ctx). Without these, a machine-proposed `dueAt` is a guess against
         // the model's training-era clock (generate.ts's own doc).
         now: meta.endedAt, timezone: ctx.timezone,
+        callbackTodo,
       });
       if (n > 0) console.log(`finishCall ${meta.callRowId}: proposals wrote ${n}`);
     } catch (e) {

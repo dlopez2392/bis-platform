@@ -4,7 +4,7 @@
    part of the shipped module and typing the fake strictly would fight it
    for no safety gained (same rationale as embed-script.test.ts). */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { generateProposals } from "./generate";
+import { generateProposals, isCallbackTitle } from "./generate";
 import type { TranscriptEvent } from "@bis/db";
 
 // Matches summary-service.test.ts's own pattern: generateProposals reads
@@ -156,6 +156,9 @@ const base = {
     id: string; stageId: string; stageName: string;
     stages: readonly { id: string; name: string; position: number }[];
   } | null,
+  // Default is "this call left no callback To do" — every test written
+  // before F-033 runs exactly as it did.
+  callbackTodo: false,
 };
 
 /**
@@ -1298,4 +1301,61 @@ describe("generateProposals — opportunity_stage", () => {
     await generateProposals({ ...base, db, openOpportunity: pipeline, fetchImpl });
     expect(systemPromptOf(fetchImpl).toLowerCase()).toContain("last stage");
   });
+});
+
+/**
+ * Owner ruling 2026-10-09 (O2): when the call already left a callback To do
+ * (F-033's `tasks.call_id` row), the generator does not ALSO suggest calling
+ * the caller back — the same request twice, once as work and once as a
+ * question about work. Every other proposal is untouched.
+ */
+describe("generateProposals — no callback suggestion beside a callback To do", () => {
+  const callback = { kind: "task", title: "Call Ana back about the dining table", dueAt: null, evidence: "Call me Tuesday morning" };
+  const quote = { kind: "task", title: "Send a dining table quote", dueAt: null, evidence: "I need a quote for a dining table" };
+
+  it("a callback To do exists → the callback-style task is dropped and the next real task takes its slot (mutation: drop the title check → the callback is stored, FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({ ...base, db, contactId: "c1", callbackTodo: true,
+      fetchImpl: modelReturning({ proposals: [callback, quote] }) });
+    expect(n).toBe(1);
+    expect(db.rows.map((r: { payload: { title: string } }) => r.payload.title)).toEqual(["Send a dining table quote"]);
+  });
+
+  it("a dropped callback suggestion spends none of the three-per-call budget (mutation: count it as an attempt → the quote is never reached, FAILS)", async () => {
+    const db = fakeDb();
+    const again = (title: string) => ({ ...callback, title });
+    const n = await generateProposals({ ...base, db, contactId: "c1", callbackTodo: true,
+      fetchImpl: modelReturning({ proposals: [callback, again("Call her back"), again("Return Ana's call"), quote] }) });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload.title).toBe("Send a dining table quote");
+  });
+
+  it("no callback To do → the callback suggestion is still made (mutation: drop it regardless of the To do → FAILS)", async () => {
+    const db = fakeDb();
+    const n = await generateProposals({ ...base, db, contactId: "c1", callbackTodo: false,
+      fetchImpl: modelReturning({ proposals: [callback] }) });
+    expect(n).toBe(1);
+    expect(db.rows[0].payload.title).toBe("Call Ana back about the dining table");
+  });
+
+  it("the model is told, only when the To do exists (mutation: always say it → FAILS; never → FAILS)", async () => {
+    const withTodo = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db: fakeDb(), callbackTodo: true, fetchImpl: withTodo });
+    expect(systemPromptOf(withTodo)).toContain("already on the to-do list");
+    const without = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db: fakeDb(), callbackTodo: false, fetchImpl: without });
+    expect(systemPromptOf(without)).not.toContain("already on the to-do list");
+  });
+});
+
+describe("isCallbackTitle: what counts as a callback-style task", () => {
+  it.each([
+    "Call Ana back", "Call back Ana Ruiz", "call her back Tuesday morning", "Callback the customer",
+    "Call-back about the roof", "Phone Luis back", "Ring them back", "Return Ana's call", "Return the call",
+  ])("%s → yes", (title) => { expect(isCallbackTitle(title)).toBe(true); });
+
+  it.each([
+    "Send a dining table quote", "Order shingles", "Book a back-room inspection",
+    "Schedule a call with the supplier", "Email Ana the estimate", "Back up the photos",
+  ])("%s → no", (title) => { expect(isCallbackTitle(title)).toBe(false); });
 });

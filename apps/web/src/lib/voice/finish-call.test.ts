@@ -1829,3 +1829,27 @@ describe("finishCall — the staff alert leads with the call-back line", () => {
     expect(order).toEqual(["email", "finishCallRow"]);
   });
 });
+
+/** O2 (owner ruling 2026-10-09): the proposals are told whether this call's callback To do exists. */
+describe("finishCall — the proposals know about the callback To do", () => {
+  const msg = () => withMessage(withTranscript(emptyCallState(), { role: "caller", text: "Please call me back about the leak.", at: "t" }),
+    { body: "Call about the leak", at: "t" });
+
+  it("a To do written → callbackTodo: true (mutation: always pass false → FAILS)", async () => {
+    await finishCall(msg(), ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({ callbackTodo: true }));
+  });
+
+  it("the To do leg failed → callbackTodo: false, so the suggestion is the request's only trace (mutation: set it before the write → FAILS)", async () => {
+    dbMocks.ensureCallbackTask.mockRejectedValue(new Error("db down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await finishCall(msg(), ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({ callbackTodo: false }));
+  });
+
+  it("no To do wanted (a booking) → callbackTodo: false (mutation: always pass true → FAILS)", async () => {
+    await finishCall(withBooking(withTranscript(emptyCallState(), { role: "caller", text: "Book me in", at: "t" }),
+      { id: "b1", contactName: "Ana", startsAt: "2027-06-02T15:00:00Z", endsAt: "2027-06-02T16:00:00Z" }), ctx, meta);
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({ callbackTodo: false }));
+  });
+});

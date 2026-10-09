@@ -117,6 +117,7 @@ function systemFor(
   openOpportunity: OpenOpportunity | null,
   now: Date,
   timezone: string,
+  callbackTodo: boolean,
 ): string {
   // THE MODEL'S ONLY CLOCK. Fix-wave Important 1: without this sentence the
   // model has no current date, no account zone, and no turn timestamps
@@ -130,6 +131,9 @@ function systemFor(
   let system = `${SYSTEM} This call happened at ${now.toISOString()}, in the account's own time zone (${
     timezone
   }). Any "dueAt" you propose must be a real moment after this instant — never in the past relative to it, and never more than about a year beyond it.`;
+  if (callbackTodo) {
+    system = `${system} Calling this caller back is already on the to-do list, so never propose calling them back or returning their call.`;
+  }
   if (blankFields.length > 0) {
     system = `${system} You may also propose {"kind":"contact_field","field":"<one of: ${
       blankFields.join(", ")
@@ -144,6 +148,27 @@ function systemFor(
     }" stage, in a pipeline with these stages in order: ${stageNames}. If — and ONLY if — the call is clear evidence the deal moved to a LATER stage in that list, you may propose {"kind":"opportunity_stage","toStage":"<the exact name of one LATER stage from that list>","evidence":"..."}. The stage name must be spelled EXACTLY as given above. Never propose the current stage, and never propose an EARLIER stage — only a human may move a deal backwards. Never propose the LAST stage in that list — closing a deal is a judgement about money and outcome that one phone call cannot make, and only a human can record how it ended; this always gets refused, so do not waste a proposal on it.`;
   }
   return system;
+}
+
+/**
+ * Is this task title a request to CALL THE CALLER BACK? Owner ruling
+ * 2026-10-09: when the call already left a callback To do (F-033,
+ * lib/voice/call-card.ts), a suggestion to do the same thing is the request
+ * twice — once as work, once as a question about work — so it is dropped.
+ *
+ * Narrow on purpose: "call/phone/ring … back" (up to three words between),
+ * "callback"/"call-back", and "return … call". A task that merely mentions a
+ * call ("Schedule a call with the supplier") or calls someone else about
+ * something ("Call the supplier about shingles" has no "back") is a different
+ * piece of work and stays. The model is ALSO told (`systemFor`), which
+ * catches phrasings this cannot see; this check is the part that does not
+ * depend on the model having read it.
+ */
+const CALLBACK_TITLE =
+  /\b(?:call|phone|ring)\b(?:\s+\S+){0,3}?\s+back\b|\bcall-?back\b|\breturn\b(?:\s+\S+){0,2}?\s+calls?\b/i;
+
+export function isCallbackTitle(title: string): boolean {
+  return CALLBACK_TITLE.test(title);
 }
 
 type RawProposal = {
@@ -222,6 +247,14 @@ export async function generateProposals(input: {
    * which one is exactly the failure this feature must not produce.
    */
   openOpportunity: OpenOpportunity | null;
+  /**
+   * The call already left a callback To do (finishCall's own leg wrote or
+   * found it, `ensureCallbackTask`). True → a callback-style `task`
+   * proposal is dropped (`isCallbackTitle`) and the model is told not to
+   * make one. False when no To do was written, including when that leg
+   * failed: then the suggestion is the only trace of the request.
+   */
+  callbackTodo: boolean;
   /**
    * This call's own instant — `finishCall` passes `meta.endedAt`, never a
    * fresh `new Date()` read inside this module (a module-scope "now" would
@@ -305,7 +338,7 @@ export async function generateProposals(input: {
         // proposals fit comfortably inside this; a runaway array does not.
         max_tokens: 2000,
         messages: [
-          { role: "system", content: systemFor(input.blankFields, input.openOpportunity, input.now, input.timezone) },
+          { role: "system", content: systemFor(input.blankFields, input.openOpportunity, input.now, input.timezone, input.callbackTodo) },
           { role: "user", content: transcriptForModel(input.transcript) },
         ],
       }),
@@ -495,6 +528,10 @@ export async function generateProposals(input: {
       if (p.kind !== "task") continue;
       const title = typeof p.title === "string" ? p.title.trim().slice(0, MAX_TITLE_LEN) : "";
       if (!title) continue;
+      // The callback is already a To do (owner ruling 2026-10-09, see
+      // isCallbackTitle). Before `attempts++`: a dropped duplicate must not
+      // spend a slot a real proposal could use.
+      if (input.callbackTodo && isCallbackTitle(title)) continue;
       // THE BOUNDARY, and note WHAT IS STORED. `groundedEvidence` returns the
       // caller's WHOLE TURN, not the model's excerpt of it, and that turn is
       // what the reviewer sees.
