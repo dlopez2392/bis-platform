@@ -526,6 +526,21 @@ export const m = {
   "contact.addTask": "New task…",
   "contact.done": "done",
   "contact.company": "Company",
+  // F-157's drawer line (docs/crm-features.md §4.3 rider 6): the owner's own
+  // free-text note on where this lead came from ("contact.source.label",
+  // inline-editable like the fields above) plus the auto-detected hint next
+  // to it — never guessed, so a contact with nothing captured says so in
+  // plain words rather than showing a blank that looks identical to "nobody
+  // filled this in". The Spanish lines wait for an operator locale (common
+  // rule; precedent `todo.consent.*`, messages.ts:628-642 on origin/main).
+  "contact.source.label": "Source",
+  "contact.source.label.es": "Origen",
+  "contact.source.unknown": "Source unknown",
+  "contact.source.unknown.es": "Origen desconocido",
+  "contact.source.foundThrough": "Found through {channel}",
+  "contact.source.foundThrough.es": "Llegó a través de {channel}",
+  "contact.source.referredBy": "Referred by {name}",
+  "contact.source.referredBy.es": "Recomendado por {name}",
   "contact.noActivity": "No activity yet",
   "contact.noActivityBody": "Notes, tasks, and deals will appear here.",
   "contact.noOpportunities": "None yet.",
@@ -966,6 +981,15 @@ export const m = {
   "forms.kind.core.email": "Email",
   "forms.kind.core.phone": "Phone",
   "forms.kind.core.company_name": "Company",
+  // F-018, folded into F-157 (docs/crm-features.md §4.3 rider 6): the source
+  // question — one optional field a form can add. This exact string doubles
+  // as the field's default customer-facing label (form-editor.tsx's
+  // `addField`, same as every kind above it), so it is written for the
+  // visitor, not the operator. The Spanish line waits for an operator locale
+  // (common rule) — no form renders in a visitor's language from a single
+  // field label today; see this lane's report for the open question.
+  "forms.kind.core.referral_source": "Who recommended you?",
+  "forms.kind.core.referral_source.es": "¿Quién le recomendó?",
   "forms.kind.message": "Message (starts a conversation)",
   "forms.kind.consent": "Consent checkbox",
   "forms.invalidRedirectUrl": "Redirect URL must start with http:// or https://.",

@@ -22,6 +22,8 @@ import { SubmitButton } from "../../../submit-button";
 import { updateContactAction, addTagAction, removeTagAction } from "./actions";
 import { updateContactFieldAction, undoInlinePhoneEditAction } from "../actions";
 import { FIELDS } from "../contact-drawer";
+import { SourceField } from "../source-field";
+import { contactSourceHint } from "@/lib/contacts/lead-source";
 import { useRouter } from "next/navigation";
 import { EmailRow } from "../email-row";
 import type { EmailLoad } from "@/lib/consent/email-row";
@@ -55,6 +57,12 @@ export function ContactFieldsPanel({
 }) {
   const router = useRouter();
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
+  // F-157: computed from the SAME `contact` prop the FIELDS below read —
+  // this page already has the full row server-side, so no second fetch like
+  // the drawer's own summary route.
+  const sourceHint = contactSourceHint({
+    source: contact.source ?? null, custom: contact.custom, attribution: contact.attribution,
+  });
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const boundUpdateContact = updateContactAction.bind(null, accountId);
   const boundAddTag = addTagAction.bind(null, accountId);
@@ -85,6 +93,13 @@ export function ContactFieldsPanel({
                 </dd>
               </div>
             ))}
+            <SourceField
+              accountId={accountId}
+              contactId={contactId}
+              source={contact.source ?? null}
+              sourceHint={sourceHint}
+              onSaved={() => router.refresh()}
+            />
           </dl>
 
           <TextsRow

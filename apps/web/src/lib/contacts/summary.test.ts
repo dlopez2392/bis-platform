@@ -26,6 +26,8 @@ function real(): ContactSummary {
     phone_country_unconfirmed: true,
     phone: "+15512345678",
     zone: { zone: "America/Chicago", guessed: false, label: "America/Chicago" },
+    source: "form: Contact us",
+    sourceHint: "Found through ChatGPT",
   };
 }
 
@@ -234,6 +236,45 @@ describe("parseContactSummary: phone (round 3, review I3)", () => {
 
   it("a contact with no phone at all parses to null, not dropped", () => {
     expect(parseContactSummary(wire({ ...real(), phone: null }))?.phone).toBeNull();
+  });
+});
+
+/**
+ * F-157: the Source line's two parts, both TOLERATED like phone above — a
+ * server from before this rider sends neither, and the drawer must still
+ * load (no InlineField to edit, no hint caption; never "couldn't load").
+ */
+describe("parseContactSummary: source and sourceHint (F-157)", () => {
+  it("carries both through (mutation: drop either field from the return → FAILS)", () => {
+    const parsed = parseContactSummary(wire(real()));
+    expect(parsed?.source).toBe("form: Contact us");
+    expect(parsed?.sourceHint).toBe("Found through ChatGPT");
+  });
+
+  it("source missing (a server from before this rider) is null and the rest still loads (mutation: make it required → null, FAILS)", () => {
+    const parsed = parseContactSummary(without("source"));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.source).toBeNull();
+  });
+
+  it("sourceHint missing is null and the rest still loads", () => {
+    const parsed = parseContactSummary(without("sourceHint"));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.sourceHint).toBeNull();
+  });
+
+  it("sourceHint can genuinely be null (nothing extra to add) and parses as null, not dropped", () => {
+    const parsed = parseContactSummary(wire({ ...real(), sourceHint: null }));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.sourceHint).toBeNull();
+  });
+
+  it("anything but a real string is null — never coerced (mutation: String(v) → FAILS)", () => {
+    for (const v of [1, {}, true]) {
+      const parsed = parseContactSummary(wire({ ...real(), source: v, sourceHint: v }));
+      expect(parsed?.source).toBeNull();
+      expect(parsed?.sourceHint).toBeNull();
+    }
   });
 });
 

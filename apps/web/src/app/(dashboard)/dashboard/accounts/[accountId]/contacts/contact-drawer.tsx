@@ -25,6 +25,7 @@ import type { ContactRow } from "./contacts-table";
 import { summaryLoadFrom, type ParsedContactSummary, type SummaryLoad } from "@/lib/contacts/summary";
 import type { EditableField } from "@/lib/contacts/field-input";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
+import { SourceField } from "./source-field";
 
 // `nowMs` travels WITH the ready result, read inside the fetch's own
 // `.then()` (an allowed impure read — react-hooks/purity flags Date.now()
@@ -47,7 +48,15 @@ type Fetched = { contactId: string; result: LoadResult } | null;
 // Exported so contact-fields-panel.tsx (the full contact page) shares this
 // vocabulary instead of duplicating it — one list of standard fields, two
 // InlineField call sites (drawer + full page).
-export const FIELDS: { field: EditableField; labelKey: keyof typeof m; type: "text" | "email" | "tel" }[] = [
+//
+// `field` is narrowed to exclude "source" (F-157 widened EditableField to
+// add it) on purpose: this list indexes `row`/`contact` directly
+// (`row[field]`), and the drawer's list-row type (`ContactRow`,
+// contacts-table.tsx) deliberately carries none of the extra columns the
+// Source line needs — that line has its own component (`SourceField`),
+// fed by the summary route / the full page's own `contact` prop, not this
+// array.
+export const FIELDS: { field: Exclude<EditableField, "source">; labelKey: keyof typeof m; type: "text" | "email" | "tel" }[] = [
   { field: "first_name", labelKey: "contacts.firstName", type: "text" },
   { field: "last_name", labelKey: "contacts.lastName", type: "text" },
   { field: "email", labelKey: "contacts.email", type: "email" },
@@ -265,6 +274,15 @@ export function ContactDrawer({
                 </Notice>
               ) : (
                 <>
+                  <dl>
+                    <SourceField
+                      accountId={accountId}
+                      contactId={row.id}
+                      source={load.summary.source}
+                      sourceHint={load.summary.sourceHint}
+                      onSaved={() => setRetryNonce((n) => n + 1)}
+                    />
+                  </dl>
                   <TagsRow
                     accountId={accountId}
                     contactId={row.id}

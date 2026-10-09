@@ -13,15 +13,16 @@ type InputKey = "firstName" | "lastName" | "email" | "phone" | "companyName" | "
 
 /**
  * Column key -> ContactInput key. Spread from the inline editor's own map so
- * the two paths cannot drift; `source` is exported but not inline-editable, so
- * it is added here rather than widening EDITABLE_FIELDS.
+ * the two paths cannot drift. `source` used to be added here on its own —
+ * it was exported but not inline-editable — until F-157 widened
+ * EDITABLE_FIELDS to include it (the drawer's own Source line), so the
+ * spread now carries it through like every other field.
  *
  * `tags` is absent on purpose — it is not a ContactInput field and is carried
  * beside the patch, because the import ADDS tags and never clears them.
  */
 const FIELD_TO_INPUT: Record<string, InputKey> = {
   ...FIELD_TO_INPUT_KEY,
-  source: "source",
 };
 
 /**

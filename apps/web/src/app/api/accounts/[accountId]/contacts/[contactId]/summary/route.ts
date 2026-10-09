@@ -9,6 +9,7 @@ import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { formatCurrency } from "@/lib/format";
 import { m } from "@/lib/messages";
+import { contactSourceHint } from "@/lib/contacts/lead-source";
 import type { ZoneLabel } from "@/lib/zone";
 import { OUTCOMES } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/format";
 
@@ -36,6 +37,14 @@ export type ContactSummary = {
    *  screen — the drawer prints the opt-out's "Off since" date in it, and
    *  names the zone on that line when it was `guessed` (#123 m3). */
   zone: ZoneLabel;
+  /** F-157: the raw `contacts.source` column, for the drawer's inline-edit —
+   *  whatever a creation path recorded or an owner typed, verbatim. */
+  source: string | null;
+  /** F-157: the system's own observed fact next to it (never edited directly
+   *  — see `contactSourceHint`'s own doc comment), or the plain-words
+   *  "Source unknown" when nothing at all was captured, or null when
+   *  `source` itself already says enough. */
+  sourceHint: string | null;
 };
 
 const RECENT_LIMIT = 5;
@@ -112,6 +121,10 @@ export async function GET(
       contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true,
     phone: contact.phone ?? null,
     zone: { zone: zone.zone, guessed: zone.guessed, label: zone.label },
+    source: contact.source ?? null,
+    sourceHint: contactSourceHint({
+      source: contact.source ?? null, custom: contact.custom, attribution: contact.attribution,
+    }),
   };
   return NextResponse.json(body);
 }

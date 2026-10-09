@@ -108,6 +108,11 @@ export function parseContactSummary(json: unknown): ParsedContactSummary | null 
     // fails closed rather than trusting a stub).
     phone: typeof json.phone === "string" ? json.phone : null,
     zone: parseZone(json.zone),
+    // F-157: TOLERATED the same way — a server from before this rider sends
+    // neither, and the drawer's Source line then has no InlineField value
+    // and no hint caption, never a refused summary.
+    source: typeof json.source === "string" ? json.source : null,
+    sourceHint: typeof json.sourceHint === "string" ? json.sourceHint : null,
   };
 }
 

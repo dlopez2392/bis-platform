@@ -54,6 +54,8 @@ const GOOD = {
   phone_country_unconfirmed: false,
   phone: "+15512345678",
   zone: { zone: "UTC", guessed: false, label: "UTC" },
+  source: null,
+  sourceHint: null,
 };
 
 function omit(key: keyof typeof GOOD): Record<string, unknown> {
