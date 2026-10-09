@@ -541,6 +541,17 @@ export const m = {
   "contact.source.foundThrough.es": "Llegó a través de {channel}",
   "contact.source.referredBy": "Referred by {name}",
   "contact.source.referredBy.es": "Recomendado por {name}",
+  // Review round 1, m3: a humanized caption for the raw machine values
+  // `source` stores at creation ("voice", "booking", "form: X") — shown
+  // ONLY for those exact recognized shapes; an owner's own typed note
+  // (anything else) gets no caption, since there is nothing machine-made to
+  // translate.
+  "contact.source.machine.voice": "They called in",
+  "contact.source.machine.voice.es": "Llamaron por teléfono",
+  "contact.source.machine.booking": "They booked online",
+  "contact.source.machine.booking.es": "Reservaron en línea",
+  "contact.source.machine.form": "They filled out the “{name}” form",
+  "contact.source.machine.form.es": "Llenaron el formulario “{name}”",
   "contact.noActivity": "No activity yet",
   "contact.noActivityBody": "Notes, tasks, and deals will appear here.",
   "contact.noOpportunities": "None yet.",
@@ -685,6 +696,15 @@ export const m = {
   "settings.customValuesBody": "Details about this business — like its service area or license number — that messages and pages can fill in automatically.",
   "settings.fieldName": "Field name",
   "settings.fieldKey": "field_key",
+  // Review round 1, m4: "referred_by" is reserved — F-157's source
+  // question writes it directly (lib/contacts/lead-source.ts), and a
+  // custom field reusing that exact key would merge two unrelated facts
+  // into one stored value. Not yet wired to the form's own error display
+  // (that form has none today — see the fix's own commit note); thrown as
+  // a plain Error message, same posture `createCustomField`'s own
+  // snake_case check already throws with.
+  "settings.fieldKeyReserved": "\"referred_by\" is reserved for the source question — pick a different field key.",
+  "settings.fieldKeyReserved.es": "\"referred_by\" está reservado para la pregunta de origen — elija otra clave de campo.",
   "settings.dataType": "Type",
   "settings.dataType.text": "Text",
   "settings.dataType.number": "Number",
@@ -985,9 +1005,11 @@ export const m = {
   // question — one optional field a form can add. This exact string doubles
   // as the field's default customer-facing label (form-editor.tsx's
   // `addField`, same as every kind above it), so it is written for the
-  // visitor, not the operator. The Spanish line waits for an operator locale
-  // (common rule) — no form renders in a visitor's language from a single
-  // field label today; see this lane's report for the open question.
+  // VISITOR. Review round 1 correction: the `.es` twin is NOT waiting for an
+  // operator locale (there is none here) — it is seeded as the default label
+  // the moment `form.locale_default === "es"`, because the FORM already
+  // carries its own locale and the visitor reads whichever one the form was
+  // built in. Usted register, matching the plan's own wording.
   "forms.kind.core.referral_source": "Who recommended you?",
   "forms.kind.core.referral_source.es": "¿Quién le recomendó?",
   "forms.kind.message": "Message (starts a conversation)",
