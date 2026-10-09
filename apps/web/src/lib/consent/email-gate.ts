@@ -1,4 +1,4 @@
-import { readConsentState, readAccountTimezone, getMailingAddress, type SupabaseClient } from "@bis/db";
+import { readConsentState, readAccountTimezone, getMailingAddress, readEmailSuppression, serviceDb, type SupabaseClient } from "@bis/db";
 import { emailLedgerAddress } from "@bis/db/email-address";
 import { getEmailProvider } from "@/lib/email";
 import { isProductionEnv } from "@/lib/email/environment";
@@ -70,7 +70,8 @@ export type EmailRequest = Omit<SendEmailInput, "headers"> & {
 };
 
 export type EmailBlockReason =
-  | "no_address" | "stopped" | "held" | "window_after_deadline" | "ledger_unavailable" | "unsubscribe_unavailable";
+  | "no_address" | "stopped" | "held" | "suppressed" | "window_after_deadline"
+  | "ledger_unavailable" | "unsubscribe_unavailable";
 
 export type EmailSendResult =
   | { kind: "sent"; providerMessageId: string }
@@ -198,6 +199,28 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
   const address = emailLedgerAddress(req.to);
   if (!address) return { kind: "blocked", reason: "no_address" };
   const now = req.now ?? new Date();
+
+  // D-016 item 3: a hard bounce or a complaint stops EVERY customer kind,
+  // not only the ones an unsubscribe already stops. Operator mail (the
+  // business owner's own address, never the customer's) is exempt, same as
+  // decision 7/choice 23. The kinds `emailReadsLedger` already reads
+  // (informational/marketing) see a suppression for free — it is written as
+  // a `revoked` row on the SAME ledger (consent.ts's EMAIL_SUPPRESSION_METHODS),
+  // so the read below would only repeat that check; it runs ONLY for the
+  // customer_initiated/staff_typed kinds the ledger read skips. A call site
+  // with no client (several voice/forms/booking paths carry none today)
+  // reads through the service client rather than throwing: unlike the
+  // consent ledger, nothing upstream of this send already guarantees a
+  // client exists for these kinds.
+  if (spec.class !== "operator" && !emailReadsLedger(req.kind)) {
+    try {
+      const suppressed = await readEmailSuppression(deps.db ?? serviceDb(), req.accountId!, address);
+      if (suppressed) return { kind: "blocked", reason: "suppressed" };
+    } catch (e) {
+      console.error(`email gate: ${req.kind} for account ${req.accountId} blocked, suppression unreadable: ${loggableError(e)}`);
+      return { kind: "blocked", reason: "ledger_unavailable" };
+    }
+  }
 
   if (emailReadsLedger(req.kind)) {
     if (!deps.db) throw new Error(`email gate: ${req.kind} reads the ledger and needs a client`);

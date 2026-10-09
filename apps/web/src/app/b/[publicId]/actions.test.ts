@@ -121,6 +121,10 @@ vi.mock("@bis/db", () => ({
   ensureConversation: (...a: unknown[]) => ensureConversationMock(...a),
   createMessage: (...a: unknown[]) => createMessageMock(...a),
   incrementUnreadCount: (...a: unknown[]) => incrementUnreadCountMock(...a),
+  // D-016 item 3: the email gate now reads the suppression ledger for
+  // booking.confirmation too (customer_initiated — the consent ledger read
+  // above skips it, but not this one). Allowed by default.
+  readEmailSuppression: async () => null,
 }));
 
 // The SAME `setAttribution` helper the sibling public-form action owns (I3)

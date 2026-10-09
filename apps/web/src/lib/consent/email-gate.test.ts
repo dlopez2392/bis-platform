@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const db = vi.hoisted(() => ({ readConsentState: vi.fn(), readAccountTimezone: vi.fn(), getMailingAddress: vi.fn() }));
+const SERVICE_CLIENT = { service: true } as never;
+const db = vi.hoisted(() => ({
+  readConsentState: vi.fn(), readAccountTimezone: vi.fn(), getMailingAddress: vi.fn(),
+  readEmailSuppression: vi.fn(), serviceDb: vi.fn(),
+}));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const factory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
 vi.mock("@/lib/email", async (importOriginal) => ({ ...(await importOriginal<object>()), ...factory }));
@@ -38,6 +42,8 @@ beforeEach(() => {
   db.readConsentState.mockResolvedValue({ state: "allowed" });
   db.readAccountTimezone.mockResolvedValue("America/Chicago");
   db.getMailingAddress.mockResolvedValue(null);
+  db.readEmailSuppression.mockResolvedValue(null);
+  db.serviceDb.mockReturnValue(SERVICE_CLIENT);
   factory.getEmailProvider.mockReturnValue(provider());
   send.mockResolvedValue({ providerMessageId: "re_1" });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -88,6 +94,43 @@ describe("sendEmail: what an unsubscribe stops (decision 7)", () => {
 
   it("a ledger kind with no client is a programming error, not a silent send (mutation: skip the read when db is missing → sends, FAILS)", async () => {
     await expect(sendEmail(base(), { env: ENV })).rejects.toThrow(/reads the ledger and needs a client/);
+  });
+});
+
+describe("sendEmail: a hard-bounced or complained address (D-016 item 3) — nothing stops it but the customer's own resubscribe", () => {
+  it.each(["booking.confirmation", "forms.receipt", "voice.booked", "voice.moved", "voice.cancelled", "staff.composer_email"] as const)(
+    "%s to a suppressed address is blocked `suppressed`, read on the LEDGER KEY (mutation: skip the suppression check for these kinds → FAILS)", async (kind) => {
+      db.readEmailSuppression.mockResolvedValue({ method: "email_bounce", since: "2026-10-03T00:00:00Z", eventId: "s1" });
+      expect(await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed" });
+      expect(db.readEmailSuppression).toHaveBeenCalledWith(CLIENT, ACCOUNT, "ana.lopez@example.com");
+      expect(send).not.toHaveBeenCalled();
+    });
+
+  it("operator mail is NEVER checked against the suppression ledger — it goes to the business owner's own address, not the customer's (mutation: check it for every kind → FAILS)", async () => {
+    db.readEmailSuppression.mockResolvedValue({ method: "email_complaint", since: "2026-10-03T00:00:00Z", eventId: "s1" });
+    expect((await sendEmail(base({ kind: "operator.lead_alert" }), { db: CLIENT, env: ENV })).kind).toBe("sent");
+    expect(db.readEmailSuppression).not.toHaveBeenCalled();
+  });
+
+  it.each(["automation.reminder", "automation.review_request"] as const)(
+    "%s never calls the NEW suppression read — a bounce/complaint row is ALSO a `revoked` row the existing ledger read already sees (mutation: call it for every kind → FAILS)", async (kind) => {
+      db.readConsentState.mockResolvedValue({ state: "allowed" });
+      expect((await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).kind).toBe("sent");
+      expect(db.readEmailSuppression).not.toHaveBeenCalled();
+    });
+
+  it("an unreadable suppression check fails closed: blocked ledger_unavailable, logged, never sent (mutation: treat a throw as not-suppressed → FAILS)", async () => {
+    db.readEmailSuppression.mockRejectedValueOnce(new Error("readEmailSuppression failed: timeout"));
+    expect(await sendEmail(base({ kind: "booking.confirmation" }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    expect(vi.mocked(console.error).mock.calls.flat().join(" ")).toMatch(/booking\.confirmation .*blocked, suppression unreadable/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("with no client in deps, the gate reads the suppression ledger through serviceDb() rather than throwing (mutation: never fall back → a programming error where a graceful check belongs, FAILS)", async () => {
+    db.readEmailSuppression.mockResolvedValue({ method: "email_bounce", since: "2026-10-03T00:00:00Z", eventId: "s1" });
+    expect(await sendEmail(base({ kind: "staff.composer_email" }), { env: ENV })).toEqual({ kind: "blocked", reason: "suppressed" });
+    expect(db.serviceDb).toHaveBeenCalled();
+    expect(db.readEmailSuppression).toHaveBeenCalledWith(SERVICE_CLIENT, ACCOUNT, "ana.lopez@example.com");
   });
 });
 
