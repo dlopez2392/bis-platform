@@ -246,15 +246,19 @@ describe("forms", () => {
         expect(await findConciergeDestinationName(db, accountIdA, formIdA)).toBeNull();
       })));
 
-  // Fix round 1 review item 2: the first version of republishFormIfUnchanged
-  // (then named republishFormAction, with no safety checks at all) wrote
-  // status="published" unconditionally — bypassing "a form needs at least
-  // one field before it can be published", able to publish a form that had
-  // never been published before, and a stale Undo toast (clicked after the
-  // form changed again through some OTHER save) would silently resurrect
-  // long-gone state. These three tests pin each failure mode.
+  // Fix round 1 review item 2, revised fix round 2 review item 1: the first
+  // version wrote status="published" unconditionally — bypassing "a form
+  // needs at least one field before it can be published", able to publish
+  // a form that had never been published before, and a stale Undo toast
+  // (clicked after the form changed again through some OTHER save) would
+  // silently resurrect long-gone state. A second version checked both with
+  // a pre-read then wrote unconditionally on status alone — real TOCTOU
+  // exposure. Both conditions now live on the single conditional UPDATE's
+  // own WHERE clause; these three tests pin each failure mode against
+  // THAT clause specifically, not a pre-read that no longer decides
+  // anything.
   describe("republishFormIfUnchanged", () => {
-    it("republishes a form whose status still matches what the unpublish wrote (mutation: skip the conditional check and write unconditionally → the stale/needs_fields tests below FAIL)", () =>
+    it("republishes a form whose status still matches what the unpublish wrote, and has fields (mutation: drop either UPDATE condition → the stale/needs_fields tests below FAIL)", () =>
       withTestAccount(async (db, accountId) => {
         const { id: formId } = await createForm(db, accountId, { name: "Quote", fields: FIELDS }, "user_test");
         await updateForm(db, accountId, formId, { status: "draft" }, "user_test");
@@ -264,7 +268,7 @@ describe("forms", () => {
         expect((await getForm(db, accountId, formId))!.status).toBe("published");
       }));
 
-    it("refuses as stale when the form's status no longer matches what the unpublish wrote, and never writes (mutation: drop the status comparison → FAILS)", () =>
+    it("refuses as stale when the form's status no longer matches what the unpublish wrote, and never writes (mutation: drop .eq(\"status\", expectedPriorStatus) from the UPDATE itself → FAILS)", () =>
       withTestAccount(async (db, accountId) => {
         const { id: formId } = await createForm(db, accountId, { name: "Quote", fields: FIELDS }, "user_test");
         // The toast still thinks it unpublished FROM draft, but the form was
@@ -276,7 +280,7 @@ describe("forms", () => {
         expect((await getForm(db, accountId, formId))!.status).toBe("archived");
       }));
 
-    it("refuses a form with no fields, even when the status still matches, and never writes (mutation: drop the fields-length check → FAILS)", () =>
+    it("refuses a form with no fields, even when the status still matches, and never writes (mutation: drop .not(\"fields\", \"eq\", \"[]\") from the UPDATE itself → FAILS)", () =>
       withTestAccount(async (db, accountId) => {
         const { id: formId } = await createForm(db, accountId, { name: "Quote" }, "user_test");
         // createForm with no fields leaves status "draft" (its own default) —

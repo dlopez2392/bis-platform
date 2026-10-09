@@ -453,40 +453,54 @@ export async function findConciergeDestinationName(
 
 /**
  * The Undo half of the unpublish warning's safety net (fix round 1 review
- * item 2). The first version wrote `status: "published"` unconditionally,
- * which bypassed "a form needs at least one field before it can be
- * published" (the same rule `saveFormAction` enforces on every normal
- * save), could publish a form that had never been published before, and
- * let a STALE Undo toast — clicked after the form's status changed again
- * through some other save — silently resurrect status the operator no
- * longer intends.
+ * item 2; revised fix round 2 review item 1). The first version wrote
+ * `status: "published"` unconditionally, which bypassed "a form needs at
+ * least one field before it can be published" (the same rule
+ * `saveFormAction` enforces on every normal save), could publish a form
+ * that had never been published before, and let a STALE Undo toast —
+ * clicked after the form's status changed again through some other save —
+ * silently resurrect status the operator no longer intends. A second
+ * version checked both conditions with a pre-read, then wrote
+ * unconditionally on `status` alone — real TOCTOU exposure between the two.
  *
  * `expectedPriorStatus` is the status the unpublishing save actually
- * wrote, carried by the toast itself rather than re-derived here. The
- * initial read exists only to report WHICH refusal applies (so the
- * operator sees an honest, specific reason); the conditional
- * `.eq("status", expectedPriorStatus)` on the write itself is the real
- * guard — if the row no longer matches by the time this runs (the read-
- * then-write race, or simply a stale click), the update matches zero rows
- * and this reports "stale" rather than pretending anything happened.
+ * wrote, carried by the toast itself rather than re-derived here. BOTH
+ * conditions now live on the single UPDATE's own WHERE clause —
+ * `.eq("status", expectedPriorStatus)` and `.not("fields", "eq", "[]")`
+ * (jsonb equality against the literal empty array, the same shape
+ * `countFormsMissingNotify`'s `.eq("notify_emails", "{}")` already uses
+ * for the array column beside it) — so the write itself is atomic: nothing
+ * between a read and a write can ever stale the decision. Only when that
+ * UPDATE matches zero rows does this read the row at all, and only to
+ * classify WHICH condition failed, so the operator sees an honest, specific
+ * reason rather than one generic refusal.
  */
 export async function republishFormIfUnchanged(
   db: SupabaseClient, accountId: string, formId: string,
   expectedPriorStatus: FormStatus, actorId: string,
 ): Promise<"republished" | "stale" | "needs_fields"> {
-  const current = await getForm(db, accountId, formId);
-  if (!current) return "stale";
-  if (current.fields.length === 0) return "needs_fields";
-  if (current.status !== expectedPriorStatus) return "stale";
-
   const { data, error } = await db.from("forms")
     .update({ status: "published", updated_at: new Date().toISOString() })
-    .eq("account_id", accountId).eq("id", formId).eq("status", expectedPriorStatus)
+    .eq("account_id", accountId).eq("id", formId)
+    .eq("status", expectedPriorStatus)
+    .not("fields", "eq", "[]")
     .select("id");
   if (error) throw new Error(`republishFormIfUnchanged failed: ${error.message}`);
-  if (!data || data.length === 0) return "stale";
-  await emit(db, accountId, "form.updated", actorId, { formId, fields: ["status"] });
-  return "republished";
+  if (data && data.length > 0) {
+    await emit(db, accountId, "form.updated", actorId, { formId, fields: ["status"] });
+    return "republished";
+  }
+
+  // The UPDATE refused — classify why, for the operator's benefit only;
+  // this read decides nothing about whether the write happened.
+  const current = await getForm(db, accountId, formId);
+  if (!current) return "stale";
+  if (current.status !== expectedPriorStatus) return "stale";
+  if (current.fields.length === 0) return "needs_fields";
+  // Unreachable in practice — the UPDATE's own WHERE mirrors both checks
+  // above — but a race this classification cannot name must still refuse
+  // rather than claim success.
+  return "stale";
 }
 
 export async function listContactSubmissions(
