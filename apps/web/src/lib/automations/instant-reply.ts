@@ -143,10 +143,13 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
 
   // D-061: the account-level send switch every SCHEDULED pass honours for
   // free, through loadSendableRows' filter on accounts.outbound_suppressed
-  // (0032) — a demo or pre-go-live account whose rows are illustrative, not
-  // real. This inline recipe has no due-list to carry that filter, so it
-  // reads the flag itself, silently, like `disabled` just above: a demo
-  // account's own seeded submissions would otherwise log noise forever.
+  // (0032) — a demo account, or any account the agency has otherwise
+  // marked not real, whose rows are illustrative rather than something to
+  // contact. Not "pre-go-live": go-live's own migration (0063) never reads
+  // or writes this column, so the two are unrelated. This inline recipe
+  // has no due-list to carry that filter, so it reads the flag itself,
+  // silently, like `disabled` just above: a demo account's own seeded
+  // submissions would otherwise log noise forever.
   if (await isAccountOutboundSuppressed(db, accountId)) return { kind: "skipped", reason: "suppressed" };
 
   // From here on the recipe is ON, so a refusal is something the client

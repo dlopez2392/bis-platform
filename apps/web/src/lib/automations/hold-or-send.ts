@@ -110,9 +110,11 @@ export const REASONS = {
   appointmentStarted: "Appointment already started",
   noLongerDue: "No longer due",
   recipeOff: "This automation was turned off",
-  /** D-061: `accounts.outbound_suppressed` (0032) — a demo or pre-go-live
-   *  account. Only ever logged from a RELEASE, the same way `recipeOff` is:
-   *  the inline send itself returns before this reason could be written. */
+  /** D-061: `accounts.outbound_suppressed` (0032) — a demo account, or any
+   *  account the agency has otherwise marked not real; not "pre-go-live"
+   *  (go-live's own migration, 0063, never reads or writes this column).
+   *  Only ever logged from a RELEASE, the same way `recipeOff` is: the
+   *  inline send itself returns before this reason could be written. */
   accountSuppressed: m["automations.reason.accountSuppressed"],
   timezone: "The company's time zone isn't set",
   calendarOff: "The booking page is switched off",

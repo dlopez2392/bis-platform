@@ -17,8 +17,11 @@ export async function readAccountTimezone(db: SupabaseClient, accountId: string)
 }
 
 /**
- * D-061: `accounts.outbound_suppressed` (0032) is true for a demo or
- * pre-go-live account nothing should ever contact. Every scheduled pass
+ * D-061: `accounts.outbound_suppressed` (0032) is true for a demo account,
+ * or any account the agency has otherwise marked not real — never "about
+ * to go live": go-live's own migration (0063) does not read or write this
+ * column at all, so an account can go live while still suppressed (nobody
+ * ever cleared it) or stay suppressed well after. Every scheduled pass
  * honours it for free through `loadSendableRows` (booking.ts) — every
  * `listDue*` filters on it before a row is even returned. The inline
  * instant reply has no due-list to filter it through (it fires straight

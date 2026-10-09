@@ -1790,8 +1790,11 @@ export const m = {
   // "Sorry we missed your call" days later.
   "automations.reason.tooLongAfterCall": "Not sent: too long after the call",
   "automations.reason.tooLongAfterWriteIn": "Not sent: too long after they wrote in",
-  // D-061: accounts.outbound_suppressed (0032) — a demo or pre-go-live
-  // account. Every scheduled pass skips this silently through
+  // D-061: accounts.outbound_suppressed (0032) — a demo account, or any
+  // account the agency has otherwise marked not real. Not "pre-go-live":
+  // go-live's own migration (0063) never reads or writes this column, so
+  // an account can go live while still suppressed or stay suppressed well
+  // after. Every scheduled pass skips this silently through
   // loadSendableRows; this string only ever surfaces if a RELEASED instant
   // reply finds the flag set, since the inline send itself stays silent
   // (same posture as "disabled" — logging it would be noise on a seeded
