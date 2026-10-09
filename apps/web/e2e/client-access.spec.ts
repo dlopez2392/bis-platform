@@ -45,7 +45,7 @@ test("a client sees only their own account, and nothing when access is off", asy
   const db = serviceDb();
 
   // 1. Signing in lands on their own account's dashboard — not the
-  // accounts list. (dashboard)/page.tsx's resolveClientAccount() redirect
+  // accounts list. (dashboard)/page.tsx's resolveClientAccessState() redirect
   // is what's under test here.
   await page.goto("/");
   await expect(page).toHaveURL(

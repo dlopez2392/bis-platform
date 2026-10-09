@@ -6,15 +6,21 @@ import { ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AuthShell } from "@/components/auth-shell";
 import { m } from "@/lib/messages";
-import { resolveClientAccount, type AppClaims } from "@/lib/auth";
+import { resolveClientAccessState, type AppClaims } from "@/lib/auth";
 
 export default async function Home() {
   const { userId, sessionClaims } = await auth();
   const claims = sessionClaims as AppClaims | null;
   const hasAccess = claims?.app_role === "agency_admin";
 
-  const clientAccount = await resolveClientAccount();
-  if (clientAccount) redirect(`/dashboard/accounts/${clientAccount.id}/dashboard`);
+  // resolveClientAccessState, not resolveClientAccount: the latter collapses
+  // "access switched off" into null, which fell through to the no-access copy
+  // below — telling a client whose company's access was turned OFF to "open
+  // the invitation link" (D-001). The off case gets the same explicit page
+  // dashboard/layout.tsx and requireAccountAccess already send it to.
+  const clientState = await resolveClientAccessState();
+  if (clientState.status === "ok") redirect(`/dashboard/accounts/${clientState.id}/dashboard`);
+  if (clientState.status === "off") redirect("/no-access?reason=off");
 
   // Ground and the card belong to AuthShell now; this page used to mount its
   // own of each. Copy is untouched — only the frame around it changed.
