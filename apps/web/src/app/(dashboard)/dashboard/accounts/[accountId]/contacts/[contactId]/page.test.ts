@@ -283,3 +283,46 @@ describe("ContactDetailPage: the email composer's notice (Task 12, spec §6, cho
     });
   });
 });
+
+/**
+ * Review round 1, I4: `ContactFieldsPanel` is NOT mocked here (unlike
+ * `ActivityTimeline`/`TextsRow`/`EmailRow`), so this is a REAL render of the
+ * Source line — stronger evidence than a source pin, since the full page
+ * takes `contact` as a synchronous prop with no fetch effect to dodge
+ * (unlike the drawer's own summary route; see contact-drawer.wiring.test.ts
+ * for that half).
+ */
+describe("ContactDetailPage: the full page's Source line really renders from the real contact (review round 1, I4)", () => {
+  beforeEach(() => {
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+  });
+
+  it("shows the raw stored source, editable, with the computed hint beside it (mutation: wire a literal null for either prop → FAILS)", async () => {
+    getContactMock.mockReset().mockResolvedValue({
+      ...CONTACT, source: "form: Contact us",
+      attribution: { first: { ref: "https://chat.openai.com/" } },
+    });
+    const html = await render();
+    expect(html).toContain("form: Contact us");
+    expect(html).toContain("Found through ChatGPT");
+  });
+
+  it("a referred-by answer outranks the attribution channel here too, end to end", async () => {
+    getContactMock.mockReset().mockResolvedValue({
+      ...CONTACT, source: "form: Contact us", custom: { referred_by: "Jane Smith" },
+      attribution: { first: { ref: "https://chat.openai.com/" } },
+    });
+    const html = await render();
+    expect(html).toContain("Referred by Jane Smith");
+    expect(html).not.toContain("Found through");
+  });
+
+  it("nothing captured says so in plain words (mutation: guess a channel like 'Direct' instead → FAILS)", async () => {
+    getContactMock.mockReset().mockResolvedValue({ ...CONTACT, source: null, custom: {}, attribution: null });
+    const html = await render();
+    expect(html).toContain("Source unknown");
+  });
+});

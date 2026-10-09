@@ -13,6 +13,10 @@ const dbMocks = vi.hoisted(() => ({
   verifyAlertPhoneCode: vi.fn(),
   countRecentAlertPhoneVerifications: vi.fn(),
   discardAlertPhoneVerification: vi.fn(),
+  // Review round 1, m4: createFieldAction must refuse "referred_by" BEFORE
+  // ever reaching this — the mock lets the refusal test assert the DB was
+  // never touched, not merely that the promise rejected.
+  createCustomField: vi.fn(),
   // The send gate's reads (lib/consent/gate.ts): the code goes through the
   // REAL gate, so its ledger and flag reads are mocked, allowed by default.
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
@@ -24,6 +28,11 @@ const dbMocks = vi.hoisted(() => ({
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({ tag: "serviceDb" }),
 }));
+
+// `createFieldAction` is the one action in this file that reaches
+// `dbForRequest()` (every other one here uses `serviceDb()`, mocked above)
+// — nothing else in this file depends on it being real.
+vi.mock("@/lib/db", () => ({ dbForRequest: vi.fn(async () => ({ tag: "dbForRequest" })) }));
 
 // Guard mock, shaped after branding/actions.test.ts's own stub for
 // requireAccountAccess: these actions call requireAgencyOnlyAccountAccess
@@ -70,6 +79,7 @@ import { m } from "@/lib/messages";
 import { SmsProviderError } from "@/lib/sms/types";
 import {
   setAlertPhoneAction, startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction, setFromEmailAction,
+  createFieldAction,
 } from "./actions";
 
 const fd = (fields: Record<string, string>) => {
@@ -403,5 +413,35 @@ describe("setFromEmailAction — a suppressed account's sender check (D-061 revi
     dbMocks.isAccountOutboundSuppressed.mockResolvedValueOnce(true);
     const result = await setFromEmailAction("acct_1", fd({ fromEmail: "leads@rioroofing.com" }));
     expect(result).toEqual({ ok: false, error: m["automations.reason.accountSuppressed"] });
+  });
+});
+
+/**
+ * Review round 1, CRITICAL C1's own follow-up, m4: "referred_by" is the key
+ * F-157's source question writes directly onto `contacts.custom`
+ * (lib/contacts/lead-source.ts). A custom contact field created with that
+ * SAME key would merge an unrelated operator-defined value into the exact
+ * jsonb property the drawer's Source line reads as a word-of-mouth
+ * referral — reserved outright rather than left to collide silently.
+ */
+describe("createFieldAction — \"referred_by\" is reserved (review round 1, m4)", () => {
+  it("refuses the reserved key before ever reaching the database (mutation: drop the check → createCustomField IS called, FAILS)", async () => {
+    dbMocks.createCustomField.mockClear();
+    await expect(createFieldAction("acct_1", fd({ name: "Referred by", fieldKey: "referred_by", dataType: "text" })))
+      .rejects.toThrow(m["settings.fieldKeyReserved"]);
+    expect(dbMocks.createCustomField).not.toHaveBeenCalled();
+  });
+
+  it("is case- and whitespace-insensitive (an operator pasting \" Referred_By \" is still the same reserved key)", async () => {
+    dbMocks.createCustomField.mockClear();
+    await expect(createFieldAction("acct_1", fd({ name: "x", fieldKey: " Referred_By ", dataType: "text" })))
+      .rejects.toThrow(m["settings.fieldKeyReserved"]);
+    expect(dbMocks.createCustomField).not.toHaveBeenCalled();
+  });
+
+  it("any other key still reaches the database as before (mutation: refuse everything → FAILS)", async () => {
+    dbMocks.createCustomField.mockClear().mockResolvedValue({ id: "f1" });
+    await createFieldAction("acct_1", fd({ name: "Gate code", fieldKey: "gate_code", dataType: "text" }));
+    expect(dbMocks.createCustomField).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,5 @@
-import type { FormField, FormStatus, FormTheme } from "@bis/db";
+import type { FormField, FormRow, FormStatus, FormTheme, CustomFieldDef } from "@bis/db";
+import { m } from "@/lib/messages";
 
 /**
  * The key a newly added field gets, derived from the `kind` the editor is
@@ -19,6 +20,40 @@ import type { FormField, FormStatus, FormTheme } from "@bis/db";
 export function defaultFieldKey(kind: string): string {
   if (kind.startsWith("custom.")) return `custom_${kind.slice("custom.".length)}`;
   return kind.replace("core.", "");
+}
+
+/**
+ * The words shown for one field kind in the editor — the sidebar's own
+ * category tag AND the SEEDED default value of a new field's
+ * customer-facing `label` when `addField` first adds it (form-editor.tsx).
+ * Two different readers of the same string, extracted here (not a DOM
+ * renderer, same reasoning `shouldWarnOnUnpublish`/`statusAfterUndo` were
+ * pulled out for) so the locale behaviour is directly testable.
+ *
+ * `locale`, when given, is the FORM's own `locale_default` — never an
+ * "operator locale" (review round 1 correction of a stale comment at
+ * messages.ts: there is no such thing here; the dashboard's own chrome
+ * carries no live i18n and always reads English, which is exactly why the
+ * two call sites that render the editor's sidebar tag omit this argument
+ * and get English regardless of the form's locale — only the ONE call
+ * site that SEEDS a new field's customer-facing label passes it). A kind
+ * with no `.es` twin (every core kind but `core.referral_source` today)
+ * falls back to English even for a Spanish-locale form, same as before
+ * this rider.
+ */
+export function kindLabel(
+  kind: string, customFields: CustomFieldDef[], locale?: FormRow["locale_default"],
+): string {
+  const key = `forms.kind.${kind}` as keyof typeof m;
+  if (m[key]) {
+    if (locale === "es") {
+      const esKey = `forms.kind.${kind}.es` as keyof typeof m;
+      if (m[esKey]) return m[esKey] as string;
+    }
+    return m[key] as string;
+  }
+  const fieldKey = kind.slice("custom.".length);
+  return customFields.find((f) => f.field_key === fieldKey)?.name ?? fieldKey;
 }
 
 /**

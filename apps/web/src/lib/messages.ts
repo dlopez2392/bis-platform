@@ -526,6 +526,42 @@ export const m = {
   "contact.addTask": "New task…",
   "contact.done": "done",
   "contact.company": "Company",
+  // F-157's drawer line (docs/crm-features.md §4.3 rider 6): the owner's own
+  // free-text note on where this lead came from ("contact.source.label",
+  // inline-editable like the fields above) plus the auto-detected hint next
+  // to it — never guessed, so a contact with nothing captured says so in
+  // plain words rather than showing a blank that looks identical to "nobody
+  // filled this in". The Spanish lines wait for an operator locale (common
+  // rule; precedent `todo.consent.*`, messages.ts:628-642 on origin/main).
+  "contact.source.label": "Source",
+  "contact.source.label.es": "Origen",
+  "contact.source.unknown": "Source unknown",
+  "contact.source.unknown.es": "Origen desconocido",
+  "contact.source.foundThrough": "Found through {channel}",
+  "contact.source.foundThrough.es": "Llegó a través de {channel}",
+  "contact.source.referredBy": "Referred by {name}",
+  "contact.source.referredBy.es": "Recomendado por {name}",
+  // Review round 1, m3: a humanized caption for the raw machine values
+  // `source` stores at creation ("voice", "booking", "form: X") — shown
+  // ONLY for those exact recognized shapes; an owner's own typed note
+  // (anything else) gets no caption, since there is nothing machine-made to
+  // translate. Review round 2, item 1: "form: {name}" is NOT only a typed
+  // web form — enrich.ts writes it for every intake that calls enrich(),
+  // which also includes a web-chat lead (lib/concierge/lead.ts) and the
+  // retired shared-secret machine intake, both filed against the owner's
+  // destination form. "They filled out the form" is false for a chat
+  // lead. Review round 3, item 4: "Came in through your form" (round 2's
+  // own fix) still names an entry path — walking through a door — a chat
+  // visitor never used either. "Saved to" names the one fact shared by
+  // all three intakes (the answers landed in that form's records)
+  // without claiming HOW they got there. Usted register in the .es
+  // twin — this line is read by the OWNER, not the customer.
+  "contact.source.machine.voice": "They called in",
+  "contact.source.machine.voice.es": "Llamaron por teléfono",
+  "contact.source.machine.booking": "They booked online",
+  "contact.source.machine.booking.es": "Reservaron en línea",
+  "contact.source.machine.form": "Saved to your “{name}” form",
+  "contact.source.machine.form.es": "Guardado en su formulario “{name}”",
   "contact.noActivity": "No activity yet",
   "contact.noActivityBody": "Notes, tasks, and deals will appear here.",
   "contact.noOpportunities": "None yet.",
@@ -670,6 +706,25 @@ export const m = {
   "settings.customValuesBody": "Details about this business — like its service area or license number — that messages and pages can fill in automatically.",
   "settings.fieldName": "Field name",
   "settings.fieldKey": "field_key",
+  // Review round 1, m4: "referred_by" is reserved — F-157's source
+  // question writes it directly (lib/contacts/lead-source.ts), and a
+  // custom field reusing that exact key would merge two unrelated facts
+  // into one stored value. Review round 2, minor 3: a browser-side
+  // refusal (the field-key Input's own `pattern`, settings/page.tsx) is
+  // the PRIMARY UX. Review round 3, item 1 correction: a browser shows an
+  // Input's `title` for ANY pattern mismatch, not only the reserved-key
+  // one — "Gate Code"/"gateCode"/"gate-code" all fail the shape half of
+  // the pattern too, and `title` is also a plain hover tooltip shown on
+  // an EMPTY field. This string now names the WHOLE pattern
+  // (settings.fieldKeyFormat, below) and is the Input's `title`; this key
+  // stays for the one thing it is actually true for — the SERVER-SIDE
+  // throw in createFieldAction (the backstop for a bypassed or scripted
+  // submit, which has no result-returning wiring to show it at all: it
+  // lands, plainly, on the dashboard's generic error page).
+  "settings.fieldKeyReserved": "\"referred_by\" is reserved for the source question — pick a different field key.",
+  "settings.fieldKeyReserved.es": "\"referred_by\" está reservado para la pregunta de origen — elija otra clave de campo.",
+  "settings.fieldKeyFormat": "Lowercase letters, numbers and underscores only. \"referred_by\" is reserved for the source question.",
+  "settings.fieldKeyFormat.es": "Solo letras minúsculas, números y guiones bajos. \"referred_by\" está reservado para la pregunta de origen.",
   "settings.dataType": "Type",
   "settings.dataType.text": "Text",
   "settings.dataType.number": "Number",
@@ -966,6 +1021,17 @@ export const m = {
   "forms.kind.core.email": "Email",
   "forms.kind.core.phone": "Phone",
   "forms.kind.core.company_name": "Company",
+  // F-018, folded into F-157 (docs/crm-features.md §4.3 rider 6): the source
+  // question — one optional field a form can add. This exact string doubles
+  // as the field's default customer-facing label (form-editor.tsx's
+  // `addField`, same as every kind above it), so it is written for the
+  // VISITOR. Review round 1 correction: the `.es` twin is NOT waiting for an
+  // operator locale (there is none here) — it is seeded as the default label
+  // the moment `form.locale_default === "es"`, because the FORM already
+  // carries its own locale and the visitor reads whichever one the form was
+  // built in. Usted register, matching the plan's own wording.
+  "forms.kind.core.referral_source": "Who recommended you?",
+  "forms.kind.core.referral_source.es": "¿Quién le recomendó?",
   "forms.kind.message": "Message (starts a conversation)",
   "forms.kind.consent": "Consent checkbox",
   "forms.invalidRedirectUrl": "Redirect URL must start with http:// or https://.",

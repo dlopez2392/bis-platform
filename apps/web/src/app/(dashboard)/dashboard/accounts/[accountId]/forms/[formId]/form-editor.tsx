@@ -20,19 +20,14 @@ import {
 import { SubmitButton } from "../../../submit-button";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
-import { defaultFieldKey, shouldWarnOnUnpublish, statusAfterUndo } from "@/lib/forms/editor-helpers";
+import { defaultFieldKey, shouldWarnOnUnpublish, statusAfterUndo, kindLabel } from "@/lib/forms/editor-helpers";
 
 const CORE_KINDS = [
   "core.first_name", "core.last_name", "core.email", "core.phone", "core.company_name",
+  // F-018, folded into F-157: "the source question" — one optional field.
+  "core.referral_source",
   "message", "consent",
 ] as const;
-
-function kindLabel(kind: string, customFields: CustomFieldDef[]): string {
-  const key = `forms.kind.${kind}` as keyof typeof m;
-  if (m[key]) return m[key] as string;
-  const fieldKey = kind.slice("custom.".length);
-  return customFields.find((f) => f.field_key === fieldKey)?.name ?? fieldKey;
-}
 
 export function FormEditor({
   form, customFields, action, conciergeAssistantName, republishAction,
@@ -132,7 +127,10 @@ export function FormEditor({
     }
     setFields((current) => [...current, {
       key, kind: kind as FormField["kind"],
-      label: kindLabel(kind, customFields), required: false,
+      // Review round 1, m5: the ONLY call site that passes `form.locale_default`
+      // — this seeds a new field's CUSTOMER-facing label, in the form's own
+      // locale, never the editor's own (always-English) chrome.
+      label: kindLabel(kind, customFields, form.locale_default), required: false,
     }]);
   }
 

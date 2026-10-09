@@ -178,6 +178,42 @@ describe("contact summary route: timezone", () => {
 });
 
 /**
+ * F-157: the drawer's Source line. The route computes the hint server-side
+ * (`contactSourceHint`, lib/contacts/lead-source.ts — its own logic is
+ * pinned there, not re-tested here) off the SAME `getContact` read as every
+ * other field, and sends the raw `source` column alongside it for the
+ * InlineField that edits it.
+ */
+describe("contact summary route: source and sourceHint (F-157)", () => {
+  function emptySources() {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    for (const k of ["listContactTags", "listNotes", "listContactSubmissions",
+      "listContactMessages", "listContactOpportunities", "listContactCalls"] as const) {
+      dbMocks[k].mockResolvedValue([]);
+    }
+  }
+
+  it("sends the raw source column and the computed hint (mutation: drop either field → FAILS)", async () => {
+    emptySources();
+    dbMocks.getContact.mockResolvedValue({
+      id: "c1", source: "form: Contact us",
+      attribution: { first: { ref: "https://chat.openai.com/" } },
+    });
+    const body = await (await GET(req(), ctx())).json();
+    expect(body.source).toBe("form: Contact us");
+    expect(body.sourceHint).toBe("Found through ChatGPT");
+  });
+
+  it("a contact with nothing captured sends source null and the unknown hint, never thrown", async () => {
+    emptySources();
+    dbMocks.getContact.mockResolvedValue({ id: "c1" });
+    const body = await (await GET(req(), ctx())).json();
+    expect(body.source).toBeNull();
+    expect(body.sourceHint).toBe("Source unknown");
+  });
+});
+
+/**
  * The drawer no longer casts this body: it parses it (`parseContactSummary`)
  * and shows "couldn't load" for anything the parser refuses, and it drops a
  * recent item whose kind it does not know. So what this route actually

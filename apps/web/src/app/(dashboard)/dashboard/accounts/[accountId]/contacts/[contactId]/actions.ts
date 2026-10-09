@@ -5,7 +5,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { zonedTimeToUtc } from "@/lib/booking/slots";
-import { updateContact, addTagToContact, removeTagFromContact,
+import { updateContact, getContact, addTagToContact, removeTagFromContact,
          addNote, addTask, completeTask, listCustomFields, HoldUndecidedError } from "@bis/db";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
@@ -92,12 +92,24 @@ export async function updateContactAction(accountId: string, formData: FormData)
   const { contactId, path } = ids(accountId, formData);
   const db = await dbForRequest();
   const defs = await listCustomFields(db, accountId, "contact");
-  const custom: Record<string, unknown> = {};
+  // Review round 1, CRITICAL C1: `updateContact`'s `toRow` REPLACES the
+  // whole `custom` jsonb column — correct for callers that already merge
+  // themselves (enrich.ts's `fillBlanks`), but this card used to build
+  // `custom` from the account's OWN field definitions alone, which
+  // silently deleted any key no definition covers on every save —
+  // `custom.referred_by` (F-157's source question) included, since no
+  // account defines a "referred_by" field. Read the contact first and
+  // start from its STORED custom object, so a key with no matching
+  // definition rides through untouched; a defined key is still written
+  // (or explicitly deleted, for an intentional clear) exactly as before.
+  const current = await getContact(db, accountId, contactId);
+  const custom: Record<string, unknown> = { ...((current?.custom ?? {}) as Record<string, unknown>) };
   for (const d of defs) {
     const raw = formData.get(`cf_${d.field_key}`);
     if (d.data_type === "checkbox") custom[d.field_key] = raw === "on";
     else if (raw !== null && String(raw) !== "" && String(raw) !== CLEAR_FIELD_SENTINEL) custom[d.field_key] =
       d.data_type === "number" ? Number(raw) : String(raw);
+    else delete custom[d.field_key];
   }
   const val = (k: string) => {
     const v = formData.get(k);

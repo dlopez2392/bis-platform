@@ -30,11 +30,17 @@ vi.mock("@/lib/db", () => ({
 }));
 const completeTask = vi.hoisted(() => vi.fn());
 const addTask = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({})));
-vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), completeTask, addTask }));
+const getContactMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ id: "c1", custom: {} })));
+const listCustomFieldsMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => []));
+const updateContactMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ flagged: false })));
+vi.mock("@bis/db", async (importOriginal) => ({
+  ...(await importOriginal<object>()), completeTask, addTask,
+  getContact: getContactMock, listCustomFields: listCustomFieldsMock, updateContact: updateContactMock,
+}));
 
 import { HoldUndecidedError } from "@bis/db";
 import { revalidatePath } from "next/cache";
-import { completeTaskAction, addTaskAction } from "./actions";
+import { completeTaskAction, addTaskAction, updateContactAction } from "./actions";
 
 const form = (taskId: string) => { const f = new FormData(); f.set("contactId", "c1"); f.set("taskId", taskId); return f; };
 
@@ -127,5 +133,58 @@ describe("addTaskAction's due date (D-006 — one day early on To do)", () => {
     await expect(addTaskAction("a1", taskForm("2026-10-08")))
       .rejects.toThrow(/connection reset/);
     accountReadError.value = null;
+  });
+});
+
+/**
+ * Review round 1, CRITICAL C1: `updateContact`'s own `toRow` (packages/db/
+ * src/contacts.ts) REPLACES the whole `custom` jsonb column rather than
+ * merging it — a deliberate choice for the inline-field and form-submission
+ * callers, which already read-then-merge themselves (enrich.ts's
+ * `fillBlanks`). This action never did: it built `custom` from the
+ * account's OWN field definitions alone and handed that straight to
+ * `updateContact`, so saving the custom-fields card silently deleted any
+ * key no definition covers — `custom.referred_by` (F-157's source
+ * question) included, since no account defines a "referred_by" field.
+ *
+ * Fixed by reading the contact first and merging: a key with no matching
+ * definition rides through untouched; a defined key is written (or
+ * deleted, for an intentional clear) exactly as before.
+ */
+describe("updateContactAction — the custom-fields card merges, never replaces (review round 1, C1)", () => {
+  function f(fields: Record<string, string>) {
+    const fd = new FormData();
+    fd.set("contactId", "c1");
+    for (const [k, v] of Object.entries(fields)) fd.set(k, v);
+    return fd;
+  }
+  const GATE_CODE_DEF = { id: "d1", field_key: "gate_code", name: "Gate code", data_type: "text" as const, options: [] };
+
+  it("a save with one definition (gate_code) keeps an existing key no definition covers (referred_by) — the reviewer's exact probe (mutation: build custom from defs alone, no merge → FAILS)", async () => {
+    getContactMock.mockResolvedValue({ id: "c1", custom: { referred_by: "Jane Smith" } });
+    listCustomFieldsMock.mockResolvedValue([GATE_CODE_DEF]);
+    updateContactMock.mockClear();
+    await updateContactAction("a1", f({ cf_gate_code: "1234" }));
+    expect(updateContactMock).toHaveBeenCalledTimes(1);
+    const input = updateContactMock.mock.calls[0]![3] as { custom?: Record<string, unknown> };
+    expect(input.custom).toEqual({ referred_by: "Jane Smith", gate_code: "1234" });
+  });
+
+  it("clearing a defined field still removes exactly that key, merge notwithstanding (mutation: stop deleting on blank → the old value survives, FAILS)", async () => {
+    getContactMock.mockResolvedValue({ id: "c1", custom: { referred_by: "Jane Smith", gate_code: "1234" } });
+    listCustomFieldsMock.mockResolvedValue([GATE_CODE_DEF]);
+    updateContactMock.mockClear();
+    await updateContactAction("a1", f({ cf_gate_code: "" }));
+    const input = updateContactMock.mock.calls[0]![3] as { custom?: Record<string, unknown> };
+    expect(input.custom).toEqual({ referred_by: "Jane Smith" });
+  });
+
+  it("a contact with no unrelated custom keys at all still saves the defined ones (no crash on an empty/missing existing custom)", async () => {
+    getContactMock.mockResolvedValue({ id: "c1", custom: null });
+    listCustomFieldsMock.mockResolvedValue([GATE_CODE_DEF]);
+    updateContactMock.mockClear();
+    await updateContactAction("a1", f({ cf_gate_code: "9999" }));
+    const input = updateContactMock.mock.calls[0]![3] as { custom?: Record<string, unknown> };
+    expect(input.custom).toEqual({ gate_code: "9999" });
   });
 });

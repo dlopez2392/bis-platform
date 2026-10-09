@@ -49,9 +49,19 @@ export async function enrich(
   const byKind = new Map(form.fields.map((f) => [f.kind, answers.find((a) => a.key === f.key)?.value ?? ""]));
   const custom: Record<string, string> = {};
   for (const field of form.fields) {
-    if (!field.kind.startsWith("custom.")) continue;
-    const value = answers.find((a) => a.key === field.key)?.value ?? "";
-    if (value) custom[field.kind.slice("custom.".length)] = value;
+    if (field.kind.startsWith("custom.")) {
+      const value = answers.find((a) => a.key === field.key)?.value ?? "";
+      if (value) custom[field.kind.slice("custom.".length)] = value;
+    } else if (field.kind === "core.referral_source") {
+      // F-018, folded into F-157: "¿Quién le recomendó?" rides the same
+      // custom-field merge above under a reserved key, so the drawer's
+      // Source line (contactSourceHint) can read it with no new storage
+      // path and `fillBlanks`'s existing custom merge below fills it on a
+      // RETURNING contact's later submission exactly as any other custom
+      // field would.
+      const value = answers.find((a) => a.key === field.key)?.value ?? "";
+      if (value) custom.referred_by = value;
+    }
   }
 
   const errors: string[] = [];

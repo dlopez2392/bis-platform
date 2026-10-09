@@ -16,8 +16,18 @@ export type ContactInput = {
 //
 // `marketing_email_opted_out_at` (0049) is no longer read (consent PR-3): the
 // email stop lives in the ledger, and a later migration drops the column.
+// "attribution" (F-157): the first/last-touch jsonb `setAttribution`
+// (apps/web/src/lib/forms/enrich.ts) writes — selected now so the drawer's
+// lead-source line reads it off the SAME row every other field comes from.
+// A SINGLE string literal, deliberately not built with `+`: postgrest-js
+// infers each selected column's type by parsing this exact literal at
+// compile time, which only works when TypeScript keeps it as a literal
+// type. A `+`-joined string widens to plain `string`, and every caller's
+// `row.first_name`/`row.phone`/etc then collapses to `GenericStringError`
+// (proven: splitting this line with `+` to fit "attribution" broke
+// typecheck across a dozen unrelated files, not just this one).
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, created_at, updated_at, sort_name, phone_country_unconfirmed";
+  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed";
 
 /**
  * A phone as the contact row stores it (F-009, consent chain spec §4.1 item
