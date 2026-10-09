@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { serviceDb, setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus, renameAccount } from "@bis/db";
+import { serviceDb, setChecklistItem, goLive, renameAccount } from "@bis/db";
 import { requireAccountAccess, requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { deriveSetupStatus, goLivePrereqsMet, SETUP_TICK_KEYS } from "@/lib/setup/setup-status";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
@@ -150,26 +150,20 @@ export async function goLiveAction(accountId: string): Promise<ActionResult> {
   if (!target) return { ok: false, error: m["setup.goLive.notReady"] };
 
   try {
-    // Profile first. This order is still the safer one: the REVERSE would
-    // put a live number in front of a disabled profile, meaning a real
-    // caller reaches a receptionist that has been told to stay quiet — a
-    // gap this order cannot produce, because the profile is already enabled
-    // before the number write is even attempted.
-    //
-    // What this order does NOT guarantee is "a failure here leaves the line
-    // not live". The incoming route answers a number at status `testing` OR
+    // ONE call, one transaction (0063, D-043). This used to be two writes,
+    // enable the profile and then set the number live, each its own
+    // transaction. The incoming route answers a number at `testing` OR
     // `live` once the profile is enabled (api/voice/incoming/route.ts), and
-    // `target` reaching go-live at `testing` is the ordinary case — the
-    // test-call prerequisite needs a reachable number before this action is
-    // even unblocked. So if `upsertVoiceProfile` above succeeds and this
-    // second write then fails, a `target` that was already `testing` is left
-    // fully answering real callers with the profile enabled, while this
-    // action reports `ok: false` and the go-live step still reads "to do".
-    // Only a `target` starting at `provisioned` genuinely stays unreached
-    // through that same failure. Both are real outcomes of the same catch
-    // block; naming only the safe one here would be wrong.
-    await upsertVoiceProfile(db, accountId, { enabled: true }, userId);
-    await setPhoneNumberStatus(db, accountId, target.id, "live", userId);
+    // `testing` is the ordinary state here, so a failure between the two
+    // left the line answering real callers while text-back had no live
+    // number and this step still read "to do". `go_live` makes both writes
+    // and both events together, or none of them.
+    //
+    // It also refuses, writing nothing, what changed since the re-check
+    // above: the number released, the profile gone, another active number on
+    // the account. Each surfaces as `failed`, not `notReady`: the operator
+    // reloads and sees the real state, and this action never guesses which.
+    await goLive(db, accountId, target.id, userId);
   } catch (e) {
     console.error(`goLiveAction: go-live write failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["setup.goLive.failed"] };
