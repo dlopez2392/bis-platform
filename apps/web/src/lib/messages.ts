@@ -1783,6 +1783,12 @@ export const m = {
   "activity.usage.calls": "Calls handled",
   "activity.usage.capRecipe": "Most automations: up to {cap} a day",
   "activity.usage.capDay": "Up to {cap} a day",
+  // D-066: "Emails sent" used to mix in the agency's own weekly report (not
+  // a customer send, and not capped by the recipe limit above) and never
+  // said when a send failed outright. Zero is a number here too — this
+  // always renders, the same convention "0 waiting"/"0 skipped" already
+  // follow below.
+  "activity.usage.emailsFailed": "{n} failed to send",
   "activity.usage.held": "{n} waiting",
   "activity.usage.skipped": "{n} skipped",
   "activity.usage.topReason": "most often: {reason}",
