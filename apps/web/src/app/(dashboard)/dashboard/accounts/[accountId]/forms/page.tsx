@@ -6,8 +6,9 @@ import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { cn } from "@/lib/utils";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTimeInZone } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
+import { renderZone } from "@/lib/zone";
 import { m } from "@/lib/messages";
 import { FORM_STATUS_LABEL } from "@/lib/labels";
 import { NewFormDialog } from "./new-form-dialog";
@@ -20,7 +21,17 @@ export default async function FormsPage({
 }: { params: Promise<{ accountId: string }> }) {
   const { accountId } = await params;
   const db = await dbForRequest();
-  const forms = await listForms(db, accountId);
+  const [forms, account] = await Promise.all([
+    listForms(db, accountId),
+    // The zone each row's own `created_at` renders in below — not a throw:
+    // one cosmetic date column must not take the whole list down, same
+    // reasoning as the contacts list's own read (D-010).
+    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
+  ]);
+  if (account.error) {
+    console.error(`forms: account ${accountId} timezone read failed: ${account.error.message}`);
+  }
+  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
 
   return (
     <>
@@ -49,7 +60,7 @@ export default async function FormsPage({
                       {form.name}
                     </span>
                     <span className="block text-xs text-muted-foreground">
-                      {formatDateTime(form.created_at)}
+                      {formatDateTimeInZone(form.created_at, zone.zone)}
                     </span>
                   </span>
                   <span className="flex shrink-0 items-center gap-3">

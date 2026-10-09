@@ -50,6 +50,7 @@ const SENTENCE_CAPTION =
 export function ZoneNote({
   zone,
   isAgency,
+  accountless,
   className,
 }: {
   /** Straight from `renderZone` (lib/zone.ts) — never a bare zone string, so
@@ -65,13 +66,35 @@ export function ZoneNote({
    *  passes `true` as a constant; the other four are reached by both
    *  audiences and must pass the real value. */
   isAgency: boolean;
+  /**
+   * Review of #225: a screen with NO single account (blueprints — agency IP
+   * applied across many accounts, with no `account_id` to read a zone from
+   * at all) calls `renderZone(undefined)`, which ALWAYS resolves
+   * `source: "agency"` once the agency's own zone is usable — that is the
+   * EXPECTED answer there, not a degraded one, unlike an in-account screen
+   * where `source: "agency"` means THAT account's own zone was broken.
+   * Without this, such a screen printed `zone.guessed.agency` ("This company
+   * has no timezone of its own, so times use the agency's.") on a screen
+   * with no company at all — false on its face.
+   *
+   * Set true, this suppresses that sentence for `source: "agency"` (no
+   * warning at all — the ordinary `zone.note` line is the whole story) and
+   * still warns, with different copy that names no company, when even the
+   * agency's own zone was unusable (`source: "fallback"`). Defaults to
+   * `false`: every existing in-account caller is unchanged.
+   */
+  accountless?: boolean;
   className?: string;
 }) {
+  const warn = accountless
+    ? zone.source === "fallback"
+    : zone.guessed;
+
   return (
     <div className={cn("flex flex-col gap-2", className)}>
       <p className={SENTENCE_CAPTION}>{m["zone.note"].replace("{zone}", zone.label)}</p>
 
-      {zone.guessed ? (
+      {warn ? (
         // `role="note"` overrides Notice's own `role="alert"` (the spread
         // puts our props last). This is a standing configuration fact that
         // is present on first paint, not something that just happened — an
@@ -82,7 +105,14 @@ export function ZoneNote({
         // a full SENTENCE keeps the foreground colour and lets the ground
         // carry the hue, because a sentence in `--warn` sits at the AA floor.
         <Notice tone="warn" role="note" className="text-foreground">
-          {isAgency ? (
+          {accountless ? (
+            // The agency's own zone was unusable too — the one case left
+            // that is still worth a warning on a screen with no company.
+            // No "fix" line: unlike the in-account case, the fix here is not
+            // the "Add company" dialog, and this repo does not have a
+            // recommendation worth printing for the agency's own zone yet.
+            m["zone.guessed.accountless.fallback"]
+          ) : isAgency ? (
             <>
               {zone.source === "agency"
                 ? m["zone.guessed.agency"]

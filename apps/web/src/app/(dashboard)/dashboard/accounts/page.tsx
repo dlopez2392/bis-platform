@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { clerkClient } from "@clerk/nextjs/server";
 import { Building2, Unlink } from "lucide-react";
-import { serviceDb, listAccounts, listBlueprints } from "@bis/db";
+import { serviceDb, listAccounts, listBlueprints, isUsableZone } from "@bis/db";
 import { createClientAccount, adoptOrphanOrgAction } from "./actions";
 import { CreateAccountDialog } from "./create-account-dialog";
 import { AdoptOrgDialog } from "./adopt-org-dialog";
@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { requireAgency } from "@/lib/auth";
-import { formatDate } from "@/lib/format";
+import { formatDateInZone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { ACCOUNT_STATUS_LABEL } from "@/lib/labels";
@@ -135,7 +135,16 @@ export default async function AccountsPage() {
                   <p className="mt-4 truncate text-[13.5px] font-semibold text-card-foreground">{a.name}</p>
                   <p className="mt-1 text-sm text-muted-foreground">{a.timezone}</p>
                   <p className="mt-3 text-xs text-muted-foreground">
-                    {m["accounts.created"].replace("{date}", formatDate(a.created_at))}
+                    {/* The row's OWN zone, printed right above (`a.timezone`)
+                        — not the runtime's (server or browser), the same bug
+                        D-010 fixed elsewhere. Falls back to UTC rather than
+                        guessing an agency zone per row: the account's own
+                        zone name is already on screen, so a reader can see
+                        for themselves when it is unusable. */}
+                    {m["accounts.created"].replace(
+                      "{date}",
+                      formatDateInZone(a.created_at, isUsableZone(a.timezone) ? a.timezone : "UTC"),
+                    )}
                   </p>
                 </Link>
               </li>

@@ -2,8 +2,10 @@ import { Layers } from "lucide-react";
 import { serviceDb, listBlueprints } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
+import { ZoneNote } from "@/components/zone-note";
 import { requireAgency } from "@/lib/auth";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTimeInZone } from "@/lib/format";
+import { renderZone } from "@/lib/zone";
 import { m } from "@/lib/messages";
 import { BlueprintsTable } from "./blueprints-table";
 
@@ -15,23 +17,34 @@ export default async function BlueprintsPage() {
   // guard itself rather than rely solely on that shared choke point.
   await requireAgency();
   const blueprints = await listBlueprints(serviceDb());
+  // A blueprint is agency-wide IP, applied across many accounts — there is
+  // no single account whose zone a capture date could honestly claim as its
+  // own (BlueprintSummary carries no account_id at all). The honest choice
+  // on a screen with no account is the AGENCY's own zone, same as the
+  // Checklist page's `isAgency` branch — `renderZone(undefined)` falls
+  // straight to it (lib/zone.ts), and `ZoneNote` below says out loud which
+  // zone that is, same pattern as every other date-rendering screen.
+  const zone = await renderZone(undefined);
 
   return (
     <>
       <PageHeader title={m["blueprints.title"]} />
       <div className="p-6">
-        {blueprints.length === 0 ? (
-          <EmptyState icon={Layers} title={m["blueprints.empty.title"]} body={m["blueprints.empty.body"]} />
-        ) : (
-          <BlueprintsTable
-            rows={blueprints.map((b) => ({
-              id: b.id, name: b.name, version: b.version,
-              // updated_at, not created_at (D-090): every recapture stamps it,
-              // so the date agrees with the version number beside it.
-              captured: formatDateTime(b.updated_at), appliedCount: b.appliedCount,
-            }))}
-          />
-        )}
+        <div className="space-y-3">
+          <ZoneNote zone={zone} isAgency accountless />
+          {blueprints.length === 0 ? (
+            <EmptyState icon={Layers} title={m["blueprints.empty.title"]} body={m["blueprints.empty.body"]} />
+          ) : (
+            <BlueprintsTable
+              rows={blueprints.map((b) => ({
+                id: b.id, name: b.name, version: b.version,
+                // updated_at, not created_at (D-090): every recapture stamps
+                // it, so the date agrees with the version number beside it.
+                captured: formatDateTimeInZone(b.updated_at, zone.zone), appliedCount: b.appliedCount,
+              }))}
+            />
+          )}
+        </div>
       </div>
     </>
   );

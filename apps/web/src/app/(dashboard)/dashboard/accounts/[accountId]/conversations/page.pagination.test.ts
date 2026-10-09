@@ -9,7 +9,24 @@ import { encodeCursor } from "@/lib/cursor";
  * request" question.
  */
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
-vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
+// Same shape as page.test.ts's own mock: the page's own account-timezone
+// read, threaded into the list/thread's `timezone` prop (D-010's pattern).
+vi.mock("@/lib/db", () => ({
+  dbForRequest: async () => ({
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }),
+        }),
+      }),
+    }),
+  }),
+}));
+vi.mock("@/lib/zone", () => ({
+  renderZone: async (z: string | undefined) => (z
+    ? { zone: z, guessed: false, label: z, source: "account" as const }
+    : { zone: "UTC", guessed: true, label: "UTC", source: "fallback" as const }),
+}));
 
 const listConversationsMock = vi.fn();
 const getConversationSummaryMock = vi.fn();

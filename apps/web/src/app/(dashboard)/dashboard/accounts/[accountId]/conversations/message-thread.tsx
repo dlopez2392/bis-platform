@@ -1,5 +1,5 @@
 import type { listMessages } from "@bis/db";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTimeInZone } from "@/lib/format";
 import { MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
 import { messageFailureReason } from "@/lib/email/failure-reason";
 import { cn } from "@/lib/utils";
@@ -10,10 +10,16 @@ export function MessageThread({
   messages,
   contactName,
   composer,
+  timezone,
 }: {
   messages: Message[];
   contactName: string;
   composer: React.ReactNode;
+  /** The account's RESOLVED zone (`renderZone`, computed once by `page.tsx`)
+   *  — same bug, same fix, as `conversation-list.tsx`'s own `timezone` prop:
+   *  every bubble's timestamp rendered in the RUNTIME's zone, never the
+   *  account's. */
+  timezone: string;
 }) {
   return (
     // The thread pane is bounded to the viewport (topbar h-14 = 56px + the
@@ -49,7 +55,7 @@ export function MessageThread({
             ) : null}
             <p className="whitespace-pre-wrap text-sm text-card-foreground">{message.body}</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {formatDateTime(message.created_at)}
+              {formatDateTimeInZone(message.created_at, timezone)}
               {message.channel !== "email" ? (
                 // `message.channel` is a raw DB string (untyped Supabase
                 // client, no generated schema types) — messageChannelLabel

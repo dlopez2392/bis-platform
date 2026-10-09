@@ -2403,6 +2403,16 @@ export const m = {
   // earlier wording described a state the schema makes impossible.
   "zone.guessed.client":
     "Your timezone needs fixing, so times are shown in another zone. Ask your account manager to sort it out.",
+  // Review of #225 (blueprints): an ACCOUNT-LESS screen's `renderZone(undefined)`
+  // always answers `source: "agency"` when the agency's own zone is usable —
+  // that is the EXPECTED source there, not a degraded one, so `ZoneNote`'s
+  // `accountless` prop never shows `zone.guessed.agency` ("this company has
+  // no timezone of its own") for it; there is no company on the screen to
+  // make that sentence true. This one sentence covers the one case that is
+  // still worth a warning on such a screen: even the agency's own zone was
+  // unusable. Never "this company" (there is none here).
+  "zone.guessed.accountless.fallback":
+    "The agency has no usable timezone either, so times use UTC.",
 
   // ── Screened calls (2026-09-18) ────────────────────────────────────────
   // A refused call used to leave no trace but a log line. These screens are
