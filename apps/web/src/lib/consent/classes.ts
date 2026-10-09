@@ -57,7 +57,9 @@ export function isSmsKind(kind: string): kind is SmsKind {
 
 /**
  * THE EMAIL KINDS (consent chain spec §4.3, corrected by the PR-3 plan's E1:
- * twenty-two send sites). The email gate (email-gate.ts) throws on a kind
+ * twenty-two send sites then; twenty-four kinds now, with the operational
+ * floor's ops alert and F-048's cancel notice, each named at exactly one
+ * send site, which scans.test.ts pins). The email gate (email-gate.ts) throws on a kind
  * that is not here, and scan 2 fails on any kind literal handed to it that
  * is not here.
  *
