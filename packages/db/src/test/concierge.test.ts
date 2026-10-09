@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { serviceDb } from "../service";
 import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
-import { createForm } from "../forms";
+import { createForm, updateForm } from "../forms";
 import { upsertVoiceProfile, getVoiceProfile } from "../voice";
 import {
   enableConcierge, disableConcierge, getVoiceProfileByPublicId,
@@ -45,7 +45,41 @@ const RUN = Math.random().toString(36).slice(2, 10);
  * before the fix.
  */
 async function seedVoiceProfile(db: Parameters<typeof upsertVoiceProfile>[0], accountId: string) {
-  await upsertVoiceProfile(db, accountId, {}, "user_test");
+  // A READY profile (D-108): `enableConcierge` now refuses one with no
+  // greeting or no facts, and the table's defaults are blank for both.
+  await upsertVoiceProfile(db, accountId, {
+    greeting_en: "Thanks for stopping by.", greeting_es: "Gracias por visitarnos.",
+    facts: "Open weekdays 8 to 5.",
+  }, "user_test");
+}
+
+/** The two columns' worth of ready profile, plus `languages`. */
+const READY_PROFILE = {
+  greeting_en: "Hi.", greeting_es: "Hola.", facts: "Roofs.", languages: "both",
+};
+
+/**
+ * A fake db for the paths that never need a real row: `from(...).select(...)
+ * .eq(...).maybeSingle()` answers with `profile`, and `rpc` is the given
+ * stub, so a test can see whether `concierge_enable` was reached at all.
+ */
+function fakeEnableDb(
+  profile: Record<string, unknown> | null,
+  rpc: (...args: unknown[]) => Promise<{ data: unknown; error: unknown }>,
+) {
+  const chain = {
+    select: () => chain, eq: () => chain,
+    maybeSingle: async () => ({ data: profile, error: null }),
+  };
+  return { from: () => chain, rpc } as unknown as Parameters<typeof enableConcierge>[0];
+}
+
+/** D-048: the chat is live only while its destination form is PUBLISHED,
+ *  and `createForm` leaves a new form at the column default, `draft`. */
+async function publishedLeadsForm(db: Parameters<typeof createForm>[0], accountId: string) {
+  const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+  await updateForm(db, accountId, form.id, { status: "published" }, accountId);
+  return form;
 }
 
 describe("concierge accessors", () => {
@@ -140,12 +174,10 @@ describe("concierge accessors", () => {
   // `Parameters<typeof fn>[0]` typing precedent this file already uses for
   // `seedVoiceProfile`.
   it("enableConcierge surfaces the TRUE message when the code is 42501 but the text is not ours (a grant regression, not a cross-tenant form)", async () => {
-    const fakeDb = {
-      rpc: async () => ({
-        data: null,
-        error: { code: "42501", message: "permission denied for function concierge_enable" },
-      }),
-    } as unknown as Parameters<typeof enableConcierge>[0];
+    const fakeDb = fakeEnableDb(READY_PROFILE, async () => ({
+      data: null,
+      error: { code: "42501", message: "permission denied for function concierge_enable" },
+    }));
     // MUTATION: revert to `error.code === "42501" ||
     // error.message?.includes("does not belong to this account")` -- this
     // FAILS: the OR matches on the code alone and rewrites the real grant-
@@ -155,10 +187,53 @@ describe("concierge accessors", () => {
       .rejects.toThrow(/^enableConcierge failed: permission denied for function concierge_enable$/);
   });
 
+  // D-108: the toggle's lock was the only thing standing between a profile
+  // with no greeting or no facts and a live assistant; a caller that skips
+  // the card (a stale tab, a direct action call) went straight through.
+  it("enableConcierge refuses a profile with blank facts, BEFORE concierge_enable runs", async () => {
+    let rpcCalls = 0;
+    const fakeDb = fakeEnableDb({ ...READY_PROFILE, facts: "  " }, async () => {
+      rpcCalls++;
+      return { data: "pub_1", error: null };
+    });
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
+      .rejects.toThrow(/^enableConcierge failed: profile not ready \(facts\)$/);
+    expect(rpcCalls).toBe(0);
+  });
+
+  it("enableConcierge refuses a bilingual profile with no Spanish greeting", async () => {
+    const fakeDb = fakeEnableDb({ ...READY_PROFILE, greeting_es: "" },
+      async () => ({ data: "pub_1", error: null }));
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
+      .rejects.toThrow(/^enableConcierge failed: profile not ready \(spanish_greeting\)$/);
+  });
+
+  it("enableConcierge refuses a profile with no greeting at all as 'greeting'", async () => {
+    const fakeDb = fakeEnableDb({ ...READY_PROFILE, greeting_en: "", greeting_es: "" },
+      async () => ({ data: "pub_1", error: null }));
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
+      .rejects.toThrow(/^enableConcierge failed: profile not ready \(greeting\)$/);
+  });
+
+  // D-051's server half: a Spanish-only profile needs no English greeting.
+  it("enableConcierge accepts a Spanish-only profile with no English greeting", async () => {
+    const fakeDb = fakeEnableDb({ ...READY_PROFILE, languages: "es", greeting_en: "" },
+      async () => ({ data: "pub_1", error: null }));
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1")).resolves.toEqual({ publicId: "pub_1" });
+  });
+
+  it("enableConcierge still names a missing profile row as such, without reaching the RPC", async () => {
+    let rpcCalls = 0;
+    const fakeDb = fakeEnableDb(null, async () => { rpcCalls++; return { data: null, error: null }; });
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
+      .rejects.toThrow(/^enableConcierge failed: no voice profile for this account$/);
+    expect(rpcCalls).toBe(0);
+  });
+
   it("getVoiceProfileByPublicId returns null when the concierge is OFF", () =>
     withTestAccount(async (db, accountId) => {
       await seedVoiceProfile(db, accountId);
-      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      const form = await publishedLeadsForm(db, accountId);
       const { publicId } = await enableConcierge(db, accountId, form.id);
       expect(await getVoiceProfileByPublicId(db, publicId)).not.toBeNull();
       await disableConcierge(db, accountId);
@@ -169,7 +244,7 @@ describe("concierge accessors", () => {
   it("getVoiceProfileByPublicId returns null when no destination form is set", () =>
     withTestAccount(async (db, accountId) => {
       await seedVoiceProfile(db, accountId);
-      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      const form = await publishedLeadsForm(db, accountId);
       const { publicId } = await enableConcierge(db, accountId, form.id);
       await db.from("voice_profiles")
         .update({ concierge_form_id: null }).eq("account_id", accountId);
@@ -187,7 +262,7 @@ describe("concierge accessors", () => {
   it("getVoiceProfileAnyStatusByPublicId returns the profile even OFF or with no destination form; isConciergeLive tells them apart", () =>
     withTestAccount(async (db, accountId) => {
       await seedVoiceProfile(db, accountId);
-      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      const form = await publishedLeadsForm(db, accountId);
       const { publicId } = await enableConcierge(db, accountId, form.id);
 
       const live = await getVoiceProfileAnyStatusByPublicId(db, publicId);
@@ -216,15 +291,75 @@ describe("concierge accessors", () => {
     // MUTATION: drop the `concierge_form_id != null` half -- this FAILS on
     // the third case (deleting the destination form, 0042:31, leaves
     // `concierge_enabled` true and only nulls the pointer).
-    expect(isConciergeLive({ concierge_enabled: true, concierge_form_id: "f1" })).toBe(true);
-    expect(isConciergeLive({ concierge_enabled: false, concierge_form_id: "f1" })).toBe(false);
-    expect(isConciergeLive({ concierge_enabled: true, concierge_form_id: null })).toBe(false);
+    const on = { concierge_form_published: true };
+    expect(isConciergeLive({ ...on, concierge_enabled: true, concierge_form_id: "f1" })).toBe(true);
+    expect(isConciergeLive({ ...on, concierge_enabled: false, concierge_form_id: "f1" })).toBe(false);
+    expect(isConciergeLive({ ...on, concierge_enabled: true, concierge_form_id: null })).toBe(false);
   });
+
+  // D-048: the assistant answered while every lead it took failed to file,
+  // because nothing public checked whether the destination was published.
+  it("isConciergeLive also requires the destination form to be PUBLISHED", () => {
+    // MUTATION: drop the `concierge_form_published` half -- this FAILS.
+    expect(isConciergeLive({
+      concierge_enabled: true, concierge_form_id: "f1", concierge_form_published: false,
+    })).toBe(false);
+  });
+
+  it("D-048: unpublishing the destination takes the chat down on BOTH public readers, and republishing brings it back", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedVoiceProfile(db, accountId);
+      const form = await publishedLeadsForm(db, accountId);
+      const { publicId } = await enableConcierge(db, accountId, form.id);
+      expect(await getVoiceProfileByPublicId(db, publicId)).not.toBeNull();
+      const live = await getVoiceProfileAnyStatusByPublicId(db, publicId);
+      expect(live!.concierge_form_published).toBe(true);
+      expect(isConciergeLive(live!)).toBe(true);
+
+      await updateForm(db, accountId, form.id, { status: "draft" }, accountId);
+      // The turn route's reader: no new turn on a chat that cannot file.
+      expect(await getVoiceProfileByPublicId(db, publicId)).toBeNull();
+      // The page/layout reader: the row still comes back (lang, branding),
+      // but it reads not-live.
+      const dark = await getVoiceProfileAnyStatusByPublicId(db, publicId);
+      expect(dark).not.toBeNull();
+      expect(dark!.concierge_form_published).toBe(false);
+      expect(isConciergeLive(dark!)).toBe(false);
+
+      await updateForm(db, accountId, form.id, { status: "published" }, accountId);
+      expect(await getVoiceProfileByPublicId(db, publicId)).not.toBeNull();
+    }));
+
+  // Review of D-048: 0042's FK is a plain `references forms(id)`, so nothing
+  // in the schema stops `concierge_form_id` pointing at ANOTHER account's
+  // published form (only `concierge_enable` refuses one, 0045). Such a
+  // pointer must read as not published: that form is not this tenant's
+  // destination, and `fileLead` would refuse it through `getForm`'s account
+  // boundary anyway.
+  it("D-048: a destination that is ANOTHER account's published form reads as not published (chat dark)", () =>
+    withTestAccount(async (db, accountId) =>
+      withTestAccount(async (otherDb, otherAccountId) => {
+        await seedVoiceProfile(db, accountId);
+        const mine = await publishedLeadsForm(db, accountId);
+        const theirs = await publishedLeadsForm(otherDb, otherAccountId);
+        const { publicId } = await enableConcierge(db, accountId, mine.id);
+        const { error } = await db.from("voice_profiles")
+          .update({ concierge_form_id: theirs.id }).eq("account_id", accountId);
+        expect(error).toBeNull();
+
+        // MUTATION: drop the account check on the destination read -- this
+        // FAILS: the other tenant's form is published.
+        expect(await getVoiceProfileByPublicId(db, publicId)).toBeNull();
+        const any = await getVoiceProfileAnyStatusByPublicId(db, publicId);
+        expect(any!.concierge_form_id).toBe(theirs.id);
+        expect(any!.concierge_form_published).toBe(false);
+        expect(isConciergeLive(any!)).toBe(false);
+      })));
 
   it("isConciergeLive: a destination form deleted out from under a live concierge goes not-live (0042:31, on delete set null)", () =>
     withTestAccount(async (db, accountId) => {
       await seedVoiceProfile(db, accountId);
-      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      const form = await publishedLeadsForm(db, accountId);
       const { publicId } = await enableConcierge(db, accountId, form.id);
       expect(isConciergeLive((await getVoiceProfileAnyStatusByPublicId(db, publicId))!)).toBe(true);
 
@@ -441,7 +576,7 @@ describe("concierge accessors", () => {
   it("getVoiceProfileByPublicId returns the same columns getVoiceProfile does (no drifted copy)", () =>
     withTestAccount(async (db, accountId) => {
       await seedVoiceProfile(db, accountId);
-      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      const form = await publishedLeadsForm(db, accountId);
       const { publicId } = await enableConcierge(db, accountId, form.id);
       const full = await getVoiceProfile(db, accountId);
       const concierge = await getVoiceProfileByPublicId(db, publicId);

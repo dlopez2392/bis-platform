@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { HONEYPOT_FIELD, RENDER_TOKEN_FIELD } from "@/lib/forms/guards";
 import { CONCIERGE_MAX_MESSAGE_CHARS } from "@/lib/concierge/guards";
 import type { ConciergeStrings } from "@/lib/concierge/strings";
@@ -35,6 +35,16 @@ export function conversationStore(
   getStorage: () => ConciergeStorageLike = () => window.sessionStorage,
 ) {
   const key = `bis-concierge:${publicId}`;
+  // D-049: the turns the visitor has SEEN, beside the id. The id alone
+  // survived a page change, so the server carried the conversation on while
+  // every page of the client's site showed the greeting alone over it.
+  // Stamped with the conversation id they belong to, and read back only
+  // while that id is still the stored one: turns from an ended or replaced
+  // conversation are never drawn over a different one. The server's
+  // transcript stays the record (what the model reads, what the operator
+  // reads); this is only what to redraw, so a turn is written only once the
+  // server has answered it.
+  const turnsKey = `${key}:turns`;
   return {
     read(): string | null {
       try { return getStorage().getItem(key); } catch { return null; }
@@ -44,10 +54,58 @@ export function conversationStore(
       catch { /* private window, cleared site data, or blocked storage */ }
     },
     clear(): void {
-      try { getStorage().removeItem(key); }
+      try { getStorage().removeItem(key); getStorage().removeItem(turnsKey); }
+      catch { /* as above */ }
+    },
+    /** The raw stored turns, for `useSyncExternalStore`'s snapshot: a string
+     *  compares by value, so an unchanged store never re-renders. */
+    readTurnsRaw(): string | null {
+      try { return getStorage().getItem(turnsKey); } catch { return null; }
+    },
+    readTurns(): Msg[] | null {
+      try {
+        return parseStoredTurns(getStorage().getItem(turnsKey), getStorage().getItem(key));
+      } catch { return null; }
+    },
+    writeTurns(id: string, messages: Msg[]): void {
+      try { getStorage().setItem(turnsKey, JSON.stringify({ id, messages })); }
       catch { /* as above */ }
     },
   };
+}
+
+/** Stored turns, or null for anything that is not a non-empty list of
+ *  visitor/assistant messages stamped with `currentId`. Storage is the
+ *  visitor's own and anything can be in it. */
+export function parseStoredTurns(raw: string | null, currentId: string | null): Msg[] | null {
+  if (!raw || !currentId) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!parsed || typeof parsed !== "object") return null;
+  const { id, messages } = parsed as { id?: unknown; messages?: unknown };
+  if (id !== currentId || !Array.isArray(messages) || messages.length === 0) return null;
+  const ok = messages.every((m) => m && typeof m === "object"
+    && ((m as Msg).role === "visitor" || (m as Msg).role === "assistant")
+    && typeof (m as Msg).text === "string");
+  return ok ? (messages as Msg[]).map(({ role, text }) => ({ role, text })) : null;
+}
+
+/**
+ * What one answered turn does to the visitor's session store, pulled out of
+ * `sendText` so the wiring is testable without a DOM (D-049). An ended
+ * conversation clears everything, so a new page starts fresh; a turn that
+ * carries a conversation stores its id AND the turns now on screen; a
+ * response with no conversation (the too-fast notice) stores nothing.
+ */
+export function recordTurn(
+  store: Pick<ReturnType<typeof conversationStore>, "write" | "clear" | "writeTurns">,
+  data: TurnResult,
+  shown: Msg[],
+): void {
+  if (data.ended) { store.clear(); return; }
+  if (!data.conversationId) return;
+  store.write(data.conversationId);
+  store.writeTurns(data.conversationId, shown);
 }
 
 /**
@@ -99,6 +157,19 @@ export function pickErrorUpdate(
   return data.status === 429
     ? { closing: strings.rateLimited, ended: false }
     : { closing: strings.unavailable, ended: false };
+}
+
+/**
+ * D-050: the conversation id a FAILED turn may still carry. A first turn whose
+ * reply fails after the route already opened its conversation answers
+ * `{ error, conversationId }`; keeping that id makes the visitor's retry a
+ * second turn of the SAME conversation, not a second conversation spending
+ * another of their three starts. Anything else reads as "no id".
+ */
+export function errorConversationId(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const id = (body as { conversationId?: unknown }).conversationId;
+  return typeof id === "string" && id ? id : null;
 }
 
 /**
@@ -201,6 +272,10 @@ function getFramed(): boolean {
 function getServerFramed(): false {
   return false;
 }
+/** D-049's stored turns have no server-side answer either. */
+function getServerTurns(): null {
+  return null;
+}
 
 /**
  * The four DESIGN.md states all live here: the greeting IS the empty state
@@ -240,7 +315,24 @@ export function ConciergeChat({
 }) {
   // The greeting IS the empty state. It is the tenant's own copy, from their
   // own profile row — there is nothing to invent here.
-  const [messages, setMessages] = useState<Msg[]>([{ role: "assistant", text: greeting }]);
+  //
+  // D-049: unless this visitor already has a conversation going on another
+  // page of the site, in which case the turns they saw there are redrawn.
+  // Read through `useSyncExternalStore` with a `null` server snapshot (the
+  // `framed` read below is the same shape): sessionStorage has no
+  // server-side answer, so SSR and the hydrating paint both show the
+  // greeting, and React re-renders with the stored turns right after mount,
+  // with no mismatch and no effect setting state. `local` is null until the
+  // visitor sends something on THIS page; from then on it is what is shown.
+  const storedTurnsRaw = useSyncExternalStore(
+    subscribeToNothing, () => conversationStore(publicId).readTurnsRaw(), getServerTurns,
+  );
+  const restored = useMemo(
+    () => parseStoredTurns(storedTurnsRaw, conversationStore(publicId).read()),
+    [storedTurnsRaw, publicId],
+  );
+  const [local, setLocal] = useState<Msg[] | null>(null);
+  const messages = local ?? restored ?? [{ role: "assistant" as const, text: greeting }];
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -267,7 +359,7 @@ export function ConciergeChat({
   // below keep their own `window.parent === window` guards untouched.
   const framed = useSyncExternalStore(subscribeToNothing, getFramed, getServerFramed);
 
-  useEffect(() => { bottom.current?.scrollIntoView({ block: "end" }); }, [messages, pending]);
+  useEffect(() => { bottom.current?.scrollIntoView({ block: "end" }); }, [messages.length, pending]);
 
   // Posted once, at load: the loader's launcher paints from these exact
   // values (`window.parent === window` is the standalone-page case — this
@@ -306,7 +398,10 @@ export function ConciergeChat({
     if (!text || pending || ended) return;
     setDraft("");
     setError(null);
-    setMessages((m) => [...m, { role: "visitor", text }]);
+    // From what is on screen now (the greeting, or the turns restored from
+    // another page). One turn at a time: `pending` refuses a second send.
+    const withVisitor: Msg[] = [...messages, { role: "visitor", text }];
+    setLocal(withVisitor);
     setPending(true);
     try {
       const res = await fetch(`/api/concierge/${encodeURIComponent(publicId)}/turn`, {
@@ -329,20 +424,29 @@ export function ConciergeChat({
         const outcome = pickErrorUpdate({ status: res.status }, strings);
         setError(outcome.closing);
         if (outcome.ended) setEnded(true);
+        // D-050: a failed first reply still opened a conversation; keep it,
+        // so "try again" continues it. A body that is not JSON is no id.
+        const keptId = errorConversationId(await res.json().catch(() => null));
+        if (keptId) {
+          conversationId.current = keptId;
+          conversationStore(publicId).write(keptId);
+        }
         return;
       }
       const data = await res.json() as TurnResult;
       conversationId.current = data.conversationId;
-      // Persisted whenever the route hands back a real id, and cleared the
-      // moment the conversation ends — a new tab after the close starts
-      // fresh (Item 1, Branch 2 hardening).
-      const store = conversationStore(publicId);
-      if (data.ended) store.clear();
-      else if (data.conversationId) store.write(data.conversationId);
       // ONE decision, ONE sentence: `pickTurnUpdate` never returns both a
       // bubble and a closing line for the same turn (see its own doc).
       const update = pickTurnUpdate(data);
-      if (update.bubble) setMessages((m) => [...m, { role: "assistant", text: update.bubble as string }]);
+      const shown: Msg[] = update.bubble
+        ? [...withVisitor, { role: "assistant", text: update.bubble }]
+        : withVisitor;
+      if (update.bubble) setLocal(shown);
+      // Persisted whenever the route hands back a real id, and cleared the
+      // moment the conversation ends — a new tab after the close starts
+      // fresh (Item 1, Branch 2 hardening). D-049: the turns on screen go
+      // with the id, so the next page of the site redraws them.
+      recordTurn(conversationStore(publicId), data, shown);
       if (update.closing) setEndedMessage(update.closing);
       // A transient notice (the too-fast sentence), not a close — same
       // element the 429 path already renders through (`.bis-concierge-error`,

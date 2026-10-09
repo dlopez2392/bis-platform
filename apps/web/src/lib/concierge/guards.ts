@@ -39,5 +39,13 @@ export const CONCIERGE_MAX_MESSAGE_CHARS = 2_000;
  * OpenAI call (`max_tokens: 2000`, and its own comment on why); 500 suits a
  * receptionist's reply — a few sentences plus a possible tool call — where
  * 2000 suits a JSON proposal list.
+ *
+ * Calls per conversation (D-047): a turn whose completion calls capture_lead
+ * makes a SECOND call, which hears the capture's result and writes the
+ * reply. Normally that is one turn per conversation (the lead is filed once),
+ * but a model that calls the tool on every turn makes up to
+ * 2 * CONCIERGE_MAX_TURNS = 48 calls. Still bounded: each follow-up carries
+ * the same transcript plus one tool exchange, is capped by this same
+ * `max_tokens`, and is skipped when the invocation is near `maxDuration`.
  */
 export const CONCIERGE_MAX_REPLY_TOKENS = 500;

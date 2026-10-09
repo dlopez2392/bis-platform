@@ -20,7 +20,7 @@ vi.mock("@bis/db", async (importOriginal) => {
 });
 vi.mock("@/lib/forms/enrich", () => ({ enrich: enrichMock }));
 
-import { fileLead, type Db } from "./lead";
+import { fileLead, leadHasContact, type Db } from "./lead";
 
 /**
  * `fileLead`'s own `ctx.db` is used for exactly ONE thing inside this
@@ -160,6 +160,18 @@ describe("fileLead", () => {
     ]);
   });
 
+  // danlo, 2026-10-09: a lead nobody can reach is not filed. The route holds
+  // it before calling this; this is the backstop, so no caller can spend a
+  // conversation's one lead slot on a name alone.
+  it("refuses a lead with no valid email and no valid phone, before any write", async () => {
+    const { db } = fakeDb();
+    const result = await fileLead({ db, ...CTX, lead: { ...CTX.lead, email: "ana@", phone: "" } });
+    expect(result).toBe(false);
+    expect(dbFns.createSubmission).not.toHaveBeenCalled();
+    expect(dbFns.setConciergeSubmission).not.toHaveBeenCalled();
+    expect(enrichMock).not.toHaveBeenCalled();
+  });
+
   it("returns false without touching enrich when the form is not published", async () => {
     dbFns.getForm.mockResolvedValue({ ...LEAD_FORM, status: "draft" as const });
     const { db } = fakeDb();
@@ -229,5 +241,19 @@ describe("fileLead", () => {
       unknown, unknown, unknown, { answers: { key: string; label: string; value: string }[] },
     ];
     expect(uk.answers.find((a) => a.key === "p")?.value).toBe("44 20 7946 0958");
+  });
+});
+
+/** The ONE rule for "can the team reach this lead" (danlo, 2026-10-09):
+ *  the same validators `fileLead` writes the contact through. */
+describe("leadHasContact", () => {
+  const base = { fullName: "Ana", email: "", phone: "", need: "a table" };
+  it("is true with a valid email or a valid phone", () => {
+    expect(leadHasContact({ ...base, email: "ana@x.co" })).toBe(true);
+    expect(leadHasContact({ ...base, phone: "9565550100" })).toBe(true);
+  });
+  it("is false with neither, or with values that are not an email or a phone", () => {
+    expect(leadHasContact(base)).toBe(false);
+    expect(leadHasContact({ ...base, email: "ana@", phone: "call me" })).toBe(false);
   });
 });
