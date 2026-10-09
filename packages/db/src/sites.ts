@@ -145,12 +145,30 @@ export async function listTrafficDays(
   return (data ?? []) as TrafficDay[];
 }
 
+/** D-054: PostgREST on this project caps a single response at 1,000 rows
+ *  (supabase/config.toml, `max_rows`), silently — no error, just fewer rows
+ *  than exist. A busy site's window (30 days' backfill x up to 4 dimensions
+ *  x the API's own 20-per-dimension cap) can hold up to 2,400 rows, well
+ *  past that. Paged like `listBilledUsageAccounts` (usage.ts): advance by
+ *  the page's ACTUAL length and stop only on an empty page, because a page
+ *  shorter than requested is not proof there is no more — the server's own
+ *  `max_rows` can already be smaller than the page asked for. */
+const BREAKDOWN_PAGE = 1000;
+
 export async function listTrafficBreakdown(
   db: SupabaseClient, accountId: string, fromDay: string, toDay: string,
 ): Promise<TrafficBreakdownRow[]> {
-  const { data, error } = await db.from("site_traffic_breakdown")
-    .select("day, dimension, value, visitors, pageviews").eq("account_id", accountId)
-    .gte("day", fromDay).lte("day", toDay).order("day", { ascending: true });
-  if (error) throw new Error(`listTrafficBreakdown failed: ${error.message}`);
-  return (data ?? []) as TrafficBreakdownRow[];
+  const out: TrafficBreakdownRow[] = [];
+  for (let from = 0; ; ) {
+    const { data, error } = await db.from("site_traffic_breakdown")
+      .select("day, dimension, value, visitors, pageviews").eq("account_id", accountId)
+      .gte("day", fromDay).lte("day", toDay)
+      .order("day", { ascending: true }).order("dimension", { ascending: true }).order("value", { ascending: true })
+      .range(from, from + BREAKDOWN_PAGE - 1);
+    if (error) throw new Error(`listTrafficBreakdown failed: ${error.message}`);
+    const rows = (data ?? []) as TrafficBreakdownRow[];
+    out.push(...rows);
+    if (rows.length === 0) return out;
+    from += rows.length;
+  }
 }
