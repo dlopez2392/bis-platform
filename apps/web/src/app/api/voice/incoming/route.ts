@@ -399,28 +399,26 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //    ----
       //     20s  worst-case connect leg
       //
-      //   800 - 65 - 20 = 715
+      //   800 - 65 - 20 = 715, THE CLAMP BELOW.
       //
-      // THE CLAMP BELOW STILL SAYS 750, derived when the tail was counted as
-      // 30s (the carrier send and the first 12s only). Counted in full it is
-      // 65s, so a call held all the way to a 750s cap could, in the very worst
-      // case, run ~35s past the 800s ceiling. What that would cost is ORDERED:
-      // the call row and the staff alert email land in the first ~30s of the
-      // tail (770 + 30 = 800, right at the ceiling), and what an overrun cuts
+      // Pinned by lifecycle.test.ts ("cap-seconds clamp"). It has been
+      // tightened twice, each time because a leg of the budget had been left
+      // uncounted: from 770 (tail only: 770 + 30 + 20 = 820) and then from
+      // 750 (tail counted as 30s, the carrier send and the first 12s only; in
+      // full it is 65s, so a 750s cap could run ~35s past the ceiling). If a
+      // leg is ever added to the tail, add it above and re-derive here. An
+      // overrun is ORDERED, not random: the call row and the staff alert
+      // email land in the first ~30s of the tail, and what an overrun cuts
       // off is everything after them — the carrier send (alert SMS or
       // text-back), the usage row, the callback To do, the call card and the
       // proposals.
-      // Unreachable today (the default cap is 240s and nothing approaches the
-      // clamp); re-deriving the clamp to 715 is a knob change pinned by
-      // lifecycle.test.ts, left to its own decision rather than folded into a
-      // comment fix. (It was tightened once already, from 770, for the same
-      // reason: 770 + 30 + 20 = 820.)
       //
-      // THE ASSUMPTION THIS STILL CARRIES: PHONE_CONNECT_TIMEOUT_MS is
-      // configurable up to 60000ms (clamped above). Raising it past ~35s eats
-      // the whole connect budget and this 750 must be re-derived. Nothing
-      // enforces that coupling — the two knobs are independent, and this
-      // comment is the only thing linking them.
+      // THE ASSUMPTION THIS CARRIES: PHONE_CONNECT_TIMEOUT_MS is configurable
+      // up to 60000ms (clamped above), and the 20s connect leg is its 15000ms
+      // DEFAULT plus ~5s. Raising it above the default eats past that budget,
+      // and this 715 must be re-derived. Nothing enforces that coupling — the
+      // two knobs are independent, and this comment is the only thing
+      // linking them.
       //
       // THE FLOOR OF 10 IS THE SILENCE WINDOW'S, NOT THE CAP'S. A 1s cost cap
       // is absurd but harmless on its own. What it was not harmless to is the
@@ -432,7 +430,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // CAP is what makes the half-bound incapable of undercutting the clamp
       // it is applied to. Flooring after the min instead would let the window
       // TIE the cap, and a tie fires the cap first (insertion order).
-      const maxSeconds = Math.min(Math.max(parsedOrDefault, 10), 750);
+      const maxSeconds = Math.min(Math.max(parsedOrDefault, 10), 715);
       capTimer = setTimeout(() => {
         log("call cap reached, sending goodbye", { callId, maxSeconds });
         try {
@@ -471,7 +469,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //
       // THE ORDERING IS ENFORCED HERE, NOT DESCRIBED. The two knobs are
       // independent in the environment: PHONE_MAX_SILENT_SECONDS clamps to
-      // 5–120 and PHONE_MAX_CALL_SECONDS to <=750, so `120` and `60` is a
+      // 5–120 and PHONE_MAX_CALL_SECONDS to <=715, so `120` and `60` is a
       // legal pair an operator can reach by two individually sensible edits.
       // Under it, on a call where nobody speaks, the CAP fires first and
       // hands the model the open-ended "Politely wrap up…" below — which is
