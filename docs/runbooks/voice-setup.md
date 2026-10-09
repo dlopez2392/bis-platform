@@ -598,6 +598,16 @@ Beyond Step 2's three, these are the ones worth knowing by name:
   saga this milestone closed out). Unset behavior: still works, just leaks
   the `vercel.app` domain into links again — don't unset this without a
   reason.
+- **`CRON_SECRET`** — sensitive, Vercel Production only (never Preview;
+  `production-isolation.md`). Any long random string. Vercel's cron calls
+  `/api/cron/reminders` every 15 minutes (`apps/web/vercel.json`) and
+  attaches `Authorization: Bearer <CRON_SECRET>` itself; that one route runs
+  every automation pass, the follow-up emails above and the cron reminders
+  included. Unset behavior: the route answers 503 and NO automation runs; a
+  mismatched value answers 401 to the same effect. The alerting pass is one
+  of the passes that stops, so what notices is the hourly `ops-health.yml`
+  check (`OPS_HEALTH_SECRET`), which goes red once no tick has completed for
+  45 minutes.
 - **`TELNYX_PUBLIC_KEY`** — unset by default; SET in production since
   2026-09-29 (inbound texts need it). See "TELNYX_PUBLIC_KEY —
   hardened activation procedure" above before ever setting this one; it is
