@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Suspense, isValidElement, type ReactElement, type ReactNode } from "react";
+import { m } from "@/lib/messages";
 
 /**
  * ONE thing under test: the agency's Settings page hands BrandingPanel the
@@ -240,5 +241,22 @@ describe("settings page — applying a blueprint later (D-086)", () => {
     f.set("blueprintId", "bp_1");
     await (dialog!.props.action as (fd: FormData) => Promise<unknown>)(f);
     expect(blueprintActions.applyBlueprintAction).toHaveBeenCalledWith("a1", f);
+  });
+});
+
+/**
+ * Review round 2, minor 3: createFieldAction's reserved-key throw
+ * (review round 1, m4) lands on the dashboard's generic error page — this
+ * form has no result-returning wiring to show it inline. A browser-side
+ * refusal on the field-key input itself is the cheap, real UX fix; the
+ * server throw stays as the backstop for a bypassed/scripted submit.
+ */
+describe("settings page — the custom field key input refuses the reserved key in the browser (review round 2, minor 3)", () => {
+  it("carries the reserved-key pattern and its title, replacing the old shape-only pattern (mutation: keep pattern=\"[a-z0-9_]+\" → FAILS)", async () => {
+    const all = await pageElements();
+    const input = all.find((e) => (e.props as { id?: string }).id === "field-key");
+    expect(input, "the field-key Input").toBeTruthy();
+    expect(input!.props.pattern).toBe("(?!referred_by$)[a-z0-9_]+");
+    expect(input!.props.title).toBe(m["settings.fieldKeyReserved"]);
   });
 });

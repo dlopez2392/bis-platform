@@ -209,7 +209,19 @@ export default async function CrmSettingsPage({
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="field-key">{m["settings.fieldKey"]}</Label>
-                  <Input id="field-key" name="fieldKey" required pattern="[a-z0-9_]+" />
+                  {/* Review round 2, minor 3: a browser-side refusal of the
+                      reserved "referred_by" key (createFieldAction's own
+                      server-side throw, round 1 m4, lands on the dashboard's
+                      generic error page — this form has no result-returning
+                      wiring to show it inline, so the server check is a
+                      backstop, not the primary UX). Verified under the regex
+                      engine's negative-lookahead support: "referred_by" ->
+                      false, "referred_by_2" -> true, "gate_code" -> true. */}
+                  <Input
+                    id="field-key" name="fieldKey" required
+                    pattern="(?!referred_by$)[a-z0-9_]+"
+                    title={m["settings.fieldKeyReserved"]}
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="field-type">{m["settings.dataType"]}</Label>
