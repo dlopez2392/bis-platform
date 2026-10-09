@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { partOfDay, groupSlots, successCopy } from "./booking-page";
+import { partOfDay, groupSlots, successCopy, calendarLink } from "./booking-page";
 import { bookingStrings } from "@/lib/booking/public-strings";
 
 /**
@@ -138,4 +138,16 @@ describe("successCopy — the success screen says only what is true (D-033)", ()
     expect(bookingStrings("en").successBodyNoEmail).not.toMatch(/we've sent|we sent/i);
     expect(bookingStrings("es").successBodyNoEmail).not.toMatch(/te enviamos/i);
   });
+});
+
+describe("calendarLink — the success screen offers the add-to-calendar file (F-048)", () => {
+  for (const locale of ["en", "es"] as const) {
+    const s = bookingStrings(locale);
+    it(`${locale}: a link to the file, in the booker's language, whenever there is one (mutation: always null → FAILS)`, () => {
+      expect(calendarLink(s, { calendarUrl: "https://x/b/p/ics/t" })).toEqual({ href: "https://x/b/p/ics/t", label: s.addToCalendar });
+    });
+    it(`${locale}: nothing at all without a url — never a link to nowhere`, () => {
+      expect(calendarLink(s, { calendarUrl: "" })).toBeNull();
+    });
+  }
 });

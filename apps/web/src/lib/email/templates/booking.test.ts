@@ -4,7 +4,7 @@ import { emailBrand } from "./shell";
 import {
   bookingAlertEmail, bookingConfirmationEmail, bookingReminderEmail, bookingRescheduledEmail,
   bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject,
-  bookingRescheduledSubject,
+  bookingRescheduledSubject, bookingCancelledByBusinessEmail, bookingCancelledByBusinessSubject,
 } from "./booking";
 
 const UNBRANDED: Branding = {
@@ -488,6 +488,107 @@ describe("bookingCancelledEmail", () => {
       // nothing to click.
       expect(html).not.toContain("<a href");
       expect(text.trim().length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("bookingConfirmationEmail — the add-to-calendar link (F-048)", () => {
+  const ICS_URL = "https://bis-platform-six.vercel.app/b/pub1/ics/tok_1";
+
+  it("links the calendar file plainly in both parts when there is one (mutation: drop the link → FAILS)", () => {
+    const { html, text } = bookingConfirmationEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL, calendarUrl: ICS_URL,
+    });
+    expect(html).toContain(`href="${ICS_URL}"`);
+    expect(html).toContain("Add to your calendar");
+    expect(text).toContain(`Add to your calendar: ${ICS_URL}`);
+  });
+
+  it("speaks Spanish for a Spanish booker", () => {
+    const { html, text } = bookingConfirmationEmail({
+      brand, locale: "es", whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL, calendarUrl: ICS_URL,
+    });
+    for (const part of [html, text]) {
+      expect(part).toContain("Agregar a tu calendario");
+      expect(part).not.toContain("Add to your calendar");
+    }
+  });
+
+  it("omits the line entirely without a url — never a link to nowhere", () => {
+    for (const calendarUrl of [undefined, ""]) {
+      const { html, text } = bookingConfirmationEmail({
+        brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL, calendarUrl,
+      });
+      expect(html).not.toContain("Add to your calendar");
+      expect(text).not.toContain("Add to your calendar");
+    }
+  });
+});
+
+/**
+ * F-048: the notice a customer gets when the BUSINESS cancels from the
+ * Calendar page. The owner sees and can edit `message` in the Cancel dialog;
+ * the rest is fixed. Customer-facing restraint, as the confirmation: plain
+ * paragraphs and one plain link (to book again), never a button.
+ */
+describe("bookingCancelledByBusinessEmail", () => {
+  const REBOOK = "https://bis-platform-six.vercel.app/b/pub1";
+
+  it("says the booking was cancelled, with the time and the owner's own message, in both parts", () => {
+    const { html, text } = bookingCancelledByBusinessEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY,
+      message: "Our truck broke down.\nWe're sorry!", rebookUrl: REBOOK,
+    });
+    expect(bookingCancelledByBusinessSubject("en")).toBe("Your booking has been cancelled");
+    for (const part of [html, text]) {
+      expect(part).toContain("Your booking has been cancelled.");
+      expect(part).toContain(WHEN_BOOKER);
+      expect(part).toContain(WHEN_COMPANY);
+      expect(part).toContain("Our truck broke down.");
+    }
+    // The owner's line break survives into the html part as a break.
+    expect(html).toContain("Our truck broke down.<br />We're sorry!");
+    expect(text).toContain("Our truck broke down.\nWe're sorry!");
+    expect(html).toContain(`href="${REBOOK}"`);
+    expect(text).toContain(`Book a new time: ${REBOOK}`);
+  });
+
+  it("escapes the owner's message (mutation: drop escapeHtml on the message → FAILS)", () => {
+    const { html } = bookingCancelledByBusinessEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_BOOKER,
+      message: "<script>alert(1)</script>", rebookUrl: "",
+    });
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("shows the time once when both zones read the same, and leaves out an empty message and an absent rebook link", () => {
+    const { html, text } = bookingCancelledByBusinessEmail({
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_BOOKER, message: "   ", rebookUrl: "",
+    });
+    expect(text.split(WHEN_BOOKER).length - 1).toBe(1);
+    expect(html).not.toContain("<a href");
+    expect(text).not.toContain("Book a new time");
+    expect(text.trim().length).toBeGreaterThan(0);
+  });
+
+  it("speaks Spanish throughout when the owner chose Spanish, and carries no template syntax in either language", () => {
+    const es = bookingCancelledByBusinessEmail({
+      brand, locale: "es", whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY,
+      message: "Lo sentimos.", rebookUrl: REBOOK,
+    });
+    expect(bookingCancelledByBusinessSubject("es")).toBe("Tu cita fue cancelada");
+    for (const part of [es.html, es.text]) {
+      expect(part).toContain("Tu cita fue cancelada.");
+      expect(part).toContain("Agendar otro horario");
+      expect(part).toContain("para nosotros");
+      expect(part).not.toContain("cancelled");
+    }
+    for (const locale of ["en", "es"] as const) {
+      const { html, text } = bookingCancelledByBusinessEmail({
+        brand, locale, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, message: "x", rebookUrl: REBOOK,
+      });
+      for (const part of [html, text, bookingCancelledByBusinessSubject(locale)]) expect(part).not.toContain("{{");
     }
   });
 });

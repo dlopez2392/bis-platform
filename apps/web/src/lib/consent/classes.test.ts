@@ -70,6 +70,10 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
   "automation.quote_followup": ["marketing", "automated", "unsubscribe"],
   "automation.no_show_nudge": ["marketing", "automated", "unsubscribe"],
   "staff.composer_email": ["staff_typed", "any", "none"],
+  // F-048: the customer notice a person composes in the Calendar page's
+  // Cancel dialog and sends by cancelling. Staff-typed like the composer: an
+  // unsubscribe must not keep a customer from hearing their appointment is off.
+  "staff.booking_cancel_notice": ["staff_typed", "any", "none"],
   "operator.booking_alert": ["operator", "any", "none"],
   "operator.cancel_notice": ["operator", "any", "none"],
   "operator.lead_alert": ["operator", "any", "none"],
@@ -83,9 +87,9 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
 };
 
 describe("EMAIL_KINDS — spec §4.3's table, row for row", () => {
-  it("has exactly the twenty-three send sites (E1, plus the operational floor's ops alert) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the twenty-four send sites (E1, plus the operational floor's ops alert and F-048's cancel notice) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(EMAIL_KINDS).sort()).toEqual(Object.keys(EMAIL_TABLE).sort());
-    expect(Object.keys(EMAIL_KINDS)).toHaveLength(23);
+    expect(Object.keys(EMAIL_KINDS)).toHaveLength(24);
   });
 
   it.each(Object.entries(EMAIL_TABLE))("%s is %j (mutation: change any one of this row's three fields → FAILS)", (kind, [cls, hours, footer]) => {

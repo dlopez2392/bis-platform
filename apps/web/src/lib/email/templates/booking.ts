@@ -16,6 +16,8 @@ const CONFIRMATION_COPY = {
     forUs: (when: string) => `${when} for us`,
     join: "Join your video meeting",
     cancel: "Cancel this booking",
+    // F-048: the add-to-calendar file (`app/b/[publicId]/ics/[token]`).
+    addToCalendar: "Add to your calendar",
   },
   es: {
     subject: "Tu cita quedó agendada",
@@ -23,6 +25,7 @@ const CONFIRMATION_COPY = {
     forUs: (when: string) => `${when} para nosotros`,
     join: "Unirse a la videollamada",
     cancel: "Cancelar esta cita",
+    addToCalendar: "Agregar a tu calendario",
   },
 } as const;
 
@@ -112,6 +115,9 @@ export type BookingConfirmationInput = {
    *  this `undefined` (see `b/[publicId]/actions.ts`). Same empty-vs-absent
    *  discipline as `cancelUrl`: omitted entirely, never a link to nowhere. */
   meetingUrl?: string;
+  /** F-048: the booking's add-to-calendar file (`calendarFileUrl`). Same
+   *  empty-vs-absent discipline as `cancelUrl`: "" or absent, no line. */
+  calendarUrl?: string;
 };
 
 /**
@@ -148,10 +154,17 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
     ? `<p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">${escapeHtml(copy.cancel)}</a></p>`
     : "";
 
+  // F-048: a plain link, like the cancel link — the file is a convenience,
+  // not the call to action the video room is.
+  const calendarHtml = input.calendarUrl
+    ? `<p style="margin:0 0 8px;"><a href="${escapeHtml(input.calendarUrl)}" style="color:#71717a;">${escapeHtml(copy.addToCalendar)}</a></p>`
+    : "";
+
   const html = shell(input.brand, `
     <p style="margin:0 0 12px;">${escapeHtml(copy.title)}</p>
     ${whenHtml}
     ${meetingHtml}
+    ${calendarHtml}
     ${cancelHtml}
   `);
 
@@ -161,6 +174,7 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
     input.whenBookerZone,
     ...(sameZone ? [] : [copy.forUs(input.whenCompanyZone)]),
     ...(input.meetingUrl ? ["", `${copy.join}: ${input.meetingUrl}`] : []),
+    ...(input.calendarUrl ? ["", `${copy.addToCalendar}: ${input.calendarUrl}`] : []),
     ...(input.cancelUrl ? ["", `${copy.cancel}: ${input.cancelUrl}`] : []),
   ].join("\n");
 
@@ -451,6 +465,85 @@ export function bookingCancelledEmail(input: BookingCancelledInput): { html: str
   `);
 
   const text = [copy.title, "", input.whenCompanyZone, "", copy.notYou].join("\n");
+
+  return { html, text };
+}
+
+/**
+ * F-048: the customer's copy of a cancel the BUSINESS made, from the Calendar
+ * page. Same tú register as `CONFIRMATION_COPY`; the subject and title are
+ * `CANCELLED_COPY`'s own words, so a customer reads the same sentence
+ * whoever cancelled. The owner's own message (shown, and editable, in the
+ * Cancel dialog) sits between the time and the way to book again.
+ */
+const BUSINESS_CANCELLED_COPY = {
+  en: {
+    subject: CANCELLED_COPY.en.subject,
+    title: CANCELLED_COPY.en.title,
+    forUs: (when: string) => `${when} for us`,
+    rebook: "Book a new time",
+  },
+  es: {
+    subject: CANCELLED_COPY.es.subject,
+    title: CANCELLED_COPY.es.title,
+    forUs: (when: string) => `${when} para nosotros`,
+    rebook: "Agendar otro horario",
+  },
+} as const;
+
+export function bookingCancelledByBusinessSubject(locale: PublicLocale = "en"): string {
+  return BUSINESS_CANCELLED_COPY[locale].subject;
+}
+
+export type BookingCancelledByBusinessInput = {
+  brand: EmailBrand;
+  /** The language the owner chose for this notice. English when absent. */
+  locale?: PublicLocale;
+  /** The cancelled time in the booker's own zone, in `locale`. */
+  whenBookerZone: string;
+  /** The same time in the business's zone; shown only when it reads
+   *  differently, the confirmation's rule. */
+  whenCompanyZone: string;
+  /** Typed (or left as the default) by the owner. Plain text: escaped, and
+   *  its line breaks kept. Blank leaves the paragraph out. */
+  message: string;
+  /** The booking page, to choose a new time. "" when the calendar is off or
+   *  there is no origin: no line at all, never a link to nowhere. */
+  rebookUrl: string;
+};
+
+export function bookingCancelledByBusinessEmail(input: BookingCancelledByBusinessInput):
+  { html: string; text: string } {
+  const copy = BUSINESS_CANCELLED_COPY[input.locale ?? "en"];
+  const sameZone = input.whenBookerZone === input.whenCompanyZone;
+  const message = input.message.trim();
+
+  const whenHtml = sameZone
+    ? `<p style="margin:0 0 16px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>`
+    : `<p style="margin:0 0 4px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>
+       <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(copy.forUs(input.whenCompanyZone))}</p>`;
+  const messageHtml = message
+    ? `<p style="margin:0 0 16px;">${escapeHtml(message).replace(/\n/g, "<br />")}</p>`
+    : "";
+  const rebookHtml = input.rebookUrl
+    ? `<p style="margin:0;"><a href="${escapeHtml(input.rebookUrl)}" style="color:#71717a;">${escapeHtml(copy.rebook)}</a></p>`
+    : "";
+
+  const html = shell(input.brand, `
+    <p style="margin:0 0 12px;">${escapeHtml(copy.title)}</p>
+    ${whenHtml}
+    ${messageHtml}
+    ${rebookHtml}
+  `);
+
+  const text = [
+    copy.title,
+    "",
+    input.whenBookerZone,
+    ...(sameZone ? [] : [copy.forUs(input.whenCompanyZone)]),
+    ...(message ? ["", message] : []),
+    ...(input.rebookUrl ? ["", `${copy.rebook}: ${input.rebookUrl}`] : []),
+  ].join("\n");
 
   return { html, text };
 }

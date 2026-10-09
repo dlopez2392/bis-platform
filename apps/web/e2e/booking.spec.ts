@@ -337,6 +337,20 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
       "too-fast/honeypot/token guard fired and nothing was actually booked",
     ).toBeTruthy();
 
+    // --- F-048: the add-to-calendar file, offered on the success screen ----
+    // A plain GET (no mutation): the file must come back as text/calendar,
+    // carrying one event with a UID, for the booking just made.
+    const calendarLink = anonPage.getByRole("link", { name: "Add to my calendar" });
+    await expect(calendarLink).toBeVisible();
+    const calendarHref = await calendarLink.getAttribute("href");
+    expect(calendarHref, "a genuine booking must offer its calendar file").toBeTruthy();
+    const ics = await anonPage.request.get(calendarHref!);
+    expect(ics.status()).toBe(200);
+    expect(ics.headers()["content-type"]).toBe("text/calendar; charset=utf-8");
+    const icsBody = await ics.text();
+    expect(icsBody.startsWith("BEGIN:VCALENDAR\r\n")).toBe(true);
+    expect(icsBody).toMatch(/\r\nUID:[^\r\n]+@bookings\.bis-rgv\.com\r\n/);
+
     // --- Step 3: the operator sees it, positive assertions first -----------
     await page.goto(`/dashboard/accounts/${accountId}/conversations`);
     const thread = page.getByRole("link").filter({ hasText: bookerFullName });
@@ -350,6 +364,24 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
     await page.goto(`/dashboard/accounts/${accountId}/calendar`);
     await expect(page.getByText(bookerFullName)).toBeVisible();
     await expect(page.getByText(noteText)).toBeVisible();
+
+    // --- F-048: Cancel composes the customer's email, then Undo -------------
+    // This booker has an email, so Cancel opens the dialog that composes the
+    // notice; cancelling says the email will go once the toast closes. Undo,
+    // inside that window, puts the booking back before anything is sent, so
+    // the steps below still find it live (and the notice is never sent: its
+    // queued thread row is removed, which purgeBooking would sweep anyway).
+    const row = page.locator("li").filter({ hasText: bookerFullName });
+    await row.getByRole("button", { name: "Cancel", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: `Cancel ${bookerFullName}'s appointment` });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel(`Email ${bookerFullName} that it's cancelled`)).toBeChecked();
+    await dialog.getByRole("button", { name: "Cancel appointment" }).click();
+    const noticeToast = page.locator("[data-sonner-toast]")
+      .filter({ hasText: "We'll email the customer when this closes" });
+    await expect(noticeToast).toBeVisible();
+    await noticeToast.getByRole("button", { name: "Undo" }).click();
+    await expect(page.getByText("Appointment is back on.")).toBeVisible();
 
     // --- Step 4: the SAME slot is gone from the public page ----------------
     // Negative half, locked to the exact label step 2 captured — a fresh

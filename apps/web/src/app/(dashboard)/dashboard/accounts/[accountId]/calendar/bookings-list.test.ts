@@ -53,6 +53,8 @@ function render(booking: Booking): string {
     createElement(BookingsList, {
       accountId: "a1", timezone: "America/Chicago", bookings: [booking], nowIso: "2026-09-30T12:00:00Z",
       statusAction: async () => ({ ok: true as const }),
+      noticeOptionAction: async () => ({ ok: true as const, notice: "available" as const }),
+      cancelAction: async () => ({ ok: true as const, version: "v", notice: "none" as const }),
       undoCancelAction: async () => ({ ok: true as const }),
     }),
   );
@@ -193,6 +195,8 @@ describe("BookingsList — outcome buttons only once the appointment has started
     createElement(BookingsList, {
       accountId: "a1", timezone: "America/Chicago", bookings: [booking], nowIso,
       statusAction: async () => ({ ok: true as const }),
+      noticeOptionAction: async () => ({ ok: true as const, notice: "available" as const }),
+      cancelAction: async () => ({ ok: true as const, version: "v", notice: "none" as const }),
       undoCancelAction: async () => ({ ok: true as const }),
     }),
   ));
@@ -226,10 +230,83 @@ describe("BookingsList — the empty state (D-030 review)", () => {
     const text = renderedText(renderToStaticMarkup(createElement(BookingsList, {
       accountId: "a1", timezone: "America/Chicago", bookings: [], nowIso: "2026-09-30T12:00:00Z",
       statusAction: async () => ({ ok: true as const }),
+      noticeOptionAction: async () => ({ ok: true as const, notice: "available" as const }),
+      cancelAction: async () => ({ ok: true as const, version: "v", notice: "none" as const }),
       undoCancelAction: async () => ({ ok: true as const }),
     })));
     expect(text).toContain(m["calendar.bookings.empty"]);
     expect(m["calendar.bookings.empty"]).not.toMatch(/upcoming/i);
     expect(m["calendar.bookings.empty"]).toMatch(/completed or no-show/i);
+  });
+});
+
+/**
+ * Code only: line/block comments (and so JSX comments) removed, string and
+ * template contents kept. The repo's scanner, the same as
+ * lib/palette/registry.test.ts, app-sidebar.test.ts and
+ * link-site-card.test.ts: a source pin a comment can satisfy proves nothing.
+ */
+function stripComments(src: string): string {
+  let out = "";
+  let mode: "code" | "line" | "block" | "sq" | "dq" | "tpl" = "code";
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (mode === "code") {
+      if (c === "/" && d === "/") { mode = "line"; i++; continue; }
+      if (c === "/" && d === "*") { mode = "block"; i++; continue; }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = "tpl";
+      out += c;
+      continue;
+    }
+    if (mode === "line") { if (c === "\n") { mode = "code"; out += c; } continue; }
+    if (mode === "block") {
+      if (c === "*" && d === "/") { mode = "code"; i++; } else if (c === "\n") out += c;
+      continue;
+    }
+    if (c === "\\") { out += c + (d ?? ""); i++; continue; }
+    if ((mode === "sq" && c === "'") || (mode === "dq" && c === '"') || (mode === "tpl" && c === "`")) {
+      mode = "code";
+    }
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * Fix round 2 (I-1), hardened in round 3: the Cancel button's sequence is
+ * `runCancelButton` (cancel-flow.test.ts pins its paths). This pins that the
+ * row USES it, on CODE only (comments stripped): the dialog opens, and the
+ * server is asked, only through runCancelButton's own arguments, and every
+ * other `setDialogOpen` is the state pair, the dialog's own close
+ * pass-through, or a close (mutations: open the dialog from another handler
+ * in any spelling, or keep the pinned text alive in a comment while the code
+ * does otherwise → FAILS).
+ */
+describe("the row's Cancel button goes through runCancelButton (F-048 I-1)", () => {
+  it("opens the dialog and asks the server only from inside runCancelButton's arguments", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const code = stripComments(readFileSync(join(__dirname, "bookings-list.tsx"), "utf8"));
+
+    expect(code).toMatch(/onClick=\{onCancel\}/);
+    expect(code).toMatch(/function onCancel\(\) \{\s+startTransition\(async \(\) => \{\s+await runCancelButton\(\{/);
+
+    const start = code.indexOf("await runCancelButton({");
+    const end = code.indexOf("});", start);
+    expect(start, "runCancelButton is called").toBeGreaterThan(-1);
+    const args = code.slice(start, end);
+    expect(args).toMatch(/openDialog: \(\) => setDialogOpen\(true\),/);
+    expect(args).toMatch(/probe: \(\) => noticeOptionAction\(booking\.id\),/);
+
+    const outside = code.slice(0, start) + code.slice(end);
+    expect(outside).not.toMatch(/noticeOptionAction\(/);
+    const leftover = outside
+      .replace(/const \[dialogOpen, setDialogOpen\] = useState\(false\)/g, "")
+      .replace(/onOpenChange=\{setDialogOpen\}/g, "")
+      .replace(/setDialogOpen\(false\)/g, "");
+    expect(leftover).not.toMatch(/setDialogOpen/);
   });
 });

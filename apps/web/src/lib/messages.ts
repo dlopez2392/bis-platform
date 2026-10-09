@@ -1237,6 +1237,53 @@ export const m = {
   "calendar.bookings.restoreRescheduled": "This appointment was moved to a new time, so the old one can't be put back.",
   "calendar.bookings.restoreNotOurs": "The customer cancelled this one themselves, by link or on a call, so it can't be put back from here.",
   "calendar.bookings.notStartedYet": "This appointment hasn't started yet. Mark it completed or no-show once it has.",
+  // F-048: when an email can reach the customer, Cancel opens a dialog
+  // showing it; the owner can change its words and language, or not send it.
+  // Otherwise Cancel cancels at once and the toast says why nobody was told.
+  // Either way it runs at once with Undo, and the email goes only once the
+  // Undo has closed.
+  // "{name}" is the customer's name. Each ".es" line is the Spanish twin,
+  // written out for when the dashboard speaks Spanish (usted, as the other
+  // operator-facing twins).
+  "calendar.bookings.cancelledToastNotice": "Appointment cancelled. We'll email the customer when this closes, unless you undo.",
+  "calendar.bookings.cancelledToastNotice.es": "Cita cancelada. Le enviaremos un correo al cliente cuando se cierre este aviso, a menos que deshaga el cambio.",
+  "calendar.bookings.restoreCustomerTold": "The customer has already been emailed that it's cancelled, so it can't be put back from here.",
+  "calendar.bookings.restoreCustomerTold.es": "Ya se le envió un correo al cliente avisando que se canceló, así que no se puede restaurar desde aquí.",
+  // The Undo came too late and the email did NOT go (the send failed or was
+  // refused): say so, so the owner tells the customer themselves.
+  "calendar.bookings.restoreNoticeFailed": "It's too late to undo this here, and our email to the customer didn't go through. Let them know it's cancelled.",
+  "calendar.bookings.restoreNoticeFailed.es": "Ya es tarde para deshacerlo aquí, y nuestro correo al cliente no llegó a enviarse. Avísele que se canceló.",
+  // Too late, and whether the email went is not known yet (still sending, or
+  // stuck): never claim it went.
+  "calendar.bookings.restoreNoticeUnknown": "It's too late to undo this here. Check the customer's messages to see whether our email went.",
+  "calendar.bookings.restoreNoticeUnknown.es": "Ya es tarde para deshacerlo aquí. Revise los mensajes del cliente para ver si nuestro correo salió.",
+  // The cancel this Undo names was replaced by a newer change (another tab).
+  "calendar.bookings.restoreChanged": "This appointment changed after you cancelled it, so it can't be put back from here.",
+  "calendar.bookings.restoreChanged.es": "Esta cita cambió después de que la canceló, así que no se puede restaurar desde aquí.",
+  // Cancelled at once, no dialog: the customer's address has hard-bounced or
+  // complained, so no email can reach them (D-016).
+  "calendar.bookings.cancelledToastAddressBlocked": "Appointment cancelled. The customer's email address can't receive our emails, so we haven't told them. Call or text them.",
+  "calendar.bookings.cancelledToastAddressBlocked.es": "Cita cancelada. El correo del cliente no puede recibir nuestros mensajes, así que no le avisamos. Llámele o mándele un mensaje.",
+  "calendar.cancelDialog.title": "Cancel {name}'s appointment",
+  "calendar.cancelDialog.title.es": "Cancelar la cita de {name}",
+  "calendar.cancelDialog.notify": "Email {name} that it's cancelled",
+  "calendar.cancelDialog.notify.es": "Avisarle a {name} por correo que se canceló",
+  "calendar.cancelDialog.language": "Write it in",
+  "calendar.cancelDialog.language.es": "Escribirlo en",
+  "calendar.cancelDialog.languageEnglish": "English",
+  "calendar.cancelDialog.languageEnglish.es": "Inglés",
+  "calendar.cancelDialog.languageSpanish": "Spanish",
+  "calendar.cancelDialog.languageSpanish.es": "Español",
+  "calendar.cancelDialog.message": "Your message",
+  "calendar.cancelDialog.message.es": "Su mensaje",
+  "calendar.cancelDialog.messageHint": "We add the time and a link to book again. The email goes out once Undo closes.",
+  "calendar.cancelDialog.messageHint.es": "Agregamos la hora y un enlace para volver a agendar. El correo sale cuando se cierra Deshacer.",
+  "calendar.cancelDialog.messageTooLong": "That message is too long. Keep it under 2,000 characters.",
+  "calendar.cancelDialog.messageTooLong.es": "Ese mensaje es demasiado largo. Use menos de 2,000 caracteres.",
+  "calendar.cancelDialog.confirm": "Cancel appointment",
+  "calendar.cancelDialog.confirm.es": "Cancelar cita",
+  "calendar.cancelDialog.keep": "Keep it",
+  "calendar.cancelDialog.keep.es": "Mantenerla",
   "calendar.bookings.status.booked": "Booked",
   "calendar.bookings.status.cancelled": "Cancelled",
   "calendar.bookings.status.completed": "Completed",

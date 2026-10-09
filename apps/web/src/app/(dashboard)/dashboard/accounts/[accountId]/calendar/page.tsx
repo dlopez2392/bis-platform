@@ -8,9 +8,20 @@ import { m } from "@/lib/messages";
 import { CalendarSettings } from "./calendar-settings";
 import { BookingsList } from "./bookings-list";
 import { EmbedSnippet } from "./embed-snippet";
-import { updateCalendarSettingsAction, setBookingStatusAction, undoCancelBookingAction } from "./actions";
+import {
+  updateCalendarSettingsAction, setBookingStatusAction, cancelNoticeOptionAction, cancelBookingAction,
+  undoCancelBookingAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
+// F-048: Cancel's customer notice waits out the Undo window inside the
+// cancel's own invocation (`after()` in `cancelBookingAction`), and server
+// actions run in this page's function. Fluid compute's default (300 s) would
+// already cover it; this keeps the ceiling EXPLICIT, so turning Fluid off
+// (a much lower default) cannot quietly cut the notice off, and 60 s outlasts
+// the 15 s wait with room for the reads and the send while still bounding a
+// runaway render. `cancel-notice.test.ts` pins the margin.
+export const maxDuration = 60;
 
 export default async function CalendarPage({
   params,
@@ -61,6 +72,8 @@ export default async function CalendarPage({
 
   const boundUpdateSettings = updateCalendarSettingsAction.bind(null, accountId);
   const boundSetStatus = setBookingStatusAction.bind(null, accountId);
+  const boundNoticeOption = cancelNoticeOptionAction.bind(null, accountId);
+  const boundCancel = cancelBookingAction.bind(null, accountId);
   const boundUndoCancel = undoCancelBookingAction.bind(null, accountId);
 
   return (
@@ -76,6 +89,8 @@ export default async function CalendarPage({
             bookings={bookings}
             nowIso={nowIso}
             statusAction={boundSetStatus}
+            noticeOptionAction={boundNoticeOption}
+            cancelAction={boundCancel}
             undoCancelAction={boundUndoCancel}
           />
         </div>

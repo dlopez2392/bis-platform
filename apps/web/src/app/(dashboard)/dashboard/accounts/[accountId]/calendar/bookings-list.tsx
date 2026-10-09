@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import type { BookingRow, BookingStatus } from "@bis/db";
@@ -11,7 +11,9 @@ import { DotPill } from "@/components/dot-pill";
 import { m } from "@/lib/messages";
 import { CONFIRM_REPLY_TREATMENTS } from "./confirm-reply";
 import { runCancelWithUndo } from "./cancel-booking";
-import type { ActionResult } from "./actions";
+import { CancelDialog } from "./cancel-dialog";
+import { runCancelButton, NO_NOTICE } from "./cancel-flow";
+import type { ActionResult, CancelBookingResult, CancelNoticeChoice, CancelNoticeOptionResult } from "./actions";
 
 type Booking = BookingRow & { contact_name: string; contact_email: string | null };
 
@@ -64,15 +66,20 @@ function timeRange(startsAt: string, endsAt: string, timeZone: string): string {
 }
 
 function StatusActions({
-  booking, started, statusAction, undoCancelAction,
+  booking, started, when, statusAction, noticeOptionAction, cancelAction, undoCancelAction,
 }: {
   booking: Booking;
   /** D-030: the appointment's start is at or before the page's `nowIso`. */
   started: boolean;
+  /** The row's own time, in the account's zone, for the Cancel dialog. */
+  when: string;
   statusAction: (bookingId: string, status: BookingStatus) => Promise<ActionResult>;
-  undoCancelAction: (bookingId: string) => Promise<ActionResult>;
+  noticeOptionAction: (bookingId: string) => Promise<CancelNoticeOptionResult>;
+  cancelAction: (bookingId: string, notice: CancelNoticeChoice) => Promise<CancelBookingResult>;
+  undoCancelAction: (bookingId: string, version: string, noticeMessageId?: string) => Promise<ActionResult>;
 }) {
   const [pending, startTransition] = useTransition();
+  const [dialogOpen, setDialogOpen] = useState(false);
   // Once a booking has left "booked" it has no buttons here. The one way
   // back is the Undo on Cancel's own toast (D-036), never a button on the row.
   if (booking.status !== "booked") return null;
@@ -86,15 +93,34 @@ function StatusActions({
   }
 
   // D-036: Cancel runs at once and its toast carries Undo (DESIGN.md rule 6;
-  // see `./cancel-booking.ts` for why this cancel is reversible).
-  function cancel() {
+  // see `./cancel-booking.ts` for why this cancel is reversible). F-048: when
+  // a customer notice can go, the dialog composes it first and it goes only
+  // once the Undo has closed; when none can, Cancel cancels at once and the
+  // toast says why nobody was told (`./cancel-flow.ts`).
+  async function cancelWith(notice: CancelNoticeChoice, noNoticeMessage?: string) {
+    await runCancelWithUndo(
+      () => cancelAction(booking.id, notice),
+      (version, noticeMessageId) => undoCancelAction(booking.id, version, noticeMessageId),
+      toast,
+      { noNoticeMessage },
+    );
+  }
+
+  // The sequence lives in `runCancelButton` (./cancel-flow.ts), where it is
+  // tested without React.
+  function onCancel() {
     startTransition(async () => {
-      await runCancelWithUndo(
-        () => statusAction(booking.id, "cancelled"),
-        () => undoCancelAction(booking.id),
-        toast,
-      );
+      await runCancelButton({
+        contactEmail: booking.contact_email,
+        probe: () => noticeOptionAction(booking.id),
+        openDialog: () => setDialogOpen(true),
+        cancelNow: (noNoticeMessage) => cancelWith(NO_NOTICE, noNoticeMessage),
+      });
     });
+  }
+
+  function confirmFromDialog(notice: CancelNoticeChoice) {
+    startTransition(async () => { await cancelWith(notice); });
   }
 
   return (
@@ -112,15 +138,23 @@ function StatusActions({
           </Button>
         </>
       ) : null}
-      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={cancel}>
+      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={onCancel}>
         {m["calendar.bookings.cancel"]}
       </Button>
+      {dialogOpen ? (
+        <CancelDialog
+          contactName={booking.contact_name}
+          when={when}
+          onOpenChange={setDialogOpen}
+          onConfirm={confirmFromDialog}
+        />
+      ) : null}
     </div>
   );
 }
 
 export function BookingsList({
-  accountId, timezone, bookings, nowIso, statusAction, undoCancelAction,
+  accountId, timezone, bookings, nowIso, statusAction, noticeOptionAction, cancelAction, undoCancelAction,
 }: {
   accountId: string;
   /** The ACCOUNT zone (spec: grouped by day in the account zone, not the
@@ -132,8 +166,14 @@ export function BookingsList({
    *  here: the server render and the hydrated client must agree. */
   nowIso: string;
   statusAction: (bookingId: string, status: BookingStatus) => Promise<ActionResult>;
-  /** D-036: the Undo on Cancel's toast. */
-  undoCancelAction: (bookingId: string) => Promise<ActionResult>;
+  /** F-048: can a customer notice go for this booking? Asked before the
+   *  dialog opens; only "available" opens it. */
+  noticeOptionAction: (bookingId: string) => Promise<CancelNoticeOptionResult>;
+  /** F-048: Cancel, with the customer notice the dialog composed, or none. */
+  cancelAction: (bookingId: string, notice: CancelNoticeChoice) => Promise<CancelBookingResult>;
+  /** D-036: the Undo on Cancel's toast, naming the cancel's version and the
+   *  notice's queued thread row, when there is one. */
+  undoCancelAction: (bookingId: string, version: string, noticeMessageId?: string) => Promise<ActionResult>;
 }) {
   const groups = new Map<string, { heading: string; items: Booking[] }>();
   for (const b of bookings) {
@@ -220,7 +260,10 @@ export function BookingsList({
                       <StatusActions
                         booking={b}
                         started={new Date(b.starts_at).getTime() <= new Date(nowIso).getTime()}
+                        when={timeRange(b.starts_at, b.ends_at, timezone)}
                         statusAction={statusAction}
+                        noticeOptionAction={noticeOptionAction}
+                        cancelAction={cancelAction}
                         undoCancelAction={undoCancelAction}
                       />
                     </li>

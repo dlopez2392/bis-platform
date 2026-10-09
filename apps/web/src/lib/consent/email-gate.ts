@@ -17,8 +17,9 @@ import { sealConsentToken, consentTokenSecrets, isUuid } from "./token";
 /**
  * THE EMAIL GATE (consent chain spec §4.3 "Routing"; plan G1). The only
  * module outside lib/email's own provider files that may reach an email
- * provider (scan 1, scans.test.ts). Every one of the twenty-two email send
- * sites comes through `sendEmail` — directly, through `sendEmailOrThrow`,
+ * provider (scan 1, scans.test.ts). Every email send site (twenty-four
+ * kinds in classes.ts's registry, each named at exactly one site, which
+ * scans.test.ts pins) comes through `sendEmail` — directly, through `sendEmailOrThrow`,
  * through a cron tick's `ctx.email` (`emailSenderFor`), or through
  * `operatorMailer` for the two operator paths that take a provider.
  *
