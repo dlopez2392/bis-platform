@@ -32,13 +32,39 @@ export async function getVoiceProfileByPublicId(
     .not("concierge_form_id", "is", null)
     .maybeSingle();
   if (error) throw new Error(`getVoiceProfileByPublicId failed: ${error.message}`);
-  return (data as ConciergeProfile | null) ?? null;
+  const row = (data as ConciergeProfile | null) ?? null;
+  // D-048: and the destination is PUBLISHED. A form unpublished after the
+  // switch went on left this returning the profile, so the chat kept
+  // answering while `fileLead` refused every lead it took (lib/concierge/
+  // lead.ts). Same rule as the line above: a chat that cannot file anything
+  // is not opened. Checked at READ time on purpose, not as a constraint or a
+  // gate on the switch alone (voice-settings.tsx's `conciergeCanTurnOn`):
+  // publication is mutable state an operator changes on the Forms page.
+  if (!row) return null;
+  return (await isDestinationPublished(db, row.account_id, row.concierge_form_id)) ? row : null;
+}
+
+/** Whether `formId` is a PUBLISHED form of this account. Read through the
+ *  account boundary, like `getForm`, so a pointer that drifted onto another
+ *  account's form reads as "not published", never as theirs. */
+async function isDestinationPublished(
+  db: SupabaseClient, accountId: string, formId: string | null,
+): Promise<boolean> {
+  if (!formId) return false;
+  const { data, error } = await db.from("forms")
+    .select("status").eq("id", formId).eq("account_id", accountId).maybeSingle();
+  if (error) throw new Error(`concierge destination read failed: ${error.message}`);
+  return (data as { status?: string } | null)?.status === "published";
 }
 
 /** Unlike `ConciergeProfile`, `concierge_form_id` is NOT narrowed to
  *  non-null — the whole point of this accessor is to also return a profile
- *  whose concierge is off, which may never have had a destination form. */
-export type ConciergeProfileAnyStatus = VoiceProfileRow & { public_id: string };
+ *  whose concierge is off, which may never have had a destination form.
+ *  `concierge_form_published` (D-048) is read alongside it, so
+ *  `isConciergeLive` can answer from this one row. */
+export type ConciergeProfileAnyStatus = VoiceProfileRow & {
+  public_id: string; concierge_form_published: boolean;
+};
 
 /**
  * Same public_id lookup, ANY status — the concierge-off and
@@ -57,16 +83,23 @@ export async function getVoiceProfileAnyStatusByPublicId(
     .eq("public_id", publicId)
     .maybeSingle();
   if (error) throw new Error(`getVoiceProfileAnyStatusByPublicId failed: ${error.message}`);
-  return (data as ConciergeProfileAnyStatus | null) ?? null;
+  const row = (data as (VoiceProfileRow & { public_id: string }) | null) ?? null;
+  if (!row) return null;
+  return {
+    ...row,
+    concierge_form_published: await isDestinationPublished(db, row.account_id, row.concierge_form_id),
+  };
 }
 
-/** The predicate `getVoiceProfileByPublicId`'s SQL filter used to make for
- *  the caller, spelled out so the layout (lang/branding) and the page
- *  (`notFound()`) can apply it independently against the SAME cached row. */
+/** The predicate `getVoiceProfileByPublicId`'s filter makes for the turn
+ *  route, spelled out so the layout (lang/branding) and the page
+ *  (`notFound()`) can apply it independently against the SAME cached row.
+ *  D-048: on, with a destination, and that destination PUBLISHED. */
 export function isConciergeLive(
-  profile: Pick<VoiceProfileRow, "concierge_enabled" | "concierge_form_id">,
+  profile: Pick<ConciergeProfileAnyStatus, "concierge_enabled" | "concierge_form_id" | "concierge_form_published">,
 ): boolean {
-  return profile.concierge_enabled === true && profile.concierge_form_id != null;
+  return profile.concierge_enabled === true && profile.concierge_form_id != null
+    && profile.concierge_form_published === true;
 }
 
 /**

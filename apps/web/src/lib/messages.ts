@@ -1329,7 +1329,9 @@ export const m = {
   "voice.assistant.enableFailed": "Could not turn on the website assistant.",
   "voice.assistant.disableFailed": "Could not turn off the website assistant.",
   "voice.assistant.wrongForm": "That form belongs to a different company, or was just deleted. Pick another one.",
-  "voice.assistant.formUnpublished": "The form this sends to is no longer published — leads have nowhere good to land. Publish it again, or turn the assistant off to pick another.",
+  // D-048: an unpublished destination now takes the chat down (a chat that
+  // cannot file a lead is not opened), so this says what visitors see.
+  "voice.assistant.formUnpublished": "The form this sends to is no longer published, so the assistant is not answering on your website. Publish it again, or turn the assistant off to pick another.",
   "voice.assistant.formUnpublishedOff": "This form is no longer published. Publish it again or pick another one first.",
   "voice.assistant.unpublishedFormOption": "This form (no longer published)",
   "voice.assistant.snippetTitle": "Add it to your website",

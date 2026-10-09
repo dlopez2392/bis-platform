@@ -428,6 +428,15 @@ describe("ConciergeCard — the render proof", () => {
     expect(text).not.toContain(m["voice.assistant.noFormTitle"]);
   });
 
+  // D-048: an ON assistant whose destination is unpublished is no longer
+  // answering on the website at all (the public chat reads not-live), so the
+  // sentence beside the toggle has to say THAT, not that leads land badly.
+  it("ON with the destination unpublished: the sentence says the assistant is not answering on the website", () => {
+    const text = renderedText(renderCard({ enabled: true, storedFormId: "A", publishedForms: [] }));
+    expect(text).toContain(m["voice.assistant.formUnpublished"]);
+    expect(m["voice.assistant.formUnpublished"]).toMatch(/not answering on your website/);
+  });
+
   it("OFF with the stored destination unpublished: the toggle locks, and the OFF sentence names the reason", () => {
     const html = renderCard({
       enabled: false, storedFormId: "A", publishedForms: [{ id: "B", name: "Contact us" }],
