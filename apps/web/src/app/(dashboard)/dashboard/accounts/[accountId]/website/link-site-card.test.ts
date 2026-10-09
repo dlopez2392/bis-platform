@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
-import { LinkSiteCard } from "./link-site-card";
+import { LinkSiteCard, confirmsUnlink } from "./link-site-card";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -77,11 +77,39 @@ describe("LinkSiteCard — Unlink confirmation (D-057, DESIGN.md rule 6)", () =>
     expect(src).not.toMatch(/window\.confirm|[^.]confirm\(/);
   });
 
-  it("gates the destructive Unlink button on typing the linked domain, in CODE (mutation: drop the typed check → FAILS)", () => {
-    expect(src).toContain("confirmText.trim() !== linked.domain");
+  it("gates the destructive Unlink button on confirmsUnlink, in CODE (mutation: drop the typed check → FAILS)", () => {
+    expect(src).toContain("confirmsUnlink(confirmText, linked.domain)");
     // The disabled expression has to reach the real destructive button, not
     // just exist somewhere in the file.
-    expect(src).toMatch(/disabled=\{unlinking \|\| confirmText\.trim\(\) !== linked\.domain\}/);
+    expect(src).toMatch(/disabled=\{unlinking \|\| !confirmsUnlink\(confirmText, linked\.domain\)\}/);
+  });
+
+  // Review round: the two assertions above pin SOURCE text, which cannot
+  // prove the predicate ITSELF works — they would still pass if `onChange`
+  // became a no-op, since nothing ever drives `confirmText`. `confirmsUnlink`
+  // is extracted as a plain, exported function precisely so this can be a
+  // REAL behavioural test: no DOM, no click, just the predicate the disabled
+  // expression above calls.
+  describe("confirmsUnlink — the predicate itself (mutation: drop .trim()/.toLowerCase() → FAILS below)", () => {
+    const domain = "rioroofing.com";
+
+    it("enables on an exact match", () => {
+      expect(confirmsUnlink("rioroofing.com", domain)).toBe(true);
+    });
+
+    it("is case-insensitive — DESIGN.md rule 6 asks the reader to TYPE the name, not match its exact byte casing", () => {
+      expect(confirmsUnlink("RioRoofing.COM", domain)).toBe(true);
+    });
+
+    it("tolerates leading/trailing whitespace from a careless paste", () => {
+      expect(confirmsUnlink("  rioroofing.com  ", domain)).toBe(true);
+    });
+
+    it("refuses a non-match, an empty string, and a mere substring", () => {
+      expect(confirmsUnlink("rioroofing", domain)).toBe(false);
+      expect(confirmsUnlink("", domain)).toBe(false);
+      expect(confirmsUnlink("rioroofing.comm", domain)).toBe(false);
+    });
   });
 
   it("resets the typed text so a stale value cannot carry into the next open (mutation: drop a reset site → the next account's dialog can open pre-armed)", () => {

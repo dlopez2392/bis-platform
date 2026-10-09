@@ -14,6 +14,19 @@ import { m } from "@/lib/messages";
 
 export type VercelProjectOption = { id: string; name: string; domain: string | null };
 
+/**
+ * The typed-name confirm's own predicate (D-057, review round): trimmed AND
+ * case-insensitive, because DESIGN.md rule 6 asks a person to TYPE the
+ * name, not reproduce its exact byte casing — a domain has no case anyway.
+ * Exported and pure so it carries its own unit test, same reason color.ts
+ * stays separate from the action that calls it: a source pin on the JSX
+ * that calls this could never prove the PREDICATE itself still works if
+ * its own logic regressed.
+ */
+export function confirmsUnlink(typed: string, domain: string): boolean {
+  return typed.trim().toLowerCase() === domain.toLowerCase();
+}
+
 export function LinkSiteCard({
   projects, projectsUnavailable, linked, daysStored, saveAction, testAction, unlinkAction,
 }: {
@@ -155,7 +168,7 @@ export function LinkSiteCard({
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => closeConfirm(false)} disabled={unlinking}>{m["common.cancel"]}</Button>
-                <Button variant="destructive" onClick={() => void unlink()} disabled={unlinking || confirmText.trim() !== linked.domain}>
+                <Button variant="destructive" onClick={() => void unlink()} disabled={unlinking || !confirmsUnlink(confirmText, linked.domain)}>
                   {unlinking ? m["website.link.unlinking"] : m["website.link.unlinkConfirm"]}
                 </Button>
               </DialogFooter>
