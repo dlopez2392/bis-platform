@@ -146,7 +146,10 @@ export default async function DashboardLayout({
           accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
           defaultCollapsed={collapsed}
           isAgency={isAgency}
-          clientBrandName={branding?.brandName ?? undefined}
+          // D-072 review round: the SAME trimmed, never-raw resolver the
+          // tab title and the greeting now also go through, so all three
+          // surfaces read the brand name the same way.
+          clientBrandName={branding ? brandDisplayName(branding) || undefined : undefined}
           clientLogoUrl={branding?.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : undefined}
           clientAccentColor={resolveSidebarAccent(branding?.brandColor ?? null) ?? undefined}
           clientTimezone={clientState?.status === "ok" ? clientState.timezone : undefined}

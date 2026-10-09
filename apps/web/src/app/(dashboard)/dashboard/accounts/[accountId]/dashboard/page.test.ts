@@ -95,6 +95,10 @@ const dbMocks = vi.hoisted(() => ({
   // already makes; mocked here in this file's own vi.fn() shape.
   listAccountWork: vi.fn(),
   sumOpenOpportunities: vi.fn(),
+  // The REAL implementation, trackable: D-072 review round's greeting must
+  // actually CALL this (not merely coincide with it) — see the "calls
+  // brandDisplayName" test below.
+  brandDisplayName: vi.fn((b: { brandName: string | null }) => b.brandName?.trim() || ""),
 }));
 // mergeChecklist (@/lib/checklist-catalogue) is NOT mocked — the real
 // CHECKLIST_CATALOGUE (its length read below, never hard-coded here) is
@@ -122,6 +126,7 @@ vi.mock("@bis/db", () => ({
   listOpportunityValuesCreatedBetween: (...a: unknown[]) => dbMocks.listOpportunityValuesCreatedBetween(...a),
   listAccountWork: (...a: unknown[]) => dbMocks.listAccountWork(...a),
   sumOpenOpportunities: (...a: unknown[]) => dbMocks.sumOpenOpportunities(...a),
+  brandDisplayName: (...a: Parameters<typeof dbMocks.brandDisplayName>) => dbMocks.brandDisplayName(...a),
 }));
 
 // Review fix: this used to mock the card down to `() => null`, so nothing
@@ -224,6 +229,9 @@ function resetFixtures() {
   // own GAP 3 fixture shape (1 ticked, A2P rejected).
   dbMocks.listChecklistState.mockResolvedValue([row("phone_number")]);
   dbMocks.getA2pRegistration.mockResolvedValue({ status: "rejected", updatedAt: null });
+  // mockReset() above clears every mock's implementation too — restore the
+  // real one, or every greeting in this file reads "undefined".
+  dbMocks.brandDisplayName.mockImplementation((b: { brandName: string | null }) => b.brandName?.trim() || "");
 }
 
 describe("AccountDashboardPage — the checklist row (replaces the old full ChecklistPanel)", () => {
@@ -774,5 +782,20 @@ describe("AccountDashboardPage — the greeting never names the agency's private
     const html = renderedText(renderToStaticMarkup(await AccountDashboardPage(route())));
 
     expect(html).toContain(dbFixture.name);
+  });
+
+  // Minor, review round: not merely coincidence with the real function's
+  // behaviour — the client branch must actually CALL brandDisplayName, the
+  // same resolver the tab title and the sidebar identity block now use, so
+  // all three can never silently diverge again (mutation: inline the raw
+  // `.brandName` access instead → this still FAILS, because nothing calls
+  // the mock).
+  it("routes a client's greeting name through brandDisplayName, not a raw column read", async () => {
+    authFixture.isAgency = false;
+    brandingFixture.brandName = "Rio Roofing";
+
+    await AccountDashboardPage(route());
+
+    expect(dbMocks.brandDisplayName).toHaveBeenCalledWith(expect.objectContaining({ brandName: "Rio Roofing" }));
   });
 });

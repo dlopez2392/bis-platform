@@ -69,4 +69,12 @@ describe("dashboard/layout — never passes the agency's private account name to
     const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
     expect(src).not.toContain("clientAccountName");
   });
+
+  // Minor, review round: the sidebar's own name prop used to read the raw
+  // column (`branding?.brandName ?? undefined`) while the tab title (above)
+  // went through brandDisplayName. Same function, same file, both surfaces.
+  it("passes AppSidebar the SAME trimmed brandDisplayName the tab title uses, in CODE (mutation: revert to the raw column → FAILS)", () => {
+    const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
+    expect(src).toContain('clientBrandName={branding ? brandDisplayName(branding) || undefined : undefined}');
+  });
 });
