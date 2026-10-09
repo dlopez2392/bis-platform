@@ -4,6 +4,7 @@ import {
   consentStateOf, readConsentState, recordCarrierBlock, appendConsentEvent, appendConsentEventGuarded,
   newestDecidingRow, readConsentHistory, readConsentEvent, readConsentActions, consentWriteArgs, consentAppendSql,
   CUSTOMER_STOP_METHODS, emailLedgerAddress, readBlockedAddresses, type ConsentRow,
+  CONSENT_METHODS, EMAIL_SUPPRESSION_METHODS, emailSuppressionOf, readEmailSuppression, recordEmailSuppression,
 } from "./consent";
 
 /**
@@ -98,7 +99,7 @@ function fakeDb(o: {
   const calls: Array<[string, ...unknown[]]> = [];
   const reads = [...(o.reads ?? [])];
   const chain: Record<string, (...a: unknown[]) => unknown> = {};
-  for (const k of ["select", "eq", "in", "order"]) {
+  for (const k of ["select", "eq", "in", "or", "order"]) {
     chain[k] = (...a: unknown[]) => { calls.push([k, ...a]); return chain; };
   }
   chain.limit = (...a: unknown[]) => { calls.push(["limit", ...a]); return Promise.resolve(o.read ?? { data: [], error: null }); };
@@ -389,5 +390,135 @@ describe("readBlockedAddresses — which addresses a due-list must leave out", (
   it("THROWS on a read error, so a walk never judges on a truncated or failed read (mutation: swallow the error → FAILS)", async () => {
     await expect(readBlockedAddresses(fakeDb({ read: { data: null, error: { message: "boom" } } }).db, "email",
       [{ accountId: "a1", address: "ana@x.com" }])).rejects.toThrow("readBlockedAddresses failed: boom");
+  });
+});
+
+/**
+ * D-016 (0062): a hard bounce or a spam complaint is a stop on the email
+ * channel that only the customer's own resubscribe lifts. The schema half
+ * (the methods, their shape, 0055's rules over them) is proven against the
+ * table in src/test/email-suppression-schema.test.ts.
+ */
+describe("CONSENT_METHODS / EMAIL_SUPPRESSION_METHODS — the TypeScript twins of 0062's CHECK", () => {
+  it("the two suppression methods are consent methods, and nothing else is a suppression (mutation: add 'carrier_block' to EMAIL_SUPPRESSION_METHODS → FAILS)", () => {
+    expect([...EMAIL_SUPPRESSION_METHODS].sort()).toEqual(["email_bounce", "email_complaint"]);
+    for (const m of EMAIL_SUPPRESSION_METHODS) expect(CONSENT_METHODS).toContain(m);
+  });
+
+  it("neither is a stop only the customer can lift in 0055's sense: no function change rode with 0062, and unsubscribe.test.ts reads that list from 0055's own text (mutation: add email_bounce to CUSTOMER_STOP_METHODS → FAILS)", () => {
+    for (const m of EMAIL_SUPPRESSION_METHODS) expect(CUSTOMER_STOP_METHODS).not.toContain(m);
+  });
+});
+
+describe("emailSuppressionOf — a bounce or a complaint the customer has not lifted", () => {
+  const at = (h: number) => `2026-10-08T${String(h).padStart(2, "0")}:00:00Z`;
+
+  it("no rows, or only ordinary stops, is not suppressed: an unsubscribe or a staff stop is the consent gate's business, not a suppression (mutation: treat every revoked row as one → FAILS)", () => {
+    expect(emailSuppressionOf([])).toBeNull();
+    expect(emailSuppressionOf([row("revoked", at(9), "one_click"), row("revoked", at(10), "staff")])).toBeNull();
+  });
+
+  it("a hard bounce is suppressed, and so is a complaint, each carrying its method, time and id (mutation: return a fixed method → the complaint reads as a bounce, FAILS)", () => {
+    const b = row("revoked", at(9), "email_bounce");
+    expect(emailSuppressionOf([b])).toEqual({ method: "email_bounce", since: b.occurred_at, eventId: b.id });
+    const c = row("revoked", at(9), "email_complaint");
+    expect(emailSuppressionOf([c])).toEqual({ method: "email_complaint", since: c.occurred_at, eventId: c.id });
+  });
+
+  it("a NEWER unsubscribe does not hide it: a bounce under a later one_click is still suppressed (mutation: decide on the newest deciding row of any kind, as consentStateOf does → the one_click hides the bounce, FAILS)", () => {
+    const b = row("revoked", at(9), "email_bounce");
+    expect(emailSuppressionOf([b, row("revoked", at(10), "one_click")])).toMatchObject({ method: "email_bounce", eventId: b.id });
+  });
+
+  it("a newer grant never lifts it (choice 28; mutation: count granted as a lift → FAILS)", () => {
+    expect(emailSuppressionOf([row("revoked", at(9), "email_complaint"), row("granted", at(10), "form")]))
+      .toMatchObject({ method: "email_complaint" });
+  });
+
+  it("a newer resubscribe lifts it, and a bounce after a resubscribe suppresses again (mutation: take the OLDEST row → FAILS)", () => {
+    expect(emailSuppressionOf([row("revoked", at(9), "email_bounce"), row("resubscribed", at(10), "unsubscribe_page")])).toBeNull();
+    expect(emailSuppressionOf([row("resubscribed", at(9), "unsubscribe_page"), row("revoked", at(10), "email_bounce")]))
+      .toMatchObject({ method: "email_bounce" });
+  });
+
+  it("the same instant: the suppression outranks a resubscribe, whatever the ids — 0055's order errs toward sending less (mutation: tie-break on id only → null, FAILS)", () => {
+    const b = row("revoked", at(9), "email_bounce", "00000000-0000-0000-0000-00000000000a");
+    const r = row("resubscribed", at(9), "unsubscribe_page", "00000000-0000-0000-0000-00000000000z");
+    expect(emailSuppressionOf([b, r])).toMatchObject({ eventId: b.id });
+    expect(emailSuppressionOf([r, b])).toMatchObject({ eventId: b.id });
+  });
+});
+
+describe("readEmailSuppression", () => {
+  it("reads that account's EMAIL rows for that address — only the lifts and the two suppression methods, newest first, 20 — so no pile of unsubscribes can push a bounce out of the window (mutation: drop the .or() filter → FAILS; drop the channel filter → an sms row of the same string could decide, FAILS)", async () => {
+    const f = fakeDb({ read: { data: [row("revoked", "2026-10-08T09:00:00Z", "email_bounce", "e9")], error: null } });
+    expect(await readEmailSuppression(f.db, "a1", "dan@example.com"))
+      .toEqual({ method: "email_bounce", since: "2026-10-08T09:00:00Z", eventId: "e9" });
+    expect(f.calls).toEqual([
+      ["from", "consent_events"],
+      ["select", "id, action, method, occurred_at"],
+      ["eq", "account_id", "a1"], ["eq", "channel", "email"], ["eq", "address", "dan@example.com"],
+      ["or", "action.in.(resubscribed,hold_released),method.in.(email_bounce,email_complaint)"],
+      ["order", "occurred_at", { ascending: false }], ["order", "id", { ascending: false }],
+      ["limit", 20],
+    ]);
+  });
+
+  it("THROWS on a read error, so the send gate fails closed (mutation: return null on error → FAILS)", async () => {
+    await expect(readEmailSuppression(fakeDb({ read: { data: null, error: { message: "boom" } } }).db, "a1", "dan@example.com"))
+      .rejects.toThrow("readEmailSuppression failed: boom");
+  });
+});
+
+describe("recordEmailSuppression — the Resend webhook's one write", () => {
+  it("a hard bounce: revoked / email_bounce on the ledger's KEY for the address as the provider spelled it (tab-padded, mixed case), guard none, the message id as source and evidence (mutation: guard unless_customer_stopped → FAILS; pass the raw address → FAILS)", async () => {
+    const f = fakeDb();
+    expect(await recordEmailSuppression(f.db, {
+      accountId: "a1", address: "\t Dan@Example.com  ", contactId: "c1", reason: "hard_bounce", providerMessageId: "4ef9a417-02e9-4d39-ad75-9611e0fcc33c",
+    })).toBe("appended");
+    expect(rpcArgs(f.calls)).toEqual({
+      p_account_id: "a1", p_channel: "email", p_address: "dan@example.com", p_action: "revoked", p_method: "email_bounce",
+      p_guard: "none", p_expect_id: null, p_contact_id: "c1", p_actor_id: null, p_note: null,
+      p_source_ref: "email_bounce:4ef9a417-02e9-4d39-ad75-9611e0fcc33c",
+      p_evidence: { providerMessageId: "4ef9a417-02e9-4d39-ad75-9611e0fcc33c" }, p_occurred_at: null,
+    });
+  });
+
+  it("a complaint: email_complaint, under its OWN source prefix, so a bounce and a complaint of one message never read as one retry (mutation: one shared prefix → FAILS)", async () => {
+    const f = fakeDb();
+    await recordEmailSuppression(f.db, { accountId: "a1", address: "dan@example.com", contactId: null, reason: "complaint", providerMessageId: "m1" });
+    expect(rpcArgs(f.calls)).toMatchObject({ p_method: "email_complaint", p_source_ref: "email_complaint:m1", p_contact_id: null, p_guard: "none" });
+  });
+
+  it("a retried webhook is 'duplicate' — the function found the same source (mutation: map duplicate to appended → FAILS)", async () => {
+    const f = fakeDb({ rpc: { data: [{ outcome: "duplicate", event_id: "e1", prior_id: null, prior_action: null, prior_method: null, prior_evidence: null }], error: null } });
+    expect(await recordEmailSuppression(f.db, { accountId: "a1", address: "dan@example.com", contactId: null, reason: "hard_bounce", providerMessageId: "m1" }))
+      .toBe("duplicate");
+  });
+
+  it("an address the ledger cannot key is 'no_address', and nothing is written (mutation: drop the guard → the rpc runs with a null address, FAILS)", async () => {
+    for (const address of [null, "", "  ", "no-at-sign", "@example.com"]) {
+      const f = fakeDb();
+      expect(await recordEmailSuppression(f.db, { accountId: "a1", address, contactId: null, reason: "hard_bounce", providerMessageId: "m1" })).toBe("no_address");
+      expect(f.calls).toEqual([]);
+    }
+  });
+
+  it("a blank provider id, or one too long for 0054's 200-character source_ref, THROWS without writing — a truncated id could collide with another message's (mutation: drop the length check → the rpc runs, FAILS)", async () => {
+    for (const providerMessageId of ["", "   ", "x".repeat(185)]) {
+      const f = fakeDb();
+      await expect(recordEmailSuppression(f.db, { accountId: "a1", address: "dan@example.com", contactId: null, reason: "complaint", providerMessageId }))
+        .rejects.toThrow("recordEmailSuppression: providerMessageId");
+      expect(f.calls).toEqual([]);
+    }
+    // The longest that fits is written: "email_complaint:" (16) + 184 = 200.
+    const f = fakeDb();
+    expect(await recordEmailSuppression(f.db, { accountId: "a1", address: "dan@example.com", contactId: null, reason: "complaint", providerMessageId: "x".repeat(184) })).toBe("appended");
+  });
+
+  it("a refusal THROWS: guard none cannot refuse these methods today, so a refusal means 0055's rules changed under it, and the webhook must not acknowledge a stop it did not record (mutation: return 'duplicate' on refused → FAILS)", async () => {
+    const f = fakeDb({ rpc: { data: [{ outcome: "refused", event_id: null, prior_id: "p", prior_action: "revoked", prior_method: "one_click", prior_evidence: {} }], error: null } });
+    await expect(recordEmailSuppression(f.db, { accountId: "a1", address: "dan@example.com", contactId: null, reason: "hard_bounce", providerMessageId: "m1" }))
+      .rejects.toThrow("recordEmailSuppression: refused");
   });
 });

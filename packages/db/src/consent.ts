@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { emailLedgerAddress } from "./email-address";
 export { emailLedgerAddress } from "./email-address";
 
 /**
@@ -18,6 +19,8 @@ export const CONSENT_METHODS = [
   "keyword", "start_keyword", "free_text", "staff", "staff_undo", "carrier_block",
   "unsubscribe_link", "one_click", "unsubscribe_page", "form", "booking", "inbound_text",
   "backfill_0049", "backfill_telnyx",
+  // 0062 (D-016): the provider's hard bounce and the recipient's spam complaint.
+  "email_bounce", "email_complaint",
 ] as const;
 export type ConsentMethod = (typeof CONSENT_METHODS)[number];
 
@@ -318,6 +321,108 @@ export async function recordCarrierBlock(
     evidence: { kind: input.kind },
   }, "unless_customer_stopped");
   return r.outcome === "appended" ? "appended" : "already_stopped";
+}
+
+/**
+ * D-016 (0062): the stops the email provider reports — a HARD bounce (the
+ * mailbox does not exist or will never accept) and a spam complaint. 0062's
+ * consent_events_suppression_shape_check makes each an email `revoked` row
+ * and nothing else. Neither is in CUSTOMER_STOP_METHODS (0055's function was
+ * not redefined), yet staff can still lift neither: 0055 lets a staff Resume
+ * lift only a stop whose method is staff, free_text or backfill_0049, and a
+ * staff undo only a staff stop. The customer's own resubscribe
+ * (`resubscribed` / `unsubscribe_page`) lifts them, as it lifts an
+ * unsubscribe.
+ */
+export const EMAIL_SUPPRESSION_METHODS = ["email_bounce", "email_complaint"] as const satisfies readonly ConsentMethod[];
+export type EmailSuppressionMethod = (typeof EMAIL_SUPPRESSION_METHODS)[number];
+export type EmailSuppression = { method: EmailSuppressionMethod; since: string; eventId: string };
+
+/** The rows that lift a suppression: the same lifts that make an address allowed (consentStateOf). */
+const LIFTING_ACTIONS: readonly ConsentAction[] = ["resubscribed", "hold_released"];
+
+const isSuppressionRow = (r: ConsentRow) =>
+  r.action === "revoked" && (EMAIL_SUPPRESSION_METHODS as readonly string[]).includes(r.method);
+
+/**
+ * Whether an email address is suppressed, pure: the newest row among its
+ * suppressions and its lifts is a suppression. Every other row is passed
+ * over, so an unsubscribe or a staff stop written AFTER a bounce does not hide
+ * it (those are the consent gate's business and the staff-typed and
+ * customer-initiated kinds do not read them, decision 7), and a grant never
+ * lifts it (choice 28). Ordered exactly as newestDecidingRow orders (an
+ * instant tie goes to the stop: errs toward sending less).
+ */
+export function emailSuppressionOf(rows: readonly ConsentRow[]): EmailSuppression | null {
+  const newest = newestDecidingRow(rows.filter((r) => isSuppressionRow(r) || LIFTING_ACTIONS.includes(r.action)));
+  if (!newest || !isSuppressionRow(newest)) return null;
+  return { method: newest.method as EmailSuppressionMethod, since: newest.occurred_at, eventId: newest.id };
+}
+
+/**
+ * One email address's suppression, for the email gate to refuse EVERY
+ * customer kind on (the address is the ledger's key, emailLedgerAddress).
+ * Reads only the suppressions and the lifts, so no pile of other rows can push
+ * a bounce out of the 20-row window. THROWS on a read error: the gate turns
+ * that into a block, never a send (fails closed).
+ */
+export async function readEmailSuppression(
+  db: SupabaseClient, accountId: string, address: string,
+): Promise<EmailSuppression | null> {
+  const { data, error } = await db.from("consent_events")
+    .select("id, action, method, occurred_at")
+    .eq("account_id", accountId).eq("channel", "email").eq("address", address)
+    .or(`action.in.(${LIFTING_ACTIONS.join(",")}),method.in.(${EMAIL_SUPPRESSION_METHODS.join(",")})`)
+    .order("occurred_at", { ascending: false }).order("id", { ascending: false })
+    .limit(NEWEST_ROWS);
+  if (error) throw new Error(`readEmailSuppression failed: ${error.message}`);
+  return emailSuppressionOf((data ?? []) as ConsentRow[]);
+}
+
+export type EmailSuppressionInput = {
+  accountId: string;
+  /** The recipient as the provider reports it; keyed here with emailLedgerAddress. */
+  address: string | null | undefined;
+  contactId: string | null;
+  /** Only a HARD bounce suppresses. A soft (transient) bounce is never passed here. */
+  reason: "hard_bounce" | "complaint";
+  /** The provider's id of the message that bounced or was complained about: the write's source. */
+  providerMessageId: string;
+};
+
+/** 0054's source_ref ceiling. */
+const SOURCE_REF_MAX = 200;
+
+/**
+ * The email provider's webhook records a hard bounce or a complaint as a stop
+ * (0062). Guard `none`: it lands whatever stopped the address before (a
+ * customer's own unsubscribe included), because a bounce is a fact about the
+ * mailbox, not a choice anyone can overrule. One row per message and reason:
+ * the source is `<method>:<provider message id>`, so a retried delivery of the
+ * same webhook answers 'duplicate'. An address the ledger cannot key is
+ * 'no_address' and writes nothing. THROWS on a blank or over-long id, on an
+ * RPC error, and on a refusal (which guard `none` cannot produce for these
+ * methods today), so the webhook never acknowledges a stop it did not record.
+ */
+export async function recordEmailSuppression(
+  db: SupabaseClient, input: EmailSuppressionInput,
+): Promise<"appended" | "duplicate" | "no_address"> {
+  const address = emailLedgerAddress(input.address);
+  if (!address) return "no_address";
+  const method: EmailSuppressionMethod = input.reason === "complaint" ? "email_complaint" : "email_bounce";
+  const id = input.providerMessageId.trim();
+  const sourceRef = `${method}:${id}`;
+  if (!id || [...sourceRef].length > SOURCE_REF_MAX) {
+    throw new Error(`recordEmailSuppression: providerMessageId is blank or too long for a source (${[...id].length} characters)`);
+  }
+  const r = await appendConsentEventGuarded(db, {
+    accountId: input.accountId, channel: "email", address, action: "revoked", method,
+    contactId: input.contactId, sourceRef, evidence: { providerMessageId: id },
+  }, "none");
+  if (r.outcome === "refused") {
+    throw new Error(`recordEmailSuppression: refused (${method} after ${r.prior?.action ?? "no row"}/${r.prior?.method ?? "-"})`);
+  }
+  return r.outcome;
 }
 
 /**

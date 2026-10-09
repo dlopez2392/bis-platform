@@ -24,6 +24,8 @@ export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBloc
          appendConsentEventGuarded, newestDecidingRow, readConsentHistory, readConsentEvent,
          readConsentActions, consentWriteArgs, consentAppendSql, emailLedgerAddress, readBlockedAddresses,
          CONSENT_METHODS, DECIDING_ACTIONS, CUSTOMER_STOP_METHODS,
+         EMAIL_SUPPRESSION_METHODS, emailSuppressionOf, readEmailSuppression, recordEmailSuppression,
+         type EmailSuppressionMethod, type EmailSuppression, type EmailSuppressionInput,
          type ConsentChannel, type ConsentAction, type ConsentMethod, type ConsentRow,
          type ConsentState, type ConsentEventInput, type ConsentGuard, type ConsentAppend,
          type PriorDecidingRow, type ConsentHistoryRow, type ConsentEventRow } from "./consent";

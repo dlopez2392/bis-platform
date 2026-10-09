@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Client } from "pg";
 import { withRollback } from "./db";
-import { CUSTOMER_STOP_METHODS, CONSENT_METHODS } from "../consent";
+import { CUSTOMER_STOP_METHODS, CONSENT_METHODS, EMAIL_SUPPRESSION_METHODS } from "../consent";
 
 /**
  * 0055 (consent chain PR-2): the ledger's one write path, run as the role
@@ -36,15 +36,17 @@ async function append(c: Client, a: {
   account: string; action: string; method: string; guard?: string; expect?: string | null;
   address?: string; ref?: string | null; actor?: string | null; note?: string | null; at?: string | null;
   evidence?: Record<string, unknown>;
+  /** sms unless named. 0062's two methods are email stops only (consent_events_suppression_shape_check). */
+  channel?: "sms" | "email";
 }): Promise<Out> {
   await c.query("select pg_sleep(0.002)");
   await c.query("set local role service_role");
   try {
     const { rows: [row] } = await c.query<Out>(
       `select outcome, event_id, prior_id, prior_action, prior_method
-         from public.append_consent_event($1, 'sms', $2, $3, $4, $5, $6, null, $7, $8, $9, $10::jsonb, $11)`,
-      [a.account, a.address ?? ADDR, a.action, a.method, a.guard ?? "none", a.expect ?? null,
-       a.actor ?? null, a.note ?? null, a.ref ?? null, JSON.stringify(a.evidence ?? {}), a.at ?? null]);
+         from public.append_consent_event($1, $12, $2, $3, $4, $5, $6, null, $7, $8, $9, $10::jsonb, $11)`,
+      [a.account, a.address ?? (a.channel === "email" ? "ana@example.com" : ADDR), a.action, a.method, a.guard ?? "none", a.expect ?? null,
+       a.actor ?? null, a.note ?? null, a.ref ?? null, JSON.stringify(a.evidence ?? {}), a.at ?? null, a.channel ?? "sms"]);
     return row!;
   } finally {
     await c.query("reset role");
@@ -167,6 +169,9 @@ describe("0055 append_consent_event: the guards", () => {
       for (const method of CONSENT_METHODS) {
         const a = await account(c, `pm_${method}`);
         const actor = method === "staff" || method === "staff_undo" ? "user_1" : null;
+        // 0062: a bounce or a complaint is an email row or nothing; the guard's list is channel-blind, so
+        // the question asked of it is the same on either channel.
+        const channel = (EMAIL_SUPPRESSION_METHODS as readonly string[]).includes(method) ? "email" as const : "sms" as const;
         if (method === "free_text") {
           // free_text's own state rule needs a hold to land on, whatever the guard:
           const hold = await append(c, { account: a, action: "held", method: "free_text", guard: "if_allowed" });
@@ -176,9 +181,9 @@ describe("0055 append_consent_event: the guards", () => {
           // 'staff' and 'backfill_0049' each require this to be true anyway (their own state rule),
           // and every other method has no state rule at all for 'revoked', so 'none' is the only way
           // to land the row this test needs regardless of which methods CUSTOMER_STOP_METHODS names.
-          expect((await append(c, { account: a, action: "revoked", method, actor, guard: "none" })).outcome).toBe("appended");
+          expect((await append(c, { account: a, action: "revoked", method, actor, guard: "none", channel })).outcome).toBe("appended");
         }
-        const again = await append(c, { account: a, action: "revoked", method: "keyword", guard: "unless_customer_stopped" });
+        const again = await append(c, { account: a, action: "revoked", method: "keyword", guard: "unless_customer_stopped", channel });
         expect(again.outcome).toBe(CUSTOMER_STOP_METHODS.includes(method) ? "refused" : "appended");
       }
     }));
