@@ -52,6 +52,26 @@ describe("buildPaletteEntries", () => {
     expect(buildPaletteEntries(BASE, false).some((e) => e.id === "settings:billing")).toBe(false);
   });
 
+  // D-080: Branding, Weekly report and Website are real cards on the
+  // Settings page (settings/page.tsx renders <BrandingPanel>, <WeeklyReportCard
+  // id="weekly-report">, <LinkSiteCard id="website">) but none had a
+  // SETTINGS_SECTIONS entry, so DESIGN.md's "settings sections must be
+  // registered in the palette index" went unmet for all three.
+  it("registers the branding settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+    const entry = buildPaletteEntries(BASE, true).find((e) => e.id === "settings:branding");
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#branding`);
+  });
+
+  it("registers the weekly report settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+    const entry = buildPaletteEntries(BASE, true).find((e) => e.id === "settings:weekly-report");
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#weekly-report`);
+  });
+
+  it("registers the website settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
+    const entry = buildPaletteEntries(BASE, true).find((e) => e.id === "settings:website");
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#website`);
+  });
+
   it("finds the website assistant by the words an operator would type", () => {
     const entries = buildPaletteEntries(BASE, true);
     const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;
@@ -59,6 +79,16 @@ describe("buildPaletteEntries", () => {
     // typing "widget" finds nothing.
     for (const word of ["website", "widget", "chat", "concierge"]) {
       expect(voice.keywords).toContain(word);
+    }
+  });
+
+  // D-062: an operator typing any one of the five automation recipes by name
+  // found nothing — only no-show/reminder/review words were registered.
+  it("finds Automations by referral, reactivation, quote, confirmation and instant reply (mutation: drop any of these from NAV_KEYWORDS → FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, true);
+    const automations = entries.find((e) => e.id === `nav:${BASE}/automations`)!;
+    for (const word of ["referral", "reactivation", "quote", "confirmation", "instant reply"]) {
+      expect(automations.keywords).toContain(word);
     }
   });
 

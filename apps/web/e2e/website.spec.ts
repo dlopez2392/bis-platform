@@ -92,7 +92,12 @@ test.describe("unlinking a site, as the agency", () => {
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByText("Linked to fixture.example")).toBeVisible();
     await page.getByRole("button", { name: "Unlink site" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Unlink", exact: true }).click();
+    // D-057 (DESIGN.md rule 6): Unlink deletes stored history, so it is
+    // gated behind TYPING the domain, not a reflexive confirm.
+    const confirmDialog = page.getByRole("dialog");
+    await expect(confirmDialog.getByRole("button", { name: "Unlink", exact: true })).toBeDisabled();
+    await confirmDialog.getByLabel("Type fixture.example to confirm.").fill("fixture.example");
+    await confirmDialog.getByRole("button", { name: "Unlink", exact: true }).click();
     await expect(page.getByText("Site unlinked")).toBeVisible();
     // The card re-rendered unlinked: no button, the sell copy back.
     await expect(page.getByRole("button", { name: "Unlink site" })).toHaveCount(0);

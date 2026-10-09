@@ -97,7 +97,6 @@ export function AppSidebar({
   accounts,
   defaultCollapsed,
   isAgency,
-  clientAccountName,
   clientBrandName,
   clientLogoUrl,
   clientAccentColor,
@@ -106,14 +105,14 @@ export function AppSidebar({
   accounts: AccountOption[];
   defaultCollapsed: boolean;
   isAgency: boolean;
-  /** The client's own company name. Undefined for the agency, which gets the
-   *  switcher instead. Clients have no switcher — hiding it removed the only
-   *  place the account name appeared, so they could not tell which company
-   *  they were looking at, and the only branding on screen was the agency's. */
-  clientAccountName?: string;
   /** What this company's own customers call it, when the agency has set it.
-   *  Takes precedence over clientAccountName, which stays the agency's
-   *  internal label ("Rio Roofing — trial") and is not for the client's eyes. */
+   *  Undefined for the agency, which gets the switcher instead, and for an
+   *  unbranded client — who then gets NO identity block at all (D-072: this
+   *  used to fall back to `clientAccountName`, the agency's own internal
+   *  label, e.g. "Rio Roofing — trial", which is not for the client's eyes
+   *  and carried no other purpose once removed — effectively unreachable in
+   *  practice, since `brand_name` is seeded at account creation and go-live
+   *  requires the Branding step, but "effectively" is not "never"). */
   clientBrandName?: string;
   /** Already resolved server-side — see BrandingPanel for why this is a URL
    *  and not a storage path. */
@@ -125,8 +124,7 @@ export function AppSidebar({
   clientAccentColor?: string;
   /** The client's own account timezone — same shape as the other client*
    *  props above: resolved server-side in this layout, from the account
-   *  that's already been looked up for clientAccountName (auth.ts's
-   *  resolveClientAccessState reads it off the same row), not from an
+   *  row auth.ts's resolveClientAccessState reads, not from an
    *  [accountId] URL segment this layout never receives. Second identity-
    *  block line, mirroring AccountSwitcher's own timezone line below. */
   clientTimezone?: string;
@@ -182,10 +180,11 @@ export function AppSidebar({
   // account nav item is actually active.
   const backToAgency: NavItem = { href: "/dashboard/accounts", label: m["shell.backToAgency"], icon: ArrowLeft };
 
-  // What the identity block below calls this company. The brand name is what
-  // their own customers know them by; the account name is the agency's
-  // internal label and only stands in when no brand is set.
-  const clientLabel = clientBrandName ?? clientAccountName;
+  // What the identity block below calls this company: the brand name, full
+  // stop (D-072). No fallback to the agency's own internal account label —
+  // `clientLabel ? (...) : null` below already degrades to no identity
+  // block at all for the unbranded case.
+  const clientLabel = clientBrandName;
 
   return (
     <aside

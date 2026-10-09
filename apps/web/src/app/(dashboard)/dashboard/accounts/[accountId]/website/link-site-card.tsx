@@ -33,6 +33,19 @@ export function LinkSiteCard({
   // setup-move-number-button.tsx), and the bulk-delete bar is the precedent.
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [unlinking, setUnlinking] = useState(false);
+  // D-057: unlinking a site deletes its stored traffic history, so DESIGN.md
+  // rule 6 wants a TYPED name, not a reflexive "Are you sure?" — the same
+  // shape as contacts' bulk-action-bar.tsx typing the selection count. Reset
+  // on every open/close/success so a stale value can never cross accounts
+  // (this panel's own account-keying lesson, right above in `unlink`'s own
+  // comment) or outlive the dialog that asked for it.
+  const [confirmText, setConfirmText] = useState("");
+
+  function closeConfirm(open: boolean) {
+    if (unlinking) return;
+    setConfirmOpen(open);
+    setConfirmText("");
+  }
 
   async function unlink() {
     setUnlinking(true);
@@ -42,7 +55,7 @@ export function LinkSiteCard({
         toast.success(m["website.link.unlinked"]);
         // The server re-renders `linked` as null; the inputs are local state
         // keyed on the account, so they would otherwise keep the old values.
-        setProjectId(""); setDomain(""); setConfirmOpen(false);
+        setProjectId(""); setDomain(""); setConfirmOpen(false); setConfirmText("");
       } else {
         toast.error(r.error);
       }
@@ -51,7 +64,7 @@ export function LinkSiteCard({
       // the toast and leave the dialog armed over an unknown outcome (the
       // setup-move-number-button lesson). Say so and collapse the confirm.
       toast.error(m["common.actionCrashed"]);
-      setConfirmOpen(false);
+      setConfirmOpen(false); setConfirmText("");
     } finally { setUnlinking(false); }
   }
 
@@ -98,7 +111,11 @@ export function LinkSiteCard({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>
-            <Button type="button" variant="outline" disabled={!projectId || testing} onClick={test}>{testing ? m["common.saving"] : m["website.link.test"]}</Button>
+            {/* Ghost, not outline (D-056): Save is this card's one primary
+                (DESIGN.md rule 8), so everything else here is ghost — and its
+                own "Testing…" word, not Save's borrowed "Saving…", since
+                nothing here is saving anything. */}
+            <Button type="button" variant="ghost" disabled={!projectId || testing} onClick={test}>{testing ? m["website.link.testing"] : m["website.link.test"]}</Button>
             {linked ? (
               <Button type="button" variant="ghost" className="ml-auto text-destructive hover:text-destructive" onClick={() => setConfirmOpen(true)}>
                 {m["website.link.unlink"]}
@@ -107,7 +124,7 @@ export function LinkSiteCard({
           </div>
         </form>
         {linked ? (
-          <Dialog open={confirmOpen} onOpenChange={(open) => { if (!unlinking) setConfirmOpen(open); }}>
+          <Dialog open={confirmOpen} onOpenChange={closeConfirm}>
             <DialogContent showCloseButton={!unlinking}>
               <DialogHeader>
                 <DialogTitle>{m["website.link.unlinkTitle"].replace("{domain}", linked.domain)}</DialogTitle>
@@ -119,9 +136,26 @@ export function LinkSiteCard({
                       : m["website.link.unlinkBodyNone"].replace("{domain}", linked.domain)}
                 </DialogDescription>
               </DialogHeader>
+              {/* Typed-name confirm (D-057, DESIGN.md rule 6): unlinking
+                  deletes stored history, so a reflexive "Are you sure?" is
+                  banned. Same shape as contacts/bulk-action-bar.tsx typing
+                  the selection count. */}
+              <div className="space-y-1.5">
+                <Label htmlFor="unlink-confirm">
+                  {m["website.link.unlinkType"].replace("{domain}", linked.domain)}
+                </Label>
+                <Input
+                  id="unlink-confirm"
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  placeholder={linked.domain}
+                  autoComplete="off"
+                  disabled={unlinking}
+                />
+              </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={unlinking}>{m["common.cancel"]}</Button>
-                <Button variant="destructive" onClick={() => void unlink()} disabled={unlinking}>
+                <Button variant="outline" onClick={() => closeConfirm(false)} disabled={unlinking}>{m["common.cancel"]}</Button>
+                <Button variant="destructive" onClick={() => void unlink()} disabled={unlinking || confirmText.trim() !== linked.domain}>
                   {unlinking ? m["website.link.unlinking"] : m["website.link.unlinkConfirm"]}
                 </Button>
               </DialogFooter>

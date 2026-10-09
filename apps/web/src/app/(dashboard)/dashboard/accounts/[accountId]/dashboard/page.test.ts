@@ -51,8 +51,11 @@ vi.mock("@/lib/db", () => ({
   }),
 }));
 
+// Mutable (D-072's own tests toggle `brandName`), so the greeting's fallback
+// behaviour is testable without a second vi.mock.
+const brandingFixture = vi.hoisted(() => ({ brandName: null as string | null }));
 vi.mock("@/lib/branding/tenant-theme-reader", () => ({
-  getTenantBranding: async () => ({ brandName: null }),
+  getTenantBranding: async () => ({ brandName: brandingFixture.brandName }),
 }));
 
 // F-076 (now slice): the CRM-only hero ("Leads captured") reads the SAME
@@ -195,6 +198,7 @@ const ALL_CATALOGUE_KEYS = CHECKLIST_CATALOGUE
 // when the work row's own describe block was added for the Task 5 review fix.
 function resetFixtures() {
   authFixture.isAgency = true;
+  brandingFixture.brandName = null;
   checklistRowProps.current = null;
   workRowProps.current = null;
   callsChartCardProps.current = null;
@@ -719,5 +723,56 @@ describe("AccountDashboardPage — the voice sub-line names the account's own co
     const html = renderToStaticMarkup(await AccountDashboardPage(route()));
 
     expect(renderedText(html)).not.toContain("is answering your calls.");
+  });
+});
+
+/**
+ * D-072: a CLIENT reader's greeting fell back to `account.name` — the
+ * agency's own private internal label (`dbFixture.name`, "Test Client One"
+ * here) — whenever no brand name was set yet. The agency's OWN greeting is
+ * unaffected: `accounts.name` IS the label meant for them.
+ */
+describe("AccountDashboardPage — the greeting never names the agency's private label to a client (D-072)", () => {
+  // Same pinned-clock idiom as the F-076 describe block above: page.tsx reads
+  // `new Date()` directly, and the greeting's period word ("morning") would
+  // otherwise drift with the real clock. This NOW is a Monday 7 AM in
+  // America/Chicago (this fixture's own zone) — unambiguously morning.
+  const NOW = new Date("2026-06-15T12:00:00.000Z");
+
+  beforeEach(() => {
+    resetFixtures();
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("an unbranded client gets a nameless greeting, never the agency's internal account name (mutation: restore `?? account.name` → FAILS)", async () => {
+    authFixture.isAgency = false;
+    brandingFixture.brandName = null;
+
+    const html = renderedText(renderToStaticMarkup(await AccountDashboardPage(route())));
+
+    expect(html).not.toContain(dbFixture.name);
+    expect(html).toContain(m["dashboard.greeting.morningNoName"]);
+  });
+
+  it("a branded client's greeting names their OWN brand, not the agency's label", async () => {
+    authFixture.isAgency = false;
+    brandingFixture.brandName = "Rio Roofing";
+
+    const html = renderedText(renderToStaticMarkup(await AccountDashboardPage(route())));
+
+    expect(html).toContain("Rio Roofing");
+    expect(html).not.toContain(dbFixture.name);
+  });
+
+  it("the agency's own greeting still names the account (unchanged: accounts.name IS their label)", async () => {
+    authFixture.isAgency = true;
+
+    const html = renderedText(renderToStaticMarkup(await AccountDashboardPage(route())));
+
+    expect(html).toContain(dbFixture.name);
   });
 });

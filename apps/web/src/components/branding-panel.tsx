@@ -205,7 +205,12 @@ export function BrandingPanel({
   }, previewMode);
 
   return (
-    <Card>
+    // id="branding", matching the other Settings cards' own anchor
+    // (weekly-report-card.tsx's #weekly-report, link-site-card.tsx's
+    // #website): the palette's "Branding" entry (D-080) links to
+    // `/settings#branding`, and harmless on the client's own /branding page,
+    // which has nothing else to collide with.
+    <Card id="branding" className="scroll-mt-24">
       <CardHeader>
         {/* The client's page is this panel and nothing else, and its
             PageHeader already prints the same string — rendering both put

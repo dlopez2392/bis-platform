@@ -26,6 +26,7 @@ async function render(before?: string) {
 beforeEach(() => {
   dbMocks.listAutomationLog.mockReset().mockResolvedValue([]);
   dbMocks.countAutomationUsage.mockReset().mockResolvedValue(USAGE);
+  authFixture.isAgency = true;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -56,6 +57,22 @@ describe("the Activity page", () => {
     expect(dbMocks.listAutomationLog).toHaveBeenLastCalledWith(expect.anything(), "a1", { limit: 25, before: undefined });
     await render(encodeCursor({ v: "yesterday", id: ROW.id }));   // a uuid with a non-timestamp value
     expect(dbMocks.listAutomationLog).toHaveBeenLastCalledWith(expect.anything(), "a1", { limit: 25, before: undefined });
+  });
+
+  // D-068 (DESIGN.md rule 5): the empty state named what appears here but
+  // offered no action that causes it. Only the agency can turn automations
+  // on (nav-groups.ts: Automations is agency-only) — this is the SAME
+  // agency-facing page the Calls page gates the same way (this file's own
+  // top comment), not a customer-facing surface.
+  it("the cold-start empty state offers the agency an action: a link to Automations (mutation: drop the action → FAILS)", async () => {
+    const html = await render();
+    expect(html).toMatch(new RegExp(`href="/dashboard/accounts/a1/automations"[^>]*>[^<]*Set up automations`));
+  });
+
+  it("gives a client reader no agency-only action — Automations is agency-only", async () => {
+    authFixture.isAgency = false;
+    const html = await render();
+    expect(html).not.toContain("/automations");
   });
 
   it("a cursored empty page is NOT the cold-start empty state: headers, a Newer link, no 'Nothing has gone out'", async () => {

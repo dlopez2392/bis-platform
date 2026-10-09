@@ -193,33 +193,32 @@ export default async function AccountDashboardPage({
   // WHO the greeting names: for the agency, `accounts.name` IS the label
   // meant for them (their own internal note on this client, e.g. "Rio
   // Roofing — trial") — unchanged, no branding read on this path. For a
-  // client, that same internal label is agency-private and must not
-  // surface here — mirrors app-sidebar.tsx's own `clientBrandName ??
-  // clientAccountName` precedence exactly, so the greeting can never
-  // disagree with the identity block beside it. `getTenantBranding` is
-  // serviceDb()-backed, but this is NOT a new query on a client's own
-  // request: dashboard/layout.tsx already resolves this exact accountId
-  // (their own tenant) through the same `cache()` memo earlier in the same
-  // request, so this call hits that memo — the page's "never serviceDb for
-  // its own reads" rule governs the KPI/metrics data this page owns, not
-  // branding, which every /dashboard/* route already resolves once per
-  // request regardless of this page.
+  // client, D-072: that same internal label is agency-private and must
+  // NEVER surface here, with no fallback to it at all (brandDisplayName's
+  // own "no fallback, deliberately" rule, carried to the UI layer) —
+  // `greetingName` is null, not the account's row, until a brand name is
+  // set. `getTenantBranding` is serviceDb()-backed, but this is NOT a new
+  // query on a client's own request: dashboard/layout.tsx already resolves
+  // this exact accountId (their own tenant) through the same `cache()` memo
+  // earlier in the same request, so this call hits that memo — the page's
+  // "never serviceDb for its own reads" rule governs the KPI/metrics data
+  // this page owns, not branding, which every /dashboard/* route already
+  // resolves once per request regardless of this page.
   const greetingName = isAgency
     ? account.name
-    : (await getTenantBranding(accountId)).brandName ?? account.name;
+    : (await getTenantBranding(accountId)).brandName;
   const period = greetingPeriod(now, timezone);
-  const greetingKey =
-    period === "morning"
-      ? "dashboard.greeting.morning"
-      : period === "afternoon"
-        ? "dashboard.greeting.afternoon"
-        : "dashboard.greeting.evening";
+  const periodKey = period === "morning" ? "morning" : period === "afternoon" ? "afternoon" : "evening";
   // A replacer FUNCTION, not a plain replacement string: `String.replace`
   // treats a string second argument as a pattern — `$&`, `$1`, etc. — so a
   // tenant-authored name containing one of those sequences (e.g. "Bob's $&
   // Grill") would have it expanded instead of inserted verbatim. A function
-  // return value is never re-interpreted.
-  const greetingText = m[greetingKey].replace("{name}", () => greetingName);
+  // return value is never re-interpreted. No name at all (D-072's
+  // unreachable-in-practice edge) gets its own written copy, never a
+  // dangling ", {name}".
+  const greetingText = greetingName
+    ? m[`dashboard.greeting.${periodKey}` as const].replace("{name}", () => greetingName)
+    : m[`dashboard.greeting.${periodKey}NoName` as const];
   const dateText = formatLocalLongDate(now, timezone);
   const showVoiceSub = voiceProfile?.enabled === true;
   // D-063 follow-up: the account's own configured persona, not a hard-coded
