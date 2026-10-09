@@ -12,7 +12,10 @@
  * when it is not there. Every value is pinned by ./config.test.ts against the
  * spec, migration or rule that depends on it.
  */
-import { assertCiTarget, describeCiTarget, type CiTarget } from "../ci/target";
+import {
+  assertCiTarget, assertLocalStackTarget, describeCiTarget, describeLocalStackTarget, nameArgument,
+  type CiTarget, type LocalStackTarget,
+} from "../ci/target";
 
 /** Every write is attributed to this in `events`. Not a Clerk user id. */
 export const CI_SEED_ACTOR = "system_ci_seed";
@@ -64,18 +67,45 @@ export const CI_SEED_PIPELINE = "Sales";
 /** Public; branding.ts uploads to it and demo-seed.test.ts does so live. */
 export const CI_SEED_BUCKET = "brand-logos";
 
-export function planCiSeed(env: Record<string, string | undefined>): {
-  target: CiTarget; spec: CiBaselineSpec; summary: string;
+/**
+ * Where `ci:seed` writes. `ci-project` (no argument) is the shared CI project,
+ * as ci-project-setup.yml's `seed` step runs it. `local-stack` (the one flag,
+ * `--local-stack`) is the throwaway stack the e2e job starts inside its own
+ * runner since 2026-10-08 (.github/scripts/ci-local-supabase.sh); its only
+ * allowlist is that runner's loopback.
+ */
+export type CiSeedMode = "ci-project" | "local-stack";
+
+/** The mode from `ci:seed`'s argv. Anything but nothing or `--local-stack` is refused, never ignored. */
+export function ciSeedMode(argv: readonly string[]): CiSeedMode {
+  if (argv.length === 0) return "ci-project";
+  if (argv.length === 1 && argv[0] === "--local-stack") return "local-stack";
+  const shown = argv.map(nameArgument).join(", ");
+  throw new Error(`ci:seed takes no argument or --local-stack (exactly one); got ${shown}`);
+}
+
+export function planCiSeed(env: Record<string, string | undefined>, mode: CiSeedMode = "ci-project"): {
+  target: CiTarget | LocalStackTarget; spec: CiBaselineSpec; summary: string;
 } {
-  const target = assertCiTarget({
-    ref: env.BIS_CI_SUPABASE_REF,
-    url: env.NEXT_PUBLIC_SUPABASE_URL,
-    dbUrl: env.SUPABASE_DB_URL,
-  });
+  let target: CiTarget | LocalStackTarget;
+  let where: string;
+  if (mode === "local-stack") {
+    const local = assertLocalStackTarget({ url: env.NEXT_PUBLIC_SUPABASE_URL, dbUrl: env.SUPABASE_DB_URL });
+    target = local;
+    where = describeLocalStackTarget(local);
+  } else {
+    const ci = assertCiTarget({
+      ref: env.BIS_CI_SUPABASE_REF,
+      url: env.NEXT_PUBLIC_SUPABASE_URL,
+      dbUrl: env.SUPABASE_DB_URL,
+    });
+    target = ci;
+    where = describeCiTarget(ci);
+  }
   const spec = CI_BASELINE;
   const summary = [
     `ci:seed "${spec.name}" (${spec.clerkOrgId})`,
-    describeCiTarget(target),
+    where,
     `  adds only what is missing; never updates or deletes`,
   ].join("\n");
   return { target, spec, summary };

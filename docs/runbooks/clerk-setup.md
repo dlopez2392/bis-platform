@@ -297,10 +297,17 @@ Both sign in by a ticket minted for the user id, never by an email lookup.
 instance (`danlopez508@gmail.com`)**, so ending that person's sessions ended
 CI mid-run (PR #188, 18:00:02 UTC); the per-run user shares no session with
 anyone. It needs no dashboard setup: the session-token template in Part A
-renders `app_role` from each user's own metadata. It joins Test Client One's
-org (read from the seeded account row) and makes it active, as the person's
-session did, only so `<ActivateSoleOrganization/>` never fires mid-spec; the
-agency path itself matches on `is_agency()` and never on `org_id`. The
+renders `app_role` from each user's own metadata. It creates an org of its
+own for the run (`E2E Agency Org <stamp>`, sole member) and makes it active,
+only so `<ActivateSoleOrganization/>` never fires mid-spec when
+`blueprints.spec.ts` creates a company; the agency path itself matches on
+`is_agency()` and never on `org_id`. **Until 2026-10-08 it joined Test Client
+One's org instead.** A Clerk org on this instance holds at most 5 members
+(`max_allowed_memberships`, a product rule for client orgs — do not raise
+it), and once e2e stopped queueing every concurrent run, and every run a
+cancel killed before teardown, held a seat there; the sixth would have
+failed agency setup. Teardown deletes the org and the user; the sweep finds
+a leaked org by its name. The
 demo capture (`apps/web/screenshots/auth.setup.ts`) mints its own throwaway
 agency user the same way (shared helpers in
 `apps/web/e2e/fixtures/clerk-identities.ts`), joins no organization, and
@@ -334,6 +341,17 @@ does not change what a LOCAL run does until that machine's env files are
 switched (that runbook's section 9). It also means Part E's reason for keeping
 the development entry on PRODUCTION's project is gone; see
 `docs/runbooks/production-isolation.md`.
+
+**2026-10-08:** CI's e2e now runs on a throwaway Supabase stack inside its own
+runner, not on `bis-ci`, and that stack trusts the same **development**
+instance: `.github/scripts/ci-local-supabase.sh --trust-clerk-dev-instance`
+decodes the Frontend API domain from `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`,
+refuses anything but a `*.clerk.accounts.dev` domain, and enables
+`[auth.third_party.clerk]` in the stack's copy of `config.toml`
+(`ci-supabase-project.md` section 11). The committed `config.toml` keeps
+`enabled = false`. If CI's Clerk secrets ever move to another development
+instance, the stack follows the key; `bis-ci`'s dashboard entry (section 1
+step 2 of that runbook) does not, and Preview would need it changed by hand.
 
 ## Part I — verify, in this order, and stop at the first failure
 
