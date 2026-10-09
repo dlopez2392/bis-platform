@@ -130,3 +130,39 @@ export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/,
 export const USAGE_REPORT_TICK_CAP = 200;
 export const USAGE_REPORT_BUDGET_MS = 60_000;
 export const METER_EVENT_WORST_CASE_MS = 21_000;
+
+/**
+ * THE WEEKLY CLIENT REPORT's own limits (D-067). Borrowing the recipe caps'
+ * `AUTOMATION_TICK_CAP` (10) here was the bug: that number is a BURST guard
+ * against a bug or a bulk status change on a pass that is one-to-one with
+ * something a CUSTOMER did, sized so a fully-booked morning does not
+ * overwhelm one tick. This pass is nothing like that — it is a scheduled,
+ * time-based fan-out, one email per ACCOUNT (not per customer), triggered
+ * by the clock in every zone that happens to be inside its own Monday
+ * 08:00-11:00 band right now. At 10/tick and the band's twelve ticks
+ * (15-minute cadence, three hours wide — cron-coupling.test.ts pins both),
+ * the old cap could reach at most 120 accounts sharing one zone before the
+ * band closes and that week's report for the rest is gone for good (a
+ * missed band is a missed week; spec, "Recorded consequence" — unlike the
+ * usage report's backlog, nothing here is retried after the band shuts).
+ *
+ * `WEEKLY_REPORT_TICK_CAP` (15x the old ceiling: 1,800 accounts per zone per
+ * band) is still a cap, not a dial turned off: a bug in the due-list query
+ * is still bounded to one tick's worth of damage. `WEEKLY_REPORT_BUDGET_MS`
+ * is the same order of magnitude as the usage report's own 60 s, claimed
+ * near the END of the same registered order (weekly-report.ts §registry
+ * comment: client report, then the agency roll-up, then usage, then
+ * ops-watch) — this pass stopping on its own clock, rather than its count,
+ * leaves room for those three to still run inside the route's 300 s
+ * `maxDuration` even on the tick a cap-sized backlog shows up. The check is
+ * made BEFORE starting a fresh account's compute-and-send, not mid-send
+ * (there is no measured "worst case overrun" for an email provider round
+ * trip the way METER_EVENT_WORST_CASE_MS has one for the installed Stripe
+ * SDK, so manufacturing one would be a number with no evidence behind it);
+ * the accounts a budget turns away wait for the next tick, same as a
+ * cap-turned-away account always has, and `listAccountsDueWeeklyReport`'s
+ * own `created_at` ordering (D-067's other half) is what makes that wait
+ * land on a DIFFERENT set of accounts each time rather than the same one.
+ */
+export const WEEKLY_REPORT_TICK_CAP = 150;
+export const WEEKLY_REPORT_BUDGET_MS = 60_000;

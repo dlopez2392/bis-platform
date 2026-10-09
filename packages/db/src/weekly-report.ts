@@ -55,7 +55,17 @@ export async function listAccountsDueWeeklyReport(
     // a demo account is branded and configured to look complete, so someone
     // filling in recipients to screenshot the setting would start mailing
     // invented numbers. The flag is the thing that cannot be set by accident.
-    .eq("outbound_suppressed", false);
+    .eq("outbound_suppressed", false)
+    // D-067: the pass caps attempts PER TICK and counts on the accounts a
+    // cap turns away this tick being exactly the ones it reaches first next
+    // tick — a walk across the Monday band's twelve ticks, not a single
+    // read. With no stated order, PostgREST/Postgres make no promise the
+    // same read run fifteen minutes apart returns rows in the same relative
+    // order, so the walk is not guaranteed to ever reach every due account.
+    // `created_at` is the one column on this row that is set once and never
+    // changes, so ordering by it is stable regardless of a concurrent
+    // write landing on some OTHER account's row in between.
+    .order("created_at", { ascending: true });
   if (error) throw new Error(`listAccountsDueWeeklyReport failed: ${error.message}`);
 
   const rows = (data ?? []) as {
