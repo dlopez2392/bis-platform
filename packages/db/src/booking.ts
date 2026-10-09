@@ -464,7 +464,7 @@ export async function undoOperatorCancel(
  * Undo window has closed and before anything is sent. One conditional
  * UPDATE: the row must still be cancelled and still carry the cancel's
  * version, and the claim moves the version on. The Undo's own write is
- * conditional on that same version (`undoOperatorCancel`'s `opts.version`),
+ * conditional on that same version (`undoOperatorCancel`'s required `version` argument),
  * so Postgres serialises the two on the row and exactly one of them wins:
  * an Undo that landed first leaves nothing to claim (no notice goes), and
  * a claim that landed first refuses the Undo (`superseded`).
@@ -512,6 +512,14 @@ export async function bookingContactEmail(
  * or failed row is the record of what happened. Its `message.created` event
  * stays; nothing in the app reads that type. `true` when a row went.
  * THROWS on a delete error.
+ *
+ * Fix round 2 (M-b): the row's insert touched the conversation's
+ * `last_message_at` (createMessage). After the delete it is put back to the
+ * newest message left, or null when none is, so the inbox does not sort the
+ * thread by an email that never existed. A conversation left with no
+ * messages stays in place: harmless (it sorts last, nulls last) and the
+ * next message on it reuses it. A failed reset is logged, not thrown: the
+ * row is already gone, and the sort self-heals on the thread's next message.
  */
 export async function discardQueuedNotice(
   db: SupabaseClient, accountId: string, messageId: string,
@@ -519,9 +527,22 @@ export async function discardQueuedNotice(
   const { data, error } = await db.from("messages").delete()
     .eq("account_id", accountId).eq("id", messageId)
     .eq("status", "queued").eq("direction", "outbound").eq("channel", "email")
-    .select("id");
+    .select("id, conversation_id");
   if (error) throw new Error(`discardQueuedNotice failed: ${error.message}`);
-  return (data?.length ?? 0) > 0;
+  const removed = (data ?? []) as { id: string; conversation_id: string }[];
+  if (removed.length === 0) return false;
+
+  const conversationId = removed[0]!.conversation_id;
+  const { data: newest, error: newestErr } = await db.from("messages").select("created_at")
+    .eq("account_id", accountId).eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false }).limit(1);
+  const { error: resetErr } = newestErr ? { error: newestErr } : await db.from("conversations")
+    .update({ last_message_at: ((newest ?? []) as { created_at: string }[])[0]?.created_at ?? null })
+    .eq("account_id", accountId).eq("id", conversationId);
+  if (resetErr) {
+    console.error(`discardQueuedNotice: conversation ${conversationId} sort time not reset: ${resetErr.message}`);
+  }
+  return true;
 }
 
 /** F-048: the cancel notice's thread row's status, or null when there is no

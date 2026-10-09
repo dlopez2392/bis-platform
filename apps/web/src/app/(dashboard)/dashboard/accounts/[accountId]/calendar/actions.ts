@@ -209,8 +209,9 @@ export async function cancelNoticeOptionAction(
  * Undo hands back.
  *
  * When the owner asked for the customer notice, whether it can go is checked
- * BEFORE the cancel, and a read that fails refuses the whole thing: the toast
- * must never promise an email nobody could check. When it can, the email is
+ * BEFORE the cancel; a read that fails cancels WITHOUT the notice (fail open
+ * to the reversible action) and answers "none", so the toast never promises
+ * an email nobody could check. When it can, the email is
  * composed and its thread row written QUEUED in this request, then the send
  * is scheduled with `after()` to run once the Undo window has closed
  * (`cancel-notice.ts`), never inside this response, which is what keeps the
@@ -235,8 +236,12 @@ export async function cancelBookingAction(
     try {
       availability = await cancelNoticeAvailability(await dbForRequest(), serviceDb(), accountId, bookingId);
     } catch (e) {
-      console.error(`cancelBookingAction: notice check failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
-      return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+      // Fix round 2 (M-a): fail OPEN to the reversible action. The cancel
+      // goes ahead WITHOUT the notice, and `notice: "none"` makes the toast
+      // say the customer was not told; a broken read must never stop the
+      // owner cancelling, nor promise an email nobody could check.
+      console.error(`cancelBookingAction: notice check failed for booking ${bookingId} (account ${accountId}), cancelling without it: ${String(e)}`);
+      availability = null;
     }
   }
 

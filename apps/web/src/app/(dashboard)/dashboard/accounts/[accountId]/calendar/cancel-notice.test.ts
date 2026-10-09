@@ -213,6 +213,17 @@ describe("sendQueuedCancelNotice — the customer hears only once the Undo has c
     expect(db.updateMessageStatus).toHaveBeenCalledWith(fakeDb, "acct_1", "msg_1", "failed", { error: "db down" }, "user_1");
   });
 
+  it("M-c: an email that SENT stays sent: a failure marking the row sent is logged, never turned into failed (mutation: one try around send and mark → the row is marked failed, FAILS)", async () => {
+    db.updateMessageStatus.mockImplementation(async (_d, _a, _id, status) => {
+      order.push(`mark ${status}`);
+      if (status === "sent") throw new Error("db down");
+    });
+    expect(await send()).toBe("sent");
+    expect(order).toEqual([`sleep ${UNDO_WINDOW_MS + NOTICE_GRACE_MS}`, "claim", "send", "mark sent"]);
+    expect(db.updateMessageStatus).not.toHaveBeenCalledWith(fakeDb, "acct_1", "msg_1", "failed", expect.anything(), "user_1");
+    expect(vi.mocked(console.error).mock.calls.flat().join(" ")).toContain("sent, but");
+  });
+
   it("never throws, even when marking the row fails too, and logs no address", async () => {
     vi.mocked(sendEmailOrThrow).mockRejectedValue(new Error("provider down"));
     db.updateMessageStatus.mockRejectedValue(new Error("db down"));

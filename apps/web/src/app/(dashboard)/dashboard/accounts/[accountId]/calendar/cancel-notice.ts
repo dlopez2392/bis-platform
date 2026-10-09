@@ -175,7 +175,15 @@ export async function sendQueuedCancelNotice(
       to: email.to, fromName: email.fromName, fromAddress: email.fromAddress,
       replyTo: email.replyTo, subject: email.subject, body: email.text, html: email.html,
     }, { db });
-    await updateMessageStatus(db, req.accountId, messageId, "sent", { providerMessageId }, req.userId);
+    // Its own try (fix round 2, M-c): the email has gone. A failure to RECORD
+    // that must never turn the row into "failed", or a late Undo would tell
+    // the owner it didn't go through when it did. The row stays queued (the
+    // honest "not known yet"), and the failure is logged.
+    try {
+      await updateMessageStatus(db, req.accountId, messageId, "sent", { providerMessageId }, req.userId);
+    } catch (e) {
+      console.error(`${tag}: sent, but marking the thread row sent failed: ${String(e)}`);
+    }
     return "sent";
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);

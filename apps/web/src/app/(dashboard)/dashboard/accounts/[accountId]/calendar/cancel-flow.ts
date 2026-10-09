@@ -1,5 +1,5 @@
 import { m } from "@/lib/messages";
-import type { CancelNoticeChoice } from "./actions";
+import type { CancelNoticeChoice, CancelNoticeOptionResult } from "./actions";
 
 /** Whether a customer notice can go for one booking (`cancelNoticeAvailability`,
  *  `cancel-notice.ts`). Declared here, in a module the browser may load. */
@@ -29,3 +29,38 @@ export function cancelStep(contactEmail: string | null, availability: NoticeAvai
 
 /** A cancel that asks for no notice: the cancel-at-once path. */
 export const NO_NOTICE: CancelNoticeChoice = { send: false, locale: "en", message: "" };
+
+/**
+ * The Calendar page's Cancel button, minus React (fix round 2, I-1): ask
+ * the server only when there is an email on file, open the dialog only when
+ * a notice can go, and otherwise cancel at once with the toast `cancelStep`
+ * names. M-a: a probe that answers not-ok, or throws, FAILS OPEN to the
+ * reversible action: cancel at once with no notice and the
+ * we-haven't-told-them toast, so a broken read never stops the owner
+ * cancelling.
+ */
+export async function runCancelButton(deps: {
+  contactEmail: string | null;
+  probe: () => Promise<CancelNoticeOptionResult>;
+  openDialog: () => void;
+  cancelNow: (noNoticeMessage: string) => Promise<unknown>;
+}): Promise<void> {
+  const first = cancelStep(deps.contactEmail, null);
+  if (first.kind === "now") {
+    await deps.cancelNow(first.toast);
+    return;
+  }
+  let option: CancelNoticeOptionResult | null;
+  try {
+    option = await deps.probe();
+  } catch {
+    option = null;
+  }
+  if (!option || !option.ok) {
+    await deps.cancelNow(m["calendar.bookings.cancelledToast"]);
+    return;
+  }
+  const next = cancelStep(deps.contactEmail, option.notice);
+  if (next.kind === "dialog") deps.openDialog();
+  else if (next.kind === "now") await deps.cancelNow(next.toast);
+}

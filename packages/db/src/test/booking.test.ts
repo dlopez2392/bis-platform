@@ -1247,6 +1247,45 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
     });
   });
 
+  /**
+   * Fix round 2 (M-b): the queued row's insert moved the conversation's
+   * `last_message_at` to its own time (createMessage's touch). Removing the
+   * row puts it back to the newest message left, or null when none is, so
+   * the inbox does not sort the thread by an email that never existed.
+   */
+  it("discardQueuedNotice puts the conversation's last_message_at back to the newest message left, or null (mutation: skip the reset → the deleted email's time stays, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const lastAt = async (id: string) => {
+        const { data, error } = await db.from("conversations").select("last_message_at").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return (data as { last_message_at: string | null }).last_message_at;
+      };
+      const createdAt = async (id: string) => {
+        const { data, error } = await db.from("messages").select("created_at").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return (data as { created_at: string }).created_at;
+      };
+
+      const { id: withHistory } = await createContact(db, accountId, { firstName: "Hist" }, "user_test");
+      const c1 = await ensureConversation(db, accountId, withHistory, "user_test");
+      const earlier = await createMessage(db, accountId, { conversationId: c1.id, channel: "email", direction: "inbound", body: "hi" }, "user_test");
+      // A distinctive time, older than any touch can write, so a missing reset shows.
+      const { error: ageErr } = await db.from("messages").update({ created_at: "2020-01-01T00:00:00.000Z" }).eq("id", earlier.id);
+      if (ageErr) throw new Error(ageErr.message);
+      const q1 = await createMessage(db, accountId, { conversationId: c1.id, channel: "email", direction: "outbound", body: "q" }, "user_test");
+      expect(new Date((await lastAt(c1.id))!).getTime()).not.toBe(new Date("2020-01-01T00:00:00.000Z").getTime());
+      expect(await discardQueuedNotice(db, accountId, q1.id)).toBe(true);
+      expect(new Date((await lastAt(c1.id))!).getTime()).toBe(new Date(await createdAt(earlier.id)).getTime());
+
+      const { id: fresh } = await createContact(db, accountId, { firstName: "Fresh" }, "user_test");
+      const c2 = await ensureConversation(db, accountId, fresh, "user_test");
+      const q2 = await createMessage(db, accountId, { conversationId: c2.id, channel: "email", direction: "outbound", body: "q" }, "user_test");
+      expect(await lastAt(c2.id)).not.toBeNull();
+      expect(await discardQueuedNotice(db, accountId, q2.id)).toBe(true);
+      expect(await lastAt(c2.id)).toBeNull();
+    });
+  });
+
   it("rescheduleChain refuses a booking that is not this account's (mutation: drop the account scope → it answers, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       await withTestAccount(async (_db2, otherAccountId) => {

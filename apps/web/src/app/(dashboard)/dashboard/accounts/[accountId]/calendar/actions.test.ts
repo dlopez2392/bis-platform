@@ -432,12 +432,18 @@ describe("cancelBookingAction — cancel now, tell the customer when the Undo cl
     expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
   });
 
-  it("a notice check that fails refuses the whole cancel, so the owner is never told a notice is coming that could not be checked", async () => {
+  // Fix round 2 (M-a): a notice check that fails FAILS OPEN to the
+  // reversible action. The cancel goes ahead with no notice, and the answer
+  // "none" makes the toast say the customer was not told, so no email is
+  // promised that nobody could check (mutation: refuse the cancel → FAILS).
+  it("a notice check that fails still cancels, without the notice, and promises nothing", async () => {
     notice.availability.mockRejectedValue(new Error("db down"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await cancelBookingAction("acct_1", "bk_1", NOTICE);
-    expect(r).toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
-    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+    expect(r).toEqual({ ok: true, version: VERSION, notice: "none" });
+    expect(dbMocks.setBookingStatus).toHaveBeenCalledTimes(1);
+    expect(notice.queue).not.toHaveBeenCalled();
+    expect(nextMocks.after).not.toHaveBeenCalled();
   });
 
   it("a cancel the write refuses queues and schedules nothing", async () => {

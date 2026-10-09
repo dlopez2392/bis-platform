@@ -239,3 +239,24 @@ describe("BookingsList — the empty state (D-030 review)", () => {
     expect(m["calendar.bookings.empty"]).toMatch(/completed or no-show/i);
   });
 });
+
+/**
+ * Fix round 2 (I-1): the Cancel button's sequence is `runCancelButton`
+ * (cancel-flow.test.ts pins its paths). This pins that the row USES it: the
+ * dialog opens only through its `openDialog`, and the server is asked only
+ * through its `probe` (mutation: open the dialog straight from the click, or
+ * call the probe and branch here again → FAILS).
+ */
+describe("the row's Cancel button goes through runCancelButton (F-048 I-1)", () => {
+  it("opens the dialog and asks the server only from inside runCancelButton's deps", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(__dirname, "bookings-list.tsx"), "utf8");
+    expect(src.match(/setDialogOpen\(true\)/g)).toEqual(["setDialogOpen(true)"]);
+    expect(src).toMatch(/openDialog: \(\) => setDialogOpen\(true\)/);
+    expect(src.match(/noticeOptionAction\(/g)).toEqual(["noticeOptionAction("]);
+    expect(src).toMatch(/probe: \(\) => noticeOptionAction\(booking\.id\)/);
+    expect(src).toMatch(/onClick=\{onCancel\}/);
+    expect(src).toMatch(/function onCancel\(\) \{\s+startTransition\(async \(\) => \{\s+await runCancelButton\(\{/);
+  });
+});

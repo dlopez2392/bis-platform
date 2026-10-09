@@ -12,7 +12,7 @@ import { m } from "@/lib/messages";
 import { CONFIRM_REPLY_TREATMENTS } from "./confirm-reply";
 import { runCancelWithUndo } from "./cancel-booking";
 import { CancelDialog } from "./cancel-dialog";
-import { cancelStep, NO_NOTICE } from "./cancel-flow";
+import { runCancelButton, NO_NOTICE } from "./cancel-flow";
 import type { ActionResult, CancelBookingResult, CancelNoticeChoice, CancelNoticeOptionResult } from "./actions";
 
 type Booking = BookingRow & { contact_name: string; contact_email: string | null };
@@ -106,21 +106,16 @@ function StatusActions({
     );
   }
 
+  // The sequence lives in `runCancelButton` (./cancel-flow.ts), where it is
+  // tested without React.
   function onCancel() {
     startTransition(async () => {
-      const first = cancelStep(booking.contact_email, null);
-      if (first.kind === "now") return void (await cancelWith(NO_NOTICE, first.toast));
-      let option: CancelNoticeOptionResult;
-      try {
-        option = await noticeOptionAction(booking.id);
-      } catch {
-        toast.error(m["common.actionCrashed"]);
-        return;
-      }
-      if (!option.ok) return void toast.error(option.error);
-      const next = cancelStep(booking.contact_email, option.notice);
-      if (next.kind === "dialog") setDialogOpen(true);
-      else if (next.kind === "now") await cancelWith(NO_NOTICE, next.toast);
+      await runCancelButton({
+        contactEmail: booking.contact_email,
+        probe: () => noticeOptionAction(booking.id),
+        openDialog: () => setDialogOpen(true),
+        cancelNow: (noNoticeMessage) => cancelWith(NO_NOTICE, noNoticeMessage),
+      });
     });
   }
 
