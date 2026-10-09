@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import type { FormTheme } from "@bis/db";
+import type { FormTheme, CustomFieldDef } from "@bis/db";
 import {
   defaultFieldKey, mergeFormTheme, isValidFormFieldList, defaultFormFields,
-  shouldWarnOnUnpublish, statusAfterUndo,
+  shouldWarnOnUnpublish, statusAfterUndo, kindLabel,
 } from "./editor-helpers";
 
 describe("defaultFieldKey", () => {
@@ -144,6 +144,45 @@ describe("shouldWarnOnUnpublish", () => {
 // extracted so it is testable without a DOM renderer (no DOM lib in this
 // repo — see contact-drawer.wiring.test.ts's own precedent for pulling
 // non-trivial wiring out of a component for exactly this reason).
+/**
+ * Review round 1, m5: `kindLabel` doubles as the editor's own category tag
+ * (operator-facing, always English — the dashboard carries no live i18n)
+ * AND the SEEDED default value of a new field's customer-facing `label`
+ * when `addField` first adds it. Those are two different readers: the
+ * operator building the form always reads the editor in English, but the
+ * seeded label becomes something the VISITOR reads, in whichever language
+ * the FORM itself was built in (`form.locale_default`) — never an
+ * "operator locale", which does not exist here (fixing the stale comment
+ * at messages.ts, same review round).
+ */
+describe("kindLabel", () => {
+  const NO_CUSTOM: CustomFieldDef[] = [];
+
+  it("defaults to English with no locale argument — the editor's own chrome (mutation: default to Spanish → FAILS)", () => {
+    expect(kindLabel("core.referral_source", NO_CUSTOM)).toBe("Who recommended you?");
+  });
+
+  it("stays English for an English-locale form, even when a .es twin exists", () => {
+    expect(kindLabel("core.referral_source", NO_CUSTOM, "en")).toBe("Who recommended you?");
+  });
+
+  it("seeds the Spanish twin for a Spanish-locale form (mutation: ignore the locale argument → FAILS)", () => {
+    expect(kindLabel("core.referral_source", NO_CUSTOM, "es")).toBe("¿Quién le recomendó?");
+  });
+
+  it("a kind with no .es twin falls back to English even for a Spanish form (mutation: throw/crash on a missing twin → FAILS)", () => {
+    expect(kindLabel("core.first_name", NO_CUSTOM, "es")).toBe("First name");
+  });
+
+  it("an unrecognised (custom) kind is unaffected by locale — it already reads the account's OWN custom field name", () => {
+    const def: CustomFieldDef = {
+      id: "d1", model: "contact", field_key: "gate_code", name: "Gate code",
+      data_type: "text", options: [], position: 0,
+    };
+    expect(kindLabel("custom.gate_code", [def], "es")).toBe("Gate code");
+  });
+});
+
 describe("statusAfterUndo", () => {
   it("moves the status to published on a successful republish (mutation: return currentStatus unconditionally → FAILS)", () => {
     expect(statusAfterUndo({ ok: true }, "draft")).toBe("published");

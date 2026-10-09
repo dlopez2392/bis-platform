@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { FormRow } from "@bis/db";
 import { m } from "@/lib/messages";
 
@@ -45,5 +47,33 @@ describe("FormEditor: the source question is offered in the Add field picker (F-
     // "Add field:" picker's button list must not offer it a second time.
     const pickerSection = out.slice(out.indexOf(m["forms.addField"]));
     expect(pickerSection).not.toContain(`>${m["forms.kind.core.referral_source"]}<`);
+  });
+
+  it("the Add field picker's own tag stays English for a Spanish-locale form — editor chrome, never the form's own locale (mutation: pass locale to the sidebar tag too → FAILS)", () => {
+    const out = html(form({ locale_default: "es" }));
+    expect(out).toContain(m["forms.kind.core.referral_source"]);
+    expect(out).not.toContain(m["forms.kind.core.referral_source.es"]);
+  });
+});
+
+/**
+ * Review round 1, m5: `addField` (the ONE call site that seeds a new
+ * field's customer-facing label) passes `form.locale_default` to
+ * `kindLabel` — proven as a source pin, the same tool contact-drawer.
+ * wiring.test.ts already uses for wiring a static render cannot reach
+ * (there is no DOM renderer here, so a click on "Add field" cannot be
+ * simulated; `kindLabel`'s own locale behaviour is unit-tested directly in
+ * editor-helpers.test.ts).
+ */
+describe("FormEditor: the seeded label follows the FORM's own locale, not an 'operator locale' (review round 1, m5)", () => {
+  const src = readFileSync(fileURLToPath(new URL("./form-editor.tsx", import.meta.url)), "utf8");
+
+  it("addField passes form.locale_default to kindLabel (mutation: drop the third argument → FAILS)", () => {
+    expect(src).toMatch(/label: kindLabel\(kind, customFields, form\.locale_default\)/);
+  });
+
+  it("the editor's own sidebar tags do NOT pass a locale — they stay the dashboard's own English chrome (mutation: pass form.locale_default there too → FAILS)", () => {
+    expect(src).toContain("{kindLabel(field.kind, customFields)}");
+    expect(src).toContain("{kindLabel(kind, customFields)}");
   });
 });
