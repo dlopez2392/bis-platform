@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { readConsentEvent, readConsentHistory, newestDecidingRow } from "./consent";
+import { isMissingCallIdColumn } from "./call-id-fallback";
 
 export async function addNote(
   db: SupabaseClient, accountId: string, contactId: string, body: string, actorId: string,
@@ -39,12 +40,19 @@ export async function addTask(
 }
 
 export async function listContactTasks(db: SupabaseClient, accountId: string, contactId: string) {
-  const { data, error } = await db.from("tasks")
-    .select("id, title, due_at, completed_at, created_at, consent_event_id")
+  const read = (cols: string) => db.from("tasks")
+    .select(cols)
     .eq("account_id", accountId).eq("contact_id", contactId)
     .order("created_at", { ascending: false });
+  const COLS = "id, title, due_at, completed_at, created_at, consent_event_id";
+  let { data, error } = await read(`${COLS}, call_id`);
+  // TEMPORARY (call-id-fallback.ts): before 0064, read without call_id.
+  if (isMissingCallIdColumn(error)) ({ data, error } = await read(COLS));
   if (error) throw new Error(error.message);
-  return data;
+  return (data ?? []) as unknown as {
+    id: string; title: string; due_at: string | null; completed_at: string | null;
+    created_at: string; consent_event_id: string | null; call_id?: string | null;
+  }[];
 }
 
 export async function completeTask(

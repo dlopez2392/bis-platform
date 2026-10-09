@@ -36,7 +36,7 @@ const ROW: CallListRow = {
 
 function render(
   rows: CallListRow[],
-  opts: { olderHref?: string; timezone?: string; textbackFailed?: Set<string> } = {},
+  opts: { olderHref?: string; timezone?: string; textbackFailed?: Set<string>; reasons?: Map<string, string> } = {},
 ) {
   return renderToStaticMarkup(
     createElement(CallsTable, {
@@ -45,6 +45,7 @@ function render(
       timezone: opts.timezone ?? "America/Chicago",
       olderHref: opts.olderHref,
       textbackFailed: opts.textbackFailed,
+      reasons: opts.reasons,
     }),
   );
 }
@@ -205,5 +206,20 @@ describe("CallsTable", () => {
     expect(html).toContain("When");
     expect(html).toContain("Outcome");
     expect(html).not.toContain("Older calls");
+  });
+});
+
+describe("CallsTable — why they called", () => {
+  it("puts the call's reason under the caller, on that row only (mutation: drop the reason line → FAILS; look it up by contact → the other row inherits it, FAILS)", () => {
+    const other: CallListRow = { ...ROW, id: "c2", contact: { first_name: "Luis", last_name: "Garza" } };
+    const html = render([ROW, other], { reasons: new Map([["c1", "Wants a quote for a roof leak"]]) });
+    expect(html.match(/Wants a quote for a roof leak/g)).toHaveLength(1);
+    const rows = html.split("<tr").slice(2);
+    expect(rows[0]).toContain("Wants a quote for a roof leak");
+    expect(rows[1]).not.toContain("Wants a quote for a roof leak");
+  });
+
+  it("a row with no reason renders exactly as before, and the reasons map is optional (the dashboard's mini table passes none)", () => {
+    expect(render([ROW])).toBe(render([ROW], { reasons: new Map() }));
   });
 });

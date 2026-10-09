@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import { PhoneIncoming } from "lucide-react";
-import { listCalls, countCallsSince, listFailedOutboundSms, type TextbackWindow } from "@bis/db";
+import { listCalls, countCallsSince, listFailedOutboundSms, listCallReasons, type TextbackWindow } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { requireAccountAccess } from "@/lib/auth";
@@ -110,6 +110,17 @@ export default async function CallsPage({
     );
   }
 
+  // Why each call happened (the call card, 0064): ONE read for the page,
+  // keyed by call id, swallowed exactly like the badges above — a reason is
+  // a decoration on the log, and a failed read (or a database the card's
+  // migration has not reached) costs the reasons, never the calls.
+  let reasons: ReadonlyMap<string, string> = new Map<string, string>();
+  try {
+    reasons = await listCallReasons(db, accountId, rows.map((row) => row.id));
+  } catch (e) {
+    console.error(`calls ${accountId}: reasons read failed, rendering none: ${String(e)}`);
+  }
+
   const last = rows[rows.length - 1];
   const olderHref =
     rows.length === PAGE_SIZE && last
@@ -152,6 +163,7 @@ export default async function CallsPage({
               timezone={timezone}
               olderHref={olderHref}
               textbackFailed={textbackFailed}
+              reasons={reasons}
             />
           )}
         </div>

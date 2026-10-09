@@ -35,6 +35,7 @@ export function CallsTable({
   timezone,
   olderHref,
   textbackFailed,
+  reasons,
 }: {
   rows: CallListRow[];
   accountId: string;
@@ -51,6 +52,11 @@ export function CallsTable({
    *  in both directions. Optional so the dashboard's mini table and this
    *  component's own tests can render rows without it. */
   textbackFailed?: ReadonlySet<string>;
+  /** CALL id → why they called (the call card, 0064), resolved by the page in
+   *  ONE read for the whole table. Keyed by call, never by contact: a repeat
+   *  caller rang about something different each time. Optional for the same
+   *  reason `textbackFailed` is. */
+  reasons?: ReadonlyMap<string, string>;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
 
@@ -83,6 +89,7 @@ export function CallsTable({
             // already falsy (see the branch below), so that disjunct would
             // never be the one making this true.
             const known = Boolean(row.caller_e164?.trim());
+            const reason = reasons?.get(row.id);
 
             return (
               <CallRow key={row.id} href={callHref} label={label}>
@@ -111,6 +118,14 @@ export function CallsTable({
                       {label}
                     </span>
                   )}
+                  {/* Why they called, under who — the call card's first line,
+                      so the list reads as an answering service's log. One
+                      line, truncated: the detail page has the whole card. */}
+                  {reason ? (
+                    <span className="mt-0.5 block max-w-[28rem] truncate text-xs text-muted-foreground">
+                      {reason}
+                    </span>
+                  ) : null}
                 </TableCell>
 
                 <TableCell className={cn(CELL, "text-right tabular-nums text-muted-foreground")}>

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { brandDisplayName } from "./branding";
 import { readConsentActions, type ConsentAction } from "./consent";
+import { isMissingCallIdColumn } from "./call-id-fallback";
 
 export type WorkSource = "task" | "conversation" | "booking";
 
@@ -17,6 +18,10 @@ export type WorkRow = {
    *  confirm or release (the To-do's Confirm stop / Not a stop), `revoked` a
    *  CANCEL stop to check against the appointment. Absent on every other row. */
   consent?: { eventId: string; action: ConsentAction } | null;
+  /** A task: the call it came from (0064's `tasks.call_id`) — a callback To
+   *  do the receptionist left for a person, which the queue marks as hers.
+   *  Null on a task a person made. Absent on every other row. */
+  callId?: string | null;
 };
 
 async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
@@ -38,14 +43,18 @@ async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow
   // before one due-today task). created_at is kept as the tiebreak, so rows
   // sharing a due_at (including every undated one, tied on NULL) still order
   // deterministically rather than at the database's discretion.
-  const { data, error } = await db.from("tasks")
-    .select("id, contact_id, title, due_at, created_at, consent_event_id")
+  const read = (cols: string) => db.from("tasks")
+    .select(cols)
     .eq("account_id", accountId).is("completed_at", null)
     .order("due_at", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true })
     .limit(200);
+  const COLS = "id, contact_id, title, due_at, created_at, consent_event_id";
+  let { data, error } = await read(`${COLS}, call_id`);
+  // TEMPORARY (call-id-fallback.ts): before 0064, read without call_id.
+  if (isMissingCallIdColumn(error)) ({ data, error } = await read(COLS));
   if (error) throw new Error(`openTasks failed: ${error.message}`);
-  const rows = (data ?? []) as { id: string; contact_id: string | null; title: string; due_at: string | null; created_at: string; consent_event_id: string | null }[];
+  const rows = (data ?? []) as unknown as { id: string; contact_id: string | null; title: string; due_at: string | null; created_at: string; consent_event_id: string | null; call_id?: string | null }[];
   // One read for the whole batch, and none at all without a consent task.
   const linked = rows.map((t) => t.consent_event_id).filter((id): id is string => id !== null);
   const actions = await readConsentActions(db, accountId, linked);
@@ -56,6 +65,7 @@ async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow
       contactId: t.contact_id, title: t.title,
       dueAt: t.due_at, occurredAt: t.created_at,
       consent: t.consent_event_id && action ? { eventId: t.consent_event_id, action } : null,
+      callId: t.call_id ?? null,
     };
   });
 }

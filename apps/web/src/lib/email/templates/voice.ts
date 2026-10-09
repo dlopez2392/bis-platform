@@ -11,6 +11,13 @@ export type VoiceCallAlertInput = {
   /** Absolute, or null when no contact was resolved for this call / the
    *  triggering request carried no host. NEVER relative. */
   contactUrl: string | null;
+  /**
+   * The call card's line, "Call back at {number}: {reason}" — already
+   * composed by the caller (lib/voice/call-card.ts, the callback To do's own
+   * title) from what Sofía wrote down on the call. Absent or null: the alert
+   * is exactly what it was before the card (owner ruling, 2026-10-09).
+   */
+  callback?: string | null;
 };
 
 /**
@@ -26,7 +33,13 @@ export type VoiceCallAlertInput = {
  * sent mail.
  */
 export function voiceCallAlertEmail(input: VoiceCallAlertInput): { html: string; text: string } {
-  const html = shell(input.brand, `
+  // The call-back line LEADS: who to call and why is the three-second read
+  // the owner opens this for. Escaped like the summary — the reason is the
+  // caller's request in the receptionist's words.
+  const lead = input.callback
+    ? `<p style="margin:0 0 12px;font-size:17px;font-weight:600;">${escapeHtml(input.callback)}</p>`
+    : "";
+  const html = shell(input.brand, `${lead}
     <p style="margin:0 0 12px;font-size:17px;font-weight:600;">Call — ${escapeHtml(input.outcome)}</p>
     <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(input.callerDisplay)}</p>
     <div style="margin:0 0 20px;white-space:pre-wrap;">${escapeHtml(input.summary)}</div>
@@ -36,6 +49,7 @@ export function voiceCallAlertEmail(input: VoiceCallAlertInput): { html: string;
   // Composed, never derived by stripping tags — the version a human would
   // have written, and what a text-only client shows.
   const text = [
+    ...(input.callback ? [input.callback, ""] : []),
     `Call — ${input.outcome}`,
     input.callerDisplay,
     "",
