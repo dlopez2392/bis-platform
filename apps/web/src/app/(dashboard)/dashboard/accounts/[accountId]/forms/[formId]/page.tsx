@@ -1,11 +1,11 @@
 import { notFound } from "next/navigation";
 import { headers } from "next/headers";
-import { getForm, listSubmissions, listCustomFields } from "@bis/db";
+import { getForm, listSubmissions, listCustomFields, findConciergeDestinationName } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { FormEditor } from "./form-editor";
 import { EmbedSnippet } from "./embed-snippet";
 import { SubmissionsTable } from "./submissions-table";
-import { saveFormAction } from "../actions";
+import { saveFormAction, republishFormAction } from "../actions";
 import { dbForRequest } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -18,10 +18,24 @@ export default async function FormEditorPage({
   const form = await getForm(db, accountId, formId);
   if (!form) notFound();
 
-  const [submissions, customFields, h] = await Promise.all([
+  // Fix round 1 review (minor): this lookup is a courtesy on top of the
+  // editor's real job (editing the form), not a reason to fail the whole
+  // page — a transient read error here must not cost the operator the
+  // editor entirely. `.catch` keeps it OUT of the `Promise.all`'s own
+  // failure path: a plain rejected member there would reject every other
+  // member too, and `notFound()`/the page's error boundary would show
+  // instead of the editor.
+  const conciergeAssistantName = findConciergeDestinationName(db, accountId, formId)
+    .catch((e: unknown) => {
+      console.error(`findConciergeDestinationName failed for form ${formId}: ${String(e)}`);
+      return null;
+    });
+
+  const [submissions, customFields, h, resolvedConciergeAssistantName] = await Promise.all([
     listSubmissions(db, accountId, formId),
     listCustomFields(db, accountId, "contact"),
     headers(),
+    conciergeAssistantName,
   ]);
 
   // Read from the request rather than an env var: the snippet has to point at
@@ -39,6 +53,8 @@ export default async function FormEditorPage({
             form={form}
             customFields={customFields}
             action={saveFormAction.bind(null, accountId)}
+            conciergeAssistantName={resolvedConciergeAssistantName}
+            republishAction={republishFormAction.bind(null, accountId, formId)}
           />
           <SubmissionsTable
             accountId={accountId}
