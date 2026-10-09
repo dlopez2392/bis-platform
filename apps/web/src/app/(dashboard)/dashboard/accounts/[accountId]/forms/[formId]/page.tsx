@@ -7,6 +7,7 @@ import { EmbedSnippet } from "./embed-snippet";
 import { SubmissionsTable } from "./submissions-table";
 import { saveFormAction, republishFormAction } from "../actions";
 import { dbForRequest } from "@/lib/db";
+import { renderZone } from "@/lib/zone";
 
 export const dynamic = "force-dynamic";
 
@@ -31,12 +32,20 @@ export default async function FormEditorPage({
       return null;
     });
 
-  const [submissions, customFields, h, resolvedConciergeAssistantName] = await Promise.all([
+  const [submissions, customFields, h, resolvedConciergeAssistantName, account] = await Promise.all([
     listSubmissions(db, accountId, formId),
     listCustomFields(db, accountId, "contact"),
     headers(),
     conciergeAssistantName,
+    // The zone the submissions table's own dates render in below — not a
+    // throw: one cosmetic date column must not take the editor down, same
+    // reasoning as the contacts list's own read (D-010).
+    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
   ]);
+  if (account.error) {
+    console.error(`forms editor: account ${accountId} timezone read failed: ${account.error.message}`);
+  }
+  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
 
   // Read from the request rather than an env var: the snippet has to point at
   // whatever host the operator is actually on, which differs between localhost,
@@ -59,6 +68,7 @@ export default async function FormEditorPage({
           <SubmissionsTable
             accountId={accountId}
             submissions={submissions}
+            timezone={zone.zone}
           />
         </div>
         <EmbedSnippet

@@ -3,13 +3,22 @@ import { Check, X } from "lucide-react";
 import type { SubmissionRow } from "@bis/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTimeInZone } from "@/lib/format";
 import { normalizeConsent } from "@/lib/forms/consent";
 import { m } from "@/lib/messages";
 
 export function SubmissionsTable({
-  accountId, submissions,
-}: { accountId: string; submissions: SubmissionRow[] }) {
+  accountId, submissions, timezone,
+}: {
+  accountId: string;
+  submissions: SubmissionRow[];
+  /** The account's RESOLVED zone (`renderZone`, computed once by the form
+   *  editor's own `page.tsx`) — a submission's own `created_at` (and a
+   *  consent entry's own `at`) rendered through `formatDateTime`, the
+   *  RUNTIME's zone (server or browser), never the account's, the same bug
+   *  D-010 fixed for the contacts list and the activity timeline. */
+  timezone: string;
+}) {
   return (
     <Card>
       <CardHeader><CardTitle className="text-sm">{m["forms.submissions"]}</CardTitle></CardHeader>
@@ -22,7 +31,7 @@ export function SubmissionsTable({
               <li key={submission.id} className="py-2.5">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-muted-foreground">
-                    {formatDateTime(submission.created_at)}
+                    {formatDateTimeInZone(submission.created_at, timezone)}
                   </span>
                   {submission.spam_reason ? (
                     <Badge
@@ -60,7 +69,7 @@ export function SubmissionsTable({
                     consent field, precisely so it can be produced later. Until
                     this rendered it, that evidence lived only in the database
                     and no operator could answer "prove they agreed". */}
-                <ConsentList consent={submission.consent} />
+                <ConsentList consent={submission.consent} timezone={timezone} />
               </li>
             ))}
           </ul>
@@ -70,7 +79,9 @@ export function SubmissionsTable({
   );
 }
 
-function ConsentList({ consent }: { consent: SubmissionRow["consent"] }) {
+function ConsentList({
+  consent, timezone,
+}: { consent: SubmissionRow["consent"]; timezone: string }) {
   const entries = normalizeConsent(consent);
   if (entries.length === 0) return null;
 
@@ -90,7 +101,7 @@ function ConsentList({ consent }: { consent: SubmissionRow["consent"] }) {
             </span>
             <span className="break-words text-card-foreground">{entry.text}</span>
             {entry.at ? (
-              <span className="text-muted-foreground"> · {formatDateTime(entry.at)}</span>
+              <span className="text-muted-foreground"> · {formatDateTimeInZone(entry.at, timezone)}</span>
             ) : null}
           </span>
         </li>

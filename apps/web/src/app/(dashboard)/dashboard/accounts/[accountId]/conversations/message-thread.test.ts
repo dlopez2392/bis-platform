@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
@@ -17,11 +17,12 @@ function message(status: string, error: string | null) {
   };
 }
 
-function html(status: string, error: string | null): string {
+function html(status: string, error: string | null, timezone = "UTC"): string {
   return renderToStaticMarkup(createElement(MessageThread, {
     messages: [message(status, error)] as never,
     contactName: "Ada",
     composer: null,
+    timezone,
   }));
 }
 
@@ -53,5 +54,27 @@ describe("MessageThread's failure reason (D-017)", () => {
     expect(text).not.toContain(m["conversations.failureReason.failed"]);
     expect(text).not.toContain(m["conversations.failureReason.bounced"]);
     expect(text).not.toContain(m["conversations.failureReason.complained"]);
+  });
+});
+
+/**
+ * A bubble's own timestamp rendered through `formatDateTime` — the RUNTIME's
+ * zone (server or browser), never the account's — the same bug D-010 fixed
+ * for the contacts list and the activity timeline.
+ */
+describe("MessageThread's bubble timestamp renders in the ACCOUNT's zone, not the runtime's", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("a bubble's clock time follows the account's zone (Berlin), not the runtime's (Chicago)", () => {
+    vi.stubEnv("TZ", "America/Chicago");
+    const msg = { ...message("sent", null), created_at: "2026-10-08T05:00:00.000Z" };
+    const text = renderedText(renderToStaticMarkup(createElement(MessageThread, {
+      messages: [msg] as never, contactName: "Ada", composer: null, timezone: "Europe/Berlin",
+    })));
+    // 05:00 UTC is 7:00 AM in Berlin but 12:00 AM (midnight) in Chicago.
+    expect(text).toContain("7:00 AM");
+    expect(text).not.toContain("12:00 AM");
   });
 });

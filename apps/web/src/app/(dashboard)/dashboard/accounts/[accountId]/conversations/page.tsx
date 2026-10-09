@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { contactDisplayName } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
+import { renderZone } from "@/lib/zone";
 import { cn } from "@/lib/utils";
 import { parseCursor, encodeCursor } from "@/lib/cursor";
 import { m } from "@/lib/messages";
@@ -35,7 +36,17 @@ export default async function ConversationsPage({
   // one) rather than throwing on a hand-editable URL — `parseCursor`'s own
   // contract (lib/cursor.ts).
   const cursor = parseCursor(before);
-  const conversations = await listConversations(db, accountId, { limit: PAGE_SIZE, before: cursor });
+  const [conversations, account] = await Promise.all([
+    listConversations(db, accountId, { limit: PAGE_SIZE, before: cursor }),
+    // The zone every row's own timestamp renders in below — not a throw: one
+    // cosmetic date column must not take the whole inbox down, same reasoning
+    // as the contacts list's own read (D-010).
+    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
+  ]);
+  if (account.error) {
+    console.error(`conversations: account ${accountId} timezone read failed: ${account.error.message}`);
+  }
+  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
 
   // The COLD-START reading of zero rows: no `?before=` cursor, so this is
   // page one and there is nothing behind it either — an account that has
@@ -104,6 +115,7 @@ export default async function ConversationsPage({
             olderHref={olderHref}
             newerHref={newerHref}
             before={currentBefore}
+            timezone={zone.zone}
           />
         </div>
         {active ? (
@@ -116,6 +128,7 @@ export default async function ConversationsPage({
             />
             <MessageThread
               messages={messages}
+              timezone={zone.zone}
               contactName={contactDisplayName({
                 first_name: active.contactFirstName,
                 last_name: active.contactLastName,

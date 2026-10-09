@@ -3,7 +3,7 @@ import type { ConversationSummary } from "@bis/db";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
-import { contactDisplayName, formatDateTime } from "@/lib/format";
+import { contactDisplayName, formatDateTimeInZone } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +14,7 @@ export function ConversationList({
   olderHref,
   newerHref,
   before,
+  timezone,
 }: {
   conversations: ConversationSummary[];
   base: string;
@@ -31,6 +32,11 @@ export function ConversationList({
    *  EVERY row, not only the active one: any row on this page could be
    *  opened next. */
   before?: string;
+  /** The account's RESOLVED zone (`renderZone`, computed once by `page.tsx`)
+   *  — a row's own `lastMessageAt` rendered through `formatDateTime`, the
+   *  RUNTIME's zone (server or browser), never the account's, which is the
+   *  same bug D-010 fixed for the contacts list and the activity timeline. */
+  timezone: string;
 }) {
   return (
     <div className="space-y-3">
@@ -71,7 +77,7 @@ export function ConversationList({
                   ) : null}
                   {conversation.lastMessageAt ? (
                     <span className="text-xs text-muted-foreground">
-                      {formatDateTime(conversation.lastMessageAt)}
+                      {formatDateTimeInZone(conversation.lastMessageAt, timezone)}
                     </span>
                   ) : null}
                 </span>
