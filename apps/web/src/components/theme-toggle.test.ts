@@ -43,13 +43,25 @@ describe("toggleTheme", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("calls setTheme and refresh in that order — the cookie must be written before the refreshed request can read it, but setTheme before refresh is what repaints the class synchronously first", () => {
+  // Review round: this test's NAME used to claim the cookie is written
+  // before the refresh — true of the real code, but the body only ever
+  // tracked `setTheme`/`refresh`, never the cookie write itself, so it
+  // could not have caught that ordering breaking. The cookie write is
+  // folded into the SAME `calls` array here (a setter on the stubbed
+  // `document`), so the full order — cookie, then setTheme, then refresh —
+  // is what the assertion actually checks.
+  it("writes the cookie, THEN calls setTheme, THEN refresh — the server's next request must see the choice before the class flips or the page is asked to repaint", () => {
     const calls: string[] = [];
+    let cookieValue = "";
+    vi.stubGlobal("document", {
+      get cookie() { return cookieValue; },
+      set cookie(v: string) { cookieValue = v; calls.push("cookie"); },
+    });
     const setTheme = vi.fn(() => calls.push("setTheme"));
     const refresh = vi.fn(() => calls.push("refresh"));
 
     toggleTheme("dark", setTheme, refresh);
 
-    expect(calls).toEqual(["setTheme", "refresh"]);
+    expect(calls).toEqual(["cookie", "setTheme", "refresh"]);
   });
 });
