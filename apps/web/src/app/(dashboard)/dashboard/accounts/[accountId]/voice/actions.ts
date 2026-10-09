@@ -362,6 +362,18 @@ export async function enableConciergeAction(
     if (message.includes("no voice profile for this account")) {
       return { ok: false, error: m["voice.assistant.lockedNoProfile"] };
     }
+    // D-108: `enableConcierge` now refuses a profile that is not ready, with
+    // the missing piece named, so the caller hears the same sentence the
+    // locked toggle would have shown.
+    if (message.includes("profile not ready (greeting)")) {
+      return { ok: false, error: m["voice.assistant.lockedBlankGreeting"] };
+    }
+    if (message.includes("profile not ready (spanish_greeting)")) {
+      return { ok: false, error: m["voice.assistant.lockedBlankSpanishGreeting"] };
+    }
+    if (message.includes("profile not ready (facts)")) {
+      return { ok: false, error: m["voice.assistant.lockedBlankFacts"] };
+    }
     if (message.includes("form does not belong to this account")) {
       console.error(
         `enableConciergeAction: cross-tenant or deleted form for account ${accountId}, form ${formId}: ${message}`,

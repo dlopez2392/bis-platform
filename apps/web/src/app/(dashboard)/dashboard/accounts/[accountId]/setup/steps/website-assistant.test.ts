@@ -5,6 +5,8 @@ import type { SetupStepView } from "@/lib/setup/setup-view";
 import type { StepDetailProps } from "./step-shared";
 import { renderedText } from "@/lib/rendered-text";
 import { WebsiteAssistantStep } from "./website-assistant";
+import { VoiceProfileStep } from "./voice-profile";
+import { m } from "@/lib/messages";
 
 // `EmbedSnippet` uses `useState` and a click handler but no router hook, so —
 // unlike calls-table.test.ts's `next/navigation` mock — nothing here needs
@@ -224,5 +226,62 @@ describe("WebsiteAssistantStep", () => {
     // MUTATION: force `surface="1"` (or drop the prop) at the call site —
     // this FAILS, since the class would then be absent.
     expect(html).toMatch(/class="[^"]*bg-\[var\(--surface-2\)\][^"]*"/);
+  });
+});
+
+/**
+ * Review of D-108: a bilingual profile with the English greeting written and
+ * the Spanish one blank read "Write the greeting and facts: To do", pointing
+ * the operator at a greeting they had already written. The row now says the
+ * Spanish greeting is what is missing; nothing else changes the row's title.
+ */
+describe("WebsiteAssistantStep row 1 — names the Spanish greeting when that is the only gap", () => {
+  const BILINGUAL = {
+    concierge_enabled: false, concierge_form_id: null, public_id: null,
+    greeting_en: "Hi!", greeting_es: "", facts: "We fix things.", languages: "both" as const,
+  };
+
+  it("shows the Spanish-greeting sentence on row 1 when only greeting_es is blank", () => {
+    const text = renderedText(render({ views: views({ done: false }), conciergeProfile: BILINGUAL }));
+    expect(text).toContain(m["setup.profile.spanishGreetingMissing"]);
+  });
+
+  it("shows no such sentence when the gap is the facts, or nothing is missing", () => {
+    const factsGap = renderedText(render({
+      views: views({ done: false }),
+      conciergeProfile: { ...BILINGUAL, greeting_es: "¡Hola!", facts: "" },
+    }));
+    expect(factsGap).not.toContain(m["setup.profile.spanishGreetingMissing"]);
+    const ready = renderedText(render({
+      views: views({ done: true }),
+      conciergeProfile: { ...BILINGUAL, greeting_es: "¡Hola!" },
+    }));
+    expect(ready).not.toContain(m["setup.profile.spanishGreetingMissing"]);
+  });
+});
+
+describe("VoiceProfileStep — names the Spanish greeting when that is the only gap", () => {
+  it("shows the Spanish-greeting sentence for a bilingual profile missing only greeting_es", () => {
+    const html = renderToStaticMarkup(createElement(VoiceProfileStep, baseProps({
+      step: { key: "voice_profile", done: false, skipped: false, unknown: false },
+      href: `${BASE}/voice?from=setup`,
+      conciergeProfile: {
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
+        greeting_en: "Hi!", greeting_es: "", facts: "We fix things.", languages: "both",
+      },
+    })));
+    expect(renderedText(html)).toContain(m["setup.profile.spanishGreetingMissing"]);
+  });
+
+  it("shows nothing extra for an English-only profile", () => {
+    const html = renderToStaticMarkup(createElement(VoiceProfileStep, baseProps({
+      step: { key: "voice_profile", done: false, skipped: false, unknown: false },
+      href: `${BASE}/voice?from=setup`,
+      conciergeProfile: {
+        concierge_enabled: false, concierge_form_id: null, public_id: null,
+        greeting_en: "Hi!", greeting_es: "", facts: "", languages: "en",
+      },
+    })));
+    expect(renderedText(html)).not.toContain(m["setup.profile.spanishGreetingMissing"]);
   });
 });

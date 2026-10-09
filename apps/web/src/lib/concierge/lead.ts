@@ -42,12 +42,35 @@ function log(msg: string, extra: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ at: "concierge/turn", msg, ...extra }));
 }
 
+/**
+ * Whether the team could reach this lead at all: a valid email address or a
+ * valid phone number, judged by the SAME validators the contact is written
+ * through below (an invalid value is dropped there, so it is no contact here
+ * either).
+ *
+ * danlo, 2026-10-09: a capture with a name but no way to reach them is HELD,
+ * never filed. Filing it would spend the conversation's one lead slot on a
+ * lead the team cannot act on, and a later capture carrying the number would
+ * be refused as "already on file". Held, the slot stays free; the route tells
+ * the model to ask for an email or a phone, and the lead files normally once
+ * a capture carries one. A visitor who never gives one leaves no lead.
+ */
+export function leadHasContact(lead: Pick<Lead, "email" | "phone">): boolean {
+  return isValidEmail(lead.email) || isValidPhone(lead.phone);
+}
+
 export async function fileLead(ctx: {
   db: Db; accountId: string; formId: string; conversationId: string;
   attribution: Record<string, string>; locale: "en" | "es"; ipHash: string;
   origin: string | null; lead: Lead;
 }): Promise<boolean> {
   const { db, lead } = ctx;
+  // The backstop for the rule above: the route holds such a capture before
+  // calling this, but no caller may file one.
+  if (!leadHasContact(lead)) {
+    log("lead not filed: no email or phone", { conversationId: ctx.conversationId });
+    return false;
+  }
   try {
     // Lazy for the same reason as the handler's own import, and cached — the
     // module is already resolved by the time a lead is filed.

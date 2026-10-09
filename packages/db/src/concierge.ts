@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { newPublicId } from "./forms";
-import { PROFILE_COLS, type VoiceProfileRow } from "./voice";
+import { PROFILE_COLS, getVoiceProfile, type VoiceProfileRow } from "./voice";
+import { assistantProfileGap } from "./profile-ready";
 
 /** One side of one exchange. Same shape as `calls.transcript`'s
  *  TranscriptEvent, so one reader renders both. */
@@ -25,19 +26,61 @@ export async function getVoiceProfileByPublicId(
   db: SupabaseClient, publicId: string,
 ): Promise<ConciergeProfile | null> {
   const { data, error } = await db.from("voice_profiles")
-    .select(PROFILE_COLS)
+    .select(`${PROFILE_COLS}, ${DESTINATION_EMBED}`)
     .eq("public_id", publicId)
     .eq("concierge_enabled", true)
     .not("concierge_form_id", "is", null)
     .maybeSingle();
   if (error) throw new Error(`getVoiceProfileByPublicId failed: ${error.message}`);
-  return (data as ConciergeProfile | null) ?? null;
+  // D-048: and the destination is PUBLISHED. A form unpublished after the
+  // switch went on left this returning the profile, so the chat kept
+  // answering while `fileLead` refused every lead it took (lib/concierge/
+  // lead.ts). Same rule as the line above: a chat that cannot file anything
+  // is not opened. Checked at READ time on purpose, not as a constraint or a
+  // gate on the switch alone (voice-settings.tsx's `conciergeCanTurnOn`):
+  // publication is mutable state an operator changes on the Forms page.
+  const split = splitDestination(data as RowWithDestination | null);
+  if (!split || !split.published) return null;
+  return split.row as ConciergeProfile;
+}
+
+/**
+ * The destination form's status, read IN THE SAME SELECT as the profile:
+ * PostgREST embeds `forms` through 0042's `concierge_form_id` FK (the only FK
+ * from `voice_profiles` to `forms`; the `!concierge_form_id` hint names it so
+ * a second one could never make the embed ambiguous). `account_id` comes
+ * along because that FK is a plain `references forms(id)`: nothing in the
+ * schema stops the pointer naming ANOTHER account's form (only
+ * `concierge_enable` refuses one, 0045), and such a form is not this
+ * tenant's destination however it is published.
+ */
+const DESTINATION_EMBED = "concierge_destination:forms!concierge_form_id(status, account_id)";
+
+type RowWithDestination = VoiceProfileRow & {
+  public_id: string;
+  concierge_destination: { status: string; account_id: string } | null;
+};
+
+/** The profile row exactly as `PROFILE_COLS` shapes it (the embed key
+ *  removed, so no reader sees a column `getVoiceProfile` does not have), and
+ *  whether its destination is a published form of the SAME account. */
+function splitDestination(
+  data: RowWithDestination | null,
+): { row: VoiceProfileRow & { public_id: string }; published: boolean } | null {
+  if (!data) return null;
+  const { concierge_destination: dest, ...row } = data;
+  const published = dest?.status === "published" && dest.account_id === row.account_id;
+  return { row, published };
 }
 
 /** Unlike `ConciergeProfile`, `concierge_form_id` is NOT narrowed to
  *  non-null — the whole point of this accessor is to also return a profile
- *  whose concierge is off, which may never have had a destination form. */
-export type ConciergeProfileAnyStatus = VoiceProfileRow & { public_id: string };
+ *  whose concierge is off, which may never have had a destination form.
+ *  `concierge_form_published` (D-048) is read alongside it, so
+ *  `isConciergeLive` can answer from this one row. */
+export type ConciergeProfileAnyStatus = VoiceProfileRow & {
+  public_id: string; concierge_form_published: boolean;
+};
 
 /**
  * Same public_id lookup, ANY status — the concierge-off and
@@ -52,20 +95,24 @@ export async function getVoiceProfileAnyStatusByPublicId(
   db: SupabaseClient, publicId: string,
 ): Promise<ConciergeProfileAnyStatus | null> {
   const { data, error } = await db.from("voice_profiles")
-    .select(PROFILE_COLS)
+    .select(`${PROFILE_COLS}, ${DESTINATION_EMBED}`)
     .eq("public_id", publicId)
     .maybeSingle();
   if (error) throw new Error(`getVoiceProfileAnyStatusByPublicId failed: ${error.message}`);
-  return (data as ConciergeProfileAnyStatus | null) ?? null;
+  const split = splitDestination(data as RowWithDestination | null);
+  if (!split) return null;
+  return { ...split.row, concierge_form_published: split.published };
 }
 
-/** The predicate `getVoiceProfileByPublicId`'s SQL filter used to make for
- *  the caller, spelled out so the layout (lang/branding) and the page
- *  (`notFound()`) can apply it independently against the SAME cached row. */
+/** The predicate `getVoiceProfileByPublicId`'s filter makes for the turn
+ *  route, spelled out so the layout (lang/branding) and the page
+ *  (`notFound()`) can apply it independently against the SAME cached row.
+ *  D-048: on, with a destination, and that destination PUBLISHED. */
 export function isConciergeLive(
-  profile: Pick<VoiceProfileRow, "concierge_enabled" | "concierge_form_id">,
+  profile: Pick<ConciergeProfileAnyStatus, "concierge_enabled" | "concierge_form_id" | "concierge_form_published">,
 ): boolean {
-  return profile.concierge_enabled === true && profile.concierge_form_id != null;
+  return profile.concierge_enabled === true && profile.concierge_form_id != null
+    && profile.concierge_form_published === true;
 }
 
 /**
@@ -106,6 +153,21 @@ export function isConciergeLive(
 export async function enableConcierge(
   db: SupabaseClient, accountId: string, formId: string,
 ): Promise<{ publicId: string }> {
+  // D-108: the profile has to be READY (`assistantProfileGap`, the same
+  // predicate the Voice page's toggle and Setup's row read) before the
+  // assistant goes on. The toggle's lock used to be the only thing enforcing
+  // any of it, so a caller that went around the card switched on an
+  // assistant with no greeting or nothing to answer from. Read-then-write:
+  // a greeting blanked between this read and the RPC still lands ON, which
+  // is the same state as blanking it a second after, and the Voice page
+  // warns beside the toggle for that (`greetingBlankOn`/`factsBlankOn`).
+  // "no voice profile" is decided here now too, before the RPC, with the
+  // same message the RPC's null result below still produces.
+  const profile = await getVoiceProfile(db, accountId);
+  if (!profile) throw new Error("enableConcierge failed: no voice profile for this account");
+  const gap = assistantProfileGap(profile);
+  if (gap) throw new Error(`enableConcierge failed: profile not ready (${gap})`);
+
   const { data, error } = await db.rpc("concierge_enable", {
     p_account_id: accountId, p_form_id: formId, p_new_public_id: newPublicId(),
   });

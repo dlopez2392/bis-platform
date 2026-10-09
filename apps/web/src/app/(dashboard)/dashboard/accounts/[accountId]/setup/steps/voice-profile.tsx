@@ -3,10 +3,15 @@ import { ArrowRight } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { isSpanishGreetingTheGap } from "@/lib/setup/setup-status";
 import type { StepDetailProps } from "./step-shared";
 
-export function VoiceProfileStep({ kind, href }: StepDetailProps): React.ReactNode {
+export function VoiceProfileStep({ kind, href, conciergeProfile }: StepDetailProps): React.ReactNode {
   const rows: React.ReactNode[] = [];
+  // The one gap this pane names (review of D-108): a bilingual line with the
+  // English greeting written and the Spanish one blank. Any other gap is what
+  // the step's own help line already says.
+  const spanishGap = kind !== "done" && isSpanishGreetingTheGap(conciergeProfile);
 
   // A finished step keeps its door — the agency still edits branding and
   // hours long after setup — but it stops shouting: ghost rather than
@@ -26,11 +31,14 @@ export function VoiceProfileStep({ kind, href }: StepDetailProps): React.ReactNo
     );
   }
 
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && !spanishGap) return null;
 
   return (
     <div className="mt-3 space-y-2">
-      <div className="flex flex-wrap items-center gap-2">{rows}</div>
+      {spanishGap ? (
+        <p className="text-xs text-muted-foreground">{m["setup.profile.spanishGreetingMissing"]}</p>
+      ) : null}
+      {rows.length > 0 ? <div className="flex flex-wrap items-center gap-2">{rows}</div> : null}
     </div>
   );
 }

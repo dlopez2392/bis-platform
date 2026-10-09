@@ -30,6 +30,7 @@ const PROFILE = {
   languages: "es" as const, booking_enabled: false, after_hours: "message_only" as const,
   enabled: true, textback_enabled: false, textback_body: "", forward_calls: false,
   public_id: "p1", concierge_enabled: false, concierge_form_id: null,
+  concierge_form_published: false,
 };
 
 beforeEach(() => {
