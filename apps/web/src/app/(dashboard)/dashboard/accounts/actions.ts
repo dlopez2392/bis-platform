@@ -21,8 +21,14 @@ export type CreateAccountResult = { ok: true } | { ok: false; error: string };
 export async function createClientAccount(formData: FormData): Promise<CreateAccountResult> {
   const { userId } = await requireAgency();
   const name = String(formData.get("name") ?? "").trim();
+  // The name customers see (owner decision 2026-10-09): its own field, so the
+  // business name above stays the agency's private label. It is what the
+  // Clerk organisation is created under (invitation emails carry it, D-005)
+  // and what brand_name is born as.
+  const brandName = String(formData.get("brandName") ?? "").trim();
   const timezone = String(formData.get("timezone") ?? "America/Chicago");
   if (!name) return { ok: false, error: m["accounts.nameRequired"] };
+  if (!brandName) return { ok: false, error: m["accounts.brandNameRequired"] };
   // The `?? "America/Chicago"` fallback above only covers a MISSING field;
   // a field left empty in the form arrives here as "", which would
   // otherwise fall straight into assertUsableZone below and come back as
@@ -47,7 +53,7 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
   }
 
   const clerk = await clerkClient();
-  const org = await clerk.organizations.createOrganization({ name, createdBy: userId });
+  const org = await clerk.organizations.createOrganization({ name: brandName, createdBy: userId });
   // compensating rollback: never leave a Clerk org without a tenant row.
   // Its own failure is swallowed — the refusal or error the caller gets is
   // what they act on — but logged: a failed rollback here means the Clerk org
@@ -80,7 +86,7 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
 
   let id: string;
   try {
-    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name, timezone, actorId: userId }));
+    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name, brandName, timezone, actorId: userId }));
   } catch (err) {
     await rollback();
     throw err;
@@ -121,4 +127,73 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
   // The checklist route stays reachable and keeps its own copy of the banner
   // below; it is just no longer where onboarding lands.
   redirect(`/dashboard/accounts/${id}/setup${applyOutcome === "partial" ? "?apply=partial" : ""}`);
+}
+
+/**
+ * Adopts a half-created company: a Clerk organisation with no `accounts` row
+ * behind it (lib/accounts/orphans.ts), usually made from the Clerk dashboard.
+ *
+ * D-087. The warning's old first remedy was "add the company here with the
+ * same name", which runs createClientAccount above and mints a SECOND
+ * organisation, leaving everyone already invited in the first one and still
+ * unable to sign in. This writes the account row for the organisation that
+ * already exists, under its own Clerk name, so those invitations start to
+ * work.
+ *
+ * `orgId` is bound by the accounts page, but a bound argument travels through
+ * the browser, so it is not trusted: Clerk is asked for the organisation, and
+ * `accounts.clerk_org_id`'s unique constraint refuses one already linked.
+ *
+ * And unlike createClientAccount there is NO compensating rollback: this
+ * action did not create the organisation, so a failed write must never
+ * delete it. Same result shape as createClientAccount, so the dialog reuses
+ * settleCreateAccount; success redirects to the Client access card.
+ */
+export async function adoptOrphanOrgAction(
+  orgId: string, formData: FormData,
+): Promise<CreateAccountResult> {
+  const { userId } = await requireAgency();
+  const timezone = String(formData.get("timezone") ?? "America/Chicago");
+  if (!timezone.trim()) return { ok: false, error: m["accounts.timezoneRequired"] };
+  try {
+    assertUsableZone(timezone);
+  } catch {
+    return { ok: false, error: m["accounts.timezoneUnusable"].replace("{zone}", timezone) };
+  }
+
+  let org: { id: string; name: string };
+  try {
+    const clerk = await clerkClient();
+    org = await clerk.organizations.getOrganization({ organizationId: orgId });
+  } catch (e) {
+    // A 404 is a real answer (the org is gone); anything else (a 503, a
+    // timeout, a bad key) is Clerk not answering, and saying "it is gone"
+    // would send the agency to delete or recreate something that exists.
+    if ((e as { status?: number }).status === 404) {
+      console.error(`adoptOrphanOrgAction: Clerk has no organization ${orgId}: ${String(e)}`);
+      return { ok: false, error: m["accounts.orphan.adoptGone"] };
+    }
+    console.error(`adoptOrphanOrgAction: could not reach Clerk for organization ${orgId}: ${String(e)}`);
+    return { ok: false, error: m["accounts.orphan.adoptClerkDown"] };
+  }
+  // The org name becomes brand_name (createAccount's fallback), and a blank
+  // brand name is the one thing brandDisplayName promises never happens.
+  if (!org.name?.trim()) return { ok: false, error: m["accounts.orphan.adoptNoName"] };
+  // createClientAccount's reason: the fixture sweep deletes any account on a
+  // test-shaped org id within the hour.
+  if (isTestOrgId(org.id)) return { ok: false, error: m["accounts.createRefusedTestOrgId"] };
+
+  let id: string;
+  try {
+    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name: org.name.trim(), timezone, actorId: userId }));
+  } catch (e) {
+    console.error(`adoptOrphanOrgAction: account write failed for org ${org.id}: ${String(e)}`);
+    return { ok: false, error: m["accounts.orphan.adoptFailed"] };
+  }
+
+  revalidatePath("/dashboard/accounts");
+  // To the Client access card, not setup: the account is born with client
+  // access OFF (the column default), so the people already invited still
+  // cannot sign in until it is turned on — the step the dialog's hint names.
+  redirect(`/dashboard/accounts/${id}/settings#client-access`);
 }

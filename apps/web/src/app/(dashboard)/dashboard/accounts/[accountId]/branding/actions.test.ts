@@ -26,6 +26,12 @@ vi.mock("@/lib/auth", () => authMocks);
 // setBranding call.
 const dbForRequestInstance = { tag: "dbForRequest" };
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => dbForRequestInstance }));
+// D-005: the Clerk organisation name follows the brand name. The helper owns
+// the read and the Clerk call and never throws (clerk-org-name.test.ts); here
+// only WHEN and WITH WHAT the action calls it.
+const orgNameMocks = vi.hoisted(() => ({ syncClerkOrgName: vi.fn(async () => true) }));
+vi.mock("@/lib/accounts/clerk-org-name", () => orgNameMocks);
+vi.mock("@clerk/nextjs/server", () => ({ clerkClient: async () => ({}) }));
 
 import { m } from "@/lib/messages";
 import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "./actions";
@@ -45,6 +51,42 @@ beforeEach(() => {
   dbMocks.restoreBrandLogoIfCleared.mockReset().mockResolvedValue(true);
   dbMocks.logoExists.mockReset().mockResolvedValue(true);
   authMocks.requireAccountAccess.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
+  orgNameMocks.syncClerkOrgName.mockReset().mockResolvedValue(true);
+});
+
+describe("setBrandingAction — the Clerk organisation follows the brand name (D-005)", () => {
+  it("after a successful save, renames this account's Clerk organisation to the trimmed brand name, so invitation emails name the company as it is now (mutation: drop the sync → FAILS)", async () => {
+    expect(await setBrandingAction("acct_1", fd({ brandName: "  Rio Roofing  " }))).toEqual({ ok: true });
+    expect(orgNameMocks.syncClerkOrgName).toHaveBeenCalledOnce();
+    const [db, , accountId, name] = orgNameMocks.syncClerkOrgName.mock.calls[0]! as unknown as [unknown, unknown, string, string];
+    expect(db).toBe(dbForRequestInstance);
+    expect(accountId).toBe("acct_1");
+    expect(name).toBe("Rio Roofing");
+  });
+
+  it("skips Clerk when the brand name did not change, e.g. a colour-only save (mutation: always sync → FAILS)", async () => {
+    dbMocks.getBranding.mockResolvedValue({ brandName: "Rio Roofing" });
+    expect(await setBrandingAction("acct_1", fd({ brandName: " Rio Roofing ", brandColor: "#0f766e" }))).toEqual({ ok: true });
+    expect(orgNameMocks.syncClerkOrgName).not.toHaveBeenCalled();
+  });
+
+  it("still syncs when the earlier name could not be read: unsure means try", async () => {
+    dbMocks.getBranding.mockRejectedValue(new Error("read failed"));
+    expect(await setBrandingAction("acct_1", fd({ brandName: "Rio Roofing" }))).toEqual({ ok: true });
+    expect(orgNameMocks.syncClerkOrgName).toHaveBeenCalledOnce();
+  });
+
+  it("a failed save never renames the organisation (mutation: sync before the write → FAILS)", async () => {
+    dbMocks.setBranding.mockRejectedValue(new Error("rls"));
+    expect(await setBrandingAction("acct_1", fd({ brandName: "Rio Roofing" })))
+      .toEqual({ ok: false, error: m["branding.saveFailed"] });
+    expect(orgNameMocks.syncClerkOrgName).not.toHaveBeenCalled();
+  });
+
+  it("a sync that could not reach Clerk still reports the save, which did happen (fail soft)", async () => {
+    orgNameMocks.syncClerkOrgName.mockResolvedValue(false);
+    expect(await setBrandingAction("acct_1", fd({ brandName: "Rio Roofing" }))).toEqual({ ok: true });
+  });
 });
 
 describe("setBrandingAction — brand name is required", () => {
