@@ -168,6 +168,21 @@ describe("voice settings actions", () => {
       expect(dbMocks.setPhoneNumberStatus).toHaveBeenCalledWith({}, "a1", "pn1", "live", expect.any(String));
     });
 
+    // Review minor 1: the fail-CLOSED branch. A status change that is not a
+    // release, with the number list unreadable, must not write — it could be
+    // making a second active number nobody checked for.
+    it("a non-release status change refuses, with no write, when the active-number check cannot be read (mutation: fail open → FAILS)", async () => {
+      dbMocks.listPhoneNumbersForAccount.mockRejectedValue(new Error("db down"));
+      dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      for (const status of ["provisioned", "testing", "live"]) {
+        const r = await setNumberStatusAction("a1", "pn2", status);
+        expect(r, status).toEqual({ ok: false, error: m["voice.numbers.statusUpdateFailed"] });
+      }
+      errSpy.mockRestore();
+      expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+    });
+
     it("releasing is never gated — it is how two active numbers get back to one", async () => {
       dbMocks.listPhoneNumbersForAccount.mockRejectedValue(new Error("db down"));
       dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
