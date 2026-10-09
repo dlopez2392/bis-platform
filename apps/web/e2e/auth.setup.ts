@@ -60,7 +60,8 @@ const E2E_LOGO_PNG = Buffer.from(
 // concurrent run.
 //
 // No org is needed for agency ACCESS: that is the app_role claim alone
-// (lib/auth.ts; the screenshot capture's agency joins no org at all). The
+// (lib/auth.ts; the screenshot capture's agency joins an org only so the
+// topbar names one, screenshots/auth.setup.ts). The
 // user still needs an ACTIVE org, for one reason: <ActivateSoleOrganization/>
 // switches a session with no active org and exactly ONE membership into that
 // org and reloads to "/", and blueprints.spec.ts creates an org mid-spec

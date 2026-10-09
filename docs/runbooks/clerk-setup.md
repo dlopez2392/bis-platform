@@ -310,10 +310,14 @@ failed agency setup. Teardown deletes the org and the user; the sweep finds
 a leaked org by its name. The
 demo capture (`apps/web/screenshots/auth.setup.ts`) mints its own throwaway
 agency user the same way (shared helpers in
-`apps/web/e2e/fixtures/clerk-identities.ts`), joins no organization, and
-deletes the user in its own teardown project; a leaked one is swept by the
-next e2e run, which shares the Clerk instance and the `e2e-agency-<stamp>`
-shape.
+`apps/web/e2e/fixtures/clerk-identities.ts`), and deletes the user in its
+own teardown project. Since 2026-10-09 it also joins one organization that
+persists between runs, `BIS` (slug `bis-capture`, created on first use),
+and makes it active, only so the topbar's switcher names the agency instead
+of printing "No organization selected". The membership goes with the user;
+the org grants nothing, because agency access is the `app_role` claim
+alone. A leaked capture user is swept by the next e2e run, which shares the
+Clerk instance and the `e2e-agency-<stamp>` shape.
 
 That means either option works:
 

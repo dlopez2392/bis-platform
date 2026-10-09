@@ -103,6 +103,10 @@ async function useTheme(page: Page, theme: "light" | "dark") {
  */
 async function settled(page: Page) {
   await page.waitForLoadState("networkidle");
+  // Clerk's own words for an agency session with no active organization, which
+  // the topbar's switcher printed on every capture until screenshots/
+  // auth.setup.ts gave the capture user one (CAPTURE_ORG there).
+  await expect(page.getByText("No organization selected")).toHaveCount(0);
   await expect(page.locator('[data-skeleton], .animate-pulse')).toHaveCount(0, { timeout: 20_000 });
   // An error boundary is a settled page too, which is how the 2026-10-08
   // capture passed while photographing four "Something went wrong" screens
@@ -131,6 +135,17 @@ async function shoot(page: Page, file: string, opts: { fullPage?: boolean } = {}
 // on the website side. Those two numbers have to agree or next/image reserves
 // the wrong box.
 const WIDE = { width: 1280, height: 800 };
+/**
+ * The dashboard alone is taller: 1280x900 -> 2560x1800, which the website
+ * declares as `heroShot`. At 800 the calls chart's day labels fell below the
+ * bottom edge once a "LAST 7 DAYS" caption joined the page above the KPIs
+ * (2026-10-09 capture). DESIGN.md wants a label under EVERY period, so a
+ * chart photographed without its labels is the chart breaking its own rule.
+ * `shoot` is preceded by a check that the axis is inside the frame, so the
+ * next layout change that pushes it out fails the capture instead of cropping
+ * it silently.
+ */
+const DASHBOARD = { width: 1280, height: 900 };
 /** Narrower and taller: the booking page and the email are portrait objects
  *  shown in a half-column, and an email is 600-odd pixels wide by convention. */
 const NARROW = { width: 640, height: 800 };
@@ -148,9 +163,15 @@ test.describe("demo captures", () => {
     //    the demo sets a brand colour but no neutral, so deriveTheme returns
     //    null and the chrome stays BIS's own. See lib/platform-tour.ts.
     await useTheme(page, "dark");
+    await page.setViewportSize(DASHBOARD);
     await page.goto(`/dashboard/accounts/${demo.accountId}/dashboard`);
     await settled(page);
+    const axis = await page.locator('[data-slot="chart-axis"]').first().boundingBox();
+    expect(axis, "the calls chart's day labels are not on the dashboard").not.toBeNull();
+    expect(axis!.y + axis!.height, "the calls chart's day labels fall below the dashboard capture")
+      .toBeLessThanOrEqual(DASHBOARD.height);
     await shoot(page, "dashboard-dark.png");
+    await page.setViewportSize(WIDE);
 
     // 2. The Spanish call, open. The transcript is the argument.
     await page.goto(`/dashboard/accounts/${demo.accountId}/calls/${demo.spanishCallId}`);
