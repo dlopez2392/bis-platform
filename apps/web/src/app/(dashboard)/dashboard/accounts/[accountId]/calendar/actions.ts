@@ -9,7 +9,9 @@ import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
+import { isValidEmail } from "@/lib/forms/guards";
 import { HOURS_FORM_DAYS, rowsToOpenHours, type HoursRow } from "./hours-form";
+import { parseNotifyEmails } from "./notify-emails";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -57,8 +59,17 @@ export async function updateCalendarSettingsAction(
     to: String(formData.get(`hours_${day}_to`) ?? ""),
   }));
 
-  const notifyEmails = String(formData.get("notifyEmails") ?? "")
-    .split("\n").map((s) => s.trim()).filter(Boolean);
+  // D-034: every address is checked, and the whole save is refused on the
+  // first bad one, naming it (`setReportEmailsAction`'s shape). Dropping it
+  // and saving the rest would read as "saved" while quietly losing a
+  // recipient. A returned error, never a throw: Next redacts a thrown
+  // message in production.
+  const notifyEmails = parseNotifyEmails(String(formData.get("notifyEmails") ?? ""));
+  for (const email of notifyEmails) {
+    if (!isValidEmail(email)) {
+      return { ok: false, error: m["calendar.settings.notifyEmailsInvalid"].replace("{value}", email) };
+    }
+  }
 
   // Server-side belt for the UI's seeding fix: the textarea is seeded with
   // the stored value only (never the default), but this normalizes the

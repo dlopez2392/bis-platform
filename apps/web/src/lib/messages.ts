@@ -1128,7 +1128,12 @@ export const m = {
   "calendar.settings.minNotice": "Minimum notice",
   "calendar.settings.maxAdvance": "How far ahead people can book",
   "calendar.settings.notifyEmails": "Notify these addresses",
-  "calendar.settings.notifyEmailsHint": "One address per line. Sent whenever someone books, cancels, or an appointment is coming up.",
+  // D-034: only what is actually sent. The reminder pass mails the customer,
+  // never these addresses, so "an appointment is coming up" was an alert that
+  // did not exist. The senders that DO read them are listed in the action's
+  // test (calendar/actions.test.ts). No persona name: clients rename Sofía.
+  "calendar.settings.notifyEmailsHint": "Separate addresses with commas or put each on its own line. We email them when a customer books, cancels or moves an appointment, and when a caller leaves a message or their details.",
+  "calendar.settings.notifyEmailsInvalid": "That doesn't look like an email address: {value}",
   // The inline warning the checklist's form_notify concern mirrors: an
   // account that is accepting bookings with nobody listed to hear about them
   // is a silent failure mode, not a valid configuration to save quietly.

@@ -124,3 +124,66 @@ describe("setBookingStatusAction — an outcome only once the appointment has st
     expect(result).toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
   });
 });
+
+/**
+ * D-034. The notify field split on new lines only, so "a@x.com, b@y.com" —
+ * the way the forms editor and the weekly-report field both ask for it —
+ * was stored as ONE address that no mail server accepts, and nothing checked
+ * any address at all: a typo saved green and the alert went nowhere, forever,
+ * with no symptom. Same shape as `setReportEmailsAction`: refuse the whole
+ * save on the first bad address, naming it, rather than dropping it and
+ * reporting "saved" while quietly losing a recipient.
+ */
+describe("updateCalendarSettingsAction — notify addresses (D-034)", () => {
+  function withNotify(raw: string): FormData {
+    const fd = baseFormData("");
+    fd.set("notifyEmails", raw);
+    return fd;
+  }
+
+  it("splits on commas, semicolons and new lines, trimming and dropping blanks", async () => {
+    const r = await updateCalendarSettingsAction(
+      "acct_1", withNotify("ana@example.com, ben@example.com;cy@example.com\r\n\n  dee@example.com ,"),
+    );
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.updateCalendarSettings).toHaveBeenCalledWith(
+      {}, "acct_1",
+      expect.objectContaining({
+        notifyEmails: ["ana@example.com", "ben@example.com", "cy@example.com", "dee@example.com"],
+      }),
+      "user_1",
+    );
+  });
+
+  it("refuses the whole save on a bad address, names it, and writes nothing", async () => {
+    const r = await updateCalendarSettingsAction("acct_1", withNotify("ana@example.com\nbob@example"));
+    expect(r.ok).toBe(false);
+    expect(r).toEqual({ ok: false, error: expect.stringContaining("bob@example") });
+    expect(dbMocks.updateCalendarSettings).not.toHaveBeenCalled();
+  });
+
+  it("an empty field still saves, as no addresses", async () => {
+    const r = await updateCalendarSettingsAction("acct_1", withNotify("  \n , "));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.updateCalendarSettings).toHaveBeenCalledWith(
+      {}, "acct_1", expect.objectContaining({ notifyEmails: [] }), "user_1",
+    );
+  });
+
+  /**
+   * The hint is a promise about mail. These addresses are read by exactly
+   * five senders, every one an event a customer or Sofía caused: a web
+   * booking (`b/[publicId]/actions.ts`, operator.booking_alert), a customer's
+   * cancel link (`cancel/[token]/actions.ts`, operator.cancel_notice), a
+   * phone cancel or move (`voice/tools/registry.ts`,
+   * operator.phone_change_alert) and Sofía's call alert for a booking, lead
+   * or message (`voice/finish-call.ts`, operator.call_alert). The reminder
+   * pass mails the CUSTOMER only (`automations/passes/reminders.ts`), so
+   * "an appointment is coming up" was an alert that never existed.
+   */
+  it("the hint promises no reminder alert, and says how to separate addresses", () => {
+    const hint = m["calendar.settings.notifyEmailsHint"];
+    expect(hint).not.toMatch(/coming up|reminder/i);
+    expect(hint).toMatch(/comma/i);
+  });
+});
