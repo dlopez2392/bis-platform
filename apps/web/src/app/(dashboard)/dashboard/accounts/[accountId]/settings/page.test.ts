@@ -251,12 +251,34 @@ describe("settings page — applying a blueprint later (D-086)", () => {
  * refusal on the field-key input itself is the cheap, real UX fix; the
  * server throw stays as the backstop for a bypassed/scripted submit.
  */
-describe("settings page — the custom field key input refuses the reserved key in the browser (review round 2, minor 3)", () => {
-  it("carries the reserved-key pattern and its title, replacing the old shape-only pattern (mutation: keep pattern=\"[a-z0-9_]+\" → FAILS)", async () => {
+describe("settings page — the custom field key input refuses the reserved key in the browser (review round 2, minor 3; round 3, items 1-2)", () => {
+  it("carries a pattern that behaves correctly: referred_by refused, referred_by_2 and gate_code allowed, Gate_code (uppercase) refused by the shape half (mutation: loosen/drop either half of the pattern → FAILS)", async () => {
     const all = await pageElements();
     const input = all.find((e) => (e.props as { id?: string }).id === "field-key");
     expect(input, "the field-key Input").toBeTruthy();
-    expect(input!.props.pattern).toBe("(?!referred_by$)[a-z0-9_]+");
-    expect(input!.props.title).toBe(m["settings.fieldKeyReserved"]);
+    // Review round 3, item 2: asserted on BEHAVIOUR, not the pattern
+    // string — a prior version only compared the literal string, which
+    // cannot tell a working pattern from a differently-spelled but
+    // equally-wrong one. Compiled under the same "v" (Unicode sets) flag
+    // the pattern was verified under, implicitly anchored the way a
+    // browser anchors the `pattern` attribute against the whole value.
+    const re = new RegExp(`^(?:${input!.props.pattern})$`, "v");
+    expect(re.test("referred_by")).toBe(false);
+    expect(re.test("referred_by_2")).toBe(true);
+    expect(re.test("gate_code")).toBe(true);
+    expect(re.test("Gate_code")).toBe(false);
+  });
+
+  // Review round 3, item 1: a browser shows an Input's `title` for ANY
+  // pattern mismatch (typing "Gate Code" fails the shape half too, and
+  // would falsely be told "referred_by is reserved") and as a plain hover
+  // tooltip on an EMPTY field. The title must describe the WHOLE pattern,
+  // not only the reserved-key half; `settings.fieldKeyReserved` is kept
+  // for the server-side throw alone (createFieldAction's backstop).
+  it("the title describes the whole pattern (settings.fieldKeyFormat), not only the reserved-key half (mutation: use settings.fieldKeyReserved as the title → FAILS)", async () => {
+    const all = await pageElements();
+    const input = all.find((e) => (e.props as { id?: string }).id === "field-key");
+    expect(input!.props.title).toBe(m["settings.fieldKeyFormat"]);
+    expect(input!.props.title).not.toBe(m["settings.fieldKeyReserved"]);
   });
 });

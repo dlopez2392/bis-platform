@@ -550,14 +550,18 @@ export const m = {
   // which also includes a web-chat lead (lib/concierge/lead.ts) and the
   // retired shared-secret machine intake, both filed against the owner's
   // destination form. "They filled out the form" is false for a chat
-  // lead; the wording below is true for all three. Usted register in the
-  // .es twin — this line is read by the OWNER, not the customer.
+  // lead. Review round 3, item 4: "Came in through your form" (round 2's
+  // own fix) still names an entry path — walking through a door — a chat
+  // visitor never used either. "Saved to" names the one fact shared by
+  // all three intakes (the answers landed in that form's records)
+  // without claiming HOW they got there. Usted register in the .es
+  // twin — this line is read by the OWNER, not the customer.
   "contact.source.machine.voice": "They called in",
   "contact.source.machine.voice.es": "Llamaron por teléfono",
   "contact.source.machine.booking": "They booked online",
   "contact.source.machine.booking.es": "Reservaron en línea",
-  "contact.source.machine.form": "Came in through your “{name}” form",
-  "contact.source.machine.form.es": "Llegó por su formulario “{name}”",
+  "contact.source.machine.form": "Saved to your “{name}” form",
+  "contact.source.machine.form.es": "Guardado en su formulario “{name}”",
   "contact.noActivity": "No activity yet",
   "contact.noActivityBody": "Notes, tasks, and deals will appear here.",
   "contact.noOpportunities": "None yet.",
@@ -705,15 +709,22 @@ export const m = {
   // Review round 1, m4: "referred_by" is reserved — F-157's source
   // question writes it directly (lib/contacts/lead-source.ts), and a
   // custom field reusing that exact key would merge two unrelated facts
-  // into one stored value. Review round 2, minor 3: this exact string is
-  // now the field-key Input's own `title` (settings/page.tsx), the
-  // PRIMARY UX — a browser refusing the key before any submit. The
-  // SERVER-SIDE throw in createFieldAction is only the backstop for a
-  // bypassed or scripted submit, and that path has no result-returning
-  // wiring to show this message at all: it lands, plainly, on the
-  // dashboard's generic error page.
+  // into one stored value. Review round 2, minor 3: a browser-side
+  // refusal (the field-key Input's own `pattern`, settings/page.tsx) is
+  // the PRIMARY UX. Review round 3, item 1 correction: a browser shows an
+  // Input's `title` for ANY pattern mismatch, not only the reserved-key
+  // one — "Gate Code"/"gateCode"/"gate-code" all fail the shape half of
+  // the pattern too, and `title` is also a plain hover tooltip shown on
+  // an EMPTY field. This string now names the WHOLE pattern
+  // (settings.fieldKeyFormat, below) and is the Input's `title`; this key
+  // stays for the one thing it is actually true for — the SERVER-SIDE
+  // throw in createFieldAction (the backstop for a bypassed or scripted
+  // submit, which has no result-returning wiring to show it at all: it
+  // lands, plainly, on the dashboard's generic error page).
   "settings.fieldKeyReserved": "\"referred_by\" is reserved for the source question — pick a different field key.",
   "settings.fieldKeyReserved.es": "\"referred_by\" está reservado para la pregunta de origen — elija otra clave de campo.",
+  "settings.fieldKeyFormat": "Lowercase letters, numbers and underscores only. \"referred_by\" is reserved for the source question.",
+  "settings.fieldKeyFormat.es": "Solo letras minúsculas, números y guiones bajos. \"referred_by\" está reservado para la pregunta de origen.",
   "settings.dataType": "Type",
   "settings.dataType.text": "Text",
   "settings.dataType.number": "Number",

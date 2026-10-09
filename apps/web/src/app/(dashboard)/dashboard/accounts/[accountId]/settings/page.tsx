@@ -214,13 +214,20 @@ export default async function CrmSettingsPage({
                       server-side throw, round 1 m4, lands on the dashboard's
                       generic error page — this form has no result-returning
                       wiring to show it inline, so the server check is a
-                      backstop, not the primary UX). Verified under the regex
-                      engine's negative-lookahead support: "referred_by" ->
-                      false, "referred_by_2" -> true, "gate_code" -> true. */}
+                      backstop, not the primary UX). Behaviour re-verified
+                      by page.test.ts (round 3, item 2): referred_by refused,
+                      referred_by_2 and gate_code allowed, Gate_code (upper-
+                      case) refused by the shape half. Review round 3, item
+                      1: `title` is what a browser shows for ANY pattern
+                      mismatch (the shape half fails on "Gate Code" too) and
+                      as a plain hover tooltip on an EMPTY field, so it must
+                      describe the WHOLE pattern, not only the reserved-key
+                      half — settings.fieldKeyReserved stays the SERVER-side
+                      throw's own message alone. */}
                   <Input
                     id="field-key" name="fieldKey" required
                     pattern="(?!referred_by$)[a-z0-9_]+"
-                    title={m["settings.fieldKeyReserved"]}
+                    title={m["settings.fieldKeyFormat"]}
                   />
                 </div>
                 <div className="space-y-1.5">
