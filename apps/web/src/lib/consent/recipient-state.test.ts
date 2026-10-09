@@ -73,4 +73,17 @@ describe("emailRecipientState — the email composer's read", () => {
     readConsentState.mockRejectedValueOnce(new Error("down"));
     expect(await emailRecipientState(DB, "a1", { email: "ana@example.com" })).toEqual({ kind: "unknown" });
   });
+
+  // D-016 item 4: a hard bounce or a complaint shows up on the SAME ledger
+  // read (it is a `revoked` row, same as any other stop) — this just needs
+  // to carry its own `suppressed` tag through for the composer's own line
+  // (mutation: drop the tag → the composer says "You stopped", FAILS).
+  it("a hard bounce or a complaint carries `suppressed`, neither byCustomer nor staff's line", async () => {
+    readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T15:00:00Z", method: "email_bounce", eventId: "e1" });
+    expect(await emailRecipientState(DB, "a1", { email: "ana@example.com" }))
+      .toEqual({ kind: "stopped", since: "2026-10-03T15:00:00Z", byCustomer: false, suppressed: "bounced" });
+    readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T16:00:00Z", method: "email_complaint", eventId: "e2" });
+    expect(await emailRecipientState(DB, "a1", { email: "ana@example.com" }))
+      .toEqual({ kind: "stopped", since: "2026-10-03T16:00:00Z", byCustomer: false, suppressed: "complained" });
+  });
 });

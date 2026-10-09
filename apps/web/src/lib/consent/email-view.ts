@@ -11,7 +11,14 @@ import { emailLedgerAddress } from "@bis/db/email-address";
  * writes, reads as Stopped with no Resume. Server-only; the row imports only
  * the TYPES.
  */
-export type EmailHow = { kind: "unsubscribe_link" } | { kind: "staff" } | { kind: "backfill_0049" };
+export type EmailHow =
+  | { kind: "unsubscribe_link" } | { kind: "staff" } | { kind: "backfill_0049" }
+  // D-016 (0062): the provider's own facts about the address, never a
+  // CHOICE anyone made — so each is its OWN kind, not the "staff" default
+  // (which the drawer would otherwise say for them, reading as "you did
+  // this"). Resumable only by the customer's own resubscribe: neither name
+  // is in EMAIL_RESUMABLE_METHODS below.
+  | { kind: "bounced" } | { kind: "complained" };
 
 export type EmailView =
   | { kind: "no_email" }
@@ -27,6 +34,8 @@ export function emailHowOf(method: ConsentMethod): EmailHow {
     case "one_click":
     case "unsubscribe_page": return { kind: "unsubscribe_link" };
     case "backfill_0049": return { kind: "backfill_0049" };
+    case "email_bounce": return { kind: "bounced" };
+    case "email_complaint": return { kind: "complained" };
     default: return { kind: "staff" };
   }
 }

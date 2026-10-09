@@ -47,7 +47,15 @@ export async function emailRecipientState(
   try {
     const state = await readConsentState(db, accountId, "email", address);
     if (state.state === "allowed") return { kind: "ok" };
-    return { kind: "stopped", since: state.since, byCustomer: CUSTOMER_EMAIL_STOP_METHODS.includes(state.method) };
+    // D-016 item 4: a hard bounce or a complaint is the SAME ledger's
+    // `revoked` row (0062), so this read already sees it as stopped —
+    // it just needs its own tag for composer-state.ts's own line.
+    const suppressed = state.method === "email_bounce" ? "bounced"
+      : state.method === "email_complaint" ? "complained" : undefined;
+    return {
+      kind: "stopped", since: state.since, byCustomer: CUSTOMER_EMAIL_STOP_METHODS.includes(state.method),
+      ...(suppressed ? { suppressed } : {}),
+    };
   } catch (e) {
     console.error(`composer: email consent state unreadable for account ${accountId}: ${loggableError(e)}`);
     return { kind: "unknown" };
