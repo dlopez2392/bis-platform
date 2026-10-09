@@ -73,4 +73,16 @@ describe("messageFailureReason", () => {
     expect(messageFailureReason({ status: "failed", error: raw }))
       .toBe(m["conversations.failureReason.failed"]);
   });
+
+  // D-061 review follow-up: a row written before the action-level pre-check
+  // existed (conversations/actions.ts now refuses before writing one at
+  // all) still has to render plainly, not the raw gate string, and never
+  // confused with the DIFFERENT, address-level `suppressed` block above
+  // (mutation: match `.includes("suppressed")` instead of the exact
+  // account-level string → FAILS, since that would also catch the plain
+  // "suppressed" block tested above).
+  it("a staff send blocked `suppressed_account` by the gate reads the same 'isn't sending yet' line the Activity page uses, never the raw reason or the address-level suppressed line", () => {
+    expect(messageFailureReason({ status: "failed", error: "email not sent: suppressed_account" }))
+      .toBe(m["automations.reason.accountSuppressed"]);
+  });
 });

@@ -72,6 +72,16 @@ describe("sendEmail: the account-level send switch (D-061, accounts.outbound_sup
     expect(await sendEmail(base(), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed_account" });
     expect(db.readConsentState).not.toHaveBeenCalled();
     expect(factory.getEmailProvider).not.toHaveBeenCalled();
+    // A customer-initiated kind (booking.confirmation) is the one shape
+    // where D-016's suppression-ledger read (readEmailSuppression) would
+    // otherwise run — it skips the readConsentState branch above entirely
+    // (emailReadsLedger is false for it), so only THIS kind proves the
+    // account check runs before it too (mutation: move the check after the
+    // D-016 read → readEmailSuppression gets called, FAILS).
+    db.isAccountOutboundSuppressed.mockClear();
+    db.isAccountOutboundSuppressed.mockResolvedValue(true);
+    expect(await sendEmail(base({ kind: "booking.confirmation" }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed_account" });
+    expect(db.readEmailSuppression).not.toHaveBeenCalled();
   });
 
   it("reads the flag for THIS account, falling back to the service client when the caller passed none (mutation: read a different account → FAILS)", async () => {

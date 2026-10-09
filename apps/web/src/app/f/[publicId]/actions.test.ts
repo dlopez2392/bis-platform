@@ -629,6 +629,19 @@ describe("submitFormAction — the receipt to the person who wrote in", () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  it("a suppressed account's blocked alert is a SKIP, not a failure — no processing_error, no red badge (D-061 review follow-up; mutation: push it into `failures` like a real send error → FAILS)", async () => {
+    accountRow.outbound_suppressed = true;
+    getPublishedFormByPublicIdMock.mockResolvedValue(withEmail({ notify_emails: ["owner@rioroofing.com", "second@rioroofing.com"] }));
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "en", first_name: "Maria", email: "customer@example.com",
+    }));
+
+    expect(result.status).toBe("success");
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(setSubmissionProcessingErrorMock).not.toHaveBeenCalled();
+  });
+
   it("the lead alert goes as operator.lead_alert and the receipt as forms.receipt — customer-initiated, in the page's language, with the lead's contact and the request's origin (consent PR-3; mutation: send the receipt as operator.lead_alert → it carries no way out, FAILS)", async () => {
     getPublishedFormByPublicIdMock.mockResolvedValue(withEmail({ notify_emails: ["owner@rioroofing.com"] }));
     // The file's beforeEach hands `headers()` a user-agent and NO host, so

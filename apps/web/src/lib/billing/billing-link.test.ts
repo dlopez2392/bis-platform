@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { AccountBilling, BillingLink, Plan } from "@bis/db";
+import { EmailNotSent } from "@/lib/consent/email-gate";
 
 const db = vi.hoisted(() => ({
   getAccountBilling: vi.fn(),
@@ -366,6 +367,20 @@ describe("sendBillingLink", () => {
     const r = await sendBillingLink(deps(), INPUT);
     expect(r).toEqual({ ok: false, reason: "email_failed", url: [...gateway.checkoutSessions.values()][0]!.url });
     expect(db.saveBillingLink).toHaveBeenCalledTimes(1);
+    log.mockRestore();
+  });
+
+  // D-061 review follow-up: the gate's own refusal for a suppressed account
+  // is just another email failure to this function — same generic
+  // "email_failed" reason, never the gate's raw reason string, and
+  // billing-actions.ts's own SEND_ERRORS map turns that into one plain
+  // sentence regardless of why (mutation: special-case EmailNotSent and
+  // rethrow its raw reason → FAILS).
+  it("a suppressed account's gate refusal is an email_failed reason too, never the raw 'suppressed_account' string", async () => {
+    emailError = new EmailNotSent({ kind: "blocked", reason: "suppressed_account" });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await sendBillingLink(deps(), INPUT);
+    expect(r).toEqual({ ok: false, reason: "email_failed", url: [...gateway.checkoutSessions.values()][0]!.url });
     log.mockRestore();
   });
 

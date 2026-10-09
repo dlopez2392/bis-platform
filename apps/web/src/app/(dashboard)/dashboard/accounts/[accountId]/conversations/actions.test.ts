@@ -550,6 +550,24 @@ describe("0053 — conversations and messages are written by server code", () =>
     );
   });
 
+  it("email: a suppressed account refuses before anything is written — no conversation, no message row, nothing sent (D-061 follow-up; mutation: check the flag after createMessage → a failed row is left behind, FAILS)", async () => {
+    vi.mocked(isAccountOutboundSuppressed).mockResolvedValueOnce(true);
+    const e = await sendEmailAction("acct_1", fd({ contactId: "contact_1", subject: "Hi", body: "Hello" })).catch((err: unknown) => err);
+    expect(sendRejectedReason(e)).toBe(m["automations.reason.accountSuppressed"]);
+    expect(vi.mocked(ensureConversation)).not.toHaveBeenCalled();
+    expect(createMessageMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("email: an unreadable suppression flag fails closed — refused, nothing written (mutation: fall through to 'not suppressed' on a read error → FAILS)", async () => {
+    vi.mocked(isAccountOutboundSuppressed).mockRejectedValueOnce(new Error("pgrst down"));
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const e = await sendEmailAction("acct_1", fd({ contactId: "contact_1", subject: "Hi", body: "Hello" })).catch((err: unknown) => err);
+    expect(sendRejectedReason(e)).toBe(m["automations.reason.accountSuppressed"]);
+    expect(createMessageMock).not.toHaveBeenCalled();
+    quiet.mockRestore();
+  });
+
   it("sms: same split, including the failed-send status write (mutation: the failure branch uses the request client -> FAILS)", async () => {
     smsSendMock.mockRejectedValueOnce(new Error("carrier down"));
     await expect(sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))).rejects.toThrow("carrier down");
