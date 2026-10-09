@@ -15,6 +15,7 @@
  */
 
 import { revalidatePath } from "next/cache";
+import { clerkClient } from "@clerk/nextjs/server";
 import { setBranding, getBranding, uploadBrandLogo, sweepOrphanedLogos, restoreBrandLogoIfCleared,
          logoExists, serviceDb } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -28,6 +29,7 @@ import { CORNER_NAMES, MODE_NAMES, NEUTRAL_NAMES, TYPE_NAMES, parseAllowlisted }
 // strictness costs nothing for an address we only ever hand to Resend, and one
 // email regex that drifts from another is worse than one that is strict.
 import { isValidEmail } from "@/lib/forms/guards";
+import { syncClerkOrgName } from "@/lib/accounts/clerk-org-name";
 import { m } from "@/lib/messages";
 
 /** accounts_mailing_address_check's upper bound (migration 0048). Not
@@ -156,6 +158,11 @@ export async function setBrandingAction(
     console.error(`setBranding: write failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["branding.saveFailed"] };
   }
+
+  // D-005: Clerk names the organisation in every invitation email, so it
+  // follows the name the client sees. Only after the write succeeded, and
+  // never fatal — syncClerkOrgName logs and returns false on any failure.
+  await syncClerkOrgName(await dbForRequest(), clerkClient, accountId, brandName);
 
   // Only after the new path is durably recorded, and never fatal: an orphaned
   // object costs a few KB, while failing here would report a save that in fact
