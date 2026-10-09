@@ -41,6 +41,19 @@ describe("buildRealtimeSessionConfig", () => {
     const c = buildRealtimeSessionConfig({ ...base, bookingEnabled: false }, new Date()) as unknown as SessionConfigShape;
     expect(c.tools.map((t) => t.name)).not.toContain("book_appointment");
   });
+  // D-040: "Always take a message" means no booking on the call, so the
+  // session must not hand the model the tools to do it — a prompt saying
+  // "do not book" beside a book_appointment tool is the contradiction the
+  // 2026-08-30 call showed the model resolving the wrong way.
+  it("Always take a message drops booking tools even when booking is allowed, and keeps take_message", () => {
+    const c = buildRealtimeSessionConfig(
+      { ...base, bookingEnabled: true, afterHours: "message_only" }, new Date(),
+    ) as unknown as SessionConfigShape;
+    const names = c.tools.map((t) => t.name);
+    expect(names).not.toContain("book_appointment");
+    expect(names).not.toContain("check_availability");
+    expect(names).toContain("take_message");
+  });
 
   // `handoffAvailable` is OPTIONAL, and the direction of its default is a
   // safety property, not a style choice: an omitted flag must WITHHOLD the

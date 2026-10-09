@@ -1156,6 +1156,9 @@ export const m = {
   "voice.profile.afterHours": "After hours",
   "voice.profile.afterHours.hoursThenMessage": "Follow business hours, then take a message",
   "voice.profile.afterHours.messageOnly": "Always take a message",
+  // D-040: the second option now means what it says, open or closed, and it
+  // turns booking off on calls whatever the box below says.
+  "voice.profile.afterHoursHint": "Always take a message means no booking on calls, even during business hours.",
   "voice.profile.enabled": "Receptionist enabled",
   "voice.textback.enabled": "Text back callers who didn't book",
   "voice.textback.help": "When someone talks to Sofía and hangs up without booking, send them a text. Off until you turn it on, and only for companies whose A2P registration is approved.",

@@ -190,6 +190,7 @@ export function VoiceProfileForm({
                   <SelectItem value="message_only">{m["voice.profile.afterHours.messageOnly"]}</SelectItem>
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">{m["voice.profile.afterHoursHint"]}</p>
             </div>
           </div>
 

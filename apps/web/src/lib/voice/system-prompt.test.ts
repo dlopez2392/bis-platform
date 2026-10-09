@@ -365,17 +365,38 @@ describe("buildSystemPrompt medium", () => {
       );
     });
 
-    it("gives the AFTER HOURS notice web wording, and the phone gets its own unchanged", () => {
+    it("gives the messages-only notice web wording: capture_lead whatever the time, never a message", () => {
       const web = buildSystemPrompt(baseInput({
         medium: "web", bookingEnabled: false, afterHours: "message_only",
       }), now);
-      expect(web).toContain("AFTER HOURS");
+      expect(web).toContain("MESSAGES ONLY — Whatever the time, open or closed,");
+      expect(web).toContain("use capture_lead");
       expect(web).not.toMatch(/take a message/i);
-      const phone = buildSystemPrompt(baseInput({ afterHours: "message_only" }), now);
-      expect(phone).toContain(
-        "AFTER HOURS — If the business is closed right now, say so briefly "
-        + "and take a message; do not attempt anything else.",
-      );
+      expect(web).not.toContain("closed right now");
     });
+  });
+});
+
+// D-040: the Voice page's "Always take a message" told Sofía to take a
+// message only "if the business is closed right now" — during open hours she
+// went on booking, which is the other option's behaviour, not this one's.
+describe("buildSystemPrompt — Always take a message (message_only)", () => {
+  it("tells her to take a message on every call, open or closed", () => {
+    const p = buildSystemPrompt(baseInput({ afterHours: "message_only" }), now);
+    expect(p).toContain("MESSAGES ONLY — Whatever the time, open or closed, take a message on every call");
+    expect(p).not.toContain("closed right now");
+  });
+
+  it("offers no booking, even when the profile allows booking — the two settings would contradict", () => {
+    const p = buildSystemPrompt(baseInput({ afterHours: "message_only", bookingEnabled: true }), now);
+    expect(p).not.toContain("book_appointment(");
+    expect(p).not.toContain("check_availability(");
+    expect(p).toContain("This business does not take bookings by phone.");
+  });
+
+  it("leaves Follow-business-hours exactly as it was: booking on, no messages-only line", () => {
+    const p = buildSystemPrompt(baseInput({ afterHours: "hours_then_message", bookingEnabled: true }), now);
+    expect(p).toContain("book_appointment(");
+    expect(p).not.toContain("MESSAGES ONLY");
   });
 });

@@ -562,3 +562,24 @@ describe("forwardSwitchState — the 'send calls straight to a person' switch", 
   });
 });
 
+
+// D-040: "Always take a message" now means no booking on calls at any hour,
+// which overrides the "Allow booking" box — said beside the choice, so a
+// ticked box is never a silent lie.
+describe("VoiceProfileForm's After hours choice says what Always take a message does to booking", () => {
+  const PROFILE: VoiceProfileRow = {
+    id: "vp1", account_id: "a1", persona_name: "Sofía",
+    greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
+    languages: "en", booking_enabled: true, after_hours: "message_only",
+    enabled: true, textback_enabled: false, textback_body: "",
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+  };
+
+  it("renders the hint next to the After hours select", () => {
+    const html = renderToStaticMarkup(createElement(VoiceProfileForm, {
+      profile: PROFILE, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
+    }));
+    expect(renderedText(html)).toContain(m["voice.profile.afterHoursHint"]);
+    expect(m["voice.profile.afterHoursHint"]).toMatch(/book/i);
+  });
+});

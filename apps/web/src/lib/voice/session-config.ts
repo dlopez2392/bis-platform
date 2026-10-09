@@ -2,7 +2,7 @@
 // accept endpoint — nesting it is the documented way to get a silent 4xx.
 import { readTurnDetection } from "./turn-detection";
 import { toolSchemas } from "./tools/schemas";
-import { buildSystemPrompt } from "./system-prompt";
+import { buildSystemPrompt, offersBooking } from "./system-prompt";
 
 export const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime";
 
@@ -40,7 +40,9 @@ export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {
     type: "realtime",
     model: REALTIME_MODEL,
     instructions: buildSystemPrompt(input, now),
-    tools: toolSchemas(input.bookingEnabled, input.meetingType, input.handoffAvailable === true),
+    // `offersBooking`, not `bookingEnabled`: "Always take a message" withholds
+    // the booking tools too (D-040), the same answer the prompt gives.
+    tools: toolSchemas(offersBooking(input), input.meetingType, input.handoffAvailable === true),
     audio: {
       input: {
         transcription: { model: "gpt-4o-mini-transcribe" },
