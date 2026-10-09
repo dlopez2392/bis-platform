@@ -26,7 +26,7 @@ export type EmailBrand = {
  * rather than merely discouraged.
  *
  * A blank result is unreachable through the product: `createAccount` seeds
- * `brand_name` from the name given at creation, the Branding save refuses to
+ * `brand_name` (Add company asks for it as its own required field), the Branding save refuses to
  * blank it, go-live requires the branding step, and migration 0028 backfilled
  * the rows that predate all three. A caller that still sees "" is looking at
  * an account built outside those paths, and the honest answer is a nameless

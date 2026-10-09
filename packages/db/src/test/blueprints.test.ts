@@ -50,6 +50,24 @@ describe("blueprint capture", () => {
       expect(bp!.assets.forms[0]).not.toHaveProperty("notifyEmails");
     }));
 
+  // D-089: an archived form is one the agency retired on this account, and a
+  // capture copied it into every client the blueprint was applied to.
+  it("capture leaves archived forms behind, keeping drafts and published ones (mutation: drop the status filter → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedConfig(db, accountId); // "Quote Request", published
+      await createForm(db, accountId, {
+        name: "Draft Survey", fields: [{ key: "email", kind: "core.email", label: "Email", required: true }],
+      }, "user_test");
+      const { id: retiredId } = await createForm(db, accountId, {
+        name: "Retired Promo", fields: [{ key: "email", kind: "core.email", label: "Email", required: true }],
+      }, "user_test");
+      await updateForm(db, accountId, retiredId, { status: "archived" }, "user_test");
+
+      const { id } = await captureBlueprint(db, accountId, { name: blueprintName("Archive Filter") }, "user_test");
+      const bp = await getBlueprint(db, id);
+      expect(bp!.assets.forms.map((f) => f.name).sort()).toEqual(["Draft Survey", "Quote Request"]);
+    }));
+
   it("recapturing the same name replaces the bundle and bumps version", () =>
     withTestAccount(async (db, accountId) => {
       await seedConfig(db, accountId);
@@ -79,6 +97,48 @@ describe("blueprint capture", () => {
       expect(named).toHaveLength(1);
       expect(named[0]!.id).toBe(second.id);
     }));
+
+  // D-090: the list showed the FIRST capture's date under a version that
+  // counts recaptures, so "Version 3 · Captured Sep 2" read as current.
+  it("listBlueprints reports when the blueprint was LAST captured (mutation: list created_at only → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const name = blueprintName("Last Captured");
+      const { id } = await captureBlueprint(db, accountId, { name }, "user_test");
+      await new Promise((r) => setTimeout(r, 20));
+      await captureBlueprint(db, accountId, { name }, "user_test");
+      const row = (await listBlueprints(db)).find((b) => b.id === id)!;
+      expect(row.version).toBe(2);
+      expect(Date.parse(row.updated_at)).toBeGreaterThan(Date.parse(row.created_at));
+    }));
+
+  // D-090 review: the list shows the LAST capture's date, so it is ordered by
+  // that date too — newest recapture first, not newest first-capture first.
+  it("listBlueprints orders by last capture, matching the date it shows (mutation: order by created_at → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const older = blueprintName("Order Older");
+      const newer = blueprintName("Order Newer");
+      await captureBlueprint(db, accountId, { name: older }, "user_test");
+      await new Promise((r) => setTimeout(r, 20));
+      await captureBlueprint(db, accountId, { name: newer }, "user_test");
+      await new Promise((r) => setTimeout(r, 20));
+      await captureBlueprint(db, accountId, { name: older }, "user_test"); // recaptured last
+      const mine = (await listBlueprints(db)).filter((b) => b.name === older || b.name === newer);
+      expect(mine.map((b) => b.name)).toEqual([older, newer]);
+    }));
+
+  // D-090: "Applied to N accounts" counted blueprint.applied EVENTS, so
+  // re-applying to one company (the remedy for a partial apply) inflated it.
+  it("listBlueprints counts the accounts a blueprint was applied to, not the applications (mutation: count events → FAILS)", () =>
+    withTestAccount(async (db, sourceId) => {
+      const { id } = await captureBlueprint(db, sourceId, { name: blueprintName("Applied Count") }, "user_test");
+      await applyBlueprint(db, sourceId, id, "user_test");
+      await applyBlueprint(db, sourceId, id, "user_test");
+      await withTestAccount(async (db2, targetId) => {
+        await applyBlueprint(db2, targetId, id, "user_test");
+        const row = (await listBlueprints(db2)).find((b) => b.id === id)!;
+        expect(row.appliedCount).toBe(2);
+      });
+    }), 60_000);
 
   it("capture emits an event against the source account", () =>
     withTestAccount(async (db, accountId) => {
