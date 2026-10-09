@@ -133,7 +133,7 @@ export async function listBoard(
     const rows = data ?? [];
     if (rows.length === 0) break;
     opps.push(...rows);
-    lastId = rows[rows.length - 1].id;
+    lastId = rows[rows.length - 1]!.id;
   }
   // The query above is ordered by `id` (the deterministic keyset column,
   // not a display order) so the display order — newest first, same as
