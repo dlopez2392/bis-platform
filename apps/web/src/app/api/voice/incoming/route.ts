@@ -409,7 +409,8 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //         then its own update; the callback To do is a few ms before it
       //    10s  the proposals' reading (`generateProposals`, AbortSignal 10s)
       //    ---
-      //    73s  timed tail
+      //    73s  tail (61s bounded by timeouts; the 12s rows-and-email leg is an
+      //         estimate — the Resend call has no timeout of its own)
       //
       // BEFORE the cap timer is armed (the connect leg). This is real elapsed
       // `maxDuration` that the cap knows nothing about, because the clock the
@@ -438,7 +439,11 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //     and their up-to-three inserts
       //   - the automation log, the `call.recorded` emit and the callback To
       //     do between the timed legs
+      //   - the alert text's and the text-back's prepare reads and message
+      //     write (`getAlertPhone`, `prepareAlertSms`, `prepareTextback`)
       //   - the connect leg's ~5s estimate running long (`acceptCall`)
+      //   (examples, not an exhaustive list: any new untimed leg comes out of
+      //   this margin, so re-derive the clamp when one is added)
       //    10s  margin
       //
       //   800 - 73 - 20 - 10 = 697, THE CLAMP BELOW.
