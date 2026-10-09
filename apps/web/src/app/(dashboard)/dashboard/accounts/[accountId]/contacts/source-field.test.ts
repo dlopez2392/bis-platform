@@ -41,31 +41,34 @@ describe("SourceField — F-157's drawer line", () => {
    * Review round 2, minor 4: round 1's m2 fix SLICED the hint text in JS
    * and relied on `aria-label` to carry the full fact — two real bugs.
    * `aria-label` has no naming effect on a `<p>` (ARIA's generic/paragraph
-   * role is explicitly excluded from the elements `aria-label` can name;
-   * a screen reader reads the plain text content instead, which was the
-   * CLAMPED, already-cut string) and `String.slice` cuts by UTF-16 code
-   * unit, which can split a surrogate pair in half. Fixed by rendering the
-   * FULL, unsliced text and clamping visually with CSS (`truncate`) —
-   * nothing to slice, nothing for an ineffective `aria-label` to work
-   * around. `clampHint` (lib/contacts/lead-source.ts) is now dead and
-   * removed.
+   * role is explicitly excluded from the elements `aria-label` can name)
+   * and `String.slice` cuts by UTF-16 code unit, which can split a
+   * surrogate pair in half. Review round 3, item 3: round 2's own CSS fix
+   * (`truncate`, a one-line visual clip) hid `custom.referred_by` — the
+   * source question's answer, shown ONLY on this line — from any
+   * keyboard or touch user, who cannot hover a `title` tooltip to recover
+   * the clipped part. Fixed again: the text WRAPS (`break-words`, no
+   * truncate, no line-clamp) so nothing is ever hidden from anyone.
    */
-  it("renders the FULL hint text, unsliced, letting CSS truncate it visually (mutation: slice the text before rendering → FAILS)", () => {
+  it("renders the FULL hint text, unsliced, wrapping rather than clipped (mutation: slice the text, or clip it with CSS, before rendering → FAILS)", () => {
     const long = "Referred by " + "a".repeat(200);
     const out = html("form: Contact us", long);
     expect(renderedText(out)).toContain(long);
   });
 
-  it("the hint <p> truncates with CSS, not a trailing ellipsis character in the text itself (mutation: drop the truncate class → FAILS)", () => {
-    const out = html("form: Contact us", "Found through ChatGPT");
-    expect(out).toMatch(/<p[^>]*\btruncate\b[^>]*>Found through ChatGPT<\/p>/);
-  });
-
-  it("carries the full hint as a native title (a real tooltip on hover), and no aria-label on the <p> itself — ARIA forbids naming a paragraph with one, so it would be silently ignored (mutation: add aria-label back to the <p> → FAILS)", () => {
+  it("the hint <p> wraps long text instead of clipping it — no truncate, no line-clamp (mutation: add either class back → FAILS)", () => {
     const out = html("form: Contact us", "Found through ChatGPT");
     const hintTag = out.match(/<p[^>]*>Found through ChatGPT<\/p>/)?.[0];
     expect(hintTag, "the hint <p>").toBeTruthy();
-    expect(hintTag).toContain('title="Found through ChatGPT"');
+    expect(hintTag).not.toMatch(/\btruncate\b/);
+    expect(hintTag).not.toMatch(/\bline-clamp-\d+\b/);
+  });
+
+  it("carries no title and no aria-label on the <p> — the full text is always on screen already (wrapped), so neither adds anything a sighted-mouse-only tooltip or an ignored ARIA attribute would (mutation: add either back → FAILS)", () => {
+    const out = html("form: Contact us", "Found through ChatGPT");
+    const hintTag = out.match(/<p[^>]*>Found through ChatGPT<\/p>/)?.[0];
+    expect(hintTag, "the hint <p>").toBeTruthy();
+    expect(hintTag).not.toContain("title=");
     expect(hintTag).not.toContain("aria-label");
   });
 });

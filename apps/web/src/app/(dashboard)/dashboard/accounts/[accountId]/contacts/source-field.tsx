@@ -43,19 +43,16 @@ export function SourceField({
           }}
         />
         {sourceHint ? (
-          // Review round 2, minor 4: round 1's m2 fix sliced the hint in JS
-          // (a surrogate pair could split) and leaned on `aria-label` to
-          // carry the full text — ARIA excludes a plain paragraph from the
-          // elements `aria-label` can name, so a screen reader read the
-          // CLAMPED text content regardless. Fixed: the FULL text renders,
-          // unsliced, and `truncate` (CSS, text-overflow: ellipsis) clamps
-          // it visually to one line. `title` stays as a real hover tooltip
-          // (valid and useful on a <p>); no `aria-label` needed — the real
-          // text content already is the full fact.
-          <p
-            className="text-muted-foreground mt-0.5 truncate px-2 text-xs"
-            title={sourceHint}
-          >
+          // Review round 3, item 3: `custom.referred_by` (the source
+          // question's answer) is shown ONLY on this line, and round 2's
+          // CSS fix (`truncate`, a one-line visual clip) hid it from any
+          // keyboard or touch user — there is no hover to recover the
+          // clipped part from a `title` tooltip without a mouse. The text
+          // now WRAPS instead (`break-words`, no truncate, no
+          // line-clamp): nothing is ever hidden from anyone. No `title`
+          // either — the full text is already on screen, so a tooltip
+          // repeating it adds nothing.
+          <p className="text-muted-foreground mt-0.5 break-words px-2 text-xs">
             {sourceHint}
           </p>
         ) : null}
