@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/command";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { toggleTheme } from "@/components/theme-toggle";
 // The SUBPATH, not "@bis/db": that barrel pulls in @supabase/supabase-js, and
 // this is a client component. search-term.ts is a standalone pure module.
 import { sanitizeSearchTerm, searchTermLength } from "@bis/db/search-term";
@@ -160,8 +161,11 @@ export function CommandPalette({ isAgency }: { isAgency: boolean }) {
     close();
     if (entry.kind === "href") { router.push(entry.href); return; }
     // The only action, and deliberately a safe one: no tenant data is written
-    // from a fuzzy match one keystroke from Enter.
-    setTheme(resolvedTheme === "dark" ? "light" : "dark");
+    // from a fuzzy match one keystroke from Enter. D-074: shares
+    // theme-toggle.tsx's own `toggleTheme`, not a second, incomplete copy —
+    // the topbar's button writes the `bis-theme` cookie and refreshes, and
+    // this action skipped both.
+    toggleTheme(resolvedTheme, setTheme, () => router.refresh());
   }
 
   function openHit(hit: SearchHit) {

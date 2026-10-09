@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
-import { serviceDb, listAccounts, brandLogoUrl } from "@bis/db";
+import { serviceDb, listAccounts, brandLogoUrl, brandDisplayName } from "@bis/db";
 import type { AppClaims } from "@/lib/auth";
 import { resolveSidebarAccent } from "@/lib/branding/color";
 import { getTenantAccessState, getTenantBranding } from "@/lib/branding/tenant-theme-reader";
@@ -36,15 +36,24 @@ import { Ground } from "@/components/ground";
  * this milestone removes from the sidebar, just in the one piece of the window
  * the app does not draw itself.
  *
- * The agency's own tab is untouched, and a client with no branding falls back
- * to their company name rather than to the agency's.
+ * The agency's own tab is untouched. D-072: a client with no branding yet
+ * names no company at all — never `state.name` (`accounts.name`, the
+ * agency's own private label on this client, e.g. "Rio Roofing — trial"),
+ * the exact leak `brandDisplayName`'s own "no fallback, deliberately" rule
+ * exists to close. Omitting the key (brandDisplayName returns "", and `||`
+ * turns that into `undefined`) lets Next's metadata merging fall through to
+ * the root layout's own "BIS Platform" title, the same way the public forms/
+ * booking/chat tab titles fall back to a GENERIC word (`publicTabTitle`),
+ * never to the private label — this is effectively unreachable once
+ * Branding is set (every account's `brand_name` is seeded at creation and
+ * go-live requires the step), but "effectively" is not "never".
  */
 export async function generateMetadata(): Promise<Metadata> {
   const state = await getTenantAccessState();
   if (state.status !== "ok") return {};
   const branding = await getTenantBranding(state.id);
   return {
-    title: branding.brandName ?? state.name,
+    title: brandDisplayName(branding) || undefined,
     // The root layout's description names Bespoke Intelligent Solutions
     // outright. Dropped rather than rewritten: a client's workspace has no
     // business carrying the agency's marketing copy in its <head>.
@@ -137,8 +146,10 @@ export default async function DashboardLayout({
           accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
           defaultCollapsed={collapsed}
           isAgency={isAgency}
-          clientAccountName={clientState?.status === "ok" ? clientState.name : undefined}
-          clientBrandName={branding?.brandName ?? undefined}
+          // D-072 review round: the SAME trimmed, never-raw resolver the
+          // tab title and the greeting now also go through, so all three
+          // surfaces read the brand name the same way.
+          clientBrandName={branding ? brandDisplayName(branding) || undefined : undefined}
           clientLogoUrl={branding?.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : undefined}
           clientAccentColor={resolveSidebarAccent(branding?.brandColor ?? null) ?? undefined}
           clientTimezone={clientState?.status === "ok" ? clientState.timezone : undefined}

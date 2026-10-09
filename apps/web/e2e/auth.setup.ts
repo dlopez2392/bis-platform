@@ -213,9 +213,11 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   const brandName = `Rio Roofing ${stamp}`;
   const brandLogoPath = await uploadBrandLogo(db, accountId, E2E_LOGO_PNG, "image/png");
   // Chosen deliberately: it renders differently on the two surfaces — as
-  // itself on the public form, lightened to #3a62d4 on the dark sidebar
-  // (it scores only 1.62:1 there unlightened) — so this one fixture proves
-  // both the public form's CTA resolver and resolveSidebarAccent. Since M4b
+  // itself on the public form, lightened to #315bd2 on the dark sidebar
+  // (it scores only 1.74:1 there unlightened — D-071 review round moved the
+  // contrast target to the lightest real sidebar surface, slate's own
+  // --sidebar #111721) — so this one fixture proves both the public form's
+  // CTA resolver and resolveSidebarAccent. Since M4b
   // this account is also THEMED (below), so the form lifts it too rather than
   // painting it raw — public-form-theme.spec.ts covers the raw value on the
   // unthemed path. See client-access.spec.ts.

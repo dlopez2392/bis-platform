@@ -25,7 +25,7 @@ test("account switcher navigates into a company", async ({ page }) => {
 
 // The agency's sidebar keeps the globals.css accent — brand colors are a
 // client-only override. client-access.spec.ts pins the branded case
-// (rgb(58, 98, 212), a lightened brand); this pins the no-op branch, which is
+// (rgb(49, 91, 210), a lightened brand); this pins the no-op branch, which is
 // otherwise verified only by reading. Computed style, not a class name: a
 // class assertion passes whether or not the custom property was set.
 test("the agency sidebar keeps the default accent", async ({ page }) => {

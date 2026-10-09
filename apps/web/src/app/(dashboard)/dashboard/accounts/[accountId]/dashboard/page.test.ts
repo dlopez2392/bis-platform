@@ -51,8 +51,11 @@ vi.mock("@/lib/db", () => ({
   }),
 }));
 
+// Mutable (D-072's own tests toggle `brandName`), so the greeting's fallback
+// behaviour is testable without a second vi.mock.
+const brandingFixture = vi.hoisted(() => ({ brandName: null as string | null }));
 vi.mock("@/lib/branding/tenant-theme-reader", () => ({
-  getTenantBranding: async () => ({ brandName: null }),
+  getTenantBranding: async () => ({ brandName: brandingFixture.brandName }),
 }));
 
 // F-076 (now slice): the CRM-only hero ("Leads captured") reads the SAME
@@ -92,6 +95,10 @@ const dbMocks = vi.hoisted(() => ({
   // already makes; mocked here in this file's own vi.fn() shape.
   listAccountWork: vi.fn(),
   sumOpenOpportunities: vi.fn(),
+  // The REAL implementation, trackable: D-072 review round's greeting must
+  // actually CALL this (not merely coincide with it) — see the "calls
+  // brandDisplayName" test below.
+  brandDisplayName: vi.fn((b: { brandName: string | null }) => b.brandName?.trim() || ""),
 }));
 // mergeChecklist (@/lib/checklist-catalogue) is NOT mocked — the real
 // CHECKLIST_CATALOGUE (its length read below, never hard-coded here) is
@@ -119,6 +126,7 @@ vi.mock("@bis/db", () => ({
   listOpportunityValuesCreatedBetween: (...a: unknown[]) => dbMocks.listOpportunityValuesCreatedBetween(...a),
   listAccountWork: (...a: unknown[]) => dbMocks.listAccountWork(...a),
   sumOpenOpportunities: (...a: unknown[]) => dbMocks.sumOpenOpportunities(...a),
+  brandDisplayName: (...a: Parameters<typeof dbMocks.brandDisplayName>) => dbMocks.brandDisplayName(...a),
 }));
 
 // Review fix: this used to mock the card down to `() => null`, so nothing
@@ -195,6 +203,7 @@ const ALL_CATALOGUE_KEYS = CHECKLIST_CATALOGUE
 // when the work row's own describe block was added for the Task 5 review fix.
 function resetFixtures() {
   authFixture.isAgency = true;
+  brandingFixture.brandName = null;
   checklistRowProps.current = null;
   workRowProps.current = null;
   callsChartCardProps.current = null;
@@ -220,6 +229,9 @@ function resetFixtures() {
   // own GAP 3 fixture shape (1 ticked, A2P rejected).
   dbMocks.listChecklistState.mockResolvedValue([row("phone_number")]);
   dbMocks.getA2pRegistration.mockResolvedValue({ status: "rejected", updatedAt: null });
+  // mockReset() above clears every mock's implementation too — restore the
+  // real one, or every greeting in this file reads "undefined".
+  dbMocks.brandDisplayName.mockImplementation((b: { brandName: string | null }) => b.brandName?.trim() || "");
 }
 
 describe("AccountDashboardPage — the checklist row (replaces the old full ChecklistPanel)", () => {
@@ -719,5 +731,71 @@ describe("AccountDashboardPage — the voice sub-line names the account's own co
     const html = renderToStaticMarkup(await AccountDashboardPage(route()));
 
     expect(renderedText(html)).not.toContain("is answering your calls.");
+  });
+});
+
+/**
+ * D-072: a CLIENT reader's greeting fell back to `account.name` — the
+ * agency's own private internal label (`dbFixture.name`, "Test Client One"
+ * here) — whenever no brand name was set yet. The agency's OWN greeting is
+ * unaffected: `accounts.name` IS the label meant for them.
+ */
+describe("AccountDashboardPage — the greeting never names the agency's private label to a client (D-072)", () => {
+  // Same pinned-clock idiom as the F-076 describe block above: page.tsx reads
+  // `new Date()` directly, and the greeting's period word ("morning") would
+  // otherwise drift with the real clock. This NOW is a Monday 7 AM in
+  // America/Chicago (this fixture's own zone) — unambiguously morning.
+  const NOW = new Date("2026-06-15T12:00:00.000Z");
+
+  beforeEach(() => {
+    resetFixtures();
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("an unbranded client gets a nameless greeting, never the agency's internal account name (mutation: restore `?? account.name` → FAILS)", async () => {
+    authFixture.isAgency = false;
+    brandingFixture.brandName = null;
+
+    const html = renderedText(renderToStaticMarkup(await AccountDashboardPage(route())));
+
+    expect(html).not.toContain(dbFixture.name);
+    expect(html).toContain(m["dashboard.greeting.morningNoName"]);
+  });
+
+  it("a branded client's greeting names their OWN brand, not the agency's label", async () => {
+    authFixture.isAgency = false;
+    brandingFixture.brandName = "Rio Roofing";
+
+    const html = renderedText(renderToStaticMarkup(await AccountDashboardPage(route())));
+
+    expect(html).toContain("Rio Roofing");
+    expect(html).not.toContain(dbFixture.name);
+  });
+
+  it("the agency's own greeting still names the account (unchanged: accounts.name IS their label)", async () => {
+    authFixture.isAgency = true;
+
+    const html = renderedText(renderToStaticMarkup(await AccountDashboardPage(route())));
+
+    expect(html).toContain(dbFixture.name);
+  });
+
+  // Minor, review round: not merely coincidence with the real function's
+  // behaviour — the client branch must actually CALL brandDisplayName, the
+  // same resolver the tab title and the sidebar identity block now use, so
+  // all three can never silently diverge again (mutation: inline the raw
+  // `.brandName` access instead → this still FAILS, because nothing calls
+  // the mock).
+  it("routes a client's greeting name through brandDisplayName, not a raw column read", async () => {
+    authFixture.isAgency = false;
+    brandingFixture.brandName = "Rio Roofing";
+
+    await AccountDashboardPage(route());
+
+    expect(dbMocks.brandDisplayName).toHaveBeenCalledWith(expect.objectContaining({ brandName: "Rio Roofing" }));
   });
 });

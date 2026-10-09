@@ -91,7 +91,19 @@ export default async function ActivityPage({
           ) : history.rows.length === 0 && !cursor ? (
             // Cold start: page one and nothing behind it. A cursored zero
             // (older than everything) renders the headers and a Newer link.
-            <EmptyState icon={Activity} title={m["activity.empty.title"]} body={m["activity.empty.body"]} />
+            // DESIGN.md rule 5: an empty state sells the feature with the
+            // ACTION that causes it — only the agency can act on this one,
+            // since Automations is agency-only (nav-groups.ts); this page
+            // itself is BOTH audiences, so the body sentence still needs
+            // its own second-person version for the client's reading.
+            <EmptyState
+              icon={Activity}
+              title={m["activity.empty.title"]}
+              body={isAgency ? m["activity.empty.body"] : m["activity.empty.clientBody"]}
+              action={isAgency
+                ? <Link href={`/dashboard/accounts/${accountId}/automations`} className={buttonVariants({ size: "sm" })}>{m["activity.empty.action"]}</Link>
+                : undefined}
+            />
           ) : (
             <ActivityTable rows={history.rows} timezone={zone.zone} olderHref={olderHref} newerHref={newerHref} />
           )}

@@ -139,8 +139,10 @@ test("a client sees only their own account, and nothing when access is off", asy
 
   // Computed style, not a class name: a class assertion passes while the
   // custom property is unset, which is exactly the failure being guarded.
-  // #1e3a8a scores 1.62:1 on the dark sidebar and is lightened to #3a62d4 to
-  // clear 3:1 — so this value ALSO proves the lightening ran.
+  // #1e3a8a scores 1.74:1 on the dark sidebar and is lightened to #315bd2 to
+  // clear 3:1 — so this value ALSO proves the lightening ran. (D-071 review
+  // round: the contrast TARGET moved to the lightest real sidebar surface —
+  // slate's own --sidebar, #111721 — so both numbers moved with it.)
   //
   // The rail is a two-stop gradient (app-sidebar.tsx): the first stop is
   // `var(--sidebar-accent)`, the second is the tenant's derived second
@@ -151,7 +153,7 @@ test("a client sees only their own account, and nothing when access is off", asy
   // collapsed-state dot, so a class-based selector could pass against the
   // wrong element entirely if the rail itself ever stopped rendering.
   await expect(sidebar.locator('nav [data-slot="nav-rail"]').first())
-    .toHaveCSS("background-image", /^linear-gradient\(rgb\(58, 98, 212\), rgb\(\d+, \d+, \d+\)\)$/);
+    .toHaveCSS("background-image", /^linear-gradient\(rgb\(49, 91, 210\), rgb\(\d+, \d+, \d+\)\)$/);
 
   // The tenant's accent reaches the ONE primary button. This is the cascade
   // half of the composed-token fix and cannot be unit-tested: tokens.css

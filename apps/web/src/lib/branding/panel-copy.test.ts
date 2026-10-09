@@ -36,6 +36,29 @@ describe("panelCopy", () => {
     }
   });
 
+  // D-070: both hints named only "lead forms" and the sidebar/workspace, as
+  // if the brand name and colour stopped there. brandDisplayName AND the
+  // brand colour also reach the booking page, the website chat widget and
+  // emails (brandDisplayName's own call sites: app/b/[publicId],
+  // app/c/[publicId], lib/email/templates/shell.ts). Texts are different:
+  // brandDisplayName reaches an SMS body too (lib/voice/textback.ts), but
+  // SMS is plain text with no styling at all — there is no colour for the
+  // colour hint to claim there (review round: an earlier pass named "texts"
+  // on both hints, which was true for the name and false for the colour).
+  it("names every surface the brand reaches, for both audiences (D-070)", () => {
+    for (const audience of ["agency", "client"] as const) {
+      const copy = panelCopy(audience);
+      for (const [key, hint] of [["nameHint", copy.nameHint], ["colorHint", copy.colorHint]] as const) {
+        expect(hint, `${audience} ${key} must mention the booking page: ${hint}`).toMatch(/booking/i);
+        expect(hint, `${audience} ${key} must mention website chat: ${hint}`).toMatch(/chat/i);
+        expect(hint, `${audience} ${key} must mention emails: ${hint}`).toMatch(/emails?/i);
+      }
+      expect(copy.nameHint, `${audience} nameHint must mention texts: ${copy.nameHint}`).toMatch(/texts?/i);
+      expect(copy.colorHint, `${audience} colorHint must NOT claim texts — SMS has no colour: ${copy.colorHint}`)
+        .not.toMatch(/texts?/i);
+    }
+  });
+
   /**
    * The agency's wording is deliberately untouched — Settings must render
    * byte-identically to before. Pinned here so a future "let's just reword it

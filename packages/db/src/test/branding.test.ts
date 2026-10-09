@@ -1,9 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import { serviceDb } from "../service";
 import { withTestAccount } from "./fixtures";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { setBranding, getBranding, getMailingAddress, brandDisplayName } from "../branding";
+import {
+  setBranding, getBranding, getMailingAddress, brandDisplayName, brandingChangePayload,
+} from "../branding";
 
 describe("brandDisplayName — the db copy of the ONE customer-facing name rule", () => {
   const base = {
@@ -22,6 +24,112 @@ describe("brandDisplayName — the db copy of the ONE customer-facing name rule"
   it("is the EMPTY string for a blank brand_name, whitespace included (identical to the web copy)", () => {
     expect(brandDisplayName({ ...base, brandName: "" })).toBe("");
     expect(brandDisplayName({ ...base, brandName: "  " })).toBe("");
+  });
+});
+
+describe("brandingChangePayload — the account.branding_updated audit payload (D-069)", () => {
+  it("lists every changed field, and names an untouched one as absent", () => {
+    const payload = brandingChangePayload(
+      { brand_name: "Rio Roofing" },
+      { brand_name: "Fixture Co", brand_color: "#1e3a8a" },
+    );
+    expect(payload.fields).toEqual(["brand_name"]);
+    expect(payload.changes).toEqual({ brand_name: { from: "Fixture Co", to: "Rio Roofing" } });
+  });
+
+  it("carries old -> new for every short scalar field in the patch", () => {
+    const payload = brandingChangePayload(
+      {
+        brand_name: "Rio Roofing", brand_color: "#1e3a8a", brand_neutral: "warm",
+        brand_corners: "round", brand_type: "serif", brand_mode: "dark",
+        reply_to_email: "hello@rioroofing.com",
+      },
+      {
+        brand_name: "Fixture Co", brand_color: null, brand_neutral: null,
+        brand_corners: null, brand_type: null, brand_mode: null, reply_to_email: null,
+      },
+    );
+    expect(payload.changes).toEqual({
+      brand_name: { from: "Fixture Co", to: "Rio Roofing" },
+      brand_color: { from: null, to: "#1e3a8a" },
+      brand_neutral: { from: null, to: "warm" },
+      brand_corners: { from: null, to: "round" },
+      brand_type: { from: null, to: "serif" },
+      brand_mode: { from: null, to: "dark" },
+      reply_to_email: { from: null, to: "hello@rioroofing.com" },
+    });
+  });
+
+  // Never the file's contents, and never the mailing address's free text —
+  // both can be long and one is a filesystem path, not a short scalar like a
+  // name or a colour. The field still appears in `fields`, so the record
+  // still shows WHAT was touched; it just does not carry the value.
+  it("names the logo path and mailing address as changed fields, with no old/new values logged", () => {
+    const payload = brandingChangePayload(
+      { brand_logo_path: "acct_1/logo-abc123.png", mailing_address: "123 Main St\nMcAllen, TX" },
+      { brand_logo_path: null, mailing_address: null },
+    );
+    expect(payload.fields.sort()).toEqual(["brand_logo_path", "mailing_address"]);
+    expect(payload.changes).toEqual({});
+  });
+
+  // D-069, review round: branding/actions.ts resends all 7-8 columns on
+  // EVERY save (the real caller's own shape), so `fields` must be the
+  // columns that actually CHANGED, not simply every key the patch happens
+  // to carry — otherwise a colour-only edit logs 8 "changed" fields with
+  // 6 no-ops (from === to).
+  it("excludes a no-op field from BOTH fields and changes, even though the caller resent it (mutation: drop the from===to skip → the 6 unchanged fields below reappear)", () => {
+    const payload = brandingChangePayload(
+      {
+        brand_name: "Rio Roofing", brand_logo_path: "acct_1/logo.png", brand_color: "#1e3a8a",
+        brand_neutral: "warm", brand_corners: "round", brand_type: "serif", brand_mode: "dark",
+        reply_to_email: "hello@rioroofing.com",
+      },
+      {
+        // Every field identical to the patch EXCEPT brand_color — the real
+        // shape of a colour-only Settings save, since branding/actions.ts
+        // sends the other seven back unchanged every time.
+        brand_name: "Rio Roofing", brand_logo_path: "acct_1/logo.png", brand_color: "#0f766e",
+        brand_neutral: "warm", brand_corners: "round", brand_type: "serif", brand_mode: "dark",
+        reply_to_email: "hello@rioroofing.com",
+      },
+    );
+    expect(payload.fields).toEqual(["brand_color"]);
+    expect(payload.changes).toEqual({ brand_color: { from: "#0f766e", to: "#1e3a8a" } });
+  });
+
+  it("reports no fields at all when every patched column is a no-op", () => {
+    const row = { brand_name: "Rio Roofing", brand_color: "#1e3a8a" };
+    const payload = brandingChangePayload(row, row);
+    expect(payload.fields).toEqual([]);
+    expect(payload.changes).toEqual({});
+  });
+
+  // D-069, review round: `.error` was dropped at the before-read in
+  // setBranding, so a read FAULT fell back to `before = null` — identical
+  // to a genuinely absent row — which made every patched field look
+  // "changed" (from: null) even when nothing could actually be verified.
+  // `snapshotFailed` is the caller's explicit admission it does not know,
+  // never inferred from `before` itself (null legitimately means "no row",
+  // not "unknown").
+  it("on a failed snapshot read, lists every patched column as touched but logs no fabricated old/new values", () => {
+    const payload = brandingChangePayload(
+      { brand_name: "Rio Roofing", brand_color: "#1e3a8a" },
+      null,
+      true,
+    );
+    expect(payload.fields.sort()).toEqual(["brand_color", "brand_name"]);
+    expect(payload.changes).toEqual({});
+    expect(payload.snapshot).toBe(false);
+  });
+
+  // The genuinely-absent-row case (read SUCCEEDED, found nothing) must not
+  // collapse into the read-FAILED case above just because both happen to
+  // pass `before = null` — snapshotFailed is explicit and defaults false.
+  it("a genuinely absent row (read succeeded, found nothing) still reads every short scalar's \"from\" as null — never confused with a read that merely FAILED", () => {
+    const payload = brandingChangePayload({ brand_name: "Rio Roofing" }, null, false);
+    expect(payload.changes).toEqual({ brand_name: { from: null, to: "Rio Roofing" } });
+    expect(payload).not.toHaveProperty("snapshot");
   });
 });
 
@@ -45,6 +153,111 @@ describe("branding service", () => {
         type: "account.branding_updated", actor_type: "user", actor_id: "user_test",
       });
     });
+  });
+
+  // D-069: the record showed WHO changed branding but never WHAT — every
+  // row's payload was `{}`. createAccount seeds brand_name from the
+  // account's own name ("Fixture Co" for this fixture), so the FIRST
+  // branding save already has a real "from" to show, not just a null.
+  it("logs which fields changed, with old -> new for the short scalar fields (D-069)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await setBranding(db, accountId,
+        { brandName: "Rio Roofing", brandColor: "#1e3a8a", brandLogoPath: `${accountId}/logo.png` },
+        "user_test");
+
+      const { data: ev } = await db.from("events").select("payload")
+        .eq("account_id", accountId).eq("type", "account.branding_updated").single();
+      const payload = ev!.payload as { fields: string[]; changes: Record<string, { from: unknown; to: unknown }> };
+
+      expect(payload.fields.sort()).toEqual(["brand_color", "brand_logo_path", "brand_name"].sort());
+      // The logo path is not logged as an old/new value here — it is not the
+      // "short scalar" this row exists to pin, and the brief is explicit:
+      // never the file's contents. The field NAME still appears above.
+      expect(payload.changes).toEqual({
+        brand_name: { from: "Fixture Co", to: "Rio Roofing" },
+        brand_color: { from: null, to: "#1e3a8a" },
+      });
+
+      // A second save shows the PREVIOUS save's value as "from", not the
+      // account's original seed — proof the snapshot is read fresh each time.
+      await setBranding(db, accountId, { brandName: "Rio Roofing Co" }, "user_test");
+      const { data: rows } = await db.from("events").select("payload")
+        .eq("account_id", accountId).eq("type", "account.branding_updated")
+        .order("created_at", { ascending: true });
+      const second = rows![1]!.payload as { changes: Record<string, { from: unknown; to: unknown }> };
+      expect(second.changes.brand_name).toEqual({ from: "Rio Roofing", to: "Rio Roofing Co" });
+    });
+  });
+
+  // D-069, review round: branding/actions.ts (the real and only web caller)
+  // sends ALL eight columns on every save (lines 148-152) — never a sparse
+  // patch — so this is the shape setBranding actually sees in production,
+  // not the hand-picked single-field patches the unit tests above use.
+  it("logs only the field that actually changed, even though the real caller resends every column every save (D-069, review round)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const fullPatch = {
+        brandName: "Rio Roofing", brandColor: "#0f766e", brandNeutral: "warm" as const,
+        brandCorners: "round" as const, brandType: "serif" as const, brandMode: "dark" as const,
+        replyToEmail: "hello@rioroofing.com", mailingAddress: "123 Main St\nMcAllen, TX",
+      };
+      await setBranding(db, accountId, fullPatch, "user_test");
+
+      // The SAME eight-column patch again, colour changed only — exactly
+      // the shape a real Settings save sends when an operator edits one
+      // field: branding/actions.ts always resends the other seven.
+      await setBranding(db, accountId, { ...fullPatch, brandColor: "#1e3a8a" }, "user_test");
+
+      const { data: rows } = await db.from("events").select("payload")
+        .eq("account_id", accountId).eq("type", "account.branding_updated")
+        .order("created_at", { ascending: true });
+      const payload = rows![1]!.payload as { fields: string[]; changes: Record<string, { from: unknown; to: unknown }> };
+      expect(payload.fields).toEqual(["brand_color"]);
+      expect(payload.changes).toEqual({ brand_color: { from: "#0f766e", to: "#1e3a8a" } });
+    });
+  });
+
+  // D-069, review round: `.error` was silently dropped at the before-read —
+  // a read FAULT fell back to `before = null`, logging every patched field
+  // as "changed" with a fabricated `from: null`. A fake client stands in for
+  // Supabase (same idiom as "throws on a query fault instead of answering
+  // null" below), so `setBranding`'s SECOND call (the real update) still
+  // succeeds and this proves the write is not abandoned over an audit-only
+  // read failing.
+  it("logs the read failure and still writes, with no fabricated old/new values, when the before-snapshot read errors", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    let insertedPayload: unknown;
+    try {
+      const faulty = {
+        from: (table: string) => {
+          if (table === "accounts") {
+            return {
+              select: () => ({
+                eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "boom" } }) }),
+              }),
+              update: () => ({
+                eq: () => ({ select: async () => ({ data: [{ id: "acct_1" }], error: null }) }),
+              }),
+            };
+          }
+          if (table === "events") {
+            return {
+              insert: async (row: { payload: unknown }) => { insertedPayload = row.payload; return { error: null }; },
+            };
+          }
+          throw new Error(`unexpected table in fake client: ${table}`);
+        },
+      } as unknown as SupabaseClient;
+
+      await setBranding(faulty, "acct_1", { brandName: "Rio Roofing", brandColor: "#1e3a8a" }, "user_test");
+
+      const messages = consoleError.mock.calls.map((args) => String(args[0]));
+      expect(messages.some((m) => m.includes("boom"))).toBe(true);
+      expect(insertedPayload).toEqual({
+        fields: ["brand_name", "brand_color"], changes: {}, snapshot: false,
+      });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("writes, reads back and clears the reply-to address", async () => {

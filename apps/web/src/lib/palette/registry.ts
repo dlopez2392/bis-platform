@@ -40,6 +40,12 @@ const SETTINGS_SECTIONS: { anchor: string; label: string; keywords: string[] }[]
   { anchor: "custom-values", label: m["palette.settings.customValues"], keywords: ["value", "variable", "merge"] },
   { anchor: "alert-phone", label: m["palette.settings.alertPhone"], keywords: ["sms", "text", "notify", "lead alert"] },
   { anchor: "billing", label: m["palette.settings.billing"], keywords: ["plan", "subscription", "invoice", "stripe", "complimentary", "payment"] },
+  // D-080: three real cards on this same page (settings/page.tsx's
+  // <BrandingPanel>, <WeeklyReportCard id="weekly-report">, <LinkSiteCard
+  // id="website">) had no entry here at all.
+  { anchor: "branding", label: m["palette.settings.branding"], keywords: ["logo", "colors", "theme", "brand name"] },
+  { anchor: "weekly-report", label: m["palette.settings.weeklyReport"], keywords: ["email report", "monday", "recipients"] },
+  { anchor: "website", label: m["palette.settings.website"], keywords: ["analytics", "traffic", "vercel", "domain", "link site"] },
 ];
 
 /** Extra search words per nav destination, keyed by the href SUFFIX so this
@@ -59,7 +65,7 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/tasks": ["task", "tasks", "to-do", "todo"],
   "/branding": ["logo", "colors", "theme"],
   "/voice": ["receptionist", "sofia", "ai", "website", "widget", "chat", "concierge", "bubble", "transfer", "forward", "person", "phones"],
-  "/automations": ["no-show", "no show", "text reminder", "reminder", "reviews", "review requests", "google review", "follow up", "text"],
+  "/automations": ["no-show", "no show", "text reminder", "reminder", "reviews", "review requests", "google review", "follow up", "text", "referral", "reactivation", "quote", "confirmation", "instant reply"],
   "/dashboard/accounts": ["companies", "clients"],
   "/dashboard/blueprints": ["templates"],
   "/dashboard/numbers": ["phone", "telnyx", "did", "line", "inventory", "reassign"],

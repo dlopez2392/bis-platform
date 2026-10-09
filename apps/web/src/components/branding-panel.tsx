@@ -13,7 +13,8 @@ import { SubmitButton } from "@/app/(dashboard)/dashboard/accounts/submit-button
 import { m } from "@/lib/messages";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
-import { FORM_ACCENT_FALLBACK, SIDEBAR_BG, resolveSidebarAccent } from "@/lib/branding/color";
+import { FORM_ACCENT_FALLBACK, SIDEBAR_PREVIEW_BG, resolveSidebarAccent } from "@/lib/branding/color";
+import { SIDEBAR_FOREGROUND } from "@/lib/branding/neutral-ramps";
 import { panelCopy, type BrandingAudience } from "@/lib/branding/panel-copy";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
 import { deriveTheme, type CornerName, type ModeName, type NeutralName, type TypeName } from "@/lib/branding/theme";
@@ -205,7 +206,12 @@ export function BrandingPanel({
   }, previewMode);
 
   return (
-    <Card>
+    // id="branding", matching the other Settings cards' own anchor
+    // (weekly-report-card.tsx's #weekly-report, link-site-card.tsx's
+    // #website): the palette's "Branding" entry (D-080) links to
+    // `/settings#branding`, and harmless on the client's own /branding page,
+    // which has nothing else to collide with.
+    <Card id="branding" className="scroll-mt-24">
       <CardHeader>
         {/* The client's page is this panel and nothing else, and its
             PageHeader already prints the same string — rendering both put
@@ -454,13 +460,13 @@ export function BrandingPanel({
                 </span>
                 <span
                   className="flex items-center gap-2 rounded-md px-3 py-2"
-                  style={{ backgroundColor: SIDEBAR_BG }}
+                  style={{ backgroundColor: SIDEBAR_PREVIEW_BG }}
                 >
                   <span
                     className="h-4 w-1 rounded-r"
                     style={{ backgroundColor: previewSidebar ?? "var(--sidebar-accent)" }}
                   />
-                  <span className="text-xs" style={{ color: "#d4d4d8" }}>
+                  <span className="text-xs" style={{ color: SIDEBAR_FOREGROUND }}>
                     {m["branding.previewSidebar"]}
                   </span>
                 </span>
