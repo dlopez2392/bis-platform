@@ -953,7 +953,89 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
     const content = JSON.parse(String((sentToModel(1) as unknown as Sent).messages.at(-1)!.content));
     expect(content).toMatchObject({ ok: false });
     expect(String(content.error)).toMatch(/name/i);
+    // Review: `parseCaptureLead` rejects only a missing name (or unreadable
+    // arguments), so the result must not claim an email or phone is required.
+    expect(String(content.error)).not.toMatch(/email|phone/i);
     expect((await res.json() as { reply: string }).reply).toBe("Could I get your name?");
+  });
+
+  /** The tool result the follow-up call carried, parsed. */
+  function toolResult(): { ok: boolean; result?: string; error?: string } {
+    return JSON.parse(String((sentToModel(1) as unknown as Sent).messages.at(-1)!.content));
+  }
+
+  // A name and a need is a filable lead (`required: ["fullName", "need"]`),
+  // but nobody can call it back. "The team will follow up" would be a promise
+  // with no way to keep it.
+  it("a lead filed with a name but no email or phone: recorded, and the model is told nobody can reach them", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }))
+      .mockResolvedValueOnce(modelReplies("Thanks, Ana."));
+    await laterTurn();
+    expect(enrichMock).toHaveBeenCalledTimes(1);
+    const r = toolResult();
+    expect(r.ok).toBe(true);
+    expect(String(r.result)).toMatch(/no email address or phone number/i);
+    expect(String(r.result)).not.toMatch(/will follow up/i);
+  });
+
+  it("a lead filed with a way to reach them says the team will follow up", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }))
+      .mockResolvedValueOnce(modelReplies("Thanks, Ana."));
+    await laterTurn();
+    expect(String(toolResult().result)).toMatch(/will follow up/i);
+  });
+
+  // Item 4: a capture on a conversation that already filed its one lead
+  // writes nothing (`submission_id` guard), so "their details are with the
+  // team" would claim the NEW details reached anyone.
+  it("a capture on a conversation that already has its lead: already recorded, the new details were not added", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, submission_id: "already" });
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "new@x.co", need: "a bench" }))
+      .mockResolvedValueOnce(modelReplies("Noted."));
+    await laterTurn();
+    expect(dbFns.createSubmission).not.toHaveBeenCalled();
+    const r = toolResult();
+    expect(String(r.result ?? r.error)).toMatch(/already recorded/i);
+    expect(String(r.result ?? r.error)).toMatch(/not added/i);
+  });
+
+  // Two tabs on one conversation: this turn lost the race, the OTHER turn
+  // filed the lead. The save did not fail; a lead is on file.
+  it("a capture that lost the race to another turn says a lead is already on file, not that the save failed", async () => {
+    dbFns.getConciergeConversation
+      .mockResolvedValueOnce({ ...CONVERSATION })
+      .mockResolvedValue({ ...CONVERSATION, submission_id: "s-other-tab" });
+    dbFns.setConciergeSubmission.mockResolvedValue(false);
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "ana@x.co", need: "a table" }))
+      .mockResolvedValueOnce(modelReplies("Got it."));
+    await laterTurn();
+    const r = toolResult();
+    expect(String(r.result ?? r.error)).toMatch(/already recorded/i);
+    expect(String(r.result ?? r.error)).not.toMatch(/could not be saved/i);
+  });
+
+  // Item 6: the follow-up is skipped when the invocation has too little of
+  // `maxDuration` left; the visitor reads the fixed line for what happened.
+  it("with ~26s already spent, no follow-up call is made and the fixed line is shown", async () => {
+    const realNow = Date.now.bind(Date);
+    let skew = 0;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    try {
+      fetchMock.mockImplementationOnce(async () => {
+        skew = 26_000;
+        return modelCallsCaptureLead({ fullName: "Ana", email: "ana@x.co", need: "a table" }, PRE_RESULT);
+      });
+      const res = await laterTurn();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(enrichMock).toHaveBeenCalledTimes(1);
+      expect((await res.json() as { reply: string }).reply).toBe(conciergeStrings("en").captured);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("when the follow-up call itself fails after a FAILED capture, the pre-result words are still never shown", async () => {

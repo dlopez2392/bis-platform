@@ -41,7 +41,7 @@ import { buildSystemPrompt } from "@/lib/voice/system-prompt";
 import { originFrom } from "@/lib/email/origin";
 import {
   clientIp, hashIp, verifyRenderToken, parseAttribution, MIN_FILL_MS,
-  HONEYPOT_FIELD, RENDER_TOKEN_FIELD,
+  HONEYPOT_FIELD, RENDER_TOKEN_FIELD, isValidEmail, isValidPhone,
 } from "@/lib/forms/guards";
 import {
   CONCIERGE_MAX_TURNS, CONCIERGE_MAX_CONVERSATIONS_PER_IP,
@@ -81,6 +81,38 @@ type ModelMessage = {
 };
 
 type Db = ReturnType<typeof serviceDbType>;
+
+/** What happened to one capture_lead call. `already_on_file` covers both a
+ *  conversation that filed its one lead on an earlier turn and a turn that
+ *  lost the race to another tab: either way a lead is on file and THESE
+ *  details were not added. */
+type CaptureOutcome = "filed" | "filed_unreachable" | "already_on_file" | "unusable" | "failed";
+
+/**
+ * The tool result the model hears (D-047), worded to match exactly what the
+ * code did. Model-facing, not customer copy: the visitor reads whatever the
+ * model writes from it.
+ *
+ * `filed_unreachable` does NOT tell the model to ask for an email or phone:
+ * the conversation's one submission slot is now claimed, so a second capture
+ * carrying them would be `already_on_file` and the details the visitor typed
+ * would go nowhere. Telling them plainly beats collecting something that is
+ * then dropped.
+ */
+function captureResult(outcome: CaptureOutcome): { ok: boolean; result?: string; error?: string } {
+  switch (outcome) {
+    case "filed":
+      return { ok: true, result: "Recorded. The team will follow up with them." };
+    case "filed_unreachable":
+      return { ok: true, result: "Recorded with their name, but with no email address or phone number, so the team has no way to reach them. This chat cannot add one now: tell them so, and suggest they contact the business directly." };
+    case "already_on_file":
+      return { ok: true, result: "A lead from this chat was already recorded earlier; these new details were not added." };
+    case "unusable":
+      return { ok: false, error: "Not recorded: their name is missing. Ask for it." };
+    case "failed":
+      return { ok: false, error: "Not recorded: their details could not be saved just now. Do not say they were passed on or that anyone will follow up." };
+  }
+}
 
 /** The only assistant line stored for a turn that was NOT an answer (an
  *  empty completion, `spoken`'s fallback), in either language. */
@@ -492,10 +524,12 @@ export async function POST(
     // What the tool result tells the model when it did NOT file (D-047): a
     // capture with no usable name is a different thing to say to the visitor
     // than a save that failed.
-    let notFiledBecause: "unusable" | "failed" = "failed";
+    // ONE outcome per capture, and the tool result below says exactly that
+    // (review of D-047): the result text must match what the code did.
+    let outcome: CaptureOutcome = "already_on_file";
     if (toolArgs && !conversation.submission_id) {
       const lead = parseCaptureLead(toolArgs);
-      if (!lead) notFiledBecause = "unusable";
+      outcome = "unusable";
       if (lead) {
         filed = await fileLead({
           db, accountId: profile.account_id,
@@ -519,6 +553,20 @@ export async function POST(
           // already uses this helper.
           origin: originFrom(req.headers), lead,
         });
+        if (filed) {
+          // The same validators `fileLead` writes the contact through: an
+          // invalid email or phone is dropped there, so it is no way to
+          // reach them here either.
+          outcome = isValidEmail(lead.email) || isValidPhone(lead.phone) ? "filed" : "filed_unreachable";
+        } else {
+          // `fileLead` answers false for a failed save AND for a lost race
+          // (two tabs on one conversation: the other turn claimed the one
+          // submission slot first). One re-read tells them apart; a lead on
+          // file is a lead on file, whichever turn wrote it.
+          const after = await getConciergeConversation(db, conversationId).catch(() => null);
+          if (after?.submission_id) { outcome = "already_on_file"; filed = true; }
+          else outcome = "failed";
+        }
       } else {
         log("capture_lead ignored: unusable arguments", { conversationId });
       }
@@ -544,11 +592,7 @@ export async function POST(
       const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt);
       const followupTimeout = Math.min(FOLLOWUP_TIMEOUT_MS, timeLeft);
       if (followupTimeout >= FOLLOWUP_MIN_MS) {
-        const result = filed
-          ? { ok: true, result: "Their details are with the team, who will follow up." }
-          : notFiledBecause === "unusable"
-            ? { ok: false, error: "Not recorded: their name and either an email address or a phone number are needed. Ask for what is missing." }
-            : { ok: false, error: "Not recorded: their details could not be saved just now. Do not say they were passed on or that anyone will follow up." };
+        const result = captureResult(outcome);
         try {
           const message = await complete([
             ...messages,
