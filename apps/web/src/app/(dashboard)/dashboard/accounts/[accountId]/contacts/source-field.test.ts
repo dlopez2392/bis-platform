@@ -36,4 +36,24 @@ describe("SourceField — F-157's drawer line", () => {
     expect(renderedText(out)).toContain(m["contact.source.label"]);
     expect(out).not.toContain("<form");
   });
+
+  // Review round 1, m2: a long hint (an operator's own typed referral note,
+  // or a long CSV-imported `source`) is clamped in the VISIBLE line; the
+  // full text still reaches the owner via `title`/`aria-label`, never
+  // silently dropped.
+  it("clamps a long hint in the visible text but keeps the full text in title and aria-label (mutation: render the raw hint uncut, or drop the full text from title/aria → FAILS)", () => {
+    const long = "Referred by " + "a".repeat(200);
+    const out = html("form: Contact us", long);
+    // The visible <p> text content is the CLAMPED form, with an ellipsis.
+    expect(renderedText(out)).not.toContain(long);
+    expect(out).toContain("…</p>");
+    // The FULL text is still present, via the attributes.
+    expect(out).toContain(`title="${long}"`);
+    expect(out).toContain(`aria-label="${long}"`);
+  });
+
+  it("a short hint needs no clamp attributes beyond the ordinary render (no title/aria noise on the common case)", () => {
+    const out = html("form: Contact us", "Found through ChatGPT");
+    expect(out).toContain('title="Found through ChatGPT"');
+  });
 });

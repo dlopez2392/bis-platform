@@ -2,6 +2,7 @@
 
 import { InlineField } from "@/components/inline-field";
 import { m } from "@/lib/messages";
+import { clampHint } from "@/lib/contacts/lead-source";
 import { updateContactFieldAction } from "./actions";
 
 /**
@@ -43,7 +44,17 @@ export function SourceField({
           }}
         />
         {sourceHint ? (
-          <p className="text-muted-foreground mt-0.5 px-2 text-xs">{sourceHint}</p>
+          // Review round 1, m2: the visible text is CLAMPED (an operator's
+          // own typed referral note, or a long CSV-imported `source`, has
+          // no length limit of its own); `title` and `aria-label` carry the
+          // full, unclamped fact for a hover and for a screen reader.
+          <p
+            className="text-muted-foreground mt-0.5 px-2 text-xs"
+            title={sourceHint}
+            aria-label={sourceHint}
+          >
+            {clampHint(sourceHint)}
+          </p>
         ) : null}
       </dd>
     </div>
