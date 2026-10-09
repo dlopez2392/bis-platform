@@ -222,7 +222,9 @@ export async function dropDemoAccount(
     }
   }
 
-  await deleteAccountCascade(db, existing.id, "dropDemoAccount");
+  // keepBlueprints (D-092): a blueprint the agency captured from the demo is
+  // agency work, not demo data, and a re-seed must not take it with it.
+  await deleteAccountCascade(db, existing.id, "dropDemoAccount", { keepBlueprints: true });
   return true;
 }
 

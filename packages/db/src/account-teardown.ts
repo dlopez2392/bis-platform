@@ -90,9 +90,17 @@ export const ACCOUNT_OWNED_TABLES = [
  * error leaves rows behind, and the next caller's unique constraints then fail
  * somewhere else entirely, far from the real cause). `caller` rides the
  * message so a failure says which of the two callers hit it.
+ *
+ * `keepBlueprints` (D-092): blueprints are AGENCY work, and one captured from
+ * this account is not this account's to delete. The demo re-seed drops and
+ * rebuilds its account and passes it, so a blueprint the agency captured from
+ * the demo survives; 0007's `source_account_id … on delete set null` detaches
+ * it when the account row goes. Test fixtures leave it off: a test's own
+ * stamped blueprints are scratch rows its teardown must sweep.
  */
 export async function deleteAccountCascade(
   db: SupabaseClient, accountId: string, caller: string,
+  opts: { keepBlueprints?: boolean } = {},
 ): Promise<void> {
   for (const table of ACCOUNT_OWNED_TABLES) {
     const { error } = await db.from(table).delete().eq("account_id", accountId);
@@ -100,10 +108,12 @@ export async function deleteAccountCascade(
   }
   // `blueprints` has no account_id — it is agency-scoped — so it cannot ride
   // the account-scoped loop above.
-  const { error: blueprintsErr } = await db.from("blueprints")
-    .delete().eq("source_account_id", accountId);
-  if (blueprintsErr) {
-    throw new Error(`${caller} cleanup failed on blueprints: ${blueprintsErr.message}`);
+  if (!opts.keepBlueprints) {
+    const { error: blueprintsErr } = await db.from("blueprints")
+      .delete().eq("source_account_id", accountId);
+    if (blueprintsErr) {
+      throw new Error(`${caller} cleanup failed on blueprints: ${blueprintsErr.message}`);
+    }
   }
   const { error: acctErr } = await db.from("accounts").delete().eq("id", accountId);
   if (acctErr) throw new Error(`${caller} cleanup failed on accounts: ${acctErr.message}`);
