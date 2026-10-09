@@ -348,7 +348,13 @@ describe("submitFormAction — expired render token (lead-loss regression)", () 
       [RENDER_TOKEN_FIELD]: token, locale: "en", first_name: "Maria", referral: "",
     }));
 
-    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ custom: {} });
+    // Review round 1, I3a: `toMatchObject({ custom: {} })` cannot fail — an
+    // empty object pattern is a subset of ANY object, `referred_by` present
+    // or not, so this used to pass even with an unconditional
+    // `custom.referred_by = value` write. Asserted directly on `.custom`
+    // with `toEqual` instead.
+    const input = createContactMock.mock.calls[0]![2] as { custom?: Record<string, unknown> };
+    expect(input.custom).toEqual({});
   });
 
   it("one notify recipient's failure does not silence the others", async () => {
