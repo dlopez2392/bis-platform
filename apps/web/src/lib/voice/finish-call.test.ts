@@ -1114,18 +1114,35 @@ describe("finishCall — proposal generation", () => {
     type ContactRow = { first_name: string | null; last_name: string | null; email: string | null; phone: string | null };
     type Field = "firstName" | "lastName" | "email" | "phone";
 
-    // A minimal stand-in for the two calls `fillContactBlanks` makes: a
-    // `getContact`-shaped read (`select().eq().eq().maybeSingle()`) and its
-    // own unconditional `update().eq().eq()`, plus the `events` insert its
-    // `emit()` call makes whenever it actually writes something. Table names
-    // are checked so a stray call elsewhere in the real function surfaces as
-    // a thrown error instead of a silently-wrong result.
+    // A minimal stand-in for the calls `fillContactBlanks` makes: a
+    // `getContact`-shaped read (`select().eq().eq().maybeSingle()`), its own
+    // unconditional `update().eq().eq()`, the `events` insert its `emit()`
+    // call makes whenever it actually writes something, and — since D-012 —
+    // the shared post-write duplicate check's `select("id").eq().eq()
+    // .neq().limit()`. This fake world holds exactly the one contact under
+    // test and nobody else, so that check's `.limit()` always answers "no
+    // other contact" (`data: []`) — correct for THIS test, which is about
+    // which fields get filled, not about dedupe (contacts.test.ts in
+    // packages/db owns that). Table names are checked so a stray call
+    // elsewhere in the real function surfaces as a thrown error instead of
+    // a silently-wrong result.
     function fakeContactDb(row: ContactRow) {
       return {
         from: (table: string) => {
           if (table === "contacts") {
+            const builder: {
+              eq: () => typeof builder;
+              neq: () => typeof builder;
+              maybeSingle: () => Promise<{ data: ContactRow; error: null }>;
+              limit: () => Promise<{ data: never[]; error: null }>;
+            } = {
+              eq: () => builder,
+              neq: () => builder,
+              maybeSingle: async () => ({ data: row, error: null }),
+              limit: async () => ({ data: [], error: null }),
+            };
             return {
-              select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }),
+              select: () => builder,
               update: () => ({
                 eq: () => ({ eq: () => Promise.resolve({ error: null }) }),
               }),

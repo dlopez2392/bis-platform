@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ListPanel } from "@/components/ui/list-panel";
-import { contactDisplayName, formatDate, initials } from "@/lib/format";
+import { contactDisplayName, formatDateInZone, initials } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { usePeek } from "@/lib/contacts/use-peek";
 import { pageSelectionState, togglePageSelection } from "@/lib/contacts/selection";
@@ -71,6 +71,7 @@ export function ContactsTable({
   sort,
   dir,
   q,
+  timezone,
 }: {
   rows: ContactRow[];
   accountId: string;
@@ -83,6 +84,10 @@ export function ContactsTable({
   /** The current search text, carried into a re-sort's href so it survives
    *  clicking a column header. */
   q?: string;
+  /** The account's RESOLVED zone (`renderZone`, total by construction) —
+   *  D-010: "Created" used to print in the RUNTIME's zone (server or
+   *  browser), never the account's, same bug the activity timeline had. */
+  timezone: string;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -239,7 +244,7 @@ export function ContactsTable({
                   ) : null}
                 </TableCell>
                 <TableCell className="text-muted-foreground">{c.company_name}</TableCell>
-                <TableCell className="text-muted-foreground">{formatDate(c.created_at)}</TableCell>
+                <TableCell className="text-muted-foreground">{formatDateInZone(c.created_at, timezone)}</TableCell>
               </TableRow>
             );
           })}

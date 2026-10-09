@@ -165,4 +165,33 @@ describe("applyImportBatch", () => {
       expect((await listTags(db, accountId)).map((t) => t.name)).toContain("brand-new-2");
       expect((await listContactTags(db, accountId, target.id)).map((t) => t.name)).toEqual(["brand-new-2"]);
     }));
+
+  // D-012, coordinator-requested gap closure: `updateContact` can now flag
+  // a pair too (D-012), but `applyImportBatch`'s `flagged` count only ever
+  // read `createContact`'s own flag — the comment above `flagged`'s
+  // declaration said so explicitly ("Only the createContact path can
+  // flag"), which stopped being true the moment updateContact gained its
+  // own check. Shape: row A (email) already exists; a DIFFERENT contact B
+  // holds the phone this import row also carries. The row resolves via the
+  // match index's EMAIL hit (an UPDATE, not a create), so only
+  // updateContact's own phone check — never createContact's — is what
+  // finds and flags the A/B collision.
+  it("counts a flag updateContact raised too — an index hit (by email) whose phone collides with a DIFFERENT contact's", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await createContact(db, accountId, { email: "a@example.com" }, "user_test");
+      const b = await createContact(db, accountId, { phone: "956-555-0101" }, "user_test");
+      const index = await buildMatchIndex(db, accountId);
+
+      const r = await applyImportBatch(db, accountId,
+        [{ input: { email: "a@example.com", phone: "956-555-0101" }, tags: [] }],
+        index, "user_test", { createTags: false });
+
+      expect(r).toEqual({ created: 0, updated: 1, flagged: 1 });
+      const [lo, hi] = [a.id, b.id].sort();
+      const { data } = await db.from("contact_duplicate_flags")
+        .select("reason").eq("account_id", accountId)
+        .eq("contact_a", lo).eq("contact_b", hi);
+      expect(data?.length).toBe(1);
+      expect(data![0]!.reason).toBe("phone_match_on_edit");
+    }));
 });
