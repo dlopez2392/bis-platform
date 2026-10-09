@@ -92,6 +92,11 @@ const TOTAL_LIMIT = 1;
 function exclusiveUntil(untilIso: string): string {
   return new Date(new Date(untilIso).getTime() - 60 * 60 * 1000).toISOString();
 }
+// NOTE: assumes `until` falls on a whole UTC hour, which `localDayBounds`
+// gives it for every zone probed so far; a half-hour-offset zone (e.g.
+// Asia/Kolkata, UTC+5:30) would hand this a non-hour-aligned instant, and
+// whether Vercel's own hourly bucket still lines up with a flat -1h in
+// that case is unverified — no BIS site has shipped in such a zone yet.
 
 const BASE = "https://api.vercel.com/v1/query/web-analytics";
 
@@ -99,6 +104,20 @@ export class VercelApiError extends Error {
   constructor(readonly status: number, readonly code: string | null, message: string) {
     super(message);
     this.name = "VercelApiError";
+  }
+}
+
+/** Thrown by `#get` when `this.#fetch` itself rejects — no HTTP response at
+ *  all (DNS, connection refused, timeout). Distinct from `VercelApiError`
+ *  (which always carries a real status code) so `#dayTotal` can rethrow a
+ *  genuine network failure as transient without mistaking it for one of
+ *  `parseAggregate`'s shape-validation errors, which are also plain
+ *  `Error`s but mean something fallback-worthy: the response DID come
+ *  back, just not shaped the way `TOTAL_GROUPING` assumes. */
+class VercelNetworkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VercelNetworkError";
   }
 }
 
@@ -148,7 +167,12 @@ export class VercelAnalytics {
 
   async #get(url: URL): Promise<unknown> {
     url.searchParams.set("teamId", this.#teamId);
-    const res = await this.#fetch(url.toString(), { headers: { Authorization: `Bearer ${this.#token}` } });
+    let res: Awaited<ReturnType<typeof fetch>>;
+    try {
+      res = await this.#fetch(url.toString(), { headers: { Authorization: `Bearer ${this.#token}` } });
+    } catch (e) {
+      throw new VercelNetworkError(e instanceof Error ? e.message : String(e));
+    }
     if (!res.ok) {
       let code: string | null = null;
       let message = `vercel ${url.pathname} ${res.status}`;
@@ -181,38 +205,69 @@ export class VercelAnalytics {
 
   /**
    * The local-day total, via the `TOTAL_GROUPING` aggregate call, with a
-   * SOFT fallback to the old `visits/count` (UTC-day) total when that call
-   * doesn't come back the one way it's expected to: a reject (bad request,
-   * network error, or `parseAggregate` refusing a malformed row), or a
-   * resolved response whose row count isn't exactly 1 (Vercel's shape
-   * contract here — one grouped value, because `PRODUCTION_FILTER` admits
-   * only one — is unverified live from this sandbox; see `TOTAL_GROUPING`'s
-   * doc). This call failing must never fail the whole day: a day with a
-   * degraded total (the old UTC-window number, for this one day only) is
-   * still written; a day with NO total at all is a hole the next tick has
-   * to retry forever. One log line names the fallback and why, with no
-   * token or other secret in it (both failure paths' messages come from
-   * `VercelApiError`/`parseAggregate`, which only ever carry Vercel's own
-   * status/error text or a field name — never the request itself).
+   * SOFT fallback to the old `visits/count` (UTC-day) total — but ONLY on
+   * a genuine SHAPE problem, never on a transient one.
+   *
+   * Zero `environment` rows is NOT automatically a shape problem: on a
+   * real site, roughly 29% of days have zero visitors at all — quiet days
+   * are ordinary, not broken. Falling back to the UTC-day count on every
+   * one of them would reinstate exactly the D-053 symptom this file exists
+   * to fix (a nonzero total next to empty local-day breakdowns) on nearly
+   * a third of nights, while flooding this log with a false alarm every
+   * time. `breakdownHasTraffic` — whether `fetchDayTraffic`'s `requestPath`
+   * call, fetched FIRST, came back non-empty — is how a genuinely quiet
+   * day (zero rows, empty breakdown too: `{0, 0}`, no fallback, no log) is
+   * told apart from a real mismatch (zero rows while the breakdown
+   * recorded traffic: the `environment` grouping is the one that's wrong,
+   * not the day).
+   *
+   * Only SHAPE problems fall back: a row count that isn't exactly 1 (once
+   * the quiet-day case above is excluded), a 400 (Vercel refusing the
+   * request outright — the `by=environment` assumption itself is wrong),
+   * or a malformed row (`parseAggregate` refusing it). A 429, a 5xx, or
+   * the request never reaching Vercel at all (`VercelNetworkError`) say
+   * NOTHING about the shape of the data — they're rethrown so the pass's
+   * own documented retry policy handles them (`passes/site-traffic.ts`:
+   * stop at the first failed day, the whole day retried next tick)
+   * instead of this call quietly stamping a degraded day. A day with a
+   * degraded-but-written total is a reasonable trade for an unverified
+   * shape assumption; a day silently stamped as synced while Vercel was
+   * simply down is not.
+   *
+   * One log line names a shape fallback and why, with no token or other
+   * secret in it (`VercelApiError`/`parseAggregate`'s messages only ever
+   * carry Vercel's own status/error text or a field name — never the
+   * request itself). A transient rethrow logs nothing here — it surfaces
+   * through the pass's own `failed` counter and error log instead.
    */
-  async #dayTotal(projectId: string, sinceIso: string, untilIso: string): Promise<{ visitors: number; pageviews: number }> {
+  async #dayTotal(
+    projectId: string, sinceIso: string, untilIso: string, breakdownHasTraffic: boolean,
+  ): Promise<{ visitors: number; pageviews: number }> {
     try {
       const rows = await this.aggregate(projectId, sinceIso, untilIso, TOTAL_GROUPING, TOTAL_LIMIT);
+      if (rows.length === 0 && !breakdownHasTraffic) return { visitors: 0, pageviews: 0 };
       if (rows.length === 1) return { visitors: rows[0]!.visitors, pageviews: rows[0]!.pageviews };
-      console.error(`site traffic: local-day total for project ${projectId} fell back to visits/count — the ${TOTAL_GROUPING} aggregate returned ${rows.length} row(s), expected 1`);
+      console.error(`site traffic: local-day total for project ${projectId} fell back to visits/count — the ${TOTAL_GROUPING} aggregate returned ${rows.length} row(s) while the requestPath breakdown ${breakdownHasTraffic ? "recorded real traffic" : "was also empty"}, expected exactly 1`);
     } catch (e) {
+      if (e instanceof VercelApiError && e.status !== 400) throw e;
+      if (e instanceof VercelNetworkError) throw e;
       console.error(`site traffic: local-day total for project ${projectId} fell back to visits/count — the ${TOTAL_GROUPING} aggregate failed: ${String(e)}`);
     }
     return this.countVisits(projectId, sinceIso, untilIso);
   }
 
   /** The five queries for one local day, in a fixed order (the test pins
-   *  it) — all five through `aggregate()` in the ordinary case (D-053), so
-   *  all five share one window and one environment filter; `countVisits()`
-   *  is called here ONLY as `#dayTotal`'s fallback. */
+   *  it): `requestPath` (`pages`) BEFORE the `environment` total, because
+   *  `#dayTotal` needs to know whether the day had ANY recorded traffic at
+   *  all before it can tell a legitimate empty local day apart from a
+   *  shape mismatch. All five go through `aggregate()` in the ordinary
+   *  case (D-053), sharing one window and one environment filter;
+   *  `countVisits()` is called here ONLY as `#dayTotal`'s shape-fallback —
+   *  a transient failure (429/5xx/network) propagates straight out of this
+   *  function instead, so the day is not written at all. */
   async fetchDayTraffic(projectId: string, sinceIso: string, untilIso: string): Promise<DayTraffic> {
-    const totals = await this.#dayTotal(projectId, sinceIso, untilIso);
     const pages = await this.aggregate(projectId, sinceIso, untilIso, "requestPath", BREAKDOWN_LIMIT);
+    const totals = await this.#dayTotal(projectId, sinceIso, untilIso, pages.length > 0);
     const sources = await this.aggregate(projectId, sinceIso, untilIso, "referrerHostname", BREAKDOWN_LIMIT);
     const places = await this.aggregate(projectId, sinceIso, untilIso, PLACE_DIMENSION, BREAKDOWN_LIMIT);
     const devices = await this.aggregate(projectId, sinceIso, untilIso, "deviceType", BREAKDOWN_LIMIT);

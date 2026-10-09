@@ -164,20 +164,48 @@ demo until the prospect audit piece exists.
   - Every `aggregate()` call now sends `until` one hour earlier than it is
     given, compensating Vercel's inclusive-until bucket, so the breakdown
     (and now the total) closes exactly at local midnight — not local
-    midnight plus one hour.
-  - **This grouped-total shape is unverified live, so it fails SOFT.**
-    `#dayTotal` (private, `web-analytics.ts`) wraps the `environment`
-    aggregate call: if it rejects, OR resolves with anything other than
-    exactly one row, it falls back to the OLD `visits/count` (UTC-day)
-    total for that one day only — the breakdowns still run, the day is
-    still written and stamped, nothing 500s and nothing holds up the next
-    site in the tick. **How to spot it in logs:** one `console.error` line
-    reading `site traffic: local-day total for project <id> fell back to
-    visits/count — the environment aggregate …` (either "failed: …" or
-    "returned N row(s), expected 1"). It names no token or other secret.
-    Seeing this line for a real site most nights is the signal that the
-    `by=environment` shape assumption was wrong and needs a real fix, not
-    a permanent crutch — a single appearance after a transient 5xx is not.
+    midnight plus one hour. This assumes `until` already falls on a whole
+    UTC hour, true for every zone probed so far; a half-hour-offset zone
+    (e.g. Asia/Kolkata, UTC+5:30) would hand it a non-hour-aligned instant,
+    and whether Vercel's bucket still lines up with a flat −1h there is
+    unverified — no BIS site has shipped in such a zone yet.
+  - **This grouped-total shape is unverified live, so it fails SOFT — but
+    only on a genuine SHAPE problem, not on every non-1-row response.**
+    `fetchDayTraffic` fetches the `requestPath` breakdown FIRST, then
+    `#dayTotal` (private, `web-analytics.ts`) decides the total:
+    - **Zero `environment` rows AND an empty `requestPath` breakdown is a
+      genuinely quiet day** — `{0, 0}`, no fallback, no log, no extra
+      call. On a real site roughly 29% of days have zero visitors;
+      treating every one of those as a "fallback" would have reinstated
+      the D-053 symptom itself (a nonzero UTC-day total next to empty
+      local-day breakdowns) on nearly a third of nights, and flooded this
+      log with a false alarm every night it happened.
+    - **Zero rows with a NON-empty breakdown, 2+ rows, a 400 (Vercel
+      refusing the request outright), or a malformed row
+      (`parseAggregate` refusing it)** are real shape mismatches: falls
+      back to the OLD `visits/count` (UTC-day) total for that one day
+      only — the breakdowns still run, the day is still written and
+      stamped, nothing 500s and nothing holds up the next site in the
+      tick. **How to spot it in logs:** one `console.error` line reading
+      `site traffic: local-day total for project <id> fell back to
+      visits/count — the environment aggregate …` (either "failed: …" or
+      "returned N row(s) while the requestPath breakdown recorded real
+      traffic/was also empty, expected exactly 1"). It names no token or
+      other secret. Seeing this line for a real site most nights is the
+      signal that the `by=environment` shape assumption was wrong and
+      needs a real fix, not a permanent crutch — a single appearance
+      after a transient blip is not.
+    - **A 429, a 5xx, or the request never reaching Vercel at all
+      (connection/DNS/timeout)** are NOT shape problems — they say
+      nothing about whether `by=environment` is the right grouping, only
+      that this one call didn't go through. These RETHROW instead of
+      falling back: the day is NOT written, no log line appears here,
+      and the pass's own documented retry policy
+      (`passes/site-traffic.ts`: stop at the first failed day) picks the
+      whole day back up on the next tick, the same as any other failed
+      pull. A degraded-but-written total is a reasonable trade for an
+      unverified shape assumption; a day silently stamped as synced while
+      Vercel was simply down for a minute is not.
   - `visits/count` (via `countVisits()`) is otherwise unchanged and still
     used directly only by the Settings → Website "Test connection" probe,
     a rough last-7-days sanity check, not a stored day; its UTC-floor is

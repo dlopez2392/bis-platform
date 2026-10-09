@@ -61,7 +61,7 @@ describe("VercelAnalytics", () => {
     expect(init.headers.Authorization).toBe("Bearer tok");
   });
 
-  it("aggregate passes by and limit, and fetchDayTraffic makes exactly five aggregate calls in a fixed order — totals included, since the count endpoint floors to UTC midnight (D-053)", async () => {
+  it("aggregate passes by and limit, and fetchDayTraffic makes exactly five aggregate calls in a fixed order — requestPath (pages) BEFORE the environment total, since the total's quiet-day check needs to know whether pages already came back empty (D-053)", async () => {
     // Rows are keyed by whichever dimension the call asked for — the real
     // API's shape — so the referrerHostname/country/deviceType/environment
     // parses succeed. The `environment` call (the total) returns ONE row:
@@ -85,9 +85,9 @@ describe("VercelAnalytics", () => {
     const day = await api.fetchDayTraffic("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z");
     expect(f).toHaveBeenCalledTimes(5);
     const bys = f.mock.calls.map(([u]) => new URL(u as string).searchParams.get("by"));
-    expect(bys).toEqual(["environment", "requestPath", "referrerHostname", "country", "deviceType"]);
-    expect(new URL(f.mock.calls[0]![0] as string).searchParams.get("limit")).toBe("1");
-    expect(new URL(f.mock.calls[1]![0] as string).searchParams.get("limit")).toBe("20");
+    expect(bys).toEqual(["requestPath", "environment", "referrerHostname", "country", "deviceType"]);
+    expect(new URL(f.mock.calls[0]![0] as string).searchParams.get("limit")).toBe("20");
+    expect(new URL(f.mock.calls[1]![0] as string).searchParams.get("limit")).toBe("1");
     // Mutation: drop the filter from aggregate() — previews leak into the breakdowns AND the total.
     expect(new URL(f.mock.calls[0]![0] as string).searchParams.get("filter")).toBe("environment eq 'production'");
     expect(new URL(f.mock.calls[1]![0] as string).searchParams.get("filter")).toBe("environment eq 'production'");
@@ -114,12 +114,22 @@ describe("VercelAnalytics", () => {
     expect(u.searchParams.get("until")).toBe("2026-09-02T05:00:00.000Z");
   });
 
-  // The coordinator's fail-soft ask: the `environment` total call is an
-  // unverified API shape, so a rejection or an unexpected row count must
-  // fall back to the old `visits/count` total for that one day — never
-  // fail the day outright — and say so in one log line with no secrets.
-  describe("fetchDayTraffic's total falls back to visits/count when the environment aggregate doesn't come back as expected", () => {
-    function routedFetch(envBody: { ok: boolean; status?: number; json: unknown }) {
+  // The coordinator's fail-soft ask, round 2: the `environment` total call
+  // is an unverified API shape, but zero rows is NOT automatically a shape
+  // problem — on a real site ~29% of days have zero visitors, genuinely.
+  // So: zero `environment` rows AND an empty `requestPath` breakdown is a
+  // quiet day ({0,0}, no fallback, no log); zero rows with a NON-empty
+  // breakdown, 2+ rows, or a parse/400 error are real shape mismatches
+  // (fallback + log). A 5xx/429/network failure is NEITHER kind of shape
+  // signal — it's rethrown so the pass's documented retry policy
+  // (`passes/site-traffic.ts`: stop at the first failed day, whole day
+  // retried next tick) handles it, instead of this call quietly stamping
+  // a degraded day.
+  describe("fetchDayTraffic's total: quiet days, shape fallbacks, and transient rethrows", () => {
+    function routedFetch(
+      envBody: { ok: boolean; status?: number; json: unknown },
+      breakdownJson: unknown = { data: [{ requestPath: "/", visitors: 1, pageviews: 2 }] },
+    ) {
       return vi.fn(async (url: string) => {
         const u = new URL(url);
         if (u.pathname.endsWith("visits/count")) {
@@ -129,40 +139,43 @@ describe("VercelAnalytics", () => {
         if (by === "environment") {
           return { ok: envBody.ok, status: envBody.status ?? (envBody.ok ? 200 : 500), json: async () => envBody.json, text: async () => JSON.stringify(envBody.json) };
         }
-        return { ok: true, status: 200, json: async () => ({ data: [{ [by!]: "/", visitors: 1, pageviews: 2 }] }), text: async () => "" };
+        return { ok: true, status: 200, json: async () => breakdownJson, text: async () => "" };
       });
     }
+    const countCalled = (f: ReturnType<typeof routedFetch>) =>
+      f.mock.calls.some(([u]) => new URL(u as string).pathname.endsWith("visits/count"));
 
-    // Mutation: drop the try/catch around the environment aggregate call —
-    // this throws out of fetchDayTraffic instead of falling back.
-    it("(a) the environment aggregate call rejects (500) -> falls back to count, day still written", async () => {
-      const f = routedFetch({ ok: false, status: 500, json: { error: { message: "boom" } } });
+    // Mutation: drop the `!breakdownHasTraffic` guard (always return {0,0}
+    // on zero rows) — the "recorded real traffic" test below starts
+    // reading 0 instead of falling back, failing that test's visitors
+    // assertion. Verified by mutation-probe (see report).
+    it("zero environment rows AND an empty requestPath breakdown -> a genuinely quiet day: {0,0}, no fallback, no log", async () => {
+      const f = routedFetch({ ok: true, json: { data: [] } }, { data: [] });
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
       const day = await api.fetchDayTraffic("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z");
-      expect(day.visitors).toBe(980); // COUNT_JSON's value, not the failed aggregate's
-      expect(day.pageviews).toBe(1250);
-      expect(day.pages).toHaveLength(1); // breakdowns still ran
-      expect(errSpy).toHaveBeenCalledTimes(1);
-      const line = errSpy.mock.calls[0]![0] as string;
-      expect(line).toMatch(/fell back to visits\/count/);
-      expect(line).not.toContain("tok"); // no secrets
+      expect(day.visitors).toBe(0);
+      expect(day.pageviews).toBe(0);
+      expect(day.pages).toHaveLength(0);
+      expect(errSpy).not.toHaveBeenCalled();
+      expect(countCalled(f)).toBe(false); // no fallback call at all
       errSpy.mockRestore();
     });
 
-    // Mutation: change `rows.length === 1` to `rows.length >= 0` — zero and
-    // two-row cases stop falling back and read `undefined` as 0/0.
-    it("(b) zero rows from the environment aggregate -> falls back to count", async () => {
-      const f = routedFetch({ ok: true, json: { data: [] } });
+    it("zero environment rows but the requestPath breakdown recorded real traffic -> shape mismatch: falls back to count and logs it", async () => {
+      const f = routedFetch({ ok: true, json: { data: [] } }); // default breakdownJson has one row
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
       const day = await api.fetchDayTraffic("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z");
       expect(day.visitors).toBe(980);
-      expect(errSpy.mock.calls[0]![0]).toMatch(/fell back to visits\/count/);
+      expect(day.pageviews).toBe(1250);
+      const line = errSpy.mock.calls[0]![0] as string;
+      expect(line).toMatch(/fell back to visits\/count/);
+      expect(line).toMatch(/recorded real traffic/); // pins which branch fired, not just "it fell back"
       errSpy.mockRestore();
     });
 
-    it("(b) two rows from the environment aggregate -> falls back to count", async () => {
+    it("two rows from the environment aggregate -> shape mismatch: falls back to count and logs it", async () => {
       const f = routedFetch({ ok: true, json: { data: [
         { environment: "production", visitors: 10, pageviews: 20 },
         { environment: "preview", visitors: 1, pageviews: 1 },
@@ -175,7 +188,7 @@ describe("VercelAnalytics", () => {
       errSpy.mockRestore();
     });
 
-    it("(b) a row missing `visitors` from the environment aggregate -> parseAggregate rejects -> falls back to count", async () => {
+    it("a row missing `visitors` from the environment aggregate -> parseAggregate rejects -> shape problem, falls back to count", async () => {
       const f = routedFetch({ ok: true, json: { data: [{ environment: "production", pageviews: 1250 }] } });
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
@@ -185,8 +198,57 @@ describe("VercelAnalytics", () => {
       errSpy.mockRestore();
     });
 
-    // (c) happy path: the five-call test above already asserts exactly 5
-    // fetch calls for a well-formed response, which is only true when the
+    it("a 400 from the environment aggregate call -> shape problem (Vercel rejected the request outright), falls back to count", async () => {
+      const f = routedFetch({ ok: false, status: 400, json: { error: { message: "bad request" } } });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
+      const day = await api.fetchDayTraffic("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z");
+      expect(day.visitors).toBe(980);
+      expect(day.pageviews).toBe(1250);
+      const line = errSpy.mock.calls[0]![0] as string;
+      expect(line).toMatch(/fell back to visits\/count/);
+      expect(line).not.toContain("tok"); // no secrets
+      errSpy.mockRestore();
+    });
+
+    // Mutation: drop the `e.status !== 400` rethrow guard — this test's
+    // rejection assertion fails because it falls back and resolves instead.
+    it("a 500 from the environment aggregate call -> transient, RETHROWS; the day is not written, no fallback, no log", async () => {
+      const f = routedFetch({ ok: false, status: 500, json: { error: { message: "boom" } } });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
+      await expect(api.fetchDayTraffic("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z")).rejects.toBeInstanceOf(VercelApiError);
+      expect(countCalled(f)).toBe(false); // never reaches the fallback
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    it("a 429 from the environment aggregate call -> transient, RETHROWS the same as a 5xx", async () => {
+      const f = routedFetch({ ok: false, status: 429, json: { error: { message: "rate limited" } } });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
+      await expect(api.fetchDayTraffic("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z")).rejects.toBeInstanceOf(VercelApiError);
+      expect(countCalled(f)).toBe(false);
+      errSpy.mockRestore();
+    });
+
+    it("a network-level failure (fetch itself rejects, no HTTP response at all) -> transient, RETHROWS", async () => {
+      const f = vi.fn<FetchLike>(async (url) => {
+        const u = new URL(url);
+        if (u.pathname.endsWith("visits/count")) return { ok: true, status: 200, json: async () => COUNT_JSON, text: async () => "" };
+        if (u.searchParams.get("by") === "environment") throw new TypeError("fetch failed");
+        return { ok: true, status: 200, json: async () => ({ data: [{ requestPath: "/", visitors: 1, pageviews: 2 }] }), text: async () => "" };
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
+      await expect(api.fetchDayTraffic("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z")).rejects.toThrow(/fetch failed/);
+      expect(countCalled(f as unknown as ReturnType<typeof routedFetch>)).toBe(false);
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    // Happy path: the five-call test above already asserts exactly 5 fetch
+    // calls for a well-formed response, which is only true when the
     // fallback does NOT fire (a fallback adds a 6th, visits/count, call).
   });
 
