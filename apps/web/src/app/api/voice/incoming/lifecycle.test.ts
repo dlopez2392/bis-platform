@@ -471,6 +471,22 @@ describe("runCallLifecycle — Important #4 ①: greeting payload", () => {
     expect(String(greetingCall![0])).toContain("Thanks for calling Rio Roofing Co. How can I help you today?");
     expect(String(greetingCall![0])).not.toContain("trial");
   });
+
+  // D-037: a Spanish-only line with no greeting written used to open in
+  // ENGLISH — the one language this profile said its callers do not speak.
+  // Mutation: the English fallback for every language.
+  it("languages: es with a blank greeting_es → the SPANISH fallback naming the brand", async () => {
+    vi.useFakeTimers();
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, languages: "es", greeting_es: "  " });
+    const { ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
+    const greetingCall = calls.find((c) => String(c[0]).includes("Greet the caller with exactly:"));
+    expect(String(greetingCall![0])).toContain("Gracias por llamar a Rio Roofing Co. ¿En qué le puedo ayudar?");
+    expect(String(greetingCall![0])).not.toContain("Thanks for calling");
+  });
 });
 
 describe("runCallLifecycle — Important #5: connect timeout", () => {

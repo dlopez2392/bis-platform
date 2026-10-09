@@ -1020,10 +1020,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     };
     const businessName = brandDisplayName(branding);
 
+    // A blank greeting falls back in the PROFILE's language (D-037): a
+    // Spanish-only line used to open in English, the one language its
+    // callers were said not to speak. `both` still takes English — the rule
+    // `silenceGoodbye` and `handoffLine` mirror.
     const greetingBase = profile.languages === "es" ? profile.greeting_es : profile.greeting_en;
     const greeting = greetingBase && greetingBase.trim()
       ? greetingBase
-      : `Thanks for calling ${businessName}. How can I help you today?`;
+      : profile.languages === "es"
+        ? `Gracias por llamar a ${businessName}. ¿En qué le puedo ayudar?`
+        : `Thanks for calling ${businessName}. How can I help you today?`;
 
     const promptInput: VoicePromptInput = {
       personaName: profile.persona_name, businessName, greeting,
