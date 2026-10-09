@@ -14,7 +14,7 @@ import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { getMeetingProvider } from "@/lib/meetings/provider";
 import { emailBrand } from "@/lib/email/templates/shell";
 import {
-  bookingConfirmationEmail, bookingRescheduledEmail,
+  bookingConfirmationEmail, bookingConfirmationSubject, bookingRescheduledEmail, bookingRescheduledSubject,
   bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject,
 } from "@/lib/email/templates/booking";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -467,17 +467,19 @@ export async function runTool(
       let emailFailed = false;
       if (email) {
         try {
+          // D-038: in the language the caller spoke, the cancellation's rule.
+          const locale = spokenLocale(state, ctx);
           const brand = emailBrand(ctx.branding);
-          const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone);
+          const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone, locale);
           const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${cancelToken}`;
           const { html, text } = bookingConfirmationEmail({
-            brand, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
+            brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
           });
           await sendEmailOrThrow({
-            accountId: ctx.accountId, kind: "voice.booked", contactId, origin: ctx.origin,
+            accountId: ctx.accountId, kind: "voice.booked", contactId, language: locale, origin: ctx.origin,
             to: email, fromName: brand.name, fromAddress: ctx.fromEmail ?? undefined,
             replyTo: normalizeReplyTo(ctx.branding.replyToEmail),
-            subject: "You're booked in", body: text, html,
+            subject: bookingConfirmationSubject(locale), body: text, html,
           });
         } catch (e) {
           // A sent booking must never be reported as failed: the row exists,
@@ -569,19 +571,20 @@ export async function runTool(
       const emailCustomer = async (): Promise<boolean> => {
         if (!contactEmail) return false;
         try {
+          const locale = spokenLocale(state, ctx);
           const brand = emailBrand(ctx.branding);
-          const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone);
+          const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone, locale);
           // The NEW row's token — the old confirmation's cancel link points at
           // a booking that was just cancelled above.
           const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${newCancelToken}`;
           const { html, text } = bookingRescheduledEmail({
-            brand, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
+            brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
           });
           await sendEmailOrThrow({
-            accountId: ctx.accountId, kind: "voice.moved", contactId: old.contact_id, origin: ctx.origin,
+            accountId: ctx.accountId, kind: "voice.moved", contactId: old.contact_id, language: locale, origin: ctx.origin,
             to: contactEmail, fromName: brand.name, fromAddress: ctx.fromEmail ?? undefined,
             replyTo: normalizeReplyTo(ctx.branding.replyToEmail),
-            subject: "Your booking has been moved", body: text, html,
+            subject: bookingRescheduledSubject(locale), body: text, html,
           });
           return false;
         } catch (e) {

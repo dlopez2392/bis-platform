@@ -391,6 +391,34 @@ describe("book_appointment", () => {
     expect((sendMock.mock.calls[0]![0] as { body?: unknown }).body).toBeTruthy();
   });
 
+  // D-038: the confirmation was English whatever the caller spoke. The
+  // cancellation already followed the caller's language; this is the same
+  // rule (`spokenLocale`). Mutation: drop the locale from the confirmation.
+  it("a Spanish-speaking caller gets the Spanish confirmation, its time written the Spanish way", async () => {
+    const esCtx: ToolContext = {
+      ...ctx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+    };
+    const pre = { ...emptyCallState(), transcript: [
+      { role: "caller" as const, text: "Hola, necesito una cita para mañana por la tarde, por favor.", at: "2027-06-01T12:00:00Z" },
+    ] };
+    const { result } = await runTool(pre, esCtx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    expect(sendMock).toHaveBeenCalledOnce();
+    const sent = sendMock.mock.calls[0]![0] as { subject: string; body: string; html: string };
+    expect(sent.subject).toBe("Tu cita quedó agendada");
+    expect(sent.body).toContain("Tu cita quedó agendada.");
+    // The gate picks the footer's language from this.
+    expect(gated().find((r) => r.kind === "voice.booked")).toMatchObject({ language: "es" });
+    // Asserted different first, so the next lines cannot pass vacuously.
+    const whenEs = formatWhen(new Date("2027-06-01T14:00:00.000Z"), ctx.timezone, "es");
+    const whenEn = formatWhen(new Date("2027-06-01T14:00:00.000Z"), ctx.timezone, "en");
+    expect(whenEs).not.toBe(whenEn);
+    expect(sent.body).toContain(whenEs);
+    expect(sent.html).toContain(whenEs);
+    expect(sent.body).not.toContain(whenEn);
+  });
+
   it("send failure never fails the booking", async () => {
     sendMock.mockRejectedValue(new Error("resend down"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1084,6 +1112,30 @@ describe("reschedule / cancel", () => {
       expect(customer[0]!.html).toContain(whenEs);
       expect(customer[0]!.body).not.toContain(whenEn);
       expect(sentTo(STAFF[0]!)[0]!.subject).toMatch(/^Booking cancelled by phone/);
+    });
+
+    // D-038: the reschedule email had no Spanish version at all.
+    it("a Spanish-speaking caller gets the Spanish reschedule email; the staff alert stays English", async () => {
+      const esCtx: ToolContext = {
+        ...notifyCtx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+      };
+      const pre = { ...emptyCallState(), transcript: [
+        { role: "caller" as const, text: "Hola, necesito cambiar mi cita para mañana, por favor.", at: "2027-06-01T12:00:00Z" },
+      ] };
+      const { result } = await runTool(pre, esCtx, "reschedule_appointment", { bookingId: "b1", startsAt: NEW_ISO });
+      expect(result).toMatchObject({ ok: true, bookingId: "new1" });
+      const customer = sentTo("ana@example.com");
+      expect(customer).toHaveLength(1);
+      expect(customer[0]!.subject).toBe("Tu cita fue reprogramada");
+      expect(customer[0]!.body).toContain("Tu cita fue reprogramada.");
+      expect(customer[0]!.body).toContain("https://x.example/b/pub1/cancel/newtok");
+      expect(gated().find((r) => r.kind === "voice.moved")).toMatchObject({ language: "es" });
+      const whenEs = formatWhen(new Date(NEW_ISO), notifyCtx.timezone, "es");
+      const whenEn = formatWhen(new Date(NEW_ISO), notifyCtx.timezone, "en");
+      expect(whenEs).not.toBe(whenEn);
+      expect(customer[0]!.body).toContain(whenEs);
+      expect(customer[0]!.body).not.toContain(whenEn);
+      expect(sentTo(STAFF[0]!)[0]!.subject).toMatch(/^Booking moved by phone/);
     });
 
     it("reschedule: the staff alert says moved, with the old AND new times, alongside the unchanged customer email", async () => {
