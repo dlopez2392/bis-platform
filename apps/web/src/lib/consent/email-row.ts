@@ -26,6 +26,25 @@ export function emailHowLine(how: EmailHow): string {
     case "unsubscribe_link": return m["contact.email.how.unsubscribeLink"];
     case "staff": return m["contact.email.how.staff"];
     case "backfill_0049": return m["contact.email.how.backfill0049"];
+    case "bounced": return m["contact.email.how.bounced"];
+    case "complained": return m["contact.email.how.complained"];
+  }
+}
+
+/**
+ * D-016 item 4: what the row says in place of a Resume button, when
+ * `canResume` is false. A hard bounce or a complaint is the provider's own
+ * fact about the address, not a link the customer clicked — "They can
+ * resubscribe from the unsubscribe link in any email from you" is simply
+ * untrue once an address is suppressed (no more emails go out carrying that
+ * link), so each gets its own 7am-plain explanation of what actually fixes
+ * it. Every other non-resumable how keeps the generic line.
+ */
+export function noResumeLine(how: EmailHow): string {
+  switch (how.kind) {
+    case "bounced": return m["contact.email.bouncedExplain"];
+    case "complained": return m["contact.email.complainedExplain"];
+    default: return m["contact.email.customerOnly"];
   }
 }
 

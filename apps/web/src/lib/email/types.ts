@@ -24,6 +24,15 @@ export type SendEmailInput = {
    *  X1). Only the email gate sets them: the RFC 8058 List-Unsubscribe and
    *  List-Unsubscribe-Post pair on customer email (consent PR-3). */
   headers?: Record<string, string>;
+  /** Resend tags (D-016 item 1), passed through as-is: the account id and,
+   *  when known, the contact id — only the email gate sets these, so a
+   *  bounce/complaint webhook can attribute an address back to its account
+   *  without falling back to the messages row. Name/value are each ASCII
+   *  letters, numbers, `_` or `-` only (Resend's rule); a uuid satisfies it.
+   *  Echoed back on the webhook event as `data.tags`
+   *  (resend.com/docs/dashboard/emails/tags: "After the email is sent, the
+   *  tag is included in the webhook event"). */
+  tags?: { name: string; value: string }[];
 };
 
 export type SendEmailResult = { providerMessageId: string };

@@ -1,4 +1,4 @@
-import { readConsentState, readAccountTimezone, getMailingAddress, type SupabaseClient } from "@bis/db";
+import { readConsentState, readAccountTimezone, getMailingAddress, readEmailSuppression, serviceDb, EMAIL_SUPPRESSION_METHODS, type SupabaseClient } from "@bis/db";
 import { emailLedgerAddress } from "@bis/db/email-address";
 import { getEmailProvider } from "@/lib/email";
 import { isProductionEnv } from "@/lib/email/environment";
@@ -70,7 +70,8 @@ export type EmailRequest = Omit<SendEmailInput, "headers"> & {
 };
 
 export type EmailBlockReason =
-  | "no_address" | "stopped" | "held" | "window_after_deadline" | "ledger_unavailable" | "unsubscribe_unavailable";
+  | "no_address" | "stopped" | "held" | "suppressed" | "window_after_deadline"
+  | "ledger_unavailable" | "unsubscribe_unavailable";
 
 export type EmailSendResult =
   | { kind: "sent"; providerMessageId: string }
@@ -124,13 +125,43 @@ function unsubscribeLinks(req: EmailRequest, address: string, now: Date, env: No
   return { page: `${origin}/u/${token}`, oneClick: `${origin}/api/unsubscribe/${token}` };
 }
 
+/**
+ * D-016 item 1: the account id and, when it is a uuid, the contact id — on
+ * EVERY gated send, so the Resend webhook can attribute a bounce or a
+ * complaint back to its account from the tags alone, without falling back
+ * to the messages row (older composer sends carry no tags at all). `null`
+ * for operator mail with no account (the agency roll-up): nothing to tag.
+ *
+ * Review item 3: a third tag, `class`, is `operator` for operator mail and
+ * `customer` for everything else — operator mail is the business owner's
+ * OWN address, never a customer's, so the webhook must never suppress a
+ * customer's mail because an owner reported their own weekly report as
+ * spam. This is the ONLY signal the webhook has for that: it cannot derive
+ * "operator" from the kind, because it never sees the kind.
+ *
+ * Verified against Resend's docs: tags are an array of {name, value}, ASCII
+ * letters/numbers/`_`/`-` only — a uuid and these two words both satisfy
+ * that — and are echoed back on the webhook event.
+ */
+function emailTags(req: EmailRequest): { name: string; value: string }[] | undefined {
+  if (!req.accountId) return undefined;
+  const tags = [
+    { name: "account_id", value: req.accountId },
+    { name: "class", value: EMAIL_KINDS[req.kind].class === "operator" ? "operator" : "customer" },
+  ];
+  if (isUuid(req.contactId)) tags.push({ name: "contact_id", value: req.contactId });
+  return tags;
+}
+
 /** The send fields, and nothing of the gate's own. */
 function sendFields(req: EmailRequest): SendEmailInput {
+  const tags = emailTags(req);
   return {
     to: req.to, fromName: req.fromName,
     ...(req.fromAddress !== undefined ? { fromAddress: req.fromAddress } : {}),
     ...(req.replyTo !== undefined ? { replyTo: req.replyTo } : {}),
     subject: req.subject, body: req.body,
+    ...(tags ? { tags } : {}),
   };
 }
 
@@ -180,11 +211,42 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
   if (!address) return { kind: "blocked", reason: "no_address" };
   const now = req.now ?? new Date();
 
+  // D-016 item 3: a hard bounce or a complaint stops EVERY customer kind,
+  // not only the ones an unsubscribe already stops. Operator mail (the
+  // business owner's own address, never the customer's) is exempt, same as
+  // decision 7/choice 23. The kinds `emailReadsLedger` already reads
+  // (informational/marketing) see a suppression for free — it is written as
+  // a `revoked` row on the SAME ledger (consent.ts's EMAIL_SUPPRESSION_METHODS),
+  // so the read below would only repeat that check; it runs ONLY for the
+  // customer_initiated/staff_typed kinds the ledger read skips. A call site
+  // with no client (several voice/forms/booking paths carry none today)
+  // reads through the service client rather than throwing: unlike the
+  // consent ledger, nothing upstream of this send already guarantees a
+  // client exists for these kinds.
+  if (spec.class !== "operator" && !emailReadsLedger(req.kind)) {
+    try {
+      const suppressed = await readEmailSuppression(deps.db ?? serviceDb(), req.accountId!, address);
+      if (suppressed) return { kind: "blocked", reason: "suppressed" };
+    } catch (e) {
+      console.error(`email gate: ${req.kind} for account ${req.accountId} blocked, suppression unreadable: ${loggableError(e)}`);
+      return { kind: "blocked", reason: "ledger_unavailable" };
+    }
+  }
+
   if (emailReadsLedger(req.kind)) {
     if (!deps.db) throw new Error(`email gate: ${req.kind} reads the ledger and needs a client`);
     try {
       const state = await readConsentState(deps.db, req.accountId!, "email", address);
-      if (state.state === "stopped") return { kind: "blocked", reason: "stopped" };
+      if (state.state === "stopped") {
+        // Review item 1 (D-016): a hard bounce or a complaint is written as
+        // a plain `revoked` row on THIS SAME ledger (consent.ts's
+        // EMAIL_SUPPRESSION_METHODS), so an informational/marketing kind
+        // sees it right here, never through the item-3 check above (which
+        // only runs for the kinds this branch skips). Told apart by its
+        // method, not folded into the generic "they asked not to" reason.
+        const suppressed = (EMAIL_SUPPRESSION_METHODS as readonly string[]).includes(state.method);
+        return { kind: "blocked", reason: suppressed ? "suppressed" : "stopped" };
+      }
       if (state.state === "held") return { kind: "blocked", reason: "held" };
     } catch (e) {
       console.error(`email gate: ${req.kind} for account ${req.accountId} blocked, consent state unreadable: ${loggableError(e)}`);

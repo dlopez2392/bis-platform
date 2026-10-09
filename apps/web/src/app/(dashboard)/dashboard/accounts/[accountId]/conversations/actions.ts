@@ -121,7 +121,10 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
       // company that wrote to them never sees it. Unset omits the header,
       // which is what every account does until someone fills the field in.
       replyTo: normalizeReplyTo(account?.reply_to_email),
-    }));
+      // D-016 item 3: the gate now reads the suppression ledger for this
+      // kind too (staff_typed, so decision 7's ledger read still skips it).
+      // The service client is already in scope for 0053's own writes above.
+    }, { db: writer }));
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown send failure";
     await updateMessageStatus(writer, accountId, messageId, "failed", { error: message }, userId);

@@ -208,21 +208,36 @@ export async function updateMessageStatusByProviderId(
   // the SAME write as the status, rather than a second round trip the
   // out-of-order guard below would then have to reason about separately.
   patch: { error?: string } = {},
-): Promise<{ updated: boolean }> {
+  // D-016 item 2: the webhook's suppression write (a hard bounce or a
+  // complaint) needs an account and, when known, a contact to attribute the
+  // address to — the fallback for a send that carried no Resend tags (an
+  // older composer send). `null` when the id matches no outbound row at
+  // all, or the row's conversation has none; both are answered even when
+  // the write itself is a no-op (an out-of-order replay), because the
+  // webhook still has to attribute it.
+): Promise<{ updated: boolean; accountId: string | null; contactId: string | null }> {
   const { data, error } = await db.from("messages")
-    .select("id, account_id, status")
+    .select("id, account_id, status, conversations(contact_id)")
     .eq("provider_message_id", providerMessageId)
     .eq("direction", "outbound")
     .maybeSingle();
   if (error) throw new Error(`updateMessageStatusByProviderId failed: ${error.message}`);
-  if (!data) return { updated: false };
+  if (!data) return { updated: false, accountId: null, contactId: null };
+
+  const accountId = data.account_id as string;
+  // Supabase's generated type for this embed is an array (its typing cannot
+  // prove the to-one cardinality from the FK alone), but PostgREST actually
+  // answers a single object here — pinned by the live test above — so both
+  // shapes are handled rather than trusting either one blindly.
+  const embedded = data.conversations as unknown as { contact_id: string }[] | { contact_id: string } | null;
+  const contactId = (Array.isArray(embedded) ? embedded[0] : embedded)?.contact_id ?? null;
 
   // Out-of-order or replayed event: the row already reflects an equal or
   // later point in the lifecycle. Leave it alone — no write, no event, and
   // (D-016) no patch either, even if this call carried one — rather than
   // regress the status or log a duplicate.
   if (STATUS_RANK[status] <= STATUS_RANK[data.status as MessageStatus]) {
-    return { updated: true };
+    return { updated: true, accountId, contactId };
   }
 
   const row: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
@@ -234,7 +249,7 @@ export async function updateMessageStatusByProviderId(
 
   await emit(db, data.account_id, "message.status_changed", "system",
     { messageId: data.id, status, providerMessageId }, "system");
-  return { updated: true };
+  return { updated: true, accountId, contactId };
 }
 
 /**

@@ -37,6 +37,9 @@ class ResendEmailProvider implements EmailProvider {
       ...(input.html ? { html: input.html } : {}),
       // Same spread discipline: a send without headers carries no key.
       ...(input.headers ? { headers: input.headers } : {}),
+      // Same spread discipline again: a send with no tags (operator mail
+      // with no account) carries no `tags` key at all.
+      ...(input.tags ? { tags: input.tags } : {}),
     });
     if (error) throw new Error(error.message);
     if (!data?.id) throw new Error("resend returned no message id");

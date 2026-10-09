@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { DotPill } from "@/components/dot-pill";
 import { m } from "@/lib/messages";
 import { runGuarded } from "@/lib/ui/guarded-run";
-import { EMAIL_TREATMENT, emailLine, runEmailAction, type EmailLoad } from "@/lib/consent/email-row";
+import { EMAIL_TREATMENT, emailLine, noResumeLine, runEmailAction, type EmailLoad } from "@/lib/consent/email-row";
 import type { EmailView } from "@/lib/consent/email-view";
 import type { EmailActionResult, EmailUndo } from "@/lib/consent/email-staff-actions";
 import { stopEmailsAction, undoStopEmailsAction, resumeEmailsAction } from "./email-actions";
@@ -120,7 +120,7 @@ function ReadyRow({ accountId, contactId, load, showTitle, onChanged }: {
       ) : null}
 
       {view.kind === "stopped" && !view.canResume ? (
-        <p className="text-muted-foreground text-xs">{m["contact.email.customerOnly"]}</p>
+        <p className="text-muted-foreground text-xs">{noResumeLine(view.how)}</p>
       ) : null}
       {view.kind === "stopped" && view.canResume && !resuming ? (
         <Button size="sm" variant="ghost" disabled={pending} onClick={() => { setNote(""); setResuming(true); }}>

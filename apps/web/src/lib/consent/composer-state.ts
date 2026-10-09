@@ -58,10 +58,13 @@ export function composerStateLine(state: SmsRecipientState, zone: string): strin
   }
 }
 
-/** The email composer's read (recipient-state.ts): who stopped their email, if anyone. */
+/** The email composer's read (recipient-state.ts): who stopped their email,
+ *  if anyone. `suppressed` is set only for D-016's two provider facts (a
+ *  hard bounce or a complaint) — neither a customer's nor staff's CHOICE,
+ *  so neither reads `byCustomer`. */
 export type EmailRecipientState =
   | { kind: "ok" }
-  | { kind: "stopped"; since: string; byCustomer: boolean }
+  | { kind: "stopped"; since: string; byCustomer: boolean; suppressed?: "bounced" | "complained" }
   | { kind: "unknown" };
 
 /**
@@ -69,13 +72,17 @@ export type EmailRecipientState =
  * choice 22; plan G15). The composer stays usable: a person writing about
  * the customer's own matter is not automated mail. The spec's line for the
  * customer's own unsubscribe; "You stopped …" for a staff or folded stop,
- * where "They unsubscribed" would be false. A date that will not format drops
- * the date rather than throwing inside a render.
+ * where "They unsubscribed" would be false; D-016's suppressed line for a
+ * hard bounce or a complaint, checked first — the provider's own fact about
+ * the address, which is neither of those two. A date that will not format
+ * drops the date rather than throwing inside a render.
  */
 export function composerEmailNotice(state: EmailRecipientState, zone: string): string | null {
   if (state.kind === "ok") return null;
   if (state.kind === "unknown") return m["compose.emailStateUnknown"];
-  const line = state.byCustomer ? m["compose.emailUnsubscribed"] : m["compose.emailStoppedByYou"];
+  const line = state.suppressed === "bounced" ? m["compose.emailBounced"]
+    : state.suppressed === "complained" ? m["compose.emailComplained"]
+    : state.byCustomer ? m["compose.emailUnsubscribed"] : m["compose.emailStoppedByYou"];
   try {
     return line.replace("{date}", formatDateInZone(state.since, zone));
   } catch {

@@ -18,6 +18,14 @@ const dbMocks = vi.hoisted(() => ({
   fillContactBlanks: vi.fn(), getContact: vi.fn(),
   markHandoffRequested: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), incrementUnreadCount: vi.fn(),
+  // D-016 item 3: the email gate now reads the suppression ledger for
+  // voice.booked/moved/cancelled too (customer_initiated — the consent
+  // ledger read already skips them, but not this one). Allowed by default.
+  // These three call sites carry no `db` of their own (plan: the gate falls
+  // back to serviceDb() for exactly this read), so serviceDb() needs a stub
+  // here too, or the real one throws on this file's unset Supabase env vars.
+  readEmailSuppression: vi.fn(async () => null),
+  serviceDb: vi.fn(() => ({})),
 }));
 const sendMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", async (importOriginal) => {
@@ -82,6 +90,8 @@ const markHandoffRequestedMock = dbMocks.markHandoffRequested;
 
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
+  dbMocks.readEmailSuppression.mockResolvedValue(null);
+  dbMocks.serviceDb.mockReturnValue({});
   computeAllSlotsMock.mockReset();
   // By default the submit-time check answers from the same slot list the
   // tests already set up: a start is bookable when the list carries it. The
