@@ -7,19 +7,17 @@
 // written confirmation and cancel link go. No email = book anyway, say the
 // business will confirm by phone.
 import type { VoicePromptInput } from "./session-config";
-
-/**
- * Whether this conversation may book at all: the profile allows it AND the
- * line is not set to "Always take a message" (D-040). One definition, read by
- * the prompt below and by the session's tool list (`session-config.ts`), so
- * the model is never told "take a message" while holding book_appointment.
- */
-export function offersBooking(input: Pick<VoicePromptInput, "bookingEnabled" | "afterHours">): boolean {
-  return input.bookingEnabled && input.afterHours !== "message_only";
-}
+import { bookingMode } from "./booking-mode";
 
 export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
-  const booking = offersBooking(input);
+  // `bookingMode` (booking-mode.ts) — the same answer the session's tool
+  // list and runTool's guard read. `booking`: new appointments may be made.
+  // `manageable`: an existing one may be found, moved or cancelled ("Always
+  // take a message" keeps this and drops only `booking`, owner decision
+  // 2026-10-09).
+  const mode = bookingMode(input);
+  const booking = mode === "full";
+  const manageable = mode !== "none";
   const currentDateTime = new Intl.DateTimeFormat("en-US", {
     timeZone: input.timezone, weekday: "long", year: "numeric",
     month: "long", day: "numeric", hour: "numeric", minute: "2-digit",
@@ -165,8 +163,8 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     );
   }
 
-  if (booking) {
-    if (input.meetingType === "video") {
+  if (manageable) {
+    if (booking && input.meetingType === "video") {
       lines.push(
         "- Appointments at this business happen over a VIDEO CALL. Tell the caller early that their appointment is a video meeting and that you need an email address to send their meeting link — for video appointments an email is required to book; if they cannot provide one, take a message instead. There is no phone-only option and no way to book without an email — NEVER offer to book with just a phone number, and never invent an alternative confirmation method. If the caller declines to give an email, stop collecting booking details and offer to take a message so a human can arrange it. Never read a web link aloud; say the link arrives by email.",
       );
@@ -188,7 +186,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       : "If they cannot spell it clearly or you get it wrong twice, book with the phone number alone.";
     lines.push(
       "- check_availability(date) — list open times for a date before offering any.",
-      "- book_appointment(startsAt, name, email, phone, notes) — book only a time check_availability returned.",
+      ...(booking ? ["- book_appointment(startsAt, name, email, phone, notes) — book only a time check_availability returned."] : []),
       "- find_my_booking() — call it FIRST when a caller wants to check, change or cancel an appointment. It only looks up the number they are calling from.",
       `- reschedule_appointment(bookingId, startsAt) / cancel_appointment(bookingId) — only for the booking find_my_booking returned on this call, or one you booked on this call. If either refuses, apologize and ${wouldRatherTalkToAPerson}.`,
       // Phone only: "the number they are calling from" is caller ID, which the
@@ -197,6 +195,9 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
         `- NEVER read out, confirm, change or cancel an appointment for any number other than the one they are calling from. If they say it is under another number, explain that you can only look up appointments for the number they are calling from, and ${wouldRatherTalkToAPerson}, or suggest they call back from that phone.`,
       ]),
       "- TIMES — tool results give every time twice: startsAt (an ISO timestamp — pass that exact value to tools) and local/startsAtLocal (the time in the business's own timezone). When telling the caller a time, say the local value. NEVER convert an ISO timestamp yourself — your own timezone arithmetic is not reliable, and a tool result that looks like a different hour than you expected is YOUR conversion being wrong, never a reason to re-book or re-reschedule.",
+    );
+    // The new-booking half. Absent under "Always take a message" (`manage`).
+    if (booking) lines.push(
       "",
       `BOOKING — Appointments are ${input.slotDurationMinutes} minutes. To book you need the caller's NAME and PHONE NUMBER; their email is ${isVideo ? "REQUIRED (video meeting link)" : "optional but worth asking for once, because it is where the written confirmation and the cancellation link go"}.`,
       "- If they are calling from their own phone, confirm you should use the number they are calling from; otherwise take the number and READ IT BACK DIGIT BY DIGIT and wait for them to confirm before you book.",
@@ -220,17 +221,31 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     );
   }
 
-  // "Always take a message" (D-040) means ALWAYS — open or closed. It used to
-  // say "if the business is closed right now", which is what the other
-  // setting ("Follow business hours, then take a message") promises, so the
-  // two options behaved alike and this one booked all day. Booking is off
-  // with it (`offersBooking` above), so nothing here contradicts the tools.
+  // "Always take a message" (D-040). On the PHONE line it means always, open
+  // or closed — it used to say "if the business is closed right now", which is
+  // what the other setting promises, so the two behaved alike and this one
+  // booked all day. It replaces NEW booking only (owner decision 2026-10-09):
+  // an existing appointment can still be found, moved or cancelled when the
+  // profile allows booking at all, and a caller can still be put through when
+  // there is someone to put them through to — each said only when its tool is
+  // on the session, so the line never promises one that is not.
+  //
+  // Phone only (owner decision 2026-10-09): the website chat and the browser
+  // voice demo keep the conditional lines they always had, byte for byte.
+  const onPhone = !input.medium || input.medium === "phone";
   if (input.afterHours === "message_only") {
+    const always = [
+      "MESSAGES ONLY — Whatever the time, open or closed, never book a new appointment on this line. For anything new, take a message: their name, the best number to call them back on and what they need, and say the team will call them back. You may answer a quick question from what you know above first.",
+      ...(manageable ? ["If they already have an appointment, you can still look it up, move it or cancel it."] : []),
+      ...(input.handoffAvailable ? ["If they ask for a person, or it cannot wait, you can still put them through to someone on the team."] : []),
+    ].join(" ");
     lines.push(
       "",
-      onWeb
-        ? "MESSAGES ONLY — Whatever the time, open or closed, use capture_lead to get their name and a way to reach them so the team can follow up. You may answer a quick question from what you know above first."
-        : "MESSAGES ONLY — Whatever the time, open or closed, take a message on every call: their name, the best number to call them back on and what they need, and say the team will call them back. You may answer a quick question from what you know above first.",
+      onPhone
+        ? always
+        : onWeb
+          ? "AFTER HOURS — If the business is closed right now, say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up."
+          : "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.",
     );
   }
 

@@ -198,6 +198,9 @@ export async function POST(req: Request) {
       timezone: acct.timezone, slotDurationMinutes: calendar.slot_duration_minutes,
       afterHours: profile.after_hours, callerNumber: null,
       meetingType: calendar.meeting_type,
+      // The browser demo, not the phone line: it keeps the conditional
+      // after-hours wording (owner decision 2026-10-09, see session-config.ts).
+      medium: "web_voice",
     };
 
     const base = buildRealtimeSessionConfig(promptInput, new Date());

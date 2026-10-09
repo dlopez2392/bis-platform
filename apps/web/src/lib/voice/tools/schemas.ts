@@ -2,6 +2,7 @@
 // Flat GA Realtime tool format: type/name/description/parameters at top
 // level, no function: wrapper. Ported from the reception demo and re-pointed
 // at platform semantics (booking ids, not Cal uids).
+import type { BookingMode } from "../booking-mode";
 const BOOKING_TOOLS = [
   { type: "function", name: "check_availability",
     description: "List open appointment slots for a date. Each slot carries startsAt (an ISO timestamp — pass that exact value to book_appointment or reschedule_appointment) and local (the same moment rendered in the business's own timezone — this is what you SAY to the caller; never convert the ISO value yourself).",
@@ -75,13 +76,25 @@ const VIDEO_BOOK_TOOL = {
 } as const;
 
 export function toolSchemas(
-  bookingEnabled: boolean, meetingType: "in_person" | "phone" | "video",
+  mode: BookingMode, meetingType: "in_person" | "phone" | "video",
   handoffAvailable: boolean,
 ) {
   // Appended to CORE, not to BOOKING: asking for a person has nothing to do
   // with whether this business takes appointments.
   const core = handoffAvailable ? [...CORE_TOOLS, HANDOFF_TOOL] : [...CORE_TOOLS];
-  if (!bookingEnabled) return core;
+  if (mode === "none") return core;
+  // "Always take a message": every booking tool but the one that books a NEW
+  // appointment (`booking-mode.ts`). check_availability stays — a move needs
+  // a time it offered.
+  // Its description must not name the tool this session lacks.
+  if (mode === "manage") {
+    return [
+      ...BOOKING_TOOLS.filter((t) => t.name !== "book_appointment").map((t) => (t.name === "check_availability"
+        ? { ...t, description: t.description.replace("book_appointment or reschedule_appointment", "reschedule_appointment") }
+        : t)),
+      ...core,
+    ];
+  }
   const booking = meetingType === "video"
     ? BOOKING_TOOLS.map((t) => (t.name === "book_appointment" ? VIDEO_BOOK_TOOL : t))
     : [...BOOKING_TOOLS];

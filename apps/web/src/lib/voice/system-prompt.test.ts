@@ -365,14 +365,27 @@ describe("buildSystemPrompt medium", () => {
       );
     });
 
-    it("gives the messages-only notice web wording: capture_lead whatever the time, never a message", () => {
+    // Owner decision B (2026-10-09): the always-take-a-message wording is
+    // PHONE ONLY. The website chat keeps the conditional line it always had.
+    it("keeps the website chat on the OLD conditional after-hours line under Always take a message (mutation: no phone gate → FAILS)", () => {
       const web = buildSystemPrompt(baseInput({
         medium: "web", bookingEnabled: false, afterHours: "message_only",
       }), now);
-      expect(web).toContain("MESSAGES ONLY — Whatever the time, open or closed,");
-      expect(web).toContain("use capture_lead");
+      expect(web).toContain(
+        "AFTER HOURS — If the business is closed right now, say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.",
+      );
+      expect(web).not.toContain("MESSAGES ONLY");
       expect(web).not.toMatch(/take a message/i);
-      expect(web).not.toContain("closed right now");
+    });
+
+    it("keeps the browser voice demo on the OLD conditional phone line under Always take a message (mutation: no phone gate → FAILS)", () => {
+      const demo = buildSystemPrompt(baseInput({
+        medium: "web_voice", bookingEnabled: false, afterHours: "message_only", callerNumber: null,
+      }), now);
+      expect(demo).toContain(
+        "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.",
+      );
+      expect(demo).not.toContain("MESSAGES ONLY");
     });
   });
 });
@@ -380,18 +393,43 @@ describe("buildSystemPrompt medium", () => {
 // D-040: the Voice page's "Always take a message" told Sofía to take a
 // message only "if the business is closed right now" — during open hours she
 // went on booking, which is the other option's behaviour, not this one's.
-describe("buildSystemPrompt — Always take a message (message_only)", () => {
-  it("tells her to take a message on every call, open or closed", () => {
+describe("buildSystemPrompt — Always take a message (message_only), on the phone", () => {
+  it("tells her never to book a new appointment and to take a message for anything new, open or closed", () => {
     const p = buildSystemPrompt(baseInput({ afterHours: "message_only" }), now);
-    expect(p).toContain("MESSAGES ONLY — Whatever the time, open or closed, take a message on every call");
+    expect(p).toContain("MESSAGES ONLY — Whatever the time, open or closed, never book a new appointment on this line. For anything new, take a message");
     expect(p).not.toContain("closed right now");
   });
 
-  it("offers no booking, even when the profile allows booking — the two settings would contradict", () => {
+  it("offers no NEW booking, even when the profile allows booking", () => {
     const p = buildSystemPrompt(baseInput({ afterHours: "message_only", bookingEnabled: true }), now);
     expect(p).not.toContain("book_appointment(");
-    expect(p).not.toContain("check_availability(");
-    expect(p).toContain("This business does not take bookings by phone.");
+    expect(p).not.toContain("BOOKING — Appointments are");
+  });
+
+  // Owner decision A (2026-10-09): it replaces BOOKING only. A caller with an
+  // appointment can still find, move or cancel it.
+  it("keeps an existing appointment manageable: find, move, cancel, and the times to move it to (mutation: drop the manage tools → FAILS)", () => {
+    const p = buildSystemPrompt(baseInput({ afterHours: "message_only", bookingEnabled: true }), now);
+    expect(p).toContain("- find_my_booking() — call it FIRST");
+    expect(p).toContain("- reschedule_appointment(bookingId, startsAt) / cancel_appointment(bookingId)");
+    expect(p).toContain("- check_availability(date)");
+    expect(p).toContain("- TIMES — tool results give every time twice");
+    expect(p).toContain("If they already have an appointment, you can still look it up, move it or cancel it.");
+  });
+
+  it("with booking off on the profile, there is nothing to manage and the line does not pretend there is", () => {
+    const p = buildSystemPrompt(baseInput({ afterHours: "message_only", bookingEnabled: false }), now);
+    expect(p).not.toContain("find_my_booking()");
+    expect(p).not.toContain("already have an appointment");
+  });
+
+  // Owner decision A: an urgent caller can still be put through when the
+  // account has a transfer number.
+  it("carves the transfer out when there is someone to transfer to, and only then (mutation: no carve-out → FAILS)", () => {
+    const withHandoff = buildSystemPrompt(baseInput({ afterHours: "message_only", handoffAvailable: true }), now);
+    expect(withHandoff).toContain("If they ask for a person, or it cannot wait, you can still put them through to someone on the team.");
+    const without = buildSystemPrompt(baseInput({ afterHours: "message_only", handoffAvailable: false }), now);
+    expect(without).not.toContain("put them through");
   });
 
   it("leaves Follow-business-hours exactly as it was: booking on, no messages-only line", () => {

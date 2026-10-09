@@ -360,6 +360,15 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
     expect(system).toContain("capture_lead is the ONLY tool you have here");
   });
 
+  // Owner decision B (2026-10-09): "Always take a message" changed the PHONE
+  // line only. PROFILE is message_only; the chat keeps its conditional line.
+  it("keeps the old conditional after-hours line on a message_only profile, never the phone's MESSAGES ONLY", async () => {
+    await firstTurn();
+    const system = sentToModel().messages[0]!.content;
+    expect(system).toContain("AFTER HOURS — If the business is closed right now, say so briefly, and use capture_lead");
+    expect(system).not.toContain("MESSAGES ONLY");
+  });
+
   it("answers with words when the model returns only a tool call", async () => {
     fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
     const res = await laterTurn();
