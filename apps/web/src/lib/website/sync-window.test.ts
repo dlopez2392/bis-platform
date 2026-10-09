@@ -49,4 +49,20 @@ describe("localDayBounds", () => {
     });
     expect(localDayBounds("2026-09-06", "America/Los_Angeles").sinceIso).toBe("2026-09-06T07:00:00.000Z");
   });
+
+  // D-053: `localDayBounds` resolves each day's own local midnight
+  // independently (via `zonedTimeToUtc`), so a DST transition shows up
+  // automatically as a 23h or 25h gap between sinceIso and untilIso —
+  // never a flat 24h. Mutation-probed below rather than red-first, since
+  // this is existing behavior the window-math change must not have
+  // broken, not new behavior this task adds.
+  it("spans 23 hours on the US spring-forward day (2026-03-08, America/Chicago)", () => {
+    const { sinceIso, untilIso } = localDayBounds("2026-03-08", "America/Chicago");
+    expect(new Date(untilIso).getTime() - new Date(sinceIso).getTime()).toBe(23 * 60 * 60 * 1000);
+  });
+
+  it("spans 25 hours on the US fall-back day (2026-11-01, America/Chicago)", () => {
+    const { sinceIso, untilIso } = localDayBounds("2026-11-01", "America/Chicago");
+    expect(new Date(untilIso).getTime() - new Date(sinceIso).getTime()).toBe(25 * 60 * 60 * 1000);
+  });
 });
