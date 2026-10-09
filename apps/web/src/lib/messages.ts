@@ -1830,6 +1830,16 @@ export const m = {
   // "Sorry we missed your call" days later.
   "automations.reason.tooLongAfterCall": "Not sent: too long after the call",
   "automations.reason.tooLongAfterWriteIn": "Not sent: too long after they wrote in",
+  // D-061: accounts.outbound_suppressed (0032) — a demo account, or any
+  // account the agency has otherwise marked not real. Not "pre-go-live":
+  // go-live's own migration (0063) never reads or writes this column, so
+  // an account can go live while still suppressed or stay suppressed well
+  // after. Every scheduled pass skips this silently through
+  // loadSendableRows; this string only ever surfaces if a RELEASED instant
+  // reply finds the flag set, since the inline send itself stays silent
+  // (same posture as "disabled" — logging it would be noise on a seeded
+  // demo account, not a signal).
+  "automations.reason.accountSuppressed": "This account isn't sending yet",
   "automations.activityLink": "See what went out",
   // The page's four group headings, in the order the customer lives it; the
   // last group is the one rule that holds every automation back.
@@ -1856,6 +1866,12 @@ export const m = {
   "activity.usage.calls": "Calls handled",
   "activity.usage.capRecipe": "Most automations: up to {cap} a day",
   "activity.usage.capDay": "Up to {cap} a day",
+  // D-066: "Emails sent" used to mix in the agency's own weekly report (not
+  // a customer send, and not capped by the recipe limit above) and never
+  // said when a send failed outright. Zero is a number here too — this
+  // always renders, the same convention "0 waiting"/"0 skipped" already
+  // follow below.
+  "activity.usage.emailsFailed": "{n} failed to send",
   "activity.usage.held": "{n} waiting",
   "activity.usage.skipped": "{n} skipped",
   "activity.usage.topReason": "most often: {reason}",
@@ -2365,12 +2381,16 @@ export const m = {
     "This company has no timezone of its own, so times use the agency's.",
   "zone.guessed.fallback":
     "Neither this company nor the agency has a usable timezone, so times use UTC.",
-  // The fix, for the reader who can actually apply it. Settings is
-  // agency-only (`requireAgencyOnlyAccountAccess`), so this link is rendered
-  // for the agency and ONLY for the agency — a client following it would be
-  // redirected straight back to their dashboard, which is a worse answer
-  // than no link at all.
-  "zone.guessed.fix": "Set it in Settings",
+  // D-076: this used to be a Link to Settings ("Set it in Settings"),
+  // agency-only (`requireAgencyOnlyAccountAccess`) so a client following it
+  // would have been redirected straight back to their own dashboard — but
+  // Settings has no timezone field at all, and never has: the only zone
+  // input anywhere in the product is the "Add company" dialog, and only at
+  // creation. A dead link to a page with nothing to fix is worse than no
+  // link, the same reasoning that already kept the CLIENT reader off one —
+  // this string just hadn't caught up to its own sibling's rule. Plain
+  // text now, naming the real constraint instead of a destination.
+  "zone.guessed.fix": "There's no Settings field for this yet — a company's timezone is set only when its account is created.",
   // The same fact, for a client, who can see the consequence but cannot
   // reach the setting. Says who to ask rather than offering a dead link, and
   // says "your" rather than "this company" — on their own dashboard, they

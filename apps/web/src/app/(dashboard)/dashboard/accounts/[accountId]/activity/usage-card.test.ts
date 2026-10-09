@@ -20,7 +20,7 @@ function tileText(html: string, key: string): string {
   return renderedText(html.slice(start, end));
 }
 
-const usage = { textsSent: 12, emailsSent: 3, conversations: 7, callsHandled: 41, held: 2, skipped: 8, topHeldReason: "Held until 8:00 AM — quiet hours", topSkippedReason: "Screened as a robocall" };
+const usage = { textsSent: 12, emailsSent: 3, emailsFailed: 1, conversations: 7, callsHandled: 41, held: 2, skipped: 8, topHeldReason: "Held until 8:00 AM — quiet hours", topSkippedReason: "Screened as a robocall" };
 
 describe("UsageCard", () => {
   it("four numbers, the month label, and the cap beside each (rule 1: never a count alone)", () => {
@@ -42,6 +42,17 @@ describe("UsageCard", () => {
     expect(text).toContain("0 waiting");
     expect(text).toContain("0 skipped");
     expect(text).not.toContain("most often");
+  });
+  // D-066: the emails tile counts only customer emails (never the agency's
+  // own weekly report) and names its OWN failed count — "0 failed to send"
+  // is a real month, not a blank one, so it renders even at zero.
+  it("the emails tile names its OWN failed count, distinct from held/skipped (mutation: drop the failed line → FAILS)", () => {
+    const html = renderHtml({ state: { ok: true, usage }, monthLabel: "September 2026", callCap: 50 });
+    expect(tileText(html, "emails")).toContain("1 failed to send");
+  });
+  it("zero failed is still shown, not blank", () => {
+    const html = renderHtml({ state: { ok: true, usage: { ...usage, emailsFailed: 0 } }, monthLabel: "September 2026", callCap: 50 });
+    expect(tileText(html, "emails")).toContain("0 failed to send");
   });
   it("the error state names the fix and still shows the month", () => {
     const text = render({ state: { ok: false }, monthLabel: "September 2026", callCap: 50 });

@@ -6,16 +6,16 @@ import { weeklyMetrics } from "@/lib/reports/weekly-metrics";
 import { inMondayBand, lastWeekMonday, weekWindow } from "@/lib/reports/weekly-window";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
-import { AUTOMATION_TICK_CAP } from "../caps";
+import { WEEKLY_REPORT_TICK_CAP, WEEKLY_REPORT_BUDGET_MS } from "../caps";
 import type { Pass } from "../context";
 
 /**
  * The client's Monday-morning email: how last week went, in the account's own
  * zone. Per account, in this order, each refusal counted under its own name:
  *   unresolvable zone → outside the Monday 08:00-11:00 local band → already
- *   stamped for the week that just ended → tick cap → compute both weeks'
- *   numbers → send, ONE message PER RECIPIENT → stamp once at least one
- *   recipient received it.
+ *   stamped for the week that just ended → tick cap → tick budget →
+ *   compute both weeks' numbers → send, ONE message PER RECIPIENT → stamp
+ *   once at least one recipient received it.
  *
  * `listAccountsDueWeeklyReport` already filters server-side to accounts with
  * at least one `report_emails` entry, so an unconfigured account is never a
@@ -32,10 +32,20 @@ export const weeklyClientReportPass: Pass = {
   async run(ctx) {
     const c = {
       sent: 0, failed: 0, skippedNotMonday: 0, skippedAlreadySent: 0,
-      skippedCap: 0, unresolvableTimezone: 0, unstamped: 0,
+      skippedCap: 0, skippedBudget: 0, unresolvableTimezone: 0, unstamped: 0,
     };
+    // D-067: the real cursor across the Monday band's twelve ticks is
+    // `row.lastSentWeek`, checked below BEFORE either limit — an account
+    // already stamped for this week is skipped for free, so the cap/budget
+    // attempts this tick spends always land on accounts the LAST tick had
+    // not reached yet, never a repeat of the same slice. What
+    // `listAccountsDueWeeklyReport`'s `created_at` ordering adds on top is
+    // narrower: it makes WHICH not-yet-stamped accounts get this tick's
+    // limited attempts deterministic, rather than left to an unstable scan
+    // order that could favour a different subset by accident tick to tick.
     const due = await listAccountsDueWeeklyReport(ctx.db);
     let attemptsThisTick = 0;
+    const startedAt = Date.now();
 
     for (const row of due) {
       const zone = resolveAccountZone(row.accountTimezone);
@@ -61,11 +71,22 @@ export const weeklyClientReportPass: Pass = {
         continue;
       }
 
-      // CAP (caps.ts): one attempt per ACCOUNT, guarding the same burst this
-      // guards for every other recipe pass — counted before the compute/send
-      // below, win or lose, same as no-show-nudge and site-traffic.
-      if (attemptsThisTick >= AUTOMATION_TICK_CAP) {
+      // CAP (caps.ts, D-067): this pass's OWN limit, not the shared recipe
+      // burst guard — one attempt per ACCOUNT, counted before the
+      // compute/send below, win or lose.
+      if (attemptsThisTick >= WEEKLY_REPORT_TICK_CAP) {
         c.skippedCap++;
+        continue;
+      }
+      // BUDGET (D-067): checked after the (free) cap compare, so a tick
+      // already at its cap never pays for a clock read. Measured BEFORE
+      // this account's compute-and-send starts, not mid-send — there is no
+      // measured worst case for an email provider round trip the way the
+      // usage report has one for Stripe's SDK, so this account may run
+      // somewhat past the budget rather than guess at a margin with no
+      // evidence behind it. Left for the next tick, same as a capped one.
+      if (Date.now() - startedAt >= WEEKLY_REPORT_BUDGET_MS) {
+        c.skippedBudget++;
         continue;
       }
       attemptsThisTick++;

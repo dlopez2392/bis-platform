@@ -14,6 +14,7 @@ import { lastWeekMonday } from "@/lib/reports/weekly-window";
 import type { WeeklyNumbers } from "@/lib/reports/weekly-metrics";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
+import { WEEKLY_REPORT_TICK_CAP, WEEKLY_REPORT_BUDGET_MS } from "../caps";
 import { weeklyClientReportPass } from "./weekly-report";
 
 const ZONE = "America/New_York";
@@ -56,7 +57,7 @@ function ctx(now: Date = TICK): PassContext {
 
 const EMPTY = {
   sent: 0, failed: 0, skippedNotMonday: 0, skippedAlreadySent: 0,
-  skippedCap: 0, unresolvableTimezone: 0, unstamped: 0,
+  skippedCap: 0, skippedBudget: 0, unresolvableTimezone: 0, unstamped: 0,
 };
 
 beforeEach(() => {
@@ -181,6 +182,41 @@ describe("weeklyClientReportPass", () => {
     const sent = emailSend.mock.calls[0]![0] as { body: string };
     expect(sent.body).toContain("Max is still answering");
     expect(sent.body).not.toContain("Sofía");
+  });
+
+  // D-067: the old shared recipe cap (AUTOMATION_TICK_CAP, 10) × the Monday
+  // band's twelve ticks reached at most 120 accounts sharing one time zone
+  // before that week's report for the rest was gone for good. This pass
+  // now carries its OWN, much larger cap — still a cap, so a bug in the
+  // due-list is still bounded to one tick's damage, just not a ceiling a
+  // real agency's client base can grow into.
+  it(`caps attempts at WEEKLY_REPORT_TICK_CAP (${WEEKLY_REPORT_TICK_CAP}) a tick, leaving the rest for the next one (mutation: raise or drop the cap check → FAILS)`, async () => {
+    const rows = Array.from({ length: WEEKLY_REPORT_TICK_CAP + 1 }, (_, i) => row({ accountId: `acct_${i}` }));
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue(rows);
+    expect(await weeklyClientReportPass.run(ctx())).toEqual({ ...EMPTY, sent: WEEKLY_REPORT_TICK_CAP, skippedCap: 1 });
+    expect(emailSend).toHaveBeenCalledTimes(WEEKLY_REPORT_TICK_CAP);
+  });
+
+  // The second bound: a WALL-CLOCK budget, so a tick that is somehow slow
+  // (not count-bound) still leaves the registry's later passes — the
+  // agency roll-up, the usage report, ops-watch — their share of the
+  // route's 300 s maxDuration.
+  it("stops starting new accounts once its own budget is spent, leaving the rest for the next tick (mutation: drop the budget check → both sent, FAILS)", async () => {
+    dbMocks.listAccountsDueWeeklyReport.mockResolvedValue([row({ accountId: "a1" }), row({ accountId: "a2" })]);
+    // Date.now() calls the pass makes: `startedAt`, then one check before
+    // each eligible account. a1's check reads no time passed; a2's reads
+    // exactly the budget, so a2 waits for the next tick.
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(WEEKLY_REPORT_BUDGET_MS);
+    expect(await weeklyClientReportPass.run(ctx())).toEqual({ ...EMPTY, sent: 1, skippedBudget: 1 });
+    expect(emailSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins the cap and the budget (mutation: change either → FAILS)", () => {
+    expect(WEEKLY_REPORT_TICK_CAP).toBe(150);
+    expect(WEEKLY_REPORT_BUDGET_MS).toBe(60_000);
   });
 
   it("no voice profile at all still sends a quiet week, with no receptionist claim (reassurance.receptionist must be false, not a falsy persona_name read)", async () => {

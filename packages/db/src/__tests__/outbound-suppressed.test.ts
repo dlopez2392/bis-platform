@@ -181,10 +181,15 @@ describe("outbound suppression", () => {
     // being `loadSendableRows`, or by having filtered server-side first.
     //
     // #44 asserted "exactly one caller" while scanning only booking.ts and
-    // automations.ts. weekly-report.ts was a third caller the whole time and
-    // the test could not see it, so the claim was narrower than it read. The
-    // set is now spelled out per file across every scanned file, which is a
-    // statement that can actually go stale loudly.
+    // automations.ts. weekly-report.ts was a third caller for a while — D-067
+    // (review round 2) removed that call: `listAccountsDueWeeklyReport` now
+    // selects ACCOUNT_BRAND_COLS in its OWN statement (the same shape
+    // `listAccountsForWeeklyRollup`, its neighbour in that file, already
+    // used, and for the identical reason recorded there — a real race where
+    // an account deleted mid-tick made `loadAccountBrandInfo`'s per-id
+    // `.single()` throw and kill the whole read), so the set this file
+    // expects is narrower again. Spelled out per file across every scanned
+    // file, which is a statement that can actually go stale loudly.
     // `code`, not `source`: THE MIRROR OF THE DEFECT ABOVE. The open paren
     // already made this count calls rather than mentions, but a comment
     // carrying `loadAccountBrandInfo(` counts as a caller all the same — so
@@ -193,15 +198,9 @@ describe("outbound suppression", () => {
     // gone before the count.
     const callers = FILES.flatMap((file) =>
       [...code(file).matchAll(/loadAccountBrandInfo\s*\(/g)].map(() => file));
-    expect(callers).toEqual([
-      // The declaration, and the one call inside loadSendableRows.
-      "booking.ts", "booking.ts",
-      // The single call in listAccountsDueWeeklyReport — which has already
-      // dropped suppressed accounts in its own `.eq` by the time it runs.
-      // (The named import above it does not match: this pattern requires the
-      // open paren, so it counts CALLS and not mentions.)
-      "weekly-report.ts",
-    ]);
+    // The declaration, and the one call inside loadSendableRows — both in
+    // booking.ts. Nothing in weekly-report.ts calls it any more.
+    expect(callers).toEqual(["booking.ts", "booking.ts"]);
   });
 
   it("selects the column the filter reads", () => {

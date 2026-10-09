@@ -87,7 +87,7 @@ export default async function ChecklistPage({
             this route is `requireAgencyOnlyAccountAccess`, so a client never
             reaches it and the Settings link is always the right fix. */}
         {recordedAt ? (
-          <ZoneNote zone={zone} isAgency accountId={accountId} />
+          <ZoneNote zone={zone} isAgency />
         ) : null}
         <A2pPanel
           registration={a2p}

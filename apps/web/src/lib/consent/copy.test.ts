@@ -40,15 +40,15 @@ describe("the spec's own words (§6)", () => {
 
   it("no PR-1 line exposes a code, a kind or template syntax other than its own placeholder (DESIGN.md voice)", () => {
     const keys = Object.keys(m).filter((k) => /^(contact\.phoneCountry|contact\.messages|compose\.sms(Stopped|StoppedUndated|Held|CheckNumber|StateUnknown)|settings\.alertPhone(Country|Stopped)|automations\.quiet\.fixed|activity\.source\.textback|voice\.textback\.defaultBodyHeld|automations\.reason\.)/.test(k));
-    // 36, read off messages.ts: 11 contact.phoneCountry (the 11th,
+    // 37, read off messages.ts: 11 contact.phoneCountry (the 11th,
     // `inlineChanged`, is the inline phone edit's own Undo — never sent by
     // a pick, only by an inline text edit), 3 contact.messages (PR-3 adds
     // `contact.messages.email`, the Email row's tab label), 5 compose,
     // 5 settings.alertPhone (Country, CountryUs, CountryMx, CountryMismatch,
     // Stopped), the hours sentence, the textback title, the 2 held
-    // text-back bodies, and 8 automations.reason lines (PR-3 adds
-    // `emailLedgerRetry` and `emailSetupRetry`).
-    expect(keys.length).toBe(36);
+    // text-back bodies, and 9 automations.reason lines (PR-3 adds
+    // `emailLedgerRetry` and `emailSetupRetry`; D-061 adds `accountSuppressed`).
+    expect(keys.length).toBe(37);
     for (const k of keys) {
       const text = m[k as keyof typeof m];
       expect(text).not.toMatch(/\{\{|40300|unconfirmed_number|ledger|automation\./);

@@ -186,10 +186,22 @@ export async function listAutomationLog(
 }
 
 export type AutomationUsage = {
-  textsSent: number; emailsSent: number; conversations: number; callsHandled: number;
+  textsSent: number; emailsSent: number;
+  /** D-066: a failed SEND is not nothing — counted separately from `emailsSent`
+   *  so the Activity page can show it rather than let it vanish into a count
+   *  that only ever goes up on success. */
+  emailsFailed: number;
+  conversations: number; callsHandled: number;
   held: number; skipped: number;
   topHeldReason: string | null; topSkippedReason: string | null;
 };
+
+/** D-066: `weekly_report` is the agency's own Monday email, not a send to a
+ *  customer — it carries no recipe daily cap and reads as noise next to the
+ *  customer sends this card otherwise lists. Excluded from BOTH emailsSent
+ *  and emailsFailed, the same way it would never have been counted as a
+ *  "text" or a "call" either. */
+const NOT_A_CUSTOMER_EMAIL = "weekly_report";
 
 /** The most frequent non-empty string, ties broken alphabetically so the
  *  answer is stable between two renders of the same data. */
@@ -204,7 +216,7 @@ function topReason(reasons: string[]): string | null {
 }
 
 /**
- * "This month" in units. Six exact counts over the (account, occurred_at)
+ * "This month" in units. Seven exact counts over the (account, occurred_at)
  * index — `head: true`, so no row travels — plus one bounded read of the
  * held/skipped reasons for the "most common" line. `[fromIso, toIso)`.
  */
@@ -218,9 +230,10 @@ export async function countAutomationUsage(
     if (error) throw new Error(`countAutomationUsage failed: ${error.message}`);
     return n ?? 0;
   };
-  const [textsSent, emailsSent, conversations, callsHandled, held, skipped] = await Promise.all([
+  const [textsSent, emailsSent, emailsFailed, conversations, callsHandled, held, skipped] = await Promise.all([
     count((q) => q.eq("status", "sent").eq("channel", "sms")),
-    count((q) => q.eq("status", "sent").eq("channel", "email")),
+    count((q) => q.eq("status", "sent").eq("channel", "email").neq("source", NOT_A_CUSTOMER_EMAIL)),
+    count((q) => q.eq("status", "failed").eq("channel", "email").neq("source", NOT_A_CUSTOMER_EMAIL)),
     count((q) => q.eq("status", "sent").eq("source", "concierge")),
     count((q) => q.eq("status", "sent").eq("source", "voice")),
     count((q) => q.eq("status", "held")),
@@ -232,7 +245,7 @@ export async function countAutomationUsage(
   if (error) throw new Error(`countAutomationUsage reasons failed: ${error.message}`);
   const rows = (data ?? []) as { status: "held" | "skipped"; reason: string }[];
   return {
-    textsSent, emailsSent, conversations, callsHandled, held, skipped,
+    textsSent, emailsSent, emailsFailed, conversations, callsHandled, held, skipped,
     topHeldReason: topReason(rows.filter((r) => r.status === "held").map((r) => r.reason)),
     topSkippedReason: topReason(rows.filter((r) => r.status === "skipped").map((r) => r.reason)),
   };

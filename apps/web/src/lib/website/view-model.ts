@@ -58,11 +58,40 @@ export function pageTitle(path: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/**
+ * D-053, reopened with production evidence: a day's breakdown rows have
+ * been observed summing to MORE than that same day's own stored total.
+ * The real cause is documented in the runbook (website-setup.md,
+ * "First-night findings"): `visits/count` floors `since`/`until` DOWN to
+ * UTC midnight while `visits/aggregate` treats `until` as inclusive of its
+ * bucket (+1h), so within one stored day the total covers the UTC day and
+ * the breakdown covers local midnight through local midnight plus one
+ * hour — two different WINDOWS under one "day" label. That window
+ * mismatch is the runbook's own "Decision owed" (store UTC days honestly,
+ * or sum hourly buckets) and is not fixed here — this function has no
+ * window to change. `total` alone as the denominator can therefore let a
+ * single row's share read past 100%, which is not a number this screen
+ * may ever show regardless of which fix the decision lands on.
+ *
+ * `Math.max(total, dimensionTotal)`, not `dimensionTotal` alone: in the
+ * ordinary case a dimension sums to LESS than the window total (a dropped
+ * "Others" fold, fewer distinct values than visitors), and using the
+ * smaller number there would inflate every row as though the whole
+ * window's traffic ran through this one dimension — `total` is the right
+ * denominator for "share of all visitors" exactly when it is the bigger
+ * of the two. Only when the dimension's own rows sum to MORE does the
+ * floor switch, which keeps every row at or under 100% without capping
+ * rows individually — a per-row cap would not even preserve their
+ * ranking against each other, since two rows both clamped to 100% would
+ * read as tied.
+ */
 function rank(rows: TrafficBreakdownRow[], name: (value: string) => string, total: number): Ranked[] {
   const sum = new Map<string, number>();
   for (const r of rows) sum.set(name(r.value), (sum.get(name(r.value)) ?? 0) + r.visitors);
+  const dimensionTotal = [...sum.values()].reduce((a, b) => a + b, 0);
+  const denominator = Math.max(total, dimensionTotal);
   return [...sum.entries()]
-    .map(([n, visitors]) => ({ name: n, visitors, share: total > 0 ? visitors / total : 0 }))
+    .map(([n, visitors]) => ({ name: n, visitors, share: denominator > 0 ? visitors / denominator : 0 }))
     .sort((a, b) => b.visitors - a.visitors);
 }
 

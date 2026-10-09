@@ -115,9 +115,15 @@ export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/,
  *     Past that, Stripe's v2 meter event stream is the next step.
  *   USAGE_REPORT_BUDGET_MS the pass's wall clock for sending. It stops
  *     STARTING sends at this minus METER_EVENT_WORST_CASE_MS below, so the
- *     last send still ends inside it even in that worst case. The release
- *     pass's own shape (RELEASE_BUDGET_MS): the two 60 s budgets leave the
- *     route's 300 s maxDuration room for every other pass.
+ *     last send still ends inside it even in that worst case. THREE passes
+ *     now carry a 60 s budget in this shape — release-held.ts's own
+ *     RELEASE_BUDGET_MS (first in the registry), this one, and D-067's
+ *     WEEKLY_REPORT_BUDGET_MS below (twelfth) — summing to 180 s against
+ *     the route's 300 s `maxDuration`, leaving 120 s for the other twelve
+ *     registered passes (cron-coupling.test.ts pins the sum against the
+ *     ceiling, so a fourth budgeted pass added without raising `maxDuration`
+ *     reds there rather than only showing up as a timed-out tick in
+ *     production).
  *   METER_EVENT_WORST_CASE_MS one send's worst case past its start, for the
  *     installed stripe SDK (22.6.2; see stripe-gateway.ts's
  *     METER_EVENT_TIMEOUT_MS/reportMeterEvent comments): its per-request
@@ -130,3 +136,60 @@ export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/,
 export const USAGE_REPORT_TICK_CAP = 200;
 export const USAGE_REPORT_BUDGET_MS = 60_000;
 export const METER_EVENT_WORST_CASE_MS = 21_000;
+
+/**
+ * THE WEEKLY CLIENT REPORT's own limits (D-067). Borrowing the recipe caps'
+ * `AUTOMATION_TICK_CAP` (10) here was the bug: that number is a BURST guard
+ * against a bug or a bulk status change on a pass that is one-to-one with
+ * something a CUSTOMER did, sized so a fully-booked morning does not
+ * overwhelm one tick. This pass is nothing like that — it is a scheduled,
+ * time-based fan-out, one email per ACCOUNT (not per customer), triggered
+ * by the clock in every zone that happens to be inside its own Monday
+ * 08:00-11:00 band right now. At 10/tick and the band's twelve ticks
+ * (15-minute cadence, three hours wide — cron-coupling.test.ts pins both),
+ * the old cap could reach at most 120 accounts sharing one zone before the
+ * band closes and that week's report for the rest is gone for good (a
+ * missed band is a missed week; spec, "Recorded consequence" — unlike the
+ * usage report's backlog, nothing here is retried after the band shuts).
+ *
+ * `WEEKLY_REPORT_TICK_CAP` (15x the old per-tick number: 1,800 accounts per
+ * ZONE per band, since the cap is counted fresh each tick against whichever
+ * zones are in band right now) is still a cap, not a dial turned off: a bug
+ * in the due-list query is still bounded to one tick's worth of damage.
+ * Review round 2 found that 1,800 figure could not actually have been
+ * REACHED either way: `listAccountsDueWeeklyReport` (weekly-report.ts) read
+ * every due account ACROSS EVERY ZONE in one unpaged call, so PostgREST's
+ * `max_rows` cap (supabase/config.toml) silently dropped every account past
+ * the 1,000th GLOBALLY — a bound well under this cap's own math, and one
+ * that bit the whole platform's book of business at once rather than one
+ * zone's Monday morning. That read is paged now (same stop-on-empty shape as
+ * `listTrafficBreakdown`, sites.ts), so the 1,800-per-zone figure above is
+ * the real ceiling this cap imposes, not a number the read itself cuts off
+ * first. `WEEKLY_REPORT_BUDGET_MS`
+ * is the same order of magnitude as the usage report's own 60 s, claimed
+ * near the END of the same registered order (weekly-report.ts §registry
+ * comment: client report, then the agency roll-up, then usage, then
+ * ops-watch) — this pass stopping on its own clock, rather than its count,
+ * leaves room for those three to still run inside the route's 300 s
+ * `maxDuration` even on the tick a cap-sized backlog shows up. The check is
+ * made BEFORE starting a fresh account's compute-and-send, not mid-send
+ * (there is no measured "worst case overrun" for an email provider round
+ * trip the way METER_EVENT_WORST_CASE_MS has one for the installed Stripe
+ * SDK, so manufacturing one would be a number with no evidence behind it);
+ * the accounts a budget turns away wait for the next tick, same as a
+ * cap-turned-away account always has.
+ *
+ * What actually makes that wait land on progress rather than the same
+ * account forever is `accounts.weekly_report_week`, read for free in the
+ * pass's own loop (before either limit here is even consulted): an account
+ * already stamped for this week is skipped WITHOUT spending a cap slot, so
+ * the limited attempts this tick DOES spend fall on accounts the LAST tick
+ * had not reached yet — that is the real cursor. `listAccountsDueWeeklyReport`'s
+ * `created_at` ordering (D-067's other half) does something narrower: it
+ * makes WHICH not-yet-stamped accounts get this tick's limited attempts
+ * deterministic, so two different ticks reading the same due-list in an
+ * unstable order could not arbitrarily favour different accounts by
+ * accident — it is not what makes the walk advance at all.
+ */
+export const WEEKLY_REPORT_TICK_CAP = 150;
+export const WEEKLY_REPORT_BUDGET_MS = 60_000;
