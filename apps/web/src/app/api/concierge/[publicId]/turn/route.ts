@@ -65,6 +65,20 @@ export const maxDuration = 30;
  *  facts block is not a reasoning workload. */
 const MODEL = "gpt-4o-mini";
 const MODEL_TIMEOUT_MS = 20_000;
+/** D-047's second call, the one that hears the capture's result. Shorter
+ *  than the first: it writes one sentence from a known outcome. */
+const FOLLOWUP_TIMEOUT_MS = 8_000;
+/** Below this, the follow-up is skipped rather than started: a call that is
+ *  certain to time out only delays the fixed fallback line. */
+const FOLLOWUP_MIN_MS = 2_000;
+/** Everything this handler does must finish inside `maxDuration` (30s);
+ *  three seconds are left for the reads and writes after the model. */
+const TURN_BUDGET_MS = 27_000;
+
+type ModelMessage = {
+  content?: string | null;
+  tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[];
+};
 
 type Db = ReturnType<typeof serviceDbType>;
 
@@ -94,6 +108,7 @@ function quiet(conversationId: string, reply: string, ended = false, closing = "
 export async function POST(
   req: Request, { params }: { params: Promise<{ publicId: string }> },
 ): Promise<Response> {
+  const startedAt = Date.now();
   const { publicId } = await params;
 
   let body: Record<string, unknown>;
@@ -391,14 +406,16 @@ export async function POST(
       { role: "user", content: text },
     ];
 
-    let reply = "";
-    let toolArgs: string | null = null;
-    try {
+    // One chat-completions call. Throws on a transport failure, a non-2xx,
+    // or the timeout; the two callers below decide what a throw costs.
+    async function complete(
+      msgs: unknown[], timeoutMs: number, extra: Record<string, unknown> = {},
+    ): Promise<ModelMessage | undefined> {
       const r = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: MODEL, messages, tools: [CAPTURE_LEAD_TOOL],
+          model: MODEL, messages: msgs, tools: [CAPTURE_LEAD_TOOL],
           // I2 (whole-branch review): with no bound here, gpt-4o-mini can
           // emit up to 16,384 output tokens, and every reply is replayed
           // into every LATER turn's transcript — unbounded, a single
@@ -407,26 +424,30 @@ export async function POST(
           // arithmetic; `proposals/generate.ts` already answered this same
           // question for its own OpenAI call.
           max_tokens: CONCIERGE_MAX_REPLY_TOKENS,
+          ...extra,
         }),
         // A hung connection never rejects and never resolves; without this the
         // invocation stalls until Vercel kills it and the visitor sees
         // nothing. Same defence `summary-service.ts` already runs in
         // production.
-        signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!r.ok) throw new Error(`openai ${r.status}`);
-      const data = await r.json() as {
-        choices?: { message?: {
-          content?: string | null;
-          tool_calls?: { function?: { name?: string; arguments?: string } }[];
-        } }[];
-      };
-      const message = data?.choices?.[0]?.message;
+      const data = await r.json() as { choices?: { message?: ModelMessage }[] };
+      return data?.choices?.[0]?.message;
+    }
+
+    let reply = "";
+    let toolArgs: string | null = null;
+    let toolCallId = "";
+    try {
+      const message = await complete(messages, MODEL_TIMEOUT_MS);
       // Plain text before it goes anywhere: the bubble shows markdown as
       // stray symbols, and the transcript is what the operator reads later.
       reply = plainText(message?.content ?? "");
       const call = message?.tool_calls?.find((c) => c.function?.name === "capture_lead");
       toolArgs = call?.function?.arguments ?? null;
+      toolCallId = call?.id ?? "";
     } catch (e) {
       log("model call failed", { error: String(e) });
       return NextResponse.json({ error: "unavailable" }, { status: 503 });
@@ -443,8 +464,13 @@ export async function POST(
     // an earlier turn is genuinely captured, even on a turn that does not
     // call the tool again.
     let filed = !!conversation.submission_id;
+    // What the tool result tells the model when it did NOT file (D-047): a
+    // capture with no usable name is a different thing to say to the visitor
+    // than a save that failed.
+    let notFiledBecause: "unusable" | "failed" = "failed";
     if (toolArgs && !conversation.submission_id) {
       const lead = parseCaptureLead(toolArgs);
+      if (!lead) notFiledBecause = "unusable";
       if (lead) {
         filed = await fileLead({
           db, accountId: profile.account_id,
@@ -470,6 +496,52 @@ export async function POST(
         });
       } else {
         log("capture_lead ignored: unusable arguments", { conversationId });
+      }
+    }
+
+    // D-047: THE CAPTURE'S RESULT GOES BACK TO THE MODEL before the visitor
+    // reads a word. Whatever the model wrote alongside its capture_lead call
+    // was written BEFORE anything was filed, so it is discarded, never shown:
+    // "I have passed your details on" beside a capture that failed is the
+    // defect. A second completion carries the real result as the tool's
+    // answer (`tool_choice: "none"`: it may not call the tool again) and its
+    // words are the reply. The prompt's own rule ("never say you have ...
+    // passed anything on unless capture_lead came back successful",
+    // lib/voice/system-prompt.ts) is satisfiable now, because the result
+    // finally comes back.
+    //
+    // Bounded by what is left of this invocation (`maxDuration` 30s, the first
+    // call alone may take 20s). Too little left, or the call fails: no second
+    // reply, and `spoken` below falls back to the fixed line for what really
+    // happened, never to the pre-result words.
+    if (toolArgs) {
+      reply = "";
+      const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt);
+      const followupTimeout = Math.min(FOLLOWUP_TIMEOUT_MS, timeLeft);
+      if (followupTimeout >= FOLLOWUP_MIN_MS) {
+        const result = filed
+          ? { ok: true, result: "Their details are with the team, who will follow up." }
+          : notFiledBecause === "unusable"
+            ? { ok: false, error: "Not recorded: their name and either an email address or a phone number are needed. Ask for what is missing." }
+            : { ok: false, error: "Not recorded: their details could not be saved just now. Do not say they were passed on or that anyone will follow up." };
+        try {
+          const message = await complete([
+            ...messages,
+            {
+              role: "assistant", content: null,
+              tool_calls: [{
+                id: toolCallId, type: "function",
+                function: { name: "capture_lead", arguments: toolArgs },
+              }],
+            },
+            { role: "tool", tool_call_id: toolCallId, content: JSON.stringify(result) },
+          ], followupTimeout, { tool_choice: "none" });
+          reply = plainText(message?.content ?? "");
+        } catch (e) {
+          log("capture follow-up failed", { conversationId, filed, error: String(e) });
+        }
+      } else {
+        log("capture follow-up skipped: no time left", { conversationId, filed, timeLeft });
       }
     }
 

@@ -850,6 +850,94 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
   });
 });
 
+/**
+ * D-047: the model never received the capture's result. Its words came back
+ * in the SAME completion as the capture_lead call, written before anything
+ * was filed, so "I have passed your details on" could reach the visitor (and
+ * the transcript) beside a capture that failed. The prompt told it never to
+ * say so "unless capture_lead came back successful", which it could not
+ * know. Now a capture turn makes a second call carrying the real result.
+ */
+describe("POST /api/concierge/[publicId]/turn — the capture's result reaches the model (D-047)", () => {
+  const PRE_RESULT = "Thanks, I have passed your details on to the team.";
+  type Sent = { messages: { role: string; content: string | null; tool_call_id?: string }[]; tool_choice?: string };
+
+  it("a FAILED capture: the model is told it failed, and the visitor never reads the words it wrote before knowing", async () => {
+    dbFns.createSubmission.mockRejectedValue(new Error("db down"));
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }, PRE_RESULT))
+      .mockResolvedValueOnce(modelReplies("Sorry, I could not save your details just now."));
+    const res = await laterTurn();
+    const body = await res.json() as { reply: string };
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const second = sentToModel(1) as unknown as Sent;
+    const tool = second.messages.at(-1)!;
+    expect(tool.role).toBe("tool");
+    expect(tool.tool_call_id).toBe("t1");
+    expect(JSON.parse(String(tool.content))).toMatchObject({ ok: false });
+    expect(body.reply).toBe("Sorry, I could not save your details just now.");
+    expect(body.reply).not.toBe(PRE_RESULT);
+    const [, , turns] = dbFns.appendConciergeTurns.mock.calls[0]!;
+    expect((turns as { text: string }[])[1]!.text).toBe(body.reply);
+  });
+
+  it("a FILED capture: the model is told it worked, and writes the reply from that", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "ana@x.co", need: "a table" }))
+      .mockResolvedValueOnce(modelReplies("Got it, Ana. The team will be in touch."));
+    const res = await laterTurn();
+    const body = await res.json() as { reply: string };
+    expect(enrichMock).toHaveBeenCalledTimes(1);
+    const second = sentToModel(1) as unknown as Sent;
+    expect(JSON.parse(String(second.messages.at(-1)!.content))).toMatchObject({ ok: true });
+    expect(body.reply).toBe("Got it, Ana. The team will be in touch.");
+  });
+
+  it("the follow-up call cannot call the tool again", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "ana@x.co", need: "a table" }))
+      .mockResolvedValueOnce(modelReplies("Done."));
+    await laterTurn();
+    expect((sentToModel(1) as unknown as Sent).tool_choice).toBe("none");
+  });
+
+  it("a capture with no name tells the model what is missing", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ email: "ana@x.co", need: "a table" }, PRE_RESULT))
+      .mockResolvedValueOnce(modelReplies("Could I get your name?"));
+    const res = await laterTurn();
+    const content = JSON.parse(String((sentToModel(1) as unknown as Sent).messages.at(-1)!.content));
+    expect(content).toMatchObject({ ok: false });
+    expect(String(content.error)).toMatch(/name/i);
+    expect((await res.json() as { reply: string }).reply).toBe("Could I get your name?");
+  });
+
+  it("when the follow-up call itself fails after a FAILED capture, the pre-result words are still never shown", async () => {
+    dbFns.getForm.mockResolvedValue({ ...LEAD_FORM, status: "draft" as const });
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }, PRE_RESULT))
+      .mockRejectedValueOnce(new Error("timeout"));
+    const res = await laterTurn();
+    expect(res.status).toBe(200);
+    const body = await res.json() as { reply: string };
+    expect(body.reply).not.toBe(PRE_RESULT);
+    expect(body.reply).toBe(conciergeStrings("en").unavailable);
+  });
+
+  it("when the follow-up call fails after a FILED capture, the visitor reads the fixed 'captured' line", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "ana@x.co", need: "a table" }, PRE_RESULT))
+      .mockRejectedValueOnce(new Error("timeout"));
+    const res = await laterTurn();
+    expect((await res.json() as { reply: string }).reply).toBe(conciergeStrings("en").captured);
+  });
+
+  it("a turn with no tool call makes exactly one model call", async () => {
+    await laterTurn();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("POST /api/concierge/[publicId]/turn — usage: one website chat, billed when Sofía's FIRST reply succeeds (client billing)", () => {
   // Every test FLUSHES after() before asserting, so "records nothing" means
   // nothing was scheduled either, not merely that it has not run yet.
