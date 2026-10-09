@@ -63,9 +63,8 @@ async function loadTimezone(accountId: string): Promise<string> {
 // "Book with <business>" wording a sibling route's own `generateMetadata`
 // might otherwise suggest (F-102 review round, second pass): the booking
 // page's `generateMetadata` is scoped to the SEPARATE `/b/[publicId]` route
-// and never applies to this one. There is no longer a `[publicId]`-level
-// segment layout between this page and the root to inject anything else —
-// see `app/b/[publicId]/data.ts`'s comment for why that was removed.
+// and never applies to this one. This page's own `./layout.tsx` (D-109)
+// sets no metadata: it brands a dead end's PAGE, not its tab title.
 export async function generateMetadata(
   { params, searchParams }: {
     params: Promise<{ publicId: string; token: string }>;
