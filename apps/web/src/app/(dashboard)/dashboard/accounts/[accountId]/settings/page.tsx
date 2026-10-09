@@ -7,6 +7,7 @@ import { createFieldAction, upsertValueAction, setFromEmailAction, setReportEmai
          startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction } from "./actions";
 import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
+import { ApplyBlueprintDialog } from "./apply-blueprint-dialog";
 import { ClientAccessSection } from "./client-access-section";
 import { ClientAccessSkeleton } from "./client-access-panel";
 import { WebsiteSection } from "./website-section";
@@ -17,7 +18,7 @@ import { BillingSection, BillingCardSkeleton } from "./billing-section";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { BrandingPanel } from "@/components/branding-panel";
-import { captureBlueprintAction } from "../../../blueprints/actions";
+import { captureBlueprintAction, applyBlueprintAction } from "../../../blueprints/actions";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
@@ -108,10 +109,17 @@ export default async function CrmSettingsPage({
       <PageHeader
         title={m["settings.title"]}
         actions={
-          <SaveBlueprintDialog
-            action={captureBlueprintAction.bind(null, accountId)}
-            existing={blueprints.map((b) => ({ name: b.name, version: b.version }))}
-          />
+          <>
+            {/* D-086: the "apply one later" the Add company dialog promises. */}
+            <ApplyBlueprintDialog
+              action={applyBlueprintAction.bind(null, accountId)}
+              blueprints={blueprints.map((b) => ({ id: b.id, name: b.name }))}
+            />
+            <SaveBlueprintDialog
+              action={captureBlueprintAction.bind(null, accountId)}
+              existing={blueprints.map((b) => ({ name: b.name, version: b.version }))}
+            />
+          </>
         }
       />
       <div className="space-y-6 p-6">

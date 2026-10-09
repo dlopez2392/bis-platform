@@ -96,6 +96,11 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     await page.goto("/dashboard/accounts");
     await page.getByRole("button", { name: /add company/i }).click();
     await page.getByLabel("Business name").fill(companyName);
+    // The name customers see pre-fills from the business name until edited
+    // (owner decision 2026-10-09). Left as typed, so the Clerk organisation —
+    // now created under THIS name — is still "E2E Co <stamp>", the shape
+    // fixtures/stale.ts sweeps a killed run's org by.
+    await expect(page.getByLabel("Name their customers see")).toHaveValue(companyName);
     await page.getByRole("combobox", { name: "Apply a blueprint" }).click();
     await page.getByRole("option", { name: blueprintName }).click();
     await page.getByRole("button", { name: "Add", exact: true }).click();

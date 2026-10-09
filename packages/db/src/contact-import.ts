@@ -124,10 +124,15 @@ export async function applyImportBatch(
 ): Promise<{ created: number; updated: number; flagged: number }> {
   let created = 0;
   let updated = 0;
-  // Pairs this RUN flagged, not the table's lifetime total — every other number
-  // this function returns reads that way, and the summary reports what this
-  // import did. Only the createContact path can flag: an index hit resolved to
-  // exactly one contact, so there is no second match to conflict with.
+  // Pairs this RUN flagged, not the table's lifetime total — every other
+  // number this function returns reads that way, and the summary reports
+  // what this import did. BOTH write paths below can flag: `createContact`
+  // when its own index-miss dedupe still finds a match, and `updateContact`
+  // (D-012) whenever the row's OTHER field (the one that didn't resolve the
+  // index hit) lands on a different contact's key — an index hit on email
+  // whose phone collides with someone else's is exactly that case, and the
+  // old comment here ("only the createContact path can flag") stopped being
+  // true the moment updateContact gained its own check.
   let flagged = 0;
 
   const known = new Set((await listTags(db, accountId)).map((t) => t.name.toLowerCase()));
@@ -146,7 +151,8 @@ export async function applyImportBatch(
 
     let contactId: string;
     if (hitId) {
-      await updateContact(db, accountId, hitId, row.input, actorId);
+      const updateResult = await updateContact(db, accountId, hitId, row.input, actorId);
+      if (updateResult.flagged) flagged++;
       contactId = hitId;
       updated++;
     } else {
@@ -156,7 +162,8 @@ export async function applyImportBatch(
       if (result.existing) {
         // Trap 2's second half: apply the row's fields exactly as an index
         // hit would, before counting — see the function comment above.
-        await updateContact(db, accountId, contactId, row.input, actorId);
+        const updateResult = await updateContact(db, accountId, contactId, row.input, actorId);
+        if (updateResult.flagged) flagged++;
         updated++;
       } else {
         created++;

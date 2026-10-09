@@ -17,7 +17,7 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 
 const { default: ActivityPage } = await import("./page");
 
-const USAGE = { textsSent: 1, emailsSent: 0, conversations: 0, callsHandled: 0, held: 0, skipped: 0, topHeldReason: null, topSkippedReason: null };
+const USAGE = { textsSent: 1, emailsSent: 0, emailsFailed: 0, conversations: 0, callsHandled: 0, held: 0, skipped: 0, topHeldReason: null, topSkippedReason: null };
 const ROW = { id: "00000000-0000-4000-8000-00000000000a", account_id: "a1", source: "concierge", channel: "ai", contact_id: null, subject_key: "conversation:1", status: "sent", reason: "", held_until: null, payload: {}, occurred_at: "2026-09-22T13:00:00.000Z", contact_name: null };
 
 async function render(before?: string) {

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { DotPill } from "@/components/dot-pill";
 import { m } from "@/lib/messages";
 import { CONFIRM_REPLY_TREATMENTS } from "./confirm-reply";
+import { runCancelWithUndo } from "./cancel-booking";
 import type { ActionResult } from "./actions";
 
 type Booking = BookingRow & { contact_name: string; contact_email: string | null };
@@ -63,17 +64,17 @@ function timeRange(startsAt: string, endsAt: string, timeZone: string): string {
 }
 
 function StatusActions({
-  booking, started, statusAction,
+  booking, started, statusAction, undoCancelAction,
 }: {
   booking: Booking;
   /** D-030: the appointment's start is at or before the page's `nowIso`. */
   started: boolean;
   statusAction: (bookingId: string, status: BookingStatus) => Promise<ActionResult>;
+  undoCancelAction: (bookingId: string) => Promise<ActionResult>;
 }) {
   const [pending, startTransition] = useTransition();
-  // The constraint (`bookings_no_overlap`) only binds `status='booked'`, and
-  // there is no un-cancel / un-complete path — once a booking has left
-  // "booked" it is terminal on this screen.
+  // Once a booking has left "booked" it has no buttons here. The one way
+  // back is the Undo on Cancel's own toast (D-036), never a button on the row.
   if (booking.status !== "booked") return null;
 
   function run(status: BookingStatus) {
@@ -81,6 +82,18 @@ function StatusActions({
       const result = await statusAction(booking.id, status);
       if (result.ok) toast.success(m["calendar.bookings.statusUpdated"]);
       else toast.error(result.error);
+    });
+  }
+
+  // D-036: Cancel runs at once and its toast carries Undo (DESIGN.md rule 6;
+  // see `./cancel-booking.ts` for why this cancel is reversible).
+  function cancel() {
+    startTransition(async () => {
+      await runCancelWithUndo(
+        () => statusAction(booking.id, "cancelled"),
+        () => undoCancelAction(booking.id),
+        toast,
+      );
     });
   }
 
@@ -99,7 +112,7 @@ function StatusActions({
           </Button>
         </>
       ) : null}
-      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => run("cancelled")}>
+      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={cancel}>
         {m["calendar.bookings.cancel"]}
       </Button>
     </div>
@@ -107,7 +120,7 @@ function StatusActions({
 }
 
 export function BookingsList({
-  accountId, timezone, bookings, nowIso, statusAction,
+  accountId, timezone, bookings, nowIso, statusAction, undoCancelAction,
 }: {
   accountId: string;
   /** The ACCOUNT zone (spec: grouped by day in the account zone, not the
@@ -119,6 +132,8 @@ export function BookingsList({
    *  here: the server render and the hydrated client must agree. */
   nowIso: string;
   statusAction: (bookingId: string, status: BookingStatus) => Promise<ActionResult>;
+  /** D-036: the Undo on Cancel's toast. */
+  undoCancelAction: (bookingId: string) => Promise<ActionResult>;
 }) {
   const groups = new Map<string, { heading: string; items: Booking[] }>();
   for (const b of bookings) {
@@ -206,6 +221,7 @@ export function BookingsList({
                         booking={b}
                         started={new Date(b.starts_at).getTime() <= new Date(nowIso).getTime()}
                         statusAction={statusAction}
+                        undoCancelAction={undoCancelAction}
                       />
                     </li>
                   ))}

@@ -112,4 +112,36 @@ describe("sites data layer", () => {
       expect(rows).toEqual([{ day: "2026-09-02", dimension: "page", value: "/services", visitors: 6, pageviews: 8 }]);
       expect((await getSiteForAccount(db, accountId))?.lastSyncedDay).toBe("2026-09-02");
     }));
+
+  /**
+   * D-054: PostgREST on this project caps a single response at 1,000 rows
+   * (supabase/config.toml, `max_rows = 1000`) — silently, no error, just
+   * fewer rows than exist. `listTrafficBreakdown` had no `.range()` at all,
+   * and the window a Website page view actually reads (load.ts: the
+   * CURRENT period plus the PRIOR one of equal length, for the delta) can
+   * be up to 60 days at the longest period x up to 4 dimensions x the
+   * API's own 20-per-dimension cap = up to 4,800 rows — past that limit
+   * always lost the TAIL of its `order("day", { ascending: true })` read
+   * — the rows for its NEWEST days, exactly backwards from what the
+   * Website page needs (the chart and the panels read the most RECENT
+   * days first).
+   *
+   * Mutation: drop the `.range()` loop back to a single unbounded read —
+   * day 2's 100 rows push the account past 1,000 and the newest day's
+   * rows are the ones missing.
+   */
+  it("listTrafficBreakdown returns every row past PostgREST's 1,000-row cap, including the newest day's (mutation: drop the .range() loop → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const site = await upsertSite(db, accountId, { vercelProjectId: `prj_t_${accountId.slice(0, 8)}`, domain: "busy.example" });
+      const oldRows = Array.from({ length: 950 }, (_, i) => ({ dimension: "page" as const, value: `/old-${i}`, visitors: 1, pageviews: 1 }));
+      const newRows = Array.from({ length: 100 }, (_, i) => ({ dimension: "page" as const, value: `/new-${i}`, visitors: 1, pageviews: 1 }));
+      await writeTrafficDay(db, site, "2026-08-01", { visitors: 950, pageviews: 950 }, oldRows);
+      await writeTrafficDay(db, site, "2026-08-02", { visitors: 100, pageviews: 100 }, newRows);
+
+      const rows = await listTrafficBreakdown(db, accountId, "2026-08-01", "2026-08-02");
+      expect(rows.length).toBe(1050);
+      const newestValues = new Set(rows.filter((r) => r.day === "2026-08-02").map((r) => r.value));
+      expect(newestValues.size).toBe(100);
+    });
+  }, 30_000);
 });

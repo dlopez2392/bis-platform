@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Notice } from "@/components/ui/notice";
 import {
   Select,
   SelectContent,
@@ -19,7 +20,7 @@ import {
 import { SubmitButton } from "../../../submit-button";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
-import { defaultFieldKey } from "@/lib/forms/editor-helpers";
+import { defaultFieldKey, shouldWarnOnUnpublish, statusAfterUndo } from "@/lib/forms/editor-helpers";
 
 const CORE_KINDS = [
   "core.first_name", "core.last_name", "core.email", "core.phone", "core.company_name",
@@ -34,18 +35,82 @@ function kindLabel(kind: string, customFields: CustomFieldDef[]): string {
 }
 
 export function FormEditor({
-  form, customFields, action,
+  form, customFields, action, conciergeAssistantName, republishAction,
 }: {
   form: FormRow;
   customFields: CustomFieldDef[];
-  action: (formData: FormData) => Promise<void>;
+  action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
+  // Owner context (forms tracker batch 4): null when no website assistant
+  // is wired to this form at all. See shouldWarnOnUnpublish's own comment.
+  conciergeAssistantName: string | null;
+  // `expectedPriorStatus` is the status this very save is about to take the
+  // form OFF — captured at the moment the toast is shown and threaded
+  // straight through, never re-read from state after the fact (fix round 1
+  // review item 2: republishFormIfUnchanged's own doc comment).
+  republishAction: (
+    expectedPriorStatus: FormRow["status"],
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   const [fields, setFields] = useState<FormField[]>(form.fields);
   const [successMode, setSuccessMode] = useState(form.success_mode);
+  // Controlled (fix round 1 review item 1): this used to be
+  // `defaultValue={form.status}` on the Select below, which Radix reads
+  // exactly once on mount. A successful Undo updated this state via
+  // statusAfterUndo, but with an uncontrolled Select the visible control —
+  // and so the NEXT Save — still carried the unpublished value forward: the
+  // warning reappeared on an already-published form, and clicking Save
+  // again unpublished it a second time with nothing the operator did.
+  const [status, setStatus] = useState(form.status);
 
+  // Owner context: true as soon as the pending Select choice would take an
+  // assistant-linked, currently-published form off "published" — before
+  // Save, not after, so the operator sees this while they are still
+  // deciding. DESIGN.md rule 6 forbids a reflexive "Are you sure?" dialog
+  // for a reversible action, and republishing is exactly that (one click
+  // restores it), so Save is never blocked on this — the inline notice
+  // below is informational only, and the Undo offered on the toast after a
+  // real save (rule 6's "runs immediately with an undo toast") is the
+  // actual safety net.
+  const warnOnUnpublish = shouldWarnOnUnpublish(form.status, status, conciergeAssistantName);
+
+  // D-024: a mistyped notify address or redirect URL used to fail silently
+  // into the one generic "Could not save the form." toast — the action now
+  // RETURNS the specific reason instead of throwing it away (see its own
+  // doc comment). This does not go through action-feedback.ts's
+  // notifyActionResult, unlike every other house-pattern card: that
+  // helper's success branch takes one fixed string, and the unpublish
+  // warning's success toast needs to conditionally carry an Undo action
+  // (republishAction) that plain string cannot express.
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
-    try { await action(formData); toast.success(m["forms.saved"]); }
-    catch { toast.error(m["forms.saveFailed"]); }
+    let result: { ok: true } | { ok: false; error: string };
+    try {
+      result = await action(formData);
+    } catch {
+      toast.error(m["forms.saveFailed"]);
+      return;
+    }
+    if (!result.ok) { toast.error(result.error); return; }
+    if (warnOnUnpublish && conciergeAssistantName) {
+      // `status` at this instant IS the value this save just wrote — the
+      // only thing Undo can honestly promise to restore it FROM.
+      const unpublishedTo = status;
+      toast.success(
+        m["forms.unpublishedToast"].replace("{assistant}", conciergeAssistantName),
+        {
+          action: {
+            label: m["common.undo"],
+            onClick: () => void republishAction(unpublishedTo)
+              .then((u) => {
+                setStatus((current) => statusAfterUndo(u, current));
+                if (!u.ok) toast.error(u.error);
+              })
+              .catch(() => toast.error(m["forms.republishFailed"])),
+          },
+        },
+      );
+    } else {
+      toast.success(m["forms.saved"]);
+    }
   });
 
   const available = [
@@ -217,10 +282,23 @@ export function FormEditor({
         </CardContent>
       </Card>
 
+      {/* Owner context: informational only, never blocking — see this
+          component's own doc comment on warnOnUnpublish for why a reflexive
+          confirm dialog is the wrong pattern here. */}
+      {warnOnUnpublish && conciergeAssistantName ? (
+        <Notice tone="warn">
+          {m["forms.unpublishWarning"].replace("{assistant}", conciergeAssistantName)}
+        </Notice>
+      ) : null}
+
       <div className="flex flex-wrap items-center gap-2">
         <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>
         <Label htmlFor="form-status" className="sr-only">{m["forms.status"]}</Label>
-        <Select name="status" defaultValue={form.status}>
+        <Select
+          name="status"
+          value={status}
+          onValueChange={(value) => setStatus(value as FormRow["status"])}
+        >
           <SelectTrigger id="form-status" className="w-40">
             <SelectValue />
           </SelectTrigger>

@@ -17,7 +17,7 @@ const { ZoneNote } = await import("./zone-note");
 
 function render(zone: ResolvedZone, isAgency: boolean): string {
   return renderToStaticMarkup(
-    createElement(ZoneNote, { zone, isAgency, accountId: "acct1" }),
+    createElement(ZoneNote, { zone, isAgency }),
   );
 }
 
@@ -122,10 +122,16 @@ describe("ZoneNote — a guess is announced in WORDS, never by colour alone", ()
  * answer than no link at all.
  */
 describe("ZoneNote — the fix matches the reader", () => {
-  it("offers the agency a link to Settings (mutation: drop the link -> FAILS)", () => {
+  // D-076: Settings has no timezone field — the only zone input in the
+  // whole product is the Add company dialog, and only at creation. A link
+  // to Settings here sent the agency to a page with nothing to fix,
+  // which is worse than the client's "no link at all" for the identical
+  // reason the client never got a dead Settings link in the first place.
+  it("tells the agency the true fact — no Settings field, no link at all (mutation: restore a Settings link -> FAILS)", () => {
     const html = render(FROM_AGENCY, true);
     expect(plain(html)).toContain(m["zone.guessed.fix"]);
-    expect(html).toContain('href="/dashboard/accounts/acct1/settings"');
+    expect(html).not.toContain("<a");
+    expect(html).not.toContain("/settings");
   });
 
   it("offers a CLIENT a person to ask and no link at all (mutation: drop the `isAgency` branch -> FAILS)", () => {

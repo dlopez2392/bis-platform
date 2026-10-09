@@ -15,6 +15,7 @@
  */
 
 import { revalidatePath } from "next/cache";
+import { clerkClient } from "@clerk/nextjs/server";
 import { setBranding, getBranding, uploadBrandLogo, sweepOrphanedLogos, restoreBrandLogoIfCleared,
          logoExists, serviceDb } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -28,6 +29,7 @@ import { CORNER_NAMES, MODE_NAMES, NEUTRAL_NAMES, TYPE_NAMES, parseAllowlisted }
 // strictness costs nothing for an address we only ever hand to Resend, and one
 // email regex that drifts from another is worse than one that is strict.
 import { isValidEmail } from "@/lib/forms/guards";
+import { syncClerkOrgName } from "@/lib/accounts/clerk-org-name";
 import { m } from "@/lib/messages";
 
 /** accounts_mailing_address_check's upper bound (migration 0048). Not
@@ -134,6 +136,17 @@ export async function setBrandingAction(
     }
   }
 
+  // The brand name BEFORE this save, so Clerk is only called when it changes
+  // (D-005 review): a colour or logo save has no reason to touch Clerk. An
+  // unreadable earlier name counts as changed: unsure means try. Same
+  // request-scoped client as the write below.
+  let previousBrandName: string | null = null;
+  try {
+    previousBrandName = (await getBranding(await dbForRequest(), accountId))?.brandName?.trim() ?? null;
+  } catch {
+    previousBrandName = null;
+  }
+
   try {
     await setBranding(
       // The RLS-enforced client, NOT serviceDb(). accounts_agency_all covers
@@ -155,6 +168,15 @@ export async function setBrandingAction(
   } catch (e) {
     console.error(`setBranding: write failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["branding.saveFailed"] };
+  }
+
+  // D-005: Clerk names the organisation in every invitation email, so it
+  // follows the name the client sees. Only after the write succeeded, and
+  // never fatal — syncClerkOrgName logs and returns false on any failure.
+  // Skipped when the name is unchanged; a sync that failed earlier is then
+  // retried by the next save that changes it, not by every save.
+  if (previousBrandName !== brandName) {
+    await syncClerkOrgName(await dbForRequest(), clerkClient, accountId, brandName);
   }
 
   // Only after the new path is durably recorded, and never fatal: an orphaned

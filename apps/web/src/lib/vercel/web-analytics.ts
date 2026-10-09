@@ -21,9 +21,28 @@ export const BREAKDOWN_LIMIT = 20;
  *  (docs: "groups the remaining values into Others"). It is not a page, a
  *  place or a source, and the count query already carries the true total. */
 export const OTHERS_ROLLUP = "Others";
-/** Count endpoints are documented as production-only; aggregate endpoints are
- *  not. Pinning the environment keeps every breakdown on the same footing as
- *  the totals it is compared against (OData, per the API docs). */
+/**
+ * Applied to `aggregate()` ONLY, never to `countVisits()`. Count endpoints
+ * are documented as production-only; aggregate endpoints are not, so this
+ * is what keeps every breakdown on the same environment footing as the
+ * total it is compared against (OData, per the API docs).
+ *
+ * D-053's REAL cause, per live probing (runbook, website-setup.md's
+ * "First-night findings", 2026-09-08): `visits/count` floors `since` and
+ * `until` DOWN to UTC midnight (so a local-day window is answered for the
+ * UTC day instead), while `visits/aggregate` honours `since` to the hour
+ * but treats `until` as INCLUSIVE of its bucket (echoed back +1h) — so
+ * within one stored day, the total covers the UTC day and every breakdown
+ * covers local midnight through local midnight plus one hour. Two
+ * different WINDOWS under one "day" label, not two different
+ * environments; adding this filter to `countVisits()` (tried, reverted)
+ * would not have touched that mismatch at all, and nothing here has
+ * verified the count endpoint even accepts a `filter` param — an untested
+ * query parameter is not a change to risk on every site's first sync tick
+ * after a deploy. The window fix itself is the runbook's own "Decision
+ * owed" (store UTC days honestly, or sum hourly buckets); no code here
+ * changes the windows.
+ */
 export const PRODUCTION_FILTER = "environment eq 'production'";
 
 const BASE = "https://api.vercel.com/v1/query/web-analytics";

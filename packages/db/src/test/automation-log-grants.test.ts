@@ -312,11 +312,32 @@ describe("0046 accessors, live (serviceDb under withTestAccount)", () => {
       const from = new Date(Date.now() - 60_000).toISOString();
       const to = new Date(Date.now() + 60_000).toISOString();
       expect(await countAutomationUsage(db, accountId, from, to)).toEqual({
-        textsSent: 2, emailsSent: 1, conversations: 1, callsHandled: 1,
+        textsSent: 2, emailsSent: 1, emailsFailed: 0, conversations: 1, callsHandled: 1,
         held: 1, skipped: 3,
         topHeldReason: "Held until 8:00 AM — quiet hours", topSkippedReason: "Screened as a robocall",
       });
       expect((await countAutomationUsage(db, accountId, to, "2099-01-01T00:00:00.000Z")).textsSent).toBe(0);
+    });
+  });
+
+  // D-066: "Emails sent" is read as a customer-automation metric (it carries
+  // the same recipe daily-cap context the texts tile does) — the agency's
+  // own Monday report email is neither a customer send nor subject to that
+  // cap, and must never inflate or deflate this count. A failed email is
+  // not nothing either: it belongs in its own counter, not silently absent.
+  it("countAutomationUsage excludes the agency's own weekly report from emailsSent, and counts failed emails separately (mutation: drop the source filter, or drop emailsFailed → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const w = (source: any, channel: any, k: string, status: any, reason = "") =>
+        recordAutomationLog(db, { accountId, source, channel, contactId: null, subjectKey: k, status, reason });
+      await w("reminders", "email", "booking:1", "sent");       // a real customer email
+      await w("weekly_report", "email", "week:1", "sent");      // the agency's own report — must not count
+      await w("followups", "email", "booking:2", "failed", "Couldn't be delivered");
+      await w("weekly_report", "email", "week:2", "failed", "Couldn't be delivered");   // also excluded
+      const from = new Date(Date.now() - 60_000).toISOString();
+      const to = new Date(Date.now() + 60_000).toISOString();
+      const usage = await countAutomationUsage(db, accountId, from, to);
+      expect(usage.emailsSent).toBe(1);
+      expect(usage.emailsFailed).toBe(1);
     });
   });
 

@@ -398,15 +398,109 @@ export async function listSubmissions(
  * `listForms` returns no `notify_emails`, so the checklist's "forms still
  * have no notification address" warning needs its own count rather than a
  * derived one.
+ *
+ * Scoped to `status = 'published'` (D-026): a draft cannot yet receive a
+ * submission and an archived form no longer can, so neither has a lead to
+ * lose — counting them left an operator unable to ever clear the checklist
+ * item for a form deliberately left unpublished or already retired.
  */
 export async function countFormsMissingNotify(
   db: SupabaseClient, accountId: string,
 ): Promise<number> {
   const { count, error } = await db.from("forms")
     .select("id", { count: "exact", head: true })
-    .eq("account_id", accountId).eq("notify_emails", "{}");
+    .eq("account_id", accountId).eq("status", "published").eq("notify_emails", "{}");
   if (error) throw new Error(`countFormsMissingNotify failed: ${error.message}`);
   return count ?? 0;
+}
+
+/**
+ * Owner context (forms tracker batch 4): the Forms page needs to warn an
+ * operator who is about to take a PUBLISHED form off that status when a
+ * website assistant (`voice_profiles.concierge_form_id`) files its leads
+ * into it. D-048 already stops a LIVE chat from answering once its
+ * destination is unpublished (`getVoiceProfileByPublicId`,
+ * packages/db/src/concierge.ts) — this is the half that was missing:
+ * nothing told the operator making that change what they were about to
+ * break. Returns the assistant's `persona_name`, so the warning can name it
+ * rather than say "an assistant".
+ *
+ * Reads `voice_profiles` rather than `forms`, and lives beside the forms
+ * query that needs it rather than in concierge.ts (that file's own queries
+ * are about the PUBLIC chat runtime, not the dashboard). Scoped to this
+ * account on purpose: `concierge_form_id` carries no FK-level guarantee it
+ * names a form in the SAME account as the profile before migration 0045
+ * (concierge.ts's own comment on `DESTINATION_EMBED`), so the account_id
+ * filter is what keeps a stale or cross-tenant pointer from ever naming an
+ * assistant that is not actually this account's own.
+ *
+ * `concierge_enabled` (fix round 1 review, minor): a destination wired up
+ * while the switch is off (the column's own default, 0042) is not live —
+ * unpublishing its form breaks nothing yet, so there is nothing to warn
+ * about until the operator actually turns the assistant on.
+ */
+export async function findConciergeDestinationName(
+  db: SupabaseClient, accountId: string, formId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("voice_profiles")
+    .select("persona_name")
+    .eq("account_id", accountId).eq("concierge_form_id", formId)
+    .eq("concierge_enabled", true)
+    .maybeSingle();
+  if (error) throw new Error(`findConciergeDestinationName failed: ${error.message}`);
+  return (data as { persona_name: string } | null)?.persona_name ?? null;
+}
+
+/**
+ * The Undo half of the unpublish warning's safety net (fix round 1 review
+ * item 2; revised fix round 2 review item 1). The first version wrote
+ * `status: "published"` unconditionally, which bypassed "a form needs at
+ * least one field before it can be published" (the same rule
+ * `saveFormAction` enforces on every normal save), could publish a form
+ * that had never been published before, and let a STALE Undo toast —
+ * clicked after the form's status changed again through some other save —
+ * silently resurrect status the operator no longer intends. A second
+ * version checked both conditions with a pre-read, then wrote
+ * unconditionally on `status` alone — real TOCTOU exposure between the two.
+ *
+ * `expectedPriorStatus` is the status the unpublishing save actually
+ * wrote, carried by the toast itself rather than re-derived here. BOTH
+ * conditions now live on the single UPDATE's own WHERE clause —
+ * `.eq("status", expectedPriorStatus)` and `.not("fields", "eq", "[]")`
+ * (jsonb equality against the literal empty array, the same shape
+ * `countFormsMissingNotify`'s `.eq("notify_emails", "{}")` already uses
+ * for the array column beside it) — so the write itself is atomic: nothing
+ * between a read and a write can ever stale the decision. Only when that
+ * UPDATE matches zero rows does this read the row at all, and only to
+ * classify WHICH condition failed, so the operator sees an honest, specific
+ * reason rather than one generic refusal.
+ */
+export async function republishFormIfUnchanged(
+  db: SupabaseClient, accountId: string, formId: string,
+  expectedPriorStatus: FormStatus, actorId: string,
+): Promise<"republished" | "stale" | "needs_fields"> {
+  const { data, error } = await db.from("forms")
+    .update({ status: "published", updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", formId)
+    .eq("status", expectedPriorStatus)
+    .not("fields", "eq", "[]")
+    .select("id");
+  if (error) throw new Error(`republishFormIfUnchanged failed: ${error.message}`);
+  if (data && data.length > 0) {
+    await emit(db, accountId, "form.updated", actorId, { formId, fields: ["status"] });
+    return "republished";
+  }
+
+  // The UPDATE refused — classify why, for the operator's benefit only;
+  // this read decides nothing about whether the write happened.
+  const current = await getForm(db, accountId, formId);
+  if (!current) return "stale";
+  if (current.status !== expectedPriorStatus) return "stale";
+  if (current.fields.length === 0) return "needs_fields";
+  // Unreachable in practice — the UPDATE's own WHERE mirrors both checks
+  // above — but a race this classification cannot name must still refuse
+  // rather than claim success.
+  return "stale";
 }
 
 export async function listContactSubmissions(

@@ -90,8 +90,11 @@ export const m = {
   "signIn.title": "Sign in",
   "signIn.railCopy": "by Bespoke Intelligent Solutions",
 
-  "clientAccess.off.title": "Access has been turned off",
-  "clientAccess.off.body": "Your access to this account has been turned off. Contact your account manager if you think this is a mistake.",
+  // True whether access was switched off or never turned on: an adopted
+  // half-created company starts with it off (review of D-087). Still its own
+  // page, apart from "none" below (the invitation case, D-001).
+  "clientAccess.off.title": "Access isn't turned on",
+  "clientAccess.off.body": "Access to this account isn't turned on right now. Ask the person who invited you to turn it on.",
   // Read by the person who was just invited, on their first visit, at the
   // moment it fails. "No account linked" stated a fact about our data model
   // and gave them nothing to do; "contact your account manager" is a title
@@ -101,13 +104,29 @@ export const m = {
 
   // The agency-side half of the same fault. See lib/accounts/orphans.ts.
   "accounts.orphan.title": "Set up in Clerk but not here",
-  "accounts.orphan.body": "Anyone invited to these can be sent an invitation, but cannot sign in — there is no company behind them yet. Add the company here with the same name, or delete the organization in Clerk.",
+  // D-087: the first remedy used to be "add the company here with the same
+  // name", which made a SECOND Clerk organisation and left everyone already
+  // invited in this one. "Add as a company" adopts THIS organisation.
+  "accounts.orphan.body": "Anyone invited to these can be sent an invitation, but cannot sign in — there is no company behind them yet. Choose \"Add as a company\" to finish one (everyone already invited keeps their invitation), or delete the organization in Clerk.",
+  "accounts.orphan.adopt": "Add as a company",
+  "accounts.orphan.adoptTitle": "Add \"{name}\" as a company",
+  "accounts.orphan.adoptHint": "Finishes the company Clerk already has, keeping its name. Anyone already invited can sign in once you turn on Client access in its Settings, which opens next.",
+  "accounts.orphan.adoptGone": "That organization is no longer in Clerk. Reload the page.",
+  "accounts.orphan.adoptClerkDown": "Couldn't reach Clerk to check that organization. Nothing was saved. Try again in a minute.",
+  "accounts.orphan.adoptNoName": "That organization has no name in Clerk. Give it one there, then try again.",
+  "accounts.orphan.adoptFailed": "Could not add that company. It may already have been added: reload the page and check the list.",
   "accounts.orphan.unavailable": "Could not reach Clerk to check for half-created companies. The list below is unaffected.",
 
   "clientAccess.title": "Client access",
   "clientAccess.body": "When on, invited users at this company can sign in and see this account only.",
   "clientAccess.enable": "Turn on",
   "clientAccess.disable": "Turn off",
+  // D-002: the switch's own state, as the word beside its dot (rule 3), and
+  // the toasts that carry its Undo (rule 6).
+  "clientAccess.statusOn": "On",
+  "clientAccess.statusOff": "Off",
+  "clientAccess.turnedOn": "Client access is on. Invited people at this company can sign in.",
+  "clientAccess.turnedOff": "Client access is off. Nobody at this company can sign in until you turn it back on.",
   "clientAccess.members": "Members",
   "clientAccess.invite": "Invite",
   "clientAccess.inviteEmail": "Email address",
@@ -227,6 +246,12 @@ export const m = {
   "accounts.title": "Companies",
   "accounts.add": "Add company",
   "accounts.name": "Business name",
+  // Owner decision 2026-10-09: the name customers see is its own field, so
+  // the business name above stays the agency's private label (it used to be
+  // copied into brand_name and reach the client's sidebar, emails and texts).
+  "accounts.brandName": "Name their customers see",
+  "accounts.brandNameHint": "Shown on their emails, texts, booking page and sidebar. The business name above stays private to you.",
+  "accounts.brandNameRequired": "Enter the name their customers see.",
   "accounts.timezone": "Timezone",
   "accounts.empty.title": "No companies yet",
   "accounts.empty.body": "Add your first company to start tracking contacts and deals.",
@@ -243,7 +268,9 @@ export const m = {
   "accounts.status.archived": "Archived",
   "accounts.blueprint": "Apply a blueprint",
   "accounts.blueprintNone": "Don't apply one",
-  "accounts.blueprintHint": "Copies configuration into the new company. You can apply one later instead.",
+  // D-086: "later" used to name no place, because there was none. Settings
+  // now carries an "Apply a blueprint" dialog (apply-blueprint-dialog.tsx).
+  "accounts.blueprintHint": "Copies configuration into the new company. You can also apply one later, from the company's Settings.",
   "accounts.blueprintPartial": "The company was created, but some blueprint items did not apply. Check its Settings and add anything missing by hand.",
 
   "dashboard.title": "Dashboard",
@@ -358,6 +385,8 @@ export const m = {
   "dashboard.activity.bookingCancelled": "An appointment was cancelled.",
   "dashboard.activity.bookingCompleted": "An appointment was completed.",
   "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
+  // D-036: the Calendar page's Undo on a Cancel (status_changed → booked).
+  "dashboard.activity.bookingRestored": "An appointment that was cancelled is back on.",
   "dashboard.activity.formSubmitted": "A new lead came in through your form.",
   "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
   "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of {name}.",
@@ -896,7 +925,13 @@ export const m = {
   "forms.transparent": "Transparent background",
   "forms.status": "Status",
   "forms.duplicateFieldKey": "A field with this key already exists on the form.",
-  "forms.invalidFields": "Fields must be valid: each needs a key, kind, label, and required flag.",
+  // Fix round 1 review (minor): the old wording ("each needs a key, kind,
+  // label, and required flag") exposed this form's own internal field
+  // shape — jargon with no translation for an operator, who never typed
+  // anything to cause this (it only fires on a tampered hidden input).
+  // Plain words, and the same "reload and try again" shape inline.crashed
+  // already uses for the same class of problem.
+  "forms.invalidFields": "Something went wrong with this form's fields. Reload the page and try again.",
   "forms.embed": "Embed",
   "forms.embedHint": "Paste this where the form should appear. Published forms only.",
   "forms.embedNotPublished": "Publish the form to get its embed snippet.",
@@ -939,6 +974,25 @@ export const m = {
   // settings.weeklyReportBadEmail — one bad-address message, not two that can
   // drift apart.
   "forms.invalidNotifyEmail": "That doesn't look like an email address: {value}",
+  // Owner context (forms tracker batch 4): shown inline, BEFORE Save, while
+  // the operator is still choosing a non-published status for a form a
+  // website assistant files its leads into — see shouldWarnOnUnpublish's
+  // own comment. "until you set Status back to Published" names the actual
+  // control (forms.status) and its actual option (forms.status.published)
+  // rather than the vaguer "republish" (fix round 1 review, minor).
+  "forms.unpublishWarning":
+    "{assistant} files its leads into this form — it will stop filing new leads here until you set Status back to Published.",
+  // The success toast AFTER that save has gone through. Distinct from
+  // forms.unpublishWarning (fix round 1 review, minor: the toast must say
+  // the save itself succeeded, not only name the consequence) — this one
+  // is never shown before a save, so it is the only copy of the two
+  // allowed to say "Saved."
+  "forms.unpublishedToast":
+    "Saved. {assistant} files its leads into this form — it will stop filing new leads here until you set Status back to Published.",
+  "forms.republishFailed": "Could not republish the form.",
+  // Fix round 1 review item 2: a stale Undo click — the form's status
+  // changed again, through some other save, since this toast was shown.
+  "forms.undoStale": "This form's status already changed since then — there's nothing to undo.",
 
   "conversations.unread": "unread",
   "conversations.channel.form": "Form submission",
@@ -1084,14 +1138,27 @@ export const m = {
   "blueprints.empty.title": "No blueprints yet",
   "blueprints.empty.body": "Set an account up the way you like it, then save its configuration here to reuse on the next client.",
   "blueprints.version": "Version",
-  "blueprints.captured": "Captured",
+  // The LAST capture (D-090), so it agrees with the version beside it.
+  "blueprints.captured": "Last captured",
   "blueprints.applied": "Applied to",
+  // Distinct companies, not applications (D-090, listBlueprints).
   "blueprints.appliedCount": "accounts",
+  "blueprints.appliedCountOne": "account",
   "blueprints.save": "Save as blueprint",
   "blueprints.saveHint": "Copies this account's pipelines, custom fields, tags, custom values and forms. Never contacts, conversations, or anything with a credential in it.",
   "blueprints.name": "Blueprint name",
   "blueprints.saved": "Blueprint saved",
   "blueprints.saveFailed": "Could not save the blueprint.",
+  // D-086: applying a blueprint to a company that already exists, from its
+  // Settings. Additive and idempotent (applyBlueprint): nothing is removed and
+  // a second apply skips what the first added.
+  "blueprints.apply.label": "Blueprint",
+  "blueprints.apply.hint": "Adds this blueprint's pipelines, custom fields, tags, custom values and forms to this company. Anything already here stays as it is, and nothing is removed. Forms arrive as drafts with nobody to notify yet.",
+  "blueprints.apply.submit": "Apply",
+  "blueprints.apply.pick": "Choose a blueprint to apply.",
+  "blueprints.apply.done": "Blueprint applied: {added} new, {already} already in place.",
+  "blueprints.apply.partial": "Some items in this blueprint didn't apply. Apply it again: anything already added is skipped.",
+  "blueprints.apply.failed": "Couldn't apply that blueprint. Try again.",
   "blueprints.overwriteWarning": "\"{name}\" already exists (version {version}). Saving will replace it — there is no version history and no undo.",
 
   // The public booking page's own strings (`booking.public.*`) moved to
@@ -1128,7 +1195,12 @@ export const m = {
   "calendar.settings.minNotice": "Minimum notice",
   "calendar.settings.maxAdvance": "How far ahead people can book",
   "calendar.settings.notifyEmails": "Notify these addresses",
-  "calendar.settings.notifyEmailsHint": "One address per line. Sent whenever someone books, cancels, or an appointment is coming up.",
+  // D-034: only what is actually sent. The reminder pass mails the customer,
+  // never these addresses, so "an appointment is coming up" was an alert that
+  // did not exist. The senders that DO read them are listed in the action's
+  // test (calendar/actions.test.ts). No persona name: clients rename Sofía.
+  "calendar.settings.notifyEmailsHint": "Separate addresses with commas or put each on its own line. We email them when a customer books, cancels or moves an appointment, and when a caller leaves a message or their details.",
+  "calendar.settings.notifyEmailsInvalid": "That doesn't look like an email address: {value}",
   // The inline warning the checklist's form_notify concern mirrors: an
   // account that is accepting bookings with nobody listed to hear about them
   // is a silent failure mode, not a valid configuration to save quietly.
@@ -1156,6 +1228,14 @@ export const m = {
   "calendar.bookings.markNoShow": "No-show",
   "calendar.bookings.statusUpdated": "Booking updated",
   "calendar.bookings.statusUpdateFailed": "Could not update this booking.",
+  // D-036: Cancel runs at once with Undo (rule 6). It emails nobody, so the
+  // toast says the customer has not heard, rather than letting the operator
+  // assume they have.
+  "calendar.bookings.cancelledToast": "Appointment cancelled. We haven't told the customer, so let them know.",
+  "calendar.bookings.restored": "Appointment is back on.",
+  "calendar.bookings.restoreSlotTaken": "Someone else booked that time after you cancelled, so this appointment can't be put back.",
+  "calendar.bookings.restoreRescheduled": "This appointment was moved to a new time, so the old one can't be put back.",
+  "calendar.bookings.restoreNotOurs": "The customer cancelled this one themselves, by link or on a call, so it can't be put back from here.",
   "calendar.bookings.notStartedYet": "This appointment hasn't started yet. Mark it completed or no-show once it has.",
   "calendar.bookings.status.booked": "Booked",
   "calendar.bookings.status.cancelled": "Cancelled",
@@ -1750,6 +1830,16 @@ export const m = {
   // "Sorry we missed your call" days later.
   "automations.reason.tooLongAfterCall": "Not sent: too long after the call",
   "automations.reason.tooLongAfterWriteIn": "Not sent: too long after they wrote in",
+  // D-061: accounts.outbound_suppressed (0032) — a demo account, or any
+  // account the agency has otherwise marked not real. Not "pre-go-live":
+  // go-live's own migration (0063) never reads or writes this column, so
+  // an account can go live while still suppressed or stay suppressed well
+  // after. Every scheduled pass skips this silently through
+  // loadSendableRows; this string only ever surfaces if a RELEASED instant
+  // reply finds the flag set, since the inline send itself stays silent
+  // (same posture as "disabled" — logging it would be noise on a seeded
+  // demo account, not a signal).
+  "automations.reason.accountSuppressed": "This account isn't sending yet",
   "automations.activityLink": "See what went out",
   // The page's four group headings, in the order the customer lives it; the
   // last group is the one rule that holds every automation back.
@@ -1776,6 +1866,12 @@ export const m = {
   "activity.usage.calls": "Calls handled",
   "activity.usage.capRecipe": "Most automations: up to {cap} a day",
   "activity.usage.capDay": "Up to {cap} a day",
+  // D-066: "Emails sent" used to mix in the agency's own weekly report (not
+  // a customer send, and not capped by the recipe limit above) and never
+  // said when a send failed outright. Zero is a number here too — this
+  // always renders, the same convention "0 waiting"/"0 skipped" already
+  // follow below.
+  "activity.usage.emailsFailed": "{n} failed to send",
   "activity.usage.held": "{n} waiting",
   "activity.usage.skipped": "{n} skipped",
   "activity.usage.topReason": "most often: {reason}",
@@ -2048,13 +2144,16 @@ export const m = {
   // and `brandDisplayName` (lib/email/templates/shell.ts) takes no account
   // name at all. Through the product that fallback never fires, so this
   // label reaches no client and no customer. The mistake to prevent now is
+  // (2026-10-09: Add company now asks for the customer-facing name as its
+  // own field, so the brand name no longer starts as a copy of this label
+  // and the help no longer says it does.) The mistake to prevent now is
   // the OPPOSITE one: an operator renaming here and expecting the client's
   // workspace, or their customers' emails, to follow. They do not — the
   // seeded brand name is a copy that drifts the moment either side is edited
   // alone (renameAccountAction's doc comment, setup/actions.ts) — so the copy
   // points at Branding for anything anyone else sees.
   "setup.rename.help":
-    "Your own label for this client — only you see it. Their brand name started as a copy of it; change what they and their customers see in Branding.",
+    "Your own label for this client — only you see it. Change what they and their customers see in Branding.",
 
   // ── Command palette (DESIGN.md's ⌘K key pattern) ───────────────────────
   "palette.placeholder": "Search contacts, calls, pages…",
@@ -2282,12 +2381,16 @@ export const m = {
     "This company has no timezone of its own, so times use the agency's.",
   "zone.guessed.fallback":
     "Neither this company nor the agency has a usable timezone, so times use UTC.",
-  // The fix, for the reader who can actually apply it. Settings is
-  // agency-only (`requireAgencyOnlyAccountAccess`), so this link is rendered
-  // for the agency and ONLY for the agency — a client following it would be
-  // redirected straight back to their dashboard, which is a worse answer
-  // than no link at all.
-  "zone.guessed.fix": "Set it in Settings",
+  // D-076: this used to be a Link to Settings ("Set it in Settings"),
+  // agency-only (`requireAgencyOnlyAccountAccess`) so a client following it
+  // would have been redirected straight back to their own dashboard — but
+  // Settings has no timezone field at all, and never has: the only zone
+  // input anywhere in the product is the "Add company" dialog, and only at
+  // creation. A dead link to a page with nothing to fix is worse than no
+  // link, the same reasoning that already kept the CLIENT reader off one —
+  // this string just hadn't caught up to its own sibling's rule. Plain
+  // text now, naming the real constraint instead of a destination.
+  "zone.guessed.fix": "There's no Settings field for this yet — a company's timezone is set only when its account is created.",
   // The same fact, for a client, who can see the consequence but cannot
   // reach the setting. Says who to ask rather than offering a dead link, and
   // says "your" rather than "this company" — on their own dashboard, they

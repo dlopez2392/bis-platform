@@ -1,6 +1,6 @@
 import {
   getAutomation, parseInstantReplyConfig, hasRecentOutboundSms, countInstantRepliesSince,
-  stampInstantReplySent, readAccountTimezone, type SupabaseClient,
+  stampInstantReplySent, readAccountTimezone, isAccountOutboundSuppressed, type SupabaseClient,
 } from "@bis/db";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import {
@@ -23,11 +23,15 @@ import {
  * ONE outcome per call, never a throw for a business reason. The free checks
  * (a parsed phone, inside the +1/+52 allowlist, consent not withheld) run
  * before any read; an account with the recipe off pays exactly one indexed
- * read per submission. Then, in order: the A2P gate (the same gate
- * as every send, fails closed) → the 24h per-thread hold (THE double-text
- * guard, new and returning contacts alike; one conversation exists per
- * contact) → the daily cap (25/account/24h, counted on the submission
- * stamp) → the shared write-then-send path → the stamp → mark sent.
+ * read per submission. Then, in order: the account-level send switch
+ * (accounts.outbound_suppressed, D-061 — every scheduled pass gets this for
+ * free through loadSendableRows; this inline recipe has no due-list to
+ * carry that filter, so it reads the column itself) → the A2P gate (the
+ * same gate as every send, fails closed) → the 24h per-thread hold (THE
+ * double-text guard, new and returning contacts alike; one conversation
+ * exists per contact) → the daily cap (25/account/24h, counted on the
+ * submission stamp) → the shared write-then-send path → the stamp → mark
+ * sent.
  *
  * The body is the SAVED text, sent VERBATIM — nothing composed around it, no
  * name resolved — which is what makes this the one recipe whose send path
@@ -37,8 +41,8 @@ import {
  * Logging (console.error, the passes' convention): `outsideRegion` (the
  * submission id and the number's first three characters, never the number),
  * `smsGate`, `dailyCap`, `failed` and an unstamped `sent` — each something
- * an operator or the next session would want to see. `disabled`, `noPhone`,
- * `consentWithheld` and `recentText` are normal and stay silent; `disabled`
+ * an operator or the next session would want to see. `disabled`, `suppressed`,
+ * `noPhone`, `consentWithheld` and `recentText` are normal and stay silent; `disabled`
  * in particular would otherwise log once per submission for every account
  * without the recipe.
  */
@@ -76,7 +80,7 @@ export type InstantReplyInput = {
 };
 
 export type InstantReplySkip =
-  | "noPhone" | "outsideRegion" | "consentWithheld" | "disabled" | "smsGate" | "recentText" | "dailyCap";
+  | "noPhone" | "outsideRegion" | "consentWithheld" | "disabled" | "suppressed" | "smsGate" | "recentText" | "dailyCap";
 
 export type InstantReplyOutcome =
   | { kind: "sent"; unstamped: boolean }
@@ -136,6 +140,17 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
   // enable with a blank text — so a guard, not a feature.
   const body = (input.locale === "es" ? config.bodyEs : row.body).trim();
   if (!body) return { kind: "skipped", reason: "disabled", detail: `empty ${input.locale} body` };
+
+  // D-061: the account-level send switch every SCHEDULED pass honours for
+  // free, through loadSendableRows' filter on accounts.outbound_suppressed
+  // (0032) — a demo account, or any account the agency has otherwise
+  // marked not real, whose rows are illustrative rather than something to
+  // contact. Not "pre-go-live": go-live's own migration (0063) never reads
+  // or writes this column, so the two are unrelated. This inline recipe
+  // has no due-list to carry that filter, so it reads the flag itself,
+  // silently, like `disabled` just above: a demo account's own seeded
+  // submissions would otherwise log noise forever.
+  if (await isAccountOutboundSuppressed(db, accountId)) return { kind: "skipped", reason: "suppressed" };
 
   // From here on the recipe is ON, so a refusal is something the client
   // wants to see on the Activity page. Nothing above this line is logged:
@@ -230,7 +245,8 @@ export async function sendInstantReply(input: InstantReplyInput): Promise<Instan
 
 const SKIP_REASONS: Record<InstantReplySkip, string> = {
   noPhone: REASONS.noPhone, outsideRegion: REASONS.outsideRegion, consentWithheld: REASONS.consentWithheld,
-  disabled: REASONS.recipeOff, smsGate: REASONS.smsGate, recentText: REASONS.recentText, dailyCap: REASONS.dailyCap,
+  disabled: REASONS.recipeOff, suppressed: REASONS.accountSuppressed,
+  smsGate: REASONS.smsGate, recentText: REASONS.recentText, dailyCap: REASONS.dailyCap,
 };
 
 /** The release: rebuild the input from the held row and run the whole

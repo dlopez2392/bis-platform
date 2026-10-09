@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { loadAccountBrandInfo, ACCOUNT_BRAND_COLS } from "./booking";
+import { ACCOUNT_BRAND_COLS } from "./booking";
 import { brandDisplayName, type Branding } from "./branding";
 import { emit } from "./events";
 
@@ -31,6 +31,36 @@ export type AccountDueWeeklyReport = {
   hasSite: boolean;
 };
 
+/** D-067: PostgREST on this project caps a single response at `max_rows`
+ *  (supabase/config.toml), silently — no error, just fewer rows than exist.
+ *  Shared with `listTrafficBreakdown`'s own page size (sites.ts): same
+ *  server, same ceiling. */
+const DUE_WEEKLY_REPORT_PAGE = 1000;
+
+type AccountBrandRow = {
+  timezone: string; brand_name: string | null; brand_logo_path: string | null;
+  brand_color: string | null; brand_neutral: Branding["brandNeutral"];
+  brand_corners: Branding["brandCorners"]; brand_type: Branding["brandType"];
+  brand_mode: Branding["brandMode"]; reply_to_email: string | null;
+};
+
+/** Shared by `listAccountsDueWeeklyReport` and `listAccountsForWeeklyRollup`:
+ *  both select `ACCOUNT_BRAND_COLS` in their OWN statement now (see either
+ *  function's comment for why `loadAccountBrandInfo` was wrong here), so
+ *  both need the identical row-to-`Branding` mapping. */
+function brandingOf(r: AccountBrandRow): Branding {
+  return {
+    brandName: r.brand_name ?? null,
+    brandLogoPath: r.brand_logo_path ?? null,
+    brandColor: r.brand_color ?? null,
+    brandNeutral: r.brand_neutral ?? null,
+    brandCorners: r.brand_corners ?? null,
+    brandType: r.brand_type ?? null,
+    brandMode: r.brand_mode ?? null,
+    replyToEmail: r.reply_to_email ?? null,
+  };
+}
+
 /**
  * Every account due a weekly report — meaning every account with at least one
  * recipient. Whether it is Monday, and whether this week was already sent, are
@@ -40,32 +70,71 @@ export type AccountDueWeeklyReport = {
  * An account with no recipients is filtered out SERVER-SIDE and never crosses
  * the wire. That is what makes "not configured" a non-event rather than a
  * failure the pass has to count.
+ *
+ * D-067, TWO fixes together:
+ *
+ *   1. PAGED, stopping only on a genuinely empty page (same shape as
+ *      `listTrafficBreakdown`, sites.ts) — an unpaged read inherits
+ *      PostgREST's `max_rows` cap, and `order("created_at")` ascending
+ *      made that silent: the 1,001st account (oldest-created-last) would
+ *      never even reach the pass's own cap/budget logic, since it was
+ *      never in the array those loop over.
+ *   2. The brand columns (`ACCOUNT_BRAND_COLS`) are now selected in THIS
+ *      statement, not via a follow-up `loadAccountBrandInfo` call — which
+ *      did one `.single()` PER due account, serially, before the pass's
+ *      own tick budget even starts counting (a real cost at the scale
+ *      this read now has to serve). `listAccountsForWeeklyRollup` below
+ *      made the identical change for the identical reason (a real race,
+ *      found by the test suite): one statement removes both the N serial
+ *      reads and the account-deleted-mid-tick throw `loadAccountBrandInfo`
+ *      would otherwise raise.
  */
 export async function listAccountsDueWeeklyReport(
   db: SupabaseClient,
 ): Promise<AccountDueWeeklyReport[]> {
-  const { data, error } = await db.from("accounts")
-    .select("id, created_at, report_emails, weekly_report_week")
-    // PostgREST spells "array is not the empty array" as a `neq` against the
-    // literal `{}`. A `.not("report_emails", "is", null)` would NOT do it:
-    // the column is `not null default '{}'`, so the empty case is a value.
-    .neq("report_emails", "{}")
-    // A suppressed account sends nothing (0032), and this report is a real
-    // send to a real inbox. The recipient list alone is NOT the guard here:
-    // a demo account is branded and configured to look complete, so someone
-    // filling in recipients to screenshot the setting would start mailing
-    // invented numbers. The flag is the thing that cannot be set by accident.
-    .eq("outbound_suppressed", false);
-  if (error) throw new Error(`listAccountsDueWeeklyReport failed: ${error.message}`);
-
-  const rows = (data ?? []) as {
+  type Row = {
     id: string; created_at: string;
     report_emails: string[]; weekly_report_week: string | null;
-  }[];
+  } & AccountBrandRow;
+  const rows: Row[] = [];
+  for (let from = 0; ; ) {
+    const { data, error } = await db.from("accounts")
+      .select(`id, created_at, report_emails, weekly_report_week, ${ACCOUNT_BRAND_COLS}`)
+      // PostgREST spells "array is not the empty array" as a `neq` against
+      // the literal `{}`. A `.not("report_emails", "is", null)` would NOT
+      // do it: the column is `not null default '{}'`, so the empty case is
+      // a value.
+      .neq("report_emails", "{}")
+      // A suppressed account sends nothing (0032), and this report is a real
+      // send to a real inbox. The recipient list alone is NOT the guard
+      // here: a demo account is branded and configured to look complete, so
+      // someone filling in recipients to screenshot the setting would start
+      // mailing invented numbers. The flag is the thing that cannot be set
+      // by accident.
+      .eq("outbound_suppressed", false)
+      // D-067: the pass caps attempts PER TICK. The real cursor that makes
+      // those limited attempts land on PROGRESS across the Monday band's
+      // twelve ticks is `weekly_report_week`, read from this row and
+      // checked for free in the pass's own loop before either limit — an
+      // already-stamped account costs nothing there. This ordering's job
+      // is narrower: it makes WHICH not-yet-stamped accounts get a given
+      // tick's limited attempts deterministic. `created_at` is the one
+      // column on this row that is set once and never changes, so ordering
+      // by it is stable regardless of a concurrent write landing on some
+      // OTHER account's row in between; `id` breaks a tie between two
+      // accounts created in the same instant, so the ordering stays a
+      // TOTAL one across pages.
+      .order("created_at", { ascending: true }).order("id", { ascending: true })
+      .range(from, from + DUE_WEEKLY_REPORT_PAGE - 1);
+    if (error) throw new Error(`listAccountsDueWeeklyReport failed: ${error.message}`);
+    const page = (data ?? []) as Row[];
+    rows.push(...page);
+    if (page.length === 0) break;
+    from += page.length;
+  }
   if (rows.length === 0) return [];
 
   const ids = rows.map((r) => r.id);
-  const info = await loadAccountBrandInfo(db, ids, "listAccountsDueWeeklyReport");
 
   // ONE read for every account's site flag, not one per row. `sites` holds at
   // most one row per account today, but this asks the question the report
@@ -75,20 +144,17 @@ export async function listAccountsDueWeeklyReport(
   if (siteErr) throw new Error(`listAccountsDueWeeklyReport sites failed: ${siteErr.message}`);
   const withSite = new Set((siteRows ?? []).map((s: { account_id: string }) => s.account_id));
 
-  return rows.map((r) => {
-    const brand = info.get(r.id)!;
-    return {
-      accountId: r.id,
-      createdAt: r.created_at,
-      reportEmails: r.report_emails,
-      accountTimezone: brand.accountTimezone,
-      brandName: brandDisplayName(brand.branding),
-      branding: brand.branding,
-      replyToEmail: brand.replyToEmail,
-      lastSentWeek: r.weekly_report_week,
-      hasSite: withSite.has(r.id),
-    };
-  });
+  return rows.map((r) => ({
+    accountId: r.id,
+    createdAt: r.created_at,
+    reportEmails: r.report_emails,
+    accountTimezone: r.timezone,
+    brandName: brandDisplayName(brandingOf(r)),
+    branding: brandingOf(r),
+    replyToEmail: r.reply_to_email ?? null,
+    lastSentWeek: r.weekly_report_week,
+    hasSite: withSite.has(r.id),
+  }));
 }
 
 /**
@@ -220,16 +286,10 @@ export async function listAccountsForWeeklyRollup(
   if (rows.length === 0) return [];
 
   const ids = rows.map((r) => r.id);
-  const brandingOf = (r: (typeof rows)[number]): Branding => ({
-    brandName: r.brand_name ?? null,
-    brandLogoPath: r.brand_logo_path ?? null,
-    brandColor: r.brand_color ?? null,
-    brandNeutral: r.brand_neutral ?? null,
-    brandCorners: r.brand_corners ?? null,
-    brandType: r.brand_type ?? null,
-    brandMode: r.brand_mode ?? null,
-    replyToEmail: r.reply_to_email ?? null,
-  });
+  // `brandingOf` is now the module-level helper above, shared with
+  // listAccountsDueWeeklyReport — D-067 (review round 2) gave that
+  // function the identical row-to-`Branding` mapping this one already had
+  // inline, so the two copies became one.
 
   // Same one-read-for-everyone shape as listAccountsDueWeeklyReport's own
   // site flag above, not one query per account.

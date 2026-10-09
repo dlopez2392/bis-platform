@@ -9,11 +9,11 @@ import { normalizeLocale, publicTabTitle } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
-import { BookingPage } from "./booking-page";
-import { getSlotsAction, submitBookingAction } from "./actions";
+import { BookingPage } from "../booking-page";
+import { getSlotsAction, submitBookingAction } from "../actions";
 import {
   loadCalendar, loadCalendarSafe, isCalendarLive, loadCalendarBranding as loadBranding, UNBRANDED,
-} from "./data";
+} from "../data";
 
 export const dynamic = "force-dynamic";
 
@@ -46,14 +46,8 @@ function pad(n: number): string {
 //
 // The title (F-102, defect :870) is set only for the live case; a disabled
 // or unknown calendar falls through all the way to the ROOT `app/b/layout.tsx`'s
-// static "Booking" default. A non-root segment layout briefly computed a
-// brand-aware fallback title here instead (F-102 review round, fix 6) —
-// REMOVED (owner decision, second review round): it never actually
-// branded the not-found PAGE (notFound() is caught by `app/b/not-found.tsx`,
-// above this segment, which replaces it — the title changed but the brand
-// chrome never rendered) and cost a real query on every cancel request for
-// a benefit that didn't exist. See `app/b/[publicId]/data.ts`'s own comment
-// for the full writeup. `/b`'s not-found stays NEUTRAL, title included.
+// static "Booking" default. The dead end's PAGE is branded for a real
+// calendar by `./layout.tsx` (D-109); its tab title is not, yet.
 //
 // Uses `loadCalendarSafe`, NOT the page component's own `loadCalendar`
 // below (F-102 review round, fix 1) — see `app/f/[publicId]/page.tsx`'s

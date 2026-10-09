@@ -135,7 +135,8 @@ vi.mock("@bis/db", () => ({
   incrementUnreadCount: (...a: unknown[]) => incrementUnreadCountMock(...a),
 }));
 
-import { confirmCancelAction, lookupBookingByToken } from "./actions";
+import { confirmCancelAction } from "./actions";
+import { lookupBookingByToken } from "./data";
 import { serviceDb } from "@bis/db";
 import { bookingStrings } from "@/lib/booking/public-strings";
 
@@ -223,6 +224,19 @@ describe("GET never mutates — structural: confirmCancelAction is the only call
 
     expect(pageSrc).not.toMatch(/cancelBookingByToken/);
     expect(actionsSrc).toMatch(/cancelBookingByToken/);
+  });
+});
+
+/**
+ * D-109 review: every runtime export of a "use server" module is a server
+ * action, an endpoint a browser can POST to. The read-only token lookup is a
+ * page/layout helper, so it lives in `./data.ts`, and this module exports the
+ * cancel action and nothing else.
+ */
+describe("the \"use server\" module exports only the cancel action", () => {
+  it("lookupBookingByToken is not a server action (mutation: export it from actions.ts again → FAILS)", async () => {
+    const mod = await import("./actions");
+    expect(Object.keys(mod).sort()).toEqual(["confirmCancelAction"]);
   });
 });
 

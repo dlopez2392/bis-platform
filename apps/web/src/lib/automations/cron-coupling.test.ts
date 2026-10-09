@@ -11,7 +11,7 @@ import {
 import { FOLLOWUP_MAX_AGE_MS } from "@/lib/booking/followup-timing";
 import { reminderDeadline } from "@/lib/booking/reminder-timing";
 import { nextOpening, expiresBeforeOpening } from "@/lib/consent/hours";
-import { SMS_RETRY_COOLDOWN_MS } from "./caps";
+import { SMS_RETRY_COOLDOWN_MS, USAGE_REPORT_BUDGET_MS, WEEKLY_REPORT_BUDGET_MS } from "./caps";
 import { RELEASE_BUDGET_MS } from "./passes/release-held";
 
 /**
@@ -218,5 +218,30 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     // per recipe (it is thirteen entries today, and was nine when this
     // sentence was written), and a number written down here rots silently.
     expect(maxDuration).toBeGreaterThanOrEqual((RELEASE_BUDGET_MS / 1000) * 2);
+  });
+
+  /**
+   * Review M2: the test above checks ONE budgeted pass against the route's
+   * `maxDuration`. THREE passes carry a wall-clock budget today —
+   * release-held (RELEASE_BUDGET_MS), the usage report
+   * (USAGE_REPORT_BUDGET_MS) and, since D-067, the weekly client report
+   * (WEEKLY_REPORT_BUDGET_MS) — and nothing coupled their SUM to the
+   * ceiling: three budgets could be raised independently, each passing
+   * its own neighbour's check, until together they left the other twelve
+   * registered passes no room at all inside one tick. `MIN_HEADROOM_MS`
+   * is one more 60 s budget's worth — the smallest margin that still
+   * reads as "room for the rest", not a number tuned to pass today's
+   * three. Mutation: raise any one budget past the point this leaves
+   * zero headroom → FAILS; comment out `maxDuration` or any budget
+   * export → FAILS (the `Number(...)` on `undefined` is `NaN`, and `NaN`
+   * fails every comparison).
+   */
+  it("the three wall-clock budgets, summed, still leave at least one more budget's worth of headroom inside maxDuration", () => {
+    const m = /^export const maxDuration = (\d+);$/m.exec(routeSource);
+    expect(m).not.toBeNull();
+    const maxDuration = Number(m![1]);
+    const MIN_HEADROOM_MS = 60_000;
+    const sumBudgetsMs = RELEASE_BUDGET_MS + USAGE_REPORT_BUDGET_MS + WEEKLY_REPORT_BUDGET_MS;
+    expect(maxDuration * 1000).toBeGreaterThanOrEqual(sumBudgetsMs + MIN_HEADROOM_MS);
   });
 });

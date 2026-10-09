@@ -14,10 +14,19 @@ const LABEL = "font-mono text-[10px] font-medium uppercase tracking-[0.14em] tex
  * context. No hero gradient: text-coloured numbers; the dashboard's KPI is
  * the screen's one gradient moment and this is not that screen.
  */
+type Tile = { key: string; label: string; value: number; context: string; extra?: string };
+
 export function UsageCard({ state, monthLabel, callCap }: { state: UsageState; monthLabel: string; callCap: number }) {
-  const tiles = state.ok ? [
+  const tiles: Tile[] = state.ok ? [
     { key: "texts", label: m["activity.usage.texts"], value: state.usage.textsSent, context: m["activity.usage.capRecipe"].replace("{cap}", String(AUTOMATION_DAILY_CAP)) },
-    { key: "emails", label: m["activity.usage.emails"], value: state.usage.emailsSent, context: m["activity.usage.capRecipe"].replace("{cap}", String(AUTOMATION_DAILY_CAP)) },
+    {
+      key: "emails", label: m["activity.usage.emails"], value: state.usage.emailsSent,
+      context: m["activity.usage.capRecipe"].replace("{cap}", String(AUTOMATION_DAILY_CAP)),
+      // D-066: counts only customer emails (never the agency's own weekly
+      // report, which carries no recipe cap) and names its own failed
+      // count — "0 failed to send" is a real month, not a blank one.
+      extra: m["activity.usage.emailsFailed"].replace("{n}", String(state.usage.emailsFailed)),
+    },
     { key: "conversations", label: m["activity.usage.conversations"], value: state.usage.conversations, context: m["activity.usage.capDay"].replace("{cap}", String(CONCIERGE_MAX_CONVERSATIONS_PER_ACCOUNT_PER_DAY)) },
     { key: "calls", label: m["activity.usage.calls"], value: state.usage.callsHandled, context: m["activity.usage.capDay"].replace("{cap}", String(callCap)) },
   ] : [];
@@ -38,6 +47,7 @@ export function UsageCard({ state, monthLabel, callCap }: { state: UsageState; m
                   <dt className={LABEL}>{t.label}</dt>
                   <dd className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{t.value}</dd>
                   <dd className="text-xs text-muted-foreground">{t.context}</dd>
+                  {t.extra ? <dd className="text-xs text-muted-foreground">{t.extra}</dd> : null}
                 </div>
               ))}
             </dl>

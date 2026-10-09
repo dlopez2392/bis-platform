@@ -4,13 +4,21 @@ const { lookupBookingByTokenMock, getBrandingMock } = vi.hoisted(() => ({
   lookupBookingByTokenMock: vi.fn(),
   getBrandingMock: vi.fn(),
 }));
-vi.mock("./actions", () => ({ lookupBookingByToken: lookupBookingByTokenMock }));
-// `page.tsx`'s own `loadTimezone` calls `serviceDb().from("accounts")...`
-// directly — the component-render tests below need a `serviceDb()` that
-// actually answers that one chained call.
+// One fake `serviceDb()` answering both chained reads this route makes:
+// `page.tsx`'s own `loadTimezone` (accounts) and `./data.ts`'s REAL
+// `lookupBookingByToken` (bookings), whose row comes from
+// `lookupBookingByTokenMock`. A rejection becomes the query error the real
+// lookup turns into a throw, so `loadBookingSafe`'s catch is the real one.
 const fakeDb = {
-  from: () => ({ select: () => ({ eq: () => ({
-    maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }),
+  from: (table: string) => ({ select: () => ({ eq: () => ({
+    maybeSingle: async () => {
+      if (table !== "bookings") return { data: { timezone: "America/Chicago" }, error: null };
+      try {
+        return { data: await lookupBookingByTokenMock(), error: null };
+      } catch (e) {
+        return { data: null, error: { message: (e as Error).message } };
+      }
+    },
   }) }) }),
 };
 vi.mock("@bis/db", () => ({

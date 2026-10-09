@@ -259,7 +259,7 @@ export default async function CallDetailPage({
               `formatCallTime` already renders its short name ("CDT") beside
               the time; this says which zone that abbreviation belongs to,
               and whether it is this account's own. */}
-          <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
+          <ZoneNote zone={zone} isAgency={isAgency} />
           {/* Above the summary, because it is the only thing on this page that
               asks the operator to DO something. Not a `section` with a
               heading: the badge already says what this is, and an <h2>

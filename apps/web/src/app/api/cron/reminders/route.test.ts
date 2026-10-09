@@ -282,7 +282,7 @@ const EMPTY_NO_SHOW_NUDGES = {
   skippedSmsGate: 0, skippedRecentFailure: 0, skippedCap: 0, skippedCalendarOff: 0,
   waitingForMorning: 0, unresolvableTimezone: 0,
 };
-const EMPTY_WEEKLY_CLIENT = { sent: 0, failed: 0, skippedNotMonday: 0, skippedAlreadySent: 0, skippedCap: 0, unresolvableTimezone: 0, unstamped: 0 };
+const EMPTY_WEEKLY_CLIENT = { sent: 0, failed: 0, skippedNotMonday: 0, skippedAlreadySent: 0, skippedCap: 0, skippedBudget: 0, unresolvableTimezone: 0, unstamped: 0 };
 // `skippedNoRecipient: 1`, not 0: `getAgencyReportTarget` is mocked to return
 // no row here, and refusing to send with nowhere to send TO — visibly, under
 // its own counter — is exactly the designed behaviour. An unset agency address

@@ -2,7 +2,7 @@ import "dotenv/config";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
@@ -258,6 +258,119 @@ describe("contacts service", () => {
     }));
 });
 
+describe("updateContact dedupe on edit (D-012)", () => {
+  // Before this fix updateContact never checked the dedupe keys at all: an
+  // edit that landed one contact's email or phone on another contact's key
+  // created a silent duplicate — same key, two rows, nothing recorded,
+  // never surfaced to the merge queue findDuplicate otherwise feeds.
+  it("flags the pair when an edit lands this contact's email on another contact's", () =>
+    withTestAccount(async (db, accountId) => {
+      const held = await createContact(db, accountId,
+        { firstName: "Held", email: "held@example.com" }, "user_test");
+      const other = await createContact(db, accountId,
+        { firstName: "Other", email: "other@example.com" }, "user_test");
+
+      await updateContact(db, accountId, other.id, { email: "HELD@example.com" }, "user_test");
+
+      // The edit itself is never refused — the operator's edit is the truth
+      // about this row, same policy as setContactPhoneCountry.
+      const row = await getContact(db, accountId, other.id);
+      expect(row?.email).toBe("HELD@example.com");
+
+      const [lo, hi] = [held.id, other.id].sort();
+      const { data } = await db.from("contact_duplicate_flags")
+        .select("reason").eq("account_id", accountId)
+        .eq("contact_a", lo).eq("contact_b", hi);
+      expect(data?.length, "exactly one flag row for the pair").toBe(1);
+      expect(data![0]!.reason).toBe("email_match_on_edit");
+    }));
+
+  it("flags the pair when an edit lands this contact's phone on another contact's, any formatting", () =>
+    withTestAccount(async (db, accountId) => {
+      const held = await createContact(db, accountId,
+        { firstName: "Held", phone: "(956) 292-1696" }, "user_test");
+      const other = await createContact(db, accountId,
+        { firstName: "Other", phone: "956-555-0101" }, "user_test");
+
+      // Different punctuation, same ten digits — the dedupe key, not an
+      // exact string match, is what must catch this.
+      await updateContact(db, accountId, other.id, { phone: "+19562921696" }, "user_test");
+
+      const [lo, hi] = [held.id, other.id].sort();
+      const { data } = await db.from("contact_duplicate_flags")
+        .select("reason").eq("account_id", accountId)
+        .eq("contact_a", lo).eq("contact_b", hi);
+      expect(data?.length, "exactly one flag row for the pair").toBe(1);
+      expect(data![0]!.reason).toBe("phone_match_on_edit");
+    }));
+
+  it("does not flag an edit that leaves the phone unchanged (re-saving the same number)", () =>
+    withTestAccount(async (db, accountId) => {
+      await createContact(db, accountId,
+        { firstName: "Held", phone: "(956) 292-1696" }, "user_test");
+      const other = await createContact(db, accountId,
+        { firstName: "Other", phone: "956-555-0101" }, "user_test");
+
+      // Re-saving Other's OWN number, unchanged, must never flag it against
+      // itself or anyone else.
+      await updateContact(db, accountId, other.id, { phone: "956-555-0101" }, "user_test");
+
+      const { data } = await db.from("contact_duplicate_flags")
+        .select("id").eq("account_id", accountId);
+      expect(data).toHaveLength(0);
+    }));
+
+  it("does not duplicate the flag row when the SAME colliding edit is saved again (mutation: flagDuplicatePair not swallowing 23505 → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const held = await createContact(db, accountId,
+        { firstName: "Held", email: "held@example.com" }, "user_test");
+      const other = await createContact(db, accountId,
+        { firstName: "Other", email: "other@example.com" }, "user_test");
+
+      await updateContact(db, accountId, other.id, { email: "held@example.com" }, "user_test");
+      // The SAME colliding value, saved again — re-running the dedupe check
+      // against a pair already flagged, which is the unique index's repeat
+      // (23505) this test actually exercises. A re-save with an UNRELATED
+      // field (the old version of this test used `{ lastName: "Touched" }`)
+      // never touches row.email at all, so it never re-ran the check — that
+      // version could not fail no matter how the repeat was handled.
+      await expect(updateContact(db, accountId, other.id, { email: "held@example.com" }, "user_test"))
+        .resolves.toEqual({ flagged: true });
+
+      const [lo, hi] = [held.id, other.id].sort();
+      const { data } = await db.from("contact_duplicate_flags")
+        .select("id").eq("account_id", accountId)
+        .eq("contact_a", lo).eq("contact_b", hi);
+      expect(data?.length, "one flag row, not one per save").toBe(1);
+    }));
+
+  // Self-exclusion check: an edit to a genuinely unique value (nobody else
+  // holds this key) must find no twin via the `.neq("id", contactId)`
+  // self-exclusion — not log an error, and not write a flag. Spying on
+  // console.error, not just checking the table, so a query that silently
+  // matched the row ITSELF (a missing/wrong `.neq`) and then errored on
+  // something else downstream would still be caught here.
+  it("edits to a genuinely unique email: no error logged, no flag written (mutation: drop .neq('id', contactId) → the row matches ITSELF, and flagging a contact against itself trips the pair's own contact_a < contact_b check constraint, logged as code 23514 → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const c = await createContact(db, accountId,
+          { firstName: "Solo", email: "solo@example.com" }, "user_test");
+
+        const result = await updateContact(db, accountId, c.id,
+          { email: "nobody-else-has-this@example.com" }, "user_test");
+
+        expect(result).toEqual({ flagged: false });
+        expect(errorSpy).not.toHaveBeenCalled();
+        const { data } = await db.from("contact_duplicate_flags")
+          .select("id").eq("account_id", accountId);
+        expect(data).toHaveLength(0);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    }));
+});
+
 describe("fillContactBlanks", () => {
   it("fills only blank fields and reports them", () =>
     withTestAccount(async (db, accountId) => {
@@ -311,6 +424,49 @@ describe("fillContactBlanks", () => {
       const c = await createContact(db, accountId, { firstName: "Ana", phone: "+15550000026" }, "t");
       expect(await fillContactBlanks(db, accountId, c.id,
         { firstName: "Maria", lastName: "Smith" }, "t")).toEqual([]);
+    }));
+
+  // D-012 via a second path: a proposal-approval fill (the shape
+  // calls/[callId]/actions.ts's acceptProposal uses — ONE field, the
+  // contact_field proposal's own) that lands a blank email on another
+  // contact's key created the exact same silent duplicate updateContact
+  // used to, just reached through fillContactBlanks instead of a direct
+  // edit. No merge-queue row recorded it before this fix.
+  it("flags the pair when a proposal-approval fill lands a blank email on another contact's key", () =>
+    withTestAccount(async (db, accountId) => {
+      const held = await createContact(db, accountId,
+        { firstName: "Held", email: "held@example.com" }, "t");
+      const blank = await createContact(db, accountId, { firstName: "Blank" }, "t");
+
+      // The single-field shape acceptProposal actually calls with.
+      const filled = await fillContactBlanks(db, accountId, blank.id,
+        { email: "HELD@example.com" }, "t");
+      expect(filled).toEqual(["email"]);
+
+      const [lo, hi] = [held.id, blank.id].sort();
+      const { data } = await db.from("contact_duplicate_flags")
+        .select("reason").eq("account_id", accountId)
+        .eq("contact_a", lo).eq("contact_b", hi);
+      expect(data?.length, "exactly one flag row for the pair").toBe(1);
+      expect(data![0]!.reason).toBe("email_match_on_edit");
+    }));
+
+  it("flags the pair when a proposal-approval fill lands a blank phone on another contact's key", () =>
+    withTestAccount(async (db, accountId) => {
+      const held = await createContact(db, accountId,
+        { firstName: "Held", phone: "(956) 292-1696" }, "t");
+      const blank = await createContact(db, accountId, { firstName: "Blank" }, "t");
+
+      const filled = await fillContactBlanks(db, accountId, blank.id,
+        { phone: "+19562921696" }, "t");
+      expect(filled).toEqual(["phone", "phone_country_unconfirmed"]);
+
+      const [lo, hi] = [held.id, blank.id].sort();
+      const { data } = await db.from("contact_duplicate_flags")
+        .select("reason").eq("account_id", accountId)
+        .eq("contact_a", lo).eq("contact_b", hi);
+      expect(data?.length, "exactly one flag row for the pair").toBe(1);
+      expect(data![0]!.reason).toBe("phone_match_on_edit");
     }));
 });
 

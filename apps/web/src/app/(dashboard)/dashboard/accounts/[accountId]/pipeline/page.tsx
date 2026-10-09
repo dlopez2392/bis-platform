@@ -25,10 +25,12 @@ export default async function PipelinePage({
     // header figure is "what's in the pipeline": the exact same call the
     // account dashboard's "Pipeline value" tile makes, so the two numbers
     // can never disagree by construction — not two definitions kept in
-    // sync by hand, one shared source. `listBoard` alone can't stand in for
-    // it: it reads only this ONE (default) pipeline, unpaged, so an account
-    // with a second pipeline or over 1,000 open deals would still disagree
-    // with the dashboard tile, which sums every pipeline past that cap.
+    // sync by hand, one shared source. `listBoard` alone still can't stand
+    // in for it, even past D-105 (it now pages past the 1,000-row cap too):
+    // it reads only this ONE (default) pipeline and every status, so an
+    // account with a second pipeline, or any won/lost deal at all, would
+    // still disagree with the dashboard tile, which sums OPEN deals across
+    // every pipeline.
     sumOpenOpportunities(db, accountId),
   ]);
   const { count, value: total } = openTotals;
