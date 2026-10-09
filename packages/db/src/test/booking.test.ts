@@ -9,6 +9,7 @@ import {
   listBookedRanges, listCalendarBookings, listDueReminders, stampReminderSent,
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
   SlotTakenError, BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel,
+  claimCancelNotice, rescheduleChain,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -1066,3 +1067,147 @@ describe("reschedule link (0061, D-035)", () => {
 // rows to prove `ownAccountEmbedsOnly`. The refusal is proved in
 // same-account-fk-schema.test.ts; the guard stays in booking.ts as defence in
 // depth; the own-account due rows are proved above and in due-by-id.test.ts.
+
+/**
+ * F-048 (rider). Two things the Calendar page's Cancel and the customer's
+ * add-to-calendar file need from the row.
+ *
+ * THE NOTICE'S CLAIM. A business-side cancel can now tell the customer, but
+ * only once its Undo window has closed (rule 6: an Undo that arrives after
+ * the customer was told is not an Undo). `bookings.updated_at`, which only a
+ * status write sets, is the cancel's VERSION: the Undo writes only while the
+ * row still carries it, and the notice claims the row by moving it on. The two
+ * are conditional UPDATEs of one row, so Postgres serialises them and exactly
+ * one wins; neither is a read-then-write.
+ *
+ * THE CHAIN. A reschedule makes a new row pointing at the old one (0061), so
+ * one appointment is a chain of rows. Its calendar file keeps ONE identity
+ * (the first row's id) and counts the moves.
+ */
+describe("F-048: the cancel notice's claim and the reschedule chain", () => {
+  const range = (cal: { id: string }, contactId: string, day: string) => ({
+    calendarId: cal.id, contactId,
+    startsAt: new Date(`2029-08-${day}T15:00:00Z`), endsAt: new Date(`2029-08-${day}T16:00:00Z`),
+  });
+  const rowOf = async (db: SupabaseClient, id: string) => {
+    const { data, error } = await db.from("bookings").select("status, updated_at").eq("id", id).single();
+    if (error) throw new Error(error.message);
+    return data as { status: string; updated_at: string };
+  };
+  const outcome = async (p: Promise<unknown>) => {
+    try { await p; } catch (e) { return e instanceof BookingNotRestorableError ? e.reason : String(e); }
+    return "restored";
+  };
+
+  it("setBookingStatus answers the version it wrote, and it is the row's own updated_at (mutation: answer a fresh Date → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ver" }, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "01"), "user_test");
+      const { updatedAt } = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test");
+      expect(new Date((await rowOf(db, b.id)).updated_at).getTime()).toBe(new Date(updatedAt).getTime());
+    });
+  });
+
+  it("the claim wins once, only on the version it names, only on a cancelled row of this account, and then the Undo is refused as customer_told (mutation: drop the version predicate from the claim → the second claim also wins, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        const cal = await getOrCreateCalendar(db, accountId, "user_test");
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Told" }, "user_test");
+        const b = await createBooking(db, accountId, range(cal, contactId, "02"), "user_test");
+        const { updatedAt } = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+
+        expect(await claimCancelNotice(db, otherAccountId, b.id, updatedAt)).toBe(false); // not this account's
+        expect(await claimCancelNotice(db, accountId, b.id, "2001-01-01T00:00:00.000Z")).toBe(false); // stale version
+        expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(true);
+        expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(false); // already claimed
+
+        expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test", { version: updatedAt }))).toBe("customer_told");
+        expect((await rowOf(db, b.id)).status).toBe("cancelled");
+      });
+    });
+  });
+
+  it("an Undo that lands first restores the row, and the notice's claim then loses", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Back" }, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "03"), "user_test");
+      const { updatedAt } = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test", { version: updatedAt }))).toBe("restored");
+      expect((await rowOf(db, b.id)).status).toBe("booked");
+      expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(false);
+    });
+  });
+
+  // The version alone already refuses the case above (the Undo moved it). The
+  // claim's status predicate is the second guard, for a row that left
+  // "cancelled" WITHOUT a new version: any write that skips setBookingStatus.
+  it("the claim also refuses a row that is no longer cancelled under the same version (mutation: drop the status predicate from the claim → it wins, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Raw" }, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "07"), "user_test");
+      const { updatedAt } = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      const { error } = await db.from("bookings").update({ status: "completed" }).eq("id", b.id);
+      if (error) throw new Error(error.message);
+      expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(false);
+    });
+  });
+
+  it("a cancel, Undo and second cancel leave the FIRST cancel's version stale: its notice cannot claim, the second's can (mutation: claim on status alone → the first wins too, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Twice" }, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "04"), "user_test");
+      const first = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      await undoOperatorCancel(db, accountId, b.id, "user_test", { version: first.updatedAt });
+      const second = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      expect(await claimCancelNotice(db, accountId, b.id, first.updatedAt)).toBe(false);
+      expect(await claimCancelNotice(db, accountId, b.id, second.updatedAt)).toBe(true);
+    });
+  });
+
+  it("an Undo without a version keeps D-036's behaviour, and the other refusals still win over customer_told", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Plain" }, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "05"), "user_test");
+      await setBookingStatus(db, accountId, b.id, "cancelled", "user_test");
+      expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test"))).toBe("restored");
+
+      const sofia = await createBooking(db, accountId, range(cal, contactId, "06"), "user_test");
+      const { updatedAt } = await setBookingStatus(db, accountId, sofia.id, "cancelled", "voice", "ai");
+      expect(await outcome(undoOperatorCancel(db, accountId, sofia.id, "user_test", { version: updatedAt }))).toBe("not_operator_cancel");
+    });
+  });
+
+  it("rescheduleChain names the first row and counts the moves, for every row of the chain (mutation: stop after one hop → the third row reads depth 1, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Chain" }, "user_test");
+      const a = await createBooking(db, accountId, range(cal, contactId, "10"), "voice", "ai");
+      const b = await createBooking(db, accountId, { ...range(cal, contactId, "11"), rescheduledFromId: a.id }, "voice", "ai");
+      await setBookingStatus(db, accountId, a.id, "cancelled", "voice", "ai");
+      const c = await createBooking(db, accountId, { ...range(cal, contactId, "12"), rescheduledFromId: b.id }, "voice", "ai");
+      await setBookingStatus(db, accountId, b.id, "cancelled", "voice", "ai");
+      const lone = await createBooking(db, accountId, range(cal, contactId, "13"), "user_test");
+
+      expect(await rescheduleChain(db, accountId, a.id)).toEqual({ rootId: a.id, depth: 0 });
+      expect(await rescheduleChain(db, accountId, b.id)).toEqual({ rootId: a.id, depth: 1 });
+      expect(await rescheduleChain(db, accountId, c.id)).toEqual({ rootId: a.id, depth: 2 });
+      expect(await rescheduleChain(db, accountId, lone.id)).toEqual({ rootId: lone.id, depth: 0 });
+    });
+  });
+
+  it("rescheduleChain refuses a booking that is not this account's (mutation: drop the account scope → it answers, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        const cal = await getOrCreateCalendar(db, accountId, "user_test");
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Mine" }, "user_test");
+        const a = await createBooking(db, accountId, range(cal, contactId, "14"), "user_test");
+        await expect(rescheduleChain(db, otherAccountId, a.id)).rejects.toThrow(/no booking/);
+      });
+    });
+  });
+});
