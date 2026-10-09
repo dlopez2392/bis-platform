@@ -36,7 +36,7 @@ function fakeSchedule() {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const VERSION = "2026-10-09T18:00:00.123Z";
-const cancelled = (noticeScheduled = false) => async () => (noticeScheduled
+const cancelled = (withNotice = false) => async () => (withNotice
   ? { ok: true as const, version: VERSION, notice: "scheduled" as const, noticeMessageId: "msg_1" }
   : { ok: true as const, version: VERSION, notice: "none" as const });
 
