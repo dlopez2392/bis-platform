@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import {
-  serviceDb, getBranding, brandLogoUrl, brandDisplayName, type Branding,
+  serviceDb, getBranding, brandLogoUrl, brandDisplayName, bookingWasMoved, type Branding,
 } from "@bis/db";
 import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
 import { safeZone, formatWhen } from "@/lib/booking/time";
@@ -35,6 +35,24 @@ async function loadBranding(accountId: string, publicId: string, token: string):
     console.error(`cancel ${publicId}/${token}: branding read failed for account ${accountId}: ${String(e)}`);
     return null;
   }
+}
+
+/** F-048: whether a move replaced this (cancelled) booking. Decorative, like
+ *  the branding read: a failure keeps the plain cancelled words. */
+async function movedSafe(accountId: string, bookingId: string): Promise<boolean> {
+  try {
+    return await bookingWasMoved(serviceDb(), accountId, bookingId);
+  } catch (e) {
+    console.error(`cancel page: moved-check failed for booking ${bookingId}: ${String(e)}`);
+    return false;
+  }
+}
+
+/** F-048: a plain helper, not inline in the component body, for the
+ *  react-hooks/purity reason the booking page's `issueRenderToken` gives:
+ *  this force-dynamic page reads the clock once per request. */
+function hasStarted(startsAtIso: string): boolean {
+  return !(new Date(startsAtIso).getTime() > Date.now());
 }
 
 /** The account's own zone, for the fallback `safeZone` needs — same shape as
@@ -140,6 +158,16 @@ export default async function CancelBookingPage({
 
   const isCancelled = row.status === "cancelled";
   const isPast = row.status === "completed" || row.status === "no_show";
+  // F-048: an old link whose booking a move replaced says "moved", not
+  // "cancelled" (the new time is in the newest email; this link no longer
+  // speaks for it). A failed read keeps the cancelled words.
+  const wasMoved = isCancelled ? await movedSafe(row.account_id, row.id) : false;
+  // F-048: every email that ever went out links THIS page, and the booking
+  // page's success screen says "cancel or reschedule", so an upcoming live
+  // booking is offered the move beside the cancel. Not once it has started:
+  // there is nothing left to move.
+  const canMove = row.status === "booked" && !hasStarted(row.starts_at);
+  const moveHref = `/b/${publicId}/move/${token}${locale === "es" ? "?locale=es" : ""}`;
 
   return (
     // `lang` on this element (F-102 review round, fix 7) — the one fix that
@@ -163,7 +191,9 @@ export default async function CancelBookingPage({
         <p className="bis-cancel-when">{when}</p>
 
         {isCancelled ? (
-          <p role="status" className="bis-cancel-title">{strings.cancelAlreadyCancelledTitle}</p>
+          <p role="status" className="bis-cancel-title">
+            {wasMoved ? strings.movedTitle : strings.cancelAlreadyCancelledTitle}
+          </p>
         ) : isPast ? (
           <p role="status" className="bis-cancel-title">{strings.cancelPastTitle}</p>
         ) : (
@@ -173,7 +203,14 @@ export default async function CancelBookingPage({
           // hold and show `CancelResult.error` — the plain server-action
           // form this replaced discarded that result entirely, which is
           // exactly the "a failed cancel is silent" bug this fixes.
-          <CancelForm publicId={publicId} token={token} locale={locale} strings={strings} />
+          //
+          // F-048: the move is the other answer to "I can't make it", offered
+          // on the page every email links. Handed to the form so it goes
+          // away once this booking is cancelled here.
+          <CancelForm
+            publicId={publicId} token={token} locale={locale} strings={strings}
+            moveHref={canMove ? moveHref : null}
+          />
         )}
 
         {/* Same treatment and the same new-tab reasoning as the booking page's
@@ -220,6 +257,10 @@ const CANCEL_CSS = `
 .bis-cancel-submit:disabled { opacity: 0.6; cursor: not-allowed; }
 /* Same AA reasoning as the booking page's own error rule — see booking-page.tsx. */
 .bis-cancel-error { color: var(--form-error, #b91c1c); margin: 12px 0 0; }
+/* F-048: the move, offered beside the cancel: a quiet link, not a second
+   primary (rule 8: the cancel is this view's one decision). */
+.bis-cancel-move { margin: 16px 0 0; font-size: 14px; }
+.bis-cancel-move a { color: var(--foreground, #18181b); }
 .bis-cancel-poweredby { margin: 24px 0 0; font-size: 12px; text-align: center; }
 .bis-cancel-poweredby a { color: var(--muted-foreground, #71717a); text-decoration: none; }
 .bis-cancel-poweredby a:hover { text-decoration: underline; }

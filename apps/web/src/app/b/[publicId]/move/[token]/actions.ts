@@ -103,7 +103,7 @@ export async function confirmMoveAction(
     const state = moveState(ctx, now);
     if (state === "cancelled") return { ok: false, error: s.moveAlreadyChanged, gone: true };
     if (state === "past") return { ok: false, error: s.cancelPastTitle, gone: true };
-    if (state === "offline") return { ok: false, error: s.cancelHintNoEmailNoLink };
+    if (state === "offline") return { ok: false, error: s.moveOffline };
 
     const timezone = ctx.account.timezone ?? "UTC";
     const wanted = new Date(slotStartsAt);

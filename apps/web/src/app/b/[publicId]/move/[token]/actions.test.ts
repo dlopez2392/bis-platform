@@ -141,7 +141,7 @@ describe("confirmMoveAction — refusals, before any write", () => {
     expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toEqual({ ok: false, error: en.cancelPastTitle, gone: true });
 
     m.readMoveContext.mockResolvedValueOnce(context({}, { enabled: false }));
-    expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toEqual({ ok: false, error: en.cancelHintNoEmailNoLink });
+    expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toEqual({ ok: false, error: en.moveOffline });
 
     expect(m.moveBooking).not.toHaveBeenCalled();
     expect(gated()).toEqual([]);
