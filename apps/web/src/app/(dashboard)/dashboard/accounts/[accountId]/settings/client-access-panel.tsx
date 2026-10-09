@@ -8,17 +8,76 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SubmitButton } from "../../submit-button";
+import { DotPill } from "@/components/dot-pill";
 import { m } from "@/lib/messages";
 
 export type ClientAccessMember = { id: string; email: string; role: string };
 
+// ONE primary per card (DESIGN.md rule 8), and which one depends on the
+// state: while access is off the only thing this card can do is turn it on,
+// so that is the primary and the (disabled) Invite is ghost; while it is on,
+// Invite is the work and "Turn off" steps back to ghost.
 function InviteButton({ disabled }: { disabled: boolean }) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" disabled={disabled || pending}>
+    <Button type="submit" variant={disabled ? "ghost" : "default"} disabled={disabled || pending}>
       {pending ? m["common.saving"] : m["clientAccess.invite"]}
     </Button>
+  );
+}
+
+function AccessButton({ primary, children }: { primary: boolean; children: React.ReactNode }) {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" variant={primary ? "default" : "ghost"} disabled={pending}>
+      {pending ? m["common.saving"] : children}
+    </Button>
+  );
+}
+
+const ACCESS_STATUS = {
+  on: { label: m["clientAccess.statusOn"], dot: "bg-success", chip: "border-success/30 bg-success/10 text-foreground" },
+  off: { label: m["clientAccess.statusOff"], dot: "bg-muted-foreground/60", chip: "border-border bg-transparent text-muted-foreground" },
+} as const;
+
+/**
+ * The on/off switch (D-002). Says the current state as a dot AND a word
+ * (rule 3), and flips at once with an Undo toast (rule 6): switching access
+ * is reversible, so it is never a confirm dialog and never a silent one-way
+ * write. Holds no React state, so a test can call it and reach its form
+ * action without a DOM.
+ */
+export function ClientAccessSwitch({
+  enabled,
+  setAccessAction,
+}: {
+  enabled: boolean;
+  setAccessAction: (formData: FormData) => Promise<void>;
+}) {
+  const flip = async (to: boolean, offerUndo: boolean): Promise<void> => {
+    const formData = new FormData();
+    formData.set("enabled", to ? "true" : "false");
+    try {
+      await setAccessAction(formData);
+    } catch {
+      toast.error(m["common.actionCrashed"]);
+      return;
+    }
+    toast.success(
+      to ? m["clientAccess.turnedOn"] : m["clientAccess.turnedOff"],
+      offerUndo
+        ? { action: { label: m["common.undo"], onClick: () => void flip(!to, false) } }
+        : undefined,
+    );
+  };
+  const status = enabled ? ACCESS_STATUS.on : ACCESS_STATUS.off;
+  return (
+    <form action={() => flip(!enabled, true)} className="flex flex-wrap items-center gap-3">
+      <DotPill label={status.label} dot={status.dot} chip={status.chip} data-status={enabled ? "on" : "off"} />
+      <AccessButton primary={!enabled}>
+        {enabled ? m["clientAccess.disable"] : m["clientAccess.enable"]}
+      </AccessButton>
+    </form>
   );
 }
 
@@ -53,10 +112,7 @@ export function ClientAccessPanel({
         <CardDescription>{m["clientAccess.body"]}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        <form action={setAccessAction}>
-          <input type="hidden" name="enabled" value={enabled ? "false" : "true"} />
-          <SubmitButton>{enabled ? m["clientAccess.disable"] : m["clientAccess.enable"]}</SubmitButton>
-        </form>
+        <ClientAccessSwitch enabled={enabled} setAccessAction={setAccessAction} />
 
         <div className="space-y-2">
           <p className="text-sm font-medium text-card-foreground">{m["clientAccess.members"]}</p>

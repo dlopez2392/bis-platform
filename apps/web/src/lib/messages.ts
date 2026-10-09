@@ -108,6 +108,12 @@ export const m = {
   "clientAccess.body": "When on, invited users at this company can sign in and see this account only.",
   "clientAccess.enable": "Turn on",
   "clientAccess.disable": "Turn off",
+  // D-002: the switch's own state, as the word beside its dot (rule 3), and
+  // the toasts that carry its Undo (rule 6).
+  "clientAccess.statusOn": "On",
+  "clientAccess.statusOff": "Off",
+  "clientAccess.turnedOn": "Client access is on. Invited people at this company can sign in.",
+  "clientAccess.turnedOff": "Client access is off. Nobody at this company can sign in until you turn it back on.",
   "clientAccess.members": "Members",
   "clientAccess.invite": "Invite",
   "clientAccess.inviteEmail": "Email address",
