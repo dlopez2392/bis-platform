@@ -2,14 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, updateCalendarSettings, setBookingStatus, BookingNotStartedError,
+  serviceDb, updateCalendarSettings, setBookingStatus, undoOperatorCancel,
+  BookingNotStartedError, BookingNotRestorableError, SlotTakenError,
   type BookingStatus, type CalendarSettingsPatch,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
+import { isValidEmail } from "@/lib/forms/guards";
 import { HOURS_FORM_DAYS, rowsToOpenHours, type HoursRow } from "./hours-form";
+import { parseNotifyEmails } from "./notify-emails";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -57,8 +60,17 @@ export async function updateCalendarSettingsAction(
     to: String(formData.get(`hours_${day}_to`) ?? ""),
   }));
 
-  const notifyEmails = String(formData.get("notifyEmails") ?? "")
-    .split("\n").map((s) => s.trim()).filter(Boolean);
+  // D-034: every address is checked, and the whole save is refused on the
+  // first bad one, naming it (`setReportEmailsAction`'s shape). Dropping it
+  // and saving the rest would read as "saved" while quietly losing a
+  // recipient. A returned error, never a throw: Next redacts a thrown
+  // message in production.
+  const notifyEmails = parseNotifyEmails(String(formData.get("notifyEmails") ?? ""));
+  for (const email of notifyEmails) {
+    if (!isValidEmail(email)) {
+      return { ok: false, error: m["calendar.settings.notifyEmailsInvalid"].replace("{value}", email) };
+    }
+  }
 
   // Server-side belt for the UI's seeding fix: the textarea is seeded with
   // the stored value only (never the default), but this normalizes the
@@ -114,19 +126,75 @@ export async function setBookingStatusAction(
 ): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
 
+  // D-036: the way back to "booked" is `undoCancelBookingAction` below and
+  // only that, because only it carries the un-cancel guard (`onlyFrom`).
+  // Through here a crafted request could reopen a COMPLETED job.
+  if (status === "booked") return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+
   try {
     // D-030: `startedBy` is the server's own clock, never the page's. An
     // outcome (completed / no_show) on an appointment that has not started is
     // refused by the write itself — the button is hidden too, but a stale page
     // or a crafted request reaches this action all the same, and so does the
     // To do screen's close-out, which calls it.
-    await setBookingStatus(serviceDb(), accountId, bookingId, status, userId, "user",
-      { startedBy: new Date().toISOString() });
+    // D-036 review: a Cancel writes only a row that is still "booked", so a
+    // stale tab cannot cancel a job already marked completed (whose Undo,
+    // an un-cancel only, could then never reopen it). Outcomes are not
+    // limited: completed and no-show stay correctable into each other.
+    await setBookingStatus(serviceDb(), accountId, bookingId, status, userId, "user", {
+      startedBy: new Date().toISOString(),
+      ...(status === "cancelled" ? { onlyFrom: "booked" as const } : {}),
+    });
   } catch (e) {
     if (e instanceof BookingNotStartedError) {
       return { ok: false, error: m["calendar.bookings.notStartedYet"] };
     }
     console.error(`setBookingStatusAction: ${status} failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
+    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/calendar`);
+  return { ok: true };
+}
+
+/**
+ * D-036: the Calendar page's Undo for a Cancel. DESIGN.md rule 6: a
+ * reversible action runs at once and offers Undo; typing a name is for
+ * destructive deletes, and an "Are you sure?" before it is the reflexive
+ * dialog the rule forbids. Cancel here IS reversible: it tells nobody (no
+ * customer email, no staff alert; `setBookingStatus` writes the row and one
+ * `booking.status_changed` event, which only the activity feed reads), so
+ * putting the row back undoes all of it.
+ *
+ * `undoOperatorCancel` (packages/db) carries the guards: an un-cancel only
+ * (`onlyFrom: "cancelled"` on the write), only of a cancel a PERSON made on
+ * the dashboard (never the customer's link or Sofía's call), and never of a
+ * booking a reschedule has replaced. The flip re-enters
+ * `bookings_no_overlap`; if a customer booked the freed time in the
+ * meantime, it refuses with `SlotTakenError`. Each refusal is told in words. serviceDb() for the reason
+ * `setBookingStatusAction` gives above: no UPDATE grant on `bookings` exists
+ * for `authenticated`, so `requireAccountAccess` is the gate.
+ */
+export async function undoCancelBookingAction(
+  accountId: string, bookingId: string,
+): Promise<ActionResult> {
+  const { userId } = await requireAccountAccess(accountId);
+
+  try {
+    await undoOperatorCancel(serviceDb(), accountId, bookingId, userId);
+  } catch (e) {
+    if (e instanceof SlotTakenError) {
+      return { ok: false, error: m["calendar.bookings.restoreSlotTaken"] };
+    }
+    if (e instanceof BookingNotRestorableError) {
+      return {
+        ok: false,
+        error: e.reason === "rescheduled"
+          ? m["calendar.bookings.restoreRescheduled"]
+          : m["calendar.bookings.restoreNotOurs"],
+      };
+    }
+    console.error(`undoCancelBookingAction: failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
     return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   }
 

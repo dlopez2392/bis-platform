@@ -8,7 +8,7 @@ import {
   createBooking, cancelBookingByToken, setBookingStatus,
   listBookedRanges, listCalendarBookings, listDueReminders, stampReminderSent,
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
-  SlotTakenError, BookingNotStartedError,
+  SlotTakenError, BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -366,6 +366,127 @@ describe("booking accessors", () => {
       // The wrong account is still "no booking", not "not started".
       await expect(setBookingStatus(db, "00000000-0000-0000-0000-000000000000", started.id, "completed",
         "user_test", "user", { startedBy })).rejects.toThrow(/no booking/);
+    });
+  });
+
+  /**
+   * D-036: Cancel on the Calendar page runs at once and offers Undo, and Undo
+   * is `setBookingStatus(…, "booked", …, { onlyFrom: "cancelled" })`. Two
+   * things the un-cancel needs that the write did not have:
+   *  - the flip back re-enters `bookings_no_overlap` (the constraint binds
+   *    status='booked' only, and Postgres re-checks it on UPDATE), so a time
+   *    someone else booked in between must surface as `SlotTakenError`, the
+   *    same class `createBooking` throws, not a generic failure;
+   *  - `onlyFrom` makes it an un-CANCEL only, as a predicate on the UPDATE: a
+   *    stale Undo on a booking since marked completed must not reopen it.
+   */
+  it("D-036: un-cancel restores a cancelled booking, refuses a taken slot as SlotTakenError, and only ever flips FROM cancelled", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Undo" }, "user_test");
+      const statusOf = async (id: string) => {
+        const { data, error } = await db.from("bookings").select("status").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return (data as { status: string }).status;
+      };
+      const range = (day: string) => ({
+        calendarId: cal.id, contactId,
+        startsAt: new Date(`2027-06-${day}T15:00:00Z`), endsAt: new Date(`2027-06-${day}T16:00:00Z`),
+      });
+
+      // Restored: back to booked, with its own event.
+      const a = await createBooking(db, accountId, range("01"), "user_test");
+      await setBookingStatus(db, accountId, a.id, "cancelled", "user_test");
+      await setBookingStatus(db, accountId, a.id, "booked", "user_test", "user", { onlyFrom: "cancelled" });
+      expect(await statusOf(a.id)).toBe("booked");
+      const { data: ev } = await db.from("events").select("payload")
+        .eq("account_id", accountId).eq("type", "booking.status_changed")
+        .order("created_at", { ascending: true });
+      expect((ev ?? []).map((r) => (r as { payload: { status: string } }).payload.status))
+        .toEqual(["cancelled", "booked"]);
+
+      // Someone booked the freed time in between: SlotTakenError, still cancelled.
+      const b = await createBooking(db, accountId, range("02"), "user_test");
+      await setBookingStatus(db, accountId, b.id, "cancelled", "user_test");
+      await createBooking(db, accountId, range("02"), "public", "system");
+      await expect(setBookingStatus(db, accountId, b.id, "booked", "user_test", "user", { onlyFrom: "cancelled" }))
+        .rejects.toBeInstanceOf(SlotTakenError);
+      expect(await statusOf(b.id)).toBe("cancelled");
+
+      // Not cancelled any more: refused, and left exactly as it was.
+      const c = await createBooking(db, accountId, range("03"), "user_test");
+      await setBookingStatus(db, accountId, c.id, "completed", "user_test");
+      await expect(setBookingStatus(db, accountId, c.id, "booked", "user_test", "user", { onlyFrom: "cancelled" }))
+        .rejects.toThrow(/no booking/);
+      expect(await statusOf(c.id)).toBe("completed");
+    });
+  });
+
+  /**
+   * D-036 review: the Calendar page's Undo puts back only what a PERSON on
+   * this screen cancelled. A cancel by the customer's own link, or by Sofía
+   * on a call, is the customer's decision and the operator's Undo must not
+   * reverse it; and a booking a reschedule replaced (a newer row's
+   * `rescheduled_from_id` points at it) would come back as a second live
+   * appointment beside its replacement.
+   */
+  it("D-036: undoOperatorCancel restores an operator's cancel, and refuses a reschedule's original and a customer's or Sofía's cancel", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Undo2" }, "user_test");
+      const statusOf = async (id: string) => {
+        const { data, error } = await db.from("bookings").select("status").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return (data as { status: string }).status;
+      };
+      const range = (day: string) => ({
+        calendarId: cal.id, contactId,
+        startsAt: new Date(`2027-07-${day}T15:00:00Z`), endsAt: new Date(`2027-07-${day}T16:00:00Z`),
+      });
+      const reason = async (p: Promise<unknown>) => {
+        try { await p; } catch (e) { return e instanceof BookingNotRestorableError ? e.reason : String(e); }
+        return "restored";
+      };
+
+      const own = await createBooking(db, accountId, range("01"), "user_test");
+      await setBookingStatus(db, accountId, own.id, "cancelled", "user_test");
+      expect(await reason(undoOperatorCancel(db, accountId, own.id, "user_test"))).toBe("restored");
+      expect(await statusOf(own.id)).toBe("booked");
+
+      const moved = await createBooking(db, accountId, range("02"), "user_test");
+      // A PERSON cancelled it, so only the reschedule check can refuse it.
+      await setBookingStatus(db, accountId, moved.id, "cancelled", "user_test");
+      await createBooking(db, accountId, { ...range("03"), rescheduledFromId: moved.id }, "user_test");
+      expect(await reason(undoOperatorCancel(db, accountId, moved.id, "user_test"))).toBe("rescheduled");
+      expect(await statusOf(moved.id)).toBe("cancelled");
+
+      const byLink = await createBooking(db, accountId, range("04"), "user_test");
+      await cancelBookingByToken(db, byLink.cancelToken);
+      expect(await reason(undoOperatorCancel(db, accountId, byLink.id, "user_test"))).toBe("not_operator_cancel");
+      expect(await statusOf(byLink.id)).toBe("cancelled");
+
+      const bySofia = await createBooking(db, accountId, range("05"), "user_test");
+      await setBookingStatus(db, accountId, bySofia.id, "cancelled", "voice", "ai");
+      expect(await reason(undoOperatorCancel(db, accountId, bySofia.id, "user_test"))).toBe("not_operator_cancel");
+      expect(await statusOf(bySofia.id)).toBe("cancelled");
+
+      // "Who cancelled" is THIS booking's newest cancel, never the account's.
+      // Each step above undoes the account's newest cancel, so an unscoped
+      // read passed them all. Here a newer cancel of ANOTHER booking
+      // disagrees, in both directions (mutation: drop the
+      // `payload->>bookingId` filter → FAILS).
+      const mine = await createBooking(db, accountId, range("06"), "user_test");
+      const theirs = await createBooking(db, accountId, range("07"), "user_test");
+      await setBookingStatus(db, accountId, mine.id, "cancelled", "user_test");
+      await setBookingStatus(db, accountId, theirs.id, "cancelled", "voice", "ai"); // newer, Sofía's
+      expect(await reason(undoOperatorCancel(db, accountId, mine.id, "user_test"))).toBe("restored");
+
+      const sofias = await createBooking(db, accountId, range("08"), "user_test");
+      const later = await createBooking(db, accountId, range("09"), "user_test");
+      await setBookingStatus(db, accountId, sofias.id, "cancelled", "voice", "ai");
+      await setBookingStatus(db, accountId, later.id, "cancelled", "user_test"); // newer, a person's
+      expect(await reason(undoOperatorCancel(db, accountId, sofias.id, "user_test"))).toBe("not_operator_cancel");
+      expect(await statusOf(sofias.id)).toBe("cancelled");
     });
   });
 

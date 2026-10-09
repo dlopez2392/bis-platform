@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/empty-state";
-import { formatCurrency, formatDate, formatDateInZone, formatDateTime } from "@/lib/format";
+import { formatCurrency, formatDateInZone, formatDateTimeInZone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { STATUS_LABEL, MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
@@ -191,10 +191,14 @@ export function ActivityTimeline({
              mockup's `.row`, northern-lights.html:122). */
           <ol className="flex flex-col">
             {items.map((item, i) => {
-              const day = formatDate(item.at);
+              // D-010: the account's own zone, not the runtime's (server or
+              // browser) — the same bug `taskDueDateText` below already
+              // fixed for a task's due date, now applied to every row's own
+              // "when this happened" timestamp and the day it groups under.
+              const day = formatDateInZone(item.at, timezone);
               // Derive the separator from the previous item rather than a
               // carried variable — mutating during render is not safe.
-              const showSeparator = i === 0 || day !== formatDate(items[i - 1]!.at);
+              const showSeparator = i === 0 || day !== formatDateInZone(items[i - 1]!.at, timezone);
               return (
                 <li
                   key={`${item.kind}-${item.id}`}
@@ -274,7 +278,7 @@ function TimelineRow({
         <StickyNote className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="whitespace-pre-wrap break-words text-sm text-card-foreground">{item.body}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(item.at)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{formatDateTimeInZone(item.at, timezone)}</p>
         </div>
       </div>
     );
@@ -291,7 +295,7 @@ function TimelineRow({
             {item.title}
           </p>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span>{formatDateTime(item.at)}</span>
+            <span>{formatDateTimeInZone(item.at, timezone)}</span>
             {item.dueAt && taskDueDateText(item.dueAt, timezone) ? (
               <span className="flex items-center gap-1">
                 <CalendarClock className="size-3" aria-hidden />
@@ -334,7 +338,7 @@ function TimelineRow({
             {item.body}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {formatDateTime(item.at)}
+            {formatDateTimeInZone(item.at, timezone)}
             {/* The status is the honest part: "sent" is what the provider
                 accepted, and a `failed` message must not look delivered on
                 the record the operator trusts. D-014: the raw column value
@@ -374,7 +378,7 @@ function TimelineRow({
               </div>
             ))}
           </dl>
-          <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(item.at)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{formatDateTimeInZone(item.at, timezone)}</p>
         </div>
       </div>
     );
@@ -386,7 +390,7 @@ function TimelineRow({
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-card-foreground">{item.name}</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          {formatCurrency(item.value)} · {STATUS_LABEL[item.status] ?? item.status} · {formatDateTime(item.at)}
+          {formatCurrency(item.value)} · {STATUS_LABEL[item.status] ?? item.status} · {formatDateTimeInZone(item.at, timezone)}
         </p>
       </div>
     </div>

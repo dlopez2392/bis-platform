@@ -56,7 +56,7 @@ export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId
          listSubmissionCreationsBetween,
          shouldRecordRateLimit, findRecentDuplicate, linkSubmissionContact,
          setSubmissionProcessingError, emitFormSubmitted, listSubmissions, listContactSubmissions,
-         countFormsMissingNotify,
+         countFormsMissingNotify, findConciergeDestinationName, republishFormIfUnchanged,
          type FormField, type FormFieldKind, type FormTheme, type FormStatus,
          type FormRow, type FormSummary,
          type SubmissionInput, type SubmissionRow, type SubmissionConsent } from "./forms";
@@ -80,7 +80,7 @@ export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, upda
          type CalendarRow, type BookingRow, type BookingStatus, type CalendarSettingsPatch,
          type CreateBookingInput, type DueReminder, type DueFollowup, type DueLookup } from "./booking";
 export { LATE_REMINDER_WINDOW_START_MS, LATE_REMINDER_WINDOW_END_MS, LATE_REMINDER_MIN_AGE_MS, isLateBooking } from "./booking";
-export { BookingNotStartedError } from "./booking";
+export { BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel } from "./booking";
 export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
          REVIEW_REQUEST_MAX_AGE_MS,

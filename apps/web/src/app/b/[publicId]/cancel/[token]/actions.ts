@@ -2,7 +2,7 @@
 
 import {
   serviceDb, cancelBookingByToken, getContact,
-  ensureConversation, createMessage, incrementUnreadCount, type BookingRow,
+  ensureConversation, createMessage, incrementUnreadCount,
   type Branding,
 } from "@bis/db";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
@@ -18,33 +18,6 @@ export type CancelResult = { ok: true } | { ok: false; error: string };
 // unauthenticated capability link is never a signed-in user acting.
 const ACTOR_ID = "public";
 const ACTOR_TYPE = "system";
-
-const BOOKING_COLS =
-  "id, account_id, calendar_id, contact_id, starts_at, ends_at, status, note, "
-  + "cancel_token, booker_timezone, reminder_sent_at";
-
-/**
- * Read-only lookup by token — a plain SELECT, no `.update()` anywhere in this
- * function. This is the accessor that lets `page.tsx` distinguish "never
- * existed" from "already cancelled" from "booked" from "already happened" on
- * a GET, without touching a row: `cancelBookingByToken` (Task 2) collapses
- * the first two into a single `null`, which is exactly right for ITS job
- * (idempotent cancel) and exactly wrong for a page that needs to render four
- * different states.
- *
- * Deliberately NOT added to `packages/db` — this task makes no DDL/package
- * changes. It is a strong candidate to move there once a second caller needs
- * it (booking-grants/read-model work is the obvious next one), noted for the
- * final review rather than done speculatively here.
- */
-export async function lookupBookingByToken(
-  db: ReturnType<typeof serviceDb>, token: string,
-): Promise<BookingRow | null> {
-  const { data, error } = await db.from("bookings")
-    .select(BOOKING_COLS).eq("cancel_token", token).maybeSingle();
-  if (error) throw new Error(`lookupBookingByToken failed: ${error.message}`);
-  return (data as unknown as BookingRow | null) ?? null;
-}
 
 /** Same subject-injection guard `b/[publicId]/actions.ts` keeps — duplicated
  *  rather than imported because it is two lines and private there; promoting
@@ -102,9 +75,9 @@ async function loadCalendarNotifyEmails(
 
 /**
  * The cancel-by-link submit path, and the ONLY place in this route tree that
- * mutates — `page.tsx`'s GET is a pure read (see `lookupBookingByToken`
- * above). A mail scanner that prefetches every link in an inbox to check for
- * malware would otherwise cancel a booking nobody asked to cancel; splitting
+ * mutates — `page.tsx`'s GET is a pure read (see `./data.ts`'s
+ * `lookupBookingByToken`). A mail scanner that prefetches every link in an
+ * inbox to check for malware would otherwise cancel a booking nobody asked to cancel; splitting
  * the mutation into a POST-only form action is the whole reason this page
  * exists instead of a cancel-on-GET redirect.
  */

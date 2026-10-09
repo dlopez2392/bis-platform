@@ -34,6 +34,22 @@ export function formatDateTime(iso: string): string {
 }
 
 /**
+ * A calendar date AND time in a SPECIFIED zone — `formatDateTime`'s own
+ * caveat applies to it (renders in the RUNTIME's zone, not the account's)
+ * for exactly the reason `formatDateInZone` exists below: a timeline row's
+ * own "when this happened" clock time is read by an operator who lives in
+ * the account's zone, not the server's or their own browser's. Same
+ * no-year caveat does not apply here — this one DOES carry a year, same
+ * reasoning as `formatDateInZone`'s own note on that.
+ */
+export function formatDateTimeInZone(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone, month: "short", day: "numeric", year: "numeric",
+    hour: "numeric", minute: "2-digit",
+  }).format(new Date(iso));
+}
+
+/**
  * A calendar date in a SPECIFIED zone — for timestamps whose meaning is the
  * day they happened on in the account's world, not the hour, and not the
  * viewer's clock. (`formatDate` above pins no zone at all, so it renders in

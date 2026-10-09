@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import { Client } from "pg";
 import { withTestAccount } from "./fixtures";
 import { withRollback, actAs } from "./db";
+import { upsertVoiceProfile } from "../voice";
 import {
   newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
   getFormByPublicId, isFormLive, updateForm,
   countFormsMissingNotify, listSubmissionCreationsBetween,
+  findConciergeDestinationName, republishFormIfUnchanged,
 } from "../forms";
 
 const FIELDS = [
@@ -150,10 +152,14 @@ describe("forms", () => {
       expect((await getForm(db, accountId, id))!.name).toBe("A");
     }));
 
-  it("countFormsMissingNotify counts only forms whose notify_emails is still empty", () =>
+  it("countFormsMissingNotify counts only PUBLISHED forms whose notify_emails is still empty", () =>
     withTestAccount(async (db, accountId) => {
       const { id: bareId } = await createForm(db, accountId, { name: "No notify" }, "user_test");
       const { id: notifiedId } = await createForm(db, accountId, { name: "Notified" }, "user_test");
+      // Both forms are live, so the count below reflects notify_emails alone,
+      // never status — that half of the behaviour has its own test below.
+      await updateForm(db, accountId, bareId, { status: "published" }, "user_test");
+      await updateForm(db, accountId, notifiedId, { status: "published" }, "user_test");
 
       // Both forms start with the schema default '{}' — count reflects that.
       expect(await countFormsMissingNotify(db, accountId)).toBe(2);
@@ -168,6 +174,124 @@ describe("forms", () => {
       // Both forms present, neither miscounted as the other's account.
       expect(await getForm(db, accountId, bareId)).not.toBeNull();
     }));
+
+  // D-026: a form that cannot yet (draft) or can no longer (archived) receive
+  // a real submission was still blocking the checklist's "set a notify
+  // address" item — an operator could never clear the warning for a form
+  // they have deliberately not published, or has already retired.
+  it("countFormsMissingNotify excludes drafts and archived forms, even with an empty notify list", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: draftId } = await createForm(db, accountId, { name: "Still drafting" }, "user_test");
+      const { id: archivedId } = await createForm(db, accountId, { name: "Retired" }, "user_test");
+      await updateForm(db, accountId, archivedId, { status: "archived" }, "user_test");
+
+      // Neither form is live, so neither should count against the checklist.
+      expect(await countFormsMissingNotify(db, accountId)).toBe(0);
+
+      const { id: publishedId } = await createForm(db, accountId, { name: "Live" }, "user_test");
+      await updateForm(db, accountId, publishedId, { status: "published" }, "user_test");
+      expect(await countFormsMissingNotify(db, accountId)).toBe(1);
+
+      expect(await getForm(db, accountId, draftId)).not.toBeNull();
+    }));
+
+  // Owner context (forms tracker batch 4): the Forms page needs to warn an
+  // operator before they unpublish a form that a website assistant
+  // (voice_profiles.concierge_form_id) files its leads into — this is the
+  // read that names the assistant. `upsertVoiceProfile` is voice.ts's own
+  // export, read-only here; this file does not own voice.ts, only the
+  // query that joins into it from the forms side.
+  it("findConciergeDestinationName names the assistant wired to this form, or null when none is (mutation: always return null → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: formId } = await createForm(db, accountId, { name: "Quote" }, "user_test");
+      expect(await findConciergeDestinationName(db, accountId, formId)).toBeNull();
+
+      await upsertVoiceProfile(db, accountId, {
+        persona_name: "Ana", concierge_form_id: formId, concierge_enabled: true,
+      }, "user_test");
+      expect(await findConciergeDestinationName(db, accountId, formId)).toBe("Ana");
+    }));
+
+  // Fix round 1 review (minor): only warn when the assistant is actually
+  // switched ON. A destination wired up while the switch was still off (the
+  // table's own default, 0042) is not live, so unpublishing its form breaks
+  // nothing yet.
+  it("findConciergeDestinationName returns null while the assistant is switched off, even with a destination wired up (mutation: drop the concierge_enabled filter → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: formId } = await createForm(db, accountId, { name: "Quote" }, "user_test");
+      await upsertVoiceProfile(db, accountId, {
+        persona_name: "Ana", concierge_form_id: formId, concierge_enabled: false,
+      }, "user_test");
+      expect(await findConciergeDestinationName(db, accountId, formId)).toBeNull();
+    }));
+
+  // Fix round 1 review item 3: the original version of this test set up
+  // B's profile with NO concierge_form_id at all, so it could never match
+  // formIdA regardless of the account_id filter — deleting that filter from
+  // the implementation still passed 15/15. Pointing B's own profile AT A's
+  // form is what actually exercises the filter: without it, a bare
+  // `.eq("concierge_form_id", formId)` finds B's row even when asked under
+  // A's account.
+  it("findConciergeDestinationName ignores another account's own profile pointing at this form (mutation: drop the account_id filter → FAILS)", () =>
+    withTestAccount(async (db, accountIdA) =>
+      withTestAccount(async (db2, accountIdB) => {
+        const { id: formIdA } = await createForm(db, accountIdA, { name: "A's form" }, "user_test");
+        // Invalid in practice (0045's concierge_enable RPC refuses a
+        // cross-tenant form; this is a direct table write that bypasses it,
+        // precisely to prove the account_id filter — not the FK — is what
+        // keeps this function tenant-safe), but a real possible DB state.
+        await upsertVoiceProfile(db2, accountIdB, {
+          persona_name: "Bea", concierge_form_id: formIdA, concierge_enabled: true,
+        }, "user_test");
+        expect(await findConciergeDestinationName(db, accountIdA, formIdA)).toBeNull();
+      })));
+
+  // Fix round 1 review item 2, revised fix round 2 review item 1: the first
+  // version wrote status="published" unconditionally — bypassing "a form
+  // needs at least one field before it can be published", able to publish
+  // a form that had never been published before, and a stale Undo toast
+  // (clicked after the form changed again through some OTHER save) would
+  // silently resurrect long-gone state. A second version checked both with
+  // a pre-read then wrote unconditionally on status alone — real TOCTOU
+  // exposure. Both conditions now live on the single conditional UPDATE's
+  // own WHERE clause; these three tests pin each failure mode against
+  // THAT clause specifically, not a pre-read that no longer decides
+  // anything.
+  describe("republishFormIfUnchanged", () => {
+    it("republishes a form whose status still matches what the unpublish wrote, and has fields (mutation: drop either UPDATE condition → the stale/needs_fields tests below FAIL)", () =>
+      withTestAccount(async (db, accountId) => {
+        const { id: formId } = await createForm(db, accountId, { name: "Quote", fields: FIELDS }, "user_test");
+        await updateForm(db, accountId, formId, { status: "draft" }, "user_test");
+
+        expect(await republishFormIfUnchanged(db, accountId, formId, "draft", "user_test"))
+          .toBe("republished");
+        expect((await getForm(db, accountId, formId))!.status).toBe("published");
+      }));
+
+    it("refuses as stale when the form's status no longer matches what the unpublish wrote, and never writes (mutation: drop .eq(\"status\", expectedPriorStatus) from the UPDATE itself → FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        const { id: formId } = await createForm(db, accountId, { name: "Quote", fields: FIELDS }, "user_test");
+        // The toast still thinks it unpublished FROM draft, but the form was
+        // archived by some other save since — the stale-click case.
+        await updateForm(db, accountId, formId, { status: "archived" }, "user_test");
+
+        expect(await republishFormIfUnchanged(db, accountId, formId, "draft", "user_test"))
+          .toBe("stale");
+        expect((await getForm(db, accountId, formId))!.status).toBe("archived");
+      }));
+
+    it("refuses a form with no fields, even when the status still matches, and never writes (mutation: drop .not(\"fields\", \"eq\", \"[]\") from the UPDATE itself → FAILS)", () =>
+      withTestAccount(async (db, accountId) => {
+        const { id: formId } = await createForm(db, accountId, { name: "Quote" }, "user_test");
+        // createForm with no fields leaves status "draft" (its own default) —
+        // exactly what a never-published form, wrongly republished before
+        // this fix, would have looked like.
+
+        expect(await republishFormIfUnchanged(db, accountId, formId, "draft", "user_test"))
+          .toBe("needs_fields");
+        expect((await getForm(db, accountId, formId))!.status).toBe("draft");
+      }));
+  });
 
   it("RLS hides another tenant's forms from an authenticated caller", () =>
     withRollback(async (c: Client) => {

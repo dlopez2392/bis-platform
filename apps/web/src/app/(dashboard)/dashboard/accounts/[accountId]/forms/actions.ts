@@ -4,7 +4,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { createForm, getForm, updateForm, type FormField, type FormStatus } from "@bis/db";
+import {
+  createForm, getForm, updateForm, republishFormIfUnchanged,
+  type FormField, type FormStatus,
+} from "@bis/db";
 import { m } from "@/lib/messages";
 import { isValidFormFieldList, mergeFormTheme, defaultFormFields } from "@/lib/forms/editor-helpers";
 // The public form's own validator, reused deliberately rather than a second
@@ -29,7 +32,24 @@ export async function createFormAction(accountId: string, formData: FormData): P
   redirect(`/dashboard/accounts/${accountId}/forms/${id}`);
 }
 
-export async function saveFormAction(accountId: string, formData: FormData): Promise<void> {
+/**
+ * D-024: a mistyped notify address or redirect URL used to fail the save by
+ * THROWING, which `form-editor.tsx`'s catch block reduced to one generic
+ * "Could not save the form." toast — and which a production Next.js deploy
+ * reduces to an opaque digest before the operator's browser ever sees the
+ * real reason at all (same production-redaction fact `action-feedback.ts`'s
+ * own doc comment and `setFromEmailAction`/`setReportEmailsAction` in
+ * settings/actions.ts are already built around). Every validation branch
+ * below now RETURNS `{ ok: false, error }` instead, so the specific,
+ * landscaper-copy reason reaches the toast verbatim. A `formId` missing from
+ * the hidden input, and `updateForm` finding no row to update, stay thrown:
+ * neither is something a mistyped address or URL could cause, and both read
+ * as the genuine "this page may be stale, reload" case the crashed path
+ * exists for.
+ */
+export async function saveFormAction(
+  accountId: string, formData: FormData,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireAccountAccess(accountId);
   const formId = String(formData.get("formId") ?? "");
   if (!formId) throw new Error("formId required");
@@ -46,12 +66,12 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
     if (!isValidFormFieldList(parsed)) throw new Error("invalid field shape");
     fields = parsed;
   } catch {
-    throw new Error(m["forms.invalidFields"]);
+    return { ok: false, error: m["forms.invalidFields"] };
   }
 
   const status = String(formData.get("status") ?? "draft") as FormStatus;
   if (status === "published" && fields.length === 0) {
-    throw new Error("a form needs at least one field before it can be published");
+    return { ok: false, error: m["forms.noFields"] };
   }
 
   const notifyEmails = String(formData.get("notifyEmails") ?? "")
@@ -67,7 +87,7 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
   // losing a recipient.
   for (const email of notifyEmails) {
     if (!isValidEmail(email)) {
-      throw new Error(m["forms.invalidNotifyEmail"].replace("{value}", email));
+      return { ok: false, error: m["forms.invalidNotifyEmail"].replace("{value}", email) };
     }
   }
 
@@ -87,7 +107,7 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
       scheme = null;
     }
     if (scheme !== "http:" && scheme !== "https:") {
-      throw new Error(m["forms.invalidRedirectUrl"]);
+      return { ok: false, error: m["forms.invalidRedirectUrl"] };
     }
   }
 
@@ -123,4 +143,42 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
 
   revalidatePath(`/dashboard/accounts/${accountId}/forms`);
   revalidatePath(`/dashboard/accounts/${accountId}/forms/${formId}`);
+  return { ok: true };
+}
+
+/**
+ * The Undo half of the Forms page's unpublish warning (owner context, forms
+ * tracker batch 4; see `shouldWarnOnUnpublish`'s own doc comment). Revised
+ * in fix round 1 (review item 2): the first version wrote `status:
+ * "published"` through `updateForm` unconditionally, which bypassed "a
+ * form needs at least one field before it can be published", could publish
+ * a form that had never been published before, and let a STALE Undo toast
+ * (clicked after the form's status changed again through some other save)
+ * silently resurrect status the operator no longer intends.
+ *
+ * `expectedPriorStatus` is the status the unpublishing save actually wrote
+ * — the toast passes it straight through from the save it was offered on,
+ * never re-derived here. Every safety check now lives in
+ * `republishFormIfUnchanged` (packages/db/src/forms.ts); this layer's only
+ * job is the account-access guard and translating its three-way outcome
+ * into the `{ ok, error }` shape the toast renders. A failure is reported,
+ * never thrown — this runs from a toast's own action handler, with no form
+ * around it to catch anything.
+ */
+export async function republishFormAction(
+  accountId: string, formId: string, expectedPriorStatus: FormStatus,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId } = await requireAccountAccess(accountId);
+  const db = await dbForRequest();
+  let outcome: "republished" | "stale" | "needs_fields";
+  try {
+    outcome = await republishFormIfUnchanged(db, accountId, formId, expectedPriorStatus, userId);
+  } catch {
+    return { ok: false, error: m["forms.republishFailed"] };
+  }
+  if (outcome === "needs_fields") return { ok: false, error: m["forms.noFields"] };
+  if (outcome === "stale") return { ok: false, error: m["forms.undoStale"] };
+  revalidatePath(`/dashboard/accounts/${accountId}/forms`);
+  revalidatePath(`/dashboard/accounts/${accountId}/forms/${formId}`);
+  return { ok: true };
 }

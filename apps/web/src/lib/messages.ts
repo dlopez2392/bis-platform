@@ -385,6 +385,8 @@ export const m = {
   "dashboard.activity.bookingCancelled": "An appointment was cancelled.",
   "dashboard.activity.bookingCompleted": "An appointment was completed.",
   "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
+  // D-036: the Calendar page's Undo on a Cancel (status_changed → booked).
+  "dashboard.activity.bookingRestored": "An appointment that was cancelled is back on.",
   "dashboard.activity.formSubmitted": "A new lead came in through your form.",
   "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
   "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of {name}.",
@@ -923,7 +925,13 @@ export const m = {
   "forms.transparent": "Transparent background",
   "forms.status": "Status",
   "forms.duplicateFieldKey": "A field with this key already exists on the form.",
-  "forms.invalidFields": "Fields must be valid: each needs a key, kind, label, and required flag.",
+  // Fix round 1 review (minor): the old wording ("each needs a key, kind,
+  // label, and required flag") exposed this form's own internal field
+  // shape — jargon with no translation for an operator, who never typed
+  // anything to cause this (it only fires on a tampered hidden input).
+  // Plain words, and the same "reload and try again" shape inline.crashed
+  // already uses for the same class of problem.
+  "forms.invalidFields": "Something went wrong with this form's fields. Reload the page and try again.",
   "forms.embed": "Embed",
   "forms.embedHint": "Paste this where the form should appear. Published forms only.",
   "forms.embedNotPublished": "Publish the form to get its embed snippet.",
@@ -966,6 +974,25 @@ export const m = {
   // settings.weeklyReportBadEmail — one bad-address message, not two that can
   // drift apart.
   "forms.invalidNotifyEmail": "That doesn't look like an email address: {value}",
+  // Owner context (forms tracker batch 4): shown inline, BEFORE Save, while
+  // the operator is still choosing a non-published status for a form a
+  // website assistant files its leads into — see shouldWarnOnUnpublish's
+  // own comment. "until you set Status back to Published" names the actual
+  // control (forms.status) and its actual option (forms.status.published)
+  // rather than the vaguer "republish" (fix round 1 review, minor).
+  "forms.unpublishWarning":
+    "{assistant} files its leads into this form — it will stop filing new leads here until you set Status back to Published.",
+  // The success toast AFTER that save has gone through. Distinct from
+  // forms.unpublishWarning (fix round 1 review, minor: the toast must say
+  // the save itself succeeded, not only name the consequence) — this one
+  // is never shown before a save, so it is the only copy of the two
+  // allowed to say "Saved."
+  "forms.unpublishedToast":
+    "Saved. {assistant} files its leads into this form — it will stop filing new leads here until you set Status back to Published.",
+  "forms.republishFailed": "Could not republish the form.",
+  // Fix round 1 review item 2: a stale Undo click — the form's status
+  // changed again, through some other save, since this toast was shown.
+  "forms.undoStale": "This form's status already changed since then — there's nothing to undo.",
 
   "conversations.unread": "unread",
   "conversations.channel.form": "Form submission",
@@ -1168,7 +1195,12 @@ export const m = {
   "calendar.settings.minNotice": "Minimum notice",
   "calendar.settings.maxAdvance": "How far ahead people can book",
   "calendar.settings.notifyEmails": "Notify these addresses",
-  "calendar.settings.notifyEmailsHint": "One address per line. Sent whenever someone books, cancels, or an appointment is coming up.",
+  // D-034: only what is actually sent. The reminder pass mails the customer,
+  // never these addresses, so "an appointment is coming up" was an alert that
+  // did not exist. The senders that DO read them are listed in the action's
+  // test (calendar/actions.test.ts). No persona name: clients rename Sofía.
+  "calendar.settings.notifyEmailsHint": "Separate addresses with commas or put each on its own line. We email them when a customer books, cancels or moves an appointment, and when a caller leaves a message or their details.",
+  "calendar.settings.notifyEmailsInvalid": "That doesn't look like an email address: {value}",
   // The inline warning the checklist's form_notify concern mirrors: an
   // account that is accepting bookings with nobody listed to hear about them
   // is a silent failure mode, not a valid configuration to save quietly.
@@ -1196,6 +1228,14 @@ export const m = {
   "calendar.bookings.markNoShow": "No-show",
   "calendar.bookings.statusUpdated": "Booking updated",
   "calendar.bookings.statusUpdateFailed": "Could not update this booking.",
+  // D-036: Cancel runs at once with Undo (rule 6). It emails nobody, so the
+  // toast says the customer has not heard, rather than letting the operator
+  // assume they have.
+  "calendar.bookings.cancelledToast": "Appointment cancelled. We haven't told the customer, so let them know.",
+  "calendar.bookings.restored": "Appointment is back on.",
+  "calendar.bookings.restoreSlotTaken": "Someone else booked that time after you cancelled, so this appointment can't be put back.",
+  "calendar.bookings.restoreRescheduled": "This appointment was moved to a new time, so the old one can't be put back.",
+  "calendar.bookings.restoreNotOurs": "The customer cancelled this one themselves, by link or on a call, so it can't be put back from here.",
   "calendar.bookings.notStartedYet": "This appointment hasn't started yet. Mark it completed or no-show once it has.",
   "calendar.bookings.status.booked": "Booked",
   "calendar.bookings.status.cancelled": "Cancelled",

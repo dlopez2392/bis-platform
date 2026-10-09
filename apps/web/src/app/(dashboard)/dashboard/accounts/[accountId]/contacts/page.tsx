@@ -12,6 +12,7 @@ import { dbForRequest } from "@/lib/db";
 import { encodeCursor, parseCursor } from "@/lib/cursor";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { renderZone } from "@/lib/zone";
 
 export const dynamic = "force-dynamic";
 
@@ -130,11 +131,19 @@ export default async function ContactsPage({
   const sort = parseSort(rawSort);
   const dir = parseDir(rawDir);
 
-  const [rows, total, tags] = await Promise.all([
+  const [rows, total, tags, account] = await Promise.all([
     listContacts(db, accountId, { search: q, limit: PAGE_SIZE + 1, before: cursor, sort: { key: sort, dir } }),
     countContacts(db, accountId, { search: q }),
     listTags(db, accountId),
+    // D-010: the "Created" column's own zone — not a throw, the contact
+    // detail page's own reasoning: one cosmetic date column must not 500
+    // the whole list. `undefined` makes `renderZone` fall back.
+    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
   ]);
+  if (account.error) {
+    console.error(`contacts list: account ${accountId} timezone read failed: ${account.error.message}`);
+  }
+  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
   const base = `/dashboard/accounts/${accountId}/contacts`;
   const boundCreateContact = createContactAction.bind(null, accountId);
 
@@ -211,7 +220,15 @@ export default async function ContactsPage({
           />
         ) : (
           <>
-            <ContactsTable rows={page} accountId={accountId} existingTags={tags} sort={sort} dir={dir} q={q} />
+            <ContactsTable
+              rows={page}
+              accountId={accountId}
+              existingTags={tags}
+              sort={sort}
+              dir={dir}
+              q={q}
+              timezone={zone.zone}
+            />
             {newerHref || olderHref ? (
               <div className="mt-4 flex items-center justify-between">
                 <div>

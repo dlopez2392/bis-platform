@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { FormTheme } from "@bis/db";
 import {
   defaultFieldKey, mergeFormTheme, isValidFormFieldList, defaultFormFields,
+  shouldWarnOnUnpublish, statusAfterUndo,
 } from "./editor-helpers";
 
 describe("defaultFieldKey", () => {
@@ -95,5 +96,62 @@ describe("isValidFormFieldList", () => {
     expect(isValidFormFieldList([{ ...valid, required: "true" }])).toBe(false);
     expect(isValidFormFieldList([{ ...valid, kind: 5 }])).toBe(false);
     expect(isValidFormFieldList([valid, {}])).toBe(false);
+  });
+});
+
+// Owner context (forms tracker batch 4): the Forms page warns before taking
+// a form off "published" when a website assistant files its leads there —
+// D-048 already stops the chat from answering once that happens
+// (concierge.ts's getVoiceProfileByPublicId), but nothing told the operator
+// making the change what they were about to break. This predicate is the
+// decision alone, so it is testable without the editor's own Select state,
+// its toast, or its Undo wiring.
+describe("shouldWarnOnUnpublish", () => {
+  // Retitled (fix round 1 review): the old name claimed "mutation: drop the
+  // currentStatus check → FAILS", but both assertions here already hold
+  // currentStatus at "published" — dropping that check changes nothing for
+  // either one (it is the OTHER "does not warn" tests below that catch it).
+  // What this test actually isolates is checking nextStatus against
+  // "published" specifically, not against one hardcoded off-published value:
+  // a mutation that checked `nextStatus === "draft"` instead of
+  // `nextStatus !== "published"` would still pass the first assertion but
+  // FAIL the second (archived).
+  it("warns for EITHER off-published value, draft or archived — not just one (mutation: check nextStatus === \"draft\" instead of !== \"published\" → the archived case alone FAILS)", () => {
+    expect(shouldWarnOnUnpublish("published", "draft", "Ana")).toBe(true);
+    expect(shouldWarnOnUnpublish("published", "archived", "Ana")).toBe(true);
+  });
+
+  it("does not warn when the form was never published to begin with (mutation: drop the currentStatus check → the 'archived already' case now also warns, FAILS)", () => {
+    expect(shouldWarnOnUnpublish("draft", "archived", "Ana")).toBe(false);
+    expect(shouldWarnOnUnpublish("archived", "draft", "Ana")).toBe(false);
+  });
+
+  it("does not warn when the pending status is still published, e.g. no real change (mutation: drop the nextStatus check → FAILS)", () => {
+    expect(shouldWarnOnUnpublish("published", "published", "Ana")).toBe(false);
+  });
+
+  it("does not warn when no assistant is wired to this form (mutation: drop the null check → FAILS)", () => {
+    expect(shouldWarnOnUnpublish("published", "draft", null)).toBe(false);
+  });
+});
+
+// Fix round 1 review item 1: the Status Select was uncontrolled
+// (defaultValue={form.status} — Radix reads it exactly once), so a
+// successful Undo republish left the visible control, and the `status`
+// state driving shouldWarnOnUnpublish, still showing the unpublished value.
+// The warning reappeared on an already-published form, and the next Save
+// unpublished it again. This is the state-transition decision alone,
+// extracted so it is testable without a DOM renderer (no DOM lib in this
+// repo — see contact-drawer.wiring.test.ts's own precedent for pulling
+// non-trivial wiring out of a component for exactly this reason).
+describe("statusAfterUndo", () => {
+  it("moves the status to published on a successful republish (mutation: return currentStatus unconditionally → FAILS)", () => {
+    expect(statusAfterUndo({ ok: true }, "draft")).toBe("published");
+    expect(statusAfterUndo({ ok: true }, "archived")).toBe("published");
+  });
+
+  it("leaves the status exactly as it was when the republish failed (mutation: return \"published\" unconditionally → FAILS)", () => {
+    expect(statusAfterUndo({ ok: false, error: "nope" }, "draft")).toBe("draft");
+    expect(statusAfterUndo({ ok: false, error: "nope" }, "archived")).toBe("archived");
   });
 });
