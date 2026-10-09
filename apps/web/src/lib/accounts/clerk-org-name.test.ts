@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@bis/db";
 import { syncClerkOrgName, type ClerkOrgWriter } from "./clerk-org-name";
 
 // D-005: Clerk's invitation email names the Clerk organisation, and that name

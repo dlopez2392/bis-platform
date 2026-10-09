@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@bis/db";
 import { loggableError } from "@/lib/loggable-error";
 
 /** The one Clerk Backend call this needs; `clerkClient()` satisfies it. */
