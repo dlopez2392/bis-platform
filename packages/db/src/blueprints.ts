@@ -255,7 +255,10 @@ async function buildBundle(db: SupabaseClient, accountId: string): Promise<Bluep
 
 export async function listBlueprints(db: SupabaseClient): Promise<BlueprintSummary[]> {
   const { data, error } = await db.from("blueprints")
-    .select("id, name, version, created_at, updated_at").order("created_at", { ascending: false });
+    // Newest LAST capture first: the list shows updated_at, so it is ordered
+    // by it too (D-090 review). id breaks a tie so the order is stable.
+    .select("id, name, version, created_at, updated_at")
+    .order("updated_at", { ascending: false }).order("id");
   if (error) throw new Error(error.message);
 
   const rows = (data ?? []) as any[];

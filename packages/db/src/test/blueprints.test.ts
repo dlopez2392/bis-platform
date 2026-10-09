@@ -111,6 +111,21 @@ describe("blueprint capture", () => {
       expect(Date.parse(row.updated_at)).toBeGreaterThan(Date.parse(row.created_at));
     }));
 
+  // D-090 review: the list shows the LAST capture's date, so it is ordered by
+  // that date too — newest recapture first, not newest first-capture first.
+  it("listBlueprints orders by last capture, matching the date it shows (mutation: order by created_at → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const older = blueprintName("Order Older");
+      const newer = blueprintName("Order Newer");
+      await captureBlueprint(db, accountId, { name: older }, "user_test");
+      await new Promise((r) => setTimeout(r, 20));
+      await captureBlueprint(db, accountId, { name: newer }, "user_test");
+      await new Promise((r) => setTimeout(r, 20));
+      await captureBlueprint(db, accountId, { name: older }, "user_test"); // recaptured last
+      const mine = (await listBlueprints(db)).filter((b) => b.name === older || b.name === newer);
+      expect(mine.map((b) => b.name)).toEqual([older, newer]);
+    }));
+
   // D-090: "Applied to N accounts" counted blueprint.applied EVENTS, so
   // re-applying to one company (the remedy for a partial apply) inflated it.
   it("listBlueprints counts the accounts a blueprint was applied to, not the applications (mutation: count events → FAILS)", () =>
