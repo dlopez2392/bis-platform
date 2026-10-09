@@ -188,6 +188,42 @@ export type Branding = {
 };
 
 /**
+ * The columns `brandingChangePayload` carries an old -> new value for: short
+ * text/enum scalars a person reads directly on an audit row. Deliberately
+ * excludes `brand_logo_path` (a Storage path, not file content, but not what
+ * this row exists to show either) and `mailing_address` (free text, possibly
+ * several lines) — both still appear in `fields` below, so the record still
+ * shows WHAT was touched.
+ */
+const SHORT_SCALAR_AUDIT_FIELDS = new Set([
+  "brand_name", "brand_color", "brand_neutral", "brand_corners", "brand_type",
+  "brand_mode", "reply_to_email",
+]);
+
+/**
+ * D-069: `setBranding` used to emit `account.branding_updated` with an empty
+ * `{}` payload — the record showed WHO changed branding, never WHAT. Builds
+ * the payload from the patch about to be written and the row's values just
+ * before it: every changed column's name, plus old -> new for the short
+ * scalar fields (see `SHORT_SCALAR_AUDIT_FIELDS`). Exported and pure so it
+ * carries its own unit tests, same reason `color.ts` stays separate from the
+ * action that calls it.
+ */
+export function brandingChangePayload(
+  patch: Record<string, string | null>,
+  before: Record<string, string | null> | null,
+): { fields: string[]; changes: Record<string, { from: string | null; to: string | null }> } {
+  const fields = Object.keys(patch);
+  const changes: Record<string, { from: string | null; to: string | null }> = {};
+  for (const field of fields) {
+    if (SHORT_SCALAR_AUDIT_FIELDS.has(field)) {
+      changes[field] = { from: before?.[field] ?? null, to: patch[field] ?? null };
+    }
+  }
+  return { fields, changes };
+}
+
+/**
  * Patches one account's branding. SERVER ONLY, agency-gated at the call site.
  *
  * A field is written only when it is present AND not `undefined`. The two are
@@ -225,6 +261,20 @@ export async function setBranding(
   if (input.mailingAddress !== undefined) patch.mailing_address = input.mailingAddress;
   if (Object.keys(patch).length === 0) return;
 
+  // D-069's "before" snapshot, read just ahead of the write so the audit
+  // payload can carry old -> new for the short scalar fields. Best-effort,
+  // not a compare-and-set: a save that lands between this read and the
+  // update below can make a logged "from" stale by one write, which is an
+  // audit-log imprecision, not a correctness bug — restoreBrandLogoIfCleared
+  // above is the actual guard against two writes racing on the same column.
+  // Only read when at least one changing field is one `brandingChangePayload`
+  // logs a value for; a logo-only or address-only save has nothing to show.
+  const needsBefore = Object.keys(patch).some((f) => SHORT_SCALAR_AUDIT_FIELDS.has(f));
+  const before = needsBefore
+    ? (await db.from("accounts").select(Object.keys(patch).join(", "))
+        .eq("id", accountId).maybeSingle()).data as Record<string, string | null> | null
+    : null;
+
   // `.select("id")` so the update reports WHICH rows it touched. Without it,
   // PostgREST returns no error and no rows for an account that does not exist,
   // which is indistinguishable from success -- and the caller would report a
@@ -237,7 +287,7 @@ export async function setBranding(
     .update(patch).eq("id", accountId).select("id");
   if (error) throw new Error(`setBranding failed: ${error.message}`);
   if (!data?.length) throw new Error(`setBranding: no account ${accountId}`);
-  await emit(db, accountId, "account.branding_updated", actorId, {});
+  await emit(db, accountId, "account.branding_updated", actorId, brandingChangePayload(patch, before));
 }
 
 /**
