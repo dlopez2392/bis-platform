@@ -1,25 +1,26 @@
 #!/bin/sh
 # Refuses a direct push to main.
 #
-# This repository is private on a GitHub plan that does not offer protected
-# branches, so nothing SERVER-side can decline a push to main or a merge over
-# a red build. This hook is the part of that protection that can be enforced
-# for free: it runs on the machine doing the pushing, and the accident it
-# stops — a `git push` while main happens to be checked out, landing
-# unverified work straight onto the branch that deploys production — is by
-# far the most likely one.
+# The control is on the SERVER, not here. The repository is public, and a
+# ruleset on main (id 23712687, no bypass actors, so the owner is bound too)
+# requires the "verify" and "e2e" checks green on a pull request's head
+# commit, allows only squash-merge through a pull request, and refuses direct
+# pushes, force-pushes and deletion of main. This hook is a courtesy in front
+# of that: it runs on the machine doing the pushing and stops the likeliest
+# accident (a `git push` while main happens to be checked out) before the
+# server has to, with a message that says what to do instead.
 #
 # It deliberately does NOT try to be a security control. Anyone who wants
 # past it can pass the override below, use --no-verify, or push from a clone
-# where the hook is not installed. That is the correct scope: this guards
-# against a slip, not against intent.
+# where the hook is not installed; the ruleset still refuses the push. That
+# is the correct scope: this guards against a slip, not against intent.
 #
 # Install (once per clone, hooks are not carried by git itself):
 #
 #     git config core.hooksPath .githooks
 #
-# Deliberate override, for a hotfix when CI itself is the thing that is
-# broken:
+# Override (skips THIS hook only; with no bypass actors on the ruleset, the
+# server refuses a direct push to main anyway):
 #
 #     bash:       ALLOW_MAIN_PUSH=1 git push
 #     PowerShell: $env:ALLOW_MAIN_PUSH=1; git push; Remove-Item Env:ALLOW_MAIN_PUSH
@@ -53,9 +54,11 @@ request carries the evidence. Open one instead:
     git switch -c <a-branch-name>
     git push -u origin <a-branch-name>
 
-then merge it on GitHub once the "verify" and "e2e" checks are green.
+then squash-merge it on GitHub once the "verify" and "e2e" checks are green
+on its head commit. The ruleset on main refuses a direct push regardless of
+this hook.
 
-To override deliberately (a hotfix while CI itself is broken):
+To skip this hook deliberately (the server will still refuse the push):
 
     bash:       ALLOW_MAIN_PUSH=1 git push
     PowerShell: $env:ALLOW_MAIN_PUSH=1; git push; Remove-Item Env:ALLOW_MAIN_PUSH
