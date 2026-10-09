@@ -204,20 +204,49 @@ const SHORT_SCALAR_AUDIT_FIELDS = new Set([
  * D-069: `setBranding` used to emit `account.branding_updated` with an empty
  * `{}` payload — the record showed WHO changed branding, never WHAT. Builds
  * the payload from the patch about to be written and the row's values just
- * before it: every changed column's name, plus old -> new for the short
+ * before it: every CHANGED column's name, plus old -> new for the short
  * scalar fields (see `SHORT_SCALAR_AUDIT_FIELDS`). Exported and pure so it
  * carries its own unit tests, same reason `color.ts` stays separate from the
  * action that calls it.
+ *
+ * Review round: `fields` is every key in `patch` whose value actually
+ * DIFFERS from `before` — not simply `Object.keys(patch)`. The real (and
+ * only) caller, branding/actions.ts, resends all 7-8 columns on EVERY save
+ * (its own form always submits every field), so a colour-only edit was
+ * logging 8 "changed" fields with 6 of them `from === to`.
+ *
+ * `snapshotFailed` is the caller's explicit admission the before-read
+ * itself FAILED (a query fault, not "no row") — it must never be inferred
+ * from `before` being `null`, because `null` is also the legitimate answer
+ * for a row that genuinely does not exist yet (getBranding's own contract).
+ * Conflating the two was the bug this round closes: a read fault silently
+ * became `before = null`, which made every patched field read as "changed"
+ * with a fabricated `from: null`. On a failed read this still names every
+ * patched column (the write DID touch them), but logs no old/new values at
+ * all and marks `snapshot: false`, so a reader of the event can tell the
+ * difference between a verified delta and an unverifiable one.
  */
 export function brandingChangePayload(
   patch: Record<string, string | null>,
   before: Record<string, string | null> | null,
-): { fields: string[]; changes: Record<string, { from: string | null; to: string | null }> } {
-  const fields = Object.keys(patch);
+  snapshotFailed = false,
+): {
+  fields: string[];
+  changes: Record<string, { from: string | null; to: string | null }>;
+  snapshot?: false;
+} {
+  if (snapshotFailed) {
+    return { fields: Object.keys(patch), changes: {}, snapshot: false };
+  }
+  const fields: string[] = [];
   const changes: Record<string, { from: string | null; to: string | null }> = {};
-  for (const field of fields) {
+  for (const field of Object.keys(patch)) {
+    const from = before?.[field] ?? null;
+    const to = patch[field] ?? null;
+    if (from === to) continue;
+    fields.push(field);
     if (SHORT_SCALAR_AUDIT_FIELDS.has(field)) {
-      changes[field] = { from: before?.[field] ?? null, to: patch[field] ?? null };
+      changes[field] = { from, to };
     }
   }
   return { fields, changes };
@@ -262,18 +291,26 @@ export async function setBranding(
   if (Object.keys(patch).length === 0) return;
 
   // D-069's "before" snapshot, read just ahead of the write so the audit
-  // payload can carry old -> new for the short scalar fields. Best-effort,
-  // not a compare-and-set: a save that lands between this read and the
-  // update below can make a logged "from" stale by one write, which is an
-  // audit-log imprecision, not a correctness bug — restoreBrandLogoIfCleared
-  // above is the actual guard against two writes racing on the same column.
-  // Only read when at least one changing field is one `brandingChangePayload`
-  // logs a value for; a logo-only or address-only save has nothing to show.
-  const needsBefore = Object.keys(patch).some((f) => SHORT_SCALAR_AUDIT_FIELDS.has(f));
-  const before = needsBefore
-    ? (await db.from("accounts").select(Object.keys(patch).join(", "))
-        .eq("id", accountId).maybeSingle()).data as Record<string, string | null> | null
-    : null;
+  // payload can carry old -> new for the short scalar fields, AND (review
+  // round) so `brandingChangePayload` can tell a real change from one of
+  // the real caller's own no-op resends. Best-effort, not a compare-and-set:
+  // a save that lands between this read and the update below can make a
+  // logged "from" stale by one write, which is an audit-log imprecision,
+  // not a correctness bug — restoreBrandLogoIfCleared above is the actual
+  // guard against two writes racing on the same column.
+  //
+  // `.error` is checked (review round: it used to be dropped here, so a
+  // query FAULT silently became `before = null` — indistinguishable from a
+  // genuinely absent row, and `brandingChangePayload` would then report
+  // every patched field as "changed" with a fabricated `from: null`). A
+  // failed read is logged and passed through explicitly as `snapshotFailed`
+  // rather than guessed at from the shape of `before` alone.
+  const { data: beforeRow, error: beforeError } = await db.from("accounts")
+    .select(Object.keys(patch).join(", ")).eq("id", accountId).maybeSingle();
+  if (beforeError) {
+    console.error(`setBranding: before-snapshot read failed for account ${accountId}: ${beforeError.message}`);
+  }
+  const before = beforeError ? null : (beforeRow as Record<string, string | null> | null);
 
   // `.select("id")` so the update reports WHICH rows it touched. Without it,
   // PostgREST returns no error and no rows for an account that does not exist,
@@ -287,7 +324,8 @@ export async function setBranding(
     .update(patch).eq("id", accountId).select("id");
   if (error) throw new Error(`setBranding failed: ${error.message}`);
   if (!data?.length) throw new Error(`setBranding: no account ${accountId}`);
-  await emit(db, accountId, "account.branding_updated", actorId, brandingChangePayload(patch, before));
+  await emit(db, accountId, "account.branding_updated", actorId,
+    brandingChangePayload(patch, before, Boolean(beforeError)));
 }
 
 /**
