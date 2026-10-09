@@ -136,16 +136,18 @@ async function shoot(page: Page, file: string, opts: { fullPage?: boolean } = {}
 // the wrong box.
 const WIDE = { width: 1280, height: 800 };
 /**
- * The dashboard alone is taller: 1280x900 -> 2560x1800, which the website
+ * The dashboard alone is taller: 1280x880 -> 2560x1760, which the website
  * declares as `heroShot`. At 800 the calls chart's day labels fell below the
  * bottom edge once a "LAST 7 DAYS" caption joined the page above the KPIs
- * (2026-10-09 capture). DESIGN.md wants a label under EVERY period, so a
+ * (2026-10-09 capture). 880 rather than 900: at 900 the chart's legend fits
+ * with room to spare, but the top 5px of the next element down showed as a
+ * sliver along the bottom edge (capture run 37959965188). DESIGN.md wants a label under EVERY period, so a
  * chart photographed without its labels is the chart breaking its own rule.
  * `shoot` is preceded by a check that the axis is inside the frame, so the
  * next layout change that pushes it out fails the capture instead of cropping
  * it silently.
  */
-const DASHBOARD = { width: 1280, height: 900 };
+const DASHBOARD = { width: 1280, height: 880 };
 /** Narrower and taller: the booking page and the email are portrait objects
  *  shown in a half-column, and an email is 600-odd pixels wide by convention. */
 const NARROW = { width: 640, height: 800 };
