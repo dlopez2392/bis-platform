@@ -1161,6 +1161,12 @@ export const m = {
   "calendar.bookings.markNoShow": "No-show",
   "calendar.bookings.statusUpdated": "Booking updated",
   "calendar.bookings.statusUpdateFailed": "Could not update this booking.",
+  // D-036: Cancel runs at once with Undo (rule 6). It emails nobody, so the
+  // toast says the customer has not heard, rather than letting the operator
+  // assume they have.
+  "calendar.bookings.cancelledToast": "Appointment cancelled. We haven't told the customer, so let them know.",
+  "calendar.bookings.restored": "Appointment is back on.",
+  "calendar.bookings.restoreSlotTaken": "Someone else booked that time after you cancelled, so this appointment can't be put back.",
   "calendar.bookings.notStartedYet": "This appointment hasn't started yet. Mark it completed or no-show once it has.",
   "calendar.bookings.status.booked": "Booked",
   "calendar.bookings.status.cancelled": "Cancelled",

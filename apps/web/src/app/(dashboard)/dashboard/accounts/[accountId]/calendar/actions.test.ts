@@ -13,8 +13,8 @@ vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
 }));
 
-import { updateCalendarSettingsAction, setBookingStatusAction } from "./actions";
-import { BookingNotStartedError } from "@bis/db";
+import { updateCalendarSettingsAction, setBookingStatusAction, undoCancelBookingAction } from "./actions";
+import { BookingNotStartedError, SlotTakenError } from "@bis/db";
 import { m } from "@/lib/messages";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
 
@@ -185,5 +185,47 @@ describe("updateCalendarSettingsAction — notify addresses (D-034)", () => {
     const hint = m["calendar.settings.notifyEmailsHint"];
     expect(hint).not.toMatch(/coming up|reminder/i);
     expect(hint).toMatch(/comma/i);
+  });
+});
+
+/**
+ * D-036. Cancel on the Calendar page was irreversible. It tells nobody (no
+ * customer email, no staff alert; `setBookingStatus` writes the row and one
+ * event, and nothing reacts to that event but the activity feed), so it is
+ * REVERSIBLE in DESIGN.md rule 6's sense: it runs at once with an Undo. The
+ * Undo is its own action, an un-cancel only, and the generic status action
+ * no longer accepts "booked" at all, so there is exactly one way back and it
+ * carries the guard.
+ */
+describe("undoCancelBookingAction — the Calendar page's Undo (D-036)", () => {
+  beforeEach(() => {
+    dbMocks.setBookingStatus.mockReset();
+    dbMocks.setBookingStatus.mockResolvedValue(undefined);
+  });
+
+  it("flips back to booked only FROM cancelled, as the signed-in user", async () => {
+    expect(await undoCancelBookingAction("acct_1", "bk_1")).toEqual({ ok: true });
+    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith(
+      {}, "acct_1", "bk_1", "booked", "user_1", "user", { onlyFrom: "cancelled" },
+    );
+  });
+
+  it("says plainly when the time was booked by someone else in between", async () => {
+    dbMocks.setBookingStatus.mockRejectedValue(new SlotTakenError());
+    const r = await undoCancelBookingAction("acct_1", "bk_1");
+    expect(r).toEqual({ ok: false, error: m["calendar.bookings.restoreSlotTaken"] });
+    expect(m["calendar.bookings.restoreSlotTaken"]).toMatch(/\w/);
+  });
+
+  it("any other failure is the generic message", async () => {
+    dbMocks.setBookingStatus.mockRejectedValue(new Error("no booking"));
+    expect(await undoCancelBookingAction("acct_1", "bk_1"))
+      .toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
+  });
+
+  it("the generic status action refuses \"booked\" and writes nothing (the Undo is the only way back)", async () => {
+    const r = await setBookingStatusAction("acct_1", "bk_1", "booked");
+    expect(r).toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
   });
 });

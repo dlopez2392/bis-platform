@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, updateCalendarSettings, setBookingStatus, BookingNotStartedError,
+  serviceDb, updateCalendarSettings, setBookingStatus, BookingNotStartedError, SlotTakenError,
   type BookingStatus, type CalendarSettingsPatch,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -125,6 +125,11 @@ export async function setBookingStatusAction(
 ): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
 
+  // D-036: the way back to "booked" is `undoCancelBookingAction` below and
+  // only that, because only it carries the un-cancel guard (`onlyFrom`).
+  // Through here a crafted request could reopen a COMPLETED job.
+  if (status === "booked") return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+
   try {
     // D-030: `startedBy` is the server's own clock, never the page's. An
     // outcome (completed / no_show) on an appointment that has not started is
@@ -138,6 +143,43 @@ export async function setBookingStatusAction(
       return { ok: false, error: m["calendar.bookings.notStartedYet"] };
     }
     console.error(`setBookingStatusAction: ${status} failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
+    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/calendar`);
+  return { ok: true };
+}
+
+/**
+ * D-036: the Calendar page's Undo for a Cancel. DESIGN.md rule 6: a
+ * reversible action runs at once and offers Undo; typing a name is for
+ * destructive deletes, and an "Are you sure?" before it is the reflexive
+ * dialog the rule forbids. Cancel here IS reversible: it tells nobody (no
+ * customer email, no staff alert; `setBookingStatus` writes the row and one
+ * `booking.status_changed` event, which only the activity feed reads), so
+ * putting the row back undoes all of it.
+ *
+ * `onlyFrom: "cancelled"`: an un-cancel only, as a predicate on the write, so
+ * a late click can never reopen a booking that has since become anything
+ * else. The flip re-enters `bookings_no_overlap`; if a customer booked the
+ * freed time in the meantime, the write refuses with `SlotTakenError` and the
+ * operator is told so in words. serviceDb() for the reason
+ * `setBookingStatusAction` gives above: no UPDATE grant on `bookings` exists
+ * for `authenticated`, so `requireAccountAccess` is the gate.
+ */
+export async function undoCancelBookingAction(
+  accountId: string, bookingId: string,
+): Promise<ActionResult> {
+  const { userId } = await requireAccountAccess(accountId);
+
+  try {
+    await setBookingStatus(serviceDb(), accountId, bookingId, "booked", userId, "user",
+      { onlyFrom: "cancelled" });
+  } catch (e) {
+    if (e instanceof SlotTakenError) {
+      return { ok: false, error: m["calendar.bookings.restoreSlotTaken"] };
+    }
+    console.error(`undoCancelBookingAction: failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
     return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   }
 

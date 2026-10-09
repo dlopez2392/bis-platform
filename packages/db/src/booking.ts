@@ -326,11 +326,20 @@ export class BookingNotStartedError extends Error {
  * action passes it; omitted (the demo seed, the db tests, the receptionist's
  * cancel) the write is exactly what it was. Cancel is never an outcome and
  * is never refused by it.
+ *
+ * `opts.onlyFrom` (D-036): the row is written only if its CURRENT status is
+ * that one, as a predicate on the UPDATE (zero rows throws "no booking",
+ * like the wrong account). The Calendar page's Undo is
+ * `"booked", { onlyFrom: "cancelled" }` — an un-cancel, never an un-complete.
+ *
+ * A flip back to "booked" re-enters `bookings_no_overlap` (Postgres re-checks
+ * an exclusion constraint on UPDATE), so a time someone booked in between is
+ * `SlotTakenError`, mapped exactly as `createBooking` maps it.
  */
 export async function setBookingStatus(
   db: SupabaseClient, accountId: string, bookingId: string, status: BookingStatus, actorId: string,
   actorType: ActorType = "user",
-  opts: { startedBy?: string } = {},
+  opts: { startedBy?: string; onlyFrom?: BookingStatus } = {},
 ): Promise<void> {
   const nowIso = new Date().toISOString();
   // THE AUTOMATION CLOCKS (0026; spec, "Decisions taken after Milestone A
@@ -348,8 +357,12 @@ export async function setBookingStatus(
     .update({ status, updated_at: nowIso, ...stamp })
     .eq("account_id", accountId).eq("id", bookingId);
   if (guarded) q = q.lte("starts_at", opts.startedBy!);
+  if (opts.onlyFrom !== undefined) q = q.eq("status", opts.onlyFrom);
   const { data, error } = await q.select("id");
-  if (error) throw new Error(`setBookingStatus failed: ${error.message}`);
+  if (error) {
+    if (error.code === "23P01" || error.message?.includes("bookings_no_overlap")) throw new SlotTakenError();
+    throw new Error(`setBookingStatus failed: ${error.message}`);
+  }
   if (!data?.length) {
     // Zero rows under the guard is either "not started" or "no such booking
     // here"; one read tells them apart so the operator is told which.

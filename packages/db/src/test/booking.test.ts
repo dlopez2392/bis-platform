@@ -370,6 +370,59 @@ describe("booking accessors", () => {
   });
 
   /**
+   * D-036: Cancel on the Calendar page runs at once and offers Undo, and Undo
+   * is `setBookingStatus(…, "booked", …, { onlyFrom: "cancelled" })`. Two
+   * things the un-cancel needs that the write did not have:
+   *  - the flip back re-enters `bookings_no_overlap` (the constraint binds
+   *    status='booked' only, and Postgres re-checks it on UPDATE), so a time
+   *    someone else booked in between must surface as `SlotTakenError`, the
+   *    same class `createBooking` throws, not a generic failure;
+   *  - `onlyFrom` makes it an un-CANCEL only, as a predicate on the UPDATE: a
+   *    stale Undo on a booking since marked completed must not reopen it.
+   */
+  it("D-036: un-cancel restores a cancelled booking, refuses a taken slot as SlotTakenError, and only ever flips FROM cancelled", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Undo" }, "user_test");
+      const statusOf = async (id: string) => {
+        const { data, error } = await db.from("bookings").select("status").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return (data as { status: string }).status;
+      };
+      const range = (day: string) => ({
+        calendarId: cal.id, contactId,
+        startsAt: new Date(`2027-06-${day}T15:00:00Z`), endsAt: new Date(`2027-06-${day}T16:00:00Z`),
+      });
+
+      // Restored: back to booked, with its own event.
+      const a = await createBooking(db, accountId, range("01"), "user_test");
+      await setBookingStatus(db, accountId, a.id, "cancelled", "user_test");
+      await setBookingStatus(db, accountId, a.id, "booked", "user_test", "user", { onlyFrom: "cancelled" });
+      expect(await statusOf(a.id)).toBe("booked");
+      const { data: ev } = await db.from("events").select("payload")
+        .eq("account_id", accountId).eq("type", "booking.status_changed")
+        .order("created_at", { ascending: true });
+      expect((ev ?? []).map((r) => (r as { payload: { status: string } }).payload.status))
+        .toEqual(["cancelled", "booked"]);
+
+      // Someone booked the freed time in between: SlotTakenError, still cancelled.
+      const b = await createBooking(db, accountId, range("02"), "user_test");
+      await setBookingStatus(db, accountId, b.id, "cancelled", "user_test");
+      await createBooking(db, accountId, range("02"), "public", "system");
+      await expect(setBookingStatus(db, accountId, b.id, "booked", "user_test", "user", { onlyFrom: "cancelled" }))
+        .rejects.toBeInstanceOf(SlotTakenError);
+      expect(await statusOf(b.id)).toBe("cancelled");
+
+      // Not cancelled any more: refused, and left exactly as it was.
+      const c = await createBooking(db, accountId, range("03"), "user_test");
+      await setBookingStatus(db, accountId, c.id, "completed", "user_test");
+      await expect(setBookingStatus(db, accountId, c.id, "booked", "user_test", "user", { onlyFrom: "cancelled" }))
+        .rejects.toThrow(/no booking/);
+      expect(await statusOf(c.id)).toBe("completed");
+    });
+  });
+
+  /**
    * D-030's other half: the operator's list began at `now` on `starts_at`, so
    * an appointment vanished from it the moment it started — exactly when it
    * could first be marked. It now also carries every appointment that has
