@@ -34,10 +34,15 @@ export const weeklyClientReportPass: Pass = {
       sent: 0, failed: 0, skippedNotMonday: 0, skippedAlreadySent: 0,
       skippedCap: 0, skippedBudget: 0, unresolvableTimezone: 0, unstamped: 0,
     };
-    // D-067: `listAccountsDueWeeklyReport` orders oldest-account-first, so
-    // the accounts WEEKLY_REPORT_TICK_CAP/the budget turn away this tick are
-    // exactly the ones reached first next tick — a real walk across the
-    // Monday band's twelve ticks, not twelve repeats of the same slice.
+    // D-067: the real cursor across the Monday band's twelve ticks is
+    // `row.lastSentWeek`, checked below BEFORE either limit — an account
+    // already stamped for this week is skipped for free, so the cap/budget
+    // attempts this tick spends always land on accounts the LAST tick had
+    // not reached yet, never a repeat of the same slice. What
+    // `listAccountsDueWeeklyReport`'s `created_at` ordering adds on top is
+    // narrower: it makes WHICH not-yet-stamped accounts get this tick's
+    // limited attempts deterministic, rather than left to an unstable scan
+    // order that could favour a different subset by accident tick to tick.
     const due = await listAccountsDueWeeklyReport(ctx.db);
     let attemptsThisTick = 0;
     const startedAt = Date.now();

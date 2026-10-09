@@ -146,9 +146,20 @@ export const METER_EVENT_WORST_CASE_MS = 21_000;
  * missed band is a missed week; spec, "Recorded consequence" — unlike the
  * usage report's backlog, nothing here is retried after the band shuts).
  *
- * `WEEKLY_REPORT_TICK_CAP` (15x the old ceiling: 1,800 accounts per zone per
- * band) is still a cap, not a dial turned off: a bug in the due-list query
- * is still bounded to one tick's worth of damage. `WEEKLY_REPORT_BUDGET_MS`
+ * `WEEKLY_REPORT_TICK_CAP` (15x the old per-tick number: 1,800 accounts per
+ * ZONE per band, since the cap is counted fresh each tick against whichever
+ * zones are in band right now) is still a cap, not a dial turned off: a bug
+ * in the due-list query is still bounded to one tick's worth of damage.
+ * Review round 2 found that 1,800 figure could not actually have been
+ * REACHED either way: `listAccountsDueWeeklyReport` (weekly-report.ts) read
+ * every due account ACROSS EVERY ZONE in one unpaged call, so PostgREST's
+ * `max_rows` cap (supabase/config.toml) silently dropped every account past
+ * the 1,000th GLOBALLY — a bound well under this cap's own math, and one
+ * that bit the whole platform's book of business at once rather than one
+ * zone's Monday morning. That read is paged now (same stop-on-empty shape as
+ * `listTrafficBreakdown`, sites.ts), so the 1,800-per-zone figure above is
+ * the real ceiling this cap imposes, not a number the read itself cuts off
+ * first. `WEEKLY_REPORT_BUDGET_MS`
  * is the same order of magnitude as the usage report's own 60 s, claimed
  * near the END of the same registered order (weekly-report.ts §registry
  * comment: client report, then the agency roll-up, then usage, then
@@ -160,9 +171,19 @@ export const METER_EVENT_WORST_CASE_MS = 21_000;
  * trip the way METER_EVENT_WORST_CASE_MS has one for the installed Stripe
  * SDK, so manufacturing one would be a number with no evidence behind it);
  * the accounts a budget turns away wait for the next tick, same as a
- * cap-turned-away account always has, and `listAccountsDueWeeklyReport`'s
- * own `created_at` ordering (D-067's other half) is what makes that wait
- * land on a DIFFERENT set of accounts each time rather than the same one.
+ * cap-turned-away account always has.
+ *
+ * What actually makes that wait land on progress rather than the same
+ * account forever is `accounts.weekly_report_week`, read for free in the
+ * pass's own loop (before either limit here is even consulted): an account
+ * already stamped for this week is skipped WITHOUT spending a cap slot, so
+ * the limited attempts this tick DOES spend fall on accounts the LAST tick
+ * had not reached yet — that is the real cursor. `listAccountsDueWeeklyReport`'s
+ * `created_at` ordering (D-067's other half) does something narrower: it
+ * makes WHICH not-yet-stamped accounts get this tick's limited attempts
+ * deterministic, so two different ticks reading the same due-list in an
+ * unstable order could not arbitrarily favour different accounts by
+ * accident — it is not what makes the walk advance at all.
  */
 export const WEEKLY_REPORT_TICK_CAP = 150;
 export const WEEKLY_REPORT_BUDGET_MS = 60_000;

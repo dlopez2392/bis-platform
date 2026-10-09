@@ -147,12 +147,16 @@ export async function listTrafficDays(
 
 /** D-054: PostgREST on this project caps a single response at 1,000 rows
  *  (supabase/config.toml, `max_rows`), silently — no error, just fewer rows
- *  than exist. A busy site's window (30 days' backfill x up to 4 dimensions
- *  x the API's own 20-per-dimension cap) can hold up to 2,400 rows, well
- *  past that. Paged like `listBilledUsageAccounts` (usage.ts): advance by
- *  the page's ACTUAL length and stop only on an empty page, because a page
- *  shorter than requested is not proof there is no more — the server's own
- *  `max_rows` can already be smaller than the page asked for. */
+ *  than exist. The window this read actually serves is bigger than one
+ *  site's backfill: `load.ts` reads `[prior[0], current[last]]` — the
+ *  CURRENT period plus the PRIOR one of equal length, for the delta — so
+ *  at the largest period (30 days) that is up to 60 days, x up to 4
+ *  dimensions x the API's own 20-per-dimension cap, up to 4,800 rows. Well
+ *  past the 1,000-row cap. Paged like `listBilledUsageAccounts` (usage.ts):
+ *  advance by the page's ACTUAL length and stop only on an empty page,
+ *  because a page shorter than requested is not proof there is no more —
+ *  the server's own `max_rows` can already be smaller than the page asked
+ *  for. */
 const BREAKDOWN_PAGE = 1000;
 
 export async function listTrafficBreakdown(

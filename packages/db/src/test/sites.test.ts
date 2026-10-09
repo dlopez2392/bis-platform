@@ -117,11 +117,14 @@ describe("sites data layer", () => {
    * D-054: PostgREST on this project caps a single response at 1,000 rows
    * (supabase/config.toml, `max_rows = 1000`) — silently, no error, just
    * fewer rows than exist. `listTrafficBreakdown` had no `.range()` at all,
-   * so a busy site (30 days' backfill x up to 4 dimensions x the API's own
-   * 20-per-dimension cap = up to 2,400 rows) past that limit always lost
-   * the TAIL of its `order("day", { ascending: true })` read — the rows
-   * for its NEWEST days, exactly backwards from what the Website page
-   * needs (the chart and the panels read the most RECENT days first).
+   * and the window a Website page view actually reads (load.ts: the
+   * CURRENT period plus the PRIOR one of equal length, for the delta) can
+   * be up to 60 days at the longest period x up to 4 dimensions x the
+   * API's own 20-per-dimension cap = up to 4,800 rows — past that limit
+   * always lost the TAIL of its `order("day", { ascending: true })` read
+   * — the rows for its NEWEST days, exactly backwards from what the
+   * Website page needs (the chart and the panels read the most RECENT
+   * days first).
    *
    * Mutation: drop the `.range()` loop back to a single unbounded read —
    * day 2's 100 rows push the account past 1,000 and the newest day's
