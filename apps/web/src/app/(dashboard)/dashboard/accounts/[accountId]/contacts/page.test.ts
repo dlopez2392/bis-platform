@@ -23,7 +23,11 @@ vi.mock("./actions", () => ({ createContactAction: vi.fn() }));
 // D-010: the page's own direct query — the account's timezone — projected
 // the same way calls/page.test.ts and contacts/[contactId]/page.test.ts
 // project theirs, so a column this page stops selecting would show up here
-// too.
+// too. A mutable mock (not a bare async literal), same reason as
+// contacts/[contactId]/page.test.ts's own `accountRead`: the timezone-
+// read-failure test below swaps in a failing read for ONE call.
+const accountRead = vi.fn(async (): Promise<{ data: unknown; error: unknown }> =>
+  ({ data: { timezone: "America/Chicago" }, error: null }));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
     from: (table: string) => {
@@ -31,7 +35,7 @@ vi.mock("@/lib/db", () => ({
       return {
         select: () => ({
           eq: () => ({
-            maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }),
+            maybeSingle: () => accountRead(),
           }),
         }),
       };
@@ -41,10 +45,14 @@ vi.mock("@/lib/db", () => ({
 // Echoes the zone it was handed, same shape and reason as
 // contacts/[contactId]/page.test.ts's own renderZone stub: the only way this
 // test sees "America/Chicago" is if the account's row actually reached it.
+// Wrapped in a spy (not a bare function) so the timezone-read-failure test
+// below can assert it was actually CALLED WITH `undefined` — the fallback
+// path's whole claim — not merely that "UTC" showed up somewhere.
+const renderZoneMock = vi.fn(async (z: string | undefined) => (z
+  ? { zone: z, guessed: false, label: z, source: "account" as const }
+  : { zone: "UTC", guessed: true, label: "UTC", source: "fallback" as const }));
 vi.mock("@/lib/zone", () => ({
-  renderZone: async (z: string | undefined) => (z
-    ? { zone: z, guessed: false, label: z, source: "account" as const }
-    : { zone: "UTC", guessed: true, label: "UTC", source: "fallback" as const }),
+  renderZone: (z: string | undefined) => renderZoneMock(z),
 }));
 const listContactsMock = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => [{
   id: "c1", first_name: "Ana", last_name: null, email: null, phone: null,
@@ -254,5 +262,33 @@ describe("the account's zone reaches ContactsTable (D-010)", () => {
     expect(contactsTableMock).toHaveBeenCalledWith(
       expect.objectContaining({ timezone: "America/Chicago" }),
     );
+  });
+
+  // Coordinator-requested gap closure: the account's own `timezone` read
+  // (contacts/page.tsx's own `account.error` branch) must not take the
+  // whole list down — one cosmetic date column's own read failing is the
+  // contact detail page's own reasoning (and its own test,
+  // contacts/[contactId]/page.test.ts's "a failed account read falls back
+  // to the GUESSED zone, logged, never thrown"), now pinned here too.
+  it("a failed account timezone read falls back to the GUESSED zone, logged, never thrown", async () => {
+    accountRead.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
+    contactsTableMock.mockClear();
+    renderZoneMock.mockClear();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Never thrown: a page render that rejects here fails this test on
+      // its own, with no assertion needed to say so.
+      renderToStaticMarkup(
+        await ContactsPage({
+          params: Promise.resolve({ accountId: "a1" }),
+          searchParams: Promise.resolve({}),
+        }),
+      );
+      expect(renderZoneMock).toHaveBeenCalledWith(undefined);
+      expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ timezone: "UTC" }));
+      expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("boom");
+    } finally {
+      errors.mockRestore();
+    }
   });
 });

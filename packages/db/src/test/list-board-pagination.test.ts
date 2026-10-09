@@ -63,10 +63,10 @@ function fakeBoardDb(
   return { db, limitCalls, eqCalls, orderCalls, gtCalls };
 }
 
-function oppRow(id: string, stageId: string, value: number) {
+function oppRow(id: string, stageId: string, value: number, createdAt = "2027-01-01T00:00:00.000Z") {
   return {
     id, name: id, monetary_value: value, status: "open", stage_id: stageId,
-    created_at: "2027-01-01T00:00:00.000Z",
+    created_at: createdAt,
     contacts: { id: "c1", first_name: "A", last_name: "B" },
   };
 }
@@ -113,6 +113,32 @@ describe("listBoard (keyset pagination, no row-cap undercount)", () => {
 
     expect(limitCalls.length).toBeGreaterThan(1);
     expect(orderCalls).toEqual(limitCalls.map(() => ["id", { ascending: true }]));
+  });
+
+  // Coordinator-requested gap closure: the four tests above all give every
+  // row the SAME created_at, so the keyset order (by `id`, the fetch-time
+  // cursor) and the display order (newest-first by `created_at`, restored
+  // once every page is in) happen to coincide by construction — a test
+  // that could pass even if the final `.sort()` were deleted entirely.
+  // Here the fetch (keyset/id) order is OLDEST id first ("a", "b", "c") but
+  // the created_at values are deliberately NOT monotonic with id, spread
+  // across two separate pages, so only a real post-fetch sort by
+  // created_at — not the order pages arrived in — can produce the newest-
+  // first id sequence this test asserts (mutation: delete the final `.sort`
+  // call → the ids would come back in fetch order "a","b","c" instead).
+  it("restores newest-first display order across page boundaries, not fetch (id) order (mutation: delete the final .sort → FAILS)", async () => {
+    const { db } = fakeBoardDb(STAGES, [
+      // Page 1: ids "a" (oldest) then "b" (newest) — fetched in that order.
+      [oppRow("a", "s1", 100, "2027-01-01T00:00:00.000Z"),
+       oppRow("b", "s1", 200, "2027-01-03T00:00:00.000Z")],
+      // Page 2: id "c" (middle) — a THIRD page, so the sort has to survive
+      // the pagination loop, not just one page's own Array#sort call.
+      [oppRow("c", "s1", 300, "2027-01-02T00:00:00.000Z")],
+    ]);
+
+    const board = await listBoard(db, "acct1", "pipe1", 2);
+
+    expect(board[0]!.opportunities.map((o) => o.id)).toEqual(["b", "c", "a"]);
   });
 
   it("scopes EVERY page to this account and pipeline", async () => {
