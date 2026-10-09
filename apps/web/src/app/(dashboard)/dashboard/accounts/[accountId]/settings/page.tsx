@@ -9,6 +9,7 @@ import { createFieldAction, upsertValueAction, setClientAccessAction, inviteClie
          startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction } from "./actions";
 import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
+import { ApplyBlueprintDialog } from "./apply-blueprint-dialog";
 import { ClientAccessPanel, type ClientAccessMember } from "./client-access-panel";
 import { SendingAddressCard } from "./sending-address-card";
 import { WeeklyReportCard } from "./weekly-report-card";
@@ -19,7 +20,7 @@ import { saveSiteAction, testSiteConnectionAction, unlinkSiteAction } from "../w
 import { vercelAnalyticsFromEnv } from "@/lib/vercel/web-analytics";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { BrandingPanel } from "@/components/branding-panel";
-import { captureBlueprintAction } from "../../../blueprints/actions";
+import { captureBlueprintAction, applyBlueprintAction } from "../../../blueprints/actions";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
@@ -172,10 +173,17 @@ export default async function CrmSettingsPage({
       <PageHeader
         title={m["settings.title"]}
         actions={
-          <SaveBlueprintDialog
-            action={captureBlueprintAction.bind(null, accountId)}
-            existing={blueprints.map((b) => ({ name: b.name, version: b.version }))}
-          />
+          <>
+            {/* D-086: the "apply one later" the Add company dialog promises. */}
+            <ApplyBlueprintDialog
+              action={applyBlueprintAction.bind(null, accountId)}
+              blueprints={blueprints.map((b) => ({ id: b.id, name: b.name }))}
+            />
+            <SaveBlueprintDialog
+              action={captureBlueprintAction.bind(null, accountId)}
+              existing={blueprints.map((b) => ({ name: b.name, version: b.version }))}
+            />
+          </>
         }
       />
       <div className="space-y-6 p-6">

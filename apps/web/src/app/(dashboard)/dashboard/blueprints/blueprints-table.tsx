@@ -19,7 +19,8 @@ export function BlueprintsTable({
           </span>
           <span className="flex shrink-0 items-center gap-3">
             <span className="text-xs text-muted-foreground">
-              {m["blueprints.applied"]} {row.appliedCount} {m["blueprints.appliedCount"]}
+              {m["blueprints.applied"]} {row.appliedCount}{" "}
+              {row.appliedCount === 1 ? m["blueprints.appliedCountOne"] : m["blueprints.appliedCount"]}
             </span>
             <Badge variant="secondary">{m["blueprints.version"]} {row.version}</Badge>
           </span>

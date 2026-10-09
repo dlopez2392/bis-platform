@@ -28,8 +28,9 @@ export const FIXTURE_ACCOUNT_RE = /^E2E Client Co (\d{13})$/;
 /**
  * `E2E Co 1786412389258` — the company `blueprints.spec.ts` creates through
  * the real "Add company" dialog. `createClientAccount` names the Clerk org
- * after the account, so this one string is BOTH an account row and a real
- * Clerk org, and the spec's own `finally` is the only thing that removed
+ * after the name customers see, which the dialog pre-fills from the business
+ * name and the spec leaves as typed, so this one string is BOTH an account
+ * row and a real Clerk org, and the spec's own `finally` is the only thing that removed
  * either: a killed run stranded both where this sweep could not see them,
  * because `FIXTURE_ACCOUNT_RE` knows only the per-run fixture's name.
  * Anchored exactly as tightly: "E2E Co-op", "E2E Corp", "E2E Company" and

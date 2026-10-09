@@ -26,7 +26,9 @@ export default async function BlueprintsPage() {
           <BlueprintsTable
             rows={blueprints.map((b) => ({
               id: b.id, name: b.name, version: b.version,
-              captured: formatDateTime(b.created_at), appliedCount: b.appliedCount,
+              // updated_at, not created_at (D-090): every recapture stamps it,
+              // so the date agrees with the version number beside it.
+              captured: formatDateTime(b.updated_at), appliedCount: b.appliedCount,
             }))}
           />
         )}
