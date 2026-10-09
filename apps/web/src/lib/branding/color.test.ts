@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import {
   parseHexColor, contrastRatio, readableTextOn, lightenForSidebar,
   resolveSidebarAccent, SIDEBAR_BG, ensureContrast,
@@ -25,6 +28,32 @@ describe("parseHexColor", () => {
   });
 });
 
+// D-071: SIDEBAR_BG pinned "#1e1b2e" — the sidebar's :root --sidebar literal
+// from before the Northern Lights token refactor (commit 3a6796c9,
+// 2026-09-08). That literal island is gone: the sidebar now composites from
+// --sidebar-ground (opaque #0B0A12 in :root, transparent in .dark, letting
+// the same dark page ground show through), so SIDEBAR_BG must mirror
+// tokens.css's --sidebar-ground, not a snapshot of a value tokens.css no
+// longer declares.
+describe("SIDEBAR_BG mirrors tokens.css's --sidebar-ground", () => {
+  const tokensPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../styles/tokens.css",
+  );
+  const tokensCss = readFileSync(tokensPath, "utf8");
+  const rootBlock = tokensCss.match(/:root\s*\{([^}]*)\}/)?.[1];
+
+  it("finds tokens.css's :root block", () => {
+    expect(rootBlock).toBeTruthy();
+  });
+
+  it("matches --sidebar-ground's current literal", () => {
+    const declared = rootBlock?.match(/--sidebar-ground:\s*(#[0-9a-fA-F]{6});/)?.[1]?.toLowerCase();
+    expect(declared).toBeTruthy();
+    expect(SIDEBAR_BG).toBe(declared);
+  });
+});
+
 describe("contrastRatio", () => {
   // Pins the WCAG formula itself. If this drifts, every threshold below is
   // meaningless.
@@ -39,8 +68,8 @@ describe("contrastRatio", () => {
 
   it("matches measured values for the colors this feature cares about", () => {
     expect(contrastRatio("#6d28d9", "#ffffff")).toBeCloseTo(7.10, 2);
-    expect(contrastRatio("#8b5cf6", SIDEBAR_BG)).toBeCloseTo(3.96, 2);
-    expect(contrastRatio("#1e3a8a", SIDEBAR_BG)).toBeCloseTo(1.62, 2);
+    expect(contrastRatio("#8b5cf6", SIDEBAR_BG)).toBeCloseTo(4.65, 2);
+    expect(contrastRatio("#1e3a8a", SIDEBAR_BG)).toBeCloseTo(1.90, 2);
   });
 });
 
@@ -55,8 +84,9 @@ describe("readableTextOn", () => {
 });
 
 describe("lightenForSidebar", () => {
-  // The sidebar is always dark (#1e1b2e). A navy brand is invisible there
-  // untreated — 1.62:1 — which is the whole reason this function exists.
+  // The sidebar is always dark (#0b0a12, --sidebar-ground). A navy brand is
+  // invisible there untreated — 1.90:1 — which is the whole reason this
+  // function exists.
   it("raises a too-dark color past 3:1 against the sidebar", () => {
     const out = lightenForSidebar("#1e3a8a");
     expect(out).not.toBe("#1e3a8a");
@@ -64,15 +94,15 @@ describe("lightenForSidebar", () => {
   });
 
   it("leaves a color that already clears 3:1 untouched", () => {
-    expect(lightenForSidebar("#0f766e")).toBe("#0f766e"); // measured 3.07
-    expect(lightenForSidebar("#8b5cf6")).toBe("#8b5cf6"); // measured 3.96
-    expect(lightenForSidebar("#fde047")).toBe("#fde047"); // measured 12.73
+    expect(lightenForSidebar("#0f766e")).toBe("#0f766e"); // measured 3.60
+    expect(lightenForSidebar("#8b5cf6")).toBe("#8b5cf6"); // measured 4.65
+    expect(lightenForSidebar("#fde047")).toBe("#fde047"); // measured 14.94
   });
 
   // Fidelity over legibility, decided in spec section 5: a company's hue is
   // never silently changed, only lightened.
   it("preserves hue", () => {
-    expect(lightenForSidebar("#1e3a8a")).toBe("#3a62d4");
+    expect(lightenForSidebar("#1e3a8a")).toBe("#2d56cd");
   });
 
   it("handles an achromatic color without dividing by zero", () => {
@@ -96,7 +126,7 @@ describe("resolveSidebarAccent", () => {
   });
 
   it("lightens a valid colour to stay visible on the dark sidebar", () => {
-    expect(resolveSidebarAccent("#1e3a8a")).toBe("#3a62d4");
+    expect(resolveSidebarAccent("#1e3a8a")).toBe("#2d56cd");
   });
 });
 
