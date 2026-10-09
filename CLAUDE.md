@@ -52,7 +52,14 @@
   (`docs/runbooks/ci-supabase-project.md`). The `e2e` job enforces the
   first part: it fails, naming each file, when a migration in the branch is
   not in the CI project's history (`.github/scripts/ci-migrations-applied.sh`).
-  Production and parity are still checked by hand. Booking and
+  Production and parity are still checked by hand. That check proves only
+  that each migration's VERSION is in bis-ci's history, not that bis-ci's
+  schema works with the app: no CI test runs on bis-ci any more, so Vercel
+  Preview (plus local runs and a dispatched capture) is the only thing that
+  exercises it. And CI's stacks are the Supabase CLI's Docker images, not
+  hosted Supabase, so read a CI-vs-Preview disagreement as an ENVIRONMENT
+  finding first (runbook section 6). Leftover fixture rows and logos on
+  bis-ci are swept only by a local run (runbook section 9). Booking and
   calendar-settings specs run on the per-run fixture account — never point
   mutating specs at `Test Client One` or any live account.
 - **Only production credentials reach production data. DONE 2026-10-07.**

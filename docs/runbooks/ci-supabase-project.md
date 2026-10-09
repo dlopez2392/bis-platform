@@ -250,8 +250,26 @@ reported as a notice, never a failure. It is the ONLY place `ci.yml` reads
 this project: `BIS_CI_SUPABASE_REF` and `BIS_CI_SUPABASE_DB_URL` (from
 `CI_SUPABASE_DB_URL`) are set on that step alone, the script checks the URL
 is this project's Session pooler user before psql sees it, and it reads in
-one read-only transaction sent as one command. It does not check production (e2e holds no production
-credential, and must not): steps 5 and 6 are still the orchestrator's.
+one read-only transaction sent as one command. It does not check production
+(e2e holds no production credential, and must not): steps 5 and 6 are still
+the orchestrator's.
+
+**What that gate does NOT prove.** It checks that each migration's VERSION is
+in this project's history, nothing more. No CI test runs against this
+project's schema any more, so "the app works on bis-ci" is checked only by
+what still runs here: Vercel Preview (a deployment for every pushed branch,
+exercised only when someone signs in to it), a `screenshots.yml` capture
+(dispatched by hand) and local runs on danlo's machine. A migration that recorded its version but left this project in a
+state the app cannot use (a failed post-apply step, a hand edit, drift) is
+caught by step 3's post-apply checks and by Preview, never by CI.
+
+**CI and Preview do not run on the same thing.** CI's databases are the
+Supabase CLI's Docker images (2.109.1: Postgres, PostgREST v14.14, a Kong
+gateway with keep-alive off, Storage), started per run (section 11), not
+Supabase's hosted services. This project and production are hosted. When CI
+and Preview disagree about the same commit, read it as an ENVIRONMENT finding
+first (versions, gateway behaviour, a grant or bootstrap difference, a
+migration applied here by hand) before suspecting the code.
 
 ## 7. Restore from a pause
 
@@ -329,6 +347,27 @@ seeds its own stack), but it still shares this project with other local
 runs, Vercel Preview and a screenshot capture: before a local e2e run, check
 `gh run list --workflow screenshots.yml --status in_progress`.
 
+**Leftovers on this project are cleared only from this machine.** A local
+e2e run that is killed before its teardown (Ctrl-C, a crashed server, an
+out-of-memory kill) strands its fixture account rows here, and its logo in
+the PUBLIC `brand-logos` bucket. Since 2026-10-08 nothing in CI sweeps them:
+CI's e2e runs its fixture sweep (`apps/web/e2e/fixtures/sweep.ts`) against
+its own throwaway stack, so in CI only the sweep's Clerk legs (users and
+orgs in the shared development instance) do anything. The database and
+Storage legs reach this project only from a run whose env names it, which
+is a local one. Two ways to clear them, neither needing a new workflow:
+
+- the next local `pnpm --filter web test:e2e` sweeps at the top of its setup
+  (anything this suite named, 30 minutes old or more);
+- or on its own, report first: `pnpm --filter web e2e:sweep` lists what it
+  would delete; set `E2E_SWEEP_DELETE=1` for that one command to delete
+  (PowerShell: `$env:E2E_SWEEP_DELETE='1'; pnpm --filter web e2e:sweep;
+  Remove-Item Env:E2E_SWEEP_DELETE`).
+
+Leftovers do not break CI any more (CI never reads these rows). They show
+up in Vercel Preview's account list, and an orphaned logo stays publicly
+readable until it is swept, so sweep after any killed local run.
+
 ## 10. Reading a red e2e run
 
 CI publishes **no Playwright traces** (since 2026-10-07). This repository is
@@ -351,9 +390,13 @@ user, and a trace can contain session cookies. The `playwright-traces` and
 
 Neither CI job uses this project for its run. Every verify run and every e2e
 run starts its own Supabase stack inside its runner, runs against it, and the
-stack is gone with the runner. Nothing is shared between runs, so neither
+stack is gone with the runner. No database is shared between runs, so neither
 job has a repo-wide concurrency group, branches' runs go in parallel, and e2e
-starts beside verify rather than after it. (Until this date every verify
+starts beside verify rather than after it. Concurrent e2e runs still share
+the Clerk development instance (each mints its own users and orgs there, and
+none joins Test Client One's org, which holds at most 5 members), the Stripe
+TEST account and the CI OpenAI key; the e2e job's comment in `ci.yml` says
+why each is safe. (Until this date every verify
 waited in one line, `verify-ci-supabase`, for this project: with three or
 four runs queued, the last waited about 45 minutes before starting; and
 every e2e waited in another, `e2e-ci-supabase`, because all of them shared
@@ -400,8 +443,9 @@ e2e runs the same steps, with three differences:
   instance's JWKS at `supabase start` and hands it to PostgREST alongside the
   stack's own secret [read from the CLI's source at that tag]. The script
   reads PostgREST's running JWKS back with `docker inspect` and refuses the
-  stack unless it holds an RSA key (the stack's own secret is an `oct` key,
-  so an RSA key can only be the issuer's).
+  stack unless it holds an RSA key whose kid is a Clerk instance id
+  (`ins_…`) in the same key object (the stack's own secret is an `oct` key;
+  the kid ties the RSA key to Clerk rather than to whatever issuer answered).
 - It seeds that stack with `ci:seed:local` (section 4's baseline, refused
   anywhere but the runner's loopback), before Playwright, which builds the
   app with the stack's URL baked in.
@@ -419,14 +463,17 @@ Reading a red one:
   404: the migrations did not reach PostgREST; with 403, the bootstrap's
   default privileges did not take effect before the migrations.
 - e2e's **Start a local Supabase stack that trusts the Clerk development
-  instance** red on "PostgREST … holds no RSA key": the trust did not reach
+  instance** red on "PostgREST … holds no RSA key with a Clerk instance kid":
+  the trust did not reach
   PostgREST, and every signed-in page would have come back empty. Red inside
   `supabase start` on an OIDC or JWKS URL: Clerk's discovery endpoint did not
   answer; re-run once.
 - e2e's **Playwright** red with in-account pages empty or 500 while
   `/dashboard/accounts` renders: the classic "Clerk token not trusted"
   shape (`clerk-setup.md`). Check the stack step's notice names the domain
-  and an RSA key.
+  and an RSA key with a Clerk kid. If the same commit works on Preview, that
+  difference is the finding (section 6, "CI and Preview do not run on the
+  same thing").
 - **pnpm check** red: as before, except that a db test can no longer fail
   from another branch's run, so a failure that moves between re-runs is not
   contention any more. Read it as a real one.
