@@ -212,15 +212,80 @@ export async function sweepClerkOrgs(
 ): Promise<void> {
   try {
     const orgs = await fetchAllPages((page) => clerk.organizations.getOrganizationList(page));
+    // Ids the accounts leg already took by clerk_org_id: one report line and
+    // one delete per org, including in a dry run where it is still listed.
+    const taken = new Set(report.clerkOrgs.map((o) => o.id));
     for (const org of orgs) {
-      // Same decision as the accounts leg: an org is named after its account
-      // (auth.setup.ts by hand, blueprints.spec.ts through createClientAccount).
+      if (taken.has(org.id)) continue;
+      // Same decision as the accounts leg, by NAME. auth.setup.ts names the
+      // fixture org after its account; createClientAccount names an org after
+      // the name customers see, which blueprints.spec.ts leaves equal to the
+      // business name. Neither survives a Branding save (D-005 renames the
+      // org to the brand name), so an org whose account row still exists is
+      // deleted BY ID in sweepStaleAccounts instead; this leg catches orgs
+      // with no account row (a run killed between the Clerk call and the
+      // insert, and the agency's own fixture org).
       if (!isStaleFixtureAccount(org.name, now, maxAgeMs)) continue;
       report.clerkOrgs.push({ id: org.id, name: org.name });
       if (!dryRun) await clerk.organizations.deleteOrganization(org.id);
     }
   } catch (e) {
     report.errors.push(`clerk orgs: ${String(e)}`);
+  }
+}
+
+/**
+ * Leg 1: fixture accounts, matched by name and then by age.
+ *
+ * The `like` is a prefilter for the network, never the decision:
+ * `isStaleFixtureAccount` is what admits a row, and it refuses
+ * "E2E Client Co-op 1786412389258", which this pattern would happily
+ * return. "E2E %" rather than one prefix per shape because the shapes are
+ * now two (`E2E Client Co`, `E2E Co`) and one prefilter covering both is
+ * the same one the forms leg below already uses.
+ *
+ * Exported for `sweep.test.ts`, which injects a fake db and a fake Clerk.
+ */
+export async function sweepStaleAccounts(
+  db: Db, clerk: ClerkForSweep, report: SweepReport, now: number, maxAgeMs: number, dryRun: boolean,
+): Promise<void> {
+  const { data: accounts, error: accountsError } = await db
+    .from("accounts").select("id, name, clerk_org_id").like("name", FIXTURE_NAME_PREFILTER);
+  if (accountsError) {
+    report.errors.push(`accounts select: ${accountsError.message}`);
+  }
+  const stale = (accounts ?? []).filter(
+    (a: { name: string }) => isStaleFixtureAccount(a.name, now, maxAgeMs),
+  ) as Array<{ id: string; name: string; clerk_org_id: string | null }>;
+
+  for (const account of stale) {
+    report.accounts.push({ id: account.id, name: account.name });
+    const objects = await removePrefix(db, account.id, report, dryRun);
+    report.orphanObjects.push(...objects);
+    // The org behind the row, BY ID, and BEFORE the row: sweepClerkOrgs
+    // finds orgs by NAME, and D-005 renames an org to its brand name on every
+    // Branding save — the per-run fixture's brand is "Rio Roofing <stamp>"
+    // (auth.setup.ts), so once client-branding.spec has saved, its org
+    // matches no fixture pattern. Only ids from rows the fixture patterns
+    // admitted above reach this line. Org first, because a row deleted first
+    // would leave nothing pointing at an org whose delete then failed.
+    if (account.clerk_org_id) {
+      report.clerkOrgs.push({ id: account.clerk_org_id, name: account.name });
+      if (!dryRun) await deleteFixtureOrg(clerk, account.clerk_org_id, report);
+    }
+    if (!dryRun) await deleteAccountCascade(db, account.id, report);
+  }
+}
+
+/** A 404 means the org is already gone (teardown got it, or the name leg
+ *  did on an earlier run): not an error. Anything else is reported, never
+ *  thrown, like every other leg. */
+async function deleteFixtureOrg(clerk: ClerkForSweep, orgId: string, report: SweepReport): Promise<void> {
+  try {
+    await clerk.organizations.deleteOrganization(orgId);
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return;
+    report.errors.push(`clerk org ${orgId} (behind a stale fixture account): ${String(e)}`);
   }
 }
 
@@ -256,29 +321,10 @@ export async function sweepStaleFixtures({
   const report = emptySweepReport();
   const db = serviceDb();
 
-  // 1. Fixture accounts, matched by name and then by age.
-  //
-  // The `like` is a prefilter for the network, never the decision:
-  // `isStaleFixtureAccount` is what admits a row, and it refuses
-  // "E2E Client Co-op 1786412389258", which this pattern would happily
-  // return. "E2E %" rather than one prefix per shape because the shapes are
-  // now two (`E2E Client Co`, `E2E Co`) and one prefilter covering both is
-  // the same one the forms leg below already uses.
-  const { data: accounts, error: accountsError } = await db
-    .from("accounts").select("id, name, clerk_org_id").like("name", FIXTURE_NAME_PREFILTER);
-  if (accountsError) {
-    report.errors.push(`accounts select: ${accountsError.message}`);
-  }
-  const stale = (accounts ?? []).filter(
-    (a: { name: string }) => isStaleFixtureAccount(a.name, now, maxAgeMs),
-  ) as Array<{ id: string; name: string; clerk_org_id: string | null }>;
+  const clerk = await clerkClient();
 
-  for (const account of stale) {
-    report.accounts.push({ id: account.id, name: account.name });
-    const objects = await removePrefix(db, account.id, report, dryRun);
-    report.orphanObjects.push(...objects);
-    if (!dryRun) await deleteAccountCascade(db, account.id, report);
-  }
+  // 1. Fixture accounts, and the Clerk org behind each (sweepStaleAccounts).
+  await sweepStaleAccounts(db, clerk, report, now, maxAgeMs, dryRun);
 
   // 2. Clerk identities. Independent of step 1 on purpose: a run killed
   // between createUser and createAccount leaves a user with no account row,
@@ -286,7 +332,6 @@ export async function sweepStaleFixtures({
   // every Clerk result rather than trusting a single `limit: 100` call — see
   // `fetchAllPages`'s own comment for why a single page silently strands
   // anything past the first 100.
-  const clerk = await clerkClient();
   await sweepClerkUsers(clerk, report, now, maxAgeMs, dryRun);
   await sweepClerkOrgs(clerk, report, now, maxAgeMs, dryRun);
 

@@ -45,7 +45,7 @@ test("a client sees only their own account, and nothing when access is off", asy
   const db = serviceDb();
 
   // 1. Signing in lands on their own account's dashboard — not the
-  // accounts list. (dashboard)/page.tsx's resolveClientAccount() redirect
+  // accounts list. (dashboard)/page.tsx's resolveClientAccessState() redirect
   // is what's under test here.
   await page.goto("/");
   await expect(page).toHaveURL(
@@ -251,7 +251,7 @@ test("a client sees only their own account, and nothing when access is off", asy
   await setClientAccess(db, fixture.accountId, false, fixture.clerkUserId);
   await page.goto(`/dashboard/accounts/${fixture.accountId}/dashboard`);
   await expect(page).toHaveURL(/\/no-access\?reason=off$/);
-  await expect(page.getByText("Access has been turned off")).toBeVisible();
+  await expect(page.getByText("Access isn't turned on")).toBeVisible();
 });
 
 // The client's own CUSTOMERS — people with no relationship to BIS at all, and

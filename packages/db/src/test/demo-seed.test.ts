@@ -11,6 +11,9 @@ import {
 import { listSitesToSync } from "../sites";
 import { listDueReminders } from "../booking";
 import { listAccountsForWeeklyRollup, listAccountsDueWeeklyReport } from "../weekly-report";
+import { createAccount } from "../accounts";
+import { captureBlueprint, getBlueprint } from "../blueprints";
+import { testBlueprintName } from "./fixtures";
 
 /**
  * The seeder against a real database — a THROWAWAY org id, never the real
@@ -77,6 +80,18 @@ describe("demo tenant seeder", () => {
       expect(account!.brand_logo_path).toMatch(new RegExp(`^${accountId}/logo-[0-9a-f]{16}\\.png$`));
       // No recipients: the weekly report's own switch, on top of the flag.
       expect(account!.report_emails).toEqual([]);
+
+      // D-058: the recipe bodies are the operator's prose, as the product
+      // stores them — nothing substitutes `{{tags}}` (the link and the date
+      // are composed AROUND the body), so a seeded tag reached the preview
+      // and the settings screens people screenshot as raw template syntax.
+      const { data: recipes } = await db.from("automations")
+        .select("recipe_key, body").eq("account_id", accountId);
+      expect(recipes!.map((a) => a.recipe_key).sort()).toEqual(["review_request", "sms_reminder"]);
+      for (const recipe of recipes!) {
+        expect(recipe.body, recipe.recipe_key).not.toMatch(/\{\{|\}\}/);
+        expect(recipe.body.trim(), recipe.recipe_key).not.toBe("");
+      }
 
       // --- Every stored contact detail is reserved. Read back from the
       //     DATABASE, not from the source list — this is the assertion that
@@ -270,6 +285,31 @@ describe("demo tenant seeder", () => {
       if (stray) await deleteAccountCascade(db, stray.id, "demo-seed.test cleanup");
     }
   }, 600_000);
+
+  // D-092: re-seeding the demo drops and rebuilds its account, and the drop
+  // deleted every agency blueprint captured from it — agency work, not demo
+  // data. A suppressed account at a throwaway org id stands in for the demo
+  // (dropDemoAccount checks exactly those two things), so this needs no seed.
+  it("dropping the demo account keeps any agency blueprint captured from it (mutation: delete blueprints by source_account_id → FAILS)", async () => {
+    const db = serviceDb();
+    const orgId = `org_test_demoseed_bp_${Math.random().toString(36).slice(2, 10)}`;
+    const name = testBlueprintName("Captured From Demo");
+    await createAccount(db, { clerkOrgId: orgId, name: "Demo Stand-in", actorId: "user_test", outboundSuppressed: true });
+    try {
+      const account = await findDemoAccount(db, orgId);
+      const { id: blueprintId } = await captureBlueprint(db, account!.id, { name }, "user_test");
+      expect(await dropDemoAccount(db, orgId)).toBe(true);
+      expect(await findDemoAccount(db, orgId)).toBeNull();
+      const kept = await getBlueprint(db, blueprintId);
+      expect(kept?.name).toBe(name);
+      // 0007 FK, on delete set null: the blueprint outlives its source.
+      expect(kept?.source_account_id).toBeNull();
+    } finally {
+      const stray = await findDemoAccount(db, orgId);
+      if (stray) await deleteAccountCascade(db, stray.id, "demo-seed.test D-092 cleanup");
+      await db.from("blueprints").delete().eq("name", name);
+    }
+  }, 60_000);
 
   it("refuses an org id Clerk could actually mint", async () => {
     const db = serviceDb();

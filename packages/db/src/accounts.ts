@@ -7,6 +7,15 @@ export async function createAccount(
   input: {
     clerkOrgId: string; name: string; timezone?: string; actorId: string;
     /**
+     * The name customers see (`brand_name`). Add company asks for it as its
+     * own field (owner decision 2026-10-09), so the agency's private label
+     * (`name`, e.g. "Rio Roofing — trial") never becomes the brand. Absent
+     * means `name` — fixtures, the demo and adopting an orphan, where the
+     * one name they have IS the public one — so no account is ever born
+     * without a brand name.
+     */
+    brandName?: string;
+    /**
      * Born with outbound suppressed, in the INSERT itself. For the demo
      * tenant only: created and then suppressed, it existed contactable for
      * two round trips, and on the shared CI project a test reading the live
@@ -32,7 +41,8 @@ export async function createAccount(
   const { data: account, error } = await db
     .from("accounts")
     .insert({
-      agency_id: agency.id, clerk_org_id: input.clerkOrgId, name: input.name, brand_name: input.name, timezone,
+      agency_id: agency.id, clerk_org_id: input.clerkOrgId, name: input.name,
+      brand_name: input.brandName?.trim() || input.name, timezone,
       ...(input.outboundSuppressed ? { outbound_suppressed: true } : {}),
     })
     .select("id")
