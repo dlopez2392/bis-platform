@@ -75,4 +75,26 @@ describe("buildWebsiteView", () => {
   it("hands the sentence the same numbers the tiles show", () => {
     expect(view.sentence.map((s) => s.text).join("")).toMatch(/^120 people visited your website, 71% more than the week before\./);
   });
+
+  /**
+   * D-053, reopened with production evidence: on a real account, a day's
+   * breakdown rows have been observed summing to MORE than that same
+   * day's own total (pageviews, which are additive, 44 vs a stored total
+   * of 37; a single dimension VALUE reading 31 against a 30-visitor
+   * window — "103%"). A share's denominator must never be smaller than
+   * the dimension's own rows sum to, so a single row can never read past
+   * 100% regardless of how the totals/breakdown reads disagree upstream.
+   *
+   * Mutation: use `total` alone (the window's own total, dropping the
+   * `Math.max` against the dimension's own sum) → 31/30 = 1.0333…, FAILS.
+   */
+  it("never lets a single row's share pass 100%, even when a dimension oversums the window total (mutation: use `total` alone as the denominator → FAILS)", () => {
+    const daily2: TrafficDay[] = ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06"]
+      .map((d, i) => day(d, i === 6 ? 30 : 0));
+    const breakdown2 = [bd("2026-09-06", "place", "US", 31)];
+    const view2 = buildWebsiteView({ now: NOW, timezone: TZ, period: 7, daily: daily2, breakdown: breakdown2, lastSyncedDay: "2026-09-06" });
+    expect(view2.totals.visitors).toBe(30);
+    expect(view2.places).toEqual([{ name: "US", visitors: 31, share: 1 }]);
+    expect(view2.places[0]!.share).toBeLessThanOrEqual(1);
+  });
 });

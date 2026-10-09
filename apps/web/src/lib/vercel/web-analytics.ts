@@ -21,9 +21,18 @@ export const BREAKDOWN_LIMIT = 20;
  *  (docs: "groups the remaining values into Others"). It is not a page, a
  *  place or a source, and the count query already carries the true total. */
 export const OTHERS_ROLLUP = "Others";
-/** Count endpoints are documented as production-only; aggregate endpoints are
- *  not. Pinning the environment keeps every breakdown on the same footing as
- *  the totals it is compared against (OData, per the API docs). */
+/**
+ * D-053 (reopened with production evidence, 2026-10-09): this used to be
+ * applied to `aggregate()` ONLY, on the documented claim that the count
+ * endpoint is production-only by itself. Read-only SELECTs against a real
+ * account's stored rows disproved that: a day's breakdown rows summed to
+ * MORE than that same day's total (and the reverse), on roughly a tenth of
+ * the day/dimension groups sampled — the two calls were counting two
+ * different populations of events under one "day's total" label. Applied
+ * to BOTH `countVisits()` and `aggregate()` now (OData, per the API docs),
+ * so neither call depends on an unverified claim about the other
+ * endpoint's default scope.
+ */
 export const PRODUCTION_FILTER = "environment eq 'production'";
 
 const BASE = "https://api.vercel.com/v1/query/web-analytics";
@@ -102,7 +111,8 @@ export class VercelAnalytics {
   }
 
   async countVisits(projectId: string, sinceIso: string, untilIso: string) {
-    return parseCount(await this.#get(this.#query("visits/count", { projectId, since: sinceIso, until: untilIso })));
+    return parseCount(await this.#get(this.#query("visits/count",
+      { projectId, since: sinceIso, until: untilIso, filter: PRODUCTION_FILTER })));
   }
 
   async aggregate(projectId: string, sinceIso: string, untilIso: string, by: string, limit: number): Promise<DimRow[]> {
