@@ -179,6 +179,16 @@ describe("weeklyReportSubject (D-064, review round 2)", () => {
       .toBe("Last week: 50 website visitors");
   });
 
+  // Review round 3: "1 website visitors" is a grammar bug the plural fixture
+  // above could never catch (50 is plural either way). Both counts pinned
+  // here so one case cannot regress without the other noticing.
+  it("singular: 1 website visitor, not 1 website visitors (mutation: drop the singular branch → FAILS)", () => {
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: 1 }))
+      .toBe("Last week: 1 website visitor");
+    expect(weeklyReportSubject({ calls: 0, leads: 0, bookings: 0, visitors: 2 }))
+      .toBe("Last week: 2 website visitors");
+  });
+
   it("leads with calls/leads, unaffected, when the pipeline itself is not quiet", () => {
     expect(weeklyReportSubject({ calls: 12, leads: 4, bookings: 2, visitors: 86 }))
       .toBe("Last week: 12 calls, 4 new leads");

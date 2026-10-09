@@ -81,9 +81,13 @@ describe("buildWebsiteView", () => {
    * breakdown rows have been observed summing to MORE than that same
    * day's own total (pageviews, which are additive, 44 vs a stored total
    * of 37; a single dimension VALUE reading 31 against a 30-visitor
-   * window — "103%"). A share's denominator must never be smaller than
-   * the dimension's own rows sum to, so a single row can never read past
-   * 100% regardless of how the totals/breakdown reads disagree upstream.
+   * window — "103%"). The runbook (website-setup.md) traces this to
+   * `visits/count` and `visits/aggregate` disagreeing on the WINDOW a
+   * "day" covers (count floors to UTC midnight; aggregate treats `until`
+   * as inclusive, +1h) — a decision still owed there, not fixed by this
+   * function. A share's denominator must never be smaller than the
+   * dimension's own rows sum to regardless, so a single row can never
+   * read past 100% whatever upstream disagreement produced the oversum.
    *
    * Mutation: use `total` alone (the window's own total, dropping the
    * `Math.max` against the dimension's own sum) → 31/30 = 1.0333…, FAILS.

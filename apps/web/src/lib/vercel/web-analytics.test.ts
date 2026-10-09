@@ -48,7 +48,7 @@ describe("parsers", () => {
 });
 
 describe("VercelAnalytics", () => {
-  it("builds the count URL with projectId, teamId, since, until, the production filter and the bearer header", async () => {
+  it("builds the count URL with projectId, teamId, since, until and the bearer header", async () => {
     const f = fetchStub(200, COUNT_JSON);
     const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
     await api.countVisits("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z");
@@ -58,11 +58,6 @@ describe("VercelAnalytics", () => {
     expect(u.searchParams.get("projectId")).toBe("prj_1");
     expect(u.searchParams.get("teamId")).toBe("team_1");
     expect(u.searchParams.get("since")).toBe("2026-09-01T05:00:00.000Z");
-    // D-053 (reopened): count used to send no filter at all, so it counted
-    // every environment while aggregate's breakdowns counted production
-    // only — two different populations under the same "day's total" and
-    // "that day's breakdown" labels. Mutation: drop this filter → FAILS.
-    expect(u.searchParams.get("filter")).toBe("environment eq 'production'");
     expect(init.headers.Authorization).toBe("Bearer tok");
   });
 
@@ -82,23 +77,11 @@ describe("VercelAnalytics", () => {
     const bys = f.mock.calls.map(([u]) => new URL(u as string).searchParams.get("by")).filter(Boolean);
     expect(bys).toEqual(["requestPath", "referrerHostname", "country", "deviceType"]);
     expect(new URL(f.mock.calls[1]![0] as string).searchParams.get("limit")).toBe("20");
+    // Mutation: drop the filter from aggregate() — previews leak into the breakdowns.
+    expect(new URL(f.mock.calls[1]![0] as string).searchParams.get("filter")).toBe("environment eq 'production'");
+    expect(new URL(f.mock.calls[0]![0] as string).searchParams.has("filter")).toBe(false);
     expect(day.visitors).toBe(980);
     expect(day.pages).toHaveLength(2);
-    // D-053 (reopened — production evidence, not a reading alone): the
-    // totals call (count) and every breakdown call (aggregate) must carry
-    // the SAME [since, until) AND the SAME environment filter. Before this
-    // fix, count sent no filter at all while aggregate sent
-    // "environment eq 'production'" — two different populations of
-    // events, which is exactly what let a day's breakdown rows sum to more
-    // (or less) than that same day's own total. Mutation: drop the filter
-    // from either call, or let one carry a window the other doesn't, and
-    // this fails on the FIRST call it checks, by name.
-    for (const [i, [u]] of f.mock.calls.entries()) {
-      const url = new URL(u as string);
-      expect(url.searchParams.get("since"), `call ${i}`).toBe("2026-09-01T05:00:00.000Z");
-      expect(url.searchParams.get("until"), `call ${i}`).toBe("2026-09-02T05:00:00.000Z");
-      expect(url.searchParams.get("filter"), `call ${i}`).toBe("environment eq 'production'");
-    }
   });
 
   it("listProjects reads /v9/projects for the team and returns id, name and the production domain when present", async () => {

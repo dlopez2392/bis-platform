@@ -60,11 +60,18 @@ export function pageTitle(path: string): string {
 
 /**
  * D-053, reopened with production evidence: a day's breakdown rows have
- * been observed summing to MORE than that same day's own stored total (the
- * totals read and the breakdown read were, until web-analytics.ts's
- * PRODUCTION_FILTER fix, counting two different populations of events).
- * `total` alone as the denominator can therefore let a single row's share
- * read past 100%, which is not a number this screen may ever show.
+ * been observed summing to MORE than that same day's own stored total.
+ * The real cause is documented in the runbook (website-setup.md,
+ * "First-night findings"): `visits/count` floors `since`/`until` DOWN to
+ * UTC midnight while `visits/aggregate` treats `until` as inclusive of its
+ * bucket (+1h), so within one stored day the total covers the UTC day and
+ * the breakdown covers local midnight through local midnight plus one
+ * hour — two different WINDOWS under one "day" label. That window
+ * mismatch is the runbook's own "Decision owed" (store UTC days honestly,
+ * or sum hourly buckets) and is not fixed here — this function has no
+ * window to change. `total` alone as the denominator can therefore let a
+ * single row's share read past 100%, which is not a number this screen
+ * may ever show regardless of which fix the decision lands on.
  *
  * `Math.max(total, dimensionTotal)`, not `dimensionTotal` alone: in the
  * ordinary case a dimension sums to LESS than the window total (a dropped

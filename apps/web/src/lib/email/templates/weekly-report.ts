@@ -165,7 +165,10 @@ export function weeklyReportEmail(input: WeeklyReportInput): { html: string; tex
  */
 export function weeklyReportSubject(now: WeeklyNumbers): string {
   if (isQuietPipeline(now)) {
-    if (now.visitors !== null && now.visitors > 0) return `Last week: ${now.visitors} website visitors`;
+    if (now.visitors !== null && now.visitors > 0) {
+      const noun = now.visitors === 1 ? "visitor" : "visitors";
+      return `Last week: ${now.visitors} website ${noun}`;
+    }
     return "Last week was quiet";
   }
   return `Last week: ${now.calls} calls, ${now.leads} new leads`;

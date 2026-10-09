@@ -22,16 +22,26 @@ export const BREAKDOWN_LIMIT = 20;
  *  place or a source, and the count query already carries the true total. */
 export const OTHERS_ROLLUP = "Others";
 /**
- * D-053 (reopened with production evidence, 2026-10-09): this used to be
- * applied to `aggregate()` ONLY, on the documented claim that the count
- * endpoint is production-only by itself. Read-only SELECTs against a real
- * account's stored rows disproved that: a day's breakdown rows summed to
- * MORE than that same day's total (and the reverse), on roughly a tenth of
- * the day/dimension groups sampled — the two calls were counting two
- * different populations of events under one "day's total" label. Applied
- * to BOTH `countVisits()` and `aggregate()` now (OData, per the API docs),
- * so neither call depends on an unverified claim about the other
- * endpoint's default scope.
+ * Applied to `aggregate()` ONLY, never to `countVisits()`. Count endpoints
+ * are documented as production-only; aggregate endpoints are not, so this
+ * is what keeps every breakdown on the same environment footing as the
+ * total it is compared against (OData, per the API docs).
+ *
+ * D-053's REAL cause, per live probing (runbook, website-setup.md's
+ * "First-night findings", 2026-09-08): `visits/count` floors `since` and
+ * `until` DOWN to UTC midnight (so a local-day window is answered for the
+ * UTC day instead), while `visits/aggregate` honours `since` to the hour
+ * but treats `until` as INCLUSIVE of its bucket (echoed back +1h) — so
+ * within one stored day, the total covers the UTC day and every breakdown
+ * covers local midnight through local midnight plus one hour. Two
+ * different WINDOWS under one "day" label, not two different
+ * environments; adding this filter to `countVisits()` (tried, reverted)
+ * would not have touched that mismatch at all, and nothing here has
+ * verified the count endpoint even accepts a `filter` param — an untested
+ * query parameter is not a change to risk on every site's first sync tick
+ * after a deploy. The window fix itself is the runbook's own "Decision
+ * owed" (store UTC days honestly, or sum hourly buckets); no code here
+ * changes the windows.
  */
 export const PRODUCTION_FILTER = "environment eq 'production'";
 
@@ -111,8 +121,7 @@ export class VercelAnalytics {
   }
 
   async countVisits(projectId: string, sinceIso: string, untilIso: string) {
-    return parseCount(await this.#get(this.#query("visits/count",
-      { projectId, since: sinceIso, until: untilIso, filter: PRODUCTION_FILTER })));
+    return parseCount(await this.#get(this.#query("visits/count", { projectId, since: sinceIso, until: untilIso })));
   }
 
   async aggregate(projectId: string, sinceIso: string, untilIso: string, by: string, limit: number): Promise<DimRow[]> {
