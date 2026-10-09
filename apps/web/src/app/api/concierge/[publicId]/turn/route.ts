@@ -41,7 +41,7 @@ import { buildSystemPrompt } from "@/lib/voice/system-prompt";
 import { originFrom } from "@/lib/email/origin";
 import {
   clientIp, hashIp, verifyRenderToken, parseAttribution, MIN_FILL_MS,
-  HONEYPOT_FIELD, RENDER_TOKEN_FIELD, isValidEmail, isValidPhone,
+  HONEYPOT_FIELD, RENDER_TOKEN_FIELD,
 } from "@/lib/forms/guards";
 import {
   CONCIERGE_MAX_TURNS, CONCIERGE_MAX_CONVERSATIONS_PER_IP,
@@ -53,7 +53,7 @@ import {
   CAPTURE_LEAD_TOOL, parseCaptureLead, budgetNotice,
 } from "@/lib/concierge/prompt";
 import { conciergeStrings } from "@/lib/concierge/strings";
-import { fileLead } from "@/lib/concierge/lead";
+import { fileLead, leadHasContact } from "@/lib/concierge/lead";
 
 export const runtime = "nodejs";
 /** One model call with a 20s ceiling, plus the reads around it. Nothing here
@@ -86,25 +86,25 @@ type Db = ReturnType<typeof serviceDbType>;
  *  conversation that filed its one lead on an earlier turn and a turn that
  *  lost the race to another tab: either way a lead is on file and THESE
  *  details were not added. */
-type CaptureOutcome = "filed" | "filed_unreachable" | "already_on_file" | "unusable" | "failed";
+type CaptureOutcome = "filed" | "needs_contact" | "already_on_file" | "unusable" | "failed";
 
 /**
  * The tool result the model hears (D-047), worded to match exactly what the
  * code did. Model-facing, not customer copy: the visitor reads whatever the
  * model writes from it.
  *
- * `filed_unreachable` does NOT tell the model to ask for an email or phone:
- * the conversation's one submission slot is now claimed, so a second capture
- * carrying them would be `already_on_file` and the details the visitor typed
- * would go nowhere. Telling them plainly beats collecting something that is
- * then dropped.
+ * `needs_contact` (danlo, 2026-10-09): a name with no valid email and no
+ * valid phone is HELD, not filed (`leadHasContact`, lib/concierge/lead.ts), so
+ * the conversation's one lead slot stays free. The model is told to ask for
+ * one; the next capture that carries it files normally, name included. A
+ * visitor who never gives one leaves no lead.
  */
 function captureResult(outcome: CaptureOutcome): { ok: boolean; result?: string; error?: string } {
   switch (outcome) {
     case "filed":
       return { ok: true, result: "Recorded. The team will follow up with them." };
-    case "filed_unreachable":
-      return { ok: true, result: "Recorded with their name, but with no email address or phone number, so the team has no way to reach them. This chat cannot add one now: tell them so, and suggest they contact the business directly." };
+    case "needs_contact":
+      return { ok: false, error: "Not recorded yet: the team needs an email address or a phone number to reach them. Ask the visitor for one, then call capture_lead again with it. If they would rather not give one, nothing is recorded; do not say the team will follow up." };
     case "already_on_file":
       return { ok: true, result: "A lead from this chat was already recorded earlier; these new details were not added." };
     case "unusable":
@@ -530,7 +530,12 @@ export async function POST(
     if (toolArgs && !conversation.submission_id) {
       const lead = parseCaptureLead(toolArgs);
       outcome = "unusable";
-      if (lead) {
+      if (lead && !leadHasContact(lead)) {
+        // HELD, not filed (danlo, 2026-10-09): the one lead slot stays free
+        // for the capture that carries a way to reach them.
+        outcome = "needs_contact";
+        log("capture_lead held: no email or phone", { conversationId });
+      } else if (lead) {
         filed = await fileLead({
           db, accountId: profile.account_id,
           // conversation.form_id, NOT profile.concierge_form_id (I1,
@@ -554,10 +559,7 @@ export async function POST(
           origin: originFrom(req.headers), lead,
         });
         if (filed) {
-          // The same validators `fileLead` writes the contact through: an
-          // invalid email or phone is dropped there, so it is no way to
-          // reach them here either.
-          outcome = isValidEmail(lead.email) || isValidPhone(lead.phone) ? "filed" : "filed_unreachable";
+          outcome = "filed";
         } else {
           // `fileLead` answers false for a failed save AND for a lost race
           // (two tabs on one conversation: the other turn claimed the one

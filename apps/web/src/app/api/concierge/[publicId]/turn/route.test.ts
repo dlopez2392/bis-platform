@@ -367,7 +367,7 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
   });
 
   it("answers with words when the model returns only a tool call", async () => {
-    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
     const res = await laterTurn();
     const body = await res.json() as { reply: string };
     // MUTATION: fall back to `strings.unavailable` — this FAILS, and the
@@ -764,7 +764,7 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
   // APP_ORIGIN FIRST, same as enrich's other caller (f/[publicId]/actions.ts).
   it("builds the lead-alert link through originFrom(), never the raw (spoofable) Origin header", async () => {
     vi.stubEnv("APP_ORIGIN", "https://app.example");
-    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
     await laterTurn({}, { origin: "null" }); // what a sandboxed iframe actually sends
     expect(enrichMock).toHaveBeenCalledTimes(1);
     const call = enrichMock.mock.calls[0]!;
@@ -776,7 +776,7 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
   });
 
   it("reads the destination form through the tenant boundary", async () => {
-    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
     await laterTurn();
     // getForm(db, accountId, formId) — the account id IS the boundary
     // (packages/db/src/forms.ts:97).
@@ -791,7 +791,7 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
   // comment on the column). PROFILE.concierge_form_id is "form-now";
   // CONVERSATION.form_id is "form-then" — different literals on purpose.
   it("files against the conversation's OWN form, not whatever the profile points at now", async () => {
-    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
     await laterTurn();
     // MUTATION: revert to `profile.concierge_form_id` — this FAILS, and a
     // form switched mid-conversation reads/files against the wrong one.
@@ -818,7 +818,10 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
 
   it("drops a value the model invented rather than storing it", async () => {
     fetchMock.mockResolvedValue(modelCallsCaptureLead({
-      fullName: "Ana", email: "not-an-address", need: "a table",
+      // A valid phone so the lead files at all (danlo, 2026-10-09: a name
+      // with no way to reach them is held, not filed); the form has no phone
+      // field, so the answers are still the name and the need.
+      fullName: "Ana", email: "not-an-address", phone: "9565550100", need: "a table",
     }));
     await laterTurn();
     const [, , , input] = dbFns.createSubmission.mock.calls[0]!;
@@ -851,7 +854,7 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
 
   it("files at most one submission per conversation", async () => {
     dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, submission_id: "already" });
-    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "again" }));
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "again" }));
     await laterTurn();
     // MUTATION: drop the submission_id guard — this FAILS, and one visitor
     // becomes two contacts.
@@ -861,7 +864,7 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
 
   it("leaves no orphan row when a concurrent turn claimed the slot first", async () => {
     dbFns.setConciergeSubmission.mockResolvedValue(false);
-    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
     await laterTurn();
     // MUTATION: call enrich regardless of the boolean — this FAILS, and the
     // loser of the race creates a second contact, thread and alert.
@@ -875,7 +878,7 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
 
   it("still answers the visitor when filing the lead throws", async () => {
     dbFns.createSubmission.mockRejectedValue(new Error("db down"));
-    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }, "Got it."));
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }, "Got it."));
     const res = await laterTurn();
     expect(res.status).toBe(200);
     expect((await res.json() as { reply: string }).reply).toBe("Got it.");
@@ -883,7 +886,7 @@ describe("POST /api/concierge/[publicId]/turn — filing the lead", () => {
 
   it("files nothing when the destination form is no longer published, and does not claim it filed anyway", async () => {
     dbFns.getForm.mockResolvedValue({ ...LEAD_FORM, status: "draft" as const });
-    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
     const res = await laterTurn();
     expect(dbFns.createSubmission).not.toHaveBeenCalled();
     expect(enrichMock).not.toHaveBeenCalled();
@@ -967,16 +970,55 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
   // A name and a need is a filable lead (`required: ["fullName", "need"]`),
   // but nobody can call it back. "The team will follow up" would be a promise
   // with no way to keep it.
-  it("a lead filed with a name but no email or phone: recorded, and the model is told nobody can reach them", async () => {
+  // danlo, 2026-10-09: a name with no email and no phone is HELD, not filed.
+  // Filing it would spend the conversation's ONE lead slot on a lead the team
+  // cannot act on, and a later capture carrying the number would then be
+  // refused as "already on file". Held, the slot stays free and the model is
+  // told to ask for a way to reach them.
+  it("a name with no email and no phone files NOTHING, and the model is told to ask for one", async () => {
     fetchMock
-      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }))
-      .mockResolvedValueOnce(modelReplies("Thanks, Ana."));
-    await laterTurn();
-    expect(enrichMock).toHaveBeenCalledTimes(1);
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }, "Thanks, I have passed that on."))
+      .mockResolvedValueOnce(modelReplies("What is the best number or email to reach you, Ana?"));
+    const res = await laterTurn();
+    expect(dbFns.createSubmission).not.toHaveBeenCalled();
+    expect(dbFns.setConciergeSubmission).not.toHaveBeenCalled();
+    expect(enrichMock).not.toHaveBeenCalled();
     const r = toolResult();
-    expect(r.ok).toBe(true);
-    expect(String(r.result)).toMatch(/no email address or phone number/i);
-    expect(String(r.result)).not.toMatch(/will follow up/i);
+    expect(r.ok).toBe(false);
+    expect(String(r.error)).toMatch(/email address or a phone number/i);
+    expect(String(r.error)).toMatch(/ask/i);
+    expect((await res.json() as { reply: string }).reply)
+      .toBe("What is the best number or email to reach you, Ana?");
+  });
+
+  it("an email and phone that are not valid hold the lead the same way (the validators filing uses)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "ana@", phone: "call me", need: "a table" }))
+      .mockResolvedValueOnce(modelReplies("Could I get an email or a number?"));
+    await laterTurn();
+    expect(dbFns.createSubmission).not.toHaveBeenCalled();
+    expect(String(toolResult().error)).toMatch(/email address or a phone number/i);
+  });
+
+  it("once a later capture carries a phone, the held lead files normally with the name", async () => {
+    // Turn A: name only, held.
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana García", need: "a table" }))
+      .mockResolvedValueOnce(modelReplies("What number can the team reach you on?"));
+    await laterTurn();
+    expect(dbFns.createSubmission).not.toHaveBeenCalled();
+    // Turn B: the slot is still free (nothing was filed), and the phone arrives.
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana García", phone: "9565550100", need: "a table" }))
+      .mockResolvedValueOnce(modelReplies("Thanks, Ana. The team will call you."));
+    await laterTurn();
+    expect(dbFns.createSubmission).toHaveBeenCalledTimes(1);
+    expect(enrichMock).toHaveBeenCalledTimes(1);
+    const [, , , input] = dbFns.createSubmission.mock.calls[0]!;
+    expect((input as { answers: { key: string; value: string }[] }).answers)
+      .toEqual(expect.arrayContaining([{ key: "n", label: "First name", value: "Ana" }]));
+    const sent = JSON.parse(String((sentToModel(3) as unknown as Sent).messages.at(-1)!.content));
+    expect(sent).toMatchObject({ ok: true });
   });
 
   it("a lead filed with a way to reach them says the team will follow up", async () => {
@@ -1087,7 +1129,7 @@ describe("POST /api/concierge/[publicId]/turn — usage: one website chat, bille
   });
 
   it("a first turn where the model ONLY called capture_lead (no text; the lead was filed, the visitor reads the 'captured' line) bills exactly one chat (mutation: answered = Boolean(reply) → records nothing, FAILS)", async () => {
-    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", need: "a table" }));
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
     const res = await firstTurn();
     expect(res.status).toBe(200);
     expect((await res.json() as { reply: string }).reply).toBe(conciergeStrings("en").captured);
