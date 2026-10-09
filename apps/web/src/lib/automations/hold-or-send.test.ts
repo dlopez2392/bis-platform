@@ -5,7 +5,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // gate itself answering "stopped" instead of "suppressed" for an automated
 // kind) could not have been hidden by a test that already assumes the
 // gate's classification.
-const dbMocks = vi.hoisted(() => ({ recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(), readConsentState: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({
+  recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(), readConsentState: vi.fn(),
+  // D-061: the REAL email gate's own account-level send switch, exercised
+  // below against `{} as never`. Unmocked, it would throw. Allowed by default.
+  isAccountOutboundSuppressed: vi.fn(async () => false),
+}));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
 import { holdOrSend, writeHeld, logSkipped, REASONS, subjectOf, verdict, type HoldSubject } from "./hold-or-send";
@@ -32,6 +37,7 @@ beforeEach(() => {
   dbMocks.recordAutomationLog.mockReset().mockResolvedValue(undefined);
   dbMocks.getAutomationLogEntry.mockReset().mockResolvedValue(null);
   dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "allowed" });
+  dbMocks.isAccountOutboundSuppressed.mockReset().mockResolvedValue(false);
   vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
 });
 

@@ -16,6 +16,10 @@ const dbMocks = vi.hoisted(() => ({
   // The send gate's reads (lib/consent/gate.ts): the code goes through the
   // REAL gate, so its ledger and flag reads are mocked, allowed by default.
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
+  // D-061: the gate's own account-level send switch, for both the SMS code
+  // and the sender-check email (which falls back to the stubbed serviceDb()
+  // below). Allowed by default.
+  isAccountOutboundSuppressed: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({ tag: "serviceDb" }),
@@ -45,10 +49,27 @@ const sendMock = vi.fn();
 const getSmsProviderMock = vi.fn(() => ({ isFake: true, send: sendMock }));
 vi.mock("@/lib/sms", () => ({ getSmsProvider: () => getSmsProviderMock() }));
 
+// setFromEmailAction's one caller of Clerk: a fixed admin address, so the
+// sender-check email has somewhere to send its verification to.
+vi.mock("@clerk/nextjs/server", () => ({
+  clerkClient: async () => ({
+    users: { getUser: async () => ({ primaryEmailAddress: { emailAddress: "admin@example.com" } }) },
+  }),
+}));
+
+// isFake: false — verifyFromAddress (preflight.ts) refuses to "verify"
+// against the FAKE provider outside production, before the real gate is
+// even reached, so a test of the GATE's own refusal needs a provider that
+// looks real without touching a network.
+const emailSendMock = vi.fn();
+vi.mock("@/lib/email", () => ({
+  getEmailProvider: () => ({ isFake: false, send: (...a: unknown[]) => emailSendMock(...a) }),
+}));
+
 import { m } from "@/lib/messages";
 import { SmsProviderError } from "@/lib/sms/types";
 import {
-  setAlertPhoneAction, startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction,
+  setAlertPhoneAction, startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction, setFromEmailAction,
 } from "./actions";
 
 const fd = (fields: Record<string, string>) => {
@@ -67,6 +88,7 @@ beforeEach(() => {
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "msg_1" });
   dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "allowed" });
   dbMocks.readPhoneCountryFlag.mockReset().mockResolvedValue(false);
+  dbMocks.isAccountOutboundSuppressed.mockReset().mockResolvedValue(false);
   // Cleared/live by default — most tests care about one thing at a time, and
   // an unmocked resolveSmsSender() would return undefined and crash the
   // `gate.ok` read.
@@ -373,5 +395,13 @@ describe("startAlertPhoneVerificationAction → confirmAlertPhoneVerificationAct
     expect(dbMocks.verifyAlertPhoneCode).toHaveBeenCalledWith(
       { tag: "serviceDb" }, "acct_1", "+525512345678", "482913", "user_1",
     );
+  });
+});
+
+describe("setFromEmailAction — a suppressed account's sender check (D-061 review follow-up)", () => {
+  it("shows the plain sentence, never the gate's raw reason string (mutation: drop the EmailNotSent mapping → the raw 'email not sent: suppressed_account' reaches the admin, FAILS)", async () => {
+    dbMocks.isAccountOutboundSuppressed.mockResolvedValueOnce(true);
+    const result = await setFromEmailAction("acct_1", fd({ fromEmail: "leads@rioroofing.com" }));
+    expect(result).toEqual({ ok: false, error: m["automations.reason.accountSuppressed"] });
   });
 });

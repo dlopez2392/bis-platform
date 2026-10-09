@@ -12,6 +12,10 @@ const dbMocks = vi.hoisted(() => ({
   recordCarrierBlock: vi.fn(),
   // The release's "has this caller been in touch since?" read (danlo, 2026-09-26).
   callerInTouchSince: vi.fn(),
+  // D-061: the gate's own account-level send switch check — unmocked, it
+  // would fall through to the real implementation and throw against this
+  // file's fake DB. Allowed by default.
+  isAccountOutboundSuppressed: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const senderMocks = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -62,6 +66,7 @@ beforeEach(() => {
   dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
   dbMocks.callerInTouchSince.mockResolvedValue(false);
+  dbMocks.isAccountOutboundSuppressed.mockResolvedValue(false);
   sms.isFake = false;
   sms.redirectTo = undefined;
   sms.send.mockReset().mockResolvedValue({ providerMessageId: "sm1" });
@@ -156,6 +161,17 @@ describe("prepareTextback: the send gate decides before any row", () => {
     expect(outcome.notSent).toBe("sender_refused");
     expect(resolveContact).not.toHaveBeenCalled();
     expect(dbMocks.ensureConversation).not.toHaveBeenCalled();
+  });
+
+  it("a suppressed account's missed-call text-back is NOT sent: no message row, one skipped row with the account-suppressed reason (D-061, through the real gate; mutation: skip the chokepoint check → a row is written, FAILS)", async () => {
+    dbMocks.isAccountOutboundSuppressed.mockResolvedValue(true);
+    const outcome = await prepareTextback(DB, "a1", request());
+    expect(outcome.notSent).toBe("blocked");
+    expect(dbMocks.createMessage).not.toHaveBeenCalled();
+    expect(sms.send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      source: "textback", subjectKey: "call:call1", status: "skipped", reason: "This account isn't sending yet",
+    })]);
   });
 });
 

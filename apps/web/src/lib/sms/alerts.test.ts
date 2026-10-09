@@ -9,6 +9,10 @@ vi.mock("./sender", async () => {
 
 const consentMocks = vi.hoisted(() => ({
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
+  // D-061: the gate's own account-level send switch — unmocked, it would
+  // fall through to the real implementation and throw against this file's
+  // `{} as never` db. Allowed by default.
+  isAccountOutboundSuppressed: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...consentMocks }));
 
@@ -31,6 +35,7 @@ beforeEach(() => {
   sendMock.mockResolvedValue({ providerMessageId: "msg_1" });
   consentMocks.readConsentState.mockResolvedValue({ state: "allowed" });
   consentMocks.readPhoneCountryFlag.mockResolvedValue(false);
+  consentMocks.isAccountOutboundSuppressed.mockResolvedValue(false);
   resolveSmsSenderMock.mockResolvedValue({
     ok: true, from: SENDING_NUMBER, ownedNumbers: [SENDING_NUMBER, SECOND_OWNED_NUMBER],
   });

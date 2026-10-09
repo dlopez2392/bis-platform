@@ -36,6 +36,10 @@ vi.mock("@bis/db", () => ({
   writeTrafficDay: async () => { throw new Error("route.test: no site is due"); },
   stampSiteSynced: async () => { throw new Error("route.test: no site is due"); },
   stampFollowupSent: (...a: unknown[]) => stampFollowupSentMock(...a),
+  // D-061: the email/SMS gates' own account-level send switch, read for
+  // every real send this route makes through `ctx.email`/`ctx.sms`. Allowed
+  // by default — this is a bare factory mock, so an unlisted export throws.
+  isAccountOutboundSuppressed: async () => false,
   // The review-request pass runs on the same harness; with nothing due it
   // makes exactly one query. Enumerated because a factory mock THROWS on any
   // export it does not define — including the constant the gate module reads

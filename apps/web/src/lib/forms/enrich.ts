@@ -4,7 +4,7 @@ import {
   ensureConversation, createMessage, incrementUnreadCount, emitFormSubmitted,
   setSubmissionProcessingError,
 } from "@bis/db";
-import { sendEmailOrThrow } from "@/lib/consent/email-gate";
+import { sendEmailOrThrow, EmailNotSent } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { leadAlertEmail } from "@/lib/email/templates/lead-alert";
@@ -366,6 +366,13 @@ async function notify(
         replyTo: normalizeReplyTo(leadEmail),
       });
     } catch (e) {
+      // D-061 review follow-up: a suppressed account is a deliberate SKIP
+      // (the same posture the instant reply and the text-back already take),
+      // never a failure — `processing_error` is the operator's "somebody
+      // was not told about this lead" signal, and a demo account's own
+      // seeded submissions must not wear a red badge for working exactly as
+      // designed.
+      if (e instanceof EmailNotSent && e.result.kind === "blocked" && e.result.reason === "suppressed_account") continue;
       failures.push(`${to} (${e instanceof Error ? e.message : String(e)})`);
     }
   }

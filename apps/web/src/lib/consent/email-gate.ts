@@ -1,4 +1,7 @@
-import { readConsentState, readAccountTimezone, getMailingAddress, readEmailSuppression, serviceDb, EMAIL_SUPPRESSION_METHODS, type SupabaseClient } from "@bis/db";
+import {
+  readConsentState, readAccountTimezone, getMailingAddress, readEmailSuppression, serviceDb,
+  EMAIL_SUPPRESSION_METHODS, isAccountOutboundSuppressed, type SupabaseClient,
+} from "@bis/db";
 import { emailLedgerAddress } from "@bis/db/email-address";
 import { getEmailProvider } from "@/lib/email";
 import { isProductionEnv } from "@/lib/email/environment";
@@ -24,6 +27,12 @@ import { sealConsentToken, consentTokenSecrets, isUuid } from "./token";
  *      does a customer kind with no account;
  *   2. `to` is keyed as the ledger keys it (emailLedgerAddress); nothing to
  *      key → blocked `no_address`;
+ *   2b. when the request carries an account, `accounts.outbound_suppressed`
+ *      (D-061, 0032): true → blocked `suppressed_account`, before any other
+ *      read — covers every email kind an account can be billed for,
+ *      including operator mail, since a suppressed account's own owner
+ *      alerts go to a demo address too; the two kinds with no account at all
+ *      (the agency roll-up) have nothing to check;
  *   3. an informational or marketing kind — automated mail, what an
  *      unsubscribe stops (decision 7) — reads the ledger: stopped → blocked
  *      `stopped`, held → blocked `held`. Customer-initiated, staff-typed and
@@ -45,9 +54,9 @@ import { sealConsentToken, consentTokenSecrets, isUuid } from "./token";
  *      staff-typed mail have the marker removed and carry no headers;
  *   7. the send, with the send fields ONLY.
  *
- * FAILS CLOSED: a ledger or zone read error is blocked `ledger_unavailable`,
- * logged through `loggableError`, never a send. Never logs a token or an
- * address.
+ * FAILS CLOSED: a ledger, zone or suppression-flag read error is blocked
+ * `ledger_unavailable`, logged through `loggableError`, never a send. Never
+ * logs a token or an address.
  */
 export type EmailRequest = Omit<SendEmailInput, "headers"> & {
   /** The business the email is from. Null only for operator mail with no
@@ -71,7 +80,11 @@ export type EmailRequest = Omit<SendEmailInput, "headers"> & {
 
 export type EmailBlockReason =
   | "no_address" | "stopped" | "held" | "suppressed" | "window_after_deadline"
-  | "ledger_unavailable" | "unsubscribe_unavailable";
+  | "ledger_unavailable" | "unsubscribe_unavailable"
+  /** D-061: `accounts.outbound_suppressed` is true. Distinct from `suppressed`
+   *  (D-016's address-level bounce/complaint fact): this is about the whole
+   *  account, not one address. */
+  | "suppressed_account";
 
 export type EmailSendResult =
   | { kind: "sent"; providerMessageId: string }
@@ -210,6 +223,21 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
   const address = emailLedgerAddress(req.to);
   if (!address) return { kind: "blocked", reason: "no_address" };
   const now = req.now ?? new Date();
+
+  // D-061: covers every email kind an account can be billed for, including
+  // operator mail — a suppressed account is not real, so its own owner
+  // alerts go to a demo address too. The two kinds with no account at all
+  // (the agency roll-up) have nothing to check.
+  if (req.accountId) {
+    try {
+      if (await isAccountOutboundSuppressed(deps.db ?? serviceDb(), req.accountId)) {
+        return { kind: "blocked", reason: "suppressed_account" };
+      }
+    } catch (e) {
+      console.error(`email gate: ${req.kind} for account ${req.accountId} blocked, suppression flag unreadable: ${loggableError(e)}`);
+      return { kind: "blocked", reason: "ledger_unavailable" };
+    }
+  }
 
   // D-016 item 3: a hard bounce or a complaint stops EVERY customer kind,
   // not only the ones an unsubscribe already stops. Operator mail (the

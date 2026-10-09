@@ -9,7 +9,7 @@ import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, se
          startAlertPhoneVerification, verifyAlertPhoneCode, countRecentAlertPhoneVerifications,
          discardAlertPhoneVerification,
          ALERT_CODE_MAX_SENDS_PER_HOUR } from "@bis/db";
-import { operatorMailer } from "@/lib/consent/email-gate";
+import { operatorMailer, EmailNotSent } from "@/lib/consent/email-gate";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 // The public form's own validator, reused deliberately rather than a second
 // regex — the same reasoning branding/actions.ts records: one email regex
@@ -183,6 +183,13 @@ export async function setFromEmailAction(
     );
   } catch (e) {
     console.error(`setFromEmail: save failed for account ${accountId}: ${String(e)}`);
+    // D-061 review follow-up: the one gate reason that is not a provider
+    // fact about the domain — a suppressed account refuses every send, and
+    // that reads as the plain sentence, never the gate's own internal reason
+    // string.
+    if (e instanceof EmailNotSent && e.result.kind === "blocked" && e.result.reason === "suppressed_account") {
+      return { ok: false, error: m["automations.reason.accountSuppressed"] };
+    }
     // The provider's message, verbatim and unwrapped — it names the domain and
     // says what to do about it.
     return { ok: false, error: e instanceof Error ? e.message : m["settings.sendingAddressSaveFailed"] };

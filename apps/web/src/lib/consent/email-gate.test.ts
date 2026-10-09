@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const SERVICE_CLIENT = { service: true } as never;
 const db = vi.hoisted(() => ({
   readConsentState: vi.fn(), readAccountTimezone: vi.fn(), getMailingAddress: vi.fn(),
-  readEmailSuppression: vi.fn(), serviceDb: vi.fn(),
+  readEmailSuppression: vi.fn(), serviceDb: vi.fn(), isAccountOutboundSuppressed: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const factory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
@@ -44,6 +44,7 @@ beforeEach(() => {
   db.getMailingAddress.mockResolvedValue(null);
   db.readEmailSuppression.mockResolvedValue(null);
   db.serviceDb.mockReturnValue(SERVICE_CLIENT);
+  db.isAccountOutboundSuppressed.mockResolvedValue(false);
   factory.getEmailProvider.mockReturnValue(provider());
   send.mockResolvedValue({ providerMessageId: "re_1" });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -62,6 +63,47 @@ describe("sendEmail: the registry and the address", () => {
     expect(await sendEmail(base({ to: "not an address" }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "no_address" });
     expect(db.readConsentState).not.toHaveBeenCalled();
     expect(factory.getEmailProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendEmail: the account-level send switch (D-061, accounts.outbound_suppressed)", () => {
+  it("a suppressed account is blocked suppressed_account before any other read (mutation: drop the check → sent, FAILS)", async () => {
+    db.isAccountOutboundSuppressed.mockResolvedValue(true);
+    expect(await sendEmail(base(), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed_account" });
+    expect(db.readConsentState).not.toHaveBeenCalled();
+    expect(factory.getEmailProvider).not.toHaveBeenCalled();
+    // A customer-initiated kind (booking.confirmation) is the one shape
+    // where D-016's suppression-ledger read (readEmailSuppression) would
+    // otherwise run — it skips the readConsentState branch above entirely
+    // (emailReadsLedger is false for it), so only THIS kind proves the
+    // account check runs before it too (mutation: move the check after the
+    // D-016 read → readEmailSuppression gets called, FAILS).
+    db.isAccountOutboundSuppressed.mockClear();
+    db.isAccountOutboundSuppressed.mockResolvedValue(true);
+    expect(await sendEmail(base({ kind: "booking.confirmation" }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed_account" });
+    expect(db.readEmailSuppression).not.toHaveBeenCalled();
+  });
+
+  it("reads the flag for THIS account, falling back to the service client when the caller passed none (mutation: read a different account → FAILS)", async () => {
+    await sendEmail(base({ kind: "operator.lead_alert" }), { env: ENV });
+    expect(db.isAccountOutboundSuppressed).toHaveBeenCalledWith(SERVICE_CLIENT, ACCOUNT);
+  });
+
+  it("an unreadable suppression flag FAILS CLOSED as ledger_unavailable, never sent (mutation: catch the read and treat an error as 'not suppressed' → sent, FAILS)", async () => {
+    db.isAccountOutboundSuppressed.mockRejectedValue(new Error("pgrst down"));
+    expect(await sendEmail(base(), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("operator mail with NO account (the agency roll-up) is never checked — there is no account to read (mutation: call serviceDb() anyway → FAILS)", async () => {
+    await sendEmail(base({ kind: "operator.agency_report", accountId: null, contactId: null }), { env: ENV });
+    expect(db.isAccountOutboundSuppressed).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalled();
+  });
+
+  it("operator mail WITH an account is covered too — a suppressed account's own owner alerts go to a demo address (mutation: skip the check for operator kinds → sent, FAILS)", async () => {
+    db.isAccountOutboundSuppressed.mockResolvedValue(true);
+    expect(await sendEmail(base({ kind: "operator.lead_alert" }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed_account" });
   });
 });
 
