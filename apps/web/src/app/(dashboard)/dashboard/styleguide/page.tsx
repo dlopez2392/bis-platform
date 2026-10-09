@@ -45,6 +45,8 @@ import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { SettingsFieldCards } from "./settings-field-cards";
 import { BillingCardStates } from "./billing-card-states";
+import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
+import { LinkSiteSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
 import { EmbedSnippet } from "@/components/embed-snippet";
@@ -608,6 +610,18 @@ export default async function StyleguidePage() {
               billing link, where it applies. Built by the real
               billingCardView from fixture rows (billing-card-states.tsx). */}
           <BillingCardStates />
+        </Section>
+
+        <Section title="Settings cards that stream (loading)" file="accounts/[accountId]/settings/page.tsx">
+          {/* The two Settings cards that wait on a third party (Clerk's member
+              list, Vercel's project list) stream in their own Suspense, and
+              these are what shows until they land. Real titles, bars for
+              what is still coming, and each keeps its card's anchor id so a
+              palette jump still lands on it. */}
+          <div className="flex w-full flex-wrap items-start gap-6">
+            <div className="w-full max-w-md"><ClientAccessSkeleton /></div>
+            <div className="w-full max-w-md"><LinkSiteSkeleton linkedDomain={null} /></div>
+          </div>
         </Section>
 
         <Section title="Empty state" file="components/empty-state.tsx">

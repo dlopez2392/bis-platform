@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -175,6 +176,33 @@ export function LinkSiteCard({
             </DialogContent>
           </Dialog>
         ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Shaped like LinkSiteCard (DESIGN.md rule 7): the project picker, the domain
+ * field and the button row. It keeps `id="website"` so the palette's
+ * "Website" jump lands while this is showing (see ClientAccessSkeleton).
+ */
+export function LinkSiteSkeleton({ linkedDomain }: { linkedDomain: string | null }) {
+  return (
+    <Card id="website" className="scroll-mt-24" aria-busy="true" aria-label={m["website.link.title"]}>
+      <CardHeader>
+        <CardTitle>{m["website.link.title"]}</CardTitle>
+        <CardDescription>
+          {linkedDomain ? m["website.link.linked"].replace("{domain}", linkedDomain) : m["website.link.body"]}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {[0, 1].map((i) => (
+          <div key={i} className="space-y-1.5">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-9 w-full" />
+          </div>
+        ))}
+        <Skeleton className="h-9 w-32" />
       </CardContent>
     </Card>
   );
