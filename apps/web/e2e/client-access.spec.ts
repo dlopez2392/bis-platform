@@ -251,7 +251,7 @@ test("a client sees only their own account, and nothing when access is off", asy
   await setClientAccess(db, fixture.accountId, false, fixture.clerkUserId);
   await page.goto(`/dashboard/accounts/${fixture.accountId}/dashboard`);
   await expect(page).toHaveURL(/\/no-access\?reason=off$/);
-  await expect(page.getByText("Access has been turned off")).toBeVisible();
+  await expect(page.getByText("Access isn't turned on")).toBeVisible();
 });
 
 // The client's own CUSTOMERS — people with no relationship to BIS at all, and

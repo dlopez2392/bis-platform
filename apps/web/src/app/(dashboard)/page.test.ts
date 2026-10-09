@@ -67,7 +67,7 @@ beforeEach(() => {
 });
 
 describe("/ (landing) for a signed-in client (D-001)", () => {
-  it("a client whose access is switched off is sent to the 'access has been turned off' page, never told to open their invitation (mutation: drop the off branch → FAILS)", async () => {
+  it("a client whose access is switched off is sent to the 'access isn't turned on' page, never told to open their invitation (mutation: drop the off branch → FAILS)", async () => {
     h.claims = { org_id: "org_off" };
     h.state = { status: "off" };
     const result = await visit();

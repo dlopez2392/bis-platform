@@ -90,8 +90,11 @@ export const m = {
   "signIn.title": "Sign in",
   "signIn.railCopy": "by Bespoke Intelligent Solutions",
 
-  "clientAccess.off.title": "Access has been turned off",
-  "clientAccess.off.body": "Your access to this account has been turned off. Contact your account manager if you think this is a mistake.",
+  // True whether access was switched off or never turned on: an adopted
+  // half-created company starts with it off (review of D-087). Still its own
+  // page, apart from "none" below (the invitation case, D-001).
+  "clientAccess.off.title": "Access isn't turned on",
+  "clientAccess.off.body": "Access to this account isn't turned on right now. Ask the person who invited you to turn it on.",
   // Read by the person who was just invited, on their first visit, at the
   // moment it fails. "No account linked" stated a fact about our data model
   // and gave them nothing to do; "contact your account manager" is a title
@@ -107,7 +110,7 @@ export const m = {
   "accounts.orphan.body": "Anyone invited to these can be sent an invitation, but cannot sign in — there is no company behind them yet. Choose \"Add as a company\" to finish one (everyone already invited keeps their invitation), or delete the organization in Clerk.",
   "accounts.orphan.adopt": "Add as a company",
   "accounts.orphan.adoptTitle": "Add \"{name}\" as a company",
-  "accounts.orphan.adoptHint": "Finishes the company Clerk already has, keeping its name. Anyone already invited can sign in once it is added.",
+  "accounts.orphan.adoptHint": "Finishes the company Clerk already has, keeping its name. Anyone already invited can sign in once you turn on Client access in its Settings, which opens next.",
   "accounts.orphan.adoptGone": "That organization is no longer in Clerk. Reload the page.",
   "accounts.orphan.adoptFailed": "Could not add that company. It may already have been added: reload the page and check the list.",
   "accounts.orphan.unavailable": "Could not reach Clerk to check for half-created companies. The list below is unaffected.",

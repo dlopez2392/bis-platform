@@ -147,7 +147,7 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
  * And unlike createClientAccount there is NO compensating rollback: this
  * action did not create the organisation, so a failed write must never
  * delete it. Same result shape as createClientAccount, so the dialog reuses
- * settleCreateAccount, and success ends in the same redirect to setup.
+ * settleCreateAccount; success redirects to the Client access card.
  */
 export async function adoptOrphanOrgAction(
   orgId: string, formData: FormData,
@@ -182,5 +182,8 @@ export async function adoptOrphanOrgAction(
   }
 
   revalidatePath("/dashboard/accounts");
-  redirect(`/dashboard/accounts/${id}/setup`);
+  // To the Client access card, not setup: the account is born with client
+  // access OFF (the column default), so the people already invited still
+  // cannot sign in until it is turned on — the step the dialog's hint names.
+  redirect(`/dashboard/accounts/${id}/settings#client-access`);
 }

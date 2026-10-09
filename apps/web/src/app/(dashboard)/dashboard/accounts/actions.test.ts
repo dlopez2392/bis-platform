@@ -218,7 +218,10 @@ describe("adoptOrphanOrgAction (D-087)", () => {
     expect(dbMocks.createAccount.mock.calls[0]?.[1]).toEqual({
       clerkOrgId: CLERK_ORG_ID, name: "Rio Roofing", timezone: "America/Denver", actorId: "user_agency",
     });
-    expect(redirect).toHaveBeenCalledWith("/dashboard/accounts/acct_1/setup");
+    // Lands on the Client access card, not setup (review): an adopted account
+    // is born with client access OFF, so the people already invited cannot
+    // sign in until it is turned on — the step the hint names.
+    expect(redirect).toHaveBeenCalledWith("/dashboard/accounts/acct_1/settings#client-access");
   });
 
   it("never deletes the organisation when the account write fails: it was not this action's to delete (mutation: reuse createClientAccount's rollback → FAILS)", async () => {
@@ -249,6 +252,14 @@ describe("adoptOrphanOrgAction (D-087)", () => {
     expect(await adoptOrphanOrgAction(CLERK_ORG_ID, tz("Mars/Olympus")))
       .toEqual({ ok: false, error: m["accounts.timezoneUnusable"].replace("{zone}", "Mars/Olympus") });
     expect(clerkMocks.getOrg).not.toHaveBeenCalled();
+  });
+});
+
+describe("the adopt hint tells the truth (review of D-087)", () => {
+  it("says invitees sign in once Client access is turned on, not merely once the company is added (mutation: restore \"once it is added\" → FAILS)", () => {
+    expect(m["accounts.orphan.adoptHint"]).not.toMatch(/once it is added/i);
+    expect(m["accounts.orphan.adoptHint"]).toMatch(/Client access/);
+    expect(m["accounts.orphan.adoptHint"]).toMatch(/Settings/);
   });
 });
 
