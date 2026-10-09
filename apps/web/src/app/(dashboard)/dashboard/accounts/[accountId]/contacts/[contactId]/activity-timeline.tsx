@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { STATUS_LABEL, MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
 import { messageFailureReason } from "@/lib/email/failure-reason";
-import { aiAuthorMark } from "@/lib/voice/provenance";
+import { AiAuthorMark } from "../../calls/ai-author-mark";
 
 // Exhaustively typed to the real channel union (see labels.ts's own
 // MESSAGE_CHANNEL_LABEL comment) so a new channel is a compile error here
@@ -302,7 +302,7 @@ function TimelineRow({
             <span>{formatDateTimeInZone(item.at, timezone)}</span>
             {/* DESIGN.md, Provenance: who made this To do is never left to
                 be inferred when a call made it. */}
-            {item.fromCall ? <span>{aiAuthorMark()}</span> : null}
+            {item.fromCall ? <AiAuthorMark /> : null}
             {item.dueAt && taskDueDateText(item.dueAt, timezone) ? (
               <span className="flex items-center gap-1">
                 <CalendarClock className="size-3" aria-hidden />

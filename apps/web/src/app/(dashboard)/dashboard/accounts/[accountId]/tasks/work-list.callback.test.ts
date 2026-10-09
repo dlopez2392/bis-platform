@@ -27,7 +27,11 @@ describe("the callback To do on today's queue (F-033; DESIGN.md provenance)", ()
     const typed = rows.find((r) => r.includes("Order shingles"))!;
     expect(callback).toContain("Sofía · AI");
     expect(typed).not.toContain("· AI");
-    // Still the person's row: the contact name stays beside the mark.
+    // Still the person's row: the contact name stays beside the mark —
+    // as its own element, never fused into "Ana Reyes · Sofía · AI", which
+    // reads as three dot-parts (M9; mutation: join them in one string → FAILS).
     expect(callback).toContain("Ana Reyes");
+    expect(callback).toMatch(/<span[^>]*data-ai-mark[^>]*>Sofía · AI<\/span>/);
+    expect(callback).not.toContain("Ana Reyes · Sofía");
   });
 });
