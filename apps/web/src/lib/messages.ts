@@ -249,7 +249,9 @@ export const m = {
   "accounts.status.archived": "Archived",
   "accounts.blueprint": "Apply a blueprint",
   "accounts.blueprintNone": "Don't apply one",
-  "accounts.blueprintHint": "Copies configuration into the new company. You can apply one later instead.",
+  // D-086: "later" used to name no place, because there was none. Settings
+  // now carries an "Apply a blueprint" dialog (apply-blueprint-dialog.tsx).
+  "accounts.blueprintHint": "Copies configuration into the new company. You can also apply one later, from the company's Settings.",
   "accounts.blueprintPartial": "The company was created, but some blueprint items did not apply. Check its Settings and add anything missing by hand.",
 
   "dashboard.title": "Dashboard",
@@ -1098,6 +1100,16 @@ export const m = {
   "blueprints.name": "Blueprint name",
   "blueprints.saved": "Blueprint saved",
   "blueprints.saveFailed": "Could not save the blueprint.",
+  // D-086: applying a blueprint to a company that already exists, from its
+  // Settings. Additive and idempotent (applyBlueprint): nothing is removed and
+  // a second apply skips what the first added.
+  "blueprints.apply.label": "Blueprint",
+  "blueprints.apply.hint": "Adds this blueprint's pipelines, custom fields, tags, custom values and forms to this company. Anything already here stays as it is, and nothing is removed. Forms arrive as drafts with nobody to notify yet.",
+  "blueprints.apply.submit": "Apply",
+  "blueprints.apply.pick": "Choose a blueprint to apply.",
+  "blueprints.apply.done": "Blueprint applied: {added} new, {already} already in place.",
+  "blueprints.apply.partial": "Some items in this blueprint didn't apply. Apply it again: anything already added is skipped.",
+  "blueprints.apply.failed": "Couldn't apply that blueprint. Try again.",
   "blueprints.overwriteWarning": "\"{name}\" already exists (version {version}). Saving will replace it — there is no version history and no undo.",
 
   // The public booking page's own strings (`booking.public.*`) moved to

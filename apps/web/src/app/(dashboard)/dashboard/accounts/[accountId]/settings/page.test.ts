@@ -16,6 +16,7 @@ vi.mock("@/lib/auth", () => ({ requireAgencyOnlyAccountAccess: async () => ({ us
 
 const fx = vi.hoisted(() => ({
   mailingAddress: null as string | null,
+  blueprints: [] as Array<{ id: string; name: string; version: number; created_at: string; appliedCount: number }>,
   mailingReads: [] as unknown[][],
   brandingReads: [] as unknown[][],
   /** The request-scoped client. Answers the page's one inline accounts read. */
@@ -41,7 +42,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
   serviceDb: () => fx.service,
   listCustomFields: async () => [],
   listCustomValues: async () => [],
-  listBlueprints: async () => [],
+  listBlueprints: async () => fx.blueprints,
   getBranding: async (...args: unknown[]) => {
     fx.brandingReads.push(args);
     return {
@@ -81,7 +82,8 @@ vi.mock("../branding/actions", () => ({
 vi.mock("../website/actions", () => ({
   saveSiteAction: noop, testSiteConnectionAction: noop, unlinkSiteAction: noop,
 }));
-vi.mock("../../../blueprints/actions", () => ({ captureBlueprintAction: noop }));
+const blueprintActions = vi.hoisted(() => ({ captureBlueprintAction: async () => {}, applyBlueprintAction: vi.fn(async () => ({ ok: true })) }));
+vi.mock("../../../blueprints/actions", () => blueprintActions);
 vi.mock("./billing-actions", () => ({
   sendBillingLinkAction: noop, markComplimentaryAction: noop, removeComplimentaryAction: noop, changePlanAction: noop,
 }));
@@ -92,6 +94,7 @@ vi.mock("@/components/branding-panel", () => panel);
 const { default: SettingsPage } = await import("./page");
 const { BillingSection, BillingCardSkeleton } = await import("./billing-section");
 const { ClientAccessPanel } = await import("./client-access-panel");
+const { ApplyBlueprintDialog } = await import("./apply-blueprint-dialog");
 
 /** Depth-first search of the returned element tree for BrandingPanel's props. */
 function findPanelProps(node: ReactNode): Record<string, unknown> | null {
@@ -120,6 +123,8 @@ async function panelProps() {
 
 beforeEach(() => {
   fx.mailingAddress = null;
+  fx.blueprints = [];
+  blueprintActions.applyBlueprintAction.mockClear();
   fx.mailingReads = [];
   fx.brandingReads = [];
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -162,5 +167,30 @@ describe("settings page — the Billing card", () => {
     const column = all.find((e) => Array.isArray(e.props.children) && (e.props.children as unknown[]).includes(boundary));
     const siblings = (column!.props.children as unknown[]).filter((c) => isValidElement(c));
     expect((siblings[siblings.indexOf(boundary!) - 1] as ReactElement).type).toBe(ClientAccessPanel);
+  });
+});
+
+describe("settings page — applying a blueprint later (D-086)", () => {
+  /** Every element, descending into ReactNode props too: PageHeader carries
+   *  its buttons in `actions`, not `children`. */
+  function everyElement(n: unknown, out: ReactElement<Record<string, unknown>>[] = []) {
+    if (Array.isArray(n)) { n.forEach((c) => everyElement(c, out)); return out; }
+    if (!isValidElement(n)) return out;
+    const el = n as ReactElement<Record<string, unknown>>;
+    out.push(el);
+    for (const v of Object.values(el.props)) everyElement(v, out);
+    return out;
+  }
+
+  it("offers this company's Settings an Apply a blueprint dialog listing every blueprint, bound to THIS account (mutation: drop the mount → FAILS; bind another account → FAILS)", async () => {
+    fx.blueprints = [{ id: "bp_1", name: "Roofers", version: 2, created_at: "2026-10-01T00:00:00Z", appliedCount: 0 }];
+    const el = await SettingsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({}) });
+    const dialog = everyElement(el).find((e) => e.type === ApplyBlueprintDialog);
+    expect(dialog, "ApplyBlueprintDialog on Settings").toBeTruthy();
+    expect(dialog!.props.blueprints).toEqual([{ id: "bp_1", name: "Roofers" }]);
+    const f = new FormData();
+    f.set("blueprintId", "bp_1");
+    await (dialog!.props.action as (fd: FormData) => Promise<unknown>)(f);
+    expect(blueprintActions.applyBlueprintAction).toHaveBeenCalledWith("a1", f);
   });
 });
