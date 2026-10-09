@@ -583,3 +583,48 @@ describe("VoiceProfileForm's After hours choice says what Always take a message 
     expect(m["voice.profile.afterHoursHint"]).toMatch(/book/i);
   });
 });
+
+// D-040 (owner-confirmed): while "Always take a message" is chosen, the
+// "Allow booking" box is disabled — it cannot do anything on a call — but its
+// STORED value still travels with every save, so switching back to "Follow
+// business hours" finds it as it was. Radix does not submit a disabled
+// checkbox, so without the hidden input a save here would write false.
+describe("VoiceProfileForm's Allow booking box under Always take a message (D-040)", () => {
+  const BASE: VoiceProfileRow = {
+    id: "vp1", account_id: "a1", persona_name: "Sofía",
+    greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
+    languages: "en", booking_enabled: true, after_hours: "message_only",
+    enabled: true, textback_enabled: false, textback_body: "",
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+  };
+  const render = (over: Partial<VoiceProfileRow>) => renderToStaticMarkup(createElement(VoiceProfileForm, {
+    profile: { ...BASE, ...over }, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
+  }));
+  /** The booking checkbox's own button tag. */
+  const bookingBox = (html: string) => {
+    const tag = /<button[^>]*id="booking_enabled"[^>]*>/.exec(html)?.[0];
+    if (!tag) throw new Error("the booking checkbox did not render");
+    return tag;
+  };
+  const submitsBooking = (html: string) =>
+    /<input[^>]*type="hidden"[^>]*name="booking_enabled"[^>]*value="on"|<input[^>]*name="booking_enabled"[^>]*type="hidden"[^>]*value="on"/.test(html);
+
+  it("is disabled, still checked, and pointed at the hint while Always take a message is chosen (mutation: never disable → FAILS)", () => {
+    const tag = bookingBox(render({ after_hours: "message_only", booking_enabled: true }));
+    expect(tag).toMatch(/\sdisabled=""/);
+    expect(tag).toContain('data-state="checked"');
+    expect(tag).toContain('aria-describedby="after_hours_hint"');
+  });
+
+  it("keeps submitting its stored value while disabled (mutation: drop the hidden input → FAILS)", () => {
+    expect(submitsBooking(render({ after_hours: "message_only", booking_enabled: true }))).toBe(true);
+    expect(submitsBooking(render({ after_hours: "message_only", booking_enabled: false }))).toBe(false);
+  });
+
+  it("is an ordinary, enabled checkbox under Follow business hours, submitting what it shows", () => {
+    const html = render({ after_hours: "hours_then_message", booking_enabled: true });
+    expect(bookingBox(html)).not.toMatch(/\sdisabled=""/);
+    expect(submitsBooking(html)).toBe(true);
+    expect(submitsBooking(render({ after_hours: "hours_then_message", booking_enabled: false }))).toBe(false);
+  });
+});
