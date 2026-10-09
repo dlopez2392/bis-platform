@@ -99,6 +99,10 @@ const STRINGS = {
     calendarForUs: "{when} for us",
     calendarJoin: "Join your video meeting",
     calendarCancel: "Cancel this booking",
+    // F-048: the message the Calendar page's Cancel dialog prefills into the
+    // customer's notice, in the language the owner picks. The owner can
+    // rewrite it; the email adds the time and a link to book again.
+    cancelNoticeDefault: "We're sorry, but we have to cancel this appointment.",
   },
   es: {
     noSlots: "No hay horarios disponibles este día.",
@@ -156,6 +160,7 @@ const STRINGS = {
     calendarForUs: "{when} para nosotros",
     calendarJoin: "Unirse a la videollamada",
     calendarCancel: "Cancelar esta cita",
+    cancelNoticeDefault: "Lo sentimos, pero tenemos que cancelar tu cita.",
   },
 } as const;
 

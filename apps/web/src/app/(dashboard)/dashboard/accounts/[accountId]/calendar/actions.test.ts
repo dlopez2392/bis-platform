@@ -5,16 +5,25 @@ vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
 }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
+// F-048: the notice is scheduled with after(), and its origin read from the
+// request. The callback is captured and run by hand: cancel-notice.test.ts
+// covers what the notice itself does.
+const nextMocks = vi.hoisted(() => ({ after: vi.fn(), headers: vi.fn() }));
+vi.mock("next/server", () => ({ after: nextMocks.after }));
+vi.mock("next/headers", () => ({ headers: nextMocks.headers }));
+const noticeMock = vi.hoisted(() => vi.fn());
+vi.mock("./cancel-notice", () => ({ sendCancelNoticeAfterUndo: noticeMock }));
 
 const dbMocks = vi.hoisted(() => ({
   updateCalendarSettings: vi.fn(), setBookingStatus: vi.fn(), undoOperatorCancel: vi.fn(),
+  bookingContactEmail: vi.fn(), isAccountOutboundSuppressed: vi.fn(),
   serviceDb: vi.fn(() => ({})),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
 }));
 
-import { updateCalendarSettingsAction, setBookingStatusAction, undoCancelBookingAction } from "./actions";
+import { updateCalendarSettingsAction, setBookingStatusAction, undoCancelBookingAction, cancelBookingAction } from "./actions";
 import { BookingNotStartedError, BookingNotRestorableError, SlotTakenError } from "@bis/db";
 import { m } from "@/lib/messages";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
@@ -208,9 +217,9 @@ describe("undoCancelBookingAction — the Calendar page's Undo (D-036)", () => {
 
   // undoOperatorCancel carries the guards (a person's cancel, not replaced
   // by a reschedule, only FROM cancelled); booking.test.ts pins them.
-  it("restores through undoOperatorCancel, as the signed-in user", async () => {
-    expect(await undoCancelBookingAction("acct_1", "bk_1")).toEqual({ ok: true });
-    expect(dbMocks.undoOperatorCancel).toHaveBeenCalledWith({}, "acct_1", "bk_1", "user_1");
+  it("restores through undoOperatorCancel, as the signed-in user, naming the cancel's version (F-048; mutation: drop the version → FAILS)", async () => {
+    expect(await undoCancelBookingAction("acct_1", "bk_1", "2026-10-09T18:00:00.123Z")).toEqual({ ok: true });
+    expect(dbMocks.undoOperatorCancel).toHaveBeenCalledWith({}, "acct_1", "bk_1", "user_1", { version: "2026-10-09T18:00:00.123Z" });
     expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
   });
 
@@ -233,6 +242,13 @@ describe("undoCancelBookingAction — the Calendar page's Undo (D-036)", () => {
     expect(await undoCancelBookingAction("acct_1", "bk_1"))
       .toEqual({ ok: false, error: m["calendar.bookings.restoreNotOurs"] });
     expect(m["calendar.bookings.restoreNotOurs"]).toMatch(/customer/i);
+  });
+
+  it("F-048: says the customer has already been emailed when the notice won", async () => {
+    dbMocks.undoOperatorCancel.mockRejectedValue(new BookingNotRestorableError("customer_told"));
+    expect(await undoCancelBookingAction("acct_1", "bk_1", "v"))
+      .toEqual({ ok: false, error: m["calendar.bookings.restoreCustomerTold"] });
+    expect(m["calendar.bookings.restoreCustomerTold"]).toMatch(/emailed/);
   });
 
   it("any other failure is the generic message", async () => {
@@ -263,5 +279,92 @@ describe("undoCancelBookingAction — the Calendar page's Undo (D-036)", () => {
     await setBookingStatusAction("acct_1", "bk_1", "completed");
     const opts = dbMocks.setBookingStatus.mock.calls[0]![6] as { onlyFrom?: string };
     expect(opts.onlyFrom).toBeUndefined();
+  });
+});
+
+/**
+ * F-048: the Calendar page's Cancel, with its customer notice. Cancels at
+ * once (DESIGN.md rule 6) and answers the cancel's version, which the Undo
+ * hands back; when the owner asked for the notice and it can go, it is
+ * scheduled to run after the response, never sent inside it.
+ */
+describe("cancelBookingAction — cancel now, tell the customer when the Undo closes (F-048)", () => {
+  const VERSION = "2026-10-09T18:00:00.123Z";
+  const NOTICE = { send: true, locale: "es", message: "  Lo sentimos.\r\nHasta pronto.  " };
+  const runScheduled = async () => {
+    for (const [fn] of nextMocks.after.mock.calls) await (fn as () => Promise<unknown>)();
+  };
+
+  beforeEach(() => {
+    dbMocks.setBookingStatus.mockReset().mockResolvedValue({ updatedAt: VERSION });
+    dbMocks.bookingContactEmail.mockReset().mockResolvedValue("maria@example.com");
+    dbMocks.isAccountOutboundSuppressed.mockReset().mockResolvedValue(false);
+    nextMocks.after.mockReset();
+    nextMocks.headers.mockReset().mockResolvedValue(new Headers({ host: "app.example.com", "x-forwarded-proto": "https" }));
+    noticeMock.mockReset().mockResolvedValue("sent");
+  });
+
+  it("cancels only a booking that is still booked, as the signed-in user, and answers the version (mutation: drop onlyFrom → FAILS)", async () => {
+    const r = await cancelBookingAction("acct_1", "bk_1", { ...NOTICE, send: false });
+    expect(r).toEqual({ ok: true, version: VERSION, noticeScheduled: false });
+    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith({}, "acct_1", "bk_1", "cancelled", "user_1", "user", { onlyFrom: "booked" });
+  });
+
+  it("with the notice asked for and an address to send to, schedules it after the response with the cancel's version and the owner's words (mutation: send inline instead of after() → FAILS)", async () => {
+    const r = await cancelBookingAction("acct_1", "bk_1", NOTICE);
+    expect(r).toEqual({ ok: true, version: VERSION, noticeScheduled: true });
+    expect(noticeMock).not.toHaveBeenCalled();
+    expect(nextMocks.after).toHaveBeenCalledTimes(1);
+    await runScheduled();
+    expect(noticeMock).toHaveBeenCalledWith({
+      accountId: "acct_1", bookingId: "bk_1", version: VERSION, userId: "user_1",
+      locale: "es", message: "Lo sentimos.\nHasta pronto.", origin: "https://app.example.com",
+    });
+  });
+
+  it("a notice that was not asked for is never scheduled (mutation: ignore send → FAILS)", async () => {
+    await cancelBookingAction("acct_1", "bk_1", { ...NOTICE, send: false });
+    expect(nextMocks.after).not.toHaveBeenCalled();
+    expect(dbMocks.bookingContactEmail).not.toHaveBeenCalled();
+  });
+
+  it("no address on file: still cancels, schedules nothing, and says so (mutation: schedule anyway → FAILS)", async () => {
+    dbMocks.bookingContactEmail.mockResolvedValue(null);
+    expect(await cancelBookingAction("acct_1", "bk_1", NOTICE)).toEqual({ ok: true, version: VERSION, noticeScheduled: false });
+    expect(nextMocks.after).not.toHaveBeenCalled();
+  });
+
+  it("an account marked not to send: still cancels, schedules nothing (D-061)", async () => {
+    dbMocks.isAccountOutboundSuppressed.mockResolvedValue(true);
+    expect(await cancelBookingAction("acct_1", "bk_1", NOTICE)).toEqual({ ok: true, version: VERSION, noticeScheduled: false });
+    expect(nextMocks.after).not.toHaveBeenCalled();
+  });
+
+  it("a language it does not speak is English, never an exception", async () => {
+    await cancelBookingAction("acct_1", "bk_1", { ...NOTICE, locale: "fr" });
+    await runScheduled();
+    expect(noticeMock.mock.calls[0]![0]).toMatchObject({ locale: "en" });
+  });
+
+  it("a message over the limit is refused in words, and nothing is cancelled (mutation: drop the bound → FAILS)", async () => {
+    const r = await cancelBookingAction("acct_1", "bk_1", { ...NOTICE, message: "x".repeat(2001) });
+    expect(r).toEqual({ ok: false, error: m["calendar.cancelDialog.messageTooLong"] });
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+  });
+
+  it("an address read that fails refuses the whole cancel, so the owner is never told a notice is coming that could not be checked", async () => {
+    dbMocks.bookingContactEmail.mockRejectedValue(new Error("db down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await cancelBookingAction("acct_1", "bk_1", NOTICE);
+    expect(r).toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+  });
+
+  it("a cancel the write refuses schedules nothing", async () => {
+    dbMocks.setBookingStatus.mockRejectedValue(new Error("setBookingStatus: no booking"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await cancelBookingAction("acct_1", "bk_1", NOTICE);
+    expect(r).toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
+    expect(nextMocks.after).not.toHaveBeenCalled();
   });
 });

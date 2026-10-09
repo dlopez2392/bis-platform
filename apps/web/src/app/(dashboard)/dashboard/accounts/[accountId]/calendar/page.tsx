@@ -8,9 +8,14 @@ import { m } from "@/lib/messages";
 import { CalendarSettings } from "./calendar-settings";
 import { BookingsList } from "./bookings-list";
 import { EmbedSnippet } from "./embed-snippet";
-import { updateCalendarSettingsAction, setBookingStatusAction, undoCancelBookingAction } from "./actions";
+import { updateCalendarSettingsAction, setBookingStatusAction, cancelBookingAction, undoCancelBookingAction } from "./actions";
 
 export const dynamic = "force-dynamic";
+// F-048: Cancel's customer notice waits out the Undo window inside the
+// cancel's own invocation (`after()` in `cancelBookingAction`), and server
+// actions run in this page's function. 60 seconds outlasts that wait with
+// room for the reads and the send; `cancel-notice.test.ts` pins the margin.
+export const maxDuration = 60;
 
 export default async function CalendarPage({
   params,
@@ -61,6 +66,7 @@ export default async function CalendarPage({
 
   const boundUpdateSettings = updateCalendarSettingsAction.bind(null, accountId);
   const boundSetStatus = setBookingStatusAction.bind(null, accountId);
+  const boundCancel = cancelBookingAction.bind(null, accountId);
   const boundUndoCancel = undoCancelBookingAction.bind(null, accountId);
 
   return (
@@ -76,6 +82,7 @@ export default async function CalendarPage({
             bookings={bookings}
             nowIso={nowIso}
             statusAction={boundSetStatus}
+            cancelAction={boundCancel}
             undoCancelAction={boundUndoCancel}
           />
         </div>

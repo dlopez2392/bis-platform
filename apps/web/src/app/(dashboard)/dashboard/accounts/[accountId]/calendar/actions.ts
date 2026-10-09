@@ -1,8 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
+import { after } from "next/server";
 import {
   serviceDb, updateCalendarSettings, setBookingStatus, undoOperatorCancel,
+  bookingContactEmail, isAccountOutboundSuppressed,
   BookingNotStartedError, BookingNotRestorableError, SlotTakenError,
   type BookingStatus, type CalendarSettingsPatch,
 } from "@bis/db";
@@ -10,11 +13,26 @@ import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
+import { originFrom } from "@/lib/email/origin";
 import { isValidEmail } from "@/lib/forms/guards";
+import { normalizeLocale } from "@/lib/forms/public-strings";
 import { HOURS_FORM_DAYS, rowsToOpenHours, type HoursRow } from "./hours-form";
 import { parseNotifyEmails } from "./notify-emails";
+import { sendCancelNoticeAfterUndo } from "./cancel-notice";
+import { NOTICE_MESSAGE_MAX } from "./undo-window";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
+
+/** F-048: what the Cancel dialog asks for. `locale` and `message` are
+ *  re-checked here: a server action is an endpoint like any other. */
+export type CancelNoticeChoice = { send: boolean; locale: string; message: string };
+
+/** F-048: `version` is the cancel's own, which the Undo hands back;
+ *  `noticeScheduled` says whether the customer will be emailed when the Undo
+ *  window closes, so the toast tells the owner the truth either way. */
+export type CancelBookingResult =
+  | { ok: true; version: string; noticeScheduled: boolean }
+  | { ok: false; error: string };
 
 type MeetingType = NonNullable<CalendarSettingsPatch["meetingType"]>;
 const MEETING_TYPES: readonly MeetingType[] = ["in_person", "phone", "video"];
@@ -158,13 +176,75 @@ export async function setBookingStatusAction(
 }
 
 /**
+ * F-048: the Calendar page's Cancel, from its dialog. It cancels AT ONCE (a
+ * row that is still booked only, D-036's review) and answers the cancel's
+ * version, which the Undo hands back. When the owner asked for the customer
+ * notice and it can go (the contact has an address, the account is not
+ * marked not to send), the notice is scheduled with `after()` to run once
+ * the Undo window has closed (`cancel-notice.ts`): never inside this
+ * response, which is what keeps the cancel reversible (DESIGN.md rule 6).
+ *
+ * Both checks run BEFORE the cancel, and a read that fails refuses the whole
+ * thing: the toast must never say "we'll email the customer" for a notice
+ * nobody could check. serviceDb() for the write, for the reason
+ * `setBookingStatusAction` gives below; the address is read as the signed-in
+ * user (RLS), and the suppression flag the way the composer reads it.
+ */
+export async function cancelBookingAction(
+  accountId: string, bookingId: string, notice: CancelNoticeChoice,
+): Promise<CancelBookingResult> {
+  const { userId } = await requireAccountAccess(accountId);
+
+  const message = String(notice?.message ?? "").replace(/\r\n/g, "\n").trim();
+  if (message.length > NOTICE_MESSAGE_MAX) return { ok: false, error: m["calendar.cancelDialog.messageTooLong"] };
+  const locale = normalizeLocale(typeof notice?.locale === "string" ? notice.locale : undefined, "en");
+
+  let noticeScheduled = false;
+  if (notice?.send === true) {
+    try {
+      const to = await bookingContactEmail(await dbForRequest(), accountId, bookingId);
+      noticeScheduled = to !== null && !(await isAccountOutboundSuppressed(serviceDb(), accountId));
+    } catch (e) {
+      console.error(`cancelBookingAction: notice check failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
+      return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+    }
+  }
+
+  let version: string;
+  try {
+    ({ updatedAt: version } = await setBookingStatus(
+      serviceDb(), accountId, bookingId, "cancelled", userId, "user", { onlyFrom: "booked" },
+    ));
+  } catch (e) {
+    console.error(`cancelBookingAction: cancel failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
+    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  }
+
+  if (noticeScheduled) {
+    const origin = originFrom(await headers());
+    after(async () => {
+      const outcome = await sendCancelNoticeAfterUndo({ accountId, bookingId, version, userId, locale, message, origin });
+      if (outcome !== "sent" && outcome !== "undone") {
+        console.error(`cancelBookingAction: notice for booking ${bookingId} (account ${accountId}) not sent: ${outcome}`);
+      }
+    });
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/calendar`);
+  return { ok: true, version, noticeScheduled };
+}
+
+/**
  * D-036: the Calendar page's Undo for a Cancel. DESIGN.md rule 6: a
  * reversible action runs at once and offers Undo; typing a name is for
  * destructive deletes, and an "Are you sure?" before it is the reflexive
- * dialog the rule forbids. Cancel here IS reversible: it tells nobody (no
- * customer email, no staff alert; `setBookingStatus` writes the row and one
- * `booking.status_changed` event, which only the activity feed reads), so
- * putting the row back undoes all of it.
+ * dialog the rule forbids. Cancel here IS reversible: until the F-048 notice
+ * goes (after the Undo window) it tells nobody (no staff alert;
+ * `setBookingStatus` writes the row and one `booking.status_changed` event,
+ * which only the activity feed reads), so putting the row back undoes all of
+ * it. `version` (F-048) is the cancel's own: the Undo writes only while the
+ * row still carries it, so it can never land after the notice claimed the
+ * cancel (`customer_told`).
  *
  * `undoOperatorCancel` (packages/db) carries the guards: an un-cancel only
  * (`onlyFrom: "cancelled"` on the write), only of a cancel a PERSON made on
@@ -176,12 +256,13 @@ export async function setBookingStatusAction(
  * for `authenticated`, so `requireAccountAccess` is the gate.
  */
 export async function undoCancelBookingAction(
-  accountId: string, bookingId: string,
+  accountId: string, bookingId: string, version?: string,
 ): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
 
   try {
-    await undoOperatorCancel(serviceDb(), accountId, bookingId, userId);
+    await undoOperatorCancel(serviceDb(), accountId, bookingId, userId,
+      { version: typeof version === "string" ? version : undefined });
   } catch (e) {
     if (e instanceof SlotTakenError) {
       return { ok: false, error: m["calendar.bookings.restoreSlotTaken"] };
@@ -189,8 +270,8 @@ export async function undoCancelBookingAction(
     if (e instanceof BookingNotRestorableError) {
       return {
         ok: false,
-        error: e.reason === "rescheduled"
-          ? m["calendar.bookings.restoreRescheduled"]
+        error: e.reason === "rescheduled" ? m["calendar.bookings.restoreRescheduled"]
+          : e.reason === "customer_told" ? m["calendar.bookings.restoreCustomerTold"]
           : m["calendar.bookings.restoreNotOurs"],
       };
     }
