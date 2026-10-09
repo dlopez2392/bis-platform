@@ -51,7 +51,11 @@ describe("0019 voice schema", () => {
       expect(ok.data!.status).toBe("provisioned");
       const bad = await db.from("phone_numbers")
         .insert({ account_id: accountId, e164: "956-555-0111" }).select("id");
-      expect(bad.error).not.toBeNull();
+      // Named, not just "some error": since 0063 a second non-released number
+      // on this account also trips phone_numbers_one_active_per_account, so a
+      // bare not-null would stay green with the e164 check dropped.
+      expect(bad.error?.code).toBe("23514");
+      expect(bad.error?.message).toContain("phone_numbers_e164_check");
     });
   });
 

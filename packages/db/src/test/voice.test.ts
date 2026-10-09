@@ -15,6 +15,7 @@ import {
   listContactCalls, searchCalls,
   markHandoffRequested, getCallByHandoffToken, setCallOutcome,
   callerInTouchSince,
+  goLive, getPhoneNumberById,
   type CallOutcome,
 } from "../voice";
 
@@ -816,6 +817,77 @@ describe("callerInTouchSince", () => {
       expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(false);
       await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "inbound", body: "still need a quote" }, "user_test");
       expect(await callerInTouchSince(db, accountId, caller, convo.id, since)).toBe(true);
+    });
+  });
+});
+
+/**
+ * goLive (0063, D-043): the one call goLiveAction makes. The function's own
+ * refusals and grants are pinned in go-live-grants.test.ts against Postgres
+ * directly; these two go through serviceDb() and PostgREST, the way the app
+ * calls it, and compare what it leaves behind with the two-call path it
+ * replaced.
+ */
+describe("goLive", () => {
+  const GOLIVE_ACTOR = "user_golive";
+  const goLiveEvents = async (db: Parameters<typeof goLive>[0], accountId: string) => {
+    const { data, error } = await db.from("events").select("type, actor_type, actor_id, payload")
+      .eq("account_id", accountId).eq("actor_id", GOLIVE_ACTOR).order("id");
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  };
+
+  it("leaves exactly the rows the old two-call path did: profile on, number live, the same two events in the same order (mutation: emit { fields: ['enabled', 'updated_at'] } -> FAILS)", async () => {
+    await withTestAccount(async (db, oldPath) => {
+      await withTestAccount(async (_db2, newPath) => {
+        const setUp = async (accountId: string) => {
+          const n = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber(), status: "testing" }, "user_test");
+          await upsertVoiceProfile(db, accountId, { greeting_en: "Thanks for calling." }, "user_test");
+          return n.id;
+        };
+        const oldNum = await setUp(oldPath);
+        const newNum = await setUp(newPath);
+
+        // What goLiveAction did before 0063: two writes, two transactions.
+        await upsertVoiceProfile(db, oldPath, { enabled: true }, GOLIVE_ACTOR);
+        await setPhoneNumberStatus(db, oldPath, oldNum, "live", GOLIVE_ACTOR);
+        await goLive(db, newPath, newNum, GOLIVE_ACTOR);
+
+        const anonymise = (rows: unknown[], numberId: string) =>
+          JSON.parse(JSON.stringify(rows).replaceAll(numberId, "<number>"));
+        const before = anonymise(await goLiveEvents(db, oldPath), oldNum);
+        const after = anonymise(await goLiveEvents(db, newPath), newNum);
+        // Spelled out as well as compared, so two EMPTY lists cannot pass.
+        expect(after).toEqual([
+          { type: "voice_profile.updated", actor_type: "user", actor_id: GOLIVE_ACTOR, payload: { fields: ["enabled"] } },
+          { type: "phone_number.status_changed", actor_type: "user", actor_id: GOLIVE_ACTOR,
+            payload: { phoneNumberId: "<number>", status: "live" } },
+        ]);
+        expect(after).toEqual(before);
+        expect((await getVoiceProfile(db, newPath))?.enabled).toBe(true);
+        expect((await getPhoneNumberById(db, newNum))?.status).toBe("live");
+      });
+    });
+  });
+
+  it("is one transaction: a refused go-live throws and leaves the profile off, the number where it was and no event (D-043; mutation: goLive as the old upsertVoiceProfile + setPhoneNumberStatus pair -> profile left on, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        // This account has a profile and no number; the number named belongs
+        // to another tenant. The profile write succeeds inside go_live before
+        // the number write is refused, so only a single transaction leaves
+        // the profile off.
+        await upsertVoiceProfile(db, accountId, { greeting_en: "Thanks for calling." }, "user_test");
+        const other = await assignPhoneNumber(db, otherAccountId, { e164: testPhoneNumber(), status: "testing" }, "user_test");
+        const err = await goLive(db, accountId, other.id, GOLIVE_ACTOR).then(() => null, (e: Error) => e);
+        // State first: what D-043 is about is what a failure LEAVES, and the
+        // two-call path fails this line (its first write already committed).
+        expect((await getVoiceProfile(db, accountId))?.enabled).toBe(false);
+        expect((await getPhoneNumberById(db, other.id))?.status).toBe("testing");
+        expect(await goLiveEvents(db, accountId)).toEqual([]);
+        expect(await goLiveEvents(db, otherAccountId)).toEqual([]);
+        expect(err?.message).toBe("goLive failed: go_live: no such number on this account, or it was released");
+      });
     });
   });
 });

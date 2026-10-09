@@ -48,6 +48,9 @@ import type { ReadKey } from "@/lib/setup/setup-view";
 const dbMocks = vi.hoisted(() => ({
   setChecklistItem: vi.fn(),
   upsertVoiceProfile: vi.fn(), setPhoneNumberStatus: vi.fn(),
+  // D-043: goLiveAction makes ONE write, `goLive` (0063, one transaction).
+  // The two above stay mocked so the tests can pin that neither is called.
+  goLive: vi.fn(),
   // renameAccountAction no longer writes `accounts` from the route. The final
   // review moved it onto `renameAccount` (packages/db/src/accounts.ts) —
   // where every other account-level write already lives — so what this file
@@ -62,9 +65,9 @@ const dbMocks = vi.hoisted(() => ({
 
 /** The one object `serviceDb()` resolves to everywhere in this file. Kept as
  *  a single shared reference — rather than a fresh `{}` per call — so the
- *  four actions that pass it straight through to a `@bis/db` function
- *  (setChecklistItem, upsertVoiceProfile, setPhoneNumberStatus,
- *  renameAccount) can each assert "the same db instance flowed through"
+ *  actions that pass it straight through to a `@bis/db` function
+ *  (setChecklistItem, goLive, renameAccount) can each assert "the same db
+ *  instance flowed through"
  *  against this reference. */
 const serviceDbInstance = vi.hoisted(() => ({ __serviceDb: true }));
 
@@ -165,6 +168,7 @@ beforeEach(() => {
   setupInputsMocks.gatherSetupInputs.mockResolvedValue(readyGathered());
   dbMocks.upsertVoiceProfile.mockResolvedValue({});
   dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
+  dbMocks.goLive.mockResolvedValue(undefined);
   // Already reset by the allMocks() loop above (renameAccount lives in
   // dbMocks); only the default resolved value needs setting here. `undefined`,
   // not `{ error: null }` — the real helper returns `Promise<void>` and
@@ -240,7 +244,7 @@ describe("setSetupTickAction", () => {
  * the not-called ones — a refusal that still wrote would be no refusal at all.
  */
 describe("goLiveAction", () => {
-  const writes = () => [dbMocks.upsertVoiceProfile, dbMocks.setPhoneNumberStatus];
+  const writes = () => [dbMocks.goLive, dbMocks.upsertVoiceProfile, dbMocks.setPhoneNumberStatus];
 
   it("a non-agency caller is rejected before any db call — reads included", async () => {
     guardFixture.isAgency = false;
@@ -351,11 +355,16 @@ describe("goLiveAction", () => {
     errSpy.mockRestore();
   });
 
-  it("enables the profile and marks the number live once everything checks out", async () => {
+  it("goes live in ONE call, goLive, never the old two-write pair (D-043; mutation: restore the upsertVoiceProfile + setPhoneNumberStatus pair -> FAILS)", async () => {
     const r = await goLiveAction("a1");
     expect(r).toEqual({ ok: true });
-    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith(serviceDbInstance, "a1", { enabled: true }, "user_1");
-    expect(dbMocks.setPhoneNumberStatus).toHaveBeenCalledWith(serviceDbInstance, "a1", "pn1", "live", "user_1");
+    // goLive enables the profile and sets the number live in one transaction
+    // (0063), so a failure can no longer leave the profile on and the number
+    // still testing. Two separate writes here would reintroduce exactly that.
+    expect(dbMocks.goLive).toHaveBeenCalledTimes(1);
+    expect(dbMocks.goLive).toHaveBeenCalledWith(serviceDbInstance, "a1", "pn1", "user_1");
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+    expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
   });
 
   it("skips a released number and takes the first live-able one", async () => {
@@ -367,12 +376,16 @@ describe("goLiveAction", () => {
     }));
     const r = await goLiveAction("a1");
     expect(r).toEqual({ ok: true });
-    expect(dbMocks.setPhoneNumberStatus).toHaveBeenCalledWith(serviceDbInstance, "a1", "pn2", "live", "user_1");
+    expect(dbMocks.goLive).toHaveBeenCalledWith(serviceDbInstance, "a1", "pn2", "user_1");
   });
 
-  it("reports a failed write rather than rejecting into the client island", async () => {
+  it("reports a refused or failed go-live as failed rather than rejecting into the client island", async () => {
+    // goLive throws the database's refusal (another active number, no
+    // profile, a number released since the re-check) or a transport error.
+    // Every one of them is reported as `failed`: "Reload and try again" shows
+    // the operator the real state, and nothing was written.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    dbMocks.setPhoneNumberStatus.mockRejectedValue(new Error("nope"));
+    dbMocks.goLive.mockRejectedValue(new Error("goLive failed: go_live: no such number on this account, or it was released"));
     const r = await goLiveAction("a1");
     expect(r).toEqual({ ok: false, error: m["setup.goLive.failed"] });
     errSpy.mockRestore();

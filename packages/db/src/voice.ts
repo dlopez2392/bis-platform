@@ -186,6 +186,33 @@ export async function upsertVoiceProfile(
 }
 
 /**
+ * Takes an account live: enables its voice profile and sets `phoneNumberId`
+ * live, in ONE transaction (0063, D-043). It records the same two events, in
+ * the same order, that `upsertVoiceProfile(..., { enabled: true })` and
+ * `setPhoneNumberStatus(..., "live")` did when goLiveAction called them one
+ * after the other, as actor type `user`.
+ *
+ * Why one call: as two writes, a failure after the first left the profile on
+ * and the number still `testing`. The incoming route answers a `testing`
+ * number once the profile is enabled, so callers reached the receptionist
+ * while text-back had no live number and Setup still read "To do". Now
+ * either everything lands or nothing does.
+ *
+ * The database refuses, writing nothing, and this throws its message: no
+ * actor, another active number on the account, no voice profile, or a number
+ * that is not on this account or was released. Call it with `serviceDb()`
+ * behind the app's agency check: only `service_role` may execute `go_live`.
+ */
+export async function goLive(
+  db: SupabaseClient, accountId: string, phoneNumberId: string, actorId: string,
+): Promise<void> {
+  const { error } = await db.rpc("go_live", {
+    p_account_id: accountId, p_phone_number_id: phoneNumberId, p_actor_id: actorId,
+  });
+  if (error) throw new Error(`goLive failed: ${error.message}`);
+}
+
+/**
  * The per-account call forward (0058; spec 2026-10-01-operational-floor,
  * section 3). `on` sends this account's callers straight to
  * `accounts.transfer_phone` instead of to the receptionist; there is no second

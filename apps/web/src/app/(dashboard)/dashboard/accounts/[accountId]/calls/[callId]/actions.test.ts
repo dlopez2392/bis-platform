@@ -262,16 +262,50 @@ function dbWithFailingContactRead(real: Db): Db {
   } as unknown as Db;
 }
 
+/** A call on the account's ONE active number: reused when the account
+ *  already holds one, inserted only when it holds none. Migration 0063's
+ *  `phone_numbers_one_active_per_account` refuses a second non-released
+ *  number per account, and two tests below seed two calls on one account. */
 async function seedCall(db: Db, accountId: string): Promise<string> {
-  const num = await db.from("phone_numbers")
-    .insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
-  if (num.error) throw new Error(`phone_numbers insert failed: ${num.error.message}`);
+  const held = await db.from("phone_numbers")
+    .select("id").eq("account_id", accountId).neq("status", "released").maybeSingle();
+  if (held.error) throw new Error(`phone_numbers read failed: ${held.error.message}`);
+  let phoneNumberId = held.data?.id as string | undefined;
+  if (!phoneNumberId) {
+    const num = await db.from("phone_numbers")
+      .insert({ account_id: accountId, e164: testPhoneNumber() }).select("id").single();
+    if (num.error) throw new Error(`phone_numbers insert failed: ${num.error.message}`);
+    phoneNumberId = num.data!.id as string;
+  }
   const call = await db.from("calls")
-    .insert({ account_id: accountId, phone_number_id: num.data!.id, caller_e164: "+19562921696" })
+    .insert({ account_id: accountId, phone_number_id: phoneNumberId, caller_e164: "+19562921696" })
     .select("id").single();
   if (call.error) throw new Error(`calls insert failed: ${call.error.message}`);
   return call.data!.id as string;
 }
+
+/** Proved here, on any database, rather than left to the index: on one
+ *  without 0063 a second number per account is accepted, so the two
+ *  two-call tests below stay green there while failing on every database
+ *  that has the index, with `duplicate key value violates unique constraint
+ *  "phone_numbers_one_active_per_account"`. */
+it("seedCall keeps an account at ONE non-released number, as 0063's phone_numbers_one_active_per_account requires " +
+  "(mutation: insert a fresh number on every seedCall -> FAILS)", async () => {
+  await withTestAccount(async (db, accountId) => {
+    const callA = await seedCall(db, accountId);
+    const callB = await seedCall(db, accountId);
+
+    const { data: active, error: nErr } = await db.from("phone_numbers")
+      .select("id").eq("account_id", accountId).neq("status", "released");
+    expect(nErr).toBeNull();
+    expect(active).toHaveLength(1);
+
+    const { data: calls, error: cErr } = await db.from("calls")
+      .select("phone_number_id").in("id", [callA, callB]);
+    expect(cErr).toBeNull();
+    expect(calls!.map((c) => c.phone_number_id)).toEqual([active![0]!.id, active![0]!.id]);
+  });
+});
 
 describe("acceptProposal", () => {
   it(
