@@ -73,6 +73,24 @@ describe("contacts service", () => {
       expect((row?.custom as any).referral).toBe("yes");
     }));
 
+  // F-157: `getContact`/`listContacts` share one SELECT (`COLS`), and
+  // `attribution` was never in it — the column `setAttribution`
+  // (apps/web/src/lib/forms/enrich.ts) writes directly has existed since
+  // 0003_crm_core.sql and never been read back anywhere. The drawer's
+  // lead-source line needs it off the SAME read every other field comes
+  // from, not a second query. Mutation: drop "attribution" from COLS →
+  // row.attribution is undefined, FAILS.
+  it("getContact returns the attribution column COLS now selects", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await createContact(db, accountId, { firstName: "Lee" }, "user_test");
+      const { error } = await db.from("contacts")
+        .update({ attribution: { first: { ref: "https://chat.openai.com/" } } })
+        .eq("account_id", accountId).eq("id", id);
+      expect(error).toBeNull();
+      const row = await getContact(db, accountId, id);
+      expect(row?.attribution).toEqual({ first: { ref: "https://chat.openai.com/" } });
+    }));
+
   it("search matches name/email/phone; tags round-trip", () =>
     withTestAccount(async (db, accountId) => {
       const { id } = await createContact(db, accountId,
