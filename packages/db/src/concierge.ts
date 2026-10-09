@@ -26,13 +26,12 @@ export async function getVoiceProfileByPublicId(
   db: SupabaseClient, publicId: string,
 ): Promise<ConciergeProfile | null> {
   const { data, error } = await db.from("voice_profiles")
-    .select(PROFILE_COLS)
+    .select(`${PROFILE_COLS}, ${DESTINATION_EMBED}`)
     .eq("public_id", publicId)
     .eq("concierge_enabled", true)
     .not("concierge_form_id", "is", null)
     .maybeSingle();
   if (error) throw new Error(`getVoiceProfileByPublicId failed: ${error.message}`);
-  const row = (data as ConciergeProfile | null) ?? null;
   // D-048: and the destination is PUBLISHED. A form unpublished after the
   // switch went on left this returning the profile, so the chat kept
   // answering while `fileLead` refused every lead it took (lib/concierge/
@@ -40,21 +39,38 @@ export async function getVoiceProfileByPublicId(
   // is not opened. Checked at READ time on purpose, not as a constraint or a
   // gate on the switch alone (voice-settings.tsx's `conciergeCanTurnOn`):
   // publication is mutable state an operator changes on the Forms page.
-  if (!row) return null;
-  return (await isDestinationPublished(db, row.account_id, row.concierge_form_id)) ? row : null;
+  const split = splitDestination(data as RowWithDestination | null);
+  if (!split || !split.published) return null;
+  return split.row as ConciergeProfile;
 }
 
-/** Whether `formId` is a PUBLISHED form of this account. Read through the
- *  account boundary, like `getForm`, so a pointer that drifted onto another
- *  account's form reads as "not published", never as theirs. */
-async function isDestinationPublished(
-  db: SupabaseClient, accountId: string, formId: string | null,
-): Promise<boolean> {
-  if (!formId) return false;
-  const { data, error } = await db.from("forms")
-    .select("status").eq("id", formId).eq("account_id", accountId).maybeSingle();
-  if (error) throw new Error(`concierge destination read failed: ${error.message}`);
-  return (data as { status?: string } | null)?.status === "published";
+/**
+ * The destination form's status, read IN THE SAME SELECT as the profile:
+ * PostgREST embeds `forms` through 0042's `concierge_form_id` FK (the only FK
+ * from `voice_profiles` to `forms`; the `!concierge_form_id` hint names it so
+ * a second one could never make the embed ambiguous). `account_id` comes
+ * along because that FK is a plain `references forms(id)`: nothing in the
+ * schema stops the pointer naming ANOTHER account's form (only
+ * `concierge_enable` refuses one, 0045), and such a form is not this
+ * tenant's destination however it is published.
+ */
+const DESTINATION_EMBED = "concierge_destination:forms!concierge_form_id(status, account_id)";
+
+type RowWithDestination = VoiceProfileRow & {
+  public_id: string;
+  concierge_destination: { status: string; account_id: string } | null;
+};
+
+/** The profile row exactly as `PROFILE_COLS` shapes it (the embed key
+ *  removed, so no reader sees a column `getVoiceProfile` does not have), and
+ *  whether its destination is a published form of the SAME account. */
+function splitDestination(
+  data: RowWithDestination | null,
+): { row: VoiceProfileRow & { public_id: string }; published: boolean } | null {
+  if (!data) return null;
+  const { concierge_destination: dest, ...row } = data;
+  const published = dest?.status === "published" && dest.account_id === row.account_id;
+  return { row, published };
 }
 
 /** Unlike `ConciergeProfile`, `concierge_form_id` is NOT narrowed to
@@ -79,16 +95,13 @@ export async function getVoiceProfileAnyStatusByPublicId(
   db: SupabaseClient, publicId: string,
 ): Promise<ConciergeProfileAnyStatus | null> {
   const { data, error } = await db.from("voice_profiles")
-    .select(PROFILE_COLS)
+    .select(`${PROFILE_COLS}, ${DESTINATION_EMBED}`)
     .eq("public_id", publicId)
     .maybeSingle();
   if (error) throw new Error(`getVoiceProfileAnyStatusByPublicId failed: ${error.message}`);
-  const row = (data as (VoiceProfileRow & { public_id: string }) | null) ?? null;
-  if (!row) return null;
-  return {
-    ...row,
-    concierge_form_published: await isDestinationPublished(db, row.account_id, row.concierge_form_id),
-  };
+  const split = splitDestination(data as RowWithDestination | null);
+  if (!split) return null;
+  return { ...split.row, concierge_form_published: split.published };
 }
 
 /** The predicate `getVoiceProfileByPublicId`'s filter makes for the turn

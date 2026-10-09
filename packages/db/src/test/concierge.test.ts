@@ -323,6 +323,32 @@ describe("concierge accessors", () => {
       expect(await getVoiceProfileByPublicId(db, publicId)).not.toBeNull();
     }));
 
+  // Review of D-048: 0042's FK is a plain `references forms(id)`, so nothing
+  // in the schema stops `concierge_form_id` pointing at ANOTHER account's
+  // published form (only `concierge_enable` refuses one, 0045). Such a
+  // pointer must read as not published: that form is not this tenant's
+  // destination, and `fileLead` would refuse it through `getForm`'s account
+  // boundary anyway.
+  it("D-048: a destination that is ANOTHER account's published form reads as not published (chat dark)", () =>
+    withTestAccount(async (db, accountId) =>
+      withTestAccount(async (otherDb, otherAccountId) => {
+        await seedVoiceProfile(db, accountId);
+        const mine = await publishedLeadsForm(db, accountId);
+        const theirs = await publishedLeadsForm(otherDb, otherAccountId);
+        const { publicId } = await enableConcierge(db, accountId, mine.id);
+        const { error } = await db.from("voice_profiles")
+          .update({ concierge_form_id: theirs.id }).eq("account_id", accountId);
+        expect(error).toBeNull();
+
+        // MUTATION: drop the account check on the destination read -- this
+        // FAILS: the other tenant's form is published.
+        expect(await getVoiceProfileByPublicId(db, publicId)).toBeNull();
+        const any = await getVoiceProfileAnyStatusByPublicId(db, publicId);
+        expect(any!.concierge_form_id).toBe(theirs.id);
+        expect(any!.concierge_form_published).toBe(false);
+        expect(isConciergeLive(any!)).toBe(false);
+      })));
+
   it("isConciergeLive: a destination form deleted out from under a live concierge goes not-live (0042:31, on delete set null)", () =>
     withTestAccount(async (db, accountId) => {
       await seedVoiceProfile(db, accountId);
