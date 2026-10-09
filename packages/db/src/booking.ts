@@ -415,7 +415,8 @@ export async function undoOperatorCancel(
   const { data: events, error: evErr } = await db.from("events").select("type, actor_type, payload")
     .eq("account_id", accountId).in("type", ["booking.cancelled", "booking.status_changed"])
     .eq("payload->>bookingId", bookingId)
-    .order("created_at", { ascending: false });
+    // `id` breaks a created_at tie so the same rows always read the same way.
+    .order("created_at", { ascending: false }).order("id", { ascending: false });
   if (evErr) throw new Error(`undoOperatorCancel event read failed: ${evErr.message}`);
   const lastCancel = ((events ?? []) as { type: string; actor_type: string; payload: { status?: string } }[])
     .find((e) => e.type === "booking.cancelled" || e.payload?.status === "cancelled");

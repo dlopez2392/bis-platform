@@ -469,6 +469,24 @@ describe("booking accessors", () => {
       await setBookingStatus(db, accountId, bySofia.id, "cancelled", "voice", "ai");
       expect(await reason(undoOperatorCancel(db, accountId, bySofia.id, "user_test"))).toBe("not_operator_cancel");
       expect(await statusOf(bySofia.id)).toBe("cancelled");
+
+      // "Who cancelled" is THIS booking's newest cancel, never the account's.
+      // Each step above undoes the account's newest cancel, so an unscoped
+      // read passed them all. Here a newer cancel of ANOTHER booking
+      // disagrees, in both directions (mutation: drop the
+      // `payload->>bookingId` filter → FAILS).
+      const mine = await createBooking(db, accountId, range("06"), "user_test");
+      const theirs = await createBooking(db, accountId, range("07"), "user_test");
+      await setBookingStatus(db, accountId, mine.id, "cancelled", "user_test");
+      await setBookingStatus(db, accountId, theirs.id, "cancelled", "voice", "ai"); // newer, Sofía's
+      expect(await reason(undoOperatorCancel(db, accountId, mine.id, "user_test"))).toBe("restored");
+
+      const sofias = await createBooking(db, accountId, range("08"), "user_test");
+      const later = await createBooking(db, accountId, range("09"), "user_test");
+      await setBookingStatus(db, accountId, sofias.id, "cancelled", "voice", "ai");
+      await setBookingStatus(db, accountId, later.id, "cancelled", "user_test"); // newer, a person's
+      expect(await reason(undoOperatorCancel(db, accountId, sofias.id, "user_test"))).toBe("not_operator_cancel");
+      expect(await statusOf(sofias.id)).toBe("cancelled");
     });
   });
 
