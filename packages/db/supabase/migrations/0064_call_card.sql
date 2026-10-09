@@ -63,8 +63,14 @@
 -- deploy. The build after it reads the card with its own query on the calls
 -- pages (a failure there renders no card, never no page) and writes it with
 -- its own update in finishCall's tail (a failure there loses the card, never
--- the call row). The To do page's read of tasks.call_id is the one read that
--- needs this file first: apply before merging.
+-- the call row). Two reads name tasks.call_id: openTasks (work-queue.ts),
+-- behind the account dashboard, the To do page and the agency work page, and
+-- listContactTasks (activities.ts), behind the contact page. Without this
+-- file those four pages would error (42703); both reads therefore retry
+-- without the column on exactly that error (call-id-fallback.ts, TEMPORARY,
+-- removed once this file is on production), and a To do then shows without
+-- its author mark. Apply to production before the app ships all the same:
+-- the fallback is a net, not the plan.
 --
 -- LOCKS AND COST. The UNIQUE build takes ACCESS EXCLUSIVE on calls for the
 -- length of a small index build; ADD COLUMN with no default is

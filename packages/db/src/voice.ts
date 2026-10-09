@@ -581,8 +581,16 @@ export async function ensureCallbackTask(
     .select("id").single();
   if (!error && data) {
     const id = (data as { id: string }).id;
-    await emit(db, accountId, "task.created", actorId,
-      { taskId: id, contactId: input.contactId, callId: input.callId }, actorType);
+    // The To do is written; its activity event is a convenience. A failed
+    // emit must not read as a failed To do in finishCall's log (it would
+    // send someone looking for a row that exists), so it is logged as what
+    // it is and the To do is returned.
+    try {
+      await emit(db, accountId, "task.created", actorId,
+        { taskId: id, contactId: input.contactId, callId: input.callId }, actorType);
+    } catch (e) {
+      console.error(`ensureCallbackTask: To do ${id} written, but its task.created emit failed: ${String(e)}`);
+    }
     return { id, created: true };
   }
   if (error?.code !== "23505") throw new Error(`ensureCallbackTask failed: ${error?.message ?? "no row"}`);
