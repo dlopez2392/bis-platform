@@ -1397,3 +1397,53 @@ describe("transfer_to_human", () => {
     expect(state.served).not.toContain("transferred");
   });
 });
+
+// Review minor 10 (belt and braces): the session withholds the tools a
+// line does not offer, and runTool refuses them too — a model that calls a
+// tool it was never given (models do) changes nothing.
+describe("runTool refuses the booking tools the line does not offer", () => {
+  const messageOnly: ToolContext = {
+    ...ctx, profile: { booking_enabled: true, after_hours: "message_only" } as unknown as VoiceProfileRow,
+  };
+  const bookingOff: ToolContext = {
+    ...ctx, profile: { booking_enabled: false, after_hours: "hours_then_message" } as unknown as VoiceProfileRow,
+  };
+
+  it("Always take a message: book_appointment is refused before anything is written (mutation: no guard → FAILS)", async () => {
+    computeAllSlotsMock.mockResolvedValue([{ startsAt: new Date("2027-06-01T14:00:00Z"), endsAt: new Date("2027-06-01T15:00:00Z") }]);
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: false });
+    dbMocks.createBooking.mockResolvedValue({ id: "bk1", cancelToken: "tok" });
+    const pre = emptyCallState();
+    const { state, result } = await runTool(pre, messageOnly, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("take_message") });
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    expect(dbMocks.createBooking).not.toHaveBeenCalled();
+    expect(state).toBe(pre);
+  });
+
+  it("Always take a message: an existing appointment can still be found (owner decision A)", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
+    const { result } = await runTool(emptyCallState(), messageOnly, "find_my_booking", {});
+    expect(result).toMatchObject({ found: true, bookingId: "b9" });
+  });
+
+  it("booking off on the profile: every booking tool is refused, nothing read or written (mutation: no guard → FAILS)", async () => {
+    dbMocks.findUpcomingBookingForPhone.mockResolvedValue({ bookingId: "b9", startsAt: "2027-06-03T14:00:00Z" });
+    const calls: [ToolName, Record<string, unknown>][] = [
+      ["check_availability", { date: "2027-06-01" }],
+      ["book_appointment", { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana", emailDeclined: true }],
+      ["find_my_booking", {}],
+      ["reschedule_appointment", { bookingId: "b9", startsAt: "2027-06-02T14:00:00.000Z" }],
+      ["cancel_appointment", { bookingId: "b9" }],
+    ];
+    for (const [name, args] of calls) {
+      const { result } = await runTool(emptyCallState(), bookingOff, name, args);
+      expect(result, name).toMatchObject({ ok: false, error: expect.any(String) });
+    }
+    expect(computeAllSlotsMock).not.toHaveBeenCalled();
+    expect(dbMocks.findUpcomingBookingForPhone).not.toHaveBeenCalled();
+    expect(dbMocks.getBookingById).not.toHaveBeenCalled();
+    expect(dbMocks.createBooking).not.toHaveBeenCalled();
+  });
+});
