@@ -64,14 +64,19 @@ export function pageTitle(path: string): string {
  * The real cause is documented in the runbook (website-setup.md,
  * "First-night findings"): `visits/count` floors `since`/`until` DOWN to
  * UTC midnight while `visits/aggregate` treats `until` as inclusive of its
- * bucket (+1h), so within one stored day the total covers the UTC day and
- * the breakdown covers local midnight through local midnight plus one
- * hour — two different WINDOWS under one "day" label. That window
- * mismatch is the runbook's own "Decision owed" (store UTC days honestly,
- * or sum hourly buckets) and is not fixed here — this function has no
- * window to change. `total` alone as the denominator can therefore let a
- * single row's share read past 100%, which is not a number this screen
- * may ever show regardless of which fix the decision lands on.
+ * bucket (+1h), so within one stored day the total covered the UTC day
+ * and the breakdown covered local midnight through local midnight plus
+ * one hour — two different WINDOWS under one "day" label.
+ *
+ * DECIDED 2026-10-09 (danlo): local day, for both totals and breakdowns.
+ * `web-analytics.ts`'s `fetchDayTraffic` now sources the total from the
+ * SAME aggregate window every breakdown uses (`TOTAL_GROUPING`), so a
+ * newly-synced day never has two windows under one label again. This
+ * function still keeps `Math.max`, not `dimensionTotal` alone, as the
+ * denominator: it is the display-layer safety net for every day stored
+ * BEFORE the fix landed (not yet re-pulled — see the runbook's "Historical
+ * days" note) and it costs nothing on a correctly-windowed day, where
+ * `total` is already the larger of the two by construction.
  *
  * `Math.max(total, dimensionTotal)`, not `dimensionTotal` alone: in the
  * ordinary case a dimension sums to LESS than the window total (a dropped

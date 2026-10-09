@@ -24,26 +24,74 @@ export const OTHERS_ROLLUP = "Others";
 /**
  * Applied to `aggregate()` ONLY, never to `countVisits()`. Count endpoints
  * are documented as production-only; aggregate endpoints are not, so this
- * is what keeps every breakdown on the same environment footing as the
- * total it is compared against (OData, per the API docs).
+ * is what keeps every breakdown — and now the total too (see
+ * `TOTAL_GROUPING` below) — on the same environment footing.
  *
  * D-053's REAL cause, per live probing (runbook, website-setup.md's
  * "First-night findings", 2026-09-08): `visits/count` floors `since` and
  * `until` DOWN to UTC midnight (so a local-day window is answered for the
  * UTC day instead), while `visits/aggregate` honours `since` to the hour
  * but treats `until` as INCLUSIVE of its bucket (echoed back +1h) — so
- * within one stored day, the total covers the UTC day and every breakdown
- * covers local midnight through local midnight plus one hour. Two
- * different WINDOWS under one "day" label, not two different
+ * within one stored day, the total covered the UTC day and every
+ * breakdown covered local midnight through local midnight plus one hour.
+ * Two different WINDOWS under one "day" label, not two different
  * environments; adding this filter to `countVisits()` (tried, reverted)
- * would not have touched that mismatch at all, and nothing here has
- * verified the count endpoint even accepts a `filter` param — an untested
- * query parameter is not a change to risk on every site's first sync tick
- * after a deploy. The window fix itself is the runbook's own "Decision
- * owed" (store UTC days honestly, or sum hourly buckets); no code here
- * changes the windows.
+ * would not have touched that mismatch at all.
+ *
+ * DECIDED 2026-10-09 (D-053, danlo): local day, for both totals and
+ * breakdowns. `fetchDayTraffic` no longer calls `countVisits()` at all —
+ * the total is now ANOTHER `aggregate()` call (`TOTAL_GROUPING`), on the
+ * exact same `[since, until)` window every breakdown uses, so there is
+ * only ever one window per stored day, not two. The `until`-inclusive
+ * quirk is compensated inside `aggregate()` itself (`exclusiveUntil`),
+ * so every caller — the total and all four breakdowns — gets a window
+ * that closes exactly at the `until` it was given. `countVisits()` is
+ * unchanged and still used only by the Test Connection probe
+ * (`website/actions.ts`), which is a rough last-7-days sanity check, not
+ * a stored day — its UTC-floor and inclusive-until are both irrelevant
+ * there.
  */
 export const PRODUCTION_FILTER = "environment eq 'production'";
+
+/**
+ * D-053: the local-day TOTAL, sourced from `aggregate()` instead of
+ * `visits/count`, because `aggregate()` honours `since`/`until` to the
+ * hour (once `exclusiveUntil` below removes its own quirk) while `count`
+ * floors both to UTC midnight. Grouping by `environment` — already the
+ * ONLY value `PRODUCTION_FILTER` admits into any aggregate response —
+ * turns "group by" into ordinary set arithmetic: one group, one row, and
+ * that row's `visitors`/`pageviews` ARE the window's un-split totals (not
+ * a sum across rows, which would be exact for pageviews but not for
+ * visitors — the problem the runbook's "Decision owed" named and this
+ * sidesteps rather than solves). `limit` is 1 because the filter already
+ * guarantees at most one row.
+ *
+ * ASSUMPTION (not verified live from this sandbox — the token here is
+ * production-only and unreachable): that `by=environment&limit=1` is
+ * accepted and returns that single row. `environment` is one of the
+ * runbook's own confirmed allowed groupings (Part A's Findings), and the
+ * single-row shape follows from group-by semantics once the filter has
+ * already excluded every other value — nothing here is a NEW claim about
+ * the API past what the runbook already proved live.
+ */
+const TOTAL_GROUPING = "environment";
+const TOTAL_LIMIT = 1;
+
+/**
+ * D-053: Vercel's aggregate endpoint treats `until` as INCLUSIVE of its
+ * hour bucket (echoed back +1h — runbook's "First-night findings",
+ * verified live on 2026-09-08). Subtracting one hour before sending makes
+ * the ACTUAL window close exactly at the caller's `until`, matching the
+ * half-open `[since, until)` `localDayBounds` already builds. A flat
+ * millisecond subtraction on the absolute instant, not a local-time one,
+ * so it is correct on a DST transition day the same as any other —
+ * `localDayBounds` already resolves each day's real local midnight
+ * independently, so the 1-hour Vercel-bucket compensation here never
+ * needs to know the local offset at all.
+ */
+function exclusiveUntil(untilIso: string): string {
+  return new Date(new Date(untilIso).getTime() - 60 * 60 * 1000).toISOString();
+}
 
 const BASE = "https://api.vercel.com/v1/query/web-analytics";
 
@@ -126,14 +174,18 @@ export class VercelAnalytics {
 
   async aggregate(projectId: string, sinceIso: string, untilIso: string, by: string, limit: number): Promise<DimRow[]> {
     return parseAggregate(
-      await this.#get(this.#query("visits/aggregate", { projectId, since: sinceIso, until: untilIso, by, limit: String(limit), filter: PRODUCTION_FILTER })),
+      await this.#get(this.#query("visits/aggregate", { projectId, since: sinceIso, until: exclusiveUntil(untilIso), by, limit: String(limit), filter: PRODUCTION_FILTER })),
       by,
     );
   }
 
-  /** The five queries for one local day, in a fixed order (the test pins it). */
+  /** The five queries for one local day, in a fixed order (the test pins
+   *  it) — all five through `aggregate()` now (D-053), so all five share
+   *  one window and one environment filter; `countVisits()` is no longer
+   *  called here at all. */
   async fetchDayTraffic(projectId: string, sinceIso: string, untilIso: string): Promise<DayTraffic> {
-    const totals = await this.countVisits(projectId, sinceIso, untilIso);
+    const totalRows = await this.aggregate(projectId, sinceIso, untilIso, TOTAL_GROUPING, TOTAL_LIMIT);
+    const totals = { visitors: totalRows[0]?.visitors ?? 0, pageviews: totalRows[0]?.pageviews ?? 0 };
     const pages = await this.aggregate(projectId, sinceIso, untilIso, "requestPath", BREAKDOWN_LIMIT);
     const sources = await this.aggregate(projectId, sinceIso, untilIso, "referrerHostname", BREAKDOWN_LIMIT);
     const places = await this.aggregate(projectId, sinceIso, untilIso, PLACE_DIMENSION, BREAKDOWN_LIMIT);

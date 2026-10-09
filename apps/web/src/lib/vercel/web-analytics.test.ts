@@ -61,27 +61,57 @@ describe("VercelAnalytics", () => {
     expect(init.headers.Authorization).toBe("Bearer tok");
   });
 
-  it("aggregate passes by and limit, and fetchDayTraffic makes exactly five calls in a fixed order", async () => {
+  it("aggregate passes by and limit, and fetchDayTraffic makes exactly five aggregate calls in a fixed order — totals included, since the count endpoint floors to UTC midnight (D-053)", async () => {
     // Rows are keyed by whichever dimension the call asked for — the real
-    // API's shape — so the referrerHostname/country/deviceType parses succeed.
+    // API's shape — so the referrerHostname/country/deviceType/environment
+    // parses succeed. The `environment` call (the total) returns ONE row:
+    // the production filter already restricts every aggregate call to that
+    // single value, so grouping by it yields the window's un-split total —
+    // ASSUMPTION, unverified live from this sandbox: Vercel accepts
+    // `by=environment&limit=1` and still returns the row (it is one of the
+    // runbook's own confirmed allowed groupings; the single-row response
+    // shape under a filter that already admits only one value is ordinary
+    // group-by arithmetic, not new API behavior).
     const f = vi.fn(async (url: string) => {
       const by = new URL(url).searchParams.get("by");
-      const body = by === null ? COUNT_JSON : { version: 1, query: { groupBy: [by] }, data: [
-        { [by]: "/", pageviews: 400, visitors: 300 }, { [by]: "/services", count: 120, visitors: 90 },
-      ] };
+      const body = by === "environment"
+        ? { version: 1, query: { groupBy: ["environment"] }, data: [{ environment: "production", pageviews: 1250, visitors: 980 }] }
+        : { version: 1, query: { groupBy: [by] }, data: [
+            { [by!]: "/", pageviews: 400, visitors: 300 }, { [by!]: "/services", count: 120, visitors: 90 },
+          ] };
       return { ok: true, status: 200, json: async () => body, text: async () => "" };
     });
     const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
     const day = await api.fetchDayTraffic("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z");
     expect(f).toHaveBeenCalledTimes(5);
-    const bys = f.mock.calls.map(([u]) => new URL(u as string).searchParams.get("by")).filter(Boolean);
-    expect(bys).toEqual(["requestPath", "referrerHostname", "country", "deviceType"]);
+    const bys = f.mock.calls.map(([u]) => new URL(u as string).searchParams.get("by"));
+    expect(bys).toEqual(["environment", "requestPath", "referrerHostname", "country", "deviceType"]);
+    expect(new URL(f.mock.calls[0]![0] as string).searchParams.get("limit")).toBe("1");
     expect(new URL(f.mock.calls[1]![0] as string).searchParams.get("limit")).toBe("20");
-    // Mutation: drop the filter from aggregate() — previews leak into the breakdowns.
+    // Mutation: drop the filter from aggregate() — previews leak into the breakdowns AND the total.
+    expect(new URL(f.mock.calls[0]![0] as string).searchParams.get("filter")).toBe("environment eq 'production'");
     expect(new URL(f.mock.calls[1]![0] as string).searchParams.get("filter")).toBe("environment eq 'production'");
-    expect(new URL(f.mock.calls[0]![0] as string).searchParams.has("filter")).toBe(false);
     expect(day.visitors).toBe(980);
+    expect(day.pageviews).toBe(1250);
     expect(day.pages).toHaveLength(2);
+  });
+
+  it("every aggregate call sends `until` one hour earlier than passed, countering Vercel's inclusive-until bucket (runbook's First-night findings; verified live, not from this sandbox)", async () => {
+    const f = fetchStub(200, { version: 1, query: {}, data: [] });
+    const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
+    // Mutation: drop the `- 1h` adjustment — `until` comes back equal to the input.
+    await api.aggregate("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z", "requestPath", 20);
+    const u = new URL(f.mock.calls[0]![0] as string);
+    expect(u.searchParams.get("since")).toBe("2026-09-01T05:00:00.000Z"); // since is untouched
+    expect(u.searchParams.get("until")).toBe("2026-09-02T04:00:00.000Z");
+  });
+
+  it("countVisits (the Test Connection probe) sends `until` untouched — only aggregate carries the inclusive-until compensation", async () => {
+    const f = fetchStub(200, COUNT_JSON);
+    const api = new VercelAnalytics({ token: "tok", teamId: "team_1", fetchImpl: f as unknown as typeof fetch });
+    await api.countVisits("prj_1", "2026-09-01T05:00:00.000Z", "2026-09-02T05:00:00.000Z");
+    const u = new URL(f.mock.calls[0]![0] as string);
+    expect(u.searchParams.get("until")).toBe("2026-09-02T05:00:00.000Z");
   });
 
   it("listProjects reads /v9/projects for the team and returns id, name and the production domain when present", async () => {
