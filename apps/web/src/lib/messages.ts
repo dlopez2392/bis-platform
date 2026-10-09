@@ -726,9 +726,9 @@ export const m = {
   // (forms.kind.core.referral_source), and these four strings now name it
   // that way — the owner never sees the words "source question" anywhere.
   // Pinned in messages.test.ts against that key's own text, per language.
-  "settings.fieldKeyReserved": "\"referred_by\" is saved for the \"Who recommended you?\" question — pick a different field key.",
+  "settings.fieldKeyReserved": "\"referred_by\" is reserved for the \"Who recommended you?\" question — pick a different field key.",
   "settings.fieldKeyReserved.es": "\"referred_by\" está reservado para la pregunta \"¿Quién le recomendó?\" — elija otra clave de campo.",
-  "settings.fieldKeyFormat": "Lowercase letters, numbers and underscores only. \"referred_by\" is saved for the \"Who recommended you?\" question.",
+  "settings.fieldKeyFormat": "Lowercase letters, numbers and underscores only. \"referred_by\" is reserved for the \"Who recommended you?\" question.",
   "settings.fieldKeyFormat.es": "Solo letras minúsculas, números y guiones bajos. \"referred_by\" está reservado para la pregunta \"¿Quién le recomendó?\".",
   "settings.dataType": "Type",
   "settings.dataType.text": "Text",

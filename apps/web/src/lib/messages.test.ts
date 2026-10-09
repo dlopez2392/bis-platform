@@ -101,3 +101,11 @@ describe("settings.fieldKeyReserved / settings.fieldKeyFormat name the question 
     expect(m[key]).not.toMatch(/source question|pregunta de origen/i);
   });
 });
+
+describe("settings.fieldKeyReserved / settings.fieldKeyFormat say RESERVED in English, as the Spanish says reservado", () => {
+  it.each(["settings.fieldKeyReserved", "settings.fieldKeyFormat"] as const)(
+    "%s says \"is reserved for\" (mutation: \"is saved for\" → FAILS)", (key) => {
+      expect(m[key]).toContain("\"referred_by\" is reserved for");
+      expect(m[`${key}.es`]).toContain("\"referred_by\" está reservado para");
+    });
+});
