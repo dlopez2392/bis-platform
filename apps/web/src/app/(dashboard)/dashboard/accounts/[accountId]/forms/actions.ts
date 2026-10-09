@@ -4,7 +4,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { createForm, getForm, updateForm, type FormField, type FormStatus } from "@bis/db";
+import {
+  createForm, getForm, updateForm, republishFormIfUnchanged,
+  type FormField, type FormStatus,
+} from "@bis/db";
 import { m } from "@/lib/messages";
 import { isValidFormFieldList, mergeFormTheme, defaultFormFields } from "@/lib/forms/editor-helpers";
 // The public form's own validator, reused deliberately rather than a second
@@ -145,25 +148,36 @@ export async function saveFormAction(
 
 /**
  * The Undo half of the Forms page's unpublish warning (owner context, forms
- * tracker batch 4; see `shouldWarnOnUnpublish`'s own doc comment). Writes
- * ONLY `status`, deliberately narrower than `saveFormAction`: replaying the
- * operator's whole submitted FormData a second time from an Undo click
- * would also re-apply (or re-validate against stale values for) everything
- * else they changed in the same save, which is not what "undo the
- * unpublish" means. A failure here is reported, never thrown — this runs
- * from a toast's own action handler, with no form around it to catch
- * anything.
+ * tracker batch 4; see `shouldWarnOnUnpublish`'s own doc comment). Revised
+ * in fix round 1 (review item 2): the first version wrote `status:
+ * "published"` through `updateForm` unconditionally, which bypassed "a
+ * form needs at least one field before it can be published", could publish
+ * a form that had never been published before, and let a STALE Undo toast
+ * (clicked after the form's status changed again through some other save)
+ * silently resurrect status the operator no longer intends.
+ *
+ * `expectedPriorStatus` is the status the unpublishing save actually wrote
+ * — the toast passes it straight through from the save it was offered on,
+ * never re-derived here. Every safety check now lives in
+ * `republishFormIfUnchanged` (packages/db/src/forms.ts); this layer's only
+ * job is the account-access guard and translating its three-way outcome
+ * into the `{ ok, error }` shape the toast renders. A failure is reported,
+ * never thrown — this runs from a toast's own action handler, with no form
+ * around it to catch anything.
  */
 export async function republishFormAction(
-  accountId: string, formId: string,
+  accountId: string, formId: string, expectedPriorStatus: FormStatus,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireAccountAccess(accountId);
   const db = await dbForRequest();
+  let outcome: "republished" | "stale" | "needs_fields";
   try {
-    await updateForm(db, accountId, formId, { status: "published" }, userId);
+    outcome = await republishFormIfUnchanged(db, accountId, formId, expectedPriorStatus, userId);
   } catch {
     return { ok: false, error: m["forms.republishFailed"] };
   }
+  if (outcome === "needs_fields") return { ok: false, error: m["forms.noFields"] };
+  if (outcome === "stale") return { ok: false, error: m["forms.undoStale"] };
   revalidatePath(`/dashboard/accounts/${accountId}/forms`);
   revalidatePath(`/dashboard/accounts/${accountId}/forms/${formId}`);
   return { ok: true };

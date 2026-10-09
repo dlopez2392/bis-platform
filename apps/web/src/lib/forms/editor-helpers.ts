@@ -118,3 +118,21 @@ export function shouldWarnOnUnpublish(
   return conciergeAssistantName != null
     && currentStatus === "published" && nextStatus !== "published";
 }
+
+/**
+ * The state transition after clicking Undo on the unpublish-warning toast
+ * (fix round 1 review item 1): the Status Select was uncontrolled
+ * (`defaultValue={form.status}` — Radix reads it exactly once), so a
+ * successful republish left the visible control, and the `status` state
+ * `shouldWarnOnUnpublish` reads, still showing the status that was just
+ * undone — the warning reappeared on an already-published form, and the
+ * next Save unpublished it again. `ok: false` leaves `currentStatus`
+ * untouched: nothing changed on the row, so nothing should change on
+ * screen either.
+ */
+export function statusAfterUndo(
+  result: { ok: true } | { ok: false; error: string },
+  currentStatus: FormStatus,
+): FormStatus {
+  return result.ok ? "published" : currentStatus;
+}

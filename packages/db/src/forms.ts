@@ -433,6 +433,11 @@ export async function countFormsMissingNotify(
  * (concierge.ts's own comment on `DESTINATION_EMBED`), so the account_id
  * filter is what keeps a stale or cross-tenant pointer from ever naming an
  * assistant that is not actually this account's own.
+ *
+ * `concierge_enabled` (fix round 1 review, minor): a destination wired up
+ * while the switch is off (the column's own default, 0042) is not live —
+ * unpublishing its form breaks nothing yet, so there is nothing to warn
+ * about until the operator actually turns the assistant on.
  */
 export async function findConciergeDestinationName(
   db: SupabaseClient, accountId: string, formId: string,
@@ -440,9 +445,48 @@ export async function findConciergeDestinationName(
   const { data, error } = await db.from("voice_profiles")
     .select("persona_name")
     .eq("account_id", accountId).eq("concierge_form_id", formId)
+    .eq("concierge_enabled", true)
     .maybeSingle();
   if (error) throw new Error(`findConciergeDestinationName failed: ${error.message}`);
   return (data as { persona_name: string } | null)?.persona_name ?? null;
+}
+
+/**
+ * The Undo half of the unpublish warning's safety net (fix round 1 review
+ * item 2). The first version wrote `status: "published"` unconditionally,
+ * which bypassed "a form needs at least one field before it can be
+ * published" (the same rule `saveFormAction` enforces on every normal
+ * save), could publish a form that had never been published before, and
+ * let a STALE Undo toast — clicked after the form's status changed again
+ * through some other save — silently resurrect status the operator no
+ * longer intends.
+ *
+ * `expectedPriorStatus` is the status the unpublishing save actually
+ * wrote, carried by the toast itself rather than re-derived here. The
+ * initial read exists only to report WHICH refusal applies (so the
+ * operator sees an honest, specific reason); the conditional
+ * `.eq("status", expectedPriorStatus)` on the write itself is the real
+ * guard — if the row no longer matches by the time this runs (the read-
+ * then-write race, or simply a stale click), the update matches zero rows
+ * and this reports "stale" rather than pretending anything happened.
+ */
+export async function republishFormIfUnchanged(
+  db: SupabaseClient, accountId: string, formId: string,
+  expectedPriorStatus: FormStatus, actorId: string,
+): Promise<"republished" | "stale" | "needs_fields"> {
+  const current = await getForm(db, accountId, formId);
+  if (!current) return "stale";
+  if (current.fields.length === 0) return "needs_fields";
+  if (current.status !== expectedPriorStatus) return "stale";
+
+  const { data, error } = await db.from("forms")
+    .update({ status: "published", updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", formId).eq("status", expectedPriorStatus)
+    .select("id");
+  if (error) throw new Error(`republishFormIfUnchanged failed: ${error.message}`);
+  if (!data || data.length === 0) return "stale";
+  await emit(db, accountId, "form.updated", actorId, { formId, fields: ["status"] });
+  return "republished";
 }
 
 export async function listContactSubmissions(

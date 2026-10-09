@@ -19,9 +19,8 @@ import {
 } from "@/components/ui/select";
 import { SubmitButton } from "../../../submit-button";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
-import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { m } from "@/lib/messages";
-import { defaultFieldKey, shouldWarnOnUnpublish } from "@/lib/forms/editor-helpers";
+import { defaultFieldKey, shouldWarnOnUnpublish, statusAfterUndo } from "@/lib/forms/editor-helpers";
 
 const CORE_KINDS = [
   "core.first_name", "core.last_name", "core.email", "core.phone", "core.company_name",
@@ -44,10 +43,23 @@ export function FormEditor({
   // Owner context (forms tracker batch 4): null when no website assistant
   // is wired to this form at all. See shouldWarnOnUnpublish's own comment.
   conciergeAssistantName: string | null;
-  republishAction: () => Promise<{ ok: true } | { ok: false; error: string }>;
+  // `expectedPriorStatus` is the status this very save is about to take the
+  // form OFF — captured at the moment the toast is shown and threaded
+  // straight through, never re-read from state after the fact (fix round 1
+  // review item 2: republishFormIfUnchanged's own doc comment).
+  republishAction: (
+    expectedPriorStatus: FormRow["status"],
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   const [fields, setFields] = useState<FormField[]>(form.fields);
   const [successMode, setSuccessMode] = useState(form.success_mode);
+  // Controlled (fix round 1 review item 1): this used to be
+  // `defaultValue={form.status}` on the Select below, which Radix reads
+  // exactly once on mount. A successful Undo updated this state via
+  // statusAfterUndo, but with an uncontrolled Select the visible control —
+  // and so the NEXT Save — still carried the unpublished value forward: the
+  // warning reappeared on an already-published form, and clicking Save
+  // again unpublished it a second time with nothing the operator did.
   const [status, setStatus] = useState(form.status);
 
   // Owner context: true as soon as the pending Select choice would take an
@@ -79,13 +91,19 @@ export function FormEditor({
     }
     if (!result.ok) { toast.error(result.error); return; }
     if (warnOnUnpublish && conciergeAssistantName) {
+      // `status` at this instant IS the value this save just wrote — the
+      // only thing Undo can honestly promise to restore it FROM.
+      const unpublishedTo = status;
       toast.success(
-        m["forms.unpublishWarning"].replace("{assistant}", conciergeAssistantName),
+        m["forms.unpublishedToast"].replace("{assistant}", conciergeAssistantName),
         {
           action: {
             label: m["common.undo"],
-            onClick: () => void republishAction()
-              .then((u) => { if (!u.ok) toast.error(u.error); })
+            onClick: () => void republishAction(unpublishedTo)
+              .then((u) => {
+                setStatus((current) => statusAfterUndo(u, current));
+                if (!u.ok) toast.error(u.error);
+              })
               .catch(() => toast.error(m["forms.republishFailed"])),
           },
         },
@@ -278,7 +296,7 @@ export function FormEditor({
         <Label htmlFor="form-status" className="sr-only">{m["forms.status"]}</Label>
         <Select
           name="status"
-          defaultValue={form.status}
+          value={status}
           onValueChange={(value) => setStatus(value as FormRow["status"])}
         >
           <SelectTrigger id="form-status" className="w-40">

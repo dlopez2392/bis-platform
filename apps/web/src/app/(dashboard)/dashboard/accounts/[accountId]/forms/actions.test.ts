@@ -10,6 +10,7 @@ const dbMocks = vi.hoisted(() => ({
   createForm: vi.fn(),
   getForm: vi.fn(),
   updateForm: vi.fn(),
+  republishFormIfUnchanged: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
@@ -49,6 +50,7 @@ beforeEach(() => {
   authMocks.requireAccountAccess.mockReset().mockResolvedValue({ userId: "user_1" });
   dbMocks.getForm.mockReset().mockResolvedValue({ ...BASE_FORM });
   dbMocks.updateForm.mockReset().mockResolvedValue(undefined);
+  dbMocks.republishFormIfUnchanged.mockReset().mockResolvedValue("republished");
 });
 
 // D-024: a mistyped notify address or redirect URL used to fail the save by
@@ -109,27 +111,42 @@ describe("saveFormAction — field-level errors instead of a swallowed throw (D-
   });
 });
 
-// Owner context (forms tracker batch 4): the Undo half of the Forms page's
-// unpublish warning. Deliberately narrower than saveFormAction — it writes
-// ONLY status, so clicking Undo on the toast can never clobber whatever
-// else the operator changed in the same save that triggered the warning.
+// Owner context (forms tracker batch 4), revised in fix round 1 (review
+// item 2): the Undo half of the Forms page's unpublish warning. The first
+// version wrote status unconditionally through updateForm; it now delegates
+// every safety check (the fields rule, and refusing a stale click) to
+// packages/db's own republishFormIfUnchanged, and this layer's only job is
+// threading the account-access guard and turning its three-way outcome into
+// the { ok, error } shape the toast renders.
 describe("republishFormAction", () => {
-  it("writes only status back to published (mutation: pass through the rest of the row too → FAILS)", async () => {
-    const result = await republishFormAction("acct_1", "form_1");
+  it("passes accountId, formId, the caller's expected prior status and the actor through, and reports ok on a clean republish (mutation: hardcode a fixed prior status instead of the one passed in → FAILS)", async () => {
+    const result = await republishFormAction("acct_1", "form_1", "draft");
     expect(result).toEqual({ ok: true });
-    expect(dbMocks.updateForm).toHaveBeenCalledWith(
-      dbForRequestInstance, "acct_1", "form_1", { status: "published" }, "user_1",
+    expect(dbMocks.republishFormIfUnchanged).toHaveBeenCalledWith(
+      dbForRequestInstance, "acct_1", "form_1", "draft", "user_1",
     );
   });
 
   it("checks account access before writing (mutation: drop the guard call → FAILS)", async () => {
-    await republishFormAction("acct_1", "form_1");
+    await republishFormAction("acct_1", "form_1", "draft");
     expect(authMocks.requireAccountAccess).toHaveBeenCalledWith("acct_1");
   });
 
-  it("reports a plain failure instead of throwing when the update fails (mutation: let it reject → FAILS)", async () => {
-    dbMocks.updateForm.mockRejectedValueOnce(new Error("updateForm failed: form not found in account"));
-    const result = await republishFormAction("acct_1", "form_1");
+  it("reports the stale outcome with an honest message instead of silently succeeding (mutation: treat every outcome as ok → FAILS)", async () => {
+    dbMocks.republishFormIfUnchanged.mockResolvedValue("stale");
+    const result = await republishFormAction("acct_1", "form_1", "draft");
+    expect(result).toEqual({ ok: false, error: m["forms.undoStale"] });
+  });
+
+  it("reports the needs-fields outcome with the same rule saveFormAction already enforces, instead of silently succeeding (mutation: treat every outcome as ok → FAILS)", async () => {
+    dbMocks.republishFormIfUnchanged.mockResolvedValue("needs_fields");
+    const result = await republishFormAction("acct_1", "form_1", "draft");
+    expect(result).toEqual({ ok: false, error: m["forms.noFields"] });
+  });
+
+  it("reports a plain failure instead of throwing when the write itself throws (mutation: let it reject → FAILS)", async () => {
+    dbMocks.republishFormIfUnchanged.mockRejectedValueOnce(new Error("db exploded"));
+    const result = await republishFormAction("acct_1", "form_1", "draft");
     expect(result).toEqual({ ok: false, error: m["forms.republishFailed"] });
   });
 });
