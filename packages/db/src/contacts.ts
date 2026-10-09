@@ -391,12 +391,47 @@ export async function updateContact(
     if (readError) throw new Error(`updateContact phone read failed: ${readError.message}`);
     currentPhone = (data as { phone: string | null } | null)?.phone ?? null;
   }
+  const row = toRow(input, currentPhone);
   const { error } = await db.from("contacts")
-    .update({ ...toRow(input, currentPhone), updated_at: new Date().toISOString() })
+    .update({ ...row, updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", contactId);
   if (error) throw new Error(`updateContact failed: ${error.message}`);
   await emit(db, accountId, "contact.updated", actorId, { contactId, fields: Object.keys(input) },
     actorType);
+
+  // D-012: an edit that lands this contact's email or phone on another
+  // contact's dedupe key used to create a silent duplicate — same key, two
+  // rows, nothing recorded, never reaching the merge queue the way
+  // createContact's and setContactPhoneCountry's own duplicate checks do.
+  // Checked AFTER the write succeeds and never blocks it: the operator's
+  // edit is the truth about this row (same policy as setContactPhoneCountry
+  // choosing a phone's country), and any failure here is logged, never
+  // thrown — a throw would report a failed edit that actually went through
+  // (review R3-M11's rule, same as setContactPhoneCountry's own check).
+  // `row.email`/`row.phone` are only set when toRow() decided the value is
+  // genuinely NEW (a cleared field, or a phone re-saved unchanged, leaves
+  // them unset), so an unchanged save can never flag itself.
+  if (typeof row.email === "string" && row.email) {
+    const eKey = emailKey(row.email);
+    const { data: twins, error: twinErr } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("email_key", eKey).neq("id", contactId).limit(1);
+    if (twinErr) {
+      console.error(`updateContact: email duplicate check for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
+    } else {
+      const twin = (twins ?? [])[0] as { id: string } | undefined;
+      if (twin) await flagDuplicatePair(db, accountId, contactId, twin.id, "email_match_on_edit");
+    }
+  }
+  if (typeof row.phone === "string" && row.phone) {
+    const { data: twins, error: twinErr } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("phone_key", phoneDigits(row.phone)).neq("id", contactId).limit(1);
+    if (twinErr) {
+      console.error(`updateContact: phone duplicate check for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
+    } else {
+      const twin = (twins ?? [])[0] as { id: string } | undefined;
+      if (twin) await flagDuplicatePair(db, accountId, contactId, twin.id, "phone_match_on_edit");
+    }
+  }
 }
 
 /**
