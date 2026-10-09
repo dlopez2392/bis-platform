@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderedText } from "@/lib/rendered-text";
 import { encodeCursor } from "@/lib/cursor";
+import { m } from "@/lib/messages";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
 const authFixture = vi.hoisted(() => ({ isAgency: true }));
@@ -60,10 +61,10 @@ describe("the Activity page", () => {
   });
 
   // D-068 (DESIGN.md rule 5): the empty state named what appears here but
-  // offered no action that causes it. Only the agency can turn automations
-  // on (nav-groups.ts: Automations is agency-only) — this is the SAME
-  // agency-facing page the Calls page gates the same way (this file's own
-  // top comment), not a customer-facing surface.
+  // offered no action that causes it. This page is BOTH audiences (its own
+  // top comment) — a client reads it too — but only the agency can turn
+  // automations on (nav-groups.ts: Automations is agency-only), so the
+  // ACTION, not the page, is agency-only.
   it("the cold-start empty state offers the agency an action: a link to Automations (mutation: drop the action → FAILS)", async () => {
     const html = await render();
     expect(html).toMatch(new RegExp(`href="/dashboard/accounts/a1/automations"[^>]*>[^<]*Set up automations`));
@@ -73,6 +74,26 @@ describe("the Activity page", () => {
     authFixture.isAgency = false;
     const html = await render();
     expect(html).not.toContain("/automations");
+  });
+
+  // Minor, review round: the empty state's body copy said "for this
+  // company" — correct agency voice (a third party describing the client),
+  // wrong on the SAME page's client reading (the business owner reading
+  // about their own business). No action is still fine for a client here
+  // (Automations stays agency-managed) — only the SENTENCE needed a
+  // second-person version, the same `body`/`clientBody` shape
+  // branding.ts's panel-copy already uses.
+  it("gives a client reader a client-voiced empty sentence, never \"for this company\"", async () => {
+    authFixture.isAgency = false;
+    const text = renderedText(await render());
+    expect(text).toContain(m["activity.empty.clientBody"]);
+    expect(text).not.toContain("for this company");
+  });
+
+  it("keeps the agency's own third-person sentence unchanged", async () => {
+    authFixture.isAgency = true;
+    const text = renderedText(await render());
+    expect(text).toContain(m["activity.empty.body"]);
   });
 
   it("a cursored empty page is NOT the cold-start empty state: headers, a Newer link, no 'Nothing has gone out'", async () => {

@@ -128,7 +128,7 @@ export const m = {
   "branding.clientTitle": "Your branding",
   "branding.clientBody": "What your team sees in this workspace, and what your customers see on your lead forms.",
   "branding.clientNameHint": "What your own customers see — on your lead forms, your booking page, website chat, emails and texts, and in this workspace.",
-  "branding.clientColorHint": "Used for buttons and highlights on your lead forms, booking page, website chat, emails and texts, and in this sidebar. Leave blank for the default.",
+  "branding.clientColorHint": "Used for buttons and highlights on your lead forms, booking page, website chat and emails, and in this sidebar. Leave blank for the default.",
   "branding.clientNeutralHint": "The greys behind your content. Warm leans beige, cool leans blue, slate is neutral.",
   "branding.clientModeHint": "What your team sees on a first visit. Each person can still switch it.",
   "branding.clientModeFollow": "Follow the device",
@@ -159,7 +159,7 @@ export const m = {
   "branding.noLogoToRemove": "There's no logo to remove.",
   "branding.logoGone": "That logo can't be brought back. Upload it again.",
   "branding.color": "Brand color",
-  "branding.colorHint": "Used for buttons and highlights on their lead forms, booking page, website chat, emails and texts, and in their sidebar. Leave blank for the default.",
+  "branding.colorHint": "Used for buttons and highlights on their lead forms, booking page, website chat and emails, and in their sidebar. Leave blank for the default.",
   "branding.badColor": "Enter a color as a hex code, like #0f766e.",
   "branding.nameRequired": "Customers see this name on every email and text. Give the company a name before saving.",
   "branding.colorPreview": "Preview",
@@ -1739,6 +1739,10 @@ export const m = {
   "activity.usage.error": "Couldn't load this month's numbers. Reload the page to try again.",
   "activity.empty.title": "Nothing has gone out yet",
   "activity.empty.body": "Every text, email and conversation the system handles for this company shows up here the moment a reminder, a review request or the website or phone assistant sends something.",
+  // The same sentence, second person: this page is BOTH audiences (its own
+  // top comment), and a client reading about THEIR OWN business should
+  // never read "this company" the way an agency describing a client does.
+  "activity.empty.clientBody": "Every text, email and conversation the system handles for your business shows up here the moment a reminder, a review request or the website or phone assistant sends something.",
   "activity.empty.action": "Set up automations",
   "activity.error": "Couldn't load the history. Reload the page to try again.",
   "activity.col.when": "When",
