@@ -105,15 +105,42 @@ export async function setOpportunityStatus(
     { opportunityId: oppId, status }, actorType);
 }
 
-export async function listBoard(db: SupabaseClient, accountId: string, pipelineId: string) {
+// D-105: a plain `.select()` here hit PostgREST's row cap (max_rows, 1000 in
+// production) and silently dropped every card past it — the board would
+// just show fewer cards than exist, with nothing on screen saying so
+// (DESIGN.md: "never promise a number the screen can't know"). Paged past
+// the cap with the same keyset pattern as `sumOpenOpportunities` below (id
+// ascending, `.gt()` cursor, stopping only on a genuinely empty page — a
+// short-but-nonempty page is not proof there are no more rows). Default
+// kept at 1000 so pagination is invisible in the common case; tests shrink
+// it to prove the loop without creating a thousand real rows.
+const BOARD_PAGE_SIZE = 1000;
+
+export async function listBoard(
+  db: SupabaseClient, accountId: string, pipelineId: string, pageSize: number = BOARD_PAGE_SIZE,
+) {
   const stages = await stagesOf(db, accountId, pipelineId);
-  const { data: opps, error } = await db.from("opportunities")
-    .select("id, name, monetary_value, status, stage_id, contacts(id, first_name, last_name)")
-    .eq("account_id", accountId).eq("pipeline_id", pipelineId)
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
+  const opps: any[] = [];
+  let lastId: string | undefined;
+  for (;;) {
+    let query = db.from("opportunities")
+      .select("id, name, monetary_value, status, stage_id, created_at, contacts(id, first_name, last_name)")
+      .eq("account_id", accountId).eq("pipeline_id", pipelineId)
+      .order("id", { ascending: true });
+    if (lastId !== undefined) query = query.gt("id", lastId);
+    const { data, error } = await query.limit(pageSize);
+    if (error) throw new Error(error.message);
+    const rows = data ?? [];
+    if (rows.length === 0) break;
+    opps.push(...rows);
+    lastId = rows[rows.length - 1].id;
+  }
+  // The query above is ordered by `id` (the deterministic keyset column,
+  // not a display order) so the display order — newest first, same as
+  // before this fix — is restored once every page is in hand.
+  opps.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   return stages.map(stage => {
-    const inStage = (opps ?? []).filter((o: any) => o.stage_id === stage.id).map((o: any) => ({
+    const inStage = opps.filter((o: any) => o.stage_id === stage.id).map((o: any) => ({
       id: o.id as string, name: o.name as string,
       monetary_value: Number(o.monetary_value), status: o.status as string,
       contact: { id: o.contacts.id as string,
