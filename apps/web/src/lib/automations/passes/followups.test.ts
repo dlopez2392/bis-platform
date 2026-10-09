@@ -4,6 +4,9 @@ import type { DueFollowup, AutomationLogRow } from "@bis/db";
 const dbMocks = vi.hoisted(() => ({
   listDueFollowups: vi.fn(), stampFollowupSent: vi.fn(), getDueFollowupById: vi.fn(), recordAutomationLog: vi.fn(),
   getAutomationLogEntry: vi.fn(), readConsentState: vi.fn(), readAccountTimezone: vi.fn(),
+  // D-061: the REAL email gate (below) calls this against `{} as never` —
+  // unmocked, it would throw. Allowed by default.
+  isAccountOutboundSuppressed: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailFactory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
@@ -157,6 +160,7 @@ describe("the REAL email gate, end to end, for a stopped customer (item 3, follo
     emailFactory.getEmailProvider.mockReset().mockReturnValue({ isFake: true, send: providerSend });
     dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "stopped", since: "2026-09-01T00:00:00Z", method: "unsubscribe_link", eventId: "e1" });
     dbMocks.readAccountTimezone.mockReset().mockResolvedValue("America/Chicago");
+    dbMocks.isAccountOutboundSuppressed.mockReset().mockResolvedValue(false);
   });
 
   it("the provider's send is NEVER called, and the booking is NOT stamped sent, for a customer the ledger says is stopped (mutation: treat kind 'automation.followup' as customer_initiated so the gate skips the ledger read → FAILS)", async () => {

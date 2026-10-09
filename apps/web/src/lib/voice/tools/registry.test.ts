@@ -26,6 +26,10 @@ const dbMocks = vi.hoisted(() => ({
   // here too, or the real one throws on this file's unset Supabase env vars.
   readEmailSuppression: vi.fn(async () => null),
   serviceDb: vi.fn(() => ({})),
+  // D-061: the email gate's own account-level send switch, read off the
+  // same stubbed serviceDb() above when a call site carries no `db` of its
+  // own. Allowed by default.
+  isAccountOutboundSuppressed: vi.fn(async () => false),
 }));
 const sendMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", async (importOriginal) => {

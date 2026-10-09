@@ -64,6 +64,11 @@ const calendarNotifyRowsRef: { current: Record<string, { notify_emails: string[]
 const calendarLookupErrorRef: { current: { message: string } | null } = { current: null };
 
 vi.mock("@bis/db", () => ({
+  // D-061: the email gate's own account-level send switch. A bare factory
+  // mock like this one has no `importOriginal` fallback, so an unlisted
+  // export is simply undefined — allowed by default (no test here
+  // suppresses the account).
+  isAccountOutboundSuppressed: async () => false,
   serviceDb: () => ({
     from: (table: string) => {
       if (table === "accounts") {

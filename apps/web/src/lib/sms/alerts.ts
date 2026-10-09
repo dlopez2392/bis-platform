@@ -21,13 +21,11 @@ import { sendSms } from "@/lib/consent/gate";
  * A name is judged safe to lead with: it is the "who" the message exists to
  * answer, and it is no more exposed here than on a caller-ID screen.
  *
- * `outbound_suppressed` (accounts) is deliberately NOT consulted anywhere in
- * this file. That is a decision, not an oversight: the two neighbouring
- * alert legs this module rides beside — the booking/call staff ALERT EMAIL
- * and the missed-call text-BACK — don't consult it either (verified against
- * `app/b/[publicId]/actions.ts` and `lib/voice/finish-call.ts` as of this
- * writing), so this stays consistent with its siblings rather than silently
- * becoming the one alert path that honours a flag none of the others do.
+ * `outbound_suppressed` (accounts, D-061) is not read anywhere in this file
+ * ON PURPOSE, but not because the flag goes unconsulted — `deliverAlertSms`
+ * sends through `sendSms` (lib/consent/gate.ts), and `decideSms` there is
+ * the ONE chokepoint every send path reads it through, this one included.
+ * A second read here would duplicate, not strengthen, that check.
  */
 
 /** Both composers share ONE phrase for "the rest is in your inbox," so the

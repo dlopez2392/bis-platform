@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const db = vi.hoisted(() => ({
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
+  isAccountOutboundSuppressed: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const sender = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
@@ -28,6 +29,7 @@ const provider = (over: Record<string, unknown> = {}) => ({ isFake: true, send, 
 beforeEach(() => {
   for (const fn of [...Object.values(db), ...Object.values(sender), ...Object.values(factory), send]) fn.mockReset();
   sender.resolveSmsSender.mockResolvedValue({ ok: true, from: FROM, ownedNumbers: [FROM] });
+  db.isAccountOutboundSuppressed.mockResolvedValue(false);
   db.readConsentState.mockResolvedValue({ state: "allowed" });
   db.readPhoneCountryFlag.mockResolvedValue(false);
   db.readAccountTimezone.mockResolvedValue("America/Chicago");
@@ -65,6 +67,27 @@ describe("decideSms: steps 1-3", () => {
     sender.resolveSmsSender.mockRejectedValue(new Error("resolveSmsSender failed: fetch failed"));
     await expect(decideSms(DB, base())).rejects.toThrow(/resolveSmsSender failed/);
     await expect(sendSms(DB, base())).rejects.toThrow(/resolveSmsSender failed/);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("decideSms: the account-level send switch (D-061, accounts.outbound_suppressed)", () => {
+  it("a suppressed account is blocked suppressed_account before the A2P read runs (mutation: drop the check → clear, FAILS)", async () => {
+    db.isAccountOutboundSuppressed.mockResolvedValue(true);
+    expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "suppressed_account" });
+    expect(sender.resolveSmsSender).not.toHaveBeenCalled();
+    expect(db.readConsentState).not.toHaveBeenCalled();
+  });
+
+  it("reads the flag for THIS account (mutation: read a different account → FAILS)", async () => {
+    await decideSms(DB, base());
+    expect(db.isAccountOutboundSuppressed).toHaveBeenCalledWith(DB, "acct_1");
+  });
+
+  it("an unreadable suppression flag FAILS CLOSED as ledger_unavailable: decideSms and sendSms both block, send never runs (mutation: catch the read and treat an error as 'not suppressed' → clear/sent, FAILS)", async () => {
+    db.isAccountOutboundSuppressed.mockRejectedValue(new Error("pgrst down"));
+    expect(await decideSms(DB, base())).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    expect(await sendSms(DB, base())).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
     expect(send).not.toHaveBeenCalled();
   });
 });

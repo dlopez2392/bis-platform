@@ -236,6 +236,7 @@ export const BLOCK_REASONS: Record<AutomationBlockReason, string> = {
   held: REASONS.textsHeld,
   unconfirmed_number: REASONS.numberUnconfirmed,
   window_after_deadline: REASONS.windowAfterDeadline,
+  suppressed_account: REASONS.accountSuppressed,
 };
 
 /** Every refusal the EMAIL gate can hand an automation, as the Activity page
@@ -246,6 +247,7 @@ export const EMAIL_BLOCK_REASONS: Record<Exclude<EmailBlockReason, "ledger_unava
   held: REASONS.optedOutEmail,
   suppressed: REASONS.suppressedEmail,
   window_after_deadline: REASONS.windowAfterDeadline,
+  suppressed_account: REASONS.accountSuppressed,
 };
 
 function hoursRuleOf(s: HoldSubject): HoursRule {

@@ -27,6 +27,16 @@ export const COMPLAINT_ERROR_MARKER = "complained";
 const SUPPRESSED_BLOCK_MESSAGE = "email not sent: suppressed";
 
 /**
+ * D-061 review follow-up: the gate's `suppressed_account` reason
+ * (`EmailNotSent`'s `email not sent: suppressed_account`), for any row a
+ * staff-typed send wrote before the action-level pre-check above existed —
+ * `conversations/actions.ts` now refuses before writing one at all, but a
+ * row already in the database still has to render something a business
+ * owner can read, not this raw string.
+ */
+const SUPPRESSED_ACCOUNT_BLOCK_MESSAGE = "email not sent: suppressed_account";
+
+/**
  * D-017. The thread (`message-thread.tsx`) and the contact timeline
  * (`activity-timeline.tsx`) stored a failure reason on every outbound
  * message that bounced or failed and showed NEITHER of them — an operator
@@ -51,9 +61,9 @@ export function messageFailureReason(
       : m["conversations.failureReason.bounced"];
   }
   if (message.status === "failed") {
-    return message.error === SUPPRESSED_BLOCK_MESSAGE
-      ? m["conversations.failureReason.suppressed"]
-      : m["conversations.failureReason.failed"];
+    if (message.error === SUPPRESSED_BLOCK_MESSAGE) return m["conversations.failureReason.suppressed"];
+    if (message.error === SUPPRESSED_ACCOUNT_BLOCK_MESSAGE) return m["automations.reason.accountSuppressed"];
+    return m["conversations.failureReason.failed"];
   }
   return null;
 }

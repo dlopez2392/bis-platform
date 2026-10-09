@@ -5,7 +5,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import {
   getContact, ensureConversation, createMessage, updateMessageStatus,
-  clearUnreadCount, serviceDb,
+  clearUnreadCount, serviceDb, isAccountOutboundSuppressed,
 } from "@bis/db";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -57,6 +57,22 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
   // belong to THIS account; that is what authorises the writes below, which
   // go through the service client scoped to the same accountId.
   const writer = serviceDb();
+
+  // D-061, review follow-up: checked here, before anything is written — the
+  // same bar sendSmsAction already sets below (its own write only happens
+  // once the gate clears). Without this, sendEmailOrThrow's own chokepoint
+  // check still blocks the send, but only AFTER createMessage already left a
+  // `failed` row with the gate's raw reason string sitting in the thread. A
+  // read that fails is treated as suppressed (fail closed), never as "go
+  // ahead and write."
+  let suppressed: boolean;
+  try {
+    suppressed = await isAccountOutboundSuppressed(writer, accountId);
+  } catch (e) {
+    console.error(`sendEmailAction: suppression flag unreadable for account ${accountId}: ${String(e)}`);
+    suppressed = true;
+  }
+  if (suppressed) rejectSend(m["automations.reason.accountSuppressed"]);
 
   const convo = await ensureConversation(writer, accountId, contactId, userId);
 
@@ -191,6 +207,11 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
       // The render's own words for an unreadable state (review R3-M2): never
       // worded as the customer's choice, and never an open form.
       case "ledger_unavailable": rejectSend(m["compose.smsStateUnknown"]);
+      // D-061: a suppressed account (a demo, or otherwise not real) refuses
+      // every send — the composer says so plainly rather than silently
+      // dropping the attempt, and nothing was written: `prepare` runs only
+      // after the gate clears.
+      case "suppressed_account": rejectSend(m["automations.reason.accountSuppressed"]);
       default: rejectSend(composerBlockedLine(result.reason));
     }
   }
