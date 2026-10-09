@@ -152,29 +152,45 @@ demo until the prospect audit piece exists.
   **DECIDED 2026-10-09 (D-053, danlo): the client's LOCAL day — local
   midnight to local midnight — for both totals and breakdowns.** What the
   code now does (`lib/vercel/web-analytics.ts`):
-  - `fetchDayTraffic` no longer calls `visits/count` at all. The TOTAL is
-    now another `visits/aggregate` call, grouped `by=environment` with
-    `limit=1` — the `environment eq 'production'` filter already applied
-    to every aggregate call admits only that one value into the response,
-    so the single row it returns is the window's un-split total (ordinary
-    group-by arithmetic, not a sum across rows — the thing that would have
-    been exact for pageviews but not for unique visitors). Totals and
-    breakdowns are now the SAME `aggregate()` call on the SAME window, so
-    there is only ever one window per stored day, never two.
+  - `fetchDayTraffic`'s TOTAL now comes from `visits/aggregate`, grouped
+    `by=environment` with `limit=1` — the `environment eq 'production'`
+    filter already applied to every aggregate call admits only that one
+    value into the response, so the single row it returns is the window's
+    un-split total (ordinary group-by arithmetic, not a sum across rows —
+    the thing that would have been exact for pageviews but not for unique
+    visitors). Totals and breakdowns are now the SAME `aggregate()` call
+    shape on the SAME window, so there is only ever one window per stored
+    day, never two.
   - Every `aggregate()` call now sends `until` one hour earlier than it is
     given, compensating Vercel's inclusive-until bucket, so the breakdown
     (and now the total) closes exactly at local midnight — not local
     midnight plus one hour.
-  - `visits/count` (via `countVisits()`) is unchanged and still used only
-    by the Settings → Website "Test connection" probe, a rough last-7-days
-    sanity check, not a stored day; its UTC-floor is irrelevant there.
-  - This has NOT been verified live against the real API (the token here
-    is production-only) — it follows mechanically from the runbook's own
-    confirmed findings above (both quirks were probed live) plus ordinary
-    group-by semantics, but the first real post-deploy tick should still
-    be read the way step 6 of Part A already asks: confirm `siteTraffic`'s
-    counters, and spot-check one day's total against its own breakdown sum
-    for sanity.
+  - **This grouped-total shape is unverified live, so it fails SOFT.**
+    `#dayTotal` (private, `web-analytics.ts`) wraps the `environment`
+    aggregate call: if it rejects, OR resolves with anything other than
+    exactly one row, it falls back to the OLD `visits/count` (UTC-day)
+    total for that one day only — the breakdowns still run, the day is
+    still written and stamped, nothing 500s and nothing holds up the next
+    site in the tick. **How to spot it in logs:** one `console.error` line
+    reading `site traffic: local-day total for project <id> fell back to
+    visits/count — the environment aggregate …` (either "failed: …" or
+    "returned N row(s), expected 1"). It names no token or other secret.
+    Seeing this line for a real site most nights is the signal that the
+    `by=environment` shape assumption was wrong and needs a real fix, not
+    a permanent crutch — a single appearance after a transient 5xx is not.
+  - `visits/count` (via `countVisits()`) is otherwise unchanged and still
+    used directly only by the Settings → Website "Test connection" probe,
+    a rough last-7-days sanity check, not a stored day; its UTC-floor is
+    irrelevant there.
+  - None of the `environment`-grouping behavior has been verified live
+    against the real API (the token here is production-only) — it
+    follows mechanically from the runbook's own confirmed findings above
+    (both quirks were probed live) plus ordinary group-by semantics, and
+    the fallback above is exactly the hedge against that gap. The first
+    real post-deploy tick should still be read the way step 6 of Part A
+    already asks: confirm `siteTraffic`'s counters, grep the cron log for
+    the fallback line above, and spot-check one day's total against its
+    own breakdown sum for sanity.
   - **Historical days are NOT automatically corrected.** Every day already
     stored before this fix landed carries the OLD two-window shape (UTC
     total, local+1h breakdown) until it is re-pulled; `daysToSync` only

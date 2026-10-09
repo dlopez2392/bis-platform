@@ -179,13 +179,39 @@ export class VercelAnalytics {
     );
   }
 
+  /**
+   * The local-day total, via the `TOTAL_GROUPING` aggregate call, with a
+   * SOFT fallback to the old `visits/count` (UTC-day) total when that call
+   * doesn't come back the one way it's expected to: a reject (bad request,
+   * network error, or `parseAggregate` refusing a malformed row), or a
+   * resolved response whose row count isn't exactly 1 (Vercel's shape
+   * contract here — one grouped value, because `PRODUCTION_FILTER` admits
+   * only one — is unverified live from this sandbox; see `TOTAL_GROUPING`'s
+   * doc). This call failing must never fail the whole day: a day with a
+   * degraded total (the old UTC-window number, for this one day only) is
+   * still written; a day with NO total at all is a hole the next tick has
+   * to retry forever. One log line names the fallback and why, with no
+   * token or other secret in it (both failure paths' messages come from
+   * `VercelApiError`/`parseAggregate`, which only ever carry Vercel's own
+   * status/error text or a field name — never the request itself).
+   */
+  async #dayTotal(projectId: string, sinceIso: string, untilIso: string): Promise<{ visitors: number; pageviews: number }> {
+    try {
+      const rows = await this.aggregate(projectId, sinceIso, untilIso, TOTAL_GROUPING, TOTAL_LIMIT);
+      if (rows.length === 1) return { visitors: rows[0]!.visitors, pageviews: rows[0]!.pageviews };
+      console.error(`site traffic: local-day total for project ${projectId} fell back to visits/count — the ${TOTAL_GROUPING} aggregate returned ${rows.length} row(s), expected 1`);
+    } catch (e) {
+      console.error(`site traffic: local-day total for project ${projectId} fell back to visits/count — the ${TOTAL_GROUPING} aggregate failed: ${String(e)}`);
+    }
+    return this.countVisits(projectId, sinceIso, untilIso);
+  }
+
   /** The five queries for one local day, in a fixed order (the test pins
-   *  it) — all five through `aggregate()` now (D-053), so all five share
-   *  one window and one environment filter; `countVisits()` is no longer
-   *  called here at all. */
+   *  it) — all five through `aggregate()` in the ordinary case (D-053), so
+   *  all five share one window and one environment filter; `countVisits()`
+   *  is called here ONLY as `#dayTotal`'s fallback. */
   async fetchDayTraffic(projectId: string, sinceIso: string, untilIso: string): Promise<DayTraffic> {
-    const totalRows = await this.aggregate(projectId, sinceIso, untilIso, TOTAL_GROUPING, TOTAL_LIMIT);
-    const totals = { visitors: totalRows[0]?.visitors ?? 0, pageviews: totalRows[0]?.pageviews ?? 0 };
+    const totals = await this.#dayTotal(projectId, sinceIso, untilIso);
     const pages = await this.aggregate(projectId, sinceIso, untilIso, "requestPath", BREAKDOWN_LIMIT);
     const sources = await this.aggregate(projectId, sinceIso, untilIso, "referrerHostname", BREAKDOWN_LIMIT);
     const places = await this.aggregate(projectId, sinceIso, untilIso, PLACE_DIMENSION, BREAKDOWN_LIMIT);
