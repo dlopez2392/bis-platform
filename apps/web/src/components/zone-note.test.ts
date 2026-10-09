@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ResolvedZone } from "@bis/db";
+import { resolveZone } from "@bis/db";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
 
@@ -15,9 +16,9 @@ vi.mock("next/link", () => ({
 
 const { ZoneNote } = await import("./zone-note");
 
-function render(zone: ResolvedZone, isAgency: boolean): string {
+function render(zone: ResolvedZone, isAgency: boolean, accountless?: boolean): string {
   return renderToStaticMarkup(
-    createElement(ZoneNote, { zone, isAgency }),
+    createElement(ZoneNote, { zone, isAgency, accountless }),
   );
 }
 
@@ -147,5 +148,47 @@ describe("ZoneNote — the fix matches the reader", () => {
     // date — it is their own business's calls on screen.
     const html = render(FROM_FALLBACK, false);
     expect(plain(html)).toContain(m["zone.note"].replace("{zone}", "UTC"));
+  });
+});
+
+/**
+ * Review of #225 (blueprints): `renderZone(undefined)` — the call every
+ * account-less screen makes, because there is no account row to try first —
+ * ALWAYS answers `source: "agency"` when the agency's own zone is usable.
+ * Before `accountless`, `ZoneNote` could not tell that apart from an
+ * IN-ACCOUNT screen whose account's own zone was broken, and printed "This
+ * company has no timezone of its own, so times use the agency's." on a
+ * screen with no company at all (blueprints) — false on its face.
+ *
+ * Built from the REAL `resolveZone` (packages/db/src/zone-resolution.ts),
+ * not a hand-built literal: the claim under test is specifically about what
+ * `renderZone(undefined)` actually hands back on an account-less screen, and
+ * a hand-built fixture could drift from that without this test noticing.
+ */
+describe("ZoneNote — `accountless` screens (review of #225)", () => {
+  const AGENCY_ZONE_USABLE = resolveZone(undefined, "America/Chicago");
+  const AGENCY_ZONE_ALSO_UNUSABLE = resolveZone(undefined, undefined);
+
+  it("names the zone with NO warning when the agency's own zone answers — that is the EXPECTED source here, not a degraded one (mutation: drop the `accountless` check -> FAILS)", () => {
+    expect(AGENCY_ZONE_USABLE.source).toBe("agency");
+    expect(AGENCY_ZONE_USABLE.guessed).toBe(true);
+    const html = render(AGENCY_ZONE_USABLE, true, true);
+    expect(plain(html)).toContain(m["zone.note"].replace("{zone}", "America/Chicago"));
+    expect(plain(html)).not.toContain(m["zone.guessed.agency"]);
+    expect(html).not.toContain('role="note"');
+  });
+
+  it("still warns when even the agency's own zone is unusable (mutation: suppress every warning under `accountless` -> FAILS)", () => {
+    expect(AGENCY_ZONE_ALSO_UNUSABLE.source).toBe("fallback");
+    const html = render(AGENCY_ZONE_ALSO_UNUSABLE, true, true);
+    expect(plain(html)).toContain(m["zone.guessed.accountless.fallback"]);
+    // Never the per-company sentence — there is no company on this screen.
+    expect(plain(html)).not.toContain(m["zone.guessed.agency"]);
+    expect(plain(html)).not.toContain(m["zone.guessed.fallback"]);
+  });
+
+  it("an ordinary (non-accountless) screen is UNCHANGED — the same agency-sourced zone still warns there (mutation: let `accountless` leak into the default -> FAILS)", () => {
+    const html = render(AGENCY_ZONE_USABLE, true);
+    expect(plain(html)).toContain(m["zone.guessed.agency"]);
   });
 });

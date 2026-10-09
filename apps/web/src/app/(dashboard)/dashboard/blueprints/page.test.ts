@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { formatDateTimeInZone } from "@/lib/format";
 import { renderedText } from "@/lib/rendered-text";
+import { m } from "@/lib/messages";
 
 // D-090: the list showed the FIRST capture's date beside a version number
 // that counts recaptures, so a blueprint recaptured yesterday read as months
@@ -67,5 +68,19 @@ describe("blueprints list (D-090)", () => {
     resolvedZone = { zone: "America/Chicago", guessed: true, label: "America/Chicago", source: "agency" };
     const text = renderedText(renderToStaticMarkup(await BlueprintsPage()));
     expect(text).toContain("America/Chicago");
+  });
+
+  // Review of #225: `renderZone(undefined)` always answers `source: "agency"`
+  // on this screen once the agency's own zone is usable — that is the
+  // EXPECTED source here, not a degraded one, since there is no account on
+  // this screen to have "its own" zone broken in the first place.
+  // `ZoneNote`'s `isAgency` prop alone could not distinguish "no account at
+  // all" from "this account's own zone was broken", so it printed "This
+  // company has no timezone of its own" on a screen with no company at all
+  // (mutation: drop `accountless` from the page's own `<ZoneNote>` → FAILS).
+  it("never claims a company has no timezone of its own — there is no company on this screen", async () => {
+    resolvedZone = { zone: "America/Chicago", guessed: true, label: "America/Chicago", source: "agency" };
+    const text = renderedText(renderToStaticMarkup(await BlueprintsPage()));
+    expect(text).not.toContain(m["zone.guessed.agency"]);
   });
 });

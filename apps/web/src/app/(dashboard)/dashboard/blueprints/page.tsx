@@ -31,7 +31,7 @@ export default async function BlueprintsPage() {
       <PageHeader title={m["blueprints.title"]} />
       <div className="p-6">
         <div className="space-y-3">
-          <ZoneNote zone={zone} isAgency />
+          <ZoneNote zone={zone} isAgency accountless />
           {blueprints.length === 0 ? (
             <EmptyState icon={Layers} title={m["blueprints.empty.title"]} body={m["blueprints.empty.body"]} />
           ) : (

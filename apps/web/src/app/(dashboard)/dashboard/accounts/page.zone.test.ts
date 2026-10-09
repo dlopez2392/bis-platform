@@ -11,15 +11,20 @@ import { renderedText } from "@/lib/rendered-text";
  * screen and simply never used to render the row's own date.
  */
 vi.mock("@/lib/auth", () => ({ requireAgency: async () => ({ userId: "user_agency" }) }));
+// A mutable mock (`vi.hoisted`, not a bare async literal) so the unusable-
+// zone test below can swap in its own row without disturbing the first
+// test's fixture — same reason contacts/page.test.ts's own `accountRead`
+// mock is a `vi.fn()`.
+const listAccountsMock = vi.hoisted(() => vi.fn(async () => [
+  {
+    id: "acct_1", name: "West Co", clerk_org_id: "org_1", status: "active",
+    timezone: "America/Los_Angeles", created_at: "2026-10-09T02:30:00.000Z",
+  },
+]));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   serviceDb: () => ({}),
-  listAccounts: async () => [
-    {
-      id: "acct_1", name: "West Co", clerk_org_id: "org_1", status: "active",
-      timezone: "America/Los_Angeles", created_at: "2026-10-09T02:30:00.000Z",
-    },
-  ],
+  listAccounts: () => listAccountsMock(),
   listBlueprints: async () => [],
 }));
 vi.mock("@clerk/nextjs/server", () => ({
@@ -32,6 +37,13 @@ const { default: AccountsPage } = await import("./page");
 describe("accounts list's row 'Created' date renders in THAT ACCOUNT's own zone, not the runtime's", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    listAccountsMock.mockReset();
+    listAccountsMock.mockResolvedValue([
+      {
+        id: "acct_1", name: "West Co", clerk_org_id: "org_1", status: "active",
+        timezone: "America/Los_Angeles", created_at: "2026-10-09T02:30:00.000Z",
+      },
+    ]);
   });
 
   it("follows the row's own timezone (Los Angeles), not the runtime's (Tokyo)", async () => {
@@ -42,5 +54,23 @@ describe("accounts list's row 'Created' date renders in THAT ACCOUNT's own zone,
     // which the row must show regardless of either wrong fallback.
     expect(text).toContain("Oct 8, 2026");
     expect(text).not.toContain("Oct 9, 2026");
+  });
+
+  // Review of #225: `isUsableZone(a.timezone) ? a.timezone : "UTC"`
+  // (page.tsx:146) was never exercised by an actually-unusable row — every
+  // existing fixture carried a real IANA name, so a regression that threw
+  // instead of falling back (or dropped the guard and fed `Intl` garbage
+  // directly) could not have failed any test here.
+  it("a row with an unusable timezone still renders — it falls back to UTC rather than throwing (mutation: drop the `isUsableZone` guard → FAILS)", async () => {
+    listAccountsMock.mockResolvedValueOnce([
+      {
+        id: "acct_2", name: "Bad Zone Co", clerk_org_id: "org_2", status: "active",
+        timezone: "Not-A-Real-Zone", created_at: "2026-10-09T02:30:00.000Z",
+      },
+    ]);
+    const text = renderedText(renderToStaticMarkup(await AccountsPage()));
+    expect(text).toContain("Bad Zone Co");
+    // Formatted in the UTC fallback, not thrown and not silently blank.
+    expect(text).toContain("Oct 9, 2026");
   });
 });
