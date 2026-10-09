@@ -24,16 +24,15 @@ on:
 # users production's data; it must not. The CI project trusts exactly that
 # instance, and so does this capture now.
 #
-# Takes ci.yml's e2e lock, `e2e-ci-supabase`, queued and never cancelled:
-# this drives a browser through the CI project and, when re-seeding,
-# rewrites a whole account in it, so it must neither run beside an e2e job
-# nor knock one out of the queue. (`e2e-shared-supabase`, the name this file
-# used to take, is production's old lock; ci.yml left it in #194.) A job
-# holds one group, so a re-seed can overlap a `verify` job: accepted, since
-# the capture runs rarely, the seeder bounds itself to 12 writes in flight,
-# and the one live reader of the demo there (demo-seed.test.ts) can no longer
-# catch it half-built: the account is born suppressed (createAccount's
-# outboundSuppressed).
+# Queues on `e2e-ci-supabase`, never cancelled: when re-seeding, this rewrites
+# a whole account in the CI project, so two captures must not overlap. The
+# name is history: ci.yml's e2e job took the same lock until 2026-10-08,
+# because both drove a browser through the CI project. Neither CI gate runs
+# on the CI project any more (each starts a Supabase stack inside its own
+# runner; e2e only READS the project's migration history), so nothing in
+# ci.yml takes this lock and nothing there can collide with a capture.
+# (`e2e-shared-supabase`, the name this file used to take, is production's
+# old lock; ci.yml left it in #194.)
 concurrency:
   group: e2e-ci-supabase
   cancel-in-progress: false
@@ -43,8 +42,8 @@ jobs:
   capture:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # The CI project, exactly as ci.yml names it: literals for what is not
-    # secret (ci-workflow.test.ts pins that the two files agree), the CI_*
+    # The CI project, exactly as ci-project-setup.yml names it: literals for
+    # what is not secret (ci-workflow.test.ts pins that the two agree), the CI_*
     # secrets mapped onto the names the code reads, and no production secret
     # at all. The guard step below refuses the run if any of it names
     # production. No `environment:` either: #192 put production's Supabase
