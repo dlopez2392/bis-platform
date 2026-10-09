@@ -60,16 +60,26 @@ function lines(input: WeeklyReportInput): Line[] {
 }
 
 /**
- * D-064: a week is quiet only when EVERY metric we actually measured reads
- * zero — calls, leads and bookings always count, and visitors counts too
- * whenever a site is linked (`visitors !== null`). Leaving visitors out of
- * this check let a week with real website traffic get the "Nothing came
- * in" copy and drop its one honest number, in direct conflict with the
- * rule that a MEASURED metric is never swallowed, quiet week or not — only
- * an un-measured one is omitted.
+ * D-064 (review round 2): "quiet" is the PIPELINE — calls, leads and
+ * bookings — and only that. Round 1 folded visitors into this check too,
+ * which fixed the wrong thing: it kept a measured, nonzero visitor count
+ * from being swallowed by routing a visitors-only week to the FULL,
+ * four-zero-row table instead — exactly the report-card-of-zeros copy
+ * DESIGN.md's own rule says a quiet week must never get. The pipeline
+ * being quiet still earns the quiet body; what changes is that the body
+ * now says so, below, when the website had something to report.
  */
-function isQuietWeek(now: WeeklyNumbers): boolean {
-  return now.calls === 0 && now.leads === 0 && now.bookings === 0 && (now.visitors === null || now.visitors === 0);
+function isQuietPipeline(now: WeeklyNumbers): boolean {
+  return now.calls === 0 && now.leads === 0 && now.bookings === 0;
+}
+
+/** A measured, nonzero visitor count is never omitted, even inside the
+ *  quiet-pipeline body — only a metric we didn't measure (`null`) or one
+ *  that was genuinely quiet too (`0`) stays silent about it. */
+function visitorsSentence(now: WeeklyNumbers): string | null {
+  if (now.visitors === null || now.visitors === 0) return null;
+  const noun = now.visitors === 1 ? "visitor" : "visitors";
+  return `Your website had ${now.visitors} ${noun} last week.`;
 }
 
 function quietBody(input: WeeklyReportInput): { html: string; text: string } {
@@ -83,15 +93,18 @@ function quietBody(input: WeeklyReportInput): { html: string; text: string } {
   const reassurance = running.length > 0
     ? `${running.join(", and ")}.`
     : "";
+  const visitors = visitorsSentence(input.now);
 
   const text = [
     "Nothing came in last week — no calls, no leads, no bookings.",
+    visitors,
     reassurance,
   ].filter(Boolean).join("\n\n");
 
   const html = [
     `<p style="margin:0 0 12px;font-size:17px;font-weight:600;">Last week was quiet</p>`,
     `<p style="margin:0 0 16px;color:#71717a;">Nothing came in last week &mdash; no calls, no leads, no bookings.</p>`,
+    visitors ? `<p style="margin:0 0 16px;color:#71717a;">${escapeHtml(visitors)}</p>` : "",
     reassurance ? `<p style="margin:0 0 16px;color:#71717a;">${escapeHtml(reassurance)}</p>` : "",
   ].filter(Boolean).join("");
 
@@ -108,7 +121,7 @@ function quietBody(input: WeeklyReportInput): { html: string; text: string } {
  */
 export function weeklyReportEmail(input: WeeklyReportInput): { html: string; text: string } {
   const { now } = input;
-  const isQuiet = isQuietWeek(now);
+  const isQuiet = isQuietPipeline(now);
 
   const body = isQuiet ? quietBody(input) : (() => {
     const rows = lines(input);
@@ -143,8 +156,17 @@ export function weeklyReportEmail(input: WeeklyReportInput): { html: string; tex
   };
 }
 
-/** The subject line. A number is what gets it opened; a quiet week says so. */
+/**
+ * The subject line. A number is what gets it opened. D-064 (review round
+ * 2): a quiet PIPELINE with a real visitors count leads with THAT number
+ * rather than claiming "quiet" (false — the website had a week) or
+ * falling back to "0 calls, 0 new leads" (round 1's mistake — that's the
+ * four-zero-row framing the body itself refuses to send).
+ */
 export function weeklyReportSubject(now: WeeklyNumbers): string {
-  if (isQuietWeek(now)) return "Last week was quiet";
+  if (isQuietPipeline(now)) {
+    if (now.visitors !== null && now.visitors > 0) return `Last week: ${now.visitors} website visitors`;
+    return "Last week was quiet";
+  }
   return `Last week: ${now.calls} calls, ${now.leads} new leads`;
 }
