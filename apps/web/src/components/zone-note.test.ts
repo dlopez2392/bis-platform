@@ -17,7 +17,7 @@ const { ZoneNote } = await import("./zone-note");
 
 function render(zone: ResolvedZone, isAgency: boolean): string {
   return renderToStaticMarkup(
-    createElement(ZoneNote, { zone, isAgency, accountId: "acct1" }),
+    createElement(ZoneNote, { zone, isAgency }),
   );
 }
 

@@ -330,7 +330,7 @@ export default async function AccountDashboardPage({
             right below it ("Last 7 days" is seven of WHOSE days) and the
             work row that follows, which `bucketWork` measures against those
             same midnights. */}
-        <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
+        <ZoneNote zone={zone} isAgency={isAgency} />
         <WorkRowCard accountId={accountId} total={workTotal} overdue={workOverdue} />
         {/* D-077, design review follow-up: a suffix on each of the four
             tile's own labels ("Appointments booked · Last 7 days",

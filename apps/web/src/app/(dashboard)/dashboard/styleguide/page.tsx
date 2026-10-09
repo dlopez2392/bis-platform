@@ -488,15 +488,13 @@ export default async function StyleguidePage() {
               <ZoneNote
                 zone={{ zone: "America/Chicago", guessed: false, label: "America/Chicago", source: "account" }}
                 isAgency
-                accountId="demo"
               />
             </div>
             <div className="space-y-2">
-              <p className="text-xs text-muted-foreground">Guessed from the agency — agency reader, gets the fix</p>
+              <p className="text-xs text-muted-foreground">Guessed from the agency — agency reader, told what's broken (D-076: no Settings link — there's nowhere to send it)</p>
               <ZoneNote
                 zone={{ zone: "America/Chicago", guessed: true, label: "America/Chicago", source: "agency" }}
                 isAgency
-                accountId="demo"
               />
             </div>
             <div className="space-y-2">
@@ -504,17 +502,15 @@ export default async function StyleguidePage() {
               <ZoneNote
                 zone={{ zone: "UTC", guessed: true, label: "UTC", source: "fallback" }}
                 isAgency
-                accountId="demo"
               />
             </div>
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">
-                Client reader — no Settings link, because that route is agency-only
+                Client reader — a person to ask, never a link; Settings is agency-only
               </p>
               <ZoneNote
                 zone={{ zone: "UTC", guessed: true, label: "UTC", source: "fallback" }}
                 isAgency={false}
-                accountId="demo"
               />
             </div>
           </div>

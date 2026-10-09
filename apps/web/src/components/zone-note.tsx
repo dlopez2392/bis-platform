@@ -50,12 +50,6 @@ const SENTENCE_CAPTION =
 export function ZoneNote({
   zone,
   isAgency,
-  // D-076: unused now that the agency's closing sentence is plain text
-  // rather than a Link built from it — kept in the prop so all five
-  // existing callers (Calls, Call detail, the dashboard, Checklist, the
-  // work queue) need no change; renamed so no lint rule mistakes it for
-  // a left-behind reference.
-  accountId: _accountId,
   className,
 }: {
   /** Straight from `renderZone` (lib/zone.ts) — never a bare zone string, so
@@ -67,11 +61,10 @@ export function ZoneNote({
    *  to link to, and never has) or the client's (a person to ask, never a
    *  link — Settings is agency-only, `requireAgencyOnlyAccountAccess`, so a
    *  client who followed a link there would be redirected back to their own
-   *  dashboard). Two screens here (Checklist) are agency-only anyway and
-   *  pass `true` as a constant; the other three are reached by both
+   *  dashboard). One screen here (Checklist) is agency-only anyway and
+   *  passes `true` as a constant; the other four are reached by both
    *  audiences and must pass the real value. */
   isAgency: boolean;
-  accountId: string;
   className?: string;
 }) {
   return (

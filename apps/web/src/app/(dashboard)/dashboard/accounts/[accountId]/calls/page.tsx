@@ -132,7 +132,7 @@ export default async function CallsPage({
             Grouped with the table instead, so what it qualifies is
             unambiguous. */}
         <div className="space-y-3">
-          <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
+          <ZoneNote zone={zone} isAgency={isAgency} />
           {rows.length === 0 && !cursor ? (
             // The COLD-START reading of zero rows: no `?before=` cursor, so
             // this is page one and there is nothing behind it either — a

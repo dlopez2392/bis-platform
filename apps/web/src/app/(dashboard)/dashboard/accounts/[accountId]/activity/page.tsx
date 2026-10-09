@@ -75,7 +75,7 @@ export default async function ActivityPage({
       <div className="space-y-6 p-6">
         <UsageCard state={usage} monthLabel={month.label} callCap={readLimitConfig().perAccountPerDay} />
         <div className="space-y-3">
-          <ZoneNote zone={zone} isAgency={isAgency} accountId={accountId} />
+          <ZoneNote zone={zone} isAgency={isAgency} />
           {!history.ok ? (
             // A cursored page's error must not take the pager down with it —
             // without this, a client two pages deep who hits a transient
