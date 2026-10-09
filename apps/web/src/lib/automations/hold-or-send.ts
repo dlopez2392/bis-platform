@@ -110,6 +110,10 @@ export const REASONS = {
   appointmentStarted: "Appointment already started",
   noLongerDue: "No longer due",
   recipeOff: "This automation was turned off",
+  /** D-061: `accounts.outbound_suppressed` (0032) — a demo or pre-go-live
+   *  account. Only ever logged from a RELEASE, the same way `recipeOff` is:
+   *  the inline send itself returns before this reason could be written. */
+  accountSuppressed: m["automations.reason.accountSuppressed"],
   timezone: "The company's time zone isn't set",
   calendarOff: "The booking page is switched off",
   recentText: "A text already went to this person today",

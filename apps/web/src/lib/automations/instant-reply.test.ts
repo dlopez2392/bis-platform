@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   getAutomation: vi.fn(), hasRecentOutboundSms: vi.fn(), countInstantRepliesSince: vi.fn(),
-  stampInstantReplySent: vi.fn(),
+  stampInstantReplySent: vi.fn(), isAccountOutboundSuppressed: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
   readAccountTimezone: vi.fn(), recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(),
   // The send gate's own reads (lib/consent/gate.ts): the instant reply goes
@@ -54,6 +54,7 @@ beforeEach(() => {
   dbMocks.hasRecentOutboundSms.mockResolvedValue(false);
   dbMocks.countInstantRepliesSince.mockResolvedValue(0);
   dbMocks.stampInstantReplySent.mockResolvedValue(undefined);
+  dbMocks.isAccountOutboundSuppressed.mockResolvedValue(false);
   dbMocks.ensureConversation.mockResolvedValue({ id: "convo_1", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
   dbMocks.updateMessageStatus.mockResolvedValue(undefined);
@@ -138,6 +139,30 @@ describe("sendInstantReply — the recipe row", () => {
     await sendInstantReply(input());
     expect(dbMocks.getAutomation).toHaveBeenCalledTimes(1);
     expect(dbMocks.getAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "instant_reply");
+  });
+});
+
+describe("sendInstantReply — the account-level send switch every scheduled pass honours (D-061, accounts.outbound_suppressed)", () => {
+  it("a suppressed account's recipe never texts, even ON with a valid body (mutation: drop the check → sent, FAILS)", async () => {
+    dbMocks.isAccountOutboundSuppressed.mockResolvedValue(true);
+    expect(await sendInstantReply(input())).toEqual({ kind: "skipped", reason: "suppressed" });
+    expect(senderMock.resolveSmsSender).not.toHaveBeenCalled();
+    expect(smsSend).not.toHaveBeenCalled();
+    // Silent like `disabled`: a demo account would otherwise log noise on
+    // every submission it seeds.
+    expect(errors()).toEqual([]);
+    expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
+  });
+
+  it("reads the flag for THIS account, once, only once the recipe is confirmed on", async () => {
+    await sendInstantReply(input());
+    expect(dbMocks.isAccountOutboundSuppressed).toHaveBeenCalledTimes(1);
+    expect(dbMocks.isAccountOutboundSuppressed).toHaveBeenCalledWith(expect.anything(), "acct_1");
+
+    dbMocks.isAccountOutboundSuppressed.mockClear();
+    dbMocks.getAutomation.mockResolvedValue({ ...ROW, enabled: false });
+    expect(await sendInstantReply(input())).toEqual({ kind: "skipped", reason: "disabled" });
+    expect(dbMocks.isAccountOutboundSuppressed).not.toHaveBeenCalled();
   });
 });
 
@@ -333,6 +358,13 @@ describe("releaseInstantReply — from the held row's payload", () => {
     dbMocks.getAutomation.mockResolvedValue({ ...ROW, enabled: false });
     expect(await releaseInstantReply(ctx, heldRow(PAYLOAD))).toBe("skipped");
     expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This automation was turned off" }));
+  });
+
+  it("a release found suppressed meanwhile (D-061) writes a reason only the release path can produce, never texted", async () => {
+    dbMocks.isAccountOutboundSuppressed.mockResolvedValue(true);
+    expect(await releaseInstantReply(ctx, heldRow(PAYLOAD))).toBe("skipped");
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reason: "This account isn't sending yet" }));
   });
 
   it("a row keyed for something other than a submission is skipped as 'No longer due', never texted", async () => {

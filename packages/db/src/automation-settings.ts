@@ -15,3 +15,22 @@ export async function readAccountTimezone(db: SupabaseClient, accountId: string)
   if (error) throw new Error(`readAccountTimezone failed: ${error.message}`);
   return (data as { timezone: string | null } | null)?.timezone ?? null;
 }
+
+/**
+ * D-061: `accounts.outbound_suppressed` (0032) is true for a demo or
+ * pre-go-live account nothing should ever contact. Every scheduled pass
+ * honours it for free through `loadSendableRows` (booking.ts) — every
+ * `listDue*` filters on it before a row is even returned. The inline
+ * instant reply has no due-list to filter it through (it fires straight
+ * from a form submission), so it reads the flag itself, here, the same way
+ * it reads the account's zone just above. A missing account reads as not
+ * suppressed, the same posture `loadAccountBrandInfo` takes before this
+ * column existed (DEFAULT FALSE, byte-identical for every account already
+ * on file) — the account itself is a data problem the recipe's own `getAutomation`
+ * read would have already surfaced.
+ */
+export async function isAccountOutboundSuppressed(db: SupabaseClient, accountId: string): Promise<boolean> {
+  const { data, error } = await db.from("accounts").select("outbound_suppressed").eq("id", accountId).maybeSingle();
+  if (error) throw new Error(`isAccountOutboundSuppressed failed: ${error.message}`);
+  return (data as { outbound_suppressed: boolean | null } | null)?.outbound_suppressed === true;
+}

@@ -30,6 +30,7 @@ const dbMocks = vi.hoisted(() => ({
   stampQuoteFollowupSent: vi.fn(), stampQuoteFollowupSmsFailed: vi.fn(), countQuoteFollowupsSince: vi.fn(),
   latestInboundByContact: vi.fn(),
   getAutomation: vi.fn(), hasRecentOutboundSms: vi.fn(), countInstantRepliesSince: vi.fn(), stampInstantReplySent: vi.fn(),
+  isAccountOutboundSuppressed: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
   listSitesToSync: vi.fn(),
   listAccountsDueWeeklyReport: vi.fn(),
@@ -202,6 +203,7 @@ beforeEach(() => {
   dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
   dbMocks.recordCarrierBlock.mockResolvedValue("appended");   // explicit: the gate reaches it only on a carrier stop (phase 3 rule)
   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
+  dbMocks.isAccountOutboundSuppressed.mockResolvedValue(false);
   dbMocks.getAutomationLogEntry.mockResolvedValue(null);
   dbMocks.listReleasableHolds.mockResolvedValue([]);
   dbMocks.listBilledUsageAccounts.mockResolvedValue([]);
