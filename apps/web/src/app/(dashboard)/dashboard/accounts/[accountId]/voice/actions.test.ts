@@ -160,6 +160,17 @@ describe("voice settings actions", () => {
       expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
     });
 
+    // Review minor 7: the same refusal reaches an account that ALREADY has two
+    // active numbers, when one of them moves testing → live. Its words must be
+    // true there too — that number was never off, so "turn it back on" is not.
+    it("an already-active number on a two-number account is refused in words true for that case too", async () => {
+      dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "live"), row("pn2", "testing")]);
+      const r = await setNumberStatusAction("a1", "pn2", "live");
+      expect(r).toEqual({ ok: false, error: m["voice.numbers.anotherActive"] });
+      expect(m["voice.numbers.anotherActive"]).not.toMatch(/back on/i);
+      expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+    });
+
     it("the active number's own status walk is not blocked by itself", async () => {
       dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "testing"), row("pn2", "released")]);
       dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
