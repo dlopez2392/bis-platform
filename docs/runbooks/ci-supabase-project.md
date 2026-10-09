@@ -58,7 +58,8 @@ In CI, and in the CI-only tools, a check names the CI project by
 - `.github/scripts/ci-migrations-applied.sh` (e2e's read of this project):
   refuses production's ref anywhere, and any DB URL that is not
   `postgres.<ref>` on a `*.pooler.supabase.com` host, before psql sees it,
-  then reads in a read-only session.
+  then reads in one read-only transaction sent as one command (safe through
+  the 6543 transaction pooler too).
 - `packages/db/src/ci/target.ts` (`assertCiTarget`), inside `db:push:ci`,
   `db:migrations:ci`, `ci:sql` and `ci:seed`: a narrower check of the ref, the
   API URL and the DB URL only (refuses production's ref, a URL or DB user for
@@ -248,8 +249,8 @@ this project holds that the branch lacks (another branch pushed first) is
 reported as a notice, never a failure. It is the ONLY place `ci.yml` reads
 this project: `BIS_CI_SUPABASE_REF` and `BIS_CI_SUPABASE_DB_URL` (from
 `CI_SUPABASE_DB_URL`) are set on that step alone, the script checks the URL
-is this project's Session pooler user before psql sees it, and it reads in a
-read-only session. It does not check production (e2e holds no production
+is this project's Session pooler user before psql sees it, and it reads in
+one read-only transaction sent as one command. It does not check production (e2e holds no production
 credential, and must not): steps 5 and 6 are still the orchestrator's.
 
 ## 7. Restore from a pause

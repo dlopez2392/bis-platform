@@ -89,8 +89,10 @@ on:
 #
 #   This one, per run: one group per branch ref, cancelling. A newer push to a
 #   branch stops that SAME branch's older run, running or waiting, and with it
-#   the Supabase traffic it was making (a cancelled run's fixtures are swept by
-#   a later run once they are an hour old). Another branch is another group,
+#   the traffic it was making. A cancel skips teardown: the run's database goes
+#   with its runner, but its Clerk users and orgs stay in the shared
+#   development instance until a later run's setup, on any branch, sweeps them
+#   at 30 minutes old (e2e/fixtures/stale.ts). Another branch is another group,
 #   so it is never touched. On main every run is its own group (the run id)
 #   and nothing cancels it: main's run is the checked state of the commit
 #   being deployed (#62 and #64 each had theirs killed by the next merge).
@@ -105,8 +107,10 @@ on:
 #   queued, the last waited about 45 minutes before starting. e2e had one,
 #   `e2e-ci-supabase`, repo-wide and queueing (`queue: max`), because every
 #   run shared Test Client One on bis-ci. Each job now runs on a stack inside
-#   its own runner, so there is nothing to contend for and branches' runs go
-#   in parallel. The per-branch group above still supersedes a branch's own
+#   its own runner, so no two runs contend for a database and branches' runs
+#   go in parallel. What concurrent e2e runs still share (the Clerk development
+#   instance above all) is listed in the e2e job's comment, with why each is
+#   safe to share. The per-branch group above still supersedes a branch's own
 #   stale run, and still never cancels main.
 concurrency:
   group: ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
@@ -340,7 +344,7 @@ jobs:
       # The ONLY place ci.yml reads the CI project. Its DB URL is scoped to
       # this step, under a name no app code reads, the script checks it is
       # the CI project's Session pooler user before psql sees it, and it reads
-      # in a read-only session. Needs only bash and psql.
+      # in one read-only transaction. Needs only bash and psql.
       - name: Check that the CI project has every migration in this branch
         if: steps.scope.outputs.docs_only != 'true'
         env:

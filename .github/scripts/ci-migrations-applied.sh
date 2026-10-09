@@ -29,9 +29,10 @@
 # before psql sees it: production's ref nowhere, and exactly the form
 #   postgres[ql]://postgres.<ref>:<password>@<host>.pooler.supabase.com:<5432|6543>/postgres[?sslmode=require]
 # (the form packages/db/src/ci/target.ts accepts for the same secret). The
-# read runs in a READ-ONLY session: this is a check, and bis-ci is shared with
-# Vercel Preview and the screenshot capture. Never prints the URL. Needs bash
-# and psql. A history it cannot read is a FAILURE, never a skip.
+# read runs in ONE READ-ONLY TRANSACTION sent as one command (see the psql
+# call for why one, not a session setting): this is a check, and bis-ci is
+# shared with Vercel Preview and the screenshot capture. Never prints the URL.
+# Needs bash and psql. A history it cannot read is a FAILURE, never a skip.
 #
 # Tested by apps/web/ci/ci-migrations-applied.test.ts (fake psql).
 
@@ -80,9 +81,15 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# ONE command, ONE read-only transaction. The URL check above admits the
+# transaction pooler (6543), which may run each transaction on a different
+# server connection: a separate `set session characteristics … read only`
+# could land on one and the read on another, read-write. A single query
+# string holding begin…commit is one transaction, kept on one connection by
+# either pooler. (psql 15+ prints every statement's result from one -c; -q
+# drops the BEGIN/COMMIT tags, and only digit lines are read below anyway.)
 if ! applied_raw="$(psql "$db_url" -X -q -tA -v ON_ERROR_STOP=1 \
-  -c "set session characteristics as transaction read only" \
-  -c "select version from supabase_migrations.schema_migrations order by version")"; then
+  -c "begin transaction read only; select version from supabase_migrations.schema_migrations order by version; commit;")"; then
   echo "::error::Could not read the CI project's migration history (supabase_migrations.schema_migrations); psql's own message is above. A gate that cannot check is red, not skipped: re-run once, and if it fails again, check the CI project (docs/runbooks/ci-supabase-project.md)."
   exit 1
 fi

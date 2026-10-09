@@ -35,8 +35,10 @@ const PROD_REF = "tlbkbmlrfafquucsmsmm";
 const poolerUrl = (ref: string) => `postgresql://postgres.${ref}:${DB_PASSWORD}@aws-0-us-east-1.pooler.supabase.com:5432/postgres`;
 const DB_URL = poolerUrl(CI_REF);
 
+// One log line per call, each argument kept whole inside [[…]], so a case can
+// tell one `-c "a; b"` from two `-c a -c b`.
 const FAKE_PSQL = `#!/usr/bin/env bash
-printf 'psql %s\\n' "$*" >> "$FAKE_DIR/log"
+{ printf 'psql'; for a in "$@"; do printf ' [[%s]]' "$a"; done; printf '\\n'; } >> "$FAKE_DIR/log"
 if [ -n "\${FAKE_PSQL_STDERR:-}" ]; then printf '%s\\n' "$FAKE_PSQL_STDERR" >&2; fi
 printf '%s' "$FAKE_APPLIED"
 exit "\${FAKE_PSQL_EXIT:-0}"
@@ -172,8 +174,8 @@ describe("ci-migrations-applied.sh: every migration in the branch is on the CI p
 // holds NO CI-project value for the app: this step alone reads bis-ci, with
 // its own step-scoped names, and it no longer has the CI-project guard in
 // front of it. So it checks what it was handed before psql sees it, and
-// reads in a read-only session: it is a check, and must never be able to
-// write to the project other runs and Vercel Preview share.
+// reads in one read-only transaction: it is a check, and must never be able
+// to write to the project local runs and Vercel Preview share.
 describe("ci-migrations-applied.sh reads bis-ci only, read-only, and only from its own variables", () => {
   it("never falls back to the app's SUPABASE_DB_URL, which in e2e is the local stack's (mutation: read SUPABASE_DB_URL → FAILS)", () => {
     const r = run(VERSIONS, { BIS_CI_SUPABASE_DB_URL: undefined, SUPABASE_DB_URL: DB_URL });
@@ -208,17 +210,34 @@ describe("ci-migrations-applied.sh reads bis-ci only, read-only, and only from i
     expect(r.status).toBe(0);
   });
 
-  it("makes the session read-only before it reads the history, in the same psql call (mutation: drop the read-only SET → FAILS)", () => {
-    const r = run(VERSIONS);
+  // Review M-4 (2026-10-08). The URL check admits the transaction pooler
+  // (6543) as well as the session pooler (5432). Through a transaction
+  // pooler each TRANSACTION may run on a different server connection, so a
+  // `set session characteristics … read only` sent as its own command can
+  // land on one connection and the read on another, read-write. One command
+  // holding `begin transaction read only; select …; commit;` is one
+  // transaction, which a transaction pooler keeps on one connection.
+  it.each([
+    ["the session pooler (5432)", DB_URL],
+    ["the transaction pooler (6543)", DB_URL.replace(":5432/", ":6543/")],
+  ])("reads the history in ONE read-only transaction sent as ONE command, through %s (mutation: a separate SET, or no `begin transaction read only` → FAILS)", (_label, url) => {
+    const r = run(VERSIONS, { BIS_CI_SUPABASE_DB_URL: url });
     expect(r.status, r.output).toBe(0);
-    const call = r.log[0] ?? "";
-    const readOnly = call.indexOf("set session characteristics as transaction read only");
-    expect(readOnly).toBeGreaterThanOrEqual(0);
-    expect(call.indexOf("supabase_migrations.schema_migrations")).toBeGreaterThan(readOnly);
+    expect(r.log).toHaveLength(1);
+    const args = [...(r.log[0] ?? "").matchAll(/\[\[(.*?)\]\]/g)].map((m) => m[1]!);
+    expect(args).toContain(url);
+    const commands = args.filter((_, i) => args[i - 1] === "-c");
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatch(
+      /^begin transaction read only; *select version from supabase_migrations\.schema_migrations order by version; *commit;$/,
+    );
+    // Stops at the first error, so a refused BEGIN can never fall through to
+    // a read outside the transaction.
+    expect(args.join(" ")).toContain("ON_ERROR_STOP=1");
   });
 
   it("counts only version lines, so a status line psql prints is never read as a migration bis-ci holds", () => {
-    const r = run(["SET", ...VERSIONS]);
+    const r = run(["BEGIN", "SET", ...VERSIONS, "COMMIT"]);
     expect(r.status).toBe(0);
     expect(r.output).not.toMatch(/holds \d+ migration/);
   });
