@@ -94,6 +94,7 @@ import { readReputationConfig, decideReputation, windowStart } from "@/lib/voice
 import { readSilentSeconds, isCallerAudioEvent, silenceGoodbye } from "@/lib/voice/silence-guard";
 import { configuredOrigin } from "@/lib/email/origin";
 import { brandDisplayName } from "@/lib/email/templates/shell";
+import { openingGreeting } from "@/lib/voice/greeting";
 
 export const runtime = "nodejs";
 export const maxDuration = 800;
@@ -220,7 +221,8 @@ const CLOSE_AFTER_GOODBYE_MS = 5000;
 interface LifecycleArgs {
   callId: string;
   apiKey: string;
-  greeting: string;
+  /** The whole `response.create` instruction for the opening line (`openingGreeting`). */
+  greetingInstruction: string;
   languages: "en" | "es" | "both";
   callRowId: string | null;
   startedAt: Date;
@@ -239,7 +241,7 @@ interface LifecycleArgs {
  * of the demo's own recorder/store.
  */
 function runCallLifecycle(args: LifecycleArgs): Promise<void> {
-  const { callId, apiKey, greeting, languages, callRowId, startedAt, toolCtx, finishCtx } = args;
+  const { callId, apiKey, greetingInstruction, languages, callRowId, startedAt, toolCtx, finishCtx } = args;
   let state = emptyCallState();
   let capTimer: NodeJS.Timeout | undefined;
   let closeTimer: NodeJS.Timeout | undefined;
@@ -337,7 +339,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         try {
           ws.send(JSON.stringify({
             type: "response.create",
-            response: { instructions: `Greet the caller with exactly: ${greeting}` },
+            response: { instructions: greetingInstruction },
           }));
         } catch (e) {
           log("greeting send failed", { callId, error: String(e) });
@@ -1020,16 +1022,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     };
     const businessName = brandDisplayName(branding);
 
-    // A blank greeting falls back in the PROFILE's language (D-037): a
-    // Spanish-only line used to open in English, the one language its
-    // callers were said not to speak. `both` still takes English — the rule
-    // `silenceGoodbye` and `handoffLine` mirror.
-    const greetingBase = profile.languages === "es" ? profile.greeting_es : profile.greeting_en;
-    const greeting = greetingBase && greetingBase.trim()
-      ? greetingBase
-      : profile.languages === "es"
-        ? `Gracias por llamar a ${businessName}. ¿En qué le puedo ayudar?`
-        : `Thanks for calling ${businessName}. How can I help you today?`;
+    // D-037: `openingGreeting` (lib/voice/greeting.ts) — a blank greeting
+    // falls back in its own language, and a bilingual line opens with the
+    // English greeting then the Spanish one.
+    const opening = openingGreeting(profile, businessName);
+    const greeting = opening.text;
 
     const promptInput: VoicePromptInput = {
       personaName: profile.persona_name, businessName, greeting,
@@ -1104,7 +1101,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // fallback's error (texml/handoff) once she is reachable again.
     stampHeartbeat("voice.sip_webhook", { ok: true });
     after(() => runCallLifecycle({
-      callId, apiKey, greeting, languages: profile.languages,
+      callId, apiKey, greetingInstruction: opening.instruction, languages: profile.languages,
       callRowId, startedAt: now, toolCtx, finishCtx,
     }));
 

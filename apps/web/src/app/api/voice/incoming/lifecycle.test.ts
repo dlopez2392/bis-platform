@@ -487,6 +487,25 @@ describe("runCallLifecycle — Important #4 ①: greeting payload", () => {
     expect(String(greetingCall![0])).toContain("Gracias por llamar a Rio Roofing Co. ¿En qué le puedo ayudar?");
     expect(String(greetingCall![0])).not.toContain("Thanks for calling");
   });
+
+  // D-037 (owner decision, Option A): a bilingual line's Spanish greeting was
+  // never heard. It now opens with the English greeting, then the Spanish one.
+  // Mutation: send only greeting_en on `both` → FAILS.
+  it("languages: both → ONE greeting instruction carrying the English then the Spanish greeting", async () => {
+    vi.useFakeTimers();
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, languages: "both" });
+    const { ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    const greetings = calls.filter((c) => c.includes("Greet the caller"));
+    expect(greetings).toHaveLength(1);
+    const sent = greetings[0]!;
+    expect(sent).toContain("Hi, thanks for calling Rio Roofing.");
+    expect(sent).toContain("Hola, gracias por llamar.");
+    expect(sent.indexOf("Hi, thanks for calling")).toBeLessThan(sent.indexOf("Hola, gracias"));
+  });
 });
 
 describe("runCallLifecycle — Important #5: connect timeout", () => {
