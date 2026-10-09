@@ -423,7 +423,17 @@ export async function finishCall(
       const contactUrl = contactId
         ? `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`
         : null;
-      const { html, text } = voiceCallAlertEmail({ brand, outcome, summary, callerDisplay, contactUrl });
+      // The call card's line LEADS the alert (owner ruling, 2026-10-09):
+      // "Call back at {number}: {reason}", from what Sofía WROTE DOWN on the
+      // call — the same line and the same rule as the callback To do below
+      // (`callbackWanted`), so a booked call, whose appointment is the
+      // follow-up, keeps today's alert, and so does a call where nothing was
+      // written down. Pure reads of `state`: nothing here waits on the card's
+      // post-call reading, and this leg's place and isolation are unchanged.
+      const callbackReason = callbackWanted(state) ? recordedReason(state) : null;
+      const callbackNumber = callbackReason ? callbackNumberOf(state, ctx.callerNumber) : null;
+      const callback = callbackReason && callbackNumber ? callbackTaskTitle(callbackNumber, callbackReason) : null;
+      const { html, text } = voiceCallAlertEmail({ brand, outcome, summary, callerDisplay, contactUrl, callback });
 
       const failures: string[] = [];
       for (const to of ctx.notifyEmails) {
@@ -786,6 +796,7 @@ export async function finishCall(
         ? await readCallForCard(state.transcript, { label: `finishCall ${meta.callRowId}` })
         : NO_READING;
       const card = composeCallCard(state, ctx.callerNumber, reading);
+      // The stored reason is English today; it follows the reader's language once owners can choose one (F-013 part 1, F-096; owner ruling 2026-10-09).
       if (card) await setCallCard(ctx.db, ctx.accountId, meta.callRowId, card);
     } catch (e) {
       console.error(`finishCall ${meta.callRowId}: call card failed: ${String(e)}`);

@@ -1795,3 +1795,37 @@ describe("finishCall — the call card and the callback To do", () => {
     expect(err.mock.calls.some((c) => String(c[0]).includes("call card failed"))).toBe(true);
   });
 });
+
+/**
+ * Owner ruling 2026-10-09 (O1): the staff alert email LEADS with the call
+ * card's line — "Call back at {number}: {reason}" — built from what Sofía
+ * wrote down on the call, and is unchanged where nothing was.
+ */
+describe("finishCall — the staff alert leads with the call-back line", () => {
+  const caller = () => withTranscript(emptyCallState(), { role: "caller", text: "Hi, my roof is leaking.", at: "t" });
+  const sentText = () => (emailRefs.send.mock.calls[0]![0] as { body: string }).body;
+
+  it("a message call's alert opens with the number as said and the message (mutation: drop the line → FAILS)", async () => {
+    await finishCall(withMessage(caller(), { body: "Wants the owner to call about the leak", callbackNumber: "+19565061545", at: "t" }), ctx, meta);
+    expect(sentText().split("\n")[0]).toBe("Call back at 9565061545: Wants the owner to call about the leak");
+  });
+
+  it("a lead's alert opens with the caller ID and the need when no other number was given", async () => {
+    await finishCall(withLead(caller(), { fields: { fullName: "Ana Ruiz", need: "roof quote" } }), ctx, meta);
+    expect(sentText().split("\n")[0]).toBe("Call back at +19562921696: roof quote");
+  });
+
+  it("a booked call's alert stays as today: the appointment is the follow-up, as for the To do (mutation: gate on recordedReason alone → \"Call back at …: roof quote\", FAILS)", async () => {
+    await finishCall(withBooking(withLead(caller(), { fields: { fullName: "Ana Ruiz", need: "roof quote" } }),
+      { id: "b1", contactName: "Ana", startsAt: "2027-06-02T15:00:00Z", endsAt: "2027-06-02T16:00:00Z" }), ctx, meta);
+    expect(sentText().split("\n")[0]).toBe("Call — booked");
+  });
+
+  it("the alert's ordering is untouched: email before the durable row, as before (mutation: compute the line from a read after finishCallRow → FAILS)", async () => {
+    const order: string[] = [];
+    emailRefs.send.mockImplementation(async () => { order.push("email"); return { providerMessageId: "x" }; });
+    dbMocks.finishCallRow.mockImplementation(async () => { order.push("finishCallRow"); });
+    await finishCall(withMessage(caller(), { body: "Call me", at: "t" }), ctx, meta);
+    expect(order).toEqual(["email", "finishCallRow"]);
+  });
+});
