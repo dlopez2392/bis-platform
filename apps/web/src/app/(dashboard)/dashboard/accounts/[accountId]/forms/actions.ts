@@ -29,7 +29,24 @@ export async function createFormAction(accountId: string, formData: FormData): P
   redirect(`/dashboard/accounts/${accountId}/forms/${id}`);
 }
 
-export async function saveFormAction(accountId: string, formData: FormData): Promise<void> {
+/**
+ * D-024: a mistyped notify address or redirect URL used to fail the save by
+ * THROWING, which `form-editor.tsx`'s catch block reduced to one generic
+ * "Could not save the form." toast — and which a production Next.js deploy
+ * reduces to an opaque digest before the operator's browser ever sees the
+ * real reason at all (same production-redaction fact `action-feedback.ts`'s
+ * own doc comment and `setFromEmailAction`/`setReportEmailsAction` in
+ * settings/actions.ts are already built around). Every validation branch
+ * below now RETURNS `{ ok: false, error }` instead, so the specific,
+ * landscaper-copy reason reaches the toast verbatim. A `formId` missing from
+ * the hidden input, and `updateForm` finding no row to update, stay thrown:
+ * neither is something a mistyped address or URL could cause, and both read
+ * as the genuine "this page may be stale, reload" case the crashed path
+ * exists for.
+ */
+export async function saveFormAction(
+  accountId: string, formData: FormData,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireAccountAccess(accountId);
   const formId = String(formData.get("formId") ?? "");
   if (!formId) throw new Error("formId required");
@@ -46,12 +63,12 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
     if (!isValidFormFieldList(parsed)) throw new Error("invalid field shape");
     fields = parsed;
   } catch {
-    throw new Error(m["forms.invalidFields"]);
+    return { ok: false, error: m["forms.invalidFields"] };
   }
 
   const status = String(formData.get("status") ?? "draft") as FormStatus;
   if (status === "published" && fields.length === 0) {
-    throw new Error("a form needs at least one field before it can be published");
+    return { ok: false, error: m["forms.noFields"] };
   }
 
   const notifyEmails = String(formData.get("notifyEmails") ?? "")
@@ -67,7 +84,7 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
   // losing a recipient.
   for (const email of notifyEmails) {
     if (!isValidEmail(email)) {
-      throw new Error(m["forms.invalidNotifyEmail"].replace("{value}", email));
+      return { ok: false, error: m["forms.invalidNotifyEmail"].replace("{value}", email) };
     }
   }
 
@@ -87,7 +104,7 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
       scheme = null;
     }
     if (scheme !== "http:" && scheme !== "https:") {
-      throw new Error(m["forms.invalidRedirectUrl"]);
+      return { ok: false, error: m["forms.invalidRedirectUrl"] };
     }
   }
 
@@ -123,4 +140,5 @@ export async function saveFormAction(accountId: string, formData: FormData): Pro
 
   revalidatePath(`/dashboard/accounts/${accountId}/forms`);
   revalidatePath(`/dashboard/accounts/${accountId}/forms/${formId}`);
+  return { ok: true };
 }

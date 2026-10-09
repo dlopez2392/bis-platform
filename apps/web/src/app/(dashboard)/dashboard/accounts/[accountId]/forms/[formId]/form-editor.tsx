@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { SubmitButton } from "../../../submit-button";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
+import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { m } from "@/lib/messages";
 import { defaultFieldKey } from "@/lib/forms/editor-helpers";
 
@@ -38,14 +39,21 @@ export function FormEditor({
 }: {
   form: FormRow;
   customFields: CustomFieldDef[];
-  action: (formData: FormData) => Promise<void>;
+  action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   const [fields, setFields] = useState<FormField[]>(form.fields);
   const [successMode, setSuccessMode] = useState(form.success_mode);
 
+  // D-024: a mistyped notify address or redirect URL used to fail silently
+  // into the one generic "Could not save the form." toast — the action now
+  // RETURNS the specific reason instead of throwing it away (see its own
+  // doc comment), and this is the house pattern (action-feedback.ts) that
+  // shows that reason verbatim rather than a second generic message.
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
-    try { await action(formData); toast.success(m["forms.saved"]); }
-    catch { toast.error(m["forms.saveFailed"]); }
+    await notifyActionResult(() => action(formData), toast, {
+      success: m["forms.saved"],
+      crashed: m["forms.saveFailed"],
+    });
   });
 
   const available = [
