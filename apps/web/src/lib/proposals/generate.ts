@@ -74,6 +74,10 @@ const SYSTEM = [
   "Every proposal MUST carry an `evidence` field quoting the CALLER's own words VERBATIM from the transcript.",
   "Never quote the assistant. Never paraphrase. If you cannot quote the caller, do not propose.",
   "Write every title in plain, everyday words a business owner would say out loud — never an internal code, an abbreviation, or `{{template}}` placeholder syntax.",
+  // English titles, like the call card's reason and the To do title
+  // (call-card.ts): the screen is English today, and isCallbackTitle reads
+  // English. Reader-language titles wait for F-013 part 1 / F-096.
+  "Write every title in English, even when the call was in Spanish; evidence stays the caller's own words, verbatim.",
   '`dueAt` MUST be either a full ISO-8601 instant (for example "2026-09-23T09:00:00.000Z") or the literal JSON null value — never a phrase like "next Tuesday morning".',
   'Reply ONLY with JSON: {"proposals":[{"kind":"task","title":"...","dueAt":null,"evidence":"..."}]}',
   'If there is nothing to propose, reply {"proposals":[]}.',
@@ -156,16 +160,33 @@ function systemFor(
  * lib/voice/call-card.ts), a suggestion to do the same thing is the request
  * twice — once as work, once as a question about work — so it is dropped.
  *
- * Narrow on purpose: "call/phone/ring … back" (up to three words between),
- * "callback"/"call-back", and "return … call". A task that merely mentions a
- * call ("Schedule a call with the supplier") or calls someone else about
- * something ("Call the supplier about shingles" has no "back") is a different
- * piece of work and stays. The model is ALSO told (`systemFor`), which
- * catches phrasings this cannot see; this check is the part that does not
- * depend on the model having read it.
+ * Narrow on purpose. It matches "call/phone/ring (or calling/phoning/ringing)
+ * … back" with up to three words between, "callback"/"call-back", "get back
+ * to", and "return … call". It does NOT match:
+ *   - a "back" that is part of another word: "back-order", "back-ordered"
+ *     (`back` may not be followed by a hyphen or an apostrophe);
+ *   - a "back" reached across a word that starts a new subject — about, for,
+ *     on, re, regarding, with, to, and, then, or — or across "the back":
+ *     "Call supplier about back order", "Phone the bank about back taxes",
+ *     "Schedule a call for back porch repair", "Ring up the back-order
+ *     supplier";
+ *   - a "return … call" spanning "and": "Process Ana's return and call the
+ *     supplier".
+ * A task that calls someone ELSE about something stays: it is different work.
+ *
+ * ENGLISH IS ENOUGH: proposal titles are written in English whatever the
+ * call's language (`SYSTEM`, the card reason's rule in call-card.ts), so a
+ * Spanish "devolver la llamada" never reaches this check. The model is ALSO
+ * told not to propose a callback (`systemFor`), which catches phrasings this
+ * cannot see; this check is the part that does not depend on the model
+ * having read it.
  */
-const CALLBACK_TITLE =
-  /\b(?:call|phone|ring)\b(?:\s+\S+){0,3}?\s+back\b|\bcall-?back\b|\breturn\b(?:\s+\S+){0,2}?\s+calls?\b/i;
+const GAP_WORD = String.raw`(?:\s+(?!(?:about|for|on|re|regarding|with|to|and|then|or|the\s+back)\b)\S+)`;
+const CALLBACK_TITLE = new RegExp(
+  String.raw`\b(?:call(?:ing)?|phon(?:e|ing)|ring(?:ing)?)\b${GAP_WORD}{0,3}?\s+back\b(?![-'])` +
+  String.raw`|\bcall-?backs?\b|\bget\s+back\s+to\b|\breturn\b${GAP_WORD}{0,2}?\s+calls?\b`,
+  "i",
+);
 
 export function isCallbackTitle(title: string): boolean {
   return CALLBACK_TITLE.test(title);
@@ -531,7 +552,13 @@ export async function generateProposals(input: {
       // The callback is already a To do (owner ruling 2026-10-09, see
       // isCallbackTitle). Before `attempts++`: a dropped duplicate must not
       // spend a slot a real proposal could use.
-      if (input.callbackTodo && isCallbackTitle(title)) continue;
+      if (input.callbackTodo && isCallbackTitle(title)) {
+        // One info line per drop, the title only: a dropped suggestion is
+        // otherwise invisible, and a matcher that drops a real task has to
+        // be findable from the logs.
+        console.log(`generateProposals: dropped "${title}" for call ${input.callId}: the callback To do already exists`);
+        continue;
+      }
       // THE BOUNDARY, and note WHAT IS STORED. `groundedEvidence` returns the
       // caller's WHOLE TURN, not the model's excerpt of it, and that turn is
       // what the reviewer sees.

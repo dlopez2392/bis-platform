@@ -1338,6 +1338,14 @@ describe("generateProposals — no callback suggestion beside a callback To do",
     expect(db.rows[0].payload.title).toBe("Call Ana back about the dining table");
   });
 
+  it("each dropped title is logged once, by its title only (mutation: drop the log → FAILS)", async () => {
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+    await generateProposals({ ...base, db: fakeDb(), contactId: "c1", callbackTodo: true,
+      fetchImpl: modelReturning({ proposals: [callback, quote] }) });
+    const lines = info.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("callback To do"));
+    expect(lines).toEqual([`generateProposals: dropped "Call Ana back about the dining table" for call call1: the callback To do already exists`]);
+  });
+
   it("the model is told, only when the To do exists (mutation: always say it → FAILS; never → FAILS)", async () => {
     const withTodo = modelReturning({ proposals: [] });
     await generateProposals({ ...base, db: fakeDb(), callbackTodo: true, fetchImpl: withTodo });
@@ -1348,14 +1356,32 @@ describe("generateProposals — no callback suggestion beside a callback To do",
   });
 });
 
+describe("proposal titles are English (orchestrator, with owner ruling O-2 item 3)", () => {
+  it("the prompt says so, whatever language the call was in — so the English callback check is enough (mutation: drop the sentence → FAILS)", async () => {
+    const f = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db: fakeDb(), fetchImpl: f });
+    expect(systemPromptOf(f)).toContain("Write every title in English, even when the call was in Spanish");
+  });
+});
+
 describe("isCallbackTitle: what counts as a callback-style task", () => {
   it.each([
     "Call Ana back", "Call back Ana Ruiz", "call her back Tuesday morning", "Callback the customer",
     "Call-back about the roof", "Phone Luis back", "Ring them back", "Return Ana's call", "Return the call",
+    "Call the customer back", "Call Mr. Garza back",
+    // Round 2 must-drops: a gerund, and the plain-English "get back to".
+    "Calling Ana back", "Phoning Luis back", "Get back to Ana",
   ])("%s → yes", (title) => { expect(isCallbackTitle(title)).toBe(true); });
 
   it.each([
     "Send a dining table quote", "Order shingles", "Book a back-room inspection",
     "Schedule a call with the supplier", "Email Ana the estimate", "Back up the photos",
+    // Round 2 must-keeps (review m1): a "back" that is part of another word or
+    // phrase, reached across about/for/up the/and, is not a callback.
+    "Call supplier about back order", "Ring up the back-order supplier", "Phone the bank about back taxes",
+    "Schedule a call for back porch repair", "Process Ana's return and call the supplier",
+    "Call the supplier about back-ordered shingles",
+    // Only the hyphen guard keeps this one: no stop word stands between.
+    "Call Rio Supply back-order desk",
   ])("%s → no", (title) => { expect(isCallbackTitle(title)).toBe(false); });
 });
