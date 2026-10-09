@@ -134,7 +134,10 @@ Read off the repository on 2026-10-07 (main at `1e4f0dd2`):
 
 CI and e2e no longer need it. Since #133 they run on `bis-ci`, whose only
 Third-Party Auth entry is the development instance (`ci-supabase-project.md`,
-section 1 step 2). Nothing in CI fetches a Vercel URL: no workflow names
+section 1 step 2). (Since 2026-10-08 both CI jobs run on a stack inside their
+own runner instead; e2e's stack trusts the same development instance,
+`ci-supabase-project.md` section 11. Neither needs the dev issuer on
+production. The table above is the 2026-10-07 reading.) Nothing in CI fetches a Vercel URL: no workflow names
 `vercel.app` or a preview, and Playwright starts its own server on
 `localhost:3000` (`apps/web/playwright.config.ts`, `webServer`). The ruleset on
 `main` requires only `verify` and `e2e`, not a Vercel check. Before the work,
@@ -572,12 +575,15 @@ unless that changes.
   page reads through `dbForRequest()`, so it proves the publishable key and
   the CI project's trust of the development instance.
 
-**While Preview is on the CI project,** it shares the account that every e2e
-run uses. Browse freely. Mutate only an account you create yourself, never
-Test Client One (the same rule `CLAUDE.md` sets for specs), and check
-`gh run list --workflow ci.yml --status in_progress` first. The CI project is
-disposable (`ci-supabase-project.md` section 8): a rebuild drops anything
-created from a preview.
+**While Preview is on the CI project,** it shares Test Client One with local
+e2e runs on danlo's machine and with the screenshot capture. (CI's own e2e
+seeds its own copy in a per-run stack since 2026-10-08,
+`ci-supabase-project.md` section 11, so it no longer shares this one.)
+Browse freely. Mutate only an account you create yourself, never Test
+Client One (the same rule `CLAUDE.md` sets for specs), and check
+`gh run list --workflow screenshots.yml --status in_progress` first. The CI
+project is disposable (`ci-supabase-project.md` section 8): a rebuild drops
+anything created from a preview.
 
 **Roll back.** PATCH the step-2 rows back to their targets in the baseline
 file, delete the step-4 rows, and build a new preview. Rows deleted in step 3

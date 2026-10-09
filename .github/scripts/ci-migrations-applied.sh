@@ -19,9 +19,20 @@
 # NOT a failure. It does not check production: e2e holds no production
 # credential, and must not.
 #
-# Reads SUPABASE_DB_URL (the CI project's Session pooler URI, which the e2e
-# job's guard has already accepted). Never prints it. Needs bash and psql.
-# A history it cannot read is a FAILURE, never a skip.
+# Reads BIS_CI_SUPABASE_REF and BIS_CI_SUPABASE_DB_URL: the CI project's ref
+# (a literal) and Session pooler URI (repository secret CI_SUPABASE_DB_URL),
+# which ci.yml gives THIS STEP ALONE. Never SUPABASE_DB_URL: since 2026-10-08
+# the e2e job runs on a throwaway stack in its own runner, the app's
+# SUPABASE_DB_URL is that stack's, and the job holds no CI-project value for
+# the app at all. Nothing ahead of this step checks the URL against bis-ci any
+# more (the e2e guard now refuses every cloud value), so it is checked HERE,
+# before psql sees it: production's ref nowhere, and exactly the form
+#   postgres[ql]://postgres.<ref>:<password>@<host>.pooler.supabase.com:<5432|6543>/postgres[?sslmode=require]
+# (the form packages/db/src/ci/target.ts accepts for the same secret). The
+# read runs in ONE READ-ONLY TRANSACTION sent as one command (see the psql
+# call for why one, not a session setting): this is a check, and bis-ci is
+# shared with Vercel Preview and the screenshot capture. Never prints the URL.
+# Needs bash and psql. A history it cannot read is a FAILURE, never a skip.
 #
 # Tested by apps/web/ci/ci-migrations-applied.test.ts (fake psql).
 
@@ -31,8 +42,28 @@ set -uo pipefail
 MIGRATIONS_DIR="packages/db/supabase/migrations"
 FIX="Push it to the CI project from this branch: gh workflow run ci-project-setup.yml --ref <this branch> -f step=push-dry-run (it must list exactly the new file), then -f step=push; then production, then parity (docs/runbooks/ci-supabase-project.md, section 6). Then re-run this job."
 
-if [ -z "${SUPABASE_DB_URL:-}" ]; then
-  echo "::error::SUPABASE_DB_URL is empty or missing: the e2e job maps the CI project's repository secret CI_SUPABASE_DB_URL onto it. Nothing was checked."
+PROD_REF="tlbkbmlrfafquucsmsmm"
+ref="${BIS_CI_SUPABASE_REF:-}"
+db_url="${BIS_CI_SUPABASE_DB_URL:-}"
+if [ -z "$ref" ]; then
+  echo "::error::BIS_CI_SUPABASE_REF is empty or missing: it is a literal in this step's env in .github/workflows/ci.yml, the CI project's ref. Nothing was checked."
+  exit 1
+fi
+if [ -z "$db_url" ]; then
+  echo "::error::BIS_CI_SUPABASE_DB_URL is empty or missing: this step's env in .github/workflows/ci.yml maps the repository secret CI_SUPABASE_DB_URL onto it. Nothing was checked."
+  exit 1
+fi
+case "${ref,,} ${db_url,,}" in
+  *"$PROD_REF"*)
+    echo "::error::BIS_CI_SUPABASE_REF or BIS_CI_SUPABASE_DB_URL names the production Supabase project ($PROD_REF). This check reads the CI project only. Nothing was checked."
+    exit 1 ;;
+esac
+if ! [[ "$ref" =~ ^[a-z0-9]{20}$ ]]; then
+  echo "::error::BIS_CI_SUPABASE_REF is not shaped like a Supabase project ref (20 lowercase letters and digits). Nothing was checked."
+  exit 1
+fi
+if ! [[ "$db_url" =~ ^postgres(ql)?://postgres\.${ref}:[A-Za-z0-9._~%-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.pooler\.supabase\.com:(5432|6543)/postgres(\?sslmode=require)?$ ]]; then
+  echo "::error::BIS_CI_SUPABASE_DB_URL is not the CI project's Session pooler URI (user postgres.$ref on a *.pooler.supabase.com host, database postgres, no query but sslmode=require). Fix: Supabase dashboard > project $ref > Connect > Session pooler, into the repository secret CI_SUPABASE_DB_URL. Nothing was checked."
   exit 1
 fi
 if ! command -v psql >/dev/null 2>&1; then
@@ -50,8 +81,15 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 1
 fi
 
-if ! applied_raw="$(psql "$SUPABASE_DB_URL" -X -tA -v ON_ERROR_STOP=1 \
-  -c "select version from supabase_migrations.schema_migrations order by version")"; then
+# ONE command, ONE read-only transaction. The URL check above admits the
+# transaction pooler (6543), which may run each transaction on a different
+# server connection: a separate `set session characteristics … read only`
+# could land on one and the read on another, read-write. A single query
+# string holding begin…commit is one transaction, kept on one connection by
+# either pooler. (psql 15+ prints every statement's result from one -c; -q
+# drops the BEGIN/COMMIT tags, and only digit lines are read below anyway.)
+if ! applied_raw="$(psql "$db_url" -X -q -tA -v ON_ERROR_STOP=1 \
+  -c "begin transaction read only; select version from supabase_migrations.schema_migrations order by version; commit;")"; then
   echo "::error::Could not read the CI project's migration history (supabase_migrations.schema_migrations); psql's own message is above. A gate that cannot check is red, not skipped: re-run once, and if it fails again, check the CI project (docs/runbooks/ci-supabase-project.md)."
   exit 1
 fi
@@ -59,7 +97,8 @@ fi
 declare -A applied=()
 while IFS= read -r line; do
   v="$(printf '%s' "$line" | tr -d '[:space:]')"
-  [ -n "$v" ] && applied["$v"]=1
+  # Versions only: a status line psql printed (e.g. SET) is not a migration.
+  [[ "$v" =~ ^[0-9]+$ ]] && applied["$v"]=1
 done <<< "$applied_raw"
 
 declare -A local_versions=()

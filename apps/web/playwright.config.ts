@@ -66,11 +66,16 @@ if (missingEnv.length > 0) {
 /**
  * Refuses production before the build starts or any project runs.
  *
- * CI runs this suite on its own Supabase project behind
- * .github/scripts/ci-target-guard.sh. A local run reads apps/web/.env.local,
- * and until that file is switched (docs/runbooks/ci-supabase-project.md,
- * section 9) it names production, where the setup creates accounts, Clerk
- * users and Storage objects and the specs write.
+ * Since 2026-10-08, CI runs this suite against a throwaway Supabase stack
+ * started INSIDE its own runner (.github/workflows/ci.yml, "Start a local
+ * Supabase stack"; built from the branch's own migrations by
+ * .github/scripts/ci-local-supabase.sh) rather than the standing bis-ci
+ * cloud project — guarded, both before and after that stack comes up, by
+ * .github/scripts/ci-target-guard.sh. A local run reads
+ * apps/web/.env.local, and until that file is switched
+ * (docs/runbooks/ci-supabase-project.md, section 9) it names production,
+ * where the setup creates accounts, Clerk users and Storage objects and the
+ * specs write.
  *
  * Here, not only in auth.setup.ts, because the setup project can be skipped:
  * `--no-deps` runs the chromium specs without it, and `--project=teardown`

@@ -28,6 +28,8 @@ const INSTALL_CLI = "bash .github/scripts/ci-supabase-cli.sh";
 const START_STACK = "bash .github/scripts/ci-local-supabase.sh";
 /** e2e's check that the CI project holds every migration of the branch (ci-migrations-applied.test.ts). */
 const MIGRATIONS_APPLIED = "bash .github/scripts/ci-migrations-applied.sh";
+/** e2e seeds the stack in its own runner, never the CI project (packages/db/src/ci-seed/config.ts ciSeedMode). */
+const SEED_LOCAL = "pnpm --filter @bis/db ci:seed:local";
 /** The names the code reads to find Supabase. verify gets them from its own stack only. */
 const SUPABASE_NAMES = [
   "BIS_CI_SUPABASE_REF", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY",
@@ -143,6 +145,33 @@ function jobEnv(jobLines: string[]): Record<string, string> {
   return out;
 }
 
+/**
+ * `NAME: value` pairs in the `env:` of the ONE step of a job whose `run:` is
+ * exactly `run`. A step's env is scoped to that step: GitHub hands it to no
+ * other step, which is why the CI project's DB URL may live there and nowhere
+ * else in ci.yml.
+ */
+function stepEnv(jobLines: string[], run: string): Record<string, string> {
+  const runAt = jobLines.findIndex((l) => l.trim() === `run: ${run}`);
+  if (runAt < 0) throw new Error(`no step runs "${run}"`);
+  let dash = runAt;
+  while (dash >= 0 && !/^\s*- /.test(jobLines[dash]!)) dash--;
+  const dashIndent = jobLines[dash]!.search(/\S/);
+  const rest = jobLines.slice(dash + 1);
+  const end = rest.findIndex((l) => l.trim() !== "" && l.search(/\S/) <= dashIndent);
+  const block = end < 0 ? rest : rest.slice(0, end);
+  const envAt = block.findIndex((l) => /^\s+env:\s*$/.test(l));
+  if (envAt < 0) return {};
+  const envIndent = block[envAt]!.search(/\S/);
+  const out: Record<string, string> = {};
+  for (const line of block.slice(envAt + 1)) {
+    if (line.trim() !== "" && line.search(/\S/) <= envIndent) break;
+    const m = /^\s+([A-Za-z0-9_]+): (.+)$/.exec(line);
+    if (m?.[1] && m[2]) out[m[1]] = m[2].trim();
+  }
+  return out;
+}
+
 const ciLines = codeLines(read("../../../.github/workflows/ci.yml"));
 const ciEnv = mapping(topLevelBlock(ciLines, "env"));
 const ciJobs = jobs(ciLines);
@@ -166,13 +195,15 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(found).toEqual([]);
   });
 
-  it("reads secrets only by name, and only the six it needs", () => {
+  it("reads secrets only by name, and only the five it needs (mutation: re-add `SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SECRET_KEY }}` to e2e → FAILS)", () => {
     // `secrets['X']` and `toJSON(secrets)` reach a production secret without
     // ever writing `secrets.X`. So every mention of the secrets context must
     // be exactly `secrets.<one of these>`; anything else is listed.
+    // CI_SUPABASE_SECRET_KEY left this list on 2026-10-08: neither job writes
+    // to the CI project any more, so nothing here may hold its secret key.
     const allowed = new Set([
       "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY",
-      "CI_SUPABASE_SECRET_KEY", "CI_SUPABASE_DB_URL", "OPENAI_API_KEY",
+      "CI_SUPABASE_DB_URL", "OPENAI_API_KEY",
       "CI_STRIPE_SECRET_KEY",
     ]);
     const offending = ciLines.flatMap((line) =>
@@ -187,22 +218,30 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(found).toEqual([]);
   });
 
-  it("maps the CI project's secrets onto the names the code reads, in the e2e job's own env", () => {
-    const e2eEnv = jobEnv(job("e2e"));
-    expect(e2eEnv.SUPABASE_SERVICE_ROLE_KEY).toBe("${{ secrets.CI_SUPABASE_SECRET_KEY }}");
-    expect(e2eEnv.SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
-    expect(e2eEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY).toMatch(/^sb_publishable_/);
+  // verify and e2e each run on a stack they start in their own runner (both
+  // since 2026-10-08). A cloud value in the workflow-level env or a job's env
+  // would reach the suites or the app: depending on how GitHub orders `env:`
+  // against GITHUB_ENV it could aim them back at the shared project, and it
+  // would hand a job a credential it has no use for. The guard's two local
+  // modes refuse that at run time; this refuses it in review.
+  it.each(["verify", "e2e"])("gives %s no cloud Supabase value: none in the workflow-level env, none in its job env (mutation: put NEXT_PUBLIC_SUPABASE_URL back in e2e's env → FAILS)", (id) => {
+    expect(SUPABASE_NAMES.filter((n) => n in ciEnv)).toEqual([]);
+    expect([...SUPABASE_NAMES, "BIS_CI_SUPABASE_DB_URL"].filter((n) => n in jobEnv(job(id)))).toEqual([]);
   });
 
-  // verify runs on a stack it starts in its own runner (2026-10-08). A cloud
-  // value in the workflow-level env would reach verify too: it would hand
-  // verify the CI project's secret key for nothing, and depending on how
-  // GitHub orders `env:` against GITHUB_ENV it could aim verify's suites back
-  // at the shared project. The guard's --before-local-stack refuses that at
-  // run time; this refuses it in review.
-  it("gives verify no cloud Supabase value: none in the workflow-level env, none in its own (mutation: move NEXT_PUBLIC_SUPABASE_URL back to the top-level env → FAILS)", () => {
-    expect(SUPABASE_NAMES.filter((n) => n in ciEnv)).toEqual([]);
-    expect(SUPABASE_NAMES.filter((n) => n in jobEnv(job("verify")))).toEqual([]);
+  it("never names the CI project's secret key at all: neither job writes to that project (mutation: map CI_SUPABASE_SECRET_KEY into e2e again → FAILS)", () => {
+    expect(ciLines.filter((l) => l.includes("CI_SUPABASE_SECRET_KEY"))).toEqual([]);
+  });
+
+  // The ONE place ci.yml still reads the CI project (2026-10-08): e2e's check
+  // that bis-ci holds every migration of the branch ("CI project FIRST"). It
+  // needs bis-ci's DB URL, read-only, and nothing else does, so the secret is
+  // scoped to that step under a name no app code reads; the guard refuses it
+  // in the job's scope (ci-target-guard.test.ts).
+  it("reads secrets.CI_SUPABASE_DB_URL on exactly one line, inside the migration check step's own env, as BIS_CI_SUPABASE_DB_URL (mutation: map it in e2e's job env, or as SUPABASE_DB_URL → FAILS)", () => {
+    const matches = ciLines.filter((l) => l.includes("secrets.CI_SUPABASE_DB_URL"));
+    expect(matches.map((l) => l.trim())).toEqual(["BIS_CI_SUPABASE_DB_URL: ${{ secrets.CI_SUPABASE_DB_URL }}"]);
+    expect(stepEnv(job("e2e"), MIGRATIONS_APPLIED).BIS_CI_SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
     expect(job("verify").filter((l) => /secrets\.CI_SUPABASE_/.test(l))).toEqual([]);
   });
 
@@ -228,13 +267,12 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(ciLines.filter((l) => l.includes("STRIPE_WEBHOOK_SECRET") && !l.trim().startsWith("#"))).toHaveLength(1);
   });
 
-  it("names the same CI project as the setup workflow that builds it, as a literal URL, in e2e's env", () => {
-    // The project ci-project-setup.yml bootstraps, pushes and seeds is the one
-    // e2e must run on. A rebuilt project changes both files together.
-    const e2eEnv = jobEnv(job("e2e"));
+  it("the migration check names the same CI project as the setup workflow that builds it, as a literal ref", () => {
+    // The project ci-project-setup.yml bootstraps and pushes is the one whose
+    // history the branch is checked against. A rebuilt project changes both
+    // files together.
     expect(setupEnv.BIS_CI_SUPABASE_REF).toMatch(/^[a-z0-9]{20}$/);
-    expect(e2eEnv.BIS_CI_SUPABASE_REF).toBe(setupEnv.BIS_CI_SUPABASE_REF);
-    expect(e2eEnv.NEXT_PUBLIC_SUPABASE_URL).toBe(`https://${setupEnv.BIS_CI_SUPABASE_REF}.supabase.co`);
+    expect(stepEnv(job("e2e"), MIGRATIONS_APPLIED).BIS_CI_SUPABASE_REF).toBe(setupEnv.BIS_CI_SUPABASE_REF);
   });
 });
 
@@ -257,15 +295,16 @@ describe("screenshots.yml captures on the CI project, never production's", () =>
     expect(shotLines.filter((line) => line.includes(PROD_REF) || line.includes(PROD_PUBLISHABLE_PREFIX))).toEqual([]);
   });
 
-  it("names the same CI project as ci.yml's e2e job, with the CI_* secrets mapped onto the names the code reads", () => {
-    // ci.yml holds the CI project's literals in e2e's job env since
-    // 2026-10-08 (verify runs on its own stack and holds none). Compared to
-    // a defined value, so the two can never "agree" by both being absent.
-    const e2eEnv = jobEnv(job("e2e"));
-    expect(e2eEnv.BIS_CI_SUPABASE_REF).toMatch(/^[a-z0-9]{20}$/);
-    expect(env.BIS_CI_SUPABASE_REF).toBe(e2eEnv.BIS_CI_SUPABASE_REF);
-    expect(env.NEXT_PUBLIC_SUPABASE_URL).toBe(e2eEnv.NEXT_PUBLIC_SUPABASE_URL);
-    expect(env.NEXT_PUBLIC_SUPABASE_ANON_KEY).toBe(e2eEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+  it("names the same CI project as the setup workflow that builds it, with the CI_* secrets mapped onto the names the code reads", () => {
+    // Pinned against ci-project-setup.yml since 2026-10-08: ci.yml's jobs both
+    // run on stacks of their own and hold none of the CI project's literals
+    // (e2e's migration check holds only its ref). Compared to a defined
+    // value, so the two can never "agree" by both being absent.
+    expect(setupEnv.BIS_CI_SUPABASE_REF).toMatch(/^[a-z0-9]{20}$/);
+    expect(env.BIS_CI_SUPABASE_REF).toBe(setupEnv.BIS_CI_SUPABASE_REF);
+    expect(env.NEXT_PUBLIC_SUPABASE_URL).toBe(setupEnv.NEXT_PUBLIC_SUPABASE_URL);
+    expect(env.NEXT_PUBLIC_SUPABASE_URL).toBe(`https://${setupEnv.BIS_CI_SUPABASE_REF}.supabase.co`);
+    expect(env.NEXT_PUBLIC_SUPABASE_ANON_KEY).toMatch(/^sb_publishable_/);
     expect(env.SUPABASE_SERVICE_ROLE_KEY).toBe("${{ secrets.CI_SUPABASE_SECRET_KEY }}");
     expect(env.SUPABASE_DB_URL).toBe("${{ secrets.CI_SUPABASE_DB_URL }}");
   });
@@ -284,20 +323,31 @@ describe("screenshots.yml captures on the CI project, never production's", () =>
     expect(jobKeys(capture)).not.toContain("environment");
   });
 
-  it("queues on ci.yml's e2e lock, never cancelling (mutation: back to e2e-shared-supabase → FAILS)", () => {
+  // The capture rewrites a whole account in the CI project when it re-seeds,
+  // so two captures must not overlap: it keeps its queue, under the name it
+  // has always taken. ci.yml's e2e took the same lock until 2026-10-08,
+  // because both drove a browser through the CI project; e2e now runs on a
+  // stack in its own runner and takes no lock at all (asserted below).
+  it("queues on its own lock for the CI project, never cancelling (mutation: back to e2e-shared-supabase → FAILS)", () => {
     const lock = mapping(topLevelBlock(shotLines, "concurrency"));
-    const e2eLock = job("e2e").join("\n").match(/group: (\S+)/)?.[1];
-    expect(e2eLock).toBe("e2e-ci-supabase");
-    expect(lock.group).toBe(e2eLock);
+    expect(lock.group).toBe("e2e-ci-supabase");
     expect(lock["cancel-in-progress"]).toBe("false");
     expect(lock.queue).toBe("max");
   });
 });
 
 describe("ci.yml's jobs", () => {
-  it("keeps the job ids the main ruleset requires: verify and e2e", () => {
+  // e2e and verify start TOGETHER since 2026-10-08. `needs: verify` existed
+  // to stop the two racing for one cloud database (the b9f31dc timeouts, in
+  // git history); each now has a stack in its own runner, so nothing couples
+  // them. A red verify still blocks the merge on its own: the ruleset on main
+  // requires BOTH checks green on the head commit, and a skipped e2e would be
+  // the one way to weaken that (a check skipped by a job's dependency is not
+  // a failure). What it costs: e2e also runs on a commit whose verify is red.
+  it("keeps the job ids the main ruleset requires, and starts e2e beside verify, not after it (mutation: re-add `needs: verify` → FAILS)", () => {
     expect(Object.keys(ciJobs)).toEqual(expect.arrayContaining(["verify", "e2e"]));
-    expect(job("e2e").some((line) => /^\s+needs: verify\s*$/.test(line))).toBe(true);
+    expect(jobKeys(job("e2e"))).not.toContain("needs");
+    expect(jobKeys(job("verify"))).not.toContain("needs");
   });
 
   it.each(["verify", "e2e"])("%s has no job-level name, if or continue-on-error", (id) => {
@@ -311,7 +361,7 @@ describe("ci.yml's jobs", () => {
 
   it.each([
     ["verify", GUARD_BEFORE_LOCAL],
-    ["e2e", GUARD],
+    ["e2e", GUARD_BEFORE_LOCAL],
   ])("%s runs the target guard straight after checkout, before anything else", (id, guard) => {
     const [first, second] = steps(job(id));
     expect(first?.uses ?? "").toMatch(/^actions\/checkout@/);
@@ -340,6 +390,23 @@ describe("ci.yml's jobs", () => {
     ]);
   });
 
+  // e2e since 2026-10-08: the same stack as verify, started with the one
+  // difference e2e needs (PostgREST trusts the Clerk development instance its
+  // sign-ins come from), checked by the same guard, then seeded and driven.
+  // ORDER IS LOAD-BEARING: Playwright builds the app inside its own step
+  // (`pnpm build && pnpm start`), and NEXT_PUBLIC_SUPABASE_URL is baked in at
+  // build time, so the stack must be up, and its values in GITHUB_ENV, before
+  // that step. The migration check reads bis-ci, read-only, before anything
+  // else costs time. "|" is the Chromium install, a multi-line `run:`.
+  it("e2e runs exactly the guard, the docs-only decision, the migration check on bis-ci, the install, its own Clerk-trusting stack, the guard again on that stack, the seed of THAT stack, Chromium and Playwright, in that order (mutation: start the stack after Playwright, or without --trust-clerk-dev-instance → FAILS)", () => {
+    const runs = steps(job("e2e")).flatMap((s) => (s.run ? [s.run] : []));
+    expect(runs).toEqual([
+      GUARD_BEFORE_LOCAL, SCOPE, MIGRATIONS_APPLIED, "pnpm install --frozen-lockfile",
+      INSTALL_CLI, `${START_STACK} --trust-clerk-dev-instance`, GUARD_LOCAL,
+      SEED_LOCAL, "|", "pnpm --filter web test:e2e",
+    ]);
+  });
+
   // The docs-only gate. A docs-only push must still END each required job
   // `success` on the head SHA, so the gate is a step, never a job-level `if:`
   // (asserted above) and never a workflow path filter (asserted here).
@@ -347,8 +414,7 @@ describe("ci.yml's jobs", () => {
   // "Pending" and a PR that requires them "will be blocked from merging";
   // a job skipped by `if:` "will report its status as Success" — but its
   // check run's conclusion reads `skipped`, which is not what this repo's
-  // head-SHA check-run reading expects to see, and e2e's `needs: verify`
-  // would inherit the skip.
+  // head-SHA check-run reading expects to see.
   it("the workflow has no path, branch or tag filter, so every push gets both required checks (mutation: `paths-ignore: ['**/*.md']` under push → FAILS)", () => {
     const on = topLevelBlock(ciLines, "on").map((l) => l.trim()).filter(Boolean);
     expect(on).toEqual(["push:", "workflow_dispatch:"]);
@@ -384,40 +450,39 @@ describe("ci.yml's jobs", () => {
       expect(all[at]?.if, `${id}: ${run}`).toBe(DOCS_ONLY_IF);
     };
     guarded("verify", "pnpm check");
-    guarded("e2e", "pnpm --filter @bis/db ci:seed");
+    guarded("e2e", MIGRATIONS_APPLIED);
+    guarded("e2e", `${START_STACK} --trust-clerk-dev-instance`);
+    guarded("e2e", SEED_LOCAL);
     guarded("e2e", "pnpm --filter web test:e2e");
   });
 
-  // PR #200 review: verify used to fail a branch whose new migration had not
-  // reached the CI project, because its db suite ran there. It no longer
-  // does (it builds its own database), so e2e checks it instead, straight
-  // after its guard and before it writes anything to that project.
-  it("e2e checks every branch migration is on the CI project after its guard and before it seeds (mutation: drop the step, or move it after ci:seed → FAILS)", () => {
+  // "Every new migration goes to the CI project FIRST" (CLAUDE.md). Since
+  // verify and then e2e moved onto stacks built from the branch's own files
+  // (2026-10-08), no gate runs on bis-ci, so nothing would notice a migration
+  // that never reached it. This step is that gate. It lives in e2e because e2e
+  // is a required check; verify must hold no CI-project value at all. It is a
+  // step of a required job rather than a job of its own, because a new job is
+  // not a required check until the ruleset is changed.
+  it("e2e checks every branch migration is on the CI project, with its own step-scoped values, before anything else costs time (mutation: drop the step, or move it after the stack → FAILS)", () => {
     const all = steps(job("e2e"));
     const runs = all.map((s) => s.run ?? "");
     const check = runs.indexOf(MIGRATIONS_APPLIED);
-    expect(check, "migration check step").toBeGreaterThan(runs.indexOf(GUARD));
-    expect(check).toBeGreaterThan(runs.indexOf(SCOPE));
-    expect(check).toBeLessThan(runs.indexOf("pnpm --filter @bis/db ci:seed"));
+    expect(check, "migration check step").toBe(runs.indexOf(SCOPE) + 1);
+    expect(check).toBeLessThan(runs.indexOf(`${START_STACK} --trust-clerk-dev-instance`));
     expect(all[check]?.if).toBe(DOCS_ONLY_IF);
+    expect(Object.keys(stepEnv(job("e2e"), MIGRATIONS_APPLIED)).sort()).toEqual(["BIS_CI_SUPABASE_DB_URL", "BIS_CI_SUPABASE_REF"]);
     // verify must not: it holds no CI-project credential to check with.
     expect(steps(job("verify")).map((s) => s.run)).not.toContain(MIGRATIONS_APPLIED);
   });
 
-  it("e2e seeds the CI project after the install and before Playwright", () => {
-    const runs = steps(job("e2e")).flatMap((s) => (s.run ? [s.run] : []));
-    const install = runs.indexOf("pnpm install --frozen-lockfile");
-    const seed = runs.indexOf("pnpm --filter @bis/db ci:seed");
-    const playwright = runs.indexOf("pnpm --filter web test:e2e");
-    expect(install, "install step").toBeGreaterThanOrEqual(0);
-    expect(seed, "ci:seed step").toBeGreaterThan(install);
-    expect(playwright, "Playwright step").toBeGreaterThan(seed);
-  });
-
-  it("e2e queues in its own CI-project group and is never cancelled", () => {
-    const text = job("e2e").join("\n");
-    expect(/^\s+group: (\S+)\s*$/m.exec(text)?.[1]).toBe("e2e-ci-supabase");
-    expect(/^\s+cancel-in-progress: (\S+)\s*$/m.exec(text)?.[1]).toBe("false");
+  // e2e left the shared project on 2026-10-08: two e2e runs, on two
+  // branches, now run side by side, each on its own stack. What they still
+  // share is the Clerk development instance, where each mints its own
+  // throwaway users and the sweep deletes only what is 30 minutes old
+  // (e2e/fixtures/stale.ts), so a run never touches another run's users.
+  it("e2e joins no job-level concurrency group, so branches' e2e runs go in parallel (mutation: re-add `group: e2e-ci-supabase` → FAILS)", () => {
+    expect(jobKeys(job("e2e"))).not.toContain("concurrency");
+    expect(job("e2e").filter((l) => /^\s+(group|queue|cancel-in-progress):/.test(l))).toEqual([]);
   });
 
   // 2026-10-08: verify shares no database with any other run (its stack lives
@@ -430,18 +495,6 @@ describe("ci.yml's jobs", () => {
     expect(job("verify").filter((l) => /^\s+(group|queue|cancel-in-progress):/.test(l))).toEqual([]);
   });
 
-  // Cross-branch cancellation (2026-10-07). A concurrency group holds one
-  // running and, by default (`queue: single`), ONE pending entry: a newer
-  // pending job replaces the older one. Both groups above are repo-wide, so
-  // any push on any branch cancelled whichever other branch's job was
-  // waiting (~5 times that day). `queue: max` lets up to 100 wait, FIFO
-  // (GitHub docs, "Queueing multiple pending runs"). e2e's group stays
-  // repo-wide because it is not safe to run twice at once: every run shares
-  // Test Client One by design. (verify left its group on 2026-10-08, above.)
-  it("e2e lets every other branch's job wait in line instead of replacing it (mutation: drop `queue: max` → FAILS)", () => {
-    const text = job("e2e").join("\n");
-    expect(/^\s+queue: (\S+)\s*$/m.exec(text)?.[1]).toBe("max");
-  });
 
   it("a newer push supersedes only ITS OWN branch's older run, and a run on main is never superseded (mutation: group `ci-${{ github.ref }}` → main's runs replace each other → FAILS; cancel-in-progress `true` → FAILS)", () => {
     // Workflow level, one group per branch ref, cancelling: a second push to

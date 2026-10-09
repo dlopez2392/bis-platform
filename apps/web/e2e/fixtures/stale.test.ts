@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  FIXTURE_ACCOUNT_RE, FIXTURE_BLUEPRINT_RE, FIXTURE_CO_ACCOUNT_RE, FIXTURE_EMAIL_RE,
+  FIXTURE_ACCOUNT_RE, FIXTURE_AGENCY_ORG_RE, FIXTURE_BLUEPRINT_RE, FIXTURE_CO_ACCOUNT_RE, FIXTURE_EMAIL_RE,
   FIXTURE_FORM_RE, FIXTURE_PLAN_RE, STALE_AFTER_MS,
   fixtureStamp, isStaleFixture, isStaleFixtureAccount, isStaleFixtureBlueprint,
   isStaleFixtureForm, isStaleFixturePlan, isUuid,
@@ -219,6 +219,37 @@ describe("FIXTURE_CO_ACCOUNT_RE", () => {
     expect(FIXTURE_CO_ACCOUNT_RE.test(`E2E Co ${STAMP}0`)).toBe(false);
     expect(FIXTURE_CO_ACCOUNT_RE.test(`E2E Client Co ${STAMP}`)).toBe(false);
     expect(FIXTURE_ACCOUNT_RE.test(`E2E Co ${STAMP}`)).toBe(false);
+  });
+});
+
+// The per-run agency user's OWN organization (auth.setup.ts, 2026-10-08). A
+// Clerk org with no account row: it exists so the agency session has an
+// active org without taking a seat in Test Client One's (5 per client org).
+// A killed run leaks it, and only the clerk-orgs leg, by name, can find it.
+describe("the agency's per-run organization", () => {
+  it("is swept by the account/org decision once older than the window, never sooner", () => {
+    expect(isStaleFixtureAccount(`E2E Agency Org ${STAMP}`, LATER)).toBe(true);
+    expect(isStaleFixtureAccount(`E2E Agency Org ${STAMP}`, STAMP + 1000)).toBe(false);
+  });
+
+  it("refuses every near-miss, however old", () => {
+    for (const value of [
+      `E2E Agency ${STAMP}`,
+      `E2E Agency Org ${STAMP} LLC`,
+      `My E2E Agency Org ${STAMP}`,
+      `E2E Agency Organization ${STAMP}`,
+      `e2e Agency Org ${STAMP}`,
+      `E2E Agency Org ${String(STAMP).slice(0, 12)}`,
+      `E2E Agency Org ${STAMP}0`,
+    ]) {
+      expect(isStaleFixtureAccount(value, Number.MAX_SAFE_INTEGER), value).toBe(false);
+    }
+  });
+
+  it("requires exactly 13 digits (against the regex directly)", () => {
+    expect(FIXTURE_AGENCY_ORG_RE.test(`E2E Agency Org ${STAMP}`)).toBe(true);
+    expect(FIXTURE_AGENCY_ORG_RE.test(`E2E Agency Org ${String(STAMP).slice(0, 12)}`)).toBe(false);
+    expect(FIXTURE_AGENCY_ORG_RE.test(`E2E Agency Org ${STAMP}0`)).toBe(false);
   });
 });
 

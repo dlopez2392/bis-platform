@@ -95,14 +95,25 @@ teardown("delete the client-access e2e fixture", async () => {
   }
 });
 
-// The per-run agency user auth.setup.ts mints. A Clerk user and nothing else:
-// its one org membership is in the SEEDED org, which this run did not create
-// and must not delete, and deleting the user removes the membership with it.
-teardown("delete the agency e2e user", async () => {
+// The per-run agency user auth.setup.ts mints, and the org of its own that
+// it is the sole member of (never the seeded org: see auth.setup.ts for the
+// seat cap that rules that out). Deleting the user would leave that org
+// behind with no members, so the org goes first, by its recorded id. A
+// record with no org id is a setup that died before creating one.
+teardown("delete the agency e2e user and its org", async () => {
   if (!existsSync(AGENCY_FIXTURE_FILE)) return;
-  const { clerkUserId } = JSON.parse(readFileSync(AGENCY_FIXTURE_FILE, "utf-8")) as { clerkUserId: string };
+  const { clerkUserId, clerkOrgId } = JSON.parse(readFileSync(AGENCY_FIXTURE_FILE, "utf-8")) as {
+    clerkUserId: string; clerkOrgId?: string;
+  };
+  const clerk = await clerkClient();
+  if (clerkOrgId) {
+    try {
+      await clerk.organizations.deleteOrganization(clerkOrgId);
+    } catch (e) {
+      console.error(`e2e teardown: failed to delete agency Clerk org ${clerkOrgId}: ${String(e)}`);
+    }
+  }
   try {
-    const clerk = await clerkClient();
     await clerk.users.deleteUser(clerkUserId);
   } catch (e) {
     console.error(`e2e teardown: failed to delete agency Clerk user ${clerkUserId}: ${String(e)}`);

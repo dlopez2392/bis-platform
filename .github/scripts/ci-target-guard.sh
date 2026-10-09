@@ -38,26 +38,32 @@
 # The probe runs last on purpose: the secret key is only ever sent to a host
 # the static checks have already accepted.
 #
-# MODES (2026-10-08). The checks above are the DEFAULT, with no argument: the
-# e2e job, which runs on the shared CI project. The verify job runs on a
-# throwaway Supabase stack it starts inside its own runner
-# (.github/scripts/ci-local-supabase.sh), so it has no CI-project value to
-# check, and runs this script twice instead:
+# MODES (2026-10-08). The checks above are the DEFAULT, with no argument:
+# what a job on the shared CI project runs (screenshots.yml's capture). The
+# two CI gates, verify and e2e, each run on a throwaway Supabase stack they
+# start inside their own runner (.github/scripts/ci-local-supabase.sh; verify
+# since #200, e2e since the same day), so neither has a CI-project value for
+# its suites or its app to check, and each runs this script twice instead:
 #
 #   --before-local-stack  straight after checkout, before that stack exists.
 #       The Clerk keys must be present and the development instance's (check
 #       4), a Stripe key must be a test key (check 6), and NONE of the five
-#       Supabase values above may be set at all: verify holds no cloud
-#       project's credential, so one that is set leaked in from ci.yml's env
-#       (they belong to e2e's job env) and would aim the suites at a shared
-#       project. Sends nothing anywhere.
+#       Supabase values above may be set at all, nor BIS_CI_SUPABASE_DB_URL:
+#       neither job holds a cloud project's credential in its env, so one
+#       that is set leaked in from ci.yml's workflow or job env and would aim
+#       the suites or the app at a shared project. (The ONE CI-project value
+#       ci.yml still reads, e2e's migration check's BIS_CI_SUPABASE_REF and
+#       BIS_CI_SUPABASE_DB_URL, is scoped to that step alone.) Sends nothing
+#       anywhere.
 #   --local-stack  once the stack is up and has written its values to
 #       GITHUB_ENV. The four values the code reads must all be present;
 #       NEXT_PUBLIC_SUPABASE_URL must be exactly http://<loopback>:<port>
 #       and SUPABASE_DB_URL a postgres URI on the loopback with no query
 #       string (node-pg reads a `host=` there over the URI's own host);
-#       production's ref may appear nowhere, Clerk is checked as above, and
-#       the probe goes to that loopback API with the stack's service key.
+#       production's ref may appear nowhere, BIS_CI_SUPABASE_REF and
+#       BIS_CI_SUPABASE_DB_URL may not be set beside them, Clerk is checked as
+#       above, and the probe goes to that loopback API with the stack's
+#       service key.
 #
 # Any other argument, or more than one, is refused before anything is
 # checked, so a typo can never select a weaker mode.
@@ -106,7 +112,7 @@ source_of() {
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY | CLERK_SECRET_KEY) echo "repository secret $1"; return ;;
   esac
   if [ "$mode" = "local-stack" ]; then
-    echo "the step that starts verify's local Supabase stack (.github/scripts/ci-local-supabase.sh), which writes it to GITHUB_ENV from \`supabase status\`"
+    echo "the step that starts this job's local Supabase stack (.github/scripts/ci-local-supabase.sh), which writes it to GITHUB_ENV from \`supabase status\`"
     return
   fi
   case "$1" in
@@ -143,9 +149,18 @@ done
 # --- 1b. before the local stack: no Supabase value at all ----------------------
 if [ "$mode" = "before-local-stack" ]; then
   for name in BIS_CI_SUPABASE_REF NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY \
-    SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL; do
+    SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL BIS_CI_SUPABASE_DB_URL; do
     if [ -n "${!name:-}" ]; then
-      fail "$name is set before verify's local Supabase stack exists. verify runs on a stack it starts inside its own runner and holds no cloud project's value; the CI project's values belong in the e2e job's env in .github/workflows/ci.yml, never the workflow-level env."
+      fail "$name is set before this job's local Supabase stack exists. verify and e2e each run on a stack they start inside their own runner and hold no cloud project's value; the only CI-project values ci.yml may read are the migration check's BIS_CI_SUPABASE_REF and BIS_CI_SUPABASE_DB_URL, in that one step's own env, never the job's or the workflow's."
+    fi
+  done
+fi
+
+# --- 1L. beside the local stack: no CI-project value ----------------------------
+if [ "$mode" = "local-stack" ]; then
+  for name in BIS_CI_SUPABASE_REF BIS_CI_SUPABASE_DB_URL; do
+    if [ -n "${!name:-}" ]; then
+      fail "$name is set beside the local stack's values. The suites and the app read only the stack on this runner's loopback; a CI-project value belongs in the migration check's own step env in .github/workflows/ci.yml, never the job's or the workflow's."
     fi
   done
 fi
@@ -174,7 +189,7 @@ fi
 # (the probe appends one), no userinfo, no TLS (the local stack has none).
 if [ "$mode" = "local-stack" ] && [ -n "$url" ]; then
   if ! [[ "$url" =~ ^http://(127\.0\.0\.1|localhost):[0-9]{1,5}$ ]]; then
-    fail "NEXT_PUBLIC_SUPABASE_URL is not the local stack's API: it must be exactly http://127.0.0.1:<port> (or localhost), as \`supabase status\` prints it. verify never runs on a cloud project."
+    fail "NEXT_PUBLIC_SUPABASE_URL is not the local stack's API: it must be exactly http://127.0.0.1:<port> (or localhost), as \`supabase status\` prints it. Neither verify nor e2e runs on a cloud project."
   fi
 fi
 
@@ -186,7 +201,7 @@ fi
 # (PR #200 review); and a query string can carry host=, which node-pg obeys.
 if [ "$mode" = "local-stack" ] && [ -n "$db" ]; then
   if ! [[ "$db" =~ ^postgres(ql)?://[^@/?#]+@(127\.0\.0\.1|localhost)(:[0-9]{1,5})?/[A-Za-z0-9_]+$ ]]; then
-    fail "SUPABASE_DB_URL is not the local stack's database: it must be a postgres:// URI on 127.0.0.1 (or localhost) with no query string, as \`supabase status\` prints it. verify never connects to a cloud project."
+    fail "SUPABASE_DB_URL is not the local stack's database: it must be a postgres:// URI on 127.0.0.1 (or localhost) with no query string, as \`supabase status\` prints it. Neither verify nor e2e connects to a cloud project."
   fi
 fi
 
@@ -241,7 +256,7 @@ if [ "$failed" -ne 0 ]; then
 fi
 
 if [ "$mode" = "before-local-stack" ]; then
-  echo "CI target guard: no cloud Supabase value in scope before verify's local stack starts, and the Clerk development instance, confirmed. The stack's own values are checked by --local-stack once it is up."
+  echo "CI target guard: no cloud Supabase value in scope before this job's local stack starts, and the Clerk development instance, confirmed. The stack's own values are checked by --local-stack once it is up."
   exit 0
 fi
 
@@ -261,7 +276,7 @@ if [ "$mode" = "local-stack" ]; then
 
   case "$status" in
     200)
-      echo "CI target guard: verify's local Supabase stack on this runner's loopback, and the Clerk development instance, confirmed."
+      echo "CI target guard: this job's local Supabase stack on this runner's loopback, and the Clerk development instance, confirmed."
       exit 0
       ;;
     401)
