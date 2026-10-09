@@ -312,3 +312,74 @@ export function describeCiTarget(target: CiTarget): string {
     `  db  ${target.dbUser}@${target.dbHost}`,
   ].join("\n");
 }
+
+/**
+ * What a local-stack tool may print about where it is writing: the API URL
+ * and the database's host:port, never the DB URL's credentials.
+ */
+export type LocalStackTarget = { url: string; dbHost: string };
+
+/** The API as `supabase status` prints it: plain http, the loopback, a port, nothing else. */
+const LOCAL_API_URL = /^http:\/\/(127\.0\.0\.1|localhost):[0-9]{1,5}$/;
+
+/**
+ * The database as `supabase status` prints it, anchored end to end: a
+ * lowercase scheme, userinfo holding no `@ / ? #`, the loopback host, an
+ * optional port, a database name, and nothing after. The same form
+ * .github/scripts/ci-target-guard.sh --local-stack accepts, for the same
+ * reasons: taking "the host after the last @" let an @ later in the URL carry
+ * a loopback address while the real host was elsewhere (PR #200 review), and
+ * node-pg obeys a `host=` in a query string over the URI's own host.
+ */
+const LOCAL_DB_URL = /^postgres(?:ql)?:\/\/([^@/?#]+)@(127\.0\.0\.1|localhost)(?::([0-9]{1,5}))?\/([A-Za-z0-9_]+)$/;
+
+/**
+ * The guard for a CI tool writing to the throwaway Supabase stack a CI job
+ * starts inside its own runner (.github/scripts/ci-local-supabase.sh): since
+ * 2026-10-08 the e2e job seeds THAT stack (`ci:seed --local-stack`), not the
+ * shared CI project. The only allowlist is the runner's loopback. Any cloud
+ * URL is refused, the CI project's included, so a local-stack seed can never
+ * quietly become a write to a project other runs share; production is named
+ * as production first, so its refusal reads as what it is.
+ *
+ * Pure, like `assertCiTarget`: no env reads, no network, and no message
+ * repeats a value it was given.
+ */
+export function assertLocalStackTarget(input: { url: string | undefined; dbUrl: string | undefined }): LocalStackTarget {
+  const url = input.url?.trim() ?? "";
+  if (!url) throw new Error("NEXT_PUBLIC_SUPABASE_URL is not set");
+  if (mentionsProduction(url)) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL points at production; this tool never writes production");
+  }
+  if (!LOCAL_API_URL.test(url)) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is not a local Supabase stack's API: it must be exactly http://127.0.0.1:<port> (or localhost), as `supabase status` prints it");
+  }
+
+  const dbUrl = input.dbUrl?.trim() ?? "";
+  if (!dbUrl) throw new Error("SUPABASE_DB_URL is not set");
+  if (mentionsProduction(dbUrl)) {
+    throw new Error("SUPABASE_DB_URL points at production; this tool never writes production");
+  }
+  const m = LOCAL_DB_URL.exec(dbUrl);
+  if (!m) {
+    throw new Error("SUPABASE_DB_URL is not the local Supabase stack's database: it must be a postgres:// URI on 127.0.0.1 (or localhost) with no query string, as `supabase status` prints it");
+  }
+  const userinfo = m[1] ?? "";
+  const host = m[2] ?? "";
+  const port = m[3] ? Number(m[3]) : 5432;
+  const database = m[4] ?? "";
+  const colon = userinfo.indexOf(":");
+  const user = decodeOnce(colon === -1 ? userinfo : userinfo.slice(0, colon));
+  // The backstop the CI target has too: what node-pg itself would dial.
+  assertPgResolvesTo(dbUrl, { user, host, port, database });
+
+  return { url, dbHost: `${host}:${port}` };
+}
+
+export function describeLocalStackTarget(target: LocalStackTarget): string {
+  return [
+    "local Supabase stack (this runner's loopback)",
+    `  api ${target.url}`,
+    `  db  ${target.dbHost}`,
+  ].join("\n");
+}

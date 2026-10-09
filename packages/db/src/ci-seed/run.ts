@@ -1,5 +1,7 @@
 /**
- * `pnpm --filter @bis/db ci:seed`
+ * `pnpm --filter @bis/db ci:seed` (the CI project) or
+ * `pnpm --filter @bis/db ci:seed:local` (`--local-stack`: the throwaway stack
+ * the e2e job starts inside its own runner, since 2026-10-08)
  *
  * Seeds the CI project (named by `BIS_CI_SUPABASE_REF`, expected
  * `odnobiodsftffphuuosz`) with the account the e2e suite reads, then verifies
@@ -15,11 +17,11 @@
  */
 import "dotenv/config";
 import { serviceDb } from "../service";
-import { planCiSeed } from "./config";
+import { ciSeedMode, planCiSeed } from "./config";
 import { baselineGaps, ensureCiBaseline, readBaselineSnapshot } from "./seed";
 
 async function main(): Promise<void> {
-  const plan = planCiSeed(process.env);
+  const plan = planCiSeed(process.env, ciSeedMode(process.argv.slice(2)));
   console.log(plan.summary);
   console.log("");
 

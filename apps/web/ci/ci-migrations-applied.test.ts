@@ -30,10 +30,15 @@ const MIGRATION_FILES = fs.readdirSync(path.join(REPO, "packages/db/supabase/mig
   .filter((f) => f.endsWith(".sql")).sort();
 const VERSIONS = MIGRATION_FILES.map((f) => f.split("_")[0]!);
 const DB_PASSWORD = "UnitTestCiPoolerPassword_6a2e";
-const DB_URL = `postgresql://postgres.cirefcirefcirefciref:${DB_PASSWORD}@aws-0-us-east-1.pooler.supabase.com:5432/postgres`;
+const CI_REF = "cirefcirefcirefciref";
+const PROD_REF = "tlbkbmlrfafquucsmsmm";
+const poolerUrl = (ref: string) => `postgresql://postgres.${ref}:${DB_PASSWORD}@aws-0-us-east-1.pooler.supabase.com:5432/postgres`;
+const DB_URL = poolerUrl(CI_REF);
 
+// One log line per call, each argument kept whole inside [[…]], so a case can
+// tell one `-c "a; b"` from two `-c a -c b`.
 const FAKE_PSQL = `#!/usr/bin/env bash
-printf 'psql %s\\n' "$*" >> "$FAKE_DIR/log"
+{ printf 'psql'; for a in "$@"; do printf ' [[%s]]' "$a"; done; printf '\\n'; } >> "$FAKE_DIR/log"
 if [ -n "\${FAKE_PSQL_STDERR:-}" ]; then printf '%s\\n' "$FAKE_PSQL_STDERR" >&2; fi
 printf '%s' "$FAKE_APPLIED"
 exit "\${FAKE_PSQL_EXIT:-0}"
@@ -84,8 +89,12 @@ function run(applied: string[], extraEnv: Record<string, string | undefined> = {
   Object.assign(env, {
     FAKE_DIR: toBashPath(fakeDir),
     FAKE_APPLIED: applied.map((v) => `${v}\n`).join(""),
-    SUPABASE_DB_URL: DB_URL,
+    // The step-scoped names ci.yml gives this step alone (2026-10-08), never
+    // the app's SUPABASE_DB_URL, which in the e2e job is the local stack's.
+    BIS_CI_SUPABASE_REF: CI_REF,
+    BIS_CI_SUPABASE_DB_URL: DB_URL,
   });
+  delete env.SUPABASE_DB_URL;
   for (const [k, v] of Object.entries(extraEnv)) {
     if (v === undefined) delete env[k];
     else env[k] = v;
@@ -153,10 +162,83 @@ describe("ci-migrations-applied.sh: every migration in the branch is on the CI p
     expect(r.output).toMatch(/::error::.*could not read/i);
   });
 
-  it("refuses to run without SUPABASE_DB_URL, naming it, and never calls psql", () => {
-    const r = run(VERSIONS, { SUPABASE_DB_URL: undefined });
+  it.each(["BIS_CI_SUPABASE_DB_URL", "BIS_CI_SUPABASE_REF"])("refuses to run without %s, naming it, and never calls psql", (name) => {
+    const r = run(VERSIONS, { [name]: undefined });
     expect(r.status).toBe(1);
-    expect(r.output).toMatch(/::error::.*SUPABASE_DB_URL/);
+    expect(r.output).toMatch(new RegExp(`::error::.*${name}`));
     expect(r.log).toEqual([]);
+  });
+});
+
+// Since 2026-10-08 the e2e job runs on a stack inside its own runner and
+// holds NO CI-project value for the app: this step alone reads bis-ci, with
+// its own step-scoped names, and it no longer has the CI-project guard in
+// front of it. So it checks what it was handed before psql sees it, and
+// reads in one read-only transaction: it is a check, and must never be able
+// to write to the project local runs and Vercel Preview share.
+describe("ci-migrations-applied.sh reads bis-ci only, read-only, and only from its own variables", () => {
+  it("never falls back to the app's SUPABASE_DB_URL, which in e2e is the local stack's (mutation: read SUPABASE_DB_URL → FAILS)", () => {
+    const r = run(VERSIONS, { BIS_CI_SUPABASE_DB_URL: undefined, SUPABASE_DB_URL: DB_URL });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*BIS_CI_SUPABASE_DB_URL/);
+    expect(r.log).toEqual([]);
+  });
+
+  it.each([
+    ["another project's pooler user", poolerUrl("otherotherotherother")],
+    ["the direct host (user postgres)", `postgresql://postgres:${DB_PASSWORD}@db.${CI_REF}.supabase.co:5432/postgres`],
+    ["the local stack's database", `postgresql://postgres:${DB_PASSWORD}@127.0.0.1:54322/postgres`],
+    ["a host override in the query string", `${DB_URL}?host=evil.example`],
+    ["an upper-case scheme", DB_URL.replace("postgresql://", "POSTGRESQL://")],
+  ])("refuses %s before psql sees it (mutation: drop the URL check → FAILS)", (_label, url) => {
+    const r = run(VERSIONS, { BIS_CI_SUPABASE_DB_URL: url });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*BIS_CI_SUPABASE_DB_URL.*Session pooler/);
+    expect(r.log).toEqual([]);
+  });
+
+  it("refuses production by name, wherever its ref appears, before psql sees it", () => {
+    const r = run(VERSIONS, { BIS_CI_SUPABASE_REF: PROD_REF, BIS_CI_SUPABASE_DB_URL: poolerUrl(PROD_REF) });
+    expect(r.status).toBe(1);
+    expect(r.output).toMatch(/::error::.*production/);
+    expect(r.log).toEqual([]);
+  });
+
+  it("accepts the Session pooler URI with ?sslmode=require, the one query ci:seed's target check also allows", () => {
+    const r = run(VERSIONS, { BIS_CI_SUPABASE_DB_URL: `${DB_URL}?sslmode=require` });
+    expect(r.output).not.toContain("::error::");
+    expect(r.status).toBe(0);
+  });
+
+  // Review M-4 (2026-10-08). The URL check admits the transaction pooler
+  // (6543) as well as the session pooler (5432). Through a transaction
+  // pooler each TRANSACTION may run on a different server connection, so a
+  // `set session characteristics … read only` sent as its own command can
+  // land on one connection and the read on another, read-write. One command
+  // holding `begin transaction read only; select …; commit;` is one
+  // transaction, which a transaction pooler keeps on one connection.
+  it.each([
+    ["the session pooler (5432)", DB_URL],
+    ["the transaction pooler (6543)", DB_URL.replace(":5432/", ":6543/")],
+  ])("reads the history in ONE read-only transaction sent as ONE command, through %s (mutation: a separate SET, or no `begin transaction read only` → FAILS)", (_label, url) => {
+    const r = run(VERSIONS, { BIS_CI_SUPABASE_DB_URL: url });
+    expect(r.status, r.output).toBe(0);
+    expect(r.log).toHaveLength(1);
+    const args = [...(r.log[0] ?? "").matchAll(/\[\[(.*?)\]\]/g)].map((m) => m[1]!);
+    expect(args).toContain(url);
+    const commands = args.filter((_, i) => args[i - 1] === "-c");
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatch(
+      /^begin transaction read only; *select version from supabase_migrations\.schema_migrations order by version; *commit;$/,
+    );
+    // Stops at the first error, so a refused BEGIN can never fall through to
+    // a read outside the transaction.
+    expect(args.join(" ")).toContain("ON_ERROR_STOP=1");
+  });
+
+  it("counts only version lines, so a status line psql prints is never read as a migration bis-ci holds", () => {
+    const r = run(["BEGIN", "SET", ...VERSIONS, "COMMIT"]);
+    expect(r.status).toBe(0);
+    expect(r.output).not.toMatch(/holds \d+ migration/);
   });
 });

@@ -1,6 +1,13 @@
 import { test, expect } from "./fixtures/test";
-import { SEEDED_CONTACT_NAME } from "./support";
+import { config as loadEnv } from "dotenv";
+import { serviceDb, createContact } from "@bis/db";
+import { readClientFixture } from "./support";
 import { m } from "../src/lib/messages";
+
+// Playwright's config passes env to the webServer, not to this process, so the
+// service-role credentials have to be loaded explicitly for setup and cleanup.
+loadEnv({ path: "apps/web/.env.local" });
+loadEnv({ path: ".env.local" });
 
 const ACCOUNT_NAME = "Test Client One";
 
@@ -73,30 +80,52 @@ test("opening a contact from the table renders the detail screen", async ({ page
  * nothing about the record.
  */
 test("an email sent from a contact appears on that contact's timeline", async ({ page }) => {
-  await page.goto("/dashboard/accounts");
-  await page.getByRole("link", { name: new RegExp(ACCOUNT_NAME, "i") }).first().click();
-  // By name, not by position — see SEEDED_CONTACT_NAME above. This test needs
-  // a contact the app is willing to email. P4 (Task 5) removed the name-cell
-  // link: the row opens the peek drawer, and the full page is reached from
-  // its "Open full page" link.
-  await page.getByRole("row").filter({ hasText: SEEDED_CONTACT_NAME }).click();
-  const openDialog = page.getByRole("dialog");
-  await expect(openDialog).toBeVisible();
-  await openDialog.getByRole("link", { name: m["drawer.openFull"] }).click();
-  await expect(page).toHaveURL(/\/contacts\/[0-9a-f-]{36}$/);
+  // On the per-run fixture account, never Test Client One (CLAUDE.md): a send
+  // writes a conversation and a message. This test used to send from Maria
+  // Garcia on the seeded account and never cleaned up, so every run added
+  // another email to a live record. It now sends from a contact of its own,
+  // with an email address (the send guard requires one), deleted afterwards
+  // in FK order; a run that dies first strands it only until auth.teardown.ts
+  // deletes the whole fixture account.
+  const fixture = readClientFixture();
+  test.skip(!fixture, "client fixture file missing — run through the setup project");
+  const accountId = fixture!.accountId;
+  const stamp = Date.now();
+  const db = serviceDb();
+  const { id: contactId } = await createContact(db, accountId, {
+    firstName: "Timeline", lastName: `Check ${stamp}`, email: `e2e-timeline-${stamp}@example.com`,
+  }, "e2e-contact-detail");
 
-  const body = `Timeline check ${Date.now()}`;
-  // The composer has no <label>s — it is a mode toggle plus placeholders.
-  await page.getByRole("button", { name: "Email", exact: true }).click();
-  await page.getByPlaceholder("Subject").fill("Timeline check");
-  await page.getByPlaceholder(/write an email/i).fill(body);
-  await page.getByRole("button", { name: "Send", exact: true }).click();
+  try {
+    await page.goto(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
 
-  // The timeline, not the composer. Outside production the provider is the
-  // fake one, so this proves the record — not delivery.
-  // The unique body is the real assertion; "Email sent" is deliberately
-  // .first() because this contact has a long history of them — which is the
-  // point. Before this change that label matched nothing at all.
-  await expect(page.getByText("Email sent").first()).toBeVisible();
-  await expect(page.getByText(body)).toBeVisible();
+    const body = `Timeline check ${stamp}`;
+    // The composer has no <label>s — it is a mode toggle plus placeholders.
+    await page.getByRole("button", { name: "Email", exact: true }).click();
+    await page.getByPlaceholder("Subject").fill("Timeline check");
+    await page.getByPlaceholder(/write an email/i).fill(body);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+
+    // The timeline, not the composer. Outside production the provider is the
+    // fake one, so this proves the record — not delivery. The unique body is
+    // the real assertion; before this change "Email sent" matched nothing at
+    // all on the timeline.
+    await expect(page.getByText("Email sent").first()).toBeVisible();
+    await expect(page.getByText(body)).toBeVisible();
+  } finally {
+    await deleteContactAndThread(accountId, contactId);
+  }
 });
+
+/** This test's own contact and anything its send created, in FK order. */
+async function deleteContactAndThread(accountId: string, contactId: string): Promise<void> {
+  const db = serviceDb();
+  const { data: convos } = await db.from("conversations").select("id")
+    .eq("account_id", accountId).eq("contact_id", contactId);
+  for (const convo of convos ?? []) {
+    await db.from("messages").delete().eq("conversation_id", convo.id);
+    await db.from("conversations").delete().eq("id", convo.id);
+  }
+  const { error } = await db.from("contacts").delete().eq("id", contactId);
+  if (error) console.error(`contact-detail e2e: cleanup failed: ${error.message}`);
+}
