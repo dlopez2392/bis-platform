@@ -1,50 +1,65 @@
-import { test, expect } from "./fixtures/test";
+import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
-import { serviceDb } from "@bis/db";
-import { SEEDED_CONTACT_NAME } from "./support";
+import { serviceDb, createContact } from "@bis/db";
+import { readClientFixture } from "./support";
 import { m } from "../src/lib/messages";
 
 // Playwright's config passes env to the webServer, not to this process, so the
-// service-role credentials have to be loaded explicitly for cleanup.
+// service-role credentials have to be loaded explicitly for setup and cleanup.
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
 
-// Pinned by name, not position — same reasoning as contact-detail.spec.ts:
-// "first card" on /dashboard/accounts broke once stray accounts existed
-// alongside the seeded one. This spec needs Test Client One specifically
-// because that's the account whose contact (Maria Garcia) has an email
-// address, which the send guard requires.
-const ACCOUNT_NAME = "Test Client One";
-
-// SEEDED_CONTACT_NAME (support.ts): ...and the contact on it that actually
-// has that email address. Named rather than taken positionally: `listContacts`
-// orders by `created_at` descending, so `.first()` means "whoever rang most
-// recently", and real voice calls have since created contacts on this shared
-// account from a phone number alone, with `email` null. The composer
-// correctly refuses to email those — it renders "no email on this contact"
-// instead of a Subject field — so `.first()` had quietly stopped selecting a
-// contact this spec can send from.
-
+// On the per-run fixture account, never Test Client One (CLAUDE.md): a send
+// writes a conversation and a message. This spec used to send from Maria
+// Garcia on the seeded account, the one contact there with an email address
+// (which the send guard requires); it deleted its message but left the
+// conversation behind on a live record. It now sends from a contact of its
+// own, with an email address, and deletes the contact, its conversation and
+// its messages afterwards, in FK order. A run that dies first strands them
+// only until auth.teardown.ts deletes the whole fixture account.
 test("email sent from a contact appears in the thread and in Conversations", async ({ page }) => {
-  await page.goto("/dashboard/accounts");
-  await page.getByRole("link", { name: new RegExp(ACCOUNT_NAME, "i") }).first().click();
-  await expect(page).toHaveURL(/\/contacts$/);
+  const fixture = readClientFixture();
+  test.skip(!fixture, "client fixture file missing — run through the setup project");
+  const accountId = fixture!.accountId;
+  const stamp = Date.now();
+  // A full name, so the Conversations list shows it rather than the address
+  // and the thread can be picked by whose it is.
+  const contactName = `Mail Check ${stamp}`;
+  const db = serviceDb();
+  const { id: contactId } = await createContact(db, accountId, {
+    firstName: "Mail", lastName: `Check ${stamp}`, email: `e2e-messaging-${stamp}@example.com`,
+  }, "e2e-messaging");
 
-  // P4 (Task 5) removed the name-cell link by design: a row click opens the
-  // peek drawer, and the full contact page is reached from the drawer's
-  // "Open full page" link. Same preamble as contact-detail.spec.ts; every
-  // assertion below is unchanged.
-  await page.getByRole("row").filter({ hasText: SEEDED_CONTACT_NAME }).click();
+  try {
+    await sendAndFindInConversations(page, accountId, contactId, contactName, stamp);
+  } finally {
+    const { data: convos } = await db.from("conversations").select("id")
+      .eq("account_id", accountId).eq("contact_id", contactId);
+    for (const convo of convos ?? []) {
+      await db.from("messages").delete().eq("conversation_id", convo.id);
+      await db.from("conversations").delete().eq("id", convo.id);
+    }
+    const { error } = await db.from("contacts").delete().eq("id", contactId);
+    expect(error, `cleanup failed: ${error?.message}`).toBeNull();
+  }
+});
+
+async function sendAndFindInConversations(
+  page: Page, accountId: string, contactId: string, contactName: string, stamp: number,
+): Promise<void> {
+  // Opened through the list and the peek drawer, the way an operator gets
+  // there: P4 (Task 5) removed the name-cell link, so a row click opens the
+  // drawer and the full page is reached from its "Open full page" link.
+  await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${stamp}`);
+  await page.getByRole("row").filter({ hasText: contactName }).click();
   const drawer = page.getByRole("dialog");
   await expect(drawer).toBeVisible();
   await drawer.getByRole("link", { name: m["drawer.openFull"] }).click();
-  await expect(page).toHaveURL(/\/contacts\/[0-9a-f-]{36}$/);
+  await expect(page).toHaveURL(new RegExp(`/contacts/${contactId}$`));
 
-  // This spec writes real rows to the shared dev database. `ensureConversation`
-  // is unique per (account, contact), so runs reuse one thread and it is the
-  // *messages* that accumulate — those are deleted at the end of this test.
-  // The timestamped subject both scopes that cleanup and stops assertions
-  // from matching a row a crashed earlier run left behind.
+  // The timestamped subject stops assertions from matching a row a crashed
+  // earlier run left behind. (Kept as `Date.now()` literally: the template is
+  // listed by its source text in fixtures/fixture-names.test.ts.)
   const subject = `E2E ${Date.now()}`;
   // `exact` matters since P4 Task 8: the fields panel's inline-edit control
   // for the email field is a button named "Edit Email", which a substring
@@ -80,18 +95,11 @@ test("email sent from a contact appears in the thread and in Conversations", asy
   await expect(page).toHaveURL(/\/conversations/);
   // The screen no longer auto-opens the newest thread — doing so marked a fresh
   // inbound lead read before anyone looked at it — so a thread has to be picked.
-  // Picked by WHOSE it is, now that this spec walks in through a named contact
-  // rather than "the first row in the table": voice calls have since opened
-  // conversations of their own on this account, so "the first thread" is a
-  // position in a list this spec never asserts the order of.
-  await page.locator("a[href*='?c=']").filter({ hasText: SEEDED_CONTACT_NAME }).first().click();
+  // Picked by WHOSE it is: other specs open conversations on this account too,
+  // so "the first thread" is a position in a list this spec never asserts the
+  // order of.
+  await page.locator("a[href*='?c=']").filter({ hasText: contactName }).first().click();
   await expect(page.getByText(subject).first()).toBeVisible();
   await expect(page.getByText("Sent").first()).toBeVisible();
   await expect(page.getByText("Sent by the e2e suite.").first()).toBeVisible();
-
-  // Delete only the rows this run created, matched by its unique subject.
-  // Nothing else is touched — the seeded account, contact and opportunity
-  // must survive, and the conversation row is shared with future runs.
-  const { error } = await serviceDb().from("messages").delete().eq("subject", subject);
-  expect(error, `cleanup failed: ${error?.message}`).toBeNull();
-});
+}

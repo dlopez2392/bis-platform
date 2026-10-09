@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
-import { SEEDED_ACCOUNT_NAME, openAccountByName, readClientFixture } from "./support";
+import { readClientFixture } from "./support";
 
 // Playwright's config passes env to the webServer, not to this process, so the
 // service-role credentials have to be loaded explicitly for setup and cleanup.
@@ -17,10 +17,13 @@ loadEnv({ path: ".env.local" });
 test.describe.configure({ timeout: 120_000 });
 
 // Runs in a `finally`, not at the end of the test body. A failure partway
-// through leaves a stray contact in the shared dev database, and the very next
-// spec — contact-detail.spec, which opens "the first contact in the table" —
-// then fails for reasons that have nothing to do with it. That is not
-// hypothetical: it is what happened the first time this spec failed.
+// through leaves a stray contact behind, and a later spec that reads the same
+// account's contacts then fails for reasons that have nothing to do with it.
+// That is not hypothetical: it is what happened the first time this spec
+// failed, back when it ran on Test Client One. Every test here now writes to
+// the per-run fixture account instead (CLAUDE.md: mutating specs never point
+// at Test Client One), which auth.teardown.ts deletes whole, so a purge that
+// never ran strands rows for one run, not for ever.
 async function purge(formName: string, leadEmail: string): Promise<void> {
   const db = serviceDb();
   const { data: forms } = await db.from("forms").select("id").eq("name", formName);
@@ -92,9 +95,13 @@ async function addConsentField(page: Page, label: string): Promise<void> {
 async function newPublishedForm(
   page: Page, formName: string, consentLabel?: string,
 ): Promise<string> {
-  // By accessible name, never `.first()` — the seeded-account rule in
-  // support.ts.
-  await openAccountByName(page, SEEDED_ACCOUNT_NAME);
+  // On the per-run fixture account, never Test Client One: building a form
+  // and submitting it writes a form, a contact, a conversation and a
+  // submission. Opened by id, which the fixture file makes authoritative (the
+  // agency session sees every account), so there is no card-by-name lookup.
+  const fixture = readClientFixture();
+  test.skip(!fixture, "client fixture file missing — run through the setup project");
+  await page.goto(`/dashboard/accounts/${fixture!.accountId}/contacts`);
   await expect(page).toHaveURL(/\/contacts$/);
 
   // The sidebar's Forms link, on purpose: it is the path a real user takes,
@@ -238,8 +245,8 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
     await page.goto(editorUrl);
     await expect(page.getByText(consentLabel)).toBeVisible();
   } finally {
-    // Only this run's rows, in FK order. The seeded account, its contacts and
-    // its opportunities must all survive.
+    // Only this run's rows, in FK order. The fixture's own contact and form,
+    // which other specs read, must survive.
     await purge(formName, leadEmail);
   }
 });
