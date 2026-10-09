@@ -57,6 +57,22 @@ describe("accounts service", () => {
       expect(data).toEqual({ name: "Fixture Co", brand_name: "Fixture Co" });
     });
   });
+
+  // Owner decision 2026-10-09: Add company asks for the name customers see as
+  // its own field, so the agency's private label never becomes the brand.
+  it("createAccount stores the brand name it is given, apart from the private label (mutation: brand_name from name → FAILS)", async () => {
+    const db = serviceDb();
+    const { id } = await createAccount(db, {
+      clerkOrgId: `org_test_${suffix()}`, name: "Rio Roofing — trial", brandName: "Rio Roofing", actorId: "user_test",
+    });
+    try {
+      const { data } = await db.from("accounts").select("name, brand_name").eq("id", id).single();
+      expect(data).toEqual({ name: "Rio Roofing — trial", brand_name: "Rio Roofing" });
+    } finally {
+      await db.from("events").delete().eq("account_id", id);
+      await db.from("accounts").delete().eq("id", id);
+    }
+  });
 });
 
 /**

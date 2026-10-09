@@ -2,8 +2,9 @@ import Link from "next/link";
 import { clerkClient } from "@clerk/nextjs/server";
 import { Building2, Unlink } from "lucide-react";
 import { serviceDb, listAccounts, listBlueprints } from "@bis/db";
-import { createClientAccount } from "./actions";
+import { createClientAccount, adoptOrphanOrgAction } from "./actions";
 import { CreateAccountDialog } from "./create-account-dialog";
+import { AdoptOrgDialog } from "./adopt-org-dialog";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
@@ -82,11 +83,14 @@ export default async function AccountsPage() {
                 <p className="mt-1 text-sm text-muted-foreground">{m["accounts.orphan.body"]}</p>
                 <ul className="mt-3 flex flex-wrap gap-2">
                   {orphans.map((o) => (
-                    <li key={o.id} data-orphan-org={o.id}>
+                    <li key={o.id} data-orphan-org={o.id} className="flex items-center gap-2">
                       <Badge variant="chip" className="gap-1.5 py-1 pr-2.5 pl-2">
                         <span className="size-[7px] rounded-full bg-[var(--warn)]" aria-hidden />
                         {o.name}
                       </Badge>
+                      {/* D-087: adopt THIS organisation. The old remedy sent
+                          the agency to Add company, which made a second one. */}
+                      <AdoptOrgDialog orgName={o.name} action={adoptOrphanOrgAction.bind(null, o.id)} />
                     </li>
                   ))}
                 </ul>

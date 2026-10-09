@@ -22,12 +22,13 @@ vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
 }));
 vi.mock("@/lib/auth", () => ({ requireAgency: async () => ({ userId: "user_agency" }) }));
-const clerkMocks = vi.hoisted(() => ({ createOrg: vi.fn(), deleteOrg: vi.fn() }));
+const clerkMocks = vi.hoisted(() => ({ createOrg: vi.fn(), deleteOrg: vi.fn(), getOrg: vi.fn() }));
 vi.mock("@clerk/nextjs/server", () => ({
   clerkClient: async () => ({
     organizations: {
       createOrganization: clerkMocks.createOrg,
       deleteOrganization: clerkMocks.deleteOrg,
+      getOrganization: clerkMocks.getOrg,
     },
   }),
 }));
@@ -35,7 +36,7 @@ vi.mock("@clerk/nextjs/server", () => ({
 import { redirect } from "next/navigation";
 import { m } from "@/lib/messages";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
-import { createClientAccount } from "./actions";
+import { createClientAccount, adoptOrphanOrgAction } from "./actions";
 
 /** What a real Clerk organisation id looks like: `org_` plus base58. */
 const CLERK_ORG_ID = "org_2abcDEFghiJKL";
@@ -43,6 +44,7 @@ const CLERK_ORG_ID = "org_2abcDEFghiJKL";
 const form = (over: Record<string, string> = {}) => {
   const f = new FormData();
   f.set("name", "Rio Roofing");
+  f.set("brandName", "Rio Roofing");
   f.set("timezone", "America/Chicago");
   f.set("blueprintId", NO_BLUEPRINT_SENTINEL);
   for (const [k, v] of Object.entries(over)) f.set(k, v);
@@ -55,6 +57,30 @@ beforeEach(() => {
   dbMocks.applyBlueprint.mockReset().mockResolvedValue({ failed: [] });
   clerkMocks.createOrg.mockReset().mockResolvedValue({ id: CLERK_ORG_ID });
   clerkMocks.deleteOrg.mockReset().mockResolvedValue(undefined);
+  clerkMocks.getOrg.mockReset().mockResolvedValue({ id: CLERK_ORG_ID, name: "Rio Roofing" });
+});
+
+/**
+ * Owner decision 2026-10-09: Add company asks for the name customers see as
+ * its own field. The business name stays the agency's private label; the
+ * brand name is what brand_name and the Clerk organisation (whose name
+ * invitation emails carry, D-005) are born with.
+ */
+describe("createClientAccount — the name customers see", () => {
+  it("creates the Clerk organisation under the BRAND name and stores it as brand_name, the business name as the private label (mutation: org named from name → FAILS; brandName dropped → FAILS)", async () => {
+    await createClientAccount(form({ name: "Rio Roofing — trial", brandName: "  Rio Roofing  " }));
+    expect(clerkMocks.createOrg).toHaveBeenCalledWith({ name: "Rio Roofing", createdBy: "user_agency" });
+    expect(dbMocks.createAccount.mock.calls[0]?.[1]).toMatchObject({
+      name: "Rio Roofing — trial", brandName: "Rio Roofing",
+    });
+  });
+
+  it("refuses a blank brand name before Clerk is touched (mutation: drop the check → FAILS)", async () => {
+    expect(await createClientAccount(form({ brandName: "   " })))
+      .toEqual({ ok: false, error: m["accounts.brandNameRequired"] });
+    expect(clerkMocks.createOrg).not.toHaveBeenCalled();
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
 });
 
 describe("createClientAccount", () => {
@@ -172,5 +198,98 @@ describe("createClientAccount", () => {
     await expect(createClientAccount(form())).rejects.toThrow("clerk is down");
 
     expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * D-087: the half-created-company warning told the agency to "add the company
+ * here with the same name" — which runs createClientAccount, mints a SECOND
+ * Clerk organisation, and leaves everyone already invited in the first one,
+ * still unable to sign in. Adopting links the organisation that exists.
+ */
+describe("adoptOrphanOrgAction (D-087)", () => {
+  const tz = (zone = "America/Chicago") => { const f = new FormData(); f.set("timezone", zone); return f; };
+
+  it("creates the account on the EXISTING organisation, under its own Clerk name, and never creates a second one (mutation: call createOrganization → FAILS; use a typed name → FAILS)", async () => {
+    await adoptOrphanOrgAction(CLERK_ORG_ID, tz("America/Denver"));
+    expect(clerkMocks.getOrg).toHaveBeenCalledWith({ organizationId: CLERK_ORG_ID });
+    expect(clerkMocks.createOrg).not.toHaveBeenCalled();
+    expect(dbMocks.createAccount).toHaveBeenCalledOnce();
+    expect(dbMocks.createAccount.mock.calls[0]?.[1]).toEqual({
+      clerkOrgId: CLERK_ORG_ID, name: "Rio Roofing", timezone: "America/Denver", actorId: "user_agency",
+    });
+    // Lands on the Client access card, not setup (review): an adopted account
+    // is born with client access OFF, so the people already invited cannot
+    // sign in until it is turned on — the step the hint names.
+    expect(redirect).toHaveBeenCalledWith("/dashboard/accounts/acct_1/settings#client-access");
+  });
+
+  it("never deletes the organisation when the account write fails: it was not this action's to delete (mutation: reuse createClientAccount's rollback → FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.createAccount.mockRejectedValue(new Error("duplicate key value violates unique constraint"));
+    expect(await adoptOrphanOrgAction(CLERK_ORG_ID, tz()))
+      .toEqual({ ok: false, error: m["accounts.orphan.adoptFailed"] });
+    expect(clerkMocks.deleteOrg).not.toHaveBeenCalled();
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("refuses an organisation Clerk no longer has, writing nothing", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    clerkMocks.getOrg.mockRejectedValue(Object.assign(new Error("not found"), { status: 404 }));
+    expect(await adoptOrphanOrgAction("org_gone", tz()))
+      .toEqual({ ok: false, error: m["accounts.orphan.adoptGone"] });
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
+
+  it("a Clerk outage is not reported as a missing organisation: its own words, its own log line (mutation: one refusal for both → FAILS)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    clerkMocks.getOrg.mockRejectedValue(Object.assign(new Error("Service Unavailable"), { status: 503 }));
+    expect(await adoptOrphanOrgAction(CLERK_ORG_ID, tz()))
+      .toEqual({ ok: false, error: m["accounts.orphan.adoptClerkDown"] });
+    expect(m["accounts.orphan.adoptClerkDown"]).not.toBe(m["accounts.orphan.adoptGone"]);
+    expect(String(err.mock.calls.at(-1)?.[0])).toMatch(/could not reach Clerk/i);
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
+
+  it("a 404 from Clerk is the missing-organisation refusal", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    clerkMocks.getOrg.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
+    expect(await adoptOrphanOrgAction(CLERK_ORG_ID, tz()))
+      .toEqual({ ok: false, error: m["accounts.orphan.adoptGone"] });
+  });
+
+  it("refuses an organisation whose Clerk name is blank, so no account is born with a blank brand name (mutation: drop the check → FAILS)", async () => {
+    clerkMocks.getOrg.mockResolvedValue({ id: CLERK_ORG_ID, name: "   " });
+    expect(await adoptOrphanOrgAction(CLERK_ORG_ID, tz()))
+      .toEqual({ ok: false, error: m["accounts.orphan.adoptNoName"] });
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
+
+  it("refuses a test-shaped org id (the fixture sweep would delete the account within the hour), writing nothing", async () => {
+    clerkMocks.getOrg.mockResolvedValue({ id: "org_test_x", name: "E2E Co" });
+    expect(await adoptOrphanOrgAction("org_test_x", tz()))
+      .toEqual({ ok: false, error: m["accounts.createRefusedTestOrgId"] });
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unusable timezone before Clerk is touched", async () => {
+    expect(await adoptOrphanOrgAction(CLERK_ORG_ID, tz("Mars/Olympus")))
+      .toEqual({ ok: false, error: m["accounts.timezoneUnusable"].replace("{zone}", "Mars/Olympus") });
+    expect(clerkMocks.getOrg).not.toHaveBeenCalled();
+  });
+});
+
+describe("the adopt hint tells the truth (review of D-087)", () => {
+  it("says invitees sign in once Client access is turned on, not merely once the company is added (mutation: restore \"once it is added\" → FAILS)", () => {
+    expect(m["accounts.orphan.adoptHint"]).not.toMatch(/once it is added/i);
+    expect(m["accounts.orphan.adoptHint"]).toMatch(/Client access/);
+    expect(m["accounts.orphan.adoptHint"]).toMatch(/Settings/);
+  });
+});
+
+describe("the half-created-company warning (D-087)", () => {
+  it("no longer tells the agency to add the company again by name (mutation: restore the old remedy → FAILS)", () => {
+    expect(m["accounts.orphan.body"]).not.toMatch(/same name/i);
+    expect(m["accounts.orphan.body"]).toContain(m["accounts.orphan.adopt"]);
   });
 });

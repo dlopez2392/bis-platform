@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { m } from "@/lib/messages";
 import { NO_BLUEPRINT_SENTINEL } from "./constants";
+import { AccountNameFields } from "./account-name-fields";
 import { SubmitButton } from "./submit-button";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { settleCreateAccount } from "./create-account-feedback";
@@ -69,10 +70,7 @@ export function CreateAccountDialog({
           onSubmit={onSubmit}
           className="space-y-4"
         >
-          <div className="space-y-2">
-            <Label htmlFor="name">{m["accounts.name"]}</Label>
-            <Input id="name" name="name" required />
-          </div>
+          <AccountNameFields />
           <div className="space-y-2">
             <Label htmlFor="timezone">{m["accounts.timezone"]}</Label>
             <Input id="timezone" name="timezone" defaultValue="America/Chicago" />
