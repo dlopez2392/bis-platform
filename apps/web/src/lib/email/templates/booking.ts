@@ -18,6 +18,8 @@ const CONFIRMATION_COPY = {
     cancel: "Cancel this booking",
     // F-048: the add-to-calendar file (`app/b/[publicId]/ics/[token]`).
     addToCalendar: "Add to your calendar",
+    // F-048: the customer's own move (`app/b/[publicId]/move/[token]`).
+    move: "Change the time",
   },
   es: {
     subject: "Tu cita quedó agendada",
@@ -26,6 +28,7 @@ const CONFIRMATION_COPY = {
     join: "Unirse a la videollamada",
     cancel: "Cancelar esta cita",
     addToCalendar: "Agregar a tu calendario",
+    move: "Cambiar el horario",
   },
 } as const;
 
@@ -36,6 +39,14 @@ export function bookingConfirmationSubject(locale: PublicLocale = "en"): string 
 const ROW_LABEL_STYLE =
   "padding:4px 12px 4px 0;color:#71717a;white-space:nowrap;vertical-align:top;";
 const ROW_VALUE_STYLE = "padding:4px 0;vertical-align:top;";
+
+/** F-048: a secondary customer link (the calendar file, a change of time):
+ *  plain, like the cancel link, and nothing at all without a url. */
+function plainLink(url: string | undefined, label: string): string {
+  return url
+    ? `<p style="margin:0 0 8px;"><a href="${escapeHtml(url)}" style="color:#71717a;">${escapeHtml(label)}</a></p>`
+    : "";
+}
 
 export type BookingAlertInput = {
   brand: EmailBrand;
@@ -118,6 +129,9 @@ export type BookingConfirmationInput = {
   /** F-048: the booking's add-to-calendar file (`calendarFileUrl`). Same
    *  empty-vs-absent discipline as `cancelUrl`: "" or absent, no line. */
   calendarUrl?: string;
+  /** F-048: where the customer moves this booking themselves (`bookingMoveUrl` in
+   *  lib/booking/links.ts). "" or absent, no line. */
+  moveUrl?: string;
 };
 
 /**
@@ -165,6 +179,7 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
     ${whenHtml}
     ${meetingHtml}
     ${calendarHtml}
+    ${plainLink(input.moveUrl, copy.move)}
     ${cancelHtml}
   `);
 
@@ -175,6 +190,7 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
     ...(sameZone ? [] : [copy.forUs(input.whenCompanyZone)]),
     ...(input.meetingUrl ? ["", `${copy.join}: ${input.meetingUrl}`] : []),
     ...(input.calendarUrl ? ["", `${copy.addToCalendar}: ${input.calendarUrl}`] : []),
+    ...(input.moveUrl ? ["", `${copy.move}: ${input.moveUrl}`] : []),
     ...(input.cancelUrl ? ["", `${copy.cancel}: ${input.cancelUrl}`] : []),
   ].join("\n");
 
@@ -194,6 +210,8 @@ const RESCHEDULED_COPY = {
     join: "Join your video meeting",
     replaces: "This link replaces the one from your earlier confirmation.",
     cancel: "Cancel this booking",
+    addToCalendar: CONFIRMATION_COPY.en.addToCalendar,
+    move: CONFIRMATION_COPY.en.move,
   },
   es: {
     subject: "Tu cita fue reprogramada",
@@ -202,6 +220,8 @@ const RESCHEDULED_COPY = {
     join: "Unirse a la videollamada",
     replaces: "Este enlace reemplaza al de tu confirmación anterior.",
     cancel: "Cancelar esta cita",
+    addToCalendar: CONFIRMATION_COPY.es.addToCalendar,
+    move: CONFIRMATION_COPY.es.move,
   },
 } as const;
 
@@ -228,11 +248,19 @@ export type BookingRescheduledInput = {
    *  template exists: a same-day video reschedule otherwise leaves the
    *  customer holding a link to a room nobody will be in. */
   meetingUrl?: string;
+  /** F-048: the NEW booking's add-to-calendar file. Its UID is the first
+   *  booking's and its SEQUENCE the number of moves (`rescheduleChain`), so
+   *  opening it updates the event the customer already saved. "" or absent,
+   *  no line. */
+  calendarUrl?: string;
+  /** F-048: the NEW booking's change-of-time link. "" or absent, no line. */
+  moveUrl?: string;
 };
 
 /**
- * The email a booker gets after their booking is MOVED (today: by phone,
- * through the voice assistant's reschedule tool).
+ * The email a booker gets after their booking is MOVED: by phone, through
+ * the voice assistant's reschedule tool, or by the customer themselves from
+ * the link in their email (F-048, kind `booking.moved`).
  *
  * The confirmation reshaped for changed news: "moved", not "booked" — the
  * customer already had a confirmation, so repeating its copy verbatim would
@@ -266,6 +294,8 @@ export function bookingRescheduledEmail(input: BookingRescheduledInput):
     <p style="margin:0 0 12px;">${escapeHtml(copy.title)}</p>
     ${whenHtml}
     ${meetingHtml}
+    ${plainLink(input.calendarUrl, copy.addToCalendar)}
+    ${plainLink(input.moveUrl, copy.move)}
     ${cancelHtml}
   `);
 
@@ -277,6 +307,8 @@ export function bookingRescheduledEmail(input: BookingRescheduledInput):
     ...(input.meetingUrl
       ? ["", `${copy.join}: ${input.meetingUrl}`, copy.replaces]
       : []),
+    ...(input.calendarUrl ? ["", `${copy.addToCalendar}: ${input.calendarUrl}`] : []),
+    ...(input.moveUrl ? ["", `${copy.move}: ${input.moveUrl}`] : []),
     ...(input.cancelUrl ? ["", `${copy.cancel}: ${input.cancelUrl}`] : []),
   ].join("\n");
 
@@ -412,6 +444,60 @@ export function bookingPhoneChangeAlertEmail(input: BookingPhoneChangeAlertInput
       : [`When: ${input.whenCompanyZone}`]),
     `Who: ${input.contactName}`,
     `Called from: ${callerDisplay}`,
+    ...(input.contactUrl ? ["", `Open this contact: ${input.contactUrl}`] : []),
+  ].join("\n");
+
+  return { subject, html, text };
+}
+
+export type BookingMovedAlertInput = {
+  brand: EmailBrand;
+  /** The time BEFORE the move, pre-formatted in the company zone. */
+  whenCompanyZone: string;
+  /** The new time, pre-formatted in the company zone. */
+  newWhenCompanyZone: string;
+  /** From the contact row — customer-supplied (typed on a booking page). */
+  contactName: string;
+  /** Absolute, or null. NEVER relative. */
+  contactUrl: string | null;
+};
+
+/**
+ * F-048: the email a client gets when their CUSTOMER moves a booking from
+ * the link in their own email. The phone alert's shape without the call:
+ * both times in words (never an arrow), who, and the contact. Operator-facing
+ * and English like every staff alert; it returns its own subject because the
+ * subject carries the customer-supplied name.
+ */
+export function bookingMovedAlertEmail(input: BookingMovedAlertInput):
+  { subject: string; html: string; text: string } {
+  const heading = "Booking moved";
+  const sentence = `${input.contactName} moved their booking.`;
+  const subject = `${heading}: ${stripSubjectControlChars(input.whenCompanyZone)} to `
+    + `${stripSubjectControlChars(input.newWhenCompanyZone)} — ${stripSubjectControlChars(input.contactName)}`;
+
+  const row = (label: string, value: string) => `<tr>
+      <td style="${ROW_LABEL_STYLE}">${label}</td>
+      <td style="${ROW_VALUE_STYLE}">${escapeHtml(value)}</td>
+    </tr>`;
+  const rows = [
+    row("Was", input.whenCompanyZone), row("Now", input.newWhenCompanyZone), row("Who", input.contactName),
+  ].join("\n");
+
+  const html = shell(input.brand, `
+    <p style="margin:0 0 12px;font-size:17px;font-weight:600;">${heading}</p>
+    <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(sentence)}</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">${rows}</table>
+    ${input.contactUrl ? button(input.brand, input.contactUrl, "Open this contact") : ""}
+  `);
+
+  const text = [
+    `${heading}.`,
+    sentence,
+    "",
+    `Was: ${input.whenCompanyZone}`,
+    `Now: ${input.newWhenCompanyZone}`,
+    `Who: ${input.contactName}`,
     ...(input.contactUrl ? ["", `Open this contact: ${input.contactUrl}`] : []),
   ].join("\n");
 

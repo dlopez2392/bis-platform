@@ -103,6 +103,29 @@ const STRINGS = {
     // customer's notice, in the language the owner picks. The owner can
     // rewrite it; the email adds the time and a link to book again.
     cancelNoticeDefault: "We're sorry, but we have to cancel this appointment.",
+    // F-048: the customer moves their own booking —
+    // `/b/<publicId>/move/<token>`, reached from the confirmation email and
+    // from the cancel page. The picker itself reuses the booking page's words.
+    moveLink: "Change the time instead",
+    cancelInsteadLink: "Cancel this booking instead",
+    moveCurrentLabel: "Your booking now",
+    moveChosenLabel: "Your new time",
+    moveSubmit: "Move my booking",
+    moveSubmitting: "Moving…",
+    moveSuccessTitle: "Your booking has been moved.",
+    moveSuccessBody: "We've sent the new time to your email.",
+    moveSuccessBodyNoEmail: "We couldn't email you, so please note the new time above.",
+    moveManageHint: "Need to change or cancel it again? Use the link in your email.",
+    moveManageHintNoEmail: "Save this link to change or cancel it later.",
+    moveGenericError: "Something went wrong — your booking was not moved. Please try again.",
+    // The link's booking stopped being live while the page was open (another
+    // tab, or the business, changed it). Nothing was moved.
+    moveAlreadyChanged: "This booking was already changed or cancelled, so nothing was moved. Check your newest email.",
+    // An OLD link, after a move: the booking it names was replaced. Said on
+    // the cancel page and the move page alike, instead of "cancelled".
+    movedTitle: "This booking was moved. Your newest email has the new time.",
+    moveTabTitleWithBrand: "Change your visit with {business}",
+    moveTabTitleNoBrand: "Change your appointment",
   },
   es: {
     noSlots: "No hay horarios disponibles este día.",
@@ -161,6 +184,22 @@ const STRINGS = {
     calendarJoin: "Unirse a la videollamada",
     calendarCancel: "Cancelar esta cita",
     cancelNoticeDefault: "Lo sentimos, pero tenemos que cancelar tu cita.",
+    moveLink: "Mejor cambiar el horario",
+    cancelInsteadLink: "Mejor cancelar esta cita",
+    moveCurrentLabel: "Tu cita ahora",
+    moveChosenLabel: "Tu nuevo horario",
+    moveSubmit: "Cambiar mi cita",
+    moveSubmitting: "Cambiando…",
+    moveSuccessTitle: "Tu cita fue reprogramada.",
+    moveSuccessBody: "Te enviamos el nuevo horario a tu correo.",
+    moveSuccessBodyNoEmail: "No pudimos enviarte un correo, así que anota el nuevo horario de arriba.",
+    moveManageHint: "¿Necesitas cambiarla o cancelarla otra vez? Usa el enlace de tu correo.",
+    moveManageHintNoEmail: "Guarda este enlace para cambiarla o cancelarla más tarde.",
+    moveGenericError: "Algo salió mal — tu cita no se cambió. Vuelve a intentarlo.",
+    moveAlreadyChanged: "Esta cita ya se cambió o se canceló, así que no se movió nada. Revisa tu correo más reciente.",
+    movedTitle: "Esta cita se cambió de horario. Tu correo más reciente tiene el nuevo horario.",
+    moveTabTitleWithBrand: "Cambia tu cita con {business}",
+    moveTabTitleNoBrand: "Cambiar una cita",
   },
 } as const;
 

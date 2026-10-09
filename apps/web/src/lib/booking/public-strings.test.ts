@@ -33,6 +33,7 @@ describe("bookingStrings", () => {
     for (const locale of ["en", "es"] as const) {
       expect(bookingStrings(locale).tabTitleWithBrand).toContain("{business}");
       expect(bookingStrings(locale).cancelTabTitleWithBrand).toContain("{business}");
+      expect(bookingStrings(locale).moveTabTitleWithBrand).toContain("{business}");
     }
   });
 
