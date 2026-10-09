@@ -19,6 +19,7 @@ import {
   type WeekdayKey,
 } from "./hours-form";
 import type { ActionResult } from "./actions";
+import { parseNotifyEmails } from "./notify-emails";
 
 const DAY_LABEL: Record<WeekdayKey, string> = {
   mon: m["calendar.settings.day.mon"],
@@ -74,8 +75,8 @@ export function CalendarSettings({
     });
   });
 
-  const notifyEmailsEmpty = notifyEmailsText
-    .split("\n").map((s) => s.trim()).filter(Boolean).length === 0;
+  // The same split the save uses (D-034), so a field of only commas warns too.
+  const notifyEmailsEmpty = parseNotifyEmails(notifyEmailsText).length === 0;
 
   return (
     <Card>

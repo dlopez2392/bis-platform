@@ -385,6 +385,8 @@ export const m = {
   "dashboard.activity.bookingCancelled": "An appointment was cancelled.",
   "dashboard.activity.bookingCompleted": "An appointment was completed.",
   "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
+  // D-036: the Calendar page's Undo on a Cancel (status_changed → booked).
+  "dashboard.activity.bookingRestored": "An appointment that was cancelled is back on.",
   "dashboard.activity.formSubmitted": "A new lead came in through your form.",
   "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
   "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of {name}.",
@@ -1193,7 +1195,12 @@ export const m = {
   "calendar.settings.minNotice": "Minimum notice",
   "calendar.settings.maxAdvance": "How far ahead people can book",
   "calendar.settings.notifyEmails": "Notify these addresses",
-  "calendar.settings.notifyEmailsHint": "One address per line. Sent whenever someone books, cancels, or an appointment is coming up.",
+  // D-034: only what is actually sent. The reminder pass mails the customer,
+  // never these addresses, so "an appointment is coming up" was an alert that
+  // did not exist. The senders that DO read them are listed in the action's
+  // test (calendar/actions.test.ts). No persona name: clients rename Sofía.
+  "calendar.settings.notifyEmailsHint": "Separate addresses with commas or put each on its own line. We email them when a customer books, cancels or moves an appointment, and when a caller leaves a message or their details.",
+  "calendar.settings.notifyEmailsInvalid": "That doesn't look like an email address: {value}",
   // The inline warning the checklist's form_notify concern mirrors: an
   // account that is accepting bookings with nobody listed to hear about them
   // is a silent failure mode, not a valid configuration to save quietly.
@@ -1221,6 +1228,14 @@ export const m = {
   "calendar.bookings.markNoShow": "No-show",
   "calendar.bookings.statusUpdated": "Booking updated",
   "calendar.bookings.statusUpdateFailed": "Could not update this booking.",
+  // D-036: Cancel runs at once with Undo (rule 6). It emails nobody, so the
+  // toast says the customer has not heard, rather than letting the operator
+  // assume they have.
+  "calendar.bookings.cancelledToast": "Appointment cancelled. We haven't told the customer, so let them know.",
+  "calendar.bookings.restored": "Appointment is back on.",
+  "calendar.bookings.restoreSlotTaken": "Someone else booked that time after you cancelled, so this appointment can't be put back.",
+  "calendar.bookings.restoreRescheduled": "This appointment was moved to a new time, so the old one can't be put back.",
+  "calendar.bookings.restoreNotOurs": "The customer cancelled this one themselves, by link or on a call, so it can't be put back from here.",
   "calendar.bookings.notStartedYet": "This appointment hasn't started yet. Mark it completed or no-show once it has.",
   "calendar.bookings.status.booked": "Booked",
   "calendar.bookings.status.cancelled": "Cancelled",

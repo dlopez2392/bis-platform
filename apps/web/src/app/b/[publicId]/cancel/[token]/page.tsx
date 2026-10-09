@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { cache } from "react";
 import { notFound } from "next/navigation";
 import {
   serviceDb, getBranding, brandLogoUrl, brandDisplayName, type Branding,
@@ -10,36 +9,15 @@ import { normalizeLocale, publicTabTitle } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
-import { lookupBookingByToken } from "./actions";
+import { loadBooking, loadBookingSafe } from "./data";
 import { CancelForm } from "./cancel-form";
 
 export const dynamic = "force-dynamic";
 
-/**
- * MINOR fix: `generateMetadata` and the page component below both run
- * against the SAME request and both need this exact row — same double-fetch
- * shape, and the same `cache()` fix, `b/[publicId]/page.tsx`'s own
- * `loadCalendar` already applies. One query, not two, on a route that is
- * anonymous, `force-dynamic`, and reachable by anyone holding the link.
- */
-const loadBooking = cache((token: string) => lookupBookingByToken(serviceDb(), token));
-
-/**
- * `generateMetadata` below goes through THIS, not `loadBooking` directly
- * (F-102 review round, fix 1 — see `app/f/[publicId]/page.tsx`'s identical
- * comment for the full reasoning, confirmed by a live build+curl check).
- * `generateMetadata` has no `error.tsx` boundary of its own to land in; the
- * page component below is the one place on this route allowed to throw
- * (via the real `loadBooking`), since `app/b/error.tsx` can catch it there.
- */
-async function loadBookingSafe(token: string): ReturnType<typeof loadBooking> {
-  try {
-    return await loadBooking(token);
-  } catch (e) {
-    console.error(`cancel/${token}: booking read failed: ${String(e)}`);
-    return null;
-  }
-}
+// `loadBooking`/`loadBookingSafe` live in `./data.ts` (D-109) so this page, its
+// `generateMetadata` and `./layout.tsx` share ONE cached token lookup per
+// request: the layout asks for the same row to decide whether a dead end
+// should wear the business's brand, at no cost to a working link.
 
 const UNBRANDED: Branding = {
   brandName: null, brandLogoPath: null, brandColor: null,
@@ -85,9 +63,8 @@ async function loadTimezone(accountId: string): Promise<string> {
 // "Book with <business>" wording a sibling route's own `generateMetadata`
 // might otherwise suggest (F-102 review round, second pass): the booking
 // page's `generateMetadata` is scoped to the SEPARATE `/b/[publicId]` route
-// and never applies to this one. There is no longer a `[publicId]`-level
-// segment layout between this page and the root to inject anything else —
-// see `app/b/[publicId]/data.ts`'s comment for why that was removed.
+// and never applies to this one. This page's own `./layout.tsx` (D-109)
+// sets no metadata: it brands a dead end's PAGE, not its tab title.
 export async function generateMetadata(
   { params, searchParams }: {
     params: Promise<{ publicId: string; token: string }>;
@@ -137,7 +114,7 @@ export default async function CancelBookingPage({
   const locale = normalizeLocale(typeof query.locale === "string" ? query.locale : undefined, "en");
   const strings = bookingStrings(locale);
 
-  // `lookupBookingByToken` (via the `loadBooking` cache wrapper above) is a
+  // `lookupBookingByToken` (via `./data.ts`'s `loadBooking` cache wrapper) is a
   // plain SELECT — this is what lets the four states below (unknown /
   // cancelled / booked / past) be told apart on a GET, unlike the accessor
   // `CancelForm`'s submit calls, which deliberately collapses "unknown" and

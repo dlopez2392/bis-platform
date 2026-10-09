@@ -8,7 +8,7 @@ import { m } from "@/lib/messages";
 import { CalendarSettings } from "./calendar-settings";
 import { BookingsList } from "./bookings-list";
 import { EmbedSnippet } from "./embed-snippet";
-import { updateCalendarSettingsAction, setBookingStatusAction } from "./actions";
+import { updateCalendarSettingsAction, setBookingStatusAction, undoCancelBookingAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +61,7 @@ export default async function CalendarPage({
 
   const boundUpdateSettings = updateCalendarSettingsAction.bind(null, accountId);
   const boundSetStatus = setBookingStatusAction.bind(null, accountId);
+  const boundUndoCancel = undoCancelBookingAction.bind(null, accountId);
 
   return (
     <>
@@ -75,6 +76,7 @@ export default async function CalendarPage({
             bookings={bookings}
             nowIso={nowIso}
             statusAction={boundSetStatus}
+            undoCancelAction={boundUndoCancel}
           />
         </div>
         <EmbedSnippet origin={origin} publicId={calendar.public_id} enabled={calendar.enabled} />

@@ -21,6 +21,7 @@ const PUBLIC_SOURCES = [
   "b/[publicId]/booking-page.tsx",
   "b/[publicId]/cancel/[token]/page.tsx",
   "b/error.tsx",
+  "b/branded-dead-end.tsx",
   "f/[publicId]/form.css",
   "f/[publicId]/form-page.tsx",
 ];
