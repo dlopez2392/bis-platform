@@ -7,10 +7,15 @@ const { lookupBookingByTokenMock, getCalendarByPublicIdMock, getBrandingMock } =
   getCalendarByPublicIdMock: vi.fn(),
   getBrandingMock: vi.fn(),
 }));
-vi.mock("./actions", () => ({ lookupBookingByToken: lookupBookingByTokenMock }));
+// The bookings read is `./data.ts`'s REAL lookup; its row comes from the mock.
+const fakeDb = {
+  from: () => ({ select: () => ({ eq: () => ({
+    maybeSingle: async () => ({ data: await lookupBookingByTokenMock(), error: null }),
+  }) }) }),
+};
 vi.mock("@bis/db", async () => ({
   ...(await vi.importActual<typeof import("@bis/db")>("@bis/db")),
-  serviceDb: () => ({}),
+  serviceDb: () => fakeDb,
   getCalendarByPublicId: getCalendarByPublicIdMock,
   getBranding: getBrandingMock,
   brandLogoUrl: (p: string) => `https://cdn.example/${p}`,
@@ -59,7 +64,7 @@ describe("the cancel page's segment layout (D-109)", () => {
     expect(html).toContain("data-booking-dead-end");
     expect(html).toContain("Acme Plumbing");
     expect(html).toContain(SENTINEL);
-    expect(getCalendarByPublicIdMock).toHaveBeenCalledWith({}, "p1");
+    expect(getCalendarByPublicIdMock).toHaveBeenCalledWith(fakeDb, "p1");
   });
 
   it("an unknown token under an id that never existed stays neutral", async () => {
