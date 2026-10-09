@@ -407,6 +407,18 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
 
     const response = await anonPage.goto(publicPath);
     expect(response?.status(), "a disabled calendar's public URL must 404").toBe(404);
+    // D-109: a REAL calendar's dead end renders inside the booking page's own
+    // segment layout, which wraps it in the business's brand. The wrapper is
+    // the proof the not-found was caught BESIDE that layout (#185's attempt
+    // rendered the neutral one above it); the fixture account may have no
+    // logo or name, so the attribute, not the brand, is what is asserted.
+    await expect(anonPage.getByText("We can't find this page.")).toBeVisible();
+    await expect(anonPage.locator("[data-booking-dead-end]")).toHaveCount(1);
+    // An id that never existed stays neutral: same 404, same words, no brand.
+    const unknown = await anonPage.goto("/b/zzzzzzzzzzzz");
+    expect(unknown?.status(), "an unknown calendar id must 404").toBe(404);
+    await expect(anonPage.getByText("We can't find this page.")).toBeVisible();
+    await expect(anonPage.locator("[data-booking-dead-end]")).toHaveCount(0);
   } finally {
     if (anonContext) await anonContext.close().catch(() => {});
     await purgeBooking(bookerEmail);
