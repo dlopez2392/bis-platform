@@ -3,7 +3,8 @@ import type { PublicLocale } from "@/lib/forms/public-strings";
 
 /**
  * The confirmation is the one booking email a stranger reads, so it is the
- * one that speaks their language. The alert and the reminder stay English:
+ * one that speaks their language — as do the reschedule and cancellation a
+ * phone call sends (D-038). The alert and the reminder stay English:
  * the alert is for the operator, and the reminder runs from a cron that has
  * no booker language on the row yet (a `bookings.locale` column is the
  * recorded follow-up).
@@ -166,8 +167,39 @@ export function bookingConfirmationEmail(input: BookingConfirmationInput):
   return { html, text };
 }
 
+/**
+ * The reschedule email's copy, per language (D-038: it had no Spanish
+ * version, so a caller who moved their appointment in Spanish got English).
+ * Same tú register as `CONFIRMATION_COPY` and `CANCELLED_COPY`.
+ */
+const RESCHEDULED_COPY = {
+  en: {
+    subject: "Your booking has been moved",
+    title: "Your booking has been moved.",
+    forUs: (when: string) => `${when} for us`,
+    join: "Join your video meeting",
+    replaces: "This link replaces the one from your earlier confirmation.",
+    cancel: "Cancel this booking",
+  },
+  es: {
+    subject: "Tu cita fue reprogramada",
+    title: "Tu cita fue reprogramada.",
+    forUs: (when: string) => `${when} para nosotros`,
+    join: "Unirse a la videollamada",
+    replaces: "Este enlace reemplaza al de tu confirmación anterior.",
+    cancel: "Cancelar esta cita",
+  },
+} as const;
+
+export function bookingRescheduledSubject(locale: PublicLocale = "en"): string {
+  return RESCHEDULED_COPY[locale].subject;
+}
+
 export type BookingRescheduledInput = {
   brand: EmailBrand;
+  /** The caller's language; English when absent. Both when-strings are
+   *  expected to have been formatted in the same language by the caller. */
+  locale?: PublicLocale;
   /** Pre-formatted in the booker's own zone — the NEW time, never the old. */
   whenBookerZone: string;
   /** Pre-formatted in the company's zone; same show-only-when-different
@@ -197,41 +229,41 @@ export type BookingRescheduledInput = {
  */
 export function bookingRescheduledEmail(input: BookingRescheduledInput):
   { html: string; text: string } {
+  const copy = RESCHEDULED_COPY[input.locale ?? "en"];
   const sameZone = input.whenBookerZone === input.whenCompanyZone;
 
   const whenHtml = sameZone
     ? `<p style="margin:0 0 16px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>`
     : `<p style="margin:0 0 4px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>
-       <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(input.whenCompanyZone)} for us</p>`;
+       <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(copy.forUs(input.whenCompanyZone))}</p>`;
 
   const meetingHtml = input.meetingUrl
-    ? `<p style="margin:0 0 4px;">${button(input.brand, input.meetingUrl, "Join your video meeting")}</p>
-       <p style="margin:0 0 16px;color:#71717a;">This link replaces the one from your earlier confirmation.</p>`
+    ? `<p style="margin:0 0 4px;">${button(input.brand, input.meetingUrl, copy.join)}</p>
+       <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(copy.replaces)}</p>`
     : "";
 
   // Same reasoning as `bookingConfirmationEmail`'s `cancelHtml`: an empty
   // `cancelUrl` gets no anchor at all, never one pointing nowhere.
   const cancelHtml = input.cancelUrl
-    ? `<p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">Cancel this booking</a></p>`
+    ? `<p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">${escapeHtml(copy.cancel)}</a></p>`
     : "";
 
   const html = shell(input.brand, `
-    <p style="margin:0 0 12px;">Your booking has been moved.</p>
+    <p style="margin:0 0 12px;">${escapeHtml(copy.title)}</p>
     ${whenHtml}
     ${meetingHtml}
     ${cancelHtml}
   `);
 
   const text = [
-    "Your booking has been moved.",
+    copy.title,
     "",
     input.whenBookerZone,
-    ...(sameZone ? [] : [`${input.whenCompanyZone} for us`]),
+    ...(sameZone ? [] : [copy.forUs(input.whenCompanyZone)]),
     ...(input.meetingUrl
-      ? ["", `Join your video meeting: ${input.meetingUrl}`,
-        "This link replaces the one from your earlier confirmation."]
+      ? ["", `${copy.join}: ${input.meetingUrl}`, copy.replaces]
       : []),
-    ...(input.cancelUrl ? ["", `Cancel this booking: ${input.cancelUrl}`] : []),
+    ...(input.cancelUrl ? ["", `${copy.cancel}: ${input.cancelUrl}`] : []),
   ].join("\n");
 
   return { html, text };

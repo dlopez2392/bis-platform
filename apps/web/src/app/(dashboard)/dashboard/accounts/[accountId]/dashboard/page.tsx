@@ -395,11 +395,15 @@ export default async function AccountDashboardPage({
             voiceEnabled={showVoiceSub}
             spamCount={spamCallsIso.length}
             abandonedCount={abandonedCallsIso.length}
+            personaName={voiceProfile?.persona_name ?? null}
           />
           {/* Both audiences (see the `listRecentEvents` call above's own
               grants comment) — no isAgency gate, unlike the checklist row
               below. */}
-          <ActivityCard accountId={accountId} events={recentEvents} now={now} />
+          <ActivityCard
+            accountId={accountId} events={recentEvents} now={now}
+            personaName={voiceProfile?.persona_name ?? null}
+          />
         </div>
 
         {/* Below the metrics on purpose (danlo, 2026-09-02): the dashboard

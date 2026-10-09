@@ -323,7 +323,7 @@ export const m = {
   "dashboard.calls.unit.call": "call",
   "dashboard.calls.unit.calls": "calls",
   // Rule 5 (designed empty states): one sentence, verbatim from the brief.
-  "dashboard.calls.empty": "When Sofía answers, every call lands here with its outcome.",
+  "dashboard.calls.empty": "When {name} answers, every call lands here with its outcome.",
   "dashboard.calls.emptySetupVoice": "Set up your voice receptionist",
   "dashboard.calls.emptyViewCalls": "View all calls",
   // The "screened, not empty" state (#182 follow-up): the window had calls,
@@ -337,9 +337,9 @@ export const m = {
   // who hung up is never hidden behind the spam line). All three take
   // "{count}"/"{unit}" (the "both" variant takes two of each, spam first),
   // the same replace-by-hand convention as the tooltip strings above.
-  "dashboard.calls.screenedSpam": "No calls answered in the last 14 days. Sofía flagged {count} {unit} as likely spam.",
-  "dashboard.calls.screenedAbandoned": "No calls answered in the last 14 days. {count} {unit} hung up before Sofía could help.",
-  "dashboard.calls.screenedBoth": "No calls answered in the last 14 days. Sofía flagged {spamCount} {spamUnit} as likely spam, and {otherCount} {otherUnit} hung up before she could help.",
+  "dashboard.calls.screenedSpam": "No calls answered in the last 14 days. {name} flagged {count} {unit} as likely spam.",
+  "dashboard.calls.screenedAbandoned": "No calls answered in the last 14 days. {count} {unit} hung up before {name} could help.",
+  "dashboard.calls.screenedBoth": "No calls answered in the last 14 days. {name} flagged {spamCount} {spamUnit} as likely spam, and {otherCount} {otherUnit} hung up before {name} could help.",
   "dashboard.calls.unit.caller": "caller",
   "dashboard.calls.unit.callers": "callers",
 
@@ -360,8 +360,8 @@ export const m = {
   "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
   "dashboard.activity.formSubmitted": "A new lead came in through your form.",
   "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
-  "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of Sofía.",
-  "dashboard.activity.forwardOff": "Sofía started answering calls again.",
+  "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of {name}.",
+  "dashboard.activity.forwardOff": "{name} started answering calls again.",
   // Rule 5 (designed empty states): one sentence, verbatim from the brief.
   // No action link — the brief pins this one deliberately link-less.
   "dashboard.activity.empty": "Bookings, form leads, and call outcomes appear here as they happen.",
@@ -1166,6 +1166,9 @@ export const m = {
   "voice.profile.afterHours": "After hours",
   "voice.profile.afterHours.hoursThenMessage": "Follow business hours, then take a message",
   "voice.profile.afterHours.messageOnly": "Always take a message",
+  // D-040: the second option now means what it says, open or closed, and it
+  // turns booking off on calls whatever the box below says.
+  "voice.profile.afterHoursHint": "Always take a message means no booking on calls, even during business hours.",
   "voice.profile.enabled": "Receptionist enabled",
   "voice.textback.enabled": "Text back callers who didn't book",
   "voice.textback.help": "When someone talks to Sofía and hangs up without booking, send them a text. Off until you turn it on, and only for companies whose A2P registration is approved.",
@@ -1272,6 +1275,8 @@ export const m = {
   "voice.numbers.statusUpdated": "Status updated",
   "voice.numbers.statusUpdateFailed": "Could not update this number's status.",
   "voice.numbers.goLiveNeedsProfile": "Fill in the voice profile before going live",
+  // D-042: one active number per account.
+  "voice.numbers.anotherActive": "This client has another active number. A client can have only one, so release the other one first.",
   "voice.moveFailed": "Couldn't move that number — check it isn't in use and try again.",
   // Server-side twin of the page's own precondition (setup/page.tsx only
   // offers the move list when `assignedNumber === null`): a tampered or
@@ -1944,8 +1949,10 @@ export const m = {
   "setup.step.forwarding.noNumber": "Assign a number first — there is nothing to forward to yet.",
   "setup.step.forwarding.unknownNumber": "Couldn't check the assigned number — reload to retry.",
   "setup.step.test_call.title": "Test call",
+  // D-091: only an answered call (booked, lead, message, transferred) turns
+  // the step green, so the help says what to do on the call.
   "setup.step.test_call.help":
-    "Call the assigned number. The call will appear on the Calls page and turn this step green.",
+    "Call the assigned number and leave a message or book a time. That call turns this step green — a hang-up or a robocall doesn't count.",
   // Shown only for a `provisioned` number — assigned but not yet answering
   // anything. The button below fixes exactly this.
   "setup.testCall.provisionedNote":

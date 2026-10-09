@@ -46,6 +46,17 @@ function pickOne<T extends readonly string[]>(raw: string, allowed: T): T[number
   return (allowed as readonly string[]).includes(raw) ? (raw as T[number]) : null;
 }
 
+/**
+ * Whether the account holds an active (not `released`) number other than
+ * `exceptId` — the one-active-number rule (D-042) `assignNumberAction` and
+ * `setNumberStatusAction` share with `moveNumberAction`'s destination check.
+ * Throws on a failed read; each caller fails closed.
+ */
+async function hasOtherActiveNumber(accountId: string, exceptId: string | null): Promise<boolean> {
+  const rows = await listPhoneNumbersForAccount(serviceDb(), accountId);
+  return rows.some((n) => n.id !== exceptId && n.status !== "released");
+}
+
 export async function saveVoiceProfileAction(
   accountId: string, formData: FormData,
 ): Promise<ActionResult> {
@@ -95,6 +106,20 @@ export async function assignNumberAction(
   if (!e164) return { ok: false, error: m["voice.numbers.badE164"] };
 
   const telnyxId = String(formData.get("telnyxId") ?? "").trim();
+
+  // D-042: one active number per account — the rule `moveNumberAction`
+  // below already enforces, in its words. A second active number is a state
+  // the setup wizard and go-live cannot describe, and the text sender
+  // silently picks the oldest live one. The read fails CLOSED: this is a
+  // save, and the operator can press it again.
+  try {
+    if (await hasOtherActiveNumber(accountId, null)) {
+      return { ok: false, error: m["voice.moveDestinationOccupied"] };
+    }
+  } catch (e) {
+    console.error(`assignNumberAction: active-number check failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["voice.numbers.assignFailed"] };
+  }
 
   try {
     await assignPhoneNumber(
@@ -185,6 +210,21 @@ export async function setNumberStatusAction(
 
   const validStatus = pickOne(status, STATUS_VALUES);
   if (!validStatus) return { ok: false, error: m["voice.numbers.statusUpdateFailed"] };
+
+  // D-042: bringing a released number back must not make it the account's
+  // SECOND active one. Releasing is never gated — it is how an account that
+  // already has two gets back to one, and an off switch must not depend on a
+  // read that can be down.
+  if (validStatus !== "released") {
+    try {
+      if (await hasOtherActiveNumber(accountId, phoneNumberId)) {
+        return { ok: false, error: m["voice.numbers.anotherActive"] };
+      }
+    } catch (e) {
+      console.error(`setNumberStatusAction: active-number check failed for account ${accountId}: ${String(e)}`);
+      return { ok: false, error: m["voice.numbers.statusUpdateFailed"] };
+    }
+  }
 
   if (validStatus === "live") {
     const profile = await getVoiceProfile(serviceDb(), accountId);

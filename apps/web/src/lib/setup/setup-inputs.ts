@@ -1,7 +1,7 @@
 // apps/web/src/lib/setup/setup-inputs.ts
 import {
   getCalendarForAccount, getVoiceProfile, listPhoneNumbersForAccount,
-  countCallsSince, listChecklistState, listForms, hasConciergeSiteConversation,
+  countAnsweredCallsSince, listChecklistState, listForms, hasConciergeSiteConversation,
   serviceDb, type SupabaseClient, type PhoneNumberRow,
 } from "@bis/db";
 import { SETUP_TICK_KEYS, type SetupInputs, type SetupPermissions } from "./setup-status";
@@ -111,9 +111,10 @@ export async function gatherSetupInputs(
     getCalendarForAccount(db, accountId),
     getVoiceProfile(db, accountId),
     listPhoneNumbersForAccount(db, accountId),
-    // Epoch floor: "has this account EVER taken a call" — the same
-    // question the test-call step asks on the setup page itself.
-    countCallsSince(db, accountId, "1970-01-01T00:00:00.000Z"),
+    // Epoch floor: "has this account EVER ANSWERED a call" — the question
+    // the test-call step asks. Answered only (D-091): counting every row
+    // turned the step green on a robocall, a hang-up or a silent ring.
+    countAnsweredCallsSince(db, accountId, "1970-01-01T00:00:00.000Z"),
     listChecklistState(db, accountId),
     // The website-assistant step's own two legs (Setup step task): published
     // forms (row 2) and site conversations (row 4's proof). Own legs, not

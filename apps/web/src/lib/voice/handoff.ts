@@ -65,10 +65,9 @@ export function newHandoffToken(): string {
  * belongs to this function ONLY; put it on that one and the caller hears it
  * read aloud.
  *
- * `both` takes English, mirroring the greeting's own rule
- * (`app/api/voice/incoming/route.ts:764`,
- * `languages === "es" ? greeting_es : greeting_en`) rather than inventing a
- * second language policy for this one line.
+ * `both` takes English. This used to mirror the greeting's rule; since D-037
+ * a bilingual line OPENS with both greetings (`lib/voice/greeting.ts`), but
+ * this line is unchanged by that decision and still takes English.
  */
 export function handoffLine(languages: "en" | "es" | "both"): string {
   const line = languages === "es"

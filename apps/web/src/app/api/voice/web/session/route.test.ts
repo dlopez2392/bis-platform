@@ -168,6 +168,20 @@ describe("POST /api/voice/web/session — the name a website visitor hears", () 
     expect(session.tools).toEqual([]);
   });
 
+  // Owner decision B (2026-10-09): "Always take a message" changed the PHONE
+  // line only. The browser demo keeps the conditional line it always had.
+  it("on a message_only profile, keeps the old conditional after-hours line, never the phone's MESSAGES ONLY", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, after_hours: "message_only" });
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0]! as [string, { body: string }];
+    const { session } = JSON.parse(String(init.body)) as { session: { instructions: string } };
+    expect(session.instructions).toContain(
+      "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.",
+    );
+    expect(session.instructions).not.toContain("MESSAGES ONLY");
+  });
+
   it("refuses with 503, and mints nothing, when the accounts read fails", async () => {
     // Mutation: drop the `if (error || !account)` guard in the route — a
     // session would be minted on a row that never came back.
