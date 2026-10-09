@@ -569,7 +569,7 @@ describe("runCallLifecycle — Important #5: connect timeout", () => {
 });
 
 describe("runCallLifecycle — Important #5: cap-seconds clamp", () => {
-  it("PHONE_MAX_CALL_SECONDS above 750 is clamped to 750, not the route's 800s maxDuration", async () => {
+  it("PHONE_MAX_CALL_SECONDS above 697 is clamped to 697, not the route's 800s maxDuration", async () => {
     vi.useFakeTimers();
     // Above BOTH the clamp and the route's `maxDuration = 800`, so a missing
     // clamp cannot accidentally still land inside the invocation budget.
@@ -586,19 +586,52 @@ describe("runCallLifecycle — Important #5: cap-seconds clamp", () => {
     await flushMicrotasks();
 
     // Just under the clamp: no goodbye yet.
-    await vi.advanceTimersByTimeAsync(749_000);
+    await vi.advanceTimersByTimeAsync(696_000);
     expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
       .some((c) => String(c[0]).includes("brief goodbye"))).toBe(false);
 
-    // Crossing 750s (not the configured 900s) fires the goodbye. 750 is
-    // 800 - 30 - 20, the two budgets derived in route.ts: a 30s post-cap tail
-    // (5s close delay + 3s bounded drain + 10s carrier text-back + 12s of
-    // finishCall's remaining DB and email round trips) AND a 20s connect leg
-    // before the cap timer is armed at all — the cap's clock starts on
-    // `open`, not when the webhook arrived, and 770 counted only the tail.
+    // Crossing 697s (not the configured 900s) fires the goodbye. 697 is
+    // 800 - 73 - 20 - 10, derived in route.ts: a 73s timed post-cap tail
+    // (goodbye playout, the SIP hangup, the socket's close handshake, the
+    // bounded drain, the summary reading, the durable rows and staff email,
+    // one carrier send, the usage write, the call card's and the proposals'
+    // readings), a ~20s connect leg before the cap timer is armed at all
+    // (the cap's clock starts on `open`, not when the webhook arrived), and
+    // 10s of margin for the legs nothing times. (770 counted only part of
+    // the tail; 750 counted it as 30s; 715 missed the hangup and the close
+    // handshake, which defaulted to ws's 30s.)
     await vi.advanceTimersByTimeAsync(1_000);
     expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
       .some((c) => String(c[0]).includes("brief goodbye"))).toBe(true);
+  });
+
+  it("PHONE_MAX_CALL_SECONDS=698, one second past the clamp, is clamped to 697 (mutation: clamp at 698 or above → no goodbye at 697s, FAILS)", async () => {
+    vi.useFakeTimers();
+    process.env.PHONE_MAX_CALL_SECONDS = "698";
+    const { ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+    // Somebody spoke, so the silence guard stands aside (see above).
+    ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(696_999);
+    expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
+      .some((c) => String(c[0]).includes("brief goodbye"))).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
+      .some((c) => String(c[0]).includes("brief goodbye"))).toBe(true);
+  });
+
+  // `finish()` runs on the socket's `close` event, and `ws.close()` only
+  // emits it once the peer answers the close handshake — or, if it never
+  // does, once ws's `closeTimeout` destroys the socket. Left unset that is
+  // ws's own default of 30000ms (ws@8.21.3 lib/websocket.js `CLOSE_TIMEOUT`),
+  // 30 uncounted seconds in the clamp's tail. The 3s counted in route.ts is
+  // only true while the socket is built with it.
+  it("the call socket is built with an explicit 3s closeTimeout, not ws's 30s default (mutation: drop the option → undefined, FAILS)", async () => {
+    const { ws } = await startLifecycle();
+    expect((ws.opts as { closeTimeout?: number }).closeTimeout).toBe(3_000);
   });
 
   it("PHONE_MAX_CALL_SECONDS below 10 is floored to 10, not honoured literally", async () => {
@@ -945,7 +978,7 @@ describe("silence cutoff (Guard 1) — the two cost knobs cannot invert", () => 
     vi.useFakeTimers();
     // An operator's perfectly reasonable pair of edits, in the wrong order:
     // the cost cap tightened to a minute, the silence window left long. Both
-    // are inside their own documented clamps (cap ≤ 750, silence 5–120).
+    // are inside their own documented clamps (cap ≤ 697, silence 5–120).
     process.env.PHONE_MAX_CALL_SECONDS = "60";
     process.env.PHONE_MAX_SILENT_SECONDS = "120";
     const { ws } = await startLifecycle();

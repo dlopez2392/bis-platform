@@ -136,13 +136,24 @@ const MAX_TRANSFER_SECONDS = 3600;
  * call, and these ceilings still matter.
  *
  * Why ten and not two: the legitimate fetch happens seconds after the stamp —
- * Sofía says her line, the socket closes, Telnyx fetches this URL. But the
- * upper bound on the gap is the CALL's own length, not that handful of
- * seconds: if the socket close were ever delayed, the AI leg still runs to
- * `PHONE_MAX_CALL_SECONDS` (≤ 280s, ~4.7 minutes) before Telnyx comes here.
- * Ten minutes clears that worst case with room for a carrier retry, and still
- * turns a permanently-valid logged credential into a ten-minute one. Anything
- * under five would hang up on a real caller.
+ * Sofía says her line, the leg is hung up five seconds later (plus a hangup
+ * bounded at 5s), Telnyx fetches this URL. But the upper bound on the gap is
+ * the CALL's own length, not that handful of seconds: if the handoff's own
+ * close were ever lost, the AI leg runs to the cost cap and ends on the
+ * cap's close instead — `PHONE_MAX_CALL_SECONDS` plus ~10s. At the 240s
+ * default that is ~4.2 minutes, and ten minutes clears it with room for a
+ * carrier retry while still turning a permanently-valid logged credential
+ * into a ten-minute one. Anything under five would hang up on a real caller.
+ *
+ * THE GAP, STATED RATHER THAN CLOSED: the cap clamps at 697s
+ * (`incoming/route.ts`), and 697 + ~10 is ~11.8 minutes, past this window.
+ * Ten minutes covers caps up to ~590s. Left at ten on purpose: widening it
+ * lengthens the disclosure window of EVERY logged token, every call, to buy a
+ * case that needs two things at once — an operator raising
+ * `PHONE_MAX_CALL_SECONDS` past ~590 (it is 240 everywhere today) AND the
+ * handoff close failing to fire on that call. When it does, the cost is that
+ * caller is hung up rather than put through. Raising the cap past ~590s is
+ * the trigger to revisit this number.
  *
  * Deliberately NOT single-use, and the token is deliberately NOT cleared:
  * Task 5's result route is pointed at `handoff-result?t=<the same token>`, so
