@@ -245,7 +245,7 @@ export function VoiceProfileForm({
   );
 }
 
-export type ConciergeLockReason = "no_profile" | "blank_greeting" | "blank_facts" | "no_published_form";
+export type ConciergeLockReason = "no_profile" | "blank_greeting" | "blank_spanish_greeting" | "blank_facts" | "no_published_form";
 
 /**
  * The pure decision behind the website-assistant toggle's disabled state —
@@ -278,6 +278,7 @@ export function conciergeLockReason(
   if (!profile) return "no_profile";
   const gap = assistantProfileGap(profile);
   if (gap === "greeting") return "blank_greeting";
+  if (gap === "spanish_greeting") return "blank_spanish_greeting";
   if (gap === "facts") return "blank_facts";
   if (publishedFormCount === 0) return "no_published_form";
   return null;
@@ -364,7 +365,8 @@ export function conciergeToggleLocked(
   selectedFormId: string, formUnpublished: boolean,
 ): boolean {
   return !enabled && (
-    lockReason === "no_profile" || lockReason === "blank_greeting" || lockReason === "blank_facts"
+    lockReason === "no_profile" || lockReason === "blank_greeting"
+    || lockReason === "blank_spanish_greeting" || lockReason === "blank_facts"
     || !selectedFormId || formUnpublished
   );
 }
@@ -411,6 +413,7 @@ export function conciergeOffReason(
 ): string | null {
   return lockReason === "no_profile" ? m["voice.assistant.lockedNoProfile"]
     : lockReason === "blank_greeting" ? m["voice.assistant.lockedBlankGreeting"]
+    : lockReason === "blank_spanish_greeting" ? m["voice.assistant.lockedBlankSpanishGreeting"]
     : lockReason === "blank_facts" ? m["voice.assistant.lockedBlankFacts"]
     : !selectedFormId ? m["voice.assistant.lockedNoSelection"]
     : formUnpublished ? m["voice.assistant.formUnpublishedOff"]
@@ -582,6 +585,7 @@ export function ConciergeCard({
     conciergeOffReason(lockReason, selectedFormId, formUnpublished)
   ) : (
     lockReason === "blank_greeting" ? m["voice.assistant.greetingBlankOn"]
+    : lockReason === "blank_spanish_greeting" ? m["voice.assistant.spanishGreetingBlankOn"]
     : lockReason === "blank_facts" ? m["voice.assistant.factsBlankOn"]
     : formUnpublished ? m["voice.assistant.formUnpublished"]
     : null

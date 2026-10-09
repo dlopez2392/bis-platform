@@ -1318,6 +1318,10 @@ export const m = {
   "voice.assistant.greetingBlankOn": "The greeting is blank, so visitors see an empty first message. Write one in the assistant's profile above.",
   // D-108: the facts are the only thing the assistant answers from, so the
   // switch needs them too (Setup's profile row always did).
+  // A bilingual line with the English greeting written and the Spanish one
+  // blank: say WHICH greeting, not "the greeting" about one already written.
+  "voice.assistant.lockedBlankSpanishGreeting": "Write the Spanish greeting first. This line answers in English and Spanish, so it needs both.",
+  "voice.assistant.spanishGreetingBlankOn": "The Spanish greeting is blank. This line answers in English and Spanish, so write one in the assistant's profile above.",
   "voice.assistant.lockedBlankFacts": "Write what the assistant should know about the business first.",
   "voice.assistant.factsBlankOn": "Nothing is written about the business, so the assistant has nothing to answer questions from. Add it in the assistant's profile above.",
   "voice.assistant.lockedNoSelection": "Choose a form for its leads first.",
@@ -1896,6 +1900,9 @@ export const m = {
   "setup.step.website_assistant.help":
     "A text assistant for the website. It answers questions and takes names around the clock, and files them into a form you choose. The last row turns done the first time a visitor uses it from your site.",
   "setup.step.website_assistant.row1.title": "Write the greeting and facts",
+  // Shown under the profile row (and on the voice-profile step) when the one
+  // thing missing is a bilingual line's Spanish greeting.
+  "setup.profile.spanishGreetingMissing": "The Spanish greeting is still blank. This line answers in English and Spanish, so it needs both.",
   "setup.step.website_assistant.row2.title": "Publish a form for its leads",
   "setup.step.website_assistant.row2.body":
     "It fills in a name, an email or phone, and a message.",

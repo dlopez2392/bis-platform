@@ -1,5 +1,5 @@
 import type { CalendarRow, VoiceProfileRow, PhoneNumberRow } from "@bis/db";
-import { isAssistantProfileReady } from "@bis/db/profile-ready";
+import { assistantProfileGap, isAssistantProfileReady } from "@bis/db/profile-ready";
 
 // Pure module by design: the wizard's whole promise is that step completion
 // is COMPUTED from live rows on every render, never stored as its own flag
@@ -129,6 +129,16 @@ export function isVoiceProfileDone(
   profile: Pick<VoiceProfileRow, "facts" | "greeting_en" | "greeting_es" | "languages"> | null,
 ): boolean {
   return isAssistantProfileReady(profile);
+}
+
+/** True when the ONE thing keeping the profile from done is a bilingual
+ *  line's blank Spanish greeting, so a Setup row can say which greeting,
+ *  rather than "write the greeting" about one the operator already wrote.
+ *  Same predicate as above, never a second rule. */
+export function isSpanishGreetingTheGap(
+  profile: Pick<VoiceProfileRow, "facts" | "greeting_en" | "greeting_es" | "languages"> | null,
+): boolean {
+  return profile !== null && assistantProfileGap(profile) === "spanish_greeting";
 }
 
 // The five steps a CRM-only plan can never reach: each one is either Sofía

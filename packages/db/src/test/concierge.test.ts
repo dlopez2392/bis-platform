@@ -205,6 +205,13 @@ describe("concierge accessors", () => {
     const fakeDb = fakeEnableDb({ ...READY_PROFILE, greeting_es: "" },
       async () => ({ data: "pub_1", error: null }));
     await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
+      .rejects.toThrow(/^enableConcierge failed: profile not ready \(spanish_greeting\)$/);
+  });
+
+  it("enableConcierge refuses a profile with no greeting at all as 'greeting'", async () => {
+    const fakeDb = fakeEnableDb({ ...READY_PROFILE, greeting_en: "", greeting_es: "" },
+      async () => ({ data: "pub_1", error: null }));
+    await expect(enableConcierge(fakeDb, "acct-1", "form-1"))
       .rejects.toThrow(/^enableConcierge failed: profile not ready \(greeting\)$/);
   });
 

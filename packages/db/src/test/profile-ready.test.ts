@@ -35,8 +35,19 @@ describe("assistantProfileGap / isAssistantProfileReady", () => {
   });
 
   it("a bilingual profile needs BOTH greetings", () => {
-    expect(assistantProfileGap({ ...ready, greeting_es: "" })).toBe("greeting");
+    expect(isAssistantProfileReady({ ...ready, greeting_es: "" })).toBe(false);
     expect(assistantProfileGap({ ...ready, greeting_en: " " })).toBe("greeting");
+    expect(assistantProfileGap({ ...ready, greeting_en: "", greeting_es: "" })).toBe("greeting");
+  });
+
+  // Review: an operator with English written and Spanish blank was told
+  // "write the greeting", about a greeting they had written.
+  it("a bilingual profile missing ONLY the Spanish greeting names the Spanish greeting", () => {
+    expect(assistantProfileGap({ ...ready, greeting_es: "  " })).toBe("spanish_greeting");
+  });
+
+  it("a Spanish-only profile missing its greeting is just 'the greeting' (it is the only one)", () => {
+    expect(assistantProfileGap({ ...ready, languages: "es", greeting_es: "" })).toBe("greeting");
   });
 
   it("blank facts are a gap even with every greeting written", () => {

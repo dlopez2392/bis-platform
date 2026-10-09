@@ -462,6 +462,14 @@ describe("enableConciergeAction", () => {
     expect(r).toEqual({ ok: false, error: m["voice.assistant.lockedBlankGreeting"] });
   });
 
+  it("a bilingual profile with no Spanish greeting renders the toggle's own Spanish-greeting sentence", async () => {
+    dbMocks.enableConcierge.mockRejectedValue(
+      new Error("enableConcierge failed: profile not ready (spanish_greeting)"),
+    );
+    const r = await enableConciergeAction("a1", "form1");
+    expect(r).toEqual({ ok: false, error: m["voice.assistant.lockedBlankSpanishGreeting"] });
+  });
+
   it("a profile with no facts renders the toggle's own facts sentence", async () => {
     dbMocks.enableConcierge.mockRejectedValue(
       new Error("enableConcierge failed: profile not ready (facts)"),

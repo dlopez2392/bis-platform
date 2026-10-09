@@ -328,6 +328,9 @@ export async function enableConciergeAction(
     if (message.includes("profile not ready (greeting)")) {
       return { ok: false, error: m["voice.assistant.lockedBlankGreeting"] };
     }
+    if (message.includes("profile not ready (spanish_greeting)")) {
+      return { ok: false, error: m["voice.assistant.lockedBlankSpanishGreeting"] };
+    }
     if (message.includes("profile not ready (facts)")) {
       return { ok: false, error: m["voice.assistant.lockedBlankFacts"] };
     }

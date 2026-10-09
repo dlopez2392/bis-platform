@@ -51,7 +51,13 @@ describe("conciergeLockReason", () => {
     // MUTATION: drop this branch entirely (only ever check greeting_en) —
     // this FAILS, because a bilingual line with no Spanish greeting would
     // open a chat that goes silent for half its callers.
-    expect(conciergeLockReason({ ...readyProfile, languages: "both", greeting_es: "" }, 3)).toBe("blank_greeting");
+    // Review of D-108: named as the SPANISH greeting, because the English
+    // one is written and "write the greeting" would point at the wrong box.
+    expect(conciergeLockReason({ ...readyProfile, languages: "both", greeting_es: "" }, 3)).toBe("blank_spanish_greeting");
+  });
+
+  it("a bilingual line with NEITHER greeting locks on the greeting, not the Spanish one", () => {
+    expect(conciergeLockReason({ ...readyProfile, languages: "both", greeting_en: "", greeting_es: "" }, 3)).toBe("blank_greeting");
   });
 
   // D-051: this test used to be named for the right rule and assert the
@@ -211,6 +217,7 @@ describe("conciergeToggleLocked — the toggle's own disabled state", () => {
     expect(conciergeToggleLocked(false, "no_profile", "", false)).toBe(true);
     expect(conciergeToggleLocked(false, "blank_greeting", "", false)).toBe(true);
     expect(conciergeToggleLocked(false, "blank_facts", "f1", false)).toBe(true);
+    expect(conciergeToggleLocked(false, "blank_spanish_greeting", "f1", false)).toBe(true);
     expect(conciergeToggleLocked(false, null, "", false)).toBe(true);
   });
 
@@ -386,11 +393,13 @@ describe("ConciergeCard — the render proof", () => {
     /** I5: the server-confirmed public id, once a save has landed. */
     publicId?: string | null;
     facts?: string;
+    languages?: VoiceProfileRow["languages"];
   }) {
     const profile: VoiceProfileRow = {
       ...BASE_PROFILE, concierge_enabled: opts.enabled, concierge_form_id: opts.storedFormId,
       greeting_en: opts.greetingEn ?? BASE_PROFILE.greeting_en,
       facts: opts.facts ?? BASE_PROFILE.facts,
+      languages: opts.languages ?? BASE_PROFILE.languages,
       public_id: opts.publicId ?? null,
     };
     const enableAction = vi.fn(async () => ({ ok: true as const, publicId: "pub_x" }));
@@ -491,6 +500,28 @@ describe("ConciergeCard — the render proof", () => {
     expect(text).toContain(m["voice.assistant.factsBlankOn"]);
     expect(text).not.toContain(m["voice.assistant.greetingBlankOn"]);
     expect(html).toMatch(CHECKED_CHECKBOX);
+    expect(html).not.toMatch(DISABLED_CHECKBOX);
+  });
+
+  it("OFF, bilingual, Spanish greeting blank: the toggle locks and the sentence names the SPANISH greeting", () => {
+    const html = renderCard({
+      enabled: false, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact us" }],
+      languages: "both",
+    });
+    const text = renderedText(html);
+    expect(html).toMatch(DISABLED_CHECKBOX);
+    expect(text).toContain(m["voice.assistant.lockedBlankSpanishGreeting"]);
+    expect(text).not.toContain(m["voice.assistant.lockedBlankGreeting"]);
+  });
+
+  it("ON, bilingual, Spanish greeting blanked later: the ON sentence names the Spanish greeting", () => {
+    const html = renderCard({
+      enabled: true, storedFormId: "A", publishedForms: [{ id: "A", name: "Contact us" }],
+      languages: "both",
+    });
+    const text = renderedText(html);
+    expect(text).toContain(m["voice.assistant.spanishGreetingBlankOn"]);
+    expect(text).not.toContain(m["voice.assistant.greetingBlankOn"]);
     expect(html).not.toMatch(DISABLED_CHECKBOX);
   });
 
