@@ -104,12 +104,16 @@ function channelFrom(attribution: unknown): string | null {
 
 /**
  * Review round 1, m3: the raw machine values `source` stores at creation
- * — "voice" (a call), "booking" (the booking page), "form: {name}" (a
- * form's own submission) — each gets a humanized caption beside the
- * (still raw, still editable) value, never replacing it. An owner's own
- * typed note (anything else — a CSV import's free text, a manual
- * correction) matches none of these and gets no caption: there is nothing
- * machine-made to translate.
+ * — "voice" (a call), "booking" (the booking page), "form: {name}" (filed
+ * against the owner's destination form — NOT only a typed web form:
+ * enrich.ts (lib/forms/enrich.ts:105) writes this exact shape for every
+ * intake that calls enrich(), which includes a web-chat lead
+ * (lib/concierge/lead.ts:168) and the retired shared-secret machine
+ * intake, both filed against that same destination form) — each gets a
+ * humanized caption beside the (still raw, still editable) value, never
+ * replacing it. An owner's own typed note (anything else — a CSV import's
+ * free text, a manual correction) matches none of these and gets no
+ * caption: there is nothing machine-made to translate.
  */
 function machineSourceCaption(source: string): string | null {
   if (source === "voice") return m["contact.source.machine.voice"];
@@ -119,20 +123,12 @@ function machineSourceCaption(source: string): string | null {
   return null;
 }
 
-/**
- * Review round 1, m2: the drawer's DISPLAYED hint, clamped — an operator's
- * own typed `custom.referred_by` answer (or `source`, via CSV import) can
- * be arbitrarily long, and `contactSourceHint` itself carries no limit
- * (its return value is the full fact; `source-field.tsx` keeps that full
- * text for `title`/`aria-label` and shows this clamped form in the line
- * itself). `<=`, not `<`: a hint exactly at the limit is not clamped.
- */
-const HINT_DISPLAY_LIMIT = 120;
-
-export function clampHint(hint: string): string {
-  if (hint.length <= HINT_DISPLAY_LIMIT) return hint;
-  return `${hint.slice(0, HINT_DISPLAY_LIMIT)}…`;
-}
+// Review round 1, m2 added clampHint here (a JS-side slice to 120 chars)
+// to bound the drawer's displayed hint. Review round 2, minor 4: removed
+// — it sliced by UTF-16 code unit (can split a surrogate pair) and its
+// only caller leaned on an `aria-label` that ARIA does not let a `<p>`
+// use for naming anyway. source-field.tsx now renders the FULL,
+// unsliced hint and clamps it visually with CSS (`truncate`) instead.
 
 export function contactSourceHint(input: {
   source: string | null;

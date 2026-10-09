@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { contactSourceHint, clampHint } from "./lead-source";
+import { contactSourceHint } from "./lead-source";
 
 /**
  * F-157's drawer line. `contactSourceHint` is the READ-ONLY half shown next
@@ -144,9 +144,15 @@ describe("contactSourceHint", () => {
     it("booking", () => {
       expect(contactSourceHint({ source: "booking", custom: null, attribution: null })).toBe("They booked online");
     });
-    it("form: X names the form (mutation: drop the {name} substitution → FAILS)", () => {
+    // Review round 2, item 1: `source: "form: {name}"` is written by
+    // enrich.ts for EVERY intake that calls it — a typed-in web form
+    // submission, a web-chat lead (lib/concierge/lead.ts:168 calls the
+    // SAME enrich()), and the retired shared-secret machine intake, all
+    // against the owner's destination form. "They filled out the form" is
+    // false for a chat lead, who never filled out anything.
+    it("form: X names the form with wording true for a typed form, a web-chat lead and the (retired) machine intake alike (mutation: drop the {name} substitution → FAILS)", () => {
       expect(contactSourceHint({ source: "form: Contact us", custom: null, attribution: null }))
-        .toBe("They filled out the “Contact us” form");
+        .toBe("Came in through your “Contact us” form");
     });
     it("an owner's own typed note (anything else) gets no caption — nothing machine-made to translate (mutation: caption every non-empty source → FAILS)", () => {
       expect(contactSourceHint({ source: "Met at the Valley Expo", custom: null, attribution: null })).toBeNull();
@@ -174,10 +180,16 @@ describe("contactSourceHint", () => {
       expect(hint).toBe("Found through ChatGPT");
     });
 
-    it("ref is tried FIRST — a real Google ref wins even with an unrelated utm_source present", () => {
+    // Review round 2, item 2: "newsletter" is never recognised by
+    // aiAssistantNameOf either way, so the ORIGINAL version of this test
+    // passed regardless of which signal was tried first — swapping
+    // channelFromRef(first) ?? channelFromUtmSource(first) to the other
+    // order left it green. utm_source="chatgpt.com" IS recognised, so the
+    // swap now actually changes the answer.
+    it("ref is tried FIRST — a real Google ref wins even with a RECOGNISED utm_source present (mutation: swap the ?? order → 'Found through ChatGPT', FAILS)", () => {
       const hint = contactSourceHint({
         source: "form: Contact us", custom: null,
-        attribution: { first: { ref: "https://www.google.com/search", utm_source: "newsletter" } },
+        attribution: { first: { ref: "https://www.google.com/search", utm_source: "chatgpt.com" } },
       });
       expect(hint).toBe("Found through Google");
     });
@@ -204,31 +216,8 @@ describe("contactSourceHint", () => {
   });
 });
 
-/**
- * Review round 1, m2: an operator can type an arbitrarily long referral
- * note (`custom.referred_by` rides free text) or a long free-form `source`
- * via CSV import, and `contactSourceHint` hands it straight to the drawer
- * with no length limit of its own. The DISPLAYED hint is what gets
- * clamped (source-field.tsx keeps the full text for title/aria), not the
- * hint text itself — `contactSourceHint`'s own return value is unclamped,
- * so a caller needing the full fact (an aria-label, a future export) still
- * gets it.
- */
-describe("clampHint", () => {
-  it("leaves a short hint untouched (mutation: always append an ellipsis → FAILS)", () => {
-    expect(clampHint("Found through ChatGPT")).toBe("Found through ChatGPT");
-  });
-
-  it("clamps to 120 characters with a trailing ellipsis, not mid-word with no indication (mutation: raise the limit past the fixture's length → FAILS)", () => {
-    const long = "Referred by " + "a".repeat(200);
-    const clamped = clampHint(long);
-    expect(clamped.length).toBe(121); // 120 + the ellipsis character
-    expect(clamped.endsWith("…")).toBe(true);
-    expect(clamped.startsWith("Referred by ")).toBe(true);
-  });
-
-  it("exactly at the limit is not clamped (off-by-one; mutation: use < instead of <= → FAILS)", () => {
-    const exact = "x".repeat(120);
-    expect(clampHint(exact)).toBe(exact);
-  });
-});
+// Review round 1, m2 added a `clampHint` here (a JS-side slice to 120
+// chars, tested in this spot). Review round 2, minor 4: removed — it cut
+// by UTF-16 code unit (a surrogate pair could split) and its only caller,
+// source-field.tsx, now clamps the FULL, unsliced hint visually with CSS
+// (`truncate`) instead. See that file's own test for the new behaviour.

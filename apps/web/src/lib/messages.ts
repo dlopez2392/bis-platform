@@ -545,13 +545,19 @@ export const m = {
   // `source` stores at creation ("voice", "booking", "form: X") — shown
   // ONLY for those exact recognized shapes; an owner's own typed note
   // (anything else) gets no caption, since there is nothing machine-made to
-  // translate.
+  // translate. Review round 2, item 1: "form: {name}" is NOT only a typed
+  // web form — enrich.ts writes it for every intake that calls enrich(),
+  // which also includes a web-chat lead (lib/concierge/lead.ts) and the
+  // retired shared-secret machine intake, both filed against the owner's
+  // destination form. "They filled out the form" is false for a chat
+  // lead; the wording below is true for all three. Usted register in the
+  // .es twin — this line is read by the OWNER, not the customer.
   "contact.source.machine.voice": "They called in",
   "contact.source.machine.voice.es": "Llamaron por teléfono",
   "contact.source.machine.booking": "They booked online",
   "contact.source.machine.booking.es": "Reservaron en línea",
-  "contact.source.machine.form": "They filled out the “{name}” form",
-  "contact.source.machine.form.es": "Llenaron el formulario “{name}”",
+  "contact.source.machine.form": "Came in through your “{name}” form",
+  "contact.source.machine.form.es": "Llegó por su formulario “{name}”",
   "contact.noActivity": "No activity yet",
   "contact.noActivityBody": "Notes, tasks, and deals will appear here.",
   "contact.noOpportunities": "None yet.",
@@ -699,10 +705,13 @@ export const m = {
   // Review round 1, m4: "referred_by" is reserved — F-157's source
   // question writes it directly (lib/contacts/lead-source.ts), and a
   // custom field reusing that exact key would merge two unrelated facts
-  // into one stored value. Not yet wired to the form's own error display
-  // (that form has none today — see the fix's own commit note); thrown as
-  // a plain Error message, same posture `createCustomField`'s own
-  // snake_case check already throws with.
+  // into one stored value. Review round 2, minor 3: this exact string is
+  // now the field-key Input's own `title` (settings/page.tsx), the
+  // PRIMARY UX — a browser refusing the key before any submit. The
+  // SERVER-SIDE throw in createFieldAction is only the backstop for a
+  // bypassed or scripted submit, and that path has no result-returning
+  // wiring to show this message at all: it lands, plainly, on the
+  // dashboard's generic error page.
   "settings.fieldKeyReserved": "\"referred_by\" is reserved for the source question — pick a different field key.",
   "settings.fieldKeyReserved.es": "\"referred_by\" está reservado para la pregunta de origen — elija otra clave de campo.",
   "settings.dataType": "Type",
