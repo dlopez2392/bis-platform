@@ -247,17 +247,19 @@ describe("sendEmail: the footer and the RFC 8058 headers (spec §4.3, plan G7)",
 });
 
 describe("sendEmail: Resend tags (D-016 item 1 — so the webhook can attribute a bounce/complaint)", () => {
-  it("carries the account id and the contact id when it is a uuid (mutation: drop the tags → FAILS)", async () => {
+  it("carries the account id, the contact id when it is a uuid, and class=customer for a non-operator kind (mutation: drop the tags → FAILS)", async () => {
     await sendEmail(base(), { db: CLIENT, env: ENV });
-    expect(sent().tags).toEqual([{ name: "account_id", value: ACCOUNT }, { name: "contact_id", value: CONTACT }]);
+    expect(sent().tags).toEqual([
+      { name: "account_id", value: ACCOUNT }, { name: "class", value: "customer" }, { name: "contact_id", value: CONTACT },
+    ]);
   });
 
-  it("carries only the account id when the contact id is not a uuid, or is absent (mutation: pass the raw contactId through → a non-uuid tag value, FAILS)", async () => {
+  it("carries only the account id and class when the contact id is not a uuid, or is absent (mutation: pass the raw contactId through → a non-uuid tag value, FAILS)", async () => {
     await sendEmail(base({ contactId: "ct_1" }), { db: CLIENT, env: ENV });
-    expect(sent().tags).toEqual([{ name: "account_id", value: ACCOUNT }]);
+    expect(sent().tags).toEqual([{ name: "account_id", value: ACCOUNT }, { name: "class", value: "customer" }]);
     send.mockClear();
     await sendEmail(base({ contactId: null }), { db: CLIENT, env: ENV });
-    expect(sent().tags).toEqual([{ name: "account_id", value: ACCOUNT }]);
+    expect(sent().tags).toEqual([{ name: "account_id", value: ACCOUNT }, { name: "class", value: "customer" }]);
   });
 
   it("carries no tags at all for operator mail with no account — the agency roll-up (mutation: always send the account_id tag → FAILS)", async () => {
@@ -265,6 +267,22 @@ describe("sendEmail: Resend tags (D-016 item 1 — so the webhook can attribute 
     expect(sent().tags).toBeUndefined();
     expect("tags" in sent()).toBe(false);
   });
+
+  // D-016 review item 3: an owner marking their OWN weekly report as spam
+  // must never suppress a customer's address — the webhook tells operator
+  // mail apart by this tag alone, so every class of email kind must carry
+  // the right one.
+  it("operator mail WITH an account (the business owner's own alert) carries class=operator, never customer (mutation: tag every kind as customer → FAILS)", async () => {
+    await sendEmail(base({ kind: "operator.lead_alert" }), { db: CLIENT, env: ENV });
+    expect(sent().tags).toEqual(expect.arrayContaining([{ name: "class", value: "operator" }]));
+    expect(sent().tags).not.toEqual(expect.arrayContaining([{ name: "class", value: "customer" }]));
+  });
+
+  it.each(["booking.confirmation", "staff.composer_email", "automation.review_request"] as const)(
+    "%s (customer_initiated, staff_typed and marketing alike) carries class=customer, never operator (mutation: tag every kind as operator → FAILS)", async (kind) => {
+      await sendEmail(base({ kind }), { db: CLIENT, env: ENV });
+      expect(sent().tags).toEqual(expect.arrayContaining([{ name: "class", value: "customer" }]));
+    });
 });
 
 describe("sendEmail: the postal address on the three follow-ups whose templates print none (decision P1, G18; spec §10)", () => {

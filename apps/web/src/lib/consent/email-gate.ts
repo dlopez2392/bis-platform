@@ -131,13 +131,24 @@ function unsubscribeLinks(req: EmailRequest, address: string, now: Date, env: No
  * complaint back to its account from the tags alone, without falling back
  * to the messages row (older composer sends carry no tags at all). `null`
  * for operator mail with no account (the agency roll-up): nothing to tag.
+ *
+ * Review item 3: a third tag, `class`, is `operator` for operator mail and
+ * `customer` for everything else — operator mail is the business owner's
+ * OWN address, never a customer's, so the webhook must never suppress a
+ * customer's mail because an owner reported their own weekly report as
+ * spam. This is the ONLY signal the webhook has for that: it cannot derive
+ * "operator" from the kind, because it never sees the kind.
+ *
  * Verified against Resend's docs: tags are an array of {name, value}, ASCII
- * letters/numbers/`_`/`-` only — a uuid satisfies that — and are echoed back
- * on the webhook event.
+ * letters/numbers/`_`/`-` only — a uuid and these two words both satisfy
+ * that — and are echoed back on the webhook event.
  */
 function emailTags(req: EmailRequest): { name: string; value: string }[] | undefined {
   if (!req.accountId) return undefined;
-  const tags = [{ name: "account_id", value: req.accountId }];
+  const tags = [
+    { name: "account_id", value: req.accountId },
+    { name: "class", value: EMAIL_KINDS[req.kind].class === "operator" ? "operator" : "customer" },
+  ];
   if (isUuid(req.contactId)) tags.push({ name: "contact_id", value: req.contactId });
   return tags;
 }

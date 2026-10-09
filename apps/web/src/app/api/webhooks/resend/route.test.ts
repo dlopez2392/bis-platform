@@ -206,6 +206,136 @@ describe("resend webhook", () => {
     });
   });
 
+  // Review item 2: consent_events_contact_fkey is (account_id, contact_id) ->
+  // contacts(account_id, id). Picking the account from one source and the
+  // contact from ANOTHER can pair a contact with an account it does not
+  // belong to, which the database refuses (23503), not silently drops — and
+  // the old code rethrew that as a 500 Resend would retry forever.
+  describe("email suppression: account and contact come from the SAME source, and a mismatch never blocks the write (review items 2 and 5)", () => {
+    const OTHER_ACCOUNT = "11111111-1111-4111-8111-111111111111";
+    const OTHER_CONTACT = "22222222-2222-4222-8222-222222222222";
+    const CONTACT_FK_ERROR = new Error(
+      'append_consent_event failed: insert or update on table "consent_events" violates foreign key constraint "consent_events_contact_fkey"',
+    );
+    const ACCOUNT_FK_ERROR = new Error(
+      'append_consent_event failed: insert or update on table "consent_events" violates foreign key constraint "consent_events_account_id_fkey"',
+    );
+
+    it("a tag account with NO tag contact never pairs with the ROW's (different) contact (mutation: fall back to the row's contact → FAILS)", async () => {
+      updateMock.mockResolvedValue({ updated: true, accountId: OTHER_ACCOUNT, contactId: OTHER_CONTACT });
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_1", to: ["customer@example.com"], tags: { account_id: ACCOUNT },
+          bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      await POST(req({}));
+      expect(suppressMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ accountId: ACCOUNT, contactId: null }));
+    });
+
+    it("a contact FK violation retries ONCE with no contact — the suppression is per ADDRESS, so it still lands (mutation: give up on the first throw → FAILS)", async () => {
+      suppressMock.mockRejectedValueOnce(CONTACT_FK_ERROR).mockResolvedValueOnce("appended");
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_1", to: ["customer@example.com"], tags: { account_id: ACCOUNT, contact_id: CONTACT },
+          bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      const res = await POST(req({}));
+      expect(res.status).toBe(200);
+      expect(suppressMock).toHaveBeenCalledTimes(2);
+      expect(suppressMock.mock.calls[0]![1]).toMatchObject({ accountId: ACCOUNT, contactId: CONTACT });
+      expect(suppressMock.mock.calls[1]![1]).toMatchObject({ accountId: ACCOUNT, contactId: null });
+    });
+
+    it("an account that does not exist (the FK says so) is logged and a 200, never a 500 (mutation: rethrow it → FAILS)", async () => {
+      suppressMock.mockRejectedValueOnce(ACCOUNT_FK_ERROR);
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_1", to: ["customer@example.com"], tags: { account_id: ACCOUNT },
+          bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      const res = await POST(req({}));
+      expect(res.status).toBe(200);
+      expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.resend_webhook", { ok: true });
+    });
+
+    it("a contact-FK retry whose account ALSO does not exist is still logged and a 200, never a 500 (dev-redirect scenario; mutation: rethrow the retry's error → FAILS)", async () => {
+      suppressMock.mockRejectedValueOnce(CONTACT_FK_ERROR).mockRejectedValueOnce(ACCOUNT_FK_ERROR);
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_1", to: ["customer@example.com"], tags: { account_id: ACCOUNT, contact_id: CONTACT },
+          bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      const res = await POST(req({}));
+      expect(res.status).toBe(200);
+      expect(suppressMock).toHaveBeenCalledTimes(2);
+      expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.resend_webhook", { ok: true });
+    });
+
+    it("a genuinely unexpected throw (neither FK) still rethrows a 500 — the two FK names are matched, not every error swallowed (mutation: catch everything → FAILS)", async () => {
+      suppressMock.mockRejectedValueOnce(new Error("consent_events down"));
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_1", to: ["customer@example.com"], tags: { account_id: ACCOUNT },
+          bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      await expect(POST(req({}))).rejects.toThrow("consent_events down");
+      expect(suppressMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a tag account that disagrees with the row's is LOGGED, never blocked — the write proceeds on the tag's own pair (review item 5; mutation: refuse to write on a mismatch → FAILS)", async () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      updateMock.mockResolvedValue({ updated: true, accountId: OTHER_ACCOUNT, contactId: OTHER_CONTACT });
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_1", to: ["customer@example.com"], tags: { account_id: ACCOUNT, contact_id: CONTACT },
+          bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      const res = await POST(req({}));
+      expect(res.status).toBe(200);
+      expect(suppressMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ accountId: ACCOUNT, contactId: CONTACT }));
+      expect(errSpy.mock.calls.flat().join(" ")).toMatch(new RegExp(`${ACCOUNT}.*disagrees.*${OTHER_ACCOUNT}`));
+      errSpy.mockRestore();
+    });
+  });
+
+  // Review item 3: operator mail (the business owner's own weekly report,
+  // lead alert, etc.) goes to the AGENCY'S own address, never a customer's.
+  // An owner marking their OWN alert as spam must never suppress a
+  // customer's future mail — so the gate's own class tag (item 1's tags,
+  // now a third one) tells the webhook to record status but skip the
+  // suppression ledger entirely for operator-class events.
+  describe("email suppression: operator-class events never suppress (review item 3)", () => {
+    it("an operator-class complaint records status but writes NO suppression (mutation: suppress operator mail too → FAILS)", async () => {
+      verifyMock.mockReturnValue({
+        type: "email.complained",
+        data: { email_id: "prov_1", to: ["owner@rio.example"], tags: { account_id: ACCOUNT, class: "operator" } },
+      });
+      const res = await POST(req({}));
+      expect(res.status).toBe(200);
+      expect(updateMock).toHaveBeenCalledTimes(1);
+      expect(suppressMock).not.toHaveBeenCalled();
+    });
+
+    it("a customer-class (or untagged, an older send) bounce still suppresses as before (mutation: skip suppression whenever class is missing → FAILS)", async () => {
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_1", to: ["customer@example.com"], tags: { account_id: ACCOUNT, class: "customer" },
+          bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      await POST(req({}));
+      expect(suppressMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ accountId: ACCOUNT }));
+      suppressMock.mockClear(); updateMock.mockClear();
+
+      updateMock.mockResolvedValue({ updated: true, accountId: ACCOUNT, contactId: null });
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_2", to: ["customer@example.com"], bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      await POST(req({}));
+      expect(suppressMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ accountId: ACCOUNT }));
+    });
+  });
+
   describe("heartbeat (operational-floor spec §1)", () => {
     it("an unset secret is an outage: 500 and an error stamp, before any read", async () => {
       delete process.env.RESEND_WEBHOOK_SECRET;
