@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  parseHexColor, contrastRatio, readableTextOn, lightenForSidebar,
-  resolveSidebarAccent, SIDEBAR_BG, ensureContrast,
+  parseHexColor, contrastRatio, relativeLuminance, readableTextOn, lightenForSidebar,
+  resolveSidebarAccent, SIDEBAR_BG, SIDEBAR_PREVIEW_BG, ensureContrast,
 } from "./color";
+import { NEUTRAL_RAMPS } from "./neutral-ramps";
 
 describe("parseHexColor", () => {
   it("accepts #rrggbb and normalizes to lowercase", () => {
@@ -28,29 +29,68 @@ describe("parseHexColor", () => {
   });
 });
 
-// D-071: SIDEBAR_BG pinned "#1e1b2e" — the sidebar's :root --sidebar literal
-// from before the Northern Lights token refactor (commit 3a6796c9,
-// 2026-09-08). That literal island is gone: the sidebar now composites from
-// --sidebar-ground (opaque #0B0A12 in :root, transparent in .dark, letting
-// the same dark page ground show through), so SIDEBAR_BG must mirror
-// tokens.css's --sidebar-ground, not a snapshot of a value tokens.css no
-// longer declares.
-describe("SIDEBAR_BG mirrors tokens.css's --sidebar-ground", () => {
-  const tokensPath = path.join(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../../styles/tokens.css",
-  );
-  const tokensCss = readFileSync(tokensPath, "utf8");
-  const rootBlock = tokensCss.match(/:root\s*\{([^}]*)\}/)?.[1];
+// D-071, review round: SIDEBAR_BG used to pin "#1e1b2e" (the sidebar's
+// :root --sidebar literal from before the Northern Lights token refactor,
+// commit 3a6796c9, 2026-09-08), then moved to --sidebar-ground alone
+// (#0b0a12) — the DARKEST base, not the lightest. A LIGHTER background is
+// the HARDER case for a dark accent to clear 3:1 against (same foreground
+// luminance against a lighter background scores a LOWER ratio), so pinning
+// the darkest base under-protected every brand colour that renders on a
+// THEMED tenant's real --sidebar (theme-style.ts), which is lighter than
+// the unthemed glass composite for all three neutral ramps. The reviewer's
+// sweep found 9 of 10 sampled dark brand colours fell under 3:1 against the
+// slate ramp's own sidebar on that version.
+//
+// SIDEBAR_BG is now the LIGHTEST of the real candidates — clearing the
+// lightest clears every darker one too — computed from NEUTRAL_RAMPS
+// directly (not hand-picked), so a future ramp retune cannot silently drift
+// away from this test. SIDEBAR_PREVIEW_BG is the UNTHEMED glass sidebar's
+// own look (branding-panel.tsx's preview swatch only) — a separate constant
+// now, not the contrast target: the two being one constant is what let the
+// guarantee weaken unnoticed.
+describe("SIDEBAR_BG is the lightest real sidebar surface (D-071 review round)", () => {
+  const candidates = [SIDEBAR_PREVIEW_BG, ...Object.values(NEUTRAL_RAMPS).map((r) => r.sidebar)];
 
-  it("finds tokens.css's :root block", () => {
-    expect(rootBlock).toBeTruthy();
+  it("SIDEBAR_PREVIEW_BG is the unthemed glass sidebar's own composite, and distinct from SIDEBAR_BG", () => {
+    // tokens.css's --sidebar-ground (#0B0A12, opaque in :root) composited
+    // under --sidebar-surface's 2% white tint.
+    expect(SIDEBAR_PREVIEW_BG).toBe("#100f17");
   });
 
-  it("matches --sidebar-ground's current literal", () => {
-    const declared = rootBlock?.match(/--sidebar-ground:\s*(#[0-9a-fA-F]{6});/)?.[1]?.toLowerCase();
-    expect(declared).toBeTruthy();
-    expect(SIDEBAR_BG).toBe(declared);
+  it("equals the candidate with the highest relative luminance — computed, not asserted against a single hand-picked hex", () => {
+    const lightest = candidates.reduce((best, hex) =>
+      relativeLuminance(hex) > relativeLuminance(best) ? hex : best);
+    expect(SIDEBAR_BG).toBe(lightest);
+  });
+
+  it("is at least as light as EVERY real sidebar surface (the invariant the fix exists to hold)", () => {
+    for (const hex of candidates) {
+      expect(relativeLuminance(SIDEBAR_BG)).toBeGreaterThanOrEqual(relativeLuminance(hex));
+    }
+  });
+
+  // Today's concrete winner, named directly: slate's own --sidebar is the
+  // lightest of the four. If NEUTRAL_RAMPS ever changes this, the two tests
+  // above still hold; this one is the regression a reader notices.
+  it("is slate's --sidebar today", () => {
+    expect(SIDEBAR_BG).toBe(NEUTRAL_RAMPS.slate.sidebar);
+  });
+
+  // The regression this whole round exists to close: lightenForSidebar's
+  // output must clear 3:1 against EVERY real surface, not only against
+  // SIDEBAR_BG itself — sampled dark colours the reviewer's own sweep used.
+  it("lightenForSidebar clears 3:1 against every real sidebar surface, not only SIDEBAR_BG", () => {
+    const darkColors = [
+      "#1e3a8a", "#1e1b4b", "#0f172a", "#111827", "#1f2937",
+      "#312e81", "#4c1d95", "#164e63", "#0c4a6e", "#422006",
+    ];
+    for (const color of darkColors) {
+      const out = lightenForSidebar(color);
+      for (const surface of candidates) {
+        expect(contrastRatio(out, surface), `${color} -> ${out} vs ${surface}`)
+          .toBeGreaterThanOrEqual(3);
+      }
+    }
   });
 });
 
@@ -68,8 +108,8 @@ describe("contrastRatio", () => {
 
   it("matches measured values for the colors this feature cares about", () => {
     expect(contrastRatio("#6d28d9", "#ffffff")).toBeCloseTo(7.10, 2);
-    expect(contrastRatio("#8b5cf6", SIDEBAR_BG)).toBeCloseTo(4.65, 2);
-    expect(contrastRatio("#1e3a8a", SIDEBAR_BG)).toBeCloseTo(1.90, 2);
+    expect(contrastRatio("#8b5cf6", SIDEBAR_BG)).toBeCloseTo(4.24, 2);
+    expect(contrastRatio("#1e3a8a", SIDEBAR_BG)).toBeCloseTo(1.74, 2);
   });
 });
 
@@ -84,9 +124,9 @@ describe("readableTextOn", () => {
 });
 
 describe("lightenForSidebar", () => {
-  // The sidebar is always dark (#0b0a12, --sidebar-ground). A navy brand is
-  // invisible there untreated — 1.90:1 — which is the whole reason this
-  // function exists.
+  // The sidebar is always dark (SIDEBAR_BG, the lightest real sidebar
+  // surface — slate's own today). A navy brand is invisible there
+  // untreated — 1.74:1 — which is the whole reason this function exists.
   it("raises a too-dark color past 3:1 against the sidebar", () => {
     const out = lightenForSidebar("#1e3a8a");
     expect(out).not.toBe("#1e3a8a");
@@ -94,15 +134,15 @@ describe("lightenForSidebar", () => {
   });
 
   it("leaves a color that already clears 3:1 untouched", () => {
-    expect(lightenForSidebar("#0f766e")).toBe("#0f766e"); // measured 3.60
-    expect(lightenForSidebar("#8b5cf6")).toBe("#8b5cf6"); // measured 4.65
-    expect(lightenForSidebar("#fde047")).toBe("#fde047"); // measured 14.94
+    expect(lightenForSidebar("#0f766e")).toBe("#0f766e"); // measured 3.28
+    expect(lightenForSidebar("#8b5cf6")).toBe("#8b5cf6"); // measured 4.24
+    expect(lightenForSidebar("#fde047")).toBe("#fde047"); // measured 13.63
   });
 
   // Fidelity over legibility, decided in spec section 5: a company's hue is
   // never silently changed, only lightened.
   it("preserves hue", () => {
-    expect(lightenForSidebar("#1e3a8a")).toBe("#2d56cd");
+    expect(lightenForSidebar("#1e3a8a")).toBe("#315bd2");
   });
 
   it("handles an achromatic color without dividing by zero", () => {
@@ -126,7 +166,7 @@ describe("resolveSidebarAccent", () => {
   });
 
   it("lightens a valid colour to stay visible on the dark sidebar", () => {
-    expect(resolveSidebarAccent("#1e3a8a")).toBe("#2d56cd");
+    expect(resolveSidebarAccent("#1e3a8a")).toBe("#315bd2");
   });
 });
 

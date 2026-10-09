@@ -3,23 +3,51 @@
  * unit-tested and mutation-tested — the same reason validate-logo.ts is
  * separate from the action that uses it.
  */
+import { NEUTRAL_RAMPS } from "./neutral-ramps";
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
 /** BIS violet. What an unbranded form has always used. */
 export const FORM_ACCENT_FALLBACK = "#6d28d9";
+
 /**
- * The sidebar is dark in BOTH themes by design (D-071: this used to pin
- * `--sidebar`'s old literal island, #1e1b2e in light / #131120 in dark —
- * those two hexes stopped existing at the Northern Lights token refactor,
- * commit 3a6796c9, 2026-09-08). Today the sidebar composites from
- * `--sidebar-ground` (tokens.css): opaque #0B0A12 in `:root`, transparent in
- * `.dark` so the same dark page ground shows through — both modes land on
- * the same base. This mirrors that literal directly (same convention as
- * SIDEBAR_FOREGROUND mirroring `--sidebar-text`); `color.test.ts` pins it
- * against tokens.css so a future retune cannot drift unnoticed.
+ * The PREVIEW SWATCH's own background (branding-panel.tsx's "Sidebar"
+ * specimen) — NOT the contrast target below. D-071's review round split
+ * these apart: they used to be the one constant, which is what let the
+ * contrast guarantee quietly weaken (a preview-colour change silently
+ * changed what every brand colour is measured against).
+ *
+ * The unthemed glass sidebar's own composite: tokens.css's
+ * `--sidebar-ground` (#0B0A12, opaque in `:root`) under
+ * `--sidebar-surface`'s 2% white tint ≈ #100f17 — the look an unthemed
+ * (BIS) account's own sidebar actually has, and the old `--sidebar` literal
+ * island's replacement (that literal, #1e1b2e light / #131120 dark, stopped
+ * existing at the Northern Lights token refactor, commit 3a6796c9,
+ * 2026-09-08).
  */
-export const SIDEBAR_BG = "#0b0a12";
+export const SIDEBAR_PREVIEW_BG = "#100f17";
+
+/**
+ * The CONTRAST TARGET `lightenForSidebar`/`resolveSidebarAccent` walk a
+ * brand colour toward: the LIGHTEST real sidebar background a tenant's
+ * accent could ever be read against. A LIGHTER background is the HARDER
+ * case to clear 3:1 (the same foreground luminance scores a LOWER ratio
+ * against a lighter background), so clearing the lightest clears every
+ * darker one too.
+ *
+ * Computed, not hand-picked, from `SIDEBAR_PREVIEW_BG` above and every
+ * `NEUTRAL_RAMPS` ramp's own `sidebar` (a THEMED tenant's real sidebar
+ * surface, see theme-style.ts), so a future ramp retune cannot silently
+ * outrun this. D-071's review round found the previous version — pinned at
+ * `--sidebar-ground` alone, the DARKEST of these, after an earlier pass
+ * moved it off the since-deleted `#1e1b2e` literal — left 9 of 10 sampled
+ * dark brand colours under 3:1 against the slate ramp's real sidebar: the
+ * walk was clearing 3:1 against a background darker than the one a themed
+ * tenant's accent is actually painted on.
+ */
+export const SIDEBAR_BG: string = [SIDEBAR_PREVIEW_BG, ...Object.values(NEUTRAL_RAMPS).map((r) => r.sidebar)]
+  .reduce((lightest, hex) => (relativeLuminance(hex) > relativeLuminance(lightest) ? hex : lightest));
+
 /** WCAG 1.4.11 for non-text UI components, which is what these accents are. */
 const SIDEBAR_MIN_RATIO = 3;
 /**
