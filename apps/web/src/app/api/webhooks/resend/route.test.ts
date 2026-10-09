@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const updateMock = vi.fn();
+const suppressMock = vi.fn();
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({}),
   updateMessageStatusByProviderId: (...args: unknown[]) => updateMock(...args),
+  recordEmailSuppression: (...args: unknown[]) => suppressMock(...args),
 }));
 const stampMock = vi.fn();
 vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
@@ -11,6 +13,9 @@ const verifyMock = vi.fn();
 vi.mock("svix", () => ({ Webhook: class { verify(...a: unknown[]) { return verifyMock(...a); } } }));
 
 import { POST } from "./route";
+
+const ACCOUNT = "5b1f6a5e-6a3d-4f7e-9f65-2a0b1c3d4e5f";
+const CONTACT = "0c9a8b7d-1e2f-4a3b-8c4d-5e6f7a8b9c0d";
 
 function req(body: unknown) {
   return new Request("http://localhost/api/webhooks/resend", {
@@ -21,7 +26,8 @@ function req(body: unknown) {
 }
 
 beforeEach(() => {
-  updateMock.mockReset().mockResolvedValue({ updated: true });
+  updateMock.mockReset().mockResolvedValue({ updated: true, accountId: null, contactId: null });
+  suppressMock.mockReset().mockResolvedValue("appended");
   verifyMock.mockReset();
   stampMock.mockReset();
   process.env.RESEND_WEBHOOK_SECRET = "whsec_test";
@@ -90,7 +96,7 @@ describe("resend webhook", () => {
 
   it("returns 200 for an unknown provider id so the provider stops retrying", async () => {
     verifyMock.mockReturnValue({ type: "email.delivered", data: { email_id: "nope" } });
-    updateMock.mockResolvedValue({ updated: false });
+    updateMock.mockResolvedValue({ updated: false, accountId: null, contactId: null });
     const res = await POST(req({}));
     expect(res.status).toBe(200);
   });
@@ -100,6 +106,104 @@ describe("resend webhook", () => {
     const res = await POST(req({}));
     expect(res.status).toBe(200);
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  describe("email suppression (D-016 item 2): a hard bounce or a complaint stops later mail to that address", () => {
+    it("a hard (Permanent) bounce records a suppression, resolved from the event's OWN tags first (mutation: read the message row instead of the tags → FAILS)", async () => {
+      updateMock.mockResolvedValue({ updated: true, accountId: "fallback-account", contactId: "fallback-contact" });
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: {
+          email_id: "prov_hard", to: ["customer@example.com"],
+          tags: { account_id: ACCOUNT, contact_id: CONTACT },
+          bounce: { type: "Permanent", subType: "General", message: "mailbox unavailable" },
+        },
+      });
+      const res = await POST(req({}));
+      expect(res.status).toBe(200);
+      expect(suppressMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+        accountId: ACCOUNT, address: "customer@example.com", contactId: CONTACT,
+        reason: "hard_bounce", providerMessageId: "prov_hard",
+      });
+    });
+
+    it("a complaint records a suppression with reason complaint, not hard_bounce (mutation: always write hard_bounce → FAILS)", async () => {
+      verifyMock.mockReturnValue({
+        type: "email.complained",
+        data: { email_id: "prov_c", to: ["customer@example.com"], tags: { account_id: ACCOUNT, contact_id: CONTACT } },
+      });
+      await POST(req({}));
+      expect(suppressMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ reason: "complaint" }));
+    });
+
+    it.each(["Transient", "Undetermined", undefined])(
+      "a non-permanent bounce (type %j) writes NOTHING to the suppression ledger (mutation: suppress on every bounce → FAILS)", async (type) => {
+        verifyMock.mockReturnValue({
+          type: "email.bounced",
+          data: { email_id: "prov_soft", to: ["customer@example.com"], tags: { account_id: ACCOUNT },
+            ...(type !== undefined ? { bounce: { type, subType: "General", message: "x" } } : {}) },
+        });
+        const res = await POST(req({}));
+        expect(res.status).toBe(200);
+        expect(suppressMock).not.toHaveBeenCalled();
+      });
+
+    it("falls back to the message row's account and contact id when the event carries no tags — an older composer send (mutation: ignore the fallback → FAILS)", async () => {
+      updateMock.mockResolvedValue({ updated: true, accountId: ACCOUNT, contactId: CONTACT });
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_hard", to: ["customer@example.com"], bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      await POST(req({}));
+      expect(suppressMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ accountId: ACCOUNT, contactId: CONTACT }));
+    });
+
+    it("no account from the tags or the row: logged, 200, never a suppression call — nothing to attribute to (mutation: suppress with a null account → FAILS)", async () => {
+      updateMock.mockResolvedValue({ updated: false, accountId: null, contactId: null });
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_unknown", to: ["customer@example.com"], bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      const res = await POST(req({}));
+      expect(res.status).toBe(200);
+      expect(suppressMock).not.toHaveBeenCalled();
+    });
+
+    it("recordEmailSuppression's no_address outcome is still a 200, not an error (mutation: 500 on no_address → FAILS)", async () => {
+      suppressMock.mockResolvedValue("no_address");
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_hard", to: [], tags: { account_id: ACCOUNT }, bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      const res = await POST(req({}));
+      expect(res.status).toBe(200);
+    });
+
+    it("a throw from recordEmailSuppression is a 500 (Resend retries) and stamps an error (mutation: swallow the throw → FAILS)", async () => {
+      suppressMock.mockRejectedValue(new Error("consent_events down"));
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_hard", to: ["customer@example.com"], tags: { account_id: ACCOUNT }, bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      await expect(POST(req({}))).rejects.toThrow("consent_events down");
+      expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.resend_webhook", expect.objectContaining({ ok: false }));
+    });
+
+    it("the address is the payload's OWN recipient (data.to[0]), never looked up elsewhere (mutation: drop the address → FAILS)", async () => {
+      verifyMock.mockReturnValue({
+        type: "email.bounced",
+        data: { email_id: "prov_hard", to: ["first@example.com", "second@example.com"], tags: { account_id: ACCOUNT },
+          bounce: { type: "Permanent", subType: "General", message: "x" } },
+      });
+      await POST(req({}));
+      expect(suppressMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ address: "first@example.com" }));
+    });
+
+    it("a delivered event never touches the suppression ledger (mutation: call it for every event → FAILS)", async () => {
+      verifyMock.mockReturnValue({ type: "email.delivered", data: { email_id: "prov_1", to: ["a@example.com"], tags: { account_id: ACCOUNT } } });
+      await POST(req({}));
+      expect(suppressMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("heartbeat (operational-floor spec §1)", () => {
