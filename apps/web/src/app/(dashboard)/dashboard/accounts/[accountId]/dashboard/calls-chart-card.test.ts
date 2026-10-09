@@ -50,6 +50,7 @@ function render(opts: {
   voiceEnabled?: boolean;
   spamCount?: number;
   abandonedCount?: number;
+  personaName?: string | null;
 } = {}) {
   // `spamCount`/`abandonedCount` default to 0, never derived from
   // `dayBuckets`: every pre-existing (non-screened) test below relies on
@@ -68,6 +69,7 @@ function render(opts: {
       voiceEnabled: opts.voiceEnabled ?? true,
       spamCount: opts.spamCount ?? 0,
       abandonedCount: opts.abandonedCount ?? 0,
+      personaName: opts.personaName ?? null,
     }),
   );
 }
@@ -269,7 +271,7 @@ describe("CallsChartCard", () => {
   it("screened state (BOTH spam and abandoned present in the same window): one sentence naming both, the abandoned caller never hidden behind the spam line", () => {
     const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 93, abandonedCount: 2 });
     expect(html).toContain(
-      "No calls answered in the last 14 days. Sofía flagged 93 calls as likely spam, and 2 callers hung up before she could help.",
+      "No calls answered in the last 14 days. Sofía flagged 93 calls as likely spam, and 2 callers hung up before Sofía could help.",
     );
     expect(html).not.toContain("When Sofía answers, every call lands here with its outcome.");
   });
@@ -277,7 +279,7 @@ describe("CallsChartCard", () => {
   it("screened state (both present, each singular)", () => {
     const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 1, abandonedCount: 1 });
     expect(html).toContain(
-      "No calls answered in the last 14 days. Sofía flagged 1 call as likely spam, and 1 caller hung up before she could help.",
+      "No calls answered in the last 14 days. Sofía flagged 1 call as likely spam, and 1 caller hung up before Sofía could help.",
     );
   });
 
@@ -299,5 +301,43 @@ describe("CallsChartCard", () => {
     expect(html).toContain("When Sofía answers, every call lands here with its outcome.");
     expect(html).toContain("Ana Reyes");
     expect(html).toContain("/dashboard/accounts/acct1/calls/c1");
+  });
+});
+
+// D-045: the persona's name is configurable (voice_profiles.persona_name),
+// but every line of this card said "Sofía" — and "she" — whatever the
+// account had renamed its receptionist to.
+describe("CallsChartCard — names the account's own receptionist (D-045)", () => {
+  it("the empty state uses the configured name", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], personaName: "Max" });
+    expect(html).toContain("When Max answers, every call lands here with its outcome.");
+    expect(html).not.toContain("Sofía");
+  });
+
+  it("all three screened lines use the configured name, and never a pronoun that assumes one", () => {
+    const spam = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 3, personaName: "Max" });
+    expect(spam).toContain("No calls answered in the last 14 days. Max flagged 3 calls as likely spam.");
+    const abandoned = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], abandonedCount: 2, personaName: "Max" });
+    expect(abandoned).toContain("No calls answered in the last 14 days. 2 callers hung up before Max could help.");
+    const both = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 3, abandonedCount: 2, personaName: "Max" });
+    expect(both).toContain(
+      "No calls answered in the last 14 days. Max flagged 3 calls as likely spam, and 2 callers hung up before Max could help.",
+    );
+    for (const html of [spam, abandoned, both]) {
+      expect(html).not.toContain("Sofía");
+      expect(html).not.toContain(" she ");
+    }
+  });
+
+  it("falls back to Sofía when no name is set, or it is blank", () => {
+    expect(render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], personaName: null }))
+      .toContain("When Sofía answers, every call lands here with its outcome.");
+    expect(render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], personaName: "  " }))
+      .toContain("When Sofía answers, every call lands here with its outcome.");
+  });
+
+  it("a name carrying a replacement pattern is inserted verbatim", () => {
+    const html = render({ dayBuckets: ZERO_BUCKETS, recentCalls: [], spamCount: 1, personaName: "A$&B" });
+    expect(html).toContain("A$&amp;B flagged 1 call as likely spam.");
   });
 });

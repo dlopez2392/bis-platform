@@ -14,7 +14,7 @@ import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { getMeetingProvider } from "@/lib/meetings/provider";
 import { emailBrand } from "@/lib/email/templates/shell";
 import {
-  bookingConfirmationEmail, bookingRescheduledEmail,
+  bookingConfirmationEmail, bookingConfirmationSubject, bookingRescheduledEmail, bookingRescheduledSubject,
   bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject,
 } from "@/lib/email/templates/booking";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -25,6 +25,7 @@ import {
   withServed, withTransferred,
 } from "../call-state";
 import { detectSpokenLanguage } from "../language";
+import { bookingMode } from "../booking-mode";
 import type { HandoffTarget } from "../handoff";
 
 export type ToolName =
@@ -58,6 +59,12 @@ export interface ToolContext {
   handoffTarget: HandoffTarget;
   now?: () => Date;
 }
+
+/** The booking tools that work on what exists rather than making something
+ *  new — kept under "Always take a message", refused with booking off. */
+const MANAGE_TOOLS: ReadonlySet<ToolName> = new Set([
+  "check_availability", "find_my_booking", "reschedule_appointment", "cancel_appointment",
+]);
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const REQUIRED_LEAD_FIELDS = ["fullName", "need"] as const;
@@ -238,6 +245,21 @@ export async function runTool(
   state: CallState, ctx: ToolContext, name: ToolName, args: Record<string, unknown>,
 ): Promise<{ state: CallState; result: unknown }> {
   const now = ctx.now?.() ?? new Date();
+
+  // Belt and braces (review minor 10): the session never hands the model a
+  // booking tool this line does not offer (`toolSchemas`, the same
+  // `bookingMode`), but models do call tools they were not given. Refused
+  // here before anything is read or written; `state` untouched.
+  const mode = bookingMode({ bookingEnabled: ctx.profile.booking_enabled, afterHours: ctx.profile.after_hours });
+  if (name === "book_appointment" && mode !== "full") {
+    return { state, result: { ok: false, error:
+      "New appointments can't be booked on this line. Take a message with take_message instead, so the team can call them back to set it up." } };
+  }
+  if (MANAGE_TOOLS.has(name) && mode === "none") {
+    return { state, result: { ok: false, error:
+      `Appointments can't be looked up or changed on this line. Apologize, then ${nextStep(ctx)} so the team can help.` } };
+  }
+
   switch (name) {
     // Every time a tool result names leaves this file twice: `startsAt`
     // (ISO, what other tool calls take) and a `local`/`startsAtLocal`
@@ -467,17 +489,19 @@ export async function runTool(
       let emailFailed = false;
       if (email) {
         try {
+          // D-038: in the language the caller spoke, the cancellation's rule.
+          const locale = spokenLocale(state, ctx);
           const brand = emailBrand(ctx.branding);
-          const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone);
+          const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone, locale);
           const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${cancelToken}`;
           const { html, text } = bookingConfirmationEmail({
-            brand, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
+            brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
           });
           await sendEmailOrThrow({
-            accountId: ctx.accountId, kind: "voice.booked", contactId, origin: ctx.origin,
+            accountId: ctx.accountId, kind: "voice.booked", contactId, language: locale, origin: ctx.origin,
             to: email, fromName: brand.name, fromAddress: ctx.fromEmail ?? undefined,
             replyTo: normalizeReplyTo(ctx.branding.replyToEmail),
-            subject: "You're booked in", body: text, html,
+            subject: bookingConfirmationSubject(locale), body: text, html,
           });
         } catch (e) {
           // A sent booking must never be reported as failed: the row exists,
@@ -569,19 +593,20 @@ export async function runTool(
       const emailCustomer = async (): Promise<boolean> => {
         if (!contactEmail) return false;
         try {
+          const locale = spokenLocale(state, ctx);
           const brand = emailBrand(ctx.branding);
-          const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone);
+          const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone, locale);
           // The NEW row's token — the old confirmation's cancel link points at
           // a booking that was just cancelled above.
           const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${newCancelToken}`;
           const { html, text } = bookingRescheduledEmail({
-            brand, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
+            brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
           });
           await sendEmailOrThrow({
-            accountId: ctx.accountId, kind: "voice.moved", contactId: old.contact_id, origin: ctx.origin,
+            accountId: ctx.accountId, kind: "voice.moved", contactId: old.contact_id, language: locale, origin: ctx.origin,
             to: contactEmail, fromName: brand.name, fromAddress: ctx.fromEmail ?? undefined,
             replyTo: normalizeReplyTo(ctx.branding.replyToEmail),
-            subject: "Your booking has been moved", body: text, html,
+            subject: bookingRescheduledSubject(locale), body: text, html,
           });
           return false;
         } catch (e) {

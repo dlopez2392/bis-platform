@@ -25,6 +25,7 @@ const dbMocks = vi.hoisted(() => ({
   getVoiceProfile: vi.fn(),
   listPhoneNumbersForAccount: vi.fn(),
   countCallsSince: vi.fn(),
+  countAnsweredCallsSince: vi.fn(),
   listChecklistState: vi.fn(),
   listForms: vi.fn(),
   hasConciergeSiteConversation: vi.fn(),
@@ -78,6 +79,7 @@ describe("gatherSetupInputs — accounts.permissions reaches SetupInputs (review
     dbMocks.getVoiceProfile.mockResolvedValue(null);
     dbMocks.listPhoneNumbersForAccount.mockResolvedValue([]);
     dbMocks.countCallsSince.mockResolvedValue(0);
+    dbMocks.countAnsweredCallsSince.mockResolvedValue(0);
     dbMocks.listChecklistState.mockResolvedValue([]);
     dbMocks.listForms.mockResolvedValue([]);
     dbMocks.hasConciergeSiteConversation.mockResolvedValue(false);
@@ -119,5 +121,48 @@ describe("gatherSetupInputs — accounts.permissions reaches SetupInputs (review
     const { inputs, failed } = await gatherSetupInputs(db, "a1");
     expect(inputs.permissions).toBeNull();
     expect(failed.account).toBe(false);
+  });
+});
+
+// D-091: "Test call" read done after ANY call — a robocall, a hang-up, a
+// silent ring. It now counts only calls that were answered (the four
+// ANSWERED_CALL_OUTCOMES the weekly report and the press-1 screen use).
+describe("gatherSetupInputs — the test-call step counts answered calls only (D-091)", () => {
+  beforeEach(() => {
+    Object.values(dbMocks).forEach((mock) => mock.mockReset());
+    dbMocks.getCalendarForAccount.mockResolvedValue(null);
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    dbMocks.listPhoneNumbersForAccount.mockResolvedValue([]);
+    dbMocks.listChecklistState.mockResolvedValue([]);
+    dbMocks.listForms.mockResolvedValue([]);
+    dbMocks.hasConciergeSiteConversation.mockResolvedValue(false);
+  });
+
+  it("five calls that were all robocalls or hang-ups leave callCount at 0 (mutation: count every call → 5, FAILS)", async () => {
+    dbMocks.countCallsSince.mockResolvedValue(5);
+    dbMocks.countAnsweredCallsSince.mockResolvedValue(0);
+    const db = dbWithAccountRow({ brand_name: "Acme", from_email: null, permissions: {} });
+    const { inputs, failed } = await gatherSetupInputs(db, "a1");
+    expect(inputs.callCount).toBe(0);
+    expect(failed.calls).toBe(false);
+  });
+
+  it("an answered call counts, read from the epoch floor", async () => {
+    dbMocks.countCallsSince.mockResolvedValue(5);
+    dbMocks.countAnsweredCallsSince.mockResolvedValue(1);
+    const db = dbWithAccountRow({ brand_name: "Acme", from_email: null, permissions: {} });
+    const { inputs } = await gatherSetupInputs(db, "a1");
+    expect(inputs.callCount).toBe(1);
+    expect(dbMocks.countAnsweredCallsSince).toHaveBeenCalledWith(db, "a1", "1970-01-01T00:00:00.000Z");
+  });
+
+  it("a failed answered-calls read reports failed.calls, never a silent 0", async () => {
+    dbMocks.countCallsSince.mockResolvedValue(5);
+    dbMocks.countAnsweredCallsSince.mockRejectedValue(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = dbWithAccountRow({ brand_name: "Acme", from_email: null, permissions: {} });
+    const { failed } = await gatherSetupInputs(db, "a1");
+    errSpy.mockRestore();
+    expect(failed.calls).toBe(true);
   });
 });

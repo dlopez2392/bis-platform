@@ -7,7 +7,7 @@ import {
   assignPhoneNumber, getPhoneNumberByE164, setPhoneNumberStatus,
   getVoiceProfile, upsertVoiceProfile,
   startCallRow, finishCallRow, countCallsSince, countCallsByCallerSince,
-  countCallerHistorySince,
+  countCallerHistorySince, countAnsweredCallsSince,
   hasActiveCallSince,
   findUpcomingBookingForPhone, getBookingById, deleteCallRow,
   listPhoneNumbersForAccount, listAllPhoneNumbers, reassignPhoneNumber,
@@ -384,6 +384,35 @@ describe("voice accessors", () => {
         .toBe(0);
       expect((await countCallerHistorySince(db, accountId, customer, new Date(Date.now() + 86_400_000).toISOString())).answeredCalls)
         .toBe(0);
+    });
+  });
+
+  // D-091: the setup wizard's "Test call" step read done after ANY call — a
+  // robocall included. It asks this instead: answered calls only.
+  it("countAnsweredCallsSince: counts booked/lead/message/transferred, never abandoned, spam or an unfinished row", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const since = new Date(Date.now() - 86_400_000).toISOString();
+      const finish = async (outcome: CallOutcome) => {
+        const { id } = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550311" });
+        await finishCallRow(db, accountId, id, {
+          outcome, endedAt: new Date(), durationSecs: 30, turnCount: 3,
+          transcript: [], summary: "", language: "en",
+        });
+      };
+      // Only calls nobody was answered on: a talking robot, a silent ring,
+      // and a call still in flight (the column default is `abandoned`).
+      await finish("abandoned");
+      await finish("spam");
+      await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: "+19565550312" });
+      expect(await countCallsSince(db, accountId, since)).toBe(3);
+      expect(await countAnsweredCallsSince(db, accountId, since)).toBe(0);
+
+      for (const outcome of ["booked", "lead", "message", "transferred"] as const) await finish(outcome);
+      expect(await countAnsweredCallsSince(db, accountId, since)).toBe(4);
+      // Tenancy and the window floor.
+      expect(await countAnsweredCallsSince(db, "00000000-0000-0000-0000-000000000099", since)).toBe(0);
+      expect(await countAnsweredCallsSince(db, accountId, new Date(Date.now() + 86_400_000).toISOString())).toBe(0);
     });
   });
 });

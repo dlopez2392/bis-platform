@@ -120,6 +120,89 @@ describe("voice settings actions", () => {
     expect(dbMocks.assignPhoneNumber).toHaveBeenCalledWith({}, "a1",
       expect.objectContaining({ e164: "+19565550100", telnyxId: "uuid-1" }), expect.any(String));
   });
+  // D-042: the Voice page could give an account a SECOND active number — a
+  // state the setup wizard and go-live cannot describe, and the text sender
+  // silently picks the oldest live one. The same rule moveNumberAction
+  // already enforces: a released number is a former number and does not count.
+  describe("one active number per account (D-042)", () => {
+    const row = (id: string, status: string) => ({ id, account_id: "a1", e164: `+1956555010${id.slice(-1)}`, status });
+
+    it("assigning refuses, with no write, when the account already has an active number", async () => {
+      dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "testing")]);
+      const r = await assignNumberAction("a1", fd({ e164: "(956) 555-0109" }));
+      expect(r).toEqual({ ok: false, error: m["voice.moveDestinationOccupied"] });
+      expect(dbMocks.assignPhoneNumber).not.toHaveBeenCalled();
+    });
+
+    it("assigning goes through when the account's only numbers are released", async () => {
+      dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "released")]);
+      dbMocks.assignPhoneNumber.mockResolvedValue({ id: "pn2" });
+      const r = await assignNumberAction("a1", fd({ e164: "(956) 555-0109" }));
+      expect(r).toEqual({ ok: true });
+      expect(dbMocks.assignPhoneNumber).toHaveBeenCalledOnce();
+    });
+
+    it("assigning refuses when the check itself fails — a save the operator can press again", async () => {
+      dbMocks.listPhoneNumbersForAccount.mockRejectedValue(new Error("db down"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const r = await assignNumberAction("a1", fd({ e164: "(956) 555-0109" }));
+      errSpy.mockRestore();
+      expect(r).toEqual({ ok: false, error: m["voice.numbers.assignFailed"] });
+      expect(dbMocks.assignPhoneNumber).not.toHaveBeenCalled();
+    });
+
+    it("turning a released number back on refuses while another number is active", async () => {
+      dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "live"), row("pn2", "released")]);
+      for (const status of ["provisioned", "testing", "live"]) {
+        const r = await setNumberStatusAction("a1", "pn2", status);
+        expect(r).toEqual({ ok: false, error: m["voice.numbers.anotherActive"] });
+      }
+      expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+    });
+
+    // Review minor 7: the same refusal reaches an account that ALREADY has two
+    // active numbers, when one of them moves testing → live. Its words must be
+    // true there too — that number was never off, so "turn it back on" is not.
+    it("an already-active number on a two-number account is refused in words true for that case too", async () => {
+      dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "live"), row("pn2", "testing")]);
+      const r = await setNumberStatusAction("a1", "pn2", "live");
+      expect(r).toEqual({ ok: false, error: m["voice.numbers.anotherActive"] });
+      expect(m["voice.numbers.anotherActive"]).not.toMatch(/back on/i);
+      expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+    });
+
+    it("the active number's own status walk is not blocked by itself", async () => {
+      dbMocks.listPhoneNumbersForAccount.mockResolvedValue([row("pn1", "testing"), row("pn2", "released")]);
+      dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
+      const r = await setNumberStatusAction("a1", "pn1", "live");
+      expect(r).toEqual({ ok: true });
+      expect(dbMocks.setPhoneNumberStatus).toHaveBeenCalledWith({}, "a1", "pn1", "live", expect.any(String));
+    });
+
+    // Review minor 1: the fail-CLOSED branch. A status change that is not a
+    // release, with the number list unreadable, must not write — it could be
+    // making a second active number nobody checked for.
+    it("a non-release status change refuses, with no write, when the active-number check cannot be read (mutation: fail open → FAILS)", async () => {
+      dbMocks.listPhoneNumbersForAccount.mockRejectedValue(new Error("db down"));
+      dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      for (const status of ["provisioned", "testing", "live"]) {
+        const r = await setNumberStatusAction("a1", "pn2", status);
+        expect(r, status).toEqual({ ok: false, error: m["voice.numbers.statusUpdateFailed"] });
+      }
+      errSpy.mockRestore();
+      expect(dbMocks.setPhoneNumberStatus).not.toHaveBeenCalled();
+    });
+
+    it("releasing is never gated — it is how two active numbers get back to one", async () => {
+      dbMocks.listPhoneNumbersForAccount.mockRejectedValue(new Error("db down"));
+      dbMocks.setPhoneNumberStatus.mockResolvedValue(undefined);
+      const r = await setNumberStatusAction("a1", "pn2", "released");
+      expect(r).toEqual({ ok: true });
+      expect(dbMocks.listPhoneNumbersForAccount).not.toHaveBeenCalled();
+    });
+  });
+
   it("going live requires a filled profile", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "", facts: "" });
     const r = await setNumberStatusAction("a1", "pn1", "live");

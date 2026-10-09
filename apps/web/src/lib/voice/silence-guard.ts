@@ -106,9 +106,9 @@ export function isCallerAudioEvent(type: string | undefined): boolean {
  * There is nothing to wrap up on a silent call, so there is nothing to
  * improvise: a fixed sentence, and out.
  *
- * `both` takes English, mirroring the greeting's own rule at
- * `app/api/voice/incoming/route.ts:764` (`languages === "es" ? greeting_es : greeting_en`)
- * rather than inventing a second language policy.
+ * `both` takes English. This used to mirror the greeting's rule; since D-037
+ * a bilingual line OPENS with both greetings (`lib/voice/greeting.ts`), but
+ * this goodbye is unchanged by that decision and still takes English.
  */
 export function silenceGoodbye(languages: "en" | "es" | "both"): string {
   const line = languages === "es"

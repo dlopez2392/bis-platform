@@ -4,6 +4,7 @@ import { emailBrand } from "./shell";
 import {
   bookingAlertEmail, bookingConfirmationEmail, bookingReminderEmail, bookingRescheduledEmail,
   bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject,
+  bookingRescheduledSubject,
 } from "./booking";
 
 const UNBRANDED: Branding = {
@@ -331,6 +332,41 @@ describe("bookingConfirmationEmail — Spanish", () => {
     const input = { brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL };
     expect(bookingConfirmationEmail(input)).toEqual(bookingConfirmationEmail({ ...input, locale: "en" }));
     expect(bookingConfirmationEmail(input).text).toContain("You're booked in.");
+  });
+});
+
+// D-038: a booking moved by phone, for a caller who spoke Spanish. Same tú
+// register as the Spanish confirmation and cancellation.
+describe("bookingRescheduledEmail — Spanish", () => {
+  const WHEN_BOOKER_ES = "mar, 26 ago, 3:00 p. m. EDT";
+  const WHEN_COMPANY_ES = "mar, 26 ago, 2:00 p. m. CDT";
+
+  it("speaks Spanish throughout when the caller did, the replaces-line included", () => {
+    const { html, text } = bookingRescheduledEmail({
+      brand, locale: "es", whenBookerZone: WHEN_BOOKER_ES, whenCompanyZone: WHEN_COMPANY_ES,
+      cancelUrl: CANCEL_URL, meetingUrl: MEETING_URL,
+    });
+    expect(bookingRescheduledSubject("es")).toBe("Tu cita fue reprogramada");
+    for (const part of [html, text]) {
+      expect(part).toContain("Tu cita fue reprogramada.");
+      expect(part).toContain(`${WHEN_COMPANY_ES} para nosotros`);
+      expect(part).toContain("Unirse a la videollamada");
+      expect(part).toContain("Este enlace reemplaza al de tu confirmación anterior.");
+      expect(part).toContain("Cancelar esta cita");
+      expect(part.toLowerCase()).not.toContain("moved");
+      expect(part).not.toContain(" for us");
+      expect(part).not.toContain("replaces");
+    }
+  });
+
+  it("defaults to English when no locale is given, byte-identical to the explicit en", () => {
+    const input = {
+      brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY,
+      cancelUrl: CANCEL_URL, meetingUrl: MEETING_URL,
+    };
+    expect(bookingRescheduledEmail(input)).toEqual(bookingRescheduledEmail({ ...input, locale: "en" }));
+    expect(bookingRescheduledSubject()).toBe("Your booking has been moved");
+    expect(bookingRescheduledSubject("en")).toBe("Your booking has been moved");
   });
 });
 

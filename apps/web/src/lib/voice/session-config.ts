@@ -3,11 +3,14 @@
 import { readTurnDetection } from "./turn-detection";
 import { toolSchemas } from "./tools/schemas";
 import { buildSystemPrompt } from "./system-prompt";
+import { bookingMode } from "./booking-mode";
 
 export const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime";
 
 export type VoicePromptInput = {
-  personaName: string; businessName: string; greeting: string;
+  // No `greeting`: the prompt never embeds one. The phone line's opening is
+  // its own instruction (`openingGreeting`, lib/voice/greeting.ts).
+  personaName: string; businessName: string;
   facts: string; services: string;
   languages: "en" | "es" | "both";
   bookingEnabled: boolean;
@@ -28,11 +31,14 @@ export type VoicePromptInput = {
    * to "phone" so every existing caller's prompt is byte-identical — a
    * prompt change is a behaviour change on a live phone line.
    *
-   * The web demo (`api/voice/web/session`) deliberately does NOT pass this:
-   * it is voice, over WebRTC, and it keeps the `webDemoNotice` it has always
-   * appended. Only the text concierge passes "web".
+   * The text concierge passes "web". The browser voice demo
+   * (`api/voice/web/session`) passes "web_voice": it is voice, over WebRTC,
+   * and it reads the PHONE wording everywhere (`onWeb` is "web" only) except
+   * the one line that is phone-line policy — "Always take a message" (owner
+   * decision 2026-10-09: phone only). It keeps the `webDemoNotice` it has
+   * always appended.
    */
-  medium?: "phone" | "web";
+  medium?: "phone" | "web" | "web_voice";
 };
 
 export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {
@@ -40,7 +46,9 @@ export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {
     type: "realtime",
     model: REALTIME_MODEL,
     instructions: buildSystemPrompt(input, now),
-    tools: toolSchemas(input.bookingEnabled, input.meetingType, input.handoffAvailable === true),
+    // `bookingMode`, not `bookingEnabled`: "Always take a message" withholds
+    // the NEW-booking tool (D-040), the same answer the prompt gives.
+    tools: toolSchemas(bookingMode(input), input.meetingType, input.handoffAvailable === true),
     audio: {
       input: {
         transcription: { model: "gpt-4o-mini-transcribe" },

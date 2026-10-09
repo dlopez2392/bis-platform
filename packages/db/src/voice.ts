@@ -502,6 +502,25 @@ export async function countCallsSince(
 }
 
 /**
+ * How many of the account's calls since `sinceIso` were ANSWERED — outcome in
+ * `ANSWERED_CALL_OUTCOMES` (booked/lead/message/transferred). The setup
+ * wizard's "Test call" step reads this (D-091): `countCallsSince` above counts
+ * every row, so a robocall (`spam`), a hang-up (`abandoned`) or a call still
+ * in flight (the column default `abandoned`) turned the step green. Never use
+ * it for the call caps, which must count every call that cost money.
+ */
+export async function countAnsweredCallsSince(
+  db: SupabaseClient, accountId: string, sinceIso: string,
+): Promise<number> {
+  const { count, error } = await db.from("calls")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).gte("started_at", sinceIso)
+    .in("outcome", [...ANSWERED_CALL_OUTCOMES]);
+  if (error) throw new Error(`countAnsweredCallsSince failed: ${error.message}`);
+  return count ?? 0;
+}
+
+/**
  * Whether the account has any call still IN PROGRESS as of `sinceIso` — a
  * `calls` row with no `ended_at` (finishCallRow never ran) whose
  * `started_at` is after `sinceIso`. The topbar Sofía presence indicator

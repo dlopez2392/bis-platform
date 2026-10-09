@@ -140,3 +140,28 @@ describe("BrandingPanel — Remove logo (DESIGN rule 6, rule 8)", () => {
     expect(panelSource).toMatch(/<Button type="button" variant="ghost" size="sm" onClick=\{removeLogo\} disabled=\{removePending\}>/);
   });
 });
+
+// D-071 review round: the colour-only/unset preview's "Sidebar" specimen
+// painted its own background from SIDEBAR_BG (the CONTRAST TARGET, after the
+// split — not a colour meant to be looked at) and its label text from a
+// hard-coded "#d4d4d8", the pre-Northern-Lights --sidebar-text literal
+// (DESIGN.md's Installation status log: it moved to #a9a3bd, then to
+// today's #b9b3cf). Neither is a token-or-constant literal island this
+// file is allowed to keep.
+describe("BrandingPanel — the unset/colour-only preview's sidebar specimen (D-071)", () => {
+  it("paints its background from SIDEBAR_PREVIEW_BG, never SIDEBAR_BG (mutation: swap back to SIDEBAR_BG → still passes today by value, so this also pins the import) and its label from SIDEBAR_FOREGROUND, never the stale #d4d4d8", () => {
+    expect(panelSource).toContain('from "@/lib/branding/color"');
+    expect(panelSource).toMatch(/import\s*\{[^}]*SIDEBAR_PREVIEW_BG[^}]*\}\s*from\s*"@\/lib\/branding\/color"/);
+    expect(panelSource).not.toMatch(/\bSIDEBAR_BG\b/);
+    expect(panelSource).toContain('from "@/lib/branding/neutral-ramps"');
+    expect(panelSource).not.toContain("#d4d4d8");
+    expect(panelSource).toContain("backgroundColor: SIDEBAR_PREVIEW_BG");
+    expect(panelSource).toContain("color: SIDEBAR_FOREGROUND");
+  });
+
+  it("renders the specimen with the real token values when no theme is set (brandColor null)", () => {
+    const html = render(null);
+    expect(html).toContain('style="background-color:#100f17"');
+    expect(html).toMatch(/style="color:#b9b3cf"[^<]*>Sidebar</);
+  });
+});

@@ -419,7 +419,6 @@ export async function POST(
 
     const system = buildSystemPrompt({
       personaName: profile.persona_name, businessName,
-      greeting: locale === "es" ? profile.greeting_es : profile.greeting_en,
       facts: profile.facts, services: profile.services,
       languages: profile.languages,
       // FALSE regardless of the tenant's own setting, exactly as the web demo

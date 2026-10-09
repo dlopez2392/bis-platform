@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildRealtimeSessionConfig } from "./session-config";
 
 const base = {
-  personaName: "Sofía", businessName: "Rio Roofing", greeting: "Hi.",
+  personaName: "Sofía", businessName: "Rio Roofing",
   facts: "-", services: "-", languages: "both" as const, bookingEnabled: true,
   timezone: "America/Chicago", slotDurationMinutes: 60,
   afterHours: "hours_then_message" as const, callerNumber: null,
@@ -40,6 +40,30 @@ describe("buildRealtimeSessionConfig", () => {
   it("booking disabled drops booking tools from the session", () => {
     const c = buildRealtimeSessionConfig({ ...base, bookingEnabled: false }, new Date()) as unknown as SessionConfigShape;
     expect(c.tools.map((t) => t.name)).not.toContain("book_appointment");
+  });
+  // D-040: "Always take a message" means no booking on the call, so the
+  // session must not hand the model the tools to do it — a prompt saying
+  // "do not book" beside a book_appointment tool is the contradiction the
+  // 2026-08-30 call showed the model resolving the wrong way.
+  it("Always take a message drops book_appointment even when booking is allowed, and keeps take_message", () => {
+    const c = buildRealtimeSessionConfig(
+      { ...base, bookingEnabled: true, afterHours: "message_only" }, new Date(),
+    ) as unknown as SessionConfigShape;
+    const names = c.tools.map((t) => t.name);
+    expect(names).not.toContain("book_appointment");
+    expect(names).toContain("take_message");
+  });
+  // Owner decision A (2026-10-09): it replaces NEW booking only — an existing
+  // appointment can still be found, moved (to a time check_availability
+  // offers) or cancelled.
+  it("Always take a message keeps the existing-appointment tools (mutation: withhold every booking tool → FAILS)", () => {
+    const c = buildRealtimeSessionConfig(
+      { ...base, bookingEnabled: true, afterHours: "message_only" }, new Date(),
+    ) as unknown as SessionConfigShape;
+    const names = c.tools.map((t) => t.name);
+    for (const t of ["find_my_booking", "reschedule_appointment", "cancel_appointment", "check_availability"]) {
+      expect(names).toContain(t);
+    }
   });
 
   // `handoffAvailable` is OPTIONAL, and the direction of its default is a

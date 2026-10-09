@@ -81,6 +81,17 @@ export function VoiceProfileForm({
   const [previewLanguage, setPreviewLanguage] = useState<"en" | "es">(
     p.languages === "es" ? "es" : "en",
   );
+  // D-040: "Always take a message" turns booking off on calls whatever the
+  // "Allow booking" box says (`offersBooking`, lib/voice/system-prompt.ts),
+  // so the box is disabled while it is chosen. Same onValueChange-only
+  // pattern as `previewLanguage` above. The box's value lives in state and is
+  // submitted through a hidden input rather than the checkbox's own name:
+  // Radix does not submit a DISABLED checkbox, so a save made while it is
+  // disabled would otherwise write `false` — and switching back to "Follow
+  // business hours" must find the stored value as it was.
+  const [afterHours, setAfterHours] = useState(p.after_hours);
+  const [bookingChecked, setBookingChecked] = useState(p.booking_enabled);
+  const bookingLocked = afterHours === "message_only";
   // What the counter below previews must match what actually SENDS —
   // `prepareTextback` (lib/voice/textback.ts):
   //   withOptOut(r.textbackBody.trim() || defaultTextbackBody(r.brandName, r.language), r.language)
@@ -186,19 +197,31 @@ export function VoiceProfileForm({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="after_hours">{m["voice.profile.afterHours"]}</Label>
-              <Select name="after_hours" defaultValue={p.after_hours}>
-                <SelectTrigger id="after_hours" className="w-full"><SelectValue /></SelectTrigger>
+              <Select
+                name="after_hours" defaultValue={p.after_hours}
+                onValueChange={(v) => setAfterHours(v === "message_only" ? "message_only" : "hours_then_message")}
+              >
+                <SelectTrigger id="after_hours" className="w-full" aria-describedby="after_hours_hint"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="hours_then_message">{m["voice.profile.afterHours.hoursThenMessage"]}</SelectItem>
                   <SelectItem value="message_only">{m["voice.profile.afterHours.messageOnly"]}</SelectItem>
                 </SelectContent>
               </Select>
+              <p id="after_hours_hint" className="text-xs text-muted-foreground">{m["voice.profile.afterHoursHint"]}</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <Checkbox id="booking_enabled" name="booking_enabled" defaultChecked={p.booking_enabled} />
+            {/* No `name`: the hidden input below carries the value, so it is
+                saved even while the box is disabled (see `bookingLocked`). The
+                Label greys with it through the Checkbox's `peer` class. */}
+            <Checkbox
+              id="booking_enabled" checked={bookingChecked} disabled={bookingLocked}
+              onCheckedChange={(v) => setBookingChecked(v === true)}
+              aria-describedby={bookingLocked ? "after_hours_hint" : undefined}
+            />
             <Label htmlFor="booking_enabled">{m["voice.profile.bookingEnabled"]}</Label>
+            {bookingChecked ? <input type="hidden" name="booking_enabled" value="on" /> : null}
           </div>
 
           <div className="flex items-center gap-2">

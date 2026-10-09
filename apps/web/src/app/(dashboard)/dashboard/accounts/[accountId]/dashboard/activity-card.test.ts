@@ -18,8 +18,8 @@ function row(overrides: Partial<EventRow>): EventRow {
   };
 }
 
-function render(events: EventRow[], now: Date = NOW) {
-  return renderToStaticMarkup(createElement(ActivityCard, { accountId: "acct1", events, now }));
+function render(events: EventRow[], now: Date = NOW, personaName: string | null = null) {
+  return renderToStaticMarkup(createElement(ActivityCard, { accountId: "acct1", events, now, personaName }));
 }
 
 describe("ActivityCard", () => {
@@ -133,3 +133,20 @@ describe("ActivityCard — who answers the phone (operational-floor PR-2)", () =
   });
 });
 
+
+// D-045: who answers the phone is named by the account's own persona, not a
+// hard-coded "Sofía".
+describe("ActivityCard — names the account's own receptionist (D-045)", () => {
+  it("both directions of the forward use the configured name", () => {
+    const on = render([row({ id: "f1", type: "voice.forward_changed", payload: { forwardCalls: true } })], NOW, "Max");
+    expect(on).toContain("Calls started going straight to your transfer number instead of Max.");
+    const off = render([row({ id: "f2", type: "voice.forward_changed", payload: { forwardCalls: false } })], NOW, "Max");
+    expect(off).toContain("Max started answering calls again.");
+    for (const html of [on, off]) expect(html).not.toContain("Sofía");
+  });
+
+  it("falls back to Sofía when no name is set, or it is blank", () => {
+    const off = render([row({ id: "f2", type: "voice.forward_changed", payload: { forwardCalls: false } })], NOW, "  ");
+    expect(off).toContain("Sofía started answering calls again.");
+  });
+});
