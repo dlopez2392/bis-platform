@@ -102,6 +102,19 @@ export function pickErrorUpdate(
 }
 
 /**
+ * D-050: the conversation id a FAILED turn may still carry. A first turn whose
+ * reply fails after the route already opened its conversation answers
+ * `{ error, conversationId }`; keeping that id makes the visitor's retry a
+ * second turn of the SAME conversation, not a second conversation spending
+ * another of their three starts. Anything else reads as "no id".
+ */
+export function errorConversationId(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const id = (body as { conversationId?: unknown }).conversationId;
+  return typeof id === "string" && id ? id : null;
+}
+
+/**
  * The close producer (Task 5 review, "Esc and the close producer"): the
  * loader's own `bis-concierge-close` handling in embed-script.ts was already
  * correct and tested — what had NO producer anywhere was this side sending
@@ -329,6 +342,13 @@ export function ConciergeChat({
         const outcome = pickErrorUpdate({ status: res.status }, strings);
         setError(outcome.closing);
         if (outcome.ended) setEnded(true);
+        // D-050: a failed first reply still opened a conversation; keep it,
+        // so "try again" continues it. A body that is not JSON is no id.
+        const keptId = errorConversationId(await res.json().catch(() => null));
+        if (keptId) {
+          conversationId.current = keptId;
+          conversationStore(publicId).write(keptId);
+        }
         return;
       }
       const data = await res.json() as TurnResult;

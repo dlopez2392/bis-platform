@@ -143,6 +143,18 @@ export async function POST(
   const priorId = typeof body.conversationId === "string" && body.conversationId
     ? body.conversationId : null;
 
+  // D-050: the conversation THIS request opened, once its row exists. A turn
+  // 1 that fails after that point (the model call, or any read after the
+  // insert) used to answer a bare 503, so the page retried as a first turn:
+  // a second row, a second count against the visitor's 3-per-10-minutes, for
+  // one question. Every failure past the insert hands the id back, and the
+  // page continues on it. Refusals before the insert have no id to give.
+  let openedId: string | null = null;
+  const unavailable = () => NextResponse.json(
+    openedId ? { error: "unavailable", conversationId: openedId } : { error: "unavailable" },
+    { status: 503 },
+  );
+
   try {
     const db = serviceDb() as Db;
     const profile = await getVoiceProfileByPublicId(db, publicId);
@@ -306,6 +318,7 @@ export async function POST(
         ipHash, locale, attribution, origin,
       });
       conversationId = created.id;
+      openedId = created.id;
       // Part C: one `ai` row per conversation START — "website chats" on
       // the client's Activity page is the count of these. Isolated leg.
       try {
@@ -450,7 +463,7 @@ export async function POST(
       toolCallId = call?.id ?? "";
     } catch (e) {
       log("model call failed", { error: String(e) });
-      return NextResponse.json({ error: "unavailable" }, { status: 503 });
+      return unavailable();
     }
 
     // Lead capture, at most once per conversation, and BEFORE `spoken` is
@@ -627,6 +640,6 @@ export async function POST(
     // Anything the reads above threw. A refusal, so it costs nothing — and
     // never an unhandled 500 with a stack in it.
     log("refused: turn failed", { publicId, error: String(e) });
-    return NextResponse.json({ error: "unavailable" }, { status: 503 });
+    return unavailable();
   }
 }

@@ -604,6 +604,35 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
     expect(dbFns.appendConciergeTurns).not.toHaveBeenCalled();
   });
 
+  // D-050: the row was created, then the model failed, and the 503 carried no
+  // id. The page retried as a FIRST turn, opening a second conversation and
+  // spending a second of the visitor's three starts on one question.
+  it("a failed FIRST reply hands back the conversation it opened, so the retry continues it", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("timeout"));
+    const res = await firstTurn();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "unavailable", conversationId: "c1" });
+    // The retry the page now sends, on that id.
+    const retry = await laterTurn();
+    expect(retry.status).toBe(200);
+    expect(dbFns.createConciergeConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it("a FIRST turn that fails after its row exists, for any reason, still hands back the id", async () => {
+    dbFns.claimConciergeTurn.mockRejectedValueOnce(new Error("db blip"));
+    const res = await firstTurn();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "unavailable", conversationId: "c1" });
+  });
+
+  it("a FIRST turn refused before any row exists hands back no id", async () => {
+    dbFns.countConciergeConversationsByIp.mockRejectedValueOnce(new Error("db blip"));
+    const res = await firstTurn();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "unavailable" });
+    expect(dbFns.createConciergeConversation).not.toHaveBeenCalled();
+  });
+
   it("refuses when the account read fails rather than prompting with a blank name", async () => {
     dbSpy.accountsError = { message: "boom" };
     const res = await firstTurn();

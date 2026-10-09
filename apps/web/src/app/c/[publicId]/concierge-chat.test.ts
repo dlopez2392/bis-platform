@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  pickTurnUpdate, pickErrorUpdate, conversationStore, type TurnResult,
+  pickTurnUpdate, pickErrorUpdate, errorConversationId, conversationStore, type TurnResult,
   CLOSE_MESSAGE, brandMessage, shouldCloseOnKey,
   ASK_MESSAGE_TYPE, parseAskMessage, askAllowedFrom,
 } from "./concierge-chat";
@@ -131,6 +131,26 @@ describe("pickErrorUpdate", () => {
 
   it("never ends the conversation on 429 — the visitor may try later on the same one", () => {
     expect(pickErrorUpdate({ status: 429 }, strings).ended).toBe(false);
+  });
+});
+
+/**
+ * D-050: a first turn whose reply failed AFTER its conversation row existed
+ * now answers `{ error, conversationId }`. The page keeps that id, so the
+ * visitor's retry continues the same conversation instead of opening a
+ * second one (and spending a second of their three starts).
+ */
+describe("errorConversationId", () => {
+  it("reads the id a failed first reply hands back", () => {
+    expect(errorConversationId({ error: "unavailable", conversationId: "c1" })).toBe("c1");
+  });
+
+  it("is null when the refusal carries none, or the body is not JSON-shaped", () => {
+    expect(errorConversationId({ error: "rate_limited" })).toBeNull();
+    expect(errorConversationId({ error: "unavailable", conversationId: "" })).toBeNull();
+    expect(errorConversationId({ conversationId: 42 })).toBeNull();
+    expect(errorConversationId(null)).toBeNull();
+    expect(errorConversationId("oops")).toBeNull();
   });
 });
 
