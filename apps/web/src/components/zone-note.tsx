@@ -1,4 +1,3 @@
-import Link from "next/link";
 import type { ResolvedZone } from "@bis/db";
 
 import { Notice } from "@/components/ui/notice";
@@ -51,20 +50,26 @@ const SENTENCE_CAPTION =
 export function ZoneNote({
   zone,
   isAgency,
-  accountId,
+  // D-076: unused now that the agency's closing sentence is plain text
+  // rather than a Link built from it — kept in the prop so all five
+  // existing callers (Calls, Call detail, the dashboard, Checklist, the
+  // work queue) need no change; renamed so no lint rule mistakes it for
+  // a left-behind reference.
+  accountId: _accountId,
   className,
 }: {
   /** Straight from `renderZone` (lib/zone.ts) — never a bare zone string, so
    *  a caller cannot render this note without also having decided what to do
    *  about `guessed`. */
   zone: ResolvedZone;
-  /** From `requireAccountAccess`. Decides whether the fix is a LINK or a
-   *  person to ask: Settings is agency-only
-   *  (`requireAgencyOnlyAccountAccess`), so a client who followed the link
-   *  would be redirected back to their own dashboard. Two screens here
-   *  (Checklist) are agency-only anyway and pass `true` as a constant; the
-   *  other three are reached by both audiences and must pass the real
-   *  value. */
+  /** From `requireAccountAccess`. Decides which closing sentence reads —
+   *  the agency's (D-076: plain text now; Settings has no timezone field
+   *  to link to, and never has) or the client's (a person to ask, never a
+   *  link — Settings is agency-only, `requireAgencyOnlyAccountAccess`, so a
+   *  client who followed a link there would be redirected back to their own
+   *  dashboard). Two screens here (Checklist) are agency-only anyway and
+   *  pass `true` as a constant; the other three are reached by both
+   *  audiences and must pass the real value. */
   isAgency: boolean;
   accountId: string;
   className?: string;
@@ -89,21 +94,13 @@ export function ZoneNote({
               {zone.source === "agency"
                 ? m["zone.guessed.agency"]
                 : m["zone.guessed.fallback"]}{" "}
-              {/* `underline underline-offset-2` and NOTHING else, matching
-                  `alert-phone-card.tsx`'s Link-inside-a-warn-Notice, which is
-                  the same pattern in the same place. The focus ring comes
-                  from globals.css's un-layered `:focus-visible` rule, which
-                  beats every Tailwind utility on purpose — a hand-rolled
-                  `focus-visible:ring-*` here would be redundant and its
-                  companion `focus-visible:outline-none` could not have
-                  suppressed the global outline anyway (Tailwind utilities sit
-                  inside a cascade layer that rule deliberately outranks). */}
-              <Link
-                href={`/dashboard/accounts/${accountId}/settings`}
-                className="underline underline-offset-2"
-              >
-                {m["zone.guessed.fix"]}
-              </Link>
+              {/* D-076: PLAIN TEXT, not a Link — the only zone input in the
+                  whole product is the "Add company" dialog, and only at
+                  creation. A Link to Settings here (as this used to be)
+                  sent the agency to a page with nothing on it to fix, which
+                  is worse than no link, the exact reasoning the CLIENT
+                  branch below already followed. */}
+              {m["zone.guessed.fix"]}
             </>
           ) : (
             m["zone.guessed.client"]

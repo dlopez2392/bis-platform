@@ -2295,12 +2295,16 @@ export const m = {
     "This company has no timezone of its own, so times use the agency's.",
   "zone.guessed.fallback":
     "Neither this company nor the agency has a usable timezone, so times use UTC.",
-  // The fix, for the reader who can actually apply it. Settings is
-  // agency-only (`requireAgencyOnlyAccountAccess`), so this link is rendered
-  // for the agency and ONLY for the agency — a client following it would be
-  // redirected straight back to their dashboard, which is a worse answer
-  // than no link at all.
-  "zone.guessed.fix": "Set it in Settings",
+  // D-076: this used to be a Link to Settings ("Set it in Settings"),
+  // agency-only (`requireAgencyOnlyAccountAccess`) so a client following it
+  // would have been redirected straight back to their own dashboard — but
+  // Settings has no timezone field at all, and never has: the only zone
+  // input anywhere in the product is the "Add company" dialog, and only at
+  // creation. A dead link to a page with nothing to fix is worse than no
+  // link, the same reasoning that already kept the CLIENT reader off one —
+  // this string just hadn't caught up to its own sibling's rule. Plain
+  // text now, naming the real constraint instead of a destination.
+  "zone.guessed.fix": "There's no Settings field for this yet — a company's timezone is set only when its account is created.",
   // The same fact, for a client, who can see the consequence but cannot
   // reach the setting. Says who to ask rather than offering a dead link, and
   // says "your" rather than "this company" — on their own dashboard, they
