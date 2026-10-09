@@ -349,6 +349,47 @@ test("a visitor's message comes back with a reply", async ({ page }) => {
   await expect(page.locator(".bis-concierge-error")).toHaveCount(0);
 });
 
+// D-049: the conversation id survived a page change but the visible turns did
+// not, so every page of the client's site redrew the greeting alone over a
+// conversation the server was still carrying on. The restore is client-side
+// only (sessionStorage, read after hydration), so the unit suite cannot see
+// it: mutating `local ?? restored ?? [greeting]` to `local ?? [greeting]`
+// passed every unit test. This is the test that fails then.
+//
+// The turn is STUBBED (route.fulfill), not sent: what is under test is the
+// page's own store and restore, not the model, so this needs no
+// OPENAI_API_KEY and cannot flake on wording. The stubbed body is the
+// route's real 200 shape (`quiet()` in route.ts).
+test("the conversation is still on screen after the visitor opens another page (D-049)", async ({ page }) => {
+  test.skip(!widget, skipReason);
+  const strings = conciergeStrings("en");
+  const QUESTION = "Do you build benches too?";
+  const REPLY = `Yes, benches as well. (e2e ${Date.now()})`;
+
+  await page.goto(`/c/${widget!.publicId}`);
+  await expect(page.getByText(GREETING)).toBeVisible();
+
+  await page.route(`**/api/concierge/${widget!.publicId}/turn`, (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      conversationId: `e2e-d049-${Date.now()}`, reply: REPLY, ended: false, closing: "",
+    }),
+  }));
+
+  await page.locator("#bis-concierge-input").fill(QUESTION);
+  await page.getByRole("button", { name: strings.send }).click();
+  await expect(page.locator(".bis-msg-assistant", { hasText: REPLY })).toBeVisible();
+
+  // The same tab opening the chat again, as the bubble does on every page of
+  // the client's site: same origin, same sessionStorage.
+  await page.goto(`/c/${widget!.publicId}`);
+  await expect(page.locator(".bis-msg-visitor", { hasText: QUESTION })).toBeVisible();
+  await expect(page.locator(".bis-msg-assistant", { hasText: REPLY })).toBeVisible();
+  // The greeting is still the first line, not drawn a second time.
+  await expect(page.getByText(GREETING)).toHaveCount(1);
+});
+
 /**
  * 2026-09-21: the operator's click on the Voice page's checkbox did nothing —
  * no toast, no snippet, no server call, no database change — and every test

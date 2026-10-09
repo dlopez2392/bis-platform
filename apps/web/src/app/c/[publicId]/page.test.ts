@@ -39,6 +39,9 @@ const PROFILE = {
   after_hours: "message_only", enabled: true, textback_enabled: false,
   textback_body: "", public_id: "abc123", concierge_enabled: true,
   concierge_form_id: "f1", forward_calls: false,
+  // D-048: the any-status reader now reports whether the destination is
+  // published, and `isConciergeLive` requires it.
+  concierge_form_published: true,
 };
 
 const noSearchParams = Promise.resolve({});
@@ -111,6 +114,16 @@ describe("ConciergePage (F-102 review round, fix 2)", () => {
   // destination form leaves `concierge_enabled` true with no form id.
   it("404s when concierge_enabled is true but concierge_form_id is null (the deleted-destination-form case)", async () => {
     getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue({ ...PROFILE, concierge_form_id: null });
+    await expect(
+      ConciergePage({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams }),
+    ).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+  });
+
+  // D-048: a destination form unpublished after the assistant went on left
+  // the chat open while every lead it took failed to file. The chat is not
+  // live without somewhere for a lead to land.
+  it("404s when the destination form is no longer published", async () => {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue({ ...PROFILE, concierge_form_published: false });
     await expect(
       ConciergePage({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams }),
     ).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });

@@ -7,6 +7,9 @@ import { toast } from "sonner";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import type { PhoneNumberRow, PhoneNumberStatus, VoiceProfileRow } from "@bis/db";
+// The subpath, never the barrel: this is a client component, and the barrel
+// would carry the database client into the browser bundle.
+import { assistantProfileGap, type AssistantProfileFields } from "@bis/db/profile-ready";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, nativeFieldClass } from "@/components/ui/input";
@@ -242,7 +245,7 @@ export function VoiceProfileForm({
   );
 }
 
-export type ConciergeLockReason = "no_profile" | "blank_greeting" | "no_published_form";
+export type ConciergeLockReason = "no_profile" | "blank_greeting" | "blank_spanish_greeting" | "blank_facts" | "no_published_form";
 
 /**
  * The pure decision behind the website-assistant toggle's disabled state —
@@ -260,19 +263,23 @@ export type ConciergeLockReason = "no_profile" | "blank_greeting" | "no_publishe
  * an account can have a form published long before its greeting is written,
  * or vice versa.
  *
- * Greeting rule, verbatim from the brief: gate on `greeting_en` ALWAYS
- * (regardless of `languages`), and on `greeting_es` too when `languages` is
- * `es` or `both` — a bilingual line silent for half its callers is exactly
- * the state this exists to prevent.
+ * The profile rule is `assistantProfileGap` (`@bis/db/profile-ready`), the
+ * ONE predicate Setup's profile row and `enableConcierge` also read (D-108):
+ * every greeting the language setting shows (English for `en`, Spanish for
+ * `es`, both for `both`) plus the facts. This used to gate on `greeting_en`
+ * ALWAYS, which locked a Spanish-only line for want of an English greeting no
+ * visitor would ever see (D-051), and never on facts, so the assistant could
+ * go on while Setup still said To do.
  */
 export function conciergeLockReason(
-  profile: Pick<VoiceProfileRow, "greeting_en" | "greeting_es" | "languages"> | null,
+  profile: AssistantProfileFields | null,
   publishedFormCount: number,
 ): ConciergeLockReason | null {
   if (!profile) return "no_profile";
-  const enBlank = !profile.greeting_en.trim();
-  const esBlank = (profile.languages === "es" || profile.languages === "both") && !profile.greeting_es.trim();
-  if (enBlank || esBlank) return "blank_greeting";
+  const gap = assistantProfileGap(profile);
+  if (gap === "greeting") return "blank_greeting";
+  if (gap === "spanish_greeting") return "blank_spanish_greeting";
+  if (gap === "facts") return "blank_facts";
   if (publishedFormCount === 0) return "no_published_form";
   return null;
 }
@@ -359,6 +366,7 @@ export function conciergeToggleLocked(
 ): boolean {
   return !enabled && (
     lockReason === "no_profile" || lockReason === "blank_greeting"
+    || lockReason === "blank_spanish_greeting" || lockReason === "blank_facts"
     || !selectedFormId || formUnpublished
   );
 }
@@ -405,6 +413,8 @@ export function conciergeOffReason(
 ): string | null {
   return lockReason === "no_profile" ? m["voice.assistant.lockedNoProfile"]
     : lockReason === "blank_greeting" ? m["voice.assistant.lockedBlankGreeting"]
+    : lockReason === "blank_spanish_greeting" ? m["voice.assistant.lockedBlankSpanishGreeting"]
+    : lockReason === "blank_facts" ? m["voice.assistant.lockedBlankFacts"]
     : !selectedFormId ? m["voice.assistant.lockedNoSelection"]
     : formUnpublished ? m["voice.assistant.formUnpublishedOff"]
     : null;
@@ -575,6 +585,8 @@ export function ConciergeCard({
     conciergeOffReason(lockReason, selectedFormId, formUnpublished)
   ) : (
     lockReason === "blank_greeting" ? m["voice.assistant.greetingBlankOn"]
+    : lockReason === "blank_spanish_greeting" ? m["voice.assistant.spanishGreetingBlankOn"]
+    : lockReason === "blank_facts" ? m["voice.assistant.factsBlankOn"]
     : formUnpublished ? m["voice.assistant.formUnpublished"]
     : null
   );

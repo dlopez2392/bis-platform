@@ -1332,6 +1332,14 @@ export const m = {
   "voice.assistant.lockedNoProfile": "Set up the assistant's name and greeting first.",
   "voice.assistant.lockedBlankGreeting": "Write the greeting visitors will see first.",
   "voice.assistant.greetingBlankOn": "The greeting is blank, so visitors see an empty first message. Write one in the assistant's profile above.",
+  // D-108: the facts are the only thing the assistant answers from, so the
+  // switch needs them too (Setup's profile row always did).
+  // A bilingual line with the English greeting written and the Spanish one
+  // blank: say WHICH greeting, not "the greeting" about one already written.
+  "voice.assistant.lockedBlankSpanishGreeting": "Write the Spanish greeting first. This line answers in English and Spanish, so it needs both.",
+  "voice.assistant.spanishGreetingBlankOn": "The Spanish greeting is blank. This line answers in English and Spanish, so write one in the assistant's profile above.",
+  "voice.assistant.lockedBlankFacts": "Write what the assistant should know about the business first.",
+  "voice.assistant.factsBlankOn": "Nothing is written about the business, so the assistant has nothing to answer questions from. Add it in the assistant's profile above.",
   "voice.assistant.lockedNoSelection": "Choose a form for its leads first.",
   "voice.assistant.noFormTitle": "No published form yet",
   "voice.assistant.noFormBody": "The website assistant needs a form to send its leads to. Publish one, then come back here to turn it on.",
@@ -1341,7 +1349,9 @@ export const m = {
   "voice.assistant.enableFailed": "Could not turn on the website assistant.",
   "voice.assistant.disableFailed": "Could not turn off the website assistant.",
   "voice.assistant.wrongForm": "That form belongs to a different company, or was just deleted. Pick another one.",
-  "voice.assistant.formUnpublished": "The form this sends to is no longer published — leads have nowhere good to land. Publish it again, or turn the assistant off to pick another.",
+  // D-048: an unpublished destination now takes the chat down (a chat that
+  // cannot file a lead is not opened), so this says what visitors see.
+  "voice.assistant.formUnpublished": "The form this sends to is no longer published, so the assistant is not answering on your website. Publish it again, or turn the assistant off to pick another.",
   "voice.assistant.formUnpublishedOff": "This form is no longer published. Publish it again or pick another one first.",
   "voice.assistant.unpublishedFormOption": "This form (no longer published)",
   "voice.assistant.snippetTitle": "Add it to your website",
@@ -1906,6 +1916,9 @@ export const m = {
   "setup.step.website_assistant.help":
     "A text assistant for the website. It answers questions and takes names around the clock, and files them into a form you choose. The last row turns done the first time a visitor uses it from your site.",
   "setup.step.website_assistant.row1.title": "Write the greeting and facts",
+  // Shown under the profile row (and on the voice-profile step) when the one
+  // thing missing is a bilingual line's Spanish greeting.
+  "setup.profile.spanishGreetingMissing": "The Spanish greeting is still blank. This line answers in English and Spanish, so it needs both.",
   "setup.step.website_assistant.row2.title": "Publish a form for its leads",
   "setup.step.website_assistant.row2.body":
     "It fills in a name, an email or phone, and a message.",

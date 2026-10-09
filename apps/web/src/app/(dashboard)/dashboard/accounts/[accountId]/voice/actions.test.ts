@@ -452,6 +452,32 @@ describe("enableConciergeAction", () => {
     errSpy.mockRestore();
   });
 
+  // D-108: the server refusal names the SAME missing piece the locked toggle
+  // would have, for a caller that went around the card.
+  it("a profile with no greeting renders the toggle's own greeting sentence", async () => {
+    dbMocks.enableConcierge.mockRejectedValue(
+      new Error("enableConcierge failed: profile not ready (greeting)"),
+    );
+    const r = await enableConciergeAction("a1", "form1");
+    expect(r).toEqual({ ok: false, error: m["voice.assistant.lockedBlankGreeting"] });
+  });
+
+  it("a bilingual profile with no Spanish greeting renders the toggle's own Spanish-greeting sentence", async () => {
+    dbMocks.enableConcierge.mockRejectedValue(
+      new Error("enableConcierge failed: profile not ready (spanish_greeting)"),
+    );
+    const r = await enableConciergeAction("a1", "form1");
+    expect(r).toEqual({ ok: false, error: m["voice.assistant.lockedBlankSpanishGreeting"] });
+  });
+
+  it("a profile with no facts renders the toggle's own facts sentence", async () => {
+    dbMocks.enableConcierge.mockRejectedValue(
+      new Error("enableConcierge failed: profile not ready (facts)"),
+    );
+    const r = await enableConciergeAction("a1", "form1");
+    expect(r).toEqual({ ok: false, error: m["voice.assistant.lockedBlankFacts"] });
+  });
+
   it("any other failure gets the generic sentence, logged rather than swallowed", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.enableConcierge.mockRejectedValue(new Error("enableConcierge failed: db down"));
