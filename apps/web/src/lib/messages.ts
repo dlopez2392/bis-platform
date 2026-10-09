@@ -101,7 +101,15 @@ export const m = {
 
   // The agency-side half of the same fault. See lib/accounts/orphans.ts.
   "accounts.orphan.title": "Set up in Clerk but not here",
-  "accounts.orphan.body": "Anyone invited to these can be sent an invitation, but cannot sign in — there is no company behind them yet. Add the company here with the same name, or delete the organization in Clerk.",
+  // D-087: the first remedy used to be "add the company here with the same
+  // name", which made a SECOND Clerk organisation and left everyone already
+  // invited in this one. "Add as a company" adopts THIS organisation.
+  "accounts.orphan.body": "Anyone invited to these can be sent an invitation, but cannot sign in — there is no company behind them yet. Choose \"Add as a company\" to finish one (everyone already invited keeps their invitation), or delete the organization in Clerk.",
+  "accounts.orphan.adopt": "Add as a company",
+  "accounts.orphan.adoptTitle": "Add \"{name}\" as a company",
+  "accounts.orphan.adoptHint": "Finishes the company Clerk already has, keeping its name. Anyone already invited can sign in once it is added.",
+  "accounts.orphan.adoptGone": "That organization is no longer in Clerk. Reload the page.",
+  "accounts.orphan.adoptFailed": "Could not add that company. It may already have been added: reload the page and check the list.",
   "accounts.orphan.unavailable": "Could not reach Clerk to check for half-created companies. The list below is unaffected.",
 
   "clientAccess.title": "Client access",

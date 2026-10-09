@@ -122,3 +122,59 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
   // below; it is just no longer where onboarding lands.
   redirect(`/dashboard/accounts/${id}/setup${applyOutcome === "partial" ? "?apply=partial" : ""}`);
 }
+
+/**
+ * Adopts a half-created company: a Clerk organisation with no `accounts` row
+ * behind it (lib/accounts/orphans.ts), usually made from the Clerk dashboard.
+ *
+ * D-087. The warning's old first remedy was "add the company here with the
+ * same name", which runs createClientAccount above and mints a SECOND
+ * organisation, leaving everyone already invited in the first one and still
+ * unable to sign in. This writes the account row for the organisation that
+ * already exists, under its own Clerk name, so those invitations start to
+ * work.
+ *
+ * `orgId` is bound by the accounts page, but a bound argument travels through
+ * the browser, so it is not trusted: Clerk is asked for the organisation, and
+ * `accounts.clerk_org_id`'s unique constraint refuses one already linked.
+ *
+ * And unlike createClientAccount there is NO compensating rollback: this
+ * action did not create the organisation, so a failed write must never
+ * delete it. Same result shape as createClientAccount, so the dialog reuses
+ * settleCreateAccount, and success ends in the same redirect to setup.
+ */
+export async function adoptOrphanOrgAction(
+  orgId: string, formData: FormData,
+): Promise<CreateAccountResult> {
+  const { userId } = await requireAgency();
+  const timezone = String(formData.get("timezone") ?? "America/Chicago");
+  if (!timezone.trim()) return { ok: false, error: m["accounts.timezoneRequired"] };
+  try {
+    assertUsableZone(timezone);
+  } catch {
+    return { ok: false, error: m["accounts.timezoneUnusable"].replace("{zone}", timezone) };
+  }
+
+  let org: { id: string; name: string };
+  try {
+    const clerk = await clerkClient();
+    org = await clerk.organizations.getOrganization({ organizationId: orgId });
+  } catch (e) {
+    console.error(`adoptOrphanOrgAction: Clerk has no organization ${orgId}: ${String(e)}`);
+    return { ok: false, error: m["accounts.orphan.adoptGone"] };
+  }
+  // createClientAccount's reason: the fixture sweep deletes any account on a
+  // test-shaped org id within the hour.
+  if (isTestOrgId(org.id)) return { ok: false, error: m["accounts.createRefusedTestOrgId"] };
+
+  let id: string;
+  try {
+    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name: org.name, timezone, actorId: userId }));
+  } catch (e) {
+    console.error(`adoptOrphanOrgAction: account write failed for org ${org.id}: ${String(e)}`);
+    return { ok: false, error: m["accounts.orphan.adoptFailed"] };
+  }
+
+  revalidatePath("/dashboard/accounts");
+  redirect(`/dashboard/accounts/${id}/setup`);
+}
