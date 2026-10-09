@@ -297,10 +297,17 @@ Both sign in by a ticket minted for the user id, never by an email lookup.
 instance (`danlopez508@gmail.com`)**, so ending that person's sessions ended
 CI mid-run (PR #188, 18:00:02 UTC); the per-run user shares no session with
 anyone. It needs no dashboard setup: the session-token template in Part A
-renders `app_role` from each user's own metadata. It joins Test Client One's
-org (read from the seeded account row) and makes it active, as the person's
-session did, only so `<ActivateSoleOrganization/>` never fires mid-spec; the
-agency path itself matches on `is_agency()` and never on `org_id`. The
+renders `app_role` from each user's own metadata. It creates an org of its
+own for the run (`E2E Agency Org <stamp>`, sole member) and makes it active,
+only so `<ActivateSoleOrganization/>` never fires mid-spec when
+`blueprints.spec.ts` creates a company; the agency path itself matches on
+`is_agency()` and never on `org_id`. **Until 2026-10-08 it joined Test Client
+One's org instead.** A Clerk org on this instance holds at most 5 members
+(`max_allowed_memberships`, a product rule for client orgs — do not raise
+it), and once e2e stopped queueing every concurrent run, and every run a
+cancel killed before teardown, held a seat there; the sixth would have
+failed agency setup. Teardown deletes the org and the user; the sweep finds
+a leaked org by its name. The
 demo capture (`apps/web/screenshots/auth.setup.ts`) mints its own throwaway
 agency user the same way (shared helpers in
 `apps/web/e2e/fixtures/clerk-identities.ts`), joins no organization, and

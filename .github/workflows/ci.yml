@@ -64,8 +64,10 @@ name: CI
 #           no repo-wide queue: until 2026-10-08 every run shared one seeded
 #           account on bis-ci, so runs were serialized repo-wide and specs
 #           timed out under contention there (four in one 15.2-minute run that
-#           day). Each run now seeds its own copy. What runs still share is the
-#           Clerk development instance; each mints its own throwaway users.
+#           day). Each run now seeds its own copy of the DATABASE. What runs
+#           still share is listed in the e2e job's own comment below: above
+#           all the one Clerk development instance, plus the Stripe TEST
+#           account, the CI OpenAI key and a read-only look at bis-ci.
 #
 # Both jobs REFUSE to run without their credentials, naming what is missing
 # (the guard's check 1). A gate that quietly skips when it cannot run is how
@@ -236,9 +238,10 @@ jobs:
     # #85) — the SAME TREE that had just passed both jobs on its own branch —
     # three runs failed three different tests, every one a wall-clock timeout
     # (auth.setup.ts:93, blueprints.spec.ts:29, auth.setup.ts:51): contention,
-    # not a defect. Each job now has a stack inside its own runner, so there is
-    # nothing left to race for, and e2e starts beside verify: a push's wall
-    # clock is the longer of the two jobs, not their sum plus a queue.
+    # not a defect. Each job now has its own database inside its own runner, so
+    # verify and e2e no longer race for one, and e2e starts beside verify: a
+    # push's wall clock is the longer of the two jobs, not their sum plus a
+    # queue.
     #
     # A red verify still blocks the merge without `needs`: the ruleset on main
     # requires BOTH checks green on the head commit. (`needs` would only add a
@@ -248,11 +251,26 @@ jobs:
     # The group `e2e-ci-supabase` serialized every e2e run in the repo because
     # every run shared one seeded account on bis-ci ("Test Client One", its
     # pipeline card, its forms, its unread counts). Each run now seeds its own
-    # copy of that account in its own stack. What runs still share is the
-    # Clerk development instance, where each mints its own throwaway users;
-    # the fixture sweep deletes only what is 30 minutes old
-    # (e2e/fixtures/stale.ts), so one run never deletes another's.
-    # ci-workflow.test.ts fails if either line comes back.
+    # copy of that account in its own stack. ci-workflow.test.ts fails if
+    # either line comes back.
+    #
+    # What concurrent e2e runs (2-3 branches at once, plus any run a cancel
+    # killed before teardown) STILL share, and why each is safe:
+    #   - The one Clerk development instance. Every run mints its own users
+    #     and orgs there (an agency user and an org of its own, a client user
+    #     and org, the company blueprints.spec.ts adds), and they count
+    #     against the instance's limits together. Every run's seed names the
+    #     SAME Clerk org for "Test Client One", but nothing joins it any more:
+    #     a Clerk org here holds at most 5 members, and until 2026-10-08 each
+    #     run's agency user took a seat in it (e2e/auth.setup.ts). The sweep
+    #     deletes users and orgs this suite named once they are 30 minutes old
+    #     (e2e/fixtures/stale.ts), so one run never deletes another's, and a
+    #     killed run's leftovers last until the next setup on any branch.
+    #   - The Stripe TEST account (plans.spec.ts, billing.spec.ts): each run's
+    #     own products, prices, customers and subscriptions, named or tagged
+    #     per run; the target guard refuses a live key.
+    #   - The CI OpenAI key: one short model call per run.
+    #   - bis-ci, read-only, by the migration check alone.
     env:
       # NO Supabase value, as in verify: the stack writes its four to
       # GITHUB_ENV, and the guard refuses any that is already set. The CI

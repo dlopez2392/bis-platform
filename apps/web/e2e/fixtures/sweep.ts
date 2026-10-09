@@ -6,14 +6,19 @@
  * process-level timeout each strand a real Clerk user, a real Clerk org, real
  * Postgres rows, and a **public** object in Storage — permanently, because
  * nothing else knows they exist, WHEN the run was pointed at a project that
- * outlives the run. That is a LOCAL run, against bis-ci (shared with every
- * other local run and with CI's own migration-parity check) — two such
- * leftovers are on a human's to-do list right now, which is what makes this
- * worth building rather than remembering. CI itself (since 2026-10-08) seeds
- * and tears down its own per-run local Supabase stack regardless (gone when
- * the runner is), but still runs this pass: a run that dies mid-suite still
- * leaves its fixtures for the rest of THAT run's own specs, and nothing here
- * assumes which kind of project it was given.
+ * outlives the run. For the DATABASE and Storage legs that is a LOCAL run,
+ * against bis-ci (shared with every other local run, Vercel Preview and the
+ * screenshot capture) — two such leftovers are on a human's to-do list right
+ * now, which is what makes this worth building rather than remembering.
+ *
+ * In CI (since 2026-10-08) those legs find nothing: each e2e run seeds its
+ * own throwaway Supabase stack, which dies with the runner, rows and logos
+ * and all. What CI keeps this pass for is the CLERK legs. Every run, CI or
+ * local, mints its users and orgs in the ONE Clerk development instance, and
+ * a run that is killed or cancelled (a newer push cancels an older run of the
+ * same branch, which skips teardown) leaves them there for good. The next run
+ * to reach setup, on any branch, deletes the ones 30 minutes old. Nothing
+ * here assumes which kind of database it was given.
  *
  * Cleaning up BEFORE a run is what makes cleanup unconditional. Teardown stays
  * exactly as it is — it is still the fast path, and it deletes by known id

@@ -8,7 +8,6 @@ import { serviceDb, createAccount, setClientAccess, createContact,
 import { sweepStaleFixtures, formatSweepReport } from "./fixtures/sweep";
 import { refuseProduction } from "./fixtures/production-guard";
 import { saveSignedInState } from "./fixtures/session-state";
-import { SEEDED_ACCOUNT_NAME } from "./support";
 import { createAgencyUser, setActiveOrganization, signInWithTicket } from "./fixtures/clerk-identities";
 
 // Needed for the client-fixture setup below, which calls serviceDb() and
@@ -58,13 +57,27 @@ const E2E_LOGO_PNG = Buffer.from(
 // Runs once before the real specs: mints a throwaway agency user for THIS
 // run and signs it in (fixtures/clerk-identities.ts says why it is never a
 // person). A per-run user shares no session with a person or with a
-// concurrent run. No org is needed for agency access. The user still joins
-// the seeded org and makes it active, exactly
-// as the real person's session did: <ActivateSoleOrganization/> switches a
-// session with no active org and exactly ONE membership and reloads to "/",
-// and blueprints.spec.ts creates an org mid-spec ("Add company" makes the
-// creator a member), which would hand a member-of-nothing user exactly one.
-// Deleted by auth.teardown.ts; a leaked one is swept by its email stamp.
+// concurrent run.
+//
+// No org is needed for agency ACCESS: that is the app_role claim alone
+// (lib/auth.ts; the screenshot capture's agency joins no org at all). The
+// user still needs an ACTIVE org, for one reason: <ActivateSoleOrganization/>
+// switches a session with no active org and exactly ONE membership into that
+// org and reloads to "/", and blueprints.spec.ts creates an org mid-spec
+// ("Add company" makes the creator a member), which would hand a
+// member-of-nothing user exactly one and yank the spec back to "/".
+//
+// That active org is the user's OWN, made for this run (`E2E Agency Org
+// <stamp>`, fixtures/stale.ts), never the seeded one. Until 2026-10-08 the
+// user joined Test Client One's org, and a Clerk org on this instance holds
+// at most 5 members: every concurrent run took a seat there, so did every run
+// a cancel killed before teardown (the sweep frees a seat only once that user
+// is 30 minutes old), and the sixth agency setup would fail before one spec
+// ran. Raising the cap is not the fix: 5 seats per client org is a product
+// rule (docs/superpowers/specs/2026-08-02-m2-client-access-design.md).
+//
+// auth.teardown.ts deletes the org and the user; a leaked user is swept by
+// its email stamp and a leaked org by its name.
 setup("authenticate as agency_admin", async ({ page }) => {
   await clerkSetup();
   const clerk_ = await clerkClient();
@@ -74,21 +87,15 @@ setup("authenticate as agency_admin", async ({ page }) => {
   mkdirSync("e2e/.auth", { recursive: true });
   writeFileSync(AGENCY_FIXTURE_FILE, JSON.stringify({ clerkUserId: userId, email }));
 
-  // The seeded account's org, read from the account row rather than pinned
-  // here: one source (the CI seed), no second copy of the id to drift.
-  const { data: seeded, error } = await serviceDb()
-    .from("accounts").select("clerk_org_id").eq("name", SEEDED_ACCOUNT_NAME).limit(2);
-  if (error) throw new Error(`agency setup: reading ${SEEDED_ACCOUNT_NAME} failed: ${error.message}`);
-  const organizationId = seeded?.length === 1 ? seeded[0]?.clerk_org_id : undefined;
-  if (!organizationId) {
-    throw new Error(`agency setup: expected exactly one ${SEEDED_ACCOUNT_NAME} with a Clerk org, found ${seeded?.length ?? 0}`);
-  }
-  await clerk_.organizations.createOrganizationMembership({
-    organizationId, userId, role: "org:member",
+  // createdBy makes the user this org's sole (admin) member.
+  const agencyOrg = await clerk_.organizations.createOrganization({
+    name: `E2E Agency Org ${Date.now()}`,
+    createdBy: userId,
   });
+  writeFileSync(AGENCY_FIXTURE_FILE, JSON.stringify({ clerkUserId: userId, email, clerkOrgId: agencyOrg.id }));
 
   await signInWithTicket(page, clerk_, userId);
-  await setActiveOrganization(page, organizationId);
+  await setActiveOrganization(page, agencyOrg.id);
   await page.goto("/dashboard/accounts");
   await page.waitForURL(/\/dashboard\/accounts$/);
 
@@ -112,16 +119,17 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
 
   // Clean up before creating, because cleaning up after is optional.
   // auth.teardown only runs when a suite COMPLETES, so every Ctrl-C, crashed
-  // dev server or process-level timeout strands a real Clerk user, a real
-  // Clerk org, real rows and a PUBLIC Storage object — permanently, on a
-  // LOCAL run (bis-ci, shared with every other local run), since nothing
-  // afterwards knows they existed. CI's own per-run local stack (since
-  // 2026-10-08) dies with the runner regardless, but still runs this pass,
-  // because a mid-suite death still leaves fixtures for the REST of that
-  // same run's own specs. This is the pass that makes those bounded: it
-  // deletes only names this suite mints and only after 30 minutes, so a
-  // concurrently-running suite's fixture is never touched (see
-  // fixtures/stale.ts, which owns that decision and is unit-tested).
+  // dev server, process-level timeout or cancelled CI run strands what setup
+  // made, since nothing afterwards knows it existed. Real rows and a PUBLIC
+  // Storage object are stranded on a LOCAL run's database (bis-ci, shared
+  // with every other local run and Vercel Preview); CI's per-run stack
+  // (since 2026-10-08) dies with the runner and takes those with it. The
+  // Clerk users and orgs are stranded in EITHER case, because every run
+  // shares the one Clerk development instance, and clearing those is what
+  // CI runs this pass for. It deletes only names this suite mints and only
+  // after 30 minutes, so a concurrently-running suite's fixture is never
+  // touched (see fixtures/stale.ts, which owns that decision and is
+  // unit-tested).
   //
   // Wrapped so a sweep failure can never fail a run that would otherwise
   // pass. Housekeeping must not become a new way for the suite to go red.
