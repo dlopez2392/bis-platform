@@ -491,7 +491,7 @@ export default async function StyleguidePage() {
               />
             </div>
             <div className="space-y-2">
-              <p className="text-xs text-muted-foreground">Guessed from the agency — agency reader, told what's broken (D-076: no Settings link — there's nowhere to send it)</p>
+              <p className="text-xs text-muted-foreground">Guessed from the agency — agency reader, told what&apos;s broken (no Settings link: there&apos;s nowhere to send it)</p>
               <ZoneNote
                 zone={{ zone: "America/Chicago", guessed: true, label: "America/Chicago", source: "agency" }}
                 isAgency
