@@ -275,7 +275,13 @@ export function ContactDrawer({
               ) : (
                 <>
                   <dl>
+                    {/* Review round 1, m6: keyed by contact id, the same
+                        reason FIELDS' own rows are (see that array's own
+                        comment above) — a bare position would let React
+                        reuse InlineField's internal `shown`/`editing` state
+                        across a contact switch instead of remounting it. */}
                     <SourceField
+                      key={row.id}
                       accountId={accountId}
                       contactId={row.id}
                       source={load.summary.source}

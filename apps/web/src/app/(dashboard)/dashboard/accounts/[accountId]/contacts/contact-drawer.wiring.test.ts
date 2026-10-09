@@ -359,3 +359,34 @@ describe("the pick is judged against the phone the operator SAW (review I3, roun
     expect(page).toContain("phone: contact.phone ?? null");
   });
 });
+
+/**
+ * Review round 1, I4: nothing proved the Source line's two props actually
+ * come from the summary/contact read rather than a stubbed-out literal.
+ * `renderToStaticMarkup` under THIS file's own `useState`/`useEffect`
+ * interceptor (see `load()` above) can never reach the drawer's "ready"
+ * branch — the mock never actually re-renders after an effect's `set` call
+ * — so the drawer's half has to be a source pin, the same tool this file
+ * already uses for the Texts/Email row wiring above. The full page's half
+ * is proven by a REAL render instead (page.test.ts), since
+ * `ContactFieldsPanel` takes `contact` as a synchronous prop with no fetch
+ * of its own to dodge.
+ */
+describe("the Source line's props come from the real read, not a stub (review round 1, I4)", () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
+  const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
+
+  it("the drawer passes the summary's own source/sourceHint, never a literal null (mutation: source={null} sourceHint={null} → FAILS)", () => {
+    expect(drawer).toMatch(/<SourceField[\s\S]{0,250}?source=\{load\.summary\.source\}[\s\S]{0,150}?sourceHint=\{load\.summary\.sourceHint\}/);
+  });
+
+  it("the full page passes the real contact's source and the computed hint, never a literal null (mutation: source={null} sourceHint={null} → FAILS)", () => {
+    expect(panel).toMatch(/<SourceField[\s\S]{0,250}?source=\{contact\.source \?\? null\}[\s\S]{0,150}?sourceHint=\{sourceHint\}/);
+  });
+
+  it("the drawer keys SourceField by contact id, like FIELDS' own rows (mutation: drop the key → a contact switch could reuse InlineField's stale edit state, FAILS)", () => {
+    expect(drawer).toMatch(/<SourceField\s+key=\{row\.id\}/);
+  });
+});
