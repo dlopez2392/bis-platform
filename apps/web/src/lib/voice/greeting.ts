@@ -17,10 +17,13 @@ function spanishGreeting(profile: GreetingProfile, businessName: string): string
  * The opening line, as words (`text`) and as the `response.create`
  * instruction the call socket sends after the greeting delay (`instruction`).
  *
- * - `en` / `es`: that language's greeting, in the instruction the route has
- *   always sent ("Greet the caller with exactly: …").
+ * - `en` / `es`: that language's greeting, trimmed, in the instruction the
+ *   route has always sent ("Greet the caller with exactly: …"). Trimmed is
+ *   not byte-identical to before: the route used to send a non-blank
+ *   greeting untrimmed.
  * - `both` (D-037, owner decision 2026-10-08, Option A): the English greeting,
- *   then the Spanish one, each verbatim. Before this a bilingual line's
+ *   then the Spanish one, each the operator's own words (trimmed of leading
+ *   and trailing whitespace, otherwise unchanged). Before this a bilingual line's
  *   Spanish greeting was never heard. The instruction is deliberately short
  *   and literal: the Realtime model must say the operator's own words, not
  *   translate one into the other or blend them into a single sentence. A
@@ -41,7 +44,9 @@ export function openingGreeting(
       instruction:
         "Greet the caller with these two greetings, word for word, one right after the other: "
         + "first the English one, then the Spanish one. Do not translate, shorten or combine them. "
-        + `English: "${en}" Spanish: "${es}"`,
+        // JSON-quoted (review minor 4): a greeting with its own quotation
+        // marks cannot blur where it ends and the next label begins.
+        + `English: ${JSON.stringify(en)} Spanish: ${JSON.stringify(es)}`,
     };
   }
   const text = profile.languages === "es"

@@ -7,12 +7,12 @@ const profile = (languages: "en" | "es" | "both", greeting_en = EN, greeting_es 
   ({ languages, greeting_en, greeting_es });
 
 describe("openingGreeting — single-language lines are unchanged", () => {
-  it("en: the English greeting, verbatim, in the instruction the route has always sent", () => {
+  it("en: the English greeting, trimmed, in the instruction the route has always sent", () => {
     expect(openingGreeting(profile("en"), "Rio Roofing Co").instruction)
       .toBe(`Greet the caller with exactly: ${EN}`);
   });
 
-  it("es: the Spanish greeting, verbatim", () => {
+  it("es: the Spanish greeting, trimmed", () => {
     expect(openingGreeting(profile("es"), "Rio Roofing Co").instruction)
       .toBe(`Greet the caller with exactly: ${ES}`);
   });
@@ -26,9 +26,9 @@ describe("openingGreeting — single-language lines are unchanged", () => {
 });
 
 // D-037 (owner decision, Option A): a bilingual line opens with BOTH of the
-// operator's greetings — English first, then Spanish — each verbatim.
+// operator's greetings — English first, then Spanish — each trimmed.
 describe("openingGreeting — a bilingual line says both greetings (D-037)", () => {
-  it("carries both greetings verbatim, English before Spanish (mutation: English only → FAILS)", () => {
+  it("carries both greetings, trimmed, English before Spanish (mutation: English only → FAILS)", () => {
     const { instruction } = openingGreeting(profile("both"), "Rio Roofing Co");
     expect(instruction).toContain(`English: "${EN}"`);
     expect(instruction).toContain(`Spanish: "${ES}"`);
@@ -54,5 +54,26 @@ describe("openingGreeting — a bilingual line says both greetings (D-037)", () 
 
   it("text carries both, in order, for anything that reads the greeting as words", () => {
     expect(openingGreeting(profile("both"), "Rio Roofing Co").text).toBe(`${EN} ${ES}`);
+  });
+});
+
+// Review minor 4: an operator's greeting can contain quotation marks. Each
+// greeting is quoted as a JSON string, so where one ends and the next label
+// begins is never ambiguous to the model.
+describe("openingGreeting — greeting boundaries survive quotation marks", () => {
+  it("escapes quotes inside a greeting (mutation: plain \"…\" wrapping → FAILS)", () => {
+    const en = 'Thanks for calling "Big Al\'s" Roofing.';
+    const es = 'Gracias por llamar a "Big Al\'s".';
+    const { instruction } = openingGreeting(profile("both", en, es), "Big Al's");
+    expect(instruction).toContain('English: "Thanks for calling \\"Big Al\'s\\" Roofing."');
+    expect(instruction).toContain('Spanish: "Gracias por llamar a \\"Big Al\'s\\"."');
+  });
+});
+
+// Review minor 5: "trimmed", not "verbatim" — said and pinned.
+describe("openingGreeting — trims the operator's greeting, nothing else", () => {
+  it("drops leading and trailing whitespace and keeps everything between", () => {
+    expect(openingGreeting(profile("en", "  Hi,  there.\n"), "Rio Roofing Co").instruction)
+      .toBe("Greet the caller with exactly: Hi,  there.");
   });
 });
