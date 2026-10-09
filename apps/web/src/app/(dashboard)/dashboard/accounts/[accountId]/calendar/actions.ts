@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, updateCalendarSettings, setBookingStatus, BookingNotStartedError, SlotTakenError,
+  serviceDb, updateCalendarSettings, setBookingStatus, undoOperatorCancel,
+  BookingNotStartedError, BookingNotRestorableError, SlotTakenError,
   type BookingStatus, type CalendarSettingsPatch,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -136,8 +137,14 @@ export async function setBookingStatusAction(
     // refused by the write itself — the button is hidden too, but a stale page
     // or a crafted request reaches this action all the same, and so does the
     // To do screen's close-out, which calls it.
-    await setBookingStatus(serviceDb(), accountId, bookingId, status, userId, "user",
-      { startedBy: new Date().toISOString() });
+    // D-036 review: a Cancel writes only a row that is still "booked", so a
+    // stale tab cannot cancel a job already marked completed (whose Undo,
+    // an un-cancel only, could then never reopen it). Outcomes are not
+    // limited: completed and no-show stay correctable into each other.
+    await setBookingStatus(serviceDb(), accountId, bookingId, status, userId, "user", {
+      startedBy: new Date().toISOString(),
+      ...(status === "cancelled" ? { onlyFrom: "booked" as const } : {}),
+    });
   } catch (e) {
     if (e instanceof BookingNotStartedError) {
       return { ok: false, error: m["calendar.bookings.notStartedYet"] };
@@ -159,11 +166,12 @@ export async function setBookingStatusAction(
  * `booking.status_changed` event, which only the activity feed reads), so
  * putting the row back undoes all of it.
  *
- * `onlyFrom: "cancelled"`: an un-cancel only, as a predicate on the write, so
- * a late click can never reopen a booking that has since become anything
- * else. The flip re-enters `bookings_no_overlap`; if a customer booked the
- * freed time in the meantime, the write refuses with `SlotTakenError` and the
- * operator is told so in words. serviceDb() for the reason
+ * `undoOperatorCancel` (packages/db) carries the guards: an un-cancel only
+ * (`onlyFrom: "cancelled"` on the write), only of a cancel a PERSON made on
+ * the dashboard (never the customer's link or Sofía's call), and never of a
+ * booking a reschedule has replaced. The flip re-enters
+ * `bookings_no_overlap`; if a customer booked the freed time in the
+ * meantime, it refuses with `SlotTakenError`. Each refusal is told in words. serviceDb() for the reason
  * `setBookingStatusAction` gives above: no UPDATE grant on `bookings` exists
  * for `authenticated`, so `requireAccountAccess` is the gate.
  */
@@ -173,11 +181,18 @@ export async function undoCancelBookingAction(
   const { userId } = await requireAccountAccess(accountId);
 
   try {
-    await setBookingStatus(serviceDb(), accountId, bookingId, "booked", userId, "user",
-      { onlyFrom: "cancelled" });
+    await undoOperatorCancel(serviceDb(), accountId, bookingId, userId);
   } catch (e) {
     if (e instanceof SlotTakenError) {
       return { ok: false, error: m["calendar.bookings.restoreSlotTaken"] };
+    }
+    if (e instanceof BookingNotRestorableError) {
+      return {
+        ok: false,
+        error: e.reason === "rescheduled"
+          ? m["calendar.bookings.restoreRescheduled"]
+          : m["calendar.bookings.restoreNotOurs"],
+      };
     }
     console.error(`undoCancelBookingAction: failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
     return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };

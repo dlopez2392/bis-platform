@@ -7,14 +7,15 @@ vi.mock("@/lib/auth", () => ({
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 
 const dbMocks = vi.hoisted(() => ({
-  updateCalendarSettings: vi.fn(), setBookingStatus: vi.fn(), serviceDb: vi.fn(() => ({})),
+  updateCalendarSettings: vi.fn(), setBookingStatus: vi.fn(), undoOperatorCancel: vi.fn(),
+  serviceDb: vi.fn(() => ({})),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
 }));
 
 import { updateCalendarSettingsAction, setBookingStatusAction, undoCancelBookingAction } from "./actions";
-import { BookingNotStartedError, SlotTakenError } from "@bis/db";
+import { BookingNotStartedError, BookingNotRestorableError, SlotTakenError } from "@bis/db";
 import { m } from "@/lib/messages";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
 
@@ -201,24 +202,41 @@ describe("undoCancelBookingAction — the Calendar page's Undo (D-036)", () => {
   beforeEach(() => {
     dbMocks.setBookingStatus.mockReset();
     dbMocks.setBookingStatus.mockResolvedValue(undefined);
+    dbMocks.undoOperatorCancel.mockReset();
+    dbMocks.undoOperatorCancel.mockResolvedValue(undefined);
   });
 
-  it("flips back to booked only FROM cancelled, as the signed-in user", async () => {
+  // undoOperatorCancel carries the guards (a person's cancel, not replaced
+  // by a reschedule, only FROM cancelled); booking.test.ts pins them.
+  it("restores through undoOperatorCancel, as the signed-in user", async () => {
     expect(await undoCancelBookingAction("acct_1", "bk_1")).toEqual({ ok: true });
-    expect(dbMocks.setBookingStatus).toHaveBeenCalledWith(
-      {}, "acct_1", "bk_1", "booked", "user_1", "user", { onlyFrom: "cancelled" },
-    );
+    expect(dbMocks.undoOperatorCancel).toHaveBeenCalledWith({}, "acct_1", "bk_1", "user_1");
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
   });
 
   it("says plainly when the time was booked by someone else in between", async () => {
-    dbMocks.setBookingStatus.mockRejectedValue(new SlotTakenError());
+    dbMocks.undoOperatorCancel.mockRejectedValue(new SlotTakenError());
     const r = await undoCancelBookingAction("acct_1", "bk_1");
     expect(r).toEqual({ ok: false, error: m["calendar.bookings.restoreSlotTaken"] });
-    expect(m["calendar.bookings.restoreSlotTaken"]).toMatch(/\w/);
+    expect(m["calendar.bookings.restoreSlotTaken"]).toMatch(/booked that time/);
+  });
+
+  it("says the appointment was moved when a reschedule replaced it", async () => {
+    dbMocks.undoOperatorCancel.mockRejectedValue(new BookingNotRestorableError("rescheduled"));
+    expect(await undoCancelBookingAction("acct_1", "bk_1"))
+      .toEqual({ ok: false, error: m["calendar.bookings.restoreRescheduled"] });
+    expect(m["calendar.bookings.restoreRescheduled"]).toMatch(/moved/i);
+  });
+
+  it("says it was the customer's or a call's cancel, not one to undo from here", async () => {
+    dbMocks.undoOperatorCancel.mockRejectedValue(new BookingNotRestorableError("not_operator_cancel"));
+    expect(await undoCancelBookingAction("acct_1", "bk_1"))
+      .toEqual({ ok: false, error: m["calendar.bookings.restoreNotOurs"] });
+    expect(m["calendar.bookings.restoreNotOurs"]).toMatch(/customer/i);
   });
 
   it("any other failure is the generic message", async () => {
-    dbMocks.setBookingStatus.mockRejectedValue(new Error("no booking"));
+    dbMocks.undoOperatorCancel.mockRejectedValue(new Error("no booking"));
     expect(await undoCancelBookingAction("acct_1", "bk_1"))
       .toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
   });
@@ -227,5 +245,23 @@ describe("undoCancelBookingAction — the Calendar page's Undo (D-036)", () => {
     const r = await setBookingStatusAction("acct_1", "bk_1", "booked");
     expect(r).toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
     expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Review minor: Cancel from a stale tab hit whatever the row had become,
+   * so a job already marked COMPLETED could be cancelled (and its Undo,
+   * guarded to un-cancel only, could then not reopen it). Cancel now writes
+   * only a row that is still "booked".
+   */
+  it("Cancel writes only a booking that is still booked (mutation: drop onlyFrom → FAILS)", async () => {
+    expect(await setBookingStatusAction("acct_1", "bk_1", "cancelled")).toEqual({ ok: true });
+    const opts = dbMocks.setBookingStatus.mock.calls[0]![6] as { onlyFrom?: string };
+    expect(opts.onlyFrom).toBe("booked");
+  });
+
+  it("an outcome is not limited to booked rows (completed ↔ no-show stays correctable)", async () => {
+    await setBookingStatusAction("acct_1", "bk_1", "completed");
+    const opts = dbMocks.setBookingStatus.mock.calls[0]![6] as { onlyFrom?: string };
+    expect(opts.onlyFrom).toBeUndefined();
   });
 });

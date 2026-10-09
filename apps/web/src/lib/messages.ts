@@ -1209,6 +1209,8 @@ export const m = {
   "calendar.bookings.cancelledToast": "Appointment cancelled. We haven't told the customer, so let them know.",
   "calendar.bookings.restored": "Appointment is back on.",
   "calendar.bookings.restoreSlotTaken": "Someone else booked that time after you cancelled, so this appointment can't be put back.",
+  "calendar.bookings.restoreRescheduled": "This appointment was moved to a new time, so the old one can't be put back.",
+  "calendar.bookings.restoreNotOurs": "The customer cancelled this one themselves, by link or on a call, so it can't be put back from here.",
   "calendar.bookings.notStartedYet": "This appointment hasn't started yet. Mark it completed or no-show once it has.",
   "calendar.bookings.status.booked": "Booked",
   "calendar.bookings.status.cancelled": "Cancelled",

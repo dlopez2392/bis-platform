@@ -377,6 +377,55 @@ export async function setBookingStatus(
   await emit(db, accountId, "booking.status_changed", actorId, { bookingId, status }, actorType);
 }
 
+/** D-036: an Undo the Calendar page must not perform. Nothing was written.
+ *  `rescheduled`: a newer booking replaced this one (its
+ *  `rescheduled_from_id` points here), so restoring it would put a second
+ *  live appointment beside the replacement. `not_operator_cancel`: the last
+ *  cancel was the customer's (their link) or Sofía's (a call), not a person
+ *  on the dashboard, so it is the customer's decision to reverse, not ours. */
+export class BookingNotRestorableError extends Error {
+  constructor(readonly reason: "rescheduled" | "not_operator_cancel") {
+    super(`booking cannot be restored: ${reason}`);
+    this.name = "BookingNotRestorableError";
+  }
+}
+
+/**
+ * The Calendar page's Undo on a Cancel (D-036): back to "booked" only when a
+ * person on the dashboard made the cancel and no reschedule has replaced the
+ * booking since. Both are reads before the write; the write itself still
+ * carries `onlyFrom: "cancelled"` and the overlap constraint, so the
+ * remaining gap (a reschedule landing between the read and the write, in an
+ * Undo window of seconds) can at worst be refused by the constraint, never
+ * reopen a non-cancelled row.
+ *
+ * "Who cancelled" is the newest cancel event for the row: `booking.cancelled`
+ * (the customer's link, actor 'system'/'public') or `booking.status_changed`
+ * with status 'cancelled' (the dashboard, actor 'user'; Sofía, actor 'ai').
+ * No event at all is refused too: nothing proves a person did it.
+ */
+export async function undoOperatorCancel(
+  db: SupabaseClient, accountId: string, bookingId: string, actorId: string,
+): Promise<void> {
+  const { data: replacement, error: replErr } = await db.from("bookings").select("id")
+    .eq("account_id", accountId).eq("rescheduled_from_id", bookingId).limit(1);
+  if (replErr) throw new Error(`undoOperatorCancel replacement read failed: ${replErr.message}`);
+  if (replacement && replacement.length > 0) throw new BookingNotRestorableError("rescheduled");
+
+  const { data: events, error: evErr } = await db.from("events").select("type, actor_type, payload")
+    .eq("account_id", accountId).in("type", ["booking.cancelled", "booking.status_changed"])
+    .eq("payload->>bookingId", bookingId)
+    .order("created_at", { ascending: false });
+  if (evErr) throw new Error(`undoOperatorCancel event read failed: ${evErr.message}`);
+  const lastCancel = ((events ?? []) as { type: string; actor_type: string; payload: { status?: string } }[])
+    .find((e) => e.type === "booking.cancelled" || e.payload?.status === "cancelled");
+  if (!lastCancel || lastCancel.type !== "booking.status_changed" || lastCancel.actor_type !== "user") {
+    throw new BookingNotRestorableError("not_operator_cancel");
+  }
+
+  await setBookingStatus(db, accountId, bookingId, "booked", actorId, "user", { onlyFrom: "cancelled" });
+}
+
 /** How many started-but-unmarked bookings the operator's list carries at
  *  most — the same cap the To do screen's stale-booking source uses. */
 const AWAITING_OUTCOME_LIMIT = 200;
