@@ -312,8 +312,9 @@ demo capture (`apps/web/screenshots/auth.setup.ts`) mints its own throwaway
 agency user the same way (shared helpers in
 `apps/web/e2e/fixtures/clerk-identities.ts`), and deletes the user in its
 own teardown project. Since 2026-10-09 it also joins one organization that
-persists between runs, `BIS` (slug `bis-capture`, created on first use),
-and makes it active, only so the topbar's switcher names the agency instead
+persists between runs, `BIS` (found by `bisCaptureOrg: true` in its private
+metadata, since this instance has organization slugs off; created on first
+use), and makes it active, only so the topbar's switcher names the agency instead
 of printing "No organization selected". The membership goes with the user;
 the org grants nothing, because agency access is the `app_role` claim
 alone. A leaked capture user is swept by the next e2e run, which shares the

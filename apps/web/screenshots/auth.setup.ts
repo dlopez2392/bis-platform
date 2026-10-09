@@ -22,8 +22,11 @@ const AGENCY_FIXTURE_FILE = "screenshots/.auth/agency-fixture.json";
  * 2026-10-07, beside a real person's photo). This org gives the switcher the
  * agency's own name instead.
  *
- * ONE org, kept between runs, found by its slug: never one per run. A per-run
- * org named "BIS" would be indistinguishable from this one, and the e2e sweep
+ * ONE org, kept between runs, never one per run. It is found by a private
+ * metadata marker, not a slug: the development instance has organization
+ * slugs turned off, and asking for one is refused outright
+ * (`organization_slugs_disabled`, capture run 37958998483). A per-run org
+ * named "BIS" would be indistinguishable from this one, and the e2e sweep
  * deletes leaked orgs by their stamped NAME (e2e/fixtures/stale.ts), so a run
  * killed before teardown would leave a "BIS" org nothing ever removes. The
  * user's membership needs no cleanup: deleting the user (auth.teardown.ts, or
@@ -36,15 +39,20 @@ const AGENCY_FIXTURE_FILE = "screenshots/.auth/agency-fixture.json";
  * (lib/auth.ts never reads org_id for an agency_admin), and RLS's
  * app.is_agency() reads app_role too.
  */
-const CAPTURE_ORG = { name: "BIS", slug: "bis-capture" } as const;
+const CAPTURE_ORG_NAME = "BIS";
+const CAPTURE_ORG_MARK = "bisCaptureOrg";
 
 async function captureOrganization(clerk_: ClerkBackend): Promise<string> {
-  try {
-    return (await clerk_.organizations.getOrganization({ slug: CAPTURE_ORG.slug })).id;
-  } catch (e) {
-    if ((e as { status?: number }).status !== 404) throw e;
-  }
-  const org = await clerk_.organizations.createOrganization({ ...CAPTURE_ORG });
+  // `query` is a partial match on name, so filter on the marker; oldest first,
+  // so a duplicate (two first runs racing) can never flip which one is used.
+  const { data } = await clerk_.organizations.getOrganizationList({
+    query: CAPTURE_ORG_NAME, orderBy: "+created_at", limit: 100,
+  });
+  const found = data.find((o) => o.privateMetadata?.[CAPTURE_ORG_MARK] === true);
+  if (found) return found.id;
+  const org = await clerk_.organizations.createOrganization({
+    name: CAPTURE_ORG_NAME, privateMetadata: { [CAPTURE_ORG_MARK]: true },
+  });
   return org.id;
 }
 
@@ -63,10 +71,11 @@ async function captureOrganization(clerk_: ClerkBackend): Promise<string> {
  * in as danlopez508@gmail.com, whose profile photo was in the corner of every
  * marketing screenshot; the topbar now shows a throwaway "BIS Team" instead.
  * It reaches the demo tenant, whose org `org_demo_resaca_air` is a fiction, on
- * the app_role claim alone. It also joins CAPTURE_ORG and makes it active, but
- * only so the topbar's switcher reads "BIS" (see CAPTURE_ORG). Active before
- * the state is saved, so <ActivateSoleOrganization/> (no active org, exactly
- * one membership) has nothing to do and never reloads a capture to "/".
+ * the app_role claim alone. It also joins the "BIS" org and makes it
+ * active, but only so the topbar's switcher reads "BIS" (see
+ * captureOrganization). Active before the state is saved, so
+ * <ActivateSoleOrganization/> (no active org, exactly one membership) has
+ * nothing to do and never reloads a capture to "/".
  */
 setup("sign in as the agency", async ({ page }) => {
   await clerkSetup();
