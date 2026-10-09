@@ -71,6 +71,15 @@ describe("syncClerkOrgName (D-005)", () => {
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
+  it("gives up on a Clerk that never answers, so a slow Clerk cannot hang the save (mutation: no timeout → the test times out, FAILS)", async () => {
+    const { db } = fakeDb({ clerk_org_id: "org_abc" });
+    const hung: ClerkOrgWriter = { organizations: { updateOrganization: () => new Promise(() => {}) } };
+    const started = Date.now();
+    expect(await syncClerkOrgName(db, async () => hung, "acct_1", "X", { timeoutMs: 30 })).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(String(warn.mock.calls[0]![0])).toMatch(/timed out/i);
+  }, 2000);
+
   it("fails soft when the Clerk client itself cannot be built (a missing key)", async () => {
     const { db } = fakeDb({ clerk_org_id: "org_abc" });
     expect(await syncClerkOrgName(db, async () => { throw new Error("no key"); }, "acct_1", "X")).toBe(false);

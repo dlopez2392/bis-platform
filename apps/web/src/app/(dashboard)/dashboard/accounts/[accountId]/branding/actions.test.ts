@@ -64,6 +64,18 @@ describe("setBrandingAction — the Clerk organisation follows the brand name (D
     expect(name).toBe("Rio Roofing");
   });
 
+  it("skips Clerk when the brand name did not change, e.g. a colour-only save (mutation: always sync → FAILS)", async () => {
+    dbMocks.getBranding.mockResolvedValue({ brandName: "Rio Roofing" });
+    expect(await setBrandingAction("acct_1", fd({ brandName: " Rio Roofing ", brandColor: "#0f766e" }))).toEqual({ ok: true });
+    expect(orgNameMocks.syncClerkOrgName).not.toHaveBeenCalled();
+  });
+
+  it("still syncs when the earlier name could not be read: unsure means try", async () => {
+    dbMocks.getBranding.mockRejectedValue(new Error("read failed"));
+    expect(await setBrandingAction("acct_1", fd({ brandName: "Rio Roofing" }))).toEqual({ ok: true });
+    expect(orgNameMocks.syncClerkOrgName).toHaveBeenCalledOnce();
+  });
+
   it("a failed save never renames the organisation (mutation: sync before the write → FAILS)", async () => {
     dbMocks.setBranding.mockRejectedValue(new Error("rls"));
     expect(await setBrandingAction("acct_1", fd({ brandName: "Rio Roofing" })))

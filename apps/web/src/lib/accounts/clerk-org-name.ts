@@ -25,12 +25,15 @@ export type ClerkOrgWriter = {
  * Fails SOFT, always: the BIS save has already happened when this runs, and
  * an unreachable Clerk must not turn it into a reported failure. It logs a
  * warning naming the organisation and returns false; nothing here throws.
+ * The Clerk call is bounded by `timeoutMs` (default 3s), so a Clerk that
+ * never answers cannot hold the Branding save open.
  */
 export async function syncClerkOrgName(
   db: SupabaseClient,
   clerk: () => Promise<ClerkOrgWriter>,
   accountId: string,
   name: string,
+  { timeoutMs = 3000 }: { timeoutMs?: number } = {},
 ): Promise<boolean> {
   let orgId: string | null = null;
   try {
@@ -42,7 +45,17 @@ export async function syncClerkOrgName(
       console.warn(`syncClerkOrgName: account ${accountId} has no Clerk organisation; name not synced`);
       return false;
     }
-    await (await clerk()).organizations.updateOrganization(orgId, { name });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        (async () => (await clerk()).organizations.updateOrganization(orgId!, { name }))(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Clerk timed out after ${timeoutMs}ms`)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
     return true;
   } catch (e) {
     console.warn(

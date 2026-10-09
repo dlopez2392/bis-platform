@@ -136,6 +136,17 @@ export async function setBrandingAction(
     }
   }
 
+  // The brand name BEFORE this save, so Clerk is only called when it changes
+  // (D-005 review): a colour or logo save has no reason to touch Clerk. An
+  // unreadable earlier name counts as changed: unsure means try. Same
+  // request-scoped client as the write below.
+  let previousBrandName: string | null = null;
+  try {
+    previousBrandName = (await getBranding(await dbForRequest(), accountId))?.brandName?.trim() ?? null;
+  } catch {
+    previousBrandName = null;
+  }
+
   try {
     await setBranding(
       // The RLS-enforced client, NOT serviceDb(). accounts_agency_all covers
@@ -162,7 +173,11 @@ export async function setBrandingAction(
   // D-005: Clerk names the organisation in every invitation email, so it
   // follows the name the client sees. Only after the write succeeded, and
   // never fatal — syncClerkOrgName logs and returns false on any failure.
-  await syncClerkOrgName(await dbForRequest(), clerkClient, accountId, brandName);
+  // Skipped when the name is unchanged; a sync that failed earlier is then
+  // retried by the next save that changes it, not by every save.
+  if (previousBrandName !== brandName) {
+    await syncClerkOrgName(await dbForRequest(), clerkClient, accountId, brandName);
+  }
 
   // Only after the new path is durably recorded, and never fatal: an orphaned
   // object costs a few KB, while failing here would report a save that in fact
