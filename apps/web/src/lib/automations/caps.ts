@@ -115,9 +115,15 @@ export const INSTANT_REPLY_ALLOWED_PATTERNS: readonly RegExp[] = [/^\+1\d{10}$/,
  *     Past that, Stripe's v2 meter event stream is the next step.
  *   USAGE_REPORT_BUDGET_MS the pass's wall clock for sending. It stops
  *     STARTING sends at this minus METER_EVENT_WORST_CASE_MS below, so the
- *     last send still ends inside it even in that worst case. The release
- *     pass's own shape (RELEASE_BUDGET_MS): the two 60 s budgets leave the
- *     route's 300 s maxDuration room for every other pass.
+ *     last send still ends inside it even in that worst case. THREE passes
+ *     now carry a 60 s budget in this shape — release-held.ts's own
+ *     RELEASE_BUDGET_MS (first in the registry), this one, and D-067's
+ *     WEEKLY_REPORT_BUDGET_MS below (twelfth) — summing to 180 s against
+ *     the route's 300 s `maxDuration`, leaving 120 s for the other twelve
+ *     registered passes (cron-coupling.test.ts pins the sum against the
+ *     ceiling, so a fourth budgeted pass added without raising `maxDuration`
+ *     reds there rather than only showing up as a timed-out tick in
+ *     production).
  *   METER_EVENT_WORST_CASE_MS one send's worst case past its start, for the
  *     installed stripe SDK (22.6.2; see stripe-gateway.ts's
  *     METER_EVENT_TIMEOUT_MS/reportMeterEvent comments): its per-request
