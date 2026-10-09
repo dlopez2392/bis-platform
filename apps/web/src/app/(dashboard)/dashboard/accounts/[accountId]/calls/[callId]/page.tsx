@@ -10,8 +10,8 @@ import {
   UserRound,
 } from "lucide-react";
 import {
-  getCall, listFailedOutboundSms, listProposalsForCall, getContact,
-  type FailedOutboundSms, type CallProposal,
+  getCall, listFailedOutboundSms, listProposalsForCall, getContact, getCallCard, getVoiceProfile,
+  type FailedOutboundSms, type CallProposal, type CallCard,
 } from "@bis/db";
 import { smsRecipientState } from "@/lib/consent/recipient-state";
 import { composerStateLine } from "@/lib/consent/composer-state";
@@ -32,6 +32,7 @@ import { splitSummaryBlocks, type SummaryBlock } from "./summary-blocks";
 import { TranscriptView } from "./transcript-view";
 import { TextbackResend } from "./textback-resend";
 import { CallProposals, type ResolvedStage } from "./proposals";
+import { CallCardPanel, hasCard } from "./call-card-panel";
 // The detail page is six of these stacked and not one of them was glass, so
 // the whole route read as flat rectangles on a lit ground. `bg-card` BEFORE
 // `glass`, the order `ui/card.tsx` uses: a tenant's `--card` still wins the
@@ -164,6 +165,34 @@ export default async function CallDetailPage({
     stageNames = {};
   }
 
+  // The call card: who called, why, the number to call back and their own
+  // words (lib/voice/call-card.ts writes it after the call). Its own read,
+  // swallowed like the two above and for their reason: one panel on a page
+  // whose job is the call, so a failed read (or a database the card's
+  // migration has not reached) costs the panel, never the call record. A
+  // card of three nulls is a call from before cards, or a spam call, and
+  // renders nothing (`hasCard`).
+  //
+  // The persona name is ONLY the author mark's, so its read failing must not
+  // cost the card: it falls back to "Sofía" on its own (the presence
+  // indicator's rule, D-063: the account's own name, else the default).
+  let card: CallCard | null = null;
+  let personaName = "Sofía";
+  try {
+    const [cardRow, profile] = await Promise.all([
+      getCallCard(db, accountId, callId),
+      getVoiceProfile(db, accountId).catch((e: unknown) => {
+        console.error(`call detail ${callId}: persona read failed, marking the card as Sofía: ${String(e)}`);
+        return null;
+      }),
+    ]);
+    card = cardRow;
+    personaName = profile?.persona_name?.trim() || "Sofía";
+  } catch (e) {
+    console.error(`call detail ${callId}: call card read failed, rendering no card: ${String(e)}`);
+    card = null;
+  }
+
   // Every link is conditional on its own id. A call that matched no contact,
   // opened no conversation and booked nothing renders no rail at all rather
   // than a panel of disabled-looking dead ends — and the main column takes
@@ -260,6 +289,17 @@ export default async function CallDetailPage({
               the time; this says which zone that abbreviation belongs to,
               and whether it is this account's own. */}
           <ZoneNote zone={zone} isAgency={isAgency} />
+          {/* First, above everything that follows: the three-second read of
+              the call. The failed text-back panel below still sits above the
+              summary, as before. */}
+          {hasCard(card) ? (
+            <CallCardPanel
+              who={callerLabel(call)}
+              card={card}
+              personaName={personaName}
+              language={call.language}
+            />
+          ) : null}
           {/* Above the summary, because it is the only thing on this page that
               asks the operator to DO something. Not a `section` with a
               heading: the badge already says what this is, and an <h2>

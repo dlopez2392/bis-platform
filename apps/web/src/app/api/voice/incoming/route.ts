@@ -368,13 +368,21 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //
       //     5s  closeTimer — the goodbye plays out before `ws.close()`
       //     3s  finish()'s bounded frame drain (`Promise.race([chain, 3000])`)
-      //    10s  finishCall's carrier text-back send (SEND_TIMEOUT_MS,
-      //         `lib/sms/telnyx.ts`) — a full provider round trip
-      //    12s  the rest of finishCall: contact, conversation and message
-      //         rows, `finishCallRow`, and the staff alert email — sequential
-      //         network round trips with no timeout of their own
+      //    10s  the summary reading (`generateSummary`, AbortSignal 10s) —
+      //         first in finishCall, before anything is written
+      //    12s  contact, conversation and message rows, `finishCallRow`, and
+      //         the staff alert email — sequential network round trips with
+      //         no timeout of their own. THE CALL ROW IS DURABLE HERE, ~30s in.
+      //    10s  ONE carrier send (SEND_TIMEOUT_MS, `lib/sms/telnyx.ts`): the
+      //         staff alert SMS (booked/lead/message) or the missed-call
+      //         text-back (abandoned) — never both on one call
+      //     5s  the usage ledger write (`recordUsageSafely`)
+      //    10s  the call card's reading (`readCallForCard`, AbortSignal 10s),
+      //         then its own update; the callback To do is a few ms before it
+      //    10s  the proposals' reading (`generateProposals`, AbortSignal 10s),
+      //         then up to three inserts with no timeout of their own
       //    ---
-      //    30s  worst-case tail
+      //    65s  worst-case tail (plus the untimed inserts)
       //
       // BEFORE the cap timer is armed (the connect leg). This is real elapsed
       // `maxDuration` that the cap knows nothing about, because the clock the
@@ -391,13 +399,22 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //    ----
       //     20s  worst-case connect leg
       //
-      //   800 - 30 - 20 = 750
+      //   800 - 65 - 20 = 715
       //
-      // Tightened from 770, which budgeted the tail only. 770 + 30 + 20 = 820
-      // overruns the 800s ceiling by 20s. Unreachable today — the default cap
-      // is 240s and nothing approaches the clamp — but it is the same latent
-      // shape the old 280/300 pair had, and it is cheaper to fix than to
-      // remember.
+      // THE CLAMP BELOW STILL SAYS 750, derived when the tail was counted as
+      // 30s (the carrier send and the first 12s only). Counted in full it is
+      // 65s, so a call held all the way to a 750s cap could, in the very worst
+      // case, run ~35s past the 800s ceiling. What that would cost is ORDERED:
+      // the call row and the staff alert email land in the first ~30s of the
+      // tail (770 + 30 = 800, right at the ceiling), and what an overrun cuts
+      // off is everything after them — the carrier send (alert SMS or
+      // text-back), the usage row, the callback To do, the call card and the
+      // proposals.
+      // Unreachable today (the default cap is 240s and nothing approaches the
+      // clamp); re-deriving the clamp to 715 is a knob change pinned by
+      // lifecycle.test.ts, left to its own decision rather than folded into a
+      // comment fix. (It was tightened once already, from 770, for the same
+      // reason: 770 + 30 + 20 = 820.)
       //
       // THE ASSUMPTION THIS STILL CARRIES: PHONE_CONNECT_TIMEOUT_MS is
       // configurable up to 60000ms (clamped above). Raising it past ~35s eats

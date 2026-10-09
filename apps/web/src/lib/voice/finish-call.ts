@@ -2,6 +2,7 @@ import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
   finishCallRow, emit, getAlertPhone, getContact, recordAutomationLog,
+  ensureCallbackTask, setCallCard,
 } from "@bis/db";
 import { REASONS } from "@/lib/automations/hold-or-send";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
@@ -16,6 +17,10 @@ import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { summaryFactLine } from "./summarize";
 import { isCallerIdNumber, spokenPhone } from "./phone-number";
+import {
+  callbackWanted, callbackNumberOf, callbackTaskTitle, recordedReason,
+  cardReadable, readCallForCard, composeCallCard, NO_READING,
+} from "./call-card";
 // STATIC, not the lazy `await import(...)` this repo otherwise reaches for
 // near route handlers: the documented page-data trap (a module-scope DB
 // import breaking `next build`'s page-data collection) doesn't apply to a
@@ -371,6 +376,14 @@ export async function finishCall(
   // English text is the platform contradicting itself in front of the
   // customer, and two separate derivations is how that starts.
   const spokenLanguage = detectSpokenLanguage(state.transcript, ctx.profileLanguage);
+  // The callback line, computed ONCE and read twice: it leads the staff alert
+  // email and it IS the callback To do's title, so the two can never say
+  // different things (review m2). Null when no person needs to call back
+  // (`callbackWanted`: a booked call, a hang-up, a recording, a handoff) or
+  // there is no number to call. A call with nothing written down but a
+  // number gets the bare "Call back at {number}" in both places.
+  const callbackNumber = callbackWanted(state) ? callbackNumberOf(state, ctx.callerNumber) : null;
+  const callbackLine = callbackNumber ? callbackTaskTitle(callbackNumber, recordedReason(state)) : null;
 
   let summary: string;
   try {
@@ -418,7 +431,17 @@ export async function finishCall(
       const contactUrl = contactId
         ? `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`
         : null;
-      const { html, text } = voiceCallAlertEmail({ brand, outcome, summary, callerDisplay, contactUrl });
+      // The callback line LEADS the alert (owner ruling, 2026-10-09): exactly
+      // the To do's own title (`callbackLine`, computed once above) —
+      // "Call back at {number}: {reason}" from what Sofía wrote down, or the
+      // bare "Call back at {number}" when she wrote nothing. Where no person
+      // needs to call back (a booked call, whose appointment is the
+      // follow-up) the alert is today's. A pure read of `state`: nothing here
+      // waits on the card's post-call reading, and this leg's place and
+      // isolation are unchanged.
+      const { html, text } = voiceCallAlertEmail({
+        brand, outcome, summary, callerDisplay, contactUrl, callback: callbackLine,
+      });
 
       const failures: string[] = [];
       for (const to of ctx.notifyEmails) {
@@ -703,6 +726,45 @@ export async function finishCall(
     }, `finishCall ${meta.callRowId}`);
   }
 
+  // THE CALLBACK TO DO (F-033): when the caller wants a person to call them
+  // back, a To do on today's queue for that person — never a call placed by
+  // Sofía (the plan's "callback rows go to people"). Who qualifies is
+  // `callbackWanted`'s (./call-card): a message taken, or a lead with no
+  // booking; never a recording, never a caller who asked for a person.
+  //
+  // Its own leg and its own try/catch, like every other: a To do that cannot
+  // be written (a missing column on a database the migration has not reached,
+  // anything) costs the call its To do and nothing else — the row, the alert
+  // and the text-back above are already settled.
+  //
+  // After the durable row and both carrier sends: it is a few milliseconds of
+  // database work, and a person waiting on a text is still more urgent than a
+  // To do they will read later. Gated on `meta.callRowId`, NOT `stored`: the
+  // To do names its call (`tasks.call_id`), and that row exists from pickup
+  // even when finishCallRow failed — a person still has to call this caller.
+  // No number to call (caller ID withheld, none given) → no To do: there is
+  // no call for a person to make, and the message itself is in the thread
+  // and the staff alert.
+  //
+  // Due at the call's own end (never a fresh clock): an undated To do lands
+  // in Waiting, and a callback belongs in Today.
+  // Read by the proposals below (owner ruling 2026-10-09): with the callback
+  // already a To do, they do not also suggest it. True only once the write
+  // (or an existing row) is confirmed.
+  let callbackTodo = false;
+  if (meta.callRowId && callbackLine) {
+    try {
+      await ensureCallbackTask(ctx.db, ctx.accountId, {
+        callId: meta.callRowId, contactId,
+        title: callbackLine,
+        dueAt: meta.endedAt.toISOString(),
+      }, ACTOR_ID, ACTOR_TYPE);
+      callbackTodo = true;
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId}: callback To do failed: ${String(e)}`);
+    }
+  }
+
   // The one failure mode with no other trace anywhere: a real booked/lead/
   // message call that landed neither in the database nor in anyone's inbox.
   // This log line IS the alert for that case (see the function doc) — it
@@ -721,6 +783,34 @@ export async function finishCall(
     await emit(ctx.db, ctx.accountId, "call.recorded", ACTOR_ID, { callId: meta.callRowId, outcome }, ACTOR_TYPE);
   } catch (e) {
     console.error(`finishCall ${meta.callRowId ?? "(no row)"}: emit failed: ${String(e)}`);
+  }
+
+  // THE CALL CARD (F-033): why they called, the number to call back and the
+  // caller's own words, on the call's own row. `composeCallCard` (./call-card)
+  // decides what goes on it: what Sofía wrote down first, the post-call
+  // reading only where she wrote nothing down, and no card at all for spam.
+  //
+  // Gated on `stored`, like the proposals below and for their reason: the
+  // words on a card are quoted from the transcript `finishCallRow` made
+  // durable. Written by `setCallCard`, its OWN update — never folded into
+  // `finishCallRow`'s, so nothing about a card can cost the call its row.
+  //
+  // The reading reaches OpenAI (10 s bound, never throws), so this sits in
+  // the tail with the proposals and after everything a person is waiting on:
+  // the alert, the text-back, the To do above. Before the proposals, which
+  // stay the last leg: the card is the record of the call, a proposal an
+  // opinion about it. Its own try/catch: a card failure costs the card.
+  if (meta.callRowId && stored) {
+    try {
+      const reading = cardReadable(state)
+        ? await readCallForCard(state.transcript, { label: `finishCall ${meta.callRowId}` })
+        : NO_READING;
+      const card = composeCallCard(state, ctx.callerNumber, reading);
+      // The stored reason is English today; it follows the reader's language once owners can choose one (F-013 part 1, F-096; owner ruling 2026-10-09).
+      if (card) await setCallCard(ctx.db, ctx.accountId, meta.callRowId, card);
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId}: call card failed: ${String(e)}`);
+    }
   }
 
   // PROPOSALS. `stored` — not merely `meta.callRowId` — is the gate: the
@@ -815,6 +905,7 @@ export async function finishCall(
         // ctx). Without these, a machine-proposed `dueAt` is a guess against
         // the model's training-era clock (generate.ts's own doc).
         now: meta.endedAt, timezone: ctx.timezone,
+        callbackTodo,
       });
       if (n > 0) console.log(`finishCall ${meta.callRowId}: proposals wrote ${n}`);
     } catch (e) {

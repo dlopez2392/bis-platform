@@ -45,7 +45,11 @@ const listCallsMock = vi.fn();
 // must never do is call it once per row, and the only way to see that from
 // here is to count the calls and look at what was passed.
 const listFailedOutboundSmsMock = vi.fn();
+/** Why each call happened (the call card, 0064): one read per page, like the
+ *  failed-text-back read above, and as swallowable. */
+const listCallReasonsMock = vi.fn(async () => new Map<string, string>());
 vi.mock("@bis/db", () => ({
+  listCallReasons: (...args: unknown[]) => listCallReasonsMock(...(args as [])),
   listCalls: (...args: unknown[]) => listCallsMock(...args),
   countCallsSince: async () => 3,
   listFailedOutboundSms: (...args: unknown[]) => listFailedOutboundSmsMock(...args),
@@ -279,5 +283,31 @@ describe("CallsPage — the zone note", () => {
     expect(renderedText(html)).toContain(m["zone.guessed.client"]);
     expect(renderedText(html)).not.toContain(m["zone.guessed.fix"]);
     expect(html).not.toContain("/settings");
+  });
+});
+
+describe("CallsPage — why they called", () => {
+  const ROW2: CallListRow = { ...ROW, id: "c2", contact_id: null, conversation_id: null };
+  beforeEach(() => {
+    listCallsMock.mockResolvedValue([ROW, ROW2]);
+    listFailedOutboundSmsMock.mockResolvedValue([]);
+    listCallReasonsMock.mockReset().mockResolvedValue(new Map([["c1", "Wants a quote for a roof leak"]]));
+  });
+
+  it("asks for the whole page's reasons in ONE read, for this account and exactly the rows on screen, and shows them (mutation: never pass reasons to the table → FAILS)", async () => {
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(listCallReasonsMock).toHaveBeenCalledTimes(1);
+    expect(listCallReasonsMock).toHaveBeenCalledWith(expect.anything(), "acct1", ["c1", "c2"]);
+    expect(html).toContain("Wants a quote for a roof leak");
+  });
+
+  it("still renders every call when the reasons read blows up (mutation: drop the catch → the page throws, FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listCallReasonsMock.mockRejectedValue(new Error("column calls.reason does not exist"));
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).toContain("+19565061545");
+    expect(html).not.toContain("Wants a quote");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("reasons read failed"));
+    spy.mockRestore();
   });
 });

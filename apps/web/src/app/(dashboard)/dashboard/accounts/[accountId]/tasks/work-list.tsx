@@ -34,6 +34,7 @@ import type { TextsActionResult } from "@/lib/consent/staff-actions";
 // four/five-entry map is not worth reaching across a route boundary for).
 import { STATUS_TREATMENT, type ResolvedStage } from "../calls/[callId]/proposals";
 import { CARD, CARD_HEAD } from "../calls/[callId]/card";
+import { AiAuthorMark } from "../calls/ai-author-mark";
 
 /** The four Task 4 actions, bound to one `accountId` by `WorkList` and
  *  threaded down through `WorkRowItem` into the "use client" boundary. */
@@ -307,13 +308,22 @@ function WorkRowItem({
   const treatment = BUCKET_TREATMENT[bucket];
   const primary = primaryLabel(row, contactName);
   const secondary = secondaryLine(row, contactName);
+  // DESIGN.md, Provenance: a callback To do a call left (`callId`, 0064) is
+  // the receptionist's, and says so beside the person it is about, as its
+  // own mark. A To do a person typed carries no mark here, as before.
+  const fromCall = row.source === "task" && Boolean(row.callId);
   const dateText = rowDateText(row, timezone);
 
   const body = (
     <>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-sm font-medium text-card-foreground">{primary}</span>
-        {secondary ? <span className="truncate text-xs text-muted-foreground">{secondary}</span> : null}
+        {secondary || fromCall ? (
+          <span className="flex min-w-0 items-center gap-2">
+            {secondary ? <span className="truncate text-xs text-muted-foreground">{secondary}</span> : null}
+            {fromCall ? <AiAuthorMark /> : null}
+          </span>
+        ) : null}
       </span>
       <Badge variant="chip" className={cn("shrink-0 gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
         <span className={cn("size-[7px] rounded-full", treatment.dot)} aria-hidden />

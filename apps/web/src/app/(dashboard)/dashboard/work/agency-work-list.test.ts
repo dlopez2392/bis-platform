@@ -452,3 +452,20 @@ export function _typeOnly_agencyBucketedWorkCannotHoldAProposal(
   // structurally, not just by convention.
   b.waiting.push(p);
 }
+
+describe("the callback To do on the agency-wide list (F-033; DESIGN.md provenance)", () => {
+  it("a To do a call left carries the receptionist's author mark as its own element; one a person typed does not (mutation: drop the mark → FAILS; mark every task → FAILS)", () => {
+    const html = renderList(buckets({
+      today: [
+        row({ id: "task:t1", title: "Call back at 9565061545: Roof leak", contactId: "c1", callId: "call1" }),
+        row({ id: "task:t2", title: "Order shingles", contactId: "c1", callId: null }),
+      ],
+    }), { c1: "Ana Reyes" });
+    const rows = html.split("<li").slice(1);
+    const callback = rows.find((r) => r.includes("Roof leak"))!;
+    const typed = rows.find((r) => r.includes("Order shingles"))!;
+    expect(callback).toMatch(/<span[^>]*data-ai-mark[^>]*>Sofía · AI<\/span>/);
+    expect(callback).toContain("Ana Reyes");
+    expect(typed).not.toContain("· AI");
+  });
+});

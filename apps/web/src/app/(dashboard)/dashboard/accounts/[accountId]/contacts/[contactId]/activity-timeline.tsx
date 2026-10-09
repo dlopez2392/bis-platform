@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { STATUS_LABEL, MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
 import { messageFailureReason } from "@/lib/email/failure-reason";
+import { AiAuthorMark } from "../../calls/ai-author-mark";
 
 // Exhaustively typed to the real channel union (see labels.ts's own
 // MESSAGE_CHANNEL_LABEL comment) so a new channel is a compile error here
@@ -35,7 +36,9 @@ type ContactMessage = Awaited<ReturnType<typeof listContactMessages>>[number];
 
 type TimelineItem =
   | { kind: "note"; id: string; at: string; body: string }
-  | { kind: "task"; id: string; at: string; title: string; dueAt: string | null; completedAt: string | null; holdOpen: boolean }
+  | { kind: "task"; id: string; at: string; title: string; dueAt: string | null; completedAt: string | null; holdOpen: boolean;
+      /** A callback To do a call left (0064's `tasks.call_id`): the receptionist's. */
+      fromCall: boolean }
   | { kind: "opportunity"; id: string; at: string; name: string; value: number; status: string }
   | { kind: "submission"; id: string; at: string; formName: string;
       answers: { key: string; label: string; value: string }[] }
@@ -117,6 +120,7 @@ export function ActivityTimeline({
         dueAt: t.due_at,
         completedAt: t.completed_at,
         holdOpen: holdOpenTaskIds.includes(t.id),
+        fromCall: Boolean(t.call_id),
       }),
     ),
     ...opportunities.map(
@@ -296,6 +300,9 @@ function TimelineRow({
           </p>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span>{formatDateTimeInZone(item.at, timezone)}</span>
+            {/* DESIGN.md, Provenance: who made this To do is never left to
+                be inferred when a call made it. */}
+            {item.fromCall ? <AiAuthorMark /> : null}
             {item.dueAt && taskDueDateText(item.dueAt, timezone) ? (
               <span className="flex items-center gap-1">
                 <CalendarClock className="size-3" aria-hidden />
