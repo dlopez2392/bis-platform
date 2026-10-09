@@ -134,6 +134,10 @@ describe("cardReadable: is the transcript worth a reading?", () => {
     expect(cardReadable(emptyCallState())).toBe(false);
     expect(cardReadable(withRecordedCaller(spoke()))).toBe(false);
   });
+
+  it("a recording that got a MESSAGE taken is still not read: the message outranks the robocall marker in classifyOutcome, so the marker is checked on its own (mutation: drop the recordedCaller term → FAILS)", () => {
+    expect(cardReadable(withRecordedCaller(withMessage(spoke(), { body: "Press 1 for your warranty", at: "t" })))).toBe(false);
+  });
 });
 
 describe("readCallForCard: the model's reading, grounded", () => {
@@ -171,6 +175,12 @@ describe("readCallForCard: the model's reading, grounded", () => {
     expect(body.messages[1].content).toContain("caller: Hi, my roof started leaking");
     expect(body.messages[0].content).toMatch(/English/);
     expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("the reading is capped at 10 seconds, the summary's own bound (mutation: AbortSignal.timeout(600_000) → FAILS)", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    await readCallForCard(transcript, { fetchImpl: modelReturning({ reason: null, quote: null }) });
+    expect(timeout).toHaveBeenCalledWith(10_000);
   });
 
   it("no key → no request and no reading", async () => {
@@ -215,6 +225,11 @@ describe("composeCallCard", () => {
   it("a spam call gets no card at all, even with a caller ID (mutation: drop the spam gate → a card of one number, FAILS)", () => {
     expect(composeCallCard(withRecordedCaller(spoke()), CALLER_ID, NO_READING)).toBeNull();
     expect(composeCallCard(emptyCallState(), CALLER_ID, NO_READING)).toBeNull();
+  });
+
+  it("a recording that got a MESSAGE taken gets no card: its outcome is `message`, so only the marker refuses it (mutation: drop the recordedCaller term → a card of the robot's message, FAILS)", () => {
+    expect(composeCallCard(withRecordedCaller(withMessage(spoke(), { body: "Press 1 for your warranty", at: "t" })), CALLER_ID, NO_READING))
+      .toBeNull();
   });
 
   it("nothing to say at all → no card", () => {
