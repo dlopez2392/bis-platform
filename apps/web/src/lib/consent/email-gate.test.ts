@@ -156,7 +156,7 @@ describe("sendEmail: the footer and the RFC 8058 headers (spec §4.3, plan G7)",
 
   it("the provider gets the send fields ONLY — never the gate's own (mutation: spread the whole request → accountId reaches Resend, FAILS)", async () => {
     await sendEmail(base({ replyTo: "office@rio.example", fromAddress: "hello@rio.example" }), { db: CLIENT, env: ENV });
-    expect(Object.keys(sent()).sort()).toEqual(["body", "fromAddress", "fromName", "headers", "html", "replyTo", "subject", "to"]);
+    expect(Object.keys(sent()).sort()).toEqual(["body", "fromAddress", "fromName", "headers", "html", "replyTo", "subject", "tags", "to"]);
     expect(sent().to).toBe("  Ana.Lopez@Example.com ");
   });
 
@@ -183,6 +183,27 @@ describe("sendEmail: the footer and the RFC 8058 headers (spec §4.3, plan G7)",
     expect(sent().html).toBeUndefined();
     expect(sent().body).toMatch(/Unsubscribe: https:\/\/app\.example\.com\/u\//);
     expect(sent().headers).toBeDefined();
+  });
+});
+
+describe("sendEmail: Resend tags (D-016 item 1 — so the webhook can attribute a bounce/complaint)", () => {
+  it("carries the account id and the contact id when it is a uuid (mutation: drop the tags → FAILS)", async () => {
+    await sendEmail(base(), { db: CLIENT, env: ENV });
+    expect(sent().tags).toEqual([{ name: "account_id", value: ACCOUNT }, { name: "contact_id", value: CONTACT }]);
+  });
+
+  it("carries only the account id when the contact id is not a uuid, or is absent (mutation: pass the raw contactId through → a non-uuid tag value, FAILS)", async () => {
+    await sendEmail(base({ contactId: "ct_1" }), { db: CLIENT, env: ENV });
+    expect(sent().tags).toEqual([{ name: "account_id", value: ACCOUNT }]);
+    send.mockClear();
+    await sendEmail(base({ contactId: null }), { db: CLIENT, env: ENV });
+    expect(sent().tags).toEqual([{ name: "account_id", value: ACCOUNT }]);
+  });
+
+  it("carries no tags at all for operator mail with no account — the agency roll-up (mutation: always send the account_id tag → FAILS)", async () => {
+    await sendEmail(base({ kind: "operator.agency_report", accountId: null, contactId: null }), { env: ENV });
+    expect(sent().tags).toBeUndefined();
+    expect("tags" in sent()).toBe(false);
   });
 });
 

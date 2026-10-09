@@ -124,13 +124,32 @@ function unsubscribeLinks(req: EmailRequest, address: string, now: Date, env: No
   return { page: `${origin}/u/${token}`, oneClick: `${origin}/api/unsubscribe/${token}` };
 }
 
+/**
+ * D-016 item 1: the account id and, when it is a uuid, the contact id — on
+ * EVERY gated send, so the Resend webhook can attribute a bounce or a
+ * complaint back to its account from the tags alone, without falling back
+ * to the messages row (older composer sends carry no tags at all). `null`
+ * for operator mail with no account (the agency roll-up): nothing to tag.
+ * Verified against Resend's docs: tags are an array of {name, value}, ASCII
+ * letters/numbers/`_`/`-` only — a uuid satisfies that — and are echoed back
+ * on the webhook event.
+ */
+function emailTags(req: EmailRequest): { name: string; value: string }[] | undefined {
+  if (!req.accountId) return undefined;
+  const tags = [{ name: "account_id", value: req.accountId }];
+  if (isUuid(req.contactId)) tags.push({ name: "contact_id", value: req.contactId });
+  return tags;
+}
+
 /** The send fields, and nothing of the gate's own. */
 function sendFields(req: EmailRequest): SendEmailInput {
+  const tags = emailTags(req);
   return {
     to: req.to, fromName: req.fromName,
     ...(req.fromAddress !== undefined ? { fromAddress: req.fromAddress } : {}),
     ...(req.replyTo !== undefined ? { replyTo: req.replyTo } : {}),
     subject: req.subject, body: req.body,
+    ...(tags ? { tags } : {}),
   };
 }
 
