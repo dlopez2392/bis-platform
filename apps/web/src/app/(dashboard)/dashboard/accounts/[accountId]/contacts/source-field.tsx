@@ -2,7 +2,6 @@
 
 import { InlineField } from "@/components/inline-field";
 import { m } from "@/lib/messages";
-import { clampHint } from "@/lib/contacts/lead-source";
 import { updateContactFieldAction } from "./actions";
 
 /**
@@ -44,16 +43,20 @@ export function SourceField({
           }}
         />
         {sourceHint ? (
-          // Review round 1, m2: the visible text is CLAMPED (an operator's
-          // own typed referral note, or a long CSV-imported `source`, has
-          // no length limit of its own); `title` and `aria-label` carry the
-          // full, unclamped fact for a hover and for a screen reader.
+          // Review round 2, minor 4: round 1's m2 fix sliced the hint in JS
+          // (a surrogate pair could split) and leaned on `aria-label` to
+          // carry the full text — ARIA excludes a plain paragraph from the
+          // elements `aria-label` can name, so a screen reader read the
+          // CLAMPED text content regardless. Fixed: the FULL text renders,
+          // unsliced, and `truncate` (CSS, text-overflow: ellipsis) clamps
+          // it visually to one line. `title` stays as a real hover tooltip
+          // (valid and useful on a <p>); no `aria-label` needed — the real
+          // text content already is the full fact.
           <p
-            className="text-muted-foreground mt-0.5 px-2 text-xs"
+            className="text-muted-foreground mt-0.5 truncate px-2 text-xs"
             title={sourceHint}
-            aria-label={sourceHint}
           >
-            {clampHint(sourceHint)}
+            {sourceHint}
           </p>
         ) : null}
       </dd>

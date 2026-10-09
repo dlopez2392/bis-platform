@@ -37,23 +37,35 @@ describe("SourceField — F-157's drawer line", () => {
     expect(out).not.toContain("<form");
   });
 
-  // Review round 1, m2: a long hint (an operator's own typed referral note,
-  // or a long CSV-imported `source`) is clamped in the VISIBLE line; the
-  // full text still reaches the owner via `title`/`aria-label`, never
-  // silently dropped.
-  it("clamps a long hint in the visible text but keeps the full text in title and aria-label (mutation: render the raw hint uncut, or drop the full text from title/aria → FAILS)", () => {
+  /**
+   * Review round 2, minor 4: round 1's m2 fix SLICED the hint text in JS
+   * and relied on `aria-label` to carry the full fact — two real bugs.
+   * `aria-label` has no naming effect on a `<p>` (ARIA's generic/paragraph
+   * role is explicitly excluded from the elements `aria-label` can name;
+   * a screen reader reads the plain text content instead, which was the
+   * CLAMPED, already-cut string) and `String.slice` cuts by UTF-16 code
+   * unit, which can split a surrogate pair in half. Fixed by rendering the
+   * FULL, unsliced text and clamping visually with CSS (`truncate`) —
+   * nothing to slice, nothing for an ineffective `aria-label` to work
+   * around. `clampHint` (lib/contacts/lead-source.ts) is now dead and
+   * removed.
+   */
+  it("renders the FULL hint text, unsliced, letting CSS truncate it visually (mutation: slice the text before rendering → FAILS)", () => {
     const long = "Referred by " + "a".repeat(200);
     const out = html("form: Contact us", long);
-    // The visible <p> text content is the CLAMPED form, with an ellipsis.
-    expect(renderedText(out)).not.toContain(long);
-    expect(out).toContain("…</p>");
-    // The FULL text is still present, via the attributes.
-    expect(out).toContain(`title="${long}"`);
-    expect(out).toContain(`aria-label="${long}"`);
+    expect(renderedText(out)).toContain(long);
   });
 
-  it("a short hint needs no clamp attributes beyond the ordinary render (no title/aria noise on the common case)", () => {
+  it("the hint <p> truncates with CSS, not a trailing ellipsis character in the text itself (mutation: drop the truncate class → FAILS)", () => {
     const out = html("form: Contact us", "Found through ChatGPT");
-    expect(out).toContain('title="Found through ChatGPT"');
+    expect(out).toMatch(/<p[^>]*\btruncate\b[^>]*>Found through ChatGPT<\/p>/);
+  });
+
+  it("carries the full hint as a native title (a real tooltip on hover), and no aria-label on the <p> itself — ARIA forbids naming a paragraph with one, so it would be silently ignored (mutation: add aria-label back to the <p> → FAILS)", () => {
+    const out = html("form: Contact us", "Found through ChatGPT");
+    const hintTag = out.match(/<p[^>]*>Found through ChatGPT<\/p>/)?.[0];
+    expect(hintTag, "the hint <p>").toBeTruthy();
+    expect(hintTag).toContain('title="Found through ChatGPT"');
+    expect(hintTag).not.toContain("aria-label");
   });
 });
