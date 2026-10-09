@@ -336,6 +336,28 @@ describe("resend webhook", () => {
     });
   });
 
+  // Review item 7(ii): Resend's OWN account-level suppression list (verified
+  // against resend.com/docs/dashboard/emails/email-suppressions — "Suppressions
+  // apply to your entire team... across all your domains") can fire
+  // `email.suppressed` for an address Resend refused BEFORE even trying,
+  // because of a bounce/complaint on a DIFFERENT send (possibly a different
+  // tenant's, since the team's list is shared) that this webhook may never
+  // have processed itself. The payload names no bounce/complaint type we can
+  // attribute, so this never writes a NEW suppression row — only the status.
+  describe("email.suppressed (review item 7ii): Resend's own account-level list, status only, never a new suppression row", () => {
+    it("records the status as failed, and writes NOTHING to the suppression ledger (mutation: treat it as a hard bounce → FAILS)", async () => {
+      verifyMock.mockReturnValue({
+        type: "email.suppressed",
+        data: { email_id: "prov_1", to: ["customer@example.com"], tags: { account_id: ACCOUNT },
+          suppressed: { type: "OnAccountSuppressionList", message: "Resend has suppressed sending to this address" } },
+      });
+      const res = await POST(req({}));
+      expect(res.status).toBe(200);
+      expect(updateMock).toHaveBeenCalledExactlyOnceWith(expect.anything(), "prov_1", "failed");
+      expect(suppressMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("heartbeat (operational-floor spec §1)", () => {
     it("an unset secret is an outage: 500 and an error stamp, before any read", async () => {
       delete process.env.RESEND_WEBHOOK_SECRET;

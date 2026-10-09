@@ -243,10 +243,12 @@ describe("holdOrSend: the EMAIL gate's answers (consent PR-3, plan G10)", () => 
     dbMocks.readConsentState.mockResolvedValue({
       state: "stopped", since: "2026-10-03T00:00:00Z", method: "email_bounce", eventId: "e1",
     });
-    const send = () => sendEmailOrThrow({
-      accountId: "acct_1", kind: "automation.reminder", contactId: "ct_1",
-      to: "ana@example.com", fromName: "Rio Roofing", subject: "Reminder", body: "See you at 3",
-    }, { db: {} as never });
+    const send = async () => {
+      await sendEmailOrThrow({
+        accountId: "acct_1", kind: "automation.reminder", contactId: "ct_1",
+        to: "ana@example.com", fromName: "Rio Roofing", subject: "Reminder", body: "See you at 3",
+      }, { db: {} as never });
+    };
     expect(await holdOrSend(ctx(NOON), email(), send)).toBe("skipped");
     expect(logged()).toEqual([expect.objectContaining({ status: "skipped", reason: REASONS.suppressedEmail })]);
   });

@@ -17,6 +17,15 @@ const STATUS_BY_EVENT: Record<string, MessageStatus> = {
   // mail) is below, in the suppression block.
   "email.complained": "bounced",
   "email.failed": "failed",
+  // Review item 7(ii): Resend's OWN account-level suppression list (shared
+  // across our whole team, every domain — resend.com/docs/dashboard/emails/
+  // email-suppressions) can refuse delivery BEFORE even attempting it,
+  // because of an earlier bounce or complaint this webhook may never have
+  // processed under THIS account (the list is shared across every tenant we
+  // send for). `failed` because nothing was delivered. The payload names no
+  // bounce/complaint type we can attribute to our own ledger, so this never
+  // writes a suppression row below — only the status.
+  "email.suppressed": "failed",
 };
 
 /** The two FK names 0054 gives consent_events, verified against a live

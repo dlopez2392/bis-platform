@@ -515,7 +515,13 @@ export const m = {
   "contact.email.how.bounced": "it bounced",
   "contact.email.how.complained": "they marked it as spam",
   "contact.email.bouncedExplain": "This address bounced — emails to it won't send. Fix the address to start again.",
-  "contact.email.complainedExplain": "They marked an email as spam — you can't email them again unless they resubscribe.",
+  // Review item 7(i): Resend's OWN suppression list is shared across our
+  // WHOLE team, every tenant (resend.com/docs/dashboard/emails/email-
+  // suppressions) and a resubscribe here lifts only OUR OWN tracking of
+  // consent, never Resend's — so this says what WE do (stop trying), never
+  // a guarantee that a resubscribe alone restores delivery, which would not
+  // always be true.
+  "contact.email.complainedExplain": "They marked an email as spam — we won't email them again unless they resubscribe.",
   "contact.email.stopEmails": "Stop emails",
   "contact.email.stoppedToast": "Emails stopped.",
   "contact.email.resume": "Resume emails…",
@@ -803,7 +809,10 @@ export const m = {
   // the one line still fits the same "on {date}" shape as the two above, so
   // the undated fallback (composer-state.ts's catch branch) keeps working.
   "compose.emailBounced": "This address bounced on {date} — emails to it won't send. Fix the address to start again.",
-  "compose.emailComplained": "This person marked an email as spam on {date} — you can't email them again unless they resubscribe.",
+  // Review item 7(i): same caveat as contact.email.complainedExplain —
+  // Resend's own TEAM-wide suppression list is a separate thing we don't
+  // control, so this states OUR policy, never a delivery guarantee.
+  "compose.emailComplained": "This person marked an email as spam on {date} — we won't email them again unless they resubscribe.",
   "compose.emailStateUnknown": "Couldn't check whether they unsubscribed. Write only about something they asked you for.",
   // {n} segments — SMS bills per segment, and a single non-GSM character
   // (an accent, a curly apostrophe) drops the whole message to 70 per segment.
