@@ -313,7 +313,7 @@ export const m = {
   "dashboard.calls.unit.call": "call",
   "dashboard.calls.unit.calls": "calls",
   // Rule 5 (designed empty states): one sentence, verbatim from the brief.
-  "dashboard.calls.empty": "When Sofía answers, every call lands here with its outcome.",
+  "dashboard.calls.empty": "When {name} answers, every call lands here with its outcome.",
   "dashboard.calls.emptySetupVoice": "Set up your voice receptionist",
   "dashboard.calls.emptyViewCalls": "View all calls",
   // The "screened, not empty" state (#182 follow-up): the window had calls,
@@ -327,9 +327,9 @@ export const m = {
   // who hung up is never hidden behind the spam line). All three take
   // "{count}"/"{unit}" (the "both" variant takes two of each, spam first),
   // the same replace-by-hand convention as the tooltip strings above.
-  "dashboard.calls.screenedSpam": "No calls answered in the last 14 days. Sofía flagged {count} {unit} as likely spam.",
-  "dashboard.calls.screenedAbandoned": "No calls answered in the last 14 days. {count} {unit} hung up before Sofía could help.",
-  "dashboard.calls.screenedBoth": "No calls answered in the last 14 days. Sofía flagged {spamCount} {spamUnit} as likely spam, and {otherCount} {otherUnit} hung up before she could help.",
+  "dashboard.calls.screenedSpam": "No calls answered in the last 14 days. {name} flagged {count} {unit} as likely spam.",
+  "dashboard.calls.screenedAbandoned": "No calls answered in the last 14 days. {count} {unit} hung up before {name} could help.",
+  "dashboard.calls.screenedBoth": "No calls answered in the last 14 days. {name} flagged {spamCount} {spamUnit} as likely spam, and {otherCount} {otherUnit} hung up before {name} could help.",
   "dashboard.calls.unit.caller": "caller",
   "dashboard.calls.unit.callers": "callers",
 
@@ -350,8 +350,8 @@ export const m = {
   "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
   "dashboard.activity.formSubmitted": "A new lead came in through your form.",
   "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
-  "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of Sofía.",
-  "dashboard.activity.forwardOff": "Sofía started answering calls again.",
+  "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of {name}.",
+  "dashboard.activity.forwardOff": "{name} started answering calls again.",
   // Rule 5 (designed empty states): one sentence, verbatim from the brief.
   // No action link — the brief pins this one deliberately link-less.
   "dashboard.activity.empty": "Bookings, form leads, and call outcomes appear here as they happen.",

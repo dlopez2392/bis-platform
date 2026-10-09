@@ -53,6 +53,7 @@ export function CallsChartCard({
   voiceEnabled,
   spamCount,
   abandonedCount,
+  personaName,
 }: {
   accountId: string;
   /** The ACCOUNT's IANA zone — the mini table's local time column reads it,
@@ -80,8 +81,13 @@ export function CallsChartCard({
    *  `excludeCallers` default) — named ALONGSIDE `spamCount` when both are
    *  nonzero (`screenedCopy`'s "both" case), never hidden behind it. */
   abandonedCount: number;
+  /** The account's own receptionist name (`voice_profiles.persona_name`,
+   *  D-045) — null when there is no profile. Every line of this card names
+   *  it; "Sofía" only when it is missing or blank, like the sub-line. */
+  personaName: string | null;
 }) {
   const base = `/dashboard/accounts/${accountId}`;
+  const name = personaName?.trim() || "Sofía";
   const answeredCount = dayBuckets.reduce((sum, bucket) => sum + bucket.count, 0);
   const chartState = resolveCallsChartState({ answeredCount, spamCount, abandonedCount });
 
@@ -111,7 +117,7 @@ export function CallsChartCard({
       {chartState.kind !== "answered" ? (
         <EmptyState
           icon={PhoneIncoming}
-          title={chartState.kind === "none" ? m["dashboard.calls.empty"] : screenedCopy(chartState)}
+          title={withName(chartState.kind === "none" ? m["dashboard.calls.empty"] : screenedCopy(chartState), name)}
           action={
             <Link href={ctaHref} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
               {ctaLabel}
@@ -155,6 +161,13 @@ function callerUnit(count: number): string {
  *  the first version of this copy led with spam alone whenever it was
  *  present, silently dropping a real abandoned caller from the same
  *  window). */
+/** Every "{name}" in a line, by a FUNCTION replacer — a persona containing
+ *  `$&` must be inserted verbatim, never re-read as a replacement pattern
+ *  (page.tsx's own sub-line does the same). `screenedBoth` names it twice. */
+function withName(line: string, name: string): string {
+  return line.replaceAll("{name}", () => name);
+}
+
 function screenedCopy(state: { spamCount: number; abandonedCount: number }): string {
   if (state.spamCount > 0 && state.abandonedCount > 0) {
     return m["dashboard.calls.screenedBoth"]

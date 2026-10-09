@@ -131,13 +131,24 @@ vi.mock("@bis/db", () => ({
 const callsChartCardProps = vi.hoisted(() => ({
   current: null as { spamCount: number; abandonedCount: number } | null,
 }));
+// D-045: the persona name each card was handed, captured apart from the
+// counts above so that test's exact `toEqual` stays what it pins.
+const cardPersonaNames = vi.hoisted(() => ({
+  calls: undefined as string | null | undefined, activity: undefined as string | null | undefined,
+}));
 vi.mock("./calls-chart-card", () => ({
-  CallsChartCard: (props: { spamCount: number; abandonedCount: number }) => {
+  CallsChartCard: (props: { spamCount: number; abandonedCount: number; personaName: string | null }) => {
     callsChartCardProps.current = { spamCount: props.spamCount, abandonedCount: props.abandonedCount };
+    cardPersonaNames.calls = props.personaName;
     return null;
   },
 }));
-vi.mock("./activity-card", () => ({ ActivityCard: () => null }));
+vi.mock("./activity-card", () => ({
+  ActivityCard: (props: { personaName: string | null }) => {
+    cardPersonaNames.activity = props.personaName;
+    return null;
+  },
+}));
 
 // The one component under real test-of-integration here: captured rather
 // than rendered, so this file can assert exactly what page.tsx computed and
@@ -711,6 +722,19 @@ describe("AccountDashboardPage — the voice sub-line names the account's own co
     const html = renderToStaticMarkup(await AccountDashboardPage(route()));
 
     expect(renderedText(html)).toContain("Sofía is answering your calls.");
+  });
+
+  // D-045: the calls card and the activity card said "Sofía" whatever the
+  // persona was called; the page now hands both the configured name.
+  it("hands the calls card and the activity card the account's own persona name (mutation: pass null → FAILS)", async () => {
+    cardPersonaNames.calls = undefined;
+    cardPersonaNames.activity = undefined;
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true, persona_name: "Max" });
+
+    renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(cardPersonaNames.calls).toBe("Max");
+    expect(cardPersonaNames.activity).toBe("Max");
   });
 
   it("no enabled voice profile renders no sub-line at all, and never reads a persona name for it", async () => {

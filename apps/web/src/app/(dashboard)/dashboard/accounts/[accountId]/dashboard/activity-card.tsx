@@ -95,7 +95,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** The one place raw `events.type`/payload values get turned into copy —
  *  everything not covered by the curation map above returns `null`. */
-function curate(event: EventRow): CuratedRow | null {
+function curate(event: EventRow, personaName: string): CuratedRow | null {
   const payload = isRecord(event.payload) ? event.payload : {};
 
   switch (event.type) {
@@ -154,7 +154,10 @@ function curate(event: EventRow): CuratedRow | null {
       return {
         // On is a warning (Sofía is no longer answering); off is Sofía back.
         key: event.id, icon: payload.forwardCalls ? PhoneForwarded : Phone, tone: payload.forwardCalls ? "warning" : "accent",
-        summary: payload.forwardCalls ? m["dashboard.activity.forwardOn"] : m["dashboard.activity.forwardOff"],
+        // D-045: the account's own receptionist, by a function replacer (a
+        // name containing `$&` is inserted verbatim).
+        summary: (payload.forwardCalls ? m["dashboard.activity.forwardOn"] : m["dashboard.activity.forwardOff"])
+          .replace("{name}", () => personaName),
         createdAtIso: event.createdAt,
       };
     }
@@ -167,6 +170,7 @@ export function ActivityCard({
   accountId,
   events,
   now,
+  personaName,
 }: {
   accountId: string;
   /** Raw ledger rows, newest first — `listRecentEvents(db, accountId, N)`,
@@ -178,9 +182,13 @@ export function ActivityCard({
    *  discipline: a value computed once at the top of the request, not
    *  re-read per row). */
   now: Date;
+  /** The account's own receptionist name (`voice_profiles.persona_name`,
+   *  D-045), null with no profile; "Sofía" only when missing or blank. */
+  personaName: string | null;
 }) {
+  const name = personaName?.trim() || "Sofía";
   const rows = events
-    .map(curate)
+    .map((event) => curate(event, name))
     .filter((row): row is CuratedRow => row !== null)
     .slice(0, DISPLAY_LIMIT);
   const isEmpty = rows.length === 0;
