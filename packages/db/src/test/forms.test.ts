@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import { Client } from "pg";
 import { withTestAccount } from "./fixtures";
 import { withRollback, actAs } from "./db";
+import { upsertVoiceProfile } from "../voice";
 import {
   newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
   getFormByPublicId, isFormLive, updateForm,
   countFormsMissingNotify, listSubmissionCreationsBetween,
+  findConciergeDestinationName,
 } from "../forms";
 
 const FIELDS = [
@@ -192,6 +194,37 @@ describe("forms", () => {
 
       expect(await getForm(db, accountId, draftId)).not.toBeNull();
     }));
+
+  // Owner context (forms tracker batch 4): the Forms page needs to warn an
+  // operator before they unpublish a form that a website assistant
+  // (voice_profiles.concierge_form_id) files its leads into — this is the
+  // read that names the assistant. `upsertVoiceProfile` is voice.ts's own
+  // export, read-only here; this file does not own voice.ts, only the
+  // query that joins into it from the forms side.
+  it("findConciergeDestinationName names the assistant wired to this form, or null when none is (mutation: always return null → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: formId } = await createForm(db, accountId, { name: "Quote" }, "user_test");
+      expect(await findConciergeDestinationName(db, accountId, formId)).toBeNull();
+
+      await upsertVoiceProfile(db, accountId, {
+        persona_name: "Ana", concierge_form_id: formId,
+      }, "user_test");
+      expect(await findConciergeDestinationName(db, accountId, formId)).toBe("Ana");
+    }));
+
+  it("findConciergeDestinationName ignores another account's own form/profile pairing (mutation: drop the account_id filter → FAILS)", () =>
+    withTestAccount(async (db, accountIdA) =>
+      withTestAccount(async (db2, accountIdB) => {
+        const { id: formIdA } = await createForm(db, accountIdA, { name: "A's form" }, "user_test");
+        await upsertVoiceProfile(db2, accountIdB, {
+          persona_name: "Bea",
+        }, "user_test");
+        // accountIdB's profile never points at formIdA, so this must read null
+        // under EITHER account — proving the lookup is account-scoped, not a
+        // bare match on concierge_form_id across every tenant's profiles.
+        expect(await findConciergeDestinationName(db, accountIdB, formIdA)).toBeNull();
+        expect(await findConciergeDestinationName(db, accountIdA, formIdA)).toBeNull();
+      })));
 
   it("RLS hides another tenant's forms from an authenticated caller", () =>
     withRollback(async (c: Client) => {

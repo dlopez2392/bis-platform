@@ -1,4 +1,4 @@
-import type { FormField, FormTheme } from "@bis/db";
+import type { FormField, FormStatus, FormTheme } from "@bis/db";
 
 /**
  * The key a newly added field gets, derived from the `kind` the editor is
@@ -93,4 +93,28 @@ function isValidFormField(value: unknown): value is FormField {
  */
 export function isValidFormFieldList(value: unknown): value is FormField[] {
   return Array.isArray(value) && value.every(isValidFormField);
+}
+
+/**
+ * Owner context (forms tracker batch 4): true when the operator is about to
+ * take a form OFF "published" while a website assistant files its leads
+ * into it (`findConciergeDestinationName`, packages/db/src/forms.ts).
+ * D-048 already stops the live chat from answering once that happens
+ * (`getVoiceProfileByPublicId`, packages/db/src/concierge.ts) — this is the
+ * half that was missing: nothing told the operator making the change what
+ * they were about to break.
+ *
+ * `currentStatus` is the form's last SAVED status (there is nothing to warn
+ * about leaving if it was never live), `nextStatus` is the pending Select
+ * value, and `conciergeAssistantName` is null when no assistant is wired to
+ * this form at all. Pure and DB-free on purpose: the editor's own Select
+ * state is the only thing that changes turn to turn, and a decision this
+ * small does not need the fetch that found the assistant's name re-run on
+ * every keystroke.
+ */
+export function shouldWarnOnUnpublish(
+  currentStatus: FormStatus, nextStatus: FormStatus, conciergeAssistantName: string | null,
+): boolean {
+  return conciergeAssistantName != null
+    && currentStatus === "published" && nextStatus !== "published";
 }

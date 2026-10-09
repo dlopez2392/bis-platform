@@ -142,3 +142,29 @@ export async function saveFormAction(
   revalidatePath(`/dashboard/accounts/${accountId}/forms/${formId}`);
   return { ok: true };
 }
+
+/**
+ * The Undo half of the Forms page's unpublish warning (owner context, forms
+ * tracker batch 4; see `shouldWarnOnUnpublish`'s own doc comment). Writes
+ * ONLY `status`, deliberately narrower than `saveFormAction`: replaying the
+ * operator's whole submitted FormData a second time from an Undo click
+ * would also re-apply (or re-validate against stale values for) everything
+ * else they changed in the same save, which is not what "undo the
+ * unpublish" means. A failure here is reported, never thrown — this runs
+ * from a toast's own action handler, with no form around it to catch
+ * anything.
+ */
+export async function republishFormAction(
+  accountId: string, formId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId } = await requireAccountAccess(accountId);
+  const db = await dbForRequest();
+  try {
+    await updateForm(db, accountId, formId, { status: "published" }, userId);
+  } catch {
+    return { ok: false, error: m["forms.republishFailed"] };
+  }
+  revalidatePath(`/dashboard/accounts/${accountId}/forms`);
+  revalidatePath(`/dashboard/accounts/${accountId}/forms/${formId}`);
+  return { ok: true };
+}

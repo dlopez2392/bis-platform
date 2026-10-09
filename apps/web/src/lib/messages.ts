@@ -939,6 +939,13 @@ export const m = {
   // settings.weeklyReportBadEmail — one bad-address message, not two that can
   // drift apart.
   "forms.invalidNotifyEmail": "That doesn't look like an email address: {value}",
+  // Owner context (forms tracker batch 4): shown inline while the operator
+  // is still choosing a non-published status for a form a website assistant
+  // files its leads into, and again (as the Undo toast's own text) once
+  // that save has gone through — see shouldWarnOnUnpublish's own comment.
+  "forms.unpublishWarning":
+    "{assistant} files its leads into this form — it will stop filing new ones here until you republish.",
+  "forms.republishFailed": "Could not republish the form.",
 
   "conversations.unread": "unread",
   "conversations.channel.form": "Form submission",

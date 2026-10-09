@@ -1,11 +1,11 @@
 import { notFound } from "next/navigation";
 import { headers } from "next/headers";
-import { getForm, listSubmissions, listCustomFields } from "@bis/db";
+import { getForm, listSubmissions, listCustomFields, findConciergeDestinationName } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { FormEditor } from "./form-editor";
 import { EmbedSnippet } from "./embed-snippet";
 import { SubmissionsTable } from "./submissions-table";
-import { saveFormAction } from "../actions";
+import { saveFormAction, republishFormAction } from "../actions";
 import { dbForRequest } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -18,10 +18,11 @@ export default async function FormEditorPage({
   const form = await getForm(db, accountId, formId);
   if (!form) notFound();
 
-  const [submissions, customFields, h] = await Promise.all([
+  const [submissions, customFields, h, conciergeAssistantName] = await Promise.all([
     listSubmissions(db, accountId, formId),
     listCustomFields(db, accountId, "contact"),
     headers(),
+    findConciergeDestinationName(db, accountId, formId),
   ]);
 
   // Read from the request rather than an env var: the snippet has to point at
@@ -39,6 +40,8 @@ export default async function FormEditorPage({
             form={form}
             customFields={customFields}
             action={saveFormAction.bind(null, accountId)}
+            conciergeAssistantName={conciergeAssistantName}
+            republishAction={republishFormAction.bind(null, accountId, formId)}
           />
           <SubmissionsTable
             accountId={accountId}

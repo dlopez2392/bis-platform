@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { FormTheme } from "@bis/db";
 import {
   defaultFieldKey, mergeFormTheme, isValidFormFieldList, defaultFormFields,
+  shouldWarnOnUnpublish,
 } from "./editor-helpers";
 
 describe("defaultFieldKey", () => {
@@ -95,5 +96,32 @@ describe("isValidFormFieldList", () => {
     expect(isValidFormFieldList([{ ...valid, required: "true" }])).toBe(false);
     expect(isValidFormFieldList([{ ...valid, kind: 5 }])).toBe(false);
     expect(isValidFormFieldList([valid, {}])).toBe(false);
+  });
+});
+
+// Owner context (forms tracker batch 4): the Forms page warns before taking
+// a form off "published" when a website assistant files its leads there —
+// D-048 already stops the chat from answering once that happens
+// (concierge.ts's getVoiceProfileByPublicId), but nothing told the operator
+// making the change what they were about to break. This predicate is the
+// decision alone, so it is testable without the editor's own Select state,
+// its toast, or its Undo wiring.
+describe("shouldWarnOnUnpublish", () => {
+  it("warns when a currently-published, assistant-linked form is about to move off published (mutation: drop the currentStatus check → FAILS)", () => {
+    expect(shouldWarnOnUnpublish("published", "draft", "Ana")).toBe(true);
+    expect(shouldWarnOnUnpublish("published", "archived", "Ana")).toBe(true);
+  });
+
+  it("does not warn when the form was never published to begin with (mutation: drop the currentStatus check → the 'archived already' case now also warns, FAILS)", () => {
+    expect(shouldWarnOnUnpublish("draft", "archived", "Ana")).toBe(false);
+    expect(shouldWarnOnUnpublish("archived", "draft", "Ana")).toBe(false);
+  });
+
+  it("does not warn when the pending status is still published, e.g. no real change (mutation: drop the nextStatus check → FAILS)", () => {
+    expect(shouldWarnOnUnpublish("published", "published", "Ana")).toBe(false);
+  });
+
+  it("does not warn when no assistant is wired to this form (mutation: drop the null check → FAILS)", () => {
+    expect(shouldWarnOnUnpublish("published", "draft", null)).toBe(false);
   });
 });

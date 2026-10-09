@@ -414,6 +414,37 @@ export async function countFormsMissingNotify(
   return count ?? 0;
 }
 
+/**
+ * Owner context (forms tracker batch 4): the Forms page needs to warn an
+ * operator who is about to take a PUBLISHED form off that status when a
+ * website assistant (`voice_profiles.concierge_form_id`) files its leads
+ * into it. D-048 already stops a LIVE chat from answering once its
+ * destination is unpublished (`getVoiceProfileByPublicId`,
+ * packages/db/src/concierge.ts) — this is the half that was missing:
+ * nothing told the operator making that change what they were about to
+ * break. Returns the assistant's `persona_name`, so the warning can name it
+ * rather than say "an assistant".
+ *
+ * Reads `voice_profiles` rather than `forms`, and lives beside the forms
+ * query that needs it rather than in concierge.ts (that file's own queries
+ * are about the PUBLIC chat runtime, not the dashboard). Scoped to this
+ * account on purpose: `concierge_form_id` carries no FK-level guarantee it
+ * names a form in the SAME account as the profile before migration 0045
+ * (concierge.ts's own comment on `DESTINATION_EMBED`), so the account_id
+ * filter is what keeps a stale or cross-tenant pointer from ever naming an
+ * assistant that is not actually this account's own.
+ */
+export async function findConciergeDestinationName(
+  db: SupabaseClient, accountId: string, formId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("voice_profiles")
+    .select("persona_name")
+    .eq("account_id", accountId).eq("concierge_form_id", formId)
+    .maybeSingle();
+  if (error) throw new Error(`findConciergeDestinationName failed: ${error.message}`);
+  return (data as { persona_name: string } | null)?.persona_name ?? null;
+}
+
 export async function listContactSubmissions(
   db: SupabaseClient, accountId: string, contactId: string,
 ): Promise<(SubmissionRow & { formName: string })[]> {

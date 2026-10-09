@@ -30,7 +30,7 @@ const dbForRequestInstance = { tag: "dbForRequest" };
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => dbForRequestInstance }));
 
 import { m } from "@/lib/messages";
-import { saveFormAction } from "./actions";
+import { saveFormAction, republishFormAction } from "./actions";
 
 const fd = (fields: Record<string, string>) => {
   const f = new FormData();
@@ -106,5 +106,30 @@ describe("saveFormAction — field-level errors instead of a swallowed throw (D-
       expect.objectContaining({ notify_emails: ["owner@example.com"] }),
       "user_1",
     );
+  });
+});
+
+// Owner context (forms tracker batch 4): the Undo half of the Forms page's
+// unpublish warning. Deliberately narrower than saveFormAction — it writes
+// ONLY status, so clicking Undo on the toast can never clobber whatever
+// else the operator changed in the same save that triggered the warning.
+describe("republishFormAction", () => {
+  it("writes only status back to published (mutation: pass through the rest of the row too → FAILS)", async () => {
+    const result = await republishFormAction("acct_1", "form_1");
+    expect(result).toEqual({ ok: true });
+    expect(dbMocks.updateForm).toHaveBeenCalledWith(
+      dbForRequestInstance, "acct_1", "form_1", { status: "published" }, "user_1",
+    );
+  });
+
+  it("checks account access before writing (mutation: drop the guard call → FAILS)", async () => {
+    await republishFormAction("acct_1", "form_1");
+    expect(authMocks.requireAccountAccess).toHaveBeenCalledWith("acct_1");
+  });
+
+  it("reports a plain failure instead of throwing when the update fails (mutation: let it reject → FAILS)", async () => {
+    dbMocks.updateForm.mockRejectedValueOnce(new Error("updateForm failed: form not found in account"));
+    const result = await republishFormAction("acct_1", "form_1");
+    expect(result).toEqual({ ok: false, error: m["forms.republishFailed"] });
   });
 });
