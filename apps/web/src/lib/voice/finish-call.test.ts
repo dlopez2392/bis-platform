@@ -1815,6 +1815,13 @@ describe("finishCall — the staff alert leads with the call-back line", () => {
     expect(sentText().split("\n")[0]).toBe("Call back at +19562921696: roof quote");
   });
 
+  it("a lead with no need recorded: the alert leads with the To do's own bare line, and the To do carries the same words (review m2; mutation: gate the line on a reason → \"Call — lead\", FAILS)", async () => {
+    await finishCall(withLead(caller(), { fields: { fullName: "Ana Ruiz" } }), ctx, meta);
+    expect(sentText().split("\n")[0]).toBe("Call back at +19562921696");
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ title: "Call back at +19562921696" }), "voice", "ai");
+  });
+
   it("a booked call's alert stays as today: the appointment is the follow-up, as for the To do (mutation: gate on recordedReason alone → \"Call back at …: roof quote\", FAILS)", async () => {
     await finishCall(withBooking(withLead(caller(), { fields: { fullName: "Ana Ruiz", need: "roof quote" } }),
       { id: "b1", contactName: "Ana", startsAt: "2027-06-02T15:00:00Z", endsAt: "2027-06-02T16:00:00Z" }), ctx, meta);

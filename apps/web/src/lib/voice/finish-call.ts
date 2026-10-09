@@ -376,6 +376,14 @@ export async function finishCall(
   // English text is the platform contradicting itself in front of the
   // customer, and two separate derivations is how that starts.
   const spokenLanguage = detectSpokenLanguage(state.transcript, ctx.profileLanguage);
+  // The callback line, computed ONCE and read twice: it leads the staff alert
+  // email and it IS the callback To do's title, so the two can never say
+  // different things (review m2). Null when no person needs to call back
+  // (`callbackWanted`: a booked call, a hang-up, a recording, a handoff) or
+  // there is no number to call. A call with nothing written down but a
+  // number gets the bare "Call back at {number}" in both places.
+  const callbackNumber = callbackWanted(state) ? callbackNumberOf(state, ctx.callerNumber) : null;
+  const callbackLine = callbackNumber ? callbackTaskTitle(callbackNumber, recordedReason(state)) : null;
 
   let summary: string;
   try {
@@ -423,17 +431,17 @@ export async function finishCall(
       const contactUrl = contactId
         ? `${ctx.origin}/dashboard/accounts/${ctx.accountId}/contacts/${contactId}`
         : null;
-      // The call card's line LEADS the alert (owner ruling, 2026-10-09):
-      // "Call back at {number}: {reason}", from what Sofía WROTE DOWN on the
-      // call — the same line and the same rule as the callback To do below
-      // (`callbackWanted`), so a booked call, whose appointment is the
-      // follow-up, keeps today's alert, and so does a call where nothing was
-      // written down. Pure reads of `state`: nothing here waits on the card's
-      // post-call reading, and this leg's place and isolation are unchanged.
-      const callbackReason = callbackWanted(state) ? recordedReason(state) : null;
-      const callbackNumber = callbackReason ? callbackNumberOf(state, ctx.callerNumber) : null;
-      const callback = callbackReason && callbackNumber ? callbackTaskTitle(callbackNumber, callbackReason) : null;
-      const { html, text } = voiceCallAlertEmail({ brand, outcome, summary, callerDisplay, contactUrl, callback });
+      // The callback line LEADS the alert (owner ruling, 2026-10-09): exactly
+      // the To do's own title (`callbackLine`, computed once above) —
+      // "Call back at {number}: {reason}" from what Sofía wrote down, or the
+      // bare "Call back at {number}" when she wrote nothing. Where no person
+      // needs to call back (a booked call, whose appointment is the
+      // follow-up) the alert is today's. A pure read of `state`: nothing here
+      // waits on the card's post-call reading, and this leg's place and
+      // isolation are unchanged.
+      const { html, text } = voiceCallAlertEmail({
+        brand, outcome, summary, callerDisplay, contactUrl, callback: callbackLine,
+      });
 
       const failures: string[] = [];
       for (const to of ctx.notifyEmails) {
@@ -744,19 +752,16 @@ export async function finishCall(
   // already a To do, they do not also suggest it. True only once the write
   // (or an existing row) is confirmed.
   let callbackTodo = false;
-  if (meta.callRowId && callbackWanted(state)) {
-    const number = callbackNumberOf(state, ctx.callerNumber);
-    if (number) {
-      try {
-        await ensureCallbackTask(ctx.db, ctx.accountId, {
-          callId: meta.callRowId, contactId,
-          title: callbackTaskTitle(number, recordedReason(state)),
-          dueAt: meta.endedAt.toISOString(),
-        }, ACTOR_ID, ACTOR_TYPE);
-        callbackTodo = true;
-      } catch (e) {
-        console.error(`finishCall ${meta.callRowId}: callback To do failed: ${String(e)}`);
-      }
+  if (meta.callRowId && callbackLine) {
+    try {
+      await ensureCallbackTask(ctx.db, ctx.accountId, {
+        callId: meta.callRowId, contactId,
+        title: callbackLine,
+        dueAt: meta.endedAt.toISOString(),
+      }, ACTOR_ID, ACTOR_TYPE);
+      callbackTodo = true;
+    } catch (e) {
+      console.error(`finishCall ${meta.callRowId}: callback To do failed: ${String(e)}`);
     }
   }
 
