@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
@@ -22,7 +22,7 @@ function row(i: number): ContactRow {
 
 function render(
   rows: ContactRow[],
-  opts: { sort?: "name" | "company" | "created"; dir?: "asc" | "desc" } = {},
+  opts: { sort?: "name" | "company" | "created"; dir?: "asc" | "desc"; timezone?: string } = {},
 ) {
   return renderToStaticMarkup(createElement(ContactsTable, {
     rows,
@@ -30,6 +30,7 @@ function render(
     existingTags: [],
     sort: opts.sort ?? "created",
     dir: opts.dir ?? "desc",
+    timezone: opts.timezone ?? "America/Chicago",
   }));
 }
 
@@ -79,6 +80,28 @@ describe("ContactsTable", () => {
   it("defaults to created, descending, with no explicit sort/dir props given by a caller that hasn't sorted", () => {
     const cells = headerCells(render([row(0)]));
     expect(cells.find((c) => c.text.includes(m["contacts.col.created"]))?.aria).toBe("descending");
+  });
+
+  // D-010: the "Created" column rendered through `formatDate` — the
+  // RUNTIME's zone (server or browser), never the account's. `process.env.TZ`
+  // stands in for "whichever zone the runtime happens to be in", pinned to a
+  // zone that disagrees with the account's own so the assertion means the
+  // same thing on any machine.
+  describe("the Created column renders in the ACCOUNT's zone, not the runtime's (D-010)", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("mutation: render Created with the runtime's zone instead of the account's → FAILS", () => {
+      vi.stubEnv("TZ", "America/Chicago");
+      const r = row(0);
+      // 23:30 UTC on the 8th is still Oct 8 in Chicago, but already Oct 9 in
+      // Berlin — the account's own calendar day, which "Created" must name.
+      r.created_at = "2026-10-08T23:30:00.000Z";
+      const html = render([r], { timezone: "Europe/Berlin" });
+      expect(html).toContain("Oct 9, 2026");
+      expect(html).not.toContain("Oct 8, 2026");
+    });
   });
 });
 
