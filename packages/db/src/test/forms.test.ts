@@ -150,10 +150,14 @@ describe("forms", () => {
       expect((await getForm(db, accountId, id))!.name).toBe("A");
     }));
 
-  it("countFormsMissingNotify counts only forms whose notify_emails is still empty", () =>
+  it("countFormsMissingNotify counts only PUBLISHED forms whose notify_emails is still empty", () =>
     withTestAccount(async (db, accountId) => {
       const { id: bareId } = await createForm(db, accountId, { name: "No notify" }, "user_test");
       const { id: notifiedId } = await createForm(db, accountId, { name: "Notified" }, "user_test");
+      // Both forms are live, so the count below reflects notify_emails alone,
+      // never status — that half of the behaviour has its own test below.
+      await updateForm(db, accountId, bareId, { status: "published" }, "user_test");
+      await updateForm(db, accountId, notifiedId, { status: "published" }, "user_test");
 
       // Both forms start with the schema default '{}' — count reflects that.
       expect(await countFormsMissingNotify(db, accountId)).toBe(2);
@@ -167,6 +171,26 @@ describe("forms", () => {
       expect(await countFormsMissingNotify(db, accountId)).toBe(2);
       // Both forms present, neither miscounted as the other's account.
       expect(await getForm(db, accountId, bareId)).not.toBeNull();
+    }));
+
+  // D-026: a form that cannot yet (draft) or can no longer (archived) receive
+  // a real submission was still blocking the checklist's "set a notify
+  // address" item — an operator could never clear the warning for a form
+  // they have deliberately not published, or has already retired.
+  it("countFormsMissingNotify excludes drafts and archived forms, even with an empty notify list", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: draftId } = await createForm(db, accountId, { name: "Still drafting" }, "user_test");
+      const { id: archivedId } = await createForm(db, accountId, { name: "Retired" }, "user_test");
+      await updateForm(db, accountId, archivedId, { status: "archived" }, "user_test");
+
+      // Neither form is live, so neither should count against the checklist.
+      expect(await countFormsMissingNotify(db, accountId)).toBe(0);
+
+      const { id: publishedId } = await createForm(db, accountId, { name: "Live" }, "user_test");
+      await updateForm(db, accountId, publishedId, { status: "published" }, "user_test");
+      expect(await countFormsMissingNotify(db, accountId)).toBe(1);
+
+      expect(await getForm(db, accountId, draftId)).not.toBeNull();
     }));
 
   it("RLS hides another tenant's forms from an authenticated caller", () =>

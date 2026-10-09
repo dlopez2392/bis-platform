@@ -398,13 +398,18 @@ export async function listSubmissions(
  * `listForms` returns no `notify_emails`, so the checklist's "forms still
  * have no notification address" warning needs its own count rather than a
  * derived one.
+ *
+ * Scoped to `status = 'published'` (D-026): a draft cannot yet receive a
+ * submission and an archived form no longer can, so neither has a lead to
+ * lose — counting them left an operator unable to ever clear the checklist
+ * item for a form deliberately left unpublished or already retired.
  */
 export async function countFormsMissingNotify(
   db: SupabaseClient, accountId: string,
 ): Promise<number> {
   const { count, error } = await db.from("forms")
     .select("id", { count: "exact", head: true })
-    .eq("account_id", accountId).eq("notify_emails", "{}");
+    .eq("account_id", accountId).eq("status", "published").eq("notify_emails", "{}");
   if (error) throw new Error(`countFormsMissingNotify failed: ${error.message}`);
   return count ?? 0;
 }
