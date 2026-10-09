@@ -1,4 +1,4 @@
-import { readConsentState, readAccountTimezone, getMailingAddress, readEmailSuppression, serviceDb, type SupabaseClient } from "@bis/db";
+import { readConsentState, readAccountTimezone, getMailingAddress, readEmailSuppression, serviceDb, EMAIL_SUPPRESSION_METHODS, type SupabaseClient } from "@bis/db";
 import { emailLedgerAddress } from "@bis/db/email-address";
 import { getEmailProvider } from "@/lib/email";
 import { isProductionEnv } from "@/lib/email/environment";
@@ -226,7 +226,16 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
     if (!deps.db) throw new Error(`email gate: ${req.kind} reads the ledger and needs a client`);
     try {
       const state = await readConsentState(deps.db, req.accountId!, "email", address);
-      if (state.state === "stopped") return { kind: "blocked", reason: "stopped" };
+      if (state.state === "stopped") {
+        // Review item 1 (D-016): a hard bounce or a complaint is written as
+        // a plain `revoked` row on THIS SAME ledger (consent.ts's
+        // EMAIL_SUPPRESSION_METHODS), so an informational/marketing kind
+        // sees it right here, never through the item-3 check above (which
+        // only runs for the kinds this branch skips). Told apart by its
+        // method, not folded into the generic "they asked not to" reason.
+        const suppressed = (EMAIL_SUPPRESSION_METHODS as readonly string[]).includes(state.method);
+        return { kind: "blocked", reason: suppressed ? "suppressed" : "stopped" };
+      }
       if (state.state === "held") return { kind: "blocked", reason: "held" };
     } catch (e) {
       console.error(`email gate: ${req.kind} for account ${req.accountId} blocked, consent state unreadable: ${loggableError(e)}`);

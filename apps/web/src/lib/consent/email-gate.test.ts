@@ -75,6 +75,23 @@ describe("sendEmail: what an unsubscribe stops (decision 7)", () => {
       expect(send).not.toHaveBeenCalled();
     });
 
+  // Review item 1 (D-016): every automation.* email kind reads the LEDGER
+  // (the branch above), never the new readEmailSuppression check (item 3,
+  // which only runs for kinds the ledger read skips) — so a bounce or a
+  // complaint reaches THIS branch as a plain `revoked`/"stopped" row, and
+  // without this fix it would be told apart from a real "they asked not to"
+  // stop nowhere upstream of the Activity page's reason text.
+  it.each(["automation.reminder", "automation.review_request"] as const)(
+    "%s to an address the LEDGER's OWN bounce/complaint row stopped is blocked `suppressed`, never the generic `stopped` (mutation: drop the method check → FAILS)", async (kind) => {
+      db.readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T00:00:00Z", method: "email_bounce", eventId: "e1" });
+      expect(await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed" });
+      db.readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T00:00:00Z", method: "email_complaint", eventId: "e2" });
+      expect(await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed" });
+      // A REAL customer stop on the same branch is untouched.
+      db.readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T00:00:00Z", method: "one_click", eventId: "e3" });
+      expect(await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "stopped" });
+    });
+
   it.each(["booking.confirmation", "forms.receipt", "voice.booked", "voice.moved", "voice.cancelled",
     "staff.composer_email", "operator.booking_alert"] as const)(
     "%s is NOT subject to the ledger: it never reads it and sends to a stopped address (decision 7, choices 22 and 23; mutation: read the ledger for every kind → FAILS)", async (kind) => {
