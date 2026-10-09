@@ -99,7 +99,9 @@ test("an email sent from a contact appears on that contact's timeline", async ({
   try {
     await page.goto(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
 
-    const body = `Timeline check ${stamp}`;
+    // Must not share words with the contact's name ("Timeline Check <stamp>",
+    // the page heading): getByText ignores case, so it matched both.
+    const body = `Hello from the e2e send ${stamp}`;
     // The composer has no <label>s — it is a mode toggle plus placeholders.
     await page.getByRole("button", { name: "Email", exact: true }).click();
     await page.getByPlaceholder("Subject").fill("Timeline check");
