@@ -323,6 +323,56 @@ async function flagDuplicatePair(
   return true;
 }
 
+/**
+ * The post-write duplicate check both `updateContact` and
+ * `fillContactBlanks` run (D-012, reached by two different write paths —
+ * a direct edit and a proposal-approval/booking/voice fill). Checks ONLY
+ * the columns `written` actually names (an unchanged phone, or a field
+ * this call never wrote at all, is never checked — there is nothing new
+ * to collide with) for a match against a DIFFERENT contact's
+ * `email_key`/`phone_key`, and flags the pair via the existing
+ * `flagDuplicatePair`/`contact_duplicate_flags` queue on a hit.
+ *
+ * Called AFTER the write it is about has already succeeded, and never
+ * blocks or throws: the write that landed is the truth about this row
+ * (same policy as `setContactPhoneCountry` choosing a phone's country),
+ * and a failed check here is logged, never thrown — a throw would report
+ * a failed write that actually succeeded (review R3-M11's rule).
+ *
+ * Returns whether EITHER column was flagged — a fresh flag, or the
+ * designed no-op repeat of one already on file (`flagDuplicatePair`
+ * itself returns `true` for both) — so a caller that reports write-time
+ * progress (`applyImportBatch`'s `flagged` count) can count it.
+ */
+async function flagDuplicatesAfterWrite(
+  db: SupabaseClient, accountId: string, contactId: string,
+  written: { email?: unknown; phone?: unknown },
+): Promise<boolean> {
+  let flagged = false;
+  if (typeof written.email === "string" && written.email) {
+    const eKey = emailKey(written.email);
+    const { data: twins, error: twinErr } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("email_key", eKey).neq("id", contactId).limit(1);
+    if (twinErr) {
+      console.error(`contact duplicate check (email) for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
+    } else {
+      const twin = (twins ?? [])[0] as { id: string } | undefined;
+      if (twin) flagged = (await flagDuplicatePair(db, accountId, contactId, twin.id, "email_match_on_edit")) || flagged;
+    }
+  }
+  if (typeof written.phone === "string" && written.phone) {
+    const { data: twins, error: twinErr } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("phone_key", phoneDigits(written.phone)).neq("id", contactId).limit(1);
+    if (twinErr) {
+      console.error(`contact duplicate check (phone) for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
+    } else {
+      const twin = (twins ?? [])[0] as { id: string } | undefined;
+      if (twin) flagged = (await flagDuplicatePair(db, accountId, contactId, twin.id, "phone_match_on_edit")) || flagged;
+    }
+  }
+  return flagged;
+}
+
 export async function createContact(
   db: SupabaseClient, accountId: string, input: ContactInput, actorId: string,
   actorType: ActorType = "user",
@@ -379,7 +429,7 @@ export async function updateContact(
   db: SupabaseClient, accountId: string, contactId: string,
   input: Partial<ContactInput>, actorId: string,
   actorType: ActorType = "user",
-): Promise<void> {
+): Promise<{ flagged: boolean }> {
   // Read the phone as it stands BEFORE this write, so toRow can tell an
   // unchanged number (keep the flag) from a genuinely different one
   // (recompute it) — review C1. Only fetched when a phone is actually being
@@ -403,35 +453,19 @@ export async function updateContact(
   // contact's dedupe key used to create a silent duplicate — same key, two
   // rows, nothing recorded, never reaching the merge queue the way
   // createContact's and setContactPhoneCountry's own duplicate checks do.
-  // Checked AFTER the write succeeds and never blocks it: the operator's
-  // edit is the truth about this row (same policy as setContactPhoneCountry
-  // choosing a phone's country), and any failure here is logged, never
-  // thrown — a throw would report a failed edit that actually went through
-  // (review R3-M11's rule, same as setContactPhoneCountry's own check).
-  // `row.email`/`row.phone` are only set when toRow() decided the value is
-  // genuinely NEW (a cleared field, or a phone re-saved unchanged, leaves
-  // them unset), so an unchanged save can never flag itself.
-  if (typeof row.email === "string" && row.email) {
-    const eKey = emailKey(row.email);
-    const { data: twins, error: twinErr } = await db.from("contacts").select("id")
-      .eq("account_id", accountId).eq("email_key", eKey).neq("id", contactId).limit(1);
-    if (twinErr) {
-      console.error(`updateContact: email duplicate check for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
-    } else {
-      const twin = (twins ?? [])[0] as { id: string } | undefined;
-      if (twin) await flagDuplicatePair(db, accountId, contactId, twin.id, "email_match_on_edit");
-    }
-  }
-  if (typeof row.phone === "string" && row.phone) {
-    const { data: twins, error: twinErr } = await db.from("contacts").select("id")
-      .eq("account_id", accountId).eq("phone_key", phoneDigits(row.phone)).neq("id", contactId).limit(1);
-    if (twinErr) {
-      console.error(`updateContact: phone duplicate check for account ${accountId} failed after the write: code ${twinErr.code ?? "none"}`);
-    } else {
-      const twin = (twins ?? [])[0] as { id: string } | undefined;
-      if (twin) await flagDuplicatePair(db, accountId, contactId, twin.id, "phone_match_on_edit");
-    }
-  }
+  // `flagDuplicatesAfterWrite` is the shared check `fillContactBlanks` below
+  // also runs, for the SAME reason reached through a different write path.
+  //
+  // Review correction: `row.phone` is skipped by `toRow` itself when the
+  // number is unchanged (the `currentPhone` comparison above) — but `row.email`
+  // carries NO such guard; `toRow` sets it on every call that names
+  // `input.email`, changed or not. So a full-form save that resubmits the
+  // SAME email every time re-runs this check every time too. That is
+  // harmless, not a bug: `.neq("id", contactId)` self-excludes, so a save
+  // that didn't actually move the key onto a DIFFERENT contact finds no
+  // twin and flags nothing — it is extra, needless work, never a false flag.
+  const flagged = await flagDuplicatesAfterWrite(db, accountId, contactId, row);
+  return { flagged };
 }
 
 /**
@@ -494,6 +528,14 @@ export async function fillContactBlanks(
     .eq("account_id", accountId).eq("id", contactId);
   if (error) throw new Error(`fillContactBlanks failed: ${error.message}`);
   await emit(db, accountId, "contact.updated", actorId, { contactId, fields: reportedFields }, actorType);
+  // D-012 via this fill path too: a returning caller's email/phone can land
+  // on a DIFFERENT contact's dedupe key exactly as a direct edit can (the
+  // call proposal approval, the /b booking form, finish-call, textback and
+  // the voice tools all reach this function). `written` already carries
+  // only the columns THIS call is actually about to write — `email`/`phone`
+  // are absent from it whenever `patch` never named them — so the shared
+  // check below runs for no more than those.
+  await flagDuplicatesAfterWrite(db, accountId, contactId, written);
   return reportedFields;
 }
 
