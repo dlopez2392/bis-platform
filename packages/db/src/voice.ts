@@ -491,6 +491,117 @@ export async function finishCallRow(
   if (!data || data.length === 0) throw new Error("finishCallRow matched no row");
 }
 
+/**
+ * The call card (0064): why they called, the number to call back, and the
+ * caller's own words. Each field is null when the call did not yield it.
+ *
+ * Written by its OWN update, never as part of `finishCallRow`'s: the call row
+ * is the record every screen and the bill read, and nothing about a card may
+ * be able to cost the call that row (a missing column on a database the
+ * migration has not reached yet, a bad value, anything). `finishCall` calls
+ * this in its tail, inside its own try/catch.
+ */
+export type CallCard = {
+  reason: string | null;
+  /** As the caller said it, or the caller ID — never re-parsed (0064). */
+  callbackNumber: string | null;
+  /** One caller turn, verbatim from the transcript. */
+  callerWords: string | null;
+};
+
+export async function setCallCard(
+  db: SupabaseClient, accountId: string, callId: string, card: CallCard,
+): Promise<void> {
+  const { data, error } = await db.from("calls")
+    .update({ reason: card.reason, callback_number: card.callbackNumber, caller_words: card.callerWords })
+    .eq("id", callId).eq("account_id", accountId).select("id");
+  if (error) throw new Error(`setCallCard failed: ${error.message}`);
+  if (!data || data.length === 0) throw new Error("setCallCard matched no row");
+}
+
+/**
+ * The card of ONE call of this account; null when the call is not this
+ * account's (or does not exist). A call with no card written reads as a card
+ * of three nulls, so a page can tell "no such call" from "nothing to show".
+ *
+ * A read of its own rather than three more columns on `getCall`'s select:
+ * the call detail page must render the call even if this read fails.
+ */
+export async function getCallCard(
+  db: SupabaseClient, accountId: string, callId: string,
+): Promise<CallCard | null> {
+  const { data, error } = await db.from("calls")
+    .select("reason, callback_number, caller_words")
+    .eq("account_id", accountId).eq("id", callId).maybeSingle();
+  if (error) throw new Error(`getCallCard failed: ${error.message}`);
+  if (!data) return null;
+  const row = data as { reason: string | null; callback_number: string | null; caller_words: string | null };
+  return { reason: row.reason, callbackNumber: row.callback_number, callerWords: row.caller_words };
+}
+
+/**
+ * Why each of these calls happened, for the calls list: ONE read for the
+ * page, keyed by call id, holding only calls of this account that have a
+ * reason. No ids, no read.
+ */
+export async function listCallReasons(
+  db: SupabaseClient, accountId: string, callIds: readonly string[],
+): Promise<Map<string, string>> {
+  if (callIds.length === 0) return new Map();
+  const { data, error } = await db.from("calls")
+    .select("id, reason")
+    .eq("account_id", accountId).in("id", [...callIds]).not("reason", "is", null);
+  if (error) throw new Error(`listCallReasons failed: ${error.message}`);
+  return new Map(((data ?? []) as { id: string; reason: string }[]).map((r) => [r.id, r.reason]));
+}
+
+/**
+ * The callback To do a call leaves when the caller wants a person to call
+ * them back (0064): one per call, enforced by `tasks_call_once`, linked to
+ * the call by `tasks.call_id` (which is also what shows it as Sofía's).
+ *
+ * `finishCall` runs once per call, so a second attempt is not a path the
+ * product takes; if one ever arrives it finds the first To do and returns it
+ * (`created: false`), writing and emitting nothing. Any other error throws —
+ * the caller (`finishCall`'s own leg) catches and logs it.
+ *
+ * Mirrors `ensureConsentTask` (activities.ts), the other To do the system
+ * writes for a person.
+ */
+export async function ensureCallbackTask(
+  db: SupabaseClient, accountId: string,
+  input: { callId: string; contactId: string | null; title: string; dueAt: string },
+  actorId: string, actorType: ActorType = "ai",
+): Promise<{ id: string; created: boolean }> {
+  const { data, error } = await db.from("tasks")
+    .insert({
+      account_id: accountId, contact_id: input.contactId, title: input.title,
+      call_id: input.callId, due_at: input.dueAt,
+    })
+    .select("id").single();
+  if (!error && data) {
+    const id = (data as { id: string }).id;
+    // The To do is written; its activity event is a convenience. A failed
+    // emit must not read as a failed To do in finishCall's log (it would
+    // send someone looking for a row that exists), so it is logged as what
+    // it is and the To do is returned.
+    try {
+      await emit(db, accountId, "task.created", actorId,
+        { taskId: id, contactId: input.contactId, callId: input.callId }, actorType);
+    } catch (e) {
+      console.error(`ensureCallbackTask: To do ${id} written, but its task.created emit failed: ${String(e)}`);
+    }
+    return { id, created: true };
+  }
+  if (error?.code !== "23505") throw new Error(`ensureCallbackTask failed: ${error?.message ?? "no row"}`);
+  const { data: found, error: readErr } = await db.from("tasks")
+    .select("id").eq("account_id", accountId).eq("call_id", input.callId).maybeSingle();
+  if (readErr || !found) {
+    throw new Error(`ensureCallbackTask: already there but unreadable: ${readErr?.message ?? "no row"}`);
+  }
+  return { id: (found as { id: string }).id, created: false };
+}
+
 export async function countCallsSince(
   db: SupabaseClient, accountId: string, sinceIso: string,
 ): Promise<number> {

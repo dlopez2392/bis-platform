@@ -64,7 +64,14 @@ const getCallMock = vi.fn();
 const listFailedOutboundSmsMock = vi.fn();
 const listProposalsForCallMock = vi.fn();
 const getContactMock = vi.fn();
+/** The call card (0064) and the persona its author mark names: each its own
+ *  read, each defaulted in `beforeEach` to "nothing", so every case written
+ *  before the card renders exactly what it rendered before. */
+const getCallCardMock = vi.fn();
+const getVoiceProfileMock = vi.fn();
 vi.mock("@bis/db", () => ({
+  getCallCard: (...args: unknown[]) => getCallCardMock(...args),
+  getVoiceProfile: (...args: unknown[]) => getVoiceProfileMock(...args),
   getCall: (...args: unknown[]) => getCallMock(...args),
   listFailedOutboundSms: (...args: unknown[]) => listFailedOutboundSmsMock(...args),
   listProposalsForCall: (...args: unknown[]) => listProposalsForCallMock(...args),
@@ -188,6 +195,8 @@ describe("CallDetailPage", () => {
     // review — only the new describe block below overrides these.
     getContactMock.mockReset().mockResolvedValue({ id: "ct1", phone: "+19565061545", phone_country_unconfirmed: false });
     recipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    getCallCardMock.mockReset().mockResolvedValue({ reason: null, callbackNumber: null, callerWords: null });
+    getVoiceProfileMock.mockReset().mockResolvedValue(null);
   });
 
   it("renders the header, the summary and both sides of the conversation", async () => {
@@ -613,5 +622,55 @@ describe("\"Send it now\" is closed on render when the number cannot be texted (
     const html = await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]);
     expect(html).not.toContain("Send it now");
     expect(renderedText(html)).toContain(m["compose.smsStateUnknown"]);
+  });
+});
+
+describe("CallDetailPage — the call card", () => {
+  const CARD = {
+    reason: "Wants the owner to call about the leak",
+    callbackNumber: "9565061545",
+    callerWords: "I need a roof inspection.",
+  };
+  beforeEach(() => {
+    listFailedOutboundSmsMock.mockClear();
+    getCallCardMock.mockReset().mockResolvedValue(CARD);
+    getVoiceProfileMock.mockReset().mockResolvedValue({ persona_name: "Marisol" });
+  });
+  const text = (html: string) => renderedText(html).replace(/\s+/g, " ");
+
+  it("reads this call's card for this account and shows it above the summary, marked with the account's persona (mutation: drop the panel → FAILS; read another account → FAILS)", async () => {
+    const html = await render(CALL);
+    expect(getCallCardMock).toHaveBeenCalledWith(expect.anything(), "acct1", "call1");
+    expect(getVoiceProfileMock).toHaveBeenCalledWith(expect.anything(), "acct1");
+    expect(text(html)).toContain(`${m["calls.card.reason"]} Wants the owner to call about the leak`);
+    expect(text(html)).toContain("Marisol · AI");
+    expect(html.indexOf('id="call-card"')).toBeGreaterThan(-1);
+    expect(html.indexOf('id="call-card"')).toBeLessThan(html.indexOf('id="call-summary"'));
+  });
+
+  it("a call with no card (three nulls: before cards, spam) renders no card section (mutation: render whenever the read returns → FAILS)", async () => {
+    getCallCardMock.mockResolvedValue({ reason: null, callbackNumber: null, callerWords: null });
+    const html = await render(CALL);
+    expect(html).not.toContain('id="call-card"');
+    expect(text(html)).not.toContain(m["calls.card.reasonUnknown"]);
+  });
+
+  it("a card read that blows up costs the card, never the call (mutation: drop the catch → the page throws, FAILS)", async () => {
+    getCallCardMock.mockRejectedValue(new Error("column calls.reason does not exist"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const html = await render(CALL);
+    expect(html).not.toContain('id="call-card"');
+    expect(html).toContain("I need a roof inspection.");
+    expect(err.mock.calls.some((c) => String(c[0]).includes("call card read failed"))).toBe(true);
+    err.mockRestore();
+  });
+
+  it("no persona to read (no profile, or the read fails) → the mark falls back to Sofía, and the card still shows (mutation: drop the fallback → \" · AI\", FAILS)", async () => {
+    getVoiceProfileMock.mockRejectedValue(new Error("voice_profiles read failed"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(text(await render(CALL))).toContain("Sofía · AI");
+    getVoiceProfileMock.mockResolvedValue({ persona_name: "  " });
+    expect(text(await render(CALL))).toContain("Sofía · AI");
+    err.mockRestore();
   });
 });

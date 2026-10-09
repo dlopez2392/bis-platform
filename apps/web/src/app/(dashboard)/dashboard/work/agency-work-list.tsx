@@ -51,6 +51,7 @@ import { cn } from "@/lib/utils";
 // nothing.
 import type { ResolvedStage } from "../accounts/[accountId]/calls/[callId]/proposals";
 import { CARD, CARD_HEAD } from "../accounts/[accountId]/calls/[callId]/card";
+import { AiAuthorMark } from "../accounts/[accountId]/calls/ai-author-mark";
 
 const BUCKET_ORDER: Bucket[] = ["overdue", "today", "waiting"];
 
@@ -131,6 +132,9 @@ function AgencyWorkRowItem({
   const treatment = BUCKET_TREATMENT[bucket];
   const primary = primaryLabel(row, contactName);
   const secondary = secondaryLine(row, contactName);
+  // DESIGN.md, Provenance: a callback To do a call left (`callId`, 0064) is
+  // the receptionist's, marked as on the account's own To do page.
+  const fromCall = row.source === "task" && Boolean(row.callId);
   const dateText = rowDateText(row);
 
   const body = (
@@ -162,7 +166,12 @@ function AgencyWorkRowItem({
           ) : null}
         </span>
         <span className="truncate text-sm font-medium text-card-foreground">{primary}</span>
-        {secondary ? <span className="truncate text-xs text-muted-foreground">{secondary}</span> : null}
+        {secondary || fromCall ? (
+          <span className="flex min-w-0 items-center gap-2">
+            {secondary ? <span className="truncate text-xs text-muted-foreground">{secondary}</span> : null}
+            {fromCall ? <AiAuthorMark /> : null}
+          </span>
+        ) : null}
       </span>
       <Badge variant="chip" className={cn("shrink-0 gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
         <span className={cn("size-[7px] rounded-full", treatment.dot)} aria-hidden />

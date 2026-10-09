@@ -2042,6 +2042,39 @@ export const m = {
   "calls.detail.assistant": "Assistant",
   "calls.detail.caller": "Caller",
   "calls.detail.noTranscript": "No transcript was recorded for this call.",
+  // The call card: who called, why, the number to call back and the caller's
+  // own words, readable in three seconds. Each line the screen renders has a
+  // written-out `.es` twin that waits for an operator locale (the
+  // `todo.consent.*` precedent); the screen renders the English today.
+  "calls.card.heading": "At a glance",
+  "calls.card.heading.es": "De un vistazo",
+  "calls.card.who": "Who called",
+  "calls.card.who.es": "Quién llamó",
+  "calls.card.reason": "Why they called",
+  "calls.card.reason.es": "Por qué llamó",
+  "calls.card.reasonUnknown": "Not recorded",
+  "calls.card.reasonUnknown.es": "No quedó registrado",
+  "calls.card.callback": "Call back at",
+  "calls.card.callback.es": "Devolver la llamada al",
+  "calls.card.callbackUnknown": "No number. Their caller ID was hidden and they didn't give one.",
+  "calls.card.callbackUnknown.es": "Sin número. Su identificador de llamadas estaba oculto y no dejó uno.",
+  "calls.card.words": "In their words",
+  "calls.card.words.es": "En sus palabras",
+  // The author mark on anything the receptionist wrote (DESIGN.md,
+  // Provenance: "Sofía · AI"). "{name}" is the account's own persona
+  // (voice_profiles.persona_name), "Sofía" when the screen has none to hand.
+  "provenance.ai": "{name} · AI",
+  "provenance.ai.es": "{name} · IA",
+  // The callback To do a call leaves when the caller wants a person to call
+  // them back. The English line is written into tasks.title when the To do is
+  // made (the `todo.consent.*` precedent); the Spanish waits for an operator
+  // locale. "{number}" is the number as the caller said it, or their caller
+  // ID; "{reason}" is what they called about. The bare line is for a call
+  // with no reason recorded.
+  "todo.callback.en": "Call back at {number}: {reason}",
+  "todo.callback.es": "Devuelva la llamada al {number}: {reason}",
+  "todo.callback.bare.en": "Call back at {number}",
+  "todo.callback.bare.es": "Devuelva la llamada al {number}",
 
   "setup.title": "Client setup",
   // The stepper rail's own accessible name. Distinct from `setup.title`

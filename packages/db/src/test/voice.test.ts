@@ -3,6 +3,8 @@ import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { createContact } from "../contacts";
 import { ensureConversation, createMessage } from "../messaging";
 import { getOrCreateCalendar, createBooking, setBookingStatus, getCalendarForAccount } from "../booking";
+import { addTask, listContactTasks } from "../activities";
+import { listAccountWork } from "../work-queue";
 import {
   assignPhoneNumber, getPhoneNumberByE164, setPhoneNumberStatus,
   getVoiceProfile, upsertVoiceProfile,
@@ -16,6 +18,7 @@ import {
   markHandoffRequested, getCallByHandoffToken, setCallOutcome,
   callerInTouchSince,
   goLive, getPhoneNumberById,
+  setCallCard, getCallCard, listCallReasons, ensureCallbackTask,
   type CallOutcome,
 } from "../voice";
 
@@ -888,6 +891,139 @@ describe("goLive", () => {
         expect(await goLiveEvents(db, otherAccountId)).toEqual([]);
         expect(err?.message).toBe("goLive failed: go_live: no such number on this account, or it was released");
       });
+    });
+  });
+});
+
+/**
+ * The call card (0064): why they called, the number to call back and the
+ * caller's own words, written by `finishCall` AFTER the call row is finished,
+ * in its own update — and the callback To do that points back at its call.
+ */
+describe("call card accessors", () => {
+  it("setCallCard writes the three fields; getCallCard reads them back, null cross-account or unknown (mutation: drop .eq(\"account_id\") on the read → account B sees A's card, FAILS)", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db2, accountB) => {
+        const n = await assignPhoneNumber(db, accountA, { e164: testPhoneNumber() }, "user_test");
+        const { id } = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: "+19562921696" });
+        // A call nobody has written a card for reads as an EMPTY card, not
+        // as no call: the page tells those two apart.
+        expect(await getCallCard(db, accountA, id)).toEqual({ reason: null, callbackNumber: null, callerWords: null });
+        await setCallCard(db, accountA, id, {
+          reason: "Wants a quote for a roof leak", callbackNumber: "956 555 0142",
+          callerWords: "My roof started leaking last night and I need someone out here.",
+        });
+        expect(await getCallCard(db, accountA, id)).toEqual({
+          reason: "Wants a quote for a roof leak", callbackNumber: "956 555 0142",
+          callerWords: "My roof started leaking last night and I need someone out here.",
+        });
+        expect(await getCallCard(db, accountB, id)).toBeNull();
+        expect(await getCallCard(db, accountA, "00000000-0000-0000-0000-000000000000")).toBeNull();
+      });
+    });
+  });
+
+  it("setCallCard on another account's call throws and writes nothing (mutation: drop the matched-no-row check → resolves, FAILS)", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db2, accountB) => {
+        const n = await assignPhoneNumber(db, accountA, { e164: testPhoneNumber() }, "user_test");
+        const { id } = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: null });
+        await expect(setCallCard(db, accountB, id, { reason: "x", callbackNumber: null, callerWords: null }))
+          .rejects.toThrow("setCallCard matched no row");
+        expect((await getCallCard(db, accountA, id))?.reason).toBeNull();
+      });
+    });
+  });
+
+  it("listCallReasons answers for exactly the asked calls of this account, skips a call with no reason, and asks nothing for none (mutation: drop .in(\"id\") → the unasked call's reason appears, FAILS)", async () => {
+    await withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (_db2, accountB) => {
+        const n = await assignPhoneNumber(db, accountA, { e164: testPhoneNumber() }, "user_test");
+        const asked = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: null });
+        const blank = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: null });
+        const unasked = await startCallRow(db, accountA, { phoneNumberId: n.id, callerE164: null });
+        await setCallCard(db, accountA, asked.id, { reason: "Roof leak", callbackNumber: null, callerWords: null });
+        await setCallCard(db, accountA, unasked.id, { reason: "Gutter cleaning", callbackNumber: null, callerWords: null });
+        const reasons = await listCallReasons(db, accountA, [asked.id, blank.id]);
+        expect(Object.fromEntries(reasons)).toEqual({ [asked.id]: "Roof leak" });
+        expect((await listCallReasons(db, accountB, [asked.id])).size).toBe(0);
+        expect((await listCallReasons(db, accountA, [])).size).toBe(0);
+      });
+    });
+  });
+
+  it("ensureCallbackTask writes ONE To do linked to its call, due when given, emitted as the AI's; a second attempt finds the first and emits nothing (mutation: drop the 23505 branch → the second call throws, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const n = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const { id: callId } = await startCallRow(db, accountId, { phoneNumberId: n.id, callerE164: "+19562921696" });
+      const contact = await createContact(db, accountId, { firstName: "Ana", phone: "+19562921696" }, "voice", "ai");
+      const dueAt = "2027-06-01T17:02:00.000Z";
+      const first = await ensureCallbackTask(db, accountId,
+        { callId, contactId: contact.id, title: "Call back at +19562921696: Roof leak", dueAt }, "voice", "ai");
+      expect(first.created).toBe(true);
+      const again = await ensureCallbackTask(db, accountId,
+        { callId, contactId: contact.id, title: "Call back at +19562921696: something else", dueAt }, "voice", "ai");
+      expect(again).toEqual({ id: first.id, created: false });
+
+      const { data: tasks } = await db.from("tasks")
+        .select("id, title, due_at, contact_id, call_id, completed_at").eq("account_id", accountId);
+      expect(tasks).toEqual([{
+        id: first.id, title: "Call back at +19562921696: Roof leak", due_at: "2027-06-01T17:02:00+00:00",
+        contact_id: contact.id, call_id: callId, completed_at: null,
+      }]);
+      const { data: events } = await db.from("events").select("type, actor_id, actor_type, payload")
+        .eq("account_id", accountId).eq("type", "task.created");
+      expect(events).toEqual([{
+        type: "task.created", actor_id: "voice", actor_type: "ai",
+        payload: { taskId: first.id, contactId: contact.id, callId },
+      }]);
+    });
+  });
+
+  it("ensureCallbackTask with no contact still writes the To do (a withheld name must not cost the callback)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const n = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const { id: callId } = await startCallRow(db, accountId, { phoneNumberId: n.id, callerE164: "+19562921696" });
+      const r = await ensureCallbackTask(db, accountId,
+        { callId, contactId: null, title: "Call back at +19562921696: Roof leak", dueAt: "2027-06-01T17:02:00.000Z" }, "voice", "ai");
+      const { data } = await db.from("tasks").select("contact_id, call_id").eq("id", r.id).single();
+      expect(data).toEqual({ contact_id: null, call_id: callId });
+    });
+  });
+});
+
+/**
+ * Where a callback To do is SEEN: the To do queue and the contact's
+ * timeline. Each must carry the To do's call, because that link is the only
+ * thing that shows the row as the receptionist's (DESIGN.md, provenance).
+ */
+describe("the callback To do carries its call to the screens that show it", () => {
+  it("listAccountWork: a callback To do's row names its call, a To do a person typed names none (mutation: drop call_id from openTasks' select → callId undefined, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const n = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const { id: callId } = await startCallRow(db, accountId, { phoneNumberId: n.id, callerE164: "+19562921696" });
+      const callback = await ensureCallbackTask(db, accountId,
+        { callId, contactId: null, title: "Call back at +19562921696: Roof leak", dueAt: new Date().toISOString() }, "voice", "ai");
+      const typed = await addTask(db, accountId, { title: "Order shingles" }, "user_test");
+      const rows = await listAccountWork(db, accountId);
+      expect(rows.find((r) => r.id === `task:${callback.id}`)?.callId).toBe(callId);
+      expect(rows.find((r) => r.id === `task:${typed.id}`)?.callId).toBeNull();
+    });
+  });
+
+  it("listContactTasks: the contact's timeline gets each To do's call_id (mutation: drop call_id from the select → undefined, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const n = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const { id: callId } = await startCallRow(db, accountId, { phoneNumberId: n.id, callerE164: "+19562921696" });
+      const contact = await createContact(db, accountId, { firstName: "Ana", phone: "+19562921696" }, "voice", "ai");
+      await ensureCallbackTask(db, accountId,
+        { callId, contactId: contact.id, title: "Call back at +19562921696: Roof leak", dueAt: new Date().toISOString() }, "voice", "ai");
+      await addTask(db, accountId, { contactId: contact.id, title: "Order shingles" }, "user_test");
+      const tasks = await listContactTasks(db, accountId, contact.id);
+      expect(tasks.map((t) => [t.title, t.call_id]).sort()).toEqual([
+        ["Call back at +19562921696: Roof leak", callId],
+        ["Order shingles", null],
+      ]);
     });
   });
 });
