@@ -82,6 +82,17 @@ describe("VercelAnalytics", () => {
     expect(new URL(f.mock.calls[0]![0] as string).searchParams.has("filter")).toBe(false);
     expect(day.visitors).toBe(980);
     expect(day.pages).toHaveLength(2);
+    // D-053: the totals call and every breakdown call cover the SAME
+    // [since, until) — the one pair fetchDayTraffic was given, passed
+    // through unchanged, never recomputed per call. A totals call and a
+    // breakdown call that quietly drifted onto different windows is
+    // exactly what would let a breakdown's shares of that "total" drift
+    // or pass 100%.
+    for (const [u] of f.mock.calls) {
+      const url = new URL(u as string);
+      expect(url.searchParams.get("since")).toBe("2026-09-01T05:00:00.000Z");
+      expect(url.searchParams.get("until")).toBe("2026-09-02T05:00:00.000Z");
+    }
   });
 
   it("listProjects reads /v9/projects for the team and returns id, name and the production domain when present", async () => {
