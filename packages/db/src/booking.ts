@@ -222,12 +222,16 @@ export async function updateCalendarSettings(
  */
 export async function listBookedRanges(
   db: SupabaseClient, calendarId: string, fromIso: string, toIso: string,
+  /** F-048: leave this one booking out — the one a customer is MOVING, which
+   *  is still `booked` while they pick (`computeMoveSlots` in apps/web). */
+  excludeBookingId?: string,
 ): Promise<{ starts_at: string; ends_at: string }[]> {
-  const { data, error } = await db.from("bookings")
+  let q = db.from("bookings")
     .select("starts_at, ends_at")
     .eq("calendar_id", calendarId).eq("status", "booked")
-    .lt("starts_at", toIso).gt("ends_at", fromIso)
-    .order("starts_at", { ascending: true });
+    .lt("starts_at", toIso).gt("ends_at", fromIso);
+  if (excludeBookingId !== undefined) q = q.neq("id", excludeBookingId);
+  const { data, error } = await q.order("starts_at", { ascending: true });
   if (error) throw new Error(`listBookedRanges failed: ${error.message}`);
   return data ?? [];
 }
@@ -605,6 +609,92 @@ export async function rescheduleChain(
     id = from;
   }
   throw new Error(`rescheduleChain: booking ${bookingId} is more than ${RESCHEDULE_CHAIN_MAX} moves deep`);
+}
+
+/** F-048: a move refused because the booking is not (or is no longer) a live
+ *  booking of this account. Nothing was left written: either nothing was
+ *  written at all, or the replacement was taken back out. */
+export class BookingNotMovableError extends Error {
+  constructor(message = "booking is not live, so it cannot be moved") {
+    super(message);
+    this.name = "BookingNotMovableError";
+  }
+}
+
+/**
+ * F-048: a customer moves their own booking (the link in their email). The
+ * receptionist's reschedule, as a primitive, made safe for a link two tabs
+ * can hold at once:
+ *
+ *  1. read the row, this account's, and refuse anything not `booked`;
+ *  2. book the NEW range first, naming the old row (`rescheduled_from_id`,
+ *     0061), carrying its contact, calendar, note and booker zone: never
+ *     leave the customer with nothing. A taken range is `SlotTakenError`
+ *     from `createBooking`, and the old row is untouched;
+ *  3. cancel the old row ONLY IF it is still `booked` (`onlyFrom`), with the
+ *     same `booking.status_changed` the reschedule writes. If it is not (the
+ *     other tab cancelled or moved it in between), the new row is DELETED,
+ *     not cancelled: it never was an appointment, and a cancelled row naming
+ *     the old one would read as a move (`bookingWasMoved`) and block an Undo
+ *     (`undoOperatorCancel`). Its `booking.created` event stays. Then
+ *     `BookingNotMovableError`.
+ *
+ * The new row gets its own cancel token (the old row's now opens a cancelled
+ * booking), and `rescheduleChain` gives its calendar file the old row's UID
+ * with the next SEQUENCE, so the event a customer saved is updated.
+ * THROWS a plain Error on a read or write failure, after the same take-back.
+ */
+export async function moveBooking(
+  db: SupabaseClient, accountId: string, bookingId: string,
+  to: { startsAt: Date; endsAt: Date; meetingUrl?: string },
+  actorId: string, actorType: ActorType = "user",
+): Promise<{ id: string; cancelToken: string }> {
+  const { data, error } = await db.from("bookings")
+    .select("id, calendar_id, contact_id, note, booker_timezone, status")
+    .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
+  if (error) throw new Error(`moveBooking read failed: ${error.message}`);
+  const old = data as {
+    id: string; calendar_id: string; contact_id: string;
+    note: string | null; booker_timezone: string | null; status: BookingStatus;
+  } | null;
+  if (!old || old.status !== "booked") throw new BookingNotMovableError();
+
+  const created = await createBooking(db, accountId, {
+    calendarId: old.calendar_id, contactId: old.contact_id,
+    startsAt: to.startsAt, endsAt: to.endsAt,
+    note: old.note ?? undefined, bookerTimezone: old.booker_timezone ?? undefined,
+    meetingUrl: to.meetingUrl, rescheduledFromId: old.id,
+  }, actorId, actorType);
+
+  try {
+    await setBookingStatus(db, accountId, old.id, "cancelled", actorId, actorType, { onlyFrom: "booked" });
+  } catch (e) {
+    const { error: delErr } = await db.from("bookings").delete()
+      .eq("account_id", accountId).eq("id", created.id);
+    if (delErr) {
+      throw new Error(`moveBooking: ${old.id} was not cancelled (${String(e)}) and its replacement `
+        + `${created.id} could not be taken back: ${delErr.message}`);
+    }
+    // Zero rows matched `onlyFrom: "booked"`: the row is no longer live.
+    // Anything else was a write failure, reported as one.
+    if (e instanceof Error && e.message.startsWith("setBookingStatus: no booking")) {
+      throw new BookingNotMovableError();
+    }
+    throw e;
+  }
+  return created;
+}
+
+/** F-048: whether a move replaced this booking (a row of this account names
+ *  it in `rescheduled_from_id`). The cancel and move pages read it so an old
+ *  link says "moved", not "cancelled". THROWS on a read error. */
+export async function bookingWasMoved(
+  db: SupabaseClient, accountId: string, bookingId: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("bookings").select("id")
+    .eq("account_id", accountId).eq("rescheduled_from_id", bookingId).limit(1);
+  if (error) throw new Error(`bookingWasMoved failed: ${error.message}`);
+  return (data?.length ?? 0) > 0;
 }
 
 /** How many started-but-unmarked bookings the operator's list carries at
