@@ -532,15 +532,35 @@ export async function discardQueuedNotice(
   const removed = (data ?? []) as { id: string; conversation_id: string }[];
   if (removed.length === 0) return false;
 
+  // Round 3: a compare-and-set, never an unconditional write. A message can
+  // land on this thread between the reads below and the write, and its touch
+  // moves last_message_at to NOW; writing the older time over it would sort
+  // a live thread down. So the value read first (V) is a predicate on the
+  // write: zero rows matched means something newer already touched the
+  // conversation, and it is left alone. (Comparing against the deleted row's
+  // created_at could never match: that is the DB clock's default now(),
+  // while createMessage's touch writes the app clock.)
   const conversationId = removed[0]!.conversation_id;
-  const { data: newest, error: newestErr } = await db.from("messages").select("created_at")
-    .eq("account_id", accountId).eq("conversation_id", conversationId)
-    .order("created_at", { ascending: false }).limit(1);
-  const { error: resetErr } = newestErr ? { error: newestErr } : await db.from("conversations")
-    .update({ last_message_at: ((newest ?? []) as { created_at: string }[])[0]?.created_at ?? null })
-    .eq("account_id", accountId).eq("id", conversationId);
-  if (resetErr) {
-    console.error(`discardQueuedNotice: conversation ${conversationId} sort time not reset: ${resetErr.message}`);
+  const reset = async (): Promise<string | null> => {
+    const { data: conv, error: convErr } = await db.from("conversations").select("last_message_at")
+      .eq("account_id", accountId).eq("id", conversationId).maybeSingle();
+    if (convErr) return convErr.message;
+    if (!conv) return null;
+    const seen = (conv as { last_message_at: string | null }).last_message_at;
+    const { data: newest, error: newestErr } = await db.from("messages").select("created_at")
+      .eq("account_id", accountId).eq("conversation_id", conversationId)
+      .order("created_at", { ascending: false }).limit(1);
+    if (newestErr) return newestErr.message;
+    let q = db.from("conversations")
+      .update({ last_message_at: ((newest ?? []) as { created_at: string }[])[0]?.created_at ?? null })
+      .eq("account_id", accountId).eq("id", conversationId);
+    q = seen === null ? q.is("last_message_at", null) : q.eq("last_message_at", seen);
+    const { error: resetErr } = await q;
+    return resetErr ? resetErr.message : null;
+  };
+  const failure = await reset();
+  if (failure) {
+    console.error(`discardQueuedNotice: conversation ${conversationId} sort time not reset: ${failure}`);
   }
   return true;
 }

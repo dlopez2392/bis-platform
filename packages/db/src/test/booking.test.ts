@@ -1286,6 +1286,78 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
     });
   });
 
+  /**
+   * Round 3: the reset races a message arriving on the same thread. An
+   * inbound message landing between the reset's reads and its write moves
+   * `last_message_at` to NOW; an unconditional write then puts the older
+   * time back over it. The reset is a compare-and-set on the value it read,
+   * so it leaves a newer touch alone. The race is forced, not hoped for: the
+   * client handed in runs the inbound write just before the conversation
+   * UPDATE is awaited.
+   */
+  it("discardQueuedNotice never overwrites a newer message's touch that lands mid-reset (mutation: an unconditional reset → the older time wins, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const lastAt = async (id: string) => {
+        const { data, error } = await db.from("conversations").select("last_message_at").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return (data as { last_message_at: string | null }).last_message_at;
+      };
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Race" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const earlier = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "inbound", body: "hi" }, "user_test");
+      const { error: ageErr } = await db.from("messages").update({ created_at: "2020-01-01T00:00:00.000Z" }).eq("id", earlier.id);
+      if (ageErr) throw new Error(ageErr.message);
+      const queued = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "q" }, "user_test");
+
+      // Runs once, just before the reset's UPDATE on conversations is awaited.
+      let injected = false;
+      const inject = async () => {
+        if (injected) return;
+        injected = true;
+        await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "inbound", body: "just in" }, "user_test");
+      };
+      const beforeAwait = <T extends object>(builder: T): T => {
+        const proxy: T = new Proxy(builder, {
+          get(target, prop) {
+            if (prop === "then") {
+              return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+                inject().then(() => (target as unknown as PromiseLike<unknown>).then(res, rej), rej);
+            }
+            const v = Reflect.get(target, prop, target);
+            if (typeof v !== "function") return v;
+            return (...args: unknown[]) => {
+              const r = (v as (...a: unknown[]) => unknown).apply(target, args);
+              return r === target ? proxy : r;
+            };
+          },
+        });
+        return proxy;
+      };
+      const racyDb = new Proxy(db, {
+        get(target, prop) {
+          if (prop !== "from") return Reflect.get(target, prop, target);
+          return (table: string) => {
+            const qb = target.from(table);
+            if (table !== "conversations") return qb;
+            return new Proxy(qb, {
+              get(t, p) {
+                const v = Reflect.get(t, p, t);
+                if (p === "update") return (...a: unknown[]) => beforeAwait((v as (...x: unknown[]) => object).apply(t, a));
+                return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+              },
+            });
+          };
+        },
+      }) as SupabaseClient;
+
+      expect(await discardQueuedNotice(racyDb, accountId, queued.id)).toBe(true);
+      expect(injected, "the race was forced").toBe(true);
+      // The inbound message's touch is newer than anything the reset read;
+      // it must survive, not be replaced by the 2020 message's time.
+      expect(new Date((await lastAt(convo.id))!).getTime()).toBeGreaterThan(new Date("2025-01-01T00:00:00Z").getTime());
+    });
+  });
+
   it("rescheduleChain refuses a booking that is not this account's (mutation: drop the account scope → it answers, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       await withTestAccount(async (_db2, otherAccountId) => {
