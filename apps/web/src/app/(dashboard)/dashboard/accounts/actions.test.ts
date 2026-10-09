@@ -235,9 +235,33 @@ describe("adoptOrphanOrgAction (D-087)", () => {
 
   it("refuses an organisation Clerk no longer has, writing nothing", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    clerkMocks.getOrg.mockRejectedValue(new Error("not found"));
+    clerkMocks.getOrg.mockRejectedValue(Object.assign(new Error("not found"), { status: 404 }));
     expect(await adoptOrphanOrgAction("org_gone", tz()))
       .toEqual({ ok: false, error: m["accounts.orphan.adoptGone"] });
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
+
+  it("a Clerk outage is not reported as a missing organisation: its own words, its own log line (mutation: one refusal for both → FAILS)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    clerkMocks.getOrg.mockRejectedValue(Object.assign(new Error("Service Unavailable"), { status: 503 }));
+    expect(await adoptOrphanOrgAction(CLERK_ORG_ID, tz()))
+      .toEqual({ ok: false, error: m["accounts.orphan.adoptClerkDown"] });
+    expect(m["accounts.orphan.adoptClerkDown"]).not.toBe(m["accounts.orphan.adoptGone"]);
+    expect(String(err.mock.calls.at(-1)?.[0])).toMatch(/could not reach Clerk/i);
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
+
+  it("a 404 from Clerk is the missing-organisation refusal", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    clerkMocks.getOrg.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
+    expect(await adoptOrphanOrgAction(CLERK_ORG_ID, tz()))
+      .toEqual({ ok: false, error: m["accounts.orphan.adoptGone"] });
+  });
+
+  it("refuses an organisation whose Clerk name is blank, so no account is born with a blank brand name (mutation: drop the check → FAILS)", async () => {
+    clerkMocks.getOrg.mockResolvedValue({ id: CLERK_ORG_ID, name: "   " });
+    expect(await adoptOrphanOrgAction(CLERK_ORG_ID, tz()))
+      .toEqual({ ok: false, error: m["accounts.orphan.adoptNoName"] });
     expect(dbMocks.createAccount).not.toHaveBeenCalled();
   });
 

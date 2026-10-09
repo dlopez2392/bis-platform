@@ -166,16 +166,26 @@ export async function adoptOrphanOrgAction(
     const clerk = await clerkClient();
     org = await clerk.organizations.getOrganization({ organizationId: orgId });
   } catch (e) {
-    console.error(`adoptOrphanOrgAction: Clerk has no organization ${orgId}: ${String(e)}`);
-    return { ok: false, error: m["accounts.orphan.adoptGone"] };
+    // A 404 is a real answer (the org is gone); anything else (a 503, a
+    // timeout, a bad key) is Clerk not answering, and saying "it is gone"
+    // would send the agency to delete or recreate something that exists.
+    if ((e as { status?: number }).status === 404) {
+      console.error(`adoptOrphanOrgAction: Clerk has no organization ${orgId}: ${String(e)}`);
+      return { ok: false, error: m["accounts.orphan.adoptGone"] };
+    }
+    console.error(`adoptOrphanOrgAction: could not reach Clerk for organization ${orgId}: ${String(e)}`);
+    return { ok: false, error: m["accounts.orphan.adoptClerkDown"] };
   }
+  // The org name becomes brand_name (createAccount's fallback), and a blank
+  // brand name is the one thing brandDisplayName promises never happens.
+  if (!org.name?.trim()) return { ok: false, error: m["accounts.orphan.adoptNoName"] };
   // createClientAccount's reason: the fixture sweep deletes any account on a
   // test-shaped org id within the hour.
   if (isTestOrgId(org.id)) return { ok: false, error: m["accounts.createRefusedTestOrgId"] };
 
   let id: string;
   try {
-    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name: org.name, timezone, actorId: userId }));
+    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name: org.name.trim(), timezone, actorId: userId }));
   } catch (e) {
     console.error(`adoptOrphanOrgAction: account write failed for org ${org.id}: ${String(e)}`);
     return { ok: false, error: m["accounts.orphan.adoptFailed"] };

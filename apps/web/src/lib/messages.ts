@@ -112,6 +112,8 @@ export const m = {
   "accounts.orphan.adoptTitle": "Add \"{name}\" as a company",
   "accounts.orphan.adoptHint": "Finishes the company Clerk already has, keeping its name. Anyone already invited can sign in once you turn on Client access in its Settings, which opens next.",
   "accounts.orphan.adoptGone": "That organization is no longer in Clerk. Reload the page.",
+  "accounts.orphan.adoptClerkDown": "Couldn't reach Clerk to check that organization. Nothing was saved. Try again in a minute.",
+  "accounts.orphan.adoptNoName": "That organization has no name in Clerk. Give it one there, then try again.",
   "accounts.orphan.adoptFailed": "Could not add that company. It may already have been added: reload the page and check the list.",
   "accounts.orphan.unavailable": "Could not reach Clerk to check for half-created companies. The list below is unaffected.",
 
