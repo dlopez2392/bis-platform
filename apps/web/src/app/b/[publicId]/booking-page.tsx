@@ -149,6 +149,17 @@ export function successCopy(
   };
 }
 
+/**
+ * F-048: the add-to-calendar link on the success screen, beside the cancel
+ * hint. Null without a url (no origin), the same never-a-link-to-nowhere rule
+ * the cancel hint keeps. Pure, like `successCopy`.
+ */
+export function calendarLink(
+  strings: BookingStrings, result: { calendarUrl: string },
+): { href: string; label: string } | null {
+  return result.calendarUrl ? { href: result.calendarUrl, label: strings.addToCalendar } : null;
+}
+
 export function BookingPage({
   locale, strings, todayKey, maxAdvanceDays, renderToken, attribution, getSlots, submit,
 }: Props) {
@@ -389,6 +400,7 @@ export function BookingPage({
 
   if (result?.ok) {
     const copy = successCopy(strings, result);
+    const calendar = calendarLink(strings, result);
     return (
       <div className="bis-booking" ref={rootRef}>
         <style>{BOOKING_CSS}</style>
@@ -414,6 +426,9 @@ export function BookingPage({
             </p>
           ) : null}
           <p className="bis-booking-success-body">{copy.body}</p>
+          {calendar ? (
+            <p className="bis-booking-calendar"><a href={calendar.href}>{calendar.label}</a></p>
+          ) : null}
           {copy.cancelHref ? (
             <p className="bis-booking-cancel-hint"><a href={copy.cancelHref}>{copy.cancelHint}</a></p>
           ) : (
@@ -846,6 +861,8 @@ const BOOKING_CSS = `
 .bis-booking-success-title { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 4px; }
 .bis-booking-success-when { margin: 0 0 12px; font-weight: 600; }
 .bis-booking-success-body { color: var(--muted-foreground, #71717a); margin: 0 0 16px; }
+.bis-booking-calendar { margin: 0 0 8px; font-weight: 600; }
+.bis-booking-calendar a { color: var(--bis-accent); }
 .bis-booking-cancel-hint { font-size: 13px; color: var(--muted-foreground, #71717a); margin: 0; }
 
 /* --- Ours, quietly ---------------------------------------------------------

@@ -26,12 +26,15 @@ import { normalizeLocale } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { bookingConfirmationSubject } from "@/lib/email/templates/booking";
 import { recordBookingGrant } from "@/lib/consent/grants";
+import { calendarFileUrl } from "@/lib/booking/calendar-file";
 
 export type BookingResult =
   /** `confirmationSent` (D-033): true only once the email gate said the
    *  booker's confirmation was SENT. The success screen claims an email only
    *  when it is true. */
-  | { ok: true; cancelUrl: string; confirmationSent: boolean }
+  /** `calendarUrl` (F-048): the add-to-calendar file, "" when there is no
+   *  origin to build it on — the same empty-means-omit shape as `cancelUrl`. */
+  | { ok: true; cancelUrl: string; calendarUrl: string; confirmationSent: boolean }
   | { ok: false; error: string; slotTaken?: true };
 
 // Every db mutation this action makes passes this pair. The trailing
@@ -220,7 +223,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       // harmless here because a person filling this form in good faith does
       // not hit this branch. `confirmationSent: true` for the same reason:
       // a real accept nearly always says true, so the fake says it too.
-      return { ok: true, cancelUrl: "", confirmationSent: true };
+      return { ok: true, cancelUrl: "", calendarUrl: "", confirmationSent: true };
     }
 
     const token = verifyRenderToken(str(formData, RENDER_TOKEN_FIELD), Date.now(), publicId);
@@ -237,10 +240,10 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }
       // `malformed`/`bad_signature` stay folded into the shared fake success —
       // unlike `expired`, there is no real visitor on the other end of those.
-      return { ok: true, cancelUrl: "", confirmationSent: true };
+      return { ok: true, cancelUrl: "", calendarUrl: "", confirmationSent: true };
     }
     if (token.elapsedMs < MIN_FILL_MS) {
-      return { ok: true, cancelUrl: "", confirmationSent: true };
+      return { ok: true, cancelUrl: "", calendarUrl: "", confirmationSent: true };
     }
 
     // --- The booking --------------------------------------------------
@@ -417,6 +420,9 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     const cancelUrl = originFrom(h)
       ? `${originFrom(h)}/b/${publicId}/cancel/${cancelToken}${locale === "es" ? "?locale=es" : ""}`
       : "";
+    // F-048: the booking's add-to-calendar file, on the same origin and
+    // token as the cancel link, in the booker's language.
+    const calendarUrl = calendarFileUrl(originFrom(h), publicId, cancelToken, locale);
 
     // Everything below is best-effort, structurally, not just by convention:
     // a send through the email gate THROWS (`EmailNotSent`) when the
@@ -477,7 +483,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }
 
       const { html, text } = bookingConfirmationEmail({
-        brand, locale, whenBookerZone, whenCompanyZone: whenCompanyZoneForBooker, cancelUrl, meetingUrl,
+        brand, locale, whenBookerZone, whenCompanyZone: whenCompanyZoneForBooker, cancelUrl, meetingUrl, calendarUrl,
       });
       await sendEmailOrThrow({
         // The customer-initiated kind (spec §4.3): it answers what the booker
@@ -519,7 +525,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       console.error(`booking ${bookingId} alert SMS failed: ${String(e)}`);
     }
 
-    return { ok: true, cancelUrl, confirmationSent };
+    return { ok: true, cancelUrl, calendarUrl, confirmationSent };
   } catch (e) {
     console.error(`submitBookingAction ${publicId} failed: ${String(e)}`);
     return { ok: false, error: s.genericError };

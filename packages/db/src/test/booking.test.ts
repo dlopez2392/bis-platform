@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
+import { ensureConversation, createMessage, updateMessageStatus } from "../messaging";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   getOrCreateCalendar, getCalendarByPublicId, updateCalendarSettings,
@@ -9,6 +10,7 @@ import {
   listBookedRanges, listCalendarBookings, listDueReminders, stampReminderSent,
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
   SlotTakenError, BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel,
+  claimCancelNotice, rescheduleChain, bookingContactEmail, discardQueuedNotice, noticeMessageStatus,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -449,25 +451,25 @@ describe("booking accessors", () => {
       };
 
       const own = await createBooking(db, accountId, range("01"), "user_test");
-      await setBookingStatus(db, accountId, own.id, "cancelled", "user_test");
-      expect(await reason(undoOperatorCancel(db, accountId, own.id, "user_test"))).toBe("restored");
+      const ownCancel = await setBookingStatus(db, accountId, own.id, "cancelled", "user_test");
+      expect(await reason(undoOperatorCancel(db, accountId, own.id, "user_test", ownCancel.updatedAt))).toBe("restored");
       expect(await statusOf(own.id)).toBe("booked");
 
       const moved = await createBooking(db, accountId, range("02"), "user_test");
       // A PERSON cancelled it, so only the reschedule check can refuse it.
-      await setBookingStatus(db, accountId, moved.id, "cancelled", "user_test");
+      const movedCancel = await setBookingStatus(db, accountId, moved.id, "cancelled", "user_test");
       await createBooking(db, accountId, { ...range("03"), rescheduledFromId: moved.id }, "user_test");
-      expect(await reason(undoOperatorCancel(db, accountId, moved.id, "user_test"))).toBe("rescheduled");
+      expect(await reason(undoOperatorCancel(db, accountId, moved.id, "user_test", movedCancel.updatedAt))).toBe("rescheduled");
       expect(await statusOf(moved.id)).toBe("cancelled");
 
       const byLink = await createBooking(db, accountId, range("04"), "user_test");
-      await cancelBookingByToken(db, byLink.cancelToken);
-      expect(await reason(undoOperatorCancel(db, accountId, byLink.id, "user_test"))).toBe("not_operator_cancel");
+      const linkRow = await cancelBookingByToken(db, byLink.cancelToken);
+      expect(await reason(undoOperatorCancel(db, accountId, byLink.id, "user_test", (linkRow as unknown as { updated_at: string }).updated_at))).toBe("not_operator_cancel");
       expect(await statusOf(byLink.id)).toBe("cancelled");
 
       const bySofia = await createBooking(db, accountId, range("05"), "user_test");
-      await setBookingStatus(db, accountId, bySofia.id, "cancelled", "voice", "ai");
-      expect(await reason(undoOperatorCancel(db, accountId, bySofia.id, "user_test"))).toBe("not_operator_cancel");
+      const sofiaCancel = await setBookingStatus(db, accountId, bySofia.id, "cancelled", "voice", "ai");
+      expect(await reason(undoOperatorCancel(db, accountId, bySofia.id, "user_test", sofiaCancel.updatedAt))).toBe("not_operator_cancel");
       expect(await statusOf(bySofia.id)).toBe("cancelled");
 
       // "Who cancelled" is THIS booking's newest cancel, never the account's.
@@ -477,15 +479,15 @@ describe("booking accessors", () => {
       // `payload->>bookingId` filter → FAILS).
       const mine = await createBooking(db, accountId, range("06"), "user_test");
       const theirs = await createBooking(db, accountId, range("07"), "user_test");
-      await setBookingStatus(db, accountId, mine.id, "cancelled", "user_test");
+      const mineCancel = await setBookingStatus(db, accountId, mine.id, "cancelled", "user_test");
       await setBookingStatus(db, accountId, theirs.id, "cancelled", "voice", "ai"); // newer, Sofía's
-      expect(await reason(undoOperatorCancel(db, accountId, mine.id, "user_test"))).toBe("restored");
+      expect(await reason(undoOperatorCancel(db, accountId, mine.id, "user_test", mineCancel.updatedAt))).toBe("restored");
 
       const sofias = await createBooking(db, accountId, range("08"), "user_test");
       const later = await createBooking(db, accountId, range("09"), "user_test");
-      await setBookingStatus(db, accountId, sofias.id, "cancelled", "voice", "ai");
+      const sofiasCancel = await setBookingStatus(db, accountId, sofias.id, "cancelled", "voice", "ai");
       await setBookingStatus(db, accountId, later.id, "cancelled", "user_test"); // newer, a person's
-      expect(await reason(undoOperatorCancel(db, accountId, sofias.id, "user_test"))).toBe("not_operator_cancel");
+      expect(await reason(undoOperatorCancel(db, accountId, sofias.id, "user_test", sofiasCancel.updatedAt))).toBe("not_operator_cancel");
       expect(await statusOf(sofias.id)).toBe("cancelled");
     });
   });
@@ -1066,3 +1068,304 @@ describe("reschedule link (0061, D-035)", () => {
 // rows to prove `ownAccountEmbedsOnly`. The refusal is proved in
 // same-account-fk-schema.test.ts; the guard stays in booking.ts as defence in
 // depth; the own-account due rows are proved above and in due-by-id.test.ts.
+
+/**
+ * F-048 (rider). Two things the Calendar page's Cancel and the customer's
+ * add-to-calendar file need from the row.
+ *
+ * THE NOTICE'S CLAIM. A business-side cancel can now tell the customer, but
+ * only once its Undo window has closed (rule 6: an Undo that arrives after
+ * the customer was told is not an Undo). `bookings.updated_at`, which only a
+ * status write sets, is the cancel's VERSION: the Undo writes only while the
+ * row still carries it, and the notice claims the row by moving it on. The two
+ * are conditional UPDATEs of one row, so Postgres serialises them and exactly
+ * one wins; neither is a read-then-write.
+ *
+ * THE CHAIN. A reschedule makes a new row pointing at the old one (0061), so
+ * one appointment is a chain of rows. Its calendar file keeps ONE identity
+ * (the first row's id) and counts the moves.
+ */
+describe("F-048: the cancel notice's claim and the reschedule chain", () => {
+  const range = (cal: { id: string }, contactId: string, day: string) => ({
+    calendarId: cal.id, contactId,
+    startsAt: new Date(`2029-08-${day}T15:00:00Z`), endsAt: new Date(`2029-08-${day}T16:00:00Z`),
+  });
+  const rowOf = async (db: SupabaseClient, id: string) => {
+    const { data, error } = await db.from("bookings").select("status, updated_at").eq("id", id).single();
+    if (error) throw new Error(error.message);
+    return data as { status: string; updated_at: string };
+  };
+  const outcome = async (p: Promise<unknown>) => {
+    try { await p; } catch (e) { return e instanceof BookingNotRestorableError ? e.reason : String(e); }
+    return "restored";
+  };
+
+  it("setBookingStatus answers the version it wrote, and it is the row's own updated_at (mutation: answer a fresh Date → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ver" }, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "01"), "user_test");
+      const { updatedAt } = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test");
+      expect(new Date((await rowOf(db, b.id)).updated_at).getTime()).toBe(new Date(updatedAt).getTime());
+    });
+  });
+
+  it("the claim wins once, only on the version it names, only on a cancelled row of this account, and then the Undo is refused as superseded (mutation: drop the version predicate from the claim → the second claim also wins, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        const cal = await getOrCreateCalendar(db, accountId, "user_test");
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Told" }, "user_test");
+        const b = await createBooking(db, accountId, range(cal, contactId, "02"), "user_test");
+        const { updatedAt } = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+
+        expect(await claimCancelNotice(db, otherAccountId, b.id, updatedAt)).toBe(false); // not this account's
+        expect(await claimCancelNotice(db, accountId, b.id, "2001-01-01T00:00:00.000Z")).toBe(false); // stale version
+        expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(true);
+        expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(false); // already claimed
+
+        expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test", updatedAt))).toBe("superseded");
+        expect((await rowOf(db, b.id)).status).toBe("cancelled");
+      });
+    });
+  });
+
+  it("an Undo that lands first restores the row, and the notice's claim then loses", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Back" }, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "03"), "user_test");
+      const { updatedAt } = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test", updatedAt))).toBe("restored");
+      expect((await rowOf(db, b.id)).status).toBe("booked");
+      expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(false);
+    });
+  });
+
+  // The version alone already refuses the case above (the Undo moved it). The
+  // claim's status predicate is the second guard, for a row that left
+  // "cancelled" WITHOUT a new version: any write that skips setBookingStatus.
+  it("the claim also refuses a row that is no longer cancelled under the same version (mutation: drop the status predicate from the claim → it wins, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Raw" }, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "07"), "user_test");
+      const { updatedAt } = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      const { error } = await db.from("bookings").update({ status: "completed" }).eq("id", b.id);
+      if (error) throw new Error(error.message);
+      expect(await claimCancelNotice(db, accountId, b.id, updatedAt)).toBe(false);
+    });
+  });
+
+  it("a cancel, Undo and second cancel leave the FIRST cancel's version stale: its notice cannot claim, the second's can (mutation: claim on status alone → the first wins too, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Twice" }, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "04"), "user_test");
+      const first = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      await undoOperatorCancel(db, accountId, b.id, "user_test", first.updatedAt);
+      const second = await setBookingStatus(db, accountId, b.id, "cancelled", "user_test", "user", { onlyFrom: "booked" });
+      expect(await claimCancelNotice(db, accountId, b.id, first.updatedAt)).toBe(false);
+      expect(await claimCancelNotice(db, accountId, b.id, second.updatedAt)).toBe(true);
+    });
+  });
+
+  it("an Undo naming a stale version restores nothing, and the other refusals still win over superseded (M1: the version is required)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Plain" }, "user_test");
+      const b = await createBooking(db, accountId, range(cal, contactId, "05"), "user_test");
+      await setBookingStatus(db, accountId, b.id, "cancelled", "user_test");
+      expect(await outcome(undoOperatorCancel(db, accountId, b.id, "user_test", "2001-01-01T00:00:00.000Z"))).toBe("superseded");
+      expect((await rowOf(db, b.id)).status).toBe("cancelled");
+
+      const sofia = await createBooking(db, accountId, range(cal, contactId, "06"), "user_test");
+      const { updatedAt } = await setBookingStatus(db, accountId, sofia.id, "cancelled", "voice", "ai");
+      expect(await outcome(undoOperatorCancel(db, accountId, sofia.id, "user_test", updatedAt))).toBe("not_operator_cancel");
+    });
+  });
+
+  it("rescheduleChain names the first row and counts the moves, for every row of the chain (mutation: stop after one hop → the third row reads depth 1, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Chain" }, "user_test");
+      const a = await createBooking(db, accountId, range(cal, contactId, "10"), "voice", "ai");
+      const b = await createBooking(db, accountId, { ...range(cal, contactId, "11"), rescheduledFromId: a.id }, "voice", "ai");
+      await setBookingStatus(db, accountId, a.id, "cancelled", "voice", "ai");
+      const c = await createBooking(db, accountId, { ...range(cal, contactId, "12"), rescheduledFromId: b.id }, "voice", "ai");
+      await setBookingStatus(db, accountId, b.id, "cancelled", "voice", "ai");
+      const lone = await createBooking(db, accountId, range(cal, contactId, "13"), "user_test");
+
+      expect(await rescheduleChain(db, accountId, a.id)).toEqual({ rootId: a.id, depth: 0 });
+      expect(await rescheduleChain(db, accountId, b.id)).toEqual({ rootId: a.id, depth: 1 });
+      expect(await rescheduleChain(db, accountId, c.id)).toEqual({ rootId: a.id, depth: 2 });
+      expect(await rescheduleChain(db, accountId, lone.id)).toEqual({ rootId: lone.id, depth: 0 });
+    });
+  });
+
+  it("bookingContactEmail answers the booking's own contact's address, trimmed, and null for no address or another account's booking (mutations: drop the account scope, or drop the trim → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        const cal = await getOrCreateCalendar(db, accountId, "user_test");
+        const { id: withEmail } = await createContact(db, accountId, { firstName: "Em", email: "em@example.com" }, "user_test");
+        // Stored with surrounding whitespace, the way an import or an old row
+        // can hold it, so the trim is what the assertion below proves (M6).
+        const { error: rawErr } = await db.from("contacts").update({ email: "  em@example.com \n" }).eq("id", withEmail);
+        if (rawErr) throw new Error(rawErr.message);
+        const { id: noEmail } = await createContact(db, accountId, { firstName: "None" }, "user_test");
+        const a = await createBooking(db, accountId, range(cal, withEmail, "15"), "user_test");
+        const b = await createBooking(db, accountId, range(cal, noEmail, "16"), "user_test");
+        expect(await bookingContactEmail(db, accountId, a.id)).toBe("em@example.com");
+        expect(await bookingContactEmail(db, accountId, b.id)).toBeNull();
+        expect(await bookingContactEmail(db, otherAccountId, a.id)).toBeNull();
+      });
+    });
+  });
+
+  /**
+   * F-048 fix round: the notice's thread row is written QUEUED in the cancel
+   * itself, before the wait. An Undo that wins removes it (nothing was sent,
+   * and the appointment is back on), but only while it is still queued: a
+   * sent or failed row is the record of what happened and is never removed.
+   */
+  it("discardQueuedNotice removes only a queued outbound email of this account, and noticeMessageStatus reads it back (mutation: drop the queued guard → the sent row is deleted, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Thread" }, "user_test");
+        const convo = await ensureConversation(db, accountId, contactId, "user_test");
+        const queued = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "q" }, "user_test");
+        const sent = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "s" }, "user_test");
+        await updateMessageStatus(db, accountId, sent.id, "sent", { providerMessageId: `re_${sent.id}` }, "user_test");
+
+        expect(await noticeMessageStatus(db, accountId, queued.id)).toBe("queued");
+        expect(await discardQueuedNotice(db, otherAccountId, queued.id)).toBe(false);
+        expect(await discardQueuedNotice(db, accountId, sent.id)).toBe(false);
+        expect(await noticeMessageStatus(db, accountId, sent.id)).toBe("sent");
+        expect(await discardQueuedNotice(db, accountId, queued.id)).toBe(true);
+        expect(await noticeMessageStatus(db, accountId, queued.id)).toBeNull();
+        expect(await noticeMessageStatus(db, otherAccountId, sent.id)).toBeNull();
+      });
+    });
+  });
+
+  /**
+   * Fix round 2 (M-b): the queued row's insert moved the conversation's
+   * `last_message_at` to its own time (createMessage's touch). Removing the
+   * row puts it back to the newest message left, or null when none is, so
+   * the inbox does not sort the thread by an email that never existed.
+   */
+  it("discardQueuedNotice puts the conversation's last_message_at back to the newest message left, or null (mutation: skip the reset → the deleted email's time stays, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const lastAt = async (id: string) => {
+        const { data, error } = await db.from("conversations").select("last_message_at").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return (data as { last_message_at: string | null }).last_message_at;
+      };
+      const createdAt = async (id: string) => {
+        const { data, error } = await db.from("messages").select("created_at").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return (data as { created_at: string }).created_at;
+      };
+
+      const { id: withHistory } = await createContact(db, accountId, { firstName: "Hist" }, "user_test");
+      const c1 = await ensureConversation(db, accountId, withHistory, "user_test");
+      const earlier = await createMessage(db, accountId, { conversationId: c1.id, channel: "email", direction: "inbound", body: "hi" }, "user_test");
+      // A distinctive time, older than any touch can write, so a missing reset shows.
+      const { error: ageErr } = await db.from("messages").update({ created_at: "2020-01-01T00:00:00.000Z" }).eq("id", earlier.id);
+      if (ageErr) throw new Error(ageErr.message);
+      const q1 = await createMessage(db, accountId, { conversationId: c1.id, channel: "email", direction: "outbound", body: "q" }, "user_test");
+      expect(new Date((await lastAt(c1.id))!).getTime()).not.toBe(new Date("2020-01-01T00:00:00.000Z").getTime());
+      expect(await discardQueuedNotice(db, accountId, q1.id)).toBe(true);
+      expect(new Date((await lastAt(c1.id))!).getTime()).toBe(new Date(await createdAt(earlier.id)).getTime());
+
+      const { id: fresh } = await createContact(db, accountId, { firstName: "Fresh" }, "user_test");
+      const c2 = await ensureConversation(db, accountId, fresh, "user_test");
+      const q2 = await createMessage(db, accountId, { conversationId: c2.id, channel: "email", direction: "outbound", body: "q" }, "user_test");
+      expect(await lastAt(c2.id)).not.toBeNull();
+      expect(await discardQueuedNotice(db, accountId, q2.id)).toBe(true);
+      expect(await lastAt(c2.id)).toBeNull();
+    });
+  });
+
+  /**
+   * Round 3: the reset races a message arriving on the same thread. An
+   * inbound message landing between the reset's reads and its write moves
+   * `last_message_at` to NOW; an unconditional write then puts the older
+   * time back over it. The reset is a compare-and-set on the value it read,
+   * so it leaves a newer touch alone. The race is forced, not hoped for: the
+   * client handed in runs the inbound write just before the conversation
+   * UPDATE is awaited.
+   */
+  it("discardQueuedNotice never overwrites a newer message's touch that lands mid-reset (mutation: an unconditional reset → the older time wins, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const lastAt = async (id: string) => {
+        const { data, error } = await db.from("conversations").select("last_message_at").eq("id", id).single();
+        if (error) throw new Error(error.message);
+        return (data as { last_message_at: string | null }).last_message_at;
+      };
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Race" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const earlier = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "inbound", body: "hi" }, "user_test");
+      const { error: ageErr } = await db.from("messages").update({ created_at: "2020-01-01T00:00:00.000Z" }).eq("id", earlier.id);
+      if (ageErr) throw new Error(ageErr.message);
+      const queued = await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "q" }, "user_test");
+
+      // Runs once, just before the reset's UPDATE on conversations is awaited.
+      let injected = false;
+      const inject = async () => {
+        if (injected) return;
+        injected = true;
+        await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "inbound", body: "just in" }, "user_test");
+      };
+      const beforeAwait = <T extends object>(builder: T): T => {
+        const proxy: T = new Proxy(builder, {
+          get(target, prop) {
+            if (prop === "then") {
+              return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+                inject().then(() => (target as unknown as PromiseLike<unknown>).then(res, rej), rej);
+            }
+            const v = Reflect.get(target, prop, target);
+            if (typeof v !== "function") return v;
+            return (...args: unknown[]) => {
+              const r = (v as (...a: unknown[]) => unknown).apply(target, args);
+              return r === target ? proxy : r;
+            };
+          },
+        });
+        return proxy;
+      };
+      const racyDb = new Proxy(db, {
+        get(target, prop) {
+          if (prop !== "from") return Reflect.get(target, prop, target);
+          return (table: string) => {
+            const qb = target.from(table);
+            if (table !== "conversations") return qb;
+            return new Proxy(qb, {
+              get(t, p) {
+                const v = Reflect.get(t, p, t);
+                if (p === "update") return (...a: unknown[]) => beforeAwait((v as (...x: unknown[]) => object).apply(t, a));
+                return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+              },
+            });
+          };
+        },
+      }) as SupabaseClient;
+
+      expect(await discardQueuedNotice(racyDb, accountId, queued.id)).toBe(true);
+      expect(injected, "the race was forced").toBe(true);
+      // The inbound message's touch is newer than anything the reset read;
+      // it must survive, not be replaced by the 2020 message's time.
+      expect(new Date((await lastAt(convo.id))!).getTime()).toBeGreaterThan(new Date("2025-01-01T00:00:00Z").getTime());
+    });
+  });
+
+  it("rescheduleChain refuses a booking that is not this account's (mutation: drop the account scope → it answers, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        const cal = await getOrCreateCalendar(db, accountId, "user_test");
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Mine" }, "user_test");
+        const a = await createBooking(db, accountId, range(cal, contactId, "14"), "user_test");
+        await expect(rescheduleChain(db, otherAccountId, a.id)).rejects.toThrow(/no booking/);
+      });
+    });
+  });
+});

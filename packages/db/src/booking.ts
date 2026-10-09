@@ -335,12 +335,17 @@ export class BookingNotStartedError extends Error {
  * A flip back to "booked" re-enters `bookings_no_overlap` (Postgres re-checks
  * an exclusion constraint on UPDATE), so a time someone booked in between is
  * `SlotTakenError`, mapped exactly as `createBooking` maps it.
+ *
+ * F-048: answers the `updated_at` it wrote. Only a status write sets that
+ * column, so it is this write's VERSION: `opts.version` writes only a row
+ * still carrying the version named (an Undo of exactly that cancel), and
+ * `claimCancelNotice` claims exactly that cancel's notice.
  */
 export async function setBookingStatus(
   db: SupabaseClient, accountId: string, bookingId: string, status: BookingStatus, actorId: string,
   actorType: ActorType = "user",
-  opts: { startedBy?: string; onlyFrom?: BookingStatus } = {},
-): Promise<void> {
+  opts: { startedBy?: string; onlyFrom?: BookingStatus; version?: string } = {},
+): Promise<{ updatedAt: string }> {
   const nowIso = new Date().toISOString();
   // THE AUTOMATION CLOCKS (0026; spec, "Decisions taken after Milestone A
   // shipped"). The review request runs from the LATER of ends_at and this
@@ -358,6 +363,7 @@ export async function setBookingStatus(
     .eq("account_id", accountId).eq("id", bookingId);
   if (guarded) q = q.lte("starts_at", opts.startedBy!);
   if (opts.onlyFrom !== undefined) q = q.eq("status", opts.onlyFrom);
+  if (opts.version !== undefined) q = q.eq("updated_at", opts.version);
   const { data, error } = await q.select("id");
   if (error) {
     if (error.code === "23P01" || error.message?.includes("bookings_no_overlap")) throw new SlotTakenError();
@@ -375,6 +381,7 @@ export async function setBookingStatus(
     throw new Error(`setBookingStatus: no booking ${bookingId} for account ${accountId}`);
   }
   await emit(db, accountId, "booking.status_changed", actorId, { bookingId, status }, actorType);
+  return { updatedAt: nowIso };
 }
 
 /** D-036: an Undo the Calendar page must not perform. Nothing was written.
@@ -382,9 +389,13 @@ export async function setBookingStatus(
  *  `rescheduled_from_id` points here), so restoring it would put a second
  *  live appointment beside the replacement. `not_operator_cancel`: the last
  *  cancel was the customer's (their link) or Sofía's (a call), not a person
- *  on the dashboard, so it is the customer's decision to reverse, not ours. */
+ *  on the dashboard, so it is the customer's decision to reverse, not ours.
+ *  `superseded` (F-048): the row is still cancelled but no longer carries
+ *  the version this Undo names: the cancel's customer notice claimed it, or a
+ *  later cancel replaced it. Which one, and whether the email actually went,
+ *  is the caller's to tell (the notice's thread row says). */
 export class BookingNotRestorableError extends Error {
-  constructor(readonly reason: "rescheduled" | "not_operator_cancel") {
+  constructor(readonly reason: "rescheduled" | "not_operator_cancel" | "superseded") {
     super(`booking cannot be restored: ${reason}`);
     this.name = "BookingNotRestorableError";
   }
@@ -403,9 +414,15 @@ export class BookingNotRestorableError extends Error {
  * (the customer's link, actor 'system'/'public') or `booking.status_changed`
  * with status 'cancelled' (the dashboard, actor 'user'; Sofía, actor 'ai').
  * No event at all is refused too: nothing proves a person did it.
+ *
+ * `version` (F-048, REQUIRED): the cancel's own `updatedAt`. The write lands
+ * only while the row still carries it, so it can never follow the cancel's
+ * customer notice, which claims the row by moving the version on
+ * (`claimCancelNotice`). A write refused that way, on a row still
+ * cancelled, is `superseded`. There is no unversioned Undo.
  */
 export async function undoOperatorCancel(
-  db: SupabaseClient, accountId: string, bookingId: string, actorId: string,
+  db: SupabaseClient, accountId: string, bookingId: string, actorId: string, version: string,
 ): Promise<void> {
   const { data: replacement, error: replErr } = await db.from("bookings").select("id")
     .eq("account_id", accountId).eq("rescheduled_from_id", bookingId).limit(1);
@@ -424,7 +441,170 @@ export async function undoOperatorCancel(
     throw new BookingNotRestorableError("not_operator_cancel");
   }
 
-  await setBookingStatus(db, accountId, bookingId, "booked", actorId, "user", { onlyFrom: "cancelled" });
+  try {
+    await setBookingStatus(db, accountId, bookingId, "booked", actorId, "user", { onlyFrom: "cancelled", version });
+  } catch (e) {
+    if (e instanceof SlotTakenError) throw e;
+    // Zero rows. Told apart by one read, after the fact: still cancelled
+    // under a different version means the notice claimed it first.
+    const { data: row, error: readErr } = await db.from("bookings").select("status, updated_at")
+      .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
+    if (readErr) throw new Error(`undoOperatorCancel re-read failed: ${readErr.message}`);
+    const r = row as { status: BookingStatus; updated_at: string } | null;
+    if (r && r.status === "cancelled"
+      && new Date(r.updated_at).getTime() !== new Date(version).getTime()) {
+      throw new BookingNotRestorableError("superseded");
+    }
+    throw e;
+  }
+}
+
+/**
+ * F-048: the Calendar page's customer notice claims its cancel, once the
+ * Undo window has closed and before anything is sent. One conditional
+ * UPDATE: the row must still be cancelled and still carry the cancel's
+ * version, and the claim moves the version on. The Undo's own write is
+ * conditional on that same version (`undoOperatorCancel`'s required `version` argument),
+ * so Postgres serialises the two on the row and exactly one of them wins:
+ * an Undo that landed first leaves nothing to claim (no notice goes), and
+ * a claim that landed first refuses the Undo (`superseded`).
+ *
+ * `true` = this caller owns the send. A cancel that was undone, undone and
+ * cancelled again (a newer version), or never cancelled answers `false`.
+ */
+export async function claimCancelNotice(
+  db: SupabaseClient, accountId: string, bookingId: string, version: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("bookings")
+    .update({ updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", bookingId)
+    .eq("status", "cancelled").eq("updated_at", version)
+    .select("id");
+  if (error) throw new Error(`claimCancelNotice failed: ${error.message}`);
+  return (data?.length ?? 0) > 0;
+}
+
+/**
+ * F-048: the address a cancel notice for this booking would go to: its own
+ * contact's email, trimmed, or null when there is none (or the booking is not
+ * this account's). The Calendar page's Cancel reads it to decide whether a
+ * notice can be scheduled at all; the notice reads the contact again when it
+ * sends. THROWS on a read error.
+ */
+export async function bookingContactEmail(
+  db: SupabaseClient, accountId: string, bookingId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("bookings").select("contacts(email)")
+    .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
+  if (error) throw new Error(`bookingContactEmail failed: ${error.message}`);
+  const email = (data as { contacts: { email: string | null } | null } | null)?.contacts?.email?.trim();
+  return email || null;
+}
+
+/**
+ * F-048: the cancel notice's thread row is written QUEUED in the cancel
+ * itself, before the Undo window (so a notice the server never got to send
+ * stays visible as a stuck queued row instead of vanishing). When the Undo
+ * wins, nothing was sent and the appointment is back on, so the row is
+ * removed rather than marked: the only non-sent status the table has is
+ * `failed`, which would tell the owner something went wrong when nothing
+ * did. Only a QUEUED outbound email of this account is ever removed; a sent
+ * or failed row is the record of what happened. Its `message.created` event
+ * stays; nothing in the app reads that type. `true` when a row went.
+ * THROWS on a delete error.
+ *
+ * Fix round 2 (M-b): the row's insert touched the conversation's
+ * `last_message_at` (createMessage). After the delete it is put back to the
+ * newest message left, or null when none is, so the inbox does not sort the
+ * thread by an email that never existed. A conversation left with no
+ * messages stays in place: harmless (it sorts last, nulls last) and the
+ * next message on it reuses it. A failed reset is logged, not thrown: the
+ * row is already gone, and the sort self-heals on the thread's next message.
+ */
+export async function discardQueuedNotice(
+  db: SupabaseClient, accountId: string, messageId: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("messages").delete()
+    .eq("account_id", accountId).eq("id", messageId)
+    .eq("status", "queued").eq("direction", "outbound").eq("channel", "email")
+    .select("id, conversation_id");
+  if (error) throw new Error(`discardQueuedNotice failed: ${error.message}`);
+  const removed = (data ?? []) as { id: string; conversation_id: string }[];
+  if (removed.length === 0) return false;
+
+  // Round 3: a compare-and-set, never an unconditional write. A message can
+  // land on this thread between the reads below and the write, and its touch
+  // moves last_message_at to NOW; writing the older time over it would sort
+  // a live thread down. So the value read first (V) is a predicate on the
+  // write: zero rows matched means something newer already touched the
+  // conversation, and it is left alone. (Comparing against the deleted row's
+  // created_at could never match: that is the DB clock's default now(),
+  // while createMessage's touch writes the app clock.)
+  const conversationId = removed[0]!.conversation_id;
+  const reset = async (): Promise<string | null> => {
+    const { data: conv, error: convErr } = await db.from("conversations").select("last_message_at")
+      .eq("account_id", accountId).eq("id", conversationId).maybeSingle();
+    if (convErr) return convErr.message;
+    if (!conv) return null;
+    const seen = (conv as { last_message_at: string | null }).last_message_at;
+    const { data: newest, error: newestErr } = await db.from("messages").select("created_at")
+      .eq("account_id", accountId).eq("conversation_id", conversationId)
+      .order("created_at", { ascending: false }).limit(1);
+    if (newestErr) return newestErr.message;
+    let q = db.from("conversations")
+      .update({ last_message_at: ((newest ?? []) as { created_at: string }[])[0]?.created_at ?? null })
+      .eq("account_id", accountId).eq("id", conversationId);
+    q = seen === null ? q.is("last_message_at", null) : q.eq("last_message_at", seen);
+    const { error: resetErr } = await q;
+    return resetErr ? resetErr.message : null;
+  };
+  const failure = await reset();
+  if (failure) {
+    console.error(`discardQueuedNotice: conversation ${conversationId} sort time not reset: ${failure}`);
+  }
+  return true;
+}
+
+/** F-048: the cancel notice's thread row's status, or null when there is no
+ *  such row on this account. What an Undo refused as `superseded` reads to
+ *  tell the owner, truthfully, whether the customer was emailed. THROWS on a
+ *  read error. */
+export async function noticeMessageStatus(
+  db: SupabaseClient, accountId: string, messageId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("messages").select("status")
+    .eq("account_id", accountId).eq("id", messageId).maybeSingle();
+  if (error) throw new Error(`noticeMessageStatus failed: ${error.message}`);
+  return (data as { status: string } | null)?.status ?? null;
+}
+
+/** How far `rescheduleChain` walks. A chain only grows by one row per move,
+ *  so no real appointment comes near this; it bounds a corrupted one. */
+const RESCHEDULE_CHAIN_MAX = 50;
+
+/**
+ * F-048: one appointment's identity across its reschedules. A move makes a
+ * new row pointing at the one it replaced (`rescheduled_from_id`, 0061), so
+ * the appointment is a chain; `rootId` is its first row and `depth` the
+ * number of moves since. The add-to-calendar file uses them as its UID and
+ * SEQUENCE, so a moved appointment updates the event a customer already
+ * saved instead of adding a second one. Account-scoped at every hop; a
+ * booking that is not this account's THROWS.
+ */
+export async function rescheduleChain(
+  db: SupabaseClient, accountId: string, bookingId: string,
+): Promise<{ rootId: string; depth: number }> {
+  let id = bookingId;
+  for (let depth = 0; depth <= RESCHEDULE_CHAIN_MAX; depth++) {
+    const { data, error } = await db.from("bookings").select("id, rescheduled_from_id")
+      .eq("account_id", accountId).eq("id", id).maybeSingle();
+    if (error) throw new Error(`rescheduleChain failed: ${error.message}`);
+    if (!data) throw new Error(`rescheduleChain: no booking ${id} for account ${accountId}`);
+    const from = (data as { rescheduled_from_id: string | null }).rescheduled_from_id;
+    if (!from) return { rootId: id, depth };
+    id = from;
+  }
+  throw new Error(`rescheduleChain: booking ${bookingId} is more than ${RESCHEDULE_CHAIN_MAX} moves deep`);
 }
 
 /** How many started-but-unmarked bookings the operator's list carries at
