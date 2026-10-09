@@ -90,6 +90,11 @@ export const EMAIL_KINDS = {
   "automation.quote_followup": { class: "marketing", hours: "automated", footer: "unsubscribe" },
   "automation.no_show_nudge": { class: "marketing", hours: "automated", footer: "unsubscribe" },
   "staff.composer_email": { class: "staff_typed", hours: "any", footer: "none" },
+  // F-048: the notice a person composes in the Calendar page's Cancel dialog
+  // and sends by cancelling (after its Undo window). Staff-typed, as the
+  // composer is: an unsubscribe does not stop a customer hearing that their
+  // appointment is off, and it may go at any hour the owner cancels.
+  "staff.booking_cancel_notice": { class: "staff_typed", hours: "any", footer: "none" },
   "operator.booking_alert": { class: "operator", hours: "any", footer: "none" },
   "operator.cancel_notice": { class: "operator", hours: "any", footer: "none" },
   "operator.lead_alert": { class: "operator", hours: "any", footer: "none" },
