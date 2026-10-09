@@ -484,6 +484,23 @@ export async function claimCancelNotice(
   return (data?.length ?? 0) > 0;
 }
 
+/**
+ * F-048: the address a cancel notice for this booking would go to: its own
+ * contact's email, trimmed, or null when there is none (or the booking is not
+ * this account's). The Calendar page's Cancel reads it to decide whether a
+ * notice can be scheduled at all; the notice reads the contact again when it
+ * sends. THROWS on a read error.
+ */
+export async function bookingContactEmail(
+  db: SupabaseClient, accountId: string, bookingId: string,
+): Promise<string | null> {
+  const { data, error } = await db.from("bookings").select("contacts(email)")
+    .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
+  if (error) throw new Error(`bookingContactEmail failed: ${error.message}`);
+  const email = (data as { contacts: { email: string | null } | null } | null)?.contacts?.email?.trim();
+  return email || null;
+}
+
 /** How far `rescheduleChain` walks. A chain only grows by one row per move,
  *  so no real appointment comes near this; it bounds a corrupted one. */
 const RESCHEDULE_CHAIN_MAX = 50;

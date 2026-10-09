@@ -9,7 +9,7 @@ import {
   listBookedRanges, listCalendarBookings, listDueReminders, stampReminderSent,
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
   SlotTakenError, BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel,
-  claimCancelNotice, rescheduleChain,
+  claimCancelNotice, rescheduleChain, bookingContactEmail,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -1197,6 +1197,21 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
       expect(await rescheduleChain(db, accountId, b.id)).toEqual({ rootId: a.id, depth: 1 });
       expect(await rescheduleChain(db, accountId, c.id)).toEqual({ rootId: a.id, depth: 2 });
       expect(await rescheduleChain(db, accountId, lone.id)).toEqual({ rootId: lone.id, depth: 0 });
+    });
+  });
+
+  it("bookingContactEmail answers the booking's own contact's address, trimmed, and null for no address or another account's booking (mutation: drop the account scope → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        const cal = await getOrCreateCalendar(db, accountId, "user_test");
+        const { id: withEmail } = await createContact(db, accountId, { firstName: "Em", email: "em@example.com" }, "user_test");
+        const { id: noEmail } = await createContact(db, accountId, { firstName: "None" }, "user_test");
+        const a = await createBooking(db, accountId, range(cal, withEmail, "15"), "user_test");
+        const b = await createBooking(db, accountId, range(cal, noEmail, "16"), "user_test");
+        expect(await bookingContactEmail(db, accountId, a.id)).toBe("em@example.com");
+        expect(await bookingContactEmail(db, accountId, b.id)).toBeNull();
+        expect(await bookingContactEmail(db, otherAccountId, a.id)).toBeNull();
+      });
     });
   });
 
