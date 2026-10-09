@@ -146,12 +146,15 @@ vi.mock("@bis/db", () => ({
   readPhoneCountryFlag: vi.fn(async () => false),
   readAccountTimezone: vi.fn(async () => "America/Chicago"),
   recordCarrierBlock: vi.fn(),
+  // D-061: the gate's own account-level send switch, for both composer
+  // sends. Allowed by default.
+  isAccountOutboundSuppressed: vi.fn(async () => false),
 }));
 
 import { sendEmailAction, sendSmsAction, markConversationReadAction } from "./actions";
 import {
   createMessage, updateMessageStatus, recordUsage, getContact, ensureConversation, clearUnreadCount,
-  readConsentState, readPhoneCountryFlag,
+  readConsentState, readPhoneCountryFlag, isAccountOutboundSuppressed,
 } from "@bis/db";
 import { m } from "@/lib/messages";
 import { sendRejectedReason } from "./send-errors";
@@ -643,5 +646,12 @@ describe("sendSmsAction — the consent gate's refusals", () => {
     contactRow.phone = "(956) 292-1696";
     await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }));
     expect(vi.mocked(readConsentState)).toHaveBeenCalledWith(svc.db, "acct_1", "sms", "+19562921696");
+  });
+
+  it("a suppressed account: refused with the plain sentence, nothing written, nothing sent (D-061; mutation: drop the chokepoint check → sent, FAILS)", async () => {
+    vi.mocked(isAccountOutboundSuppressed).mockResolvedValueOnce(true);
+    expect(sendRejectedReason(await send())).toBe(m["automations.reason.accountSuppressed"]);
+    expect(createMessageMock).not.toHaveBeenCalled();
+    expect(smsSendMock).not.toHaveBeenCalled();
   });
 });

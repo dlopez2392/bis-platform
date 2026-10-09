@@ -16,6 +16,10 @@ const dbMocks = vi.hoisted(() => ({
   // The send gate's reads (lib/consent/gate.ts): the code goes through the
   // REAL gate, so its ledger and flag reads are mocked, allowed by default.
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
+  // D-061: the gate's own account-level send switch, for both the SMS code
+  // and the sender-check email (which falls back to the stubbed serviceDb()
+  // below). Allowed by default.
+  isAccountOutboundSuppressed: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({ tag: "serviceDb" }),
@@ -67,6 +71,7 @@ beforeEach(() => {
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "msg_1" });
   dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "allowed" });
   dbMocks.readPhoneCountryFlag.mockReset().mockResolvedValue(false);
+  dbMocks.isAccountOutboundSuppressed.mockReset().mockResolvedValue(false);
   // Cleared/live by default — most tests care about one thing at a time, and
   // an unmocked resolveSmsSender() would return undefined and crash the
   // `gate.ok` read.

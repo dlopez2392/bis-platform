@@ -9,6 +9,15 @@ const dbMocks = vi.hoisted(() => ({
   // alert go through the REAL gate, allowed by default.
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
   recordCarrierBlock: vi.fn(),
+  // D-061: the gate's own account-level send switch, for both the SMS and
+  // the email gate. Unmocked, it would fall through to the real
+  // implementation and throw against this file's fake DB. Allowed by default.
+  isAccountOutboundSuppressed: vi.fn(),
+  // The email gate's suppression check falls back to serviceDb() for the
+  // staff call-alert send site, which carries no `db` of its own (plan: same
+  // reason registry.test.ts stubs this). The REAL serviceDb() throws outside
+  // a request with no Supabase env vars set.
+  serviceDb: vi.fn(() => ({})),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -214,6 +223,7 @@ beforeEach(() => {
   dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
   dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
   dbMocks.getAutomationLogEntry.mockResolvedValue(null);
+  dbMocks.isAccountOutboundSuppressed.mockResolvedValue(false);
   // The ordinary case: a contact with all four allow-listed columns already
   // filled, so `blankFields` computes to `[]` unless a test deliberately
   // leaves one of these blank to exercise the propagation.

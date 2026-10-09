@@ -52,6 +52,10 @@ const accountRow = {
   brand_name: "Rio Roofing", brand_logo_path: null,
   brand_color: null, brand_neutral: null, brand_corners: null,
   brand_type: null, brand_mode: null,
+  // D-061: the email gate's own account-level send switch reads this off
+  // the same projecting mock below (its `select("outbound_suppressed")`
+  // finds the key here, same as every other column it asks for).
+  outbound_suppressed: false,
 };
 
 vi.mock("@bis/db", () => ({
@@ -84,6 +88,11 @@ vi.mock("@bis/db", () => ({
     }),
   }),
   brandLogoUrl: (path: string) => `https://cdn.test/${path}`,
+  // D-061: the email gate's own account-level send switch. A bare factory
+  // mock like this one has no `importOriginal` fallback, so an unlisted
+  // export is simply undefined — reading straight off `accountRow` rather
+  // than threading this through the generic `serviceDb()` projection above.
+  isAccountOutboundSuppressed: async () => accountRow.outbound_suppressed,
   getPublishedFormByPublicId: (...a: unknown[]) => getPublishedFormByPublicIdMock(...a),
   createSubmission: (...a: unknown[]) => createSubmissionMock(...a),
   recordRejectedSubmission: (...a: unknown[]) => recordRejectedSubmissionMock(...a),
@@ -157,6 +166,7 @@ beforeEach(() => {
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
   incrementUnreadCountMock.mockReset();
   instantReplyMock.mockReset().mockResolvedValue({ kind: "skipped", reason: "disabled" });
+  accountRow.outbound_suppressed = false;
   formGrantsMock.mockReset().mockResolvedValue(undefined);
   vi.mocked(sendEmailOrThrow).mockClear();
 });
@@ -605,6 +615,18 @@ describe("submitFormAction — the receipt to the person who wrote in", () => {
       to: "customer@example.com", subject: "We received your message — Rio Roofing",
     });
     expect(sendMock.mock.calls[1]![0].body).toContain("Hi Maria,");
+  });
+
+  it("a suppressed account: neither the company's alert nor the person's receipt is sent (D-061, through the real gate; mutation: drop the chokepoint check → both sent, FAILS)", async () => {
+    accountRow.outbound_suppressed = true;
+    getPublishedFormByPublicIdMock.mockResolvedValue(withEmail({ notify_emails: ["owner@rioroofing.com"] }));
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "en", first_name: "Maria", email: "customer@example.com",
+    }));
+
+    expect(result.status).toBe("success");
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
   it("the lead alert goes as operator.lead_alert and the receipt as forms.receipt — customer-initiated, in the page's language, with the lead's contact and the request's origin (consent PR-3; mutation: send the receipt as operator.lead_alert → it carries no way out, FAILS)", async () => {

@@ -112,6 +112,11 @@ vi.mock("@bis/db", () => ({
       }),
     }),
   }),
+  // D-061: the email gate's own account-level send switch. A bare factory
+  // mock like this one has no `importOriginal` fallback, so an unlisted
+  // export is simply undefined — allowed by default (no test here suppresses
+  // the account).
+  isAccountOutboundSuppressed: async () => false,
   getCalendarByPublicId: (...a: unknown[]) => getCalendarByPublicIdMock(...a),
   listBookedRanges: (...a: unknown[]) => listBookedRangesMock(...a),
   countRecentBookings: (...a: unknown[]) => countRecentBookingsMock(...a),

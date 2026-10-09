@@ -154,9 +154,9 @@ describe("sendInstantReply — the account-level send switch every scheduled pas
     expect(dbMocks.recordAutomationLog).not.toHaveBeenCalled();
   });
 
-  it("reads the flag for THIS account, once, only once the recipe is confirmed on", async () => {
+  it("reads the flag for THIS account, only once the recipe is confirmed on — twice in all: this recipe's own early read (silent, saves the A2P round trip for a demo account), and the send gate's own chokepoint read (D-061 plan note: 'fine if the gate re-checks') (mutation: read a different account → FAILS)", async () => {
     await sendInstantReply(input());
-    expect(dbMocks.isAccountOutboundSuppressed).toHaveBeenCalledTimes(1);
+    expect(dbMocks.isAccountOutboundSuppressed).toHaveBeenCalledTimes(2);
     expect(dbMocks.isAccountOutboundSuppressed).toHaveBeenCalledWith(expect.anything(), "acct_1");
 
     dbMocks.isAccountOutboundSuppressed.mockClear();

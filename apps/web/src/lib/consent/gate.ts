@@ -1,5 +1,6 @@
 import {
-  readConsentState, recordCarrierBlock, readPhoneCountryFlag, readAccountTimezone, type SupabaseClient,
+  readConsentState, recordCarrierBlock, readPhoneCountryFlag, readAccountTimezone,
+  isAccountOutboundSuppressed, type SupabaseClient,
 } from "@bis/db";
 import { normalisePhone } from "@bis/db/phone";
 import { getSmsProvider } from "@/lib/sms";
@@ -24,21 +25,27 @@ import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
  * The steps, in the spec's order:
  *   1. a kind missing from the registry THROWS (a programming error);
  *   2. `to` is normalised (F-009); nothing textable → blocked `no_number`;
- *   3. `resolveSmsSender`: A2P approved and a live number, else blocked
+ *   3. `accounts.outbound_suppressed` (D-061, 0032): true → blocked
+ *      `suppressed_account`, before the A2P read — a suppressed account is
+ *      a demo or otherwise-not-real account, and the chokepoint here is
+ *      what covers every send path through this gate, present and future,
+ *      not only the scheduled passes `loadSendableRows` already filters
+ *      before a row is even returned;
+ *   4. `resolveSmsSender`: A2P approved and a live number, else blocked
  *      with its reason (its own read error THROWS, as it always has, into
  *      each caller's existing catch);
- *   4. the ledger: stopped → blocked `stopped`, held → blocked `held` —
+ *   5. the ledger: stopped → blocked `stopped`, held → blocked `held` —
  *      except `consent.stop_confirmation`, the one send let through a
  *      stopped address, and only when it answers the newest `revoked` row
  *      and that row is under five minutes old (`answersStop`);
- *   5. an unconfirmed number (the normalisation said so, or the contact's
+ *   6. an unconfirmed number (the normalisation said so, or the contact's
  *      `phone_country_unconfirmed`, unless the number came from the carrier)
  *      → blocked `unconfirmed_number`;
- *   6. the kind's hours: outside them → `deferred` until they open, unless
+ *   7. the kind's hours: outside them → `deferred` until they open, unless
  *      the deadline falls first (choice 21) → blocked `window_after_deadline`;
- *   7. the kind's footer;
- *   8. the provider;
- *   9. a refusal whose code says the number opted out (Telnyx 40300,
+ *   8. the kind's footer;
+ *   9. the provider;
+ *   10. a refusal whose code says the number opted out (Telnyx 40300,
  *      VERIFIED from Telnyx's docs, see the plan) appends `revoked` /
  *      `carrier_block` to the ledger — never for a provider redirected to a
  *      developer's phone, whose refusal is about THAT number.
@@ -46,7 +53,8 @@ import { nextOpening, expiresBeforeOpening, hoursZone } from "./hours";
  * FAILS CLOSED: a ledger, flag or ZONE read error is blocked
  * `ledger_unavailable`, logged through `loggableError`, never a send. (A
  * zone that was read but cannot be resolved still takes the fallback zone:
- * that is the account's data, not an outage.)
+ * that is the account's data, not an outage.) The suppression read at step 3
+ * fails closed the same way.
  */
 export type SmsRequest = {
   accountId: string;
@@ -83,7 +91,10 @@ export type SmsBlockReason =
   | "unconfirmed_number" | "window_after_deadline" | "ledger_unavailable"
   /** A stop confirmation for an address that is no longer stopped (a START
    *  landed first): "you won't get any more texts" would be false. */
-  | "stop_confirmation_stale";
+  | "stop_confirmation_stale"
+  /** D-061: `accounts.outbound_suppressed` is true. Distinct from `stopped`/
+   *  `held`, which are about ONE address; this is about the whole account. */
+  | "suppressed_account";
 
 /** Spec §4.2: the one stop confirmation goes within five minutes of the stop
  *  (today's 47 CFR 64.1200(a)(12) presumes a confirmation sent within five
@@ -177,6 +188,13 @@ export async function decideSms(db: SupabaseClient, req: SmsRequest): Promise<Sm
   const spec = SMS_KINDS[req.kind];
   const number = normalisePhone(req.to);
   if (!number) return { kind: "blocked", reason: "no_number" };
+
+  try {
+    if (await isAccountOutboundSuppressed(db, req.accountId)) return { kind: "blocked", reason: "suppressed_account" };
+  } catch (e) {
+    console.error(`consent gate: ${req.kind} for account ${req.accountId} blocked, suppression flag unreadable: ${loggableError(e)}`);
+    return { kind: "blocked", reason: "ledger_unavailable" };
+  }
 
   const sender = await resolveSmsSender(db, req.accountId);
   if (!sender.ok) return { kind: "blocked", reason: sender.reason };

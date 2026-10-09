@@ -191,6 +191,11 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
       // The render's own words for an unreadable state (review R3-M2): never
       // worded as the customer's choice, and never an open form.
       case "ledger_unavailable": rejectSend(m["compose.smsStateUnknown"]);
+      // D-061: a suppressed account (a demo, or otherwise not real) refuses
+      // every send — the composer says so plainly rather than silently
+      // dropping the attempt, and nothing was written: `prepare` runs only
+      // after the gate clears.
+      case "suppressed_account": rejectSend(m["automations.reason.accountSuppressed"]);
       default: rejectSend(composerBlockedLine(result.reason));
     }
   }
