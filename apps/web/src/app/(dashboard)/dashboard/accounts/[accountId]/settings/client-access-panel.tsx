@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DotPill } from "@/components/dot-pill";
@@ -176,6 +177,45 @@ export function ClientAccessPanel({
           ) : null}
           <InviteButton disabled={!enabled} />
         </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Shaped like the loaded card (DESIGN.md rule 7, no spinners): the status
+ * pill and its button (ClientAccessSwitch), the "Members" label and two
+ * rows, the invite field and its button. The title and description are
+ * static copy, so they are real text, not bars.
+ *
+ * It carries the card's `id="client-access"` because the hash scroll runs
+ * ONCE, when the page first commits, which is while this is showing. Without
+ * the id the palette's "Client access" jump would find no target and land at
+ * the top (next/dist/client/components/layout-router.js treats a missing
+ * target as handled). BillingCardSkeleton keeps `id="billing"` for the same
+ * reason.
+ */
+export function ClientAccessSkeleton() {
+  return (
+    <Card id="client-access" className="scroll-mt-24" aria-busy="true" aria-label={m["clientAccess.title"]}>
+      <CardHeader>
+        <CardTitle>{m["clientAccess.title"]}</CardTitle>
+        <CardDescription>{m["clientAccess.body"]}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <Skeleton className="h-6 w-28 rounded-full" />
+          <Skeleton className="h-9 w-36" />
+        </div>
+        <div className="space-y-2">
+          <Skeleton className="h-4 w-20" />
+          {[0, 1].map((i) => <Skeleton key={i} className="h-[34px] w-full" />)}
+        </div>
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-28" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-24" />
+        </div>
       </CardContent>
     </Card>
   );
