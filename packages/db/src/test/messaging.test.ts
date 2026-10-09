@@ -433,7 +433,7 @@ describe("messaging", () => {
       expect(reversed.find((h) => h.callId === "call-second")!.messageId).toBe(secondCall.id);
     }));
 
-  it("updateMessageStatusByProviderId finds the row without tenant context", () =>
+  it("updateMessageStatusByProviderId finds the row without tenant context (D-016: and answers its account id and the conversation's contact id, for the webhook's suppression write)", () =>
     withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");
       const convo = await ensureConversation(db, accountId, contactId, "user_test");
@@ -447,18 +447,40 @@ describe("messaging", () => {
       // literal the row it reaches is only this account's by luck.
       const hit = await updateMessageStatusByProviderId(db, providerMessageId, "delivered");
       expect(hit.updated).toBe(true);
+      expect(hit.accountId).toBe(accountId);
+      expect(hit.contactId).toBe(contactId);
 
       const [msg] = await listMessages(db, accountId, convo.id);
       expect(msg!.status).toBe("delivered");
     }));
 
-  it("updateMessageStatusByProviderId ignores an unknown id without throwing", () =>
+  it("updateMessageStatusByProviderId ignores an unknown id without throwing, and answers no account or contact (mutation: answer the account anyway → the webhook attributes a bounce to a row that does not exist, FAILS)", () =>
     withTestAccount(async (db) => {
       // Drawn and never written. "Unknown" has to be unknown to the whole
       // PROJECT for this to mean anything, and a literal is only unknown until
       // some other run writes it — this lookup has no account to hide behind.
       const miss = await updateMessageStatusByProviderId(db, testProviderMessageId(), "delivered");
       expect(miss.updated).toBe(false);
+      expect(miss.accountId).toBeNull();
+      expect(miss.contactId).toBeNull();
+    }));
+
+  it("updateMessageStatusByProviderId still answers the account and contact id on an out-of-order no-op (D-016: a replayed bounce must still attribute, even though nothing is written; mutation: answer null on the early return → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Grace" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      const { id } = await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "outbound", body: "x",
+      }, "user_test");
+      const providerMessageId = testProviderMessageId();
+      await updateMessageStatus(db, accountId, id, "sent", { providerMessageId }, "user_test");
+
+      await updateMessageStatusByProviderId(db, providerMessageId, "opened");
+      // "delivered" ranks below "opened": a true no-op, no write at all.
+      const replay = await updateMessageStatusByProviderId(db, providerMessageId, "delivered");
+      expect(replay.updated).toBe(true);
+      expect(replay.accountId).toBe(accountId);
+      expect(replay.contactId).toBe(contactId);
     }));
 
   it("updateMessageStatusByProviderId logs the webhook update as the system actor, not a user", () =>

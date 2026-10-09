@@ -68,4 +68,20 @@ describe("composerEmailNotice — the email composer's one line (spec §6, choic
     expect(composerEmailNotice({ kind: "stopped", since: "garbage", byCustomer: true }, "America/Chicago"))
       .toBe("They unsubscribed from your emails. Write only about something they asked you for.");
   });
+
+  // D-016 item 4: a hard bounce or a complaint is the PROVIDER's own fact
+  // about the address — its own line, never "You stopped" or "They
+  // unsubscribed" (neither of which is true here; mutation: fall back to
+  // byCustomer's two lines → FAILS).
+  it("a suppressed address (bounced/complained) says its OWN line, with the date, regardless of byCustomer", () => {
+    expect(composerEmailNotice({ kind: "stopped", since: "2026-10-04T02:30:00Z", byCustomer: false, suppressed: "bounced" }, "America/Chicago"))
+      .toBe(m["compose.emailBounced"].replace("{date}", formatDateInZone("2026-10-04T02:30:00Z", "America/Chicago")));
+    expect(composerEmailNotice({ kind: "stopped", since: "2026-10-04T02:30:00Z", byCustomer: true, suppressed: "complained" }, "America/Chicago"))
+      .toBe(m["compose.emailComplained"].replace("{date}", formatDateInZone("2026-10-04T02:30:00Z", "America/Chicago")));
+  });
+
+  it("a suppressed address with an unformattable date drops the date, same as the other two lines (mutation: throw instead of falling back → FAILS)", () => {
+    expect(composerEmailNotice({ kind: "stopped", since: "garbage", byCustomer: false, suppressed: "bounced" }, "America/Chicago"))
+      .toBe("This address bounced — emails to it won't send. Fix the address to start again.");
+  });
 });

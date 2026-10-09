@@ -36,4 +36,16 @@ describe("emailViewOf — the Email row, as data (spec §6)", () => {
     expect([...EMAIL_RESUMABLE_METHODS].sort()).toEqual(["backfill_0049", "staff"]);
     expect(emailHowOf("unsubscribe_page")).toEqual({ kind: "unsubscribe_link" });
   });
+
+  // D-016 item 4: a hard bounce or a complaint (0062's email_bounce/
+  // email_complaint methods) is its own `how`, not a fallthrough to "staff
+  // stopped" — the two read completely differently to the operator (a broken
+  // address vs. a spam report), and neither is staff-resumable (mutation:
+  // read either as "staff" → FAILS).
+  it("a hard bounce and a complaint are their OWN how, and neither is resumable by staff (mutation: fold them into the staff default → FAILS)", () => {
+    const bounced = row("revoked", "email_bounce", "2026-10-03T10:00:00Z");
+    expect(emailViewOf([bounced], true)).toEqual({ kind: "stopped", eventId: bounced.id, since: bounced.occurred_at, how: { kind: "bounced" }, canResume: false });
+    const complained = row("revoked", "email_complaint", "2026-10-03T10:00:00Z");
+    expect(emailViewOf([complained], true)).toEqual({ kind: "stopped", eventId: complained.id, since: complained.occurred_at, how: { kind: "complained" }, canResume: false });
+  });
 });

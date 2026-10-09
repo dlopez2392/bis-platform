@@ -1,4 +1,4 @@
-import { readConsentState, type SupabaseClient } from "@bis/db";
+import { readConsentState, readEmailSuppression, type SupabaseClient } from "@bis/db";
 import { normalisePhone } from "@bis/db/phone";
 import { emailLedgerAddress } from "@bis/db/email-address";
 import { loggableError } from "@/lib/loggable-error";
@@ -45,7 +45,23 @@ export async function emailRecipientState(
   const address = emailLedgerAddress(contact.email);
   if (!address) return { kind: "ok" };
   try {
-    const state = await readConsentState(db, accountId, "email", address);
+    // D-016 review item 4: a suppression (consent.ts's emailSuppressionOf)
+    // is STICKY — only the customer's own resubscribe lifts it, never a
+    // later stop by any other method. readConsentState's generic newest-
+    // row read does not know that: a one-click unsubscribe written AFTER a
+    // bounce/complaint would read as the newest row and say "They
+    // unsubscribed", hiding the suppression the gate still blocks on. Read
+    // in parallel and checked FIRST, so it wins whenever it answers.
+    const [state, suppression] = await Promise.all([
+      readConsentState(db, accountId, "email", address),
+      readEmailSuppression(db, accountId, address),
+    ]);
+    if (suppression) {
+      return {
+        kind: "stopped", since: suppression.since, byCustomer: false,
+        suppressed: suppression.method === "email_bounce" ? "bounced" : "complained",
+      };
+    }
     if (state.state === "allowed") return { kind: "ok" };
     return { kind: "stopped", since: state.since, byCustomer: CUSTOMER_EMAIL_STOP_METHODS.includes(state.method) };
   } catch (e) {

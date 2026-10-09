@@ -140,6 +140,9 @@ vi.mock("@bis/db", () => ({
   // the REAL gate, so its ledger and country-flag reads are mocked here,
   // allowed by default.
   readConsentState: vi.fn(async () => ({ state: "allowed" })),
+  // D-016 item 3: the email gate's suppression check, for staff.composer_email
+  // (staff_typed — the ledger read above skips it, but not this one).
+  readEmailSuppression: vi.fn(async () => null),
   readPhoneCountryFlag: vi.fn(async () => false),
   readAccountTimezone: vi.fn(async () => "America/Chicago"),
   recordCarrierBlock: vi.fn(),

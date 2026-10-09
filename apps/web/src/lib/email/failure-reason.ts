@@ -12,6 +12,21 @@ import { m } from "@/lib/messages";
 export const COMPLAINT_ERROR_MARKER = "complained";
 
 /**
+ * D-016 review item 4: the exact message `EmailNotSent` (`lib/consent/
+ * email-gate.ts`) gives a `{ kind: "blocked", reason: "suppressed" }`
+ * result — `email not sent: ${result.reason}`. NOT imported from there:
+ * lib/consent already depends on lib/email (scan 1, scans.test.ts), and
+ * this file must not invert that into a cycle, so the literal is pinned
+ * here instead, with this comment as the cross-reference. A staff-typed
+ * send the gate blocks this way throws EmailNotSent, and the catch sites
+ * that write `messages.error` (conversations/actions.ts) write its
+ * message VERBATIM — the same shape as every other raw-text failure this
+ * module exists to never echo, which is why this is matched exactly, not
+ * as a substring (same discipline as COMPLAINT_ERROR_MARKER above).
+ */
+const SUPPRESSED_BLOCK_MESSAGE = "email not sent: suppressed";
+
+/**
  * D-017. The thread (`message-thread.tsx`) and the contact timeline
  * (`activity-timeline.tsx`) stored a failure reason on every outbound
  * message that bounced or failed and showed NEITHER of them — an operator
@@ -35,6 +50,10 @@ export function messageFailureReason(
       ? m["conversations.failureReason.complained"]
       : m["conversations.failureReason.bounced"];
   }
-  if (message.status === "failed") return m["conversations.failureReason.failed"];
+  if (message.status === "failed") {
+    return message.error === SUPPRESSED_BLOCK_MESSAGE
+      ? m["conversations.failureReason.suppressed"]
+      : m["conversations.failureReason.failed"];
+  }
   return null;
 }

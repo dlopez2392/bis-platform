@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const dbMocks = vi.hoisted(() => ({ recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn() }));
+// readConsentState: review item 1's integration test runs the REAL gate
+// (sendEmailOrThrow), not a mocked EmailNotSent, so the bug it caught (the
+// gate itself answering "stopped" instead of "suppressed" for an automated
+// kind) could not have been hidden by a test that already assumes the
+// gate's classification.
+const dbMocks = vi.hoisted(() => ({ recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(), readConsentState: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
 import { holdOrSend, writeHeld, logSkipped, REASONS, subjectOf, verdict, type HoldSubject } from "./hold-or-send";
 import { SmsBlocked, SmsDeferred, LEDGER_RETRY_MS, type AutomationBlockReason } from "./send-sms";
-import { EmailNotSent } from "@/lib/consent/email-gate";
+import { EmailNotSent, sendEmailOrThrow } from "@/lib/consent/email-gate";
 
 const NIGHT = new Date("2026-09-22T04:00:00Z");   // 23:00 CDT, Mon Sept 21
 const NOON = new Date("2026-09-21T17:00:00Z");    // 12:00 CDT, Mon Sept 21
@@ -26,6 +31,7 @@ const logWrites = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
 beforeEach(() => {
   dbMocks.recordAutomationLog.mockReset().mockResolvedValue(undefined);
   dbMocks.getAutomationLogEntry.mockReset().mockResolvedValue(null);
+  dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "allowed" });
   vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
 });
 
@@ -218,9 +224,33 @@ describe("holdOrSend: the EMAIL gate's answers (consent PR-3, plan G10)", () => 
     ["held", "They asked not to get these emails"],
     ["no_address", "No email address on file"],
     ["window_after_deadline", "Not sent: quiet hours ran past the appointment"],
+    // D-016: a hard bounce or a complaint is a PROVIDER FACT about the
+    // address, not something the customer asked for — reads differently on
+    // the Activity page than "stopped"/"held" above (mutation: reuse
+    // optedOutEmail's words → FAILS).
+    ["suppressed", "This address bounced or was marked as spam"],
   ] as const)("a refusal (%s) is ONE skipped row reading %j, and no throw (mutation: rethrow it → FAILS)", async (reason, words) => {
     expect(await holdOrSend(ctx(NOON), email(), async () => { throw new EmailNotSent({ kind: "blocked", reason }); })).toBe("skipped");
     expect(logged()).toEqual([expect.objectContaining({ status: "skipped", reason: words })]);
+  });
+
+  // Review item 1: the table above only pins holdOrSend's OWN mapping —
+  // it says nothing about what the GATE actually answers for a real
+  // automated send, which is where the bug lived (the gate's ledger branch
+  // returned "stopped" for a bounce/complaint row, so `suppressed` could
+  // never be reached from here). This runs the REAL gate.
+  it("an automated email kind blocked by a bounce/complaint ROW on the ledger logs the suppressed line end to end, never optedOutEmail (mutation: revert the gate's method check → FAILS)", async () => {
+    dbMocks.readConsentState.mockResolvedValue({
+      state: "stopped", since: "2026-10-03T00:00:00Z", method: "email_bounce", eventId: "e1",
+    });
+    const send = async () => {
+      await sendEmailOrThrow({
+        accountId: "acct_1", kind: "automation.reminder", contactId: "ct_1",
+        to: "ana@example.com", fromName: "Rio Roofing", subject: "Reminder", body: "See you at 3",
+      }, { db: {} as never });
+    };
+    expect(await holdOrSend(ctx(NOON), email(), send)).toBe("skipped");
+    expect(logged()).toEqual([expect.objectContaining({ status: "skipped", reason: REASONS.suppressedEmail })]);
   });
 
   it("a provider failure is today's failure: a failed row and the throw (mutation: swallow it → the pass counts it sent, FAILS)", async () => {

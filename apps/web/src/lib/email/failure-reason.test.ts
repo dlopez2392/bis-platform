@@ -51,4 +51,26 @@ describe("messageFailureReason", () => {
     expect(messageFailureReason({ status: "bounced", error: raw }))
       .toBe(m["conversations.failureReason.bounced"]);
   });
+
+  // D-016 review item 4: a staff-typed email the gate blocked `suppressed`
+  // (an address a PRIOR bounce or complaint already suppressed) throws
+  // EmailNotSent with the exact message `email not sent: suppressed`
+  // (email-gate.ts's own format), which the staff composer's catch writes
+  // verbatim into `messages.error`. That is tellable apart from a generic
+  // failure, same spirit as the complaint marker above.
+  it("a staff send blocked `suppressed` by the gate gets its own line, never the generic 'didn't go through' (mutation: drop the suppressed check → FAILS)", () => {
+    expect(messageFailureReason({ status: "failed", error: "email not sent: suppressed" }))
+      .toBe(m["conversations.failureReason.suppressed"]);
+  });
+
+  // Same exact-match discipline as the complaint marker: a raw provider
+  // string that merely contains the word "suppressed" must not be mistaken
+  // for the gate's own block message (mutation: `.includes` instead of
+  // `===` → FAILS).
+  it("a provider string merely CONTAINING the word \"suppressed\" is not the gate's block message, and gets the generic failed line", () => {
+    const raw = "delivery suppressed by an upstream spam filter, unrelated to our own ledger";
+    expect(raw.includes("suppressed")).toBe(true); // the trap this guards
+    expect(messageFailureReason({ status: "failed", error: raw }))
+      .toBe(m["conversations.failureReason.failed"]);
+  });
 });

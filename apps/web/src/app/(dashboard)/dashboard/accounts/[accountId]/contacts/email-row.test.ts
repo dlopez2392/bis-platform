@@ -32,6 +32,19 @@ describe("EmailRow — spec §6's Email row", () => {
     expect(out).not.toContain(m["contact.email.resume"]);
   });
 
+  it("Stopped by a hard bounce or a complaint: the short how, the suppression-specific explanation, never the (false, once suppressed) customer-only line, NO Resume (D-016 item 4; mutation: fall back to customerOnly → FAILS)", () => {
+    const bounced = renderedText(html(ready({ kind: "stopped", eventId: "e", since: "2026-10-03T15:00:00Z", how: { kind: "bounced" }, canResume: false })));
+    expect(bounced).toContain("it bounced");
+    expect(bounced).toContain(m["contact.email.bouncedExplain"]);
+    expect(bounced).not.toContain(m["contact.email.customerOnly"]);
+    expect(bounced).not.toContain(m["contact.email.resume"]);
+
+    const complained = renderedText(html(ready({ kind: "stopped", eventId: "e", since: "2026-10-03T15:00:00Z", how: { kind: "complained" }, canResume: false })));
+    expect(complained).toContain("they marked it as spam");
+    expect(complained).toContain(m["contact.email.complainedExplain"]);
+    expect(complained).not.toContain(m["contact.email.customerOnly"]);
+  });
+
   it("Stopped by staff or the fold: ghost 'Resume emails…' (the note form opens on click, e2e), no customer-only line (mutation: canResume ignored → FAILS)", () => {
     const out = html(ready({ kind: "stopped", eventId: "e", since: "2026-09-01T15:00:00Z", how: { kind: "backfill_0049" }, canResume: true }));
     expect(buttons(out)).toEqual([m["contact.email.resume"]]);

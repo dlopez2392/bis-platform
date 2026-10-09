@@ -516,6 +516,22 @@ export const m = {
   "contact.email.how.unsubscribeLink": "unsubscribe link",
   "contact.email.how.staff": "you recorded it",
   "contact.email.how.backfill0049": "you marked them “No marketing emails”",
+  // D-016 item 4: a hard bounce or a complaint is the PROVIDER's fact about
+  // the address, never a choice staff or the customer made through a link —
+  // its own short "how" (for the "Since {date} · {how}" line) and its own
+  // longer explanation in place of "They can resubscribe from the
+  // unsubscribe link…", which is simply false once an address is suppressed
+  // (no more emails go out carrying that link).
+  "contact.email.how.bounced": "it bounced",
+  "contact.email.how.complained": "they marked it as spam",
+  "contact.email.bouncedExplain": "This address bounced — emails to it won't send. Fix the address to start again.",
+  // Review item 7(i): Resend's OWN suppression list is shared across our
+  // WHOLE team, every tenant (resend.com/docs/dashboard/emails/email-
+  // suppressions) and a resubscribe here lifts only OUR OWN tracking of
+  // consent, never Resend's — so this says what WE do (stop trying), never
+  // a guarantee that a resubscribe alone restores delivery, which would not
+  // always be true.
+  "contact.email.complainedExplain": "They marked an email as spam — we won't email them again unless they resubscribe.",
   "contact.email.stopEmails": "Stop emails",
   "contact.email.stoppedToast": "Emails stopped.",
   "contact.email.resume": "Resume emails…",
@@ -798,6 +814,15 @@ export const m = {
   // stays usable and says why the operator should keep it to their matter.
   "compose.emailUnsubscribed": "They unsubscribed from your emails on {date}. Write only about something they asked you for.",
   "compose.emailStoppedByYou": "You stopped emails to them on {date}. Write only about something they asked you for.",
+  // D-016 item 4: the provider's own facts about the address (a hard bounce,
+  // a complaint) read differently to the composer than a stop anyone CHOSE —
+  // the one line still fits the same "on {date}" shape as the two above, so
+  // the undated fallback (composer-state.ts's catch branch) keeps working.
+  "compose.emailBounced": "This address bounced on {date} — emails to it won't send. Fix the address to start again.",
+  // Review item 7(i): same caveat as contact.email.complainedExplain —
+  // Resend's own TEAM-wide suppression list is a separate thing we don't
+  // control, so this states OUR policy, never a delivery guarantee.
+  "compose.emailComplained": "This person marked an email as spam on {date} — we won't email them again unless they resubscribe.",
   "compose.emailStateUnknown": "Couldn't check whether they unsubscribed. Write only about something they asked you for.",
   // {n} segments — SMS bills per segment, and a single non-GSM character
   // (an accent, a curly apostrophe) drops the whole message to 70 per segment.
@@ -833,6 +858,9 @@ export const m = {
   "conversations.failureReason.complained": "They marked this email as spam.",
   "conversations.failureReason.bounced": "This address couldn't be reached.",
   "conversations.failureReason.failed": "This didn't go through.",
+  // D-016 review item 4: the gate refused to even try — this address
+  // already bounced or was marked as spam on an earlier message.
+  "conversations.failureReason.suppressed": "Already bounced or marked as spam — nothing was sent.",
 
   "forms.title": "Forms",
   "forms.add": "New form",

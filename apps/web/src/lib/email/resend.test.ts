@@ -89,3 +89,19 @@ describe("custom headers (consent PR-3; Resend's CreateEmailBaseOptions.headers,
     expect("headers" in sendMock.mock.calls[1]![0]).toBe(false);
   });
 });
+
+// D-016 item 1: every gated send carries Resend tags (account id, and the
+// contact id when known), so the webhook can attribute a bounce/complaint
+// back to its account without a messages-row fallback. Verified against
+// Resend's docs (resend.com/docs/dashboard/emails/tags): `tags` on send is
+// an ARRAY of {name, value}, echoed back on the webhook event as `data.tags`.
+describe("tags (D-016 item 1)", () => {
+  it("passes tags through to Resend exactly, and a send without them carries no tags key (mutation: drop the tags spread → FAILS; mutation: always send tags: [] → FAILS)", async () => {
+    const provider = resendEmailProvider("re_test", "crm@bis-rgv.com");
+    const tags = [{ name: "account_id", value: "5b1f6a5e-6a3d-4f7e-9f65-2a0b1c3d4e5f" }];
+    await provider.send({ to: "c@example.com", fromName: "Rio", subject: "Hi", body: "plain", tags });
+    expect(sendMock.mock.calls[0]![0].tags).toEqual(tags);
+    await provider.send({ to: "c@example.com", fromName: "Rio", subject: "Hi", body: "plain" });
+    expect("tags" in sendMock.mock.calls[1]![0]).toBe(false);
+  });
+});

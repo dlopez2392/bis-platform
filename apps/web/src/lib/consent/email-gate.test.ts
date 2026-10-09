@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const db = vi.hoisted(() => ({ readConsentState: vi.fn(), readAccountTimezone: vi.fn(), getMailingAddress: vi.fn() }));
+const SERVICE_CLIENT = { service: true } as never;
+const db = vi.hoisted(() => ({
+  readConsentState: vi.fn(), readAccountTimezone: vi.fn(), getMailingAddress: vi.fn(),
+  readEmailSuppression: vi.fn(), serviceDb: vi.fn(),
+}));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const factory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
 vi.mock("@/lib/email", async (importOriginal) => ({ ...(await importOriginal<object>()), ...factory }));
@@ -38,6 +42,8 @@ beforeEach(() => {
   db.readConsentState.mockResolvedValue({ state: "allowed" });
   db.readAccountTimezone.mockResolvedValue("America/Chicago");
   db.getMailingAddress.mockResolvedValue(null);
+  db.readEmailSuppression.mockResolvedValue(null);
+  db.serviceDb.mockReturnValue(SERVICE_CLIENT);
   factory.getEmailProvider.mockReturnValue(provider());
   send.mockResolvedValue({ providerMessageId: "re_1" });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -69,6 +75,23 @@ describe("sendEmail: what an unsubscribe stops (decision 7)", () => {
       expect(send).not.toHaveBeenCalled();
     });
 
+  // Review item 1 (D-016): every automation.* email kind reads the LEDGER
+  // (the branch above), never the new readEmailSuppression check (item 3,
+  // which only runs for kinds the ledger read skips) — so a bounce or a
+  // complaint reaches THIS branch as a plain `revoked`/"stopped" row, and
+  // without this fix it would be told apart from a real "they asked not to"
+  // stop nowhere upstream of the Activity page's reason text.
+  it.each(["automation.reminder", "automation.review_request"] as const)(
+    "%s to an address the LEDGER's OWN bounce/complaint row stopped is blocked `suppressed`, never the generic `stopped` (mutation: drop the method check → FAILS)", async (kind) => {
+      db.readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T00:00:00Z", method: "email_bounce", eventId: "e1" });
+      expect(await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed" });
+      db.readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T00:00:00Z", method: "email_complaint", eventId: "e2" });
+      expect(await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed" });
+      // A REAL customer stop on the same branch is untouched.
+      db.readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-03T00:00:00Z", method: "one_click", eventId: "e3" });
+      expect(await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "stopped" });
+    });
+
   it.each(["booking.confirmation", "forms.receipt", "voice.booked", "voice.moved", "voice.cancelled",
     "staff.composer_email", "operator.booking_alert"] as const)(
     "%s is NOT subject to the ledger: it never reads it and sends to a stopped address (decision 7, choices 22 and 23; mutation: read the ledger for every kind → FAILS)", async (kind) => {
@@ -88,6 +111,43 @@ describe("sendEmail: what an unsubscribe stops (decision 7)", () => {
 
   it("a ledger kind with no client is a programming error, not a silent send (mutation: skip the read when db is missing → sends, FAILS)", async () => {
     await expect(sendEmail(base(), { env: ENV })).rejects.toThrow(/reads the ledger and needs a client/);
+  });
+});
+
+describe("sendEmail: a hard-bounced or complained address (D-016 item 3) — nothing stops it but the customer's own resubscribe", () => {
+  it.each(["booking.confirmation", "forms.receipt", "voice.booked", "voice.moved", "voice.cancelled", "staff.composer_email"] as const)(
+    "%s to a suppressed address is blocked `suppressed`, read on the LEDGER KEY (mutation: skip the suppression check for these kinds → FAILS)", async (kind) => {
+      db.readEmailSuppression.mockResolvedValue({ method: "email_bounce", since: "2026-10-03T00:00:00Z", eventId: "s1" });
+      expect(await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed" });
+      expect(db.readEmailSuppression).toHaveBeenCalledWith(CLIENT, ACCOUNT, "ana.lopez@example.com");
+      expect(send).not.toHaveBeenCalled();
+    });
+
+  it("operator mail is NEVER checked against the suppression ledger — it goes to the business owner's own address, not the customer's (mutation: check it for every kind → FAILS)", async () => {
+    db.readEmailSuppression.mockResolvedValue({ method: "email_complaint", since: "2026-10-03T00:00:00Z", eventId: "s1" });
+    expect((await sendEmail(base({ kind: "operator.lead_alert" }), { db: CLIENT, env: ENV })).kind).toBe("sent");
+    expect(db.readEmailSuppression).not.toHaveBeenCalled();
+  });
+
+  it.each(["automation.reminder", "automation.review_request"] as const)(
+    "%s never calls the NEW suppression read — a bounce/complaint row is ALSO a `revoked` row the existing ledger read already sees (mutation: call it for every kind → FAILS)", async (kind) => {
+      db.readConsentState.mockResolvedValue({ state: "allowed" });
+      expect((await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).kind).toBe("sent");
+      expect(db.readEmailSuppression).not.toHaveBeenCalled();
+    });
+
+  it("an unreadable suppression check fails closed: blocked ledger_unavailable, logged, never sent (mutation: treat a throw as not-suppressed → FAILS)", async () => {
+    db.readEmailSuppression.mockRejectedValueOnce(new Error("readEmailSuppression failed: timeout"));
+    expect(await sendEmail(base({ kind: "booking.confirmation" }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "ledger_unavailable" });
+    expect(vi.mocked(console.error).mock.calls.flat().join(" ")).toMatch(/booking\.confirmation .*blocked, suppression unreadable/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("with no client in deps, the gate reads the suppression ledger through serviceDb() rather than throwing (mutation: never fall back → a programming error where a graceful check belongs, FAILS)", async () => {
+    db.readEmailSuppression.mockResolvedValue({ method: "email_bounce", since: "2026-10-03T00:00:00Z", eventId: "s1" });
+    expect(await sendEmail(base({ kind: "staff.composer_email" }), { env: ENV })).toEqual({ kind: "blocked", reason: "suppressed" });
+    expect(db.serviceDb).toHaveBeenCalled();
+    expect(db.readEmailSuppression).toHaveBeenCalledWith(SERVICE_CLIENT, ACCOUNT, "ana.lopez@example.com");
   });
 });
 
@@ -156,7 +216,7 @@ describe("sendEmail: the footer and the RFC 8058 headers (spec §4.3, plan G7)",
 
   it("the provider gets the send fields ONLY — never the gate's own (mutation: spread the whole request → accountId reaches Resend, FAILS)", async () => {
     await sendEmail(base({ replyTo: "office@rio.example", fromAddress: "hello@rio.example" }), { db: CLIENT, env: ENV });
-    expect(Object.keys(sent()).sort()).toEqual(["body", "fromAddress", "fromName", "headers", "html", "replyTo", "subject", "to"]);
+    expect(Object.keys(sent()).sort()).toEqual(["body", "fromAddress", "fromName", "headers", "html", "replyTo", "subject", "tags", "to"]);
     expect(sent().to).toBe("  Ana.Lopez@Example.com ");
   });
 
@@ -184,6 +244,45 @@ describe("sendEmail: the footer and the RFC 8058 headers (spec §4.3, plan G7)",
     expect(sent().body).toMatch(/Unsubscribe: https:\/\/app\.example\.com\/u\//);
     expect(sent().headers).toBeDefined();
   });
+});
+
+describe("sendEmail: Resend tags (D-016 item 1 — so the webhook can attribute a bounce/complaint)", () => {
+  it("carries the account id, the contact id when it is a uuid, and class=customer for a non-operator kind (mutation: drop the tags → FAILS)", async () => {
+    await sendEmail(base(), { db: CLIENT, env: ENV });
+    expect(sent().tags).toEqual([
+      { name: "account_id", value: ACCOUNT }, { name: "class", value: "customer" }, { name: "contact_id", value: CONTACT },
+    ]);
+  });
+
+  it("carries only the account id and class when the contact id is not a uuid, or is absent (mutation: pass the raw contactId through → a non-uuid tag value, FAILS)", async () => {
+    await sendEmail(base({ contactId: "ct_1" }), { db: CLIENT, env: ENV });
+    expect(sent().tags).toEqual([{ name: "account_id", value: ACCOUNT }, { name: "class", value: "customer" }]);
+    send.mockClear();
+    await sendEmail(base({ contactId: null }), { db: CLIENT, env: ENV });
+    expect(sent().tags).toEqual([{ name: "account_id", value: ACCOUNT }, { name: "class", value: "customer" }]);
+  });
+
+  it("carries no tags at all for operator mail with no account — the agency roll-up (mutation: always send the account_id tag → FAILS)", async () => {
+    await sendEmail(base({ kind: "operator.agency_report", accountId: null, contactId: null }), { env: ENV });
+    expect(sent().tags).toBeUndefined();
+    expect("tags" in sent()).toBe(false);
+  });
+
+  // D-016 review item 3: an owner marking their OWN weekly report as spam
+  // must never suppress a customer's address — the webhook tells operator
+  // mail apart by this tag alone, so every class of email kind must carry
+  // the right one.
+  it("operator mail WITH an account (the business owner's own alert) carries class=operator, never customer (mutation: tag every kind as customer → FAILS)", async () => {
+    await sendEmail(base({ kind: "operator.lead_alert" }), { db: CLIENT, env: ENV });
+    expect(sent().tags).toEqual(expect.arrayContaining([{ name: "class", value: "operator" }]));
+    expect(sent().tags).not.toEqual(expect.arrayContaining([{ name: "class", value: "customer" }]));
+  });
+
+  it.each(["booking.confirmation", "staff.composer_email", "automation.review_request"] as const)(
+    "%s (customer_initiated, staff_typed and marketing alike) carries class=customer, never operator (mutation: tag every kind as operator → FAILS)", async (kind) => {
+      await sendEmail(base({ kind }), { db: CLIENT, env: ENV });
+      expect(sent().tags).toEqual(expect.arrayContaining([{ name: "class", value: "customer" }]));
+    });
 });
 
 describe("sendEmail: the postal address on the three follow-ups whose templates print none (decision P1, G18; spec §10)", () => {
