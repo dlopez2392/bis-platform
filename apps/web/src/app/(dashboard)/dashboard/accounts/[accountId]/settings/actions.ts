@@ -27,9 +27,21 @@ export async function createFieldAction(accountId: string, formData: FormData): 
   const dataType = String(formData.get("dataType")) as CustomFieldDef["data_type"];
   const options = String(formData.get("options") ?? "")
     .split(",").map(s => s.trim()).filter(Boolean);
+  const fieldKey = String(formData.get("fieldKey") ?? "").trim();
+  // Review round 1, C1's own follow-up, m4: "referred_by" is the key
+  // F-157's source question writes DIRECTLY onto `contacts.custom`
+  // (lib/contacts/lead-source.ts's `contactSourceHint`) — a custom contact
+  // field created with that same key would merge an unrelated
+  // operator-defined value into the exact jsonb property the drawer's
+  // Source line reads as a word-of-mouth referral. Refused before the
+  // database is ever reached, case- and whitespace-insensitively (an
+  // operator paste can carry either).
+  if (fieldKey.toLowerCase() === "referred_by") {
+    throw new Error(m["settings.fieldKeyReserved"]);
+  }
   await createCustomField(await dbForRequest(), accountId, {
     model: "contact",
-    fieldKey: String(formData.get("fieldKey") ?? "").trim(),
+    fieldKey,
     name: String(formData.get("name") ?? "").trim(),
     dataType, options: options.length ? options : undefined,
   });
