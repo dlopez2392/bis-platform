@@ -225,7 +225,12 @@ export async function updateMessageStatusByProviderId(
   if (!data) return { updated: false, accountId: null, contactId: null };
 
   const accountId = data.account_id as string;
-  const contactId = (data.conversations as { contact_id: string } | null)?.contact_id ?? null;
+  // Supabase's generated type for this embed is an array (its typing cannot
+  // prove the to-one cardinality from the FK alone), but PostgREST actually
+  // answers a single object here — pinned by the live test above — so both
+  // shapes are handled rather than trusting either one blindly.
+  const embedded = data.conversations as unknown as { contact_id: string }[] | { contact_id: string } | null;
+  const contactId = (Array.isArray(embedded) ? embedded[0] : embedded)?.contact_id ?? null;
 
   // Out-of-order or replayed event: the row already reflects an equal or
   // later point in the lifecycle. Leave it alone — no write, no event, and

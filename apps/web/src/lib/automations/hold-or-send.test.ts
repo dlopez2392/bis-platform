@@ -218,6 +218,11 @@ describe("holdOrSend: the EMAIL gate's answers (consent PR-3, plan G10)", () => 
     ["held", "They asked not to get these emails"],
     ["no_address", "No email address on file"],
     ["window_after_deadline", "Not sent: quiet hours ran past the appointment"],
+    // D-016: a hard bounce or a complaint is a PROVIDER FACT about the
+    // address, not something the customer asked for — reads differently on
+    // the Activity page than "stopped"/"held" above (mutation: reuse
+    // optedOutEmail's words → FAILS).
+    ["suppressed", "This address bounced or was marked as spam"],
   ] as const)("a refusal (%s) is ONE skipped row reading %j, and no throw (mutation: rethrow it → FAILS)", async (reason, words) => {
     expect(await holdOrSend(ctx(NOON), email(), async () => { throw new EmailNotSent({ kind: "blocked", reason }); })).toBe("skipped");
     expect(logged()).toEqual([expect.objectContaining({ status: "skipped", reason: words })]);

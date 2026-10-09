@@ -167,6 +167,11 @@ export const REASONS = {
    *  it for every automated kind (decision 7), and this is the line the
    *  client reads on the Activity page. */
   optedOutEmail: "They asked not to get these emails",
+  /** D-016 (0062): the email gate's new refusal — a hard bounce or a
+   *  complaint on this address, a fact the PROVIDER reports, never
+   *  something the customer asked for, so it reads differently from
+   *  optedOutEmail above on the Activity page. */
+  suppressedEmail: "This address bounced or was marked as spam",
   outsideRegion: "Number is outside the US, Canada or Mexico",
   consentWithheld: "They didn't agree to texts",
   robocall: "Screened as a robocall",
@@ -233,6 +238,7 @@ export const EMAIL_BLOCK_REASONS: Record<Exclude<EmailBlockReason, "ledger_unava
   no_address: REASONS.noEmail,
   stopped: REASONS.optedOutEmail,
   held: REASONS.optedOutEmail,
+  suppressed: REASONS.suppressedEmail,
   window_after_deadline: REASONS.windowAfterDeadline,
 };
 
