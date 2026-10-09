@@ -50,6 +50,24 @@ describe("blueprint capture", () => {
       expect(bp!.assets.forms[0]).not.toHaveProperty("notifyEmails");
     }));
 
+  // D-089: an archived form is one the agency retired on this account, and a
+  // capture copied it into every client the blueprint was applied to.
+  it("capture leaves archived forms behind, keeping drafts and published ones (mutation: drop the status filter → FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      await seedConfig(db, accountId); // "Quote Request", published
+      await createForm(db, accountId, {
+        name: "Draft Survey", fields: [{ key: "email", kind: "core.email", label: "Email", required: true }],
+      }, "user_test");
+      const { id: retiredId } = await createForm(db, accountId, {
+        name: "Retired Promo", fields: [{ key: "email", kind: "core.email", label: "Email", required: true }],
+      }, "user_test");
+      await updateForm(db, accountId, retiredId, { status: "archived" }, "user_test");
+
+      const { id } = await captureBlueprint(db, accountId, { name: blueprintName("Archive Filter") }, "user_test");
+      const bp = await getBlueprint(db, id);
+      expect(bp!.assets.forms.map((f) => f.name).sort()).toEqual(["Draft Survey", "Quote Request"]);
+    }));
+
   it("recapturing the same name replaces the bundle and bumps version", () =>
     withTestAccount(async (db, accountId) => {
       await seedConfig(db, accountId);

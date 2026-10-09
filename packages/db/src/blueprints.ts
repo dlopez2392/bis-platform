@@ -196,7 +196,11 @@ async function buildBundle(db: SupabaseClient, accountId: string): Promise<Bluep
       .order("name").order("id"),
     db.from("custom_values").select("id, value_key, name").eq("account_id", accountId)
       .order("value_key").order("id"),
+    // Archived forms stay behind (D-089): the agency retired them on this
+    // account, and a capture copied them into every client it was applied to.
+    // Drafts are kept — a blueprint form is applied as a draft anyway.
     db.from("forms").select("id, name, fields, theme, success_mode, success_message, redirect_url, locale_default").eq("account_id", accountId)
+      .neq("status", "archived")
       .order("created_at").order("id"),
   ]);
 
