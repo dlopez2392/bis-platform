@@ -82,3 +82,22 @@ describe("conversations.empty.body (D-020)", () => {
     expect(body.toLowerCase()).toMatch(/\bform/);
   });
 });
+
+/**
+ * Post-merge review of #228 (owner decision): the reserved-key strings named
+ * "the source question" / "la pregunta de origen", a name the owner never
+ * sees anywhere. The form editor calls that field "Who recommended you?"
+ * (forms.kind.core.referral_source), so the settings copy names it the same
+ * way, in each language, read off the catalogue rather than retyped.
+ */
+describe("settings.fieldKeyReserved / settings.fieldKeyFormat name the question the owner sees", () => {
+  it.each([
+    ["settings.fieldKeyReserved", "forms.kind.core.referral_source"],
+    ["settings.fieldKeyFormat", "forms.kind.core.referral_source"],
+    ["settings.fieldKeyReserved.es", "forms.kind.core.referral_source.es"],
+    ["settings.fieldKeyFormat.es", "forms.kind.core.referral_source.es"],
+  ] as const)("%s quotes the form editor's own label (mutation: restore \"source question\" → FAILS)", (key, label) => {
+    expect(m[key]).toContain(`"${m[label]}"`);
+    expect(m[key]).not.toMatch(/source question|pregunta de origen/i);
+  });
+});
