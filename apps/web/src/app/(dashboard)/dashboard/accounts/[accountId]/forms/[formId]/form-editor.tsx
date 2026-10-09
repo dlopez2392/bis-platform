@@ -24,6 +24,8 @@ import { defaultFieldKey, shouldWarnOnUnpublish, statusAfterUndo } from "@/lib/f
 
 const CORE_KINDS = [
   "core.first_name", "core.last_name", "core.email", "core.phone", "core.company_name",
+  // F-018, folded into F-157: "the source question" — one optional field.
+  "core.referral_source",
   "message", "consent",
 ] as const;
 

@@ -4,6 +4,12 @@ import { emit } from "./events";
 
 export type FormFieldKind =
   | "core.first_name" | "core.last_name" | "core.email" | "core.phone" | "core.company_name"
+  // F-018, folded into F-157 (docs/crm-features.md §4.3 rider 6): "the
+  // source question" — one optional field a form builder can add, asking
+  // the visitor who recommended them. Its answer rides enrich.ts's own
+  // custom-field merge under the reserved key "referred_by", not a new
+  // contacts column.
+  | "core.referral_source"
   | `custom.${string}` | "message" | "consent";
 
 export type FormField = {

@@ -310,6 +310,47 @@ describe("submitFormAction — expired render token (lead-loss regression)", () 
     expect(incrementUnreadCountMock).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * F-018, folded into F-157 (docs/crm-features.md §4.3 rider 6): "¿Quién le
+   * recomendó?" — the source question a form can add. Its answer rides the
+   * SAME custom-field merge `createContact`'s own `custom` input already
+   * carries (lib/forms/enrich.ts), under the reserved key `referred_by`, so
+   * the contact drawer's one Source line (`contactSourceHint`) can read it
+   * with no second storage path. Mutation: drop the `core.referral_source`
+   * branch from enrich's custom-field loop → `custom` stays `{}`, FAILS.
+   */
+  it("the referral question's answer reaches createContact as custom.referred_by", async () => {
+    const fields = [
+      { key: "first_name", kind: "core.first_name", label: "Name", required: true },
+      { key: "referral", kind: "core.referral_source", label: "Who recommended you?", required: false },
+    ];
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({ fields }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en",
+      first_name: "Maria", referral: "Jane Smith",
+    }));
+
+    expect(result.status).toBe("success");
+    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ custom: { referred_by: "Jane Smith" } });
+  });
+
+  it("a blank answer to the referral question writes no custom field at all (mutation: drop the `if (value)` guard → writes an empty string, FAILS)", async () => {
+    const fields = [
+      { key: "first_name", kind: "core.first_name", label: "Name", required: true },
+      { key: "referral", kind: "core.referral_source", label: "Who recommended you?", required: false },
+    ];
+    getPublishedFormByPublicIdMock.mockResolvedValue(formRow({ fields }));
+    const token = signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+
+    await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token, locale: "en", first_name: "Maria", referral: "",
+    }));
+
+    expect(createContactMock.mock.calls[0]![2]).toMatchObject({ custom: {} });
+  });
+
   it("one notify recipient's failure does not silence the others", async () => {
     // The loop used to await each send bare, so the first provider failure —
     // one bad address, one rejected domain — threw out of the loop and every
@@ -766,6 +807,24 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
     expect(updateContact).toHaveBeenCalledWith(
       expect.anything(), "acct_1", "contact_1",
       expect.objectContaining({ phone: "55 1234 5678" }), "form", "system");
+  });
+
+  it("a returning contact's referral answer fills a blank custom.referred_by the same way any other custom field would (F-018/F-157)", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withPhone({ fields: [
+      { key: "phone", kind: "core.phone", label: "Phone", required: true },
+      { key: "referral", kind: "core.referral_source", label: "Who recommended you?", required: false },
+    ] }));
+    createContactMock.mockResolvedValue({ id: "contact_1", existing: true });
+    vi.mocked(getContact).mockResolvedValueOnce({
+      id: "contact_1", first_name: "Someone", last_name: null, email: null, phone: PHONE, custom: {},
+    } as never);
+    vi.mocked(updateContact).mockClear();
+    await submitFormAction(PUBLIC_ID, IDLE, fd({
+      [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE, referral: "Jane Smith",
+    }));
+    expect(updateContact).toHaveBeenCalledWith(
+      expect.anything(), "acct_1", "contact_1",
+      expect.objectContaining({ custom: { referred_by: "Jane Smith" } }), "form", "system");
   });
 
   it("a THROWING instant reply never fails the submission, but IS recorded as processing_error — a crash must be as visible as a refusal (mutation: drop the errors.push in the catch → FAILS)", async () => {
