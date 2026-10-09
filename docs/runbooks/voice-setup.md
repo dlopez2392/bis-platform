@@ -446,9 +446,11 @@ call, actually listened to, with the resulting rows actually read.
      doesn't show up: `to`, then `diversion` (SIP `Diversion` header,
      carrier-dependent).
 
-   ⚠️ **Vercel Hobby retains runtime logs for roughly 1 hour.** Check this
-   immediately after the call — waiting until tomorrow means the log line
-   is gone and this check has to be redone with a fresh call.
+   ⚠️ **Runtime logs are kept only for a limited time.** The project is on
+   Vercel's Pro plan; read that plan's runtime-log retention in Vercel's own
+   documentation rather than trusting a number written here. Check this
+   immediately after the call — once the log line has aged out, this check
+   has to be redone with a fresh call.
 
 **Do not proceed to a real client's number until every sub-item in this step
 has been walked and confirmed**, not just "the phone rang and someone
@@ -535,9 +537,12 @@ browser for both parties.
 
 ## Follow-up emails
 
-Off by default, per-company, next-morning delivery riding the existing
-daily reminder cron (`apps/web/src/app/api/cron/reminders/route.ts` — the
-same route booking reminders already ride, Hobby-tier daily granularity).
+Off by default, per-company, delivered the morning after the appointment
+ends: between 08:00 and 11:00 in the account's own timezone
+(`apps/web/src/lib/booking/followup-timing.ts`). It rides the same scheduler
+as booking reminders, `apps/web/src/app/api/cron/reminders/route.ts`, which
+Vercel calls every 15 minutes (`apps/web/vercel.json`); the morning band,
+not the schedule, is what makes it next-morning.
 
 1. **Turn it on**: the account's **Calendar** page → Settings → the
    **"Send a follow-up email"** checkbox.
@@ -557,13 +562,15 @@ same route booking reminders already ride, Hobby-tier daily granularity).
    never gets silently marked sent). A booking with no contact email on
    file (e.g. the recorded voice-booking `fillBlanks` gap) is skipped on
    every tick — never stamped, never an error, counted as `skippedNoEmail`
-   in the cron output each day until the 25h window ages it out. Seeing the
+   in the cron output on each tick inside the morning band until the 37-hour
+   window (`FOLLOWUP_MAX_AGE_MS`) ages it out. Seeing the
    same booking skip across consecutive days is designed repetition, not a
    bug; it is never sent.
 
 **Verify:** enable follow-ups on a test calendar with a short custom body,
 complete a real booking (voice or public page) with a real email, wait for
-the next daily cron tick after the appointment's end time, and confirm the
+the next morning's 08:00–11:00 band (account timezone) after the
+appointment's end time, and confirm the
 email arrives with your custom text (or the default copy, if you left the
 body empty).
 
@@ -841,9 +848,12 @@ with the call. Record whether a caller-ID attestation field is among them.
   the take-a-message fallback, not a silent failure.
 - **Follow-up email never arrives:** confirm the checkbox is ON for that
   calendar, the booking has a saved contact email (voice bookings can lack
-  one — the recorded `fillBlanks` gap), and enough time has passed for the
-  next daily cron tick after the appointment ended — this is next-morning
-  granularity on Hobby, not real-time.
+  one — the recorded `fillBlanks` gap), and that the next morning's
+  08:00–11:00 band in the account's timezone has come since the appointment
+  ended — follow-ups are next-morning by design, not real-time, even though
+  the scheduler ticks every 15 minutes. An account whose timezone cannot be
+  resolved gets no follow-up at all (the cron output counts it as
+  `unresolvableTimezone`).
 - **Testing number doesn't answer calls:** check the wizard's test-call
   card — if the **Enable test calls** button is disabled with a "needs
   profile" note, the account has no saved voice profile yet (see
