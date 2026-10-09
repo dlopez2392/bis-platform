@@ -7,25 +7,33 @@
  * Until 2026-09-24 a missing account either SKIPPED (`openAccountByName`) or
  * was never looked for at all (`client-branding.spec.ts` carried a production
  * row id as a literal). On a project where that account does not exist — a
- * fresh or reset one, or the separate CI project before `ci:seed` has run —
- * the first shape turns specs into skips and the second turns "another
- * company's row stays untouched" into a check against a row that was never
- * there. Both read as green. So a missing seed is an operator error with one
- * fix, and this module says which.
+ * fresh or reset bis-ci project before `ci:seed` has run — the first shape
+ * turns specs into skips and the second turns "another company's row stays
+ * untouched" into a check against a row that was never there. Both read as
+ * green. So a missing seed is an operator error with one fix, and this
+ * module says which. (CI's own per-run local stack seeds itself, with
+ * `ci:seed:local`, before Playwright starts — see the message below for
+ * what a missing account means there instead.)
  *
  * Kept free of Playwright so its decisions are unit-tested (./seeded.test.ts).
  */
 import type { serviceDb } from "@bis/db";
 
-/** The command that creates the seeded baseline on a project that lacks it. */
+/** The command a LOCAL run (against bis-ci) uses to create the seeded
+ *  baseline when that project lacks it. CI never runs this one by hand: its
+ *  own per-run local stack seeds itself with `ci:seed:local` (the "Seed the
+ *  local stack" step, .github/workflows/ci.yml) before Playwright starts. */
 export const CI_SEED_COMMAND = "pnpm --filter @bis/db ci:seed";
 
 /** The one message every caller fails with when the account is absent. */
 export function seededAccountMissingMessage(name: string, where: string): string {
   return (
     `No account named "${name}" found ${where}. The e2e suite reads this seeded ` +
-    `account and fails without it rather than skipping; on a fresh or CI Supabase ` +
-    `project run \`${CI_SEED_COMMAND}\` first.`
+    `account and fails without it rather than skipping. Locally, against bis-ci, ` +
+    `run \`${CI_SEED_COMMAND}\` first. In CI this means the e2e job's own "Seed ` +
+    `the local stack" step (\`pnpm --filter @bis/db ci:seed:local\`) either failed ` +
+    `or seeded a stack Playwright never connected to — not something to fix by ` +
+    `re-running a command.`
   );
 }
 

@@ -1,8 +1,15 @@
 # Texting the business when work arrives — design
 
 **Date:** 2026-09-15 · **Branch:** `docs/feature-specs` · **Base:** `6613c09`
-**Status:** IDEA. Not planned, not scheduled. Nothing below is settled except
-the findings, which were read from the tree rather than assumed.
+**Status:** SHIPPED 2026-09-15, in #67 (a text to the account's one alert
+phone, `accounts.alert_phone`, migration 0035, when a booking lands or a call
+finishes, sent alongside the existing alert emails and never instead of them)
+and #69 (the alert phone is confirmed with a texted code before it is saved,
+0036). Form submissions do not text. The code is the record of what was
+decided: `apps/web/src/lib/sms/alerts.ts` and its three callers
+(`app/b/[publicId]/actions.ts`, `lib/voice/finish-call.ts`, the account
+settings actions). Everything below is the original idea document, kept as it
+was written; its open questions were answered by that work, not in this file.
 
 ## Why
 
@@ -60,7 +67,7 @@ without an `authenticated` UPDATE grant).
 So this feature is really two: a **destination** and a **channel**. The
 destination gap is pre-existing and bites email today.
 
-## Open questions — none of these are decided
+## Open questions — as written before #67 (see Status for what shipped)
 
 **Whose number is it?** One number per account, or a list like the email
 arrays? A landscaper with two crews is not the same as a solo operator.

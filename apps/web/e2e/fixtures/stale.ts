@@ -38,13 +38,26 @@ export const FIXTURE_ACCOUNT_RE = /^E2E Client Co (\d{13})$/;
 export const FIXTURE_CO_ACCOUNT_RE = /^E2E Co (\d{13})$/;
 
 /**
- * Every account (and therefore Clerk org) name a spec mints. The accounts leg
- * and the Clerk orgs leg of the sweep both ask `isStaleFixtureAccount`, which
- * reads this list, so a shape added here is swept in both systems at once.
+ * `E2E Agency Org 1786412389258` — the per-run agency user's OWN Clerk org
+ * (auth.setup.ts, 2026-10-08). A Clerk org with NO account row: it exists
+ * only so the agency session has an active organization without taking one
+ * of the 5 seats in Test Client One's org, which every concurrent run would
+ * otherwise share. Teardown deletes it; a killed run's is found here, by the
+ * Clerk orgs leg. Anchored exactly as tightly as the two above.
+ */
+export const FIXTURE_AGENCY_ORG_RE = /^E2E Agency Org (\d{13})$/;
+
+/**
+ * Every account or Clerk org name a spec mints. The accounts leg and the
+ * Clerk orgs leg of the sweep both ask `isStaleFixtureAccount`, which reads
+ * this list, so a shape added here is swept in both systems at once (the
+ * agency's org has no account row, so only the Clerk leg ever finds one).
  * `fixture-names.test.ts` walks the specs and fails on any stamped `E2E …`
  * name that no pattern here (or in the form/blueprint patterns) admits.
  */
-export const FIXTURE_ACCOUNT_PATTERNS: readonly RegExp[] = [FIXTURE_ACCOUNT_RE, FIXTURE_CO_ACCOUNT_RE];
+export const FIXTURE_ACCOUNT_PATTERNS: readonly RegExp[] = [
+  FIXTURE_ACCOUNT_RE, FIXTURE_CO_ACCOUNT_RE, FIXTURE_AGENCY_ORG_RE,
+];
 
 /**
  * `E2E Blueprint 1786412389258`, the blueprint `blueprints.spec.ts` captures
