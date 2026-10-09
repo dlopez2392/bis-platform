@@ -21,8 +21,14 @@ export type CreateAccountResult = { ok: true } | { ok: false; error: string };
 export async function createClientAccount(formData: FormData): Promise<CreateAccountResult> {
   const { userId } = await requireAgency();
   const name = String(formData.get("name") ?? "").trim();
+  // The name customers see (owner decision 2026-10-09): its own field, so the
+  // business name above stays the agency's private label. It is what the
+  // Clerk organisation is created under (invitation emails carry it, D-005)
+  // and what brand_name is born as.
+  const brandName = String(formData.get("brandName") ?? "").trim();
   const timezone = String(formData.get("timezone") ?? "America/Chicago");
   if (!name) return { ok: false, error: m["accounts.nameRequired"] };
+  if (!brandName) return { ok: false, error: m["accounts.brandNameRequired"] };
   // The `?? "America/Chicago"` fallback above only covers a MISSING field;
   // a field left empty in the form arrives here as "", which would
   // otherwise fall straight into assertUsableZone below and come back as
@@ -47,7 +53,7 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
   }
 
   const clerk = await clerkClient();
-  const org = await clerk.organizations.createOrganization({ name, createdBy: userId });
+  const org = await clerk.organizations.createOrganization({ name: brandName, createdBy: userId });
   // compensating rollback: never leave a Clerk org without a tenant row.
   // Its own failure is swallowed — the refusal or error the caller gets is
   // what they act on — but logged: a failed rollback here means the Clerk org
@@ -80,7 +86,7 @@ export async function createClientAccount(formData: FormData): Promise<CreateAcc
 
   let id: string;
   try {
-    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name, timezone, actorId: userId }));
+    ({ id } = await createAccount(serviceDb(), { clerkOrgId: org.id, name, brandName, timezone, actorId: userId }));
   } catch (err) {
     await rollback();
     throw err;

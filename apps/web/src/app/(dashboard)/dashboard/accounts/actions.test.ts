@@ -44,6 +44,7 @@ const CLERK_ORG_ID = "org_2abcDEFghiJKL";
 const form = (over: Record<string, string> = {}) => {
   const f = new FormData();
   f.set("name", "Rio Roofing");
+  f.set("brandName", "Rio Roofing");
   f.set("timezone", "America/Chicago");
   f.set("blueprintId", NO_BLUEPRINT_SENTINEL);
   for (const [k, v] of Object.entries(over)) f.set(k, v);
@@ -57,6 +58,29 @@ beforeEach(() => {
   clerkMocks.createOrg.mockReset().mockResolvedValue({ id: CLERK_ORG_ID });
   clerkMocks.deleteOrg.mockReset().mockResolvedValue(undefined);
   clerkMocks.getOrg.mockReset().mockResolvedValue({ id: CLERK_ORG_ID, name: "Rio Roofing" });
+});
+
+/**
+ * Owner decision 2026-10-09: Add company asks for the name customers see as
+ * its own field. The business name stays the agency's private label; the
+ * brand name is what brand_name and the Clerk organisation (whose name
+ * invitation emails carry, D-005) are born with.
+ */
+describe("createClientAccount — the name customers see", () => {
+  it("creates the Clerk organisation under the BRAND name and stores it as brand_name, the business name as the private label (mutation: org named from name → FAILS; brandName dropped → FAILS)", async () => {
+    await createClientAccount(form({ name: "Rio Roofing — trial", brandName: "  Rio Roofing  " }));
+    expect(clerkMocks.createOrg).toHaveBeenCalledWith({ name: "Rio Roofing", createdBy: "user_agency" });
+    expect(dbMocks.createAccount.mock.calls[0]?.[1]).toMatchObject({
+      name: "Rio Roofing — trial", brandName: "Rio Roofing",
+    });
+  });
+
+  it("refuses a blank brand name before Clerk is touched (mutation: drop the check → FAILS)", async () => {
+    expect(await createClientAccount(form({ brandName: "   " })))
+      .toEqual({ ok: false, error: m["accounts.brandNameRequired"] });
+    expect(clerkMocks.createOrg).not.toHaveBeenCalled();
+    expect(dbMocks.createAccount).not.toHaveBeenCalled();
+  });
 });
 
 describe("createClientAccount", () => {

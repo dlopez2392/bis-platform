@@ -241,6 +241,12 @@ export const m = {
   "accounts.title": "Companies",
   "accounts.add": "Add company",
   "accounts.name": "Business name",
+  // Owner decision 2026-10-09: the name customers see is its own field, so
+  // the business name above stays the agency's private label (it used to be
+  // copied into brand_name and reach the client's sidebar, emails and texts).
+  "accounts.brandName": "Name their customers see",
+  "accounts.brandNameHint": "Shown on their emails, texts, booking page and sidebar. The business name above stays private to you.",
+  "accounts.brandNameRequired": "Enter the name their customers see.",
   "accounts.timezone": "Timezone",
   "accounts.empty.title": "No companies yet",
   "accounts.empty.body": "Add your first company to start tracking contacts and deals.",
@@ -2077,13 +2083,16 @@ export const m = {
   // and `brandDisplayName` (lib/email/templates/shell.ts) takes no account
   // name at all. Through the product that fallback never fires, so this
   // label reaches no client and no customer. The mistake to prevent now is
+  // (2026-10-09: Add company now asks for the customer-facing name as its
+  // own field, so the brand name no longer starts as a copy of this label
+  // and the help no longer says it does.) The mistake to prevent now is
   // the OPPOSITE one: an operator renaming here and expecting the client's
   // workspace, or their customers' emails, to follow. They do not — the
   // seeded brand name is a copy that drifts the moment either side is edited
   // alone (renameAccountAction's doc comment, setup/actions.ts) — so the copy
   // points at Branding for anything anyone else sees.
   "setup.rename.help":
-    "Your own label for this client — only you see it. Their brand name started as a copy of it; change what they and their customers see in Branding.",
+    "Your own label for this client — only you see it. Change what they and their customers see in Branding.",
 
   // ── Command palette (DESIGN.md's ⌘K key pattern) ───────────────────────
   "palette.placeholder": "Search contacts, calls, pages…",
