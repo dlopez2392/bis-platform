@@ -140,6 +140,12 @@ const CONVERSATION = {
   attribution: {}, origin: null,
 };
 
+/** One exchange already on file: the conversation's first turn was answered. */
+const ANSWERED_EXCHANGE = [
+  { role: "visitor" as const, text: "do you build tables?", at: "2026-10-08T12:00:00Z" },
+  { role: "assistant" as const, text: "Yes, we do.", at: "2026-10-08T12:00:01Z" },
+];
+
 const LEAD_FORM = {
   id: "form-then", account_id: "a1", public_id: "f", name: "Leads",
   status: "published" as const,
@@ -608,14 +614,23 @@ describe("POST /api/concierge/[publicId]/turn — what a refusal costs", () => {
   // id. The page retried as a FIRST turn, opening a second conversation and
   // spending a second of the visitor's three starts on one question.
   it("a failed FIRST reply hands back the conversation it opened, so the retry continues it", async () => {
+    // A distinct id, so the retry can only find it by reading the 503.
+    dbFns.createConciergeConversation.mockResolvedValue({ id: "c-opened" });
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, id: "c-opened" });
     fetchMock.mockRejectedValueOnce(new Error("timeout"));
     const res = await firstTurn();
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: "unavailable", conversationId: "c1" });
-    // The retry the page now sends, on that id.
-    const retry = await laterTurn();
+    const body = await res.json() as { conversationId?: string };
+    expect(body).toEqual({ error: "unavailable", conversationId: "c-opened" });
+    // The retry the page now sends, on whatever id the 503 carried. Had it
+    // carried none, this is a first turn again and opens a second row.
+    const retry = await post({
+      conversationId: body.conversationId ?? null, text: "do you build tables?", locale: "en",
+      [RENDER_TOKEN_FIELD]: signRenderToken(Date.now() - 3_000, PUBLIC_ID), [HONEYPOT_FIELD]: "",
+    });
     expect(retry.status).toBe(200);
     expect(dbFns.createConciergeConversation).toHaveBeenCalledTimes(1);
+    expect(dbFns.getConciergeConversation).toHaveBeenCalledWith(expect.anything(), "c-opened");
   });
 
   it("a FIRST turn that fails after its row exists, for any reason, still hands back the id", async () => {
@@ -1018,11 +1033,60 @@ describe("POST /api/concierge/[publicId]/turn — usage: one website chat, bille
     expect(dbFns.recordUsage).not.toHaveBeenCalled();
   });
 
-  it("a later turn, answered, records nothing: only turn 1 ever attempts it (mutation: drop the turn-1 gate → FAILS)", async () => {
+  it("a later turn after an ANSWERED one records nothing: the chat was billed when it was first answered (mutation: drop the gate → FAILS)", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, transcript: ANSWERED_EXCHANGE });
     const res = await laterTurn();
     expect(res.status).toBe(200);
     await flushAfter();
     expect(dbFns.recordUsage).not.toHaveBeenCalled();
+  });
+
+  // Review of D-050: the retry of a failed first reply arrives WITH the
+  // conversation id, so a `!priorId`-only gate never billed that chat at all.
+  // "First answered turn" is what bills, whichever request it happens on.
+  it("a failed first reply, then a retry that is answered, bills the chat exactly once", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("timeout"));
+    const failed = await firstTurn();
+    expect(failed.status).toBe(503);
+    const { conversationId } = await failed.json() as { conversationId: string };
+    await flushAfter();
+    expect(dbFns.recordUsage).not.toHaveBeenCalled();
+
+    // The failed turn appended nothing, so the stored transcript is empty.
+    expect(dbFns.appendConciergeTurns).not.toHaveBeenCalled();
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, transcript: [] });
+    const retry = await post({ conversationId, text: "do you build tables?", locale: "en" });
+    expect(retry.status).toBe(200);
+    await flushAfter();
+    expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
+    expect(dbFns.recordUsage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      meter: "ai_chats", sourceRef: "conversation:c1",
+    }));
+  });
+
+  // An EMPTY completion appends an exchange (the visitor's line and the
+  // 'unavailable' sentence) without billing, so "the transcript is empty" is
+  // not the same question as "nothing was answered yet".
+  it("a turn answered after an unanswered one (empty completion) bills the chat", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({
+      ...CONVERSATION,
+      transcript: [
+        { role: "visitor", text: "hello?", at: "2026-10-08T12:00:00Z" },
+        { role: "assistant", text: conciergeStrings("en").unavailable, at: "2026-10-08T12:00:01Z" },
+      ],
+    });
+    await laterTurn();
+    await flushAfter();
+    expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("an ordinary two-turn conversation still bills once", async () => {
+    await firstTurn();
+    await flushAfter();
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, transcript: ANSWERED_EXCHANGE });
+    await laterTurn();
+    await flushAfter();
+    expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
   });
 
   it("a failing usage write leaves the visitor's answer untouched and never rejects the background work (mutation: remove recordUsageSafely's catch AND the callback's own try → the flushed callback rejects, FAILS)", async () => {

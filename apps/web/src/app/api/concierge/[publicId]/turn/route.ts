@@ -82,6 +82,18 @@ type ModelMessage = {
 
 type Db = ReturnType<typeof serviceDbType>;
 
+/** The only assistant line stored for a turn that was NOT an answer (an
+ *  empty completion, `spoken`'s fallback), in either language. */
+const UNANSWERED_LINES: ReadonlySet<string> = new Set([
+  conciergeStrings("en").unavailable, conciergeStrings("es").unavailable,
+]);
+
+/** Whether an earlier turn of this conversation was already answered, and so
+ *  already billed (the usage leg below). */
+function hadAnsweredTurn(transcript: { role: string; text: string }[]): boolean {
+  return transcript.some((t) => t.role === "assistant" && !UNANSWERED_LINES.has(t.text));
+}
+
 function log(msg: string, extra: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ at: "concierge/turn", msg, ...extra }));
 }
@@ -611,9 +623,16 @@ export async function POST(
     // model wrote a reply, or a lead was filed this turn; an empty completion
     // that fell back to `strings.unavailable` is not an answer.
     //
-    // Turn 1 only (`!priorId`): a later turn never attempts it. The unique
-    // (meter, source_ref) on `conversation:<id>` is the backstop, not the
-    // gate. In `after()`, once the response is sent (the voice routes'
+    // The conversation's FIRST ANSWERED turn, whichever request that is. It
+    // used to be turn 1 only (`!priorId`), which stopped being the same thing
+    // once D-050 let a failed first reply's retry arrive WITH the id: that
+    // chat was never billed. A failed turn appends nothing (every failure
+    // returns above the append), but an EMPTY completion appends an
+    // exchange whose assistant line is the 'unavailable' sentence, so the
+    // question is "has any earlier assistant line been an answer", not "is
+    // the transcript empty". The unique (meter, source_ref) on
+    // `conversation:<id>` is the backstop, not the gate. In `after()`, once
+    // the response is sent (the voice routes'
     // precedent): the visitor is waiting on this reply, and a stalled ledger
     // write could otherwise hold it up to recordUsageSafely's 5 s.
     // recordUsageSafely never throws, and the LAZY import (this handler's
@@ -621,7 +640,7 @@ export async function POST(
     // scope) sits inside the callback's own try, so neither a ledger failure
     // nor a failed import rejects the background work.
     const answered = Boolean(reply || (toolArgs && filed));
-    if (!priorId && answered) {
+    if (answered && !hadAnsweredTurn(conversation.transcript)) {
       after(async () => {
         try {
           const { recordUsageSafely } = await import("@/lib/billing/usage");
