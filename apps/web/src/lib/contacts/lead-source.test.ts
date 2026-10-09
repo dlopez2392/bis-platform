@@ -149,10 +149,14 @@ describe("contactSourceHint", () => {
     // submission, a web-chat lead (lib/concierge/lead.ts:168 calls the
     // SAME enrich()), and the retired shared-secret machine intake, all
     // against the owner's destination form. "They filled out the form" is
-    // false for a chat lead, who never filled out anything.
+    // false for a chat lead, who never filled out anything. Review round
+    // 3, item 4: "Came in through your form" STILL names an entry path
+    // (walking through a door) a chat visitor never used — "Saved to"
+    // names the actual, shared fact (the answers landed in that form's
+    // records) without claiming HOW they got there.
     it("form: X names the form with wording true for a typed form, a web-chat lead and the (retired) machine intake alike (mutation: drop the {name} substitution → FAILS)", () => {
       expect(contactSourceHint({ source: "form: Contact us", custom: null, attribution: null }))
-        .toBe("Came in through your “Contact us” form");
+        .toBe("Saved to your “Contact us” form");
     });
     it("an owner's own typed note (anything else) gets no caption — nothing machine-made to translate (mutation: caption every non-empty source → FAILS)", () => {
       expect(contactSourceHint({ source: "Met at the Valley Expo", custom: null, attribution: null })).toBeNull();
@@ -216,8 +220,3 @@ describe("contactSourceHint", () => {
   });
 });
 
-// Review round 1, m2 added a `clampHint` here (a JS-side slice to 120
-// chars, tested in this spot). Review round 2, minor 4: removed — it cut
-// by UTF-16 code unit (a surrogate pair could split) and its only caller,
-// source-field.tsx, now clamps the FULL, unsliced hint visually with CSS
-// (`truncate`) instead. See that file's own test for the new behaviour.

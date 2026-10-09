@@ -123,13 +123,6 @@ function machineSourceCaption(source: string): string | null {
   return null;
 }
 
-// Review round 1, m2 added clampHint here (a JS-side slice to 120 chars)
-// to bound the drawer's displayed hint. Review round 2, minor 4: removed
-// — it sliced by UTF-16 code unit (can split a surrogate pair) and its
-// only caller leaned on an `aria-label` that ARIA does not let a `<p>`
-// use for naming anyway. source-field.tsx now renders the FULL,
-// unsliced hint and clamps it visually with CSS (`truncate`) instead.
-
 export function contactSourceHint(input: {
   source: string | null;
   /** `contacts.custom` as stored — unchecked jsonb. */
