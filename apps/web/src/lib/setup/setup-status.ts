@@ -39,6 +39,9 @@ export type SetupInputs = {
     | "concierge_enabled" | "concierge_form_id" | "public_id"
   > | null;
   numbers: Pick<PhoneNumberRow, "status">[];
+  /** ANSWERED calls ever (`countAnsweredCallsSince`, D-091): a robocall, a
+   *  hang-up or a silent ring proves nothing about the line, so none of
+   *  them turns the test-call step green. */
   callCount: number;
   ticks: { emailSkipped: boolean; forwardingDone: boolean };
   /** Published forms only (the setup pane's row 2) — gatherSetupInputs

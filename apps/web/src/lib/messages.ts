@@ -1921,8 +1921,10 @@ export const m = {
   "setup.step.forwarding.noNumber": "Assign a number first — there is nothing to forward to yet.",
   "setup.step.forwarding.unknownNumber": "Couldn't check the assigned number — reload to retry.",
   "setup.step.test_call.title": "Test call",
+  // D-091: only an answered call (booked, lead, message, transferred) turns
+  // the step green, so the help says what to do on the call.
   "setup.step.test_call.help":
-    "Call the assigned number. The call will appear on the Calls page and turn this step green.",
+    "Call the assigned number and leave a message or book a time. That call turns this step green — a hang-up or a robocall doesn't count.",
   // Shown only for a `provisioned` number — assigned but not yet answering
   // anything. The button below fixes exactly this.
   "setup.testCall.provisionedNote":
