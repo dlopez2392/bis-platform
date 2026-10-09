@@ -90,6 +90,15 @@ const STRINGS = {
     tabTitleNoBrand: "Book an appointment",
     cancelTabTitleWithBrand: "Cancel your visit with {business}",
     cancelTabTitleNoBrand: "Cancel your appointment",
+    // F-048: the add-to-calendar file (`lib/booking/calendar-file.ts`) and
+    // the success screen link that downloads it. `{business}` is the brand
+    // name (`brandDisplayName`), `{when}` the time in the business zone.
+    addToCalendar: "Add to my calendar",
+    calendarTitleWithBrand: "Appointment with {business}",
+    calendarTitleNoBrand: "Appointment",
+    calendarForUs: "{when} for us",
+    calendarJoin: "Join your video meeting",
+    calendarCancel: "Cancel this booking",
   },
   es: {
     noSlots: "No hay horarios disponibles este día.",
@@ -141,6 +150,12 @@ const STRINGS = {
     tabTitleNoBrand: "Reservar una cita",
     cancelTabTitleWithBrand: "Cancela tu cita con {business}",
     cancelTabTitleNoBrand: "Cancelar una cita",
+    addToCalendar: "Agregar a mi calendario",
+    calendarTitleWithBrand: "Cita con {business}",
+    calendarTitleNoBrand: "Cita",
+    calendarForUs: "{when} para nosotros",
+    calendarJoin: "Unirse a la videollamada",
+    calendarCancel: "Cancelar esta cita",
   },
 } as const;
 

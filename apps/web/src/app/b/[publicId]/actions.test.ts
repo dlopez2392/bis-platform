@@ -290,7 +290,7 @@ describe("submitBookingAction — spam gates (each mutation named)", () => {
   it("honeypot filled: fake success, zero writes, zero sends (mutation: skip the honeypot check → FAILS)", async () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ [HONEYPOT_FIELD]: "gotcha" }));
 
-    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: true });
+    expect(result).toEqual({ ok: true, cancelUrl: "", calendarUrl: "", confirmationSent: true });
     expect(createContactMock).not.toHaveBeenCalled();
     expect(createBookingMock).not.toHaveBeenCalled();
     expect(ensureConversationMock).not.toHaveBeenCalled();
@@ -302,7 +302,7 @@ describe("submitBookingAction — spam gates (each mutation named)", () => {
     const freshToken = signRenderToken(Date.now(), PUBLIC_ID); // elapsed ~0ms, under MIN_FILL_MS
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ [RENDER_TOKEN_FIELD]: freshToken }));
 
-    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: true });
+    expect(result).toEqual({ ok: true, cancelUrl: "", calendarUrl: "", confirmationSent: true });
     expect(createContactMock).not.toHaveBeenCalled();
     expect(createBookingMock).not.toHaveBeenCalled();
     expect(ensureConversationMock).not.toHaveBeenCalled();
@@ -683,7 +683,7 @@ describe("submitBookingAction — C3: an expired render token is a real failure,
   it("a malformed token (not expired, just invalid) keeps the shared fake success", async () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ [RENDER_TOKEN_FIELD]: "not-a-token" }));
 
-    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: true });
+    expect(result).toEqual({ ok: true, cancelUrl: "", calendarUrl: "", confirmationSent: true });
     expect(createContactMock).not.toHaveBeenCalled();
   });
 });
@@ -751,7 +751,7 @@ describe("submitBookingAction — a post-insert email failure never reaches the 
     // No `host` header in this suite's default `headers()` mock, so
     // `originFrom` returns null and `cancelUrl` is the already-handled empty
     // string — still `ok:true`, never the outer catch's generic error.
-    expect(result).toEqual({ ok: true, cancelUrl: "", confirmationSent: false });
+    expect(result).toEqual({ ok: true, cancelUrl: "", calendarUrl: "", confirmationSent: false });
     expect(createContactMock).toHaveBeenCalled();
     expect(createBookingMock).toHaveBeenCalled();
     expect(ensureConversationMock).toHaveBeenCalled();
@@ -1074,5 +1074,39 @@ describe("submitBookingAction — the booking grant (consent chain PR-2, plan Ta
     createBookingMock.mockRejectedValue(new SlotTakenError());
     await submitBookingAction(PUBLIC_ID, validFormData());
     expect(bookingGrantMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * F-048: every booking gets an add-to-calendar file. The success screen and
+ * the confirmation email both link it, built on the same origin and token as
+ * the cancel link, so it opens the same booking in the same language.
+ */
+describe("submitBookingAction — F-048: the add-to-calendar link", () => {
+  const withHost = () => vi.mocked(headers).mockResolvedValue(
+    new Headers({ "user-agent": "test-agent", host: "book.example.com", "x-forwarded-proto": "https" }) as never,
+  );
+
+  it("returns the file's absolute url and puts it in the confirmation (mutation: leave calendarUrl out of the confirmation → FAILS)", async () => {
+    withHost();
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toMatchObject({ ok: true, calendarUrl: `https://book.example.com/b/${PUBLIC_ID}/ics/tok_1` });
+    const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
+    expect(confirmation.body).toContain(`Add to your calendar: https://book.example.com/b/${PUBLIC_ID}/ics/tok_1`);
+  });
+
+  it("a Spanish booker's file opens in Spanish", async () => {
+    withHost();
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+    expect(result).toMatchObject({ ok: true, calendarUrl: `https://book.example.com/b/${PUBLIC_ID}/ics/tok_1?locale=es` });
+    const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
+    expect(confirmation.body).toContain(`Agregar a tu calendario: https://book.example.com/b/${PUBLIC_ID}/ics/tok_1?locale=es`);
+  });
+
+  it("with no host to build on, the url is empty and the email carries no calendar line", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(result).toMatchObject({ ok: true, calendarUrl: "" });
+    const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
+    expect(confirmation.body).not.toContain("Add to your calendar");
   });
 });
