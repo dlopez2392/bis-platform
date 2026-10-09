@@ -18,6 +18,9 @@ const dbMocks = vi.hoisted(() => ({
   // reason registry.test.ts stubs this). The REAL serviceDb() throws outside
   // a request with no Supabase env vars set.
   serviceDb: vi.fn(() => ({})),
+  // The call card and its callback To do (0064), each written by its own
+  // leg in finishCall's tail.
+  ensureCallbackTask: vi.fn(), setCallCard: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const emailRefs = vi.hoisted(() => ({ providerShouldThrow: false, send: vi.fn() }));
@@ -75,6 +78,14 @@ vi.mock("./summary-service", () => ({ generateSummary: summaryMocks.generateSumm
 // and WHETHER finishCall calls it, and WHAT it hands over.
 const proposalsMocks = vi.hoisted(() => ({ generateProposals: vi.fn() }));
 vi.mock("@/lib/proposals/generate", () => ({ generateProposals: proposalsMocks.generateProposals }));
+// The call card's post-call reading reaches OpenAI; it is faked here, and
+// call-card.test.ts owns its behaviour. Everything else in ./call-card (what
+// goes on the card, who gets a To do) stays REAL, so these tests pin the
+// wiring against the true rules rather than against a stub of them.
+const cardMocks = vi.hoisted(() => ({ readCallForCard: vi.fn() }));
+vi.mock("./call-card", async (importOriginal) => ({
+  ...(await importOriginal<object>()), readCallForCard: cardMocks.readCallForCard,
+}));
 
 import type { serviceDb } from "@bis/db";
 import { segmentsFor } from "@/lib/sms/segments";
@@ -234,6 +245,9 @@ beforeEach(() => {
   // The ordinary case is "nothing to propose" — resolving 0 rather than
   // rejecting, matching generateProposals's real never-throws contract.
   proposalsMocks.generateProposals.mockReset().mockResolvedValue(0);
+  dbMocks.ensureCallbackTask.mockResolvedValue({ id: "task1", created: true });
+  dbMocks.setCallCard.mockResolvedValue(undefined);
+  cardMocks.readCallForCard.mockReset().mockResolvedValue({ reason: null, callerWords: null });
 });
 
 describe("finishCall", () => {
@@ -1658,5 +1672,126 @@ describe("finishCall — usage: the minutes of a call Sofía talked to (client b
     expect(smsRefs.send).toHaveBeenCalledTimes(1);
     expect(dbMocks.emit).toHaveBeenCalledWith(
       expect.anything(), "a1", "call.recorded", "voice", { callId: "call1", outcome: "abandoned" }, "ai");
+  });
+});
+
+/**
+ * Every call leaves a card, and a caller who wants a call back leaves a To do
+ * for a person (F-033). Both are their OWN legs in finishCall's tail: neither
+ * may cost the call its row, its alert, its text-back or its proposals.
+ */
+describe("finishCall — the call card and the callback To do", () => {
+  const caller = (text = "Hi, my roof started leaking last night and I need someone out here.") =>
+    withTranscript(emptyCallState(), { role: "caller", text, at: "t" });
+  const messageState = () => withMessage(caller(),
+    { body: "Wants the owner to call about the leak", callbackNumber: "+19565061545", at: "t" });
+  const silence = () => vi.spyOn(console, "error").mockImplementation(() => {});
+
+  it("a message call leaves ONE To do for its call: the number as said and the message, due at the call's own end, contact attached, written as the AI's (mutation: dueAt new Date() → FAILS; contactId: null → FAILS)", async () => {
+    await finishCall(messageState(), ctx, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledTimes(1);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", {
+      callId: "call1", contactId: "ct1",
+      title: "Call back at 9565061545: Wants the owner to call about the leak",
+      dueAt: "2027-06-01T17:02:00.000Z",
+    }, "voice", "ai");
+  });
+
+  it("a lead with no booking leaves a To do too, at the caller ID when no other number was given", async () => {
+    await finishCall(withLead(caller(), { fields: { fullName: "Ana Ruiz", need: "roof quote" } }), ctx, meta);
+    expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ title: "Call back at +19562921696: roof quote" }), "voice", "ai");
+  });
+
+  it("an abandoned caller, a booked call and a recording leave no To do (mutation: drop the callbackWanted gate → FAILS)", async () => {
+    await finishCall(caller(), ctx, meta);
+    await finishCall(withBooking(caller(), { id: "b1", contactName: "Ana", startsAt: "2027-06-02T15:00:00Z", endsAt: "2027-06-02T16:00:00Z" }), ctx, meta);
+    await finishCall(withRecordedCaller(withMessage(caller("Press one for your warranty"), { body: "warranty", at: "t" })), ctx, meta);
+    expect(dbMocks.ensureCallbackTask).not.toHaveBeenCalled();
+  });
+
+  it("no call row → no To do: there is no call for it to name (mutation: drop the callRowId gate → called with callId null, FAILS)", async () => {
+    await finishCall(messageState(), ctx, { ...meta, callRowId: null });
+    expect(dbMocks.ensureCallbackTask).not.toHaveBeenCalled();
+  });
+
+  it("no number at all (caller ID withheld, none given) → no To do: there is no call for a person to make", async () => {
+    await finishCall(withMessage(caller(), { body: "Call me", at: "t" }), { ...ctx, callerNumber: null }, meta);
+    expect(dbMocks.ensureCallbackTask).not.toHaveBeenCalled();
+  });
+
+  it("the To do is written after the durable row (mutation: move the leg above finishCallRow → FAILS)", async () => {
+    const order: string[] = [];
+    dbMocks.finishCallRow.mockImplementation(async () => { order.push("finishCallRow"); });
+    dbMocks.ensureCallbackTask.mockImplementation(async () => { order.push("ensureCallbackTask"); return { id: "t", created: true }; });
+    await finishCall(messageState(), ctx, meta);
+    expect(order).toEqual(["finishCallRow", "ensureCallbackTask"]);
+  });
+
+  it("a To do that cannot be written changes nothing: same result, the card and the proposals still run (mutation: drop the leg's catch → finishCall rejects, FAILS)", async () => {
+    dbMocks.ensureCallbackTask.mockRejectedValue(new Error("tasks_call_fkey"));
+    const err = silence();
+    const r = await finishCall(messageState(), ctx, meta);
+    expect(r).toEqual({ stored: true, notified: true, outcome: "message" });
+    expect(dbMocks.setCallCard).toHaveBeenCalled();
+    expect(proposalsMocks.generateProposals).toHaveBeenCalled();
+    expect(err.mock.calls.some((c) => String(c[0]).includes("callback To do failed"))).toBe(true);
+  });
+
+  it("writes the card for the stored call: what Sofía wrote down, the number as said, and the reading's words (mutation: card from the reading's reason → FAILS)", async () => {
+    cardMocks.readCallForCard.mockResolvedValue({ reason: "Roof leak", callerWords: "my roof started leaking last night" });
+    await finishCall(messageState(), ctx, meta);
+    expect(dbMocks.setCallCard).toHaveBeenCalledWith({}, "a1", "call1", {
+      reason: "Wants the owner to call about the leak",
+      callbackNumber: "9565061545",
+      callerWords: "my roof started leaking last night",
+    });
+  });
+
+  it("an abandoned caller still leaves a card: the reading's reason and the caller ID (mutation: gate the card on isMeaningful → FAILS)", async () => {
+    cardMocks.readCallForCard.mockResolvedValue({ reason: "Roof leak", callerWords: null });
+    await finishCall(caller(), ctx, meta);
+    expect(dbMocks.setCallCard).toHaveBeenCalledWith({}, "a1", "call1",
+      { reason: "Roof leak", callbackNumber: "+19562921696", callerWords: null });
+  });
+
+  it("the reading is handed THIS call's transcript, and is never asked about a silent or spam call (mutation: drop the cardReadable gate → asked about a robocall, FAILS)", async () => {
+    const s = messageState();
+    await finishCall(s, ctx, meta);
+    expect(cardMocks.readCallForCard).toHaveBeenCalledWith(s.transcript, expect.objectContaining({ label: "finishCall call1" }));
+    cardMocks.readCallForCard.mockClear();
+    await finishCall(withRecordedCaller(caller("Press one for your warranty")), ctx, meta);
+    await finishCall(emptyCallState(), ctx, meta);
+    expect(cardMocks.readCallForCard).not.toHaveBeenCalled();
+  });
+
+  it("a spam call gets no card at all", async () => {
+    await finishCall(emptyCallState(), ctx, meta);
+    expect(dbMocks.setCallCard).not.toHaveBeenCalled();
+  });
+
+  it("no card when the row was not stored: the card quotes a transcript that must be durable (mutation: gate on callRowId alone → FAILS)", async () => {
+    dbMocks.finishCallRow.mockRejectedValue(new Error("db down"));
+    silence();
+    await finishCall(messageState(), ctx, meta);
+    expect(dbMocks.setCallCard).not.toHaveBeenCalled();
+    expect(cardMocks.readCallForCard).not.toHaveBeenCalled();
+  });
+
+  it("the card is written before the proposals, which stay the last leg (mutation: card leg after proposals → FAILS)", async () => {
+    const order: string[] = [];
+    dbMocks.setCallCard.mockImplementation(async () => { order.push("setCallCard"); });
+    proposalsMocks.generateProposals.mockImplementation(async () => { order.push("generateProposals"); return 0; });
+    await finishCall(messageState(), ctx, meta);
+    expect(order).toEqual(["setCallCard", "generateProposals"]);
+  });
+
+  it("a card that cannot be written changes nothing: same result, proposals still run (mutation: drop the leg's catch → FAILS)", async () => {
+    dbMocks.setCallCard.mockRejectedValue(new Error("column calls.reason does not exist"));
+    const err = silence();
+    const r = await finishCall(messageState(), ctx, meta);
+    expect(r).toEqual({ stored: true, notified: true, outcome: "message" });
+    expect(proposalsMocks.generateProposals).toHaveBeenCalled();
+    expect(err.mock.calls.some((c) => String(c[0]).includes("call card failed"))).toBe(true);
   });
 });
