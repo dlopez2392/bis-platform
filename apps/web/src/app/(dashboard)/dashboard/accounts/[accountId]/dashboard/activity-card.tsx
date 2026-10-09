@@ -20,6 +20,10 @@
 //     it, so both TYPES fold into one line)
 //   - "booking.status_changed", payload.status="completed"  → bookingCompleted
 //   - "booking.status_changed", payload.status="no_show"    → bookingNoShow
+//   - "booking.status_changed", payload.status="booked"     → bookingRestored
+//     (D-036: emitted ONLY by the Calendar page's Undo on a Cancel, through
+//     `setBookingStatus(…, { onlyFrom: "cancelled" })`; without it the feed
+//     would read "cancelled" about an appointment that is back on)
 //   - "form.submitted"                                → formSubmitted
 //   - "call.recorded"                                 → callRecorded, with
 //     payload.outcome resolved through the calls list's OWN `OUTCOMES` map
@@ -123,15 +127,20 @@ function curate(event: EventRow, personaName: string): CuratedRow | null {
           summary: m["dashboard.activity.bookingCompleted"], createdAtIso: event.createdAt,
         };
       }
+      if (status === "booked") {
+        return {
+          key: event.id, icon: CalendarCheck, tone: "success",
+          summary: m["dashboard.activity.bookingRestored"], createdAtIso: event.createdAt,
+        };
+      }
       if (status === "no_show") {
         return {
           key: event.id, icon: CalendarX, tone: "warning",
           summary: m["dashboard.activity.bookingNoShow"], createdAtIso: event.createdAt,
         };
       }
-      // An unrecognized status (none exist today — setBookingStatus's own
-      // doc comment: "cancel, mark completed, mark no-show" — but a future
-      // status must not render a fabricated line for it).
+      // An unrecognized status (none exist today; every BookingStatus is
+      // mapped above), but a future one must not render a fabricated line.
       return null;
     }
     case "form.submitted":

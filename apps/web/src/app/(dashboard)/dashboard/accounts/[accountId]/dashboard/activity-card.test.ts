@@ -49,9 +49,24 @@ describe("ActivityCard", () => {
     expect(html).toContain("An appointment was marked as a no-show.");
   });
 
+  // D-036: the Calendar page's Undo on a Cancel emits status "booked". Before
+  // this the feed dropped it, so Cancel → Undo read "An appointment was
+  // cancelled." and nothing after, about an appointment that was back on.
+  it("booking.status_changed→booked (the Calendar page's Undo) renders its own 'back on' line after the cancel", () => {
+    const html = render([
+      row({ id: "e2", type: "booking.status_changed", payload: { status: "booked" },
+        createdAt: "2027-01-04T11:55:00.000Z" }),
+      row({ id: "e1", type: "booking.status_changed", payload: { status: "cancelled" } }),
+    ]);
+    expect(html).toContain("An appointment that was cancelled is back on.");
+    expect(html).toContain("An appointment was cancelled.");
+    expect(html).not.toContain(m_activityEmpty());
+  });
+
   it("an unrecognized booking.status_changed status renders nothing for that row (silent skip, not a fabricated line)", () => {
-    const html = render([row({ id: "e1", type: "booking.status_changed", payload: { status: "booked" } })]);
+    const html = render([row({ id: "e1", type: "booking.status_changed", payload: { status: "some_future_status" } })]);
     expect(html).toContain(m_activityEmpty());
+    expect(html).not.toContain("some_future_status");
   });
 
   it("form.submitted renders the curated lead line", () => {

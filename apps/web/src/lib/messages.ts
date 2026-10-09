@@ -385,6 +385,8 @@ export const m = {
   "dashboard.activity.bookingCancelled": "An appointment was cancelled.",
   "dashboard.activity.bookingCompleted": "An appointment was completed.",
   "dashboard.activity.bookingNoShow": "An appointment was marked as a no-show.",
+  // D-036: the Calendar page's Undo on a Cancel (status_changed → booked).
+  "dashboard.activity.bookingRestored": "An appointment that was cancelled is back on.",
   "dashboard.activity.formSubmitted": "A new lead came in through your form.",
   "dashboard.activity.callRecorded": "Call outcome: {outcome}.",
   "dashboard.activity.forwardOn": "Calls started going straight to your transfer number instead of {name}.",
