@@ -61,15 +61,16 @@ describe("CommandPalette — 'Toggle theme' shares theme-toggle.tsx's toggleThem
 // accessible name.
 describe("CommandPalette — F-107 r1: a phone keeps a search entry point (icon-only, below `sm`)", () => {
   it("the mobile trigger is visible below `sm` and hidden at sm+ (mutation: drop `sm:hidden` → both triggers show everywhere)", () => {
-    expect(src).toMatch(/size="icon-sm"[\s\S]{0,80}aria-label=\{m\["shell\.search"\]\}[\s\S]{0,40}className="sm:hidden"/);
+    expect(src).toMatch(/size="icon-sm"[\s\S]{0,120}aria-label=\{m\["shell\.search"\]\}[\s\S]{0,120}className="sm:hidden"/);
   });
 
   it("the desktop trigger is hidden below `sm` and visible at sm+ (mutation: drop `hidden`/`sm:inline-flex` → it shows below `sm` too, 300px wide)", () => {
     expect(src).toContain('className="hidden gap-2 text-muted-foreground sm:inline-flex"');
   });
 
-  it("both triggers open the SAME dialog state and carry the SAME accessible name", () => {
+  it("both triggers open the SAME dialog state, carry the SAME accessible name, and name the SAME keyboard shortcut (F-107 r2 review, item 5)", () => {
     expect(src.match(/onClick=\{\(\) => setOpen\(true\)\}/g)?.length).toBe(2);
     expect(src.match(/aria-label=\{m\["shell\.search"\]\}/g)?.length).toBe(2);
+    expect(src.match(/aria-keyshortcuts=\{isMac \? "Meta\+K" : "Control\+K"\}/g)?.length).toBe(2);
   });
 });

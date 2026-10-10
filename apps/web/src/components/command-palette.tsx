@@ -196,13 +196,15 @@ export function CommandPalette({ isAgency }: { isAgency: boolean }) {
           desktop trigger's 300px box (topbar.tsx) has no room there, but
           §6.3 "Surface 2. The phone shell" keeps "a search icon" in the
           phone topbar, so hiding the trigger entirely (the rider's first
-          pass) was wrong. Same accessible name and same open handler as
-          the desktop trigger below — one palette, two entry points. */}
+          pass) was wrong. Same accessible name, same `aria-keyshortcuts`
+          (F-107 r2 review, item 5) and same open handler as the desktop
+          trigger below — one palette, two entry points. */}
       <Button
         variant="ghost"
         size="icon-sm"
         onClick={() => setOpen(true)}
         aria-label={m["shell.search"]}
+        aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}
         className="sm:hidden"
       >
         <Search className="size-4" aria-hidden />
