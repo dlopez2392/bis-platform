@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import type { PersonTheme } from "@bis/db";
@@ -9,7 +9,7 @@ import {
   cookieModeToPersist,
   readCookieValue,
   THEME_COOKIE,
-  userThemeSyncPlan,
+  nextThemeSync,
 } from "@/lib/branding/theme-mode";
 
 /**
@@ -42,7 +42,7 @@ import {
  * handling in PR #2.
  *
  * Mis preferencias (F-096, D5): `userTheme`, the signed-in person's own
- * saved choice, is resolved first via `userThemeSyncPlan` and takes
+ * saved choice, is resolved first via `nextThemeSync` (userThemeSyncPlan, applied only when the stored value changes) and takes
  * priority over the brand_mode-driven logic below -- a person who has made
  * a deliberate choice is never subject to the tenant-follow migration, which
  * exists only to reconcile a tenant default with next-themes' own local
@@ -52,11 +52,17 @@ import {
 export function ThemeCookieSync({ userTheme = null }: { userTheme?: PersonTheme | null }) {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const router = useRouter();
+  // The last stored value this effect applied (Task 6 fix round 1, I1): a
+  // run caused only by a LOCAL theme change must not push the server's
+  // stale prop back over it. See nextThemeSync.
+  const lastApplied = useRef<PersonTheme | null | undefined>(undefined);
 
   useEffect(() => {
     const existing = readCookieValue(document.cookie, THEME_COOKIE);
 
-    const plan = userThemeSyncPlan(userTheme, theme, existing);
+    const sync = nextThemeSync(lastApplied.current, userTheme, theme, existing);
+    lastApplied.current = sync.lastApplied;
+    const plan = sync.plan;
     if (plan.setTheme) setTheme(plan.setTheme);
     if (plan.writeCookie) {
       document.cookie = `${THEME_COOKIE}=${plan.writeCookie}; path=/; max-age=31536000; samesite=lax`;

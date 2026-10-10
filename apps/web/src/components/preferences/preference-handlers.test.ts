@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import type { PersonTheme } from "@bis/db";
-import { changeLanguage, changeTheme, PREFS_TOAST_MS } from "./preference-handlers";
+import { changeLanguage, changeTheme, debouncedChoice, PREFS_SAVE_DEBOUNCE_MS, PREFS_TOAST_MS } from "./preference-handlers";
 
 describe("changeTheme", () => {
   it("applies at once, saves, and Undo sends the PREVIOUS value the server returned (mutation: undo with next -> FAILS)", async () => {
@@ -96,5 +96,52 @@ describe("changeLanguage", () => {
     undo!();
     await vi.waitFor(() => expect(save).toHaveBeenLastCalledWith(null));
     expect(apply).toHaveBeenLastCalledWith(null);
+  });
+});
+
+// Fix round 1 (Task 6 review, M1): arrow keys inside a native radio group
+// move AND select, so stepping light -> dark -> system was three saves and
+// three toasts. The radio still moves at once; the commit (save + toast)
+// waits for PREFS_SAVE_DEBOUNCE_MS of quiet.
+describe("debouncedChoice", () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("three quick steps are ONE commit, of the last value, against the value before the first step (mutation: commit on every choose -> FAILS)", () => {
+    vi.useFakeTimers();
+    const commit = vi.fn();
+    const d = debouncedChoice<string | null>(commit);
+    d.choose("dark", "light");
+    vi.advanceTimersByTime(200);
+    d.choose("system", "dark");
+    vi.advanceTimersByTime(200);
+    d.choose("light", "system");
+    vi.advanceTimersByTime(PREFS_SAVE_DEBOUNCE_MS - 1);
+    expect(commit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(commit.mock.calls).toEqual([["light", "light"]]);
+    expect(PREFS_SAVE_DEBOUNCE_MS).toBe(600);
+  });
+
+  it("a new burst after a commit starts from the committed value (mutation: never reset `before` after a commit -> FAILS)", () => {
+    vi.useFakeTimers();
+    const commit = vi.fn();
+    const d = debouncedChoice<string>(commit);
+    d.choose("dark", "light");
+    vi.advanceTimersByTime(PREFS_SAVE_DEBOUNCE_MS);
+    d.choose("system", "dark");
+    vi.advanceTimersByTime(PREFS_SAVE_DEBOUNCE_MS);
+    expect(commit.mock.calls).toEqual([["dark", "light"], ["system", "dark"]]);
+  });
+
+  it("flush commits a pending choice at once and only once — leaving the page never drops it (mutation: flush clears without committing -> FAILS)", () => {
+    vi.useFakeTimers();
+    const commit = vi.fn();
+    const d = debouncedChoice<string>(commit);
+    d.choose("dark", "light");
+    d.flush();
+    expect(commit.mock.calls).toEqual([["dark", "light"]]);
+    vi.advanceTimersByTime(PREFS_SAVE_DEBOUNCE_MS * 2);
+    d.flush();
+    expect(commit).toHaveBeenCalledTimes(1);
   });
 });

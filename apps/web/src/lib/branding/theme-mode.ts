@@ -184,3 +184,33 @@ export function userThemeSyncPlan(
 
   return { setTheme, writeCookie, skipMigration: true };
 }
+
+/**
+ * ThemeCookieSync's decision, run on every render of its effect (Task 6
+ * fix round 1, I1). The effect re-runs whenever next-themes' own `theme`
+ * changes, but its `userTheme` prop is the SERVER's value and stays the OLD
+ * one until a save lands and the route re-renders. Running
+ * userThemeSyncPlan on those runs pushed the old stored choice straight
+ * back: a change from the Preferences page or the toggle flicked back until
+ * the save arrived, and an Undo to "no choice" was re-set to the old theme
+ * and cookie and then stuck there.
+ *
+ * So the stored value is applied only when it CHANGES from the last one
+ * applied (`lastApplied`, the component's ref; undefined before the first
+ * run, so a fresh mount on a new device still adopts it). A run triggered
+ * only by a local change does nothing: that change is authoritative until
+ * the next server value arrives. While a stored choice exists the old
+ * migration/follow branch stays off, as before; once the server says NULL,
+ * it runs, so the role default or the cookie rule applies and sticks.
+ */
+export function nextThemeSync(
+  lastApplied: PersonTheme | null | undefined,
+  userTheme: PersonTheme | null,
+  theme: string | undefined,
+  existingCookie: string | undefined,
+): { plan: ReturnType<typeof userThemeSyncPlan>; lastApplied: PersonTheme | null } {
+  if (lastApplied !== undefined && lastApplied === userTheme) {
+    return { plan: { setTheme: null, writeCookie: null, skipMigration: userTheme !== null }, lastApplied };
+  }
+  return { plan: userThemeSyncPlan(userTheme, theme, existingCookie), lastApplied: userTheme };
+}

@@ -131,3 +131,40 @@ export function changeTheme(input: {
     savedMessage: (v, c) => c(v === null ? "prefs.saved.theme.none" : THEME_SAVED_KEY[v]),
   });
 }
+
+/** Quiet time after the last radio step before the save runs (fix round 1, M1). */
+export const PREFS_SAVE_DEBOUNCE_MS = 600;
+
+/**
+ * One decision, one save, one toast (Task 6 fix round 1, M1). Arrow keys in
+ * a native radio group move AND select, so each step fires a change; the
+ * caller applies every step at once (the radio, and the theme's look) and
+ * hands it here, which commits only after `delayMs` of quiet: the LAST
+ * value, against the value in force before the FIRST step, so an Undo goes
+ * back past the whole burst and a burst that returns to its start is
+ * changeTheme/changeLanguage's own no-op. `flush` commits a pending choice
+ * now (the panel calls it on unmount, so leaving the page never drops one).
+ */
+export type DebouncedChoice<T> = { choose: (next: T, current: T) => void; flush: () => void };
+
+export function debouncedChoice<T>(commit: (next: T, before: T) => void, delayMs = PREFS_SAVE_DEBOUNCE_MS): DebouncedChoice<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pending: { next: T; before: T } | null = null;
+
+  function fire() {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    const p = pending;
+    pending = null;
+    if (p) commit(p.next, p.before);
+  }
+
+  return {
+    choose(next: T, current: T) {
+      pending = { next, before: pending ? pending.before : current };
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(fire, delayMs);
+    },
+    flush: fire,
+  };
+}

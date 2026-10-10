@@ -6,6 +6,7 @@ import {
   resolveThemeMode,
   THEME_COOKIE,
   userThemeSyncPlan,
+  nextThemeSync,
 } from "./theme-mode";
 
 describe("resolveThemeMode", () => {
@@ -175,5 +176,47 @@ describe("userThemeSyncPlan", () => {
   });
   it("does nothing new when there is no stored choice (mutation: skip the migration for everyone -> FAILS)", () => {
     expect(userThemeSyncPlan(null, "dark", undefined)).toEqual({ setTheme: null, writeCookie: null, skipMigration: false });
+  });
+});
+
+// Fix round 1 (Task 6 review, I1): ThemeCookieSync's effect re-runs on every
+// LOCAL theme change, while its `userTheme` prop still holds the server's
+// OLD value until the save lands. These walk the effect's real decision
+// (nextThemeSync, which the component calls with its ref) through the two
+// sequences the reviewer reproduced, carrying `lastApplied` between steps
+// exactly as the component's ref does.
+describe("nextThemeSync — the server value is applied only when it CHANGES", () => {
+  it("undo to 'no choice': the local clear is not pushed back to the old stored theme, and NULL leaves the default rule in charge (mutation: ignore lastApplied and run userThemeSyncPlan every time -> FAILS)", () => {
+    // Mount: stored "dark", in step.
+    let s = nextThemeSync(undefined, "dark", "dark", "dark");
+    expect(s.plan).toEqual({ setTheme: null, writeCookie: null, skipMigration: true });
+    // The panel's Undo: cookie cleared, next-themes on the fallback, prop still "dark".
+    s = nextThemeSync(s.lastApplied, "dark", "light", undefined);
+    expect(s.plan.setTheme).toBeNull();
+    expect(s.plan.writeCookie).toBeNull();
+    // The save lands: prop is now NULL. Nothing is forced; the old branch (role default / cookie rule) runs.
+    s = nextThemeSync(s.lastApplied, null, "light", undefined);
+    expect(s.plan).toEqual({ setTheme: null, writeCookie: null, skipMigration: false });
+    expect(s.lastApplied).toBeNull();
+  });
+
+  it("a normal change does not flick back while the save is in flight (mutation: ignore lastApplied and run userThemeSyncPlan every time -> FAILS)", () => {
+    let s = nextThemeSync(undefined, "light", "light", "light");
+    // Local change to dark (panel or toggle), prop still the old "light".
+    s = nextThemeSync(s.lastApplied, "light", "dark", "dark");
+    expect(s.plan.setTheme).toBeNull();
+    expect(s.plan.writeCookie).toBeNull();
+    // A stored choice still keeps the migration off while waiting.
+    expect(s.plan.skipMigration).toBe(true);
+    // The save lands: prop "dark", already in step.
+    s = nextThemeSync(s.lastApplied, "dark", "dark", "dark");
+    expect(s.plan).toEqual({ setTheme: null, writeCookie: null, skipMigration: true });
+  });
+
+  it("a NEW server value still wins on mount and when another device changes it (mutation: never apply after the first run -> FAILS)", () => {
+    expect(nextThemeSync(undefined, "light", "dark", "dark").plan.setTheme).toBe("light");
+    const s = nextThemeSync("light", "dark", "light", "light");
+    expect(s.plan).toEqual({ setTheme: "dark", writeCookie: "dark", skipMigration: true });
+    expect(s.lastApplied).toBe("dark");
   });
 });

@@ -79,6 +79,15 @@ describe("the panel (client)", () => {
     expect(src).toMatch(/changeTheme\(\{[\s\S]*?setMyThemeAction/);
   });
 
+  it("a radio step applies at once but saves through the debouncer, flushed on unmount (fix round 1 M1) (mutation: call changeTheme straight from onChange -> FAILS)", () => {
+    expect(src).toMatch(/onChange=\{\(choice\) => \{\s*const next = languageValueOf\(choice\);\s*setLanguage\(next\);\s*languageStep\(next, language\);/);
+    expect(src).toMatch(/onChange=\{\(choice\) => \{\s*applyTheme\(choice\);\s*themeStep\(choice, theme\);/);
+    expect(src).toContain("return () => { s.language?.flush(); s.theme?.flush(); };");
+    expect(src).toContain("s.language ??= debouncedChoice(");
+    expect(src).toContain("s.theme ??= debouncedChoice(");
+    expect(src).not.toMatch(/onChange=\{\(choice\) =>\s*void change(Theme|Language)\(/);
+  });
+
   it("offers the agency only its own languages (mutation: hard-code languageChoicesFor(false) -> FAILS)", () => {
     expect(src).toContain("languageChoicesFor(isAgency)");
   });

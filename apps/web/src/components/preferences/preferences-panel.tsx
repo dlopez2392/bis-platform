@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
@@ -21,7 +21,9 @@ import {
   type LanguageChoice,
 } from "@/lib/preferences/preference-options";
 import type { PrefsResult } from "@/lib/preferences/save";
-import { changeLanguage, changeTheme, PREFS_TOAST_MS, type PrefsCopyKey, type PrefsToast } from "./preference-handlers";
+import {
+  changeLanguage, changeTheme, debouncedChoice, PREFS_TOAST_MS, type DebouncedChoice, type PrefsCopyKey, type PrefsToast,
+} from "./preference-handlers";
 
 type Mode = "light" | "dark" | "system";
 
@@ -57,6 +59,12 @@ const THEME_LABEL_KEY = {
  * what the server paints once `themeCookieFor(null)` has cleared the cookie.
  * `seenMode` is what a person with no choice is looking at right now (the
  * cookie included), for the empty-state hint.
+ *
+ * Each step applies AT ONCE (arrow keys move the radio, and the theme's
+ * look follows), but the save and its toast wait for a pause
+ * (debouncedChoice, fix round 1 M1): one decision, one save, one toast. The
+ * commit runs through a ref holding this render's handler, so it sees the
+ * current locale and router; a choice still pending on unmount is flushed.
  */
 export function PreferencesPanel({
   isAgency,
@@ -79,6 +87,20 @@ export function PreferencesPanel({
   const [theme, setThemeChoice] = useState<PersonTheme | null>(prefs.theme);
   const copy = copyIn(locale);
 
+  const commitLanguage = useRef<(next: PersonLanguage | null, before: PersonLanguage | null) => void>(() => {});
+  const commitTheme = useRef<(next: PersonTheme | null, before: PersonTheme | null) => void>(() => {});
+  // Created on the first step, in the event handler (refs are not read during render).
+  const steps = useRef<{ language?: DebouncedChoice<PersonLanguage | null>; theme?: DebouncedChoice<PersonTheme | null> }>({});
+
+  function languageStep(next: PersonLanguage | null, current: PersonLanguage | null) {
+    const s = steps.current;
+    (s.language ??= debouncedChoice((n, b) => commitLanguage.current(n, b))).choose(next, current);
+  }
+  function themeStep(next: PersonTheme | null, current: PersonTheme | null) {
+    const s = steps.current;
+    (s.theme ??= debouncedChoice((n, b) => commitTheme.current(n, b))).choose(next, current);
+  }
+
   function savedThen<T>(action: (v: T | null) => Promise<PrefsResult<T>>) {
     return async (v: T | null) => {
       const r = await action(v);
@@ -95,6 +117,32 @@ export function PreferencesPanel({
       : `${THEME_COOKIE}=; path=/; max-age=0; samesite=lax`;
     setTheme(v ?? themeFallback);
   }
+
+  useEffect(() => {
+    commitLanguage.current = (next, before) =>
+      void changeLanguage({
+        next,
+        current: before,
+        save: savedThen<PersonLanguage>(setMyLanguageAction),
+        apply: setLanguage,
+        copyFor: copyIn,
+        accountLanguage,
+        toast: prefsToast,
+      });
+    commitTheme.current = (next, before) =>
+      void changeTheme({
+        next,
+        current: before,
+        save: savedThen<PersonTheme>(setMyThemeAction),
+        apply: applyTheme,
+        copy,
+        toast: prefsToast,
+      });
+  });
+  useEffect(() => {
+    const s = steps.current;
+    return () => { s.language?.flush(); s.theme?.flush(); };
+  }, []);
 
   const languageOptions = languageChoicesFor(isAgency).map((choice) => ({
     value: choice,
@@ -128,17 +176,11 @@ export function PreferencesPanel({
               options={languageOptions}
               value={languageChoiceFrom(language, isAgency)}
               hint={languageHint}
-              onChange={(choice) =>
-                void changeLanguage({
-                  next: languageValueOf(choice),
-                  current: language,
-                  save: savedThen<PersonLanguage>(setMyLanguageAction),
-                  apply: setLanguage,
-                  copyFor: copyIn,
-                  accountLanguage,
-                  toast: prefsToast,
-                })
-              }
+              onChange={(choice) => {
+                const next = languageValueOf(choice);
+                setLanguage(next);
+                languageStep(next, language);
+              }}
             />
           </CardContent>
         </Card>
@@ -150,16 +192,10 @@ export function PreferencesPanel({
               options={themeOptions}
               value={theme}
               hint={themeHint}
-              onChange={(choice) =>
-                void changeTheme({
-                  next: choice,
-                  current: theme,
-                  save: savedThen<PersonTheme>(setMyThemeAction),
-                  apply: applyTheme,
-                  copy,
-                  toast: prefsToast,
-                })
-              }
+              onChange={(choice) => {
+                applyTheme(choice);
+                themeStep(choice, theme);
+              }}
             />
           </CardContent>
         </Card>
