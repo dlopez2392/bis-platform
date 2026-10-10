@@ -80,7 +80,6 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   "authenticated custom_fields": IUD,
   "authenticated custom_values": IUD,
   "authenticated forms": IUD,
-  "authenticated memberships": IUD,
   "authenticated notes": IUD,
   "authenticated opportunities": insertDeleteAndUpdate([
     "assigned_to", "contact_id", "custom", "monetary_value", "name", "pipeline_id", "stage_changed_at", "stage_id",
@@ -90,7 +89,6 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   "authenticated pipelines": IUD,
   "authenticated tags": IUD,
   "authenticated tasks": IUD,
-  "authenticated users": IUD,
 };
 
 describe("schema guard: every public table, view, materialized view and foreign table", () => {

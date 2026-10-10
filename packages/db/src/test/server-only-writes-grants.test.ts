@@ -64,6 +64,15 @@ async function seed(c: Client, label: string): Promise<Seed> {
   return { accountId, contactId, conversationId, messageId, formId, submissionId, calendarId, bookingId, proposalId, eventId, opportunityId };
 }
 
+let seated = 0;
+/** A users row and a membership with `role` in the account (0066). Owner connection, before actAs. Returns the sub. */
+async function seatMember(c: Client, accountId: string, role: "owner" | "staff"): Promise<string> {
+  const sub = `user_SOW_${role}_${++seated}_${RUN}`;
+  const { rows: [u] } = await c.query("insert into users (clerk_user_id, email) values ($1, $1 || '@example.com') returning id", [sub]);
+  await c.query("insert into memberships (user_id, scope, account_id, role) values ($1,'account',$2,$3)", [u.id, accountId, role]);
+  return sub;
+}
+
 const SERVER_ONLY = [
   { table: "events", policy: "events_read" },
   { table: "form_submissions", policy: "form_submissions_member_read" },
@@ -230,11 +239,25 @@ describe("0053: a member of a real account is refused every write by privilege",
 });
 
 describe("0053: what the member can still do (green before AND after; the narrowing is narrow)", () => {
+  // Since 0066 calendar settings and contact delete are Owner-only, so the member here is seated as an
+  // Owner; each case has a Staff twin below it, where exactly the Owner-only statement matches 0 rows.
   it("calendar settings, contact and opportunity operator fields still save; contacts still insert", () =>
     withRollback(async (c) => {
       const s = await seed(c, "STILL");
-      await actAs(c, { org_id: org("STILL"), sub: "user_SOW_STILL" });
+      const sub = await seatMember(c, s.accountId, "owner");
+      await actAs(c, { org_id: org("STILL"), sub });
       expect((await c.query("update calendars set enabled = true, updated_at = now() where id = $1", [s.calendarId])).rowCount).toBe(1);
+      expect((await c.query("update contacts set first_name = 'Ana Maria', marketing_email_opted_out_at = now(), updated_at = now() where id = $1", [s.contactId])).rowCount).toBe(1);
+      expect((await c.query("update opportunities set name = 'Roof repair', status = 'won', status_changed_at = now() where id = $1", [s.opportunityId])).rowCount).toBe(1);
+      expect((await c.query("insert into contacts (account_id, first_name) values ($1,'Cris')", [s.accountId])).rowCount).toBe(1);
+    }));
+
+  it("Staff: the same operator fields and contact insert still save, but calendar settings match 0 rows (mutation: drop calendars_owner_update -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c, "STAFF");
+      const sub = await seatMember(c, s.accountId, "staff");
+      await actAs(c, { org_id: org("STAFF"), sub });
+      expect((await c.query("update calendars set enabled = true, updated_at = now() where id = $1", [s.calendarId])).rowCount).toBe(0);
       expect((await c.query("update contacts set first_name = 'Ana Maria', marketing_email_opted_out_at = now(), updated_at = now() where id = $1", [s.contactId])).rowCount).toBe(1);
       expect((await c.query("update opportunities set name = 'Roof repair', status = 'won', status_changed_at = now() where id = $1", [s.opportunityId])).rowCount).toBe(1);
       expect((await c.query("insert into contacts (account_id, first_name) values ($1,'Cris')", [s.accountId])).rowCount).toBe(1);
@@ -250,11 +273,23 @@ describe("0053: what the member can still do (green before AND after; the narrow
       const { rows: [f] } = await c.query("insert into forms (account_id, public_id, name) values ($1,$2,'Q') returning id", [a.id, `pub_SOW_RI_${RUN}`]);
       const { rows: [fs] } = await c.query(
         "insert into form_submissions (account_id, form_id, contact_id) values ($1,$2,$3) returning id", [a.id, f.id, ct.id]);
-      await actAs(c, { org_id: org("RI"), sub: "user_SOW_RI" });
+      const sub = await seatMember(c, a.id, "owner");
+      await actAs(c, { org_id: org("RI"), sub });
       expect((await c.query("delete from contacts where id = $1", [ct.id])).rowCount).toBe(1);
       await actAsOwner(c);
       const { rows } = await c.query("select contact_id from form_submissions where id = $1", [fs.id]);
       expect(rows).toEqual([{ contact_id: null }]);
+    }));
+
+  it("Staff: deleting a contact matches 0 rows and its form submission keeps the link (mutation: drop contacts_owner_delete -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c, "STAFFDEL");
+      const sub = await seatMember(c, s.accountId, "staff");
+      await actAs(c, { org_id: org("STAFFDEL"), sub });
+      expect((await c.query("delete from contacts where id = $1", [s.contactId])).rowCount).toBe(0);
+      await actAsOwner(c);
+      const { rows } = await c.query("select contact_id from form_submissions where id = $1", [s.submissionId]);
+      expect(rows).toEqual([{ contact_id: s.contactId }]);
     }));
 });
 

@@ -56,6 +56,17 @@ async function seed(c: Client): Promise<Seeded> {
   return { agencyId: agency!.id, a, b, off, plan };
 }
 
+let seated = 0;
+/** A users row plus a membership with `role` in each account (0066). Owner connection, before actAs. Returns the sub. */
+async function seatMember(c: Client, role: "owner" | "staff", accounts: string[]): Promise<string> {
+  const sub = `user_BILL_${role}_${++seated}_${RUN}`;
+  const { rows: [u] } = await c.query<{ id: string }>(
+    "insert into users (clerk_user_id, email) values ($1, $1 || '@example.com') returning id", [sub]);
+  for (const acct of accounts)
+    await c.query("insert into memberships (user_id, scope, account_id, role) values ($1,'account',$2,$3)", [u!.id, acct, role]);
+  return sub;
+}
+
 const PLAN_SQL = `insert into plans (agency_id, name, monthly_price_cents, currency, features, allowances,
                                      overage_cents, stripe_product_id, stripe_price_ids)
                   values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`;
@@ -151,10 +162,14 @@ describe("0051 grants", () => {
 });
 
 describe("0051 RLS reads: a foreign row is PRESENT in every case", () => {
+  // Since 0066 these reads are Owner-only (account_billing_owner_read, usage_events_owner_read). The
+  // caller is an Owner of all THREE accounts, so the owner check passes everywhere and only the
+  // tenant policy keeps B and OFF out: the 0051 mutation still has a row to leak.
   it("a client reads only its own account_billing row (mutation: account_billing_tenant USING (true) → FAILS, sees B and OFF)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
-      await actAs(c, { org_id: orgId("A") });
+      const sub = await seatMember(c, "owner", [s.a, s.b, s.off]);
+      await actAs(c, { org_id: orgId("A"), sub });
       const { rows } = await c.query<{ account_id: string }>("select account_id from account_billing");
       expect(rows.map((r) => r.account_id)).toEqual([s.a]);
     }));
@@ -162,9 +177,20 @@ describe("0051 RLS reads: a foreign row is PRESENT in every case", () => {
   it("a client reads only its own usage rows (mutation: usage_events_tenant USING (true) → FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
-      await actAs(c, { org_id: orgId("A") });
+      const sub = await seatMember(c, "owner", [s.a, s.b, s.off]);
+      await actAs(c, { org_id: orgId("A"), sub });
       const { rows } = await c.query("select account_id, quantity from usage_events");
       expect(rows).toEqual([{ account_id: s.a, quantity: 2 }]);
+    }));
+
+  it("a Staff member of the account reads neither its billing row nor its usage (mutation: drop account_billing_owner_read or usage_events_owner_read → FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const sub = await seatMember(c, "staff", [s.a]);
+      await actAs(c, { org_id: orgId("A"), sub });
+      const billing = await c.query("select account_id from account_billing");
+      const usage = await c.query("select account_id from usage_events");
+      expect([billing.rows, usage.rows]).toEqual([[], []]);
     }));
 
   it("a client reads no plans at all (mutation: plans_agency_read USING (true) → FAILS)", () =>
