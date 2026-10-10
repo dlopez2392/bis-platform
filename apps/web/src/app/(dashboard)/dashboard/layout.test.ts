@@ -89,7 +89,38 @@ describe("dashboard/layout — computes isOwner via ensureAccountRole and thread
   it("settles isOwner from ensureAccountRole keyed on the client's own account/org, only when resolved \"ok\" (mutation: hardcode isOwner to isAgency, or drop the status === \"ok\" guard → FAILS)", () => {
     const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
     expect(src).toContain('clientState?.status === "ok" && claims.org_id');
-    expect(src).toContain('ensureAccountRole(clientState.id, claims.org_id, userId).then((role) => role === "owner")');
+    expect(src).toContain(
+      'ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId)).then((role) => role === "owner")',
+    );
+  });
+
+  // Fix round 1, I1: `ensureAccountRole` is React cache()'d on its FULL
+  // argument list, including the 4th `stored` argument — not just the
+  // first three. `requireAccountAccess` (lib/auth.ts) always calls it with
+  // an explicit 4th argument; this layout used to call it with only 3,
+  // leaving `stored` to default inside `ensureAccountRole` itself. Two
+  // different argument counts make two different cache() entries even
+  // though accountId/orgId/userId all match, so `ensureAccountRoleWith`
+  // ran TWICE per page load — doubling the Clerk `reconcileMembership`
+  // call on the fallback path (no stored role yet). Proved against the
+  // installed react@19.2.4: outside a real request's cache dispatcher,
+  // cache() does not dedupe calls at all (confirmed empirically, not
+  // merely read), so there is no way to exercise the REAL per-request
+  // dedupe in a plain vitest run — this is a source-shape pin instead,
+  // checking that both call sites now use the identical 4-argument shape
+  // (the SAME readStoredRole promise instance, since readStoredRole is
+  // itself cache()'d on (accountId, clerkUserId) and these two calls use
+  // the same two values).
+  it("calls ensureAccountRole with the SAME 4-argument shape requireAccountAccess uses — an explicit readStoredRole(...) 4th argument, never a bare 3-arg call (mutation: drop the 4th argument → FAILS)", () => {
+    const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
+    expect(src).toMatch(
+      /ensureAccountRole\(clientState\.id, claims\.org_id, userId, readStoredRole\(clientState\.id, userId\)\)/,
+    );
+    // Belt-and-braces: if lib/auth.ts's own call ever regressed to 3 args,
+    // this layout's fix would silently stop mattering — pinned here too so
+    // either side drifting alone is caught.
+    const authSrc = readFileSync(path.join(here, "../../../lib/auth.ts"), "utf8");
+    expect(authSrc).toMatch(/ensureAccountRole\(account\.id, claims\.org_id, userId, storedRole\)/);
   });
 
   it("passes the SAME isOwner value to both AppSidebar and CommandPalette, in CODE (mutation: pass a literal `false` to either → FAILS)", () => {

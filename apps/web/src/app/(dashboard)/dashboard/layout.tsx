@@ -11,7 +11,7 @@ import { Topbar } from "@/components/topbar";
 import { ShellDataProvider } from "@/components/shell-data";
 import { CommandPalette } from "@/components/command-palette";
 import { Ground } from "@/components/ground";
-import { ensureAccountRole } from "@/lib/team/ensure-role";
+import { ensureAccountRole, readStoredRole } from "@/lib/team/ensure-role";
 
 // generateMetadata and the layout body below are separate invocations that
 // need the same answers the root layout also needs for the very same tenant
@@ -132,14 +132,27 @@ export default async function DashboardLayout({
       : Promise.resolve(null),
     // Staff and roles: the caller's Owner/Staff role in THIS account, for
     // the sidebar footer's Team link and the palette's own Team entries.
-    // `ensureAccountRole` is React cache()d per request on (accountId,
-    // orgId, userId), and requireAccountAccess calls it again with the same
-    // arguments further down the tree (the page under [accountId]/) — so
-    // this costs no extra round-trip, it only settles the answer earlier.
-    // Always false for the agency (never a client membership, plan
-    // deviation 6) and for a client whose account did not resolve to "ok".
+    // `ensureAccountRole` is React cache()'d per request on its FULL
+    // argument list — accountId, orgId, userId, AND the 4th `stored`
+    // argument — not just the first three. `requireAccountAccess`
+    // (lib/auth.ts) always calls it with an explicit 4th argument (the
+    // in-flight `readStoredRole` promise it starts beside the account
+    // read); calling it here with only 3 args, leaving `stored` to default
+    // inside `ensureAccountRole` itself, makes a DIFFERENT cache entry even
+    // though accountId/orgId/userId all match — cache() keys on every
+    // argument, including a missing one (review round 1, I1: proved
+    // against the installed react@19.2.4 that the underlying function then
+    // runs twice, and on the fallback path that is a second
+    // `reconcileMembership` Clerk call per page load). The fix is to pass
+    // the IDENTICAL 4th argument here: `readStoredRole` is itself
+    // cache()'d on (accountId, clerkUserId), so calling it with the same
+    // two values `requireAccountAccess` will use returns the SAME promise
+    // instance in this request, making this call and that one the same
+    // cache entry — one `ensureAccountRoleWith` execution, not two. Always
+    // false for the agency (never a client membership, plan deviation 6)
+    // and for a client whose account did not resolve to "ok".
     clientState?.status === "ok" && claims.org_id
-      ? ensureAccountRole(clientState.id, claims.org_id, userId).then((role) => role === "owner")
+      ? ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId)).then((role) => role === "owner")
       : Promise.resolve(false),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
