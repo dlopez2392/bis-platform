@@ -163,7 +163,8 @@ export async function reconcileMembership(
   const membership = await clerk.getMembership(input.clerkUserId, input.clerkOrgId);
   if (!membership) {
     if (input.mode === "fallback") return { outcome: "absent" }; // the fallback never removes anyone
-    const { data: u } = await db.from("users").select("id").eq("clerk_user_id", input.clerkUserId).maybeSingle();
+    const { data: u, error: lookupErr } = await db.from("users").select("id").eq("clerk_user_id", input.clerkUserId).maybeSingle();
+    if (lookupErr) throw new Error(`reconcileMembership user lookup failed: ${lookupErr.message}`);
     if (u) await deleteAccountMembership(db, account.id, u.id);
     return { outcome: "removed" };
   }
