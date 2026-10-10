@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 
 /**
  * F-048 (rider): the customer moves their own booking from the link in their
@@ -41,7 +41,7 @@ vi.mock("@/lib/meetings/provider", () => ({ getMeetingProvider: (...a: unknown[]
 const m = vi.hoisted(() => ({
   listBookedRanges: vi.fn(), moveBooking: vi.fn(), getContact: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), incrementUnreadCount: vi.fn(),
-  readMoveContext: vi.fn(),
+  readMoveContext: vi.fn(), countRecentBookings: vi.fn(), rescheduleChain: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@bis/db")>();
@@ -56,6 +56,8 @@ vi.mock("@bis/db", async (importOriginal) => {
     ensureConversation: m.ensureConversation,
     createMessage: m.createMessage,
     incrementUnreadCount: m.incrementUnreadCount,
+    countRecentBookings: m.countRecentBookings,
+    rescheduleChain: m.rescheduleChain,
   };
 });
 vi.mock("./data", async (importOriginal) => {
@@ -67,6 +69,7 @@ import { headers } from "next/headers";
 import { SlotTakenError, BookingNotMovableError, newCancelToken } from "@bis/db";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { formatWhen } from "@/lib/booking/time";
+import { hashIp, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS } from "@/lib/forms/guards";
 import { confirmMoveAction, getMoveSlotsAction } from "./actions";
 
 const TOKEN = newCancelToken();
@@ -99,6 +102,8 @@ const ELEVEN = "2027-06-01T11:00:00.000Z";
 const en = bookingStrings("en");
 const es = bookingStrings("es");
 
+beforeAll(() => { process.env.FORM_TOKEN_SECRET ??= "test-form-token-secret"; });
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
@@ -117,6 +122,8 @@ beforeEach(() => {
   m.createMessage.mockReset().mockResolvedValue({ id: "msg_1" });
   m.incrementUnreadCount.mockReset().mockResolvedValue(undefined);
   m.readMoveContext.mockReset().mockResolvedValue(context());
+  m.countRecentBookings.mockReset().mockResolvedValue(0);
+  m.rescheduleChain.mockReset().mockResolvedValue({ rootId: "bk_old", depth: 0 });
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
@@ -297,5 +304,51 @@ describe("the thread line's words (owner-facing, both languages written out)", (
       expect(es).not.toBe(en);
       for (const ph of en!.match(/\{\w+\}/g) ?? []) expect(es, `${stem}.es keeps ${ph}`).toContain(ph);
     }
+  });
+});
+
+/**
+ * Fix round 1 (I3): every successful move hands back a NEW token, so one
+ * link could chain moves forever, each one emailing the business and the
+ * customer. Two bounds, both checked BEFORE the slot is even looked at:
+ *  - the booking page's own per-IP limit (RATE_LIMIT_MAX per
+ *    RATE_LIMIT_WINDOW_MS, `countRecentBookings`), which sees moves because
+ *    the moved row carries the request's IP hash;
+ *  - a cap on the appointment's moves (its `rescheduleChain` depth), which
+ *    no change of IP gets around. Past it a person handles the change.
+ */
+describe("confirmMoveAction — how often one appointment can move (I3)", () => {
+  const withIp = () => vi.mocked(headers).mockResolvedValue(
+    new Headers({ host: "app.example", "x-forwarded-proto": "https", "x-forwarded-for": "203.0.113.7" }) as never);
+
+  it("passes the request's IP hash onto the moved row, and counts this calendar's window for it", async () => {
+    withIp();
+    await confirmMoveAction(TOKEN, "en", ELEVEN);
+    expect(m.moveBooking.mock.calls[0]![3]).toMatchObject({ ipHash: hashIp("203.0.113.7") });
+    const [, calendarId, ipHash, windowStart] = m.countRecentBookings.mock.calls[0]!;
+    expect([calendarId, ipHash]).toEqual(["cal_1", hashIp("203.0.113.7")]);
+    expect(new Date(windowStart).getTime()).toBe(NOW.getTime() - RATE_LIMIT_WINDOW_MS);
+  });
+
+  it("at the IP limit: the generic error, and nothing is checked, written or sent (mutation: drop the limit → it moves, FAILS)", async () => {
+    withIp();
+    m.countRecentBookings.mockResolvedValue(RATE_LIMIT_MAX);
+    expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toEqual({ ok: false, error: en.moveGenericError });
+    expect(m.listBookedRanges).not.toHaveBeenCalled();
+    expect(m.moveBooking).not.toHaveBeenCalled();
+    expect(gated()).toEqual([]);
+    // One under the limit still moves.
+    m.countRecentBookings.mockResolvedValue(RATE_LIMIT_MAX - 1);
+    expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toMatchObject({ ok: true });
+  });
+
+  it("an appointment already moved MOVE_CHAIN_MAX times: contact the business, nothing checked or written (mutation: drop the cap → it moves, FAILS)", async () => {
+    const { MOVE_CHAIN_MAX } = await import("./data");
+    m.rescheduleChain.mockResolvedValue({ rootId: "root", depth: MOVE_CHAIN_MAX });
+    expect(await confirmMoveAction(TOKEN, "es", ELEVEN)).toEqual({ ok: false, error: es.moveOffline, gone: true });
+    expect(m.listBookedRanges).not.toHaveBeenCalled();
+    expect(m.moveBooking).not.toHaveBeenCalled();
+    m.rescheduleChain.mockResolvedValue({ rootId: "root", depth: MOVE_CHAIN_MAX - 1 });
+    expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toMatchObject({ ok: true });
   });
 });

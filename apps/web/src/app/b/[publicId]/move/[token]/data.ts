@@ -69,6 +69,18 @@ export function moveState(ctx: Pick<MoveContext, "row" | "calendar">, now: Date)
   return "live";
 }
 
+/**
+ * Fix round 1 (I3): how many times one appointment may be moved from its link
+ * (its `rescheduleChain` depth, the receptionist's moves included). Every move
+ * hands back a NEW token, so without a bound one link could chain moves
+ * forever, each emailing the business and the customer; the booking page's
+ * per-IP limit catches a burst from one address, and this catches the chain
+ * whatever address it comes from. Lifetime, not per day: no real customer
+ * moves one appointment ten times, and past that the honest answer is the
+ * one a switched-off calendar gets, to contact the business.
+ */
+export const MOVE_CHAIN_MAX = 10;
+
 /** The booking being moved, in the shape the move engine takes. */
 export function movingOf(row: MoveContext["row"]): { id: string; startsAt: Date; endsAt: Date } {
   return { id: row.id, startsAt: new Date(row.starts_at), endsAt: new Date(row.ends_at) };

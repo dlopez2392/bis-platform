@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
@@ -11,7 +11,7 @@ import {
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
   SlotTakenError, BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel,
   claimCancelNotice, rescheduleChain, bookingContactEmail, discardQueuedNotice, noticeMessageStatus,
-  moveBooking, BookingNotMovableError, bookingWasMoved,
+  moveBooking, BookingNotMovableError, bookingWasMoved, countRecentBookings,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -1550,6 +1550,145 @@ describe("F-048: moveBooking, a customer's move in place", () => {
       expect(await liveCount(db, accountId)).toBe(0);
       const { count } = await db.from("bookings").select("id", { count: "exact", head: true }).eq("rescheduled_from_id", old.id);
       expect(count, "the taken-back row is gone, so nothing reads as a move").toBe(0);
+    });
+  });
+
+  /**
+   * Fix round 1 (C1, I2): a move's writes can land while what comes after
+   * them fails — an event insert, or the response to a write that committed.
+   * Every such case must end with exactly ONE live booking, and the answer
+   * must say which. Faults are injected into a client wrapped around the real
+   * one: `failEvent` refuses that event type's insert (nothing written);
+   * `lose` runs the real write, then answers an error as a dropped response
+   * would.
+   */
+  const faulty = (db: SupabaseClient, f: { failEvent?: string; lose?: "insert" | "update" }) => {
+    const used = { failEvent: false, lose: false };
+    const losing = <T extends object>(builder: T): T => {
+      const proxy: T = new Proxy(builder, {
+        get(target, prop) {
+          if (prop === "then") {
+            return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+              (target as unknown as PromiseLike<unknown>).then(() => {
+                used.lose = true;
+                return res({ data: null, error: { message: "fetch failed (simulated lost response)" } });
+              }, rej);
+          }
+          const v = Reflect.get(target, prop, target);
+          if (typeof v !== "function") return v;
+          return (...args: unknown[]) => {
+            const r = (v as (...a: unknown[]) => unknown).apply(target, args);
+            return r === target ? proxy : r;
+          };
+        },
+      });
+      return proxy;
+    };
+    const client = new Proxy(db, {
+      get(target, prop) {
+        if (prop !== "from") return Reflect.get(target, prop, target);
+        return (table: string) => {
+          const qb = target.from(table);
+          return new Proxy(qb, {
+            get(t, p) {
+              const v = Reflect.get(t, p, t);
+              if (table === "events" && p === "insert") {
+                return (payload: { type?: string }) => {
+                  if (payload?.type === f.failEvent) {
+                    used.failEvent = true;
+                    return Promise.resolve({ data: null, error: { message: "simulated events insert failure" } });
+                  }
+                  return (v as (x: unknown) => unknown).call(t, payload);
+                };
+              }
+              if (table === "bookings" && p === f.lose) {
+                return (...a: unknown[]) => losing((v as (...x: unknown[]) => object).apply(t, a));
+              }
+              return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+            },
+          });
+        };
+      },
+    }) as SupabaseClient;
+    return { client, used };
+  };
+  const statuses = async (db: SupabaseClient, accountId: string) => {
+    const { data, error } = await db.from("bookings").select("status, rescheduled_from_id")
+      .eq("account_id", accountId).order("created_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => `${r.rescheduled_from_id ? "new" : "old"}:${r.status}`);
+  };
+
+  it("C1: the old row's cancel lands but its event does not — the move STANDS: the new booking is kept and returned (red on the round-0 code, which took back on any error; mutation: let the event's error escape → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("17", 15), endsAt: at("17", 16) }, "user_test");
+      const { client, used } = faulty(db, { failEvent: "booking.status_changed" });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const moved = await moveBooking(client, accountId, old.id, { startsAt: at("18", 15), endsAt: at("18", 16) }, "public", "system");
+        expect(used.failEvent, "the fault fired").toBe(true);
+        expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
+        expect((await rowOf(db, moved.id))!.status).toBe("booked");
+        expect(errors.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(/event/);
+      } finally { errors.mockRestore(); }
+    });
+  });
+
+  it("C1: the old row's cancel COMMITS but its response is lost — re-read, see it cancelled, keep the move (mutation: read any cancel error as not cancelled → the new row is taken back, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("19", 15), endsAt: at("19", 16) }, "user_test");
+      const { client, used } = faulty(db, { lose: "update" });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await moveBooking(client, accountId, old.id, { startsAt: at("20", 15), endsAt: at("20", 16) }, "public", "system");
+        expect(used.lose, "the fault fired").toBe(true);
+        expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
+      } finally { errors.mockRestore(); }
+    });
+  });
+
+  it("I2: the new row lands but its booking.created event does not — never two live bookings: the move goes on and the old row is cancelled (mutation: let the event error escape → old AND new live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("21", 15), endsAt: at("21", 16) }, "user_test");
+      const { client, used } = faulty(db, { failEvent: "booking.created" });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await moveBooking(client, accountId, old.id, { startsAt: at("22", 15), endsAt: at("22", 16) }, "public", "system");
+        expect(used.failEvent, "the fault fired").toBe(true);
+        expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
+      } finally { errors.mockRestore(); }
+    });
+  });
+
+  it("I2: the new row's insert COMMITS but its response is lost — found by its own token, and the move goes on (mutation: treat the error as a failure → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("23", 15), endsAt: at("23", 16) }, "user_test");
+      const { client, used } = faulty(db, { lose: "insert" });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const moved = await moveBooking(client, accountId, old.id, { startsAt: at("24", 15), endsAt: at("24", 16) }, "public", "system");
+        expect(used.lose, "the fault fired").toBe(true);
+        expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
+        expect((await rowOf(db, moved.id))!.cancel_token).toBe(moved.cancelToken);
+      } finally { errors.mockRestore(); }
+    });
+  });
+
+  it("I3: the moved row carries the request's IP hash, so the public rate limit counts moves (mutation: drop ip_hash → countRecentBookings sees 0, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("25", 15), endsAt: at("25", 16) }, "user_test");
+      await moveBooking(db, accountId, old.id, { startsAt: at("26", 15), endsAt: at("26", 16), ipHash: "iphash-move-test" }, "public", "system");
+      expect(await countRecentBookings(db, cal.id, "iphash-move-test", new Date(Date.now() - 600_000).toISOString())).toBe(1);
     });
   });
 

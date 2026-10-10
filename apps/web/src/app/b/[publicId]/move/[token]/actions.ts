@@ -3,6 +3,7 @@
 import { headers } from "next/headers";
 import {
   serviceDb, getContact, moveBooking, SlotTakenError, BookingNotMovableError,
+  countRecentBookings, rescheduleChain,
   ensureConversation, createMessage, incrementUnreadCount,
 } from "@bis/db";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
@@ -18,9 +19,10 @@ import { moveSlots, movableSlot, dayKeyInZone } from "@/lib/booking/availability
 import { calendarFileUrl } from "@/lib/booking/calendar-file";
 import { bookingCancelUrl, bookingMoveUrl, isBookingToken } from "@/lib/booking/links";
 import { normalizeLocale } from "@/lib/forms/public-strings";
+import { clientIp, hashIp, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS } from "@/lib/forms/guards";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { m } from "@/lib/messages";
-import { readMoveContext, moveState, movingOf, scrubToken, type MoveContext } from "./data";
+import { readMoveContext, moveState, movingOf, scrubToken, MOVE_CHAIN_MAX, type MoveContext } from "./data";
 
 /**
  * F-048 (rider): the customer moves their own booking, from the link in their
@@ -106,6 +108,18 @@ export async function confirmMoveAction(
     if (state === "past") return { ok: false, error: s.cancelPastTitle, gone: true };
     if (state === "offline") return { ok: false, error: s.moveOffline };
 
+    // Fix round 1 (I3): the bounds on how often, BEFORE the slot is looked
+    // at. The booking page's own per-IP limit (the moved row carries the IP
+    // hash, so `countRecentBookings` sees moves), answered as that page
+    // answers it; then the appointment's own cap (`MOVE_CHAIN_MAX`).
+    const ipHash = hashIp(clientIp(await headers()));
+    const windowStart = new Date(now.getTime() - RATE_LIMIT_WINDOW_MS).toISOString();
+    if (await countRecentBookings(db, ctx.calendar.id, ipHash, windowStart) >= RATE_LIMIT_MAX) {
+      return { ok: false, error: s.moveGenericError };
+    }
+    const { depth } = await rescheduleChain(db, ctx.row.account_id, ctx.row.id);
+    if (depth >= MOVE_CHAIN_MAX) return { ok: false, error: s.moveOffline, gone: true };
+
     const timezone = ctx.account.timezone ?? "UTC";
     const wanted = new Date(slotStartsAt);
     const slot = Number.isFinite(wanted.getTime())
@@ -129,7 +143,7 @@ export async function confirmMoveAction(
 
     try {
       moved = await moveBooking(db, ctx.row.account_id, ctx.row.id,
-        { startsAt: slot.startsAt, endsAt: slot.endsAt, meetingUrl }, ACTOR_ID, ACTOR_TYPE);
+        { startsAt: slot.startsAt, endsAt: slot.endsAt, meetingUrl, ipHash }, ACTOR_ID, ACTOR_TYPE);
     } catch (e) {
       if (e instanceof SlotTakenError) return { ok: false, error: s.slotTaken, slotTaken: true };
       if (e instanceof BookingNotMovableError) return { ok: false, error: s.moveAlreadyChanged, gone: true };
