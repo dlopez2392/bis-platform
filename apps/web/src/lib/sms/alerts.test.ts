@@ -104,6 +104,12 @@ describe("composeBookingAlertSms", () => {
     const body = composeBookingAlertSms(worstCaseWhen, longAccentedName, true);
     expect(segmentsFor(body).segments).toBe(1);
   });
+
+  it("writes in Spanish when the account's language is es (mutation: ignore the 4th param → FAILS, stays 'New booking')", () => {
+    const body = composeBookingAlertSms("Tue, Sep 16, 2:00 PM CDT", "Maria Lopez", true, "es");
+    expect(body).toContain("Nueva cita");
+    expect(body).not.toContain("New booking");
+  });
 });
 
 describe("composeCallAlertSms", () => {

@@ -3,6 +3,12 @@ import { ALERT_CODE_TTL_MINUTES } from "@bis/db";
 import { segmentsFor } from "./segments";
 import { resolveSmsSender, refusesAlertLoop } from "./sender";
 import { sendSms } from "@/lib/consent/gate";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+// t.ts does not re-export Locale — it imports it from locale.ts itself, so
+// this file does the same rather than reaching through t.ts for a type it
+// never names.
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * Business-side alert texts — the SMS twin of `bookingAlertEmail`/
@@ -52,15 +58,27 @@ const EMAIL_HINT = " Check email for details.";
  *  subject gets for the identical value (`stripSubjectControlChars`,
  *  `app/b/[publicId]/actions.ts`) — a raw `\n`/`\r`/`\t` is still a valid
  *  contact name for the booking record itself, but it must not be able to
- *  split this one-line text onto a second visual line. */
+ *  split this one-line text onto a second visual line.
+ *
+ *  `language` (F-013, Task 8 of the Spanish-runtime lane): the reader is the
+ *  BUSINESS owner/staff this alert goes to, so it is the account's own
+ *  resolved language, never the customer's — the caller passes
+ *  `resolveLocale(undefined, account.language)`, not a booking-page locale.
+ *  Optional and defaulting to "en" so every pre-existing 3-arg call keeps
+ *  its exact prior output. The Spanish catalogue copy (messages.ts) is
+ *  written with no á/í/ó/ú on purpose — those four are the one GSM-7
+ *  gap this app's Spanish strings avoid everywhere else — so the catalogue
+ *  text alone never forces this composer's result past the one-segment
+ *  budget the English copy was designed for; only an accented NAME (already
+ *  the fallback's reason to exist) can still do that, in either language. */
 export function composeBookingAlertSms(
-  whenCompanyZone: string, contactName: string, hasEmailRecipients: boolean,
+  whenCompanyZone: string, contactName: string, hasEmailRecipients: boolean, language: Locale = "en",
 ): string {
   const name = contactName.replace(/[\r\n\t]+/g, " ").trim();
-  const withName = `New booking: ${whenCompanyZone} - ${name}.`;
+  const withName = t(m, "sms.alert.booking.newBookingWithName", language, { when: whenCompanyZone, name });
   if (segmentsFor(withName).segments <= 1) return withName;
-  const fallback = `New booking: ${whenCompanyZone}.`;
-  return hasEmailRecipients ? `${fallback}${EMAIL_HINT}` : fallback;
+  const fallback = t(m, "sms.alert.booking.newBooking", language, { when: whenCompanyZone });
+  return hasEmailRecipients ? `${fallback}${t(m, "sms.alert.booking.emailHint", language)}` : fallback;
 }
 
 /**

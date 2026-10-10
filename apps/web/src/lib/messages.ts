@@ -1494,6 +1494,21 @@ export const m = {
   "sms.consentReply.help.contact.fallback.en": "email hello@bis-rgv.com or visit bis-rgv.com",
   "sms.consentReply.help.contact.fallback.es": "escriba a hello@bis-rgv.com o visite bis-rgv.com",
 
+  // Staff-facing booking alert SMS (lib/sms/alerts.ts's composeBookingAlertSms,
+  // F-013 — AI/alerts in the reader's language). The reader here is the
+  // business owner/staff, so this is keyed off `accounts.language`, not the
+  // customer's own locale. The Spanish lines are written with NO á, í, ó or
+  // ú (same reasoning as sms.optOut/sms.consentReply above: those four are
+  // outside GSM-7 and a single one drops the whole message to UCS-2 at 70
+  // chars/segment — "mas" without its accent, matching this file's own
+  // established spelling for "mas mensajes" above).
+  "sms.alert.booking.newBookingWithName": "New booking: {when} - {name}.",
+  "sms.alert.booking.newBookingWithName.es": "Nueva cita: {when} - {name}.",
+  "sms.alert.booking.newBooking": "New booking: {when}.",
+  "sms.alert.booking.newBooking.es": "Nueva cita: {when}.",
+  "sms.alert.booking.emailHint": " Check email for details.",
+  "sms.alert.booking.emailHint.es": " Revise su correo para mas detalles.",
+
   "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
   "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
   // A text-back HELD overnight and sent at 08:00 (consent chain PR-1, danlo
