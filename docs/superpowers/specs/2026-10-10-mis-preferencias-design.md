@@ -45,8 +45,12 @@ set local lock_timeout = '5s';
 alter table public.users
   add column theme text constraint users_theme_check check (theme in ('light', 'dark', 'system'));
 comment on column public.users.theme is
-  'The person''s own theme: light, dark or system (follow the device). NULL = no choice: the bis-theme cookie, then the role default (agency dark, client light). Written only by the person''s own Preferences page and topbar toggle, server-side.';
+  'The person''s own theme: light, dark or system (follow the device). NULL = no choice. Written only by the person''s own Preferences page and topbar toggle, server-side.';
 ```
+
+(The comment above is the text 0067 shipped with, already applied to the CI project. What NULL falls back to,
+the cookie, then the tenant's `brand_mode`, then the role default, lives in the migration's header comment and
+in 5.3, not in the column comment.)
 
 Nothing else changes in the database:
 
@@ -138,6 +142,23 @@ another device's choice cannot reach. The root layout passes `userTheme` to `The
 - `userTheme` `system`: leave the cookie to the existing `cookieModeToPersist` snapshot.
 - While `userTheme` is set, the one-time `cookieModeToMigrate` migration is skipped: a stored choice outranks a
   localStorage leftover, and running both would refresh twice.
+
+The plan therefore carries two flags, not one: `skipMigration` (any stored theme) and `skipPersist` (a stored
+`light`/`dark` only). A single shared flag, as first built, returned before `cookieModeToPersist` for `system`
+too, so "Follow my device" never updated the cookie and a branded client's server paint for one mode sat under
+next-themes' class for the other (final review, I1). The effect's remaining decision is `followUpCookie`, pure and
+tested in `theme-mode.test.ts`.
+
+**Accepted: a cross-device theme flash, until hydration.** The server paints from `users.theme` (and the cookie),
+but next-themes' inline script applies the `.dark` class from THIS browser's `localStorage` before React runs.
+When another device changed the stored choice since this browser last synced, the page shows this browser's old
+class (over the server's new tokens) until hydration, when `ThemeCookieSync` calls `setTheme(userTheme)`. That is
+"until hydration", not "one frame": on a slow device or a slow network it lasts as long as the JavaScript takes to
+load and run. It happens on branded and unbranded accounts alike; on a branded account it is also a mismatch of
+tenant colours (one mode's inline tokens under the other mode's class) for the same window. It happens once per
+browser per change made elsewhere, after which localStorage and the cookie agree again. Follow-up, not in this
+release: a bootstrap script ahead of next-themes' own that reads the server-rendered theme (or the `bis-theme`
+cookie) first and seeds `localStorage` before the class is applied.
 
 **The toggle.** `toggleTheme(resolvedTheme, setTheme, refresh, persist)` keeps writing the cookie and calling
 `setTheme` at once (instant), then calls `persist(next)` = `setMyThemeAction(next)`. If the save fails it shows
