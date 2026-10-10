@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { serviceDb } from "../service";
 import { withTestAccount } from "./fixtures";
-import { roleFromClerk, languageFromClerk, isAgencyMetadata, reconcileMembership, readAccountRole, setAccountMemberRole,
+import { roleFromClerk, languageFromClerk, isAgencyMetadata, reconcileMembership, readAccountRole, setAccountMemberRole, addAccountMember, INVITE_ACCEPT_ALLOWANCE_MS,
          listAccountTeam, type ClerkTeamPort } from "../team";
 
 const RUN = Math.random().toString(36).slice(2, 10);
@@ -74,7 +74,7 @@ describe("roleFromClerk: the three sources, in order (spec §6)", () => {
 function fakePort(over: Partial<{ user: Awaited<ReturnType<ClerkTeamPort["getUser"]>>; membership: Awaited<ReturnType<ClerkTeamPort["getMembership"]>>; invite: unknown }>): ClerkTeamPort {
   return {
     getUser: async () => over.user === undefined ? { email: `p-${RUN}@example.com`, name: "Pat", publicMetadata: {} } : over.user,
-    getMembership: async () => over.membership === undefined ? { role: "org:member", publicMetadata: {} } : over.membership,
+    getMembership: async () => over.membership === undefined ? { role: "org:member", publicMetadata: {}, createdAt: Date.now() } : over.membership,
     acceptedInvitationMeta: async () => over.invite ?? null,
   };
 }
@@ -85,7 +85,7 @@ describe("reconcileMembership against the real database", () => {
       const { data } = await db.from("accounts").select("clerk_org_id").eq("id", accountId).single();
       const sub = `user_rc_${RUN}`;
       try {
-        const port = fakePort({ membership: { role: "org:member", publicMetadata: { bis_role: "owner", bis_language: "es" } } });
+        const port = fakePort({ membership: { role: "org:member", publicMetadata: { bis_role: "owner", bis_language: "es" }, createdAt: Date.now() } });
         expect(await reconcileMembership(db, port, { clerkUserId: sub, clerkOrgId: data!.clerk_org_id, mode: "webhook" }))
           .toEqual({ outcome: "created", role: "owner" });
         const team = await listAccountTeam(db, accountId);
@@ -117,8 +117,62 @@ describe("reconcileMembership against the real database", () => {
   it("an agency user is never made a member (mutation: drop the isAgencyMetadata check -> FAILS with created/owner)", () =>
     withTestAccount(async (db, accountId) => {
       const { data } = await db.from("accounts").select("clerk_org_id").eq("id", accountId).single();
-      const port = fakePort({ user: { email: "a@example.com", name: null, publicMetadata: { app_role: "agency_admin" } }, membership: { role: "org:admin", publicMetadata: {} } });
+      const port = fakePort({ user: { email: "a@example.com", name: null, publicMetadata: { app_role: "agency_admin" } }, membership: { role: "org:admin", publicMetadata: {}, createdAt: Date.now() } });
       expect(await reconcileMembership(db, port, { clerkUserId: `user_ag_${RUN}`, clerkOrgId: data!.clerk_org_id, mode: "webhook" }))
         .toEqual({ outcome: "agency_user" });
     }));
+});
+
+/**
+ * A chainable fake SupabaseClient: every builder method records itself and
+ * returns the builder; `maybeSingle()`/`single()` and a bare `await` resolve
+ * to `respond(table, ops)`. Enough for reconcile's reads and upserts without
+ * touching any real project.
+ */
+function chainDb(respond: (table: string, ops: string[]) => { data: unknown; error: unknown }): SupabaseClient {
+  return {
+    from(table: string) {
+      const ops: string[] = [];
+      const b: Record<string | symbol, unknown> = new Proxy({}, {
+        get(_t, k) {
+          if (k === "then") return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => Promise.resolve(respond(table, ops)).then(res, rej);
+          if (k === "maybeSingle" || k === "single") return async () => respond(table, [...ops, String(k)]);
+          return () => { ops.push(String(k)); return b; };
+        },
+      });
+      return b;
+    },
+  } as unknown as SupabaseClient;
+}
+
+describe("addAccountMember: a lost insert race is 'existed', not an error (fake client)", () => {
+  it("23505 from the older memberships_unique index reads as existed (mutation: drop the 23505 branch -> FAILS)", async () => {
+    const db = chainDb(() => ({ data: null, error: { code: "23505", message: 'duplicate key value violates unique constraint "memberships_unique"' } }));
+    expect(await addAccountMember(db, { accountId: "a", userId: "u", role: "staff" })).toBe("existed");
+  });
+  it("any other error still throws (mutation: swallow every error -> FAILS)", async () => {
+    const db = chainDb(() => ({ data: null, error: { code: "42501", message: "permission denied" } }));
+    await expect(addAccountMember(db, { accountId: "a", userId: "u", role: "staff" })).rejects.toThrow(/addAccountMember failed/);
+  });
+});
+
+describe("reconcileMembership honours only an invitation accepted for THIS membership (fake client)", () => {
+  it("asks for invitations accepted since the membership began, less the allowance (mutation: pass 0 -> FAILS)", async () => {
+    const db = chainDb((table, ops) => {
+      if (table === "accounts") return { data: { id: "acct" }, error: null };
+      if (table === "users") return { data: { id: "u1", language: "en" }, error: null };
+      return ops.includes("upsert") ? { data: [{ id: "m1" }], error: null } : { data: null, error: null };
+    });
+    const created = 1_760_000_000_000;
+    const seen: unknown[][] = [];
+    const port: ClerkTeamPort = {
+      getUser: async () => ({ email: "pat@example.com", name: null, publicMetadata: {} }),
+      getMembership: async () => ({ role: "org:member", publicMetadata: {}, createdAt: created }),
+      acceptedInvitationMeta: async (...a) => { seen.push(a); return null; },
+    };
+    expect(await reconcileMembership(db, port, { clerkUserId: "user_1", clerkOrgId: "org_1", mode: "fallback" }))
+      .toEqual({ outcome: "created", role: "staff" });
+    expect(INVITE_ACCEPT_ALLOWANCE_MS).toBe(10 * 60 * 1000);
+    expect(seen).toEqual([["org_1", "pat@example.com", created - INVITE_ACCEPT_ALLOWANCE_MS]]);
+  });
 });

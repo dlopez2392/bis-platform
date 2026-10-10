@@ -57,17 +57,21 @@ export function liveClerkTeamPort(): ClerkTeamPort {
       const clerk = await clerkClient();
       const list = await clerk.organizations.getOrganizationMembershipList({ organizationId: clerkOrgId, userId: [clerkUserId] });
       const m = list.data.find((x) => x.organization.id === clerkOrgId && x.publicUserData?.userId === clerkUserId);
-      return m ? { role: m.role, publicMetadata: m.publicMetadata } : null;
+      return m ? { role: m.role, publicMetadata: m.publicMetadata, createdAt: m.createdAt } : null;
     },
 
-    async acceptedInvitationMeta(clerkOrgId, email) {
+    async acceptedInvitationMeta(clerkOrgId, email, acceptedSince) {
+      // An accepted invitation's `updatedAt` is its acceptance (the status
+      // change is its last write; OrganizationInvitation.d.ts:20). Only one
+      // accepted at or after `acceptedSince` can belong to the membership
+      // being settled; an older one belonged to an earlier membership.
       const clerk = await clerkClient();
       const list = await clerk.organizations.getOrganizationInvitationList({ organizationId: clerkOrgId, status: ["accepted"], limit: PAGE });
       const want = email.toLowerCase();
-      const newest = list.data
-        .filter((i) => i.emailAddress.toLowerCase() === want)
-        .sort((a, b) => b.createdAt - a.createdAt)[0];
-      return newest ? newest.publicMetadata : null;
+      const latest = list.data
+        .filter((i) => i.emailAddress.toLowerCase() === want && i.updatedAt >= acceptedSince)
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      return latest ? latest.publicMetadata : null;
     },
   };
 }

@@ -79,6 +79,12 @@ export async function addAccountMember(
     .upsert({ scope: "account", account_id: m.accountId, user_id: m.userId, role: m.role },
             { onConflict: "account_id,user_id", ignoreDuplicates: true })
     .select("id");
+  // 23505: 0001's expression index `memberships_unique` (user_id, scope,
+  // coalesce(agency_id), coalesce(account_id)) still sits beside 0066's
+  // `memberships_account_user_key`. ON CONFLICT only absorbs a conflict on its
+  // arbiter, so two requests racing to insert the same row can lose on the
+  // OLDER index instead and raise 23505. Either way the row exists.
+  if (error && (error as { code?: unknown }).code === "23505") return "existed";
   if (error) throw new Error(`addAccountMember failed: ${error.message}`);
   return (data ?? []).length > 0 ? "created" : "existed";
 }
@@ -132,11 +138,27 @@ export async function listAccountTeam(db: SupabaseClient, accountId: string): Pr
   });
 }
 
+/**
+ * How long before a membership's creation its invitation may have been
+ * accepted and still count as THAT membership's invitation. Clerk stamps the
+ * acceptance (the invitation's `updatedAt`) and the membership's `createdAt`
+ * in the same flow, but not in one transaction, so allow for skew.
+ */
+export const INVITE_ACCEPT_ALLOWANCE_MS = 10 * 60 * 1000;
+
 /** What reconcile needs from Clerk. The web app supplies a clerkClient adapter; tests supply a fake. */
 export interface ClerkTeamPort {
   getUser(clerkUserId: string): Promise<{ email: string | null; name: string | null; publicMetadata: unknown } | null>;
-  getMembership(clerkUserId: string, clerkOrgId: string): Promise<{ role: string; publicMetadata: unknown } | null>;
-  acceptedInvitationMeta(clerkOrgId: string, email: string): Promise<unknown | null>;
+  /** `createdAt` is Clerk's epoch-ms stamp, which binds an accepted invitation to this membership. */
+  getMembership(clerkUserId: string, clerkOrgId: string): Promise<{ role: string; publicMetadata: unknown; createdAt: number } | null>;
+  /**
+   * The public metadata of the most recently accepted invitation for `email`
+   * whose acceptance is at or after `acceptedSince` (epoch ms), else null.
+   * Without that bound an OLD invitation (Owner, accepted years ago, the
+   * person since removed and re-added directly as a member) would re-grant
+   * its role to a membership it was never for.
+   */
+  acceptedInvitationMeta(clerkOrgId: string, email: string, acceptedSince: number): Promise<unknown | null>;
 }
 
 export type ReconcileOutcome =
@@ -176,7 +198,8 @@ export async function reconcileMembership(
   const existing = await readAccountRole(db, account.id, input.clerkUserId);
   if (existing) return { outcome: "exists", role: existing };
 
-  const invitationMeta = await clerk.acceptedInvitationMeta(input.clerkOrgId, user.email);
+  const invitationMeta = await clerk.acceptedInvitationMeta(
+    input.clerkOrgId, user.email, membership.createdAt - INVITE_ACCEPT_ALLOWANCE_MS);
   const role = roleFromClerk({ clerkRole: membership.role, membershipMeta: membership.publicMetadata, invitationMeta });
   const userId = await upsertUserFromClerk(db, {
     clerkUserId: input.clerkUserId, email: user.email, name: user.name,

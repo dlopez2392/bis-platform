@@ -214,6 +214,6 @@ export { recordHeartbeat, listHeartbeats, markAlerted, HEARTBEAT_KEYS, passHeart
 export { roleFromClerk, languageFromClerk, isAgencyMetadata,
          readAccountRole, upsertUserFromClerk, addAccountMember, deleteAccountMembership,
          setAccountMemberRole, removeAccountMember, setMemberLanguage, listAccountTeam,
-         reconcileMembership,
+         reconcileMembership, INVITE_ACCEPT_ALLOWANCE_MS,
          type AccountRole, type PersonLanguage, type TeamMember,
          type ClerkTeamPort, type ReconcileOutcome } from "./team";

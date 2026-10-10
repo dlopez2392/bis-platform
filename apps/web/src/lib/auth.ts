@@ -1,7 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { serviceDb, getAccountByOrgId, type AccountRole } from "@bis/db";
-import { ensureAccountRole } from "./team/ensure-role";
+import { ensureAccountRole, readStoredRole } from "./team/ensure-role";
 
 export type AppClaims = { org_id?: string; app_role?: string };
 
@@ -25,8 +25,10 @@ export async function requireAgency(): Promise<{ userId: string }> {
  * fallback (`ensureAccountRole`, which creates a missing membership from
  * Clerk and never throws), and null for the agency or for a client whose
  * role could not be settled. `canManage` is true for the agency and a client
- * Owner only. The role is read only AFTER the redirect to the caller's own
- * account, so it is never read for an account the caller cannot enter.
+ * Owner only. The stored role is READ beside the account lookup (one
+ * round-trip, not two), but nothing is written and Clerk is never asked until
+ * the redirects have confirmed this is the caller's own account; a read for
+ * an account the caller cannot enter is discarded.
  */
 export async function requireAccountAccess(
   accountId: string,
@@ -39,6 +41,10 @@ export async function requireAccountAccess(
   if (claims.app_role === "agency_admin") return { userId, isAgency: true, role: null, canManage: true };
 
   if (!claims.org_id) redirect("/no-access?reason=none");
+  // Started now, beside the account read, so the role costs no round-trip of
+  // its own. Keyed on the REQUESTED id and never rejects; if a redirect below
+  // fires, it is discarded having written nothing and asked Clerk nothing.
+  const storedRole = readStoredRole(accountId, userId);
   const account = await getAccountByOrgId(serviceDb(), claims.org_id);
   if (!account) redirect("/no-access?reason=none");
   if (!account.client_access_enabled) redirect("/no-access?reason=off");
@@ -46,7 +52,7 @@ export async function requireAccountAccess(
   // — a 403 confirms the account exists.
   if (account.id !== accountId) redirect(`/dashboard/accounts/${account.id}/dashboard`);
 
-  const role = await ensureAccountRole(account.id, claims.org_id, userId);
+  const role = await ensureAccountRole(account.id, claims.org_id, userId, storedRole);
   return { userId, isAgency: false, role, canManage: role === "owner" };
 }
 
