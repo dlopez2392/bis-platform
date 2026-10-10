@@ -816,6 +816,11 @@ export const m = {
   // make for naming a language by name regardless of which one is reading.
   "settings.language.label": "Language",
   "settings.language.label.es": "Idioma",
+  // The Language card's one line (M4 review): what the setting changes and
+  // who it leaves alone. Agency staff stay English (owner decision 1); the
+  // alert texts follow it too (owner decision B).
+  "settings.language.description": "Changes the language your client sees when they sign in, and their alert texts. Agency staff stay in English.",
+  "settings.language.description.es": "Cambia el idioma que ve su cliente al iniciar sesión, y sus mensajes de aviso. El personal de la agencia sigue en inglés.",
   "settings.language.invalid": "Choose English or Español.",
   "settings.language.invalid.es": "Elija inglés o español.",
   "settings.customFields": "Custom fields",

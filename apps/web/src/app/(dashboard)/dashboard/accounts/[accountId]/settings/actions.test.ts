@@ -481,3 +481,21 @@ describe("setAccountLanguageAction — agency-only, and en/es are the only value
     expect(requireAgencyOnlyAccountAccessMock).toHaveBeenCalledWith("acct_1");
   });
 });
+
+/**
+ * validateEnumValue's doc claims the Language action reuses it; this keeps
+ * that true. Source pin (actions.ts is a "use server" module, so the only
+ * observable difference between "reuses the shared check" and "hand-copies
+ * en/es" is the source itself): the action validates against the SAME
+ * LANGUAGE_OPTIONS the Settings field renders.
+ */
+describe("setAccountLanguageAction — one option list for the field and the action", () => {
+  it("validates with validateEnumValue(LANGUAGE_OPTIONS, value) (mutation: hand-copy `value !== \"en\" && value !== \"es\"` back → FAILS)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "actions.ts"), "utf8");
+    expect(src).toContain("validateEnumValue(LANGUAGE_OPTIONS, value)");
+    expect(src).not.toMatch(/value !== "en" && value !== "es"/);
+  });
+});

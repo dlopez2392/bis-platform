@@ -21,6 +21,8 @@ import { composeAlertPhoneVerificationSms } from "@/lib/sms/alerts";
 import { sendSms } from "@/lib/consent/gate";
 import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
+import { validateEnumValue } from "@/lib/enum-value";
+import { LANGUAGE_OPTIONS } from "@/lib/i18n/language-options";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
   await requireAgencyOnlyAccountAccess(accountId);
@@ -278,19 +280,22 @@ export async function setReportEmailsAction(
  * own account's language would be moving a lever the agency, not the
  * client, controls.
  *
- * The en/es check runs BEFORE `setAccountLanguage` is ever called: that
+ * The option check runs BEFORE `setAccountLanguage` is ever called: that
  * function's column carries a Postgres CHECK, and letting a bad value reach
  * it would surface as a raw constraint-violation 500 instead of this
- * action's own `{ ok: false }`.
+ * action's own `{ ok: false }`. It is the SAME `validateEnumValue` over the
+ * SAME `LANGUAGE_OPTIONS` the Settings field runs in the browser, so the
+ * optimistic check and this authoritative one cannot disagree.
  */
 export async function setAccountLanguageAction(
   accountId: string, value: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireAgencyOnlyAccountAccess(accountId);
-  if (value !== "en" && value !== "es") {
+  const checked = validateEnumValue(LANGUAGE_OPTIONS, value);
+  if (!checked.ok) {
     return { ok: false, error: m["settings.language.invalid"] };
   }
-  await setAccountLanguage(serviceDb(), accountId, value, userId);
+  await setAccountLanguage(serviceDb(), accountId, checked.value, userId);
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
   return { ok: true };
 }

@@ -7,6 +7,9 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { normalizeFieldInput, type EditableField } from "@/lib/contacts/field-input";
 import { commitInlineUndo, type PhoneInlineUndo, type InlinePhoneUndoWrite } from "@/lib/contacts/inline-phone-undo";
+// The `options` arm's validator lives in a plain module so the server action
+// behind an options field can run the identical check (see its doc).
+import { validateEnumValue } from "@/lib/enum-value";
 
 type ValidateResult = { ok: true; value: string } | { ok: false; error: string };
 
@@ -30,25 +33,6 @@ function normalizeRequired(raw: string): ValidateResult {
   const value = raw.trim();
   if (!value) return { ok: false, error: m["setup.rename.empty"] };
   return { ok: true, value };
-}
-
-/**
- * The `options` arm's validator: accepts only a value that is one of the
- * listed options (an enum column, e.g. `accounts.language`'s "en"/"es"),
- * never a free-typed string — the select's own <option> list is the only
- * source of valid values, so a value that is not among them cannot have
- * come from this control working normally. Exported (pure, no React) so
- * the Settings Language field's own server action can run the identical
- * check before ever reaching the database — the exact "optimistic client
- * check and authoritative server one can't disagree" reasoning
- * `normalizeRequired`'s own doc comment gives for `setup.rename.empty`.
- */
-export function validateEnumValue(
-  options: { value: string; label: string }[], raw: string,
-): ValidateResult {
-  return options.some((o) => o.value === raw)
-    ? { ok: true, value: raw }
-    : { ok: false, error: m["inline.invalidOption"] };
 }
 
 /**
@@ -78,7 +62,7 @@ export function InlineField(
   props: (
     | { field: EditableField; required?: undefined; options?: undefined }
     | { field?: undefined; required: true; options?: undefined }
-    | { field?: undefined; required?: undefined; options: { value: string; label: string }[] }
+    | { field?: undefined; required?: undefined; options: readonly { value: string; label: string }[] }
   ) & {
     label: string;
     value: string | null;
@@ -174,6 +158,10 @@ export function InlineField(
   }
 
   if (!editing) {
+    // I9: an options field shows the option's LABEL ("Español"), never its
+    // stored value ("es") — on the button and in its accessible name. An
+    // unknown stored value is still shown as-is rather than hidden.
+    const display = (options?.find((o) => o.value === shown)?.label ?? shown) || m["inline.empty"];
     return (
       <button
         type="button"
@@ -187,9 +175,9 @@ export function InlineField(
         // reader hears "Edit Email, button" and never the value itself,
         // since aria-label REPLACES the button's text content as the
         // accessible name rather than supplementing it.
-        aria-label={`${m["inline.edit"].replace("{label}", label)}: ${shown || m["inline.empty"]}`}
+        aria-label={`${m["inline.edit"].replace("{label}", label)}: ${display}`}
       >
-        {shown || m["inline.empty"]}
+        {display}
       </button>
     );
   }

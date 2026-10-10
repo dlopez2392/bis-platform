@@ -23,6 +23,7 @@ import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { InlineField } from "@/components/inline-field";
+import { LANGUAGE_OPTIONS } from "@/lib/i18n/language-options";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -146,15 +147,16 @@ export default async function CrmSettingsPage({
         <Card>
           <CardHeader>
             <CardTitle>{m["settings.language.label"]}</CardTitle>
+            <CardDescription>{m["settings.language.description"]}</CardDescription>
           </CardHeader>
           <CardContent>
+            {/* LANGUAGE_OPTIONS is the same list setAccountLanguageAction
+                validates against; the field shows its label ("Español"),
+                never the stored code (I9). */}
             <InlineField
               label={m["settings.language.label"]}
               value={account.language ?? "en"}
-              options={[
-                { value: "en", label: "English" },
-                { value: "es", label: "Español" },
-              ]}
+              options={LANGUAGE_OPTIONS}
               save={boundSetAccountLanguage}
             />
           </CardContent>
