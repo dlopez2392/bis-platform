@@ -68,6 +68,19 @@ describe("Topbar — F-107 r2: the search wrapper only shrinks below its content
   });
 });
 
+// F-107 r4 review (item 1, CRITICAL): Clerk's OrganizationSwitcher trigger
+// sizes to the full org name and never shrinks on its own — a long org
+// name pushed the header's content left of its own edge at 320px.
+describe("Topbar — F-107 r4: OrganizationSwitcher never forces the header wider than its wrapper's cap", () => {
+  it("the wrapper caps width below `sm` and clips (mutation: drop `max-w-10`/`overflow-hidden` or either `sm:` release → FAILS)", () => {
+    expect(src).toContain('<div className="min-w-0 max-w-10 overflow-hidden sm:max-w-none sm:overflow-visible">');
+  });
+
+  it("the trigger's own name/subtitle text is hidden below `sm` via Clerk's own element id, never the popover's org LIST (mutation: drop the `organizationPreviewTextContainer__organizationSwitcherTrigger` key, or its `hidden sm:block` value → FAILS)", () => {
+    expect(src).toContain("organizationPreviewTextContainer__organizationSwitcherTrigger: \"hidden sm:block\"");
+  });
+});
+
 // F-107 r1 review (item 3): measured over budget at 375px by ~20px with the
 // icon-only search trigger (item 8) restored — the header's own 22px/14px
 // mockup spacing is now tighter below `sm` only.

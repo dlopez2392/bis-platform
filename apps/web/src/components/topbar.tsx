@@ -31,6 +31,15 @@ export function Topbar({
     // end` sends overflow leftward, which `document.documentElement.
     // scrollWidth` cannot see — the bounds check above this file's own
     // topbar.test.ts pin exists for is what caught it).
+    //
+    // F-107 r4 review (item 1): the 320px budget is tighter still — on an
+    // in-account AGENCY route the search trigger (32px) + the presence
+    // pill + ThemeToggle (~36px) + OrganizationSwitcher + UserButton
+    // (~32px) + 3 gaps (24px below `sm`) + the sidebar's own 64px left
+    // 265px for OrganizationSwitcher ALONE to fit (it was sizing to the
+    // full org name, never shrinking) before anything else even started —
+    // fixed below by hiding its name text (avatar-only) and collapsing
+    // the presence pill to dot + short word (topbar-presence.tsx).
     <header className="flex h-[54px] shrink-0 items-center justify-end gap-2 border-b border-[var(--top-line)] bg-transparent px-3 sm:gap-[14px] sm:px-[22px]">
       {/* The mockup puts the search control on the LEFT of the bar at 300px
           wide, with everything else pushed right (northern-lights.html:60-62).
@@ -60,7 +69,32 @@ export function Topbar({
           unchanged, so a null render here costs nothing structurally. */}
       <TopbarPresence />
       <ThemeToggle />
-      {isAgency ? <OrganizationSwitcher hidePersonal /> : null}
+      {/* F-107 r4 review (item 1, CRITICAL): Clerk's own trigger sizes to
+          the full org name and never shrinks on its own — `min-w-0` plus
+          a width cap on this wrapper is the belt (clips to the avatar's
+          own width regardless of what Clerk renders inside, so a page-
+          level overflow is impossible even if the brace below does
+          nothing); `organizationPreviewTextContainer__
+          organizationSwitcherTrigger` is the braces (Clerk's own element
+          id for the trigger's name/subtitle text block —
+          @clerk/shared's `OrganizationPreviewId`, confirmed in
+          node_modules — scoped to the TRIGGER only, so the popover's own
+          org list still shows full names to pick from). `hidden sm:block`
+          on that one element restores the name at desktop width; the
+          wrapper's own cap is `sm:` only too, so it imposes nothing extra
+          there. */}
+      {isAgency ? (
+        <div className="min-w-0 max-w-10 overflow-hidden sm:max-w-none sm:overflow-visible">
+          <OrganizationSwitcher
+            hidePersonal
+            appearance={{
+              elements: {
+                organizationPreviewTextContainer__organizationSwitcherTrigger: "hidden sm:block",
+              },
+            }}
+          />
+        </div>
+      ) : null}
       <UserButton />
     </header>
   );
