@@ -11,9 +11,10 @@ function interpolate(raw: string, params?: Record<string, string | number>): str
   return out;
 }
 
-/** Looks up `${key}.es` when locale is "es", falling back to `key` itself
- *  when no Spanish twin exists yet (a ratchet-gate violation to catch, not
- *  a runtime crash to cause). */
+/** Looks up `${key}.es` when locale is "es", falling back to the English
+ *  `key` when no Spanish twin exists yet (a ratchet-gate violation to catch, not
+ *  a runtime crash to cause). Falls back to the raw key itself only if
+ *  neither the Spanish twin nor the English key are found. */
 export function t(
   catalogue: Record<string, string>,
   key: string,

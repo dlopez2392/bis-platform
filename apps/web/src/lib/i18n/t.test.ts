@@ -8,12 +8,18 @@ const catalogue: Record<string, string> = {
   "calls.countOne.es": "1 llamada",
   "calls.count": "{count} calls",
   "calls.count.es": "{count} llamadas",
+  "noSpanishTwin": "This key has no Spanish twin",
 };
 
 describe("t", () => {
   it("looks up the .es twin and substitutes {params} (mutation: look up key without the .es suffix for es → FAILS, returns English)", () => {
     expect(t(catalogue, "greeting", "es", { name: "Marta" })).toBe("Hola, Marta");
     expect(t(catalogue, "greeting", "en", { name: "Marta" })).toBe("Hello, Marta");
+  });
+
+  it("falls back to the English string when no .es twin exists (mutation: drop `?? catalogue[key]` → FAILS, returns the raw key)", () => {
+    expect(t(catalogue, "noSpanishTwin", "es")).toBe("This key has no Spanish twin");
+    expect(t(catalogue, "noSpanishTwin", "en")).toBe("This key has no Spanish twin");
   });
 });
 
