@@ -234,6 +234,12 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
 
     await page.getByRole("combobox", { name: "Appointment length" }).click();
     await page.getByRole("option", { name: "60 min" }).click();
+    // No buffer, set here rather than assumed from the column's default: the
+    // F-048 move step below moves the booking to the very next slot (the
+    // move page offers a booking's neighbours), and then asserts the OLD
+    // slot is offered again — a buffer around the new booking would hide it.
+    await page.getByRole("combobox", { name: "Buffer between appointments" }).click();
+    await page.getByRole("option", { name: "0 min", exact: true }).click();
 
     await page.getByLabel("Accept bookings").check();
 

@@ -74,7 +74,7 @@ export const BOOKING_CSS = `
   display: inline-flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; padding: 0;
   font: inherit; color: inherit; cursor: pointer;
-  border: 1px solid var(--border, #d4d4d8); border-radius: 8px;
+  border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius-ctl, 8px);
   background: var(--card, #ffffff);
   transition: background-color 150ms ease, border-color 150ms ease;
 }
@@ -89,7 +89,7 @@ export const BOOKING_CSS = `
   display: flex; flex-direction: column; align-items: center; gap: 2px;
   font: inherit; color: inherit; cursor: pointer;
   padding: 8px 4px 10px;
-  border: 1px solid var(--border, #d4d4d8); border-radius: 8px;
+  border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius-ctl, 8px);
   background: var(--card, #ffffff);
   transition: background-color 150ms ease, border-color 150ms ease;
 }
@@ -129,7 +129,7 @@ export const BOOKING_CSS = `
 .bis-booking-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
 .bis-booking-slot {
   font: inherit; font-variant-numeric: tabular-nums;
-  border: 1px solid var(--border, #d4d4d8); border-radius: 8px;
+  border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius-ctl, 8px);
   background: var(--card, #ffffff); color: inherit; padding: 10px 6px; cursor: pointer;
   transition: background-color 150ms ease, border-color 150ms ease;
 }
@@ -140,7 +140,7 @@ export const BOOKING_CSS = `
 /* --- Loading, shaped like what is coming --------------------------------- */
 .bis-booking-skeletons { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
 .bis-booking-skeleton {
-  height: 40px; border-radius: 8px;
+  height: 40px; border-radius: var(--radius-ctl, 8px);
   background: color-mix(in oklab, var(--foreground, #18181b) 8%, transparent);
   animation: bis-booking-pulse 1.4s ease-in-out infinite;
 }
@@ -154,7 +154,7 @@ export const BOOKING_CSS = `
 
 /* --- Empty and error ------------------------------------------------------ */
 .bis-booking-empty {
-  border: 1px dashed var(--border, #d4d4d8); border-radius: 11px;
+  border: 1px dashed var(--border, #d4d4d8); border-radius: var(--radius-card, 12px);
   padding: 20px 16px; text-align: center;
 }
 .bis-booking-empty-title { margin: 0; font-weight: 600; }
@@ -169,7 +169,7 @@ export const BOOKING_CSS = `
 /* --- The time you picked -------------------------------------------------- */
 .bis-booking-chosen {
   display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
-  border: 1px solid var(--border, #d4d4d8); border-radius: 11px;
+  border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius-card, 12px);
   background: var(--bis-tint);
   padding: 12px 14px; margin: 0 0 16px;
 }
@@ -190,7 +190,7 @@ export const BOOKING_CSS = `
    The current time is read, not acted on, so it sits on the plain card
    ground rather than the chosen card's tint. */
 .bis-booking-current {
-  border: 1px solid var(--border, #d4d4d8); border-radius: 11px;
+  border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius-card, 12px);
   background: var(--card, #ffffff);
   padding: 12px 14px; margin: 0 0 16px;
 }
@@ -207,13 +207,13 @@ export const BOOKING_CSS = `
 .bis-booking-optional { font-weight: 400; color: var(--muted-foreground, #71717a); }
 .bis-booking input[type="text"], .bis-booking input[type="email"], .bis-booking input[type="tel"], .bis-booking textarea {
   width: 100%; box-sizing: border-box; padding: 10px 12px; font: inherit;
-  border: 1px solid var(--border, #d4d4d8); border-radius: 8px;
+  border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius-ctl, 8px);
   background: var(--card, #ffffff); color: inherit;
   transition: border-color 150ms ease;
 }
 .bis-booking-hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
 .bis-booking-submit {
-  font: inherit; font-weight: 600; border: none; border-radius: 8px;
+  font: inherit; font-weight: 600; border: none; border-radius: var(--radius-ctl, 8px);
   background: var(--bis-accent); color: var(--form-accent-foreground, #ffffff);
   padding: 12px 18px; cursor: pointer; width: 100%;
   transition: filter 150ms ease;
@@ -233,7 +233,7 @@ export const BOOKING_CSS = `
 
 /* --- Booked --------------------------------------------------------------- */
 .bis-booking-success {
-  border: 1px solid var(--border, #d4d4d8); border-radius: 11px;
+  border: 1px solid var(--border, #d4d4d8); border-radius: var(--radius-card, 12px);
   background: var(--card, #ffffff);
   padding: 24px 20px; text-align: center;
 }

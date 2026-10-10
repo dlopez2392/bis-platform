@@ -7,6 +7,7 @@ import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { normalizeLocale, publicTabTitle } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
+import { scrubToken } from "@/lib/booking/links";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
 import { loadBooking, loadBookingSafe } from "./data";
@@ -32,7 +33,8 @@ async function loadBranding(accountId: string, publicId: string, token: string):
   try {
     return await getBranding(serviceDb(), accountId);
   } catch (e) {
-    console.error(`cancel ${publicId}/${token}: branding read failed for account ${accountId}: ${String(e)}`);
+    // Never the token (fix round 1, m3): it cancels and moves this booking.
+    console.error(`cancel ${publicId}: branding read failed for account ${accountId}: ${scrubToken(e, token)}`);
     return null;
   }
 }

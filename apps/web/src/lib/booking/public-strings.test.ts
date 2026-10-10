@@ -37,6 +37,19 @@ describe("bookingStrings", () => {
     }
   });
 
+  // D-033: a screen claims an email only when one is known to have gone.
+  // An old link after a move, or a move refused because the booking changed,
+  // cannot know that (no address, a suppressed one, a phone reschedule whose
+  // email failed), so neither may point at "your email" (fix round 1, m2).
+  it("never sends the reader to an email that may not exist, on the two screens that cannot know (mutation: put \"your newest email\" back → FAILS)", () => {
+    for (const locale of ["en", "es"] as const) {
+      const s = bookingStrings(locale);
+      for (const key of ["movedTitle", "moveAlreadyChanged"] as const) {
+        expect(s[key], `${locale}.${key}`).not.toMatch(/e-?mail|correo/i);
+      }
+    }
+  });
+
   // Same rule `messages.test.ts` pins for the dashboard catalogue: a stranger
   // must never read an internal roadmap label.
   it("cites no internal roadmap label", () => {

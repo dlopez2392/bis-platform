@@ -187,3 +187,27 @@ describe("CancelBookingPage — the way to move, and an old link after a move", 
     expect(walk(await render()).text).toContain(bookingStrings("en").cancelAlreadyCancelledTitle);
   });
 });
+
+/**
+ * Fix round 1 (m3): the token is the capability to cancel AND (F-048) to
+ * move this booking, so no log line may carry it — the move page's rule.
+ * Both read failures this page logs are forced, with a database message that
+ * quotes the token back, the way a filter error can.
+ */
+describe("CancelBookingPage never logs the token", () => {
+  it("a failed booking read and a failed branding read log without it (mutation: log the token → FAILS)", async () => {
+    const TOKEN = "abcdefghijkmnpqrstuvwxyz";
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      lookupBookingByTokenMock.mockRejectedValue(new Error(`no row for cancel_token=${TOKEN}`));
+      await generateMetadata({ params: Promise.resolve({ publicId: "pub1", token: TOKEN }), searchParams: noSearchParams });
+      lookupBookingByTokenMock.mockResolvedValue({ ...BOOKING, cancel_token: TOKEN });
+      getBrandingMock.mockRejectedValue(new Error("branding down"));
+      await CancelBookingPage({ params: Promise.resolve({ publicId: "pub1", token: TOKEN }), searchParams: noSearchParams });
+      const logged = errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(logged).toMatch(/booking read failed/);
+      expect(logged).toMatch(/branding read failed/);
+      expect(logged).not.toContain(TOKEN);
+    } finally { errors.mockRestore(); }
+  });
+});

@@ -35,3 +35,11 @@ const TOKEN_RE = /^[a-km-np-z2-9]{24}$/;
 export function isBookingToken(value: string): boolean {
   return TOKEN_RE.test(value);
 }
+
+/** An error's words with the token cut out, for a log line: a database
+ *  message can quote the value it filtered on. The cancel page, the move page
+ *  and the move actions all log through this. */
+export function scrubToken(e: unknown, token: string): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  return token ? msg.split(token).join("[token]") : msg;
+}

@@ -1,6 +1,7 @@
 import { calendarFileFor } from "@/lib/booking/calendar-file";
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { originFrom } from "@/lib/email/origin";
+import { isBookingToken } from "@/lib/booking/links";
 import { loadCalendarFileInput } from "./data";
 
 /**
@@ -17,9 +18,9 @@ import { loadCalendarFileInput } from "./data";
  */
 export const dynamic = "force-dynamic";
 
-/** `newCancelToken`'s shape: 24 characters of `ALPHABET` (packages/db
- *  forms.ts). Anything else cannot be a token, and is refused unread. */
-const TOKEN_RE = /^[a-km-np-z2-9]{24}$/;
+// A value that is not `newCancelToken`'s shape cannot be a token and is
+// refused unread: the ONE shape check, shared with the cancel and move pages
+// (`isBookingToken`).
 
 const NOT_FOUND = () => new Response("Not found", {
   status: 404, headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" },
@@ -29,7 +30,7 @@ export async function GET(
   req: Request, { params }: { params: Promise<{ publicId: string; token: string }> },
 ): Promise<Response> {
   const { token } = await params;
-  if (!TOKEN_RE.test(token)) return NOT_FOUND();
+  if (!isBookingToken(token)) return NOT_FOUND();
   const locale = normalizeLocale(new URL(req.url).searchParams.get("locale") ?? undefined, "en");
 
   try {

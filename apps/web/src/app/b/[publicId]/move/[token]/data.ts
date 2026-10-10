@@ -1,5 +1,6 @@
 import { cache } from "react";
 import { serviceDb, getCalendarForAccount, type BookingRow, type Branding, type CalendarRow } from "@bis/db";
+import { scrubToken } from "@/lib/booking/links";
 import { lookupBookingByToken } from "../../cancel/[token]/data";
 
 /**
@@ -101,9 +102,4 @@ export async function loadMoveContextSafe(token: string): Promise<MoveContext | 
   }
 }
 
-/** An error's words with the token cut out, for a log line: a database
- *  message can quote the value it filtered on. */
-export function scrubToken(e: unknown, token: string): string {
-  const msg = e instanceof Error ? e.message : String(e);
-  return token ? msg.split(token).join("[token]") : msg;
-}
+export { scrubToken };
