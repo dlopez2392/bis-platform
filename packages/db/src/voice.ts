@@ -313,12 +313,21 @@ export async function startCallRow(
  * Account-scoped and loud on a zero-row match, the `setPhoneNumberStatus`
  * shape: PostgREST returns no error AND no rows for an update matching
  * nothing, so a wrong id would otherwise read as a successful stamp.
+ *
+ * `language` (F-010) is the language the caller had been speaking when they
+ * asked — the one the handoff sentence is said in — written to the existing
+ * `calls.language` in this SAME update, so it costs the live call no extra
+ * round trip. The result route reads it back (`getCallByHandoffToken`) to
+ * say "nobody could answer" in that language after the socket and its
+ * transcript are gone. `finishCallRow` writes the column again at hangup
+ * from the whole transcript, by the same rule, so the two only differ if the
+ * few words said after the ask tip the balance.
  */
 export async function markHandoffRequested(
-  db: SupabaseClient, accountId: string, callRowId: string,
+  db: SupabaseClient, accountId: string, callRowId: string, language: "en" | "es",
 ): Promise<void> {
   const { data, error } = await db.from("calls")
-    .update({ handoff_requested_at: new Date().toISOString() })
+    .update({ handoff_requested_at: new Date().toISOString(), language })
     .eq("id", callRowId).eq("account_id", accountId).select("id");
   if (error) throw new Error(`markHandoffRequested failed: ${error.message}`);
   if (!data || data.length === 0) throw new Error("markHandoffRequested matched no row");
@@ -365,6 +374,11 @@ export async function markHandoffRequested(
  * but when it is set, reusing it is what stops a second "Caller" record
  * appearing beside the first.
  *
+ * `language` comes back for the same branch (F-010): the "nobody could
+ * answer" line and the text-back after it answer in the language the
+ * handoff sentence was said in, which `markHandoffRequested` stamped. One
+ * more scalar in the same select, for the same reason as the two above.
+ *
  * ONE TRADE, stated rather than hidden: the old shape re-read the outcome
  * AFTER that route's recency gate, so its value was a few milliseconds
  * fresher than this one, which is read at the top. Both are equally racy
@@ -384,15 +398,17 @@ export async function getCallByHandoffToken(
   id: string; account_id: string; phone_number_id: string;
   handoff_requested_at: string | null; outcome: string;
   caller_e164: string | null; contact_id: string | null;
+  language: "en" | "es";
 } | null> {
   const { data, error } = await db.from("calls")
-    .select("id, account_id, phone_number_id, handoff_requested_at, outcome, caller_e164, contact_id")
+    .select("id, account_id, phone_number_id, handoff_requested_at, outcome, caller_e164, contact_id, language")
     .eq("handoff_token", token).maybeSingle();
   if (error) throw new Error(`getCallByHandoffToken failed: ${error.message}`);
   return (data as {
     id: string; account_id: string; phone_number_id: string;
     handoff_requested_at: string | null; outcome: string;
     caller_e164: string | null; contact_id: string | null;
+    language: "en" | "es";
   } | null) ?? null;
 }
 

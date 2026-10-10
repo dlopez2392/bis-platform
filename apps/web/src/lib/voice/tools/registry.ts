@@ -9,6 +9,8 @@ import {
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
 import { computeAllSlots, bookableSlot, dayKeyInZone } from "@/lib/booking/availability";
+import { calendarFileUrl } from "@/lib/booking/calendar-file";
+import { bookingMoveUrl } from "@/lib/booking/links";
 import { e164Of, isCallerIdNumber, spokenPhone } from "../phone-number";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { getMeetingProvider } from "@/lib/meetings/provider";
@@ -24,7 +26,7 @@ import {
   type CallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled,
   withServed, withTransferred,
 } from "../call-state";
-import { detectSpokenLanguage } from "../language";
+import { detectCallerLanguage } from "../language";
 import { bookingMode } from "../booking-mode";
 import type { HandoffTarget } from "../handoff";
 
@@ -154,9 +156,11 @@ function contactDisplayName(contact: BookingContact | null): string {
   return [contact?.first_name, contact?.last_name].filter(Boolean).join(" ").trim() || "Someone";
 }
 
-/** The caller's language for the customer email; an unset profile is English. */
+/** The caller's language for the customer email and the handoff stamp —
+ *  their finished turns plus the one still arriving (`detectCallerLanguage`);
+ *  an unset profile is English. */
 function spokenLocale(state: CallState, ctx: ToolContext): "en" | "es" {
-  return detectSpokenLanguage(state.transcript, ctx.profile.languages) === "es" ? "es" : "en";
+  return detectCallerLanguage(state, ctx.profile.languages);
 }
 
 /**
@@ -493,9 +497,16 @@ export async function runTool(
           const locale = spokenLocale(state, ctx);
           const brand = emailBrand(ctx.branding);
           const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone, locale);
-          const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${cancelToken}`;
+          // In the caller's language, as the web confirmation's is
+          // (`b/[publicId]/actions.ts`): the cancel page reads `?locale=`,
+          // and English is its default, so only Spanish carries it.
+          const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${cancelToken}${locale === "es" ? "?locale=es" : ""}`;
+          // F-048: the add-to-calendar file, exactly as the web confirmation
+          // builds it (`b/[publicId]/actions.ts`) — same helper, same token as
+          // the cancel link, in the caller's language.
+          const calendarUrl = calendarFileUrl(ctx.origin, ctx.calendar.public_id, cancelToken, locale);
           const { html, text } = bookingConfirmationEmail({
-            brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
+            brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl, calendarUrl,
           });
           await sendEmailOrThrow({
             accountId: ctx.accountId, kind: "voice.booked", contactId, language: locale, origin: ctx.origin,
@@ -598,9 +609,19 @@ export async function runTool(
           const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone, locale);
           // The NEW row's token — the old confirmation's cancel link points at
           // a booking that was just cancelled above.
-          const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${newCancelToken}`;
+          // In the caller's language, the booked email's rule.
+          const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${newCancelToken}${locale === "es" ? "?locale=es" : ""}`;
+          // F-048 (#230): the add-to-calendar file and the move link, built
+          // by the web path's own helpers, on the NEW booking's token — its
+          // .ics carries the chain's UID and SEQUENCE, so it updates the
+          // event the caller saved rather than adding a second one. Always
+          // offered: the move page itself refuses past the chain cap, with
+          // the contact-us line, so reading the chain here would add a
+          // database round trip to the live call for nothing.
+          const calendarUrl = calendarFileUrl(ctx.origin, ctx.calendar.public_id, newCancelToken, locale);
+          const moveUrl = bookingMoveUrl(ctx.origin, ctx.calendar.public_id, newCancelToken, locale);
           const { html, text } = bookingRescheduledEmail({
-            brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
+            brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl, calendarUrl, moveUrl,
           });
           await sendEmailOrThrow({
             accountId: ctx.accountId, kind: "voice.moved", contactId: old.contact_id, language: locale, origin: ctx.origin,
@@ -714,7 +735,11 @@ export async function runTool(
           error: "The transfer can't be set up for this call. Apologize, then offer to take a message." } };
       }
       try {
-        await markHandoffRequested(ctx.db, ctx.accountId, ctx.callRowId);
+        // The caller's language rides in the same write (F-010): it is the
+        // language `call-events.ts` says the handoff sentence in (same read,
+        // same transcript), and the only way the failed-transfer line —
+        // spoken after this socket and its transcript are gone — can match it.
+        await markHandoffRequested(ctx.db, ctx.accountId, ctx.callRowId, spokenLocale(state, ctx));
       } catch (e) {
         // Loud: this is the one failure that would otherwise look exactly
         // like a caller who never asked — nothing in the row, nothing in the

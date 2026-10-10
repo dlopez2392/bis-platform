@@ -24,3 +24,27 @@ export function detectSpokenLanguage(
   // own default, so behavior only ever *improves* on today's).
   return es >= 2 && es > en ? "es" : "en";
 }
+
+/**
+ * The language the caller is speaking NOW, for something said or sent while
+ * the call is live: the handoff sentence and the language stamped with it,
+ * the cap's goodbye, the customer emails a tool sends (F-010).
+ *
+ * The finished caller turns plus the one still arriving
+ * (`pendingCallerTurn`, the transcription deltas so far): the turn that asks
+ * for a person can be transcribed AFTER Sofía has already acted on it, and
+ * reading only finished turns would answer a bilingual caller in English.
+ *
+ * Always "en" or "es" — an unset profile language is English, as the email
+ * code always treated it.
+ */
+export function detectCallerLanguage(
+  state: { transcript: TranscriptEvent[]; pendingCallerTurn: { text: string } | null },
+  profileLanguages: "en" | "es" | "both",
+): "en" | "es" {
+  const inFlight = state.pendingCallerTurn?.text.trim();
+  const turns: TranscriptEvent[] = inFlight
+    ? [...state.transcript, { role: "caller", text: inFlight, at: "" }]
+    : state.transcript;
+  return detectSpokenLanguage(turns, profileLanguages) === "es" ? "es" : "en";
+}

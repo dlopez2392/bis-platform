@@ -92,14 +92,35 @@ export interface CallState {
    * next. `null` between turns. Never read by classifyOutcome.
    */
   pendingCallerTurn: { itemId: string; text: string } | null;
+  /**
+   * The transcriber's `item_id`s of the caller turns already in `transcript`.
+   * A turn is judged and recorded ONCE: the realtime socket can re-deliver a
+   * `.completed` frame or send deltas after it, and the recording guard
+   * counts instructions across the call (O-3: two hang up), so a
+   * one-instruction turn seen twice would hang up on a customer. Kept here,
+   * not on the transcript entries, so the persisted `calls.transcript`
+   * shape does not change. Never read by classifyOutcome.
+   */
+  callerItemIds: string[];
   summary?: string;
 }
 
 export function emptyCallState(): CallState {
   return {
     contactId: null, bookings: [], leads: [], messages: [], transcript: [],
-    served: [], recordedCaller: false, pendingCallerTurn: null,
+    served: [], recordedCaller: false, pendingCallerTurn: null, callerItemIds: [],
   };
+}
+
+/** Has this caller turn (by the transcriber's item id) already been recorded? */
+export function callerTurnRecorded(state: CallState, itemId: string | undefined): boolean {
+  return itemId !== undefined && state.callerItemIds.includes(itemId);
+}
+
+/** Remembers that this caller turn is recorded. Idempotent; no id, no change. */
+export function withCallerItem(state: CallState, itemId: string | undefined): CallState {
+  if (itemId === undefined || state.callerItemIds.includes(itemId)) return state;
+  return { ...state, callerItemIds: [...state.callerItemIds, itemId] };
 }
 
 export function classifyOutcome(state: CallState): CallOutcome {

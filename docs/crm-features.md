@@ -499,9 +499,12 @@ number goes through the agency; there is no call audio, only a transcript kept f
 caller wanted and the callback number are buried in the summary; Sofía's changes to appointments are
 not yet stamped on the record as hers (F-022); business hours reach Sofía only as free text.
 
-**Bilingual today:** callers are served in English or Spanish and Sofía switches with them, but the
-Spanish greeting, phone confirmation emails, the robocall guard and several fixed lines fall back to
-English, and every summary, alert and staff screen is English.
+**Bilingual today:** callers are served in English or Spanish and Sofía switches with them. A
+bilingual line greets in both; the transfer line, the "nobody could answer" line, the cap's goodbye
+and the text-back after a failed transfer follow the language the caller spoke; a silent caller on a
+bilingual line hears the goodbye in both; refusals use the line's language. The robocall guard reads
+Spanish scripts too. Sofía's booking, move and cancellation emails follow the caller's language, but
+every summary, alert and staff screen is English.
 
 #### 2.2.7 The website assistant and website traffic
 

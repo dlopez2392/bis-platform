@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readSilentSeconds, isCallerAudioEvent, silenceGoodbye } from "./silence-guard";
+import { readSilentSeconds, isCallerAudioEvent, silenceGoodbye, capGoodbye } from "./silence-guard";
 
 const env = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv;
 
@@ -92,11 +92,37 @@ describe("silenceGoodbye", () => {
     expect(silenceGoodbye("en")).toContain("exactly");
     expect(silenceGoodbye("en")).not.toContain("wrap up");
   });
-  it("speaks Spanish for an es-only profile, English otherwise — mirroring the greeting's own rule", () => {
+  it("speaks Spanish for an es-only profile and English for an en-only one", () => {
     expect(silenceGoodbye("es")).toContain("No puedo escuchar");
+    expect(silenceGoodbye("es")).not.toContain("can't hear");
     expect(silenceGoodbye("en")).toContain("can't hear");
-    // `both` takes English, exactly as the greeting does at
-    // incoming/route.ts:746 (`languages === "es" ? greeting_es : greeting_en`).
-    expect(silenceGoodbye("both")).toBe(silenceGoodbye("en"));
+    expect(silenceGoodbye("en")).not.toContain("No puedo escuchar");
+  });
+  it("a bilingual line says it in BOTH, English first — the caller never spoke, so nothing says which (F-010)", () => {
+    // The guard only fires when the caller made no sound at all, so on a
+    // `both` line there is no language to follow. The greeting's rule (D-037)
+    // is the precedent: English, then Spanish, word for word. Mutation:
+    // `both` → English only, FAILS.
+    const both = silenceGoodbye("both");
+    expect(both).toContain("can't hear");
+    expect(both).toContain("No puedo escuchar");
+    expect(both.indexOf("can't hear")).toBeLessThan(both.indexOf("No puedo escuchar"));
+    // Still the constrained form: the two fixed sentences, nothing improvised.
+    expect(both).toMatch(/word for word/);
+    expect(both).not.toContain("wrap up");
+  });
+});
+
+describe("capGoodbye — the cost cap's wrap-up, in the caller's language (F-010)", () => {
+  it("stays OPEN-ENDED — a real conversation is being wrapped up, so it is not a fixed sentence", () => {
+    // The opposite family from silenceGoodbye, on purpose (see its doc).
+    expect(capGoodbye("en")).toMatch(/^Politely wrap up/);
+    expect(capGoodbye("en")).not.toContain("Say exactly");
+  });
+  it("names the language: the response's own instructions replace the session's, so nothing else tells the model", () => {
+    // Mutation: drop the language → the two are identical, FAILS.
+    expect(capGoodbye("es")).toContain("in Spanish");
+    expect(capGoodbye("en")).toContain("in English");
+    expect(capGoodbye("es")).not.toContain("in English");
   });
 });

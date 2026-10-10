@@ -433,6 +433,46 @@ describe("book_appointment", () => {
     expect(sent.body).not.toContain(whenEn);
   });
 
+  // F-048 leftover: the web confirmation has carried the add-to-calendar file
+  // since #227; Sofía's did not. Same helper, same token as the cancel link
+  // (the NEW booking's), in the caller's language. Mutations: drop
+  // `calendarUrl` from the template input → the URL is absent, FAILS; build
+  // it without the locale → the Spanish case loses `?locale=es`, FAILS.
+  it("the confirmation carries the add-to-calendar link, on the booking's own token", async () => {
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    const sent = sendMock.mock.calls[0]![0] as { body: string; html: string };
+    expect(sent.body).toContain("Add to your calendar: https://x.example/b/pub1/ics/tok123\n");
+    expect(sent.html).toContain('href="https://x.example/b/pub1/ics/tok123"');
+  });
+
+  it("a Spanish-speaking caller's calendar link opens in Spanish", async () => {
+    const esCtx: ToolContext = {
+      ...ctx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+    };
+    const pre = { ...emptyCallState(), transcript: [
+      { role: "caller" as const, text: "Hola, necesito una cita para mañana por la tarde, por favor.", at: "2027-06-01T12:00:00Z" },
+    ] };
+    await runTool(pre, esCtx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    const sent = sendMock.mock.calls[0]![0] as { body: string };
+    expect(sent.body).toContain("Agregar a tu calendario: https://x.example/b/pub1/ics/tok123?locale=es");
+    // F-010 review m4: the cancel link opens in Spanish too, exactly as the
+    // web confirmation's does (`b/[publicId]/actions.ts`). Mutation: drop
+    // the parameter → FAILS.
+    expect(sent.body).toContain("https://x.example/b/pub1/cancel/tok123?locale=es");
+  });
+
+  it("an English caller's cancel link carries no locale — English is the page's default", async () => {
+    await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    const sent = sendMock.mock.calls[0]![0] as { body: string };
+    // End of line: the cancel link is the body's last line. Guards the
+    // mutation that adds `?locale=es` for everyone.
+    expect(sent.body).toMatch(/https:\/\/x\.example\/b\/pub1\/cancel\/tok123$/m);
+  });
+
   it("send failure never fails the booking", async () => {
     sendMock.mockRejectedValue(new Error("resend down"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -800,6 +840,37 @@ describe("reschedule / cancel", () => {
       // at a cancelled booking, so mailing the old token again is useless.
       expect(sent.html).toContain("https://x.example/b/pub1/cancel/newtok99");
       expect(sent.body).toContain("https://x.example/b/pub1/cancel/newtok99");
+      // English carries no locale: the cancel page's default.
+      expect(sent.body).not.toContain("?locale=es");
+    });
+
+    it("a Spanish-speaking caller's moved email opens its cancel page in Spanish (F-010 review round 2)", async () => {
+      // The booked email's rule, on the NEW booking's token. Mutation: drop
+      // the parameter → FAILS.
+      const esCtx: ToolContext = {
+        ...ctx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+      };
+      const spanish = { ...emptyCallState(), transcript: [
+        { role: "caller" as const, text: "Hola, necesito cambiar mi cita para mañana, por favor.", at: "2027-06-01T12:00:00Z" },
+      ] };
+      await runTool(spanish, esCtx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+      const sent = sendMock.mock.calls[0]![0] as { body: string };
+      expect(sent.body).toContain("https://x.example/b/pub1/cancel/newtok99?locale=es");
+      // F-048 (#230): the add-to-calendar file and the move link, on the NEW
+      // booking's token (its .ics UID/SEQUENCE update the saved event), in
+      // the caller's language. Mutation: the old booking's token → FAILS.
+      expect(sent.body).toContain("https://x.example/b/pub1/ics/newtok99?locale=es");
+      expect(sent.body).toContain("https://x.example/b/pub1/move/newtok99?locale=es");
+    });
+
+    it("an English caller's moved email carries the calendar and move links on the NEW token, with no locale", async () => {
+      await runTool(emptyCallState(), ctx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+      const sent = sendMock.mock.calls[0]![0] as { body: string; html: string };
+      expect(sent.body).toMatch(/https:\/\/x\.example\/b\/pub1\/ics\/newtok99$/m);
+      expect(sent.body).toMatch(/https:\/\/x\.example\/b\/pub1\/move\/newtok99$/m);
+      expect(sent.html).toContain('href="https://x.example/b/pub1/move/newtok99"');
     });
 
     it("a contact with no email on file gets no send and raises no flag", async () => {
@@ -1377,9 +1448,42 @@ describe("transfer_to_human", () => {
 
     release();
     const { state, result } = await pending;
-    expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1");
+    expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1", "en");
     expect(result).toEqual({ ok: true });
     expect(state.served).toContain("transferred");
+  });
+
+  it("stamps the language the caller spoke with the intent, in the SAME write (F-010)", async () => {
+    // The failed-transfer line is spoken by a route that runs after the socket
+    // is gone and has no transcript; this stamp is how it answers in the
+    // language the handoff sentence was said in. Same read as the customer
+    // emails (`spokenLocale`). Mutation: stamp the profile's languages, or
+    // always "en" → FAILS.
+    const c = {
+      ...ctx, callRowId: "call-row-1", handoffTarget: TARGET,
+      profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+    };
+    const spanish = { ...emptyCallState(), transcript: [
+      { role: "caller" as const, text: "Hola, necesito hablar con una persona, por favor.", at: "2027-06-01T12:00:00Z" },
+    ] };
+    await runTool(spanish, c, "transfer_to_human", {});
+    expect(markHandoffRequestedMock).toHaveBeenCalledTimes(1);
+    expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1", "es");
+  });
+
+  it("stamps the language of a turn still arriving when the caller asked (F-010 review m3)", async () => {
+    // Same read as the handoff sentence in call-events, so the two cannot
+    // disagree. Mutation: read only the finished transcript → "en", FAILS.
+    const c = {
+      ...ctx, callRowId: "call-row-1", handoffTarget: TARGET,
+      profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+    };
+    const inFlight = {
+      ...emptyCallState(),
+      pendingCallerTurn: { itemId: "item_7", text: "Hola, quiero hablar con una persona, por favor" },
+    };
+    await runTool(inFlight, c, "transfer_to_human", {});
+    expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1", "es");
   });
 
   it("transfer_to_human refuses when no target is available, and writes nothing", async () => {
