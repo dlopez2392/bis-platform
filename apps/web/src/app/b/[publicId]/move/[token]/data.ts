@@ -31,8 +31,10 @@ export type MoveContext = {
   calendar: CalendarRow;
   account: MoveAccount;
   /** How many moves this appointment has had (`rescheduleChain`), for the
-   *  cap (`MOVE_CHAIN_MAX`). Absent reads as none. */
-  depth?: number;
+   *  cap (`MOVE_CHAIN_MAX`). REQUIRED (fix round 3): an optional depth read as
+   *  none, so a context built without it silently lifted the cap. A walk that
+   *  fails, or runs past its bound, is `MOVE_CHAIN_MAX` (capped, fail safe). */
+  depth: number;
 };
 
 const ACCOUNT_COLS = "timezone, from_email, reply_to_email, brand_name, brand_logo_path, "
@@ -54,8 +56,21 @@ export async function readMoveContext(
   const { data, error } = await db.from("accounts").select(ACCOUNT_COLS).eq("id", row.account_id).maybeSingle();
   if (error) throw new Error(`move: account read failed for ${row.account_id}: ${error.message}`);
   // Only a live booking can be moved, so only a live one pays for the walk.
-  const depth = row.status === "booked" ? (await rescheduleChain(db, row.account_id, row.id)).depth : 0;
+  const depth = row.status === "booked" ? await chainDepth(db, row.account_id, row.id) : 0;
   return { row, calendar, account: (data as MoveAccount | null) ?? NO_ACCOUNT, depth };
+}
+
+/** The appointment's move count, or `MOVE_CHAIN_MAX` when the walk fails or
+ *  runs past `rescheduleChain's` bound (fix round 3, m4): CAPPED, so the page
+ *  shows the contact-us line and the cancel link, never an error page and
+ *  never the picker. Logged once, by booking id (no token reaches here). */
+async function chainDepth(db: ReturnType<typeof serviceDb>, accountId: string, bookingId: string): Promise<number> {
+  try {
+    return (await rescheduleChain(db, accountId, bookingId)).depth;
+  } catch (e) {
+    console.error(`move: the reschedule chain of booking ${bookingId} could not be walked, treated as capped: ${String(e)}`);
+    return MOVE_CHAIN_MAX;
+  }
 }
 
 /**
@@ -78,7 +93,7 @@ export function moveState(ctx: Pick<MoveContext, "row" | "calendar" | "depth">, 
   // Fix round 2 (m-b): moved MOVE_CHAIN_MAX times already. A state, so the
   // page shows no picker and the slots action offers nothing, not only a
   // refusal at confirm.
-  if ((ctx.depth ?? 0) >= MOVE_CHAIN_MAX) return "capped";
+  if (ctx.depth >= MOVE_CHAIN_MAX) return "capped";
   return "live";
 }
 

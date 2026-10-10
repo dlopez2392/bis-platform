@@ -163,7 +163,7 @@ export async function confirmMoveAction(
   const manageUrl = bookingCancelUrl(origin, calendar.public_id, moved.cancelToken, lang);
   const calendarUrl = calendarFileUrl(origin, calendar.public_id, moved.cancelToken, lang);
   // The move that reaches the cap offers no next one (fix round 2, m-b).
-  const moveUrl = (ctx.depth ?? 0) + 1 >= MOVE_CHAIN_MAX
+  const moveUrl = ctx.depth + 1 >= MOVE_CHAIN_MAX
     ? "" : bookingMoveUrl(origin, calendar.public_id, moved.cancelToken, lang);
 
   let contact: { first_name?: string | null; last_name?: string | null; email?: string | null } | null = null;

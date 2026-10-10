@@ -40,6 +40,7 @@ const ctx = (row: Record<string, unknown> = {}, cal: Record<string, unknown> = {
   },
   calendar: { id: "cal1", account_id: "a1", public_id: "pub1", enabled: true, max_advance_days: 30, ...cal },
   account: { timezone: "America/New_York", brand_name: "Acme Plumbing" },
+  depth: 0,
 });
 const params = (publicId = "pub1", token = TOKEN) => Promise.resolve({ publicId, token });
 const query = (q: Record<string, string> = {}) => Promise.resolve(q);

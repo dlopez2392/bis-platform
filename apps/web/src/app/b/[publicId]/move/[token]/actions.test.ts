@@ -95,6 +95,7 @@ const context = (row: Record<string, unknown> = {}, cal: Record<string, unknown>
     brand_name: "Rio Roofing", brand_logo_path: null, brand_color: null, brand_neutral: null,
     brand_corners: null, brand_type: null, brand_mode: null,
   },
+  depth: 0,
 });
 
 const ELEVEN = "2027-06-01T11:00:00.000Z";

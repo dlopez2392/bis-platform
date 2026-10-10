@@ -12,6 +12,7 @@ import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
 import { loadBooking, loadBookingSafe } from "./data";
 import { CancelForm } from "./cancel-form";
+import { loadMoveContextSafe, moveState } from "../../move/[token]/data";
 
 export const dynamic = "force-dynamic";
 
@@ -50,11 +51,14 @@ async function movedSafe(accountId: string, bookingId: string): Promise<boolean>
   }
 }
 
-/** F-048: a plain helper, not inline in the component body, for the
- *  react-hooks/purity reason the booking page's `issueRenderToken` gives:
- *  this force-dynamic page reads the clock once per request. */
-function hasStarted(startsAtIso: string): boolean {
-  return !(new Date(startsAtIso).getTime() > Date.now());
+/** F-048: whether the move page would offer this booking new times — its own
+ *  context read (`loadMoveContextSafe`, which never throws) and its own
+ *  `moveState`. A plain helper, not inline in the component body, for the
+ *  react-hooks/purity reason the booking page's `issueRenderToken` gives: it
+ *  reads the clock. */
+async function moveIsOffered(token: string): Promise<boolean> {
+  const ctx = await loadMoveContextSafe(token);
+  return ctx !== null && moveState(ctx, new Date()) === "live";
 }
 
 /** The account's own zone, for the fallback `safeZone` needs — same shape as
@@ -166,9 +170,11 @@ export default async function CancelBookingPage({
   const wasMoved = isCancelled ? await movedSafe(row.account_id, row.id) : false;
   // F-048: every email that ever went out links THIS page, and the booking
   // page's success screen says "cancel or reschedule", so an upcoming live
-  // booking is offered the move beside the cancel. Not once it has started:
-  // there is nothing left to move.
-  const canMove = row.status === "booked" && !hasStarted(row.starts_at);
+  // booking is offered the move beside the cancel — exactly when the move
+  // page would offer times (fix round 3, m1: `moveState` is `live`), so the
+  // link never lands on a contact-us dead end (started, over, switched off,
+  // or moved MOVE_CHAIN_MAX times). Only a booked row pays for that read.
+  const canMove = row.status === "booked" && await moveIsOffered(token);
   const moveHref = `/b/${publicId}/move/${token}${locale === "es" ? "?locale=es" : ""}`;
 
   return (

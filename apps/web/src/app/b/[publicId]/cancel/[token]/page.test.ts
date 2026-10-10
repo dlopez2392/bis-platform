@@ -33,6 +33,17 @@ vi.mock("@bis/db", () => ({
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { renderToStaticMarkup } from "react-dom/server";
+// Fix round 3 (m1): the cancel page offers the move only when the MOVE
+// page would (`moveState`, real): its context is the move page's own read,
+// stubbed here from the same booking row, a calendar switch and a depth.
+const moveCtx = vi.hoisted(() => ({ enabled: true, depth: 0 }));
+vi.mock("../../move/[token]/data", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../move/[token]/data")>()),
+  loadMoveContextSafe: async () => {
+    const row = await lookupBookingByTokenMock();
+    return row ? { row, calendar: { id: "cal1", public_id: "pub1", enabled: moveCtx.enabled }, account: {}, depth: moveCtx.depth } : null;
+  },
+}));
 import CancelBookingPage, { generateMetadata } from "./page";
 import { CancelForm } from "./cancel-form";
 
@@ -159,6 +170,21 @@ describe("CancelBookingPage — the way to move, and an old link after a move", 
     expect((form?.props as { moveHref?: string }).moveHref).toBe("/b/pub1/move/tok123?locale=es");
     const html = renderToStaticMarkup(form!);
     expect(html).toContain(`<a href="/b/pub1/move/tok123?locale=es">${bookingStrings("es").moveLink}</a>`);
+  });
+
+  it("no move is offered on a capped appointment or a switched-off calendar — both would dead-end at contact-us (mutation: canMove from status alone → offered, FAILS)", async () => {
+    const { MOVE_CHAIN_MAX } = await import("../../move/[token]/data");
+    lookupBookingByTokenMock.mockResolvedValue({ ...BOOKING, status: "booked" });
+    try {
+      moveCtx.depth = MOVE_CHAIN_MAX;
+      expect((formOf(walk(await render()))?.props as { moveHref?: string | null }).moveHref).toBeNull();
+      moveCtx.depth = 0;
+      moveCtx.enabled = false;
+      expect((formOf(walk(await render()))?.props as { moveHref?: string | null }).moveHref).toBeNull();
+    } finally {
+      moveCtx.depth = 0;
+      moveCtx.enabled = true;
+    }
   });
 
   it("no move is offered for a booking that has started, or is over", async () => {
