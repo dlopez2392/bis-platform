@@ -59,6 +59,16 @@ describe("toggleTheme", () => {
     expect(persist).toHaveBeenCalledWith("light");
   });
 
+  // Final fix wave, M-a: a server action that THROWS (network drop, a 500)
+  // rejects rather than resolving { ok: false }. The palette shares this
+  // function, so an unhandled rejection there would show no toast at all.
+  it("a rejected save shows the failure toast too (mutation: drop the .catch -> FAILS)", async () => {
+    const persist = vi.fn(() => Promise.reject(new Error("network")));
+    const failed = vi.fn();
+    toggleTheme("dark", vi.fn(), vi.fn(), persist, failed);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+  });
+
   // Review round: this test's NAME used to claim the cookie is written
   // before the refresh — true of the real code, but the body only ever
   // tracked `setTheme`/`refresh`, never the cookie write itself, so it

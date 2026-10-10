@@ -35,7 +35,8 @@ import { setMyThemeAction } from "@/app/(dashboard)/dashboard/preferences/action
  * `persist`/`onPersistFailed` (mis preferencias, F-096, D5): the mode
  * applies at once, synchronously, above -- the save never blocks the UI.
  * `persist` runs in the background and `onPersistFailed` fires only if it
- * reports `{ ok: false }`, which shows a toast and otherwise does nothing:
+ * reports `{ ok: false }` or rejects (a thrown action, a dropped request),
+ * which shows a toast and otherwise does nothing:
  * the local choice (cookie + class, already applied) is kept either way, so
  * a failed save costs this visit's durability, never this click's effect.
  */
@@ -50,9 +51,11 @@ export function toggleTheme(
   document.cookie = `${THEME_COOKIE}=${next}; path=/; max-age=31536000; samesite=lax`;
   setTheme(next);
   refresh();
-  void persist(next).then((result) => {
-    if (!result.ok) onPersistFailed();
-  });
+  void persist(next)
+    .then((result) => {
+      if (!result.ok) onPersistFailed();
+    })
+    .catch(() => onPersistFailed());
 }
 
 export function ThemeToggle() {
