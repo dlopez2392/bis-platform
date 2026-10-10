@@ -241,3 +241,34 @@ describe("reconcileMembership never recreates a membership removed AFTER the Cle
     await expect(reconcileMembership(db, port, { clerkUserId: "user_1", clerkOrgId: "org_1", mode: "fallback" })).rejects.toThrow(/removal/);
   });
 });
+
+describe("agency users stay out of every team even once they have a users row (mis preferencias D2)", () => {
+  it("reconcileMembership returns agency_user and leaves the agency row's preferences and membership count alone (mutation: move the isAgencyMetadata check below upsertUserFromClerk -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { data: acct } = await db.from("accounts").select("clerk_org_id").eq("id", accountId).single();
+      const sub = `user_prefs_agency_team_${RUN}`;
+      try {
+        const { data: u } = await db.from("users")
+          .insert({ clerk_user_id: sub, email: `${sub}@example.com`, name: "Stored Name", theme: "dark", language: null })
+          .select("id").single();
+        // Final fix wave, M-b: Clerk reports a DIFFERENT email and name and a
+        // bis_language, and the stored language is NULL, so an upsert that ran
+        // before the agency check would visibly change this row (email, name
+        // and language). With the old seed (same email, no name, language
+        // already set) the upsert was a no-op and the mutation survived.
+        const port = fakePort({
+          user: { email: `${sub}-clerk@example.com`, name: "Clerk Name", publicMetadata: { app_role: "agency_admin" } },
+          membership: { role: "org:admin", publicMetadata: { bis_language: "en" }, createdAt: Date.now() },
+        });
+        expect(await reconcileMembership(db, port, { clerkUserId: sub, clerkOrgId: acct!.clerk_org_id, mode: "webhook" }))
+          .toEqual({ outcome: "agency_user" });
+        const { count } = await db.from("memberships").select("id", { count: "exact", head: true }).eq("user_id", u!.id);
+        expect(count).toBe(0);
+        const { data: row } = await db.from("users").select("email, name, theme, language").eq("id", u!.id).single();
+        expect(row).toEqual({ email: `${sub}@example.com`, name: "Stored Name", theme: "dark", language: null });
+      } finally {
+        await serviceDb().from("users").delete().eq("clerk_user_id", sub);
+      }
+    });
+  });
+});

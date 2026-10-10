@@ -13,6 +13,7 @@ import { CommandPalette } from "@/components/command-palette";
 import { Ground } from "@/components/ground";
 import { ensureAccountRole, readStoredRole } from "@/lib/team/ensure-role";
 import { requestLocale } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { LocaleProvider } from "@/components/locale-provider";
 import type { Locale } from "@/lib/i18n/locale";
 
@@ -125,7 +126,7 @@ export default async function DashboardLayout({
     if (state.status === "none") redirect("/no-access?reason=none");
   }
 
-  const [accounts, cookieStore, branding, isOwner] = await Promise.all([
+  const [accounts, cookieStore, branding, isOwner, prefs] = await Promise.all([
     isAgency ? listAccounts(serviceDb()) : Promise.resolve([]),
     cookies(),
     // Only a client's chrome wears a brand. The agency's stays BIS on purpose,
@@ -157,6 +158,11 @@ export default async function DashboardLayout({
     clientState?.status === "ok" && claims.org_id
       ? ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId)).then((role) => role === "owner")
       : Promise.resolve(false),
+    // Mis preferencias: the caller's own language and theme. For a client
+    // this rides on the same cached stored-person read readStoredRole (just
+    // above) derives from; for the agency it is one indexed users read,
+    // started here beside the rest. Never rejects (defaults on a fault).
+    getPersonPrefs(),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
 
@@ -170,9 +176,11 @@ export default async function DashboardLayout({
   // ancestor, so it is the one place the provider can cover both.
   //
   // For the agency, `clientState` stays null (set only inside the
-  // `!isAgency` branch above) and `isOperator: true` always wins (operators
-  // stay English — owner decision 1, 2026-10-10), so no per-account read
-  // happens on agency routes. `clientState.language` is widened onto
+  // `!isAgency` branch above) and `isOperator: true` ignores the account:
+  // operators stay English only until they choose otherwise (owner decision
+  // 1, 2026-10-10; mis preferencias): a person's own `userLanguage` wins
+  // for everyone, and with no choice the agency gets English and a client
+  // the account's language. No per-account read happens on agency routes. `clientState.language` is widened onto
   // resolveClientAccessState's existing read (lib/auth.ts →
   // getAccountByOrgId, packages/db/src/accounts.ts) — no second query.
   const locale = requestLocale({
@@ -180,6 +188,7 @@ export default async function DashboardLayout({
       ? { language: clientState.language as Locale | null }
       : null,
     isOperator: isAgency,
+    userLanguage: prefs.language,
   });
 
   return (

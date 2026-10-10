@@ -270,3 +270,15 @@ describe("filterEntries", () => {
     expect(filterEntries(entries, "zzzzqqq")).toEqual([]);
   });
 });
+
+// Mis preferencias (F-096, Task 6): a person's own page, not an account's,
+// so it is offered with or without an account in scope, to both roles.
+describe("Preferences", () => {
+  it.each([[true, null], [false, "/dashboard/accounts/a"], [true, "/dashboard/accounts/a"]] as const)(
+    "offers Preferences to everyone (isAgency=%s, base=%s) (mutation: mark it agencyOnly or emit it only with a base -> FAILS)",
+    (isAgency, base) => {
+      const e = buildPaletteEntries(base, isAgency, false).find((x) => x.id === "nav:preferences");
+      expect(e).toMatchObject({ kind: "href", href: "/dashboard/preferences", agencyOnly: false });
+      expect(filterEntries([e!], "idioma")).toHaveLength(1);
+    });
+});

@@ -1,9 +1,8 @@
 // Mirrors branding/theme-mode.ts's resolveThemeMode shape on purpose: a
-// precedence chain over values that may not exist yet. `userLanguage` is
-// the seam for the parallel staff-and-roles lane's `users.language text
-// null check (language in ('en','es'))` (spec §5) — every caller in THIS
-// lane passes undefined for it; the day that column exists, its reader
-// starts passing the real value and this function does not change.
+// precedence chain over values that may be null. `userLanguage` is the
+// person's own `users.language` (0066), read once per request by
+// `getPersonPrefs` (lib/preferences/person-prefs.ts) and passed by every
+// requestLocale call site (pinned in request-locale-callers.test.ts).
 export type Locale = "en" | "es";
 
 function isLocale(v: unknown): v is Locale {

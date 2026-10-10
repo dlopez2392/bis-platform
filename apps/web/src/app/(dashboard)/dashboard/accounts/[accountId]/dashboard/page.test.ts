@@ -22,6 +22,8 @@ import { CHECKLIST_CATALOGUE } from "@/lib/checklist-catalogue";
  */
 
 const authFixture = vi.hoisted(() => ({ isAgency: true }));
+// Mis preferencias: no stored choice, so the page keeps its existing locale.
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }),
 }));

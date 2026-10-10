@@ -1,6 +1,7 @@
-import { OrganizationSwitcher, UserButton } from "@clerk/nextjs";
+import { OrganizationSwitcher } from "@clerk/nextjs";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { TopbarPresence } from "@/components/topbar-presence";
+import { UserMenu } from "@/components/user-menu";
 
 // Design spec section 6: "No 'Back to agency', no Blueprints, no account
 // switcher in the topbar." OrganizationSwitcher is Clerk's own org chrome —
@@ -112,7 +113,7 @@ export function Topbar({
           }}
         />
       ) : null}
-      <UserButton />
+      <UserMenu />
     </header>
   );
 }

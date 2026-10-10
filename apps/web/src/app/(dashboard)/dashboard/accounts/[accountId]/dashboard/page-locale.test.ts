@@ -9,7 +9,7 @@ const src = readFileSync(
 
 describe("dashboard KPI row resolves through the locale helper", () => {
   it("resolves locale through requestLocale with the account/isOperator shape, calls formatCurrency with a locale argument, and routes the KPI labels through t() (mutation: call formatCurrency(currentPipelineValue) with no second arg → FAILS)", () => {
-    expect(src).toMatch(/requestLocale\(\{ account, isOperator: isAgency \}/);
+    expect(src).toMatch(/requestLocale\(\{ account, isOperator: isAgency, userLanguage: prefs\.language \}/);
     expect(src).toMatch(/formatCurrency\(currentPipelineValue, locale\)/);
     expect(src).toMatch(/t\(m, "dashboard\.kpi\.last7Days", locale\)/);
   });

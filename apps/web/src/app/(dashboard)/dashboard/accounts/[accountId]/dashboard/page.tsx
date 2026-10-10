@@ -25,6 +25,7 @@ import { bucketWork } from "@/lib/work/buckets";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
@@ -63,7 +64,7 @@ export default async function AccountDashboardPage({
   // Authorization already happened in [accountId]/layout.tsx; this call is
   // only to learn the role for rendering — the activation checklist is the
   // agency's onboarding worklist about the client, not client data (spec §6.1).
-  const { isAgency } = await requireAccountAccess(accountId);
+  const [{ isAgency }, prefs] = await Promise.all([requireAccountAccess(accountId), getPersonPrefs()]);
   const db = await dbForRequest();
 
   const now = new Date();
@@ -85,11 +86,11 @@ export default async function AccountDashboardPage({
       if (!data) throw new Error("account dashboard: account not found");
       return data as { name: string; timezone: string; language: Locale | null };
     });
-  // This page's render locale — client-role sessions read the account's own
-  // `language`; an agency operator's session stays English until the
-  // parallel staff-and-roles lane's `users.language` exists (requestLocale's
-  // own doc comment, Owner decision 1, 2026-10-10).
-  const locale = requestLocale({ account, isOperator: isAgency }, { locale: localeParam });
+  // This page's render locale: a person's own language (getPersonPrefs, mis
+  // preferencias) wins for everyone; with no choice, a client-role session
+  // reads the account's own `language` and an agency operator stays English
+  // (requestLocale's own doc comment, Owner decision 1, 2026-10-10).
+  const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
   // Task 11 (Spanish-runtime lane), QA-only: true only when BIS_I18N_QA="1"
   // (Playwright's webServer env / CI's e2e job — never Vercel) AND
   // `?locale=pseudo` are both present. `p()` WRAPS the already-resolved

@@ -28,6 +28,8 @@ vi.mock("@/lib/billing/account-billing-read", () => ({ readAccountBilling: seam.
 const direct = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), getAccountBilling: direct.read }));
 vi.mock("./actions", () => ({ openBillingPortalAction: async () => ({ ok: false, error: "x" }) }));
+// The layout also reads the person's own language (mis preferencias).
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
 
 const { default: Layout } = await import("../layout");
 const { default: BillingPage } = await import("./page");

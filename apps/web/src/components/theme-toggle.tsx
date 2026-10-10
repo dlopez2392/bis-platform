@@ -3,9 +3,13 @@
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import { THEME_COOKIE } from "@/lib/branding/theme-mode";
+import { useLocale } from "@/components/locale-provider";
+import { setMyThemeAction } from "@/app/(dashboard)/dashboard/preferences/actions";
 
 /**
  * The one toggle, shared: writes the `bis-theme` cookie, flips next-themes,
@@ -27,21 +31,37 @@ import { THEME_COOKIE } from "@/lib/branding/theme-mode";
  * server reads, so asking it to re-render is what actually repaints.
  * Harmless where no theme is emitted: the class flip already did the whole
  * job there.
+ *
+ * `persist`/`onPersistFailed` (mis preferencias, F-096, D5): the mode
+ * applies at once, synchronously, above -- the save never blocks the UI.
+ * `persist` runs in the background and `onPersistFailed` fires only if it
+ * reports `{ ok: false }` or rejects (a thrown action, a dropped request),
+ * which shows a toast and otherwise does nothing:
+ * the local choice (cookie + class, already applied) is kept either way, so
+ * a failed save costs this visit's durability, never this click's effect.
  */
 export function toggleTheme(
   resolvedTheme: string | undefined,
   setTheme: (theme: string) => void,
   refresh: () => void,
+  persist: (mode: "light" | "dark") => Promise<{ ok: boolean }>,
+  onPersistFailed: () => void,
 ): void {
   const next = resolvedTheme === "dark" ? "light" : "dark";
   document.cookie = `${THEME_COOKIE}=${next}; path=/; max-age=31536000; samesite=lax`;
   setTheme(next);
   refresh();
+  void persist(next)
+    .then((result) => {
+      if (!result.ok) onPersistFailed();
+    })
+    .catch(() => onPersistFailed());
 }
 
 export function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
   const router = useRouter();
+  const locale = useLocale();
 
   // Both icons render; CSS picks one off the `.dark` class the provider sets
   // on <html>. That keeps this SSR-safe — the server can't know the resolved
@@ -55,7 +75,15 @@ export function ThemeToggle() {
       data-testid="theme-toggle"
       aria-label={m["theme.toggle"]}
       title={m["theme.toggle"]}
-      onClick={() => toggleTheme(resolvedTheme, setTheme, () => router.refresh())}
+      onClick={() =>
+        toggleTheme(
+          resolvedTheme,
+          setTheme,
+          () => router.refresh(),
+          setMyThemeAction,
+          () => toast.error(t(m, "theme.saveFailed", locale)),
+        )
+      }
     >
       <Moon className="size-4 dark:hidden" aria-hidden />
       <Sun className="hidden size-4 dark:block" aria-hidden />

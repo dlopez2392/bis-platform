@@ -4,12 +4,16 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { Search } from "lucide-react";
+import { toast } from "sonner";
 import {
   CommandDialog, CommandGroup, CommandInput, CommandItem, CommandList,
 } from "@/components/ui/command";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { toggleTheme } from "@/components/theme-toggle";
+import { useLocale } from "@/components/locale-provider";
+import { setMyThemeAction } from "@/app/(dashboard)/dashboard/preferences/actions";
+import { t } from "@/lib/i18n/t";
 // The SUBPATH, not "@bis/db": that barrel pulls in @supabase/supabase-js, and
 // this is a client component. search-term.ts is a standalone pure module.
 import { sanitizeSearchTerm, searchTermLength } from "@bis/db/search-term";
@@ -89,6 +93,7 @@ export function CommandPalette({
   const pathname = usePathname();
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
+  const locale = useLocale();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [live, setLive] = useState<Live>(null);
@@ -175,8 +180,15 @@ export function CommandPalette({
     // from a fuzzy match one keystroke from Enter. D-074: shares
     // theme-toggle.tsx's own `toggleTheme`, not a second, incomplete copy —
     // the topbar's button writes the `bis-theme` cookie and refreshes, and
-    // this action skipped both.
-    toggleTheme(resolvedTheme, setTheme, () => router.refresh());
+    // this action skipped both. Mis preferencias (D5): also shares its
+    // persist/onPersistFailed pair, so ⌘K's toggle saves the choice too.
+    toggleTheme(
+      resolvedTheme,
+      setTheme,
+      () => router.refresh(),
+      setMyThemeAction,
+      () => toast.error(t(m, "theme.saveFailed", locale)),
+    );
   }
 
   function openHit(hit: SearchHit) {

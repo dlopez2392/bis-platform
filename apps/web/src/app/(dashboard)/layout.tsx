@@ -100,7 +100,7 @@ export default async function RootLayout({
   // getRequestTheme is cache()'d and the dashboard shell imports the same
   // binding, so React dedupes the underlying account, branding, and cookie
   // reads to one each per request.
-  const { inputs, serverMode, providerDefault } = await getRequestTheme();
+  const { inputs, serverMode, providerDefault, userTheme } = await getRequestTheme();
   // The agency's chrome stays BIS. Not by a conditional inside the derivation
   // -- by never having a theme to emit, so there is no branch to invert later.
   const theme = deriveTheme(inputs, serverMode);
@@ -136,7 +136,7 @@ export default async function RootLayout({
           // presence for a themed client and its ABSENCE for the agency.
           {...(theme ? { style: themeStyle(theme), "data-tenant-theme": "" } : {})}
         >
-          <ThemeProvider defaultTheme={providerDefault}>
+          <ThemeProvider defaultTheme={providerDefault} userTheme={userTheme}>
             {/* Renders nothing. Inside ClerkProvider and above every page, so
                 it covers each surface a client can reach signed-in but with no
                 active organization — /, /no-access and /sign-in — instead of

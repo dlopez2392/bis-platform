@@ -1,7 +1,7 @@
 import { cache } from "react";
 import {
-  readAccountRole, reconcileMembership, serviceDb,
-  type AccountRole, type ClerkTeamPort, type SupabaseClient,
+  readAccountRoleAndPrefs, reconcileMembership, serviceDb,
+  type AccountRole, type ClerkTeamPort, type PersonPrefs, type SupabaseClient,
 } from "@bis/db";
 import { loggableError } from "@/lib/loggable-error";
 import { liveClerkTeamPort } from "./clerk-team";
@@ -31,6 +31,14 @@ import { withTimeout } from "./with-timeout";
 /** What the stored-role read resolves to when it failed. It never rejects. */
 export const STORED_READ_FAILED = Symbol("stored role read failed");
 export type StoredRole = AccountRole | null | typeof STORED_READ_FAILED;
+/**
+ * The membership's role AND the person's own preferences (F-096), from ONE
+ * read (memberships joined to users). null = no membership in this account.
+ * Mis preferencias extends the stored-role read rather than adding a second
+ * one: the page's language and theme ride on the read requireAccountAccess
+ * already starts.
+ */
+export type StoredPerson = { role: AccountRole; prefs: PersonPrefs } | null | typeof STORED_READ_FAILED;
 
 /**
  * `@clerk/backend` sets no request timeout, and this sits in front of every
@@ -40,16 +48,26 @@ export type StoredRole = AccountRole | null | typeof STORED_READ_FAILED;
 export const CLERK_FALLBACK_TIMEOUT_MS = 3000;
 
 /**
- * The stored role, as a promise that NEVER rejects: its catch is attached
+ * The stored person, as a promise that NEVER rejects: its catch is attached
  * here, at creation, because requireAccountAccess starts it before its
  * redirects and may throw a redirect without ever awaiting it. A rejected
  * promise nobody awaits would surface as an unhandled rejection.
  */
-export function readStoredRoleWith(db: () => SupabaseClient, accountId: string, clerkUserId: string): Promise<StoredRole> {
-  return (async () => readAccountRole(db(), accountId, clerkUserId))().catch((e: unknown) => {
+export function readStoredPersonWith(db: () => SupabaseClient, accountId: string, clerkUserId: string): Promise<StoredPerson> {
+  return (async () => readAccountRoleAndPrefs(db(), accountId, clerkUserId))().catch((e: unknown) => {
     console.error(`ensureAccountRole: could not read the stored role for account ${accountId}: ${loggableError(e)}`);
     return STORED_READ_FAILED;
   });
+}
+
+/** The role half of a stored person; the sentinel and null pass through. */
+export function toStoredRole(p: StoredPerson): StoredRole {
+  return p === STORED_READ_FAILED || p === null ? p : p.role;
+}
+
+/** The stored role alone. Never rejects (readStoredPersonWith's catch). */
+export function readStoredRoleWith(db: () => SupabaseClient, accountId: string, clerkUserId: string): Promise<StoredRole> {
+  return readStoredPersonWith(db, accountId, clerkUserId).then(toStoredRole);
 }
 
 /** The testable core. `stored`, when given, is a read already in flight (see readStoredRole). */
@@ -77,9 +95,19 @@ export async function ensureAccountRoleWith(
  * whether the caller may enter that account. A read for someone else's
  * account is simply discarded by the redirect: it writes nothing and asks
  * Clerk nothing.
+ *
+ * Shared with getPersonPrefs (lib/preferences/person-prefs.ts), which reads
+ * a client's language and theme off the same entry. cache() keys on the
+ * argument COUNT as well as the values (staff and roles review I1), so every
+ * caller passes exactly (accountId, clerkUserId); person-prefs.test.ts pins
+ * that shape.
  */
+export const readStoredPerson = cache((accountId: string, clerkUserId: string): Promise<StoredPerson> =>
+  readStoredPersonWith(serviceDb, accountId, clerkUserId));
+
+/** The role off the cached stored-person read: one query serves both. */
 export const readStoredRole = cache((accountId: string, clerkUserId: string): Promise<StoredRole> =>
-  readStoredRoleWith(serviceDb, accountId, clerkUserId));
+  readStoredPerson(accountId, clerkUserId).then(toStoredRole));
 
 /** React cache()d per request, so a layout and its page settle the role once. */
 export const ensureAccountRole = cache((accountId: string, clerkOrgId: string, clerkUserId: string, stored?: Promise<StoredRole>) =>

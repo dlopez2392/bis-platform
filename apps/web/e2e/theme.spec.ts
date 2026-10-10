@@ -1,6 +1,31 @@
 import { test, expect } from "./fixtures/test";
+import { config as loadEnv } from "dotenv";
+import { AGENCY_FIXTURE_FILE, clearStoredTheme, fixtureClerkUserId, storedTheme } from "./stored-theme";
+
+// Same two paths, same reason, as every spec that talks to Supabase directly
+// from the runner process (the saved-theme reads and resets below).
+loadEnv({ path: "apps/web/.env.local" });
+loadEnv({ path: ".env.local" });
 
 const THEME_COOKIE = "bis-theme";
+
+// Every test here is about the agency with NO saved theme (users.theme NULL),
+// where the cookie and the operator default decide, exactly as before mis
+// preferencias. The toggle saves its choice to users.theme (D5), and a saved
+// theme outranks the cookie, so without this reset the toggle test below left
+// the agency's saved "dark" under the next test's light cookie and that test
+// painted dark (CI e2e, 2c0e6fb0). Established before each test, not assumed,
+// and undone after the file so no later spec inherits it.
+test.beforeEach(async () => {
+  await clearStoredTheme(fixtureClerkUserId(AGENCY_FIXTURE_FILE));
+});
+test.afterAll(async () => {
+  try {
+    await clearStoredTheme(fixtureClerkUserId(AGENCY_FIXTURE_FILE));
+  } catch (e) {
+    console.error(`theme.spec cleanup: could not clear the agency identity's saved theme: ${String(e)}`);
+  }
+});
 
 // Dark mode shipped with tokens and a provider but no way to reach it.
 // These assert the control exists, actually flips the class the tokens key
@@ -20,15 +45,23 @@ test("theme toggle flips the dark class and persists", async ({ page }) => {
 
   await expect(html).toHaveClass(/\bdark\b/);
 
+  const agency = fixtureClerkUserId(AGENCY_FIXTURE_FILE);
+
   await toggle.click();
   await expect(html).toHaveClass(/\blight\b/);
+  // The toggle saves the person's choice, not only the cookie (mis
+  // preferencias D5). Polled to completion so the background save has landed
+  // before the next test's reset, which it would otherwise overwrite.
+  await expect.poll(() => storedTheme(agency)).toBe("light");
 
   await page.reload();
   await expect(page.locator("html")).toHaveClass(/\blight\b/);
 
-  // Put it back so the stored preference doesn't leak into other specs.
+  // Toggle back; the saved "dark" this leaves is cleared by the next
+  // beforeEach and the file's afterAll, since the toggle cannot write NULL.
   await page.getByTestId("theme-toggle").click();
   await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  await expect.poll(() => storedTheme(agency)).toBe("dark");
 });
 
 // Pins getRequestTheme's isOperator wiring directly: a fresh context with NO

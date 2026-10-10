@@ -7,8 +7,9 @@
 // Owner decision 1 (2026-10-10, plan-review C2): account.language governs
 // CLIENT-role sessions only. An agency operator who opens a Spanish-
 // language client's account does NOT get a Spanish dashboard from that
-// alone — their own session stays English until the parallel staff-and-
-// roles lane's `users.language` exists. This is the SAME role split
+// alone — their own session stays English until they choose otherwise:
+// their own `users.language` (`userLanguage`, from `getPersonPrefs`)
+// wins for everyone. This is the SAME role split
 // `resolveThemeMode`'s own `isOperator` parameter already draws for
 // dark/light (`branding/theme-mode.ts`), sourced the same way
 // `getRequestTheme`'s `getIsOperator()` sources it for theme — callers here
@@ -35,10 +36,11 @@ export function requestLocale(
   input: {
     account: { language: Locale | null } | null | undefined;
     isOperator: boolean;
-    /** Not yet populated by any caller in this lane — the seam for the
-     *  parallel staff-and-roles lane's `users.language`. Threaded into
-     *  `resolveLocale` on BOTH branches, so an operator's own stored
-     *  language (once it exists) still wins over staying in English. */
+    /** The person's own `users.language`, from `getPersonPrefs`
+     *  (lib/preferences/person-prefs.ts); every call site passes it
+     *  (request-locale-callers.test.ts). Threaded into `resolveLocale` on
+     *  BOTH branches, so an operator's own choice wins over staying in
+     *  English and a client's wins over the account's language. */
     userLanguage?: Locale | null;
   },
   searchParams?: Record<string, string | string[] | undefined>,

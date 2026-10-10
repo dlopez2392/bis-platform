@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { pickRequestThemeMode } from "./tenant-theme-reader";
 import type { ModeName, ThemeInputs } from "./theme";
+import { NO_SAVED_THEME_TABLE } from "./no-saved-theme.fixture";
 
 /**
  * pickRequestThemeMode is the one real call site left for resolveThemeMode
@@ -72,4 +73,29 @@ describe("pickRequestThemeMode", () => {
       providerDefault: "light",
     });
   });
+
+  // Mis preferencias (D5): a person's own stored theme outranks the cookie,
+  // the tenant's brand_mode AND the operator default — all three are set up
+  // to disagree with it here on purpose (mutation: drop the fourth argument
+  // on the way to resolveThemeMode -> FAILS, because the operator default of
+  // "dark" would win instead).
+  it("lets a person's own stored theme win over the tenant mode, the cookie and the operator default", () => {
+    expect(pickRequestThemeMode("dark", inputsWithMode("dark"), true, "light")).toEqual({
+      serverMode: "light",
+      providerDefault: "light",
+    });
+  });
+});
+
+// The request-level half: getRequestTheme threads getPersonPrefs().theme in
+// here, and for a person with no saved theme (NULL) every answer must be
+// main's. Same literal table as theme-mode.test.ts.
+describe("pickRequestThemeMode with no saved theme answers exactly as main did", () => {
+  it.each(NO_SAVED_THEME_TABLE)(
+    "cookie %s, tenant %s, operator %s -> %s (mutations: pass the tenant mode as null, pass userTheme ?? 'system', or drop isOperator -> FAIL)",
+    (cookie, brandMode, isOperator, expected) => {
+      const { serverMode, providerDefault } = pickRequestThemeMode(cookie, inputsWithMode(brandMode), isOperator, null);
+      expect(`${serverMode}/${providerDefault}`).toBe(expected);
+    },
+  );
 });

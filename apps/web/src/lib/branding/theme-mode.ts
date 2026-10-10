@@ -7,6 +7,7 @@
  * The cookie exists for that one reason. Sidebar collapse is already
  * cookie-persisted, so this follows the house pattern.
  */
+import type { PersonTheme } from "@bis/db";
 import type { ModeName } from "./theme";
 
 export const THEME_COOKIE = "bis-theme";
@@ -50,8 +51,29 @@ export function resolveThemeMode(
   // client. A stored cookie still wins over BOTH defaults, which is why
   // this is checked last, not first.
   isOperator = false,
+  // Mis preferencias (F-096, D5): a person's own saved choice, read from
+  // `users.theme`. Checked FIRST, ahead of the cookie -- it is DESIGN.md's
+  // "a person's own stored choice always outranks either default", and with
+  // F-096 that now means it outranks the tenant's brand_mode and the role
+  // default too, not merely next-themes' own `localStorage`. "system" means
+  // the person asked to follow their device: the cookie is still the
+  // server's only window into the OS answer (same reasoning as `follow`
+  // below), so a `system` choice falls through to the cookie, then the role
+  // default -- but `providerDefault` stays "system" so next-themes keeps
+  // tracking the device instead of freezing on whatever the cookie snapshot
+  // said. A `null` userTheme (nobody has saved a choice yet) leaves every
+  // branch below exactly as it was before this parameter existed.
+  userTheme: PersonTheme | null = null,
 ): { serverMode: "light" | "dark"; providerDefault: "light" | "dark" | "system" } {
   const cookieMode = cookie === "light" || cookie === "dark" ? cookie : undefined;
+  const roleDefault = isOperator ? "dark" : "light";
+
+  if (userTheme === "light" || userTheme === "dark") {
+    return { serverMode: userTheme, providerDefault: userTheme };
+  }
+  if (userTheme === "system") {
+    return { serverMode: cookieMode ?? roleDefault, providerDefault: "system" };
+  }
 
   // `follow` is special-cased ahead of the generic cookie branch below. For
   // every other brandMode the cookie is the user's own deliberate choice and
@@ -78,8 +100,7 @@ export function resolveThemeMode(
   if (brandMode === "light" || brandMode === "dark") {
     return { serverMode: brandMode, providerDefault: brandMode };
   }
-  const fallback = isOperator ? "dark" : "light";
-  return { serverMode: fallback, providerDefault: fallback };
+  return { serverMode: roleDefault, providerDefault: roleDefault };
 }
 
 /**
@@ -127,4 +148,111 @@ export function cookieModeToMigrate(
 ): "light" | "dark" | null {
   if (existingCookie !== undefined) return null;
   return storedTheme === "light" || storedTheme === "dark" ? storedTheme : null;
+}
+
+/**
+ * Mis preferencias (F-096, D5): once a person has a saved choice, it
+ * supersedes the brand_mode-driven migration and follow-sync logic
+ * (cookieModeToMigrate / cookieModeToPersist) entirely -- those exist only
+ * to reconcile a tenant default with next-themes' own local state, and a
+ * stored choice already outranks the tenant default on the server
+ * (resolveThemeMode above). `skipMigration` tells ThemeCookieSync's effect
+ * to skip that old branch once this one has anything to say, so the two
+ * mechanisms never fight over the same cookie write.
+ *
+ * `setTheme` is non-null exactly when next-themes' own `theme` disagrees
+ * with the stored choice -- the case where this person signed in on a new
+ * device, or another device saved a different choice since this one last
+ * synced. `writeCookie` is non-null exactly when the on-disk cookie itself
+ * is stale against the stored choice, restricted to "light"/"dark": the
+ * cookie is the one thing the SERVER reads before any client code runs, and
+ * it must never hold the literal string "system" -- resolveThemeMode's
+ * `cookieMode` parsing would simply ignore it, but writing it at all would
+ * be the same class of defect `cookieModeToPersist`'s own doc comment warns
+ * against (a value with no business being a deliberate per-request answer).
+ */
+export function userThemeSyncPlan(
+  userTheme: PersonTheme | null,
+  theme: string | undefined,
+  existingCookie: string | undefined,
+): {
+  setTheme: PersonTheme | null;
+  writeCookie: "light" | "dark" | null;
+  skipMigration: boolean;
+  skipPersist: boolean;
+} {
+  if (userTheme === null) return { setTheme: null, writeCookie: null, skipMigration: false, skipPersist: false };
+
+  const setTheme = userTheme !== theme ? userTheme : null;
+  const writeCookie =
+    (userTheme === "light" || userTheme === "dark") && userTheme !== existingCookie ? userTheme : null;
+
+  // Two flags, not one (final fix wave, I1). Any stored choice skips the
+  // one-time localStorage migration; only light/dark also skip the OS
+  // snapshot, because for those the cookie write above is the whole story.
+  // "Follow my device" still needs cookieModeToPersist to keep the cookie on
+  // the device's current answer (spec 5.3), or a branded client's server
+  // paint for one mode sits under next-themes' class for the other.
+  return { setTheme, writeCookie, skipMigration: true, skipPersist: userTheme !== "system" };
+}
+
+/**
+ * ThemeCookieSync's decision, run on every render of its effect (Task 6
+ * fix round 1, I1). The effect re-runs whenever next-themes' own `theme`
+ * changes, but its `userTheme` prop is the SERVER's value and stays the OLD
+ * one until a save lands and the route re-renders. Running
+ * userThemeSyncPlan on those runs pushed the old stored choice straight
+ * back: a change from the Preferences page or the toggle flicked back until
+ * the save arrived, and an Undo to "no choice" was re-set to the old theme
+ * and cookie and then stuck there.
+ *
+ * So the stored value is applied only when it CHANGES from the last one
+ * applied (`lastApplied`, the component's ref; undefined before the first
+ * run, so a fresh mount on a new device still adopts it). A run triggered
+ * only by a local change does nothing: that change is authoritative until
+ * the next server value arrives. While a stored choice exists the old
+ * migration/follow branch stays off, as before; once the server says NULL,
+ * it runs, so the role default or the cookie rule applies and sticks.
+ */
+export function nextThemeSync(
+  lastApplied: PersonTheme | null | undefined,
+  userTheme: PersonTheme | null,
+  theme: string | undefined,
+  existingCookie: string | undefined,
+): { plan: ReturnType<typeof userThemeSyncPlan>; lastApplied: PersonTheme | null } {
+  if (lastApplied !== undefined && lastApplied === userTheme) {
+    return {
+      plan: {
+        setTheme: null,
+        writeCookie: null,
+        skipMigration: userTheme !== null,
+        skipPersist: userTheme === "light" || userTheme === "dark",
+      },
+      lastApplied,
+    };
+  }
+  return { plan: userThemeSyncPlan(userTheme, theme, existingCookie), lastApplied: userTheme };
+}
+
+/**
+ * The rest of ThemeCookieSync's effect, after the stored-choice plan has run:
+ * the one-time migration (skipped while any stored choice exists), then the
+ * OS snapshot (skipped only for a stored light/dark). Returns the mode to
+ * write into the cookie, followed by a refresh, or null for nothing to do.
+ * Pure so the "Follow my device" path is testable without a render harness.
+ */
+export function followUpCookie(
+  plan: { skipMigration: boolean; skipPersist: boolean },
+  existingCookie: string | undefined,
+  storedLocalTheme: string | null,
+  theme: string | undefined,
+  resolvedTheme: string | undefined,
+): "light" | "dark" | null {
+  if (!plan.skipMigration) {
+    const migrated = cookieModeToMigrate(existingCookie, storedLocalTheme);
+    if (migrated) return migrated;
+  }
+  if (plan.skipPersist) return null;
+  const value = cookieModeToPersist(theme, resolvedTheme);
+  return value && value !== existingCookie ? value : null;
 }
