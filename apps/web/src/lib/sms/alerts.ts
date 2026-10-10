@@ -95,27 +95,23 @@ export function formatAlertWhen(instant: Date, timeZone: string, language: Local
  *  the caller passes `resolveLocale(undefined, account.language)` and a
  *  `whenCompanyZone` from `formatAlertWhen` in that same language, never a
  *  booking-page locale. Optional and defaulting to "en" so every 3-arg call
- *  keeps its exact prior output. For Spanish (owner decision B) the whole
- *  text loses its accents, so only a name GSM-7 cannot carry at all (or one
- *  too long for a segment) still reaches the no-name fallback. */
+ *  keeps its exact prior output. For Spanish (owner decision B) our wording
+ *  and the date lose their accents; the customer's name never does, and the
+ *  no-name fallback applies past one segment exactly as in English. */
 export function composeBookingAlertSms(
   whenCompanyZone: string, contactName: string, hasEmailRecipients: boolean, language: Locale = "en",
 ): string {
   const name = contactName.replace(/[\r\n\t]+/g, " ").trim();
-  // Spanish drops every accent from the WHOLE text, the name included
-  // ("José Núñez" → "Jose Nunez"), so an accented name — the common case on
-  // a Spanish account — keeps its place instead of forcing the no-name
-  // fallback. The dashboard and the email still carry the name as typed.
-  // A Spanish text must also stay GSM-7 (owner decision B), so a name GSM-7
-  // cannot carry even unaccented (CJK, emoji) takes the fallback there,
-  // where English still accepts a one-segment UCS-2 text as it always has.
+  // Spanish drops accents from OUR wording and the date only (owner rule,
+  // 2026-10-10). The customer's name is inserted AFTER the strip, untouched
+  // ("José Núñez" stays "José Núñez"), exactly as the English alert sends
+  // it — even when that costs the text its GSM-7 encoding. The no-name
+  // fallback then works the same in both languages: past one segment, drop
+  // the name.
   const finish = (text: string) => (language === "es" ? stripDiacritics(text) : text);
-  const fits = (text: string) => {
-    const seg = segmentsFor(text);
-    return seg.segments <= 1 && (language !== "es" || seg.encoding === "gsm7");
-  };
-  const withName = finish(t(m, "sms.alert.booking.newBookingWithName", language, { when: whenCompanyZone, name }));
-  if (fits(withName)) return withName;
+  const withName = finish(t(m, "sms.alert.booking.newBookingWithName", language, { when: whenCompanyZone }))
+    .replace("{name}", () => name);
+  if (segmentsFor(withName).segments <= 1) return withName;
   const fallback = t(m, "sms.alert.booking.newBooking", language, { when: whenCompanyZone });
   return finish(hasEmailRecipients ? `${fallback}${emailHint(language)}` : fallback);
 }
