@@ -15,7 +15,7 @@
 -- SCOPE (owner decision, 2026-10-10, Spanish-runtime). This column governs
 -- CLIENT-role sessions only. Agency operators stay English regardless of
 -- this value until the parallel staff-and-roles lane's users.language
--- exists; nothing in this migration enforces that split — it is a
+-- exists; nothing in this migration enforces that split - it is a
 -- read-site rule for Task 4's resolver, recorded here because this is the
 -- column's one authoritative comment.
 --
