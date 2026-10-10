@@ -647,29 +647,38 @@ export class BookingNotMovableError extends Error {
  *     never leave the customer with nothing. A taken range is
  *     `SlotTakenError`, nothing written. An unclear insert error (a dropped
  *     response) is settled by looking the row up by the token this call
- *     minted: there, the move goes on; absent, nothing was written;
+ *     minted: there, the move goes on; absent, nothing was written; the
+ *     look-up itself failing, the row is deleted BY THAT TOKEN (a no-op if it
+ *     never landed) and the move fails;
  *  3. cancel the old row ONLY IF it is still `booked` — one conditional
- *     UPDATE here, not `setBookingStatus`, so the write and its
- *     `booking.status_changed` event are told apart:
+ *     UPDATE that stamps `updated_at` with this call's own instant, so OUR
+ *     cancel can be told from anyone else's (fix round 2, I1):
  *     - it matched: the move is DONE;
- *     - it matched nothing (the other tab cancelled or moved it): the new
- *       row is DELETED, not cancelled — it never was an appointment, and a
- *       cancelled row naming the old one would read as a move
- *       (`bookingWasMoved`) and block an Undo (`undoOperatorCancel`). Then
- *       `BookingNotMovableError`;
- *     - an unclear error: the old row is read again. Still `booked` → the
- *       same take-back; anything else → the cancel landed (or another tab's
- *       did), and the move stands.
+ *     - it matched nothing (another tab moved it, the business or the
+ *       customer's link cancelled it): TAKE BACK — the new row is DELETED,
+ *       not cancelled (it never was an appointment, and a cancelled row
+ *       naming the old one would read as a move, `bookingWasMoved`, and
+ *       block an Undo, `undoOperatorCancel`), then `BookingNotMovableError`;
+ *     - an unclear error: the old row is read again. Cancelled AND carrying
+ *       our stamp → our cancel landed behind the error, the move is done.
+ *       Anything else — still booked, or cancelled by someone else in that
+ *       window (whose own booking now stands) — the same take-back.
+ *     - an unclear error AND a failed re-read: nobody can say whose cancel
+ *       stands, so the move is ROLLED BACK: our cancel is undone where it
+ *       carries our stamp, and only once that undo has answered is the new
+ *       row deleted. If the undo itself fails the new row is kept: two live
+ *       bookings is a defect someone can see; none is a lost customer.
+ *     Every delete is retried once.
  *
- * EVENTS NEVER DECIDE THE OUTCOME (fix round 1, C1/I2). `booking.created` and
- * `booking.status_changed` are written after their rows; a failed one is
- * logged and the move continues. An event cannot un-write a row, and a move
- * that stopped there left either no live booking or two.
+ * EVENTS NEVER DECIDE THE OUTCOME (fix rounds 1 and 2). `booking.created`
+ * and `booking.status_changed` are written only once the move is SETTLED, so
+ * a taken-back move leaves no "booking created" for a row that is gone; a
+ * failed event is logged and the move stands. An event cannot un-write a row.
  *
- * So a return leaves the NEW booking live and the old one cancelled;
- * `BookingNotMovableError` and `SlotTakenError` leave the old one as it was
- * and no new row. A plain Error is thrown only when the database cannot be
- * read or written to settle which; its message names both rows.
+ * So a return leaves the NEW booking live and the old one cancelled by this
+ * call; `BookingNotMovableError` and `SlotTakenError` leave no new row. A
+ * plain Error means the move did not happen: what could be rolled back was,
+ * and its message names both rows and what could not be settled.
  *
  * The new row gets its own cancel token (the old row's now opens a cancelled
  * booking), and `rescheduleChain` gives its calendar file the old row's UID
@@ -698,6 +707,20 @@ export async function moveBooking(
     meetingUrl: to.meetingUrl, rescheduledFromId: old.id, ipHash: to.ipHash,
   };
   const cancelToken = newCancelToken();
+  // The new row, removed by the token only this call holds: idempotent, so
+  // it is safe whether or not the row ever landed. Retried once. Answers the
+  // last error, or null when the row is gone.
+  const takeBack = async (): Promise<string | null> => {
+    let last: string | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { error: delErr } = await db.from("bookings").delete()
+        .eq("account_id", accountId).eq("cancel_token", cancelToken);
+      if (!delErr) return null;
+      last = delErr.message;
+    }
+    return last;
+  };
+
   const inserted = await insertBookingRow(db, accountId, input, cancelToken);
   let newId: string;
   if (inserted.data && !inserted.error) {
@@ -708,47 +731,62 @@ export async function moveBooking(
     const { data: found, error: findErr } = await db.from("bookings").select("id")
       .eq("account_id", accountId).eq("cancel_token", cancelToken).maybeSingle();
     if (findErr) {
-      throw new Error(`moveBooking: the replacement for ${old.id} may or may not exist (insert: `
-        + `${inserted.error?.message}; re-read: ${findErr.message})`);
+      const left = await takeBack();
+      throw new Error(`moveBooking: the replacement for ${old.id} could not be confirmed (insert: `
+        + `${inserted.error?.message}; look-up: ${findErr.message}); `
+        + (left ? `it may still exist, the delete by its token failed: ${left}` : "deleted by its token, if it landed"));
     }
     if (!found) throw new Error(`moveBooking: insert failed: ${inserted.error?.message}`);
     newId = (found as { id: string }).id;
     console.error(`moveBooking: replacement ${newId} for ${old.id} landed behind an error: ${inserted.error?.message}`);
   }
-  await emitLogged(db, accountId, "booking.created", actorId,
-    { bookingId: newId, calendarId: input.calendarId, contactId: input.contactId }, actorType);
 
-  // --- 3. the old row, only if it is still live ---------------------------
+  // --- 3. the old row, only if it is still live, stamped as ours ---------
+  const ourStamp = new Date().toISOString();
   const { data: hit, error: cancelErr } = await db.from("bookings")
-    .update({ status: "cancelled", updated_at: new Date().toISOString() })
+    .update({ status: "cancelled", updated_at: ourStamp })
     .eq("account_id", accountId).eq("id", old.id).eq("status", "booked")
     .select("id");
-  let cancelled: boolean;
+  let ours: boolean;
   if (!cancelErr) {
-    cancelled = (hit?.length ?? 0) > 0;
+    ours = (hit?.length ?? 0) > 0;
   } else {
-    const { data: again, error: againErr } = await db.from("bookings").select("status")
+    const { data: again, error: againErr } = await db.from("bookings").select("status, updated_at")
       .eq("account_id", accountId).eq("id", old.id).maybeSingle();
     if (againErr) {
+      // Nobody can say whose cancel stands: roll back. Undo OURS (it alone
+      // carries our stamp; a no-op when it never landed), and only once that
+      // undo has answered, delete the new row. A failed undo keeps the new
+      // row: two live is visible, none is a lost customer.
+      const { error: undoErr } = await db.from("bookings")
+        .update({ status: "booked", updated_at: new Date().toISOString() })
+        .eq("account_id", accountId).eq("id", old.id).eq("status", "cancelled").eq("updated_at", ourStamp)
+        .select("id");
+      const left = undoErr ? `not attempted, the undo of ${old.id}'s cancel failed: ${undoErr.message}` : await takeBack();
       throw new Error(`moveBooking: cannot tell whether ${old.id} was cancelled (cancel: ${cancelErr.message}; `
-        + `re-read: ${againErr.message}); its replacement ${newId} is live`);
+        + `re-read: ${againErr.message}); rolled back` + (left ? `, but ${newId} may still be live (${left})` : ""));
     }
-    // No longer booked: our cancel landed behind the error (or another tab's
-    // did) — either way the old one is gone, and the new one stands.
-    cancelled = (again as { status: BookingStatus } | null)?.status !== "booked";
+    const row = again as { status: BookingStatus; updated_at: string } | null;
+    // OURS only when cancelled AND carrying our stamp. PostgREST answers
+    // "+00:00", not "Z", so the instants are compared, never the strings.
+    ours = row?.status === "cancelled"
+      && new Date(row.updated_at).getTime() === new Date(ourStamp).getTime();
     console.error(`moveBooking: the cancel of ${old.id} answered an error (${cancelErr.message}); `
-      + `re-read says it is ${cancelled ? "no longer booked, so the move stands" : "still booked"}`);
+      + `re-read says ${ours ? "it landed, so the move stands" : "it did not land as ours, so the move is taken back"}`);
   }
 
-  if (!cancelled) {
-    const { error: delErr } = await db.from("bookings").delete()
-      .eq("account_id", accountId).eq("id", newId);
-    if (delErr) {
-      throw new Error(`moveBooking: ${old.id} was not cancelled and its replacement ${newId} `
-        + `could not be taken back: ${delErr.message}`);
+  if (!ours) {
+    const left = await takeBack();
+    if (left) {
+      throw new Error(`moveBooking: ${old.id} was not cancelled by this move and its replacement ${newId} `
+        + `could not be taken back: ${left}`);
     }
     throw new BookingNotMovableError();
   }
+
+  // --- 4. settled: the events, which never undo it -----------------------
+  await emitLogged(db, accountId, "booking.created", actorId,
+    { bookingId: newId, calendarId: input.calendarId, contactId: input.contactId }, actorType);
   await emitLogged(db, accountId, "booking.status_changed", actorId,
     { bookingId: old.id, status: "cancelled" }, actorType);
   return { id: newId, cancelToken };

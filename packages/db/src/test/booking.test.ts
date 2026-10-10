@@ -1554,29 +1554,72 @@ describe("F-048: moveBooking, a customer's move in place", () => {
   });
 
   /**
-   * Fix round 1 (C1, I2): a move's writes can land while what comes after
-   * them fails — an event insert, or the response to a write that committed.
-   * Every such case must end with exactly ONE live booking, and the answer
-   * must say which. Faults are injected into a client wrapped around the real
-   * one: `failEvent` refuses that event type's insert (nothing written);
-   * `lose` runs the real write, then answers an error as a dropped response
-   * would.
+   * Fix rounds 1 and 2: a move's writes can land while what comes after them
+   * fails — an event insert, or the response to a write. Every such case
+   * must end with exactly ONE live booking, and the answer must say which.
+   * Faults are injected into a client wrapped around the real one, keyed on
+   * what each `bookings` query IS (its first call — select/insert/update/
+   * delete — and the columns it filters or selects):
+   *  - `failEvent`: that event type's insert is refused (nothing written);
+   *  - `lose`: the FIRST such write runs, then an error is answered, as a
+   *    dropped response would;
+   *  - `refuse: "update"`: the FIRST update answers an error WITHOUT running
+   *    (a timeout before commit); `between` runs first — another tab's move;
+   *  - `failRead`: a select filtering on `cancel_token`, or the re-read that
+   *    selects `updated_at`, answers an error;
+   *  - `failDelete`: the first N deletes answer an error without running.
    */
-  const faulty = (db: SupabaseClient, f: { failEvent?: string; lose?: "insert" | "update" }) => {
-    const used = { failEvent: false, lose: false };
-    const losing = <T extends object>(builder: T): T => {
+  type Fault = {
+    failEvent?: string; lose?: "insert" | "update"; refuse?: "update";
+    between?: () => Promise<unknown>; failRead?: "cancel_token" | "updated_at"; failDelete?: number;
+  };
+  const faulty = (db: SupabaseClient, f: Fault) => {
+    const used = { failEvent: false, lose: false, refuse: false, failRead: false, failDelete: 0 };
+    const err = (message: string) => ({ data: null, error: { message } });
+    const fired = { lose: false };
+    const watch = <T extends object>(builder: T, op: string, firstArgs: unknown[]): T => {
+      const eqs: string[] = [];
+      const selects: string[] = op === "select" ? [String(firstArgs[0] ?? "")] : [];
+      const decide = async (): Promise<{ data: unknown; error: unknown } | "real" | "lose"> => {
+        if (op === f.lose && !fired.lose) { fired.lose = true; return "lose"; }
+        if (op === "update" && f.refuse === "update" && !used.refuse) {
+          used.refuse = true;
+          await f.between?.();
+          return err("canceling statement due to statement timeout (simulated, not run)");
+        }
+        if (op === "select" && f.failRead === "cancel_token" && eqs.includes("cancel_token")) {
+          used.failRead = true;
+          return err("fetch failed (simulated token look-up)");
+        }
+        if (op === "select" && f.failRead === "updated_at" && selects.some((c) => c.includes("updated_at"))) {
+          used.failRead = true;
+          return err("fetch failed (simulated re-read)");
+        }
+        if (op === "delete" && used.failDelete < (f.failDelete ?? 0)) {
+          used.failDelete += 1;
+          return err("fetch failed (simulated delete)");
+        }
+        return "real";
+      };
       const proxy: T = new Proxy(builder, {
         get(target, prop) {
           if (prop === "then") {
-            return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
-              (target as unknown as PromiseLike<unknown>).then(() => {
-                used.lose = true;
-                return res({ data: null, error: { message: "fetch failed (simulated lost response)" } });
-              }, rej);
+            return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => decide().then((d) => {
+              if (d === "real") return (target as unknown as PromiseLike<unknown>).then(res, rej);
+              if (d === "lose") {
+                return (target as unknown as PromiseLike<unknown>).then(() => {
+                  used.lose = true;
+                  return res(err("fetch failed (simulated lost response)"));
+                }, rej);
+              }
+              return res(d);
+            }, rej);
           }
           const v = Reflect.get(target, prop, target);
           if (typeof v !== "function") return v;
           return (...args: unknown[]) => {
+            if (prop === "eq") eqs.push(String(args[0]));
+            if (prop === "select") selects.push(String(args[0] ?? ""));
             const r = (v as (...a: unknown[]) => unknown).apply(target, args);
             return r === target ? proxy : r;
           };
@@ -1596,13 +1639,13 @@ describe("F-048: moveBooking, a customer's move in place", () => {
                 return (payload: { type?: string }) => {
                   if (payload?.type === f.failEvent) {
                     used.failEvent = true;
-                    return Promise.resolve({ data: null, error: { message: "simulated events insert failure" } });
+                    return Promise.resolve(err("simulated events insert failure"));
                   }
                   return (v as (x: unknown) => unknown).call(t, payload);
                 };
               }
-              if (table === "bookings" && p === f.lose) {
-                return (...a: unknown[]) => losing((v as (...x: unknown[]) => object).apply(t, a));
+              if (table === "bookings" && typeof p === "string" && ["select", "insert", "update", "delete"].includes(p)) {
+                return (...a: unknown[]) => watch((v as (...x: unknown[]) => object).apply(t, a), p, a);
               }
               return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
             },
@@ -1679,6 +1722,99 @@ describe("F-048: moveBooking, a customer's move in place", () => {
         expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
         expect((await rowOf(db, moved.id))!.cancel_token).toBe(moved.cancelToken);
       } finally { errors.mockRestore(); }
+    });
+  });
+
+  const createdEvents = async (db: SupabaseClient, accountId: string) => {
+    const { count, error } = await db.from("events").select("id", { count: "exact", head: true })
+      .eq("account_id", accountId).eq("type", "booking.created");
+    if (error) throw new Error(error.message);
+    return count;
+  };
+  const setup = async (db: SupabaseClient, accountId: string, day: string) => {
+    const cal = await getOrCreateCalendar(db, accountId, "user_test");
+    const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+    const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at(day, 15), endsAt: at(day, 16) }, "user_test");
+    return { cal, contactId, old };
+  };
+  const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try { return await fn(); } finally { errors.mockRestore(); }
+  };
+  const outcome = async (p: Promise<unknown>) => {
+    try { await p; return "moved"; } catch (e) { return e instanceof BookingNotMovableError ? "not movable" : `Error: ${(e as Error).message}`; }
+  };
+
+  it("round 2 (I2a): the cancel answers an error WITHOUT landing — the old booking is still live, so the new one is taken back and the move refused (mutation: read every unclear cancel as ours → two live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "27");
+      const { client, used } = faulty(db, { refuse: "update" });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("28", 15), endsAt: at("28", 16) }, "public", "system")));
+      expect(used.refuse, "the fault fired").toBe(true);
+      expect(got).toBe("not movable");
+      expect(await statuses(db, accountId)).toEqual(["old:booked"]);
+      // m-c: a taken-back move leaves no "booking created" for a row that is gone.
+      expect(await createdEvents(db, accountId)).toBe(1);
+    });
+  });
+
+  it("round 2 (I1/I2b): the cancel errors and ANOTHER tab's move lands meanwhile — the old row is cancelled, but not by us, so ours is taken back and only the other tab's booking is live (mutation: treat 'no longer booked' as ours → two live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "29");
+      let other: { id: string } | undefined;
+      const { client, used } = faulty(db, {
+        refuse: "update",
+        between: async () => { other = await moveBooking(db, accountId, old.id, { startsAt: at("30", 17), endsAt: at("30", 18) }, "public", "system"); },
+      });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("30", 15), endsAt: at("30", 16) }, "public", "system")));
+      expect(used.refuse, "the fault fired").toBe(true);
+      expect(got).toBe("not movable");
+      expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
+      expect((await rowOf(db, other!.id))!.status).toBe("booked");
+    });
+  });
+
+  it("round 2 (m-a): the insert lands behind a lost response AND its token look-up fails — the row is deleted by its token, so only the old booking is live (mutation: throw without the delete → two live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "02");
+      const { client, used } = faulty(db, { lose: "insert", failRead: "cancel_token" });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("03", 17), endsAt: at("03", 18) }, "public", "system")));
+      expect(used.lose && used.failRead, "both faults fired").toBe(true);
+      expect(got).toMatch(/^Error: /);
+      expect(await statuses(db, accountId)).toEqual(["old:booked"]);
+    });
+  });
+
+  it("round 2 (m-a): the take-back delete fails once — it is retried, and only the old booking is live (mutation: no retry → two live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "04");
+      const { client, used } = faulty(db, { refuse: "update", failDelete: 1 });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("05", 17), endsAt: at("05", 18) }, "public", "system")));
+      expect(used.failDelete, "the delete fault fired").toBe(1);
+      expect(got).toBe("not movable");
+      expect(await statuses(db, accountId)).toEqual(["old:booked"]);
+    });
+  });
+
+  it("round 2 (m-a): the cancel errors AND its re-read fails, when the cancel did NOT land — rolled back to the start: only the old booking is live (mutation: throw without rolling back → two live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "06");
+      const { client, used } = faulty(db, { refuse: "update", failRead: "updated_at" });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("07", 17), endsAt: at("07", 18) }, "public", "system")));
+      expect(used.failRead, "the re-read fault fired").toBe(true);
+      expect(got).toMatch(/^Error: /);
+      expect(await statuses(db, accountId)).toEqual(["old:booked"]);
+    });
+  });
+
+  it("round 2 (m-a): the cancel LANDS behind a lost response AND its re-read fails — our cancel is undone by its stamp, then the new row taken back: still exactly one live, never none (mutation: delete without undoing → no live booking, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "08");
+      const { client, used } = faulty(db, { lose: "update", failRead: "updated_at" });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("09", 17), endsAt: at("09", 18) }, "public", "system")));
+      expect(used.lose && used.failRead, "both faults fired").toBe(true);
+      expect(got).toMatch(/^Error: /);
+      expect(await statuses(db, accountId)).toEqual(["old:booked"]);
     });
   });
 
