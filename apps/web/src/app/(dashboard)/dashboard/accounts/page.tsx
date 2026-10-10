@@ -138,12 +138,15 @@ export default async function AccountsPage() {
                   // The agency's home screen was a grid of flat rectangles —
                   // the one screen every session starts on.
                   //
-                  // F-107 (rider part): `min-w-0` — this `<a>` is the GRID
-                  // ITEM (the `<ul>`'s `grid gap-4 sm:grid-cols-2
-                  // xl:grid-cols-3`), and a grid item's automatic minimum
-                  // size defaults to its content's min-content width; the
-                  // icon chip + status badge row inside was holding the
-                  // card a few px past its own track at 320px.
+                  // F-107 (rider part): `min-w-0` — this anchor's own
+                  // automatic minimum size (it is a block-level flex/grid
+                  // descendant too) still floors at its content's
+                  // min-content width; the icon chip + status badge row
+                  // inside was holding the card a few px past its own track
+                  // at 320px. (F-107 r2 review, item 2: the GRID ITEM
+                  // itself is the `<li>` above, not this `<a>` — its own
+                  // `min-w-0` is what the track-fitting actually needed;
+                  // this one still earns its keep independently.)
                   className="block min-w-0 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3 transition-colors hover:border-[var(--accent)]"
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -164,8 +167,18 @@ export default async function AccountsPage() {
                     </Badge>
                   </div>
                   <p className="mt-4 truncate text-[13.5px] font-semibold text-card-foreground">{a.name}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{a.timezone}</p>
-                  <p className="mt-3 text-xs text-muted-foreground">
+                  {/* F-107 r2 review (item 1): `truncate` — an IANA zone can
+                      be one long unbreakable string (e.g.
+                      "America/Argentina/ComodRivadavia"), and CI's own
+                      bis-ci project (unlike this rider's local fixture, one
+                      short name) surfaces real accounts with real zones and
+                      names long enough to hold this card open past its
+                      track at 320px: "the page must fit whatever accounts
+                      exist," not just this run's own fixture. The name
+                      above already truncated; this line and the one below
+                      did not. */}
+                  <p className="mt-1 truncate text-sm text-muted-foreground">{a.timezone}</p>
+                  <p className="mt-3 truncate text-xs text-muted-foreground">
                     {/* The row's OWN zone, printed right above (`a.timezone`)
                         — not the runtime's (server or browser), the same bug
                         D-010 fixed elsewhere. Falls back to UTC rather than
