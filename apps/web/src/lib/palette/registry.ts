@@ -107,6 +107,15 @@ export function buildPaletteEntries(base: string | null, isAgency: boolean, isOw
     }
   }
 
+  // Mis preferencias (F-096, Task 6): a person's OWN page, not an
+  // account's, so it is offered to every caller, with or without an account
+  // in scope. Not a nav item (it lives in the user menu), so registered here.
+  entries.push({
+    kind: "href", id: "nav:preferences", label: m["prefs.palette"], group: "navigation", agencyOnly: false,
+    keywords: ["preferences", "language", "idioma", "español", "spanish", "english", "theme", "dark", "light", "appearance", "my"],
+    href: "/dashboard/preferences",
+  });
+
   // Staff and roles (Task 8): a client Owner reaches team management
   // directly — the sidebar footer's own destination, not a Settings-page
   // anchor, so it is registered like any other nav destination rather than

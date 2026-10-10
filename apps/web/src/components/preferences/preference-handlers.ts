@@ -1,0 +1,133 @@
+import type { PersonLanguage, PersonTheme } from "@bis/db";
+import type { Locale } from "@/lib/i18n/locale";
+import type { MessageKey } from "@/lib/messages";
+import type { PrefsResult } from "@/lib/preferences/save";
+import { localeOfLanguage } from "@/lib/preferences/preference-options";
+
+/**
+ * What the Preferences page does when a radio is chosen (F-096, spec §6;
+ * DESIGN.md rule 6): the choice applies AT ONCE, the save runs behind it,
+ * and a toast says what happened with an Undo. No confirm, no Save button.
+ * Plain async functions, not hooks (team-handlers.ts's pattern), so
+ * preference-handlers.test.ts reaches every toast and every Undo without a
+ * DOM.
+ *
+ * Undo sends the value the SERVER says it replaced (`previous`), not the
+ * one this page last showed: another tab or device may have saved in
+ * between, and the server's answer is the only one that is true.
+ */
+
+/** Sonner's own 4 s is short for a decision; the house undo window (team-handlers.ts's TEAM_TOAST_MS). */
+export const PREFS_TOAST_MS = 10_000;
+
+export type PrefsCopyKey = Extract<MessageKey, `prefs.${string}`> | "common.actionCrashed";
+type Copy = (key: PrefsCopyKey, params?: Record<string, string>) => string;
+
+export type PrefsToast = {
+  success: (msg: string, undo: { label: string; onClick: () => void }) => void;
+  error: (msg: string) => void;
+  /** The "Changed back." after an Undo lands. Optional, so a caller with no
+   *  plain toast (the tests) need not supply one. */
+  done?: (msg: string) => void;
+};
+
+type Outcome<T> = { ok: true; previous: T | null } | { ok: false; key: "prefs.error.failed" | "common.actionCrashed" };
+
+/** One save; a refusal is "didn't save", a throw (a stale page, a server fault) the house reload sentence. */
+async function attempt<T>(save: () => Promise<PrefsResult<T>>): Promise<Outcome<T>> {
+  try {
+    const r = await save();
+    return r.ok ? r : { ok: false, key: "prefs.error.failed" };
+  } catch {
+    return { ok: false, key: "common.actionCrashed" };
+  }
+}
+
+/**
+ * The shared shape of both changes: apply, save, revert on failure, and an
+ * Undo that applies the server's `previous` at once and saves it in turn
+ * (reverting to `next` if THAT save fails). `copyAt(v)` is the copy to speak
+ * once `v` is the value in force — the language card's toasts change
+ * language with the value; the theme card's never do.
+ */
+async function change<T extends string>(input: {
+  next: T | null; current: T | null;
+  save: (v: T | null) => Promise<PrefsResult<T>>;
+  apply: (v: T | null) => void;
+  copyAt: (v: T | null) => Copy;
+  savedMessage: (v: T | null, copy: Copy) => string;
+  toast: PrefsToast;
+}): Promise<void> {
+  const { next, current, save, apply, copyAt, savedMessage, toast } = input;
+  if (next === current) return;
+  apply(next);
+  const r = await attempt(() => save(next));
+  if (!r.ok) {
+    apply(current);
+    toast.error(copyAt(current)(r.key));
+    return;
+  }
+  const previous = r.previous;
+  const copy = copyAt(next);
+  toast.success(savedMessage(next, copy), {
+    label: copy("prefs.undo"),
+    onClick: () => {
+      apply(previous);
+      void attempt(() => save(previous)).then((u) => {
+        if (!u.ok) {
+          apply(next);
+          toast.error(copyAt(next)(u.key));
+          return;
+        }
+        toast.done?.(copyAt(previous)("prefs.undone"));
+      });
+    },
+  });
+}
+
+const LANGUAGE_NAME_KEY = {
+  en: "prefs.languageName.english",
+  es: "prefs.languageName.spanish",
+} as const satisfies Record<PersonLanguage, PrefsCopyKey>;
+
+const THEME_SAVED_KEY = {
+  light: "prefs.saved.theme.light",
+  dark: "prefs.saved.theme.dark",
+  system: "prefs.saved.theme.system",
+} as const satisfies Record<PersonTheme, PrefsCopyKey>;
+
+export function changeLanguage(input: {
+  next: PersonLanguage | null; current: PersonLanguage | null;
+  save: (v: PersonLanguage | null) => Promise<PrefsResult<PersonLanguage>>;
+  /** Sets the radio. The route repaints in the new language when the save lands. */
+  apply: (v: PersonLanguage | null) => void;
+  copyFor: (locale: Locale) => Copy;
+  accountLanguage: PersonLanguage | null; toast: PrefsToast;
+}): Promise<void> {
+  const { copyFor, accountLanguage } = input;
+  return change({
+    ...input,
+    // A language toast speaks the language it is about: the one just chosen,
+    // the one put back, or (on a failure) the one still in force.
+    copyAt: (v) => copyFor(localeOfLanguage(v, accountLanguage)),
+    savedMessage: (v, copy) => {
+      const language = copy(LANGUAGE_NAME_KEY[localeOfLanguage(v, accountLanguage)]);
+      return v === null ? copy("prefs.saved.languageAccount", { language }) : copy("prefs.saved.language", { language });
+    },
+  });
+}
+
+export function changeTheme(input: {
+  next: PersonTheme | null; current: PersonTheme | null;
+  save: (v: PersonTheme | null) => Promise<PrefsResult<PersonTheme>>;
+  /** Sets the radio, next-themes and the `bis-theme` cookie. */
+  apply: (v: PersonTheme | null) => void;
+  copy: Copy; toast: PrefsToast;
+}): Promise<void> {
+  const { copy } = input;
+  return change({
+    ...input,
+    copyAt: () => copy,
+    savedMessage: (v, c) => c(v === null ? "prefs.saved.theme.none" : THEME_SAVED_KEY[v]),
+  });
+}

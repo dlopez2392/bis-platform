@@ -43,6 +43,7 @@ import {
 import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
+import { ChoiceTilesDemo } from "./choice-tiles-demo";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
 import { requestPseudoMode } from "@/lib/i18n/request-locale";
 import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
@@ -227,6 +228,10 @@ export default async function StyleguidePage({
             <DotPill {...EMAIL_TREATMENT.stopped} dense data-status="stopped" />
           </div>
         </section>
+
+        <Section title={t(m, "styleguide.choiceTiles", "en")} file="components/choice-tiles.tsx">
+          <ChoiceTilesDemo />
+        </Section>
 
         <Section title="Meter" file="components/meter.tsx">
           {/* The mockup's `.meter` (northern-lights.html:56): a 5px track on

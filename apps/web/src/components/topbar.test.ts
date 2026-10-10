@@ -122,3 +122,14 @@ describe("Topbar — spec §6: a client session (isAgency: false) renders no Org
     expect(src).toMatch(/<OrganizationSwitcher[\s\S]*?\/>\s*\) : null/);
   });
 });
+
+// Mis preferencias (F-096, Task 6): Clerk's UserButton is reached through
+// UserMenu, a client component, because UserButton.MenuItems is a static
+// property of a client reference this server component cannot read, and
+// UserButton.Link's label is a plain string resolved with useLocale().
+describe("the user menu", () => {
+  it("renders <UserMenu /> and no bare <UserButton /> (mutation: put <UserButton /> back -> FAILS)", () => {
+    expect(src).toContain("<UserMenu />");
+    expect(src).not.toMatch(/<UserButton\b/);
+  });
+});
