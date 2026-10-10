@@ -175,14 +175,24 @@ test.describe("a direct delete through Staff's own token", () => {
     const contactId = (data as { id: string }).id;
     try {
       const token = await mintClientToken(staffClerkUserId);
-      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/contacts?id=eq.${contactId}`, {
+      const headers = {
+        apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+      const rowUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/contacts?id=eq.${contactId}&select=id`;
+      // Review I5: the SAME token reads the SAME row first. That proves the
+      // token carries this account's org and the tenant SELECT policy admits
+      // it, so the [] below can only mean 0066's owner-only delete refused
+      // it, not a token PostgREST could not place in any account (which
+      // would also answer 200, []).
+      const read = await fetch(rowUrl, { headers });
+      const readText = await read.text();
+      expect(read.status, readText).toBe(200);
+      expect(JSON.parse(readText) as unknown, "Staff's own token reads the row it will try to delete").toEqual([{ id: contactId }]);
+      const res = await fetch(rowUrl, {
         method: "DELETE",
-        headers: {
-          apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          Prefer: "return=representation",
-        },
+        headers: { ...headers, Prefer: "return=representation" },
       });
       const text = await res.text();
       const rows = text.trimStart().startsWith("[") ? (JSON.parse(text) as unknown[]) : [];
