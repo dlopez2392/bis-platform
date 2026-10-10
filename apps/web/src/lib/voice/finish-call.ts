@@ -67,19 +67,14 @@ export interface FinishContext {
    *  send time" — the default is deliberately never persisted, so an operator
    *  who never wrote their own keeps getting the current copy. */
   textbackBody: string;
-  /** `accounts.language` (0065) — the account's own resolved language
-   *  preference. Threaded here for one purpose only: `generateSummary`'s
-   *  staff-facing prose, which is stored ONCE and read by both the client
-   *  and agency staff, so it is written in whichever language the account
-   *  reads in. Unrelated to `profileLanguage` above (what Sofía is allowed
-   *  to SPEAK on the call) and to `calls.language` (what the caller actually
-   *  spoke) — three different "language" concepts that this field must not
-   *  be confused with. NULL means no preference recorded; `resolveLocale`
-   *  below turns that into English, the same default as everywhere else. A
-   *  caller's own quoted words inside the summary are never translated
-   *  (summary-service.ts's own rule). Optional so existing callers of
-   *  `finishCall` that have not yet threaded an account row compile
-   *  unchanged and get today's English prose. */
+  /** `accounts.language` (0065), read off the account row route.ts already
+   *  loads (ACCOUNT_COLS, no extra query). Used for ONE thing: the staff
+   *  call-alert TEXT (`composeCallAlertSms`, owner decision B, 2026-10-10 —
+   *  Spanish with accents dropped for a Spanish account). The call SUMMARY,
+   *  the conversation body and the alert EMAIL stay English regardless
+   *  (owner decision A). Unrelated to `profileLanguage` above (what Sofía
+   *  may SPEAK) and to `calls.language` (what the caller spoke). NULL or
+   *  absent means English, via `resolveLocale`. */
   accountLanguage?: Locale | null;
 }
 
@@ -402,10 +397,7 @@ export async function finishCall(
 
   let summary: string;
   try {
-    summary = await generateSummary(state, {
-      timezone: ctx.timezone,
-      language: resolveLocale(undefined, ctx.accountLanguage ?? null),
-    });
+    summary = await generateSummary(state, { timezone: ctx.timezone });
   } catch (e) {
     console.error(`finishCall: generateSummary failed, falling back to fact line: ${String(e)}`);
     summary = summaryFactLine(state);
@@ -518,7 +510,8 @@ export async function finishCall(
       const alertPhone = await getAlertPhone(ctx.db, ctx.accountId);
       pendingAlertSms = await prepareAlertSms(
         ctx.db, ctx.accountId, alertPhone,
-        composeCallAlertSms(outcome, ctx.notifyEmails.length > 0),
+        // The ACCOUNT’s language (owner decision B); NULL or absent is English.
+        composeCallAlertSms(outcome, ctx.notifyEmails.length > 0, resolveLocale(undefined, ctx.accountLanguage ?? null)),
       );
     } catch (e) {
       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS prepare failed: ${String(e)}`);

@@ -5,19 +5,19 @@ import { resolveSmsSender, refusesAlertLoop } from "./sender";
 import { sendSms } from "@/lib/consent/gate";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
-// t.ts does not re-export Locale — it imports it from locale.ts itself, so
-// this file does the same rather than reaching through t.ts for a type it
-// never names.
 import type { Locale } from "@/lib/i18n/locale";
+import { formatWhen } from "@/lib/booking/time";
 
 /**
  * Business-side alert texts — the SMS twin of `bookingAlertEmail`/
  * `voiceCallAlertEmail` (lib/email/templates/{booking,voice}.ts), sent
  * ALONGSIDE those emails, never instead of them (danlo, 2026-09-15).
  *
- * Operator-facing. `composeBookingAlertSms` writes in the account's own
- * language since F-013 (Task 8, Spanish-runtime lane); the other alerts
- * (`composeCallAlertSms`, `composeAlertPhoneVerificationSms`) stay English.
+ * Operator-facing, in the ACCOUNT's language (never the customer's). Owner
+ * decision B (2026-10-10): for a Spanish account the booking alert and the
+ * call alert are Spanish with every accent dropped (`stripDiacritics`), so
+ * they stay GSM-7 and one segment. The verification-code text, the alert
+ * emails and the conversation thread stay English.
  *
  * A text has no subject line and no room for preamble: what happened, who
  * it was, then stop. The customer's PHONE NUMBER never appears in either
@@ -33,13 +33,44 @@ import type { Locale } from "@/lib/i18n/locale";
  * A second read here would duplicate, not strengthen, that check.
  */
 
-/** Both composers share ONE phrase for "the rest is in your inbox," so the
- *  two never drift into two different promises of the same thing (a minor
- *  the alert-send-report follow-up review caught: "Check email for
- *  details." vs "Check your email for details."). Short on purpose — every
- *  caller of both composers below measures its own worst case with
- *  `segmentsFor` rather than trusting a short phrase to stay short. */
-const EMAIL_HINT = " Check email for details.";
+/** Both composers share ONE phrase for "the rest is in your inbox"
+ *  (`sms.alert.emailHint`), so the two never drift into two different
+ *  promises of the same thing (a minor the alert-send-report follow-up review
+ *  caught: "Check email for details." vs "Check your email for details.").
+ *  Short on purpose — every caller of both composers below measures its own
+ *  worst case with `segmentsFor` rather than trusting a short phrase to stay
+ *  short. */
+function emailHint(language: Locale): string {
+  return t(m, "sms.alert.emailHint", language);
+}
+
+/** Owner decision B: a Spanish staff text drops every accent — NFD splits
+ *  "á" into "a" plus a combining mark, and the marks are removed — so
+ *  á/í/ó/ú (outside GSM-7) never drop the whole text to UCS-2 at 70
+ *  chars/segment. For SMS composition only, never for display: the
+ *  accents-guard test exists because display must KEEP accents. */
+export function stripDiacritics(text: string): string {
+  return text.normalize("NFD").replace(/\p{M}/gu, "");
+}
+
+/** The when-string a staff alert TEXT carries, in the account's language.
+ *  English is exactly `formatWhen(instant, timeZone)` — the booking email,
+ *  its subject and the thread keep using that directly. Spanish is built
+ *  from es-US's own parts as "sab 17 oct, 3:00 p.m. CDT" (owner decision
+ *  B's example): no "de", no comma after the weekday, no trailing period on
+ *  an abbreviation ("sept."), any non-ASCII space folded to a plain one,
+ *  accents dropped. */
+export function formatAlertWhen(instant: Date, timeZone: string, language: Locale): string {
+  if (language !== "es") return formatWhen(instant, timeZone);
+  const parts = new Intl.DateTimeFormat("es-US", {
+    timeZone, weekday: "short", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit", timeZoneName: "short",
+  }).formatToParts(instant);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  const abbr = (type: Intl.DateTimeFormatPartTypes) => value(type).replace(/\.$/, "");
+  const when = `${abbr("weekday")} ${value("day")} ${abbr("month")}, ${value("hour")}:${value("minute")} ${value("dayPeriod")} ${value("timeZoneName")}`;
+  return stripDiacritics(when).replace(/\s+/g, " ").trim();
+}
 
 /** New booking: `<when>` `-` `<name>`. Falls back to naming no one when the
  *  name would push the message past ONE segment — measured with
@@ -59,25 +90,34 @@ const EMAIL_HINT = " Check email for details.";
  *  contact name for the booking record itself, but it must not be able to
  *  split this one-line text onto a second visual line.
  *
- *  `language` (F-013, Task 8 of the Spanish-runtime lane): the reader is the
- *  BUSINESS owner/staff this alert goes to, so it is the account's own
- *  resolved language, never the customer's — the caller passes
- *  `resolveLocale(undefined, account.language)`, not a booking-page locale.
- *  Optional and defaulting to "en" so every pre-existing 3-arg call keeps
- *  its exact prior output. The Spanish catalogue copy (messages.ts) is
- *  written with no á/í/ó/ú on purpose — those four are the one GSM-7
- *  gap this app's Spanish strings avoid everywhere else — so the catalogue
- *  text alone never forces this composer's result past the one-segment
- *  budget the English copy was designed for; only an accented NAME (already
- *  the fallback's reason to exist) can still do that, in either language. */
+ *  `language`: the reader is the BUSINESS owner/staff this alert goes to,
+ *  so it is the account's own resolved language, never the customer's —
+ *  the caller passes `resolveLocale(undefined, account.language)` and a
+ *  `whenCompanyZone` from `formatAlertWhen` in that same language, never a
+ *  booking-page locale. Optional and defaulting to "en" so every 3-arg call
+ *  keeps its exact prior output. For Spanish (owner decision B) the whole
+ *  text loses its accents, so only a name GSM-7 cannot carry at all (or one
+ *  too long for a segment) still reaches the no-name fallback. */
 export function composeBookingAlertSms(
   whenCompanyZone: string, contactName: string, hasEmailRecipients: boolean, language: Locale = "en",
 ): string {
   const name = contactName.replace(/[\r\n\t]+/g, " ").trim();
-  const withName = t(m, "sms.alert.booking.newBookingWithName", language, { when: whenCompanyZone, name });
-  if (segmentsFor(withName).segments <= 1) return withName;
+  // Spanish drops every accent from the WHOLE text, the name included
+  // ("José Núñez" → "Jose Nunez"), so an accented name — the common case on
+  // a Spanish account — keeps its place instead of forcing the no-name
+  // fallback. The dashboard and the email still carry the name as typed.
+  // A Spanish text must also stay GSM-7 (owner decision B), so a name GSM-7
+  // cannot carry even unaccented (CJK, emoji) takes the fallback there,
+  // where English still accepts a one-segment UCS-2 text as it always has.
+  const finish = (text: string) => (language === "es" ? stripDiacritics(text) : text);
+  const fits = (text: string) => {
+    const seg = segmentsFor(text);
+    return seg.segments <= 1 && (language !== "es" || seg.encoding === "gsm7");
+  };
+  const withName = finish(t(m, "sms.alert.booking.newBookingWithName", language, { when: whenCompanyZone, name }));
+  if (fits(withName)) return withName;
   const fallback = t(m, "sms.alert.booking.newBooking", language, { when: whenCompanyZone });
-  return hasEmailRecipients ? `${fallback}${t(m, "sms.alert.booking.emailHint", language)}` : fallback;
+  return finish(hasEmailRecipients ? `${fallback}${emailHint(language)}` : fallback);
 }
 
 /**
@@ -100,11 +140,11 @@ export function composeBookingAlertSms(
  * RUNTIME floor as well. Widen this union and `isMeaningful` together; the
  * compiler will catch only half of getting it wrong.
  */
-const CALL_ALERT_LEAD: Record<"booked" | "lead" | "message", string> = {
-  booked: "New call: booked a meeting.",
-  lead: "New call: a lead came in.",
-  message: "New call: left a message.",
-};
+const CALL_ALERT_LEAD = {
+  booked: "sms.alert.call.booked",
+  lead: "sms.alert.call.lead",
+  message: "sms.alert.call.message",
+} as const satisfies Record<"booked" | "lead" | "message", keyof typeof m>;
 
 /** One line naming what happened, plain ASCII, always one segment — the
  *  caller's own number is deliberately absent; the full transcript-backed
@@ -113,9 +153,13 @@ const CALL_ALERT_LEAD: Record<"booked" | "lead" | "message", string> = {
  *  two of four calendars have no notify emails at all, and for those
  *  accounts this text was the only notification they get while pointing at
  *  an email that was never sent (alert-send-report follow-up review, finding
- *  3). */
+ *  3).
+ *
+ *  `language` is the ACCOUNT's (owner decision B): finishCall passes the
+ *  `accounts.language` route.ts already loaded. The Spanish copy is written
+ *  accent-free and stripped again here, so it is GSM-7 by construction. */
 export function composeCallAlertSms(
-  outcome: "booked" | "lead" | "message", hasEmailRecipients: boolean,
+  outcome: "booked" | "lead" | "message", hasEmailRecipients: boolean, language: Locale = "en",
 ): string {
   // Runtime floor, not belt-and-braces: see CALL_ALERT_LEAD's doc. The type
   // says this lookup cannot miss; a widened type predicate upstream is enough
@@ -123,9 +167,11 @@ export function composeCallAlertSms(
   // literally reads "undefined". Throwing lands in finishCall's staff-alert
   // leg's own try/catch — a logged failure and no text, rather than a text
   // that says nothing.
-  const lead: string | undefined = CALL_ALERT_LEAD[outcome];
-  if (!lead) throw new Error(`composeCallAlertSms: no alert copy for outcome "${outcome}"`);
-  return hasEmailRecipients ? `${lead}${EMAIL_HINT}` : lead;
+  const key: (typeof CALL_ALERT_LEAD)[keyof typeof CALL_ALERT_LEAD] | undefined = CALL_ALERT_LEAD[outcome];
+  if (!key) throw new Error(`composeCallAlertSms: no alert copy for outcome "${outcome}"`);
+  const lead = t(m, key, language);
+  const text = hasEmailRecipients ? `${lead}${emailHint(language)}` : lead;
+  return language === "es" ? stripDiacritics(text) : text;
 }
 
 /**

@@ -102,34 +102,29 @@ describe("generateSummary", () => {
     const systemContent = body.messages[0].content as string;
     expect(systemContent).not.toContain("Never present a UTC time as if it were local");
   });
-  it("opts.language 'es' asks the model to write the summary in Spanish (mutation: drop the opts?.language branch → the rule always says English, FAILS)", async () => {
+  // Owner decision A (2026-10-10): Sofía's call summaries stay ENGLISH for
+  // every account, Spanish ones included — summarize.ts's BOOKING_CLAIM /
+  // INTAKE_CLAIM mismatch guards are English regexes and only stay valid
+  // over English prose. There is no language option any more; a stray one
+  // (an old caller, a cast) must not be able to switch the prompt.
+  it("a stray language option cannot switch the summary out of English (owner decision A; mutation: restore the opts.language === \"es\" branch → FAILS, the prompt asks for español)", async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
     });
-    await generateSummary(callerSpoke(), { language: "es", fetchImpl: fetchImpl as unknown as typeof fetch });
+    const opts = { language: "es", fetchImpl } as unknown as Parameters<typeof generateSummary>[1];
+    await generateSummary(callerSpoke(), opts);
     const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
     const systemContent = body.messages[0].content as string;
-    expect(systemContent).toMatch(/español/i);
-    expect(systemContent).not.toContain("Always write the summary in English");
+    expect(systemContent).toContain("Always write the summary in English (it is staff-facing), regardless of the language spoken on the call.");
+    expect(systemContent).not.toMatch(/español/i);
   });
-  it("omitting opts.language preserves today's exact English instruction with quote clause (mutation: drop the quote clause → FAILS)", async () => {
+  it("the English rule keeps the quote clause: a caller's quoted words stay in the language they spoke (mutation: drop the quote clause → FAILS)", async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
     });
     await generateSummary(callerSpoke(), { fetchImpl: fetchImpl as unknown as typeof fetch });
     const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
     const systemContent = body.messages[0].content as string;
-    expect(systemContent).toContain("Always write the summary in English (it is staff-facing), regardless of the language spoken on the call.");
     expect(systemContent).toContain("If you quote the caller, keep the quote in the language the caller spoke.");
-  });
-  it("opts.language 'es' includes the Spanish quote clause protecting caller words (mutation: drop the quote clause → FAILS)", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
-    });
-    await generateSummary(callerSpoke(), { language: "es", fetchImpl: fetchImpl as unknown as typeof fetch });
-    const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
-    const systemContent = body.messages[0].content as string;
-    expect(systemContent).toMatch(/español/i);
-    expect(systemContent).toContain("Si citas al cliente, deja la cita en el idioma en que habló.");
   });
 });

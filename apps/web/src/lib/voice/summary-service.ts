@@ -1,7 +1,6 @@
 import type { CallState } from "./call-state";
 import { classifyOutcome } from "./call-state";
 import { buildSummaryInput, composeSummary } from "./summarize";
-import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * Generates the staff-facing call summary. The caller holds `CallState` — this
@@ -36,7 +35,7 @@ import type { Locale } from "@/lib/i18n/locale";
  */
 export async function generateSummary(
   state: CallState,
-  opts?: { timezone?: string; fetchImpl?: typeof fetch; language?: Locale },
+  opts?: { timezone?: string; fetchImpl?: typeof fetch },
 ): Promise<string> {
   if (classifyOutcome(state) === "spam") return composeSummary("", state);
 
@@ -53,17 +52,11 @@ export async function generateSummary(
         "Only state that contact details were captured if INTAKE lists them; if INTAKE is (none), say plainly that none were captured.",
         "If the caller asked for something the records do not show, say what they asked for and that it was not completed — do not describe it as done.",
         "Never invent names, phone numbers, email addresses or times that do not appear in the input.",
-        // The account's resolved reader language (F-013 AI/alerts in reader's
-        // language), NOT the language the call was spoken in — this summary
-        // is stored once and read by both the client and agency staff, so
-        // the prose is written for whichever language the account reads in.
-        // A caller's own quoted words are a different concern entirely and
-        // are left untouched by this instruction: nothing here tells the
-        // model to translate a quote, only the surrounding sentences it
-        // writes itself.
-        opts?.language === "es"
-          ? "Escribe el resumen en español (es para el personal), sin importar el idioma en que se habló la llamada. Si citas al cliente, deja la cita en el idioma en que habló."
-          : "Always write the summary in English (it is staff-facing), regardless of the language spoken on the call. If you quote the caller, keep the quote in the language the caller spoke.",
+        // English for every account, Spanish ones included (owner decision
+        // A, 2026-10-10): summarize.ts's BOOKING_CLAIM/INTAKE_CLAIM mismatch
+        // guards are English regexes and only hold over English prose. The
+        // quote clause keeps a caller's own words untranslated.
+        "Always write the summary in English (it is staff-facing), regardless of the language spoken on the call. If you quote the caller, keep the quote in the language the caller spoke.",
       ];
       // BOOKED times in the input are raw UTC (see summarize.ts's fact line,
       // which stays that way deliberately). Left alone, the prose model

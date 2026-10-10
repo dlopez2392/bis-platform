@@ -196,6 +196,7 @@ import {
   signRenderToken, RENDER_TOKEN_FIELD, HONEYPOT_FIELD, RATE_LIMIT_MAX,
 } from "@/lib/forms/guards";
 import { bookingStrings } from "@/lib/booking/public-strings";
+import { segmentsFor } from "@/lib/sms/segments";
 
 const PUBLIC_ID = "cal_test1234";
 
@@ -895,6 +896,24 @@ describe("submitBookingAction — the booking alert text, alongside the email (d
     expect(result.ok).toBe(true);
     const [, , , body] = sendAlertSmsMock.mock.calls[0]!;
     expect(body).toContain("Nueva cita");
+  });
+
+  // Owner decision B (2026-10-10): the Spanish alert's DATE is Spanish too,
+  // accents dropped ("sab 17 oct, 3:00 p.m. CDT"), so the text stays GSM-7
+  // and one segment. The English `whenCompanyZone` (email, subject, thread)
+  // is untouched. Mutation: pass `whenCompanyZone` to composeBookingAlertSms
+  // instead of `formatAlertWhen(startsAt, timezone, alertLanguage)` → FAILS,
+  // the body carries "Sat, Oct 17, 3:00 PM".
+  it("the Spanish alert carries the date in Spanish without accents, GSM-7 and one segment (owner decision B; mutation: reuse the English whenCompanyZone → FAILS)", async () => {
+    accountRow.alert_phone = "+19565550001";
+    accountRow.language = "es";
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    const [, , , body] = sendAlertSmsMock.mock.calls[0]! as [unknown, unknown, unknown, string];
+    expect(body).toMatch(/^Nueva cita: (dom|lun|mar|mie|jue|vie|sab) \d{1,2} [a-z]{3,4}, \d{1,2}:\d{2} [ap]\.m\. /);
+    expect(segmentsFor(body)).toEqual(expect.objectContaining({ encoding: "gsm7", segments: 1 }));
   });
 
   // Mirror of the Spanish case above: no language set on the account (the

@@ -110,8 +110,10 @@ function log(...args: unknown[]) {
 // detail, not a public seam — so the identical column list is selected
 // inline here rather than reaching into the package's internals.
 // `language` (0065) rides along on this SAME select — no extra query — so
-// F-013's reader-language summary can read it off the account row step 9
-// already loads, the same way `timezone` and the brand columns do.
+// the staff call-alert TEXT can be written in the account's language (owner
+// decision B, 2026-10-10) off the account row step 9 already loads, the
+// same way `timezone` and the brand columns are read. The call summary
+// stays English (owner decision A).
 const ACCOUNT_COLS =
   "timezone, brand_name, brand_logo_path, brand_color, brand_neutral, " +
   "brand_corners, brand_type, brand_mode, reply_to_email, from_email, language";

@@ -353,7 +353,8 @@ describe("runCallLifecycle — cap/error idempotency", () => {
 // F-013 AI/alerts in reader's language: the account's `language` column is
 // read off the SAME `accounts` load step 9 already makes (no extra query —
 // see route.ts's ACCOUNT_COLS), then threaded into finishCall's context as
-// `accountLanguage` so the staff-facing summary can be written in it.
+// `accountLanguage` so the staff call-alert TEXT can be written in it (owner
+// decision B). The summary itself stays English (owner decision A).
 describe("runCallLifecycle — the account's language reaches finishCall (F-013)", () => {
   it("accounts.language: 'es' reaches finishCall's context as accountLanguage (mutation: drop the ACCOUNT_COLS/finishCtx wiring → undefined, FAILS)", async () => {
     accountLanguageMock.value = "es";

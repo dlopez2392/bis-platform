@@ -12,7 +12,7 @@ import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { originFrom } from "@/lib/email/origin";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingAlertEmail, bookingConfirmationEmail } from "@/lib/email/templates/booking";
-import { composeBookingAlertSms, sendAlertSms } from "@/lib/sms/alerts";
+import { composeBookingAlertSms, formatAlertWhen, sendAlertSms } from "@/lib/sms/alerts";
 import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { computeAllSlots, bookableSlot, dayKeyInZone } from "@/lib/booking/availability";
@@ -527,14 +527,18 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     //  - Maria Lopez." on a real handset (same review, minors).
     try {
       if (whenCompanyZone) {
+        // The account's OWN language — never `locale` above, which is the
+        // BOOKER's `?locale=` choice for their own confirmation email.
+        const alertLanguage = resolveLocale(undefined, account?.language ?? null);
         await sendAlertSms(
           db, calendar.account_id, account?.alert_phone ?? null,
           composeBookingAlertSms(
-            whenCompanyZone, contactName, calendar.notify_emails.length > 0,
-            // The account's OWN language (F-013) — never `locale` above,
-            // which is the BOOKER's `?locale=` choice for their own
-            // confirmation email, a different reader entirely.
-            resolveLocale(undefined, account?.language ?? null),
+            // Owner decision B: the date in the ACCOUNT's language too —
+            // for Spanish "sab 17 oct, 3:00 p.m. CDT", accents dropped so the
+            // text stays GSM-7. English is byte-identical to
+            // `whenCompanyZone`, which the email and the thread keep using.
+            formatAlertWhen(startsAt, timezone, alertLanguage),
+            contactName, calendar.notify_emails.length > 0, alertLanguage,
           ),
         );
       }
