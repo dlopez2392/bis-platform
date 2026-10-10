@@ -8,7 +8,7 @@ import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, se
          setAlertPhone, serviceDb, type CustomFieldDef,
          startAlertPhoneVerification, verifyAlertPhoneCode, countRecentAlertPhoneVerifications,
          discardAlertPhoneVerification,
-         ALERT_CODE_MAX_SENDS_PER_HOUR } from "@bis/db";
+         ALERT_CODE_MAX_SENDS_PER_HOUR, setAccountLanguage } from "@bis/db";
 import { operatorMailer, EmailNotSent } from "@/lib/consent/email-gate";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 // The public form's own validator, reused deliberately rather than a second
@@ -248,6 +248,39 @@ export async function setReportEmailsAction(
   }
 
   await setReportEmails(serviceDb(), accountId, emails, userId);
+  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+  return { ok: true };
+}
+
+/**
+ * Sets `accounts.language` (0065_account_language.sql; owner decision 4,
+ * 2026-10-10) — the Settings-page twin of `setReportEmailsAction` above,
+ * same shape and same reason. serviceDb() stands behind BOTH writes in this
+ * file that touch `accounts`, which no RLS policy or column grant stands
+ * behind, so the `requireAgencyOnlyAccountAccess` guard on the first line is
+ * the ONLY gate on this write — see `setFromEmailAction`'s own comment for
+ * why that is not redundant with the grant story.
+ *
+ * 0065 grants `authenticated` no UPDATE on `language`, deliberately: this
+ * column governs which language a CLIENT-role session reads back
+ * (`getAccountLanguage`'s own doc comment), and a client able to write its
+ * own account's language would be moving a lever the agency, not the
+ * client, controls.
+ *
+ * The en/es check runs BEFORE `setAccountLanguage` is ever called: that
+ * function's column carries a Postgres CHECK, and letting a bad value reach
+ * it would surface as a raw constraint-violation 500 instead of this
+ * action's own `{ ok: false }`.
+ */
+export async function setAccountLanguageAction(
+  accountId: string, formData: FormData,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
+  const raw = String(formData.get("language") ?? "");
+  if (raw !== "en" && raw !== "es") {
+    return { ok: false, error: m["settings.language.invalid"] };
+  }
+  await setAccountLanguage(serviceDb(), accountId, raw, userId);
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
   return { ok: true };
 }

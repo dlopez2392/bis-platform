@@ -260,6 +260,11 @@ export const m = {
   "inline.edit": "Edit {label}",
   "inline.empty": "Add…",
   "inline.crashed": "Save didn't go through — the page may be out of date. Reload and try again.",
+  // The `options` arm's own rejection (validateEnumValue) — a value typed or
+  // posted that is not one of the <select>'s own <option>s, e.g. a forged
+  // form post past the Language field below.
+  "inline.invalidOption": "Choose one of the options shown.",
+  "inline.invalidOption.es": "Elija una de las opciones mostradas.",
 
   "accounts.title": "Companies",
   "accounts.add": "Add company",
@@ -718,6 +723,15 @@ export const m = {
   "drawer.description": "Contact details, tags, and recent activity.",
 
   "settings.title": "Settings",
+  // Spanish-runtime Task 5 (owner decision 4, 2026-10-10): the one inline
+  // Language field on the agency Settings page, writing accounts.language.
+  // "English"/"Español" named literally in BOTH language versions, the same
+  // choice calendar.cancelDialog.languageEnglish/languageSpanish already
+  // make for naming a language by name regardless of which one is reading.
+  "settings.language.label": "Language",
+  "settings.language.label.es": "Idioma",
+  "settings.language.invalid": "Choose English or Español.",
+  "settings.language.invalid.es": "Elija inglés o español.",
   "settings.customFields": "Custom fields",
   "settings.customFieldsBody": "Extra fields captured on every contact.",
   "settings.customValues": "Custom values",

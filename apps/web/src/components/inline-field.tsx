@@ -33,6 +33,25 @@ function normalizeRequired(raw: string): ValidateResult {
 }
 
 /**
+ * The `options` arm's validator: accepts only a value that is one of the
+ * listed options (an enum column, e.g. `accounts.language`'s "en"/"es"),
+ * never a free-typed string — the select's own <option> list is the only
+ * source of valid values, so a value that is not among them cannot have
+ * come from this control working normally. Exported (pure, no React) so
+ * the Settings Language field's own server action can run the identical
+ * check before ever reaching the database — the exact "optimistic client
+ * check and authoritative server one can't disagree" reasoning
+ * `normalizeRequired`'s own doc comment gives for `setup.rename.empty`.
+ */
+export function validateEnumValue(
+  options: { value: string; label: string }[], raw: string,
+): ValidateResult {
+  return options.some((o) => o.value === raw)
+    ? { ok: true, value: raw }
+    : { ok: false, error: m["inline.invalidOption"] };
+}
+
+/**
  * DESIGN.md record-view rule: small edits are inline — click the value,
  * edit, save on blur/Enter with an undo toast; Esc cancels. Undo re-runs
  * the same save with the prior value (spec §Writes). No form, no Save
@@ -57,8 +76,9 @@ function normalizeRequired(raw: string): ValidateResult {
  */
 export function InlineField(
   props: (
-    | { field: EditableField; required?: undefined }
-    | { field?: undefined; required: true }
+    | { field: EditableField; required?: undefined; options?: undefined }
+    | { field?: undefined; required: true; options?: undefined }
+    | { field?: undefined; required?: undefined; options: { value: string; label: string }[] }
   ) & {
     label: string;
     value: string | null;
@@ -76,12 +96,15 @@ export function InlineField(
     undoPhone?: InlinePhoneUndoWrite;
   },
 ) {
-  const { label, field, required, value, save, inputType = "text", undoPhone } = props;
-  // `field` is guaranteed defined whenever `required` is not — the union
-  // above enforces that at every call site; this is what lets commit() and
-  // the undo guard below share ONE rule instead of branching twice.
+  const { label, field, required, options, value, save, inputType = "text", undoPhone } = props;
+  // `field` is guaranteed defined whenever neither `required` nor `options`
+  // is — the three-way union above enforces that at every call site; this
+  // is what lets commit() and the undo guard below share ONE rule instead
+  // of branching three ways.
   const normalize = (raw: string): ValidateResult =>
-    required ? normalizeRequired(raw) : normalizeFieldInput(field as EditableField, raw);
+    options ? validateEnumValue(options, raw)
+    : required ? normalizeRequired(raw)
+    : normalizeFieldInput(field as EditableField, raw);
   const [editing, setEditing] = useState(false);
   const [shown, setShown] = useState(value ?? "");
   // Tracks the committed value for cancel/undo across saves.
@@ -168,6 +191,21 @@ export function InlineField(
       >
         {shown || m["inline.empty"]}
       </button>
+    );
+  }
+
+  if (options) {
+    return (
+      <select
+        autoFocus
+        defaultValue={shown}
+        aria-label={label}
+        className="h-8 rounded-[var(--radius-ctl)] border border-input bg-background px-2 text-sm"
+        onBlur={(e) => { if (!cancelled.current) void commit(e.currentTarget.value); cancelled.current = false; }}
+        onKeyDown={(e) => { if (e.key === "Escape") { cancelled.current = true; setShown(committed.current); setEditing(false); } }}
+      >
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
     );
   }
 
