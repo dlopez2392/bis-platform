@@ -141,6 +141,30 @@ describe("processCallEvent", () => {
     expect(second.payload).toEqual({ type: "response.create", response: { instructions: handoffLine("es") } });
     expect(handoffLine("es")).not.toBe(handoffLine("en"));
   });
+  it("on a bilingual line the handoff sentence follows the language the CALLER spoke (F-010)", async () => {
+    // A `both` profile used to say this in English to everyone. The signal is
+    // the one the customer emails already use: `detectSpokenLanguage` over the
+    // caller's own turns so far. Mutation: pass `ctx.profile.languages`
+    // through (or `both` → English) → the Spanish caller hears English, FAILS.
+    runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
+    const both = { ...ctx, profile: { languages: "both" } } as unknown as ToolContext;
+    const said = (text: string) => ({
+      ...emptyCallState(),
+      transcript: [{ role: "caller" as const, text, at: "2027-06-01T12:00:00Z" }],
+    });
+    const lineFor = async (text: string) => {
+      const { actions } = await processCallEvent(said(text), both, {
+        type: "response.function_call_arguments.done", name: "transfer_to_human", arguments: "{}", call_id: "c1",
+      });
+      const second = actions[1]!;
+      if (second.kind !== "send") throw new Error("expected a send");
+      return second.payload;
+    };
+    expect(await lineFor("Hola, quiero hablar con una persona, por favor."))
+      .toEqual({ type: "response.create", response: { instructions: handoffLine("es") } });
+    expect(await lineFor("Hi, can I talk to a person please?"))
+      .toEqual({ type: "response.create", response: { instructions: handoffLine("en") } });
+  });
   it("every other tool still gets a bare response.create", async () => {
     runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
     const { actions } = await processCallEvent(emptyCallState(), ctx, {

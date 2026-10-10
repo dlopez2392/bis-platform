@@ -719,7 +719,11 @@ export async function runTool(
           error: "The transfer can't be set up for this call. Apologize, then offer to take a message." } };
       }
       try {
-        await markHandoffRequested(ctx.db, ctx.accountId, ctx.callRowId);
+        // The caller's language rides in the same write (F-010): it is the
+        // language `call-events.ts` says the handoff sentence in (same read,
+        // same transcript), and the only way the failed-transfer line —
+        // spoken after this socket and its transcript are gone — can match it.
+        await markHandoffRequested(ctx.db, ctx.accountId, ctx.callRowId, spokenLocale(state, ctx));
       } catch (e) {
         // Loud: this is the one failure that would otherwise look exactly
         // like a caller who never asked — nothing in the row, nothing in the

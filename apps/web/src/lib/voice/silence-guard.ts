@@ -106,13 +106,44 @@ export function isCallerAudioEvent(type: string | undefined): boolean {
  * There is nothing to wrap up on a silent call, so there is nothing to
  * improvise: a fixed sentence, and out.
  *
- * `both` takes English. This used to mirror the greeting's rule; since D-037
- * a bilingual line OPENS with both greetings (`lib/voice/greeting.ts`), but
- * this goodbye is unchanged by that decision and still takes English.
+ * `both` says it in BOTH, English first (F-010). This guard fires only on a
+ * call where the caller made no sound at all, so on a bilingual line nothing
+ * says which language they would have spoken — the same position the
+ * greeting is in, and the same answer (D-037, `lib/voice/greeting.ts`): the
+ * two fixed sentences, word for word, one after the other. It is twice as
+ * long, so the lifecycle gives it twice the playout before the socket goes
+ * (`incoming/route.ts`, the silence timer's close).
  */
+const SILENCE_LINE = {
+  en: "Sorry, I can't hear anything. Please call back if you need us. Goodbye.",
+  es: "Lo siento. No puedo escuchar nada. Por favor llame de nuevo si necesita ayuda. Adiós.",
+} as const;
+
 export function silenceGoodbye(languages: "en" | "es" | "both"): string {
-  const line = languages === "es"
-    ? "Lo siento. No puedo escuchar nada. Por favor llame de nuevo si necesita ayuda. Adiós."
-    : "Sorry, I can't hear anything. Please call back if you need us. Goodbye.";
-  return `Say exactly this and nothing else: "${line}"`;
+  if (languages === "both") {
+    return "Say these two goodbyes, word for word, one right after the other, and nothing else: "
+      + "first the English one, then the Spanish one. Do not translate, shorten or combine them. "
+      + `English: ${JSON.stringify(SILENCE_LINE.en)} Spanish: ${JSON.stringify(SILENCE_LINE.es)}`;
+  }
+  return `Say exactly this and nothing else: "${SILENCE_LINE[languages]}"`;
+}
+
+/**
+ * The cost cap's goodbye: a MODEL INSTRUCTION, and deliberately the OPEN-ENDED
+ * family — `silenceGoodbye`'s doc above says why the two must never merge.
+ * The cap ends a real conversation, so there is something to wrap up.
+ *
+ * It names the language because nothing else may (F-010). A
+ * `response.create`'s own `instructions` are documented as overriding the
+ * session's for that one response — an assumption about OpenAI's Realtime
+ * API that no call here has measured — so the session prompt's "answer in
+ * the caller's language" may not be in force for this reply, and an English
+ * instruction is otherwise the strongest hint left. The silence guard's doc
+ * records a cap wrap-up answered in the wrong language on the 247-second
+ * call. The language is the caller's, decided by the lifecycle from
+ * what they said (`detectSpokenLanguage`) — never `both`, which is not a
+ * language anyone is mid-conversation in.
+ */
+export function capGoodbye(language: "en" | "es"): string {
+  return `Politely wrap up and say a brief goodbye to the caller in ${language === "es" ? "Spanish" : "English"} — we're out of time.`;
 }

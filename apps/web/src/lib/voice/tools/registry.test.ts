@@ -1404,9 +1404,27 @@ describe("transfer_to_human", () => {
 
     release();
     const { state, result } = await pending;
-    expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1");
+    expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1", "en");
     expect(result).toEqual({ ok: true });
     expect(state.served).toContain("transferred");
+  });
+
+  it("stamps the language the caller spoke with the intent, in the SAME write (F-010)", async () => {
+    // The failed-transfer line is spoken by a route that runs after the socket
+    // is gone and has no transcript; this stamp is how it answers in the
+    // language the handoff sentence was said in. Same read as the customer
+    // emails (`spokenLocale`). Mutation: stamp the profile's languages, or
+    // always "en" → FAILS.
+    const c = {
+      ...ctx, callRowId: "call-row-1", handoffTarget: TARGET,
+      profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+    };
+    const spanish = { ...emptyCallState(), transcript: [
+      { role: "caller" as const, text: "Hola, necesito hablar con una persona, por favor.", at: "2027-06-01T12:00:00Z" },
+    ] };
+    await runTool(spanish, c, "transfer_to_human", {});
+    expect(markHandoffRequestedMock).toHaveBeenCalledTimes(1);
+    expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1", "es");
   });
 
   it("transfer_to_human refuses when no target is available, and writes nothing", async () => {

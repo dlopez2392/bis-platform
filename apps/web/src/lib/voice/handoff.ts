@@ -65,12 +65,16 @@ export function newHandoffToken(): string {
  * belongs to this function ONLY; put it on that one and the caller hears it
  * read aloud.
  *
- * `both` takes English. This used to mirror the greeting's rule; since D-037
- * a bilingual line OPENS with both greetings (`lib/voice/greeting.ts`), but
- * this line is unchanged by that decision and still takes English.
+ * It takes the language the CALLER spoke, never a profile's `both` (F-010):
+ * someone who has just asked for a person has said enough to tell. The
+ * caller decides it (`call-events.ts`, `detectSpokenLanguage` over the
+ * transcript so far), and the same value is stamped on the call row
+ * (`markHandoffRequested`) so `transferFailedLine` below answers in the
+ * language this line was said in. Before, a `both` line said this in English
+ * to a caller who had been speaking Spanish.
  */
-export function handoffLine(languages: "en" | "es" | "both"): string {
-  const line = languages === "es"
+export function handoffLine(language: "en" | "es"): string {
+  const line = language === "es"
     ? "Un momento, por favor. Le voy a comunicar con alguien de nuestro equipo."
     : "One moment, please. I'll connect you with someone from our team.";
   return `Say exactly this and nothing else: "${line}"`;
@@ -95,18 +99,20 @@ export function handoffLine(languages: "en" | "es" | "both"): string {
  * reason `handoffLine` uses the formal dative: we do not know who is on the
  * phone.
  *
- * `both` takes ENGLISH, not `sayXml`'s EN-then-ES pair, and that is
- * deliberate on two counts. Product: this sentence answers `handoffLine`,
- * which the same caller heard seconds earlier in English on a `both`
- * profile; the two bracket one moment and must match, or the caller is told
- * they are being connected in one language and that it failed in another.
- * Mechanical: `sayXml` can offer both languages only because it emits the
- * ELEMENTS and can hang `language="es-MX"` on the Spanish one. This function
- * returns text FOR an element, so a two-language string would be Spanish
- * read by an English voice.
+ * ONE language, never `sayXml`'s EN-then-ES pair, on two counts. Product:
+ * this sentence answers `handoffLine`, which the same caller heard seconds
+ * earlier in ONE language; the two bracket one moment and must match, or the
+ * caller is told they are being connected in one language and that it
+ * failed in another. Since F-010 that language is the caller's own, stamped
+ * on the call row when they asked (`markHandoffRequested`) and read back by
+ * `/api/voice/texml/handoff-result`. Mechanical: `sayXml` can offer both
+ * languages only because it emits the ELEMENTS and can hang
+ * `language="es-MX"` on the Spanish one. This function returns text FOR an
+ * element, so a two-language string would be Spanish read by an English
+ * voice.
  */
-export function transferFailedLine(languages: "en" | "es" | "both"): string {
-  return languages === "es"
+export function transferFailedLine(language: "en" | "es"): string {
+  return language === "es"
     ? "Lo siento, nadie pudo contestar en este momento."
     : "Sorry, we weren't able to reach anyone just now.";
 }

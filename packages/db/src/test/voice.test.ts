@@ -677,16 +677,21 @@ describe("call handoff accessors", () => {
         phoneNumberId: num.id, callerE164: "+19562921696", handoffToken: testHandoffToken(),
       });
 
-      await markHandoffRequested(db, accountId, call.id);
+      // "es", not the column's default "en": a write that dropped the language
+      // could not pass on the row's own starting value.
+      await markHandoffRequested(db, accountId, call.id, "es");
       const { data } = await db.from("calls")
-        .select("handoff_requested_at").eq("id", call.id).single();
+        .select("handoff_requested_at, language").eq("id", call.id).single();
       expect(typeof data!.handoff_requested_at).toBe("string");
+      // F-010: the caller's language rides in the same write, for the
+      // failed-transfer line spoken after the socket (and its transcript) is gone.
+      expect(data!.language).toBe("es");
 
       // Account-scoped like every other per-account writer here, and LOUD on a
       // zero-row match: PostgREST reports no error and no rows for an update
       // that hit nothing, which would otherwise read as a successful stamp.
       const ghost = "00000000-0000-0000-0000-000000000000";
-      await expect(markHandoffRequested(db, ghost, call.id)).rejects.toThrow(/matched no row/);
+      await expect(markHandoffRequested(db, ghost, call.id, "en")).rejects.toThrow(/matched no row/);
     });
   });
 
@@ -697,7 +702,7 @@ describe("call handoff accessors", () => {
       const call = await startCallRow(db, accountId, {
         phoneNumberId: num.id, callerE164: "+19562921696", handoffToken: token,
       });
-      await markHandoffRequested(db, accountId, call.id);
+      await markHandoffRequested(db, accountId, call.id, "es");
 
       // No account id is passed, and that is the assertion, not an oversight:
       // the route that calls this has none — the token IS its credential. The
@@ -710,6 +715,9 @@ describe("call handoff accessors", () => {
       // the route back to guessing.
       expect(found).toMatchObject({ id: call.id, account_id: accountId, phone_number_id: num.id });
       expect(typeof found!.handoff_requested_at).toBe("string");
+      // F-010: the language stamped with the ask comes back with it, so the
+      // result route answers in it without a second read.
+      expect(found!.language).toBe("es");
 
       // `outcome` rides along for the result route's precedence check, and it
       // is here to stop that route reaching for `getCall` — which selects

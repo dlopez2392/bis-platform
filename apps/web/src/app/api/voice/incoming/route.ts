@@ -91,7 +91,8 @@ import { finishCall, type FinishContext } from "@/lib/voice/finish-call";
 import type { ToolContext } from "@/lib/voice/tools/registry";
 import { readLimitConfig, decideLimit, utcDayStart } from "@/lib/voice/call-limits";
 import { readReputationConfig, decideReputation, windowStart } from "@/lib/voice/caller-reputation";
-import { readSilentSeconds, isCallerAudioEvent, silenceGoodbye } from "@/lib/voice/silence-guard";
+import { readSilentSeconds, isCallerAudioEvent, silenceGoodbye, capGoodbye } from "@/lib/voice/silence-guard";
+import { detectSpokenLanguage } from "@/lib/voice/language";
 import { configuredOrigin } from "@/lib/email/origin";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { openingGreeting } from "@/lib/voice/greeting";
@@ -215,6 +216,8 @@ async function endCallLeg(callId: string): Promise<void> {
  * model is still generating audio cuts the caller off mid-word. The cap's
  * tail budget (see `maxSeconds` below) is derived from this number, so a
  * second copy of it somewhere else would silently break that derivation.
+ * (A bilingual silence goodbye is two of these sentences and waits twice
+ * this — derived from it, not a second copy; see the silence timer.)
  */
 const CLOSE_AFTER_GOODBYE_MS = 5000;
 
@@ -482,9 +485,12 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       capTimer = setTimeout(() => {
         log("call cap reached, sending goodbye", { callId, maxSeconds });
         try {
+          // In the language the caller has been speaking (F-010): read off
+          // their own turns, the rule the handoff line and the customer
+          // emails use. Pure and in memory — nothing on the call's clock.
           ws.send(JSON.stringify({
             type: "response.create",
-            response: { instructions: "Politely wrap up and say a brief goodbye to the caller — we're out of time." },
+            response: { instructions: capGoodbye(detectSpokenLanguage(state.transcript, languages)) },
           }));
         } catch {
           // socket may already be closing; the closeTimer below still fires.
@@ -568,13 +574,21 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         } catch {
           // socket may already be closing; the closeTimer below still fires.
         }
+        // A bilingual line says the goodbye in both languages, one after the
+        // other (`silenceGoodbye`, F-010) — so each gets the playout the
+        // single goodbye gets, and the close waits for both. Not a leg of the
+        // cap's tail that the 697 clamp is derived from: this timer clears
+        // the cap, and fires at `maxSeconds / 2` at the latest (<= 348.5s),
+        // so even with 10s of playout and the whole tail after it this call
+        // ends hundreds of seconds inside `maxDuration`.
+        const silenceCloseMs = languages === "both" ? 2 * CLOSE_AFTER_GOODBYE_MS : CLOSE_AFTER_GOODBYE_MS;
         closeTimer = setTimeout(async () => {
           log("closing call socket after silence goodbye", { callId });
           // The leg FIRST, the socket second. Closing our socket does not end
           // the call, and `endCallLeg` never throws, so the close below still runs.
           await endCallLeg(callId);
           ws.close();
-        }, CLOSE_AFTER_GOODBYE_MS);
+        }, silenceCloseMs);
       }, silentSeconds * 1000);
     });
 
