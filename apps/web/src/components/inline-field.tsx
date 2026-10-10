@@ -2,11 +2,14 @@
 
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { Input } from "@/components/ui/input";
+import { Input, nativeFieldClass } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { normalizeFieldInput, type EditableField } from "@/lib/contacts/field-input";
 import { commitInlineUndo, type PhoneInlineUndo, type InlinePhoneUndoWrite } from "@/lib/contacts/inline-phone-undo";
+// The `options` arm's validator lives in a plain module so the server action
+// behind an options field can run the identical check (see its doc).
+import { validateEnumValue } from "@/lib/enum-value";
 
 type ValidateResult = { ok: true; value: string } | { ok: false; error: string };
 
@@ -57,8 +60,9 @@ function normalizeRequired(raw: string): ValidateResult {
  */
 export function InlineField(
   props: (
-    | { field: EditableField; required?: undefined }
-    | { field?: undefined; required: true }
+    | { field: EditableField; required?: undefined; options?: undefined }
+    | { field?: undefined; required: true; options?: undefined }
+    | { field?: undefined; required?: undefined; options: readonly { value: string; label: string }[] }
   ) & {
     label: string;
     value: string | null;
@@ -76,12 +80,15 @@ export function InlineField(
     undoPhone?: InlinePhoneUndoWrite;
   },
 ) {
-  const { label, field, required, value, save, inputType = "text", undoPhone } = props;
-  // `field` is guaranteed defined whenever `required` is not — the union
-  // above enforces that at every call site; this is what lets commit() and
-  // the undo guard below share ONE rule instead of branching twice.
+  const { label, field, required, options, value, save, inputType = "text", undoPhone } = props;
+  // `field` is guaranteed defined whenever neither `required` nor `options`
+  // is — the three-way union above enforces that at every call site; this
+  // is what lets commit() and the undo guard below share ONE rule instead
+  // of branching three ways.
   const normalize = (raw: string): ValidateResult =>
-    required ? normalizeRequired(raw) : normalizeFieldInput(field as EditableField, raw);
+    options ? validateEnumValue(options, raw)
+    : required ? normalizeRequired(raw)
+    : normalizeFieldInput(field as EditableField, raw);
   const [editing, setEditing] = useState(false);
   const [shown, setShown] = useState(value ?? "");
   // Tracks the committed value for cancel/undo across saves.
@@ -151,6 +158,10 @@ export function InlineField(
   }
 
   if (!editing) {
+    // I9: an options field shows the option's LABEL ("Español"), never its
+    // stored value ("es") — on the button and in its accessible name. An
+    // unknown stored value is still shown as-is rather than hidden.
+    const display = (options?.find((o) => o.value === shown)?.label ?? shown) || m["inline.empty"];
     return (
       <button
         type="button"
@@ -164,10 +175,25 @@ export function InlineField(
         // reader hears "Edit Email, button" and never the value itself,
         // since aria-label REPLACES the button's text content as the
         // accessible name rather than supplementing it.
-        aria-label={`${m["inline.edit"].replace("{label}", label)}: ${shown || m["inline.empty"]}`}
+        aria-label={`${m["inline.edit"].replace("{label}", label)}: ${display}`}
       >
-        {shown || m["inline.empty"]}
+        {display}
       </button>
+    );
+  }
+
+  if (options) {
+    return (
+      <select
+        autoFocus
+        defaultValue={shown}
+        aria-label={label}
+        className={cn(nativeFieldClass, "h-8")}
+        onBlur={(e) => { if (!cancelled.current) void commit(e.currentTarget.value); cancelled.current = false; }}
+        onKeyDown={(e) => { if (e.key === "Escape") { cancelled.current = true; setShown(committed.current); setEditing(false); } }}
+      >
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
     );
   }
 

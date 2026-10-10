@@ -65,6 +65,7 @@ const accountRow = {
   brand_name: "Rio Roofing Co", brand_logo_path: "logos/rio.png", brand_color: "#1a2b3c",
   brand_neutral: "warm" as const, brand_corners: "soft" as const, brand_type: "inter" as const,
   brand_mode: "light" as const, reply_to_email: "owner-reply@rio.example", from_email: "hello@rio.example",
+  language: null as "en" | "es" | null,
 };
 
 // Counts every `serviceDb()` construction, so a refusal can be shown to have

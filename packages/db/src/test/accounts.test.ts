@@ -7,6 +7,7 @@ import {
   createAccount, listAccounts, renameAccount,
   setA2pRegistration, getA2pRegistration, getAlertPhone, setAlertPhone,
   getTransferPhone, setTransferPhone, MessagingProfileTakenError,
+  getAccountLanguage, setAccountLanguage,
 } from "../accounts";
 
 const suffix = () => Math.random().toString(36).slice(2, 10);
@@ -363,5 +364,41 @@ describe("getTransferPhone / setTransferPhone", () => {
     const { data } = await db.from("events").select("id")
       .eq("account_id", ghost).eq("type", "account.transfer_phone_updated");
     expect(data ?? []).toHaveLength(0);
+  });
+});
+
+/**
+ * `accounts.language` (0065_account_language.sql) — the account-level
+ * default the Spanish-runtime resolver falls through to for CLIENT-role
+ * sessions (owner decision 2026-10-10: agency operators are unaffected until
+ * the staff-and-roles lane's `users.language` exists). NULL means no
+ * preference recorded, not English — `resolveLocale()` is what turns that
+ * into a default, not this column.
+ *
+ * Note: the events table's JSON column is `payload`, not `data` — read from
+ * `0001_tenancy.sql` (`payload jsonb not null default '{}'::jsonb`) rather
+ * than assumed.
+ */
+describe("account language", () => {
+  it("defaults to null, is settable to 'es', and rejects an invalid value (mutation: drop the check constraint -> the invalid-value assertion FAILS)", async () => {
+    const db = serviceDb();
+    const orgId = `org_test_${suffix()}`;
+    const { id } = await createAccount(db, { clerkOrgId: orgId, name: "Test Co", actorId: "user_test" });
+    try {
+      expect(await getAccountLanguage(db, id)).toBeNull();
+
+      await setAccountLanguage(db, id, "es", "user_test");
+      expect(await getAccountLanguage(db, id)).toBe("es");
+
+      const { data: ev } = await db.from("events").select("type, payload")
+        .eq("account_id", id).eq("type", "account.language_updated").single();
+      expect(ev).toMatchObject({ type: "account.language_updated", payload: { language: "es" } });
+
+      const { error } = await db.from("accounts").update({ language: "fr" }).eq("id", id);
+      expect(error).not.toBeNull();
+    } finally {
+      await db.from("events").delete().eq("account_id", id);
+      await db.from("accounts").delete().eq("id", id);
+    }
   });
 });

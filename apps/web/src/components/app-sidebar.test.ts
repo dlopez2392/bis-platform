@@ -162,10 +162,10 @@ describe("AppSidebar — footer: Settings for the agency, Team for a client Owne
     expect(src).toContain(
       "const footer: NavItem | null = isAgency\n"
       + "    ? (base\n"
-      + '        ? { href: `${base}/settings`, label: m["nav.settings"], icon: Settings }\n'
-      + '        : { href: "/dashboard", label: m["nav.dashboard"], icon: LayoutDashboard })\n'
+      + '        ? { href: `${base}/settings`, label: t(m, "nav.settings", locale), icon: Settings }\n'
+      + '        : { href: "/dashboard", label: t(m, "nav.dashboard", locale), icon: LayoutDashboard })\n'
       + "    : (base && isOwner\n"
-      + '        ? { href: `${base}/team`, label: m["nav.team"], icon: Users }\n'
+      + '        ? { href: `${base}/team`, label: t(m, "nav.team", locale), icon: Users }\n'
       + "        : null);",
     );
   });

@@ -21,7 +21,7 @@ describe("TopbarPresence — F-107 r4: dot + short word below `sm`, the full phr
   it("the on-call short word is rendered below `sm`, the full phrase at sm+ (mutation: drop `sm:hidden`/`hidden sm:flex` → FAILS)", () => {
     expect(src).toContain('<span className="flex items-center gap-1.5 text-sm text-foreground sm:hidden">');
     expect(src).toContain('<span className="hidden items-center gap-1.5 text-sm text-foreground sm:flex">');
-    expect(src).toContain('m["shell.presence.onCallShort.en"]');
+    expect(src).toContain('t(m, "shell.presence.onCallShort", locale)');
   });
 
   it("the idle short word keeps a dot, never a bare glyph, below `sm` (mutation: drop the dot span or `sm:hidden`/`hidden sm:block` → FAILS)", () => {
@@ -41,9 +41,27 @@ describe("TopbarPresence — F-107 r5: the idle short phrase names what's counte
   it("renders the singular key at weekCount === 1 and the plural key (count substituted) otherwise (mutation: always use idleShort.replace → FAILS, since weekCount 1 would read '1 calls' with no singular branch to catch it)", () => {
     expect(src).toContain(
       '        {presence.weekCount === 1\n'
-      + '          ? m["shell.presence.idleShortOne.en"]\n'
-      + '          : m["shell.presence.idleShort.en"].replace("{count}", String(presence.weekCount))}',
+      + '          ? t(m, "shell.presence.idleShortOne", locale)\n'
+      + '          : t(m, "shell.presence.idleShort", locale, { count: presence.weekCount })}',
     );
+  });
+});
+
+// Task 6 (Spanish-runtime lane): the on-call/idle phrases used to read
+// `m["shell.presence.*"]` straight off the English catalogue regardless of
+// which locale the account resolved to — this is the first place the
+// `.es` twins already sitting in messages.ts (onCallShort/idleShort/
+// idleShortOne) become reachable. Source pin, same convention as the rest
+// of this file: no render harness exists for this component.
+describe("TopbarPresence resolves shell.presence.* through useLocale()/t(), not a hard-coded .en lookup", () => {
+  it("reads locale from useLocale() and routes every short-form presence string through t() (mutation: revert to the raw m[\"...én\"] lookups → FAILS, all three patterns reappear)", () => {
+    expect(src).toMatch(/const locale = useLocale\(\);/);
+    expect(src).not.toMatch(/m\["shell\.presence\.onCallShort\.en"\]/);
+    expect(src).not.toMatch(/m\["shell\.presence\.idleShort\.en"\]/);
+    expect(src).not.toMatch(/m\["shell\.presence\.idleShortOne\.en"\]/);
+    expect(src).toMatch(/t\(m, "shell\.presence\.onCallShort", locale\)/);
+    expect(src).toMatch(/t\(m, "shell\.presence\.idleShortOne", locale\)/);
+    expect(src).toMatch(/t\(m, "shell\.presence\.idleShort", locale, \{ count: presence\.weekCount \}\)/);
   });
 });
 
@@ -77,5 +95,13 @@ describe("onCallText", () => {
     // …); a function second argument never is. A persona containing one of
     // those sequences must appear verbatim.
     expect(onCallText("Bob's $& Shop")).toBe("Bob's $& Shop · on a call");
+  });
+});
+
+// Decision D (orchestrator, 2026-10-10): the presence phrase is translated,
+// so its wrapper — in both states — carries the resolved locale as `lang`.
+describe("TopbarPresence carries lang={locale} on its translated wrapper (decision D)", () => {
+  it("both states' data-testid wrappers carry lang={locale} (mutation: drop it from either → FAILS)", () => {
+    expect(src.match(/<span data-testid="topbar-presence" lang=\{locale\}>/g)?.length).toBe(2);
   });
 });

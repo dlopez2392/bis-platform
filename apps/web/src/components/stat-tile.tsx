@@ -8,6 +8,8 @@
 import { Sparkline } from "@/components/sparkline";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 export type StatTileDelta = { direction: "up" | "down" | "flat"; label: string };
 
@@ -32,10 +34,10 @@ export function hasStatContext({
 
 /** "up 12% vs the prior period" style wording — the chip's `aria-label`,
  *  spelled out in words so ▲/▼ is never the only carrier of the meaning. */
-function deltaAriaLabel(delta: StatTileDelta): string {
-  if (delta.direction === "flat") return m["stat.delta.flat"];
+function deltaAriaLabel(delta: StatTileDelta, locale: Locale): string {
+  if (delta.direction === "flat") return t(m, "stat.delta.flat", locale);
   const key = delta.direction === "up" ? "stat.delta.up" : "stat.delta.down";
-  return m[key].replace("{value}", delta.label);
+  return t(m, key, locale, { value: delta.label });
 }
 
 // Exported (design review, D-077 follow-up): the dashboard's 7-day KPI row
@@ -53,6 +55,7 @@ export function StatTile({
   period,
   valueTestId,
   hero,
+  locale = "en",
 }: {
   label: string;
   value: string;
@@ -67,6 +70,12 @@ export function StatTile({
   /** Spec §5: the ONE number on this screen that renders in --gradient-hero.
    *  The screen names it in code; a test counts at most one per screen. */
   hero?: boolean;
+  /** The language of the tile's own copy — today the worded delta, the
+   *  sr-only sentence beside ▲/▼ (I7). The caller resolves it
+   *  (`requestLocale`); English by default, so every tile outside the
+   *  converted dashboard KPI row is unchanged. `label`/`period` arrive
+   *  already translated. */
+  locale?: Locale;
 }) {
   if (process.env.NODE_ENV !== "production" && !hasStatContext({ delta, spark, period })) {
     throw new Error(
@@ -85,8 +94,20 @@ export function StatTile({
     // grid item's automatic minimum size otherwise floors at its content's
     // min-content width, which held tiles open past their track at phone
     // width.
-    <div className="flex min-w-0 min-h-[108px] flex-col gap-1.5 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
-      <p className={LABEL_ROLE}>{label}</p>
+    <div
+      data-slot="stat-tile"
+      className="flex min-w-0 min-h-[108px] flex-col gap-1.5 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3"
+    >
+      {/* Task 11, fix round 1 (reviewer I2): the overflow spec measures
+          THIS span, not the tile root — the root has no overflow of its
+          own, so a clipped descendant never reaches its scrollWidth. No
+          `truncate` here (the label wraps across lines rather than
+          clipping on ordinary multi-word English/Spanish text, including
+          under the pseudo-locale's padding), so this is a forward-looking
+          regression guard, not a check expected to fire on today's copy —
+          see i18n-overflow.spec.ts's own comment for how it was proven
+          capable of failing. */}
+      <p data-slot="stat-tile-label" className={LABEL_ROLE}>{label}</p>
       <p
         data-testid={valueTestId}
         data-hero={hero ? "true" : undefined}
@@ -118,7 +139,7 @@ export function StatTile({
               {glyph ? `${glyph} ` : ""}
               {delta.label}
             </span>
-            <span className="sr-only">{deltaAriaLabel(delta)}</span>
+            <span className="sr-only">{deltaAriaLabel(delta, locale)}</span>
           </>
         ) : (
           <span aria-hidden />
@@ -126,7 +147,10 @@ export function StatTile({
         {spark && spark.length > 0 ? (
           <Sparkline counts={spark} className="h-[26px] w-[84px] shrink-0 text-primary" />
         ) : period ? (
-          <span className="min-w-0 truncate text-right text-xs text-muted-foreground">{period}</span>
+          // Task 11, fix round 1 (reviewer I2): the one element in this
+          // component that can ACTUALLY clip (`min-w-0 truncate` on a flex
+          // item) — the overflow spec measures this span directly.
+          <span data-slot="stat-tile-period" className="min-w-0 truncate text-right text-xs text-muted-foreground">{period}</span>
         ) : null}
       </div>
     </div>

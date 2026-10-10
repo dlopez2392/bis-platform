@@ -109,3 +109,25 @@ describe("settings.fieldKeyReserved / settings.fieldKeyFormat say RESERVED in En
       expect(m[`${key}.es`]).toContain("\"referred_by\" está reservado para");
     });
 });
+
+/**
+ * M4 (whole-branch review), Spanish copy. "Lista de tareas" (Checklist) read
+ * as the same thing as "Pendientes" (To do) — tareas ARE to-dos — so the
+ * checklist is a "Lista de verificación". "Valor en proceso" is not how a
+ * Spanish-speaking owner names a pipeline; "embudo" is, and both pipeline
+ * labels use it. "Preparación" (Setup) → "Configuración".
+ */
+describe("Spanish copy review (M4)", () => {
+  it("names Checklist, Pipeline value, Pipeline added and Setup in the reviewed words (mutation: restore \"Lista de tareas\" → FAILS)", () => {
+    expect(m["nav.checklist.es"]).toBe("Lista de verificación");
+    expect(m["account.pipelineValue.es"]).toBe("Valor del embudo");
+    expect(m["dashboard.kpi.pipelineAdded.es"]).toBe("Nuevo valor del embudo");
+    expect(m["nav.setup.es"]).toBe("Configuración");
+  });
+
+  it("no two sidebar labels read the same in Spanish (mutation: give nav.checklist.es the same text as nav.tasks.es → FAILS)", () => {
+    const spanishNav = Object.entries(m).filter(([k]) => k.startsWith("nav.") && k.endsWith(".es")).map(([, v]) => v);
+    expect(new Set(spanishNav).size).toBe(spanishNav.length);
+    expect(spanishNav.some((v) => /\btareas\b/i.test(v))).toBe(false);
+  });
+});

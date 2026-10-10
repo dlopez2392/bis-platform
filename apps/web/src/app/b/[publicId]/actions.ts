@@ -12,7 +12,8 @@ import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { originFrom } from "@/lib/email/origin";
 import { emailBrand } from "@/lib/email/templates/shell";
 import { bookingAlertEmail, bookingConfirmationEmail } from "@/lib/email/templates/booking";
-import { composeBookingAlertSms, sendAlertSms } from "@/lib/sms/alerts";
+import { composeBookingAlertSms, formatAlertWhen, sendAlertSms } from "@/lib/sms/alerts";
+import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { computeAllSlots, bookableSlot, dayKeyInZone } from "@/lib/booking/availability";
 import {
@@ -103,7 +104,7 @@ const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 async function loadAccount(db: ReturnType<typeof serviceDb>, accountId: string) {
   const { data, error } = await db.from("accounts")
     .select("timezone, from_email, reply_to_email, brand_name, brand_logo_path, "
-      + "brand_color, brand_neutral, brand_corners, brand_type, brand_mode, alert_phone")
+      + "brand_color, brand_neutral, brand_corners, brand_type, brand_mode, alert_phone, language")
     .eq("id", accountId).maybeSingle();
   if (error) throw new Error(`loadAccount(${accountId}) failed: ${error.message}`);
   return data as {
@@ -117,6 +118,11 @@ async function loadAccount(db: ReturnType<typeof serviceDb>, accountId: string) 
     // 0035_alert_phone.sql: the ONE number bookings text when work arrives.
     // NULL is "off," not an error — see sendAlertSms (@/lib/sms/alerts).
     alert_phone: string | null;
+    // F-013 (Task 8, Spanish-runtime lane): the account's own language, read
+    // for the staff booking-alert SMS below — never the booker's own
+    // `?locale=` (the `locale` local variable in this file), which answers a
+    // different question (what language the CUSTOMER'S confirmation is in).
+    language: Locale | null;
   } | null;
 }
 
@@ -521,9 +527,19 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     //  - Maria Lopez." on a real handset (same review, minors).
     try {
       if (whenCompanyZone) {
+        // The account's OWN language — never `locale` above, which is the
+        // BOOKER's `?locale=` choice for their own confirmation email.
+        const alertLanguage = resolveLocale(undefined, account?.language ?? null);
         await sendAlertSms(
           db, calendar.account_id, account?.alert_phone ?? null,
-          composeBookingAlertSms(whenCompanyZone, contactName, calendar.notify_emails.length > 0),
+          composeBookingAlertSms(
+            // Owner decision B: the date in the ACCOUNT's language too —
+            // for Spanish "sab 17 oct, 3:00 p.m. CDT", accents dropped so the
+            // text stays GSM-7. English is byte-identical to
+            // `whenCompanyZone`, which the email and the thread keep using.
+            formatAlertWhen(startsAt, timezone, alertLanguage),
+            contactName, calendar.notify_emails.length > 0, alertLanguage,
+          ),
         );
       }
     } catch (e) {

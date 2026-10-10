@@ -17,6 +17,8 @@ const dbMocks = vi.hoisted(() => ({
   // ever reaching this — the mock lets the refusal test assert the DB was
   // never touched, not merely that the promise rejected.
   createCustomField: vi.fn(),
+  // Spanish-runtime Task 5: the one write path for accounts.language.
+  setAccountLanguage: vi.fn(),
   // The send gate's reads (lib/consent/gate.ts): the code goes through the
   // REAL gate, so its ledger and flag reads are mocked, allowed by default.
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), recordCarrierBlock: vi.fn(),
@@ -79,7 +81,7 @@ import { m } from "@/lib/messages";
 import { SmsProviderError } from "@/lib/sms/types";
 import {
   setAlertPhoneAction, startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction, setFromEmailAction,
-  createFieldAction,
+  createFieldAction, setAccountLanguageAction,
 } from "./actions";
 
 const fd = (fields: Record<string, string>) => {
@@ -95,6 +97,7 @@ beforeEach(() => {
   dbMocks.verifyAlertPhoneCode.mockReset().mockResolvedValue("verified");
   dbMocks.countRecentAlertPhoneVerifications.mockReset().mockResolvedValue(0);
   dbMocks.discardAlertPhoneVerification.mockReset().mockResolvedValue(undefined);
+  dbMocks.setAccountLanguage.mockReset().mockResolvedValue(undefined);
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "msg_1" });
   dbMocks.readConsentState.mockReset().mockResolvedValue({ state: "allowed" });
   dbMocks.readPhoneCountryFlag.mockReset().mockResolvedValue(false);
@@ -443,5 +446,56 @@ describe("createFieldAction — \"referred_by\" is reserved (review round 1, m4)
     dbMocks.createCustomField.mockClear().mockResolvedValue({ id: "f1" });
     await createFieldAction("acct_1", fd({ name: "Gate code", fieldKey: "gate_code", dataType: "text" }));
     expect(dbMocks.createCustomField).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Spanish-runtime Task 5 (owner decision 4): the one Language field on the
+ * agency Settings page. `accounts.language` is not client-writable (0065
+ * grants `authenticated` no UPDATE on it — same shape as `alert_phone`/
+ * `transfer_phone`), so `requireAgencyOnlyAccountAccess` on the first line
+ * is the ONLY gate on this write, exactly as the file's other serviceDb()
+ * actions document for themselves.
+ *
+ * `(accountId, value)`, not `(accountId, FormData)` (fix round 1, I2): this
+ * is the one action `InlineField`'s `save` prop calls directly, the same
+ * shape `renameAccountAction` already uses for the same reason — see this
+ * action's own doc comment in actions.ts.
+ */
+describe("setAccountLanguageAction — agency-only, and en/es are the only values", () => {
+  it("rejects a value outside en/es before touching the database (mutation: drop the guard and pass the value through to setAccountLanguage → FAILS, a Postgres check-constraint error leaks as a 500 instead of this action's own {ok:false})", async () => {
+    const result = await setAccountLanguageAction("acct_1", "fr");
+    expect(result).toEqual({ ok: false, error: expect.stringContaining("English") });
+    expect(dbMocks.setAccountLanguage).not.toHaveBeenCalled();
+  });
+
+  it("writes the chosen language through serviceDb(), as the userId requireAgencyOnlyAccountAccess resolved (mutation: write dbForRequest() or drop userId → FAILS)", async () => {
+    expect(await setAccountLanguageAction("acct_1", "es")).toEqual({ ok: true });
+    expect(dbMocks.setAccountLanguage).toHaveBeenCalledWith(
+      { tag: "serviceDb" }, "acct_1", "es", "user_1",
+    );
+  });
+
+  it("calls requireAgencyOnlyAccountAccess before writing (mutation: drop the guard call → FAILS)", async () => {
+    await setAccountLanguageAction("acct_1", "en");
+    expect(requireAgencyOnlyAccountAccessMock).toHaveBeenCalledWith("acct_1");
+  });
+});
+
+/**
+ * validateEnumValue's doc claims the Language action reuses it; this keeps
+ * that true. Source pin (actions.ts is a "use server" module, so the only
+ * observable difference between "reuses the shared check" and "hand-copies
+ * en/es" is the source itself): the action validates against the SAME
+ * LANGUAGE_OPTIONS the Settings field renders.
+ */
+describe("setAccountLanguageAction — one option list for the field and the action", () => {
+  it("validates with validateEnumValue(LANGUAGE_OPTIONS, value) (mutation: hand-copy `value !== \"en\" && value !== \"es\"` back → FAILS)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "actions.ts"), "utf8");
+    expect(src).toContain("validateEnumValue(LANGUAGE_OPTIONS, value)");
+    expect(src).not.toMatch(/value !== "en" && value !== "es"/);
   });
 });

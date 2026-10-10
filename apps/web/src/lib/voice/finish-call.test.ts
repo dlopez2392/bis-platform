@@ -417,6 +417,11 @@ describe("finishCall", () => {
     await finishCall(s, ctx, meta);
     expect(summaryMocks.generateSummary).toHaveBeenCalledWith(s, expect.objectContaining({ timezone: "America/Chicago" }));
   });
+  it("generateSummary is never handed a language, even for a Spanish account (owner decision A: summaries stay English; mutation: pass language: resolveLocale(undefined, ctx.accountLanguage) to generateSummary again → FAILS)", async () => {
+    const s = withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" });
+    await finishCall(s, { ...ctx, accountLanguage: "es" }, meta);
+    expect(summaryMocks.generateSummary.mock.calls[0]![1]).not.toHaveProperty("language");
+  });
   it("a bilingual-profile call whose caller turns are Spanish stores language: es on the row", async () => {
     const s = withLead(withTranscript(emptyCallState(),
       { role: "caller", text: "hola, necesito una cita para mañana por favor", at: "t" }),
@@ -904,6 +909,30 @@ describe("finishCall — the staff alert SMS", () => {
     const r = await finishCall(emptyCallState(), ctx, meta);
     expect(r.outcome).toBe("spam");
     expect(smsRefs.send).not.toHaveBeenCalled();
+  });
+
+  // Owner decision B (2026-10-10): the call alert TEXT is in the account's
+  // language — ctx.accountLanguage, read off the account row route.ts already
+  // loads — Spanish with accents dropped, GSM-7, one segment. The alert
+  // EMAIL stays English (owner decision A).
+  it("a Spanish account's call alert text is Spanish, GSM-7 and one segment, while the alert email stays English (owner decision B; mutation: call composeCallAlertSms without the account's language → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    await finishCall(leadState(), { ...ctx, accountLanguage: "es" }, meta);
+    const body = smsRefs.send.mock.calls[0]![0].body as string;
+    expect(body).toBe("Nueva llamada: nuevo cliente potencial. Revise su correo para mas detalles.");
+    expect(segmentsFor(body)).toEqual(expect.objectContaining({ encoding: "gsm7", segments: 1 }));
+    const email = emailRefs.send.mock.calls[0]![0] as { subject: string };
+    expect(email.subject).toMatch(/^Call — lead — /);
+  });
+
+  it("no language on the account (null or absent) keeps the call alert text English (mutation: default the alert language to es → FAILS)", async () => {
+    dbMocks.getAlertPhone.mockResolvedValue("+19565559000");
+    await finishCall(leadState(), { ...ctx, accountLanguage: null }, meta);
+    await finishCall(leadState(), ctx, meta);
+    for (const call of smsRefs.send.mock.calls) {
+      expect((call[0] as { body: string }).body).toMatch(/^New call: a lead came in\./);
+    }
+    expect(smsRefs.send).toHaveBeenCalledTimes(2);
   });
 
   it("names the outcome and carries no phone number — booked/lead/message read distinctly", async () => {

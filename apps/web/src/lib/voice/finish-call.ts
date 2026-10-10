@@ -15,6 +15,7 @@ import { classifyOutcome, wasServed, wasTransferred, callerSpoke } from "./call-
 import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
 import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
+import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { summaryFactLine } from "./summarize";
 import { isCallerIdNumber, spokenPhone } from "./phone-number";
 import {
@@ -66,6 +67,15 @@ export interface FinishContext {
    *  send time" — the default is deliberately never persisted, so an operator
    *  who never wrote their own keeps getting the current copy. */
   textbackBody: string;
+  /** `accounts.language` (0065), read off the account row route.ts already
+   *  loads (ACCOUNT_COLS, no extra query). Used for ONE thing: the staff
+   *  call-alert TEXT (`composeCallAlertSms`, owner decision B, 2026-10-10 —
+   *  Spanish with accents dropped for a Spanish account). The call SUMMARY,
+   *  the conversation body and the alert EMAIL stay English regardless
+   *  (owner decision A). Unrelated to `profileLanguage` above (what Sofía
+   *  may SPEAK) and to `calls.language` (what the caller spoke). NULL or
+   *  absent means English, via `resolveLocale`. */
+  accountLanguage?: Locale | null;
 }
 
 export interface FinishMeta {
@@ -500,7 +510,8 @@ export async function finishCall(
       const alertPhone = await getAlertPhone(ctx.db, ctx.accountId);
       pendingAlertSms = await prepareAlertSms(
         ctx.db, ctx.accountId, alertPhone,
-        composeCallAlertSms(outcome, ctx.notifyEmails.length > 0),
+        // The ACCOUNT’s language (owner decision B); NULL or absent is English.
+        composeCallAlertSms(outcome, ctx.notifyEmails.length > 0, resolveLocale(undefined, ctx.accountLanguage ?? null)),
       );
     } catch (e) {
       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: alert SMS prepare failed: ${String(e)}`);

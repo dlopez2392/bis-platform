@@ -1,5 +1,22 @@
-import { describe, it, expect } from "vitest";
-import { formatDateInZone, formatDateTimeInZone } from "./format";
+import { describe, it, expect, vi } from "vitest";
+import { formatCurrency, formatDateInZone, formatDateTimeInZone, formatRelativeTime } from "./format";
+
+// `vi.spyOn`'s default call-through does not preserve a native Intl
+// constructor's internal slots (observed on Vitest 4.1.10 / Node v24.13.0
+// here: `new Intl.NumberFormat(...)` under a bare `vi.spyOn(Intl,
+// "NumberFormat")` returns an object with no `.format` method — vitest
+// itself warns "did not use 'function' or 'class' in its implementation").
+// This helper restores real construction via a saved original reference so
+// the spy still records call args without breaking the formatter it wraps.
+function spyOnCtor<K extends "NumberFormat" | "DateTimeFormat">(key: K) {
+  const Original = Intl[key];
+  return vi.spyOn(Intl, key).mockImplementation(function (
+    this: unknown,
+    ...args: unknown[]
+  ) {
+    return new (Original as new (...a: unknown[]) => unknown)(...args);
+  } as never);
+}
 
 describe("formatDateInZone", () => {
   it("carries the year, so records years apart cannot render identically", () => {
@@ -55,5 +72,43 @@ describe("formatDateTimeInZone", () => {
   it("carries the clock time, unlike the date-only formatDateInZone beside it", () => {
     const s = formatDateTimeInZone("2026-09-04T16:04:00Z", "America/Chicago");
     expect(s).toMatch(/\d{1,2}:\d\d\s*(AM|PM)/);
+  });
+});
+
+// F-013 part 1: an optional trailing `locale` parameter on every formatter,
+// defaulting to "en" so every existing call site above (and every other
+// caller in the repo) keeps its exact current output.
+describe("formatCurrency", () => {
+  it("stays USD in both locales, only the Intl locale tag changes (mutation: use es-MX instead of es-US → this still passes for 1234, so the real guard is the locale-tag assertion below, not the output string alone)", () => {
+    expect(formatCurrency(1234)).toBe(formatCurrency(1234, "en"));
+    // es-US groups identically to en-US (both use "," thousands/"." decimal) —
+    // the two calls below must therefore produce the SAME digits, so a
+    // regression to es-MX (which also does) would NOT be caught by string
+    // equality. The real assertion is on the Intl call itself:
+    const spy = spyOnCtor("NumberFormat");
+    formatCurrency(1234, "es");
+    expect(spy.mock.calls.at(-1)?.[0]).toBe("es-US");
+    spy.mockRestore();
+  });
+});
+
+describe("formatDateInZone locale", () => {
+  it("passes the es-US locale tag through to Intl.DateTimeFormat (mutation: hard-code en-US regardless of the locale param → FAILS)", () => {
+    const spy = spyOnCtor("DateTimeFormat");
+    formatDateInZone("2026-10-10T12:00:00Z", "America/Chicago", "es");
+    expect(spy.mock.calls.at(-1)?.[0]).toBe("es-US");
+    spy.mockRestore();
+  });
+});
+
+describe("formatRelativeTime", () => {
+  it("renders a past instant in Spanish when asked (mutation: ignore the locale param → FAILS, stays 'ago')", () => {
+    const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(formatRelativeTime(fiveMinAgo, "es")).not.toMatch(/ago/i);
+  });
+
+  it("defaults to English when no locale is given (mutation: default the param to \"es\" → FAILS)", () => {
+    const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    expect(formatRelativeTime(fiveMinAgo)).toMatch(/ago/i);
   });
 });

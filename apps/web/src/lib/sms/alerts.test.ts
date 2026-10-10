@@ -22,8 +22,9 @@ vi.mock("./index", () => ({ getSmsProvider: (...a: unknown[]) => getSmsProviderM
 
 import {
   composeBookingAlertSms, composeCallAlertSms, sendAlertSms, prepareAlertSms, deliverAlertSms,
-  composeAlertPhoneVerificationSms,
+  composeAlertPhoneVerificationSms, formatAlertWhen,
 } from "./alerts";
+import { m } from "@/lib/messages";
 
 const ACCOUNT_ID = "acct_1";
 const ALERT_PHONE = "+19565550001";
@@ -103,6 +104,114 @@ describe("composeBookingAlertSms", () => {
     const longAccentedName = "María Fernanda de la Peña González-Rodríguez";
     const body = composeBookingAlertSms(worstCaseWhen, longAccentedName, true);
     expect(segmentsFor(body).segments).toBe(1);
+  });
+
+  it("writes in Spanish when the account's language is es (mutation: ignore the 4th param → FAILS, stays 'New booking')", () => {
+    const body = composeBookingAlertSms("Tue, Sep 16, 2:00 PM CDT", "Maria Lopez", true, "es");
+    expect(body).toContain("Nueva cita");
+    expect(body).not.toContain("New booking");
+  });
+});
+
+/**
+ * Owner decision B (2026-10-10): a Spanish account's staff texts are Spanish
+ * with accents DROPPED from our wording and the date (never from the
+ * customer's name), GSM-7 and one segment for an ASCII name — for the
+ * booking alert AND the call alert. Measured with `segmentsFor`, never
+ * assumed from a character count.
+ */
+describe("owner decision B — Spanish staff texts, accents dropped, GSM-7, one segment", () => {
+  // Every zone shape es-US can print: a US abbreviation, and the long
+  // "GMT+13:45" fallback a non-US zone gets. The longest when-string across
+  // a year of them is the worst case the composers must survive.
+  const ZONES = ["America/Chicago", "Pacific/Honolulu", "America/Anchorage", "America/St_Johns", "Asia/Kolkata", "Pacific/Chatham"];
+  function worstSpanishWhen(): string {
+    let worst = "";
+    for (const zone of ZONES) for (let month = 0; month < 12; month++) for (const day of [3, 29]) for (const hour of [0, 5, 10, 15, 22]) {
+      const when = formatAlertWhen(new Date(Date.UTC(2026, month, day, hour, 59)), zone, "es");
+      if (when.length > worst.length) worst = when;
+    }
+    return worst;
+  }
+
+  it("formatAlertWhen es is Spanish without accents: \"sab 17 oct, 3:00 p.m. CDT\" (mutation: drop the NFD diacritic strip → FAILS, prints \"sáb\")", () => {
+    expect(formatAlertWhen(new Date("2026-10-17T20:00:00Z"), "America/Chicago", "es")).toBe("sab 17 oct, 3:00 p.m. CDT");
+    expect(formatAlertWhen(new Date("2026-10-14T20:00:00Z"), "America/Chicago", "es")).toBe("mie 14 oct, 3:00 p.m. CDT");
+  });
+
+  it("formatAlertWhen en is exactly today's English booking when-string (mutation: route en through the Spanish builder → FAILS)", () => {
+    expect(formatAlertWhen(new Date("2026-10-17T20:00:00Z"), "America/Chicago", "en")).toBe("Sat, Oct 17, 3:00 PM CDT");
+  });
+
+  // Owner rule (2026-10-10): only OUR wording and the date drop accents. A
+  // customer's name keeps its letters, exactly as the English alert already
+  // sends it, even if that costs the text its GSM-7 encoding.
+  it("the Spanish booking alert keeps the customer's name exactly as typed (mutation: strip the whole body, name included → FAILS, \"Jose Nunez\")", () => {
+    const body = composeBookingAlertSms("sab 17 oct, 3:00 p.m. CDT", "José Núñez", true, "es");
+    expect(body).toBe("Nueva cita: sab 17 oct, 3:00 p.m. CDT - José Núñez.");
+  });
+
+  it("strips the template and the date but never the name (mutation: strip the whole body → FAILS on the name; skip stripping the template → FAILS on \"reservó\")", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/messages", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@/lib/messages")>();
+      return { m: { ...actual.m, "sms.alert.booking.newBookingWithName.es": "Nueva cita reservó: {when} - {name}." } };
+    });
+    try {
+      const fresh = await import("./alerts");
+      expect(fresh.composeBookingAlertSms("sáb 17 oct, 3:00 p.m. CDT", "José Núñez", true, "es"))
+        .toBe("Nueva cita reservo: sab 17 oct, 3:00 p.m. CDT - José Núñez.");
+    } finally {
+      vi.doUnmock("@/lib/messages");
+      vi.resetModules();
+    }
+  });
+
+  it("worst-case Spanish booking alert with a plain-ASCII name is GSM-7 and one segment (mutation: drop the no-name fallback → FAILS for the long name)", () => {
+    for (const name of ["Maria Fernanda de la Pena Gonzalez-Rodriguez", "A".repeat(200)]) {
+      for (const hasEmail of [true, false]) {
+        const body = composeBookingAlertSms(worstSpanishWhen(), name, hasEmail, "es");
+        expect(segmentsFor(body), body).toEqual(expect.objectContaining({ encoding: "gsm7", segments: 1 }));
+      }
+    }
+  });
+
+  it.each([
+    ["a long accented name", "María Fernanda de la Peña González-Rodríguez"],
+    ["a name past one segment on its own", "Á".repeat(200)],
+    ["a name GSM-7 cannot carry at all", "张伟 🙂"],
+  ])("worst-case Spanish booking alert with %s: our own wording stays GSM-7-safe (mutation: stop stripping the date → FAILS, \"sáb\" reaches the text)", (_label, name) => {
+    for (const hasEmail of [true, false]) {
+      const when = "sáb 26 sept, 12:44 a.m. GMT+13:45"; // á is outside GSM-7 (é is not)
+      const body = composeBookingAlertSms(when, name, hasEmail, "es");
+      const ours = body.replace(name, "");
+      expect(segmentsFor(ours).encoding, ours).toBe("gsm7");
+    }
+  });
+
+  it.each(["booked", "lead", "message"] as const)(
+    "the Spanish call alert (%s) is Spanish, GSM-7 and one segment, with and without the email hint (mutation: ignore composeCallAlertSms's language → FAILS, stays \"New call\")",
+    (outcome) => {
+      for (const hasEmail of [true, false]) {
+        const body = composeCallAlertSms(outcome, hasEmail, "es");
+        expect(body).toMatch(/^Nueva llamada: /);
+        expect(segmentsFor(body), body).toEqual(expect.objectContaining({ encoding: "gsm7", segments: 1 }));
+      }
+    },
+  );
+
+  it("the call alert stays English for an English account (mutation: default the language to es → FAILS)", () => {
+    expect(composeCallAlertSms("lead", true)).toBe("New call: a lead came in. Check email for details.");
+    expect(composeCallAlertSms("lead", true, "en")).toBe("New call: a lead came in. Check email for details.");
+  });
+
+  it("every sms.alert.*.es catalogue string is GSM-7 on its own (mutation: write \"más\" into sms.alert.emailHint.es → FAILS by key)", () => {
+    const spanish = Object.entries(m).filter(([k]) => k.startsWith("sms.alert.") && k.endsWith(".es"));
+    expect(spanish.length).toBeGreaterThanOrEqual(6);
+    for (const [key, value] of spanish) {
+      expect(segmentsFor(value).encoding, `${key}: ${value}`).toBe("gsm7");
+      expect(value, key).toBe(value.normalize("NFD").replace(/\p{M}/gu, ""));
+    }
   });
 });
 
