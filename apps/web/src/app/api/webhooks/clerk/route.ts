@@ -1,6 +1,6 @@
 import { Webhook } from "svix";
 import { serviceDb, reconcileMembership, upsertUserFromClerk, isAgencyMetadata } from "@bis/db";
-import { liveClerkTeamPort } from "@/lib/team/clerk-team";
+import { liveClerkTeamPort, reassertClerkRole } from "@/lib/team/clerk-team";
 import { loggableError } from "@/lib/loggable-error";
 
 type ClerkEvent = { type?: string; data?: {
@@ -31,7 +31,11 @@ export async function POST(request: Request): Promise<Response> {
   const d = event.data ?? {};
   try {
     switch (event.type) {
+      // `organizationMembership.updated` is @clerk/backend 3.13.1's own name
+      // (dist/api/resources/Webhooks.d.ts:20, OrganizationMembershipWebhookEvent,
+      // payload OrganizationMembershipJSON: organization.id, public_user_data.user_id).
       case "organizationMembership.created":
+      case "organizationMembership.updated":
       case "organizationMembership.deleted": {
         const clerkUserId = d.public_user_data?.user_id; const clerkOrgId = d.organization?.id;
         if (!clerkUserId || !clerkOrgId) return new Response("ignored", { status: 200 });
@@ -39,7 +43,26 @@ export async function POST(request: Request): Promise<Response> {
         // applying this event's payload, so a replayed `created` that
         // arrives after a `deleted` converges to absent instead of
         // resurrecting the row.
-        await reconcileMembership(serviceDb(), liveClerkTeamPort(), { clerkUserId, clerkOrgId, mode: "webhook" });
+        const settle = async () => {
+          const r = await reconcileMembership(serviceDb(), liveClerkTeamPort(), { clerkUserId, clerkOrgId, mode: "webhook" });
+          return r.outcome === "created" || r.outcome === "exists" ? r.role : null;
+        };
+        // Review I2: where BIS holds a row, Clerk's role FOLLOWS it, so an
+        // edit in Clerk's dashboard or through its browser API cannot drift
+        // it (BIS Staff beside Clerk org:admin is the pair that must never
+        // stand). reassertClerkRole writes only what disagrees, so its own
+        // write's `updated` event ends here. A write that landed is followed
+        // by one more BIS read, in case a Team role change raced it.
+        const role = await settle();
+        if (role) {
+          const a = await reassertClerkRole(clerkOrgId, clerkUserId, role);
+          if (!a.ok) throw new Error(`re-assert of the Clerk role failed (${a.code ?? "no code"})`);
+          const now = a.changed ? await settle() : role;
+          if (now && now !== role) {
+            const b = await reassertClerkRole(clerkOrgId, clerkUserId, now);
+            if (!b.ok) throw new Error(`re-assert of the Clerk role failed (${b.code ?? "no code"})`);
+          }
+        }
         return new Response("ok", { status: 200 });
       }
       case "user.created":
