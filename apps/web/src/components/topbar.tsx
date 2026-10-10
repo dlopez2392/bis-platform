@@ -39,8 +39,17 @@ export function Topbar({
           instead of this wrapper hiding the whole thing — so this div just
           follows suit: unconstrained width (the icon trigger's own size)
           below `sm`, the mockup's 300px only at sm+. */}
+      {/* F-107 r2 review (item 3): `sm:min-w-0`, not unconditional —
+          below `sm` the icon trigger (32px) is the only content, and
+          letting the WRAPPER shrink below that would overlap it with
+          whatever sits to its right; `assertHeaderChildrenInBounds`
+          (phone-width.spec.ts) checks each child's own left/right edges,
+          not overlap BETWEEN siblings, so this would not have failed that
+          check even though it was wrong. `min-w-0` is still needed at
+          sm+, where the 300px desktop trigger's own `shrink-0` content
+          needs the wrapper free to shrink toward it. */}
       {palette ? (
-        <div className="mr-auto flex min-w-0 items-center sm:w-[300px]">{palette}</div>
+        <div className="mr-auto flex items-center sm:min-w-0 sm:w-[300px]">{palette}</div>
       ) : null}
       {/* Task 5: DESIGN.md's "AI presence" pattern — in-account only, both
           audiences, renders nothing outside an account or with no enabled

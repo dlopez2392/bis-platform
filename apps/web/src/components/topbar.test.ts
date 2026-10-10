@@ -55,9 +55,16 @@ const src = stripComments(readFileSync(path.join(here, "topbar.tsx"), "utf8"));
 // icon-only trigger below `sm` instead of this wrapper hiding the whole
 // thing, so the wrapper just follows: unconstrained width below `sm`, the
 // mockup's 300px only at sm+.
-describe("Topbar — F-107 r1: the search wrapper's width (not visibility) now follows the breakpoint", () => {
-  it("the palette wrapper is width-unconstrained below `sm` and 300px at sm+ (mutation: drop `sm:w-[300px]` → FAILS)", () => {
-    expect(src).toContain('<div className="mr-auto flex min-w-0 items-center sm:w-[300px]">{palette}</div>');
+//
+// F-107 r2 review (item 3): `min-w-0` is `sm:` only — below `sm` the icon
+// trigger (32px) is the wrapper's only content, and an unconditional
+// `min-w-0` let the wrapper shrink BELOW that, overlapping whatever sits
+// to its right (a sibling-overlap bug `assertHeaderChildrenInBounds`,
+// phone-width.spec.ts, cannot see — it checks each child's own edges, not
+// overlap between them).
+describe("Topbar — F-107 r2: the search wrapper only shrinks below its content at sm+", () => {
+  it("min-w-0 is sm: only; width is unconstrained below `sm` and 300px at sm+ (mutation: drop `sm:` from either → FAILS)", () => {
+    expect(src).toContain('<div className="mr-auto flex items-center sm:min-w-0 sm:w-[300px]">{palette}</div>');
   });
 });
 
