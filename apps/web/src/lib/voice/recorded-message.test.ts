@@ -26,15 +26,30 @@ describe("looksLikeRecordedMessage — the positives, verbatim from production",
     expect(looksLikeRecordedMessage(REAL_ROBOCALL)).toBe(true);
   });
 
-  it("catches it when the transcriber punctuates differently", () => {
-    // Whisper is not deterministic about commas, casing or the digit form, and
-    // a guard that only matches one transcription of one recording is a guard
+  it("catches it when the transcriber changes casing and the digit form, as long as the sentence breaks survive", () => {
+    // Whisper is not deterministic about casing or the digit form, and a
+    // guard that only matches one transcription of one recording is a guard
     // that stops working the next time the same robot calls.
+    expect(looksLikeRecordedMessage(
+      "hello please dont hang up the phone. this is an important message regarding " +
+      "your google business account. press zero to speak with an agent. press nine " +
+      "to opt out",
+    )).toBe(true);
+  });
+
+  it("KNOWN MISS: the same script transcribed with NO punctuation at all gets through (F-010 review round 2)", () => {
+    // Before round 2 this was a positive. The instruction must now OPEN A
+    // SENTENCE, because a customer describing a real menu says the very same
+    // words mid-sentence ("the recording said press 0 to talk to an
+    // operator…") and the owner's standing rule is that hanging up on a real
+    // customer is strictly worse than letting a robocall through. With no
+    // sentence breaks, nothing shows where a sentence starts, so this robot
+    // bills its minutes; the silence and repeat-caller guards still stand.
     expect(looksLikeRecordedMessage(
       "hello please dont hang up the phone this is an important message regarding " +
       "your google business account press zero to speak with an agent press nine " +
       "to opt out",
-    )).toBe(true);
+    )).toBe(false);
   });
 
   it("catches an IVR instruction with no opt-out clause at all", () => {
@@ -49,16 +64,28 @@ describe("looksLikeRecordedMessage — the positives, verbatim from production",
     )).toBe(true);
   });
 
-  it("catches an opt-out clause with no press instruction at all", () => {
+  it("catches an opt-out clause with no press instruction at all, opening its sentence", () => {
     // The other half. Some recordings say "reply" or give a callback number
     // instead of a keypad instruction, but still read out the opt-out because
     // somebody's compliance team made them.
     expect(looksLikeRecordedMessage(
       "Good afternoon, this message is regarding an important update to your " +
       "business listing that requires your attention before the end of the " +
+      "month. Call us back on 877-555-0100. To be removed from our list, reply STOP.",
+    )).toBe(true);
+  });
+
+  it("KNOWN MISS: the opt-out in the middle of a sentence gets through (F-010 review round 2)", () => {
+    // Was a positive. Mid-sentence, the list-holder's words are exactly what
+    // a customer reading out a letter says ("it says to be removed from our
+    // list call this number…"), so only the sentence-opening form counts —
+    // the owner's rule, see the miss above.
+    expect(looksLikeRecordedMessage(
+      "Good afternoon, this message is regarding an important update to your " +
+      "business listing that requires your attention before the end of the " +
       "month. Call us back on 877-555-0100, or reply to this message to be " +
       "removed from our list.",
-    )).toBe(true);
+    )).toBe(false);
   });
 
   it("catches the shape without the Google pretext at all", () => {
@@ -201,14 +228,6 @@ describe("looksLikeRecordedMessage — Spanish positives", () => {
     )).toBe(true);
   });
 
-  it("catches it unpunctuated, lower-case, with the digits as words", () => {
-    expect(judged(
-      "hola por favor no cuelgue este es un mensaje importante sobre su cuenta de " +
-      "negocio de google presione cero para hablar con un agente presione nueve para " +
-      "ser eliminado de nuestra lista",
-    )).toBe(true);
-  });
-
   it("catches 'marque el 1 si…' with no opt-out at all", () => {
     // The forward instruction on its own: no opt-out, no "para …," before it.
     expect(judged(
@@ -226,26 +245,62 @@ describe("looksLikeRecordedMessage — Spanish positives", () => {
       "califica para un nuevo plan de salud sin costo alguno. Para hablar con un " +
       "representante, oprima 1.",
     )).toBe(true);
-    // Unpunctuated, the next option ("o espere…") is what shows the digit ended.
+    // ", o …" offering the next option is the other way the digit visibly ends.
     expect(judged(
-      "le informamos que su paquete está retenido en la aduana por falta de pago para " +
-      "hablar con un agente oprima uno o espere en la línea para más información",
+      "Le informamos que su paquete está retenido en la aduana por falta de pago. Para " +
+      "hablar con un agente oprima uno, o espere en la línea para más información.",
     )).toBe(true);
   });
 
-  it("catches the broadcaster's opt-out with no keypad instruction", () => {
+  it("catches the broadcaster's opt-out with no keypad instruction, opening its sentence", () => {
+    expect(judged(
+      "Buenas tardes, este mensaje es sobre una actualización importante de su listado " +
+      "de negocio que requiere su atención antes de fin de mes. Llámenos al 877-555-0100. " +
+      "Para ser eliminado de nuestra lista, responda a este mensaje.",
+    )).toBe(true);
+  });
+
+  // ── KNOWN MISSES (F-010 review round 2). Each was a positive until the
+  // instruction had to OPEN A SENTENCE. A customer describing a real menu
+  // says these very words mid-sentence ("ayer llamé y después presione el 0
+  // para hablar con una operadora…"), and the owner's standing rule is that
+  // hanging up on a real customer is strictly worse than letting a robocall
+  // through. These robots bill their minutes; the silence and repeat-caller
+  // guards still stand behind this one.
+  it("KNOWN MISS: the Spanish script transcribed with no punctuation at all", () => {
+    expect(judged(
+      "hola por favor no cuelgue este es un mensaje importante sobre su cuenta de " +
+      "negocio de google presione cero para hablar con un agente presione nueve para " +
+      "ser eliminado de nuestra lista",
+    )).toBe(false);
+  });
+  it("KNOWN MISS: purpose-first with no punctuation", () => {
+    expect(judged(
+      "le informamos que su paquete está retenido en la aduana por falta de pago para " +
+      "hablar con un agente oprima uno o espere en la línea para más información",
+    )).toBe(false);
+  });
+  it("KNOWN MISS: the opt-out in the middle of a sentence", () => {
     expect(judged(
       "Buenas tardes, este mensaje es sobre una actualización importante de su listado " +
       "de negocio que requiere su atención antes de fin de mes. Llámenos al 877-555-0100, " +
       "o responda a este mensaje para ser eliminado de nuestra lista.",
-    )).toBe(true);
+    )).toBe(false);
+    expect(judged(
+      "Le llamamos del centro de inscripción de beneficios para informarle que usted " +
+      "califica para un nuevo plan de salud sin costo este año. Responda a este mensaje " +
+      "para darse de baja de nuestra lista.",
+    )).toBe(false);
   });
 });
 
-// Review round 1: the keypad rules count a command only when its purpose is
-// a robocall's, from a closed list. One positive per purpose no case above
-// already covers, each carrying ONLY that instruction, so dropping any one
-// alternative from the list fails here by name.
+// One positive per closed-list purpose and per sentence opener, each carrying
+// ONLY that instruction, so dropping any one of them from the rules fails
+// here by name. What is NOT pinned one by one, on purpose: the articles and
+// qualifiers around a purpose ("uno de nuestros", "a live", "one of our"),
+// the feminine and plural endings (operadora, asesores), "obtener más
+// información", "get more information" — variants of a purpose that is
+// pinned, not purposes of their own.
 describe("looksLikeRecordedMessage — one positive per closed-list purpose", () => {
   const PREAMBLE_EN =
     "This is a courtesy call from the benefits enrollment center regarding your " +
@@ -254,26 +309,44 @@ describe("looksLikeRecordedMessage — one positive per closed-list purpose", ()
     "Le llamamos del centro de inscripción de beneficios para informarle que usted " +
     "califica para un nuevo plan de salud sin costo este año. ";
 
-  it("English: press 1 for more information", () => {
-    expect(judged(PREAMBLE_EN + "Press 1 for more information.")).toBe(true);
+  it.each([
+    "Press 1 to speak with an agent.",
+    "Press 1 to speak with a representative.",
+    "Press 0 to talk to an operator.",
+    "Press 1 to speak with a specialist.",
+    "Press 2 to talk to an advisor.",
+    "Press 9 to opt out.",
+    "Press 9 to be removed from our list.",
+    "Press 2 to stop receiving these calls.",
+    "Press 1 to hear more information.",
+    "Press 1 for more information.",
+    "Press 0 for a live agent.",
+    "Press 0 for a representative.",
+    "Press 0 for an operator.",
+    "Please press 1 to speak with an agent.",
+    "To be removed from our list, reply STOP to this message.",
+  ])("English: %s", (instruction) => {
+    expect(judged(PREAMBLE_EN + instruction)).toBe(true);
   });
-  it("English: press 2 to stop receiving these calls", () => {
-    expect(judged(PREAMBLE_EN + "Press 2 to stop receiving these calls.")).toBe(true);
-  });
-  it("English: press 0 to talk to an operator", () => {
-    expect(judged(PREAMBLE_EN + "Press 0 to talk to an operator.")).toBe(true);
-  });
-  it("Spanish: oprima 9 para no recibir más llamadas", () => {
-    expect(judged(PREAMBLE_ES + "Oprima 9 para no recibir más llamadas.")).toBe(true);
-  });
-  it("Spanish: oprima 1 para recibir más información", () => {
-    expect(judged(PREAMBLE_ES + "Oprima 1 para recibir más información.")).toBe(true);
-  });
-  it("Spanish: para darse de baja de nuestra lista, with no keypad command", () => {
-    expect(judged(PREAMBLE_ES + "Responda a este mensaje para darse de baja de nuestra lista.")).toBe(true);
-  });
-  it("Spanish: si quiere hablar con un asesor, presione 2", () => {
-    expect(judged(PREAMBLE_ES + "Si quiere hablar con un asesor, presione 2.")).toBe(true);
+
+  it.each([
+    "Oprima 1 para hablar con un agente.",
+    "Oprima 1 para hablar con un representante.",
+    "Oprima 0 para hablar con un operador.",
+    "Oprima 1 para hablar con un especialista.",
+    "Oprima 2 para hablar con un asesor.",
+    "Oprima 9 para no recibir más llamadas.",
+    "Oprima 9 para ser eliminado de nuestra lista.",
+    "Oprima 1 para recibir más información.",
+    "Marque el 1 si desea hablar con un agente.",
+    "Marque el 1 si quiere hablar con un agente.",
+    "Marque el 1 si gusta hablar con un agente.",
+    "Por favor, oprima 1 para hablar con un agente.",
+    "Si quiere hablar con un asesor, presione 2.",
+    "Para ser eliminado de nuestra lista, responda a este mensaje.",
+    "Para darse de baja de nuestra lista, responda a este mensaje.",
+  ])("Spanish: %s", (instruction) => {
+    expect(judged(PREAMBLE_ES + instruction)).toBe(true);
   });
 });
 
@@ -376,8 +449,7 @@ const ES_CUSTOMERS = {
     "Le dejo mi número de la casa por si acaso, es el 956 555 0134, y si no contesto, " +
     "marque el 2. Es el celular de mi hijo, él siempre contesta en la tarde.",
   // A quoted command WITH a robocall's purpose, in its commonest frame
-  // ("me dijo que oprima…"). Only the y/yo/que guard keeps this one out —
-  // the partial defence of the KNOWN GAP below.
+  // ("me dijo que oprima…"): mid-sentence, so it is a story.
   toldToPressForAgent:
     "Mi suegra tiene seguro con ustedes y me dijo que oprima el 1 para hablar con un " +
     "agente, pero cuando llamé no me salió ningún menú, así que nomás quería preguntar por la póliza.",
@@ -387,15 +459,68 @@ const ES_CUSTOMERS = {
     "Mire, le hablo porque necesito que vengan a ver la lavadora de la casa, que ya no " +
     "centrifuga nada desde el lunes. Para cualquier cosa marque el uno siete dos, es la " +
     "extensión de mi trabajo.",
+
+  // ── Review round 2, C1: a list purpose followed by a PHONE NUMBER — a
+  // card, a flyer, a vendor's own line. The keypad digit never visibly ends.
+  facebookAdNumber:
+    "Hola, vi un anuncio de ustedes en Facebook que decía para más información marque el " +
+    "956 555 0134 y por eso les llamo, quería saber cuánto cuesta una mesa de comedor de mezquite.",
+  insuranceCardNumber:
+    "Sí, buenas, tengo una pregunta de mi póliza, en la tarjeta del seguro dice para hablar " +
+    "con un agente marque el 1 800 555 0199 pero ese número no me contesta, ¿ustedes me pueden ayudar?",
+  pressedYesterdayForAgent:
+    "Le hablo porque ayer para hablar con un agente de seguros presione el 2 y luego me " +
+    "pasaron con ustedes, pero se cortó, y quería terminar de arreglar lo del seguro de la troca.",
+  doctorsOffice:
+    "Soy de la oficina del doctor Garza, si quiere hablar con una asesora de nosotros marque " +
+    "el 2 cuando le conteste la grabadora, es para confirmar lo de la factura que les mandamos.",
+  comadresCard:
+    "Buenos días, mi comadre me dio su tarjeta y atrás dice si desea más información marque " +
+    "el 956 555 0172, pero ese es otro número, ¿este es el bueno para hacer una cita?",
+  vendorAfterComma:
+    "Hola, habla Rosa de la mueblería, para hablar con un asesor de nosotros marque el 956 " +
+    "555 0101 cuando guste, le hablaba por lo del pedido de las sillas que nos encargó.",
+  // The same vendor with a FULL STOP before the purpose: the purpose now
+  // begins a sentence, so only "the digit must visibly end" keeps it out.
+  vendorAfterStop:
+    "Hola, habla Rosa de la mueblería. Para hablar con un asesor de nosotros marque el 956 " +
+    "555 0101 cuando guste, le hablaba por lo del pedido de las sillas que nos encargó.",
+
+  // ── Review round 2, C2: a customer DESCRIBING a real business's menu.
+  // "Hablar con una operadora" and "más información" are what real menus
+  // offer too, so the purpose cannot tell them apart — where the command
+  // sits can: mid-sentence, after "luego" / "después" / "la grabación".
+  pressedThenOperator:
+    "Buenas, fíjese que ayer llamé y después presione el 0 para hablar con una operadora y " +
+    "nadie me contestó, entonces quería saber si me pueden cambiar la cita del jueves para el viernes.",
+  pressedThenAdvisor:
+    "Buenas tardes, le hablo porque la otra vez llamé y luego presione el 0 para hablar con " +
+    "un asesor y se cortó la llamada, y necesito ver lo de mi cotización del techo.",
+  recordingMoreInfo:
+    "Quiero más información sobre el plan de mantenimiento del aire, ayer en la grabación " +
+    "marque el 1 para más información pero no me dijeron nada de precios, ¿me puede explicar?",
+  saidCommaPress:
+    "Cuando llamé en la mañana la grabación dijo, presione 0 para hablar con un agente, y " +
+    "esperé como diez minutos y nadie me contestó, por eso le vuelvo a marcar.",
+  quotedRobocall:
+    "Oiga, me llegó una llamada rara que decía oprima 1 para hablar con un agente sobre mi " +
+    "cuenta de Google, ¿ustedes me llamaron o es una de esas llamadas de fraude?",
 } as const;
 
-// KNOWN GAP, recorded rather than chased (review round 1, sentence H): a
-// customer QUOTING a robocall's own words — "me llegó una llamada que decía
-// oprima 1 para hablar con un agente, ¿ustedes me llamaron?" — carries a
-// robocall's purpose after a robocall's command, past the length floor, and
-// is judged a recording. Nothing in the words tells a quote from the script.
-// The English rule has the same gap ("it said press 0 to speak with an
-// agent"). Only a real call can say how often that happens.
+// KNOWN GAP, recorded rather than chased (review rounds 1–2). The list
+// purposes are ALSO what real business menus offer, so the purpose alone
+// cannot tell a customer describing a menu from a script; the SENTENCE START
+// is the discriminator. A customer who quotes a menu or a robocall
+// mid-sentence ("me llegó una llamada que decía oprima 1 para hablar con un
+// agente…", "the recording said press 0 to talk to an operator…") stays on
+// the line — quotedRobocall and the round-2 negatives pin it. What is left:
+// a customer who OPENS a sentence with the command — "Ayer llamé. Presione
+// el 0 para hablar con una operadora y nadie contestó." (the accent-dropped
+// past tense is spelled like the command), or a quote the transcriber
+// breaks off with a full stop ("It said. Press 0 to speak with an agent.").
+// A colon or a comma is not a sentence start, so "decía: oprima…" and "it
+// said, press…" are safe. Nothing in the words tells the rest from a script.
+// Only a real call can say how often it happens.
 
 /** English and Spanglish callers retelling a menu or asking to stop
  *  messages — the English rule's own negatives for the same principle. */
@@ -418,6 +543,26 @@ const EN_CUSTOMERS = {
   removedFromThisList:
     "Yeah, I keep getting these flyers in the mail from you and I'd like to be removed " +
     "from this list please, I already had the roof done by another company.",
+  // Review round 2, C2: customers quoting a menu, a flyer or a letter whose
+  // option IS on the list.
+  operatorRangAndRang:
+    "Yeah hi, I called earlier and the recording said press 0 to talk to an operator and it " +
+    "just rang and rang, so I'm calling again, I need to move my appointment to Friday.",
+  spanglishAgent:
+    "Oiga, la otra vez que llamé it told me press 1 to speak with an agent y nadie me " +
+    "contestó, so I'm calling back porque necesito una cita para la troca esta semana.",
+  flyerMoreInfo:
+    "Hi, I got your flyer on my door yesterday and it says press 1 for more information, but " +
+    "when I called nothing happened, so I just wanted to ask about the lawn package.",
+  warrantyPaperwork:
+    "Hi, my water heater from you guys is leaking again and the paperwork says press 2 to " +
+    "speak with a warranty specialist but that line never picks up, so can you guys just send a tech out?",
+  letterRemovedFromOurList:
+    "Hi, I got a letter from you guys, it says to be removed from our list call this number, " +
+    "but I actually still want the service, I just moved, so I need to update my address.",
+  saidCommaPress:
+    "When I called this morning it said, press 0 to speak with an agent, and I waited like ten " +
+    "minutes and nobody picked up, so I'm trying again about my estimate.",
 } as const;
 
 describe("looksLikeRecordedMessage — Spanish negatives, real customers", () => {
@@ -496,6 +641,23 @@ describe("looksLikeRecordedMessage — Spanish negatives, real customers", () =>
     expect(judged(ES_CUSTOMERS.toldToPressForAgent)).toBe(false);
   });
 
+  it("a list purpose followed by a phone number — a card, a flyer, a vendor (review round 2, C1)", () => {
+    for (const name of [
+      "facebookAdNumber", "insuranceCardNumber", "pressedYesterdayForAgent",
+      "doctorsOffice", "comadresCard", "vendorAfterComma", "vendorAfterStop",
+    ] as const) {
+      expect(judged(ES_CUSTOMERS[name]), name).toBe(false);
+    }
+  });
+
+  it("someone describing a real menu whose option IS on the list (review round 2, C2)", () => {
+    for (const name of [
+      "pressedThenOperator", "pressedThenAdvisor", "recordingMoreInfo", "saidCommaPress", "quotedRobocall",
+    ] as const) {
+      expect(judged(ES_CUSTOMERS[name]), name).toBe(false);
+    }
+  });
+
   it("none of them trips the guard partway through, while the caller is still talking", () => {
     // The finished sentence is not the only thing judged — see
     // `trippedAtSomePrefix`. "Para cualquier cosa, marque el nueve" is a
@@ -516,6 +678,15 @@ describe("looksLikeRecordedMessage — English and Spanglish negatives, the same
 
   it("someone asking to stop texts, emails or flyers is never hung up on", () => {
     for (const name of ["optOutOfTexts", "unsubscribe", "removedFromThisList"] as const) {
+      expect(judged(EN_CUSTOMERS[name]), name).toBe(false);
+    }
+  });
+
+  it("someone quoting a menu, flyer or letter whose option IS on the list (review round 2, C2)", () => {
+    for (const name of [
+      "operatorRangAndRang", "spanglishAgent", "flyerMoreInfo", "warrantyPaperwork",
+      "letterRemovedFromOurList", "saidCommaPress",
+    ] as const) {
       expect(judged(EN_CUSTOMERS[name]), name).toBe(false);
     }
   });

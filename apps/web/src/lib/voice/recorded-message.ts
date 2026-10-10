@@ -60,15 +60,48 @@
  */
 const DIGIT = "(?:[0-9]|zero|one|two|three|four|five|six|seven|eight|nine)";
 
+// ─── How a script is told from a person (F-010 review rounds 1–2) ──────────
+//
+// THREE things, all required, because each one alone was shown to hang up on
+// real customers:
+//
+//  1. A keypad COMMAND ("press 1", "oprima 1"), never a topic word.
+//  2. A PURPOSE from a closed list — reach an agent / representative /
+//     operator / specialist / advisor, opt out or stop receiving calls, be
+//     removed from OUR list, more information. "press 1 for appointments",
+//     "oprima 2 para español", "marque el 3 para mi extensión" are customers
+//     retelling a menu or giving their own.
+//  3. The instruction BEGINS A SENTENCE — start of the turn, or right after
+//     . ! ? ¿ ¡ (an optional "please" / "por favor" may open it). The list
+//     purposes are ALSO what real business menus offer ("press 0 to talk to
+//     an operator" is the commonest real option there is), so a customer
+//     describing a menu says the very same words a robocall does. What they
+//     do not do is open a sentence with them: they say "…and the recording
+//     said press 0 to talk to an operator…", "ayer llamé y después presione
+//     el 0 para hablar con una operadora…", "it says press 1 for more
+//     information" — the command mid-sentence, after the words that make it a
+//     story. A script says it as its own sentence: "…finding you. Press 0 to
+//     speak with an agent."
+//
+// A COMMA IS NOT A SENTENCE START, on evidence: "la grabación dijo, presione
+// 0 para hablar con un agente…" and "it said, press 0 to speak with an
+// agent…" are customers (the test file's saidCommaPress), and a comma rule
+// trips both. The real robocall on record opens its instruction after a full
+// stop, so leaving the comma out loses nothing it has.
+//
+// THE TRADE, decided by the owner's standing rule that hanging up on a real
+// customer is strictly worse than letting a robocall through: a script the
+// transcriber wrote WITHOUT punctuation ("…your google business account press
+// zero to speak with an agent…") no longer matches, nor does "por favor,
+// oprima…" with nothing before it but a comma's clause, nor a mid-sentence
+// opt-out ("…or reply to this message to be removed from our list"). Those
+// robots get through and bill their minutes; the silence guard and the
+// repeat-caller guard still stand behind this one. The test file lists every
+// one of them as a KNOWN MISS.
+const SENTENCE_START = "(?:^|[.!?¿¡])\\s*(?:(?:please|por\\s+favor),?\\s+)?";
+
 /**
- * WHAT THE KEY IS FOR, from a CLOSED list: the purposes a broadcaster offers
- * and a caller's own story does not (review round 1, 2026-10-09).
- *
- * The command alone is not enough. "press 1 for appointments", "it said
- * press 2 for service", "press 1 for English" are a CUSTOMER retelling the
- * menu they got when they last rang — and a hangup on that customer leaves
- * no trace they called. What a robocall offers is a way to reach ITS agent,
- * to get off ITS list, or to hear more of its pitch; that is the list.
+ * WHAT THE KEY IS FOR (point 2 above), English.
  *   - speak/talk with/to an agent, representative, operator, specialist or
  *     advisor (one word may qualify it: "a warranty specialist")
  *   - opt out, be removed from OUR list, stop receiving calls
@@ -82,27 +115,28 @@ const EN_PURPOSE_AFTER_TO =
 const EN_PURPOSE_AFTER_FOR =
   "(?:more\\s+information|(?:an?\\s+)?(?:live\\s+)?(?:agent|representative|operator))";
 const IVR_INSTRUCTION = new RegExp(
-  // "press 0 to speak with an agent", "press nine to opt out",
-  // "press 1 for more information" — and never "press 1 for appointments".
-  `\\bpress\\s+${DIGIT}\\s+(?:to\\s+${EN_PURPOSE_AFTER_TO}|for\\s+${EN_PURPOSE_AFTER_FOR})\\b`,
+  // "…finding you. Press 0 to speak with an agent", "Press nine to opt out",
+  // "Press 1 for more information" — and never "press 1 for appointments",
+  // nor "the recording said press 0 to talk to an operator".
+  `${SENTENCE_START}press\\s+${DIGIT}\\s+(?:to\\s+${EN_PURPOSE_AFTER_TO}|for\\s+${EN_PURPOSE_AFTER_FOR})\\b`,
   "i",
 );
 
 /**
- * The opt-out clause on its own, without a keypad command: only the
- * list-holder's own words, "to be removed from OUR list". A customer says
- * "I'd like to opt out of the texts", "I'm calling to unsubscribe", "please
- * take me off this list" — each of them is a person asking to be left alone,
- * and hanging up on them is the false positive that is never seen. (Opt out
- * still counts after a keypad command, above: "press 9 to opt out".)
+ * The opt-out with no keypad command: only the list-holder's own words, "to
+ * be removed from OUR list", and only opening a sentence ("To be removed
+ * from our list, reply STOP."). A customer says "I'd like to opt out of the
+ * texts", "please take me off this list", or quotes a letter — "it says to
+ * be removed from our list call this number" — and hanging up on them is
+ * the false positive that is never seen.
  */
-const OPT_OUT = /\bto\s+be\s+removed\s+from\s+our\s+list\b/i;
+const OPT_OUT = new RegExp(`${SENTENCE_START}to\\s+be\\s+removed\\s+from\\s+our\\s+list\\b`, "i");
 
 // ─── Spanish (F-010) ────────────────────────────────────────────────────────
 //
-// The SAME two signals, said in Spanish — never a third. Keyed on what the
-// script tells the caller to DO, never on what it is about: "lo encontré en
-// Google" is a customer, exactly as "I found you on Google" is.
+// The same three requirements, said in Spanish. Keyed on what the script
+// tells the caller to DO, never on what it is about: "lo encontré en Google"
+// is a customer, exactly as "I found you on Google" is.
 //
 // No real Spanish robocall is on record yet. The shapes below are the ones US
 // Spanish IVR scripts use (usted commands, digits after "el"), which is an
@@ -111,40 +145,26 @@ const OPT_OUT = /\bto\s+be\s+removed\s+from\s+our\s+list\b/i;
 const ES_DIGIT = "(?:[0-9]|cero|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)";
 
 /**
- * The keypad COMMAND, usted form only: oprima, presione, pulse, marque.
+ * The keypad COMMAND, usted form only: oprima, presione, pulse, marque. The
+ * digit may come bare or after "el", "el número" or "la tecla".
  *
- * Only the command. The past tense a customer uses to tell a story is
- * "oprimí / presioné / pulsé / marqué" — the accent makes it a different
- * word, and "oprimí" stays different even with the accent dropped. Where
- * dropping it collides ("presione", "marque"), the narrative almost always
- * carries a subject in front — "llamé y presione el 1", "me dijo que marque
- * el 2" — so a command right after "y", "yo" or "que" is not judged a
- * command. The tú forms ("oprime", "presiona") are left out on purpose:
- * "presiona" is also the plain present ("cuando uno presiona el 1…").
- *
- * The digit may come bare or after "el", "el número" or "la tecla".
- *
- * The "y / yo / que" guard is a PARTIAL defence and nothing more: it keeps
- * out a quoted command in its commonest frame ("me dijeron que oprima el 1
- * para hablar con un agente") at the cost of a script that says "le pedimos
- * que oprima…". The real defence is the closed purpose list below; this only
- * narrows the quoting gap it cannot close (see the test file's KNOWN GAP).
+ * The past tense a customer uses to tell a story is "oprimí / presioné /
+ * pulsé / marqué"; with the accent dropped, "presione" and "marque" are
+ * spelled exactly like the command, which is why the sentence-start rule
+ * (point 3) is what keeps "ayer llamé y luego presione el 0 para hablar con
+ * un asesor" a person. The tú forms ("oprime", "presiona") are left out on
+ * purpose: "presiona" is also the plain present ("cuando uno presiona el
+ * 1…").
  */
-const ES_COMMAND = `(?<!\\b(?:y|yo|que)\\s+)\\b(?:oprima|presione|pulse|marque)\\s+(?:el\\s+(?:n[uú]mero\\s+)?|la\\s+tecla\\s+)?${ES_DIGIT}`;
+const ES_COMMAND = `(?:oprima|presione|pulse|marque)\\s+(?:el\\s+(?:n[uú]mero\\s+)?|la\\s+tecla\\s+)?${ES_DIGIT}`;
 
 /**
- * WHAT THE KEY IS FOR — the same CLOSED list as English, in Spanish (review
- * round 1). "presione el 1 para citas", "oprima 2 para español", "marque el
- * 3 para mi extensión" are customers retelling a menu or giving their own;
- * "para citas" and "para servicio" are what a real business's menu offers,
- * which is exactly why a customer repeats them. A robocall offers:
+ * WHAT THE KEY IS FOR (point 2), Spanish:
  *   - hablar con un agente / representante / operador / especialista /
  *     asesor (or "uno de nuestros …")
  *   - no recibir más llamadas
  *   - ser eliminado / removido … de NUESTRA lista
  *   - (recibir) más información
- * The accent-dropped past tense ("presione", "marque") is spelled exactly
- * like the command, so the PURPOSE is what tells a story from a script.
  */
 const ES_PURPOSE =
   "(?:hablar\\s+con\\s+(?:(?:un|una|uno\\s+de\\s+nuestros|una\\s+de\\s+nuestras|nuestros?|nuestras?)\\s+)?"
@@ -159,31 +179,46 @@ const ES_PURPOSE =
  *  "…marque el uno si" — the first half of "siete" — can never match. */
 const ES_FOR = "(?:para|si\\s+(?:desea|quiere|gusta))";
 
-/** "oprima 1 para hablar con un agente", "marque el 1 si desea hablar con un
- *  especialista" — command, digit, purpose: the English rule's order. */
-const ES_IVR_COMMAND_FIRST = new RegExp(`${ES_COMMAND}\\s+${ES_FOR}\\s+${ES_PURPOSE}\\b`, "i");
+/** "…no lo pueden encontrar. Oprima 0 para hablar con un agente." —
+ *  command, digit, purpose: the English rule's order. */
+const ES_IVR_COMMAND_FIRST = new RegExp(
+  `${SENTENCE_START}${ES_COMMAND}\\s+${ES_FOR}\\s+${ES_PURPOSE}\\b`, "i",
+);
 
 /**
  * "Para hablar con un representante, oprima 1." — purpose FIRST, which
- * Spanish scripts use far more than English ones. The purpose must be one
- * from the closed list; up to a few words may follow it ("…con un
- * representante de servicio al cliente, oprima 1") but not a sentence break.
+ * Spanish scripts use far more than English ones; the purpose opens the
+ * sentence. Up to a few words may follow it ("…con un representante de
+ * servicio al cliente, oprima 1") but not a sentence break.
+ *
+ * AND THE DIGIT MUST BE SEEN TO END — a full stop, or "(,) o …" offering the
+ * next option. A list purpose followed by a PHONE NUMBER is a vendor or a
+ * card being read out ("Para hablar con un asesor de nosotros marque el 956
+ * 555 0101…"), and this predicate runs on the caller's turn while they are
+ * still talking (`call-events.ts` judges every transcription delta's
+ * prefix), so at "…marque el 9" nothing yet shows a number is coming. Only
+ * the digit visibly ending can. (Round 1 dropped this check and six callers
+ * of that shape were hung up on; round 2 restored it.) The command-first
+ * rule needs no such ending: the purpose AFTER its digit already is one.
  */
 const ES_IVR_PURPOSE_FIRST = new RegExp(
-  `\\b${ES_FOR}\\s+${ES_PURPOSE}[^.;:!?¿¡]{0,40}?,?\\s+${ES_COMMAND}`,
+  `${SENTENCE_START}${ES_FOR}\\s+${ES_PURPOSE}[^.;:!?¿¡]{0,40}?,?\\s+${ES_COMMAND}(?=\\s*(?:[.;!?]|,?\\s+o\\b))`,
   "i",
 );
 
 /**
  * The broadcaster's opt-out with no keypad command: only the list-holder's
  * own words, "para ser eliminado de NUESTRA lista" (or "darse de baja de
- * nuestra lista"). A customer says "¿qué hago para ser removido de esta
- * lista?" or "para darse de baja del servicio" — asking to be left alone, or
- * cancelling a plan — and hanging up on them is never seen. "para no recibir
- * más llamadas" alone is the same: a customer says it too. After a keypad
- * command, the rules above count it.
+ * nuestra lista"), opening a sentence. A customer says "¿qué hago para ser
+ * removido de esta lista?" or "para darse de baja del servicio" — asking to
+ * be left alone, or cancelling a plan — and hanging up on them is never
+ * seen. "para no recibir más llamadas" alone is the same: a customer says it
+ * too. After a keypad command, the rules above count it.
  */
-const ES_OPT_OUT = /\bpara\s+(?:ser\s+(?:eliminad|removid|borrad|retirad|quitad)[oa]s?|darse\s+de\s+baja)\s+de\s+nuestras?\s+listas?\b/i;
+const ES_OPT_OUT = new RegExp(
+  `${SENTENCE_START}para\\s+(?:ser\\s+(?:eliminad|removid|borrad|retirad|quitad)[oa]s?|darse\\s+de\\s+baja)\\s+de\\s+nuestras?\\s+listas?\\b`,
+  "i",
+);
 
 /**
  * How much text before this guard will judge at all.
@@ -201,10 +236,12 @@ const MIN_LENGTH = 120;
  * True when this caller turn reads as a recorded broadcast rather than a
  * person.
  *
- * BOTH conditions, never either: enough text to be a script, AND an
- * instruction only a broadcaster gives. Length alone catches the rambling
- * customer. The instruction alone catches a transcription fragment. Requiring
- * both is what makes the negatives in the test file hold.
+ * Enough text to be a script, AND an instruction only a broadcaster gives —
+ * a keypad command for a robocall's purpose, opening a sentence (or the
+ * list-holder's opt-out, opening a sentence). Length alone catches the
+ * rambling customer; the instruction alone catches a transcription fragment;
+ * and the purpose and the sentence start together are what keep a customer
+ * retelling a phone menu on the line.
  */
 export function looksLikeRecordedMessage(text: string): boolean {
   const t = text.trim();
