@@ -8,8 +8,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 // pagination past 500 rows, and the empty tags column. Same mocking shape as
 // the sibling ⌘K search route's own test (search/route.test.ts).
 
+// Staff and roles (Task 6): export is Owner-only — the route's guard is
+// requireAccountOwner, not requireAccountAccess.
 const access = vi.fn();
-vi.mock("@/lib/auth", () => ({ requireAccountAccess: (...a: unknown[]) => access(...a) }));
+vi.mock("@/lib/auth", () => ({ requireAccountOwner: (...a: unknown[]) => access(...a) }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 
 const listContacts = vi.fn();
@@ -63,8 +65,13 @@ beforeEach(() => {
 });
 
 describe("contacts CSV export route (GET)", () => {
-  it("checks account access, for THIS account, before touching the database", async () => {
-    const denied = new Error("NEXT_REDIRECT"); // stand-in for requireAccountAccess's real redirect() throw
+  // Staff and roles (Task 6): export is Owner-only, so a Staff caller's
+  // requireAccountOwner redirect (never 403 — requireAccountOwner's own
+  // doc comment) must be rejected as-is before listContacts ever runs.
+  // (mutation: call requireAccountAccess instead of requireAccountOwner →
+  // FAILS, since the mock above only answers for requireAccountOwner.)
+  it("checks the owner guard, for THIS account, before touching the database — a Staff caller never reaches listContacts", async () => {
+    const denied = new Error("NEXT_REDIRECT"); // stand-in for requireAccountOwner's real redirect() throw
     access.mockRejectedValueOnce(denied);
     await expect(GET(req(), ctx())).rejects.toBe(denied);
     expect(access).toHaveBeenCalledWith("a1");

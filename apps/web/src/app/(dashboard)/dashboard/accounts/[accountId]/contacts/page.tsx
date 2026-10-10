@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Input } from "@/components/ui/input";
 import { buttonVariants } from "@/components/ui/button";
+import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { encodeCursor, parseCursor } from "@/lib/cursor";
 import { cn } from "@/lib/utils";
@@ -120,6 +121,13 @@ export default async function ContactsPage({
 }) {
   const { accountId } = await params;
   const { q, before, sort: rawSort, dir: rawDir } = await searchParams;
+  // Staff and roles: delete and export are Owner-only. The account-level
+  // layout already calls requireAccountAccess to gate entry into this
+  // whole account subtree, but discards the role it reads — this page
+  // needs `canManage` itself to decide the Export link's visibility and
+  // ContactsTable's own `canDelete` prop (which gates the bulk Delete
+  // control, through BulkActionBar).
+  const { canManage } = await requireAccountAccess(accountId);
   const db = await dbForRequest();
 
   // Validated once, reused twice: as the query's own cursor below, and as the
@@ -169,13 +177,15 @@ export default async function ContactsPage({
         count={countLabel}
         actions={
           <>
-            <Link
-              href={buildExportHref(base, q, sort, dir)}
-              className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
-            >
-              <Download className="size-4" aria-hidden />
-              {m["contacts.export"]}
-            </Link>
+            {canManage ? (
+              <Link
+                href={buildExportHref(base, q, sort, dir)}
+                className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+              >
+                <Download className="size-4" aria-hidden />
+                {m["contacts.export"]}
+              </Link>
+            ) : null}
             <Link
               href={`${base}/import`}
               className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
@@ -235,6 +245,7 @@ export default async function ContactsPage({
               dir={dir}
               q={q}
               timezone={zone.zone}
+              canDelete={canManage}
             />
             {newerHref || olderHref ? (
               <div className="mt-4 flex items-center justify-between">

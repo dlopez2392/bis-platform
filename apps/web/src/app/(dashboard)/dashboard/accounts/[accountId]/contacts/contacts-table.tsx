@@ -72,6 +72,7 @@ export function ContactsTable({
   dir,
   q,
   timezone,
+  canDelete,
 }: {
   rows: ContactRow[];
   accountId: string;
@@ -88,6 +89,12 @@ export function ContactsTable({
    *  D-010: "Created" used to print in the RUNTIME's zone (server or
    *  browser), never the account's, same bug the activity timeline had. */
   timezone: string;
+  /** Staff and roles: true for the agency and a client Owner, false for
+   *  Staff — threaded straight through to BulkActionBar's own prop of the
+   *  same name, which is what actually hides the Delete control. Tag
+   *  actions stay available either way (DESIGN.md rule 4: checkboxes never
+   *  render without a bulk-action bar). */
+  canDelete: boolean;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -146,6 +153,7 @@ export function ContactsTable({
         accountId={accountId}
         selectedIds={[...selected]}
         existingTags={existingTags}
+        canDelete={canDelete}
         onDone={() => setSelected(new Set())}
       />
       <Table>

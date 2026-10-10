@@ -1,8 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const requireAccountAccess = vi.fn<(accountId: string) => Promise<{ userId: string; isAgency: boolean }>>(async () => ({ userId: "user_1", isAgency: true }));
+// Staff and roles (Task 6): bulkDeleteContactsAction's guard is
+// requireAccountOwner, not requireAccountAccess — mocked separately so a
+// Staff caller (the owner guard redirecting) can be exercised without
+// touching the other actions in this file, which still use
+// requireAccountAccess unchanged.
+const requireAccountOwner = vi.fn<(accountId: string) => Promise<{ userId: string; isAgency: boolean }>>(async () => ({ userId: "user_1", isAgency: true }));
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: (accountId: string) => requireAccountAccess(accountId),
+  requireAccountOwner: (accountId: string) => requireAccountOwner(accountId),
 }));
 const dbForRequest = vi.fn(async () => ({}));
 vi.mock("@/lib/db", () => ({ dbForRequest: () => dbForRequest() }));
@@ -30,6 +37,7 @@ const { m } = await import("@/lib/messages");
 beforeEach(() => {
   vi.clearAllMocks();
   requireAccountAccess.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
+  requireAccountOwner.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
   dbForRequest.mockReset().mockResolvedValue({});
 });
 
@@ -104,6 +112,19 @@ describe("bulkDeleteContactsAction", () => {
     dbMocks.deleteContacts.mockRejectedValue(new Error("boom"));
     const r = await bulkDeleteContactsAction("a1", ["x"]);
     expect(r.ok).toBe(false);
+  });
+
+  // Staff and roles (Task 6): delete is Owner-only. A Staff caller's
+  // requireAccountOwner redirect must be rejected AS-IS — never caught and
+  // turned into a swallowed { ok: false } — and deleteContacts must never
+  // run first. (mutation: keep requireAccountAccess as the guard here →
+  // FAILS, since that mock still resolves and lets deleteContacts through.)
+  it("rejects with the owner guard's redirect before ever calling deleteContacts", async () => {
+    const denied = new Error("REDIRECT:/dashboard/accounts/a1/dashboard");
+    requireAccountOwner.mockRejectedValueOnce(denied);
+    await expect(bulkDeleteContactsAction("a1", ["x"])).rejects.toBe(denied);
+    expect(requireAccountOwner).toHaveBeenCalledWith("a1");
+    expect(dbMocks.deleteContacts).not.toHaveBeenCalled();
   });
 });
 

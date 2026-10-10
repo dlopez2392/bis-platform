@@ -22,7 +22,10 @@ function row(i: number): ContactRow {
 
 function render(
   rows: ContactRow[],
-  opts: { sort?: "name" | "company" | "created"; dir?: "asc" | "desc"; timezone?: string } = {},
+  opts: {
+    sort?: "name" | "company" | "created"; dir?: "asc" | "desc"; timezone?: string;
+    canDelete?: boolean;
+  } = {},
 ) {
   return renderToStaticMarkup(createElement(ContactsTable, {
     rows,
@@ -31,6 +34,10 @@ function render(
     sort: opts.sort ?? "created",
     dir: opts.dir ?? "desc",
     timezone: opts.timezone ?? "America/Chicago",
+    // Staff and roles: unrelated to every pre-existing test in this file —
+    // defaults to true (the agency/Owner case) so none of them have to name
+    // it. The prop's own gating is pinned in bulk-action-bar.test.ts.
+    canDelete: opts.canDelete ?? true,
   }));
 }
 

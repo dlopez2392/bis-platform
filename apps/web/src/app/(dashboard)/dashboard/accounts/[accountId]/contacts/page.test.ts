@@ -3,6 +3,18 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
+import { m } from "@/lib/messages";
+
+// Staff and roles (Task 6): the page's own owner check for the Export link
+// and ContactsTable's `canDelete` prop. Defaults to an Owner/agency caller
+// so every pre-existing test below (written before this guard existed)
+// keeps seeing the Export link and canDelete=true unless a test overrides
+// the resolved value for itself.
+const requireAccountAccessMock = vi.fn(async (_accountId: string) => (
+  { userId: "u1", isAgency: true, role: null as "owner" | "staff" | null, canManage: true }));
+vi.mock("@/lib/auth", () => ({
+  requireAccountAccess: (accountId: string) => requireAccountAccessMock(accountId),
+}));
 
 // D-009's search-form describe block below renders the WHOLE page (the
 // hidden sort/dir fields live in page.tsx's own JSX, not in a pure
@@ -290,5 +302,51 @@ describe("the account's zone reaches ContactsTable (D-010)", () => {
     } finally {
       errors.mockRestore();
     }
+  });
+});
+
+// Staff and roles (Task 6): delete and export are Owner-only. The page
+// reads `canManage` off requireAccountAccess (agency or a client Owner) and
+// uses it for both the Export link's visibility and ContactsTable's own
+// `canDelete` prop — Staff keeps the list, the search and the bulk tag
+// actions, but loses Export and bulk Delete.
+describe("Export link and canDelete are Owner-only (staff and roles)", () => {
+  it("hides the Export link for a Staff caller (mutation: render Export unconditionally → FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(
+      { userId: "u1", isAgency: false, role: "staff", canManage: false });
+    const html = renderToStaticMarkup(
+      await ContactsPage({
+        params: Promise.resolve({ accountId: "a1" }),
+        searchParams: Promise.resolve({}),
+      }),
+    );
+    expect(html).not.toContain(m["contacts.export"]);
+    // Import stays available — only Export and Delete are Owner-only.
+    expect(html).toContain(m["contacts.import"]);
+  });
+
+  it("passes canDelete: false to ContactsTable for a Staff caller (mutation: hardcode canDelete true → FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(
+      { userId: "u1", isAgency: false, role: "staff", canManage: false });
+    contactsTableMock.mockClear();
+    renderToStaticMarkup(
+      await ContactsPage({
+        params: Promise.resolve({ accountId: "a1" }),
+        searchParams: Promise.resolve({}),
+      }),
+    );
+    expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ canDelete: false }));
+  });
+
+  it("shows Export and passes canDelete: true for the agency / a client Owner", async () => {
+    contactsTableMock.mockClear();
+    const html = renderToStaticMarkup(
+      await ContactsPage({
+        params: Promise.resolve({ accountId: "a1" }),
+        searchParams: Promise.resolve({}),
+      }),
+    );
+    expect(html).toContain(m["contacts.export"]);
+    expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ canDelete: true }));
   });
 });
