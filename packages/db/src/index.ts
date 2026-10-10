@@ -218,3 +218,8 @@ export { roleFromClerk, languageFromClerk, isAgencyMetadata,
          reconcileMembership, INVITE_ACCEPT_ALLOWANCE_MS,
          type AccountRole, type PersonLanguage, type TeamMember,
          MEMBER_REMOVED_EVENT, type ClerkTeamPort, type ReconcileOutcome } from "./team";
+
+// A person's own preferences (0067): language + theme, read and write. See ./preferences.ts.
+export { PERSON_THEMES, PERSON_LANGUAGES, NO_PREFS, isPersonTheme, isPersonLanguageValue,
+         prefsFromRow, readPersonPrefs, readAccountRoleAndPrefs, savePersonPreference,
+         type PersonTheme, type PersonPrefs, type PreferenceWrite, type PersonProfile } from "./preferences";
