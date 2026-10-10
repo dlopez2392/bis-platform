@@ -218,6 +218,23 @@ async function endCallLeg(callId: string): Promise<void> {
  */
 const CLOSE_AFTER_GOODBYE_MS = 5000;
 
+/**
+ * How long `ws.close()` waits for OpenAI's answering close frame before the
+ * socket is destroyed. `finish()` — and so `finishCall`, the call row and
+ * the staff alert — runs on the `close` event, and ws emits that only once
+ * the handshake completes or this timer fires. Unset, ws waits 30000ms
+ * (`CLOSE_TIMEOUT`, ws@8.21.3 lib/websocket.js): thirty seconds nobody
+ * counted in the cap's tail.
+ *
+ * Three seconds, because a healthy handshake is one round trip (well under
+ * a second), so 3s is still several times what a live peer needs; and a
+ * peer that has not answered in 3s is not going to send anything we use —
+ * by then the goodbye has played and the SIP leg is already hung up. Every
+ * second here comes out of the cap's clamp, so it is no longer than that.
+ * Counted in the tail below; pinned by lifecycle.test.ts.
+ */
+const WS_CLOSE_TIMEOUT_MS = 3000;
+
 interface LifecycleArgs {
   callId: string;
   apiKey: string;
@@ -255,9 +272,14 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
   // encodeURIComponent the accept endpoint above already applies, for the
   // same reason: nothing guarantees its charset, and the tests exercise a
   // callId with `/` and `?` in it.
-  const ws = new WebSocket(`wss://api.openai.com/v1/realtime?call_id=${encodeURIComponent(callId)}`, {
+  //
+  // `closeTimeout` is read by ws@8.21.3 but missing from @types/ws@8.18.1's
+  // `ClientOptions`, hence the widened type instead of a cast.
+  const wsOptions: WebSocket.ClientOptions & { closeTimeout: number } = {
     headers: { Authorization: `Bearer ${apiKey}` },
-  });
+    closeTimeout: WS_CLOSE_TIMEOUT_MS,
+  };
+  const ws = new WebSocket(`wss://api.openai.com/v1/realtime?call_id=${encodeURIComponent(callId)}`, wsOptions);
 
   return new Promise<void>((resolve) => {
     // Idempotent: `close` and `error` can both fire for the same socket, and
@@ -366,61 +388,85 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // `maxDuration` or Fluid Compute kills the invocation mid-teardown and
       // the call row is lost:
       //
-      //     5s  closeTimer — the goodbye plays out before `ws.close()`
+      //     5s  closeTimer — the goodbye plays out (CLOSE_AFTER_GOODBYE_MS)
+      //     5s  `endCallLeg`, the SIP hangup, awaited BEFORE `ws.close()`
+      //         (AbortSignal 5s)
+      //     3s  the socket's close handshake (WS_CLOSE_TIMEOUT_MS). finish()
+      //         runs on the `close` event, which waits for the peer's close
+      //         frame; ws's own default wait is 30s, which is why it is set
       //     3s  finish()'s bounded frame drain (`Promise.race([chain, 3000])`)
       //    10s  the summary reading (`generateSummary`, AbortSignal 10s) —
       //         first in finishCall, before anything is written
       //    12s  contact, conversation and message rows, `finishCallRow`, and
-      //         the staff alert email — sequential network round trips with
-      //         no timeout of their own. THE CALL ROW IS DURABLE HERE, ~30s in.
+      //         the staff alert email to ONE address — sequential network
+      //         round trips with no timeout of their own (an estimate, not a
+      //         bound). THE CALL ROW IS DURABLE HERE, ~38s in.
       //    10s  ONE carrier send (SEND_TIMEOUT_MS, `lib/sms/telnyx.ts`): the
       //         staff alert SMS (booked/lead/message) or the missed-call
       //         text-back (abandoned) — never both on one call
       //     5s  the usage ledger write (`recordUsageSafely`)
       //    10s  the call card's reading (`readCallForCard`, AbortSignal 10s),
       //         then its own update; the callback To do is a few ms before it
-      //    10s  the proposals' reading (`generateProposals`, AbortSignal 10s),
-      //         then up to three inserts with no timeout of their own
+      //    10s  the proposals' reading (`generateProposals`, AbortSignal 10s)
       //    ---
-      //    65s  worst-case tail (plus the untimed inserts)
+      //    73s  tail (61s bounded by timeouts; the 12s rows-and-email leg is an
+      //         estimate — the Resend call has no timeout of its own)
       //
       // BEFORE the cap timer is armed (the connect leg). This is real elapsed
       // `maxDuration` that the cap knows nothing about, because the clock the
       // platform is measuring started at the webhook and the cap's own clock
       // starts here:
       //
-      //     ~5s  cold start, signature verification, account resolution and
-      //          the `accept` round trip to OpenAI
+      //     ~5s  AN ESTIMATE, NOT A BOUND: cold start, signature verification,
+      //          roughly ten sequential database round trips (number, profile,
+      //          the daily counts, the account, the calendar, the transfer
+      //          target, the call row), and `acceptCall` — a fetch to OpenAI
+      //          with no timeout of its own
       //     15s  the wait for the media socket to open — bounded by
       //          PHONE_CONNECT_TIMEOUT_MS, whose DEFAULT is 15000ms. The
       //          worst case that still reaches this line is a connect that
       //          took just under that; a connect that exceeds it never arms
       //          the cap at all (`settled` short-circuits above).
       //    ----
-      //     20s  worst-case connect leg
+      //    ~20s  connect leg
       //
-      //   800 - 65 - 20 = 715
+      // MARGIN, for the legs nothing times. Each is small on its own and
+      // none has a bound, so they are named here rather than pretended away:
+      //   - one more staff alert email per notify address past the first
+      //     (`ctx.notifyEmails`, sent one after another, no timeout, no cap
+      //     on how many addresses a calendar holds)
+      //   - the proposals' pre-reads (`getContact`, `resolveOpenOpportunity`)
+      //     and their up-to-three inserts
+      //   - the automation log, the `call.recorded` emit and the callback To
+      //     do between the timed legs
+      //   - the alert text's and the text-back's prepare reads and message
+      //     write (`getAlertPhone`, `prepareAlertSms`, `prepareTextback`)
+      //   - the connect leg's ~5s estimate running long (`acceptCall`)
+      //   (examples, not an exhaustive list: any new untimed leg comes out of
+      //   this margin, so re-derive the clamp when one is added)
+      //    10s  margin
       //
-      // THE CLAMP BELOW STILL SAYS 750, derived when the tail was counted as
-      // 30s (the carrier send and the first 12s only). Counted in full it is
-      // 65s, so a call held all the way to a 750s cap could, in the very worst
-      // case, run ~35s past the 800s ceiling. What that would cost is ORDERED:
-      // the call row and the staff alert email land in the first ~30s of the
-      // tail (770 + 30 = 800, right at the ceiling), and what an overrun cuts
-      // off is everything after them — the carrier send (alert SMS or
-      // text-back), the usage row, the callback To do, the call card and the
-      // proposals.
-      // Unreachable today (the default cap is 240s and nothing approaches the
-      // clamp); re-deriving the clamp to 715 is a knob change pinned by
-      // lifecycle.test.ts, left to its own decision rather than folded into a
-      // comment fix. (It was tightened once already, from 770, for the same
-      // reason: 770 + 30 + 20 = 820.)
+      //   800 - 73 - 20 - 10 = 697, THE CLAMP BELOW.
       //
-      // THE ASSUMPTION THIS STILL CARRIES: PHONE_CONNECT_TIMEOUT_MS is
-      // configurable up to 60000ms (clamped above). Raising it past ~35s eats
-      // the whole connect budget and this 750 must be re-derived. Nothing
-      // enforces that coupling — the two knobs are independent, and this
-      // comment is the only thing linking them.
+      // Pinned by lifecycle.test.ts ("cap-seconds clamp", at 900 and at 698).
+      // It has been tightened three times, each time because a leg had been
+      // left uncounted: from 770 (tail only), from 750 (tail counted as 30s),
+      // and from 715 (no hangup, and a close handshake that could wait ws's
+      // default 30s). If a leg is ever added to the tail, add it above and
+      // re-derive here. An overrun is ORDERED, not random: the call row and
+      // the staff alert email land in the first ~38s of the tail, and what an
+      // overrun cuts off is everything after them — the carrier send (alert
+      // SMS or text-back), the usage row, the callback To do, the call card
+      // and the proposals.
+      //
+      // THE ASSUMPTIONS THIS CARRIES: PHONE_CONNECT_TIMEOUT_MS is
+      // configurable up to 60000ms (clamped above), and the ~20s connect leg
+      // is its 15000ms DEFAULT plus the ~5s estimate. Raising it above the
+      // default spends the margin first and then the tail, and this 697 must
+      // be re-derived. And a calendar notifying many addresses spends the
+      // margin one email at a time. Nothing enforces either coupling — the
+      // knobs are independent, and this comment is the only thing linking
+      // them.
       //
       // THE FLOOR OF 10 IS THE SILENCE WINDOW'S, NOT THE CAP'S. A 1s cost cap
       // is absurd but harmless on its own. What it was not harmless to is the
@@ -432,7 +478,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // CAP is what makes the half-bound incapable of undercutting the clamp
       // it is applied to. Flooring after the min instead would let the window
       // TIE the cap, and a tie fires the cap first (insertion order).
-      const maxSeconds = Math.min(Math.max(parsedOrDefault, 10), 750);
+      const maxSeconds = Math.min(Math.max(parsedOrDefault, 10), 697);
       capTimer = setTimeout(() => {
         log("call cap reached, sending goodbye", { callId, maxSeconds });
         try {
@@ -471,7 +517,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //
       // THE ORDERING IS ENFORCED HERE, NOT DESCRIBED. The two knobs are
       // independent in the environment: PHONE_MAX_SILENT_SECONDS clamps to
-      // 5–120 and PHONE_MAX_CALL_SECONDS to <=750, so `120` and `60` is a
+      // 5–120 and PHONE_MAX_CALL_SECONDS to <=697, so `120` and `60` is a
       // legal pair an operator can reach by two individually sensible edits.
       // Under it, on a call where nobody speaks, the CAP fires first and
       // hands the model the open-ended "Politely wrap up…" below — which is

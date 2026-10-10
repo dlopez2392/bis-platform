@@ -203,6 +203,7 @@ shorter fuse and a cancel condition.
 
   **That bound is why this branch also puts a 10-second FLOOR on
   `PHONE_MAX_CALL_SECONDS`** (`incoming/route.ts:333`, now clamped `10..750`).
+  *(Note 2026-10-09: the upper clamp is now 697, re-derived from the full post-cap tail on `chore/rider-followups`; the floor of 10 is unchanged.)*
   The floor has nothing to do with the cap — a 1s cost cap is absurd but
   harmless on its own. It exists so half the cap can never land under the
   guard's own 5s minimum: measured off the route's log line, a cap of 8 armed a
