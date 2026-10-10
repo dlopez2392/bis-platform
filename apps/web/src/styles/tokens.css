@@ -99,6 +99,16 @@
   --radius-card: 12px;      /* cards, panels, drawers (mockup --r-card) */
   --radius-pill: 999px;
 
+  /* F-107 (rider part): the inset a phone's own OS chrome (the home-
+     indicator gesture bar) reserves at the bottom of the viewport — same
+     value in both modes, since it describes the device, not the theme (see
+     the `.dark` block below). Falls back to 0px on anything without one, so
+     a sighted check against a desktop browser or an older phone sees no
+     change. Consumed by the sidebar's pinned footer (rule 10: "pinned and
+     visible at every viewport height") so Settings and the setup meter are
+     never drawn under that bar. */
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
   /* elevation lives in the `*` block below: the shadows are accent-tinted
      now, and a var()-carrying value declared here would freeze BIS violet
      into every branded tenant (the recorded composed-token trap). */
@@ -188,6 +198,11 @@
   --radius-ctl:  8px;
   --radius-card: 12px;
   --radius-pill: 999px;
+
+  /* Same value as :root's own — see its comment. Duplicated rather than
+     left to inherit, matching this file's own convention for every other
+     theme-independent value in this block (radii, motion). */
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 
   /* elevation lives in the `.dark *` block below (see the light note). */
 

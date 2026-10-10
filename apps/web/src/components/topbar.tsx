@@ -25,8 +25,18 @@ export function Topbar({
   return (
     <header className="flex h-[54px] shrink-0 items-center justify-end gap-[14px] border-b border-[var(--top-line)] bg-transparent px-[22px]">
       {/* The mockup puts the search control on the LEFT of the bar at 300px
-          wide, with everything else pushed right (northern-lights.html:60-62). */}
-      {palette ? <div className="mr-auto flex w-[300px] min-w-0 items-center">{palette}</div> : null}
+          wide, with everything else pushed right (northern-lights.html:60-62).
+          F-107 (rider part): hidden below `sm` — the trigger inside
+          (command-palette.tsx's Button) is `shrink-0 whitespace-nowrap`, so
+          a narrower box here would not shrink it, it would just overflow
+          the topbar. A phone's own search affordance (a plain icon, per
+          §6.3 "Surface 2. The phone shell") is sequenced into F-107's
+          SECOND part with the rest of that surface; ⌘K itself still works
+          below `sm`, for the rare phone with a hardware keyboard — this
+          only hides the visible trigger that does not fit. */}
+      {palette ? (
+        <div className="mr-auto hidden w-[300px] min-w-0 items-center sm:flex">{palette}</div>
+      ) : null}
       {/* Task 5: DESIGN.md's "AI presence" pattern — in-account only, both
           audiences, renders nothing outside an account or with no enabled
           voice profile. A "use client" child so the pathname-keyed read it
