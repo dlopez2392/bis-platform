@@ -97,6 +97,7 @@ describe("/b/[publicId]/move/[token]", () => {
     m.bookingWasMoved.mockResolvedValueOnce(true);
     const moved = walk(await MoveBookingPage({ params: params(), searchParams: query() }));
     expect(moved.text).toContain(bookingStrings("en").movedTitle);
+    expect(moved.text).toContain(bookingStrings("en").movedBody);
     expect(moved.els.some((e) => e.type === MoveForm)).toBe(false);
 
     const cancelled = walk(await MoveBookingPage({ params: params(), searchParams: query() }));
@@ -111,6 +112,15 @@ describe("/b/[publicId]/move/[token]", () => {
     const started = walk(await MoveBookingPage({ params: params(), searchParams: query() }));
     expect(started.text).toContain(bookingStrings("en").cancelPastTitle);
     expect(started.els.some((e) => e.type === MoveForm)).toBe(false);
+  });
+
+  it("an appointment moved MOVE_CHAIN_MAX times shows no picker: contact the business, with the cancel (mutation: no capped state → the picker, FAILS)", async () => {
+    const { MOVE_CHAIN_MAX } = await import("./data");
+    m.loadMoveContext.mockResolvedValueOnce({ ...ctx(), depth: MOVE_CHAIN_MAX });
+    const capped = walk(await MoveBookingPage({ params: params(), searchParams: query() }));
+    expect(capped.els.some((e) => e.type === MoveForm)).toBe(false);
+    expect(capped.text).toContain(bookingStrings("en").moveOffline);
+    expect(capped.els.some((e) => (e.props as { href?: string }).href === `/b/pub1/cancel/${TOKEN}`)).toBe(true);
   });
 
   it("a switched-off calendar says to contact the business, and still offers the cancel", async () => {

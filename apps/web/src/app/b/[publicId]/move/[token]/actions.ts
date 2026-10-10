@@ -3,7 +3,7 @@
 import { headers } from "next/headers";
 import {
   serviceDb, getContact, moveBooking, SlotTakenError, BookingNotMovableError,
-  countRecentBookings, rescheduleChain,
+  countRecentBookings,
   ensureConversation, createMessage, incrementUnreadCount,
 } from "@bis/db";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
@@ -107,18 +107,18 @@ export async function confirmMoveAction(
     if (state === "cancelled") return { ok: false, error: s.moveAlreadyChanged, gone: true };
     if (state === "past") return { ok: false, error: s.cancelPastTitle, gone: true };
     if (state === "offline") return { ok: false, error: s.moveOffline };
+    if (state === "capped") return { ok: false, error: s.moveOffline, gone: true };
 
     // Fix round 1 (I3): the bounds on how often, BEFORE the slot is looked
     // at. The booking page's own per-IP limit (the moved row carries the IP
     // hash, so `countRecentBookings` sees moves), answered as that page
-    // answers it; then the appointment's own cap (`MOVE_CHAIN_MAX`).
+    // answers it. (The appointment's own cap, `MOVE_CHAIN_MAX`, is the
+    // `capped` state above.)
     const ipHash = hashIp(clientIp(await headers()));
     const windowStart = new Date(now.getTime() - RATE_LIMIT_WINDOW_MS).toISOString();
     if (await countRecentBookings(db, ctx.calendar.id, ipHash, windowStart) >= RATE_LIMIT_MAX) {
       return { ok: false, error: s.moveGenericError };
     }
-    const { depth } = await rescheduleChain(db, ctx.row.account_id, ctx.row.id);
-    if (depth >= MOVE_CHAIN_MAX) return { ok: false, error: s.moveOffline, gone: true };
 
     const timezone = ctx.account.timezone ?? "UTC";
     const wanted = new Date(slotStartsAt);
@@ -162,7 +162,9 @@ export async function confirmMoveAction(
   const origin = originFrom(await headers());
   const manageUrl = bookingCancelUrl(origin, calendar.public_id, moved.cancelToken, lang);
   const calendarUrl = calendarFileUrl(origin, calendar.public_id, moved.cancelToken, lang);
-  const moveUrl = bookingMoveUrl(origin, calendar.public_id, moved.cancelToken, lang);
+  // The move that reaches the cap offers no next one (fix round 2, m-b).
+  const moveUrl = (ctx.depth ?? 0) + 1 >= MOVE_CHAIN_MAX
+    ? "" : bookingMoveUrl(origin, calendar.public_id, moved.cancelToken, lang);
 
   let contact: { first_name?: string | null; last_name?: string | null; email?: string | null } | null = null;
   try {

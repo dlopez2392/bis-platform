@@ -139,9 +139,10 @@ export default async function MoveBookingPage({
       />
     );
   } else {
+    const moved = state === "cancelled" && await wasMoved(ctx);
     const message = state === "cancelled"
-      ? (await wasMoved(ctx) ? strings.movedTitle : strings.cancelAlreadyCancelledTitle)
-      : state === "past" ? strings.cancelPastTitle : strings.moveOffline;
+      ? (moved ? strings.movedTitle : strings.cancelAlreadyCancelledTitle)
+      : state === "past" ? strings.cancelPastTitle : strings.moveOffline; // offline, capped
     body = (
       <div className="bis-booking">
         <div className="bis-booking-current">
@@ -149,9 +150,10 @@ export default async function MoveBookingPage({
           <p className="bis-booking-current-when">{when}</p>
         </div>
         <p role="status" className="bis-booking-status">{message}</p>
+        {moved ? <p className="bis-booking-status-body">{strings.movedBody}</p> : null}
         {/* Switched off for changes, but the booking is still live: the
             cancel page beside this one is the other way out. */}
-        {state === "offline" ? (
+        {state === "offline" || state === "capped" ? (
           <p className="bis-booking-alt"><a href={cancelHref}>{strings.cancelInsteadLink}</a></p>
         ) : null}
         {poweredBy}

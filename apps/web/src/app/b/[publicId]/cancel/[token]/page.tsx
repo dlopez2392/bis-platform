@@ -193,9 +193,12 @@ export default async function CancelBookingPage({
         <p className="bis-cancel-when">{when}</p>
 
         {isCancelled ? (
-          <p role="status" className="bis-cancel-title">
-            {wasMoved ? strings.movedTitle : strings.cancelAlreadyCancelledTitle}
-          </p>
+          <>
+            <p role="status" className="bis-cancel-title">
+              {wasMoved ? strings.movedTitle : strings.cancelAlreadyCancelledTitle}
+            </p>
+            {wasMoved ? <p className="bis-cancel-body">{strings.movedBody}</p> : null}
+          </>
         ) : isPast ? (
           <p role="status" className="bis-cancel-title">{strings.cancelPastTitle}</p>
         ) : (
@@ -262,6 +265,8 @@ const CANCEL_CSS = `
 /* F-048: the move, offered beside the cancel: a quiet link, not a second
    primary (rule 8: the cancel is this view's one decision). */
 .bis-cancel-move { margin: 16px 0 0; font-size: 14px; }
+/* The line under a title (an old link after a move, F-048). */
+.bis-cancel-body { margin: -8px 0 16px; }
 .bis-cancel-move a { color: var(--foreground, #18181b); }
 .bis-cancel-poweredby { margin: 24px 0 0; font-size: 12px; text-align: center; }
 .bis-cancel-poweredby a { color: var(--muted-foreground, #71717a); text-decoration: none; }

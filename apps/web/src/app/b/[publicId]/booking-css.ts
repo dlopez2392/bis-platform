@@ -198,6 +198,7 @@ export const BOOKING_CSS = `
 /* A link that can no longer move anything says why, in the cancel page's
    title weight. */
 .bis-booking-status { margin: 0 0 8px; font-size: 17px; font-weight: 600; }
+.bis-booking-status-body { margin: 0 0 8px; color: var(--muted-foreground, #71717a); }
 .bis-booking-alt { margin: 20px 0 0; text-align: center; font-size: 13px; }
 .bis-booking-alt a { color: var(--muted-foreground, #71717a); }
 

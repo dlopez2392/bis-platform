@@ -124,7 +124,10 @@ const STRINGS = {
     // An OLD link, after a move: the booking it names was replaced. Said on
     // the cancel page and the move page alike, instead of "cancelled". Neither
     // line promises an email: none may have gone (D-033; fix round 1, m2).
-    movedTitle: "This booking was moved to a new time, so this link no longer changes it. If you need the new time, please contact us.",
+    // A short title (the cancel page sets it in its title style), and the
+    // rest as a line under it (fix round 2, m-d).
+    movedTitle: "This booking was moved.",
+    movedBody: "This link no longer changes it. If you need the new time, please contact us.",
     // The business has switched online booking off: a move is a new booking,
     // so it stops too (a cancel never does).
     moveOffline: "To change the time, please contact us directly.",
@@ -201,7 +204,8 @@ const STRINGS = {
     moveManageHintNoEmail: "Guarda este enlace para cambiarla o cancelarla más tarde.",
     moveGenericError: "Algo salió mal — tu cita no se cambió. Vuelve a intentarlo.",
     moveAlreadyChanged: "Esta cita ya se cambió o se canceló, así que no se movió nada. Si tienes dudas sobre tu horario, comunícate con nosotros.",
-    movedTitle: "Esta cita se cambió a otro horario, así que este enlace ya no la modifica. Si necesitas el nuevo horario, comunícate con nosotros.",
+    movedTitle: "Esta cita se cambió de horario.",
+    movedBody: "Este enlace ya no la modifica. Si necesitas el nuevo horario, comunícate con nosotros.",
     moveOffline: "Para cambiar el horario, comunícate directamente con nosotros.",
     moveTabTitleWithBrand: "Cambia tu cita con {business}",
     moveTabTitleNoBrand: "Cambiar una cita",

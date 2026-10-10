@@ -175,7 +175,10 @@ describe("CancelBookingPage — the way to move, and an old link after a move", 
   it("a cancelled booking a move replaced says MOVED; a plain cancel still says cancelled (mutation: ignore bookingWasMoved → FAILS)", async () => {
     lookupBookingByTokenMock.mockResolvedValue({ ...BOOKING, status: "cancelled" });
     bookingWasMovedMock.mockResolvedValueOnce(true);
-    expect(walk(await render()).text).toContain(bookingStrings("en").movedTitle);
+    // A short title, and the rest as its own line under it (fix round 2, m-d).
+    const moved = walk(await render()).text;
+    expect(moved).toContain(bookingStrings("en").movedTitle);
+    expect(moved).toContain(bookingStrings("en").movedBody);
     expect(walk(await render()).text).toContain(bookingStrings("en").cancelAlreadyCancelledTitle);
     expect(bookingWasMovedMock).toHaveBeenCalledWith(fakeDb, "a1", "bk1");
   });

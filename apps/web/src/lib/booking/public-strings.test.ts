@@ -44,7 +44,7 @@ describe("bookingStrings", () => {
   it("never sends the reader to an email that may not exist, on the two screens that cannot know (mutation: put \"your newest email\" back → FAILS)", () => {
     for (const locale of ["en", "es"] as const) {
       const s = bookingStrings(locale);
-      for (const key of ["movedTitle", "moveAlreadyChanged"] as const) {
+      for (const key of ["movedTitle", "movedBody", "moveAlreadyChanged"] as const) {
         expect(s[key], `${locale}.${key}`).not.toMatch(/e-?mail|correo/i);
       }
     }

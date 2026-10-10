@@ -41,7 +41,7 @@ vi.mock("@/lib/meetings/provider", () => ({ getMeetingProvider: (...a: unknown[]
 const m = vi.hoisted(() => ({
   listBookedRanges: vi.fn(), moveBooking: vi.fn(), getContact: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), incrementUnreadCount: vi.fn(),
-  readMoveContext: vi.fn(), countRecentBookings: vi.fn(), rescheduleChain: vi.fn(),
+  readMoveContext: vi.fn(), countRecentBookings: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@bis/db")>();
@@ -57,7 +57,6 @@ vi.mock("@bis/db", async (importOriginal) => {
     createMessage: m.createMessage,
     incrementUnreadCount: m.incrementUnreadCount,
     countRecentBookings: m.countRecentBookings,
-    rescheduleChain: m.rescheduleChain,
   };
 });
 vi.mock("./data", async (importOriginal) => {
@@ -123,7 +122,6 @@ beforeEach(() => {
   m.incrementUnreadCount.mockReset().mockResolvedValue(undefined);
   m.readMoveContext.mockReset().mockResolvedValue(context());
   m.countRecentBookings.mockReset().mockResolvedValue(0);
-  m.rescheduleChain.mockReset().mockResolvedValue({ rootId: "bk_old", depth: 0 });
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
@@ -344,11 +342,33 @@ describe("confirmMoveAction — how often one appointment can move (I3)", () => 
 
   it("an appointment already moved MOVE_CHAIN_MAX times: contact the business, nothing checked or written (mutation: drop the cap → it moves, FAILS)", async () => {
     const { MOVE_CHAIN_MAX } = await import("./data");
-    m.rescheduleChain.mockResolvedValue({ rootId: "root", depth: MOVE_CHAIN_MAX });
+    m.readMoveContext.mockResolvedValue({ ...context(), depth: MOVE_CHAIN_MAX });
     expect(await confirmMoveAction(TOKEN, "es", ELEVEN)).toEqual({ ok: false, error: es.moveOffline, gone: true });
     expect(m.listBookedRanges).not.toHaveBeenCalled();
     expect(m.moveBooking).not.toHaveBeenCalled();
-    m.rescheduleChain.mockResolvedValue({ rootId: "root", depth: MOVE_CHAIN_MAX - 1 });
+    m.readMoveContext.mockResolvedValue({ ...context(), depth: MOVE_CHAIN_MAX - 1 });
     expect(await confirmMoveAction(TOKEN, "en", ELEVEN)).toMatchObject({ ok: true });
+  });
+
+  // Fix round 2 (m-b): the cap is a STATE, not only a refusal at confirm.
+  it("a capped appointment's picker offers nothing (mutation: check the cap only at confirm → times are offered, FAILS)", async () => {
+    const { MOVE_CHAIN_MAX } = await import("./data");
+    m.readMoveContext.mockResolvedValue({ ...context(), depth: MOVE_CHAIN_MAX });
+    expect(await getMoveSlotsAction(TOKEN, "en", "2027-06-01")).toEqual({ error: en.genericError });
+    expect(m.listBookedRanges).not.toHaveBeenCalled();
+  });
+
+  it("the move that reaches the cap sends no change-the-time link — the next one could not be made (mutation: always send it → FAILS)", async () => {
+    const { MOVE_CHAIN_MAX } = await import("./data");
+    m.readMoveContext.mockResolvedValue({ ...context(), depth: MOVE_CHAIN_MAX - 1 });
+    await confirmMoveAction(TOKEN, "en", ELEVEN);
+    const last = gated().find((g) => g.kind === "booking.moved")!;
+    expect(last.body).not.toContain("/move/");
+    expect(last.body).toContain(`/cancel/${NEW_TOKEN}`);
+    // One below it, the link is there.
+    vi.mocked(sendEmailOrThrow).mockClear();
+    m.readMoveContext.mockResolvedValue({ ...context(), depth: MOVE_CHAIN_MAX - 2 });
+    await confirmMoveAction(TOKEN, "en", ELEVEN);
+    expect(gated().find((g) => g.kind === "booking.moved")!.body).toContain(`/move/${NEW_TOKEN}`);
   });
 });

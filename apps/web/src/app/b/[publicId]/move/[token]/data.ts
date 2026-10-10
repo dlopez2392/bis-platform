@@ -1,5 +1,7 @@
 import { cache } from "react";
-import { serviceDb, getCalendarForAccount, type BookingRow, type Branding, type CalendarRow } from "@bis/db";
+import {
+  serviceDb, getCalendarForAccount, rescheduleChain, type BookingRow, type Branding, type CalendarRow,
+} from "@bis/db";
 import { scrubToken } from "@/lib/booking/links";
 import { lookupBookingByToken } from "../../cancel/[token]/data";
 
@@ -28,6 +30,9 @@ export type MoveContext = {
     "id" | "account_id" | "calendar_id" | "contact_id" | "starts_at" | "ends_at" | "status" | "booker_timezone">;
   calendar: CalendarRow;
   account: MoveAccount;
+  /** How many moves this appointment has had (`rescheduleChain`), for the
+   *  cap (`MOVE_CHAIN_MAX`). Absent reads as none. */
+  depth?: number;
 };
 
 const ACCOUNT_COLS = "timezone, from_email, reply_to_email, brand_name, brand_logo_path, "
@@ -48,7 +53,9 @@ export async function readMoveContext(
   if (!calendar || calendar.id !== row.calendar_id) return null;
   const { data, error } = await db.from("accounts").select(ACCOUNT_COLS).eq("id", row.account_id).maybeSingle();
   if (error) throw new Error(`move: account read failed for ${row.account_id}: ${error.message}`);
-  return { row, calendar, account: (data as MoveAccount | null) ?? NO_ACCOUNT };
+  // Only a live booking can be moved, so only a live one pays for the walk.
+  const depth = row.status === "booked" ? (await rescheduleChain(db, row.account_id, row.id)).depth : 0;
+  return { row, calendar, account: (data as MoveAccount | null) ?? NO_ACCOUNT, depth };
 }
 
 /**
@@ -56,17 +63,22 @@ export async function readMoveContext(
  * a plain cancel with `bookingWasMoved`); `past` for an outcome, or a booking
  * that has started — still `booked`, but there is nothing left to move;
  * `offline` when the business has switched online booking off, which stops a
- * move as it stops a new booking (a cancel is never stopped by it). Pure.
+ * move as it stops a new booking (a cancel is never stopped by it); `capped`
+ * when the appointment has been moved `MOVE_CHAIN_MAX` times. Pure.
  */
-export type MoveState = "live" | "cancelled" | "past" | "offline";
+export type MoveState = "live" | "cancelled" | "past" | "offline" | "capped";
 
-export function moveState(ctx: Pick<MoveContext, "row" | "calendar">, now: Date): MoveState {
+export function moveState(ctx: Pick<MoveContext, "row" | "calendar" | "depth">, now: Date): MoveState {
   const { row, calendar } = ctx;
   if (row.status === "cancelled") return "cancelled";
   if (row.status !== "booked") return "past";
   const start = new Date(row.starts_at).getTime();
   if (!Number.isFinite(start) || start <= now.getTime()) return "past";
   if (!calendar.enabled) return "offline";
+  // Fix round 2 (m-b): moved MOVE_CHAIN_MAX times already. A state, so the
+  // page shows no picker and the slots action offers nothing, not only a
+  // refusal at confirm.
+  if ((ctx.depth ?? 0) >= MOVE_CHAIN_MAX) return "capped";
   return "live";
 }
 
