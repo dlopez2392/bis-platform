@@ -448,39 +448,39 @@ history of tests that cannot fail.
   at the DB layer, bypassing `resolveLocale`'s own default and making a later default-change a
   migration instead of a code change).
 
-## Open questions for the owner
+## Owner decisions (2026-10-10)
 
-Each is a genuine product call this spec cannot make unilaterally, with a recommendation attached
-per this repo's own working style (one recommendation, not a survey).
+All six are settled. The owner chose the recommendation on 1 and 4; 2, 3, 5 and 6 take the
+recommended default. Each is marked **Decided** below, with its reasoning kept.
 
 1. **Does `account.language` mean the ACCOUNT's administrative language, or only the default for
    its CLIENT-role logins?** An agency operator working a Spanish-language client account is
-   probably still an English-primary staff member. **Recommendation:** `account.language` is
+   probably still an English-primary staff member. **Decided (recommendation adopted):** `account.language` is
    authoritative only for CLIENT-role sessions (mirrors `theme-mode.ts`'s existing
    operator/client-role split for dark/light); an agency operator's OWN session stays English
    until S-01's user-level language exists, at which point `resolveLocale`'s `userLanguage`
    parameter — already designed for this — takes over for operators specifically.
 2. **Does this lane touch the agency's own top-level chrome (Companies, Blueprints, agency work
-   queue) at all?** **Recommendation:** no — those are agency-internal tooling, English-only for
+   queue) at all?** **Decided (recommendation adopted):** no — those are agency-internal tooling, English-only for
    now, consistent with `messages.test.ts`'s existing (currently empty but present) `AGENCY_ONLY`
    carve-out concept and with this spec's ratchet-gate route-scope allowlist.
 3. **What should `resolveLocale` default to when `account.language` is `NULL` (every account that
-   exists today)?** **Recommendation:** `"en"` — zero behavior change for every existing account,
+   exists today)?** **Decided (recommendation adopted):** `"en"` — zero behavior change for every existing account,
    explicitly NOT inferred from a contact's observed language (F-008's signal), which answers a
    different question (what language to write THIS customer in, not what language the OWNER's own
    dashboard renders in).
 4. **Should there be ANY real way to set `account.language` before Mis preferencias (F-096) ships,
    so this lane can be proven on a live, toggleable account rather than only a seeded DB value?**
-   **Recommendation:** yes — one `inline-field` (the existing primitive) added to the account's
+   **Decided (recommendation adopted):** yes — one `inline-field` (the existing primitive) added to the account's
    existing settings surface, scoped as a minimal addition to THIS lane, not a new screen and not
    the Mis preferencias UI itself. Flagging because the brief's non-goals list Mis preferencias UI
    but does not explicitly rule this narrower addition in or out.
 5. **Should the ratchet-gate baseline be count-based (per file, as designed above) or
-   hash-based (per exact string)?** **Recommendation:** count-based — simpler, and this repo's
+   hash-based (per exact string)?** **Decided (recommendation adopted):** count-based — simpler, and this repo's
    habit of moving strings between files during refactors would make a hash-based baseline noisy
    (every refactor "removes" and "adds" hashes) without actually catching more real regressions.
 6. **Should the ratchet gate scan agency-only routes at all, even just to freeze their current
-   count, or exclude them entirely from day one?** **Recommendation:** exclude them entirely by
+   count, or exclude them entirely from day one?** **Decided (recommendation adopted):** exclude them entirely by
    route-scope allowlist (ties to open question 2) — scanning-but-freezing a surface this spec
    recommends staying English-only forever just adds baseline-file churn with no safety benefit.
 
