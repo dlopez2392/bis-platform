@@ -67,8 +67,9 @@ export function newHandoffToken(): string {
  *
  * It takes the language the CALLER spoke, never a profile's `both` (F-010):
  * someone who has just asked for a person has said enough to tell. The
- * caller decides it (`call-events.ts`, `detectSpokenLanguage` over the
- * transcript so far), and the same value is stamped on the call row
+ * caller decides it (`call-events.ts`, `detectCallerLanguage` over the
+ * finished turns plus the one still arriving), and the same value is
+ * stamped on the call row
  * (`markHandoffRequested`) so `transferFailedLine` below answers in the
  * language this line was said in. Before, a `both` line said this in English
  * to a caller who had been speaking Spanish.

@@ -840,6 +840,23 @@ describe("reschedule / cancel", () => {
       // at a cancelled booking, so mailing the old token again is useless.
       expect(sent.html).toContain("https://x.example/b/pub1/cancel/newtok99");
       expect(sent.body).toContain("https://x.example/b/pub1/cancel/newtok99");
+      // English carries no locale: the cancel page's default.
+      expect(sent.body).not.toContain("?locale=es");
+    });
+
+    it("a Spanish-speaking caller's moved email opens its cancel page in Spanish (F-010 review round 2)", async () => {
+      // The booked email's rule, on the NEW booking's token. Mutation: drop
+      // the parameter → FAILS.
+      const esCtx: ToolContext = {
+        ...ctx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+      };
+      const spanish = { ...emptyCallState(), transcript: [
+        { role: "caller" as const, text: "Hola, necesito cambiar mi cita para mañana, por favor.", at: "2027-06-01T12:00:00Z" },
+      ] };
+      await runTool(spanish, esCtx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+      const sent = sendMock.mock.calls[0]![0] as { body: string };
+      expect(sent.body).toContain("https://x.example/b/pub1/cancel/newtok99?locale=es");
     });
 
     it("a contact with no email on file gets no send and raises no flag", async () => {

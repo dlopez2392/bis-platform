@@ -608,7 +608,8 @@ export async function runTool(
           const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone, locale);
           // The NEW row's token — the old confirmation's cancel link points at
           // a booking that was just cancelled above.
-          const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${newCancelToken}`;
+          // In the caller's language, the booked email's rule.
+          const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${newCancelToken}${locale === "es" ? "?locale=es" : ""}`;
           const { html, text } = bookingRescheduledEmail({
             brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
           });

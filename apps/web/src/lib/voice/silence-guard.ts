@@ -141,7 +141,8 @@ export function silenceGoodbye(languages: "en" | "es" | "both"): string {
  * instruction is otherwise the strongest hint left. The silence guard's doc
  * records a cap wrap-up answered in the wrong language on the 247-second
  * call. The language is the caller's, decided by the lifecycle from
- * what they said (`detectSpokenLanguage`) — never `both`, which is not a
+ * what they said (`detectCallerLanguage`: the finished turns plus the one
+ * still arriving) — never `both`, which is not a
  * language anyone is mid-conversation in.
  */
 export function capGoodbye(language: "en" | "es"): string {

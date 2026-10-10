@@ -39,9 +39,14 @@ describe("detectCallerLanguage — finished turns plus the one still arriving", 
     )).toBe("es");
   });
   it("finished turns and the in-progress one are read together", () => {
+    // One Spanish marker in each half: each alone is under the two-marker
+    // bar and reads English, so only reading BOTH reaches Spanish. Ignoring
+    // either half FAILS.
+    expect(detectCallerLanguage({ transcript: t(["ok hola"]), pendingCallerTurn: null }, "both")).toBe("en");
+    expect(detectCallerLanguage({ transcript: [], pendingCallerTurn: pending("ok gracias") }, "both")).toBe("en");
     expect(detectCallerLanguage({
-      transcript: t(["hola buenos días"]),
-      pendingCallerTurn: pending("necesito una cita"),
+      transcript: t(["ok hola"]),
+      pendingCallerTurn: pending("ok gracias"),
     }, "both")).toBe("es");
   });
   it("no turn at all is English, as before", () => {
