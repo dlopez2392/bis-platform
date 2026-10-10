@@ -162,10 +162,12 @@ describe("0051 grants", () => {
 });
 
 describe("0051 RLS reads: a foreign row is PRESENT in every case", () => {
-  // Since 0066 these reads are Owner-only (account_billing_owner_read, usage_events_owner_read). The
-  // caller is an Owner of all THREE accounts, so the owner check passes everywhere and only the
-  // tenant policy keeps B and OFF out: the 0051 mutation still has a row to leak.
-  it("a client reads only its own account_billing row (mutation: account_billing_tenant USING (true) → FAILS, sees B and OFF)", () =>
+  // Since 0066 these reads are Owner-only (account_billing_owner_read, usage_events_owner_read), and
+  // those restrictive policies pin the token's account too. So each table now has TWO account pins:
+  // the 0051 tenant policy's and 0066's. Loosening either one alone leaks nothing, which is why
+  // the mutation named below loosens both; staff-roles.test.ts proves 0066's pin on its own. The
+  // caller is an Owner of all THREE accounts, so the owner check itself passes everywhere.
+  it("a client reads only its own account_billing row (mutation: account_billing_tenant USING (true) AND drop account_billing_owner_read's account pin → FAILS, sees B and OFF; drop account_billing_tenant → FAILS, sees nothing)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const sub = await seatMember(c, "owner", [s.a, s.b, s.off]);
@@ -174,7 +176,7 @@ describe("0051 RLS reads: a foreign row is PRESENT in every case", () => {
       expect(rows.map((r) => r.account_id)).toEqual([s.a]);
     }));
 
-  it("a client reads only its own usage rows (mutation: usage_events_tenant USING (true) → FAILS)", () =>
+  it("a client reads only its own usage rows (mutation: usage_events_tenant USING (true) AND drop usage_events_owner_read's account pin → FAILS; drop usage_events_tenant → FAILS, sees nothing)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const sub = await seatMember(c, "owner", [s.a, s.b, s.off]);

@@ -38,21 +38,66 @@ describe("last-Owner guard", () => {
     expect(await one("select public.set_account_member_role($1, gen_random_uuid(), 'staff') as r", [acct])).toBe("not_found");
   }));
 
-  it("two Owners demoting each other at once leave exactly one Owner (mutation: drop `for update` on accounts -> both return ok, FAILS)", () =>
+  it("a sole Owner set to owner is a no-op that returns ok (mutation: drop the same-role early return -> last_owner, FAILS)", () => withRollback(async (c) => {
+    const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
+    const acct = (await c.query<{ id: string }>("insert into accounts (agency_id, clerk_org_id, name) values ($1,$2,'Same') returning id", [agency!.id, `org_same_${RUN}`])).rows[0]!.id;
+    const u = (await c.query<{ id: string }>("insert into users (clerk_user_id, email) values ($1,'o@example.com') returning id", [`user_same_${RUN}`])).rows[0]!.id;
+    await c.query("insert into memberships (user_id, scope, account_id, role) values ($1,'account',$2,'owner')", [u, acct]);
+    expect((await c.query<{ r: string }>("select public.set_account_member_role($1,$2,'owner') as r", [acct, u])).rows[0]!.r).toBe("ok");
+    expect((await c.query("select role from memberships where user_id = $1", [u])).rows).toEqual([{ role: "owner" }]);
+  }));
+
+  // Two connections, each in its own transaction. c1 runs first and holds the account row; c2 must
+  // block on it, then decide against what c1 committed. Without the lock c2 reads its own snapshot
+  // (both Owners still there), both succeed, and none is left.
+  const SET_STAFF = "select public.set_account_member_role($1,$2,'staff') as r";
+  const REMOVE = "select public.remove_account_member($1,$2) as r";
+  async function race(acct: string, first: [string, string], second: [string, string]) {
+    const c1 = await connect(); const c2 = await connect();
+    try {
+      await c1.query("begin"); await c2.query("begin");
+      const r1 = (await c1.query<{ r: string }>(first[0], [acct, first[1]])).rows[0]!.r;
+      const p2 = c2.query<{ r: string }>(second[0], [acct, second[1]]);
+      await new Promise((res) => setTimeout(res, 300)); // c2 is now blocked on the account row
+      await c1.query("commit");
+      const r2 = (await p2).rows[0]!.r;
+      await c2.query("commit");
+      const { rows } = await c1.query("select 1 from memberships where account_id = $1 and role = 'owner'", [acct]);
+      return { results: [r1, r2], ownersLeft: rows.length };
+    } finally { await c1.end(); await c2.end(); }
+  }
+
+  it("two Owners demoting each other at once leave exactly one Owner (mutation: drop the row lock in set_account_member_role -> both return ok, FAILS)", () =>
     withTwoOwners(async ({ acct, a, b }) => {
-      const c1 = await connect(); const c2 = await connect();
+      expect(await race(acct, [SET_STAFF, a], [SET_STAFF, b])).toEqual({ results: ["ok", "last_owner"], ownersLeft: 1 });
+    }));
+
+  it("two Owners removing each other at once leave exactly one Owner (mutation: drop the row lock in remove_account_member -> both return ok, FAILS)", () =>
+    withTwoOwners(async ({ acct, a, b }) => {
+      expect(await race(acct, [REMOVE, a], [REMOVE, b])).toEqual({ results: ["ok", "last_owner"], ownersLeft: 1 });
+    }));
+
+  it("an Owner removed while the other is demoted leaves exactly one Owner (mutation: drop the row lock in EITHER function -> both return ok, FAILS)", () =>
+    withTwoOwners(async ({ acct, a, b }) => {
+      expect(await race(acct, [REMOVE, a], [SET_STAFF, b])).toEqual({ results: ["ok", "last_owner"], ownersLeft: 1 });
+    }));
+
+  // Every insert into a child of accounts (contacts, calls, ...) takes FOR KEY SHARE on the account row
+  // for its foreign-key check. FOR UPDATE conflicts with that; FOR NO KEY UPDATE does not, and still
+  // conflicts with itself, which is what serialises the races above.
+  it("a team action is not blocked by an open contact insert in the same account (mutation: lock with FOR UPDATE in either function -> 55P03, FAILS)", () =>
+    withTwoOwners(async ({ acct, a }) => {
+      const writer = await connect(); const team = await connect();
       try {
-        await c1.query("begin"); await c2.query("begin");
-        const r1 = (await c1.query<{ r: string }>("select public.set_account_member_role($1,$2,'staff') as r", [acct, a])).rows[0]!.r;
-        const p2 = c2.query<{ r: string }>("select public.set_account_member_role($1,$2,'staff') as r", [acct, b]);
-        await new Promise((res) => setTimeout(res, 300)); // c2 is now blocked on the account row
-        await c1.query("commit");
-        const r2 = (await p2).rows[0]!.r;
-        await c2.query("commit");
-        expect([r1, r2]).toEqual(["ok", "last_owner"]);
-        const { rows } = await c1.query("select 1 from memberships where account_id = $1 and role = 'owner'", [acct]);
-        expect(rows).toHaveLength(1);
-      } finally { await c1.end(); await c2.end(); }
+        await writer.query("begin");
+        await writer.query("insert into contacts (account_id, first_name) values ($1,'Busy')", [acct]);
+        await team.query("set lock_timeout = '2s'");
+        expect((await team.query<{ r: string }>(SET_STAFF, [acct, a])).rows[0]!.r).toBe("ok");
+        expect((await team.query<{ r: string }>(REMOVE, [acct, a])).rows[0]!.r).toBe("ok");
+      } finally {
+        await writer.query("rollback").catch(() => undefined);
+        await writer.end(); await team.end();
+      }
     }));
 
   it("only service_role may execute either function (mutation: grant execute to authenticated -> FAILS)", () => withRollback(async (c) => {

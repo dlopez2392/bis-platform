@@ -110,6 +110,63 @@ describe("the NULL guard (memory: plpgsql NULL guard)", () => {
     }));
 });
 
+/**
+ * The owner check is pinned to the account the token is in, not only to "is an Owner somewhere".
+ * Today the permissive tenant policy also pins it, so to see the restrictive policy's own predicate
+ * each case adds, inside the rolled-back transaction, a deliberately broad permissive policy (the
+ * kind a later migration could add by mistake). The caller is an Owner of BOTH accounts, with a
+ * token for the first; the second account's row must stay out of reach.
+ */
+describe("owner-only policies are pinned to the token's account (defence in depth)", () => {
+  async function ownerOfTwo(c: Client) {
+    const s = await seed(c);
+    const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
+    const b = (await c.query<{ id: string }>(
+      "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,$2,'Roles B',true) returning id",
+      [agency!.id, `${ORG}_two`])).rows[0]!.id;
+    await c.query(
+      "insert into memberships (user_id, scope, account_id, role) select id, 'account', $2, 'owner' from users where clerk_user_id = $1",
+      [SUB.owner, b]);
+    const contact = (await c.query<{ id: string }>("insert into contacts (account_id, first_name) values ($1,'Bea') returning id", [b])).rows[0]!.id;
+    const calendar = (await c.query<{ id: string }>(
+      "insert into calendars (account_id, public_id) values ($1,$2) returning id", [b, `roles-two-${RUN}`])).rows[0]!.id;
+    const { rows: [plan] } = await c.query<{ plan_id: string }>("select plan_id from account_billing where account_id = $1", [s.acct]);
+    await c.query("insert into account_billing (account_id, plan_id) values ($1,$2)", [b, plan!.plan_id]);
+    await c.query("insert into usage_events (account_id, meter, quantity, occurred_at, source_ref) values ($1,'sms',1,now(),$2)",
+      [b, `message:roles-two-${RUN}`]);
+    return { b, contact, calendar };
+  }
+  // FOR ALL, not FOR DELETE/UPDATE: a DELETE or UPDATE with a WHERE only reaches rows the SELECT
+  // policies show, so a broad policy that is not also a SELECT policy would grant nothing to test.
+  const broad = (table: string) =>
+    `create policy zz_broad_${table} on public.${table} for all to authenticated using (true) with check (true)`;
+
+  it("contacts: an Owner of both cannot delete the other account's contact (mutation: drop the account_id predicate from contacts_owner_delete -> FAILS)", () =>
+    withRollback(async (c) => {
+      const t = await ownerOfTwo(c);
+      await c.query(broad("contacts"));
+      await actAs(c, claimsFor("owner"));
+      expect((await c.query("delete from contacts where id = $1", [t.contact])).rowCount).toBe(0);
+    }));
+  it("calendars: an Owner of both cannot change the other account's calendar settings (mutation: drop the account_id predicate from calendars_owner_update -> FAILS)", () =>
+    withRollback(async (c) => {
+      const t = await ownerOfTwo(c);
+      await c.query(broad("calendars"));
+      await actAs(c, claimsFor("owner"));
+      expect((await c.query("update calendars set buffer_minutes = 15 where id = $1", [t.calendar])).rowCount).toBe(0);
+    }));
+  it("billing: an Owner of both reads neither the other account's billing row nor its usage (mutation: drop the account_id predicate from account_billing_owner_read or usage_events_owner_read -> FAILS)", () =>
+    withRollback(async (c) => {
+      const t = await ownerOfTwo(c);
+      await c.query(broad("account_billing"));
+      await c.query(broad("usage_events"));
+      await actAs(c, claimsFor("owner"));
+      const billing = await c.query("select 1 from account_billing where account_id = $1", [t.b]);
+      const usage = await c.query("select 1 from usage_events where account_id = $1", [t.b]);
+      expect([billing.rowCount, usage.rowCount]).toEqual([0, 0]);
+    }));
+});
+
 describe("team visibility (spec §5 grants)", () => {
   // The none and removed users exist with no membership here: they are the rows a wrong policy would leak.
   it("a client reads its own company's memberships and users, nothing else (mutation: users_member_read USING (true) -> FAILS)", () =>

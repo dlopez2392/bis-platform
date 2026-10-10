@@ -3,8 +3,8 @@
 -- BIS owns the role; Clerk owns who belongs to which organisation. Roles: owner | staff.
 -- Owner-only, refused HERE for a client token (the browser holds the token and the public key):
 --   contacts DELETE, calendars UPDATE (the settings columns), account_billing SELECT, usage_events SELECT.
--- Each is a RESTRICTIVE policy calling app.is_account_owner(), ANDed with the existing permissive
--- tenant policy, so nothing that policy refused becomes allowed.
+-- Each is a RESTRICTIVE policy calling app.is_account_owner() once per statement, ANDed with the
+-- existing permissive tenant policy, so nothing that policy refused becomes allowed.
 --
 -- Membership and user rows are written by server code only (serviceDb(): the webhook, the
 -- request fallback, the Team actions). `authenticated` keeps SELECT on its own company's rows.
@@ -18,6 +18,7 @@
 --   6  drop function public.remove_account_member(uuid, uuid); drop function public.set_account_member_role(uuid, uuid, text);
 --   5  grant insert, update, delete on public.users, public.memberships to authenticated; recreate
 --      users_agency_all / memberships_agency_all as FOR ALL (0001); drop policy users_member_read on public.users;
+--      drop policy users_agency_read on public.users; drop policy memberships_agency_read on public.memberships;
 --   4  drop policy contacts_owner_delete on public.contacts; drop policy calendars_owner_update on public.calendars;
 --      drop policy account_billing_owner_read on public.account_billing; drop policy usage_events_owner_read on public.usage_events;
 --   3  drop function app.is_account_owner(uuid); drop function app.account_role(uuid);
@@ -68,14 +69,35 @@ grant execute on function app.account_role(uuid) to authenticated, service_role;
 grant execute on function app.is_account_owner(uuid) to authenticated, service_role;
 
 -- 4. Owner-only, as RESTRICTIVE policies (ANDed with each table's existing permissive policy).
+--    The agency passes for every row. A client passes for a row in the account its token is in,
+--    and only while it is an Owner of that account. Every call sits in an uncorrelated scalar
+--    subquery (an InitPlan), so it runs ONCE per statement: app.is_account_owner is SECURITY
+--    DEFINER and cannot be inlined, and called as app.is_account_owner(account_id) it ran once per
+--    row. Measured on a PG18 replica, an Owner reading 5,000 usage rows: about 245 ms per row-call,
+--    about 60 ms as written (0051's tenant policy alone costs about 57 ms there).
+--    In a policy a NULL refuses exactly as false does, so the coalesce on is_agency() (NULL for a
+--    client token) changes no outcome here; it is kept so the expression reads as is_account_owner
+--    does, where the coalesces ARE load-bearing. With client access off, current_account_id() is
+--    NULL and so is the client branch: refused.
 create policy contacts_owner_delete on public.contacts as restrictive for delete to authenticated
-  using (app.is_account_owner(account_id));
+  using ((select coalesce(app.is_agency(), false))
+         or (account_id = (select app.current_account_id())
+             and (select app.is_account_owner(app.current_account_id()))));
 create policy calendars_owner_update on public.calendars as restrictive for update to authenticated
-  using (app.is_account_owner(account_id)) with check (app.is_account_owner(account_id));
+  using ((select coalesce(app.is_agency(), false))
+         or (account_id = (select app.current_account_id())
+             and (select app.is_account_owner(app.current_account_id()))))
+  with check ((select coalesce(app.is_agency(), false))
+         or (account_id = (select app.current_account_id())
+             and (select app.is_account_owner(app.current_account_id()))));
 create policy account_billing_owner_read on public.account_billing as restrictive for select to authenticated
-  using (app.is_account_owner(account_id));
+  using ((select coalesce(app.is_agency(), false))
+         or (account_id = (select app.current_account_id())
+             and (select app.is_account_owner(app.current_account_id()))));
 create policy usage_events_owner_read on public.usage_events as restrictive for select to authenticated
-  using (app.is_account_owner(account_id));
+  using ((select coalesce(app.is_agency(), false))
+         or (account_id = (select app.current_account_id())
+             and (select app.is_account_owner(app.current_account_id()))));
 
 -- 5. Team rows: SELECT for the client role (own company), writes server-only.
 revoke insert, update, delete on public.users, public.memberships from authenticated;
@@ -89,7 +111,11 @@ create policy memberships_agency_read on public.memberships for select to authen
 -- memberships_member_read (0001) stays as is.
 
 -- 6. Role change and removal with the last-Owner guard. Serialised on the account row, so two
---    Owners demoting each other at once cannot leave none. service_role only (the Team actions).
+--    Owners demoting or removing each other at once cannot leave none. service_role only (the Team actions).
+--    FOR NO KEY UPDATE, not FOR UPDATE: every insert into a child of accounts (contacts, calls, ...)
+--    takes FOR KEY SHARE on the account row for its foreign-key check, and FOR UPDATE would make a
+--    team action wait on any open write in the account. FOR NO KEY UPDATE does not conflict with
+--    KEY SHARE and still conflicts with itself, which is the serialisation this needs.
 create function public.set_account_member_role(p_account_id uuid, p_user_id uuid, p_role text)
 returns text language plpgsql set search_path = '' as $$
 declare v_current text; v_owners int;
@@ -97,7 +123,7 @@ begin
   if p_role is null or p_role not in ('owner', 'staff') then
     raise exception 'set_account_member_role: role must be owner or staff' using errcode = '22023';
   end if;
-  perform 1 from public.accounts where id = p_account_id for update;
+  perform 1 from public.accounts where id = p_account_id for no key update;
   if not found then return 'not_found'; end if;
   select role into v_current from public.memberships
    where scope = 'account' and account_id = p_account_id and user_id = p_user_id;
@@ -117,7 +143,7 @@ create function public.remove_account_member(p_account_id uuid, p_user_id uuid)
 returns text language plpgsql set search_path = '' as $$
 declare v_current text; v_owners int;
 begin
-  perform 1 from public.accounts where id = p_account_id for update;
+  perform 1 from public.accounts where id = p_account_id for no key update;
   if not found then return 'not_found'; end if;
   select role into v_current from public.memberships
    where scope = 'account' and account_id = p_account_id and user_id = p_user_id;
