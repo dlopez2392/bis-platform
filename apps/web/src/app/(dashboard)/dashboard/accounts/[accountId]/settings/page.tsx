@@ -4,7 +4,7 @@ import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBrand
          getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setFromEmailAction, setReportEmailsAction, setAlertPhoneAction,
-         startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction } from "./actions";
+         startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction, setAccountLanguageAction } from "./actions";
 import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ApplyBlueprintDialog } from "./apply-blueprint-dialog";
@@ -22,6 +22,8 @@ import { captureBlueprintAction, applyBlueprintAction } from "../../../blueprint
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
+import { InlineField } from "@/components/inline-field";
+import { LANGUAGE_OPTIONS } from "@/lib/i18n/language-options";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -75,7 +77,7 @@ export default async function CrmSettingsPage({
     // an in-account surface — worth the owner's judgment on whether clients
     // should see this at all.
     listBlueprints(serviceDb()),
-    db.from("accounts").select("clerk_org_id, client_access_enabled, report_emails, alert_phone").eq("id", accountId).maybeSingle()
+    db.from("accounts").select("clerk_org_id, client_access_enabled, report_emails, alert_phone, language").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`settings: account lookup failed: ${error.message}`);
         if (!data) throw new Error("settings: account not found");
@@ -103,6 +105,7 @@ export default async function CrmSettingsPage({
   const boundSetAlertPhone = setAlertPhoneAction.bind(null, accountId);
   const boundStartAlertPhoneVerification = startAlertPhoneVerificationAction.bind(null, accountId);
   const boundConfirmAlertPhoneVerification = confirmAlertPhoneVerificationAction.bind(null, accountId);
+  const boundSetAccountLanguage = setAccountLanguageAction.bind(null, accountId);
   return (
     <>
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
@@ -123,6 +126,41 @@ export default async function CrmSettingsPage({
         }
       />
       <div className="space-y-6 p-6">
+        {/* Spanish-runtime Task 5 (owner decision 4, 2026-10-10): the one
+            Language field, its own self-contained card so the parallel
+            staff-and-roles lane's edits to the Suspense block below (swapping
+            ClientAccessSection for a Team card) never touch this one.
+            `account.language` is read above alongside the page's other
+            account columns — NULL (no preference recorded yet) shows as
+            English, matching `getAccountLanguage`'s own "NULL means no
+            preference, not English" note: that is the RUNTIME default
+            (Task 4's resolveLocale), not a claim that this account chose
+            English.
+
+            `boundSetAccountLanguage` is `setAccountLanguageAction` bound to
+            THIS account server-side (accountId must never travel as a form
+            field, same rule as every other bound action above) — a plain
+            `(value: string) => Promise<…>`, the exact shape `renameAction`
+            takes in setup/steps/account.tsx, and for the same reason: no
+            extra closure stands between InlineField's `save` prop and a
+            real server-action reference. */}
+        <Card>
+          <CardHeader>
+            <CardTitle>{m["settings.language.label"]}</CardTitle>
+            <CardDescription>{m["settings.language.description"]}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {/* LANGUAGE_OPTIONS is the same list setAccountLanguageAction
+                validates against; the field shows its label ("Español"),
+                never the stored code (I9). */}
+            <InlineField
+              label={m["settings.language.label"]}
+              value={account.language ?? "en"}
+              options={LANGUAGE_OPTIONS}
+              save={boundSetAccountLanguage}
+            />
+          </CardContent>
+        </Card>
         {/* The two cards that wait on a third party — Clerk's member list here,
             Vercel's project list further down — each stream in their own
             boundary, so neither holds the rest of Settings. Before this the

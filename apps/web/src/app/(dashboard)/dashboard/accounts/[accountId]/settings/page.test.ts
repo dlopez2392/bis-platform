@@ -79,7 +79,7 @@ vi.mock("./actions", () => ({
   createFieldAction: noop, upsertValueAction: noop, setClientAccessAction: noop,
   inviteClientAdminAction: noop, setFromEmailAction: noop, setReportEmailsAction: noop,
   setAlertPhoneAction: noop, startAlertPhoneVerificationAction: noop,
-  confirmAlertPhoneVerificationAction: noop,
+  confirmAlertPhoneVerificationAction: noop, setAccountLanguageAction: noop,
 }));
 vi.mock("../branding/actions", () => ({
   setBrandingAction: noop, removeBrandLogoAction: noop, restoreBrandLogoAction: noop,
@@ -280,5 +280,25 @@ describe("settings page — the custom field key input refuses the reserved key 
     const input = all.find((e) => (e.props as { id?: string }).id === "field-key");
     expect(input!.props.title).toBe(m["settings.fieldKeyFormat"]);
     expect(input!.props.title).not.toBe(m["settings.fieldKeyReserved"]);
+  });
+});
+
+/**
+ * The Language card (owner decision 4; I9 and M4 of the whole-branch
+ * review): one InlineField over the shared LANGUAGE_OPTIONS, and one line
+ * saying what the setting changes — the client's logins and their alert
+ * texts — and that agency staff stay in English.
+ */
+describe("settings page — the Language card", () => {
+  it("renders the field over LANGUAGE_OPTIONS and explains what it changes (mutation: drop the CardDescription → FAILS; pass a hand-copied option list → FAILS)", async () => {
+    const all = await pageElements();
+    const { InlineField } = await import("@/components/inline-field");
+    const { LANGUAGE_OPTIONS } = await import("@/lib/i18n/language-options");
+    const field = all.find((e) => e.type === InlineField && e.props.label === m["settings.language.label"]);
+    expect(field, "the Language InlineField").toBeTruthy();
+    expect(field!.props.options).toBe(LANGUAGE_OPTIONS);
+    expect(all.some((e) => e.props.children === m["settings.language.description"])).toBe(true);
+    expect(m["settings.language.description"]).toMatch(/sign in/);
+    expect(m["settings.language.description"]).toMatch(/Agency staff stay in English/);
   });
 });

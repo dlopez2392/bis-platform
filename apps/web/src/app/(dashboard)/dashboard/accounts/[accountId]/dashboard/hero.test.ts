@@ -42,8 +42,12 @@ describe("Dashboard hero (spec §5; F-076 now slice): one hero, and it follows t
   it("exactly one tile carries hero, and its content follows the plan (mutation: revert to the single hard-coded calls-answered key -> FAILS, since dashboard.kpi.leadsCaptured would then be absent)", () => {
     const heroes = tiles.filter(hasHeroProp);
     expect(heroes.length).toBe(1);
-    expect(heroes[0]).toContain('m["dashboard.kpi.callsAnswered"]');
-    expect(heroes[0]).toContain('m["dashboard.kpi.leadsCaptured"]');
+    // Task 7 (Spanish-runtime lane): the label read moved from a direct
+    // `m["..."]` bracket access to `t(m, "...", locale)` so the KPI row
+    // renders in the resolved locale — both keys must still be present in
+    // the hero tile's own ternary, just through the new call form.
+    expect(heroes[0]).toContain('t(m, "dashboard.kpi.callsAnswered", locale)');
+    expect(heroes[0]).toContain('t(m, "dashboard.kpi.leadsCaptured", locale)');
   });
 
   it("the word alone does not satisfy it — only the prop does (negative control)", () => {

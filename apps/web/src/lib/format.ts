@@ -1,21 +1,27 @@
 import { m } from "./messages";
+import type { Locale } from "./i18n/locale";
 
-const currency = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 0,
-});
+/** `es` renders as `es-US` (not bare `es`) so currency/date conventions stay
+ *  US-local (e.g. `$`/`,`/`.` grouping) for an audience reading Spanish in
+ *  the same market as the `en-US` callers above, not Spain's or Mexico's. */
+function tag(locale: Locale): string {
+  return locale === "es" ? "es-US" : "en-US";
+}
 
-export function formatCurrency(n: number): string {
-  return currency.format(n);
+export function formatCurrency(n: number, locale: Locale = "en"): string {
+  return new Intl.NumberFormat(tag(locale), {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(n);
 }
 
 /** Renders in the RUNTIME's zone (server or browser, whichever formats it).
  *  For anything scoped to an account — a record's timestamp, anything an
  *  operator reads as "when this happened to this client" — use
  *  `formatDateInZone` below and pass the account's zone. */
-export function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
+export function formatDate(iso: string, locale: Locale = "en"): string {
+  return new Date(iso).toLocaleDateString(tag(locale), {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -23,8 +29,8 @@ export function formatDate(iso: string): string {
 }
 
 /** Renders in the RUNTIME's zone — same caveat as `formatDate` above. */
-export function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString("en-US", {
+export function formatDateTime(iso: string, locale: Locale = "en"): string {
+  return new Date(iso).toLocaleString(tag(locale), {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -42,8 +48,12 @@ export function formatDateTime(iso: string): string {
  * no-year caveat does not apply here — this one DOES carry a year, same
  * reasoning as `formatDateInZone`'s own note on that.
  */
-export function formatDateTimeInZone(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-US", {
+export function formatDateTimeInZone(
+  iso: string,
+  timeZone: string,
+  locale: Locale = "en",
+): string {
+  return new Intl.DateTimeFormat(tag(locale), {
     timeZone, month: "short", day: "numeric", year: "numeric",
     hour: "numeric", minute: "2-digit",
   }).format(new Date(iso));
@@ -71,21 +81,39 @@ export function formatDateTimeInZone(iso: string, timeZone: string): string {
  * reports, not a cell that quietly reads "Invalid Date" forever — but it means
  * a nullable or user-supplied value must be checked BEFORE the call, not after.
  */
-export function formatDateInZone(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-US", {
+export function formatDateInZone(
+  iso: string,
+  timeZone: string,
+  locale: Locale = "en",
+): string {
+  return new Intl.DateTimeFormat(tag(locale), {
     timeZone, month: "short", day: "numeric", year: "numeric",
   }).format(new Date(iso));
 }
 
 /** For date-only values stored as UTC midnight (e.g. task due dates) —
  *  formatting in local time can roll the displayed day back by one. */
-export function formatDateUTC(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
+export function formatDateUTC(iso: string, locale: Locale = "en"): string {
+  return new Date(iso).toLocaleDateString(tag(locale), {
     month: "short",
     day: "numeric",
     year: "numeric",
     timeZone: "UTC",
   });
+}
+
+/** New — no relative-time formatter existed in this file before this task
+ *  (confirmed by grep: zero uses of Intl.RelativeTimeFormat anywhere in the
+ *  repo). `numeric: "auto"` so a recent instant reads "today"/"ayer" rather
+ *  than "0 days ago"/"hace 0 días". */
+export function formatRelativeTime(iso: string, locale: Locale = "en"): string {
+  const diffMs = new Date(iso).getTime() - Date.now();
+  const diffMin = Math.round(diffMs / 60_000);
+  const rtf = new Intl.RelativeTimeFormat(tag(locale), { numeric: "auto" });
+  if (Math.abs(diffMin) < 60) return rtf.format(diffMin, "minute");
+  const diffHr = Math.round(diffMin / 60);
+  if (Math.abs(diffHr) < 24) return rtf.format(diffHr, "hour");
+  return rtf.format(Math.round(diffHr / 24), "day");
 }
 
 export function contactDisplayName(c: {

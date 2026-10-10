@@ -2,34 +2,72 @@ export const m = {
   // The sidebar's mono uppercase group headers (DESIGN.md's grouped-nav
   // pattern). Text-cased in CSS, not here — these strings stay plain so a
   // screen reader announces them as words, not letter-by-letter.
+  // .es twins (Task 6, Spanish-runtime lane): the sidebar's own labelKey →
+  // copy lookup now runs through t() (app-sidebar.tsx), which is the first
+  // place any of these become reachable. Nav labels are rendered with
+  // `truncate` + a `title` tooltip (SidebarLink in app-sidebar.tsx), the
+  // SAME overflow handling an unusually long English label already relies
+  // on, so a long Spanish word degrades the same way rather than breaking —
+  // flagged below wherever a translation runs noticeably longer than its
+  // English twin.
   "nav.group.overview": "Overview",
+  "nav.group.overview.es": "Resumen",
   "nav.group.crm": "CRM",
+  "nav.group.crm.es": "CRM",
   "nav.group.communications": "Communications",
+  "nav.group.communications.es": "Comunicaciones",
   "nav.group.growth": "Growth",
+  "nav.group.growth.es": "Crecimiento",
   "nav.dashboard": "Dashboard",
+  "nav.dashboard.es": "Panel",
   "nav.tasks": "To do",
+  "nav.tasks.es": "Pendientes",
   "nav.website": "Website",
+  "nav.website.es": "Sitio web",
   // "Checklist", not "Activation checklist": every other sidebar entry is one
   // word, and the longer form is byte-identical to the dashboard card's own
   // title link — which made `getByRole("link", {name: "Activation checklist"})`
   // ambiguous and broke blueprints.spec.ts. Renaming here keeps that
   // assertion at full strength instead of scoping the test around the clash.
   "nav.checklist": "Checklist",
+  // M4 review: not "Lista de tareas", which read as the same thing as
+  // "Pendientes" (nav.tasks.es — tareas ARE to-dos). The longest nav.* label
+  // in either language (21 chars vs 9); truncate+title (above) is the
+  // fallback. Agency-only today, and operators stay English, so no live
+  // session renders it yet.
+  "nav.checklist.es": "Lista de verificación",
   "nav.contacts": "Contacts",
+  "nav.contacts.es": "Contactos",
   "nav.opportunities": "Opportunities",
+  "nav.opportunities.es": "Oportunidades",
   "nav.conversations": "Conversations",
+  "nav.conversations.es": "Conversaciones",
   "nav.calls": "Calls",
+  "nav.calls.es": "Llamadas",
   "nav.calendar": "Calendar",
+  "nav.calendar.es": "Calendario",
   "nav.forms": "Forms",
+  "nav.forms.es": "Formularios",
   "nav.settings": "Settings",
+  "nav.settings.es": "Ajustes",
   "nav.branding": "Branding",
+  "nav.branding.es": "Marca",
   "nav.voice": "Voice",
+  "nav.voice.es": "Voz",
   "nav.automations": "Automations",
+  // Longer than its English twin (16 chars vs 11) — same truncate+title
+  // fallback; still clears the expanded-sidebar label column.
+  "nav.automations.es": "Automatizaciones",
   "nav.setup": "Setup",
+  "nav.setup.es": "Configuración",
   "nav.accounts": "Companies",
+  "nav.accounts.es": "Empresas",
   "nav.blueprints": "Blueprints",
+  "nav.blueprints.es": "Plantillas",
   "nav.plans": "Plans",
+  "nav.plans.es": "Planes",
   "nav.billing": "Billing",
+  "nav.billing.es": "Facturación",
   // Work Queue Task 6 — the agency-wide queue, top level beside Companies
   // and Blueprints. "Work queue" rather than reusing "To do" (nav.tasks):
   // that label already names the per-account screen one level down, and the
@@ -38,21 +76,39 @@ export const m = {
   // word here in a way it stops being on the per-account screen: nothing at
   // that level is ever pooled across more than one company.
   "nav.work": "Work queue",
+  // Longer than its English twin (15 chars vs 10) — same truncate+title
+  // fallback as nav.checklist.es above.
+  "nav.work.es": "Cola de trabajo",
   // The agency numbers inventory (/dashboard/numbers), top level beside
   // Companies, Blueprints and the work queue. "Phone numbers" in full rather
   // than "Numbers": at agency scope, alone in a flat list, "Numbers" reads as
   // metrics. It is the same two words the per-account Voice page's own panel
   // uses, which is deliberate — one vocabulary for one thing.
   "nav.numbers": "Phone numbers",
+  // The longest nav.* label a live session can render in Spanish (19
+  // chars; nav.checklist.es is longer but agency-only, and operators stay
+  // English) — same truncate+title fallback as nav.checklist.es/nav.work.es
+  // above; this is the one worth the sidebar's narrowest-expanded-width
+  // check (236px), since every other client-visible translation clears it
+  // with more room to spare.
+  "nav.numbers.es": "Números de teléfono",
 
   "shell.brand": "BIS",
+  // Task 6 fix round 1: unchanged across locales (a proper noun/brand name,
+  // same reason brandDisplayName is never translated) — routed through
+  // t() anyway at the call site for consistency with every other shell.*
+  // label, not because this string itself differs.
+  "shell.brand.es": "BIS",
   "shell.switchAccount": "Switch company",
   "shell.searchAccounts": "Search companies…",
   "shell.noAccounts": "No companies yet",
   "shell.search": "Search",
   "shell.collapse": "Collapse sidebar",
+  "shell.collapse.es": "Contraer panel lateral",
   "shell.expand": "Expand sidebar",
+  "shell.expand.es": "Expandir panel lateral",
   "shell.backToAgency": "Back to companies",
+  "shell.backToAgency.es": "Volver a las empresas",
   // Topbar's AI presence indicator (DESIGN.md "AI presence" key pattern).
   // The dot itself is a separate aria-hidden element (topbar-presence.tsx);
   // this string carries the meaning on its own per DESIGN.md's status rule
@@ -77,14 +133,23 @@ export const m = {
   // width; the full phrase is one tap away on the account's own dashboard
   // (the KPI row's own "Calls answered"). `.es` written out now per this
   // lane's bilingual rule — no operator locale reads it yet.
-  "shell.presence.onCallShort.en": "On call",
+  // Renamed from "...onCallShort.en" (Task 6, Spanish-runtime lane): t()'s
+  // own lookup convention is bare key + "{key}.es" twin (see lib/i18n/t.ts),
+  // not two parallel ".en"/".es" suffixes — the old shape made the .es twin
+  // below unreachable through t(), since `t(m, "...onCallShort.en", "es")`
+  // would look for a "...onCallShort.en.es" key that never existed. No
+  // caller outside this file read the old key name (confirmed by a repo-wide
+  // grep before the rename).
+  "shell.presence.onCallShort": "On call",
   "shell.presence.onCallShort.es": "En llamada",
   // F-107 r5 review (item 2): "{count} this week" didn't say what was
   // counted — "calls" restores that, matching the full phrase's own noun.
   // Singular pair, same shape as idle/idleOne above ("1 calls" is wrong).
-  "shell.presence.idleShort.en": "{count} calls",
+  // Renamed from "...idleShort.en"/"...idleShortOne.en" — same reason as
+  // onCallShort just above.
+  "shell.presence.idleShort": "{count} calls",
   "shell.presence.idleShort.es": "{count} llamadas",
-  "shell.presence.idleShortOne.en": "1 call",
+  "shell.presence.idleShortOne": "1 call",
   "shell.presence.idleShortOne.es": "1 llamada",
 
   "landing.title": "BIS Platform",
@@ -243,6 +308,10 @@ export const m = {
   // whole account history rather than a rolling window — shared verbatim
   // across the agency and in-account dashboards, so one key, not two.
   "common.allTime": "All time",
+  // Task 7 (Spanish-runtime lane). "Desde siempre" (literally "since
+  // forever") is how a Spanish-speaking business owner reads an all-time
+  // total — more natural here than a literal "Todo el tiempo".
+  "common.allTime.es": "Desde siempre",
 
   // StatTile's delta chip (Task 4, DESIGN.md rule 1: every metric ships
   // with context). The visible chip is glyph + `delta.label` ("▲ 12%");
@@ -250,9 +319,14 @@ export const m = {
   // so the glyph is never the only carrier of the up/down/flat meaning.
   // "{value}" is the house {placeholder} convention (see setup.progress
   // above) — `deltaVsPrior`'s own `label` field (a percent or a raw count).
+  // .es twins (I7): read through t() in the tile's locale — the dashboard
+  // KPI row passes the resolved one, every other tile stays English.
   "stat.delta.up": "up {value} vs the prior period",
+  "stat.delta.up.es": "subió {value} frente al periodo anterior",
   "stat.delta.down": "down {value} vs the prior period",
+  "stat.delta.down.es": "bajó {value} frente al periodo anterior",
   "stat.delta.flat": "flat vs the prior period",
+  "stat.delta.flat.es": "sin cambios frente al periodo anterior",
 
   // InlineField component (Task 4): click-to-edit for contact fields.
   // "{label}" is the field name (e.g., "Email"); the component .replace()s it.
@@ -260,6 +334,11 @@ export const m = {
   "inline.edit": "Edit {label}",
   "inline.empty": "Add…",
   "inline.crashed": "Save didn't go through — the page may be out of date. Reload and try again.",
+  // The `options` arm's own rejection (validateEnumValue) — a value typed or
+  // posted that is not one of the <select>'s own <option>s, e.g. a forged
+  // form post past the Language field below.
+  "inline.invalidOption": "Choose one of the options shown.",
+  "inline.invalidOption.es": "Elija una de las opciones mostradas.",
 
   "accounts.title": "Companies",
   "accounts.add": "Add company",
@@ -298,8 +377,13 @@ export const m = {
   "dashboard.pipelineValue": "Pipeline value",
 
   "account.contacts": "Contacts",
+  // Task 7 (Spanish-runtime lane). Usted register throughout, same as every
+  // other .es twin in this catalogue.
+  "account.contacts.es": "Contactos",
   "account.openOpps": "Open opportunities",
+  "account.openOpps.es": "Oportunidades abiertas",
   "account.pipelineValue": "Pipeline value",
+  "account.pipelineValue.es": "Valor del embudo",
 
   // The in-account dashboard's greeting header (Task 5), both audiences.
   // "{name}" is the house {placeholder} convention (see setup.progress) — the
@@ -332,6 +416,8 @@ export const m = {
   // the four used to spark a 14-day trend beside a 7-day number — a lie by
   // omission about which span the picture showed).
   "dashboard.kpi.callsAnswered": "Calls answered",
+  // Task 7 (Spanish-runtime lane).
+  "dashboard.kpi.callsAnswered.es": "Llamadas atendidas",
   // F-076 (now slice): the hero on a CRM-only account (no enabled voice
   // profile) — "Calls answered" is structurally always 0 with no
   // receptionist taking calls, so it is never the right headline there
@@ -342,15 +428,20 @@ export const m = {
   // spells it lowercase inline rather than through a messages.ts key, so
   // there was no existing key to reuse here.
   "dashboard.kpi.leadsCaptured": "Leads captured",
+  "dashboard.kpi.leadsCaptured.es": "Clientes potenciales captados",
   "dashboard.kpi.appointmentsBooked": "Appointments booked",
+  "dashboard.kpi.appointmentsBooked.es": "Citas agendadas",
   "dashboard.kpi.afterHoursCaptured": "After-hours captured",
+  "dashboard.kpi.afterHoursCaptured.es": "Atendidas fuera de horario",
   "dashboard.kpi.pipelineAdded": "Pipeline added",
+  "dashboard.kpi.pipelineAdded.es": "Nuevo valor del embudo",
   // D-077, design review follow-up: ONE caption for the whole KPI row
   // (page.tsx, rendered with StatTile's own exported `LABEL_ROLE` class
   // string), not a suffix on each of the four labels above — a suffix
   // wrapped in the xl tile width and misaligned the row, and the mockup
   // never puts a period in a tile label (northern-lights.html:85-95).
   "dashboard.kpi.last7Days": "Last 7 days",
+  "dashboard.kpi.last7Days.es": "Últimos 7 días",
 
   // The 14-day calls chart card (Task 6) — CSS bars, hover tooltip on every
   // mark (DESIGN.md's chart section), a recent-calls mini table beneath it.
@@ -718,6 +809,20 @@ export const m = {
   "drawer.description": "Contact details, tags, and recent activity.",
 
   "settings.title": "Settings",
+  // Spanish-runtime Task 5 (owner decision 4, 2026-10-10): the one inline
+  // Language field on the agency Settings page, writing accounts.language.
+  // "English"/"Español" named literally in BOTH language versions, the same
+  // choice calendar.cancelDialog.languageEnglish/languageSpanish already
+  // make for naming a language by name regardless of which one is reading.
+  "settings.language.label": "Language",
+  "settings.language.label.es": "Idioma",
+  // The Language card's one line (M4 review): what the setting changes and
+  // who it leaves alone. Agency staff stay English (owner decision 1); the
+  // alert texts follow it too (owner decision B).
+  "settings.language.description": "Changes the language your client sees when they sign in, and their alert texts. Agency staff stay in English.",
+  "settings.language.description.es": "Cambia el idioma que ve su cliente al iniciar sesión, y sus mensajes de aviso. El personal de la agencia sigue en inglés.",
+  "settings.language.invalid": "Choose English or Español.",
+  "settings.language.invalid.es": "Elija inglés o español.",
   "settings.customFields": "Custom fields",
   "settings.customFieldsBody": "Extra fields captured on every contact.",
   "settings.customValues": "Custom values",
@@ -1480,6 +1585,28 @@ export const m = {
   "sms.consentReply.help.contact.fallback.en": "email hello@bis-rgv.com or visit bis-rgv.com",
   "sms.consentReply.help.contact.fallback.es": "escriba a hello@bis-rgv.com o visite bis-rgv.com",
 
+  // Staff-facing alert SMS (lib/sms/alerts.ts's composeBookingAlertSms and
+  // composeCallAlertSms). The reader is the business owner/staff, so this is
+  // keyed off `accounts.language`, not the customer's own locale. Owner
+  // decision B (2026-10-10): the Spanish lines carry NO accents at all (not
+  // only the á/í/ó/ú GSM-7 lacks — every mark, ñ included), so the text
+  // stays GSM-7 and one segment; alerts.test.ts checks each `.es` line.
+  // Phrased so dropping an accent never changes the meaning ("agendaron",
+  // not "agendó" → "agendo", which reads as "I schedule").
+  "sms.alert.booking.newBookingWithName": "New booking: {when} - {name}.",
+  "sms.alert.booking.newBookingWithName.es": "Nueva cita: {when} - {name}.",
+  "sms.alert.booking.newBooking": "New booking: {when}.",
+  "sms.alert.booking.newBooking.es": "Nueva cita: {when}.",
+  "sms.alert.call.booked": "New call: booked a meeting.",
+  "sms.alert.call.booked.es": "Nueva llamada: agendaron una cita.",
+  "sms.alert.call.lead": "New call: a lead came in.",
+  "sms.alert.call.lead.es": "Nueva llamada: nuevo cliente potencial.",
+  "sms.alert.call.message": "New call: left a message.",
+  "sms.alert.call.message.es": "Nueva llamada: dejaron un mensaje.",
+  // ONE phrase for "the rest is in your inbox", shared by both composers.
+  "sms.alert.emailHint": " Check email for details.",
+  "sms.alert.emailHint.es": " Revise su correo para mas detalles.",
+
   "voice.textback.defaultBodyEn": "Hi, this is {name}. Sorry we missed you just now, reply here and we'll help.",
   "voice.textback.defaultBodyNoNameEn": "Sorry we missed you just now, reply here and we'll help.",
   // A text-back HELD overnight and sent at 08:00 (consent chain PR-1, danlo
@@ -2003,6 +2130,13 @@ export const m = {
   // 2026-09-21). `dashboard.activity.*` and `contact.activity` are that
   // card's own keys and are untouched.
   "nav.activity": "What went out",
+  // Task 6 (Spanish-runtime lane). Deliberately NOT "Actividad" — the
+  // comment right above explains why the English label avoids "Activity":
+  // that word already names the account dashboard's own Activity card
+  // (dashboard.activity.title), a different surface. The same collision
+  // risk applies in Spanish the moment that card gets its own .es twin, so
+  // this stays a literal translation of "What went out" instead.
+  "nav.activity.es": "Lo que se envió",
   "activity.title": "What went out",
   "activity.usage.title": "This month",
   "activity.usage.texts": "Texts sent",
@@ -2597,6 +2731,12 @@ export const m = {
   // agency-only: a client never sees them, so the voice is an operator's,
   // not a business owner's.
   "nav.screened": "Screened calls",
+  // Task 6 (Spanish-runtime lane). Agency-only (comment above) — under the
+  // owner's operator-stays-English rule (DESIGN.md, 2026-10-06) this never
+  // actually renders today, since every caller who can see this item is an
+  // operator. Added anyway for catalogue completeness, matching every
+  // other nav.* key.
+  "nav.screened.es": "Llamadas filtradas",
   "screened.title": "Screened calls",
   // A whole-phrase pick by count, never a plural template reused for one —
   // see contacts.count's own comment above for the "1 people" bug this

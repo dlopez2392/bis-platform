@@ -52,7 +52,11 @@ export async function generateSummary(
         "Only state that contact details were captured if INTAKE lists them; if INTAKE is (none), say plainly that none were captured.",
         "If the caller asked for something the records do not show, say what they asked for and that it was not completed — do not describe it as done.",
         "Never invent names, phone numbers, email addresses or times that do not appear in the input.",
-        "Always write the summary in English (it is staff-facing), regardless of the language spoken on the call.",
+        // English for every account, Spanish ones included (owner decision
+        // A, 2026-10-10): summarize.ts's BOOKING_CLAIM/INTAKE_CLAIM mismatch
+        // guards are English regexes and only hold over English prose. The
+        // quote clause keeps a caller's own words untranslated.
+        "Always write the summary in English (it is staff-facing), regardless of the language spoken on the call. If you quote the caller, keep the quote in the language the caller spoke.",
       ];
       // BOOKED times in the input are raw UTC (see summarize.ts's fact line,
       // which stays that way deliberately). Left alone, the prose model

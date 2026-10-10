@@ -1,6 +1,9 @@
 "use client";
 
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
+import type { Locale } from "@/lib/i18n/locale";
 // Presence reads from the one shared shell fetch (shell-data.tsx) — see its
 // own doc comment for why the read lives in the [accountId] segment (via
 // shell-actions.ts) rather than dashboard/layout.tsx, which is where Topbar
@@ -18,10 +21,16 @@ import { useShellData } from "@/components/shell-data";
  * `hasStatContext` carries the identical note). A function replacer, not a
  * plain string, for the same reason dashboard/page.tsx's own {name}
  * substitutions use one: a persona containing "$&" must not be
- * re-interpreted as a replacement pattern.
+ * re-interpreted as a replacement pattern — t()'s own generic interpolate()
+ * uses a STRING replaceAll, which re-honors "$&" in the REPLACEMENT value
+ * same as String.prototype.replace does, so the name is substituted by hand
+ * here (via `t()` with no params, which returns the raw per-locale template
+ * untouched) rather than passed through t()'s params. `locale` defaults to
+ * "en" so every call site that predates Task 6 (the five tests below)
+ * keeps resolving exactly as before.
  */
-export function onCallText(personaName: string | null | undefined): string {
-  return m["shell.presence.onCall"].replace("{name}", () => personaName?.trim() || "Sofía");
+export function onCallText(personaName: string | null | undefined, locale: Locale = "en"): string {
+  return t(m, "shell.presence.onCall", locale).replace("{name}", () => personaName?.trim() || "Sofía");
 }
 
 /**
@@ -35,6 +44,7 @@ export function onCallText(personaName: string | null | undefined): string {
  */
 export function TopbarPresence() {
   const presence = useShellData()?.presence ?? null;
+  const locale = useLocale();
 
   // Covers three cases at once, all "render nothing": off-account, no
   // enabled voice profile (shell-actions.ts's own null), and any guard or
@@ -72,21 +82,21 @@ export function TopbarPresence() {
       // sometimes waited on the WRONG span forever. A single wrapper is
       // "visible" as soon as whichever CHILD the viewport shows has
       // rendered, regardless of which that is.
-      <span data-testid="topbar-presence">
+      <span data-testid="topbar-presence" lang={locale}>
         <span className="flex items-center gap-1.5 text-sm text-foreground sm:hidden">
           {dot}
-          {m["shell.presence.onCallShort.en"]}
+          {t(m, "shell.presence.onCallShort", locale)}
         </span>
         <span className="hidden items-center gap-1.5 text-sm text-foreground sm:flex">
           {dot}
-          {onCallText(presence.personaName)}
+          {onCallText(presence.personaName, locale)}
         </span>
       </span>
     );
   }
 
   return (
-    <span data-testid="topbar-presence">
+    <span data-testid="topbar-presence" lang={locale}>
       <span className="flex items-center gap-1.5 text-sm text-muted-foreground sm:hidden">
         {/* A static (non-pulsing) dot — rule 3's "dot + word" applies to
             idle the same as on-call; the full phrase's own leading "✓"
@@ -94,13 +104,13 @@ export function TopbarPresence() {
             a second dot convention. */}
         <span aria-hidden className="size-2 shrink-0 rounded-full bg-[var(--good)]" />
         {presence.weekCount === 1
-          ? m["shell.presence.idleShortOne.en"]
-          : m["shell.presence.idleShort.en"].replace("{count}", String(presence.weekCount))}
+          ? t(m, "shell.presence.idleShortOne", locale)
+          : t(m, "shell.presence.idleShort", locale, { count: presence.weekCount })}
       </span>
       <span className="hidden text-sm text-muted-foreground sm:block">
         {presence.weekCount === 1
-          ? m["shell.presence.idleOne"]
-          : m["shell.presence.idle"].replace("{count}", String(presence.weekCount))}
+          ? t(m, "shell.presence.idleOne", locale)
+          : t(m, "shell.presence.idle", locale, { count: presence.weekCount })}
       </span>
     </span>
   );

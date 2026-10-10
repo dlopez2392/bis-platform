@@ -8,7 +8,7 @@ import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, se
          setAlertPhone, serviceDb, type CustomFieldDef,
          startAlertPhoneVerification, verifyAlertPhoneCode, countRecentAlertPhoneVerifications,
          discardAlertPhoneVerification,
-         ALERT_CODE_MAX_SENDS_PER_HOUR } from "@bis/db";
+         ALERT_CODE_MAX_SENDS_PER_HOUR, setAccountLanguage } from "@bis/db";
 import { operatorMailer, EmailNotSent } from "@/lib/consent/email-gate";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
 // The public form's own validator, reused deliberately rather than a second
@@ -21,6 +21,8 @@ import { composeAlertPhoneVerificationSms } from "@/lib/sms/alerts";
 import { sendSms } from "@/lib/consent/gate";
 import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
+import { validateEnumValue } from "@/lib/enum-value";
+import { LANGUAGE_OPTIONS } from "@/lib/i18n/language-options";
 
 export async function createFieldAction(accountId: string, formData: FormData): Promise<void> {
   await requireAgencyOnlyAccountAccess(accountId);
@@ -248,6 +250,52 @@ export async function setReportEmailsAction(
   }
 
   await setReportEmails(serviceDb(), accountId, emails, userId);
+  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+  return { ok: true };
+}
+
+/**
+ * Sets `accounts.language` (0065_account_language.sql; owner decision 4,
+ * 2026-10-10). `(accountId, value)`, not `(accountId, FormData)` — this is
+ * the one write in this file an `InlineField` calls directly, and that
+ * component's `save` prop is typed `(value: string) => Promise<…>`
+ * (click-to-edit, no `<form>`), the exact shape `renameAccountAction`
+ * (setup/actions.ts) already established for the same reason: a plain
+ * closure built in the page to adapt a FormData-shaped action would be a
+ * NEW function the RSC boundary has no "use server" reference for, and
+ * React's Flight serializer refuses to send a function it cannot resolve
+ * to a server reference — `inline-field.tsx`'s own doc comment names this
+ * exact failure. Binding `accountId` with `.bind(null, accountId)` (as
+ * `setup/page.tsx` binds `renameAccountAction`, and `contact-fields-panel
+ * .tsx` binds every contact-field save) keeps this one a real reference.
+ *
+ * serviceDb() stands behind this write, which no RLS policy or column
+ * grant stands behind, so the `requireAgencyOnlyAccountAccess` guard on
+ * the first line is the ONLY gate on it — see `setFromEmailAction`'s own
+ * comment for why that is not redundant with the grant story.
+ *
+ * 0065 grants `authenticated` no UPDATE on `language`, deliberately: this
+ * column governs which language a CLIENT-role session reads back
+ * (`getAccountLanguage`'s own doc comment), and a client able to write its
+ * own account's language would be moving a lever the agency, not the
+ * client, controls.
+ *
+ * The option check runs BEFORE `setAccountLanguage` is ever called: that
+ * function's column carries a Postgres CHECK, and letting a bad value reach
+ * it would surface as a raw constraint-violation 500 instead of this
+ * action's own `{ ok: false }`. It is the SAME `validateEnumValue` over the
+ * SAME `LANGUAGE_OPTIONS` the Settings field runs in the browser, so the
+ * optimistic check and this authoritative one cannot disagree.
+ */
+export async function setAccountLanguageAction(
+  accountId: string, value: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
+  const checked = validateEnumValue(LANGUAGE_OPTIONS, value);
+  if (!checked.ok) {
+    return { ok: false, error: m["settings.language.invalid"] };
+  }
+  await setAccountLanguage(serviceDb(), accountId, checked.value, userId);
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
   return { ok: true };
 }

@@ -673,7 +673,8 @@ describe("AccountDashboardPage — the 7-day KPI tiles name their window and the
     // The caption's own <p> carries every class in LABEL_ROLE, in a single
     // class attribute — not merely that the string appears somewhere (a
     // comment or an unrelated node would also satisfy a bare `.toContain`).
-    const captionMatch = html.match(/<p class="([^"]*)">Last 7 days<\/p>/);
+    // `lang="en"` first: the KPI row carries the resolved locale (decision D).
+    const captionMatch = html.match(/<p lang="en" class="([^"]*)">Last 7 days<\/p>/);
     expect(captionMatch).not.toBeNull();
     const captionClasses = captionMatch![1]!.split(/\s+/);
     for (const cls of LABEL_ROLE.split(/\s+/)) expect(captionClasses).toContain(cls);

@@ -33,6 +33,8 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { buildNavGroups, type NavIconKey } from "@/lib/nav-groups";
 import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
+import { useLocale } from "@/components/locale-provider";
+import { t } from "@/lib/i18n/t";
 // Conversations' unread badge and the footer's setup meter both read from
 // this one shared background fetch — see shell-data.tsx's own doc comment
 // for why the read lives in the [accountId] segment (via shell-actions.ts)
@@ -42,6 +44,27 @@ import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
 import { useShellData } from "@/components/shell-data";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
+
+// Task 11 (Spanish-runtime lane), fix round 1: consumed by the styleguide's
+// pseudo-locale overflow demo (locale-nav-demo.tsx) so its container can
+// reproduce THIS row's real truncation geometry — real width, real padding,
+// real gap, real icon size, real truncate class — rather than a second,
+// hand-copied set of the same literals that could silently drift from this
+// one. NOT wired back into SidebarLink's own render below: this file's own
+// app-sidebar.test.ts already pins the exact literal strings below
+// (`"w-16 sm:w-[236px]"`, the Link's `"sm:justify-start sm:px-2.5"`, the
+// label span's `"hidden min-w-0 flex-1 truncate sm:block"`) byte for byte,
+// and composing them through these constants changed each literal's exact
+// substring, breaking three of those pins for no behavioural difference.
+// app-sidebar-nav-geometry.test.ts instead source-scans THIS file and
+// asserts each constant's value is still a literal substring of the real
+// render, so a value changing on one side without the other is still
+// caught — just via a parity read rather than a single shared call site.
+export const SIDEBAR_EXPANDED_WIDTH_CLASS = "w-16 sm:w-[236px]";
+export const NAV_ROW_GAP_CLASS = "gap-2.5";
+export const NAV_ROW_EXPANDED_PADDING_CLASS = "sm:px-2.5";
+export const NAV_ICON_SIZE_CLASS = "size-4";
+export const NAV_LABEL_TRUNCATE_CLASS = "min-w-0 flex-1 truncate";
 
 // The pure nav-groups module maps hrefs/labelKeys only (see its own doc
 // comment for why); this component owns the actual icon components and the
@@ -131,6 +154,7 @@ export function AppSidebar({
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
+  const locale = useLocale();
 
   function toggle() {
     const next = !collapsed;
@@ -160,7 +184,7 @@ export function AppSidebar({
   const groups = buildNavGroups(base, isAgency).map((group) => ({
     label: group.label,
     items: group.items.map(
-      (item): NavItem => ({ href: item.href, label: m[item.labelKey], icon: NAV_ICONS[item.iconKey] }),
+      (item): NavItem => ({ href: item.href, label: t(m, item.labelKey, locale), icon: NAV_ICONS[item.iconKey] }),
     ),
   }));
 
@@ -170,15 +194,15 @@ export function AppSidebar({
   const footer: NavItem | null = !isAgency
     ? null
     : base
-      ? { href: `${base}/settings`, label: m["nav.settings"], icon: Settings }
-      : { href: "/dashboard", label: m["nav.dashboard"], icon: LayoutDashboard };
+      ? { href: `${base}/settings`, label: t(m, "nav.settings", locale), icon: Settings }
+      : { href: "/dashboard", label: t(m, "nav.dashboard", locale), icon: LayoutDashboard };
 
   // Only shown inside an account, and only for the agency — a client has
   // nothing to go "back" to. Its href ("/dashboard/accounts") is a string
   // prefix of every in-account route, so — like the footer's agency-scope
   // link — it needs an exact match or it would light up alongside whichever
   // account nav item is actually active.
-  const backToAgency: NavItem = { href: "/dashboard/accounts", label: m["shell.backToAgency"], icon: ArrowLeft };
+  const backToAgency: NavItem = { href: "/dashboard/accounts", label: t(m, "shell.backToAgency", locale), icon: ArrowLeft };
 
   // What the identity block below calls this company: the brand name, full
   // stop (D-072). No fallback to the agency's own internal account label —
@@ -251,7 +275,7 @@ export function AppSidebar({
             href="/dashboard"
             className="hidden px-1 text-sm font-semibold text-[var(--sidebar-text-strong)] sm:inline-block"
           >
-            {m["shell.brand"]}
+            {t(m, "shell.brand", locale)}
           </Link>
         )}
         {/* F-107 (rider part): hidden below `sm`, not merely inert. The
@@ -262,7 +286,8 @@ export function AppSidebar({
         <button
           type="button"
           onClick={toggle}
-          aria-label={collapsed ? m["shell.expand"] : m["shell.collapse"]}
+          lang={locale}
+          aria-label={collapsed ? t(m, "shell.expand", locale) : t(m, "shell.collapse", locale)}
           className="hidden rounded-[var(--radius-ctl)] p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)] sm:inline-flex"
         >
           {collapsed ? (
@@ -364,8 +389,12 @@ export function AppSidebar({
           container itself: overflow-y-auto also clips the x axis, and the active
           rail sits 12px left of its item (the mockup's left: -12px). Inside the
           nav's own padding area it survives; against a bare content edge it was
-          clipped away entirely. */}
-      <nav className="-mx-3 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3">
+          clipped away entirely.
+
+          `lang={locale}` here and on the toggle above, not on the <aside>
+          (decision D): every label inside this nav resolves through t(), but
+          the account switcher and the client's brand name do not. */}
+      <nav lang={locale} className="-mx-3 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3">
         {groups.map((group, i) => (
           // Label when present; only the agency top-level group has
           // label=null and falls back to an index-based key.
@@ -389,7 +418,7 @@ export function AppSidebar({
                   !collapsed && "sm:block",
                 )}
               >
-                {m[group.label]}
+                {t(m, group.label, locale)}
               </div>
             ) : null}
             {group.items.map((item) => (
