@@ -1,6 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { serviceDb, getAccountByOrgId } from "@bis/db";
+import { serviceDb, getAccountByOrgId, type AccountRole } from "@bis/db";
+import { ensureAccountRole } from "./team/ensure-role";
 
 export type AppClaims = { org_id?: string; app_role?: string };
 
@@ -18,15 +19,24 @@ export async function requireAgency(): Promise<{ userId: string }> {
  *
  * Uses serviceDb deliberately: this runs BEFORE we trust the caller, so it
  * must be able to see the account row in order to judge it.
+ *
+ * Also carries the caller's role (staff and roles, spec §6-§7): `role` is a
+ * client's Owner/Staff role in this account, settled by the per-request
+ * fallback (`ensureAccountRole`, which creates a missing membership from
+ * Clerk and never throws), and null for the agency or for a client whose
+ * role could not be settled. `canManage` is true for the agency and a client
+ * Owner only. The role is read only AFTER the redirect to the caller's own
+ * account, so it is never read for an account the caller cannot enter.
  */
 export async function requireAccountAccess(
   accountId: string,
-): Promise<{ userId: string; isAgency: boolean }> {
+): Promise<{ userId: string; isAgency: boolean; role: AccountRole | null; canManage: boolean }> {
   const { userId, sessionClaims } = await auth();
   if (!userId) redirect("/sign-in");
   const claims = sessionClaims as AppClaims;
 
-  if (claims.app_role === "agency_admin") return { userId, isAgency: true };
+  // The agency never gets a client membership (plan deviation 6).
+  if (claims.app_role === "agency_admin") return { userId, isAgency: true, role: null, canManage: true };
 
   if (!claims.org_id) redirect("/no-access?reason=none");
   const account = await getAccountByOrgId(serviceDb(), claims.org_id);
@@ -36,7 +46,24 @@ export async function requireAccountAccess(
   // — a 403 confirms the account exists.
   if (account.id !== accountId) redirect(`/dashboard/accounts/${account.id}/dashboard`);
 
-  return { userId, isAgency: false };
+  const role = await ensureAccountRole(account.id, claims.org_id, userId);
+  return { userId, isAgency: false, role, canManage: role === "owner" };
+}
+
+/**
+ * Owner-only surfaces inside an account: Billing, calendar settings, contact
+ * export and delete, Team. Admits the agency and a client Owner. Staff (and a
+ * client whose role could not be settled, spec §9) are sent to their own
+ * dashboard, never 403'd, for requireAccountAccess's reason. The database
+ * refuses the same writes on its own (0066_staff_and_roles.sql); this is the
+ * app's half.
+ */
+export async function requireAccountOwner(
+  accountId: string,
+): Promise<{ userId: string; isAgency: boolean }> {
+  const { userId, isAgency, canManage } = await requireAccountAccess(accountId);
+  if (!canManage) redirect(`/dashboard/accounts/${accountId}/dashboard`);
+  return { userId, isAgency };
 }
 
 /**
