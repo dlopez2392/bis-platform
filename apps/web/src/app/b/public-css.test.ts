@@ -19,6 +19,9 @@ import path from "node:path";
  */
 const PUBLIC_SOURCES = [
   "b/[publicId]/booking-page.tsx",
+  // F-048: the booking flow's sheet moved here, out of booking-page.tsx; the
+  // booking page, its picker and the move page all render it.
+  "b/[publicId]/booking-css.ts",
   "b/[publicId]/cancel/[token]/page.tsx",
   "b/error.tsx",
   "b/branded-dead-end.tsx",

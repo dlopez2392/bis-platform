@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { partOfDay, groupSlots, successCopy, calendarLink } from "./booking-page";
+import { successCopy, calendarLink } from "./booking-page";
+import { partOfDay, groupSlots } from "./slot-picker";
 import { bookingStrings } from "@/lib/booking/public-strings";
 
 /**
@@ -62,18 +63,44 @@ describe("groupSlots", () => {
  * underlined link, for weeks, with every test green. Read from source rather
  * than rendered: a class with no rule is invisible to any assertion about the
  * DOM, which is exactly how it survived.
+ *
+ * F-048: the picker lives in `slot-picker.tsx` (the booking page and the
+ * move page both render it) and the sheet in `booking-css.ts`; the move
+ * page's own markup is scanned too, against the same sheet.
  */
 describe("booking page styles", () => {
+  // DESIGN.md "Shape & motion": radii are 8 (controls), 12 (cards) and 999
+  // (pills), nothing else, and tokens only. These pages render outside the
+  // dashboard's token layer, so each token carries its value as the fallback
+  // (`var(--token, <fallback>)`, the file's own convention). Fix round 1 (m1):
+  // four cards sat at 11px.
+  it("uses only the radius tokens (card 12, control 8) and the pill, never a bare length (mutation: put one card back at 11px → FAILS)", async () => {
+    const { BOOKING_CSS } = await import("./booking-css");
+    const radii = [...BOOKING_CSS.matchAll(/border-radius:\s*([^;]+);/g)].map((x) => x[1]!.trim());
+    expect(radii.length).toBeGreaterThan(10);
+    expect(radii.filter((r) => !["var(--radius-card, 12px)", "var(--radius-ctl, 8px)", "999px"].includes(r))).toEqual([]);
+    for (const card of [".bis-booking-empty", ".bis-booking-chosen", ".bis-booking-current", ".bis-booking-success"]) {
+      const at = BOOKING_CSS.indexOf(`${card} {`);
+      expect(at, card).toBeGreaterThan(-1);
+      expect(BOOKING_CSS.slice(at, BOOKING_CSS.indexOf("}", at)), card).toContain("border-radius: var(--radius-card, 12px)");
+    }
+  });
+
   it("styles every bis-booking-* class the markup uses", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const here = path.join(process.cwd(), "src/app/b/[publicId]");
-    const tsx = fs.readFileSync(path.join(here, "booking-page.tsx"), "utf8");
+    const read = (rel: string) => fs.readFileSync(path.join(here, rel), "utf8");
     const sheets = [
-      tsx.slice(tsx.indexOf("const BOOKING_CSS")),
+      read("booking-css.ts"),
       fs.readFileSync(path.join(process.cwd(), "src/styles/public-brand.css"), "utf8"),
     ].join("\n");
-    const markup = tsx.slice(0, tsx.indexOf("const BOOKING_CSS"));
+    const markup = ["booking-page.tsx", "slot-picker.tsx", "move/[token]/move-form.tsx", "move/[token]/page.tsx"]
+      .map(read).join("\n");
+    // Every page that renders this markup ships the sheet it is checked against.
+    for (const rel of ["booking-page.tsx", "move/[token]/page.tsx"]) {
+      expect(read(rel), rel).toMatch(/<style>\{BOOKING_CSS\}<\/style>/);
+    }
 
     const used = new Set<string>();
     for (const m of markup.matchAll(/className=(?:"([^"]+)"|\{`([^`]+)`\})/g)) {

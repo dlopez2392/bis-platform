@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
@@ -11,6 +11,8 @@ import {
   listDueFollowups, stampFollowupSent, listBookingCreationsBetween,
   SlotTakenError, BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel,
   claimCancelNotice, rescheduleChain, bookingContactEmail, discardQueuedNotice, noticeMessageStatus,
+  moveBooking, BookingNotMovableError, bookingWasMoved, countRecentBookings,
+  moveStamp, sameMicroInstant,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -1366,6 +1368,527 @@ describe("F-048: the cancel notice's claim and the reschedule chain", () => {
         const a = await createBooking(db, accountId, range(cal, contactId, "14"), "user_test");
         await expect(rescheduleChain(db, otherAccountId, a.id)).rejects.toThrow(/no booking/);
       });
+    });
+  });
+});
+
+/**
+ * F-048 (rider): the customer moves their own booking from the link in their
+ * email. A move is the receptionist's reschedule (0061, D-035) made safe for
+ * a public link that two tabs can hold at once: the new range is booked first
+ * (naming the old row), then the old row is cancelled ONLY IF it is still
+ * booked. When it is not (the other tab already moved or cancelled it), the
+ * new row is taken back out and nothing is left live but what was there.
+ */
+describe("F-048: moveBooking, a customer's move in place", () => {
+  const at = (day: string, hh: number) => new Date(`2029-09-${day}T${String(hh).padStart(2, "0")}:00:00Z`);
+  const rowOf = async (db: SupabaseClient, id: string) => {
+    const { data, error } = await db.from("bookings")
+      .select("status, rescheduled_from_id, calendar_id, contact_id, note, booker_timezone, starts_at, meeting_url, cancel_token")
+      .eq("id", id).maybeSingle();
+    if (error) throw new Error(error.message);
+    return data as Record<string, unknown> | null;
+  };
+  const liveCount = async (db: SupabaseClient, accountId: string) => {
+    const { count, error } = await db.from("bookings").select("id", { count: "exact", head: true })
+      .eq("account_id", accountId).eq("status", "booked");
+    if (error) throw new Error(error.message);
+    return count;
+  };
+
+  it("listBookedRanges leaves out exactly the booking named, and keeps every other (mutation: ignore excludeBookingId → the own range comes back, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const own = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("03", 15), endsAt: at("03", 16) }, "user_test");
+      await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("03", 17), endsAt: at("03", 18) }, "user_test");
+      const from = "2029-09-03T00:00:00.000Z";
+      const to = "2029-09-04T00:00:00.000Z";
+      const iso = (rows: { starts_at: string }[]) => rows.map((r) => new Date(r.starts_at).toISOString());
+      expect(iso(await listBookedRanges(db, cal.id, from, to))).toEqual([at("03", 15).toISOString(), at("03", 17).toISOString()]);
+      expect(iso(await listBookedRanges(db, cal.id, from, to, own.id))).toEqual([at("03", 17).toISOString()]);
+    });
+  });
+
+  it("books the new range linked to the old, carries the contact, calendar, note and zone, mints a NEW token, and cancels the old row as the actor given (mutation: skip the cancel → two live rows, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, {
+        calendarId: cal.id, contactId, startsAt: at("04", 15), endsAt: at("04", 16),
+        note: "gate code 1234", bookerTimezone: "America/Chicago",
+      }, "public", "system");
+
+      const moved = await moveBooking(db, accountId, old.id,
+        { startsAt: at("05", 15), endsAt: at("05", 16), meetingUrl: "https://meet.example/new" }, "public", "system");
+
+      expect(moved.id).not.toBe(old.id);
+      expect(moved.cancelToken).not.toBe(old.cancelToken);
+      const row = await rowOf(db, moved.id);
+      expect(row).toMatchObject({
+        status: "booked", rescheduled_from_id: old.id, calendar_id: cal.id, contact_id: contactId,
+        note: "gate code 1234", booker_timezone: "America/Chicago",
+        meeting_url: "https://meet.example/new", cancel_token: moved.cancelToken,
+      });
+      expect(new Date(row!.starts_at as string).toISOString()).toBe(at("05", 15).toISOString());
+      expect((await rowOf(db, old.id))!.status).toBe("cancelled");
+      expect(await liveCount(db, accountId)).toBe(1);
+      expect(await rescheduleChain(db, accountId, moved.id)).toEqual({ rootId: old.id, depth: 1 });
+
+      // Marked the way the receptionist's reschedule marks it: a status
+      // change, not the cancel link's own `booking.cancelled`, under the
+      // actor that made the move.
+      const { data: ev, error } = await db.from("events").select("type, actor_type, payload")
+        .eq("account_id", accountId).in("type", ["booking.created", "booking.status_changed", "booking.cancelled"])
+        .order("created_at", { ascending: true }).order("id", { ascending: true });
+      if (error) throw new Error(error.message);
+      const mine = (ev ?? []).map((e) => ({ ...e, payload: e.payload as { bookingId: string; status?: string } }))
+        .filter((e) => [old.id, moved.id].includes(e.payload.bookingId));
+      expect(mine.map((e) => [e.type, e.actor_type, e.payload.bookingId === moved.id ? "new" : "old"])).toEqual([
+        ["booking.created", "system", "old"],
+        ["booking.created", "system", "new"],
+        ["booking.status_changed", "system", "old"],
+      ]);
+      expect(mine[2]!.payload.status).toBe("cancelled");
+    });
+  });
+
+  it("a range overlapping a live booking is SlotTakenError, and the old row is left booked (the database's guarantee)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("06", 15), endsAt: at("06", 16) }, "user_test");
+      await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("07", 15), endsAt: at("07", 16) }, "user_test");
+      await expect(moveBooking(db, accountId, old.id, { startsAt: at("07", 15), endsAt: at("07", 16) }, "public", "system"))
+        .rejects.toThrow(SlotTakenError);
+      expect((await rowOf(db, old.id))!.status).toBe("booked");
+      expect(await liveCount(db, accountId)).toBe(2);
+    });
+  });
+
+  it("refuses a booking that is not live, or not this account's, before writing anything (mutation: drop the status check → the replacement is still taken back, but a third booking.created was written, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        const cal = await getOrCreateCalendar(db, accountId, "user_test");
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+        const gone = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("08", 15), endsAt: at("08", 16) }, "user_test");
+        await setBookingStatus(db, accountId, gone.id, "cancelled", "user_test");
+        await expect(moveBooking(db, accountId, gone.id, { startsAt: at("09", 15), endsAt: at("09", 16) }, "public", "system"))
+          .rejects.toThrow(BookingNotMovableError);
+        const live = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("10", 15), endsAt: at("10", 16) }, "user_test");
+        await expect(moveBooking(db, otherAccountId, live.id, { startsAt: at("11", 15), endsAt: at("11", 16) }, "public", "system"))
+          .rejects.toThrow(BookingNotMovableError);
+        const { count } = await db.from("bookings").select("id", { count: "exact", head: true }).eq("rescheduled_from_id", gone.id);
+        expect(count).toBe(0);
+        expect(await liveCount(db, accountId)).toBe(1);
+        // Refused BEFORE the insert, not merely taken back after it: the only
+        // bookings ever created on this account are the two made above. (The
+        // conditional cancel alone would also leave no live row, so this is
+        // what tells the up-front check from the take-back.)
+        const { count: created, error: evErr } = await db.from("events").select("id", { count: "exact", head: true })
+          .eq("account_id", accountId).eq("type", "booking.created");
+        if (evErr) throw new Error(evErr.message);
+        expect(created).toBe(2);
+      });
+    });
+  });
+
+  /**
+   * The race a public link invites: the old row stops being `booked` between
+   * the move's read and its cancel (the customer's other tab cancelled or
+   * moved it). Forced, not hoped for: the client handed in cancels the old
+   * row just before the move's insert is awaited.
+   */
+  it("when the old row stopped being live mid-move, the new row is taken back out and the move is refused (mutation: an unconditional cancel → a second live appointment, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Racer" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("12", 15), endsAt: at("12", 16) }, "user_test");
+
+      let injected = false;
+      const inject = async () => {
+        if (injected) return;
+        injected = true;
+        await cancelBookingByToken(db, old.cancelToken);
+      };
+      const beforeAwait = <T extends object>(builder: T): T => {
+        const proxy: T = new Proxy(builder, {
+          get(target, prop) {
+            if (prop === "then") {
+              return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+                inject().then(() => (target as unknown as PromiseLike<unknown>).then(res, rej), rej);
+            }
+            const v = Reflect.get(target, prop, target);
+            if (typeof v !== "function") return v;
+            return (...args: unknown[]) => {
+              const r = (v as (...a: unknown[]) => unknown).apply(target, args);
+              return r === target ? proxy : (typeof r === "object" && r !== null ? beforeAwait(r as object) : r);
+            };
+          },
+        });
+        return proxy;
+      };
+      const racyDb = new Proxy(db, {
+        get(target, prop) {
+          if (prop !== "from") return Reflect.get(target, prop, target);
+          return (table: string) => {
+            const qb = target.from(table);
+            if (table !== "bookings") return qb;
+            return new Proxy(qb, {
+              get(t, p) {
+                const v = Reflect.get(t, p, t);
+                if (p === "insert") return (...a: unknown[]) => beforeAwait((v as (...x: unknown[]) => object).apply(t, a));
+                return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+              },
+            });
+          };
+        },
+      }) as SupabaseClient;
+
+      await expect(moveBooking(racyDb, accountId, old.id, { startsAt: at("13", 15), endsAt: at("13", 16) }, "public", "system"))
+        .rejects.toThrow(BookingNotMovableError);
+      expect(injected, "the race was forced").toBe(true);
+      expect(await liveCount(db, accountId)).toBe(0);
+      const { count } = await db.from("bookings").select("id", { count: "exact", head: true }).eq("rescheduled_from_id", old.id);
+      expect(count, "the taken-back row is gone, so nothing reads as a move").toBe(0);
+    });
+  });
+
+  /**
+   * Fix rounds 1 and 2: a move's writes can land while what comes after them
+   * fails — an event insert, or the response to a write. Every such case
+   * must end with exactly ONE live booking, and the answer must say which.
+   * Faults are injected into a client wrapped around the real one, keyed on
+   * what each `bookings` query IS (its first call — select/insert/update/
+   * delete — and the columns it filters or selects):
+   *  - `failEvent`: that event type's insert is refused (nothing written);
+   *  - `lose`: the FIRST such write runs, then an error is answered, as a
+   *    dropped response would;
+   *  - `refuse: "update"`: the FIRST update answers an error WITHOUT running
+   *    (a timeout before commit); `between` runs first — another tab's move;
+   *  - `failRead`: a select filtering on `cancel_token`, or the re-read that
+   *    selects `updated_at`, answers an error;
+   *  - `failDelete`: the first N deletes answer an error without running.
+   */
+  type Fault = {
+    failEvent?: string; lose?: "insert" | "update"; refuse?: "update";
+    between?: () => Promise<unknown>; failRead?: "cancel_token" | "updated_at"; failDelete?: number;
+  };
+  const faulty = (db: SupabaseClient, f: Fault) => {
+    const used = { failEvent: false, lose: false, refuse: false, failRead: false, failDelete: 0 };
+    const err = (message: string) => ({ data: null, error: { message } });
+    const fired = { lose: false };
+    const watch = <T extends object>(builder: T, op: string, firstArgs: unknown[]): T => {
+      const eqs: string[] = [];
+      const selects: string[] = op === "select" ? [String(firstArgs[0] ?? "")] : [];
+      const decide = async (): Promise<{ data: unknown; error: unknown } | "real" | "lose"> => {
+        if (op === f.lose && !fired.lose) { fired.lose = true; return "lose"; }
+        if (op === "update" && f.refuse === "update" && !used.refuse) {
+          used.refuse = true;
+          await f.between?.();
+          return err("canceling statement due to statement timeout (simulated, not run)");
+        }
+        if (op === "select" && f.failRead === "cancel_token" && eqs.includes("cancel_token")) {
+          used.failRead = true;
+          return err("fetch failed (simulated token look-up)");
+        }
+        if (op === "select" && f.failRead === "updated_at" && selects.some((c) => c.includes("updated_at"))) {
+          used.failRead = true;
+          return err("fetch failed (simulated re-read)");
+        }
+        if (op === "delete" && used.failDelete < (f.failDelete ?? 0)) {
+          used.failDelete += 1;
+          return err("fetch failed (simulated delete)");
+        }
+        return "real";
+      };
+      const proxy: T = new Proxy(builder, {
+        get(target, prop) {
+          if (prop === "then") {
+            return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => decide().then((d) => {
+              if (d === "real") return (target as unknown as PromiseLike<unknown>).then(res, rej);
+              if (d === "lose") {
+                return (target as unknown as PromiseLike<unknown>).then(() => {
+                  used.lose = true;
+                  return res(err("fetch failed (simulated lost response)"));
+                }, rej);
+              }
+              return res(d);
+            }, rej);
+          }
+          const v = Reflect.get(target, prop, target);
+          if (typeof v !== "function") return v;
+          return (...args: unknown[]) => {
+            if (prop === "eq") eqs.push(String(args[0]));
+            if (prop === "select") selects.push(String(args[0] ?? ""));
+            const r = (v as (...a: unknown[]) => unknown).apply(target, args);
+            return r === target ? proxy : r;
+          };
+        },
+      });
+      return proxy;
+    };
+    const client = new Proxy(db, {
+      get(target, prop) {
+        if (prop !== "from") return Reflect.get(target, prop, target);
+        return (table: string) => {
+          const qb = target.from(table);
+          return new Proxy(qb, {
+            get(t, p) {
+              const v = Reflect.get(t, p, t);
+              if (table === "events" && p === "insert") {
+                return (payload: { type?: string }) => {
+                  if (payload?.type === f.failEvent) {
+                    used.failEvent = true;
+                    return Promise.resolve(err("simulated events insert failure"));
+                  }
+                  return (v as (x: unknown) => unknown).call(t, payload);
+                };
+              }
+              if (table === "bookings" && typeof p === "string" && ["select", "insert", "update", "delete"].includes(p)) {
+                return (...a: unknown[]) => watch((v as (...x: unknown[]) => object).apply(t, a), p, a);
+              }
+              return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+            },
+          });
+        };
+      },
+    }) as SupabaseClient;
+    return { client, used };
+  };
+  const statuses = async (db: SupabaseClient, accountId: string) => {
+    const { data, error } = await db.from("bookings").select("status, rescheduled_from_id")
+      .eq("account_id", accountId).order("created_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => `${r.rescheduled_from_id ? "new" : "old"}:${r.status}`);
+  };
+
+  it("C1: the old row's cancel lands but its event does not — the move STANDS: the new booking is kept and returned (red on the round-0 code, which took back on any error; mutation: let the event's error escape → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("17", 15), endsAt: at("17", 16) }, "user_test");
+      const { client, used } = faulty(db, { failEvent: "booking.status_changed" });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const moved = await moveBooking(client, accountId, old.id, { startsAt: at("18", 15), endsAt: at("18", 16) }, "public", "system");
+        expect(used.failEvent, "the fault fired").toBe(true);
+        expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
+        expect((await rowOf(db, moved.id))!.status).toBe("booked");
+        expect(errors.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(/event/);
+      } finally { errors.mockRestore(); }
+    });
+  });
+
+  it("C1: the old row's cancel COMMITS but its response is lost — re-read, see it cancelled, keep the move (mutation: read any cancel error as not cancelled → the new row is taken back, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("19", 15), endsAt: at("19", 16) }, "user_test");
+      const { client, used } = faulty(db, { lose: "update" });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await moveBooking(client, accountId, old.id, { startsAt: at("20", 15), endsAt: at("20", 16) }, "public", "system");
+        expect(used.lose, "the fault fired").toBe(true);
+        expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
+      } finally { errors.mockRestore(); }
+    });
+  });
+
+  it("I2: the new row lands but its booking.created event does not — never two live bookings: the move goes on and the old row is cancelled (mutation: let the event error escape → old AND new live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("21", 15), endsAt: at("21", 16) }, "user_test");
+      const { client, used } = faulty(db, { failEvent: "booking.created" });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await moveBooking(client, accountId, old.id, { startsAt: at("22", 15), endsAt: at("22", 16) }, "public", "system");
+        expect(used.failEvent, "the fault fired").toBe(true);
+        expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
+      } finally { errors.mockRestore(); }
+    });
+  });
+
+  it("I2: the new row's insert COMMITS but its response is lost — found by its own token, and the move goes on (mutation: treat the error as a failure → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("23", 15), endsAt: at("23", 16) }, "user_test");
+      const { client, used } = faulty(db, { lose: "insert" });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const moved = await moveBooking(client, accountId, old.id, { startsAt: at("24", 15), endsAt: at("24", 16) }, "public", "system");
+        expect(used.lose, "the fault fired").toBe(true);
+        expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
+        expect((await rowOf(db, moved.id))!.cancel_token).toBe(moved.cancelToken);
+      } finally { errors.mockRestore(); }
+    });
+  });
+
+  const createdEvents = async (db: SupabaseClient, accountId: string) => {
+    const { count, error } = await db.from("events").select("id", { count: "exact", head: true })
+      .eq("account_id", accountId).eq("type", "booking.created");
+    if (error) throw new Error(error.message);
+    return count;
+  };
+  const setup = async (db: SupabaseClient, accountId: string, day: string) => {
+    const cal = await getOrCreateCalendar(db, accountId, "user_test");
+    const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+    const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at(day, 15), endsAt: at(day, 16) }, "user_test");
+    return { cal, contactId, old };
+  };
+  const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try { return await fn(); } finally { errors.mockRestore(); }
+  };
+  const outcome = async (p: Promise<unknown>) => {
+    try { await p; return "moved"; } catch (e) { return e instanceof BookingNotMovableError ? "not movable" : `Error: ${(e as Error).message}`; }
+  };
+
+  it("round 2 (I2a): the cancel answers an error WITHOUT landing — the old booking is still live, so the new one is taken back and the move refused (mutation: read every unclear cancel as ours → two live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "27");
+      const { client, used } = faulty(db, { refuse: "update" });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("28", 15), endsAt: at("28", 16) }, "public", "system")));
+      expect(used.refuse, "the fault fired").toBe(true);
+      expect(got).toBe("not movable");
+      expect(await statuses(db, accountId)).toEqual(["old:booked"]);
+      // m-c: a taken-back move leaves no "booking created" for a row that is gone.
+      expect(await createdEvents(db, accountId)).toBe(1);
+    });
+  });
+
+  it("round 2 (I1/I2b): the cancel errors and ANOTHER tab's move lands meanwhile — the old row is cancelled, but not by us, so ours is taken back and only the other tab's booking is live (mutation: treat 'no longer booked' as ours → two live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "29");
+      let other: { id: string } | undefined;
+      const { client, used } = faulty(db, {
+        refuse: "update",
+        between: async () => { other = await moveBooking(db, accountId, old.id, { startsAt: at("30", 17), endsAt: at("30", 18) }, "public", "system"); },
+      });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("30", 15), endsAt: at("30", 16) }, "public", "system")));
+      expect(used.refuse, "the fault fired").toBe(true);
+      expect(got).toBe("not movable");
+      expect(await statuses(db, accountId)).toEqual(["old:cancelled", "new:booked"]);
+      expect((await rowOf(db, other!.id))!.status).toBe("booked");
+    });
+  });
+
+  it("round 2 (m-a): the insert lands behind a lost response AND its token look-up fails — the row is deleted by its token, so only the old booking is live (mutation: throw without the delete → two live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "02");
+      const { client, used } = faulty(db, { lose: "insert", failRead: "cancel_token" });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("03", 17), endsAt: at("03", 18) }, "public", "system")));
+      expect(used.lose && used.failRead, "both faults fired").toBe(true);
+      expect(got).toMatch(/^Error: /);
+      expect(await statuses(db, accountId)).toEqual(["old:booked"]);
+    });
+  });
+
+  it("round 2 (m-a): the take-back delete fails once — it is retried, and only the old booking is live (mutation: no retry → two live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "04");
+      const { client, used } = faulty(db, { refuse: "update", failDelete: 1 });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("05", 17), endsAt: at("05", 18) }, "public", "system")));
+      expect(used.failDelete, "the delete fault fired").toBe(1);
+      expect(got).toBe("not movable");
+      expect(await statuses(db, accountId)).toEqual(["old:booked"]);
+    });
+  });
+
+  it("round 2 (m-a): the cancel errors AND its re-read fails, when the cancel did NOT land — rolled back to the start: only the old booking is live (mutation: throw without rolling back → two live, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "06");
+      const { client, used } = faulty(db, { refuse: "update", failRead: "updated_at" });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("07", 17), endsAt: at("07", 18) }, "public", "system")));
+      expect(used.failRead, "the re-read fault fired").toBe(true);
+      expect(got).toMatch(/^Error: /);
+      expect(await statuses(db, accountId)).toEqual(["old:booked"]);
+    });
+  });
+
+  it("round 2 (m-a): the cancel LANDS behind a lost response AND its re-read fails — our cancel is undone by its stamp, then the new row taken back: still exactly one live, never none (mutation: delete without undoing → no live booking, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { old } = await setup(db, accountId, "08");
+      const { client, used } = faulty(db, { lose: "update", failRead: "updated_at" });
+      const got = await quietly(() => outcome(moveBooking(client, accountId, old.id, { startsAt: at("09", 17), endsAt: at("09", 18) }, "public", "system")));
+      expect(used.lose && used.failRead, "both faults fired").toBe(true);
+      expect(got).toMatch(/^Error: /);
+      expect(await statuses(db, accountId)).toEqual(["old:booked"]);
+    });
+  });
+
+  it("I3: the moved row carries the request's IP hash, so the public rate limit counts moves (mutation: drop ip_hash → countRecentBookings sees 0, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+      const old = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("25", 15), endsAt: at("25", 16) }, "user_test");
+      await moveBooking(db, accountId, old.id, { startsAt: at("26", 15), endsAt: at("26", 16), ipHash: "iphash-move-test" }, "public", "system");
+      expect(await countRecentBookings(db, cal.id, "iphash-move-test", new Date(Date.now() - 600_000).toISOString())).toBe(1);
+    });
+  });
+
+  it("bookingWasMoved: true for a row a move replaced, false for a plain cancel and for another account (mutation: drop the account scope → the other account reads true, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_db2, otherAccountId) => {
+        const cal = await getOrCreateCalendar(db, accountId, "user_test");
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Mover" }, "user_test");
+        const a = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("14", 15), endsAt: at("14", 16) }, "user_test");
+        const b = await createBooking(db, accountId, { calendarId: cal.id, contactId, startsAt: at("15", 15), endsAt: at("15", 16) }, "user_test");
+        await moveBooking(db, accountId, a.id, { startsAt: at("16", 15), endsAt: at("16", 16) }, "public", "system");
+        await setBookingStatus(db, accountId, b.id, "cancelled", "user_test");
+        expect(await bookingWasMoved(db, accountId, a.id)).toBe(true);
+        expect(await bookingWasMoved(db, accountId, b.id)).toBe(false);
+        expect(await bookingWasMoved(db, otherAccountId, a.id)).toBe(false);
+      });
+    });
+  });
+});
+
+/**
+ * Fix round 3 (m2): a move recognises its own cancel by the `updated_at` it
+ * stamped. Milliseconds are not unique enough (two tabs can cancel in the
+ * same ms), so the stamp carries random microseconds — timestamptz keeps
+ * them and PostgREST answers them — and is compared at that precision.
+ */
+describe("F-048: the move's own stamp", () => {
+  it("compares instants to the microsecond, whatever the zone spelling or trailing zeros (mutation: compare as Date ms → a same-ms foreign stamp reads as ours, FAILS)", () => {
+    expect(sameMicroInstant("2029-09-01T10:00:00.123456Z", "2029-09-01T10:00:00.123456+00:00")).toBe(true);
+    expect(sameMicroInstant("2029-09-01T10:00:00.123400Z", "2029-09-01T10:00:00.1234+00:00")).toBe(true);
+    expect(sameMicroInstant("2029-09-01T05:00:00.5Z", "2029-09-01T00:00:00.500000-05:00")).toBe(true);
+    // Same millisecond, another call's microseconds: NOT ours.
+    expect(sameMicroInstant("2029-09-01T10:00:00.123456Z", "2029-09-01T10:00:00.123789+00:00")).toBe(false);
+    expect(sameMicroInstant("2029-09-01T10:00:00.123456Z", "not a time")).toBe(false);
+  });
+
+  it("each call mints its own microseconds, and the database answers them back exactly", async () => {
+    // ONE fixed millisecond, so only the random microseconds can tell the
+    // stamps apart: a millisecond-only stamp gives exactly 1. 200 draws from
+    // 1000 values give about 181 distinct (1000 * (1 - e^-0.2)), standard
+    // deviation about 6; 120 is ten deviations below, so this cannot flake,
+    // and every stamp keeps that one millisecond (fix round 4: the old bar of
+    // 190 failed on correct code).
+    const fixed = new Date("2029-09-01T10:00:00.123Z");
+    const stamps = new Set(Array.from({ length: 200 }, () => moveStamp(fixed)));
+    expect(stamps.size).toBeGreaterThan(120);
+    for (const st of stamps) expect(st.startsWith("2029-09-01T10:00:00.123")).toBe(true);
+    for (const st of stamps) expect(st).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Stamp" }, "user_test");
+      const b = await createBooking(db, accountId, {
+        calendarId: cal.id, contactId, startsAt: new Date("2029-10-01T15:00:00Z"), endsAt: new Date("2029-10-01T16:00:00Z"),
+      }, "user_test");
+      const stamp = moveStamp();
+      const { error } = await db.from("bookings").update({ updated_at: stamp }).eq("id", b.id);
+      if (error) throw new Error(error.message);
+      const { data } = await db.from("bookings").select("updated_at").eq("id", b.id).single();
+      const back = (data as { updated_at: string }).updated_at;
+      expect(sameMicroInstant(back, stamp)).toBe(true);
+      // One microsecond away: a different instant, though the same millisecond.
+      const other = stamp.replace(/(\d{3})Z$/, (_m, d: string) => `${String((Number(d) + 1) % 1000).padStart(3, "0")}Z`);
+      expect(sameMicroInstant(back, other)).toBe(false);
     });
   });
 });

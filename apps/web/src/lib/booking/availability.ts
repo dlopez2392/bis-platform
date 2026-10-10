@@ -2,7 +2,9 @@
 // public booking page compute availability from ONE implementation. Any
 // drift between the two would let the AI offer times the page would refuse.
 import { listBookedRanges, serviceDb, type CalendarRow } from "@bis/db";
-import { computeSlots, bookableRange, partsInZone, type Range, type SlotConfig } from "@/lib/booking/slots";
+import {
+  computeSlots, bookableRange, computeMoveSlots, movableRange, partsInZone, type Range, type SlotConfig,
+} from "@/lib/booking/slots";
 
 function slotConfigFrom(calendar: CalendarRow, timezone: string): SlotConfig {
   return {
@@ -34,10 +36,11 @@ export async function computeAllSlots(
 /** The booked ranges both functions here judge against — ONE read, so the
  *  picker and the submit see the same bookings. */
 async function bookedInHorizon(
-  db: ReturnType<typeof serviceDb>, calendar: CalendarRow, now: Date,
+  db: ReturnType<typeof serviceDb>, calendar: CalendarRow, now: Date, excludeBookingId?: string,
 ): Promise<Range[]> {
   const horizonEndMs = now.getTime() + (calendar.max_advance_days + 2) * 24 * 3600_000;
-  const rows = await listBookedRanges(db, calendar.id, now.toISOString(), new Date(horizonEndMs).toISOString());
+  const rows = await listBookedRanges(
+    db, calendar.id, now.toISOString(), new Date(horizonEndMs).toISOString(), excludeBookingId);
   return rows.map((r) => ({ startsAt: new Date(r.starts_at), endsAt: new Date(r.ends_at) }));
 }
 
@@ -53,6 +56,31 @@ export async function bookableSlot(
   db: ReturnType<typeof serviceDb>, calendar: CalendarRow, timezone: string, now: Date, startsAt: Date,
 ): Promise<Range | null> {
   return bookableRange(slotConfigFrom(calendar, timezone), await bookedInHorizon(db, calendar, now), now, startsAt);
+}
+
+/** F-048: the booking a customer is moving — its id (left out of the busy
+ *  ranges) and its CURRENT range (still held until the move commits). */
+export type MovingBooking = { id: string; startsAt: Date; endsAt: Date };
+
+/** F-048: the move page's picker — `computeAllSlots` for the day as it will
+ *  be once the move commits (`computeMoveSlots` in ./slots.ts). ONE read, the
+ *  same as the booking page's, minus the moving booking itself. */
+export async function moveSlots(
+  db: ReturnType<typeof serviceDb>, calendar: CalendarRow, timezone: string, now: Date, moving: MovingBooking,
+): Promise<Range[]> {
+  const others = await bookedInHorizon(db, calendar, now, moving.id);
+  return computeMoveSlots(slotConfigFrom(calendar, timezone), others, moving, now);
+}
+
+/** F-048: the move's submit-time check, the twin of `bookableSlot`
+ *  (`movableRange` in ./slots.ts). `moveBooking` and `bookings_no_overlap`
+ *  remain the guarantee against a race past it. */
+export async function movableSlot(
+  db: ReturnType<typeof serviceDb>, calendar: CalendarRow, timezone: string, now: Date,
+  moving: MovingBooking, startsAt: Date,
+): Promise<Range | null> {
+  const others = await bookedInHorizon(db, calendar, now, moving.id);
+  return movableRange(slotConfigFrom(calendar, timezone), others, moving, now, startsAt);
 }
 
 /** `YYYY-MM-DD` as seen in `timezone` — the day-picker's own key format, and

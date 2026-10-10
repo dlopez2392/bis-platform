@@ -1110,3 +1110,33 @@ describe("submitBookingAction — F-048: the add-to-calendar link", () => {
     expect(confirmation.body).not.toContain("Add to your calendar");
   });
 });
+
+/**
+ * F-048 (rider): the success screen says "need to cancel or reschedule? Use
+ * the link in your confirmation email", so the confirmation carries a way to
+ * change the time: the move page, on the same origin, token and language as
+ * the cancel link.
+ */
+describe("submitBookingAction — F-048: the change-the-time link", () => {
+  const withHost = () => vi.mocked(headers).mockResolvedValue(
+    new Headers({ "user-agent": "test-agent", host: "book.example.com", "x-forwarded-proto": "https" }) as never,
+  );
+  const confirmation = () => sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
+
+  it("the confirmation links the move page (mutation: leave moveUrl out → FAILS)", async () => {
+    withHost();
+    await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(confirmation().body).toContain(`Change the time: https://book.example.com/b/${PUBLIC_ID}/move/tok_1`);
+  });
+
+  it("in Spanish for a Spanish booker", async () => {
+    withHost();
+    await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+    expect(confirmation().body).toContain(`Cambiar el horario: https://book.example.com/b/${PUBLIC_ID}/move/tok_1?locale=es`);
+  });
+
+  it("with no host to build on, no line at all", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData());
+    expect(confirmation().body).not.toContain("Change the time");
+  });
+});

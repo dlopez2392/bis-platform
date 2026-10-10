@@ -1,5 +1,6 @@
 import { cache } from "react";
 import { serviceDb, type BookingRow } from "@bis/db";
+import { scrubToken } from "@/lib/booking/links";
 
 const BOOKING_COLS =
   "id, account_id, calendar_id, contact_id, starts_at, ends_at, status, note, "
@@ -44,7 +45,8 @@ export async function loadBookingSafe(token: string): ReturnType<typeof loadBook
   try {
     return await loadBooking(token);
   } catch (e) {
-    console.error(`cancel/${token}: booking read failed: ${String(e)}`);
+    // Never the token (fix round 1, m3): it cancels and moves this booking.
+    console.error(`cancel page: booking read failed: ${scrubToken(e, token)}`);
     return null;
   }
 }
