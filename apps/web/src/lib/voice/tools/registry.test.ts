@@ -433,6 +433,33 @@ describe("book_appointment", () => {
     expect(sent.body).not.toContain(whenEn);
   });
 
+  // F-048 leftover: the web confirmation has carried the add-to-calendar file
+  // since #227; Sofía's did not. Same helper, same token as the cancel link
+  // (the NEW booking's), in the caller's language. Mutations: drop
+  // `calendarUrl` from the template input → the URL is absent, FAILS; build
+  // it without the locale → the Spanish case loses `?locale=es`, FAILS.
+  it("the confirmation carries the add-to-calendar link, on the booking's own token", async () => {
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
+    const sent = sendMock.mock.calls[0]![0] as { body: string; html: string };
+    expect(sent.body).toContain("Add to your calendar: https://x.example/b/pub1/ics/tok123\n");
+    expect(sent.html).toContain('href="https://x.example/b/pub1/ics/tok123"');
+  });
+
+  it("a Spanish-speaking caller's calendar link opens in Spanish", async () => {
+    const esCtx: ToolContext = {
+      ...ctx, profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+    };
+    const pre = { ...emptyCallState(), transcript: [
+      { role: "caller" as const, text: "Hola, necesito una cita para mañana por la tarde, por favor.", at: "2027-06-01T12:00:00Z" },
+    ] };
+    await runTool(pre, esCtx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    const sent = sendMock.mock.calls[0]![0] as { body: string };
+    expect(sent.body).toContain("Agregar a tu calendario: https://x.example/b/pub1/ics/tok123?locale=es");
+  });
+
   it("send failure never fails the booking", async () => {
     sendMock.mockRejectedValue(new Error("resend down"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});

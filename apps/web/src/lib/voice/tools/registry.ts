@@ -9,6 +9,7 @@ import {
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
 import { computeAllSlots, bookableSlot, dayKeyInZone } from "@/lib/booking/availability";
+import { calendarFileUrl } from "@/lib/booking/calendar-file";
 import { e164Of, isCallerIdNumber, spokenPhone } from "../phone-number";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { getMeetingProvider } from "@/lib/meetings/provider";
@@ -494,8 +495,12 @@ export async function runTool(
           const brand = emailBrand(ctx.branding);
           const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone, locale);
           const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${cancelToken}`;
+          // F-048: the add-to-calendar file, exactly as the web confirmation
+          // builds it (`b/[publicId]/actions.ts`) — same helper, same token as
+          // the cancel link, in the caller's language.
+          const calendarUrl = calendarFileUrl(ctx.origin, ctx.calendar.public_id, cancelToken, locale);
           const { html, text } = bookingConfirmationEmail({
-            brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl,
+            brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl, calendarUrl,
           });
           await sendEmailOrThrow({
             accountId: ctx.accountId, kind: "voice.booked", contactId, language: locale, origin: ctx.origin,
