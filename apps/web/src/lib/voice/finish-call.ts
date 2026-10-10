@@ -15,6 +15,7 @@ import { classifyOutcome, wasServed, wasTransferred, callerSpoke } from "./call-
 import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
 import { detectSpokenLanguage } from "./language";
 import { generateSummary } from "./summary-service";
+import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { summaryFactLine } from "./summarize";
 import { isCallerIdNumber, spokenPhone } from "./phone-number";
 import {
@@ -66,6 +67,20 @@ export interface FinishContext {
    *  send time" — the default is deliberately never persisted, so an operator
    *  who never wrote their own keeps getting the current copy. */
   textbackBody: string;
+  /** `accounts.language` (0065) — the account's own resolved language
+   *  preference. Threaded here for one purpose only: `generateSummary`'s
+   *  staff-facing prose, which is stored ONCE and read by both the client
+   *  and agency staff, so it is written in whichever language the account
+   *  reads in. Unrelated to `profileLanguage` above (what Sofía is allowed
+   *  to SPEAK on the call) and to `calls.language` (what the caller actually
+   *  spoke) — three different "language" concepts that this field must not
+   *  be confused with. NULL means no preference recorded; `resolveLocale`
+   *  below turns that into English, the same default as everywhere else. A
+   *  caller's own quoted words inside the summary are never translated
+   *  (summary-service.ts's own rule). Optional so existing callers of
+   *  `finishCall` that have not yet threaded an account row compile
+   *  unchanged and get today's English prose. */
+  accountLanguage?: Locale | null;
 }
 
 export interface FinishMeta {
@@ -387,7 +402,10 @@ export async function finishCall(
 
   let summary: string;
   try {
-    summary = await generateSummary(state, { timezone: ctx.timezone });
+    summary = await generateSummary(state, {
+      timezone: ctx.timezone,
+      language: resolveLocale(undefined, ctx.accountLanguage ?? null),
+    });
   } catch (e) {
     console.error(`finishCall: generateSummary failed, falling back to fact line: ${String(e)}`);
     summary = summaryFactLine(state);

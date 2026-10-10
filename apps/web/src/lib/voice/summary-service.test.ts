@@ -102,4 +102,23 @@ describe("generateSummary", () => {
     const systemContent = body.messages[0].content as string;
     expect(systemContent).not.toContain("Never present a UTC time as if it were local");
   });
+  it("opts.language 'es' asks the model to write the summary in Spanish (mutation: drop the opts?.language branch → the rule always says English, FAILS)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await generateSummary(callerSpoke(), { language: "es", fetchImpl: fetchImpl as unknown as typeof fetch });
+    const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
+    const systemContent = body.messages[0].content as string;
+    expect(systemContent).toMatch(/español/i);
+    expect(systemContent).not.toContain("Always write the summary in English");
+  });
+  it("omitting opts.language preserves today's exact English instruction", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await generateSummary(callerSpoke(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
+    const systemContent = body.messages[0].content as string;
+    expect(systemContent).toContain("Always write the summary in English (it is staff-facing), regardless of the language spoken on the call.");
+  });
 });

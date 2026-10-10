@@ -96,6 +96,7 @@ import { detectCallerLanguage } from "@/lib/voice/language";
 import { configuredOrigin } from "@/lib/email/origin";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { openingGreeting } from "@/lib/voice/greeting";
+import type { Locale } from "@/lib/i18n/locale";
 
 export const runtime = "nodejs";
 export const maxDuration = 800;
@@ -108,9 +109,12 @@ function log(...args: unknown[]) {
 // exported — that accessor is `listDueReminders`'s private implementation
 // detail, not a public seam — so the identical column list is selected
 // inline here rather than reaching into the package's internals.
+// `language` (0065) rides along on this SAME select — no extra query — so
+// F-013's reader-language summary can read it off the account row step 9
+// already loads, the same way `timezone` and the brand columns do.
 const ACCOUNT_COLS =
   "timezone, brand_name, brand_logo_path, brand_color, brand_neutral, " +
-  "brand_corners, brand_type, brand_mode, reply_to_email, from_email";
+  "brand_corners, brand_type, brand_mode, reply_to_email, from_email, language";
 
 type AccountBrandRow = {
   timezone: string;
@@ -118,6 +122,7 @@ type AccountBrandRow = {
   brand_neutral: Branding["brandNeutral"]; brand_corners: Branding["brandCorners"];
   brand_type: Branding["brandType"]; brand_mode: Branding["brandMode"];
   reply_to_email: string | null; from_email: string | null;
+  language: Locale | null;
 };
 
 async function loadAccountContext(
@@ -1143,6 +1148,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       db, accountId, branding,
       notifyEmails: calendar.notify_emails, callerNumber, origin,
       profileLanguage: profile.languages, timezone: accountRow.timezone,
+      accountLanguage: accountRow.language,
       // Read off the profile loaded at step 7, so the text-back decision is
       // pinned to the profile that answered THIS call rather than re-read
       // minutes later at hangup, when an operator may have toggled it.

@@ -93,6 +93,12 @@ vi.mock("next/server", async (importOriginal) => {
 const finishCallMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/voice/finish-call", () => ({ finishCall: (...a: unknown[]) => finishCallMock(...a) }));
 
+// --- accounts.language (0065): overridable per test, defaulting to no
+// preference recorded — the same shape a real account that never set one
+// carries. Held outside the `@bis/db` factory below so individual tests can
+// flip it without re-declaring the whole mock. ----------------------------
+const accountLanguageMock = vi.hoisted(() => ({ value: null as "en" | "es" | null }));
+
 // --- @/lib/voice/tools/registry: `runTool` mocked so one test can make a
 // function-call event's processing arbitrarily slow (a controllable
 // deferred promise) without a real tool doing real DB/email work. ----------
@@ -136,7 +142,7 @@ vi.mock("@bis/db", () => ({
               name: "Rio Roofing — trial", timezone: "America/Chicago",
               brand_name: "Rio Roofing Co", brand_logo_path: null, brand_color: null,
               brand_neutral: null, brand_corners: null, brand_type: null, brand_mode: null,
-              reply_to_email: null, from_email: null,
+              reply_to_email: null, from_email: null, language: accountLanguageMock.value,
             };
             const wanted = cols.split(",").map((c) => c.trim());
             return { data: Object.fromEntries(Object.entries(row).filter(([k]) => wanted.includes(k))), error: null };
@@ -258,6 +264,7 @@ beforeEach(() => {
 
   unwrapMock.mockReset();
   afterMock.mockReset();
+  accountLanguageMock.value = null;
   finishCallMock.mockReset().mockResolvedValue({ stored: true, notified: false, outcome: "abandoned" });
   runToolMock.mockReset();
   isCallerAudioEventMock.mockReset().mockImplementation(realIsCallerAudioEvent);
@@ -340,6 +347,30 @@ describe("runCallLifecycle — cap/error idempotency", () => {
     ws.emit("error", new Error("boom"));
     await lifecycleDone;
     expect(finishCallMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// F-013 AI/alerts in reader's language: the account's `language` column is
+// read off the SAME `accounts` load step 9 already makes (no extra query —
+// see route.ts's ACCOUNT_COLS), then threaded into finishCall's context as
+// `accountLanguage` so the staff-facing summary can be written in it.
+describe("runCallLifecycle — the account's language reaches finishCall (F-013)", () => {
+  it("accounts.language: 'es' reaches finishCall's context as accountLanguage (mutation: drop the ACCOUNT_COLS/finishCtx wiring → undefined, FAILS)", async () => {
+    accountLanguageMock.value = "es";
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const [, ctxArg] = finishCallMock.mock.calls[0]!;
+    expect(ctxArg).toMatchObject({ accountLanguage: "es" });
+  });
+  it("a NULL accounts.language (no preference recorded) reaches finishCall's context as null, not a default already baked in here", async () => {
+    accountLanguageMock.value = null;
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+    const [, ctxArg] = finishCallMock.mock.calls[0]!;
+    expect(ctxArg).toMatchObject({ accountLanguage: null });
   });
 });
 

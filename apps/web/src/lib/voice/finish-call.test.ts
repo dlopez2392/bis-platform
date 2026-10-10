@@ -417,6 +417,16 @@ describe("finishCall", () => {
     await finishCall(s, ctx, meta);
     expect(summaryMocks.generateSummary).toHaveBeenCalledWith(s, expect.objectContaining({ timezone: "America/Chicago" }));
   });
+  it("ctx.accountLanguage 'es' resolves to language: 'es' for generateSummary (F-013 AI/alerts in reader's language; mutation: drop the ctx.accountLanguage read → always 'en', FAILS)", async () => {
+    const s = withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" });
+    await finishCall(s, { ...ctx, accountLanguage: "es" }, meta);
+    expect(summaryMocks.generateSummary).toHaveBeenCalledWith(s, expect.objectContaining({ language: "es" }));
+  });
+  it("a null ctx.accountLanguage (no account preference recorded) resolves to English, same as an account that never set one", async () => {
+    const s = withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" });
+    await finishCall(s, { ...ctx, accountLanguage: null }, meta);
+    expect(summaryMocks.generateSummary).toHaveBeenCalledWith(s, expect.objectContaining({ language: "en" }));
+  });
   it("a bilingual-profile call whose caller turns are Spanish stores language: es on the row", async () => {
     const s = withLead(withTranscript(emptyCallState(),
       { role: "caller", text: "hola, necesito una cita para mañana por favor", at: "t" }),
