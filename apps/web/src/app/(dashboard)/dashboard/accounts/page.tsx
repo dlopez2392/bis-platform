@@ -70,7 +70,12 @@ export default async function AccountsPage() {
         )}
         {orphans.length > 0 && (
           <section className="mb-6 rounded-xl border border-[var(--warn)] bg-card px-4 py-3.5">
-            <div className="flex items-start gap-3">
+            {/* F-107 r1 review (item 4): `flex-col` below `sm` stacks the
+                icon above the text instead of beside it — at 320px, with
+                the icon (36px) + gap (12px) spent first, the text column
+                had ~128px left, narrower than the "Add as a company"
+                button (146px) inside it. Stacking frees that 48px back. */}
+            <div className="flex flex-col items-start gap-3 sm:flex-row">
               <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-ctl)] bg-[var(--warn-bg)] text-[var(--warn)]">
                 <Unlink className="size-4" aria-hidden />
               </span>
@@ -118,7 +123,15 @@ export default async function AccountsPage() {
         ) : (
           <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {accounts.map((a) => (
-              <li key={a.id}>
+              // F-107 r1 review (item 4, follow-on): `min-w-0` belongs on
+              // the `<li>` — THIS is the actual grid item (`<ul>`'s own
+              // `grid gap-4 sm:grid-cols-2 xl:grid-cols-3`), not the `<a>`
+              // inside it. Round 1 put `min-w-0` on the `<a>`, which let
+              // the ANCHOR shrink within the `<li>` but left the `<li>`
+              // itself — with no className of its own — floored at its
+              // content's min-width, 47px past its own 208px track at
+              // 320px (measured: `<ul>` 208px, `<li>` 255px).
+              <li key={a.id} className="min-w-0">
                 <Link
                   href={`/dashboard/accounts/${a.id}/contacts`}
                   data-testid={`account-${a.id}`}
