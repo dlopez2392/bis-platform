@@ -66,6 +66,12 @@ const accountRow = {
   // and reset here every test — same shared-object discipline the file's
   // own header comment documents for `from_email`.
   alert_phone: null as string | null,
+  // F-013 (Task 8, Spanish-runtime lane): the account's own language, read
+  // at the one real `composeBookingAlertSms` call site via
+  // `resolveLocale(undefined, account?.language ?? null)`. Defaults to null
+  // (no language set) like a real account; mutated in place and reset here
+  // every test, same discipline as `alert_phone` above.
+  language: null as "en" | "es" | null,
 };
 
 /**
@@ -282,6 +288,7 @@ beforeEach(() => {
   accountErrorRef.current = null;
   emailProviderThrowsRef.current = false;
   accountRow.alert_phone = null;
+  accountRow.language = null;
   sendAlertSmsMock.mockReset().mockResolvedValue(undefined);
   formatWhenThrowsRef.current = false;
 });
@@ -869,6 +876,39 @@ describe("submitBookingAction — the booking alert text, alongside the email (d
     expect(result.ok).toBe(true);
     expect(createBookingMock).toHaveBeenCalledTimes(1);
     expect(sendAlertSmsMock).not.toHaveBeenCalled();
+  });
+
+  // F-013 (Task 8 review fix): the staff alert is the ACCOUNT's own
+  // language, never the booker's `?locale=` choice (`validFormData()` here
+  // passes none, so the booker side is "en" either way — this pins the
+  // caller's `resolveLocale(undefined, account?.language ?? null)` wiring,
+  // not `composeBookingAlertSms` itself, which `alerts.test.ts` already
+  // covers). Mutation: replace the caller's `account?.language ?? null`
+  // with a hardcoded `null` (i.e. `resolveLocale(undefined, null)`) → this
+  // test FAILS, the body stays "New booking" instead of "Nueva cita".
+  it("writes the alert SMS in Spanish when the account's language is es (mutation: hardcode resolveLocale(undefined, null) in the caller → FAILS)", async () => {
+    accountRow.alert_phone = "+19565550001";
+    accountRow.language = "es";
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    const [, , , body] = sendAlertSmsMock.mock.calls[0]!;
+    expect(body).toContain("Nueva cita");
+  });
+
+  // Mirror of the Spanish case above: no language set on the account (the
+  // real default) must still read "New booking", not fall over or pick
+  // Spanish by accident.
+  it("writes the alert SMS in English when the account has no language set (mutation: hardcode resolveLocale(undefined, \"es\") in the caller → FAILS)", async () => {
+    accountRow.alert_phone = "+19565550001";
+    // accountRow.language is already null via the top-level beforeEach.
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(true);
+    const [, , , body] = sendAlertSmsMock.mock.calls[0]!;
+    expect(body).toContain("New booking");
   });
 });
 

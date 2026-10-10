@@ -15,10 +15,9 @@ import type { Locale } from "@/lib/i18n/locale";
  * `voiceCallAlertEmail` (lib/email/templates/{booking,voice}.ts), sent
  * ALONGSIDE those emails, never instead of them (danlo, 2026-09-15).
  *
- * Operator-facing, so English only — the alert emails and the conversation
- * thread stay English regardless of the customer's own language (see
- * `b/[publicId]/actions.ts`'s "the operator's alert and thread stay English
- * regardless"); this is the same audience.
+ * Operator-facing. `composeBookingAlertSms` writes in the account's own
+ * language since F-013 (Task 8, Spanish-runtime lane); the other alerts
+ * (`composeCallAlertSms`, `composeAlertPhoneVerificationSms`) stay English.
  *
  * A text has no subject line and no room for preamble: what happened, who
  * it was, then stop. The customer's PHONE NUMBER never appears in either
