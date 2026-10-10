@@ -71,6 +71,79 @@ const IVR_INSTRUCTION = new RegExp(
  */
 const OPT_OUT = /\b(?:to\s+opt\s+out|to\s+be\s+removed\s+from\s+(?:our|this)\s+list|to\s+unsubscribe)\b/i;
 
+// ─── Spanish (F-010) ────────────────────────────────────────────────────────
+//
+// The SAME two signals, said in Spanish — never a third. Keyed on what the
+// script tells the caller to DO, never on what it is about: "lo encontré en
+// Google" is a customer, exactly as "I found you on Google" is.
+//
+// No real Spanish robocall is on record yet. The shapes below are the ones US
+// Spanish IVR scripts use (usted commands, digits after "el"), which is an
+// assumption until a real call's transcript confirms or corrects it.
+
+const ES_DIGIT = "(?:[0-9]|cero|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)";
+
+/**
+ * The keypad COMMAND, usted form only: oprima, presione, pulse, marque.
+ *
+ * Only the command. The past tense a customer uses to tell a story is
+ * "oprimí / presioné / pulsé / marqué" — the accent makes it a different
+ * word, and "oprimí" stays different even with the accent dropped. Where
+ * dropping it collides ("presione", "marque"), the narrative almost always
+ * carries a subject in front — "llamé y presione el 1", "me dijo que marque
+ * el 2" — so a command right after "y", "yo" or "que" is not judged a
+ * command. The tú forms ("oprime", "presiona") are left out on purpose:
+ * "presiona" is also the plain present ("cuando uno presiona el 1…").
+ *
+ * The digit may come bare or after "el", "el número" or "la tecla". Each
+ * rule below then says what must FOLLOW it, and that is what tells a keypad
+ * option from a person reading out "marque el 956 555 0134".
+ */
+const ES_COMMAND = `(?<!\\b(?:y|yo|que)\\s+)\\b(?:oprima|presione|pulse|marque)\\s+(?:el\\s+(?:n[uú]mero\\s+)?|la\\s+tecla\\s+)?${ES_DIGIT}`;
+
+/** "oprima 1 para hablar con un agente", "marque el 9 si desea…" — the
+ *  English rule's order: command, digit, purpose. */
+const ES_IVR_COMMAND_FIRST = new RegExp(`${ES_COMMAND}\\s+(?:para|si)\\b`, "i");
+
+/**
+ * "Para hablar con un representante, oprima 1." — purpose FIRST, which
+ * Spanish scripts use far more than English ones, and which leaves nothing
+ * after the digit for the rule above to see.
+ *
+ * The purpose clause cannot cross a sentence.
+ *
+ * AND THE DIGIT MUST BE SEEN TO END — a full stop, or "(,) o …" offering the
+ * next option. That is what keeps a phone number out: "…marque el 956…" and
+ * "…marque el 9, 5, 6…" never end on their first digit. And it is the ONLY
+ * thing that can, because this predicate runs on the caller's turn while
+ * they are still talking (`call-events.ts` judges every transcription
+ * delta's prefix): "Para cualquier cosa, marque el nueve" is a complete
+ * purpose-then-command right up until " cinco seis" arrives, and no
+ * look-ahead for a next digit can see a digit that has not been said yet.
+ * The rule above needs no such ending because "para"/"si" after the digit
+ * already is one.
+ *
+ * What it costs, both ways: an unpunctuated script that stops on its digit
+ * is missed here; a caller who dictates a number as "9. 5. 6." after a
+ * "para …," and past the length floor would be judged at "9." — not seen in
+ * any transcript on record, and left for a real call to show.
+ */
+const ES_IVR_PURPOSE_FIRST = new RegExp(
+  `\\b(?:para|si)\\s+[^.;:!?¿¡]{1,60}?,?\\s+${ES_COMMAND}(?=\\s*(?:[.;!?]|,?\\s+o\\b))`,
+  "i",
+);
+
+/**
+ * The broadcaster's opt-out. Only what a list-holder says: "para ser
+ * eliminado de nuestra lista", "para darse de baja".
+ *
+ * NOT "para no recibir más llamadas" on its own, though scripts say it: a
+ * customer fed up with sales calls says it too ("¿qué hago para no recibir
+ * más llamadas de ustedes?"). After a keypad command — "oprima 9 para no
+ * recibir más llamadas" — the command rules above already catch it.
+ */
+const ES_OPT_OUT = /\bpara\s+(?:ser\s+)?(?:eliminad|removid|borrad|retirad|quitad)[oa]s?\s+de\s+(?:nuestra|esta)s?\s+listas?\b|\bpara\s+darse\s+de\s+baja\b/i;
+
 /**
  * How much text before this guard will judge at all.
  *
@@ -95,5 +168,6 @@ const MIN_LENGTH = 120;
 export function looksLikeRecordedMessage(text: string): boolean {
   const t = text.trim();
   if (t.length < MIN_LENGTH) return false;
-  return IVR_INSTRUCTION.test(t) || OPT_OUT.test(t);
+  return IVR_INSTRUCTION.test(t) || OPT_OUT.test(t)
+    || ES_IVR_COMMAND_FIRST.test(t) || ES_IVR_PURPOSE_FIRST.test(t) || ES_OPT_OUT.test(t);
 }

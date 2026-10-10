@@ -137,6 +137,12 @@ describe("looksLikeRecordedMessage — the negatives, which cost more to get wro
     expect(looksLikeRecordedMessage("   ")).toBe(false);
   });
 
+  it("a short Spanish answer is never a robocall either", () => {
+    // A complete instruction AND a complete opt-out, so only the floor can
+    // reject it — the same construction as the English case below.
+    expect(looksLikeRecordedMessage("Oprima 9 para ser eliminado de nuestra lista")).toBe(false);
+  });
+
   it("a short answer is never a robocall, whatever words it contains", () => {
     // These carry a COMPLETE instruction and a COMPLETE opt-out clause, so the
     // LENGTH FLOOR is the only thing that can reject them. That is the point:
@@ -151,5 +157,207 @@ describe("looksLikeRecordedMessage — the negatives, which cost more to get wro
     expect(looksLikeRecordedMessage("Press 1 to speak with someone")).toBe(false);
     expect(looksLikeRecordedMessage("press 1")).toBe(false);
     expect(looksLikeRecordedMessage("yes please")).toBe(false);
+  });
+});
+
+// ─── Spanish (F-010) ─────────────────────────────────────────────────────────
+//
+// The same two signals, said in Spanish: the keypad instruction and the
+// broadcaster's opt-out. No real Spanish robocall is on record yet, so the
+// positives are written in the shapes US Spanish IVR scripts use ("oprima 1
+// para…", "para hablar con un agente, oprima 1") — an assumption until one is
+// caught. The negatives are real-customer sentences and are the half that
+// matters: a false positive hangs up on a customer and leaves no trace.
+
+/** Judged only past the length floor — a negative under it proves nothing
+ *  about the instruction rules (the lesson this file's English negatives
+ *  record twice), and a positive under it would fail for the wrong reason. */
+function judged(text: string): boolean {
+  expect(text.trim().length, text).toBeGreaterThanOrEqual(120);
+  return looksLikeRecordedMessage(text);
+}
+
+/**
+ * A negative must hold at EVERY point the caller's turn can be judged, not
+ * only when it is finished: `call-events.ts` runs this predicate on each
+ * transcription delta's running prefix, and a customer reading out
+ * "marque el nueve…" is a prefix ending at "nueve" before the next digit
+ * arrives. Every character boundary is a superset of where a delta can end.
+ */
+function trippedAtSomePrefix(text: string): string | null {
+  for (let end = 120; end <= text.length; end++) {
+    if (looksLikeRecordedMessage(text.slice(0, end))) return text.slice(0, end);
+  }
+  return null;
+}
+
+describe("looksLikeRecordedMessage — Spanish positives", () => {
+  it("catches the Google-listing script read in Spanish", () => {
+    expect(judged(
+      "Hola, por favor no cuelgue. Este es un mensaje importante sobre su cuenta de " +
+      "negocio de Google. Nuestro sistema muestra que sus clientes no lo pueden " +
+      "encontrar. Oprima 0 para hablar con un agente de inmediato. Oprima 9 para no " +
+      "recibir más llamadas.",
+    )).toBe(true);
+  });
+
+  it("catches it unpunctuated, lower-case, with the digits as words", () => {
+    expect(judged(
+      "hola por favor no cuelgue este es un mensaje importante sobre su cuenta de " +
+      "negocio de google presione cero para hablar con un agente presione nueve para " +
+      "ser eliminado de nuestra lista",
+    )).toBe(true);
+  });
+
+  it("catches 'marque el 1 si…' with no opt-out at all", () => {
+    // The forward instruction on its own: no opt-out, no "para …," before it.
+    expect(judged(
+      "Este es un aviso urgente sobre la garantía de su vehículo, que según nuestros " +
+      "registros está por vencer. Marque el 1 si desea hablar con un especialista sobre " +
+      "cómo renovar su cobertura hoy.",
+    )).toBe(true);
+  });
+
+  it("catches the purpose-first order, 'para hablar con un representante, oprima 1.'", () => {
+    // Spanish IVRs put the purpose FIRST far more often than English ones do,
+    // and nothing follows the digit here, so the forward rule cannot see it.
+    expect(judged(
+      "Le llamamos de parte del departamento de beneficios para informarle que usted " +
+      "califica para un nuevo plan de salud sin costo alguno. Para hablar con un " +
+      "representante, oprima 1.",
+    )).toBe(true);
+    // Unpunctuated, the next option ("o espere…") is what shows the digit ended.
+    expect(judged(
+      "le informamos que su paquete está retenido en la aduana por falta de pago para " +
+      "hablar con un agente oprima uno o espere en la línea para más información",
+    )).toBe(true);
+  });
+
+  it("catches the broadcaster's opt-out with no keypad instruction", () => {
+    expect(judged(
+      "Buenas tardes, este mensaje es sobre una actualización importante de su listado " +
+      "de negocio que requiere su atención antes de fin de mes. Llámenos al 877-555-0100, " +
+      "o responda a este mensaje para ser eliminado de nuestra lista.",
+    )).toBe(true);
+  });
+});
+
+/** Real-customer Spanish, named so each test and the prefix sweep below read
+ *  the same sentences. Accent-stripped twins are how a transcriber may
+ *  render the same words. */
+const ES_CUSTOMERS = {
+  websiteButton:
+    "Hola, buenas tardes. Estaba en su página web y oprimí el botón de reservar, pero " +
+    "no me dejó escoger la hora, por eso les estoy llamando para ver si me pueden ayudar.",
+  websiteButtonPlain:
+    "hola buenas tardes estaba en su pagina web y oprimi el boton de reservar pero no " +
+    "me dejo escoger la hora por eso les estoy llamando para ver si me pueden ayudar",
+  dialledThisNumber:
+    "Sí, mire, ayer marqué a este número en la tarde y nadie me contestó, entonces " +
+    "quería saber si todavía tienen lugar la próxima semana para una limpieza de alfombras.",
+  dialledThisNumberPlain:
+    "si mire ayer marque a este numero en la tarde y nadie me contesto entonces queria " +
+    "saber si todavia tienen lugar la proxima semana para una limpieza de alfombras",
+  foundOnGoogle:
+    "Hola, lo encontré en Google buscando a alguien que arregle techos aquí en Edinburg, " +
+    "y vi que tienen muy buenas reseñas. Quería saber cuánto cobran por revisar una " +
+    "gotera en la cocina.",
+  pressedInTheMenu:
+    "Ayer en el menú oprimí el 1 para citas y se cortó la llamada, entonces le vuelvo " +
+    "a marcar para ver si me pueden dar una cita para el lunes en la mañana.",
+  pressedInTheMenuPlain:
+    "ayer en el menu oprimi el 1 para citas y se corto la llamada entonces le vuelvo " +
+    "a marcar para ver si me pueden dar una cita para el lunes en la manana",
+  pressedLastWeek:
+    "La semana pasada llamé a la oficina y presioné el 1 para hablar con alguien de " +
+    "citas, pero nadie contestó, así que quería intentar otra vez para hacerle una cita a mi mamá.",
+  pressedLastWeekPlain:
+    "la semana pasada llame a la oficina y presione el 1 para hablar con alguien de " +
+    "citas pero nadie contesto asi que queria intentar otra vez para hacerle una cita a mi mama",
+  toldToDial:
+    "Mi cuñada me pasó este número y me dijo que marque el 2 para citas, pero no me " +
+    "salió ninguna opción, así que nada más quería ver si me pueden apuntar para el sábado.",
+  agentAboutPolicy:
+    "Buenas tardes, le llamo para hablar con un agente sobre el seguro de mi casa, " +
+    "porque tuvimos un problema con el techo después de la tormenta y no sé qué cubre la póliza.",
+  ownNumber:
+    "Para cualquier cosa marque el 956 555 0134, es mi celular, y pregunte por Rosa, o " +
+    "si no le contesto déjeme un mensaje y yo le regreso la llamada en la tarde.",
+  ownNumberCommas:
+    "Para cualquier cosa, marque el 9, 5, 6, 5, 5, 5, 0, 1, 3, 4, es mi celular, y " +
+    "pregunte por Rosa, o déjeme un mensaje y yo le regreso la llamada.",
+  // The number comes AFTER the floor here, as it does when a caller explains
+  // first: a readout inside the first 120 characters is never judged at all.
+  ownNumberInWords:
+    "Mire, le hablo porque el aire acondicionado de la casa ya no enfría nada y quería " +
+    "que alguien viniera a revisarlo. Para cualquier cosa, marque el nueve cinco seis, " +
+    "cinco cinco cinco, cero uno tres cuatro, es mi celular.",
+  ownNumberAfterTalking:
+    "Mire, le hablo porque el aire acondicionado de la casa ya no enfría nada y quería " +
+    "que alguien viniera a revisarlo. Para cualquier cosa, marque el 9, 5, 6, 5, 5, 5, " +
+    "0, 1, 3, 4, es mi celular.",
+  tiredOfCalls:
+    "Oiga, ¿qué tengo que hacer para no recibir más llamadas de ustedes? Ya me han " +
+    "llamado tres veces esta semana ofreciéndome el servicio y de verdad no me interesa.",
+} as const;
+
+describe("looksLikeRecordedMessage — Spanish negatives, real customers", () => {
+  it("someone who pressed the booking button on the website", () => {
+    // "oprimí" is the past tense; only the usted command "oprima" is an
+    // instruction. Accents dropped by the transcriber must not change that.
+    expect(judged(ES_CUSTOMERS.websiteButton)).toBe(false);
+    expect(judged(ES_CUSTOMERS.websiteButtonPlain)).toBe(false);
+  });
+
+  it("someone who says they dialled this number", () => {
+    expect(judged(ES_CUSTOMERS.dialledThisNumber)).toBe(false);
+    expect(judged(ES_CUSTOMERS.dialledThisNumberPlain)).toBe(false);
+  });
+
+  it("someone who found the business on Google — never keyed on Google, in either language", () => {
+    expect(judged(ES_CUSTOMERS.foundOnGoogle)).toBe(false);
+  });
+
+  it("someone telling how they pressed 1 on an earlier call", () => {
+    // "oprimí" is never the command, accent or not ("oprimi" ≠ "oprima"), and
+    // nothing else in this sentence protects it: no "y"/"que" before it.
+    expect(judged(ES_CUSTOMERS.pressedInTheMenu)).toBe(false);
+    expect(judged(ES_CUSTOMERS.pressedInTheMenuPlain)).toBe(false);
+    // Past tense with its accent is never the command. Without the accent
+    // "presione" IS the command's spelling, so the narrative's own "y …" /
+    // "que …" in front of it is what keeps it a person's sentence.
+    expect(judged(ES_CUSTOMERS.pressedLastWeek)).toBe(false);
+    expect(judged(ES_CUSTOMERS.pressedLastWeekPlain)).toBe(false);
+    expect(judged(ES_CUSTOMERS.toldToDial)).toBe(false);
+  });
+
+  it("someone who wants to talk to an agent about their policy", () => {
+    // "para hablar con un agente" is a topic a customer can say. Only the
+    // keypad instruction attached to it makes it a script.
+    expect(judged(ES_CUSTOMERS.agentAboutPolicy)).toBe(false);
+  });
+
+  it("someone reading out their own number after 'marque el'", () => {
+    expect(judged(ES_CUSTOMERS.ownNumber)).toBe(false);
+    expect(judged(ES_CUSTOMERS.ownNumberCommas)).toBe(false);
+    expect(judged(ES_CUSTOMERS.ownNumberInWords)).toBe(false);
+  });
+
+  it("someone tired of getting calls is complaining, not broadcasting", () => {
+    // Why "para no recibir más llamadas" is NOT an opt-out signal on its own,
+    // unlike "para ser eliminado de nuestra lista": a customer can say it. It
+    // still counts after a keypad command ("oprima 9 para no recibir más
+    // llamadas"), which the instruction rules already see.
+    expect(judged(ES_CUSTOMERS.tiredOfCalls)).toBe(false);
+  });
+
+  it("none of them trips the guard partway through, while the caller is still talking", () => {
+    // The finished sentence is not the only thing judged — see
+    // `trippedAtSomePrefix`. "Para cualquier cosa, marque el nueve" is a
+    // complete purpose-then-command until " cinco" arrives.
+    const tripped = Object.entries(ES_CUSTOMERS)
+      .map(([name, text]) => [name, trippedAtSomePrefix(text)] as const)
+      .filter(([, prefix]) => prefix !== null);
+    expect(tripped).toEqual([]);
   });
 });

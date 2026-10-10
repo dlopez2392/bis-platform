@@ -259,6 +259,30 @@ describe("processCallEvent", () => {
     expect(hungUpAt).toBe(-1);
   });
 
+  // F-010: the same guard, the same delta path, in Spanish. Mutation: judge
+  // only ASCII text, or the English patterns only → never hangs up, FAILS.
+  it("a Spanish script is hung up on at its first keypad command, mid-script", async () => {
+    const { hungUpAt, state, words } = await feedWordByWord(
+      "Hola, por favor no cuelgue. Este es un mensaje importante sobre su cuenta de "
+      + "negocio de Google. Nuestro sistema muestra que sus clientes no lo pueden "
+      + "encontrar. Oprima 0 para hablar con un agente de inmediato. Oprima 9 para no "
+      + "recibir más llamadas.");
+    expect(hungUpAt).toBeGreaterThan(-1);
+    expect(words.slice(0, hungUpAt + 1).join(" ")).toMatch(/Oprima 0 para$/);
+    expect(state.recordedCaller).toBe(true);
+  });
+
+  it("a Spanish-speaking customer reading out their number is never cut, at any prefix length", async () => {
+    // Word by word is exactly where "…marque el nueve" stands complete
+    // before " cinco" arrives.
+    const { hungUpAt, state } = await feedWordByWord(
+      "Mire, le hablo porque el aire acondicionado de la casa ya no enfría nada y quería "
+      + "que alguien viniera a revisarlo. Para cualquier cosa, marque el nueve cinco seis, "
+      + "cinco cinco cinco, cero uno tres cuatro, es mi celular.");
+    expect(hungUpAt).toBe(-1);
+    expect(state.recordedCaller).toBe(false);
+  });
+
   it(".completed after a clean run of deltas appends the full turn once and clears the buffer", async () => {
     const { state: afterDeltas } = await feedWordByWord("Hi, I found you on Google and wanted to ask about a dining table.");
     expect(afterDeltas.pendingCallerTurn).not.toBeNull();
