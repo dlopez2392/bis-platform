@@ -2,7 +2,8 @@
 // Everything testable about a live call funnels through here.
 import { runTool, type ToolContext, type ToolName } from "./tools/registry";
 import {
-  withTranscript, withRecordedCaller, withCallerDelta, clearPendingCallerTurn, type CallState,
+  withTranscript, withRecordedCaller, withCallerDelta, clearPendingCallerTurn, callerTurnRecorded, withCallerItem,
+  type CallState,
 } from "./call-state";
 import { looksLikeRecordedMessage } from "./recorded-message";
 import { handoffLine } from "./handoff";
@@ -129,6 +130,9 @@ export async function processCallEvent(
       // the SIP leg twice. Same idempotence idiom as withServed.
       if (state.recordedCaller) return { state: clearPendingCallerTurn(state), actions: [] };
       if (!event.item_id || !event.delta) return { state, actions: [] };
+      // A turn already recorded (its .completed has landed): late deltas for
+      // it are not a new turn, and judging them would count it twice.
+      if (callerTurnRecorded(state, event.item_id)) return { state, actions: [] };
       const next = withCallerDelta(state, event.item_id, event.delta);
       const prefix = next.pendingCallerTurn!.text;
       // With the caller's finished turns: the count is per CALL (O-3), and
@@ -139,9 +143,9 @@ export async function processCallEvent(
       // ever be audited. The buffer is cleared because the turn is over — and
       // if a `.completed` still lands while the lifecycle awaits endCallLeg,
       // the guard at the top of this case (and of `.completed`) drops it.
-      const recorded = withRecordedCaller(
+      const recorded = withRecordedCaller(withCallerItem(
         withTranscript(clearPendingCallerTurn(next),
-          { role: "caller", text: prefix, at: new Date().toISOString() }));
+          { role: "caller", text: prefix, at: new Date().toISOString() }), event.item_id));
       return { state: recorded, actions: [{ kind: "hangup" }] };
     }
     case "conversation.item.input_audio_transcription.completed": {
@@ -152,9 +156,13 @@ export async function processCallEvent(
       // the SIP leg twice. Same idempotence idiom as withServed.
       if (state.recordedCaller) return { state: clearPendingCallerTurn(state), actions: [] };
       if (!event.transcript) return { state: clearPendingCallerTurn(state), actions: [] };
+      // A re-delivered frame for a turn already recorded: neither recorded
+      // nor judged again — a one-instruction turn counted twice would hang
+      // up on a customer (O-3 needs two).
+      if (callerTurnRecorded(state, event.item_id)) return { state, actions: [] };
       const text = String(event.transcript);
-      const next = withTranscript(clearPendingCallerTurn(state),
-        { role: "caller", text, at: new Date().toISOString() });
+      const next = withCallerItem(withTranscript(clearPendingCallerTurn(state),
+        { role: "caller", text, at: new Date().toISOString() }), event.item_id);
       // The turn is ALWAYS recorded first, recording or not. What the robot
       // said is the evidence the guard was right, and the only way anyone can
       // audit a false positive afterwards — a spam row with an empty

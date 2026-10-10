@@ -358,6 +358,39 @@ describe("processCallEvent", () => {
     expect(second.state.recordedCaller).toBe(true);
   });
 
+  // A turn the transcript already holds is never judged again: the realtime
+  // socket can re-deliver a frame, and a one-instruction turn counted twice
+  // is a hangup on a customer (O-3 needs two). Keyed on the transcriber's
+  // own item_id.
+  const ONE_QUOTE = "Hi, I'm calling back because I got your phone menu. Press 0 to talk to an "
+    + "operator, it says, but nobody ever picked up, so I'm trying again about my order.";
+
+  it("a re-delivered .completed for a turn already recorded is ignored — no second count, no hangup", async () => {
+    // Mutation: judge every .completed frame afresh → the same one-instruction
+    // turn counts twice and hangs up, FAILS.
+    const completed = { type: "conversation.item.input_audio_transcription.completed", item_id: "item_1", transcript: ONE_QUOTE };
+    const first = await processCallEvent(emptyCallState(), ctx, completed);
+    const again = await processCallEvent(first.state, ctx, completed);
+    expect(again.actions).toEqual([]);
+    expect(again.state.recordedCaller).toBe(false);
+    expect(again.state.transcript).toHaveLength(1);
+  });
+
+  it("late deltas for a turn already completed are ignored — no second count, no hangup", async () => {
+    const first = await processCallEvent(emptyCallState(), ctx,
+      { type: "conversation.item.input_audio_transcription.completed", item_id: "item_1", transcript: ONE_QUOTE });
+    let state = first.state;
+    for (const [i, word] of ONE_QUOTE.split(" ").entries()) {
+      const r = await processCallEvent(state, ctx, {
+        type: "conversation.item.input_audio_transcription.delta", item_id: "item_1", delta: (i ? " " : "") + word,
+      });
+      expect(r.actions).toEqual([]);
+      state = r.state;
+    }
+    expect(state.recordedCaller).toBe(false);
+    expect(state.pendingCallerTurn).toBeNull();
+  });
+
   it("a customer who quotes ONE menu line, then keeps talking, is never cut (O-3)", async () => {
     const first = await processCallEvent(emptyCallState(), ctx, {
       type: "conversation.item.input_audio_transcription.completed",
