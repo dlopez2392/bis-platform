@@ -618,6 +618,19 @@ describe("wave 2 — dashboard activity, settings, branding, accounts", () => {
     expect(page).not.toContain("bg-primary/10");
     expect(page).not.toContain("hover:border-primary/40");
   });
+  // F-107 r3 review (item 1, CRITICAL): the orphan-org panel's text column
+  // sized to its own content below `sm` (a `flex-col items-start` row,
+  // non-stretch), not the row's available width — a long Clerk org name
+  // pushed it, and the page, past 320/375px. `w-full sm:w-auto` on the
+  // column and `max-w-full` on the Badge (so its own `truncate` has a
+  // width to clip to) fixed it; reproduced locally with a temporary fake
+  // long-named orphan before landing the fix (see that commit's own
+  // message), not guessed.
+  it("the orphan panel's text column takes the row's width below sm, and its badge can actually truncate", () => {
+    const page = src(`${APP}/accounts/page.tsx`);
+    expect(page).toContain('<div className="w-full min-w-0 sm:w-auto">');
+    expect(page).toContain('<Badge variant="chip" className="min-w-0 max-w-full shrink gap-1.5 py-1 pr-2.5 pl-2">');
+  });
   it("branding: the swatch and the logo box stop going BACKWARDS down the ladder", () => {
     const s = src("../branding-panel.tsx");
     // --background is --surface-0, a step BELOW the card they sit on.
