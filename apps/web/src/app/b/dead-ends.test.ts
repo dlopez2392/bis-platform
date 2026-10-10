@@ -44,9 +44,12 @@ function pageCalling(marker: RegExp): string {
 
 const bookingPage = () => pageCalling(/!isCalendarLive\(calendar\)\)\s*notFound\(\)/);
 const cancelPage = () => pageCalling(/if \(!row\) notFound\(\)/);
+// F-048: the move page (`move/[token]`), which 404s an unknown token AND a
+// booking of another calendar than the one its URL names.
+const movePage = () => pageCalling(/if \(!ctx \|\| ctx\.calendar\.public_id !== publicId\) notFound\(\)/);
 
 describe("app/b dead ends sit inside a layout that can brand them (D-109)", () => {
-  for (const [name, find] of [["booking page", bookingPage], ["cancel page", cancelPage]] as const) {
+  for (const [name, find] of [["booking page", bookingPage], ["cancel page", cancelPage], ["move page", movePage]] as const) {
     it(`the ${name}'s own segment has a not-found.tsx and a layout.tsx`, () => {
       const dir = path.dirname(find());
       expect(fs.existsSync(path.join(dir, "not-found.tsx")), `${dir}/not-found.tsx`).toBe(true);
@@ -54,9 +57,11 @@ describe("app/b dead ends sit inside a layout that can brand them (D-109)", () =
     });
   }
 
-  it("the booking page's layout does not wrap the cancel page", () => {
+  it("the booking page's layout wraps neither the cancel page nor the move page", () => {
     const bookingDir = path.dirname(bookingPage());
-    const rel = path.relative(bookingDir, path.dirname(cancelPage()));
-    expect(rel.startsWith(".."), `cancel page is inside ${bookingDir}`).toBe(true);
+    for (const page of [cancelPage(), movePage()]) {
+      const rel = path.relative(bookingDir, path.dirname(page));
+      expect(rel.startsWith(".."), `${page} is inside ${bookingDir}`).toBe(true);
+    }
   });
 });

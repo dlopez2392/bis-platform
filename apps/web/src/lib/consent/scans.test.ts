@@ -263,10 +263,10 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
     expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS) && !(kind in EMAIL_KINDS))).toEqual([]);
   });
 
-  it("the scan reaches every send path's kind — all fourteen SMS kinds and all twenty-four email kinds, 34 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
+  it("the scan reaches every send path's kind — all fourteen SMS kinds and all twenty-six email kinds, 36 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
     const seen = new Set(kindLiterals().map(({ kind }) => kind));
     const all = [...new Set([...Object.keys(SMS_KINDS), ...Object.keys(EMAIL_KINDS)])].sort();
-    expect(all).toHaveLength(34);
+    expect(all).toHaveLength(36);
     expect([...seen].sort()).toEqual(all);
   });
 });
@@ -763,6 +763,7 @@ describe("the email kinds' own send sites (spec §4.3's table, E1)", () => {
     "voice.booked": ["apps/web/src/lib/voice/tools/registry.ts"],
     "voice.moved": ["apps/web/src/lib/voice/tools/registry.ts"],
     "voice.cancelled": ["apps/web/src/lib/voice/tools/registry.ts"],
+    "booking.moved": ["apps/web/src/app/b/[publicId]/move/[token]/actions.ts"],
     "automation.reminder": [`${PASSES}/reminders.ts`],
     "automation.followup": [`${PASSES}/followups.ts`],
     "automation.review_request": [`${PASSES}/review-request.ts`],
@@ -774,6 +775,7 @@ describe("the email kinds' own send sites (spec §4.3's table, E1)", () => {
     "staff.booking_cancel_notice": [`${DASH}/calendar/cancel-notice.ts`],
     "operator.booking_alert": ["apps/web/src/app/b/[publicId]/actions.ts"],
     "operator.cancel_notice": ["apps/web/src/app/b/[publicId]/cancel/[token]/actions.ts"],
+    "operator.move_notice": ["apps/web/src/app/b/[publicId]/move/[token]/actions.ts"],
     "operator.lead_alert": ["apps/web/src/lib/forms/enrich.ts"],
     "operator.call_alert": ["apps/web/src/lib/voice/finish-call.ts"],
     "operator.phone_change_alert": ["apps/web/src/lib/voice/tools/registry.ts"],
@@ -800,14 +802,16 @@ describe("scan 4: the customer-initiated email kinds only where the customer act
   const CUSTOMER_INITIATED = Object.entries(EMAIL_KINDS).filter(([, s]) => s.class === "customer_initiated").map(([k]) => k);
   const ALLOWED = new Set([
     "apps/web/src/app/b/[publicId]/actions.ts", "apps/web/src/lib/forms/enrich.ts", "apps/web/src/lib/voice/tools/registry.ts",
+    // F-048: the customer's own move, answered in the same request.
+    "apps/web/src/app/b/[publicId]/move/[token]/actions.ts",
     "apps/web/src/lib/consent/classes.ts",
   ]);
 
-  it("the class holds exactly the five kinds of spec §4.3 as corrected (the positive control; mutation: classify automation.reminder as customer_initiated → FAILS)", () => {
-    expect(CUSTOMER_INITIATED.sort()).toEqual(["booking.confirmation", "forms.receipt", "voice.booked", "voice.cancelled", "voice.moved"]);
+  it("the class holds exactly the five kinds of spec §4.3 as corrected, plus F-048's customer move (the positive control; mutation: classify automation.reminder as customer_initiated → FAILS)", () => {
+    expect(CUSTOMER_INITIATED.sort()).toEqual(["booking.confirmation", "booking.moved", "forms.receipt", "voice.booked", "voice.cancelled", "voice.moved"]);
   });
 
-  it("no file outside the booking page, the form's enrich step and the voice tools names one, and nothing under lib/automations does (mutation: the reminder pass sends kind \"booking.confirmation\" → FAILS naming it)", () => {
+  it("no file outside the booking page, its move action, the form's enrich step and the voice tools names one, and nothing under lib/automations does (mutation: the reminder pass sends kind \"booking.confirmation\" → FAILS naming it)", () => {
     const literal = new RegExp(`["'\`](?:${CUSTOMER_INITIATED.map((k) => k.replace(/\./g, "\\.")).join("|")})["'\`]`);
     const naming = webSources().filter((f) => literal.test(code(f))).map(rel);
     expect(naming.filter((f) => !ALLOWED.has(f))).toEqual([]);

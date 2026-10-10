@@ -92,9 +92,15 @@ describe("handoffLine — a model instruction", () => {
   it("carries the constrained 'say exactly this' wrapper, like silenceGoodbye", () => {
     expect(handoffLine("en")).toMatch(/^Say exactly this and nothing else: "/);
   });
-  it("says something different in Spanish, and `both` takes English like the greeting does", () => {
+  it("says something different in Spanish", () => {
     expect(handoffLine("es")).not.toBe(handoffLine("en"));
-    expect(handoffLine("both")).toBe(handoffLine("en"));
+  });
+  it("takes the language the CALLER spoke, never a profile's `both` (F-010)", () => {
+    // The caller has just asked for a person, so their language is known; a
+    // `both` profile used to fall to English here whatever they spoke. The
+    // type is the contract — the caller of this function decides.
+    // @ts-expect-error — `both` is not a language a caller speaks.
+    handoffLine("both");
   });
 });
 
@@ -103,7 +109,7 @@ describe("transferFailedLine — text for a TeXML <Say>", () => {
     // Its consumer is `<Say>{this}</Say>`. A "Say exactly this and nothing
     // else:" prefix would be READ ALOUD to the caller, and the wrapper's
     // double quotes would go into the XML element with it.
-    for (const lang of ["en", "es", "both"] as const) {
+    for (const lang of ["en", "es"] as const) {
       const line = transferFailedLine(lang);
       expect(line, lang).not.toMatch(/^Say exactly/);
       expect(line, lang).not.toContain('"');
@@ -117,7 +123,9 @@ describe("transferFailedLine — text for a TeXML <Say>", () => {
     // who was told IN SPANISH that they were being connected would otherwise
     // hear English. Collapsing the ternary to English-only must fail here.
     expect(transferFailedLine("es")).not.toBe(transferFailedLine("en"));
-    expect(transferFailedLine("both")).toBe(transferFailedLine("en"));
+    // Same contract as `handoffLine`: it answers that line, in that language.
+    // @ts-expect-error — `both` is not a language a caller speaks.
+    transferFailedLine("both");
   });
 
   it("does not guess the caller's gender", () => {

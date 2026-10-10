@@ -892,6 +892,32 @@ describe("silence cutoff (Guard 1)", () => {
       }),
     }));
   });
+
+  it("on a bilingual line the cap's wrap-up names the language the caller has been speaking (F-010)", async () => {
+    // The response's own instructions are all the model is told for that
+    // reply, so the language is named. Read off the caller's turns with the
+    // same rule as everything else (`detectSpokenLanguage`). Mutation: pass
+    // "en" (or drop the language) → FAILS.
+    vi.useFakeTimers();
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, languages: "both" });
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.close = vi.fn();
+    ws.emit("open");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    ws.emit("message", JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Hola, necesito una cita para mañana por la tarde, por favor.",
+    }));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(239_000);
+
+    const wrapUp = instructionsSent(sendSpy).find((i) => i.includes(CAP_GOODBYE));
+    expect(wrapUp).toBeDefined();
+    expect(wrapUp!).toContain("in Spanish");
+  });
 });
 
 // The guard's three wirings — the env knob, the language, and the second
@@ -937,6 +963,45 @@ describe("silence cutoff (Guard 1) — the wirings", () => {
     expect(goodbye).toBeDefined();
     expect(goodbye!).toContain("No puedo escuchar");
     expect(goodbye!).not.toContain("can't hear");
+  });
+
+  it("languages: both → a silent caller hears both goodbyes, and the socket waits for both (F-010)", async () => {
+    // Nobody spoke, so nothing says which language: the greeting's rule, both
+    // in turn. Twice the words get twice the playout — at the single
+    // goodbye's 5s the socket would close in the middle of the Spanish.
+    // Mutation: keep the 5s close for `both` → closed at +5s, FAILS.
+    vi.useFakeTimers();
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, languages: "both" });
+    const { ws } = await startLifecycle();
+    const sendSpy = vi.fn();
+    const closeSpy = vi.fn();
+    ws.send = sendSpy;
+    ws.close = closeSpy;
+    ws.emit("open");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const goodbye = instructionsSent(sendSpy).find((i) => i.includes("can't hear"));
+    expect(goodbye).toBeDefined();
+    expect(goodbye!).toContain("No puedo escuchar");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(closeSpy).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it("a one-language line keeps the single goodbye's 5s playout", async () => {
+    // The other side of the mutation above: doubling every silence close
+    // would hold a dead line open five more seconds on every en/es call.
+    vi.useFakeTimers();
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, languages: "es" });
+    const { ws } = await startLifecycle();
+    const closeSpy = vi.fn();
+    ws.send = vi.fn();
+    ws.close = closeSpy;
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(closeSpy).toHaveBeenCalled();
   });
 
   it("the slow backstop cancels too — a transcription completion, not only input_audio_buffer.*", async () => {

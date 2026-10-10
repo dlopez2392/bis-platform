@@ -139,14 +139,14 @@ function escapeXmlText(text: string): string {
 /**
  * The failed-transfer document. ONE `<Say>`, not `sayXml`'s EN-then-ES pair:
  * this sentence answers the `handoffLine` the same caller heard seconds
- * earlier, which takes English on a `both` profile, and the two must match or
- * the caller is told they are being connected in one language and that it
+ * earlier, in ONE language — theirs (F-010) — and the two must match or the
+ * caller is told they are being connected in one language and that it
  * failed in another. `language="es-MX"` is what makes the Spanish sound
  * Spanish rather than Spanish words read by an English voice.
  */
-function failedXml(languages: "en" | "es" | "both"): string {
-  const attr = languages === "es" ? ` language="es-MX"` : "";
-  const line = escapeXmlText(transferFailedLine(languages));
+function failedXml(language: "en" | "es"): string {
+  const attr = language === "es" ? ` language="es-MX"` : "";
+  const line = escapeXmlText(transferFailedLine(language));
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Say${attr}>${line}</Say><Hangup/></Response>`;
 }
 
@@ -310,16 +310,26 @@ async function decide(token: string, status: string): Promise<string> {
     }
   }
 
-  let languages: "en" | "es" | "both" = "en";
+  // The language the caller is answered in (F-010). A one-language line is
+  // that language, as it always was. A `both` line is the language stamped
+  // on the row when the caller asked (`markHandoffRequested`) — the one
+  // `handoffLine` was said in seconds ago, read by the same rule from the
+  // same transcript — so "nobody could answer" comes in the language "one
+  // moment, I'll connect you" did. The profile goes first so a row whose ask
+  // predates the stamp (the column defaults to "en") cannot turn an es-only
+  // line English. With no profile to read, the stamp is the one language fact
+  // still in hand: it rode the token lookup that already succeeded.
+  const stamped: "en" | "es" = call.language === "es" ? "es" : "en";
+  let spoken: "en" | "es" = stamped;
   let profile: Awaited<ReturnType<typeof getVoiceProfile>> = null;
   try {
     profile = await getVoiceProfile(db, accountId);
-    if (profile) languages = profile.languages;
+    if (profile && profile.languages !== "both") spoken = profile.languages;
   } catch (e) {
     // Its own try/catch too, and this one is load-bearing: letting it reach
     // the outer catch would turn the wrong LANGUAGE into no words at all,
     // which is the single ending this route exists to prevent.
-    console.error(`handoff-result: profile read failed for call ${call.id}, speaking English: ${String(e)}, accountId ${accountId}`);
+    console.error(`handoff-result: profile read failed for call ${call.id}, speaking the language stamped with the ask: ${String(e)}, accountId ${accountId}`);
   }
   // AFTER the response, never in front of it. The caller is holding a silent
   // line waiting for the <Say> above, and a carrier round trip there is
@@ -341,11 +351,10 @@ async function decide(token: string, status: string): Promise<string> {
         const outcome = await prepareTextback(db, accountId, {
           callerNumber,
           contactId,
-          // The PROFILE language, not a detected one: the transcript died with
-          // the socket, so what the caller actually spoke is no longer
-          // knowable here. `both` takes English, which is also what the
-          // failure line they just heard was spoken in.
-          language: languages === "es" ? "es" : "en",
+          // The language the failure line they just heard was spoken in
+          // (F-010): the transcript died with the socket, but the language
+          // read from it was stamped on the row when they asked.
+          language: spoken,
           brandName: brandDisplayName(branding),
           textbackBody,
           label: `handoff-result ${callId}`,
@@ -363,7 +372,7 @@ async function decide(token: string, status: string): Promise<string> {
     });
   }
 
-  return failedXml(languages);
+  return failedXml(spoken);
 }
 
 export async function POST(req: Request): Promise<NextResponse> {

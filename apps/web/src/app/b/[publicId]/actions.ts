@@ -27,6 +27,7 @@ import { bookingStrings } from "@/lib/booking/public-strings";
 import { bookingConfirmationSubject } from "@/lib/email/templates/booking";
 import { recordBookingGrant } from "@/lib/consent/grants";
 import { calendarFileUrl } from "@/lib/booking/calendar-file";
+import { bookingMoveUrl } from "@/lib/booking/links";
 
 export type BookingResult =
   /** `confirmationSent` (D-033): true only once the email gate said the
@@ -423,6 +424,10 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // F-048: the booking's add-to-calendar file, on the same origin and
     // token as the cancel link, in the booker's language.
     const calendarUrl = calendarFileUrl(originFrom(h), publicId, cancelToken, locale);
+    // F-048: where the booker moves this booking themselves (the move page
+    // beside the cancel page). Email only: the success screen's cancel link
+    // opens the cancel page, which offers the move too.
+    const moveUrl = bookingMoveUrl(originFrom(h), publicId, cancelToken, locale);
 
     // Everything below is best-effort, structurally, not just by convention:
     // a send through the email gate THROWS (`EmailNotSent`) when the
@@ -483,7 +488,7 @@ export async function submitBookingAction(publicId: string, formData: FormData):
       }
 
       const { html, text } = bookingConfirmationEmail({
-        brand, locale, whenBookerZone, whenCompanyZone: whenCompanyZoneForBooker, cancelUrl, meetingUrl, calendarUrl,
+        brand, locale, whenBookerZone, whenCompanyZone: whenCompanyZoneForBooker, cancelUrl, meetingUrl, calendarUrl, moveUrl,
       });
       await sendEmailOrThrow({
         // The customer-initiated kind (spec §4.3): it answers what the booker

@@ -234,6 +234,12 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
 
     await page.getByRole("combobox", { name: "Appointment length" }).click();
     await page.getByRole("option", { name: "60 min" }).click();
+    // No buffer, set here rather than assumed from the column's default: the
+    // F-048 move step below moves the booking to the very next slot (the
+    // move page offers a booking's neighbours), and then asserts the OLD
+    // slot is offered again — a buffer around the new booking would hide it.
+    await page.getByRole("combobox", { name: "Buffer between appointments" }).click();
+    await page.getByRole("option", { name: "0 min", exact: true }).click();
 
     await page.getByLabel("Accept bookings").check();
 
@@ -415,21 +421,55 @@ test("a stranger books, the operator sees it, the slot dies and revives", async 
     expect(cancelHinted, "a host's light hint must not override the operator's fixed dark mode")
       .toBe(cancelUnhinted);
 
-    // --- Step 5: cancel via the captured link, then idempotent replay ------
+    // --- F-048: the customer moves their own booking ------------------------
+    // From the link every email carries: the cancel page offers the move.
+    // The move page's picker is the booking page's own, offering the day as
+    // it will be once the move commits, so the booking's own slot is not on
+    // it (it overlaps itself) and the first offered slot is a NEW time.
     await anonPage.goto(cancelHref!);
+    await anonPage.getByRole("link", { name: "Change the time instead" }).click();
+    await expect(anonPage).toHaveURL(/\/move\//);
+    await expect(anonPage.getByText("Your booking now")).toBeVisible();
+    const moved = await findFirstOfferedSlot(anonPage);
+    await anonPage.locator("button.bis-booking-slot").first().click();
+    await anonPage.getByRole("button", { name: "Move my booking" }).click();
+    await expect(anonPage.getByRole("status")).toContainText(/has been moved/i);
+    // The NEW booking's own link (a new token): an empty one would mean no
+    // move happened.
+    const newCancelLink = anonPage.getByRole("link", { name: /change or cancel/i });
+    await expect(newCancelLink).toBeVisible();
+    const newCancelHref = await newCancelLink.getAttribute("href");
+    expect(newCancelHref, "a real move hands back the new booking's own link").toBeTruthy();
+    expect(newCancelHref).not.toBe(cancelHref);
+
+    // The old link now says the booking moved, not that it was cancelled.
+    await anonPage.goto(cancelHref!);
+    await expect(anonPage.getByRole("status")).toContainText(/was moved/i);
+
+    // The old slot frees, and the new one is taken.
+    await anonPage.goto(publicPath);
+    await goToDay(anonPage, weeksForward, dayIndex);
+    await expect(anonPage.getByRole("button", { name: slotLabel, exact: true })).toBeVisible();
+    await anonPage.goto(publicPath);
+    await goToDay(anonPage, moved.weeksForward, moved.dayIndex);
+    await expect(anonPage.getByRole("button", { name: moved.slotLabel, exact: true })).toHaveCount(0);
+
+    // --- Step 5: cancel via the NEW booking's link, then idempotent replay --
+    await anonPage.goto(newCancelHref!);
     await expect(anonPage.getByText("Cancel this booking?")).toBeVisible();
     await anonPage.getByRole("button", { name: "Cancel booking" }).click();
     await expect(anonPage.getByRole("status")).toContainText(/already been cancelled/i);
 
     // Opening the SAME link again must be a no-op that reads the same way,
     // not an error and not a second cancellation event.
-    await anonPage.goto(cancelHref!);
+    await anonPage.goto(newCancelHref!);
     await expect(anonPage.getByRole("status")).toContainText(/already been cancelled/i);
 
-    // A cancelled booking frees its range — the slot must be offered again.
+    // A cancelled booking frees its range — the moved-to slot must be
+    // offered again.
     await anonPage.goto(publicPath);
-    await goToDay(anonPage, weeksForward, dayIndex);
-    await expect(anonPage.getByRole("button", { name: slotLabel, exact: true })).toBeVisible();
+    await goToDay(anonPage, moved.weeksForward, moved.dayIndex);
+    await expect(anonPage.getByRole("button", { name: moved.slotLabel, exact: true })).toBeVisible();
 
     // --- Step 6: disabling the calendar takes the public URL down ----------
     await page.goto(`/dashboard/accounts/${accountId}/calendar`);

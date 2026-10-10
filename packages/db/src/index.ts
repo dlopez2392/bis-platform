@@ -83,6 +83,7 @@ export { LATE_REMINDER_WINDOW_START_MS, LATE_REMINDER_WINDOW_END_MS, LATE_REMIND
 export { BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel } from "./booking";
 export { claimCancelNotice, rescheduleChain, bookingContactEmail, loadAccountBrandInfo, type AccountBrandInfo } from "./booking";
 export { discardQueuedNotice, noticeMessageStatus } from "./booking";
+export { moveBooking, BookingNotMovableError, bookingWasMoved } from "./booking";
 export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
          REVIEW_REQUEST_MAX_AGE_MS,

@@ -59,7 +59,7 @@ const getBrandingMock = vi.hoisted(() => vi.fn());
 // test EXCEPT the escaping one — which is the only way to feed this route a
 // sentence containing an `&` without editing the copy itself.
 const realLine = vi.hoisted(() => ({
-  fn: null as null | ((l: "en" | "es" | "both") => string),
+  fn: null as null | ((l: "en" | "es") => string),
 }));
 const transferFailedLineMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/voice/handoff", async (importOriginal) => {
@@ -67,7 +67,7 @@ vi.mock("@/lib/voice/handoff", async (importOriginal) => {
   realLine.fn = actual.transferFailedLine;
   return {
     ...actual,
-    transferFailedLine: (l: "en" | "es" | "both") => transferFailedLineMock(l),
+    transferFailedLine: (l: "en" | "es") => transferFailedLineMock(l),
   };
 });
 
@@ -119,6 +119,9 @@ const REQUESTED = {
   // upgrade of this value, so what the row currently holds is what decides
   // whether the upgrade is honest.
   outcome: "abandoned",
+  // The language stamped with the ask (F-010, `markHandoffRequested`); the
+  // column's own default. The language cases below override it.
+  language: "en" as "en" | "es",
   // Read fresh: this route has NO recency gate (it is fetched when the human
   // conversation ends, which can be an hour after the caller asked), but a
   // hardcoded date would still hide a gate someone added by mistake behind a
@@ -154,7 +157,7 @@ beforeEach(() => {
   recordAutomationLogMock.mockReset().mockResolvedValue(undefined);
   getVoiceProfileMock.mockReset().mockResolvedValue(PROFILE);
   getCallMock.mockReset().mockResolvedValue({ id: "c1", account_id: "acct1", outcome: "abandoned" });
-  transferFailedLineMock.mockReset().mockImplementation((l: "en" | "es" | "both") => realLine.fn!(l));
+  transferFailedLineMock.mockReset().mockImplementation((l: "en" | "es") => realLine.fn!(l));
   afterMock.mockReset();
   getBrandingMock.mockReset().mockResolvedValue({ brandName: "Bespoke", brandColor: null, logoPath: null });
   prepareTextbackMock.mockReset().mockResolvedValue({
@@ -314,14 +317,47 @@ describe("voice texml handoff-result route", () => {
     expect(xml).toContain("Lo siento, nadie pudo contestar en este momento.");
   });
 
-  it("speaks English for a `both` profile — it must match the line this caller just heard", async () => {
-    // `handoffLine` took English on `both` seconds earlier. Telling the
-    // caller they are being connected in one language and that it failed in
-    // another is the bug this pins.
+  // F-010. On a `both` line `handoffLine` is said in the language the CALLER
+  // spoke, and that language is stamped on the row with the ask
+  // (`markHandoffRequested`). This line must match it: telling the caller
+  // they are being connected in one language and that it failed in another is
+  // the bug these pin. Mutation: read the profile only (`both` → English) →
+  // the Spanish case FAILS.
+  it("on a `both` line, a caller who asked in Spanish hears Spanish", async () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE, languages: "both" });
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, language: "es" });
+    const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
+    expect(xml).toContain('<Say language="es-MX">Lo siento, nadie pudo contestar en este momento.</Say>');
+  });
+
+  it("on a `both` line, a caller who asked in English hears English", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE, languages: "both" });
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, language: "en" });
     const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
     expect(xml).not.toContain("es-MX");
     expect(xml).toContain("Sorry, we weren't able to reach anyone just now.");
+  });
+
+  it("a one-language profile still decides — a row stamped before the language rode with the ask says nothing", async () => {
+    // `calls.language` defaults to "en", so a row whose ask predates F-010
+    // reads "en" whatever was spoken. On an es-only line the profile is the
+    // whole answer, exactly as before. Mutation: read the stamp alone →
+    // this es line speaks English, FAILS.
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE, languages: "es" });
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, language: "en" });
+    const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
+    expect(xml).toContain('language="es-MX"');
+  });
+
+  it("the text-back after a failed transfer follows the same language (F-010)", async () => {
+    // It used to read the profile because the transcript "died with the
+    // socket"; the stamp is what survived it. Mutation: `languages === "es"`
+    // on the profile alone → "en" here, FAILS.
+    getVoiceProfileMock.mockResolvedValue({ ...TEXTING, languages: "both" });
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, language: "es" });
+    await post("tok_abc", { DialCallStatus: "no-answer" });
+    await (afterMock.mock.calls[0]![0] as () => Promise<void>)();
+    expect(prepareTextbackMock.mock.calls[0]![2]).toMatchObject({ language: "es" });
   });
 
   // ── A transfer that reached nobody must not also lose the lead ────────
@@ -493,6 +529,17 @@ describe("voice texml handoff-result route", () => {
     const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
     expect(xml).toContain("<Say");
     expect(xml).toContain("Sorry, we weren't able to reach anyone just now.");
+    errSpy.mockRestore();
+  });
+
+  it("a profile read failure speaks the language stamped with the ask, not English by default (F-010)", async () => {
+    // The stamp rides the token lookup that already succeeded, so it is the
+    // one language fact still in hand. Mutation: fall back to "en" → FAILS.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getVoiceProfileMock.mockRejectedValue(new Error("boom"));
+    getCallByHandoffTokenMock.mockResolvedValue({ ...REQUESTED, language: "es" });
+    const xml = await post("tok_abc", { DialCallStatus: "no-answer" });
+    expect(xml).toContain('<Say language="es-MX">Lo siento, nadie pudo contestar en este momento.</Say>');
     errSpy.mockRestore();
   });
 

@@ -2,10 +2,12 @@
 // Everything testable about a live call funnels through here.
 import { runTool, type ToolContext, type ToolName } from "./tools/registry";
 import {
-  withTranscript, withRecordedCaller, withCallerDelta, clearPendingCallerTurn, type CallState,
+  withTranscript, withRecordedCaller, withCallerDelta, clearPendingCallerTurn, callerTurnRecorded, withCallerItem,
+  type CallState,
 } from "./call-state";
 import { looksLikeRecordedMessage } from "./recorded-message";
 import { handoffLine } from "./handoff";
+import { detectCallerLanguage } from "./language";
 
 /**
  * `close` is the ONLY action that ends a call on purpose. Its one producer is
@@ -35,6 +37,13 @@ export interface RealtimeCallEvent {
   /** `conversation.item.input_audio_transcription.delta` only — see that case. */
   item_id?: string;
   delta?: string;
+}
+
+/** The caller's finished turns so far — what the recording guard counts
+ *  instructions across (owner decision O-3: two in the call hang up). Pure,
+ *  in memory: a filter over this call's own transcript. */
+function earlierCallerTurns(state: CallState): string[] {
+  return state.transcript.filter((t) => t.role === "caller").map((t) => t.text);
 }
 
 function safeParse(raw: unknown): Record<string, unknown> {
@@ -121,17 +130,22 @@ export async function processCallEvent(
       // the SIP leg twice. Same idempotence idiom as withServed.
       if (state.recordedCaller) return { state: clearPendingCallerTurn(state), actions: [] };
       if (!event.item_id || !event.delta) return { state, actions: [] };
+      // A turn already recorded (its .completed has landed): late deltas for
+      // it are not a new turn, and judging them would count it twice.
+      if (callerTurnRecorded(state, event.item_id)) return { state, actions: [] };
       const next = withCallerDelta(state, event.item_id, event.delta);
       const prefix = next.pendingCallerTurn!.text;
-      if (!looksLikeRecordedMessage(prefix)) return { state: next, actions: [] };
+      // With the caller's finished turns: the count is per CALL (O-3), and
+      // the in-flight turn is not in the transcript yet, so nothing counts twice.
+      if (!looksLikeRecordedMessage(prefix, earlierCallerTurns(state))) return { state: next, actions: [] };
       // Recorded FIRST, as the prefix — the same evidence rule as below: the
       // words that tripped the guard are the only way a false positive can
       // ever be audited. The buffer is cleared because the turn is over — and
       // if a `.completed` still lands while the lifecycle awaits endCallLeg,
       // the guard at the top of this case (and of `.completed`) drops it.
-      const recorded = withRecordedCaller(
+      const recorded = withRecordedCaller(withCallerItem(
         withTranscript(clearPendingCallerTurn(next),
-          { role: "caller", text: prefix, at: new Date().toISOString() }));
+          { role: "caller", text: prefix, at: new Date().toISOString() }), event.item_id));
       return { state: recorded, actions: [{ kind: "hangup" }] };
     }
     case "conversation.item.input_audio_transcription.completed": {
@@ -142,9 +156,13 @@ export async function processCallEvent(
       // the SIP leg twice. Same idempotence idiom as withServed.
       if (state.recordedCaller) return { state: clearPendingCallerTurn(state), actions: [] };
       if (!event.transcript) return { state: clearPendingCallerTurn(state), actions: [] };
+      // A re-delivered frame for a turn already recorded: neither recorded
+      // nor judged again — a one-instruction turn counted twice would hang
+      // up on a customer (O-3 needs two).
+      if (callerTurnRecorded(state, event.item_id)) return { state, actions: [] };
       const text = String(event.transcript);
-      const next = withTranscript(clearPendingCallerTurn(state),
-        { role: "caller", text, at: new Date().toISOString() });
+      const next = withCallerItem(withTranscript(clearPendingCallerTurn(state),
+        { role: "caller", text, at: new Date().toISOString() }), event.item_id);
       // The turn is ALWAYS recorded first, recording or not. What the robot
       // said is the evidence the guard was right, and the only way anyone can
       // audit a false positive afterwards — a spam row with an empty
@@ -153,7 +171,10 @@ export async function processCallEvent(
       // Still here, not only in the `.delta` case above: a transcriber that
       // sends no deltas (or a turn whose prefix crossed the floor only on
       // its final word) must still be caught on the finished text.
-      if (looksLikeRecordedMessage(text)) {
+      // Judged with the caller's EARLIER turns (O-3: two instructions in the
+      // call), from `state` — before this turn was appended, so it is not
+      // counted twice.
+      if (looksLikeRecordedMessage(text, earlierCallerTurns(state))) {
         // NO GOODBYE, unlike the cap and the silence guard. Those end a call a
         // PERSON is on, where the repo rule is that a caller must never hear
         // the line simply go dead. There is nobody here to hear it: the thing
@@ -169,8 +190,14 @@ export async function processCallEvent(
       try {
         const { state: next, result } = await runTool(state, ctx, event.name as ToolName, args);
         const handingOver = endsTheAiLeg(event.name, result);
+        // In the language the CALLER spoke (F-010), read off their own turns
+        // so far, the one still arriving included — the same pure read
+        // `transfer_to_human` stamps on the call row, over the same state
+        // (the tool does not change it), so the failed-transfer line later
+        // answers in this sentence's language. `state`, not `next`: what the
+        // caller said before they asked.
         const actions = functionCallActions(event.call_id, result,
-          handingOver ? handoffLine(ctx.profile.languages) : undefined);
+          handingOver ? handoffLine(detectCallerLanguage(state, ctx.profile.languages)) : undefined);
         // AFTER the two sends, never before: the second of them is the
         // `response.create` that makes the model say "one moment, I'll put you
         // through". Close first and the caller gets silence and then a ring.

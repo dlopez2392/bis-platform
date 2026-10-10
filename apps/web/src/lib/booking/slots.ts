@@ -363,6 +363,41 @@ export function computeSlots(config: SlotConfig, booked: Range[], now: Date): Ra
   }
 }
 
+/** Whether `r` shares any real instant with `own` (`[)` bounds, the same as
+ *  `bookings_no_overlap`, so back-to-back is NOT an overlap). Compared as
+ *  epoch milliseconds, never wall-clock minutes: on a fall-back day the two
+ *  readings of 01:30 are different instants. A non-finite `own` overlaps
+ *  everything, so an unusable range fails CLOSED. */
+function overlapsOwn(r: Range, own: Range): boolean {
+  const oStart = own.startsAt.getTime();
+  const oEnd = own.endsAt.getTime();
+  if (!Number.isFinite(oStart) || !Number.isFinite(oEnd)) return true;
+  return r.startsAt.getTime() < oEnd && oStart < r.endsAt.getTime();
+}
+
+/**
+ * F-048: the slots a booking can be MOVED to. `others` must NOT contain the
+ * booking being moved (`own`): while the customer picks, that row is still
+ * `booked`, and counted as busy its buffer would block its neighbours and its
+ * end would re-anchor the rest of its day (D-028), so a mover would be shown
+ * a different grid from every other visitor's. The day is therefore computed
+ * as it will be once the move commits, and only the slots overlapping `own`'s
+ * CURRENT range are dropped: the move books the new range before it cancels
+ * the old one, so `bookings_no_overlap` would refuse them. No buffer between
+ * the new range and `own`: `own` is cancelled by the same move.
+ */
+export function computeMoveSlots(config: SlotConfig, others: Range[], own: Range, now: Date): Range[] {
+  return computeSlots(config, others, now).filter((r) => !overlapsOwn(r, own));
+}
+
+/** The submit-time twin of `computeMoveSlots`: `bookableRange` against the
+ *  day without the booking being moved, and never a range overlapping it.
+ *  Every slot `computeMoveSlots` offers passes this (move-slots.test.ts). */
+export function movableRange(config: SlotConfig, others: Range[], own: Range, now: Date, startsAt: Date): Range | null {
+  const r = bookableRange(config, others, now, startsAt);
+  return r && !overlapsOwn(r, own) ? r : null;
+}
+
 /**
  * THE SUBMIT-TIME CHECK — the one predicate the public booking submit and the
  * phone receptionist's book/reschedule all run (through `bookableSlot` in

@@ -1812,6 +1812,15 @@ export const m = {
   // The answer, on the calendar's bookings list (Task 4's badge reads these).
   "calendar.bookings.confirmed": "Confirmed by text",
   "calendar.bookings.confirmDeclined": "Asked for a different time",
+  // F-048: the line a customer's own move writes into their thread (the
+  // public move page, `move/[token]/actions.ts`). The English line is what
+  // is written today; the Spanish waits for an operator locale (the
+  // `todo.consent.*` precedent). "{was}"/"{now}" are the two times in the
+  // account's zone.
+  "calendar.move.thread.subject.en": "Booking moved",
+  "calendar.move.thread.subject.es": "Cita cambiada",
+  "calendar.move.thread.body.en": "Moved their booking from {was} to {now}",
+  "calendar.move.thread.body.es": "Cambió su cita del {was} al {now}",
 
   // Part B — the referral ask, the completed-job ladder's THIRD rung (day
   // one "how did it go?", day two "would you leave a review?", day three

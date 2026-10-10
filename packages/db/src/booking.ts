@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { newPublicId, ALPHABET } from "./forms";
@@ -222,12 +222,16 @@ export async function updateCalendarSettings(
  */
 export async function listBookedRanges(
   db: SupabaseClient, calendarId: string, fromIso: string, toIso: string,
+  /** F-048: leave this one booking out — the one a customer is MOVING, which
+   *  is still `booked` while they pick (`computeMoveSlots` in apps/web). */
+  excludeBookingId?: string,
 ): Promise<{ starts_at: string; ends_at: string }[]> {
-  const { data, error } = await db.from("bookings")
+  let q = db.from("bookings")
     .select("starts_at, ends_at")
     .eq("calendar_id", calendarId).eq("status", "booked")
-    .lt("starts_at", toIso).gt("ends_at", fromIso)
-    .order("starts_at", { ascending: true });
+    .lt("starts_at", toIso).gt("ends_at", fromIso);
+  if (excludeBookingId !== undefined) q = q.neq("id", excludeBookingId);
+  const { data, error } = await q.order("starts_at", { ascending: true });
   if (error) throw new Error(`listBookedRanges failed: ${error.message}`);
   return data ?? [];
 }
@@ -251,6 +255,32 @@ export async function createBooking(
   actorType: ActorType = "user",
 ): Promise<{ id: string; cancelToken: string }> {
   const cancelToken = newCancelToken();
+  const { data, error } = await insertBookingRow(db, accountId, input, cancelToken);
+  if (error || !data) {
+    // Postgres SQLSTATE for an exclusion violation is 23P01. PostgREST
+    // usually surfaces it as `error.code`, but some proxies drop it, so the
+    // constraint name in `error.message` is checked too.
+    if (isOverlapError(error)) throw new SlotTakenError();
+    throw new Error(`createBooking failed: ${error?.message}`);
+  }
+
+  await emit(db, accountId, "booking.created", actorId,
+    { bookingId: data.id, calendarId: input.calendarId, contactId: input.contactId }, actorType);
+  return { id: data.id, cancelToken };
+}
+
+type WriteError = { code?: string; message?: string } | null;
+
+function isOverlapError(error: WriteError): boolean {
+  return error?.code === "23P01" || error?.message?.includes("bookings_no_overlap") === true;
+}
+
+/** The row `createBooking` writes, and nothing else: no event. Shared with
+ *  `moveBooking`, which must tell a write that failed from an event that
+ *  failed after the write landed (fix round 1, I2). */
+async function insertBookingRow(
+  db: SupabaseClient, accountId: string, input: CreateBookingInput, cancelToken: string,
+): Promise<{ data: { id: string } | null; error: WriteError }> {
   const { data, error } = await db.from("bookings")
     .insert({
       account_id: accountId,
@@ -266,20 +296,7 @@ export async function createBooking(
       rescheduled_from_id: input.rescheduledFromId ?? null,
     })
     .select("id").single();
-
-  if (error || !data) {
-    // Postgres SQLSTATE for an exclusion violation is 23P01. PostgREST
-    // usually surfaces it as `error.code`, but some proxies drop it, so the
-    // constraint name in `error.message` is checked too.
-    if (error?.code === "23P01" || error?.message?.includes("bookings_no_overlap")) {
-      throw new SlotTakenError();
-    }
-    throw new Error(`createBooking failed: ${error?.message}`);
-  }
-
-  await emit(db, accountId, "booking.created", actorId,
-    { bookingId: data.id, calendarId: input.calendarId, contactId: input.contactId }, actorType);
-  return { id: data.id, cancelToken };
+  return { data: (data as { id: string } | null) ?? null, error: (error as WriteError) ?? null };
 }
 
 /**
@@ -605,6 +622,223 @@ export async function rescheduleChain(
     id = from;
   }
   throw new Error(`rescheduleChain: booking ${bookingId} is more than ${RESCHEDULE_CHAIN_MAX} moves deep`);
+}
+
+/** F-048: a move refused because the booking is not (or is no longer) a live
+ *  booking of this account. Nothing was left written: either nothing was
+ *  written at all, or the replacement was taken back out. */
+export class BookingNotMovableError extends Error {
+  constructor(message = "booking is not live, so it cannot be moved") {
+    super(message);
+    this.name = "BookingNotMovableError";
+  }
+}
+
+/**
+ * F-048: a customer moves their own booking (the link in their email). The
+ * receptionist's reschedule, as a primitive, made safe for a link two tabs
+ * can hold at once, and for a write that lands while what follows it fails.
+ *
+ *  1. read the row, this account's, and refuse anything not `booked`
+ *     (`BookingNotMovableError`, nothing written);
+ *  2. book the NEW range first, naming the old row (`rescheduled_from_id`,
+ *     0061), carrying its contact, calendar, note and booker zone, and the
+ *     request's `ipHash` (the public rate limit counts moves through it):
+ *     never leave the customer with nothing. A taken range is
+ *     `SlotTakenError`, nothing written. An unclear insert error (a dropped
+ *     response) is settled by looking the row up by the token this call
+ *     minted: there, the move goes on; absent, nothing was written; the
+ *     look-up itself failing, the row is deleted BY THAT TOKEN (a no-op if it
+ *     never landed) and the move fails;
+ *  3. cancel the old row ONLY IF it is still `booked` — one conditional
+ *     UPDATE that stamps `updated_at` with this call's own instant, so OUR
+ *     cancel can be told from anyone else's (fix round 2, I1):
+ *     - it matched: the move is DONE;
+ *     - it matched nothing (another tab moved it, the business or the
+ *       customer's link cancelled it): TAKE BACK — the new row is DELETED,
+ *       not cancelled (it never was an appointment, and a cancelled row
+ *       naming the old one would read as a move, `bookingWasMoved`, and
+ *       block an Undo, `undoOperatorCancel`), then `BookingNotMovableError`;
+ *     - an unclear error: the old row is read again. Cancelled AND carrying
+ *       our stamp → our cancel landed behind the error, the move is done.
+ *       Anything else — still booked, or cancelled by someone else in that
+ *       window (whose own booking now stands) — the same take-back.
+ *     - an unclear error AND a failed re-read: nobody can say whose cancel
+ *       stands, so the move is ROLLED BACK: our cancel is undone where it
+ *       carries our stamp, and only once that undo has answered is the new
+ *       row deleted. If the undo itself fails the new row is kept: two live
+ *       bookings is a defect someone can see; none is a lost customer.
+ *     Every delete is retried once.
+ *
+ * EVENTS NEVER DECIDE THE OUTCOME (fix rounds 1 and 2). `booking.created`
+ * and `booking.status_changed` are written only once the move is SETTLED, so
+ * a taken-back move leaves no "booking created" for a row that is gone; a
+ * failed event is logged and the move stands. An event cannot un-write a row.
+ *
+ * So a return leaves the NEW booking live and the old one cancelled by this
+ * call; `BookingNotMovableError` and `SlotTakenError` leave no new row. A
+ * plain Error means the move did not happen: what could be rolled back was,
+ * and its message names both rows and what could not be settled.
+ *
+ * The new row gets its own cancel token (the old row's now opens a cancelled
+ * booking), and `rescheduleChain` gives its calendar file the old row's UID
+ * with the next SEQUENCE, so the event a customer saved is updated.
+ */
+export async function moveBooking(
+  db: SupabaseClient, accountId: string, bookingId: string,
+  to: { startsAt: Date; endsAt: Date; meetingUrl?: string; ipHash?: string },
+  actorId: string, actorType: ActorType = "user",
+): Promise<{ id: string; cancelToken: string }> {
+  const { data, error } = await db.from("bookings")
+    .select("id, calendar_id, contact_id, note, booker_timezone, status")
+    .eq("account_id", accountId).eq("id", bookingId).maybeSingle();
+  if (error) throw new Error(`moveBooking read failed: ${error.message}`);
+  const old = data as {
+    id: string; calendar_id: string; contact_id: string;
+    note: string | null; booker_timezone: string | null; status: BookingStatus;
+  } | null;
+  if (!old || old.status !== "booked") throw new BookingNotMovableError();
+
+  // --- 2. the new row ----------------------------------------------------
+  const input: CreateBookingInput = {
+    calendarId: old.calendar_id, contactId: old.contact_id,
+    startsAt: to.startsAt, endsAt: to.endsAt,
+    note: old.note ?? undefined, bookerTimezone: old.booker_timezone ?? undefined,
+    meetingUrl: to.meetingUrl, rescheduledFromId: old.id, ipHash: to.ipHash,
+  };
+  const cancelToken = newCancelToken();
+  // The new row, removed by the token only this call holds: idempotent, so
+  // it is safe whether or not the row ever landed. Retried once. Answers the
+  // last error, or null when the row is gone.
+  const takeBack = async (): Promise<string | null> => {
+    let last: string | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { error: delErr } = await db.from("bookings").delete()
+        .eq("account_id", accountId).eq("cancel_token", cancelToken);
+      if (!delErr) return null;
+      last = delErr.message;
+    }
+    return last;
+  };
+
+  const inserted = await insertBookingRow(db, accountId, input, cancelToken);
+  let newId: string;
+  if (inserted.data && !inserted.error) {
+    newId = inserted.data.id;
+  } else {
+    if (isOverlapError(inserted.error)) throw new SlotTakenError();
+    // Unclear: did it land? The token is this call's alone, so it answers.
+    const { data: found, error: findErr } = await db.from("bookings").select("id")
+      .eq("account_id", accountId).eq("cancel_token", cancelToken).maybeSingle();
+    if (findErr) {
+      const left = await takeBack();
+      throw new Error(`moveBooking: the replacement for ${old.id} could not be confirmed (insert: `
+        + `${inserted.error?.message}; look-up: ${findErr.message}); `
+        + (left ? `it may still exist, the delete by its token failed: ${left}` : "deleted by its token, if it landed"));
+    }
+    if (!found) throw new Error(`moveBooking: insert failed: ${inserted.error?.message}`);
+    newId = (found as { id: string }).id;
+    console.error(`moveBooking: replacement ${newId} for ${old.id} landed behind an error: ${inserted.error?.message}`);
+  }
+
+  // --- 3. the old row, only if it is still live, stamped as ours ---------
+  const ourStamp = moveStamp();
+  const { data: hit, error: cancelErr } = await db.from("bookings")
+    .update({ status: "cancelled", updated_at: ourStamp })
+    .eq("account_id", accountId).eq("id", old.id).eq("status", "booked")
+    .select("id");
+  let ours: boolean;
+  if (!cancelErr) {
+    ours = (hit?.length ?? 0) > 0;
+  } else {
+    const { data: again, error: againErr } = await db.from("bookings").select("status, updated_at")
+      .eq("account_id", accountId).eq("id", old.id).maybeSingle();
+    if (againErr) {
+      // Nobody can say whose cancel stands: roll back. Undo OURS (it alone
+      // carries our stamp; a no-op when it never landed), and only once that
+      // undo has answered, delete the new row. A failed undo keeps the new
+      // row: two live is visible, none is a lost customer.
+      const { error: undoErr } = await db.from("bookings")
+        .update({ status: "booked", updated_at: new Date().toISOString() })
+        .eq("account_id", accountId).eq("id", old.id).eq("status", "cancelled").eq("updated_at", ourStamp)
+        .select("id");
+      const left = undoErr ? `not attempted, the undo of ${old.id}'s cancel failed: ${undoErr.message}` : await takeBack();
+      throw new Error(`moveBooking: cannot tell whether ${old.id} was cancelled (cancel: ${cancelErr.message}; `
+        + `re-read: ${againErr.message}); rolled back` + (left ? `, but ${newId} may still be live (${left})` : ""));
+    }
+    const row = again as { status: BookingStatus; updated_at: string } | null;
+    // OURS only when cancelled AND carrying our stamp, to the microsecond
+    // (`sameMicroInstant`: PostgREST answers "+00:00", not "Z").
+    ours = row?.status === "cancelled" && sameMicroInstant(row.updated_at, ourStamp);
+    console.error(`moveBooking: the cancel of ${old.id} answered an error (${cancelErr.message}); `
+      + `re-read says ${ours ? "it landed, so the move stands" : "it did not land as ours, so the move is taken back"}`);
+  }
+
+  if (!ours) {
+    const left = await takeBack();
+    if (left) {
+      throw new Error(`moveBooking: ${old.id} was not cancelled by this move and its replacement ${newId} `
+        + `could not be taken back: ${left}`);
+    }
+    throw new BookingNotMovableError();
+  }
+
+  // --- 4. settled: the events, which never undo it -----------------------
+  await emitLogged(db, accountId, "booking.created", actorId,
+    { bookingId: newId, calendarId: input.calendarId, contactId: input.contactId }, actorType);
+  await emitLogged(db, accountId, "booking.status_changed", actorId,
+    { bookingId: old.id, status: "cancelled" }, actorType);
+  return { id: newId, cancelToken };
+}
+
+/**
+ * Fix round 3 (m2): the `updated_at` a move's cancel writes. Now's
+ * millisecond plus three random digits of microseconds (timestamptz keeps
+ * them and PostgREST answers them), so two moves cancelling in the same
+ * millisecond collide only 1 time in 1000 — not unique, but no longer the
+ * certainty a millisecond-only stamp was. `sameMicroInstant` compares them.
+ */
+export function moveStamp(now: Date = new Date()): string {
+  return now.toISOString().replace(/Z$/, `${String(randomInt(0, 1000)).padStart(3, "0")}Z`);
+}
+
+/** Whether two timestamps name the same instant to the MICROSECOND, whatever
+ *  their zone spelling or trailing zeros ("…123400Z" = "…1234+00:00").
+ *  `Date` keeps only milliseconds, so the fraction is read from the text. */
+export function sameMicroInstant(a: string, b: string): boolean {
+  const micros = (iso: string): number | null => {
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return null;
+    const frac = /:\d\d\.(\d+)/.exec(iso)?.[1] ?? "";
+    return Math.floor(ms / 1000) * 1_000_000 + Number(frac.slice(0, 6).padEnd(6, "0"));
+  };
+  const x = micros(a);
+  const y = micros(b);
+  return x !== null && y !== null && x === y;
+}
+
+/** An event written AFTER the row it describes, where the row is the truth:
+ *  a failure is logged, never thrown (`moveBooking`'s rule). */
+async function emitLogged(
+  db: SupabaseClient, accountId: string, type: string, actorId: string, payload: object, actorType: ActorType,
+): Promise<void> {
+  try {
+    await emit(db, accountId, type, actorId, payload, actorType);
+  } catch (e) {
+    console.error(`moveBooking: ${type} event not recorded for ${JSON.stringify(payload)}: ${String(e)}`);
+  }
+}
+
+/** F-048: whether a move replaced this booking (a row of this account names
+ *  it in `rescheduled_from_id`). The cancel and move pages read it so an old
+ *  link says "moved", not "cancelled". THROWS on a read error. */
+export async function bookingWasMoved(
+  db: SupabaseClient, accountId: string, bookingId: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("bookings").select("id")
+    .eq("account_id", accountId).eq("rescheduled_from_id", bookingId).limit(1);
+  if (error) throw new Error(`bookingWasMoved failed: ${error.message}`);
+  return (data?.length ?? 0) > 0;
 }
 
 /** How many started-but-unmarked bookings the operator's list carries at
