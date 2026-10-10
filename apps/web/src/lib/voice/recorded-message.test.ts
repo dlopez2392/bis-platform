@@ -9,7 +9,7 @@
 // real callers who mention Google, who ramble at length, who read out a number,
 // who talk about pressing things.
 import { describe, it, expect } from "vitest";
-import { looksLikeRecordedMessage } from "./recorded-message";
+import { looksLikeRecordedMessage, countInstructions } from "./recorded-message";
 
 /** The exact text the robot delivered, from `calls.transcript`. */
 const REAL_ROBOCALL =
@@ -21,8 +21,79 @@ const REAL_ROBOCALL =
   "search. Press 0 to speak to an agent, press 9 to opt out, or call " +
   "877-556-9255. Thank you.";
 
+/**
+ * O-3's reason, in the callers' own words (review round 3, N1–N8): a menu
+ * line quoted as its OWN sentence, once. Each is exactly one instruction —
+ * the sentence-start rule cannot tell it from a script — and only needing a
+ * second is what keeps these customers on the line.
+ */
+const EN_ONE_QUOTE = {
+  phoneMenuOperator:
+    "Hi, I'm calling back because I got your phone menu. Press 0 to talk to an operator, " +
+    "it says, but nobody ever picked up, so I'm trying again about my order.",
+  flyerMoreInfo:
+    "I found a flyer on my windshield from you guys this morning. Press 1 for more " +
+    "information, it says, so I'm calling to ask what the detailing package costs.",
+  pleaseAgent:
+    "I've been trying to reach somebody all morning long. Please press 0 to speak with an " +
+    "agent, that's what it kept telling me, and then it would just hang up on me.",
+  warrantyLine:
+    "So I called the warranty line first like the paper says. Press 2 to speak with a " +
+    "warranty specialist, that's what it said, and it rang forever, so can you send someone out?",
+} as const;
+const ES_ONE_QUOTE = {
+  operadora:
+    "Buenas, ayer llamé a su número. Presione el 0 para hablar con una operadora y nadie " +
+    "me contestó, así que le vuelvo a marcar para lo de mi cita del viernes.",
+  questionAdvisor:
+    "Oiga, una pregunta rápida. ¿Presione el 0 para hablar con un asesor, verdad? Porque " +
+    "eso hice ayer y nadie me contestó, y necesito ver lo de mi cotización del techo.",
+  newspaperMoreInfo:
+    "Le hablo por el anuncio que vi en el periódico de la semana. Para más información, " +
+    "marque el 1. Eso dice ahí, pero no sé si es este número o el de la oficina.",
+  sonExplained:
+    "Mi hijo me explicó cómo hacerle con el menú. Oprima 1 para hablar con un agente, me " +
+    "dijo, pero cuando llamé no salió nada, así que mejor le hablo directo a usted.",
+} as const;
+
+/**
+ * Sentences that must count ZERO instructions at every prefix (review round
+ * 3) — not merely stay under the two-instruction bar, because each one
+ * pins a single rule detail that one quote elsewhere in the call would
+ * otherwise turn into a hangup.
+ */
+const COUNTS_NOTHING = {
+  // "o sea" is not "o espere": the next-option ending needs a real option.
+  oSea:
+    "Hola, habla Rosa de la mueblería, le dejo los datos. Para más información marque el " +
+    "9, o sea, el 956 555 0101, que es el número de la tienda en la tarde.",
+  // At the prefix "…marque el nueve o", the "o" is the first letter of "ocho".
+  nueveOcho:
+    "Hola, habla Rosa de la mueblería, le dejo los datos de la tienda por si acaso. Para " +
+    "más información marque el nueve ocho cinco, es la extensión de ventas.",
+  // A colon is not a sentence start: "decía: oprima…" is a quote.
+  colonQuotes:
+    "Ayer llamé y la grabación decía: oprima 1 para hablar con un agente, y luego decía: " +
+    "oprima 9 para no recibir más llamadas, y yo nomás quería hacer una cita para el sábado.",
+} as const;
+
+/** The most instructions any prefix of `text` counts — the delta judgement
+ *  sees every prefix, so a rule that counts one only mid-word is still a rule
+ *  that counts one. */
+function mostCountedAtAnyPrefix(text: string): number {
+  let most = 0;
+  for (let end = 1; end <= text.length; end++) most = Math.max(most, countInstructions(text.slice(0, end)));
+  return most;
+}
+
 describe("looksLikeRecordedMessage — the positives, verbatim from production", () => {
-  it("catches the Google-listing robocall that hit 956 Woodworks nine times", () => {
+  it("catches the Google-listing robocall that hit 956 Woodworks nine times — it reads its instruction TWICE", () => {
+    // Owner decision O-3 (danlo, 2026-10-09): the guard hangs up only at the
+    // SECOND instruction in a call. This script opens two sentences with one
+    // — "…finding you. Press 0 to speak with an agent…" and "…search. Press
+    // 0 to speak to an agent, press 9 to opt out…" — and the "press 9" after
+    // a comma is not a third.
+    expect(countInstructions(REAL_ROBOCALL)).toBe(2);
     expect(looksLikeRecordedMessage(REAL_ROBOCALL)).toBe(true);
   });
 
@@ -52,26 +123,39 @@ describe("looksLikeRecordedMessage — the positives, verbatim from production",
     )).toBe(false);
   });
 
-  it("catches an IVR instruction with no opt-out clause at all", () => {
-    // BOTH HALVES OF THE `||` HAVE TO EARN THEIR PLACE. Every positive above
-    // happens to contain the press-instruction AND the opt-out, so with only
-    // those, changing `||` to `&&` — or deleting either regex — would leave
-    // this file green. Broadcasters are not obliged to offer an opt-out.
+  it("catches a script offering two keypad options, neither of them an opt-out", () => {
+    expect(looksLikeRecordedMessage(
+      "This is an urgent notice concerning the warranty on your vehicle, which " +
+      "our records show is about to expire. Press 1 to speak with a warranty " +
+      "specialist about renewing your coverage today. Press 2 for more information.",
+    )).toBe(true);
+  });
+
+  it("KNOWN MISS (O-3): a script that reads only ONE instruction gets through", () => {
+    // Was a positive until O-3. A customer quoting a menu line as its own
+    // sentence ("…got your phone menu. Press 0 to talk to an operator, it
+    // says…") says it ONCE; a robocall reads several. One-instruction scripts
+    // are the accepted cost.
     expect(looksLikeRecordedMessage(
       "This is an urgent notice concerning the warranty on your vehicle, which " +
       "our records show is about to expire. Press 1 to speak with a warranty " +
       "specialist about renewing your coverage today.",
-    )).toBe(true);
+    )).toBe(false);
+    expect(looksLikeRecordedMessage(
+      "This is a final notice about your vehicle warranty. Press 1 to speak " +
+      "with a specialist, or press 9 to be removed from our list.",
+    )).toBe(false);
   });
 
-  it("catches an opt-out clause with no press instruction at all, opening its sentence", () => {
-    // The other half. Some recordings say "reply" or give a callback number
-    // instead of a keypad instruction, but still read out the opt-out because
-    // somebody's compliance team made them.
+  it("catches an opt-out clause with no press instruction, opening its sentence, beside one keypad option", () => {
+    // Some recordings say "reply" or give a callback number instead of a
+    // keypad instruction, but still read out the opt-out because somebody's
+    // compliance team made them. Without the opt-out this script holds ONE
+    // instruction, so the opt-out rule is what makes it two.
     expect(looksLikeRecordedMessage(
       "Good afternoon, this message is regarding an important update to your " +
       "business listing that requires your attention before the end of the " +
-      "month. Call us back on 877-555-0100. To be removed from our list, reply STOP.",
+      "month. To be removed from our list, reply STOP. Press 1 for more information.",
     )).toBe(true);
   });
 
@@ -88,15 +172,50 @@ describe("looksLikeRecordedMessage — the positives, verbatim from production",
     )).toBe(false);
   });
 
-  it("catches the shape without the Google pretext at all", () => {
-    // The pretext is whatever the scam of the month is. The IVR instruction is
-    // the part that makes it a recording rather than a person, so that is what
-    // this keys on — a different script with the same shape must still be
-    // caught.
+  it("the SAME instruction read twice counts twice — robots repeat themselves", () => {
+    // Decided with O-3: instructions need not be distinct. The real robocall
+    // repeats "Press 0" itself, and a customer repeating their one quote word
+    // for word, each time as its own sentence, is not a shape on record.
     expect(looksLikeRecordedMessage(
-      "This is a final notice about your vehicle warranty. Press 1 to speak " +
-      "with a specialist, or press 9 to be removed from our list.",
+      "This is a final notice about your vehicle warranty. Press 1 to speak with a " +
+      "specialist. Again, this is your final notice. Press 1 to speak with a specialist.",
     )).toBe(true);
+  });
+
+  it("one sentence matched by two rules is ONE instruction", () => {
+    // "Para ser eliminado de nuestra lista, oprima 9." is both a purpose-first
+    // keypad instruction and the list-holder's opt-out. Counting rules rather
+    // than sentences would make one sentence two, and a customer's one quote
+    // a hangup.
+    expect(countInstructions(
+      "Le llamamos del centro de inscripción. Para ser eliminado de nuestra lista, oprima 9.",
+    )).toBe(1);
+  });
+});
+
+// O-3: the count is per CALL, across the caller's turns — a robot whose
+// script the turn detector splits in two is still one script. Both turns'
+// words count toward the length floor, so two short fragments are still
+// never judged.
+describe("looksLikeRecordedMessage — across the caller's turns (O-3)", () => {
+  const FIRST_HALF =
+    "Hello, please don't hang up the phone. This is an important message regarding " +
+    "your Google business account. Press 0 to speak with an agent immediately.";
+
+  it("an instruction in an earlier turn and one in this turn hang up", () => {
+    expect(looksLikeRecordedMessage("Press 9 to opt out.", [FIRST_HALF])).toBe(true);
+    // The same words with no earlier turn are one instruction, and a fragment.
+    expect(looksLikeRecordedMessage("Press 9 to opt out.")).toBe(false);
+  });
+
+  it("an earlier turn with no instruction adds nothing", () => {
+    expect(looksLikeRecordedMessage(EN_ONE_QUOTE.phoneMenuOperator, [
+      "Hi, yes, this is Maria, I had an appointment on Thursday with you guys.",
+    ])).toBe(false);
+  });
+
+  it("two short fragments are still under the floor together", () => {
+    expect(looksLikeRecordedMessage("Press 9 to opt out.", ["Press 0 to speak with an agent."])).toBe(false);
   });
 });
 
@@ -228,12 +347,11 @@ describe("looksLikeRecordedMessage — Spanish positives", () => {
     )).toBe(true);
   });
 
-  it("catches 'marque el 1 si…' with no opt-out at all", () => {
-    // The forward instruction on its own: no opt-out, no "para …," before it.
+  it("catches 'marque el 1 si…' twice, with no opt-out at all", () => {
     expect(judged(
       "Este es un aviso urgente sobre la garantía de su vehículo, que según nuestros " +
       "registros está por vencer. Marque el 1 si desea hablar con un especialista sobre " +
-      "cómo renovar su cobertura hoy.",
+      "cómo renovar su cobertura hoy. Marque el 2 si desea más información.",
     )).toBe(true);
   });
 
@@ -243,30 +361,47 @@ describe("looksLikeRecordedMessage — Spanish positives", () => {
     expect(judged(
       "Le llamamos de parte del departamento de beneficios para informarle que usted " +
       "califica para un nuevo plan de salud sin costo alguno. Para hablar con un " +
-      "representante, oprima 1.",
+      "representante, oprima 1. Para no recibir más llamadas, oprima 9.",
     )).toBe(true);
-    // ", o …" offering the next option is the other way the digit visibly ends.
+    // ", o espere …" offering the next option is the other way the digit
+    // visibly ends; without it the first sentence would not count, and the
+    // second alone is one instruction.
     expect(judged(
       "Le informamos que su paquete está retenido en la aduana por falta de pago. Para " +
-      "hablar con un agente oprima uno, o espere en la línea para más información.",
+      "hablar con un agente oprima uno, o espere en la línea. Para más información, oprima 2.",
     )).toBe(true);
   });
 
-  it("catches the broadcaster's opt-out with no keypad instruction, opening its sentence", () => {
+  it("catches the broadcaster's opt-out with no keypad instruction, opening its sentence, beside one keypad option", () => {
     expect(judged(
       "Buenas tardes, este mensaje es sobre una actualización importante de su listado " +
-      "de negocio que requiere su atención antes de fin de mes. Llámenos al 877-555-0100. " +
-      "Para ser eliminado de nuestra lista, responda a este mensaje.",
+      "de negocio que requiere su atención antes de fin de mes. Para ser eliminado de " +
+      "nuestra lista, responda a este mensaje. Oprima 1 para más información.",
     )).toBe(true);
   });
 
-  // ── KNOWN MISSES (F-010 review round 2). Each was a positive until the
-  // instruction had to OPEN A SENTENCE. A customer describing a real menu
-  // says these very words mid-sentence ("ayer llamé y después presione el 0
-  // para hablar con una operadora…"), and the owner's standing rule is that
-  // hanging up on a real customer is strictly worse than letting a robocall
-  // through. These robots bill their minutes; the silence and repeat-caller
-  // guards still stand behind this one.
+  // ── KNOWN MISSES. Two causes:
+  //  - O-3 (owner, 2026-10-09): ONE instruction in a call is never enough,
+  //    because a customer quoting a menu line says it once and a robocall
+  //    reads several.
+  //  - Round 2: the instruction must OPEN A SENTENCE, because a customer
+  //    describing a real menu says the very same words mid-sentence ("ayer
+  //    llamé y después presione el 0 para hablar con una operadora…").
+  // Both follow the owner's standing rule that hanging up on a real customer
+  // is strictly worse than letting a robocall through. These robots bill
+  // their minutes; the silence and repeat-caller guards still stand.
+  it("KNOWN MISS (O-3): a Spanish script that reads only ONE instruction", () => {
+    expect(judged(
+      "Este es un aviso urgente sobre la garantía de su vehículo, que según nuestros " +
+      "registros está por vencer. Marque el 1 si desea hablar con un especialista sobre " +
+      "cómo renovar su cobertura hoy.",
+    )).toBe(false);
+    expect(judged(
+      "Le llamamos de parte del departamento de beneficios para informarle que usted " +
+      "califica para un nuevo plan de salud sin costo alguno. Para hablar con un " +
+      "representante, oprima 1.",
+    )).toBe(false);
+  });
   it("KNOWN MISS: the Spanish script transcribed with no punctuation at all", () => {
     expect(judged(
       "hola por favor no cuelgue este es un mensaje importante sobre su cuenta de " +
@@ -294,13 +429,14 @@ describe("looksLikeRecordedMessage — Spanish positives", () => {
   });
 });
 
-// One positive per closed-list purpose and per sentence opener, each carrying
-// ONLY that instruction, so dropping any one of them from the rules fails
-// here by name. What is NOT pinned one by one, on purpose: the articles and
-// qualifiers around a purpose ("uno de nuestros", "a live", "one of our"),
-// the feminine and plural endings (operadora, asesores), "obtener más
-// información", "get more information" — variants of a purpose that is
-// pinned, not purposes of their own.
+// One positive per closed-list purpose and per sentence opener. Each
+// instruction is read TWICE (O-3: two instructions to hang up, and a robot
+// repeating itself counts), so dropping any one purpose from the rules takes
+// that entry to zero and fails it by name. What is NOT pinned one by one, on
+// purpose: the articles and qualifiers around a purpose ("uno de nuestros",
+// "a live", "one of our"), the feminine and plural endings (operadora,
+// asesores), "obtener más información", "get more information" — variants
+// of a purpose that is pinned, not purposes of their own.
 describe("looksLikeRecordedMessage — one positive per closed-list purpose", () => {
   const PREAMBLE_EN =
     "This is a courtesy call from the benefits enrollment center regarding your " +
@@ -326,7 +462,7 @@ describe("looksLikeRecordedMessage — one positive per closed-list purpose", ()
     "Please press 1 to speak with an agent.",
     "To be removed from our list, reply STOP to this message.",
   ])("English: %s", (instruction) => {
-    expect(judged(PREAMBLE_EN + instruction)).toBe(true);
+    expect(judged(`${PREAMBLE_EN}${instruction} ${instruction}`)).toBe(true);
   });
 
   it.each([
@@ -346,7 +482,7 @@ describe("looksLikeRecordedMessage — one positive per closed-list purpose", ()
     "Para ser eliminado de nuestra lista, responda a este mensaje.",
     "Para darse de baja de nuestra lista, responda a este mensaje.",
   ])("Spanish: %s", (instruction) => {
-    expect(judged(PREAMBLE_ES + instruction)).toBe(true);
+    expect(judged(`${PREAMBLE_ES}${instruction} ${instruction}`)).toBe(true);
   });
 });
 
@@ -507,20 +643,18 @@ const ES_CUSTOMERS = {
     "cuenta de Google, ¿ustedes me llamaron o es una de esas llamadas de fraude?",
 } as const;
 
-// KNOWN GAP, recorded rather than chased (review rounds 1–2). The list
+// KNOWN GAP, recorded rather than chased (review rounds 1–3). The list
 // purposes are ALSO what real business menus offer, so the purpose alone
-// cannot tell a customer describing a menu from a script; the SENTENCE START
-// is the discriminator. A customer who quotes a menu or a robocall
-// mid-sentence ("me llegó una llamada que decía oprima 1 para hablar con un
-// agente…", "the recording said press 0 to talk to an operator…") stays on
-// the line — quotedRobocall and the round-2 negatives pin it. What is left:
-// a customer who OPENS a sentence with the command — "Ayer llamé. Presione
-// el 0 para hablar con una operadora y nadie contestó." (the accent-dropped
-// past tense is spelled like the command), or a quote the transcriber
-// breaks off with a full stop ("It said. Press 0 to speak with an agent.").
-// A colon or a comma is not a sentence start, so "decía: oprima…" and "it
-// said, press…" are safe. Nothing in the words tells the rest from a script.
-// Only a real call can say how often it happens.
+// cannot tell a customer describing a menu from a script. Two things do:
+// the SENTENCE START (a customer quoting a menu mid-sentence — "the recording
+// said press 0 to talk to an operator…" — never counts), and, since O-3
+// (owner, 2026-10-09), the COUNT: a customer who opens a sentence with a
+// menu line ("…got your phone menu. Press 0 to talk to an operator, it
+// says…", "Ayer llamé. Presione el 0 para hablar con una operadora…") says
+// it once, and one instruction never hangs up (EN_ONE_QUOTE / ES_ONE_QUOTE
+// pin it). What is left: a customer who quotes TWO menu lines in one call,
+// each as its own sentence. Nothing in the words tells that from a script,
+// and only a real call can say how often it happens.
 
 /** English and Spanglish callers retelling a menu or asking to stop
  *  messages — the English rule's own negatives for the same principle. */
@@ -583,13 +717,12 @@ describe("looksLikeRecordedMessage — Spanish negatives, real customers", () =>
   });
 
   it("someone telling how they pressed 1 on an earlier call", () => {
-    // "oprimí" is never the command, accent or not ("oprimi" ≠ "oprima"), and
-    // nothing else in this sentence protects it: no "y"/"que" before it.
+    // "oprimí" is never the command, accent or not ("oprimi" ≠ "oprima").
     expect(judged(ES_CUSTOMERS.pressedInTheMenu)).toBe(false);
     expect(judged(ES_CUSTOMERS.pressedInTheMenuPlain)).toBe(false);
     // Past tense with its accent is never the command. Without the accent
-    // "presione" IS the command's spelling, so the narrative's own "y …" /
-    // "que …" in front of it is what keeps it a person's sentence.
+    // "presione" IS the command's spelling; what keeps it a person's sentence
+    // is that it does not OPEN one ("…llamé a la oficina y presione…").
     expect(judged(ES_CUSTOMERS.pressedLastWeek)).toBe(false);
     expect(judged(ES_CUSTOMERS.pressedLastWeekPlain)).toBe(false);
     expect(judged(ES_CUSTOMERS.toldToDial)).toBe(false);
@@ -696,5 +829,28 @@ describe("looksLikeRecordedMessage — English and Spanglish negatives, the same
       .map(([name, text]) => [name, trippedAtSomePrefix(text)] as const)
       .filter(([, prefix]) => prefix !== null);
     expect(tripped).toEqual([]);
+  });
+});
+
+describe("looksLikeRecordedMessage — a menu line quoted ONCE as its own sentence (O-3, review round 3 N1–N8)", () => {
+  it.each(Object.entries({ ...EN_ONE_QUOTE, ...ES_ONE_QUOTE }))(
+    "%s: exactly one instruction, and the caller stays on the line",
+    (_name, text) => {
+      // Exactly ONE: the sentence-start rule sees it, and it is the
+      // two-instruction bar alone that keeps this customer. Mutation: hang
+      // up at one instruction → FAILS.
+      expect(countInstructions(text)).toBe(1);
+      expect(judged(text)).toBe(false);
+      expect(trippedAtSomePrefix(text)).toBeNull();
+    },
+  );
+});
+
+describe("countInstructions — details that must count NOTHING, at any prefix (review round 3)", () => {
+  it.each(Object.entries(COUNTS_NOTHING))("%s", (_name, text) => {
+    // Zero, not merely under two: any one of these plus one quote elsewhere
+    // in the call would otherwise be a hangup.
+    expect(mostCountedAtAnyPrefix(text)).toBe(0);
+    expect(trippedAtSomePrefix(text)).toBeNull();
   });
 });

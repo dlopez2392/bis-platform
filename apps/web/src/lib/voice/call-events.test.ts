@@ -257,14 +257,16 @@ describe("processCallEvent", () => {
     // Strictly before the last word: the whole point is not waiting for
     // the recording to finish.
     expect(hungUpAt).toBeLessThan(words.length - 1);
-    // And exactly where the FIRST IVR instruction completes. Since F-010's
-    // review round 1 that includes its PURPOSE, from a closed list: "press 1
-    // for appointments" is a customer retelling a menu, so "Press 0 to" alone
-    // no longer ends a call — "Press 0 to speak with an agent" does, three
-    // words later and still mid-script. (Before: word 40 of 80, on "to".)
+    // And exactly where the SECOND sentence-opening instruction completes
+    // (owner decision O-3, 2026-10-09: one instruction is what a customer
+    // quoting a menu says, so it takes two). The first, "…finding you. Press
+    // 0 to speak with an agent", is passed by; the call ends at "…search.
+    // Press 0 to speak to an agent," — before "press 9 to opt out" and the
+    // callback number. (History: word 40 on "to"; then "agent", three words
+    // later, once the purpose had to be on a closed list.)
     const prefix = words.slice(0, hungUpAt + 1).join(" ");
-    expect(prefix).toMatch(/Press 0 to speak with an agent$/i);
-    expect(prefix).not.toMatch(/immediately/i);
+    expect(prefix).toMatch(/search\. Press 0 to speak to an agent,$/);
+    expect(prefix).not.toMatch(/opt out/i);
     expect(state.recordedCaller).toBe(true);
   });
 
@@ -302,16 +304,73 @@ describe("processCallEvent", () => {
 
   // F-010: the same guard, the same delta path, in Spanish. Mutation: judge
   // only ASCII text, or the English patterns only → never hangs up, FAILS.
-  it("a Spanish script is hung up on at its first keypad command, mid-script", async () => {
+  it("a Spanish script is hung up on at its SECOND keypad command, mid-script", async () => {
+    // O-3, as in English: the first command is passed by. The script runs on
+    // past it (a callback number and a thank-you, as the English one does),
+    // so the hangup must land before its end.
     const { hungUpAt, state, words } = await feedWordByWord(
       "Hola, por favor no cuelgue. Este es un mensaje importante sobre su cuenta de "
       + "negocio de Google. Nuestro sistema muestra que sus clientes no lo pueden "
       + "encontrar. Oprima 0 para hablar con un agente de inmediato. Oprima 9 para no "
-      + "recibir más llamadas.");
+      + "recibir más llamadas. O llame al 877-556-9255. Gracias.");
     expect(hungUpAt).toBeGreaterThan(-1);
-    // At the end of the closed-list purpose, as in English.
-    expect(words.slice(0, hungUpAt + 1).join(" ")).toMatch(/Oprima 0 para hablar con un agente$/);
+    expect(hungUpAt).toBeLessThan(words.length - 1);
+    expect(words.slice(0, hungUpAt + 1).join(" ")).toMatch(/Oprima 9 para no recibir más llamadas\.?$/);
     expect(state.recordedCaller).toBe(true);
+  });
+
+  it("counts across the caller's turns: one instruction in a finished turn, the second while the next is still arriving (O-3)", async () => {
+    // A robot whose script the turn detector split in two is one script.
+    // Mutation: judge the in-flight turn alone → never hangs up, FAILS.
+    const first = await processCallEvent(emptyCallState(), ctx, {
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Hello, please don't hang up the phone. This is an important message "
+        + "regarding your Google business account. Press 0 to speak with an agent immediately.",
+    });
+    expect(first.actions).toEqual([]);
+    let state = first.state;
+    let hungUp = false;
+    for (const [i, word] of "Press 9 to opt out, or call us back.".split(" ").entries()) {
+      const r = await processCallEvent(state, ctx, {
+        type: "conversation.item.input_audio_transcription.delta", item_id: "item_2", delta: (i ? " " : "") + word,
+      });
+      state = r.state;
+      if (r.actions.some((a) => a.kind === "hangup")) { hungUp = true; break; }
+    }
+    expect(hungUp).toBe(true);
+    expect(state.recordedCaller).toBe(true);
+  });
+
+  it("…and the same when the second turn arrives only as a finished .completed frame, with no deltas (O-3)", async () => {
+    // A transcriber that sends no deltas. Mutation: judge the finished turn
+    // alone → one instruction each turn, never hangs up, FAILS.
+    const first = await processCallEvent(emptyCallState(), ctx, {
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Hello, please don't hang up the phone. This is an important message "
+        + "regarding your Google business account. Press 0 to speak with an agent immediately.",
+    });
+    expect(first.actions).toEqual([]);
+    const second = await processCallEvent(first.state, ctx, {
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Press 9 to opt out, or call us back.",
+    });
+    expect(second.actions).toEqual([{ kind: "hangup" }]);
+    expect(second.state.recordedCaller).toBe(true);
+  });
+
+  it("a customer who quotes ONE menu line, then keeps talking, is never cut (O-3)", async () => {
+    const first = await processCallEvent(emptyCallState(), ctx, {
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Hi, I'm calling back because I got your phone menu. Press 0 to talk to an "
+        + "operator, it says, but nobody ever picked up, so I'm trying again about my order.",
+    });
+    expect(first.actions).toEqual([]);
+    const second = await processCallEvent(first.state, ctx, {
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "It's order 4471, the oak bookshelf, and I wanted to change the delivery to Saturday.",
+    });
+    expect(second.actions).toEqual([]);
+    expect(second.state.recordedCaller).toBe(false);
   });
 
   it("a Spanish-speaking customer reading out their number is never cut, at any prefix length", async () => {

@@ -60,10 +60,10 @@
  */
 const DIGIT = "(?:[0-9]|zero|one|two|three|four|five|six|seven|eight|nine)";
 
-// ─── How a script is told from a person (F-010 review rounds 1–2) ──────────
+// ─── How a script is told from a person (F-010 review rounds 1–3) ──────────
 //
-// THREE things, all required, because each one alone was shown to hang up on
-// real customers:
+// FOUR things, all required, because each one short of them was shown to
+// hang up on real customers:
 //
 //  1. A keypad COMMAND ("press 1", "oprima 1"), never a topic word.
 //  2. A PURPOSE from a closed list — reach an agent / representative /
@@ -75,29 +75,37 @@ const DIGIT = "(?:[0-9]|zero|one|two|three|four|five|six|seven|eight|nine)";
 //     . ! ? ¿ ¡ (an optional "please" / "por favor" may open it). The list
 //     purposes are ALSO what real business menus offer ("press 0 to talk to
 //     an operator" is the commonest real option there is), so a customer
-//     describing a menu says the very same words a robocall does. What they
-//     do not do is open a sentence with them: they say "…and the recording
-//     said press 0 to talk to an operator…", "ayer llamé y después presione
-//     el 0 para hablar con una operadora…", "it says press 1 for more
-//     information" — the command mid-sentence, after the words that make it a
-//     story. A script says it as its own sentence: "…finding you. Press 0 to
-//     speak with an agent."
+//     describing a menu says the very same words a robocall does. Mostly they
+//     say them mid-sentence, after the words that make it a story: "…and the
+//     recording said press 0 to talk to an operator…", "ayer llamé y después
+//     presione el 0 para hablar con una operadora…". A script says each as
+//     its own sentence: "…finding you. Press 0 to speak with an agent."
+//  4. TWO such instructions in the call (owner decision O-3, danlo,
+//     2026-10-09). A customer CAN open a sentence with a menu line — "…got
+//     your phone menu. Press 0 to talk to an operator, it says…" — but says
+//     it once; a robocall reads several. Counted across the caller's turns
+//     (a robot the turn detector splits in two is one script), within one
+//     turn too (the real robocall reads both in one monologue), and the same
+//     instruction twice counts twice (robots repeat; a customer repeating one
+//     quote word for word, each time as its own sentence, is not a shape on
+//     record). One sentence matched by two rules is one instruction.
 //
 // A COMMA IS NOT A SENTENCE START, on evidence: "la grabación dijo, presione
 // 0 para hablar con un agente…" and "it said, press 0 to speak with an
 // agent…" are customers (the test file's saidCommaPress), and a comma rule
-// trips both. The real robocall on record opens its instruction after a full
-// stop, so leaving the comma out loses nothing it has.
+// trips both. Nor is a colon ("decía: oprima 1…" is a quote). The real
+// robocall on record opens its instructions after full stops, so leaving
+// both out loses nothing it has.
 //
 // THE TRADE, decided by the owner's standing rule that hanging up on a real
-// customer is strictly worse than letting a robocall through: a script the
+// customer is strictly worse than letting a robocall through: a script that
+// reads only ONE instruction gets through (O-3), and so does one the
 // transcriber wrote WITHOUT punctuation ("…your google business account press
-// zero to speak with an agent…") no longer matches, nor does "por favor,
-// oprima…" with nothing before it but a comma's clause, nor a mid-sentence
-// opt-out ("…or reply to this message to be removed from our list"). Those
-// robots get through and bill their minutes; the silence guard and the
-// repeat-caller guard still stand behind this one. The test file lists every
-// one of them as a KNOWN MISS.
+// zero to speak with an agent…"), "por favor, oprima…" with nothing before
+// it but a comma's clause, and a mid-sentence opt-out ("…or reply to this
+// message to be removed from our list"). Those robots bill their minutes;
+// the silence guard and the repeat-caller guard still stand behind this one.
+// The test file lists every one of them as a KNOWN MISS.
 const SENTENCE_START = "(?:^|[.!?¿¡])\\s*(?:(?:please|por\\s+favor),?\\s+)?";
 
 /**
@@ -119,7 +127,7 @@ const IVR_INSTRUCTION = new RegExp(
   // "Press 1 for more information" — and never "press 1 for appointments",
   // nor "the recording said press 0 to talk to an operator".
   `${SENTENCE_START}press\\s+${DIGIT}\\s+(?:to\\s+${EN_PURPOSE_AFTER_TO}|for\\s+${EN_PURPOSE_AFTER_FOR})\\b`,
-  "i",
+  "gi",
 );
 
 /**
@@ -130,7 +138,7 @@ const IVR_INSTRUCTION = new RegExp(
  * be removed from our list call this number" — and hanging up on them is
  * the false positive that is never seen.
  */
-const OPT_OUT = new RegExp(`${SENTENCE_START}to\\s+be\\s+removed\\s+from\\s+our\\s+list\\b`, "i");
+const OPT_OUT = new RegExp(`${SENTENCE_START}to\\s+be\\s+removed\\s+from\\s+our\\s+list\\b`, "gi");
 
 // ─── Spanish (F-010) ────────────────────────────────────────────────────────
 //
@@ -182,7 +190,7 @@ const ES_FOR = "(?:para|si\\s+(?:desea|quiere|gusta))";
 /** "…no lo pueden encontrar. Oprima 0 para hablar con un agente." —
  *  command, digit, purpose: the English rule's order. */
 const ES_IVR_COMMAND_FIRST = new RegExp(
-  `${SENTENCE_START}${ES_COMMAND}\\s+${ES_FOR}\\s+${ES_PURPOSE}\\b`, "i",
+  `${SENTENCE_START}${ES_COMMAND}\\s+${ES_FOR}\\s+${ES_PURPOSE}\\b`, "gi",
 );
 
 /**
@@ -192,7 +200,10 @@ const ES_IVR_COMMAND_FIRST = new RegExp(
  * servicio al cliente, oprima 1") but not a sentence break.
  *
  * AND THE DIGIT MUST BE SEEN TO END — a full stop, or "(,) o …" offering the
- * next option. A list purpose followed by a PHONE NUMBER is a vendor or a
+ * next option, where the "o" is followed by an option word (el, espere,
+ * oprima, presione, marque, para): "…marque el 9, o sea, el 956…" is a
+ * person correcting themselves, and at the prefix "…marque el nueve o" the
+ * "o" is the first letter of "ocho" (review round 3). A list purpose followed by a PHONE NUMBER is a vendor or a
  * card being read out ("Para hablar con un asesor de nosotros marque el 956
  * 555 0101…"), and this predicate runs on the caller's turn while they are
  * still talking (`call-events.ts` judges every transcription delta's
@@ -202,8 +213,8 @@ const ES_IVR_COMMAND_FIRST = new RegExp(
  * rule needs no such ending: the purpose AFTER its digit already is one.
  */
 const ES_IVR_PURPOSE_FIRST = new RegExp(
-  `${SENTENCE_START}${ES_FOR}\\s+${ES_PURPOSE}[^.;:!?¿¡]{0,40}?,?\\s+${ES_COMMAND}(?=\\s*(?:[.;!?]|,?\\s+o\\b))`,
-  "i",
+  `${SENTENCE_START}${ES_FOR}\\s+${ES_PURPOSE}[^.;:!?¿¡]{0,40}?,?\\s+${ES_COMMAND}(?=\\s*(?:[.;!?]|,?\\s+o\\s+(?:el|espere|oprima|presione|marque|para)\\b))`,
+  "gi",
 );
 
 /**
@@ -217,7 +228,7 @@ const ES_IVR_PURPOSE_FIRST = new RegExp(
  */
 const ES_OPT_OUT = new RegExp(
   `${SENTENCE_START}para\\s+(?:ser\\s+(?:eliminad|removid|borrad|retirad|quitad)[oa]s?|darse\\s+de\\s+baja)\\s+de\\s+nuestras?\\s+listas?\\b`,
-  "i",
+  "gi",
 );
 
 /**
@@ -232,20 +243,54 @@ const ES_OPT_OUT = new RegExp(
  */
 const MIN_LENGTH = 120;
 
+const RULES: readonly RegExp[] = [
+  IVR_INSTRUCTION, OPT_OUT, ES_IVR_COMMAND_FIRST, ES_IVR_PURPOSE_FIRST, ES_OPT_OUT,
+];
+
 /**
- * True when this caller turn reads as a recorded broadcast rather than a
- * person.
+ * How many broadcaster instructions this text holds: sentences that OPEN
+ * with a keypad command for a robocall's purpose, or with the list-holder's
+ * opt-out (points 1–3 of the design note above).
  *
- * Enough text to be a script, AND an instruction only a broadcaster gives —
- * a keypad command for a robocall's purpose, opening a sentence (or the
- * list-holder's opt-out, opening a sentence). Length alone catches the
- * rambling customer; the instruction alone catches a transcription fragment;
- * and the purpose and the sentence start together are what keep a customer
- * retelling a phone menu on the line.
+ * Counted by SENTENCE, not by rule. Every rule starts its match at the same
+ * place — the punctuation (or text start) the sentence opens after — so one
+ * sentence two rules both see ("Para ser eliminado de nuestra lista, oprima
+ * 9.") is one instruction, not two, and a customer's single quote never
+ * counts double.
  */
-export function looksLikeRecordedMessage(text: string): boolean {
-  const t = text.trim();
-  if (t.length < MIN_LENGTH) return false;
-  return IVR_INSTRUCTION.test(t) || OPT_OUT.test(t)
-    || ES_IVR_COMMAND_FIRST.test(t) || ES_IVR_PURPOSE_FIRST.test(t) || ES_OPT_OUT.test(t);
+export function countInstructions(text: string): number {
+  const sentences = new Set<number>();
+  for (const rule of RULES) {
+    for (const m of text.matchAll(rule)) sentences.add(m.index);
+  }
+  return sentences.size;
+}
+
+/** O-3 (owner, 2026-10-09): how many instructions in one call end it. */
+export const INSTRUCTIONS_TO_HANG_UP = 2;
+
+/**
+ * True when the caller reads as a recorded broadcast rather than a person.
+ *
+ * `text` is this turn as far as it has got (a delta's prefix, or the
+ * finished turn); `earlierCallerTurns` are the caller's finished turns
+ * before it in this call. A recording when, across them all, there is
+ * enough text to be a script AND at least `INSTRUCTIONS_TO_HANG_UP`
+ * instructions (`countInstructions`). Length alone catches the rambling
+ * customer; one instruction alone catches the customer who quotes a menu
+ * line; the purpose and the sentence start are what keep a customer
+ * retelling a menu mid-sentence on the line.
+ *
+ * The floor is on all the caller's words together, so a script the turn
+ * detector cut in two is judged as the script it is, and two short fragments
+ * are still never judged.
+ */
+export function looksLikeRecordedMessage(
+  text: string, earlierCallerTurns: readonly string[] = [],
+): boolean {
+  const turns = [...earlierCallerTurns, text].map((s) => s.trim());
+  const length = turns.reduce((n, s) => n + s.length, 0);
+  if (length < MIN_LENGTH) return false;
+  const instructions = turns.reduce((n, s) => n + countInstructions(s), 0);
+  return instructions >= INSTRUCTIONS_TO_HANG_UP;
 }

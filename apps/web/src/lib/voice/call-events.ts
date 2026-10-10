@@ -38,6 +38,13 @@ export interface RealtimeCallEvent {
   delta?: string;
 }
 
+/** The caller's finished turns so far — what the recording guard counts
+ *  instructions across (owner decision O-3: two in the call hang up). Pure,
+ *  in memory: a filter over this call's own transcript. */
+function earlierCallerTurns(state: CallState): string[] {
+  return state.transcript.filter((t) => t.role === "caller").map((t) => t.text);
+}
+
 function safeParse(raw: unknown): Record<string, unknown> {
   if (typeof raw !== "string") return {};
   try {
@@ -124,7 +131,9 @@ export async function processCallEvent(
       if (!event.item_id || !event.delta) return { state, actions: [] };
       const next = withCallerDelta(state, event.item_id, event.delta);
       const prefix = next.pendingCallerTurn!.text;
-      if (!looksLikeRecordedMessage(prefix)) return { state: next, actions: [] };
+      // With the caller's finished turns: the count is per CALL (O-3), and
+      // the in-flight turn is not in the transcript yet, so nothing counts twice.
+      if (!looksLikeRecordedMessage(prefix, earlierCallerTurns(state))) return { state: next, actions: [] };
       // Recorded FIRST, as the prefix — the same evidence rule as below: the
       // words that tripped the guard are the only way a false positive can
       // ever be audited. The buffer is cleared because the turn is over — and
@@ -154,7 +163,10 @@ export async function processCallEvent(
       // Still here, not only in the `.delta` case above: a transcriber that
       // sends no deltas (or a turn whose prefix crossed the floor only on
       // its final word) must still be caught on the finished text.
-      if (looksLikeRecordedMessage(text)) {
+      // Judged with the caller's EARLIER turns (O-3: two instructions in the
+      // call), from `state` — before this turn was appended, so it is not
+      // counted twice.
+      if (looksLikeRecordedMessage(text, earlierCallerTurns(state))) {
         // NO GOODBYE, unlike the cap and the silence guard. Those end a call a
         // PERSON is on, where the repo rule is that a caller must never hear
         // the line simply go dead. There is nobody here to hear it: the thing
