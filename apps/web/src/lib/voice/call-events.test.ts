@@ -165,6 +165,23 @@ describe("processCallEvent", () => {
     expect(await lineFor("Hi, can I talk to a person please?"))
       .toEqual({ type: "response.create", response: { instructions: handoffLine("en") } });
   });
+  it("…including words still arriving when the transfer is asked for (F-010 review m3)", async () => {
+    // The transcription of the turn that asked can land AFTER the tool call;
+    // its deltas are already in `pendingCallerTurn`. Mutation: read only the
+    // finished transcript → English, FAILS.
+    runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
+    const both = { ...ctx, profile: { languages: "both" } } as unknown as ToolContext;
+    const inFlight = {
+      ...emptyCallState(),
+      pendingCallerTurn: { itemId: "item_7", text: "Hola, quiero hablar con una persona, por favor" },
+    };
+    const { actions } = await processCallEvent(inFlight, both, {
+      type: "response.function_call_arguments.done", name: "transfer_to_human", arguments: "{}", call_id: "c1",
+    });
+    const second = actions[1]!;
+    if (second.kind !== "send") throw new Error("expected a send");
+    expect(second.payload).toEqual({ type: "response.create", response: { instructions: handoffLine("es") } });
+  });
   it("every other tool still gets a bare response.create", async () => {
     runToolMock.mockResolvedValue({ state: emptyCallState(), result: { ok: true } });
     const { actions } = await processCallEvent(emptyCallState(), ctx, {

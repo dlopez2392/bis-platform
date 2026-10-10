@@ -92,7 +92,7 @@ import type { ToolContext } from "@/lib/voice/tools/registry";
 import { readLimitConfig, decideLimit, utcDayStart } from "@/lib/voice/call-limits";
 import { readReputationConfig, decideReputation, windowStart } from "@/lib/voice/caller-reputation";
 import { readSilentSeconds, isCallerAudioEvent, silenceGoodbye, capGoodbye } from "@/lib/voice/silence-guard";
-import { detectSpokenLanguage } from "@/lib/voice/language";
+import { detectCallerLanguage } from "@/lib/voice/language";
 import { configuredOrigin } from "@/lib/email/origin";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { openingGreeting } from "@/lib/voice/greeting";
@@ -490,7 +490,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
           // emails use. Pure and in memory — nothing on the call's clock.
           ws.send(JSON.stringify({
             type: "response.create",
-            response: { instructions: capGoodbye(detectSpokenLanguage(state.transcript, languages)) },
+            response: { instructions: capGoodbye(detectCallerLanguage(state, languages)) },
           }));
         } catch {
           // socket may already be closing; the closeTimer below still fires.

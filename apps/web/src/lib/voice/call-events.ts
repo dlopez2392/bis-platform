@@ -6,7 +6,7 @@ import {
 } from "./call-state";
 import { looksLikeRecordedMessage } from "./recorded-message";
 import { handoffLine } from "./handoff";
-import { detectSpokenLanguage } from "./language";
+import { detectCallerLanguage } from "./language";
 
 /**
  * `close` is the ONLY action that ends a call on purpose. Its one producer is
@@ -171,12 +171,13 @@ export async function processCallEvent(
         const { state: next, result } = await runTool(state, ctx, event.name as ToolName, args);
         const handingOver = endsTheAiLeg(event.name, result);
         // In the language the CALLER spoke (F-010), read off their own turns
-        // so far — the same pure read `transfer_to_human` stamps on the call
-        // row, over the same transcript (the tool does not change it), so the
-        // failed-transfer line later answers in this sentence's language.
-        // `state`, not `next`: what the caller said before they asked.
+        // so far, the one still arriving included — the same pure read
+        // `transfer_to_human` stamps on the call row, over the same state
+        // (the tool does not change it), so the failed-transfer line later
+        // answers in this sentence's language. `state`, not `next`: what the
+        // caller said before they asked.
         const actions = functionCallActions(event.call_id, result,
-          handingOver ? handoffLine(detectSpokenLanguage(state.transcript, ctx.profile.languages)) : undefined);
+          handingOver ? handoffLine(detectCallerLanguage(state, ctx.profile.languages)) : undefined);
         // AFTER the two sends, never before: the second of them is the
         // `response.create` that makes the model say "one moment, I'll put you
         // through". Close first and the caller gets silence and then a ring.

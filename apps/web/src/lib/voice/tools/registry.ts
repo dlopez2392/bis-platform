@@ -25,7 +25,7 @@ import {
   type CallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled,
   withServed, withTransferred,
 } from "../call-state";
-import { detectSpokenLanguage } from "../language";
+import { detectCallerLanguage } from "../language";
 import { bookingMode } from "../booking-mode";
 import type { HandoffTarget } from "../handoff";
 
@@ -155,9 +155,11 @@ function contactDisplayName(contact: BookingContact | null): string {
   return [contact?.first_name, contact?.last_name].filter(Boolean).join(" ").trim() || "Someone";
 }
 
-/** The caller's language for the customer email; an unset profile is English. */
+/** The caller's language for the customer email and the handoff stamp —
+ *  their finished turns plus the one still arriving (`detectCallerLanguage`);
+ *  an unset profile is English. */
 function spokenLocale(state: CallState, ctx: ToolContext): "en" | "es" {
-  return detectSpokenLanguage(state.transcript, ctx.profile.languages) === "es" ? "es" : "en";
+  return detectCallerLanguage(state, ctx.profile.languages);
 }
 
 /**

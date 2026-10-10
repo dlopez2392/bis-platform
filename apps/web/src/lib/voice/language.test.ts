@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectSpokenLanguage } from "./language";
+import { detectSpokenLanguage, detectCallerLanguage } from "./language";
 
 const t = (texts: string[], role: "caller" | "assistant" = "caller") =>
   texts.map((text) => ({ role, text, at: "2026-08-27T00:00:00.000Z" }));
@@ -25,5 +25,31 @@ describe("detectSpokenLanguage", () => {
   it("empty or inconclusive transcript defaults to en (today's behavior)", () => {
     expect(detectSpokenLanguage([], "both")).toBe("en");
     expect(detectSpokenLanguage(t(["ok"]), "both")).toBe("en");
+  });
+});
+
+// F-010 review m3: the caller's turn can still be in flight when Sofía acts
+// on it — the transcription lands after the tool call — so the words heard
+// so far count too. Mutation: read `transcript` only → "en", FAILS.
+describe("detectCallerLanguage — finished turns plus the one still arriving", () => {
+  const pending = (text: string) => ({ itemId: "item_9", text });
+  it("a bilingual line reads the in-progress turn when nothing has finished yet", () => {
+    expect(detectCallerLanguage(
+      { transcript: [], pendingCallerTurn: pending("Hola, quiero hablar con una persona, por favor") }, "both",
+    )).toBe("es");
+  });
+  it("finished turns and the in-progress one are read together", () => {
+    expect(detectCallerLanguage({
+      transcript: t(["hola buenos días"]),
+      pendingCallerTurn: pending("necesito una cita"),
+    }, "both")).toBe("es");
+  });
+  it("no turn at all is English, as before", () => {
+    expect(detectCallerLanguage({ transcript: [], pendingCallerTurn: null }, "both")).toBe("en");
+  });
+  it("a one-language line is that language, and an unset one is English", () => {
+    expect(detectCallerLanguage({ transcript: [], pendingCallerTurn: pending("hello") }, "es")).toBe("es");
+    expect(detectCallerLanguage({ transcript: [], pendingCallerTurn: null },
+      undefined as unknown as "en")).toBe("en");
   });
 });

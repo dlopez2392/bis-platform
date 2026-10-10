@@ -1427,6 +1427,21 @@ describe("transfer_to_human", () => {
     expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1", "es");
   });
 
+  it("stamps the language of a turn still arriving when the caller asked (F-010 review m3)", async () => {
+    // Same read as the handoff sentence in call-events, so the two cannot
+    // disagree. Mutation: read only the finished transcript → "en", FAILS.
+    const c = {
+      ...ctx, callRowId: "call-row-1", handoffTarget: TARGET,
+      profile: { booking_enabled: true, languages: "both" } as unknown as VoiceProfileRow,
+    };
+    const inFlight = {
+      ...emptyCallState(),
+      pendingCallerTurn: { itemId: "item_7", text: "Hola, quiero hablar con una persona, por favor" },
+    };
+    await runTool(inFlight, c, "transfer_to_human", {});
+    expect(markHandoffRequestedMock).toHaveBeenCalledWith(expect.anything(), c.accountId, "call-row-1", "es");
+  });
+
   it("transfer_to_human refuses when no target is available, and writes nothing", async () => {
     const c = { ...ctx, callRowId: "call-row-1", handoffTarget: { available: false as const, reason: "not-configured" as const } };
     const { state, result } = await runTool(emptyCallState(), c, "transfer_to_human", {});
