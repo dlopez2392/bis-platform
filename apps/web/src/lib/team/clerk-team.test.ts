@@ -13,6 +13,7 @@ const organizations = {
   deleteOrganizationMembership: vi.fn(),
   createOrganizationMembership: vi.fn(),
   updateOrganizationMembership: vi.fn(),
+  updateOrganizationMembershipMetadata: vi.fn(),
 };
 vi.mock("@clerk/nextjs/server", () => ({ clerkClient: async () => ({ users, organizations }) }));
 
@@ -20,7 +21,7 @@ import { reconcileMembership, type SupabaseClient } from "@bis/db";
 import {
   liveClerkTeamPort, listPendingInvitations, teamCapacity, createTeamInvitation,
   revokeTeamInvitation, removeFromOrganization, restoreToOrganization, setOrganizationRole,
-  CLERK_WRITE_TIMEOUT_MS,
+  reassertClerkRole, clerkRefused, CLERK_WRITE_TIMEOUT_MS,
 } from "./clerk-team";
 
 /** Shaped like @clerk/shared's ClerkAPIResponseError: `status` plus `errors[].code`. */
@@ -202,7 +203,7 @@ describe("the Team's Clerk calls", () => {
   it("createTeamInvitation returns Clerk's error code and logs without the address (mutation: throw -> FAILS)", async () => {
     organizations.createOrganizationInvitation.mockRejectedValue(clerkError(422, "duplicate_record"));
     expect(await createTeamInvitation({ orgId: "org_1", email: "pat@example.com", role: "staff", language: "en", inviterUserId: "u" }))
-      .toEqual({ ok: false, code: "duplicate_record" });
+      .toEqual({ ok: false, code: "duplicate_record", status: 422 });
     expect(String(vi.mocked(console.error).mock.calls[0])).not.toContain("pat@example.com");
   });
   it("revokeTeamInvitation returns what an undo needs", async () => {
@@ -219,7 +220,7 @@ describe("the Team's Clerk calls", () => {
     expect(await removeFromOrganization("org_1", "user_1")).toEqual({ ok: true });
     expect(organizations.deleteOrganizationMembership).toHaveBeenCalledWith({ organizationId: "org_1", userId: "user_1" });
     organizations.deleteOrganizationMembership.mockRejectedValue(clerkError(500, "internal"));
-    expect(await removeFromOrganization("org_1", "user_1")).toEqual({ ok: false, code: "internal" });
+    expect(await removeFromOrganization("org_1", "user_1")).toEqual({ ok: false, code: "internal", status: 500 });
   });
   it("createTeamInvitation invites an Owner as org:admin, so the Clerk role follows the BIS role (mutation: always org:member -> FAILS)", async () => {
     organizations.createOrganizationInvitation.mockResolvedValue({ id: "orginv_1" });
@@ -247,8 +248,76 @@ describe("the Team's Clerk calls", () => {
   });
   it("setOrganizationRole reports a Clerk failure as a result, logged without the address (mutation: throw -> FAILS)", async () => {
     organizations.updateOrganizationMembership.mockRejectedValue(clerkError(500, "internal"));
-    expect(await setOrganizationRole("org_1", "user_1", "staff")).toEqual({ ok: false, code: "internal" });
+    expect(await setOrganizationRole("org_1", "user_1", "staff")).toEqual({ ok: false, code: "internal", status: 500 });
     expect(String(vi.mocked(console.error).mock.calls[0])).not.toContain("pat@example.com");
+  });
+});
+
+describe("a role change keeps the membership's bis_role metadata in step (review I4)", () => {
+  // updateOrganizationMembershipMetadata({ organizationId, userId, publicMetadata }):
+  // @clerk/backend 3.13.1 dist/api/endpoints/OrganizationApi.d.ts:349, params at :151-156.
+  it.each(["staff", "owner"] as const)("setOrganizationRole(%s) also writes bis_role to the membership's public metadata (mutation: skip the metadata write -> FAILS)", async (role) => {
+    organizations.updateOrganizationMembership.mockResolvedValue({});
+    organizations.updateOrganizationMembershipMetadata.mockResolvedValue({});
+    expect(await setOrganizationRole("org_1", "user_1", role)).toEqual({ ok: true });
+    expect(organizations.updateOrganizationMembershipMetadata).toHaveBeenCalledWith({ organizationId: "org_1", userId: "user_1", publicMetadata: { bis_role: role } });
+  });
+  it("the metadata write follows a role write that landed; a role write that failed writes no metadata (mutation: metadata first -> FAILS)", async () => {
+    organizations.updateOrganizationMembership.mockRejectedValue(clerkError(422, "form_param_value_invalid"));
+    expect(await setOrganizationRole("org_1", "user_1", "owner")).toEqual({ ok: false, code: "form_param_value_invalid", status: 422 });
+    expect(organizations.updateOrganizationMembershipMetadata).not.toHaveBeenCalled();
+  });
+  it("a metadata write that fails after the role landed is logged by id and the role change still stands, because stale metadata can only demote (mutation: report it as a failure -> FAILS)", async () => {
+    organizations.updateOrganizationMembership.mockResolvedValue({});
+    organizations.updateOrganizationMembershipMetadata.mockRejectedValue(clerkError(500, "internal"));
+    expect(await setOrganizationRole("org_1", "user_1", "owner")).toEqual({ ok: true });
+    expect(String(vi.mocked(console.error).mock.calls.flat())).toContain("user_1");
+  });
+});
+
+describe("clerkRefused: only a definitive 4xx says the write did not land (review I1)", () => {
+  it("4xx is a refusal; 5xx, 408, a timeout and a network error (no status) are 'may have landed' (mutation: any failure is a refusal -> FAILS)", async () => {
+    expect(clerkRefused({ ok: false, code: "x", status: 422 })).toBe(true);
+    expect(clerkRefused({ ok: false, code: "x", status: 403 })).toBe(true);
+    for (const status of [500, 502, 504, 408, null]) expect(clerkRefused({ ok: false, code: "x", status })).toBe(false);
+  });
+  it("a network error reaching Clerk reports no status (mutation: default the status to 400 -> FAILS)", async () => {
+    organizations.updateOrganizationMembership.mockRejectedValue(new TypeError("fetch failed"));
+    expect(await setOrganizationRole("org_1", "user_1", "owner")).toEqual({ ok: false, code: null, status: null });
+  });
+});
+
+describe("reassertClerkRole: Clerk follows the BIS role, writing only what disagrees (review I2)", () => {
+  const member = (role: string, publicMetadata: unknown) => organizations.getOrganizationMembershipList.mockResolvedValue({ data: [
+    { role, publicMetadata, createdAt: 1, organization: { id: "org_1" }, publicUserData: { userId: "user_1" } }], totalCount: 1 });
+  it("Clerk org:admin beside BIS staff is set back to org:member (mutation: never write the role -> FAILS)", async () => {
+    member("org:admin", { bis_role: "staff" });
+    expect(await reassertClerkRole("org_1", "user_1", "staff")).toEqual({ ok: true, changed: true });
+    expect(organizations.updateOrganizationMembership).toHaveBeenCalledWith({ organizationId: "org_1", userId: "user_1", role: "org:member" });
+    expect(organizations.updateOrganizationMembershipMetadata).not.toHaveBeenCalled();
+  });
+  it("stale metadata alone is rewritten without touching the role", async () => {
+    member("org:member", { bis_role: "owner", bis_language: "es" });
+    expect(await reassertClerkRole("org_1", "user_1", "staff")).toEqual({ ok: true, changed: true });
+    expect(organizations.updateOrganizationMembership).not.toHaveBeenCalled();
+    expect(organizations.updateOrganizationMembershipMetadata).toHaveBeenCalledWith({ organizationId: "org_1", userId: "user_1", publicMetadata: { bis_role: "staff" } });
+  });
+  it("already in step: no write at all, so the updated event it would fire cannot loop (mutation: always write -> FAILS)", async () => {
+    member("org:admin", { bis_role: "owner" });
+    expect(await reassertClerkRole("org_1", "user_1", "owner")).toEqual({ ok: true, changed: false });
+    expect(organizations.updateOrganizationMembership).not.toHaveBeenCalled();
+    expect(organizations.updateOrganizationMembershipMetadata).not.toHaveBeenCalled();
+  });
+  it("no Clerk membership: nothing to assert", async () => {
+    organizations.getOrganizationMembershipList.mockResolvedValue({ data: [], totalCount: 0 });
+    expect(await reassertClerkRole("org_1", "user_1", "owner")).toEqual({ ok: true, changed: false });
+  });
+  it("a failed role write or Clerk read is a failure result, for the webhook to retry (mutation: swallow -> FAILS)", async () => {
+    member("org:admin", {});
+    organizations.updateOrganizationMembership.mockRejectedValue(clerkError(500, "internal"));
+    expect(await reassertClerkRole("org_1", "user_1", "staff")).toEqual({ ok: false, code: "internal", status: 500 });
+    organizations.getOrganizationMembershipList.mockRejectedValue(clerkError(503, "unavailable"));
+    expect(await reassertClerkRole("org_1", "user_1", "staff")).toEqual({ ok: false, code: "unavailable", status: 503 });
   });
 });
 
@@ -260,7 +329,7 @@ describe("Clerk not-found on removal, and a bound on every Clerk write", () => {
   });
   it("removeFromOrganization: any other refusal is still a failure", async () => {
     organizations.deleteOrganizationMembership.mockRejectedValue(clerkError(403, "not_allowed"));
-    expect(await removeFromOrganization("org_1", "user_1")).toEqual({ ok: false, code: "not_allowed" });
+    expect(await removeFromOrganization("org_1", "user_1")).toEqual({ ok: false, code: "not_allowed", status: 403 });
   });
 
   const never = () => new Promise(() => {});
@@ -278,7 +347,7 @@ describe("Clerk not-found on removal, and a bound on every Clerk write", () => {
       arrange();
       const p = call();
       await vi.advanceTimersByTimeAsync(CLERK_WRITE_TIMEOUT_MS);
-      await expect(p).resolves.toEqual({ ok: false, code: "timeout" });
+      await expect(p).resolves.toEqual({ ok: false, code: "timeout", status: null });
     } finally {
       vi.useRealTimers();
     }

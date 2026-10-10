@@ -79,8 +79,23 @@ export function liveClerkTeamPort(): ClerkTeamPort {
 }
 
 export type ClerkPendingInvite = { id: string; email: string; role: AccountRole; language: PersonLanguage };
-/** A Clerk write's outcome. `code` is Clerk's own error code when it gave one, for the caller to map to copy. */
-export type ClerkWriteResult<T extends object = object> = ({ ok: true } & T) | { ok: false; code: string | null };
+/**
+ * A Clerk write's outcome. `code` is Clerk's own error code when it gave one,
+ * for the caller to map to copy; `status` is Clerk's HTTP status, null when
+ * there was no answer (a timeout or a network error).
+ */
+export type ClerkWriteFailure = { ok: false; code: string | null; status: number | null };
+export type ClerkWriteResult<T extends object = object> = ({ ok: true } & T) | ClerkWriteFailure;
+
+/**
+ * Whether a failed write DEFINITELY did not land (review I1): Clerk answered
+ * with a 4xx refusal. A 5xx, a 408, a timeout or a network error may have
+ * landed (or may land later), so a caller undoing its own first write must
+ * treat it as landed.
+ */
+export function clerkRefused(r: ClerkWriteFailure): boolean {
+  return r.status !== null && r.status >= 400 && r.status < 500 && r.status !== 408;
+}
 
 function inviteFrom(i: { id: string; emailAddress: string; role: string; publicMetadata: unknown }): ClerkPendingInvite {
   return {
@@ -101,9 +116,9 @@ function bounded<T>(write: () => Promise<T>): Promise<T> {
   return withTimeout(write(), CLERK_WRITE_TIMEOUT_MS);
 }
 
-function failed(what: string, e: unknown): { ok: false; code: string | null } {
+function failed(what: string, e: unknown): ClerkWriteFailure {
   console.error(`clerk-team: ${what} failed: ${loggableError(e)}`);
-  return { ok: false, code: e instanceof TimeoutError ? "timeout" : apiCode(e) };
+  return e instanceof TimeoutError ? { ok: false, code: "timeout", status: null } : { ok: false, code: apiCode(e), status: apiStatus(e) };
 }
 
 /** Throws (with a redacted message) when Clerk cannot be read: the Team card shows its unreachable state. */
@@ -197,18 +212,72 @@ export async function restoreToOrganization(orgId: string, clerkUserId: string, 
   }
 }
 
-/**
- * Makes the Clerk membership's role follow a BIS role change.
- * `updateOrganizationMembership({ organizationId, userId, role })`:
- * `@clerk/backend` 3.13.1 `dist/api/endpoints/OrganizationApi.d.ts:341`,
- * its params at :149 (`UpdateOrganizationMembershipParams =
- * CreateOrganizationMembershipParams`).
- */
-export async function setOrganizationRole(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult> {
+/** `updateOrganizationMembership({ organizationId, userId, role })`: @clerk/backend 3.13.1 OrganizationApi.d.ts:341, params :149. */
+async function writeClerkRole(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult> {
   try {
     await bounded(async () => (await clerkClient()).organizations.updateOrganizationMembership({ organizationId: orgId, userId: clerkUserId, role: clerkRoleFor(role) }));
     return { ok: true };
   } catch (e) {
     return failed("updateOrganizationMembership", e);
   }
+}
+
+/**
+ * The membership's own `bis_role` (review I4): Clerk copies an invitation's
+ * public metadata onto the membership it creates, and a role change does not
+ * touch it. `updateOrganizationMembershipMetadata({ organizationId, userId,
+ * publicMetadata })`: @clerk/backend 3.13.1 OrganizationApi.d.ts:349, params
+ * :151-156; Clerk merges it into the existing metadata, so `bis_language`
+ * survives.
+ */
+async function writeClerkRoleMetadata(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult> {
+  try {
+    await bounded(async () => (await clerkClient()).organizations.updateOrganizationMembershipMetadata({ organizationId: orgId, userId: clerkUserId, publicMetadata: { bis_role: role } }));
+    return { ok: true };
+  } catch (e) {
+    return failed("updateOrganizationMembershipMetadata", e);
+  }
+}
+
+/**
+ * Makes the Clerk membership follow a BIS role change: the role, then its
+ * `bis_role` metadata. The result is the ROLE write's: a metadata write that
+ * fails after the role landed is logged by id and left, because roleFromClerk
+ * takes the less privileged of the two, so stale metadata can only demote.
+ */
+export async function setOrganizationRole(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult> {
+  const r = await writeClerkRole(orgId, clerkUserId, role);
+  if (!r.ok) return r;
+  const m = await writeClerkRoleMetadata(orgId, clerkUserId, role);
+  if (!m.ok) console.error(`clerk-team: role set to ${role} but its bis_role metadata was not (org ${orgId}, user ${clerkUserId}): ${m.code ?? "no code"}`);
+  return { ok: true };
+}
+
+/**
+ * Re-asserts the BIS role on Clerk (review I2: the webhook's
+ * `organizationMembership.updated`, so a Clerk-dashboard or browser-API edit
+ * cannot drift it). Writes only what disagrees: an `updated` event fires on
+ * every write, and a write that changes nothing would answer itself forever.
+ */
+export async function reassertClerkRole(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult<{ changed: boolean }>> {
+  let m: Awaited<ReturnType<ClerkTeamPort["getMembership"]>>;
+  try {
+    m = await liveClerkTeamPort().getMembership(clerkUserId, orgId);
+  } catch (e) {
+    return failed("getOrganizationMembershipList", e);
+  }
+  if (!m) return { ok: true, changed: false };
+  let changed = false;
+  if (m.role !== clerkRoleFor(role)) {
+    const r = await writeClerkRole(orgId, clerkUserId, role);
+    if (!r.ok) return r;
+    changed = true;
+  }
+  const meta = typeof m.publicMetadata === "object" && m.publicMetadata !== null ? (m.publicMetadata as Record<string, unknown>) : {};
+  if (meta.bis_role !== role) {
+    const r = await writeClerkRoleMetadata(orgId, clerkUserId, role);
+    if (!r.ok) return r;
+    changed = true;
+  }
+  return { ok: true, changed };
 }
