@@ -108,6 +108,51 @@ export async function renameAccount(
   await emit(db, accountId, "account.renamed", actorId, { name });
 }
 
+/**
+ * The Spanish-runtime account-level default (0065_account_language.sql).
+ * This is a STRUCTURAL duplicate of the canonical `Locale` type
+ * (`apps/web/src/lib/i18n/locale.ts`, Task 2) — `packages/db` must not
+ * import from `apps/web`, so the two are kept in sync by a parity test on
+ * the app side, not by sharing an import.
+ */
+export type Locale = "en" | "es";
+
+/**
+ * Reads `accounts.language`. NULL means no preference recorded — NOT
+ * English — `resolveLocale()` (Task 4, apps/web) is what turns a null
+ * return into the product default; this function returns the stored fact
+ * only. Owner decision 2026-10-10: this column governs CLIENT-role
+ * sessions only, so a caller resolving for an agency operator must not
+ * call this at all.
+ */
+export async function getAccountLanguage(
+  db: SupabaseClient, accountId: string,
+): Promise<Locale | null> {
+  const { data, error } = await db.from("accounts")
+    .select("language").eq("id", accountId).single();
+  if (error) throw new Error(`getAccountLanguage failed: ${error.message}`);
+  return (data?.language as Locale | null) ?? null;
+}
+
+/**
+ * Sets `accounts.language`. SERVER ONLY — 0065 grants `authenticated` no
+ * UPDATE on this column (same shape as `transfer_phone`/`alert_phone`), so
+ * the only writer is the agency Settings server action (Task 5), through
+ * `serviceDb()`. Shaped after `renameAccount`/`setAlertPhone`: `.select("id")`
+ * so PostgREST's "no error, no rows" on a zero-row update cannot read as
+ * success for a stale tab or a wrong account id, and an `account.*` event is
+ * emitted because `accounts` has no `updated_at` column to fall back on.
+ */
+export async function setAccountLanguage(
+  db: SupabaseClient, accountId: string, language: Locale, actorId: string,
+): Promise<void> {
+  const { data, error } = await db.from("accounts")
+    .update({ language }).eq("id", accountId).select("id");
+  if (error) throw new Error(`setAccountLanguage failed: ${error.message}`);
+  if (!data?.length) throw new Error(`setAccountLanguage: no account ${accountId}`);
+  await emit(db, accountId, "account.language_updated", actorId, { language });
+}
+
 export type A2pStatus = "not_started" | "pending" | "approved" | "rejected";
 
 /** The writable shape. `getA2pRegistration` returns this plus `updatedAt`. */
