@@ -36,7 +36,10 @@ export default async function CalendarPage({
   const { from } = await searchParams;
   // Both audiences — calendar is the client's own business data, the same
   // class of surface `requireAccountAccess` already gates contacts with.
-  const { userId, isAgency } = await requireAccountAccess(accountId);
+  // `canManage` (Task 7, staff and roles): the agency and a client Owner
+  // only — Staff still work bookings below, but never sees the settings
+  // form at all (not read-only: the brief's own wording).
+  const { userId, isAgency, canManage } = await requireAccountAccess(accountId);
   const db = await dbForRequest();
 
   // Lazy row: this is the first thing on the account that touches the
@@ -82,7 +85,9 @@ export default async function CalendarPage({
       <PageHeader title={m["calendar.title"]} />
       <div className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="space-y-6">
-          <CalendarSettings isAgency={isAgency} calendar={calendar} action={boundUpdateSettings} />
+          {canManage ? (
+            <CalendarSettings isAgency={isAgency} calendar={calendar} action={boundUpdateSettings} />
+          ) : null}
           <BookingsList
             accountId={accountId}
             timezone={account.timezone}
