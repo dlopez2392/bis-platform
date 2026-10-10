@@ -79,8 +79,13 @@ export const m = {
   // lane's bilingual rule — no operator locale reads it yet.
   "shell.presence.onCallShort.en": "On call",
   "shell.presence.onCallShort.es": "En llamada",
-  "shell.presence.idleShort.en": "{count} this week",
-  "shell.presence.idleShort.es": "{count} esta semana",
+  // F-107 r5 review (item 2): "{count} this week" didn't say what was
+  // counted — "calls" restores that, matching the full phrase's own noun.
+  // Singular pair, same shape as idle/idleOne above ("1 calls" is wrong).
+  "shell.presence.idleShort.en": "{count} calls",
+  "shell.presence.idleShort.es": "{count} llamadas",
+  "shell.presence.idleShortOne.en": "1 call",
+  "shell.presence.idleShortOne.es": "1 llamada",
 
   "landing.title": "BIS Platform",
   "landing.tagline": "The all-in-one client platform by Bespoke Intelligent Solutions.",

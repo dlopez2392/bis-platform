@@ -31,6 +31,22 @@ describe("TopbarPresence — F-107 r4: dot + short word below `sm`, the full phr
   });
 });
 
+// F-107 r5 review (item 2, minor): "{count} this week" didn't say what was
+// counted — "calls" restores that, matching the full phrase's own noun
+// ("✓ {count} calls handled this week"). The short phrase needs its own
+// singular pair for the same reason the full phrase already has one
+// (idle/idleOne, above): "1 calls" is wrong, so a weekCount of exactly 1
+// must route to idleShortOne, not idleShort with "{count}" substituted.
+describe("TopbarPresence — F-107 r5: the idle short phrase names what's counted, with its own singular", () => {
+  it("renders the singular key at weekCount === 1 and the plural key (count substituted) otherwise (mutation: always use idleShort.replace → FAILS, since weekCount 1 would read '1 calls' with no singular branch to catch it)", () => {
+    expect(src).toContain(
+      '        {presence.weekCount === 1\n'
+      + '          ? m["shell.presence.idleShortOne.en"]\n'
+      + '          : m["shell.presence.idleShort.en"].replace("{count}", String(presence.weekCount))}',
+    );
+  });
+});
+
 /**
  * D-063 follow-up (coordinator, cheap/minor): hard-coding "Sofía" in
  * topbar-presence.tsx passed every existing test in this repo — there was

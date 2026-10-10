@@ -93,7 +93,9 @@ export function TopbarPresence() {
             stays a plain-text glyph (unchanged below, at sm+) rather than
             a second dot convention. */}
         <span aria-hidden className="size-2 shrink-0 rounded-full bg-[var(--good)]" />
-        {m["shell.presence.idleShort.en"].replace("{count}", String(presence.weekCount))}
+        {presence.weekCount === 1
+          ? m["shell.presence.idleShortOne.en"]
+          : m["shell.presence.idleShort.en"].replace("{count}", String(presence.weekCount))}
       </span>
       <span className="hidden text-sm text-muted-foreground sm:block">
         {presence.weekCount === 1
