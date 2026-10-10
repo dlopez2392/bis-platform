@@ -118,8 +118,9 @@ function oneStatement(r: BackfillRow, i: number): string {
  * the webhook, the fallback, or a person's own later change — is never
  * touched, let alone downgraded, by re-running this backfill.
  *
- * Every literal is ASCII-quoted through `sqlString`/`sqlUuid` (doubled `'`,
- * refuses a NUL); a backslash anywhere in the result throws rather than
+ * Every literal is emitted as a UTF-8 SQL literal with its quotes doubled,
+ * through `sqlString`/`sqlUuid` (refuses a NUL); non-ASCII characters
+ * pass through as UTF-8, not escaped. A backslash anywhere in the result throws rather than
  * emit it, because the Supabase MCP mangles backslash escapes (memory
  * bis-mcp-sql-escapes).
  */

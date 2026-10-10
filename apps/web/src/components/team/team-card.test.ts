@@ -365,3 +365,13 @@ describe("handlers: applied at once, with an Undo (rule 6)", () => {
     expect(toasts.error).not.toHaveBeenCalled();
   });
 });
+
+describe("the Spanish role-change toast (review M4)", () => {
+  const es = (m as Record<string, string>)["team.role.changed.es"]!;
+  it("puts the role after a colon, never as a predicate, so 'Dueño' needs no gender agreement and is no mid-sentence capital (mutation: '{name} ahora es {role}.' -> FAILS)", () => {
+    expect(es).toMatch(/: \{role\}\.$/);
+    expect(es).not.toMatch(/\bes \{role\}/);
+    const filled = es.replace("{name}", "María").replace("{role}", (m as Record<string, string>)["team.role.owner.es"]!);
+    expect(filled).not.toContain("María ahora es Dueño");
+  });
+});

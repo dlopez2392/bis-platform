@@ -3166,7 +3166,7 @@ export const m = {
   "team.loadFailed": "We couldn't load the team just now. Refresh the page to try again.",
   "team.loadFailed.es": "No pudimos cargar el equipo en este momento. Actualice la página para intentarlo de nuevo.",
   "team.role.changed": "{name} is now {role}.",
-  "team.role.changed.es": "{name} ahora es {role}.",
+  "team.role.changed.es": "Nuevo rol de {name}: {role}.",
   "team.language.changed": "{name}'s language is now {language}.",
   "team.language.changed.es": "El idioma de {name} ahora es {language}.",
   "team.removed": "{name} was removed from the team.",

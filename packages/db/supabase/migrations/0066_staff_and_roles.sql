@@ -10,9 +10,11 @@
 -- request fallback, the Team actions). `authenticated` keeps SELECT on its own company's rows.
 -- The last-Owner guard lives in two service_role-only functions that serialise on the account row.
 --
--- APPLY ORDER: CI project, then production, then parity. On production apply it, then the
--- backfill SQL (Task 5), then merge: between this file and the backfill an existing client login
--- has no membership and so cannot delete contacts, change calendar settings or read billing.
+-- APPLY ORDER (corrected 2026-10-10 after review): CI project (ci-project-setup.yml), then
+-- production, then the parity check, then merge. No backfill runs on production: the per-request
+-- fallback (apps/web lib/team/ensure-role.ts, reconcileMembership "fallback") creates each
+-- existing client login's membership from Clerk on their first in-account request, so until then
+-- that login has no membership and the owner-only actions above refuse it.
 --
 -- ROLLBACK (section by section):
 --   6  drop function public.remove_account_member(uuid, uuid); drop function public.set_account_member_role(uuid, uuid, text);
