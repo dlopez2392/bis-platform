@@ -110,4 +110,39 @@ describe("AppSidebar — F-107 (rider part): below `sm` the rail is icon-only re
   it("the setup meter's label/count row is hidden below `sm` (mutation: drop `hidden`/`sm:flex` → FAILS)", () => {
     expect(src).toContain('<span className="hidden items-center justify-between gap-2 sm:flex">');
   });
+
+  // F-107 r1 review (item 7): pins the DESKTOP half too — the mobile-first
+  // base alone proves nothing about whether expanded desktop still
+  // restores its spacing at sm+.
+  it("a nav link restores its expanded spacing at sm+ when not collapsed (mutation: delete `!collapsed && \"sm:justify-start sm:px-2.5\"` → the link stays centered/padless at desktop too)", () => {
+    expect(src).toContain('!collapsed && "sm:justify-start sm:px-2.5",');
+  });
+
+  it("the group label restores at sm+ when not collapsed (mutation: delete `!collapsed && \"sm:block\"` on the group label → it stays hidden at desktop too)", () => {
+    expect(src).toContain('!collapsed && "sm:block",');
+  });
+
+  // F-107 r1 review (item 1): a SidebarLink's visible label span is
+  // `hidden` below `sm` regardless of `collapsed`; `title`/`aria-label`
+  // used to be set only when `collapsed` was true, which left the empty
+  // string as this Link's whole accessible name at phone width (icon and
+  // active-rail mark are both `aria-hidden`) whenever there was no unread
+  // badge — every nav item but Conversations, including Back-to-agency and
+  // the footer's Settings link, which both render through this same
+  // component.
+  it("title and aria-label are unconditional, never only when `collapsed` (mutation: revert to `collapsed ? item.label : undefined` on either → FAILS)", () => {
+    expect(src).toContain("title={item.label}");
+    expect(src).toContain('aria-label={hasUnread ? `${item.label} (${unreadCount} unread)` : item.label}');
+    expect(src).not.toMatch(/title=\{collapsed \? item\.label : undefined\}/);
+  });
+
+  // F-107 r1 review (item 9): the client's logo `alt` used to be "" (purely
+  // decorative) whenever `collapsed` was false, on the reasoning that the
+  // name text was "right beside it" — below `sm` that text is CSS-`hidden`
+  // even when `collapsed` is false, so the logo was the ONLY thing in the
+  // identity block and carried no name for a screen reader at phone width.
+  it("the client logo's alt is the account name unconditionally, never `collapsed ? clientLabel : \"\"` (mutation: revert → FAILS)", () => {
+    expect(src).toContain("alt={clientLabel}");
+    expect(src).not.toMatch(/alt=\{collapsed \? clientLabel : ""\}/);
+  });
 });

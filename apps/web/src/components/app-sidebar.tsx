@@ -200,9 +200,20 @@ export function AppSidebar({
         // F-107 (rider part): the footer cluster (Settings + the setup
         // meter) must stay "pinned and visible at every viewport height"
         // (rule 10) — on a phone that includes the home-indicator gesture
-        // bar, which --safe-bottom (tokens.css; 0px with no safe area) adds
-        // on top of the existing 14px bottom padding rather than replacing
-        // it.
+        // bar, which --safe-bottom (tokens.css) adds on top of the existing
+        // 14px bottom padding rather than replacing it.
+        //
+        // ASSUMPTION (per WebKit's documented behaviour, not verified on a
+        // device from this repo): `env(safe-area-inset-bottom)` reports 0
+        // unless the document OPTS IN with a `viewport-fit=cover` viewport
+        // meta/`viewport.viewportFit` — apps/web sets neither today (`grep
+        // -rn viewportFit apps/web` is empty), so --safe-bottom is INERT in
+        // this app right now, on every phone, notched or not: this padding
+        // is currently always the plain 14px it was before. Enabling
+        // `viewportFit: "cover"` is part of F-107's second part (the
+        // bottom-tab shell), not this rider — turning it on changes how
+        // the WHOLE page paints under the status bar too, which is a
+        // bigger decision than one sidebar's bottom padding.
         "pb-[calc(0.875rem+var(--safe-bottom))]",
         // Below `sm` (640px — narrower than either of DESIGN.md's rider
         // widths, 375 and 320) the sidebar is ALWAYS the 64px collapsed
@@ -282,7 +293,10 @@ export function AppSidebar({
             "flex w-full items-center gap-2 justify-center px-0 py-2 text-sidebar-foreground",
             !collapsed && "sm:justify-start sm:px-2",
           )}
-          title={collapsed ? clientLabel : undefined}
+          // Unconditional for the same reason as SidebarLink's own title
+          // (F-107 r1 review): the name/timezone text below is `hidden`
+          // below `sm` even when `collapsed` is false.
+          title={clientLabel}
         >
           <span
             className={cn(
@@ -302,9 +316,16 @@ export function AppSidebar({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={clientLogoUrl}
-                // Decorative when the name is right beside it; the accessible
-                // name when collapsed hides that text.
-                alt={collapsed ? clientLabel : ""}
+                // Unconditional (F-107 r1 review): below `sm` the name span
+                // further down is CSS-`hidden` even when `collapsed` is
+                // false, which JS cannot see without risking a hydration
+                // flash (this file's own reasoning throughout), so there is
+                // no `collapsed`-keyed condition that is reliably "the name
+                // is visibly right beside it" any more. The remaining cost
+                // is a redundant announcement at desktop width, where the
+                // name text IS also read — never a missing one, which this
+                // trades away.
+                alt={clientLabel}
                 className="size-full object-contain"
               />
             ) : (
@@ -442,14 +463,24 @@ function SidebarLink({
   return (
     <Link
       href={item.href}
-      title={collapsed ? item.label : undefined}
-      // The unread count rides on the LINK's accessible name, never on the
-      // badge spans (both aria-hidden below): accessible-name computation
-      // prefers name-from-content, so a labelled span inside the link would
-      // REPLACE "Conversations" with "5 unread" in the collapsed state —
-      // and aria-label on a generic <span> is ignored by some screen-reader
-      // pairs anyway (naming prohibited on the generic role).
-      aria-label={hasUnread ? `${item.label} (${unreadCount} unread)` : undefined}
+      // F-107 r1 review: below `sm`, the visible label span (further down)
+      // is `hidden` even when `collapsed` is false — the icon is
+      // `aria-hidden` and the active-rail mark is `aria-hidden`, so with
+      // the old `collapsed ? item.label : undefined` this Link's
+      // accessible name was EMPTY at phone width whenever there was no
+      // unread badge (every nav item but Conversations). `title` is now
+      // unconditional too, for sighted hover at the same phone width this
+      // was broken at — a visible tooltip was never wrong for an expanded
+      // desktop row, it just had nothing to add there.
+      title={item.label}
+      // Unconditional for the same reason: the unread count rides on the
+      // LINK's accessible name, never on the badge spans (both aria-hidden
+      // below) — accessible-name computation prefers name-from-content, so
+      // a labelled span inside the link would REPLACE "Conversations" with
+      // "5 unread" in the collapsed state — and aria-label on a generic
+      // <span> is ignored by some screen-reader pairs anyway (naming
+      // prohibited on the generic role).
+      aria-label={hasUnread ? `${item.label} (${unreadCount} unread)` : item.label}
       className={cn(
         // Mobile-first (F-107, rider part): "justify-center px-0" — the
         // collapsed look — is the BASE below `sm`, whatever `collapsed`
@@ -550,7 +581,11 @@ function SetupMeterLink({
   return (
     <Link
       href={`${base}/setup`}
-      title={collapsed ? m["nav.setup"] : undefined}
+      // Unconditional for the same reason SidebarLink's own title is now
+      // unconditional (F-107 r1 review): the label/count row below is
+      // `hidden` below `sm` even when `collapsed` is false, so sighted
+      // hover needs the tooltip there too, not only when desktop-collapsed.
+      title={m["nav.setup"]}
       aria-label={`${m["nav.setup"]} (${progressText})`}
       className={cn(
         // Mobile-first (F-107, rider part): no horizontal padding is the
