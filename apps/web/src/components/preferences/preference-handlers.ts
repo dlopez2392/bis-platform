@@ -1,4 +1,4 @@
-import type { PersonLanguage, PersonTheme } from "@bis/db";
+import type { PersonLanguage, PersonPrefs, PersonTheme } from "@bis/db";
 import type { Locale } from "@/lib/i18n/locale";
 import type { MessageKey } from "@/lib/messages";
 import type { PrefsResult } from "@/lib/preferences/save";
@@ -167,4 +167,35 @@ export function debouncedChoice<T>(commit: (next: T, before: T) => void, delayMs
     },
     flush: fire,
   };
+}
+
+/**
+ * The radios are local state seeded from the server's props (final fix wave).
+ * When a prop CHANGES (the topbar toggle's save lands, or another tab's save
+ * arrives on a refresh), the matching radio follows it; while the props stay
+ * the same, a local choice still waiting on its save is left alone. Returns
+ * only the fields to reset, or null for none. The panel calls this during
+ * render against the props it last saw (React's "adjust state when a prop
+ * changes" pattern, no effect).
+ */
+export function propsResync(
+  seen: PersonPrefs,
+  incoming: PersonPrefs,
+): { language?: PersonLanguage | null; theme?: PersonTheme | null } | null {
+  const out: { language?: PersonLanguage | null; theme?: PersonTheme | null } = {};
+  if (seen.language !== incoming.language) out.language = incoming.language;
+  if (seen.theme !== incoming.theme) out.theme = incoming.theme;
+  return "language" in out || "theme" in out ? out : null;
+}
+
+/**
+ * A tab closed, or navigated away by a full page load, within the debounce
+ * window never unmounts React, so the panel also flushes on `pagehide` (the
+ * event that fires for both, including a page entering the back/forward
+ * cache). Returns the cleanup.
+ */
+export function flushOnPageHide(target: Pick<EventTarget, "addEventListener" | "removeEventListener">, flush: () => void): () => void {
+  const onHide = () => flush();
+  target.addEventListener("pagehide", onHide);
+  return () => target.removeEventListener("pagehide", onHide);
 }

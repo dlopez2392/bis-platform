@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import type { PersonTheme } from "@bis/db";
-import { changeLanguage, changeTheme, debouncedChoice, PREFS_SAVE_DEBOUNCE_MS, PREFS_TOAST_MS } from "./preference-handlers";
+import { changeLanguage, changeTheme, debouncedChoice, PREFS_SAVE_DEBOUNCE_MS, PREFS_TOAST_MS, propsResync, flushOnPageHide } from "./preference-handlers";
 
 describe("changeTheme", () => {
   it("applies at once, saves, and Undo sends the PREVIOUS value the server returned (mutation: undo with next -> FAILS)", async () => {
@@ -143,5 +143,37 @@ describe("debouncedChoice", () => {
     vi.advanceTimersByTime(PREFS_SAVE_DEBOUNCE_MS * 2);
     d.flush();
     expect(commit).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Final fix wave (cheap extras): the radios are local state seeded from the
+// server's props. When those props CHANGE (the topbar toggle's save lands,
+// or another tab's save reaches this one on a refresh) the radio must follow,
+// or it shows a stale choice as checked. A local choice still waiting on its
+// save is NOT overwritten while the props stay the same.
+describe("propsResync", () => {
+  it("unchanged props leave the local radios alone, so a pending choice is kept (mutation: always copy the props -> FAILS)", () => {
+    expect(propsResync({ language: "en", theme: "dark" }, { language: "en", theme: "dark" })).toBeNull();
+  });
+  it("a changed theme prop resets only the theme radio (mutation: drop the resync -> FAILS)", () => {
+    expect(propsResync({ language: "en", theme: "dark" }, { language: "en", theme: "light" })).toEqual({ theme: "light" });
+  });
+  it("a changed language prop resets only the language radio, NULL included (mutation: compare theme only -> FAILS)", () => {
+    expect(propsResync({ language: "es", theme: null }, { language: null, theme: null })).toEqual({ language: null });
+  });
+});
+
+// The 600 ms debounce flushes on unmount; a tab closed or navigated away
+// within that window never unmounts React, so it also flushes on pagehide.
+describe("flushOnPageHide", () => {
+  it("pagehide flushes, and the cleanup detaches (mutation: listen for beforeunload instead -> FAILS)", () => {
+    const target = new EventTarget();
+    const flush = vi.fn();
+    const detach = flushOnPageHide(target, flush);
+    target.dispatchEvent(new Event("pagehide"));
+    expect(flush).toHaveBeenCalledTimes(1);
+    detach();
+    target.dispatchEvent(new Event("pagehide"));
+    expect(flush).toHaveBeenCalledTimes(1);
   });
 });

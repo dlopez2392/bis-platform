@@ -82,7 +82,8 @@ describe("the panel (client)", () => {
   it("a radio step applies at once but saves through the debouncer, flushed on unmount (fix round 1 M1) (mutation: call changeTheme straight from onChange -> FAILS)", () => {
     expect(src).toMatch(/onChange=\{\(choice\) => \{\s*const next = languageValueOf\(choice\);\s*setLanguage\(next\);\s*languageStep\(next, language\);/);
     expect(src).toMatch(/onChange=\{\(choice\) => \{\s*applyTheme\(choice\);\s*themeStep\(choice, theme\);/);
-    expect(src).toContain("return () => { s.language?.flush(); s.theme?.flush(); };");
+    expect(src).toContain("const flushAll = () => { s.language?.flush(); s.theme?.flush(); };");
+    expect(src).toContain("return () => { detach(); flushAll(); };");
     expect(src).toContain("s.language ??= debouncedChoice(");
     expect(src).toContain("s.theme ??= debouncedChoice(");
     expect(src).not.toMatch(/onChange=\{\(choice\) =>\s*void change(Theme|Language)\(/);
@@ -146,5 +147,19 @@ describe("the user menu", () => {
     expect(src.startsWith('"use client"')).toBe(true);
     expect(src).toMatch(/<UserButton\.MenuItems>\s*<UserButton\.Link[\s\S]*href="\/dashboard\/preferences"/);
     expect(src).toContain('t(m, "prefs.menuItem", locale)');
+  });
+});
+
+// Final fix wave (cheap extras): the behaviour is propsResync and
+// flushOnPageHide, tested in preference-handlers.test.ts; these pin that the
+// panel actually uses them.
+describe("the panel keeps in step with the server and the tab", () => {
+  const src = read(path.join(here, "preferences-panel.tsx"));
+  it("re-derives its radios when the props change (mutation: drop the propsResync call -> FAILS)", () => {
+    expect(src).toMatch(/propsResync\(seenPrefs, prefs\)/);
+    expect(src).toMatch(/setSeenPrefs\(prefs\)/);
+  });
+  it("flushes a pending choice on pagehide as well as on unmount (mutation: drop flushOnPageHide -> FAILS)", () => {
+    expect(src).toMatch(/flushOnPageHide\(window, /);
   });
 });

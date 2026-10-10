@@ -22,7 +22,8 @@ import {
 } from "@/lib/preferences/preference-options";
 import type { PrefsResult } from "@/lib/preferences/save";
 import {
-  changeLanguage, changeTheme, debouncedChoice, PREFS_TOAST_MS, type DebouncedChoice, type PrefsCopyKey, type PrefsToast,
+  changeLanguage, changeTheme, debouncedChoice, flushOnPageHide, propsResync, PREFS_TOAST_MS,
+  type DebouncedChoice, type PrefsCopyKey, type PrefsToast,
 } from "./preference-handlers";
 
 type Mode = "light" | "dark" | "system";
@@ -64,7 +65,8 @@ const THEME_LABEL_KEY = {
  * look follows), but the save and its toast wait for a pause
  * (debouncedChoice, fix round 1 M1): one decision, one save, one toast. The
  * commit runs through a ref holding this render's handler, so it sees the
- * current locale and router; a choice still pending on unmount is flushed.
+ * current locale and router; a choice still pending on unmount or on
+ * `pagehide` (a closed tab never unmounts) is flushed.
  */
 export function PreferencesPanel({
   isAgency,
@@ -85,6 +87,15 @@ export function PreferencesPanel({
   const { setTheme } = useTheme();
   const [language, setLanguage] = useState<PersonLanguage | null>(prefs.language);
   const [theme, setThemeChoice] = useState<PersonTheme | null>(prefs.theme);
+  // Follow the server when its value CHANGES (the topbar toggle, another
+  // tab), never while it stays the same: a pending local choice is kept.
+  const [seenPrefs, setSeenPrefs] = useState<PersonPrefs>(prefs);
+  const resync = propsResync(seenPrefs, prefs);
+  if (resync) {
+    setSeenPrefs(prefs);
+    if ("language" in resync) setLanguage(resync.language ?? null);
+    if ("theme" in resync) setThemeChoice(resync.theme ?? null);
+  }
   const copy = copyIn(locale);
 
   const commitLanguage = useRef<(next: PersonLanguage | null, before: PersonLanguage | null) => void>(() => {});
@@ -141,7 +152,9 @@ export function PreferencesPanel({
   });
   useEffect(() => {
     const s = steps.current;
-    return () => { s.language?.flush(); s.theme?.flush(); };
+    const flushAll = () => { s.language?.flush(); s.theme?.flush(); };
+    const detach = flushOnPageHide(window, flushAll);
+    return () => { detach(); flushAll(); };
   }, []);
 
   const languageOptions = languageChoicesFor(isAgency).map((choice) => ({
