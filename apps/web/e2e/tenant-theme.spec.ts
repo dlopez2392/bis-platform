@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess } from "@bis/db";
 import { NEUTRAL_RAMPS } from "../src/lib/branding/neutral-ramps";
+import { clearStoredTheme, storedTheme } from "./stored-theme";
 
 // Same two paths, same reason, as client-access.spec.ts and auth.setup.ts: this
 // file calls serviceDb() from the Playwright runner process, not through a
@@ -85,6 +86,24 @@ test.beforeAll(async () => {
   await setClientAccess(serviceDb(), fixture.accountId, true, fixture.clerkUserId);
 });
 
+// The same kind of precondition, for the person rather than the account. The
+// topbar toggle saves its choice to users.theme (mis preferencias D5), and a
+// saved theme outranks the cookie and brand_mode. The toggle test below
+// therefore left the client a saved "light", and the cookie-less test further
+// down, which is about a client with NO saved choice following the tenant's
+// dark default, painted light instead (CI e2e, 2c0e6fb0). Reset before every
+// test and after the file, so no test here or later inherits it.
+test.beforeEach(async () => {
+  await clearStoredTheme(readClientFixture().clerkUserId);
+});
+test.afterAll(async () => {
+  try {
+    await clearStoredTheme(readClientFixture().clerkUserId);
+  } catch (e) {
+    console.error(`tenant-theme.spec cleanup: could not clear the client identity's saved theme: ${String(e)}`);
+  }
+});
+
 test.describe("tenant theme", () => {
   // Signed in as the client fixture auth.setup.ts creates, not the agency
   // admin every other spec uses.
@@ -126,6 +145,9 @@ test.describe("tenant theme", () => {
 
     await expect.poll(() => prop("[data-tenant-theme]", "--background")(page))
       .toBe(NEUTRAL_RAMPS.warm.light.bg);
+    // The toggle saves the person's choice too (D5). Polled to completion so
+    // the background save lands before the next test's reset clears it.
+    await expect.poll(() => storedTheme(fixture.clerkUserId)).toBe("light");
 
     // The reload is the point. localStorage alone would repaint on mount;
     // only the cookie makes the SERVER emit the light set.
