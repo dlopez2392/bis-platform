@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test, expect, type Page } from "./fixtures/test";
 import { buildNavGroups } from "../src/lib/nav-groups";
 import { readClientFixture } from "./support";
-import { serviceDb, setClientAccess, listContacts, listForms, upsertVoiceProfile } from "@bis/db";
+import { serviceDb, setClientAccess, listContacts, listForms, upsertVoiceProfile, getVoiceProfile } from "@bis/db";
 
 /**
  * F-107 (rider part): "at phone width the sidebar opens collapsed, its
@@ -74,9 +74,26 @@ function clientFixture(): ClientFixture | null {
   return { accountId: parsed.accountId, clerkUserId: parsed.clerkUserId };
 }
 
+/**
+ * The fixture account's voice profile EXACTLY as this file found it,
+ * restored in `afterAll` — the same `priorProfileCaptured` shape
+ * concierge.spec.ts and forward-calls.spec.ts both use, for the identical
+ * reason (F-107 r3 review, item 2): this "phone" project depends only on
+ * "setup", never on "chromium", so nothing orders it against
+ * forward-calls.spec.ts, setup.spec.ts or concierge.spec.ts (which all run
+ * on "chromium" and rely on this SAME fixture account having no, or a
+ * specific, voice profile). `priorProfileCaptured` is TRUE the moment the
+ * read below succeeds, whether or not a row existed — `priorProfile`
+ * staying null IS a captured state ("there was none before").
+ */
+let priorProfile: Awaited<ReturnType<typeof getVoiceProfile>> = null;
+let priorProfileCaptured = false;
+let fixtureRef: ClientFixture | null = null;
+
 test.beforeAll(async () => {
   const fx = clientFixture();
   if (!fx) return;
+  fixtureRef = fx;
   const db = serviceDb();
   await setClientAccess(db, fx.accountId, true, fx.clerkUserId);
   // F-107 r2 review, item 4: turns the topbar presence pill (DESIGN.md "AI
@@ -85,8 +102,38 @@ test.beforeAll(async () => {
   // scope. Every other `voice_profiles` column defaults (0019_voice_
   // core.sql); the table is in `ACCOUNT_OWNED_TABLES`
   // (packages/db/src/account-teardown.ts), so auth.teardown.ts's cascade
-  // removes it with the rest of the account.
+  // removes it with the rest of the account — belt-and-braces with the
+  // afterAll restore below, which runs first in the ordinary (non-killed)
+  // case.
+  priorProfile = await getVoiceProfile(db, fx.accountId);
+  priorProfileCaptured = true;
   await upsertVoiceProfile(db, fx.accountId, { enabled: true }, fx.clerkUserId);
+});
+
+test.afterAll(async () => {
+  if (!fixtureRef || !priorProfileCaptured) return;
+  const db = serviceDb();
+  if (priorProfile) {
+    // Every column named rather than spread (concierge.spec.ts's own
+    // precedent), so a column added to VoiceProfileRow later shows up here
+    // as a typecheck-visible omission instead of silently not being
+    // restored. `forward_calls` is excluded on purpose — upsertVoiceProfile
+    // refuses it; it is written only by setForwardCalls, which this file
+    // never calls.
+    const p = priorProfile;
+    await upsertVoiceProfile(db, fixtureRef.accountId, {
+      persona_name: p.persona_name, greeting_en: p.greeting_en, greeting_es: p.greeting_es,
+      facts: p.facts, services: p.services, languages: p.languages,
+      booking_enabled: p.booking_enabled, after_hours: p.after_hours, enabled: p.enabled,
+      textback_enabled: p.textback_enabled, textback_body: p.textback_body,
+      public_id: p.public_id, concierge_enabled: p.concierge_enabled,
+      concierge_form_id: p.concierge_form_id,
+    }, fixtureRef.clerkUserId);
+  } else {
+    // There was no profile before this file ran, so the only faithful
+    // restore is for there to be none after.
+    await db.from("voice_profiles").delete().eq("account_id", fixtureRef.accountId);
+  }
 });
 
 const WIDTH = 375;
@@ -117,7 +164,12 @@ async function assertHeaderChildrenInBounds(page: Page, route: string, width: nu
       .filter(({ r }) => (r.width > 0 || r.height > 0) && (r.left < hLeft - 0.5 || r.right > vw + 0.5))
       .map(({ el, r }) => ({
         tag: el.tagName,
-        cls: ((el as HTMLElement).className || "").slice(0, 100),
+        // F-107 r3 review, item 3: `getAttribute("class")`, not
+        // `.className` — on an SVG element `.className` is an
+        // SVGAnimatedString, not a string, so `|| ""` never fires and
+        // `.slice` would throw on the first SVG header child this ever
+        // walks.
+        cls: (el.getAttribute("class") || "").slice(0, 100),
         left: Math.round(r.left),
         right: Math.round(r.right),
       }));
@@ -168,8 +220,14 @@ async function findWidestOffender(page: Page, clientWidth: number): Promise<stri
       .sort((a, b) => b.r.right - a.r.right)[0];
     if (!widest) return null;
     const el = widest.el as HTMLElement;
+    // F-107 r3 review, item 3: `getAttribute("class")`, not `.className` —
+    // on an SVG element `.className` is an SVGAnimatedString, not a
+    // string; `.toString()` would print "[object SVGAnimatedString]"
+    // instead of the actual class list (exactly what an earlier CI
+    // offender's own text showed this diagnostic doing).
+    const cls = el.getAttribute("class");
     const selector = `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}` +
-      (el.className ? `.${el.className.toString().trim().split(/\s+/)[0]}` : "");
+      (cls ? `.${cls.trim().split(/\s+/)[0]}` : "");
     return `${selector} right=${Math.round(widest.r.right)} width=${Math.round(widest.r.width)} ` +
       `text="${(el.textContent || "").slice(0, 40)}"`;
   }, clientWidth);
