@@ -3094,6 +3094,11 @@ export const m = {
   "team.title.es": "Equipo",
   "team.body": "The people who can sign in to this company's account.",
   "team.body.es": "Las personas que pueden entrar a la cuenta de esta empresa.",
+  // The /team route's loading skeleton, read by a screen reader while the
+  // page streams (team/loading.tsx). Through the catalogue for the i18n
+  // ratchet (merge with main, #234): a raw aria-label there counted 1 > 0.
+  "team.loading": "Loading the team",
+  "team.loading.es": "Cargando el equipo",
   "team.page.subtitle": "Invite the people who work with you, and choose what each one can do.",
   "team.page.subtitle.es": "Invite a las personas que trabajan con usted y elija qué puede hacer cada una.",
   // The honest limit (spec §4): hiding Export is friction, not a wall.
