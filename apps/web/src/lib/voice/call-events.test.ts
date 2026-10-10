@@ -240,14 +240,14 @@ describe("processCallEvent", () => {
     // Strictly before the last word: the whole point is not waiting for
     // the recording to finish.
     expect(hungUpAt).toBeLessThan(words.length - 1);
-    // And exactly where the FIRST IVR instruction's SHAPE completes. The
-    // predicate is `press <digit> (to|for|and|if)` — it needs "Press 0 to",
-    // not the verb after it — so the hangup lands on "to", before "speak
-    // with an agent" has even been said. (The plan first assumed the longer
-    // phrase; the implementer's RED run corrected it: word 40 of 80.)
+    // And exactly where the FIRST IVR instruction completes. Since F-010's
+    // review round 1 that includes its PURPOSE, from a closed list: "press 1
+    // for appointments" is a customer retelling a menu, so "Press 0 to" alone
+    // no longer ends a call — "Press 0 to speak with an agent" does, three
+    // words later and still mid-script. (Before: word 40 of 80, on "to".)
     const prefix = words.slice(0, hungUpAt + 1).join(" ");
-    expect(prefix).toMatch(/Press 0 to$/i);
-    expect(prefix).not.toMatch(/agent/i);
+    expect(prefix).toMatch(/Press 0 to speak with an agent$/i);
+    expect(prefix).not.toMatch(/immediately/i);
     expect(state.recordedCaller).toBe(true);
   });
 
@@ -292,7 +292,8 @@ describe("processCallEvent", () => {
       + "encontrar. Oprima 0 para hablar con un agente de inmediato. Oprima 9 para no "
       + "recibir más llamadas.");
     expect(hungUpAt).toBeGreaterThan(-1);
-    expect(words.slice(0, hungUpAt + 1).join(" ")).toMatch(/Oprima 0 para$/);
+    // At the end of the closed-list purpose, as in English.
+    expect(words.slice(0, hungUpAt + 1).join(" ")).toMatch(/Oprima 0 para hablar con un agente$/);
     expect(state.recordedCaller).toBe(true);
   });
 
