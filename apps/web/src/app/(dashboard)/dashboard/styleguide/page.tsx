@@ -43,7 +43,7 @@ import {
 import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
-import { LocaleNavDemo } from "./locale-nav-demo";
+import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
 import { requestPseudoMode } from "@/lib/i18n/request-locale";
 import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { SettingsFieldCards } from "./settings-field-cards";
@@ -274,18 +274,34 @@ export default async function StyleguidePage({
                 is a distinct VALUE from the en/es spans' boolean
                 `data-nav-label` (which React renders as `"true"`), so the
                 spec's `[data-nav-label='pseudo']` locator selects only this
-                column. */}
+                column.
+
+                Fix round 1 (reviewer C1): rendered through the SAME
+                `NavRowGeometry`/`NAV_LABEL_SPAN_CLASS` the real en/es
+                columns use (locale-nav-demo.tsx), not a bare, unconstrained
+                span — so a pseudo label genuinely CAN clip here, at the
+                real sidebar's expanded width. `title` carries the full,
+                un-truncated text: a clipped pseudo label is accepted
+                truncation (the real sidebar's own `Link` tolerates it the
+                same way, via its own unconditional `title`), so the spec
+                asserts a clipped label still carries its full text in
+                `title`, not that it never clips. */}
             {pseudo ? (
               <div className="flex flex-col gap-1">
                 <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                   pseudo
                 </span>
                 <div className="flex flex-wrap gap-4">
-                  {NAV_LABEL_KEYS.map((key) => (
-                    <span key={key} data-nav-label="pseudo" className="text-sm font-medium">
-                      {pseudoLocale(m[key])}
-                    </span>
-                  ))}
+                  {NAV_LABEL_KEYS.map((key) => {
+                    const label = pseudoLocale(m[key]);
+                    return (
+                      <NavRowGeometry key={key}>
+                        <span data-nav-label="pseudo" title={label} className={NAV_LABEL_SPAN_CLASS}>
+                          {label}
+                        </span>
+                      </NavRowGeometry>
+                    );
+                  })}
                 </div>
               </div>
             ) : null}

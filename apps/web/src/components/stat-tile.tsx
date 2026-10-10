@@ -89,7 +89,16 @@ export function StatTile({
       data-slot="stat-tile"
       className="flex min-w-0 min-h-[108px] flex-col gap-1.5 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3"
     >
-      <p className={LABEL_ROLE}>{label}</p>
+      {/* Task 11, fix round 1 (reviewer I2): the overflow spec measures
+          THIS span, not the tile root — the root has no overflow of its
+          own, so a clipped descendant never reaches its scrollWidth. No
+          `truncate` here (the label wraps across lines rather than
+          clipping on ordinary multi-word English/Spanish text, including
+          under the pseudo-locale's padding), so this is a forward-looking
+          regression guard, not a check expected to fire on today's copy —
+          see i18n-overflow.spec.ts's own comment for how it was proven
+          capable of failing. */}
+      <p data-slot="stat-tile-label" className={LABEL_ROLE}>{label}</p>
       <p
         data-testid={valueTestId}
         data-hero={hero ? "true" : undefined}
@@ -129,7 +138,10 @@ export function StatTile({
         {spark && spark.length > 0 ? (
           <Sparkline counts={spark} className="h-[26px] w-[84px] shrink-0 text-primary" />
         ) : period ? (
-          <span className="min-w-0 truncate text-right text-xs text-muted-foreground">{period}</span>
+          // Task 11, fix round 1 (reviewer I2): the one element in this
+          // component that can ACTUALLY clip (`min-w-0 truncate` on a flex
+          // item) — the overflow spec measures this span directly.
+          <span data-slot="stat-tile-period" className="min-w-0 truncate text-right text-xs text-muted-foreground">{period}</span>
         ) : null}
       </div>
     </div>

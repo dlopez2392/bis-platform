@@ -45,6 +45,27 @@ import { useShellData } from "@/components/shell-data";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
+// Task 11 (Spanish-runtime lane), fix round 1: consumed by the styleguide's
+// pseudo-locale overflow demo (locale-nav-demo.tsx) so its container can
+// reproduce THIS row's real truncation geometry — real width, real padding,
+// real gap, real icon size, real truncate class — rather than a second,
+// hand-copied set of the same literals that could silently drift from this
+// one. NOT wired back into SidebarLink's own render below: this file's own
+// app-sidebar.test.ts already pins the exact literal strings below
+// (`"w-16 sm:w-[236px]"`, the Link's `"sm:justify-start sm:px-2.5"`, the
+// label span's `"hidden min-w-0 flex-1 truncate sm:block"`) byte for byte,
+// and composing them through these constants changed each literal's exact
+// substring, breaking three of those pins for no behavioural difference.
+// app-sidebar-nav-geometry.test.ts instead source-scans THIS file and
+// asserts each constant's value is still a literal substring of the real
+// render, so a value changing on one side without the other is still
+// caught — just via a parity read rather than a single shared call site.
+export const SIDEBAR_EXPANDED_WIDTH_CLASS = "w-16 sm:w-[236px]";
+export const NAV_ROW_GAP_CLASS = "gap-2.5";
+export const NAV_ROW_EXPANDED_PADDING_CLASS = "sm:px-2.5";
+export const NAV_ICON_SIZE_CLASS = "size-4";
+export const NAV_LABEL_TRUNCATE_CLASS = "min-w-0 flex-1 truncate";
+
 // The pure nav-groups module maps hrefs/labelKeys only (see its own doc
 // comment for why); this component owns the actual icon components and the
 // one place that maps an icon key to one.
