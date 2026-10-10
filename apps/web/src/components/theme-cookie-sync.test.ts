@@ -22,4 +22,8 @@ describe("ThemeCookieSync", () => {
     expect(src).toMatch(/lastApplied\.current = sync\.lastApplied/);
     expect(src).not.toMatch(/userThemeSyncPlan\(/);
   });
+  it("hands the whole migration/snapshot decision to followUpCookie, never returning early on skipMigration (mutation: restore `if (plan.skipMigration) return;` -> FAILS)", () => {
+    expect(src).toMatch(/followUpCookie\(plan, existing, window\.localStorage\.getItem\("theme"\), theme, resolvedTheme\)/);
+    expect(src).not.toMatch(/plan\.skipMigration\)\s*return/);
+  });
 });

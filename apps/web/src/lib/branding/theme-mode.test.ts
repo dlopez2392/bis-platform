@@ -7,6 +7,7 @@ import {
   THEME_COOKIE,
   userThemeSyncPlan,
   nextThemeSync,
+  followUpCookie,
 } from "./theme-mode";
 
 describe("resolveThemeMode", () => {
@@ -168,14 +169,14 @@ describe("a person's own theme outranks everything (mis preferencias D5)", () =>
 
 describe("userThemeSyncPlan", () => {
   it("adopts the stored theme when next-themes disagrees (another device chose it) (mutation: never setTheme -> FAILS)", () => {
-    expect(userThemeSyncPlan("light", "dark", "light")).toEqual({ setTheme: "light", writeCookie: null, skipMigration: true });
+    expect(userThemeSyncPlan("light", "dark", "light")).toEqual({ setTheme: "light", writeCookie: null, skipMigration: true, skipPersist: true });
   });
   it("writes the cookie for light/dark when it differs, never for system (mutation: write 'system' into the cookie -> FAILS)", () => {
     expect(userThemeSyncPlan("dark", "dark", "light").writeCookie).toBe("dark");
     expect(userThemeSyncPlan("system", "system", undefined).writeCookie).toBeNull();
   });
   it("does nothing new when there is no stored choice (mutation: skip the migration for everyone -> FAILS)", () => {
-    expect(userThemeSyncPlan(null, "dark", undefined)).toEqual({ setTheme: null, writeCookie: null, skipMigration: false });
+    expect(userThemeSyncPlan(null, "dark", undefined)).toEqual({ setTheme: null, writeCookie: null, skipMigration: false, skipPersist: false });
   });
 });
 
@@ -189,14 +190,14 @@ describe("nextThemeSync — the server value is applied only when it CHANGES", (
   it("undo to 'no choice': the local clear is not pushed back to the old stored theme, and NULL leaves the default rule in charge (mutation: ignore lastApplied and run userThemeSyncPlan every time -> FAILS)", () => {
     // Mount: stored "dark", in step.
     let s = nextThemeSync(undefined, "dark", "dark", "dark");
-    expect(s.plan).toEqual({ setTheme: null, writeCookie: null, skipMigration: true });
+    expect(s.plan).toEqual({ setTheme: null, writeCookie: null, skipMigration: true, skipPersist: true });
     // The panel's Undo: cookie cleared, next-themes on the fallback, prop still "dark".
     s = nextThemeSync(s.lastApplied, "dark", "light", undefined);
     expect(s.plan.setTheme).toBeNull();
     expect(s.plan.writeCookie).toBeNull();
     // The save lands: prop is now NULL. Nothing is forced; the old branch (role default / cookie rule) runs.
     s = nextThemeSync(s.lastApplied, null, "light", undefined);
-    expect(s.plan).toEqual({ setTheme: null, writeCookie: null, skipMigration: false });
+    expect(s.plan).toEqual({ setTheme: null, writeCookie: null, skipMigration: false, skipPersist: false });
     expect(s.lastApplied).toBeNull();
   });
 
@@ -210,13 +211,47 @@ describe("nextThemeSync — the server value is applied only when it CHANGES", (
     expect(s.plan.skipMigration).toBe(true);
     // The save lands: prop "dark", already in step.
     s = nextThemeSync(s.lastApplied, "dark", "dark", "dark");
-    expect(s.plan).toEqual({ setTheme: null, writeCookie: null, skipMigration: true });
+    expect(s.plan).toEqual({ setTheme: null, writeCookie: null, skipMigration: true, skipPersist: true });
   });
 
   it("a NEW server value still wins on mount and when another device changes it (mutation: never apply after the first run -> FAILS)", () => {
     expect(nextThemeSync(undefined, "light", "dark", "dark").plan.setTheme).toBe("light");
     const s = nextThemeSync("light", "dark", "light", "light");
-    expect(s.plan).toEqual({ setTheme: "dark", writeCookie: "dark", skipMigration: true });
+    expect(s.plan).toEqual({ setTheme: "dark", writeCookie: "dark", skipMigration: true, skipPersist: true });
     expect(s.lastApplied).toBe("dark");
+  });
+});
+
+// Final fix wave, I1: "Follow my device" (userTheme 'system') skips ONLY the
+// one-time migration. The cookie must still follow the OS snapshot, or a
+// branded client's server-painted tokens for one mode sit under next-themes'
+// class for the other (spec 5.3).
+describe("followUpCookie — 'system' keeps the OS snapshot, only the migration is skipped", () => {
+  it("userTheme 'system' records the device's mode when the cookie disagrees (mutation: one shared skip flag for migration and persist -> FAILS)", () => {
+    const plan = userThemeSyncPlan("system", "system", "light");
+    expect(plan.skipMigration).toBe(true);
+    expect(plan.skipPersist).toBe(false);
+    expect(followUpCookie(plan, "light", null, "system", "dark")).toBe("dark");
+  });
+  it("userTheme 'system' skips the localStorage migration but still persists the snapshot (mutation: run the migration while a stored theme exists -> FAILS)", () => {
+    const plan = userThemeSyncPlan("system", "system", undefined);
+    expect(followUpCookie(plan, undefined, "dark", "system", "light")).toBe("light");
+  });
+  it("userTheme light/dark skips both: the plan's own cookie write is the whole story (mutation: persist for light/dark -> FAILS)", () => {
+    const plan = userThemeSyncPlan("dark", "dark", "dark");
+    expect(plan.skipPersist).toBe(true);
+    expect(followUpCookie(plan, "dark", "light", "system", "light")).toBeNull();
+  });
+  it("no stored choice: migration first, then the snapshot, as before (mutation: skip the migration for everyone -> FAILS)", () => {
+    const plan = userThemeSyncPlan(null, "dark", undefined);
+    expect(followUpCookie(plan, undefined, "dark", "dark", "dark")).toBe("dark");
+    expect(followUpCookie(plan, "dark", null, "system", "light")).toBe("light");
+    expect(followUpCookie(plan, "light", null, "system", "light")).toBeNull();
+  });
+  it("a local-only run while 'system' is stored still persists the snapshot (mutation: nextThemeSync's no-change plan skips persist for 'system' -> FAILS)", () => {
+    const s = nextThemeSync("system", "system", "system", "light");
+    expect(s.plan.skipMigration).toBe(true);
+    expect(s.plan.skipPersist).toBe(false);
+    expect(followUpCookie(s.plan, "light", null, "system", "dark")).toBe("dark");
   });
 });

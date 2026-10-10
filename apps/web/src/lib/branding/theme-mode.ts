@@ -175,14 +175,25 @@ export function userThemeSyncPlan(
   userTheme: PersonTheme | null,
   theme: string | undefined,
   existingCookie: string | undefined,
-): { setTheme: PersonTheme | null; writeCookie: "light" | "dark" | null; skipMigration: boolean } {
-  if (userTheme === null) return { setTheme: null, writeCookie: null, skipMigration: false };
+): {
+  setTheme: PersonTheme | null;
+  writeCookie: "light" | "dark" | null;
+  skipMigration: boolean;
+  skipPersist: boolean;
+} {
+  if (userTheme === null) return { setTheme: null, writeCookie: null, skipMigration: false, skipPersist: false };
 
   const setTheme = userTheme !== theme ? userTheme : null;
   const writeCookie =
     (userTheme === "light" || userTheme === "dark") && userTheme !== existingCookie ? userTheme : null;
 
-  return { setTheme, writeCookie, skipMigration: true };
+  // Two flags, not one (final fix wave, I1). Any stored choice skips the
+  // one-time localStorage migration; only light/dark also skip the OS
+  // snapshot, because for those the cookie write above is the whole story.
+  // "Follow my device" still needs cookieModeToPersist to keep the cookie on
+  // the device's current answer (spec 5.3), or a branded client's server
+  // paint for one mode sits under next-themes' class for the other.
+  return { setTheme, writeCookie, skipMigration: true, skipPersist: userTheme !== "system" };
 }
 
 /**
@@ -210,7 +221,38 @@ export function nextThemeSync(
   existingCookie: string | undefined,
 ): { plan: ReturnType<typeof userThemeSyncPlan>; lastApplied: PersonTheme | null } {
   if (lastApplied !== undefined && lastApplied === userTheme) {
-    return { plan: { setTheme: null, writeCookie: null, skipMigration: userTheme !== null }, lastApplied };
+    return {
+      plan: {
+        setTheme: null,
+        writeCookie: null,
+        skipMigration: userTheme !== null,
+        skipPersist: userTheme === "light" || userTheme === "dark",
+      },
+      lastApplied,
+    };
   }
   return { plan: userThemeSyncPlan(userTheme, theme, existingCookie), lastApplied: userTheme };
+}
+
+/**
+ * The rest of ThemeCookieSync's effect, after the stored-choice plan has run:
+ * the one-time migration (skipped while any stored choice exists), then the
+ * OS snapshot (skipped only for a stored light/dark). Returns the mode to
+ * write into the cookie, followed by a refresh, or null for nothing to do.
+ * Pure so the "Follow my device" path is testable without a render harness.
+ */
+export function followUpCookie(
+  plan: { skipMigration: boolean; skipPersist: boolean },
+  existingCookie: string | undefined,
+  storedLocalTheme: string | null,
+  theme: string | undefined,
+  resolvedTheme: string | undefined,
+): "light" | "dark" | null {
+  if (!plan.skipMigration) {
+    const migrated = cookieModeToMigrate(existingCookie, storedLocalTheme);
+    if (migrated) return migrated;
+  }
+  if (plan.skipPersist) return null;
+  const value = cookieModeToPersist(theme, resolvedTheme);
+  return value && value !== existingCookie ? value : null;
 }
