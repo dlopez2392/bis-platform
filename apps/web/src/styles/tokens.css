@@ -102,11 +102,19 @@
   /* F-107 (rider part): the inset a phone's own OS chrome (the home-
      indicator gesture bar) reserves at the bottom of the viewport — same
      value in both modes, since it describes the device, not the theme (see
-     the `.dark` block below). Falls back to 0px on anything without one, so
-     a sighted check against a desktop browser or an older phone sees no
-     change. Consumed by the sidebar's pinned footer (rule 10: "pinned and
-     visible at every viewport height") so Settings and the setup meter are
-     never drawn under that bar. */
+     the `.dark` block below). Consumed by the sidebar's pinned footer
+     (rule 10: "pinned and visible at every viewport height") so Settings
+     and the setup meter are never drawn under that bar.
+
+     ASSUMPTION (per WebKit's documented behaviour, not verified on a
+     device from this repo): this is INERT — reports 0, same as the
+     fallback — unless the document opts in with a `viewport-fit=cover`
+     viewport meta (Next's `viewport.viewportFit`); apps/web sets neither
+     today. So right now this token changes nothing on any phone, notched
+     or not. Enabling `viewportFit: "cover"` is part of F-107's second part
+     (the bottom-tab shell) — it changes how the WHOLE page paints under
+     the status bar, not just this one bottom padding, so it is not turned
+     on here. */
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 
   /* elevation lives in the `*` block below: the shadows are accent-tinted
