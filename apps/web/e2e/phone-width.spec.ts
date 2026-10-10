@@ -253,16 +253,20 @@ async function findWidestOffender(page: Page, clientWidth: number): Promise<stri
  * found by the text either of its two states always contains.
  */
 async function waitForHeaderSettled(page: Page, isAgency: boolean, inAccount: boolean) {
-  await page.locator(".cl-userButton-root").first().waitFor({ state: "visible" });
+  // F-107 r5 review (item 4): an explicit timeout on each wait, so a
+  // failure NAMES the missing element (Playwright's default test timeout
+  // would otherwise fail the whole `test.step` with no indication which of
+  // these three waits — if any — never resolved).
+  await page.locator(".cl-userButton-root").first().waitFor({ state: "visible", timeout: 10_000 });
   if (isAgency) {
-    await page.locator(".cl-organizationSwitcher-root").first().waitFor({ state: "visible" });
+    await page.locator(".cl-organizationSwitcher-root").first().waitFor({ state: "visible", timeout: 10_000 });
   }
   if (inAccount) {
     // A single `data-testid`, not a text match: both of TopbarPresence's
     // CSS-toggled variants contain overlapping text ("this week" in both
     // the short and full idle phrase), so a text locator's `.first()` did
     // not reliably resolve to whichever one the viewport actually shows.
-    await page.getByTestId("topbar-presence").waitFor({ state: "visible" });
+    await page.getByTestId("topbar-presence").waitFor({ state: "visible", timeout: 10_000 });
   }
 }
 
@@ -453,5 +457,65 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
     for (const { path, inAccount } of routes) {
       await assertNoPageScroll(page, path, NARROW_WIDTH, { isAgency: true, inAccount });
     }
+  });
+});
+
+/**
+ * F-107 r5 review (item 1, CRITICAL): the r4 fix passed a CLASS STRING to
+ * a Clerk `appearance.elements` key — this app's own sign-in page already
+ * proved that does nothing against Clerk's unlayered structural CSS-in-JS.
+ * The r5 fix (topbar.tsx) replaces it with a STYLE OBJECT carrying a
+ * nested `@media` key. "It typechecks" is not proof (TypeScript does not
+ * excess-property-check keys inside `elements` — the sign-in page's own
+ * comment says so, and this repo has a compiling, misspelled key to show
+ * it); only a computed-style read on a live node is, the same way
+ * signed-out.spec.ts proves every OTHER style object on the sign-in page.
+ *
+ * `organizationSwitcherTrigger` is itself a styleable Clerk element (and
+ * the id this fix's key is SCOPED to), so `.cl-organizationSwitcherTrigger`
+ * is the unambiguous ancestor for the text container this fix targets —
+ * Clerk's org list (inside the popover opened below) renders its own,
+ * separate `organizationPreviewTextContainer` instances that carry no such
+ * scoping and must stay unaffected.
+ */
+test.describe("org-switcher trigger text — F-107 r5 computed-style probe", () => {
+  test("the org name is display:none at phone width, NOT none at desktop width, and the popover opens within the phone viewport", async ({ page }) => {
+    await page.setViewportSize({ width: WIDTH, height: HEIGHT });
+    await page.goto("/dashboard/accounts");
+    await waitForHeaderSettled(page, true, false);
+
+    const triggerText = page
+      .locator(".cl-organizationSwitcherTrigger .cl-organizationPreviewTextContainer")
+      .first();
+    const phoneDisplay = await triggerText.evaluate((el) => getComputedStyle(el).display);
+    expect(
+      phoneDisplay,
+      "the org name must be display:none at phone width — the style-object fix did nothing if this is not 'none'",
+    ).toBe("none");
+
+    // SAME node, desktop width, NO navigation — a CSS media query
+    // re-evaluates on resize alone. This is what proves the hide is
+    // `sm:`-conditional rather than an unconditional `display: none` that
+    // would ALSO have satisfied the assertion above, for the wrong reason.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const desktopDisplay = await triggerText.evaluate((el) => getComputedStyle(el).display);
+    expect(desktopDisplay, "the org name must NOT be display:none at desktop width").not.toBe("none");
+
+    // F-107 r5 review: "does opening the org switcher show its dropdown...
+    // or is it clipped by the wrapper?" The r4 wrapper (`overflow-hidden`)
+    // is gone, but back at PHONE width — the width this round's fix
+    // targets — prove the popover itself opens and stays on-screen.
+    await page.setViewportSize({ width: WIDTH, height: HEIGHT });
+    await page.locator(".cl-organizationSwitcherTrigger").first().click();
+    const popover = page.locator(".cl-organizationSwitcherPopoverCard").first();
+    await expect(popover).toBeVisible({ timeout: 10_000 });
+    // `boundingBox()` returns `{x, y, width, height}`, not `left`/`right`
+    // (TypeScript caught the wrong property names here before any browser
+    // ran this file) — `x` is the left edge, so the right edge is `x + width`.
+    const box = await popover.boundingBox();
+    expect(box, "the org switcher's popover has no box at all").not.toBeNull();
+    expect(box!.x, `the popover's left edge (${box!.x}) is off-screen`).toBeGreaterThanOrEqual(0);
+    const right = box!.x + box!.width;
+    expect(right, `the popover's right edge (${right}) exceeds the ${WIDTH}px viewport`).toBeLessThanOrEqual(WIDTH);
   });
 });
