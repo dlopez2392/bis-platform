@@ -68,6 +68,19 @@ export const m = {
   // Singular pair: "✓ 1 calls" is a real state for exactly the young voice
   // accounts that get demoed. "handled" restores DESIGN.md's own wording.
   "shell.presence.idleOne": "✓ 1 call handled this week",
+  // F-107 r4 review (item 1): below `sm` the full phrases ("{name} · on a
+  // call", "✓ {count} calls handled this week") are too wide for the
+  // topbar next to the icon-only search trigger, ThemeToggle,
+  // OrganizationSwitcher (avatar-only there, same review round) and
+  // UserButton — collapsed to "dot + short word" (rule 3: never a bare
+  // dot). The name/count are dropped, not hidden behind a tap, at phone
+  // width; the full phrase is one tap away on the account's own dashboard
+  // (the KPI row's own "Calls answered"). `.es` written out now per this
+  // lane's bilingual rule — no operator locale reads it yet.
+  "shell.presence.onCallShort.en": "On call",
+  "shell.presence.onCallShort.es": "En llamada",
+  "shell.presence.idleShort.en": "{count} this week",
+  "shell.presence.idleShort.es": "{count} esta semana",
 
   "landing.title": "BIS Platform",
   "landing.tagline": "The all-in-one client platform by Bespoke Intelligent Solutions.",
