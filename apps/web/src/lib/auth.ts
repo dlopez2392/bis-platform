@@ -77,7 +77,7 @@ export async function requireAgencyOnlyAccountAccess(
  */
 export async function resolveClientAccessState(): Promise<
   | { status: "agency" }
-  | { status: "ok"; id: string; name: string; timezone: string }
+  | { status: "ok"; id: string; name: string; timezone: string; language: string | null }
   | { status: "off" }
   | { status: "none" }
 > {
@@ -88,7 +88,11 @@ export async function resolveClientAccessState(): Promise<
   const account = await getAccountByOrgId(serviceDb(), claims.org_id);
   if (!account) return { status: "none" };
   if (!account.client_access_enabled) return { status: "off" };
-  return { status: "ok", id: account.id, name: account.name, timezone: account.timezone };
+  // `language` added (Spanish-runtime lane, Task 6 fix round 1) — see
+  // getAccountByOrgId's own comment: this is the one read the dashboard
+  // layout's chrome (AppSidebar/Topbar, rendered ABOVE [accountId]) can
+  // resolve a client's locale from, with no second query.
+  return { status: "ok", id: account.id, name: account.name, timezone: account.timezone, language: account.language };
 }
 
 /** The client's own account, or null for the agency admin / an unlinked user. */

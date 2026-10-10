@@ -15,3 +15,28 @@ describe("app-sidebar nav labels resolve through the locale helper", () => {
     expect(src).toMatch(/t\(m, group\.label, locale\)/);
   });
 });
+
+// Fix round 1, "Minor (do it)": the footer Settings/Dashboard link, the
+// back-to-agency link, the wordmark and the collapse/expand aria-label were
+// still reading m[...] directly, so their .es twins (added this round) were
+// unreachable even once LocaleProvider mounted correctly. Same source-scan
+// convention as the describe block above.
+describe("app-sidebar's remaining shell.*/nav.* labels also resolve through t() (fix round 1, Minor)", () => {
+  it("no longer looks up m[\"nav.settings\"], m[\"nav.dashboard\"], m[\"shell.backToAgency\"] or m[\"shell.brand\"] directly (mutation: revert any one back to the raw m[...] lookup → FAILS)", () => {
+    expect(src).not.toMatch(/m\["nav\.settings"\]/);
+    expect(src).not.toMatch(/m\["nav\.dashboard"\]/);
+    expect(src).not.toMatch(/m\["shell\.backToAgency"\]/);
+    expect(src).not.toMatch(/m\["shell\.brand"\]/);
+    expect(src).toMatch(/t\(m, "nav\.settings", locale\)/);
+    expect(src).toMatch(/t\(m, "nav\.dashboard", locale\)/);
+    expect(src).toMatch(/t\(m, "shell\.backToAgency", locale\)/);
+    expect(src).toMatch(/t\(m, "shell\.brand", locale\)/);
+  });
+
+  it("the collapse/expand aria-label also resolves through t(), not m[\"shell.collapse\"]/m[\"shell.expand\"] directly (mutation: revert to the raw m[...] lookup → FAILS)", () => {
+    expect(src).not.toMatch(/m\["shell\.collapse"\]/);
+    expect(src).not.toMatch(/m\["shell\.expand"\]/);
+    expect(src).toMatch(/t\(m, "shell\.expand", locale\)/);
+    expect(src).toMatch(/t\(m, "shell\.collapse", locale\)/);
+  });
+});

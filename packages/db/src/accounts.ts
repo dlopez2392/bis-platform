@@ -262,9 +262,15 @@ export async function getA2pRegistration(
 
 export async function getAccountByOrgId(
   db: SupabaseClient, clerkOrgId: string,
-): Promise<{ id: string; name: string; client_access_enabled: boolean; timezone: string } | null> {
+): Promise<{ id: string; name: string; client_access_enabled: boolean; timezone: string; language: string | null } | null> {
+  // `language` added (Spanish-runtime lane, Task 6 fix round 1): the
+  // DASHBOARD layout's own chrome (AppSidebar/Topbar) renders ABOVE
+  // [accountId]/layout.tsx in the tree, so the per-account locale it needs
+  // has to come from THIS read (via resolveClientAccessState below) rather
+  // than a second query — no extra round trip, one more column on the same
+  // row.
   const { data, error } = await db.from("accounts")
-    .select("id, name, client_access_enabled, timezone").eq("clerk_org_id", clerkOrgId).maybeSingle();
+    .select("id, name, client_access_enabled, timezone, language").eq("clerk_org_id", clerkOrgId).maybeSingle();
   if (error) throw new Error(`getAccountByOrgId failed: ${error.message}`);
   return data ?? null;
 }

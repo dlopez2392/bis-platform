@@ -91,13 +91,21 @@ export const m = {
   "nav.numbers.es": "Números de teléfono",
 
   "shell.brand": "BIS",
+  // Task 6 fix round 1: unchanged across locales (a proper noun/brand name,
+  // same reason brandDisplayName is never translated) — routed through
+  // t() anyway at the call site for consistency with every other shell.*
+  // label, not because this string itself differs.
+  "shell.brand.es": "BIS",
   "shell.switchAccount": "Switch company",
   "shell.searchAccounts": "Search companies…",
   "shell.noAccounts": "No companies yet",
   "shell.search": "Search",
   "shell.collapse": "Collapse sidebar",
+  "shell.collapse.es": "Contraer panel lateral",
   "shell.expand": "Expand sidebar",
+  "shell.expand.es": "Expandir panel lateral",
   "shell.backToAgency": "Back to companies",
+  "shell.backToAgency.es": "Volver a las empresas",
   // Topbar's AI presence indicator (DESIGN.md "AI presence" key pattern).
   // The dot itself is a separate aria-hidden element (topbar-presence.tsx);
   // this string carries the meaning on its own per DESIGN.md's status rule

@@ -11,6 +11,9 @@ import { Topbar } from "@/components/topbar";
 import { ShellDataProvider } from "@/components/shell-data";
 import { CommandPalette } from "@/components/command-palette";
 import { Ground } from "@/components/ground";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import { LocaleProvider } from "@/components/locale-provider";
+import type { Locale } from "@/lib/i18n/locale";
 
 // generateMetadata and the layout body below are separate invocations that
 // need the same answers the root layout also needs for the very same tenant
@@ -132,6 +135,28 @@ export default async function DashboardLayout({
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
 
+  // Fix round 1 (Task 6 review): AppSidebar and Topbar render HERE, as
+  // siblings of <main>{children}</main> — not inside
+  // [accountId]/layout.tsx, which wraps only {children}. A LocaleProvider
+  // mounted one level down (as the original cut of this task did) never
+  // reaches the chrome, so useLocale() there always read the context's
+  // default ("en") regardless of the account's own language. This is the
+  // one place both the sidebar and the topbar actually sit below a shared
+  // ancestor, so it is the one place the provider can cover both.
+  //
+  // For the agency, `clientState` stays null (set only inside the
+  // `!isAgency` branch above) and `isOperator: true` always wins (operators
+  // stay English — owner decision 1, 2026-10-10), so no per-account read
+  // happens on agency routes. `clientState.language` is widened onto
+  // resolveClientAccessState's existing read (lib/auth.ts →
+  // getAccountByOrgId, packages/db/src/accounts.ts) — no second query.
+  const locale = requestLocale({
+    account: clientState?.status === "ok"
+      ? { language: clientState.language as Locale | null }
+      : null,
+    isOperator: isAgency,
+  });
+
   return (
     // ShellDataProvider wraps the whole chrome, not just the two components
     // that read from it: it mounts one pathname-keyed effect that both
@@ -140,30 +165,37 @@ export default async function DashboardLayout({
     // comment for why this single fetch replaces what used to be three
     // separate per-navigation POSTs.
     <ShellDataProvider>
-      <div className="relative flex min-h-screen">
-        <Ground />
-        <AppSidebar
-          accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
-          defaultCollapsed={collapsed}
-          isAgency={isAgency}
-          // D-072 review round: the SAME trimmed, never-raw resolver the
-          // tab title and the greeting now also go through, so all three
-          // surfaces read the brand name the same way.
-          clientBrandName={branding ? brandDisplayName(branding) || undefined : undefined}
-          clientLogoUrl={branding?.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : undefined}
-          clientAccentColor={resolveSidebarAccent(branding?.brandColor ?? null) ?? undefined}
-          clientTimezone={clientState?.status === "ok" ? clientState.timezone : undefined}
-        />
-        <div className="flex min-w-0 flex-1 flex-col">
-          {/* The palette mounts ONCE for the whole dashboard tree. This
-              layout sits ABOVE the [accountId] segment, so it cannot pass an
-              account id down and does not try — CommandPalette derives the
-              current account from the pathname, the same way ShellDataProvider
-              above it already does. */}
-          <Topbar isAgency={isAgency} palette={<CommandPalette isAgency={isAgency} />} />
-          <main className="min-w-0 flex-1">{children}</main>
+      <LocaleProvider locale={locale}>
+        {/* `lang` here, not only on [accountId]/layout.tsx's own inner
+            div: that one covers {children} (the page content) but sits
+            BELOW AppSidebar/Topbar in the tree, so it was never correct
+            for the chrome. This div is the outermost element both the
+            sidebar and the topbar sit inside. */}
+        <div className="relative flex min-h-screen" lang={locale}>
+          <Ground />
+          <AppSidebar
+            accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
+            defaultCollapsed={collapsed}
+            isAgency={isAgency}
+            // D-072 review round: the SAME trimmed, never-raw resolver the
+            // tab title and the greeting now also go through, so all three
+            // surfaces read the brand name the same way.
+            clientBrandName={branding ? brandDisplayName(branding) || undefined : undefined}
+            clientLogoUrl={branding?.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : undefined}
+            clientAccentColor={resolveSidebarAccent(branding?.brandColor ?? null) ?? undefined}
+            clientTimezone={clientState?.status === "ok" ? clientState.timezone : undefined}
+          />
+          <div className="flex min-w-0 flex-1 flex-col">
+            {/* The palette mounts ONCE for the whole dashboard tree. This
+                layout sits ABOVE the [accountId] segment, so it cannot pass an
+                account id down and does not try — CommandPalette derives the
+                current account from the pathname, the same way ShellDataProvider
+                above it already does. */}
+            <Topbar isAgency={isAgency} palette={<CommandPalette isAgency={isAgency} />} />
+            <main className="min-w-0 flex-1">{children}</main>
+          </div>
         </div>
-      </div>
+      </LocaleProvider>
     </ShellDataProvider>
   );
 }

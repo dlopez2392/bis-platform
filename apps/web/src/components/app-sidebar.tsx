@@ -173,15 +173,15 @@ export function AppSidebar({
   const footer: NavItem | null = !isAgency
     ? null
     : base
-      ? { href: `${base}/settings`, label: m["nav.settings"], icon: Settings }
-      : { href: "/dashboard", label: m["nav.dashboard"], icon: LayoutDashboard };
+      ? { href: `${base}/settings`, label: t(m, "nav.settings", locale), icon: Settings }
+      : { href: "/dashboard", label: t(m, "nav.dashboard", locale), icon: LayoutDashboard };
 
   // Only shown inside an account, and only for the agency — a client has
   // nothing to go "back" to. Its href ("/dashboard/accounts") is a string
   // prefix of every in-account route, so — like the footer's agency-scope
   // link — it needs an exact match or it would light up alongside whichever
   // account nav item is actually active.
-  const backToAgency: NavItem = { href: "/dashboard/accounts", label: m["shell.backToAgency"], icon: ArrowLeft };
+  const backToAgency: NavItem = { href: "/dashboard/accounts", label: t(m, "shell.backToAgency", locale), icon: ArrowLeft };
 
   // What the identity block below calls this company: the brand name, full
   // stop (D-072). No fallback to the agency's own internal account label —
@@ -254,7 +254,7 @@ export function AppSidebar({
             href="/dashboard"
             className="hidden px-1 text-sm font-semibold text-[var(--sidebar-text-strong)] sm:inline-block"
           >
-            {m["shell.brand"]}
+            {t(m, "shell.brand", locale)}
           </Link>
         )}
         {/* F-107 (rider part): hidden below `sm`, not merely inert. The
@@ -265,7 +265,7 @@ export function AppSidebar({
         <button
           type="button"
           onClick={toggle}
-          aria-label={collapsed ? m["shell.expand"] : m["shell.collapse"]}
+          aria-label={collapsed ? t(m, "shell.expand", locale) : t(m, "shell.collapse", locale)}
           className="hidden rounded-[var(--radius-ctl)] p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)] sm:inline-flex"
         >
           {collapsed ? (
