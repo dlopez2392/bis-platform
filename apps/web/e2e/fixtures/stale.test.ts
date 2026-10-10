@@ -18,6 +18,11 @@ describe("fixtureStamp", () => {
     expect(fixtureStamp(NAME, FIXTURE_ACCOUNT_RE)).toBe(STAMP);
     expect(fixtureStamp(EMAIL, FIXTURE_EMAIL_RE)).toBe(STAMP);
     expect(fixtureStamp(`e2e-agency-${STAMP}@example.com`, FIXTURE_EMAIL_RE)).toBe(STAMP);
+    // Staff and roles: the per-run client's own Staff login (auth.setup.ts).
+    // MUTATION: narrowing FIXTURE_EMAIL_RE back to its pre-staff alternation
+    // (`/^e2e-(?:client|agency)-(\d{13})@example\.com$/`) reds this line by
+    // name, since "staff" is no longer one of the admitted words.
+    expect(fixtureStamp(`e2e-staff-${STAMP}@example.com`, FIXTURE_EMAIL_RE)).toBe(STAMP);
   });
 
   it("refuses anything that is not exactly the fixture shape", () => {
@@ -49,7 +54,7 @@ describe("fixtureStamp", () => {
       // worth pinning.
       `e2e-client-${STAMP}@examplexcom`,
       `x-e2e-client-${STAMP}@example.com`,
-      // Only the two identities the suite mints; any other e2e-* address is
+      // Only the three identities the suite mints; any other e2e-* address is
       // someone else's and is never swept.
       `e2e-admin-${STAMP}@example.com`,
       `e2e-agency-${STAMP}@example.com.evil.test`,

@@ -22,6 +22,10 @@ type ClientFixture = {
   brandLogoPath?: string;
   brandColor?: string;
   formPublicId?: string;
+  /** Staff and roles: the per-run Staff login auth.setup.ts adds to this
+   *  SAME org, recorded into this same file rather than a sidecar of its
+   *  own — see auth.setup.ts's "authenticate as staff user" test. */
+  staffClerkUserId?: string;
 };
 
 // The `teardown` project attached to "setup" (see playwright.config.ts).
@@ -92,6 +96,18 @@ teardown("delete the client-access e2e fixture", async () => {
     await clerk.users.deleteUser(fixture.clerkUserId);
   } catch (e) {
     console.error(`e2e teardown: failed to delete Clerk user ${fixture.clerkUserId}: ${String(e)}`);
+  }
+  // Staff and roles: the per-run Staff login, a SEPARATE Clerk user from the
+  // Owner above. Its own membership in `fixture.clerkOrgId` goes with the org
+  // deleted above; only the user itself needs its own delete. Optional
+  // because a run that died before "authenticate as staff user" reached its
+  // own write-then-create order (auth.setup.ts) never recorded one.
+  if (fixture.staffClerkUserId) {
+    try {
+      await clerk.users.deleteUser(fixture.staffClerkUserId);
+    } catch (e) {
+      console.error(`e2e teardown: failed to delete Clerk staff user ${fixture.staffClerkUserId}: ${String(e)}`);
+    }
   }
 });
 

@@ -116,10 +116,12 @@ describe("e2e entry points refuse production", () => {
       expect(spies.test).not.toHaveBeenCalled();
     });
 
-    it("registers its two setup tests on the CI project", async () => {
+    // Staff and roles added a third: the per-run client's own Staff login,
+    // registered after the agency and client ones (auth.setup.ts).
+    it("registers its three setup tests on the CI project", async () => {
       stubEnv(`https://${CI_REF}.supabase.invalid`);
       await import("../auth.setup");
-      expect(spies.test).toHaveBeenCalledTimes(2);
+      expect(spies.test).toHaveBeenCalledTimes(3);
     });
   });
 
