@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { newPublicId, ALPHABET } from "./forms";
@@ -742,7 +742,7 @@ export async function moveBooking(
   }
 
   // --- 3. the old row, only if it is still live, stamped as ours ---------
-  const ourStamp = new Date().toISOString();
+  const ourStamp = moveStamp();
   const { data: hit, error: cancelErr } = await db.from("bookings")
     .update({ status: "cancelled", updated_at: ourStamp })
     .eq("account_id", accountId).eq("id", old.id).eq("status", "booked")
@@ -767,10 +767,9 @@ export async function moveBooking(
         + `re-read: ${againErr.message}); rolled back` + (left ? `, but ${newId} may still be live (${left})` : ""));
     }
     const row = again as { status: BookingStatus; updated_at: string } | null;
-    // OURS only when cancelled AND carrying our stamp. PostgREST answers
-    // "+00:00", not "Z", so the instants are compared, never the strings.
-    ours = row?.status === "cancelled"
-      && new Date(row.updated_at).getTime() === new Date(ourStamp).getTime();
+    // OURS only when cancelled AND carrying our stamp, to the microsecond
+    // (`sameMicroInstant`: PostgREST answers "+00:00", not "Z").
+    ours = row?.status === "cancelled" && sameMicroInstant(row.updated_at, ourStamp);
     console.error(`moveBooking: the cancel of ${old.id} answered an error (${cancelErr.message}); `
       + `re-read says ${ours ? "it landed, so the move stands" : "it did not land as ours, so the move is taken back"}`);
   }
@@ -790,6 +789,32 @@ export async function moveBooking(
   await emitLogged(db, accountId, "booking.status_changed", actorId,
     { bookingId: old.id, status: "cancelled" }, actorType);
   return { id: newId, cancelToken };
+}
+
+/**
+ * Fix round 3 (m2): the `updated_at` a move's cancel writes, unique to the
+ * call rather than to the millisecond — two tabs can cancel in the same ms.
+ * Now's millisecond plus three random digits of microseconds: timestamptz
+ * keeps microseconds and PostgREST answers them, so `sameMicroInstant` can
+ * tell this call's cancel from any other.
+ */
+export function moveStamp(now: Date = new Date()): string {
+  return now.toISOString().replace(/Z$/, `${String(randomInt(0, 1000)).padStart(3, "0")}Z`);
+}
+
+/** Whether two timestamps name the same instant to the MICROSECOND, whatever
+ *  their zone spelling or trailing zeros ("…123400Z" = "…1234+00:00").
+ *  `Date` keeps only milliseconds, so the fraction is read from the text. */
+export function sameMicroInstant(a: string, b: string): boolean {
+  const micros = (iso: string): number | null => {
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return null;
+    const frac = /:\d\d\.(\d+)/.exec(iso)?.[1] ?? "";
+    return Math.floor(ms / 1000) * 1_000_000 + Number(frac.slice(0, 6).padEnd(6, "0"));
+  };
+  const x = micros(a);
+  const y = micros(b);
+  return x !== null && y !== null && x === y;
 }
 
 /** An event written AFTER the row it describes, where the row is the truth:

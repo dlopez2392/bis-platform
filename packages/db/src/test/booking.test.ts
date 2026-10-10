@@ -12,6 +12,7 @@ import {
   SlotTakenError, BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel,
   claimCancelNotice, rescheduleChain, bookingContactEmail, discardQueuedNotice, noticeMessageStatus,
   moveBooking, BookingNotMovableError, bookingWasMoved, countRecentBookings,
+  moveStamp, sameMicroInstant,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -1841,6 +1842,45 @@ describe("F-048: moveBooking, a customer's move in place", () => {
         expect(await bookingWasMoved(db, accountId, b.id)).toBe(false);
         expect(await bookingWasMoved(db, otherAccountId, a.id)).toBe(false);
       });
+    });
+  });
+});
+
+/**
+ * Fix round 3 (m2): a move recognises its own cancel by the `updated_at` it
+ * stamped. Milliseconds are not unique enough (two tabs can cancel in the
+ * same ms), so the stamp carries random microseconds — timestamptz keeps
+ * them and PostgREST answers them — and is compared at that precision.
+ */
+describe("F-048: the move's own stamp", () => {
+  it("compares instants to the microsecond, whatever the zone spelling or trailing zeros (mutation: compare as Date ms → a same-ms foreign stamp reads as ours, FAILS)", () => {
+    expect(sameMicroInstant("2029-09-01T10:00:00.123456Z", "2029-09-01T10:00:00.123456+00:00")).toBe(true);
+    expect(sameMicroInstant("2029-09-01T10:00:00.123400Z", "2029-09-01T10:00:00.1234+00:00")).toBe(true);
+    expect(sameMicroInstant("2029-09-01T05:00:00.5Z", "2029-09-01T00:00:00.500000-05:00")).toBe(true);
+    // Same millisecond, another call's microseconds: NOT ours.
+    expect(sameMicroInstant("2029-09-01T10:00:00.123456Z", "2029-09-01T10:00:00.123789+00:00")).toBe(false);
+    expect(sameMicroInstant("2029-09-01T10:00:00.123456Z", "not a time")).toBe(false);
+  });
+
+  it("each call mints its own microseconds, and the database answers them back exactly", async () => {
+    const stamps = new Set(Array.from({ length: 200 }, () => moveStamp()));
+    expect(stamps.size).toBeGreaterThan(190);
+    for (const st of stamps) expect(st).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Stamp" }, "user_test");
+      const b = await createBooking(db, accountId, {
+        calendarId: cal.id, contactId, startsAt: new Date("2029-10-01T15:00:00Z"), endsAt: new Date("2029-10-01T16:00:00Z"),
+      }, "user_test");
+      const stamp = moveStamp();
+      const { error } = await db.from("bookings").update({ updated_at: stamp }).eq("id", b.id);
+      if (error) throw new Error(error.message);
+      const { data } = await db.from("bookings").select("updated_at").eq("id", b.id).single();
+      const back = (data as { updated_at: string }).updated_at;
+      expect(sameMicroInstant(back, stamp)).toBe(true);
+      // One microsecond away: a different instant, though the same millisecond.
+      const other = stamp.replace(/(\d{3})Z$/, (_m, d: string) => `${String((Number(d) + 1) % 1000).padStart(3, "0")}Z`);
+      expect(sameMicroInstant(back, other)).toBe(false);
     });
   });
 });
