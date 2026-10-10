@@ -62,8 +62,8 @@ export async function generateSummary(
         // model to translate a quote, only the surrounding sentences it
         // writes itself.
         opts?.language === "es"
-          ? "Escribe el resumen en español (es para el personal), sin importar el idioma en que se habló la llamada."
-          : "Always write the summary in English (it is staff-facing), regardless of the language spoken on the call.",
+          ? "Escribe el resumen en español (es para el personal), sin importar el idioma en que se habló la llamada. Si citas al cliente, deja la cita en el idioma en que habló."
+          : "Always write the summary in English (it is staff-facing), regardless of the language spoken on the call. If you quote the caller, keep the quote in the language the caller spoke.",
       ];
       // BOOKED times in the input are raw UTC (see summarize.ts's fact line,
       // which stays that way deliberately). Left alone, the prose model

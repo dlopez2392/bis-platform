@@ -112,7 +112,7 @@ describe("generateSummary", () => {
     expect(systemContent).toMatch(/español/i);
     expect(systemContent).not.toContain("Always write the summary in English");
   });
-  it("omitting opts.language preserves today's exact English instruction", async () => {
+  it("omitting opts.language preserves today's exact English instruction with quote clause (mutation: drop the quote clause → FAILS)", async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
     });
@@ -120,5 +120,16 @@ describe("generateSummary", () => {
     const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
     const systemContent = body.messages[0].content as string;
     expect(systemContent).toContain("Always write the summary in English (it is staff-facing), regardless of the language spoken on the call.");
+    expect(systemContent).toContain("If you quote the caller, keep the quote in the language the caller spoke.");
+  });
+  it("opts.language 'es' includes the Spanish quote clause protecting caller words (mutation: drop the quote clause → FAILS)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+    });
+    await generateSummary(callerSpoke(), { language: "es", fetchImpl: fetchImpl as unknown as typeof fetch });
+    const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
+    const systemContent = body.messages[0].content as string;
+    expect(systemContent).toMatch(/español/i);
+    expect(systemContent).toContain("Si citas al cliente, deja la cita en el idioma en que habló.");
   });
 });
