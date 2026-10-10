@@ -206,7 +206,7 @@ describe("settings page — third parties never hold the page", () => {
     const boundary = boundaryAround(await pageElements(), ClientAccessSection);
     expect(boundary, "ClientAccessSection inside <Suspense>").toBeTruthy();
     expect((boundary!.props.children as ReactElement).props).toEqual({
-      accountId: "a1", clerkOrgId: null, enabled: false,
+      accountId: "a1", enabled: false,
     });
     const fallback = boundary!.props.fallback;
     expect(isValidElement(fallback) && fallback.type).toBe(ClientAccessSkeleton);

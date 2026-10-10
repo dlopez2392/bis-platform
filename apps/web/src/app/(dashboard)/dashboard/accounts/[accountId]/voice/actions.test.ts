@@ -29,8 +29,8 @@ vi.mock("@bis/db", async (importOriginal) => ({
  * explains it was deliberately WIDENED from agency-only to admit clients too,
  * which is the opposite of what this surface needs. Voice must stay
  * agency-only (the nav item, the page, and every write here), the same
- * requirement settings/actions.ts enforces on `setClientAccessAction` and
- * `inviteClientAdminAction` via this same function's `isAgency` field.
+ * requirement settings/actions.ts enforces on `setClientAccessAction` via
+ * this same function's `isAgency` field.
  *
  * So this mock extends the one real precedent with a switchable `isAgency`
  * fixture rather than hardcoding `{ userId }` alone: `requireAccountAccess`

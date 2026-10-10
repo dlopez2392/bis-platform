@@ -71,27 +71,27 @@ beforeEach(() => {
  */
 describe("ClientAccessSection", () => {
   it("renders the switch, and under it the Team card for THIS account in its own Suspense with the shared skeleton (mutation: drop the Team mount -> FAILS)", async () => {
-    const els = all(await ClientAccessSection({ accountId: "a1", clerkOrgId: "org_1", enabled: true }));
+    const els = all(await ClientAccessSection({ accountId: "a1", enabled: true }));
     const panelEl = els.find((e) => e.type === ClientAccessPanel);
     expect(panelEl?.props.enabled).toBe(true);
     const boundary = els.find((e) => e.type === Suspense);
     expect(boundary, "TeamSection inside <Suspense>").toBeTruthy();
     const child = boundary!.props.children as ReactElement<Props>;
     expect(child.type).toBe(team.TeamSection);
-    expect(child.props).toEqual({ accountId: "a1", clerkOrgId: "org_1", viewer: "agency" });
+    expect(child.props).toEqual({ accountId: "a1", viewer: "agency" });
     const fallback = boundary!.props.fallback as ReactElement;
     expect(isValidElement(fallback) && fallback.type).toBe(TeamSkeleton);
     expect(els.indexOf(panelEl!)).toBeLessThan(els.indexOf(boundary!));
   });
 
   it("shows no Team card while client access is off (spec §8: shown only while access is on) (mutation: render it always -> FAILS)", async () => {
-    const els = all(await ClientAccessSection({ accountId: "a1", clerkOrgId: "org_1", enabled: false }));
+    const els = all(await ClientAccessSection({ accountId: "a1", enabled: false }));
     expect(els.find((e) => e.type === ClientAccessPanel)?.props.enabled).toBe(false);
     expect(els.some((e) => e.type === team.TeamSection)).toBe(false);
   });
 
   it("no longer reads Clerk itself: the switch never waits on a member list (mutation: keep the live list -> FAILS)", async () => {
-    await ClientAccessSection({ accountId: "a1", clerkOrgId: "org_1", enabled: true });
+    await ClientAccessSection({ accountId: "a1", enabled: true });
     expect(fx.clerkCalls).toBe(0);
     expect(fx.memberships).not.toHaveBeenCalled();
   });

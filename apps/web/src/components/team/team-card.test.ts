@@ -144,6 +144,12 @@ describe("TeamCard: states (rule 5)", () => {
     expect(text).toContain("rosa@rio.test");
     expect(text).toContain("tom@rio.test");
   });
+  it("Clerk unreachable: no \"Just you so far\", because the invitations are unknown, not none (mutation: show the empty sentence anyway -> FAILS)", () => {
+    const text = renderedText(card({ members: [OWNER], pending: [], clerkUnavailable: true }));
+    expect(text).toContain(m["team.clerkUnavailable"]);
+    expect(text).not.toContain(m["team.empty"]);
+    expect(renderedText(card({ members: [], pending: [], clerkUnavailable: true, viewer: "agency" }))).not.toContain(m["team.empty.agency"]);
+  });
   it("Clerk reachable: no such note", () => {
     expect(renderedText(card())).not.toContain(m["team.clerkUnavailable"]);
   });
@@ -153,6 +159,47 @@ describe("TeamCard: states (rule 5)", () => {
     expect(html).toContain('aria-busy="true"');
     expect(html).not.toMatch(/spin/);
     expect(html.match(/data-slot="skeleton"/g)!.length).toBeGreaterThanOrEqual(6);
+  });
+});
+
+/**
+ * Fix round 1, I1. React 19 resets a form after EVERY `action` resolves,
+ * a refusal included, and Radix Select reverts on that reset event
+ * (lib/forms/use-form-submit.ts). A refused invite therefore wiped the
+ * typed email and put role and language back to their defaults while the
+ * dialog stayed open. The house fix is onSubmit through useFormSubmit, no
+ * `action` prop. No DOM here, so the shape is pinned from source.
+ */
+describe("the invite form keeps what was typed when an invite is refused", () => {
+  const CARD_SRC = readFileSync(path.join(here, "team-card.tsx"), "utf8");
+  const form = CARD_SRC.slice(CARD_SRC.indexOf("function InviteDialog("));
+  it("submits through useFormSubmit with no action= prop (mutation: restore <form action={...}> -> FAILS)", () => {
+    expect(form.length).toBeLessThan(CARD_SRC.length);
+    expect(CARD_SRC).toContain('import { useFormSubmit } from "@/lib/forms/use-form-submit";');
+    expect(form).toContain("useFormSubmit(");
+    expect(form).toMatch(/<form\s+onSubmit=\{onSubmit\}/);
+    // No `action=` anywhere on the form element, however it is formatted.
+    const formTag = form.slice(form.indexOf("<form"), form.indexOf(">", form.indexOf("<form")) + 1);
+    expect(formTag).toContain("onSubmit");
+    expect(formTag).not.toMatch(/\baction=/);
+  });
+  it("the send button takes pending by hand, since useFormStatus reports only for action forms (mutation: read useFormStatus again -> FAILS)", () => {
+    expect(CARD_SRC).not.toContain("useFormStatus(");
+    expect(CARD_SRC).not.toMatch(/import {[^}]*useFormStatus/);
+    expect(form).toContain("<SendButton pending={pending} />");
+  });
+});
+
+describe("the inline Selects show on a hovered row (fix round 1, M7)", () => {
+  const CARD_SRC = readFileSync(path.join(here, "team-card.tsx"), "utf8");
+  const trigger = CARD_SRC.match(/const INLINE_TRIGGER = "([^"]*)"/)?.[1] ?? "";
+  const row = CARD_SRC.match(/const LAYOUT = "([^"]*)"/)?.[1] ?? "";
+  it("a hovered trigger rises to the input step (--surface-2) with the interactive edge, never the row's own --surface-3 (mutation: hover:bg-[var(--surface-3)] on the trigger -> FAILS)", () => {
+    expect(row).toContain("hover:bg-[var(--surface-3)]");
+    expect(trigger).toContain("hover:bg-[var(--surface-2)]");
+    expect(trigger).toContain("dark:hover:bg-[var(--surface-2)]");
+    expect(trigger).toContain("hover:border-[var(--line-strong)]");
+    expect(trigger).not.toContain("hover:bg-[var(--surface-3)]");
   });
 });
 

@@ -42,22 +42,24 @@ beforeEach(() => {
 });
 
 describe("the Team page", () => {
-  it("requireAccountOwner is its first call: a Staff (redirected) never reads a row (mutation: read the account first -> FAILS)", async () => {
+  it("requireAccountOwner is its first call: a Staff (redirected) gets nothing back (mutation: drop the guard -> FAILS)", async () => {
     guard.allowed = false;
     await expect(page()).rejects.toThrow("NEXT_REDIRECT");
     expect(guard.order).toEqual(["guard:a1"]);
   });
 
-  it("mounts TeamSection for THIS account's org in its own Suspense, the shared skeleton as fallback (mutation: render it outside Suspense -> FAILS)", async () => {
+  it("mounts TeamSection for THIS account in its own Suspense, reading nothing itself (mutation: read the account in the page again -> FAILS), the shared skeleton as fallback (mutation: render it outside Suspense -> FAILS)", async () => {
     const els = all(await page());
-    expect(guard.order[0]).toBe("guard:a1");
+    // Fix round 1, M5: the page reads nothing itself; TeamSection reads the
+    // account once (team-section.test.ts).
+    expect(guard.order).toEqual(["guard:a1"]);
     const boundary = els.find((e) => e.type === Suspense);
     expect(boundary).toBeTruthy();
     const fallback = boundary!.props.fallback as ReactElement;
     expect(isValidElement(fallback) && fallback.type).toBe(TeamSkeleton);
     const child = boundary!.props.children as ReactElement<Record<string, unknown>>;
     expect(child.type).toBe(section.TeamSection);
-    expect(child.props).toMatchObject({ accountId: "a1", clerkOrgId: "org_9", viewer: "owner" });
+    expect(child.props).toEqual({ accountId: "a1", viewer: "owner" });
   });
 
   it("the agency sees the agency's copy (mutation: viewer always owner -> FAILS)", async () => {

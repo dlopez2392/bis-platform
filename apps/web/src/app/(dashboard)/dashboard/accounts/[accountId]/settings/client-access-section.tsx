@@ -21,11 +21,9 @@ import { ClientAccessPanel } from "./client-access-panel";
  */
 export function ClientAccessSection({
   accountId,
-  clerkOrgId,
   enabled,
 }: {
   accountId: string;
-  clerkOrgId: string | null;
   enabled: boolean;
 }) {
   // accountId is bound here, server-side. It must never travel as a form field.
@@ -34,7 +32,7 @@ export function ClientAccessSection({
       <ClientAccessPanel enabled={enabled} setAccessAction={setClientAccessAction.bind(null, accountId)} />
       {enabled ? (
         <Suspense fallback={<TeamSkeleton />}>
-          <TeamSection accountId={accountId} clerkOrgId={clerkOrgId} viewer="agency" />
+          <TeamSection accountId={accountId} viewer="agency" />
         </Suspense>
       ) : null}
     </>

@@ -47,8 +47,8 @@ describe("ClientAccessPanel (D-002)", () => {
   it("no longer carries an invite form or a member list: the Team card owns both (mutation: leave the invite field → FAILS)", () => {
     const html = panel(true);
     expect(html).not.toContain('name="email"');
-    expect(renderedText(html)).not.toContain(m["clientAccess.members"]);
-    expect(renderedText(html)).not.toContain(m["clientAccess.invite"]);
+    expect(renderedText(html)).not.toContain("Members");
+    expect(renderedText(html)).not.toContain(m["team.invite"]);
   });
 
   it("says whether access is on or off, as a dot AND a word (rule 3) (mutation: drop the status pill → FAILS)", () => {

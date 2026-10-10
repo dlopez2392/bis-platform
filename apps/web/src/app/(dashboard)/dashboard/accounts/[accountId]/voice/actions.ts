@@ -19,7 +19,7 @@
  * `isAgency` check. Branding does not add that check: its own header
  * explains it was deliberately WIDENED to admit the client too. Voice must
  * NOT be widened the same way; the exact mechanism settings/actions.ts uses
- * to keep `setClientAccessAction`/`inviteClientAdminAction` agency-only is
+ * to keep `setClientAccessAction` agency-only is
  * this same `isAgency` field, just returned here (Result-typed throughout)
  * rather than thrown.
  */

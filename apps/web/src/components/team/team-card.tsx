@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useFormStatus } from "react-dom";
 import { UserPlus } from "lucide-react";
 import type { AccountRole, PersonLanguage, TeamMember } from "@bis/db";
 import { DotPill } from "@/components/dot-pill";
@@ -15,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Notice } from "@/components/ui/notice";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
 import { isAccountRole, isPersonLanguage, type PendingInvite } from "@/lib/team/team-view";
 import {
@@ -51,8 +51,15 @@ const LAYOUT = "relative -mx-2 flex flex-wrap items-center gap-x-3 gap-y-2 px-2 
 const ROW = `border-t border-[var(--row-line)] py-[7px] text-[13px] first:border-t-0 ${LAYOUT}`;
 /** A pending invitation keeps its dashed edge, on the interactive line token. */
 const INVITE_ROW = `border-t border-dashed border-[var(--line-strong)] py-[7px] text-[13px] first:border-t-0 ${LAYOUT}`;
-/** An inline Select that reads as its value until used: no box, the trigger's own focus ring kept. */
-const INLINE_TRIGGER = "h-8 border-transparent bg-transparent px-1.5 shadow-none hover:bg-[var(--surface-3)] dark:bg-transparent";
+/**
+ * An inline Select that reads as its value until used: no box, the
+ * trigger's own focus ring kept. A hovered trigger sits inside a hovered row
+ * (already `--surface-3`), so it shows itself as the input it is: the
+ * ladder's input step `--surface-2` and the interactive edge `--line-strong`
+ * (fix round 1, M7). The base trigger's `dark:hover:bg-input/50` is
+ * overridden too, so both modes agree.
+ */
+const INLINE_TRIGGER = "h-8 border-transparent bg-transparent px-1.5 shadow-none hover:border-[var(--line-strong)] hover:bg-[var(--surface-2)] dark:bg-transparent dark:hover:bg-[var(--surface-2)]";
 
 export function TeamCard({
   members, pending, room, clerkUnavailable, defaultLanguage, viewer, actions,
@@ -68,7 +75,7 @@ export function TeamCard({
 }) {
   const full = room !== null && room <= 0;
   const roomLine = roomCopy(room, viewer);
-  const empty = emptyCopy(viewer, members.length, pending.length);
+  const empty = emptyCopy(viewer, members.length, pending.length, clerkUnavailable);
 
   return (
     <Card id="team" className="scroll-mt-24">
@@ -187,8 +194,8 @@ function InviteRow({ invite, viewer, actions }: { invite: PendingInvite; viewer:
   );
 }
 
-function SendButton() {
-  const { pending } = useFormStatus();
+/** Takes `pending` by hand: useFormStatus reports only for `action`-prop forms, and this one has none. */
+function SendButton({ pending }: { pending: boolean }) {
   return (
     <Button type="submit" disabled={pending}>
       {pending ? m["team.invite.sending"] : m["team.invite.send"]}
@@ -199,8 +206,16 @@ function SendButton() {
 /**
  * Email, role (default Staff) and language (default the company's). Esc
  * closes it (Radix Dialog). A refusal (already invited, already on the
- * team, full) is said inside the dialog, which stays open with what was
- * typed (spec §9); success closes it with a toast.
+ * team, full) is said inside the dialog, which stays open with the email,
+ * role and language as they were (spec §9); success closes it with a toast.
+ *
+ * Submitted through useFormSubmit (onSubmit), NOT the `action` prop. React
+ * 19 resets a form after every action resolves, a refusal included, and
+ * Radix Select reverts on that reset event, so with `action` a refused
+ * invite wiped the typed email and put role and language back to their
+ * defaults while the dialog stayed open (fix round 1, I1;
+ * lib/forms/use-form-submit.ts). Nothing to reset on success: the dialog
+ * closes, and its content unmounts.
  */
 function InviteDialog({
   actions, viewer, defaultLanguage, disabled,
@@ -208,6 +223,12 @@ function InviteDialog({
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const defaultRole: AccountRole = "staff";
+  const { pending, onSubmit } = useFormSubmit(async (formData) => {
+    const refusal = await inviteMember(actions, formData, viewer);
+    if (refusal) { setError(refusal); return; }
+    setError(null);
+    setOpen(false);
+  });
   return (
     <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) setError(null); }}>
       <DialogTrigger asChild>
@@ -219,12 +240,7 @@ function InviteDialog({
           <DialogDescription>{m["team.invite.body"]}</DialogDescription>
         </DialogHeader>
         <form
-          action={async (formData) => {
-            const refusal = await inviteMember(actions, formData, viewer);
-            if (refusal) { setError(refusal); return; }
-            setError(null);
-            setOpen(false);
-          }}
+          onSubmit={onSubmit}
           className="space-y-4"
         >
           <div className="space-y-1.5">
@@ -252,7 +268,7 @@ function InviteDialog({
             </div>
           </div>
           {error ? <Notice tone="crit" className="text-foreground">{error}</Notice> : null}
-          <SendButton />
+          <SendButton pending={pending} />
         </form>
       </DialogContent>
     </Dialog>
@@ -292,6 +308,26 @@ export function TeamSkeleton() {
         </div>
         <Skeleton className="h-4 w-40" />
         <Skeleton className="h-3 w-96 max-w-full" />
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Client access is off (spec §8: the Team card shows only while it is on).
+ * Only the agency can land here: a client cannot sign in while it is off.
+ * Says why there is nothing to manage and where it is turned on, instead
+ * of an Invite that the server would refuse with team.accessOff.
+ */
+export function TeamAccessOff() {
+  return (
+    <Card id="team" className="scroll-mt-24">
+      <CardHeader>
+        <CardTitle>{m["team.title"]}</CardTitle>
+        <CardDescription>{m["team.body"]}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Notice tone="warn" className="text-foreground">{m["team.accessOffNote"]}</Notice>
       </CardContent>
     </Card>
   );

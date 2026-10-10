@@ -142,22 +142,17 @@ export function buildPaletteEntries(base: string | null, isAgency: boolean, isOw
       keywords: ["wizard", "activation", "onboarding", "go live"],
       href: `${base}/setup`,
     });
-    // The agency's own entry point into this client's team management.
-    // DEVIATION from the task brief, which described this as a
-    // SETTINGS_SECTIONS-shaped entry (`{ anchor: "team", ... }`, implying
-    // `group: "settings"` and an href of `${base}/settings#team`): the
-    // Settings page carries no `id="team"` card today — the Team UI is its
-    // own route (Task 10), not a card on this page — and
-    // `registry.test.ts`'s own anchor-parity test (added for exactly this
-    // class of defect, D-080) asserts every `group: "settings"` entry's
-    // anchor is a REAL id on a real Settings card. Registering this as a
-    // "settings" entry now would point at a fragment that scrolls to
-    // nothing, which is precisely what that test exists to catch. Shaped
-    // instead like `nav:settings`/`nav:setup` directly above — a plain
-    // navigation entry, `group: "navigation"` — but still carrying the
-    // brief's own `palette.settings.team` label and keywords, so the agency
-    // can still find it by typing "team" or "staff". The route 404s until
-    // Task 10 ships it, same as the client Owner's `nav:team` above.
+    // The agency's own entry point into this client's team management: the
+    // Team page (`/team`), which admits the agency and shows the same card
+    // as Settings. Not a SETTINGS_SECTIONS anchor, although Settings does
+    // carry an `id="team"` card since Task 10: that card renders only while
+    // client access is on (spec §8), so `settings#team` would scroll to
+    // nothing whenever access is off, which is the defect registry.test.ts's
+    // anchor-parity check (D-080) exists to catch. /team always answers,
+    // with the access-off note when access is off. A plain navigation entry
+    // (`group: "navigation"`) like `nav:settings`/`nav:setup` above, keeping
+    // the `palette.settings.team` label and its keywords, so the agency finds
+    // it by typing "team" or "staff".
     entries.push({
       kind: "href",
       id: "settings:team",

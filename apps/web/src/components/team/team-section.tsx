@@ -7,7 +7,7 @@ import { dbForRequest } from "@/lib/db";
 import { loggableError } from "@/lib/loggable-error";
 import { listPendingInvitations, teamCapacity } from "@/lib/team/clerk-team";
 import { inviteDefaultLanguage, roomLeft, type PendingInvite } from "@/lib/team/team-view";
-import { TeamCard, TeamLoadError } from "./team-card";
+import { TeamAccessOff, TeamCard, TeamLoadError } from "./team-card";
 import type { TeamViewer } from "./team-copy";
 
 /**
@@ -21,22 +21,24 @@ import type { TeamViewer } from "./team-copy";
  *   the stored list (spec §8's unreachable state). The two Clerk reads are
  *   one unit: half an answer (invitations without the cap, or the reverse)
  *   would show a room count that ignores what it cannot see.
- * - The account is read with select("*") so its language is picked up once
- *   the Spanish runtime lane adds the column, without naming a column that
- *   may not exist yet.
+ * - The account is read ONCE, here, with select("*"): its Clerk organisation,
+ *   whether client access is on, and its language, picked up once the Spanish
+ *   runtime lane adds the column without naming a column that may not exist
+ *   yet. The callers read nothing for it (fix round 1, M5).
+ * - Client access off renders TeamAccessOff, not the card (spec §8: shown
+ *   only while access is on). Settings already mounts this only while on;
+ *   the gate is here so the agency's /team view obeys the same rule (M3).
  * - Every action is bound to THIS account here, server-side; the account id
  *   never travels from the browser.
  * - A failed team read renders the card's own error state rather than
  *   throwing: under Settings it shares a page with the client-access switch,
  *   which must stay reachable (client-access-section.tsx's reasoning).
  */
-export async function TeamSection({
-  accountId, clerkOrgId, viewer,
-}: { accountId: string; clerkOrgId: string | null; viewer: TeamViewer }) {
+export async function TeamSection({ accountId, viewer }: { accountId: string; viewer: TeamViewer }) {
   const db = await dbForRequest();
 
   let members: TeamMember[];
-  let accountLanguage: unknown;
+  let row: Record<string, unknown> | null;
   try {
     const [team, account] = await Promise.all([
       listAccountTeam(db, accountId),
@@ -44,11 +46,13 @@ export async function TeamSection({
     ]);
     if (account.error) throw new Error(`account read failed: ${account.error.message}`);
     members = team;
-    accountLanguage = (account.data as Record<string, unknown> | null)?.language;
+    row = account.data as Record<string, unknown> | null;
   } catch (e) {
     console.error(`team: stored team unreadable for account ${accountId}: ${loggableError(e)}`);
     return <TeamLoadError />;
   }
+  if (row?.client_access_enabled !== true) return <TeamAccessOff />;
+  const clerkOrgId = typeof row.clerk_org_id === "string" && row.clerk_org_id ? row.clerk_org_id : null;
 
   let pending: PendingInvite[] = [];
   let room: number | null = null;
@@ -70,7 +74,7 @@ export async function TeamSection({
       pending={pending}
       room={room}
       clerkUnavailable={clerkUnavailable}
-      defaultLanguage={inviteDefaultLanguage(accountLanguage)}
+      defaultLanguage={inviteDefaultLanguage(row.language)}
       viewer={viewer}
       actions={{
         invite: inviteTeamMemberAction.bind(null, accountId),

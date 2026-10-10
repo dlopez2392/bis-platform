@@ -150,14 +150,6 @@ export const m = {
   "clientAccess.statusOff": "Off",
   "clientAccess.turnedOn": "Client access is on. Invited people at this company can sign in.",
   "clientAccess.turnedOff": "Client access is off. Nobody at this company can sign in until you turn it back on.",
-  "clientAccess.members": "Members",
-  "clientAccess.invite": "Invite",
-  "clientAccess.inviteEmail": "Email address",
-  "clientAccess.inviteSent": "Invitation sent",
-  "clientAccess.invitePending": "Invited",
-  "clientAccess.inviteFailed": "Could not send the invitation",
-  "clientAccess.disabledHint": "Turn client access on before inviting anyone.",
-  "clientAccess.membersUnavailable": "Member list unavailable right now — the switch above still works.",
 
   "branding.title": "Branding",
   // The client-facing SET. Every string the panel shows that names whose
@@ -3012,9 +3004,9 @@ export const m = {
   "team.invite.sent": "Invitation sent to {email}.",
   "team.invite.sent.es": "Invitación enviada a {email}.",
   "team.room.many": "Room for {count} more people",
-  "team.room.many.es": "Hay lugar para {count} personas más",
+  "team.room.many.es": "Hay espacio para {count} personas más",
   "team.room.one": "Room for 1 more person",
-  "team.room.one.es": "Hay lugar para 1 persona más",
+  "team.room.one.es": "Hay espacio para 1 persona más",
   "team.empty": "Just you so far. Invite the people who answer your phones and run your jobs.",
   "team.empty.es": "Por ahora solo está usted. Invite a las personas que contestan sus llamadas y hacen sus trabajos.",
   // The agency is never on the list, so "just you" would be false for it.
@@ -3022,6 +3014,10 @@ export const m = {
   "team.empty.agency.es": "Nadie de esta empresa puede entrar todavía. Invite a las personas que contestan sus llamadas y hacen sus trabajos.",
   "team.clerkUnavailable": "We couldn't reach the sign-in service, so invitations aren't shown. Your team list is below.",
   "team.clerkUnavailable.es": "No pudimos comunicarnos con el servicio de inicio de sesión, así que no se muestran las invitaciones. Su lista de equipo está abajo.",
+  // The agency on /team while client access is off (spec §8). Only the agency
+  // can land there, and Settings is where the switch lives.
+  "team.accessOffNote": "Client access is off for this company, so nobody can sign in and nobody can be invited. Turn it on in Settings to manage the team.",
+  "team.accessOffNote.es": "El acceso del cliente está desactivado para esta empresa, así que nadie puede entrar ni recibir una invitación. Actívelo en Ajustes para administrar el equipo.",
   "team.loadFailed": "We couldn't load the team just now. Refresh the page to try again.",
   "team.loadFailed.es": "No pudimos cargar el equipo en este momento. Actualice la página para intentarlo de nuevo.",
   "team.role.changed": "{name} is now {role}.",
@@ -3038,10 +3034,10 @@ export const m = {
   "team.undone.revoke.es": "Invitación enviada de nuevo a {email}. Le llegará un correo nuevo.",
   // The error codes team/actions.ts returns.
   "team.full": "Your team is full. Ask BIS to make room.",
-  "team.full.es": "Su equipo está completo. Pídale a BIS que haga lugar.",
+  "team.full.es": "Su equipo está completo. Pídale a BIS que haga espacio.",
   // The agency raises the cap by hand (decision 33), so it is never told to ask itself.
   "team.full.agency": "This team is full. Raise the company's login limit to make room.",
-  "team.full.agency.es": "Este equipo está completo. Suba el límite de usuarios de la empresa para hacer lugar.",
+  "team.full.agency.es": "Este equipo está completo. Suba el límite de usuarios de la empresa para hacer espacio.",
   "team.accessOff": "Turn client access on before inviting anyone.",
   "team.accessOff.es": "Active el acceso del cliente antes de invitar a alguien.",
   "team.lastOwner": "Every team needs at least one Owner. Make someone else an Owner first.",
@@ -3061,9 +3057,9 @@ export const m = {
   "team.remove.failed": "That person wasn't removed. Try again in a minute.",
   "team.remove.failed.es": "No se pudo quitar a esa persona. Intente de nuevo en un minuto.",
   "team.undo.failed": "We couldn't undo that. Invite them again if you need them back.",
-  "team.undo.failed.es": "No pudimos deshacerlo. Si necesita que regrese, vuelva a invitarle.",
+  "team.undo.failed.es": "No pudimos deshacerlo. Si necesita que regrese, vuelva a enviarle una invitación.",
   "team.undo.expired": "It's too late to undo that. Invite them again if you need them back.",
-  "team.undo.expired.es": "Ya es tarde para deshacerlo. Si necesita que regrese, vuelva a invitarle.",
+  "team.undo.expired.es": "Ya es tarde para deshacerlo. Si necesita que regrese, vuelva a enviarle una invitación.",
   "team.revoke.failed": "The invitation wasn't cancelled. Try again in a minute.",
   "team.revoke.failed.es": "No se pudo cancelar la invitación. Intente de nuevo en un minuto.",
 } as const;

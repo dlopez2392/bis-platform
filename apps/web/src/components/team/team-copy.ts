@@ -46,8 +46,9 @@ export function roomCopy(room: number | null, viewer: TeamViewer): string | null
   return fill(m["team.room.many"], { count: room });
 }
 
-export function emptyCopy(viewer: TeamViewer, members: number, pending: number): string | null {
-  if (pending > 0) return null;
+/** With Clerk unreachable the invitations are UNKNOWN, not none, so "Just you so far" would be a guess (fix round 1, M2). */
+export function emptyCopy(viewer: TeamViewer, members: number, pending: number, clerkUnavailable: boolean): string | null {
+  if (clerkUnavailable || pending > 0) return null;
   if (viewer === "agency") return members === 0 ? m["team.empty.agency"] : null;
   return members <= 1 ? m["team.empty"] : null;
 }

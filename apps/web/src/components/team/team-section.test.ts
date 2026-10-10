@@ -9,7 +9,7 @@ import type { TeamMember } from "@bis/db";
  */
 const fx = vi.hoisted(() => ({
   order: [] as string[],
-  account: { language: "es" } as Record<string, unknown> | null,
+  account: null as Record<string, unknown> | null,
   listAccountTeam: vi.fn(),
   listPendingInvitations: vi.fn(),
   teamCapacity: vi.fn(),
@@ -49,7 +49,7 @@ vi.mock("@/lib/team/clerk-team", () => ({
 vi.mock("@/app/(dashboard)/dashboard/accounts/[accountId]/team/actions", () => fx.acts);
 
 const { TeamSection } = await import("./team-section");
-const { TeamCard, TeamLoadError } = await import("./team-card");
+const { TeamCard, TeamLoadError, TeamAccessOff } = await import("./team-card");
 
 type Props = Record<string, unknown> & { actions: Record<string, (...a: unknown[]) => Promise<unknown>> };
 
@@ -58,7 +58,7 @@ const INVITE = { id: "orginv_1", email: "new@rio.test", role: "staff", language:
 
 beforeEach(() => {
   fx.order = [];
-  fx.account = { language: "es" };
+  fx.account = { clerk_org_id: "org_1", client_access_enabled: true, language: "es" };
   fx.listAccountTeam.mockReset().mockResolvedValue([ROSA]);
   fx.listPendingInvitations.mockReset().mockResolvedValue([INVITE]);
   fx.teamCapacity.mockReset().mockResolvedValue({ maxAllowed: 5, members: 2, pending: 1 });
@@ -66,7 +66,7 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
-const section = (clerkOrgId: string | null = "org_1") => TeamSection({ accountId: "a1", clerkOrgId, viewer: "owner" });
+const section = () => TeamSection({ accountId: "a1", viewer: "owner" });
 
 describe("TeamSection", () => {
   it("passes the stored team (read on the RLS client), Clerk's invitations, and the room left", async () => {
@@ -102,7 +102,8 @@ describe("TeamSection", () => {
   });
 
   it("an account with no organisation never calls Clerk and is not 'unreachable'", async () => {
-    const p = (await section(null)).props as Props;
+    fx.account = { clerk_org_id: null, client_access_enabled: true };
+    const p = (await section()).props as Props;
     expect(fx.listPendingInvitations).not.toHaveBeenCalled();
     expect(fx.teamCapacity).not.toHaveBeenCalled();
     expect(p.clerkUnavailable).toBe(false);
@@ -112,8 +113,22 @@ describe("TeamSection", () => {
   it("reads the account with select(\"*\") and defaults invitations to its language (mutation: name the column -> FAILS)", async () => {
     expect(((await section()).props as Props).defaultLanguage).toBe("es");
     expect(fx.order).toContain("select:*");
-    fx.account = {};
+    fx.account = { clerk_org_id: "org_1", client_access_enabled: true };
     expect(((await section()).props as Props).defaultLanguage).toBe("en");
+  });
+
+  it("reads the account ONCE, and Clerk with that row's organisation (fix round 1, M5: the page no longer reads it too) (mutation: a second account read -> FAILS)", async () => {
+    await section();
+    expect(fx.order.filter((x) => x === "from:accounts")).toHaveLength(1);
+    expect(fx.listPendingInvitations).toHaveBeenCalledWith("org_1");
+  });
+
+  it("client access off: the access-off note instead of the card, and no Clerk call (spec §8: shown only while access is on) (mutation: drop the gate -> FAILS)", async () => {
+    fx.account = { clerk_org_id: "org_1", client_access_enabled: false };
+    const el = await section();
+    expect(el.type).toBe(TeamAccessOff);
+    expect(fx.listPendingInvitations).not.toHaveBeenCalled();
+    expect(fx.teamCapacity).not.toHaveBeenCalled();
   });
 
   it("a failed team read renders the card's own error state instead of taking the page down (mutation: drop the try -> FAILS)", async () => {
