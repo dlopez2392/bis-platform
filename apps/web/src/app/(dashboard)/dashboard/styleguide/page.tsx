@@ -44,6 +44,8 @@ import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { LocaleNavDemo } from "./locale-nav-demo";
+import { requestPseudoMode } from "@/lib/i18n/request-locale";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { SettingsFieldCards } from "./settings-field-cards";
 import { BillingCardStates } from "./billing-card-states";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
@@ -52,13 +54,19 @@ import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
 import { EmbedSnippet } from "@/components/embed-snippet";
 import "@/app/c/[publicId]/concierge.css";
-import { m } from "@/lib/messages";
+import { m, type MessageKey } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
 
 /** All three of `STATUS_TREATMENT`'s own keys, in the order a reader meets
  *  them: still open, then the two decided outcomes. */
 const PROPOSAL_STATUSES: ProposalStatus[] = ["pending", "accepted", "dismissed"];
+
+/** The same `nav.*` keys the Locale section's en/es columns demonstrate
+ *  (Task 6) — one shared array so Task 11's pseudo-locale column below
+ *  iterates the exact same set rather than a second, hand-copied list that
+ *  could drift from it. */
+const NAV_LABEL_KEYS: MessageKey[] = ["nav.contacts", "nav.numbers"];
 
 /** The Manage billing specimen's action: it answers with the page's own
  *  failure sentence and touches nothing (no read, no Stripe), so pressing it
@@ -103,8 +111,21 @@ function Section({
   );
 }
 
-export default async function StyleguidePage() {
+export default async function StyleguidePage({
+  searchParams,
+}: {
+  // Not a prop of this page before Task 11 — added so `?locale=pseudo` can
+  // reach this page.tsx's own `requestPseudoMode` call. Optional: no
+  // existing test calls this component directly without it, but a widened
+  // required prop would still be a real signature change for no benefit.
+  searchParams?: Promise<{ locale?: string }>;
+}) {
   await requireAgency();
+  const { locale: localeParam } = (await searchParams) ?? {};
+  // QA-only (requestPseudoMode is false unless BIS_I18N_QA="1" is set —
+  // Playwright's webServer env / CI's e2e job, never Vercel): the third
+  // column below, beside Task 6's real en/es ones.
+  const pseudo = requestPseudoMode({ locale: localeParam });
 
   return (
     <>
@@ -241,8 +262,33 @@ export default async function StyleguidePage() {
             is visible here too. */}
         <Section title="Locale" file="components/locale-provider.tsx · lib/i18n/t.ts · components/app-sidebar.tsx">
           <div className="flex w-full flex-col gap-4">
-            <LocaleNavDemo labelKey="nav.contacts" />
-            <LocaleNavDemo labelKey="nav.numbers" />
+            {NAV_LABEL_KEYS.map((key) => <LocaleNavDemo key={key} labelKey={key} />)}
+            {/* Task 11's own third column: the pseudo-locale overflow check
+                (e2e/i18n-overflow.spec.ts) runs against THIS page, not the
+                live sidebar, because `[accountId]/layout.tsx` is a
+                `layout.tsx` and can never receive `searchParams` — so
+                `?locale=pseudo` can't reach the account layout's own
+                `requestLocale` call. No LocaleProvider here: pseudo-locale
+                is never a real catalogue lookup, just the English string run
+                through `pseudoLocale()` directly. `data-nav-label="pseudo"`
+                is a distinct VALUE from the en/es spans' boolean
+                `data-nav-label` (which React renders as `"true"`), so the
+                spec's `[data-nav-label='pseudo']` locator selects only this
+                column. */}
+            {pseudo ? (
+              <div className="flex flex-col gap-1">
+                <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                  pseudo
+                </span>
+                <div className="flex flex-wrap gap-4">
+                  {NAV_LABEL_KEYS.map((key) => (
+                    <span key={key} data-nav-label="pseudo" className="text-sm font-medium">
+                      {pseudoLocale(m[key])}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </Section>
 

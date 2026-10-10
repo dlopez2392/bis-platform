@@ -314,6 +314,14 @@ jobs:
       # Production's CONSENT_TOKEN_SECRET is set on Vercel Production only
       # (consent PR-3 plan, Task 15) and is a different value.
       CONSENT_TOKEN_SECRET: bis_ci_e2e_consent_token_fixture_only
+      # test-only; must never be set on a Vercel deployment. Gates
+      # `requestPseudoMode`'s `?locale=pseudo` override (apps/web/src/lib/
+      # i18n/request-locale.ts) so e2e/i18n-overflow.spec.ts's two specs can
+      # run here the same way they do locally (Playwright's own webServer
+      # env carries the matching line). request-locale.test.ts's own
+      # "BIS_I18N_QA never reaches a Vercel deployment" block pins that
+      # vercel.json and next.config.ts never set it.
+      BIS_I18N_QA: "1"
     steps:
       - uses: actions/checkout@v5
 

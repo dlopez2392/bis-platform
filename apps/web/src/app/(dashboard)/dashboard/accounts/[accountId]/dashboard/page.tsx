@@ -24,7 +24,8 @@ import { normalizeOpenHours } from "@/lib/booking/slots";
 import { bucketWork } from "@/lib/work/buckets";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
-import { requestLocale } from "@/lib/i18n/request-locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import { greetingPeriod, formatLocalLongDate } from "@/lib/dashboard/greeting";
@@ -89,6 +90,15 @@ export default async function AccountDashboardPage({
   // parallel staff-and-roles lane's `users.language` exists (requestLocale's
   // own doc comment, Owner decision 1, 2026-10-10).
   const locale = requestLocale({ account, isOperator: isAgency }, { locale: localeParam });
+  // Task 11 (Spanish-runtime lane), QA-only: true only when BIS_I18N_QA="1"
+  // (Playwright's webServer env / CI's e2e job — never Vercel) AND
+  // `?locale=pseudo` are both present. `p()` WRAPS the already-resolved
+  // string from the t()/formatCurrency calls below rather than replacing
+  // their call sites, so Task 7's own source-scan pins (page-locale.test.ts,
+  // hero.test.ts) keep matching the exact literal calls they pin even with
+  // this layered on top.
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const p = (resolved: string) => (pseudo ? pseudoLocale(resolved) : resolved);
   // ONE zone for this whole page. It used to have TWO, fifty lines apart —
   // a `safeZone(…, "UTC")` clamp here for the KPI windows and the RAW
   // `account.timezone` further down for `bucketWork` — so on an account
@@ -187,7 +197,7 @@ export default async function AccountDashboardPage({
   ]);
 
   const openOppsValue = String(openOpps.count);
-  const pipelineValueDisplay = formatCurrency(openOpps.value, locale);
+  const pipelineValueDisplay = p(formatCurrency(openOpps.value, locale));
 
   const checklistEntries = mergeChecklist(checklistRows, { a2pStatus: a2p?.status });
   const checklistRemaining = checklistEntries.filter((e) => !e.done).length;
@@ -357,7 +367,7 @@ export default async function AccountDashboardPage({
             the whole row instead, reusing StatTile's own exported
             `LABEL_ROLE` class string rather than a second hand-copied one —
             tokens only, no new hard-coded value. */}
-        <p className={LABEL_ROLE}>{t(m, "dashboard.kpi.last7Days", locale)}</p>
+        <p className={LABEL_ROLE}>{p(t(m, "dashboard.kpi.last7Days", locale))}</p>
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           {/* F-076 (now slice): ONE hero tile (DESIGN.md rule 11), whose
               metric follows the plan rather than a fixed metric that reads
@@ -365,40 +375,40 @@ export default async function AccountDashboardPage({
               comment above. */}
           <StatTile
             hero
-            label={showVoiceSub ? t(m, "dashboard.kpi.callsAnswered", locale) : t(m, "dashboard.kpi.leadsCaptured", locale)}
+            label={showVoiceSub ? p(t(m, "dashboard.kpi.callsAnswered", locale)) : p(t(m, "dashboard.kpi.leadsCaptured", locale))}
             value={showVoiceSub ? String(currentCallsIso.length) : String(currentLeadsIso.length)}
             delta={showVoiceSub ? callsDelta : leadsDelta}
             spark={showVoiceSub ? callsSpark : leadsSpark}
             valueTestId={showVoiceSub ? "kpi-calls-answered" : "kpi-leads-captured"}
           />
           <StatTile
-            label={t(m, "dashboard.kpi.appointmentsBooked", locale)}
+            label={p(t(m, "dashboard.kpi.appointmentsBooked", locale))}
             value={String(currentBookingsIso.length)}
             delta={bookingsDelta}
             spark={bookingsSpark}
           />
           {hasAfterHours ? (
             <StatTile
-              label={t(m, "dashboard.kpi.afterHoursCaptured", locale)}
+              label={p(t(m, "dashboard.kpi.afterHoursCaptured", locale))}
               value={String(afterHoursCurrent)}
               delta={afterHoursDelta}
             />
           ) : null}
           <StatTile
-            label={t(m, "dashboard.kpi.pipelineAdded", locale)}
-            value={formatCurrency(currentPipelineValue, locale)}
+            label={p(t(m, "dashboard.kpi.pipelineAdded", locale))}
+            value={p(formatCurrency(currentPipelineValue, locale))}
             delta={pipelineDelta}
             spark={pipelineSpark}
           />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-3">
-          <StatTile label={t(m, "account.contacts", locale)} value={String(contactsCount)} period={t(m, "common.allTime", locale)} />
-          <StatTile label={t(m, "account.openOpps", locale)} value={openOppsValue} period={t(m, "common.allTime", locale)} />
+          <StatTile label={p(t(m, "account.contacts", locale))} value={String(contactsCount)} period={p(t(m, "common.allTime", locale))} />
+          <StatTile label={p(t(m, "account.openOpps", locale))} value={openOppsValue} period={p(t(m, "common.allTime", locale))} />
           <StatTile
-            label={t(m, "account.pipelineValue", locale)}
+            label={p(t(m, "account.pipelineValue", locale))}
             value={pipelineValueDisplay}
-            period={t(m, "common.allTime", locale)}
+            period={p(t(m, "common.allTime", locale))}
           />
         </div>
 

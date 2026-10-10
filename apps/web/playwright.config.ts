@@ -201,6 +201,15 @@ export default defineConfig({
   webServer: {
     command: USE_DEV_SERVER ? "pnpm dev" : "pnpm build && pnpm start",
     url: "http://localhost:3000",
+    env: {
+      // test-only; must never be set on a Vercel deployment. Gates
+      // `requestPseudoMode`'s `?locale=pseudo` override (lib/i18n/
+      // request-locale.ts) — the one e2e/i18n-overflow.spec.ts needs, and
+      // dead everywhere else. request-locale.test.ts's own "BIS_I18N_QA
+      // never reaches a Vercel deployment" block pins that vercel.json and
+      // next.config.ts never set it.
+      BIS_I18N_QA: "1",
+    },
     // On the build path this is FALSE on purpose. `reuseExistingServer` will
     // happily adopt whatever is already listening on 3000 — including a dev
     // server someone left running — which would silently put the flakiness

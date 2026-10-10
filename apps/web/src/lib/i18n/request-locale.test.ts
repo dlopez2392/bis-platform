@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { requestLocale } from "./request-locale";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { requestLocale, requestPseudoMode } from "./request-locale";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const appsWebRoot = path.join(here, "..", "..", "..");
 
 describe("requestLocale", () => {
   it("a CLIENT session reads the account's language (mutation: drop the isOperator branch → the operator test below also returns 'es', FAILS)", () => {
@@ -23,4 +29,37 @@ describe("requestLocale", () => {
   });
 
   afterEach(() => vi.unstubAllEnvs());
+});
+
+describe("requestPseudoMode", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is false when BIS_I18N_QA is unset, even with ?locale=pseudo (mutation: drop the flag check → FAILS, returns true anyway)", () => {
+    expect(requestPseudoMode({ locale: "pseudo" })).toBe(false);
+  });
+
+  it("is true only when BIS_I18N_QA=\"1\" AND ?locale=pseudo are BOTH present", () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    expect(requestPseudoMode({ locale: "pseudo" })).toBe(true);
+    expect(requestPseudoMode({ locale: "es" })).toBe(false);
+    expect(requestPseudoMode(undefined)).toBe(false);
+  });
+});
+
+describe("BIS_I18N_QA never reaches a Vercel deployment (orchestrator checklist)", () => {
+  // Source-scan, not an import: neither file is JSON-schema-free TypeScript
+  // that is safe to `require()` from a vitest worker (next.config.ts expects
+  // the Next.js build runtime), and a plain text search is exactly what a
+  // stray `"BIS_I18N_QA"` in either file would look like, however it got
+  // there (vercel.json's own top-level "env", a `NextConfig.env` entry, or a
+  // careless copy-paste of Playwright's/CI's `env:` block).
+  it("vercel.json names no such variable (mutation: add \"env\": { \"BIS_I18N_QA\": \"1\" } to vercel.json → FAILS)", () => {
+    const vercelJson = readFileSync(path.join(appsWebRoot, "vercel.json"), "utf8");
+    expect(vercelJson).not.toContain("BIS_I18N_QA");
+  });
+
+  it("next.config.ts names no such variable (mutation: add env: { BIS_I18N_QA: \"1\" } to next.config.ts → FAILS)", () => {
+    const nextConfig = readFileSync(path.join(appsWebRoot, "next.config.ts"), "utf8");
+    expect(nextConfig).not.toContain("BIS_I18N_QA");
+  });
 });

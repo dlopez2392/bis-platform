@@ -85,7 +85,10 @@ export function StatTile({
     // grid item's automatic minimum size otherwise floors at its content's
     // min-content width, which held tiles open past their track at phone
     // width.
-    <div className="flex min-w-0 min-h-[108px] flex-col gap-1.5 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
+    <div
+      data-slot="stat-tile"
+      className="flex min-w-0 min-h-[108px] flex-col gap-1.5 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3"
+    >
       <p className={LABEL_ROLE}>{label}</p>
       <p
         data-testid={valueTestId}

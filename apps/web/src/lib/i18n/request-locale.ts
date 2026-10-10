@@ -49,3 +49,24 @@ export function requestLocale(
     ? resolveLocale(userLanguage, null)
     : resolveLocale(userLanguage, account?.language ?? null);
 }
+
+// Task 11 (Spanish-runtime lane): gates the pseudo-locale overflow check,
+// additive to `requestLocale` above — same flag, same plain-string
+// comparison discipline (no .env value parsed by code that can throw).
+// Deliberately NOT a third member of the `Locale` type: pseudo-locale is a
+// rendering transform applied to the ENGLISH string AFTER t()/
+// formatCurrency resolve it (pseudo-locale.ts's `pseudoLocale()`), never a
+// real catalogue locale `resolveLocale` could return — keeping `Locale`
+// itself at exactly "en" | "es" means nothing upstream needs to change for
+// this to exist. Both conditions are required: the flag alone (set in
+// Playwright's webServer env and CI's e2e job — never on a Vercel
+// deployment) would otherwise force EVERY page into pseudo mode rather
+// than only the ones a test explicitly opts into via `?locale=pseudo`.
+export function requestPseudoMode(
+  searchParams?: Record<string, string | string[] | undefined>,
+): boolean {
+  if (process.env.BIS_I18N_QA !== "1") return false;
+  const raw = searchParams?.locale;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === "pseudo";
+}
