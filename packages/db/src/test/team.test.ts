@@ -59,8 +59,16 @@ describe("reconcileMembership: a failed read must not read as success", () => {
 describe("roleFromClerk: the three sources, in order (spec §6)", () => {
   it("invitation bis_role on the membership wins over the Clerk role (mutation: check clerkRole first -> FAILS)", () =>
     expect(roleFromClerk({ clerkRole: "org:admin", membershipMeta: { bis_role: "staff" } })).toBe("staff"));
-  it("then the accepted invitation's metadata", () =>
-    expect(roleFromClerk({ clerkRole: "org:member", invitationMeta: { bis_role: "owner" } })).toBe("owner"));
+  it("metadata and Clerk role agreeing on Owner is Owner, from either metadata source", () => {
+    expect(roleFromClerk({ clerkRole: "org:admin", membershipMeta: { bis_role: "owner" } })).toBe("owner");
+    expect(roleFromClerk({ clerkRole: "org:admin", invitationMeta: { bis_role: "owner" } })).toBe("owner");
+  });
+  it("metadata bis_role owner beside a Clerk org:member is the LESS privileged, staff (review I4; mutation: metadata wins -> FAILS)", () => {
+    expect(roleFromClerk({ clerkRole: "org:member", membershipMeta: { bis_role: "owner" } })).toBe("staff");
+    expect(roleFromClerk({ clerkRole: "org:member", invitationMeta: { bis_role: "owner" } })).toBe("staff");
+  });
+  it("either metadata source saying staff beside org:admin is staff (review I4; mutation: consult the membership metadata only -> FAILS)", () =>
+    expect(roleFromClerk({ clerkRole: "org:admin", membershipMeta: { bis_role: "owner" }, invitationMeta: { bis_role: "staff" } })).toBe("staff"));
   it("org:admin with no metadata is owner (every existing client login)", () =>
     expect(roleFromClerk({ clerkRole: "org:admin" })).toBe("owner"));
   it("anything else is staff, including a garbage bis_role (mutation: default to owner -> FAILS)", () => {
@@ -85,7 +93,7 @@ describe("reconcileMembership against the real database", () => {
       const { data } = await db.from("accounts").select("clerk_org_id").eq("id", accountId).single();
       const sub = `user_rc_${RUN}`;
       try {
-        const port = fakePort({ membership: { role: "org:member", publicMetadata: { bis_role: "owner", bis_language: "es" }, createdAt: Date.now() } });
+        const port = fakePort({ membership: { role: "org:admin", publicMetadata: { bis_role: "owner", bis_language: "es" }, createdAt: Date.now() } });
         expect(await reconcileMembership(db, port, { clerkUserId: sub, clerkOrgId: data!.clerk_org_id, mode: "webhook" }))
           .toEqual({ outcome: "created", role: "owner" });
         const team = await listAccountTeam(db, accountId);
@@ -174,5 +182,62 @@ describe("reconcileMembership honours only an invitation accepted for THIS membe
       .toEqual({ outcome: "created", role: "staff" });
     expect(INVITE_ACCEPT_ALLOWANCE_MS).toBe(60 * 1000);
     expect(seen).toEqual([["org_1", "pat@example.com", created - INVITE_ACCEPT_ALLOWANCE_MS]]);
+  });
+});
+
+/** A fake that records each builder call WITH its arguments, so a query's filters can be asserted. */
+function recordingDb(respond: (table: string, calls: [string, unknown[]][]) => { data: unknown; error: unknown }) {
+  const queries: { table: string; calls: [string, unknown[]][] }[] = [];
+  const db = {
+    from(table: string) {
+      const q = { table, calls: [] as [string, unknown[]][] };
+      queries.push(q);
+      const b: Record<string | symbol, unknown> = new Proxy({}, {
+        get(_t, k) {
+          if (k === "then") return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => Promise.resolve(respond(table, q.calls)).then(res, rej);
+          if (k === "maybeSingle" || k === "single") return async () => respond(table, [...q.calls, [String(k), []]]);
+          return (...a: unknown[]) => { q.calls.push([String(k), a]); return b; };
+        },
+      });
+      return b;
+    },
+  } as unknown as SupabaseClient;
+  return { db, queries };
+}
+
+describe("reconcileMembership never recreates a membership removed AFTER the Clerk membership began (review I3)", () => {
+  const created = 1_760_000_000_000;
+  const port: ClerkTeamPort = {
+    getUser: async () => ({ email: "pat@example.com", name: null, publicMetadata: {} }),
+    getMembership: async () => ({ role: "org:admin", publicMetadata: {}, createdAt: created }),
+    acceptedInvitationMeta: async () => null,
+  };
+  function world(removalEvent: boolean) {
+    return recordingDb((table, calls) => {
+      if (table === "accounts") return { data: { id: "acct" }, error: null };
+      if (table === "events") return { data: removalEvent ? { id: 9 } : null, error: null };
+      if (table === "users") return { data: { id: "u1", language: "en" }, error: null };
+      return calls.some(([k]) => k === "upsert") ? { data: [{ id: "m1" }], error: null } : { data: null, error: null };
+    });
+  }
+  it.each(["fallback", "webhook"] as const)("%s: a system team.member_removed newer than the membership refuses, and nothing is written (mutation: drop the removal check -> FAILS)", async (mode) => {
+    const { db, queries } = world(true);
+    expect(await reconcileMembership(db, port, { clerkUserId: "user_1", clerkOrgId: "org_1", mode })).toEqual({ outcome: "stale" });
+    expect(queries.some((q) => q.calls.some(([k]) => k === "upsert"))).toBe(false);
+  });
+  it("asks only for THIS account's system-written removals of THIS Clerk user, newer than the membership (mutation: drop the actor_type filter -> FAILS)", async () => {
+    const { db, queries } = world(false);
+    expect(await reconcileMembership(db, port, { clerkUserId: "user_1", clerkOrgId: "org_1", mode: "fallback" }))
+      .toEqual({ outcome: "created", role: "owner" });
+    const ev = queries.find((q) => q.table === "events")!;
+    expect(ev.calls).toEqual(expect.arrayContaining([
+      ["eq", ["account_id", "acct"]], ["eq", ["type", "team.member_removed"]], ["eq", ["actor_type", "system"]],
+      ["eq", ["payload->>clerkUserId", "user_1"]], ["gt", ["created_at", new Date(created).toISOString()]],
+    ]));
+  });
+  it("a failed removal read throws rather than reading as 'no removal' (mutation: ignore the error -> FAILS)", async () => {
+    const { db } = recordingDb((table) => table === "accounts" ? { data: { id: "acct" }, error: null }
+      : table === "events" ? { data: null, error: { message: "down" } } : { data: null, error: null });
+    await expect(reconcileMembership(db, port, { clerkUserId: "user_1", clerkOrgId: "org_1", mode: "fallback" })).rejects.toThrow(/removal/);
   });
 });

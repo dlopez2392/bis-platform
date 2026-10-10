@@ -217,4 +217,4 @@ export { roleFromClerk, languageFromClerk, isAgencyMetadata,
          setAccountMemberRole, removeAccountMember, setMemberLanguage, listAccountTeam,
          reconcileMembership, INVITE_ACCEPT_ALLOWANCE_MS,
          type AccountRole, type PersonLanguage, type TeamMember,
-         type ClerkTeamPort, type ReconcileOutcome } from "./team";
+         MEMBER_REMOVED_EVENT, type ClerkTeamPort, type ReconcileOutcome } from "./team";

@@ -131,15 +131,17 @@ function chainDb(respond: (table: string, ops: string[]) => { data: unknown; err
 }
 
 describe("re-added after removal: the real reconcile with this adapter (spec §6, review I1)", () => {
-  // Pat was invited as Owner and accepted 400 days ago, later removed, and is
-  // now re-added directly as org:member (Clerk's dashboard, or the Team undo).
+  // Pat was invited as Staff and accepted 400 days ago, later removed, and is
+  // now re-added directly as org:admin (Clerk's dashboard, or the Team undo).
+  // Since review I4 an invitation's bis_role can only DEMOTE (roleFromClerk
+  // takes the less privileged), so the binding is proven with a Staff one.
   function settle(invite: { createdAt: number; updatedAt: number }) {
     users.getUser.mockResolvedValue({ primaryEmailAddress: { emailAddress: "pat@example.com" }, fullName: "Pat", publicMetadata: {} });
     organizations.getOrganizationMembershipList.mockResolvedValue({ data: [
-      { role: "org:member", publicMetadata: {}, createdAt: NOW, organization: { id: "org_1" }, publicUserData: { userId: "user_1" } },
+      { role: "org:admin", publicMetadata: {}, createdAt: NOW, organization: { id: "org_1" }, publicUserData: { userId: "user_1" } },
     ], totalCount: 1 });
     organizations.getOrganizationInvitationList.mockResolvedValue({ data: [
-      { emailAddress: "pat@example.com", ...invite, publicMetadata: { bis_role: "owner" } },
+      { emailAddress: "pat@example.com", ...invite, publicMetadata: { bis_role: "staff" } },
     ], totalCount: 1 });
     const db = chainDb((table, ops) => {
       if (table === "accounts") return { data: { id: "acct" }, error: null };
@@ -148,18 +150,18 @@ describe("re-added after removal: the real reconcile with this adapter (spec §6
     });
     return reconcileMembership(db, liveClerkTeamPort(), { clerkUserId: "user_1", clerkOrgId: "org_1", mode: "fallback" });
   }
-  it("the old Owner invitation is ignored: Pat comes back as Staff (mutation: reconcile passes acceptedSince 0 -> FAILS)", async () => {
-    expect(await settle({ createdAt: NOW - 401 * DAY, updatedAt: NOW - 400 * DAY })).toEqual({ outcome: "created", role: "staff" });
+  it("the old Staff invitation is ignored: Pat comes back as the org:admin's Owner (mutation: reconcile passes acceptedSince 0 -> FAILS)", async () => {
+    expect(await settle({ createdAt: NOW - 401 * DAY, updatedAt: NOW - 400 * DAY })).toEqual({ outcome: "created", role: "owner" });
   });
-  it("an invitation accepted for this membership is honoured: Owner (mutation: never honour an invitation -> FAILS)", async () => {
-    expect(await settle({ createdAt: NOW - 2 * DAY, updatedAt: NOW - 60 * 1000 })).toEqual({ outcome: "created", role: "owner" });
+  it("an invitation accepted for this membership is honoured: its Staff outranks org:admin (mutation: never honour an invitation -> FAILS)", async () => {
+    expect(await settle({ createdAt: NOW - 2 * DAY, updatedAt: NOW - 60 * 1000 })).toEqual({ outcome: "created", role: "staff" });
   });
 });
 
 describe("the Team's Clerk calls", () => {
   it("listPendingInvitations maps role and language from the invitation's own metadata", async () => {
     organizations.getOrganizationInvitationList.mockResolvedValue({ data: [
-      { id: "orginv_1", emailAddress: "a@x.com", role: "org:member", publicMetadata: { bis_role: "owner", bis_language: "es" } },
+      { id: "orginv_1", emailAddress: "a@x.com", role: "org:admin", publicMetadata: { bis_role: "owner", bis_language: "es" } },
       { id: "orginv_2", emailAddress: "b@x.com", role: "org:member", publicMetadata: {} },
     ], totalCount: 2 });
     expect(await listPendingInvitations("org_1")).toEqual([
@@ -205,7 +207,7 @@ describe("the Team's Clerk calls", () => {
   });
   it("revokeTeamInvitation returns what an undo needs", async () => {
     organizations.revokeOrganizationInvitation.mockResolvedValue({
-      id: "orginv_1", emailAddress: "a@x.com", role: "org:member", publicMetadata: { bis_role: "owner", bis_language: "es" },
+      id: "orginv_1", emailAddress: "a@x.com", role: "org:admin", publicMetadata: { bis_role: "owner", bis_language: "es" },
     });
     expect(await revokeTeamInvitation("org_1", "orginv_1", "user_owner")).toEqual({
       ok: true, invite: { id: "orginv_1", email: "a@x.com", role: "owner", language: "es" },

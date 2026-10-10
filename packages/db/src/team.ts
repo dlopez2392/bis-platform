@@ -21,15 +21,41 @@ const LANGS: readonly string[] = ["en", "es"];
 const field = (meta: unknown, k: string): unknown =>
   typeof meta === "object" && meta !== null ? (meta as Record<string, unknown>)[k] : undefined;
 
-/** The rule from spec §6: invitation bis_role (membership metadata, then the
- *  accepted invitation's own metadata, in case Clerk does not copy it onto
- *  the membership) wins; else org:admin -> owner; else staff. */
+/** The rule from spec §6, failing safe (corrected 2026-10-10 after review,
+ *  I4): the Clerk role gives one answer (org:admin -> owner, else staff), and
+ *  each valid `bis_role` in the membership's metadata (Clerk copies an
+ *  invitation's public metadata onto it) or the accepted invitation's own
+ *  metadata gives another. Owner only when EVERY answer says owner; any
+ *  disagreement is the less privileged, staff. Metadata a role change left
+ *  stale can therefore only ever demote, never mint an Owner. */
 export function roleFromClerk(input: { clerkRole: string; membershipMeta?: unknown; invitationMeta?: unknown }): AccountRole {
+  const answers: AccountRole[] = [input.clerkRole === "org:admin" ? "owner" : "staff"];
   for (const meta of [input.membershipMeta, input.invitationMeta]) {
     const r = field(meta, "bis_role");
-    if (typeof r === "string" && ROLES.includes(r)) return r as AccountRole;
+    if (typeof r === "string" && ROLES.includes(r)) answers.push(r as AccountRole);
   }
-  return input.clerkRole === "org:admin" ? "owner" : "staff";
+  return answers.every((a) => a === "owner") ? "owner" : "staff";
+}
+
+/** The event type the Team's removal writes (actor_type 'system'); see apps/web lib/team/removal-log.ts. */
+export const MEMBER_REMOVED_EVENT = "team.member_removed";
+
+/**
+ * Whether a system-written removal of this Clerk user from this account is
+ * NEWER than the Clerk membership being settled (review I3). If so, the
+ * membership is the one the removal was deleting, still visible because
+ * Clerk's delete had not landed when it was read, and must not be recreated.
+ * An undo or a fresh invitation makes a NEW membership, created after the
+ * removal, which passes. A failed read throws: "could not tell" must never
+ * read as "not removed".
+ */
+async function removedSince(db: SupabaseClient, accountId: string, clerkUserId: string, membershipCreatedAt: number): Promise<boolean> {
+  const { data, error } = await db.from("events").select("id")
+    .eq("account_id", accountId).eq("type", MEMBER_REMOVED_EVENT).eq("actor_type", "system")
+    .eq("payload->>clerkUserId", clerkUserId).gt("created_at", new Date(membershipCreatedAt).toISOString())
+    .limit(1).maybeSingle();
+  if (error) throw new Error(`reconcileMembership removal lookup failed: ${error.message}`);
+  return data !== null;
 }
 
 /** The first valid en|es across every metadata object given, in order. */
@@ -166,7 +192,7 @@ export interface ClerkTeamPort {
 
 export type ReconcileOutcome =
   | { outcome: "no_account" } | { outcome: "agency_user" } | { outcome: "no_email" }
-  | { outcome: "created" | "exists"; role: AccountRole } | { outcome: "removed" | "absent" };
+  | { outcome: "created" | "exists"; role: AccountRole } | { outcome: "removed" | "absent" | "stale" };
 
 /**
  * Makes BIS match Clerk's CURRENT state for (user, org): re-reads, never
@@ -200,6 +226,9 @@ export async function reconcileMembership(
 
   const existing = await readAccountRole(db, account.id, input.clerkUserId);
   if (existing) return { outcome: "exists", role: existing };
+
+  // A removal newer than this membership means the Team is deleting it (I3).
+  if (await removedSince(db, account.id, input.clerkUserId, membership.createdAt)) return { outcome: "stale" };
 
   const invitationMeta = await clerk.acceptedInvitationMeta(
     input.clerkOrgId, user.email, membership.createdAt - INVITE_ACCEPT_ALLOWANCE_MS);
