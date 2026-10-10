@@ -496,7 +496,10 @@ export async function runTool(
           const locale = spokenLocale(state, ctx);
           const brand = emailBrand(ctx.branding);
           const whenCompanyZone = formatWhen(slot.startsAt, ctx.timezone, locale);
-          const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${cancelToken}`;
+          // In the caller's language, as the web confirmation's is
+          // (`b/[publicId]/actions.ts`): the cancel page reads `?locale=`,
+          // and English is its default, so only Spanish carries it.
+          const cancelUrl = `${ctx.origin}/b/${ctx.calendar.public_id}/cancel/${cancelToken}${locale === "es" ? "?locale=es" : ""}`;
           // F-048: the add-to-calendar file, exactly as the web confirmation
           // builds it (`b/[publicId]/actions.ts`) — same helper, same token as
           // the cancel link, in the caller's language.

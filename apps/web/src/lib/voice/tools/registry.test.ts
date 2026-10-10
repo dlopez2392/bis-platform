@@ -458,6 +458,19 @@ describe("book_appointment", () => {
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
     const sent = sendMock.mock.calls[0]![0] as { body: string };
     expect(sent.body).toContain("Agregar a tu calendario: https://x.example/b/pub1/ics/tok123?locale=es");
+    // F-010 review m4: the cancel link opens in Spanish too, exactly as the
+    // web confirmation's does (`b/[publicId]/actions.ts`). Mutation: drop
+    // the parameter → FAILS.
+    expect(sent.body).toContain("https://x.example/b/pub1/cancel/tok123?locale=es");
+  });
+
+  it("an English caller's cancel link carries no locale — English is the page's default", async () => {
+    await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", email: "ana@example.com" });
+    const sent = sendMock.mock.calls[0]![0] as { body: string };
+    // End of line: the cancel link is the body's last line. Guards the
+    // mutation that adds `?locale=es` for everyone.
+    expect(sent.body).toMatch(/https:\/\/x\.example\/b\/pub1\/cancel\/tok123$/m);
   });
 
   it("send failure never fails the booking", async () => {
