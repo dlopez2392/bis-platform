@@ -90,10 +90,10 @@ function keywordsFor(href: string, base: string | null): string[] {
  * `base` is the in-account prefix (`/dashboard/accounts/<id>`), or null at the
  * agency top level where there is no account in scope.
  */
-export function buildPaletteEntries(base: string | null, isAgency: boolean): PaletteEntry[] {
+export function buildPaletteEntries(base: string | null, isAgency: boolean, isOwner: boolean): PaletteEntry[] {
   const entries: PaletteEntry[] = [];
 
-  for (const group of buildNavGroups(base, isAgency)) {
+  for (const group of buildNavGroups(base, isAgency, isOwner)) {
     for (const item of group.items) {
       entries.push({
         kind: "href",
@@ -105,6 +105,22 @@ export function buildPaletteEntries(base: string | null, isAgency: boolean): Pal
         href: item.href,
       });
     }
+  }
+
+  // Staff and roles (Task 8): a client Owner reaches team management
+  // directly — the sidebar footer's own destination, not a Settings-page
+  // anchor, so it is registered like any other nav destination rather than
+  // through SETTINGS_SECTIONS below. Staff never get this entry.
+  if (base && !isAgency && isOwner) {
+    entries.push({
+      kind: "href",
+      id: "nav:team",
+      label: m["nav.team"],
+      group: "navigation",
+      agencyOnly: false,
+      keywords: ["team", "staff", "people", "invite", "users", "logins", "employees"],
+      href: `${base}/team`,
+    });
   }
 
   if (base && isAgency) {
@@ -125,6 +141,31 @@ export function buildPaletteEntries(base: string | null, isAgency: boolean): Pal
       agencyOnly: true,
       keywords: ["wizard", "activation", "onboarding", "go live"],
       href: `${base}/setup`,
+    });
+    // The agency's own entry point into this client's team management.
+    // DEVIATION from the task brief, which described this as a
+    // SETTINGS_SECTIONS-shaped entry (`{ anchor: "team", ... }`, implying
+    // `group: "settings"` and an href of `${base}/settings#team`): the
+    // Settings page carries no `id="team"` card today — the Team UI is its
+    // own route (Task 10), not a card on this page — and
+    // `registry.test.ts`'s own anchor-parity test (added for exactly this
+    // class of defect, D-080) asserts every `group: "settings"` entry's
+    // anchor is a REAL id on a real Settings card. Registering this as a
+    // "settings" entry now would point at a fragment that scrolls to
+    // nothing, which is precisely what that test exists to catch. Shaped
+    // instead like `nav:settings`/`nav:setup` directly above — a plain
+    // navigation entry, `group: "navigation"` — but still carrying the
+    // brief's own `palette.settings.team` label and keywords, so the agency
+    // can still find it by typing "team" or "staff". The route 404s until
+    // Task 10 ships it, same as the client Owner's `nav:team` above.
+    entries.push({
+      kind: "href",
+      id: "settings:team",
+      label: m["palette.settings.team"],
+      group: "navigation",
+      agencyOnly: true,
+      keywords: ["team", "staff", "invite", "logins", "people"],
+      href: `${base}/team`,
     });
     for (const section of SETTINGS_SECTIONS) {
       entries.push({

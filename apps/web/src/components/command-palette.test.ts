@@ -74,3 +74,13 @@ describe("CommandPalette — F-107 r1: a phone keeps a search entry point (icon-
     expect(src.match(/aria-keyshortcuts=\{isMac \? "Meta\+K" : "Control\+K"\}/g)?.length).toBe(2);
   });
 });
+
+// Staff and roles (Task 8): isOwner is threaded to buildPaletteEntries, not
+// dropped on the way through. Source-only, same reasoning as every other
+// block in this file.
+describe("CommandPalette — threads isOwner to buildPaletteEntries (staff and roles)", () => {
+  it("takes an isOwner prop and passes it as buildPaletteEntries' third argument (mutation: call buildPaletteEntries(base, isAgency) with only two args → FAILS)", () => {
+    expect(src).toMatch(/export function CommandPalette\(\{\s*isAgency,\s*isOwner,\s*\}/);
+    expect(src).toContain("filterEntries(buildPaletteEntries(base, isAgency, isOwner), query)");
+  });
+});

@@ -62,4 +62,23 @@ describe("account layout: the payment-failed banner (G21)", () => {
     expect(log).toHaveBeenCalled();
     log.mockRestore();
   });
+
+  // Staff and roles: under 0066_staff_and_roles.sql's account_billing_owner_read,
+  // a client Staff session reads NO row on the RLS client — RLS filtering,
+  // not an error. getAccountBilling's own .maybeSingle() already turns "no
+  // row" into `null` rather than throwing, and showsPaymentFailedBanner(null)
+  // is already `false` — so this is the SAME code path readAccountBilling's
+  // happy case takes for an unbilled account, confirmed here by test rather
+  // than by reading, with the Staff case named explicitly so a future reader
+  // does not mistake "no row" for "a fault".
+  it("a client Staff session (no account_billing row under RLS) renders no banner, logs nothing, and still renders the page — null is policy, not a fault (mutation: getAccountBilling throwing on no row (.single()) → the console assertion FAILS; showsPaymentFailedBanner returning true for null → the banner assertion FAILS)", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    auth.isAgency = false;
+    billing.read.mockResolvedValue(null);
+    const tree = await render();
+    expect(find(tree, BillingBanner)).toHaveLength(0);
+    expect(log).not.toHaveBeenCalled();
+    expect((tree as ReactElement<{ children: ReactNode[] }>).props.children).toContain("page");
+    log.mockRestore();
+  });
 });

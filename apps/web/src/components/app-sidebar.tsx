@@ -97,6 +97,7 @@ export function AppSidebar({
   accounts,
   defaultCollapsed,
   isAgency,
+  isOwner,
   clientBrandName,
   clientLogoUrl,
   clientAccentColor,
@@ -105,6 +106,13 @@ export function AppSidebar({
   accounts: AccountOption[];
   defaultCollapsed: boolean;
   isAgency: boolean;
+  /** Staff and roles: a client's Owner/Staff role in THIS account — settled
+   *  once by dashboard/layout.tsx (the same cached ensureAccountRole call
+   *  requireAccountAccess makes later in the request) and threaded down
+   *  rather than re-derived here. Meaningless for the agency, which is
+   *  never a client membership at all (plan deviation 6) — always false for
+   *  it, and ignored: the footer below branches on `isAgency` FIRST. */
+  isOwner: boolean;
   /** What this company's own customers call it, when the agency has set it.
    *  Undefined for the agency, which gets the switcher instead, and for an
    *  unbranded client — who then gets NO identity block at all (D-072: this
@@ -157,21 +165,27 @@ export function AppSidebar({
   // Grouping, audience filtering and href construction all live in the pure
   // nav-groups module (unit-tested there without React); this component only
   // resolves labelKey → copy and iconKey → icon component per item.
-  const groups = buildNavGroups(base, isAgency).map((group) => ({
+  const groups = buildNavGroups(base, isAgency, isOwner).map((group) => ({
     label: group.label,
     items: group.items.map(
       (item): NavItem => ({ href: item.href, label: m[item.labelKey], icon: NAV_ICONS[item.iconKey] }),
     ),
   }));
 
-  // A client has no agency scope to return to, so there is no footer item
-  // for them at all — not Settings (agency-only, see requireAgencyOnlyAccountAccess),
-  // not the agency's own top-level Dashboard link.
-  const footer: NavItem | null = !isAgency
-    ? null
-    : base
-      ? { href: `${base}/settings`, label: m["nav.settings"], icon: Settings }
-      : { href: "/dashboard", label: m["nav.dashboard"], icon: LayoutDashboard };
+  // The agency's footer is unchanged: Settings in an account, the top-level
+  // Dashboard link outside one. Staff and roles: a client has no agency
+  // scope to return to and no Settings (agency-only, see
+  // requireAgencyOnlyAccountAccess) — but a client OWNER gets Team here
+  // instead (DESIGN.md rule 10's pinned footer cluster), the same self-
+  // service entry point the palette's nav:team registers. A client Staff,
+  // like the old unconditional client case, gets no footer item at all.
+  const footer: NavItem | null = isAgency
+    ? (base
+        ? { href: `${base}/settings`, label: m["nav.settings"], icon: Settings }
+        : { href: "/dashboard", label: m["nav.dashboard"], icon: LayoutDashboard })
+    : (base && isOwner
+        ? { href: `${base}/team`, label: m["nav.team"], icon: Users }
+        : null);
 
   // Only shown inside an account, and only for the agency — a client has
   // nothing to go "back" to. Its href ("/dashboard/accounts") is a string
@@ -422,13 +436,18 @@ export function AppSidebar({
             active={isNavActive(pathname, footer.href, !base)}
           />
           {/* Agency in-account only (base set) — the agency top-level footer
-              (Dashboard link, base === null) has no account to meter, and a
-              client never reaches this branch at all (footer is null for
-              them). Hidden at done === total: a genuinely complete setup and
-              the read's own failure fold both land here, and Setup leaving
-              the nav on completion means this row IS its nav presence — see
-              shell-actions.ts. */}
-          {base && setupProgress.done !== setupProgress.total ? (
+              (Dashboard link, base === null) has no account to meter.
+              Staff and roles: a client Owner now also reaches this `footer`
+              branch (Team, below), so `isAgency` is explicit here rather
+              than relied on implicitly — setup is agency-only data
+              (shell-data.tsx never populates it for a client, which already
+              makes done===total and hides this for them today), but a
+              client's own progress has no meaning to show even if that ever
+              changed. Hidden at done === total too: a genuinely complete
+              setup and the read's own failure fold both land here, and
+              Setup leaving the nav on completion means this row IS its nav
+              presence — see shell-actions.ts. */}
+          {isAgency && base && setupProgress.done !== setupProgress.total ? (
             <SetupMeterLink
               base={base}
               collapsed={collapsed}

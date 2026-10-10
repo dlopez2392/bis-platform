@@ -11,6 +11,7 @@ import { Topbar } from "@/components/topbar";
 import { ShellDataProvider } from "@/components/shell-data";
 import { CommandPalette } from "@/components/command-palette";
 import { Ground } from "@/components/ground";
+import { ensureAccountRole } from "@/lib/team/ensure-role";
 
 // generateMetadata and the layout body below are separate invocations that
 // need the same answers the root layout also needs for the very same tenant
@@ -121,7 +122,7 @@ export default async function DashboardLayout({
     if (state.status === "none") redirect("/no-access?reason=none");
   }
 
-  const [accounts, cookieStore, branding] = await Promise.all([
+  const [accounts, cookieStore, branding, isOwner] = await Promise.all([
     isAgency ? listAccounts(serviceDb()) : Promise.resolve([]),
     cookies(),
     // Only a client's chrome wears a brand. The agency's stays BIS on purpose,
@@ -129,6 +130,17 @@ export default async function DashboardLayout({
     clientState?.status === "ok"
       ? getTenantBranding(clientState.id)
       : Promise.resolve(null),
+    // Staff and roles: the caller's Owner/Staff role in THIS account, for
+    // the sidebar footer's Team link and the palette's own Team entries.
+    // `ensureAccountRole` is React cache()d per request on (accountId,
+    // orgId, userId), and requireAccountAccess calls it again with the same
+    // arguments further down the tree (the page under [accountId]/) — so
+    // this costs no extra round-trip, it only settles the answer earlier.
+    // Always false for the agency (never a client membership, plan
+    // deviation 6) and for a client whose account did not resolve to "ok".
+    clientState?.status === "ok" && claims.org_id
+      ? ensureAccountRole(clientState.id, claims.org_id, userId).then((role) => role === "owner")
+      : Promise.resolve(false),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
 
@@ -146,6 +158,7 @@ export default async function DashboardLayout({
           accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
           defaultCollapsed={collapsed}
           isAgency={isAgency}
+          isOwner={isOwner}
           // D-072 review round: the SAME trimmed, never-raw resolver the
           // tab title and the greeting now also go through, so all three
           // surfaces read the brand name the same way.
@@ -160,7 +173,7 @@ export default async function DashboardLayout({
               account id down and does not try — CommandPalette derives the
               current account from the pathname, the same way ShellDataProvider
               above it already does. */}
-          <Topbar isAgency={isAgency} palette={<CommandPalette isAgency={isAgency} />} />
+          <Topbar isAgency={isAgency} palette={<CommandPalette isAgency={isAgency} isOwner={isOwner} />} />
           <main className="min-w-0 flex-1">{children}</main>
         </div>
       </div>

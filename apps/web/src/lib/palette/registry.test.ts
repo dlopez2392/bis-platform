@@ -46,12 +46,15 @@ function stripComments(src: string): string {
 }
 
 describe("buildPaletteEntries", () => {
-  it("registers EVERY nav destination — the contract's own parity rule", () => {
-    for (const isAgency of [true, false]) {
-      const navHrefs = buildNavGroups(BASE, isAgency).flatMap((g) => g.items.map((i) => i.href));
+  it("registers EVERY nav destination — the contract's own parity rule, in all three roles", () => {
+    // Staff and roles: the agency's own isOwner value is meaningless (it is
+    // not a client at all), so it is asserted with both values to make sure
+    // neither role is skipped by this loop.
+    for (const [isAgency, isOwner] of [[true, false], [false, true], [false, false]] as const) {
+      const navHrefs = buildNavGroups(BASE, isAgency, isOwner).flatMap((g) => g.items.map((i) => i.href));
       expect(navHrefs.length).toBeGreaterThan(0); // the check below is vacuous otherwise
       const entryHrefs = new Set(
-        buildPaletteEntries(BASE, isAgency)
+        buildPaletteEntries(BASE, isAgency, isOwner)
           .filter((e) => e.kind === "href")
           .map((e) => (e as { href: string }).href),
       );
@@ -60,7 +63,7 @@ describe("buildPaletteEntries", () => {
   });
 
   it("hides agency-only destinations and settings from a client", () => {
-    const client = buildPaletteEntries(BASE, false);
+    const client = buildPaletteEntries(BASE, false, true);
     expect(client.some((e) => e.agencyOnly)).toBe(false);
     expect(client.some((e) => e.group === "settings")).toBe(false);
     // Voice is the agency's receptionist config, not the client's own data.
@@ -70,7 +73,7 @@ describe("buildPaletteEntries", () => {
   });
 
   it("gives the agency every settings section, each with its own anchor", () => {
-    const settings = buildPaletteEntries(BASE, true).filter((e) => e.group === "settings");
+    const settings = buildPaletteEntries(BASE, true, false).filter((e) => e.group === "settings");
     expect(settings.length).toBeGreaterThanOrEqual(4);
     for (const entry of settings) {
       expect(entry.kind).toBe("href");
@@ -81,16 +84,16 @@ describe("buildPaletteEntries", () => {
   });
 
   it("registers the alert-phone settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
-    const settings = buildPaletteEntries(BASE, true).filter((e) => e.group === "settings");
+    const settings = buildPaletteEntries(BASE, true, false).filter((e) => e.group === "settings");
     const entry = settings.find((e) => e.id === "settings:alert-phone");
     expect(entry).toBeTruthy();
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#alert-phone`);
   });
 
   it("registers the billing settings section, agency only (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
-    const entry = buildPaletteEntries(BASE, true).find((e) => e.id === "settings:billing");
+    const entry = buildPaletteEntries(BASE, true, false).find((e) => e.id === "settings:billing");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#billing`);
-    expect(buildPaletteEntries(BASE, false).some((e) => e.id === "settings:billing")).toBe(false);
+    expect(buildPaletteEntries(BASE, false, true).some((e) => e.id === "settings:billing")).toBe(false);
   });
 
   // D-080: Branding, Weekly report and Website are real cards on the
@@ -99,22 +102,47 @@ describe("buildPaletteEntries", () => {
   // SETTINGS_SECTIONS entry, so DESIGN.md's "settings sections must be
   // registered in the palette index" went unmet for all three.
   it("registers the branding settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
-    const entry = buildPaletteEntries(BASE, true).find((e) => e.id === "settings:branding");
+    const entry = buildPaletteEntries(BASE, true, false).find((e) => e.id === "settings:branding");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#branding`);
   });
 
   it("registers the weekly report settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
-    const entry = buildPaletteEntries(BASE, true).find((e) => e.id === "settings:weekly-report");
+    const entry = buildPaletteEntries(BASE, true, false).find((e) => e.id === "settings:weekly-report");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#weekly-report`);
   });
 
   it("registers the website settings section (mutation: remove the SETTINGS_SECTIONS entry → FAILS)", () => {
-    const entry = buildPaletteEntries(BASE, true).find((e) => e.id === "settings:website");
+    const entry = buildPaletteEntries(BASE, true, false).find((e) => e.id === "settings:website");
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#website`);
   });
 
+  // Staff and roles (Task 8): a client Owner gets a direct `nav:team` entry;
+  // a client Staff does not. Not a SETTINGS_SECTIONS anchor — see
+  // registry.ts's own comment on why — so this is checked by id/href, not
+  // by the `group: "settings"` anchor-parity loop below.
+  it("registers nav:team for a client Owner, pointing at this account's /team; a client Staff never gets it (mutation: drop the isOwner check → the Staff assertion FAILS)", () => {
+    const owner = buildPaletteEntries(BASE, false, true).find((e) => e.id === "nav:team");
+    expect((owner as { href: string } | undefined)?.href).toBe(`${BASE}/team`);
+    expect(buildPaletteEntries(BASE, false, false).some((e) => e.id === "nav:team")).toBe(false);
+  });
+
+  it("registers settings:team for the agency, pointing at this account's /team (mutation: drop the entry → FAILS)", () => {
+    const entry = buildPaletteEntries(BASE, true, false).find((e) => e.id === "settings:team");
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/team`);
+    // Never offered to a client under either id — Team's agency entry point
+    // is a different surface from the client Owner's own nav:team above.
+    expect(buildPaletteEntries(BASE, false, true).some((e) => e.id === "settings:team")).toBe(false);
+  });
+
+  it("finds Team by the words an operator or a business owner would type (mutation: drop the keywords → FAILS)", () => {
+    for (const word of ["staff", "invite"]) {
+      expect(filterEntries(buildPaletteEntries(BASE, true, false), word).map((e) => e.id)).toContain("settings:team");
+      expect(filterEntries(buildPaletteEntries(BASE, false, true), word).map((e) => e.id)).toContain("nav:team");
+    }
+  });
+
   it("finds the website assistant by the words an operator would type", () => {
-    const entries = buildPaletteEntries(BASE, true);
+    const entries = buildPaletteEntries(BASE, true, false);
     const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;
     // MUTATION: remove the NAV_KEYWORDS entry — this FAILS, and an operator
     // typing "widget" finds nothing.
@@ -126,7 +154,7 @@ describe("buildPaletteEntries", () => {
   // D-062: an operator typing any one of the five automation recipes by name
   // found nothing — only no-show/reminder/review words were registered.
   it("finds Automations by referral, reactivation, quote, confirmation and instant reply (mutation: drop any of these from NAV_KEYWORDS → FAILS)", () => {
-    const entries = buildPaletteEntries(BASE, true);
+    const entries = buildPaletteEntries(BASE, true, false);
     const automations = entries.find((e) => e.id === `nav:${BASE}/automations`)!;
     for (const word of ["referral", "reactivation", "quote", "confirmation", "instant reply"]) {
       expect(automations.keywords).toContain(word);
@@ -134,15 +162,15 @@ describe("buildPaletteEntries", () => {
   });
 
   it("has no duplicate ids and no entry without a label", () => {
-    for (const isAgency of [true, false]) {
-      const entries = buildPaletteEntries(BASE, isAgency);
+    for (const [isAgency, isOwner] of [[true, false], [false, true], [false, false]] as const) {
+      const entries = buildPaletteEntries(BASE, isAgency, isOwner);
       expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
       for (const e of entries) expect(e.label.trim().length).toBeGreaterThan(0);
     }
   });
 
   it("outside an account offers only the top-level destinations", () => {
-    const entries = buildPaletteEntries(null, true);
+    const entries = buildPaletteEntries(null, true, false);
     const hrefs = entries.filter((e) => e.kind === "href").map((e) => (e as { href: string }).href);
     expect(hrefs).toContain("/dashboard/accounts");
     expect(hrefs).toContain("/dashboard/blueprints");
@@ -154,14 +182,14 @@ describe("buildPaletteEntries", () => {
   });
 
   it("finds Plans by the words an operator types for it (mutation: drop its NAV_KEYWORDS entry → FAILS)", () => {
-    const entries = buildPaletteEntries(null, true);
+    const entries = buildPaletteEntries(null, true, false);
     for (const word of ["billing", "pricing", "stripe"]) {
       expect(filterEntries(entries, word).map((e) => e.id)).toContain("nav:/dashboard/plans");
     }
   });
 
   it("finds a client's Billing page by the words a business owner types for it (mutation: drop its NAV_KEYWORDS entry → FAILS)", () => {
-    const entries = buildPaletteEntries(BASE, false);
+    const entries = buildPaletteEntries(BASE, false, true);
     for (const word of ["invoice", "card", "receipt"]) {
       expect(filterEntries(entries, word).map((e) => e.id)).toContain(`nav:${BASE}/billing`);
     }
@@ -170,7 +198,7 @@ describe("buildPaletteEntries", () => {
   it("offers no action that writes tenant data", () => {
     // The safety line the spec draws: navigation and safe actions only. If a
     // future action id appears here, it has to be justified against that rule.
-    const actions = buildPaletteEntries(BASE, true).filter((e) => e.kind === "action");
+    const actions = buildPaletteEntries(BASE, true, false).filter((e) => e.kind === "action");
     expect(actions.map((a) => (a as { actionId: string }).actionId)).toEqual(["toggle-theme"]);
   });
 
@@ -198,7 +226,7 @@ describe("buildPaletteEntries", () => {
       .map((f) => stripComments(readFileSync(path.join(here, f), "utf8")))
       .join("\n");
 
-    const anchors = buildPaletteEntries(BASE, true)
+    const anchors = buildPaletteEntries(BASE, true, false)
       .filter((e) => e.group === "settings")
       .map((e) => (e as { href: string }).href.split("#")[1]!);
     expect(anchors.length).toBeGreaterThan(0); // the loop below is vacuous otherwise
@@ -210,7 +238,7 @@ describe("buildPaletteEntries", () => {
 });
 
 describe("filterEntries", () => {
-  const entries = buildPaletteEntries(BASE, true);
+  const entries = buildPaletteEntries(BASE, true, false);
 
   it("returns everything for an empty query", () => {
     expect(filterEntries(entries, "   ")).toHaveLength(entries.length);

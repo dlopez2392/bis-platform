@@ -78,3 +78,25 @@ describe("dashboard/layout — never passes the agency's private account name to
     expect(src).toContain('clientBrandName={branding ? brandDisplayName(branding) || undefined : undefined}');
   });
 });
+
+// Staff and roles (Task 8): isOwner is settled via the same cached
+// ensureAccountRole call requireAccountAccess makes later in the request,
+// and threaded to BOTH AppSidebar (the footer's Team link) and CommandPalette
+// (its own Team entries) — never hardcoded, never derived from isAgency
+// alone. Source-only: a render test would need Clerk/next/headers/the whole
+// shell mocked for no payoff beyond what these pins already cover.
+describe("dashboard/layout — computes isOwner via ensureAccountRole and threads it to AppSidebar and CommandPalette (staff and roles)", () => {
+  it("settles isOwner from ensureAccountRole keyed on the client's own account/org, only when resolved \"ok\" (mutation: hardcode isOwner to isAgency, or drop the status === \"ok\" guard → FAILS)", () => {
+    const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
+    expect(src).toContain('clientState?.status === "ok" && claims.org_id');
+    expect(src).toContain('ensureAccountRole(clientState.id, claims.org_id, userId).then((role) => role === "owner")');
+  });
+
+  it("passes the SAME isOwner value to both AppSidebar and CommandPalette, in CODE (mutation: pass a literal `false` to either → FAILS)", () => {
+    const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
+    // The AppSidebar call site: isAgency immediately followed by isOwner,
+    // both reading the computed variables (not a literal).
+    expect(src).toContain("isAgency={isAgency}\n          isOwner={isOwner}");
+    expect(src).toContain('<CommandPalette isAgency={isAgency} isOwner={isOwner} />');
+  });
+});

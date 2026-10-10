@@ -30,6 +30,11 @@ export const m = {
   "nav.blueprints": "Blueprints",
   "nav.plans": "Plans",
   "nav.billing": "Billing",
+  // Staff and roles (Task 8): a client Owner's sidebar footer link and its
+  // own nav:team palette entry — never a scrolling nav row (nav-groups.ts's
+  // own "never includes a Team item" test), and never shown to Staff.
+  "nav.team": "Team",
+  "nav.team.es": "Equipo",
   // Work Queue Task 6 — the agency-wide queue, top level beside Companies
   // and Blueprints. "Work queue" rather than reusing "To do" (nav.tasks):
   // that label already names the per-account screen one level down, and the
@@ -2352,6 +2357,11 @@ export const m = {
   "palette.error": "Couldn't search your records just now.",
   "palette.retry": "Try again",
   "palette.action.toggleTheme": "Switch between light and dark",
+  // Staff and roles (Task 8): the agency's own ⌘K entry point into this
+  // client's team management (registry.ts's own comment on why this is a
+  // plain navigation entry, not a SETTINGS_SECTIONS anchor).
+  "palette.settings.team": "Team",
+  "palette.settings.team.es": "Equipo",
   "palette.settings.clientAccess": "Client access",
   "palette.settings.sendingAddress": "Sending address",
   "palette.settings.customFields": "Custom fields",

@@ -75,7 +75,17 @@ function useIsMac(): boolean {
  * (the agency top level) the static half still works and the live half is
  * simply not offered — there is no account to scope a search to.
  */
-export function CommandPalette({ isAgency }: { isAgency: boolean }) {
+export function CommandPalette({
+  isAgency,
+  isOwner,
+}: {
+  isAgency: boolean;
+  /** Staff and roles: a client's Owner/Staff role, threaded from
+   *  dashboard/layout.tsx the same way AppSidebar's own isOwner prop is —
+   *  meaningless for the agency (never a client membership, plan deviation
+   *  6), ignored because buildPaletteEntries checks isAgency first. */
+  isOwner: boolean;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
@@ -87,7 +97,7 @@ export function CommandPalette({ isAgency }: { isAgency: boolean }) {
 
   const accountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1] ?? null;
   const base = accountId ? `/dashboard/accounts/${accountId}` : null;
-  const entries = filterEntries(buildPaletteEntries(base, isAgency), query);
+  const entries = filterEntries(buildPaletteEntries(base, isAgency, isOwner), query);
 
   // Sanitized, not merely trimmed, and measured against the SAME floor the
   // route applies to the SAME transform. Gating on the raw string instead let
