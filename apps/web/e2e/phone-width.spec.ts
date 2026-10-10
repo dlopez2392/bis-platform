@@ -131,8 +131,13 @@ test.afterAll(async () => {
     }, fixtureRef.clerkUserId);
   } else {
     // There was no profile before this file ran, so the only faithful
-    // restore is for there to be none after.
-    await db.from("voice_profiles").delete().eq("account_id", fixtureRef.accountId);
+    // restore is for there to be none after. F-107 r4 review, item 3:
+    // the delete's own error was ignored — destructured and thrown
+    // instead, forward-calls.spec.ts's own precedent (:157-163), so a
+    // failed restore surfaces as a failed `afterAll` rather than a
+    // silently stranded row.
+    const { error } = await db.from("voice_profiles").delete().eq("account_id", fixtureRef.accountId);
+    if (error) throw new Error(`phone-width spec: voice_profiles restore-delete failed: ${error.message}`);
   }
 });
 
@@ -233,7 +238,38 @@ async function findWidestOffender(page: Page, clientWidth: number): Promise<stri
   }, clientWidth);
 }
 
-async function assertNoPageScroll(page: Page, route: string, width: number) {
+/**
+ * F-107 r4 review, item 2: `goto` resolves on "load", not on every async
+ * child mounting — Clerk's UserButton/OrganizationSwitcher and (in-account)
+ * the presence pill all render after an SDK round trip, and measuring
+ * right after `goto` let /dashboard and /contacts PASS at 320px with the
+ * exact same header that failed on /settings moments later, for no reason
+ * but timing: a route that measures before the header has its real
+ * content proves nothing. `.cl-userButton-root`/`.cl-organizationSwitcher-
+ * root` are Clerk's own structural class names (the org-switcher one is
+ * confirmed from a real CI failure's own diagnostic text, not guessed —
+ * Clerk's `cl-<component>-root` naming is consistent across its
+ * components). The presence pill has no stable class of its own, so it is
+ * found by the text either of its two states always contains.
+ */
+async function waitForHeaderSettled(page: Page, isAgency: boolean, inAccount: boolean) {
+  await page.locator(".cl-userButton-root").first().waitFor({ state: "visible" });
+  if (isAgency) {
+    await page.locator(".cl-organizationSwitcher-root").first().waitFor({ state: "visible" });
+  }
+  if (inAccount) {
+    // A single `data-testid`, not a text match: both of TopbarPresence's
+    // CSS-toggled variants contain overlapping text ("this week" in both
+    // the short and full idle phrase), so a text locator's `.first()` did
+    // not reliably resolve to whichever one the viewport actually shows.
+    await page.getByTestId("topbar-presence").waitFor({ state: "visible" });
+  }
+}
+
+async function assertNoPageScroll(
+  page: Page, route: string, width: number,
+  opts: { isAgency: boolean; inAccount: boolean },
+) {
   await test.step(`${route} at ${width}px`, async () => {
     await page.setViewportSize({ width, height: HEIGHT });
     await page.goto(route);
@@ -242,6 +278,7 @@ async function assertNoPageScroll(page: Page, route: string, width: number) {
     // silently pass it by measuring whatever page it landed on instead.
     const pathname = new URL(page.url()).pathname;
     expect(pathname, `${route} redirected to ${pathname}`).toBe(route);
+    await waitForHeaderSettled(page, opts.isAgency, opts.inAccount);
     const measured = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
@@ -274,7 +311,7 @@ function topLevelAgencyRoutes(): string[] {
 test.describe("top-level agency routes (agency session, no account) — phone width", () => {
   test("every top-level route has no horizontal page scroll", async ({ page }) => {
     for (const route of topLevelAgencyRoutes()) {
-      await assertNoPageScroll(page, route, WIDTH);
+      await assertNoPageScroll(page, route, WIDTH, { isAgency: true, inAccount: false });
     }
   });
 });
@@ -291,7 +328,7 @@ test.describe("in-account routes, client session — phone width", () => {
     const base = `/dashboard/accounts/${fixture.accountId}`;
     const routes = buildNavGroups(base, false).flatMap((g) => g.items.map((i) => i.href));
     for (const route of routes) {
-      await assertNoPageScroll(page, route, WIDTH);
+      await assertNoPageScroll(page, route, WIDTH, { isAgency: false, inAccount: true });
     }
 
     // F-107 r1 review, item 5: detail routes, read-only, on the fixture
@@ -306,10 +343,10 @@ test.describe("in-account routes, client session — phone width", () => {
     // forever if that fixture ever stopped seeding one, rather than
     // failing loudly the way a real regression should.
     expect(contacts.length, "the fixture always seeds one contact (auth.setup.ts)").toBeGreaterThan(0);
-    await assertNoPageScroll(page, `${base}/contacts/${contacts[0]!.id}`, WIDTH);
+    await assertNoPageScroll(page, `${base}/contacts/${contacts[0]!.id}`, WIDTH, { isAgency: false, inAccount: true });
     // contacts/import needs no fixture data — it is the CSV wizard's own
     // first step (DESIGN.md's "CSV import" pattern: "choose a file").
-    await assertNoPageScroll(page, `${base}/contacts/import`, WIDTH);
+    await assertNoPageScroll(page, `${base}/contacts/import`, WIDTH, { isAgency: false, inAccount: true });
 
     // F-107 r1 review, item 1: below `sm`, the sidebar's label spans are
     // CSS-`hidden` even when the cookie-free default (`collapsed=false`)
@@ -341,7 +378,7 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
       `${base}/setup`,
     ];
     for (const route of routes) {
-      await assertNoPageScroll(page, route, WIDTH);
+      await assertNoPageScroll(page, route, WIDTH, { isAgency: true, inAccount: true });
     }
 
     // F-107 r1 review, item 5: forms/[formId], read-only, if the fixture has
@@ -354,7 +391,7 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
     // F-107 r2 review, item 4: auth.setup.ts always publishes exactly one
     // form ("E2E Brand Form …") — same reasoning as the contact above.
     expect(forms.length, "the fixture always publishes one form (auth.setup.ts)").toBeGreaterThan(0);
-    await assertNoPageScroll(page, `${base}/forms/${forms[0]!.id}`, WIDTH);
+    await assertNoPageScroll(page, `${base}/forms/${forms[0]!.id}`, WIDTH, { isAgency: true, inAccount: true });
 
     // F-107 r1 review, item 1: the Settings footer link is the same
     // SidebarLink component as every nav item — same fix, same proof.
@@ -370,10 +407,15 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
     // table is in `ACCOUNT_OWNED_TABLES` (packages/db/src/
     // account-teardown.ts), so auth.teardown.ts's cascade removes it with
     // the rest of the account — a real write, but a safe and cheap one,
-    // not a read. With zero calls ever made on this account, the idle
-    // state reads "✓ 0 calls handled this week" (messages.ts
-    // `shell.presence.idle`).
-    await expect(page.getByText(/calls handled this week/)).toBeVisible();
+    // not a read. F-107 r4 review (item 1) collapsed this page's own
+    // presence text to "0 this week" below `sm` (this test runs at
+    // `WIDTH` = 375px — DESIGN.md's rider's primary width, below `sm`) —
+    // the full "✓ 0 calls handled this week" phrase this assertion used
+    // to check for is now `hidden` there on purpose, so the check is
+    // against the SAME `data-testid` wrapper `waitForHeaderSettled` (this
+    // file) already proved visible above, not against either phrase's
+    // own text.
+    await expect(page.getByTestId("topbar-presence")).toBeVisible();
   });
 
   // The Goal's stricter, parenthetical width — checked on a representative
@@ -395,9 +437,21 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
       return;
     }
     const base = `/dashboard/accounts/${fixture.accountId}`;
-    const routes = ["/dashboard/accounts", `${base}/dashboard`, `${base}/contacts`, `${base}/settings`, `${base}/voice`];
-    for (const route of routes) {
-      await assertNoPageScroll(page, route, NARROW_WIDTH);
+    // F-107 r4 review, item 2: `inAccount` per-route, not one blanket
+    // value for the whole loop — /dashboard/accounts is the top-level
+    // agency list (no account, no presence pill); the rest are in this
+    // SAME fixture account, which this spec's own beforeAll keeps an
+    // enabled voice profile on, so their presence pill genuinely renders
+    // and is worth waiting for.
+    const routes: { path: string; inAccount: boolean }[] = [
+      { path: "/dashboard/accounts", inAccount: false },
+      { path: `${base}/dashboard`, inAccount: true },
+      { path: `${base}/contacts`, inAccount: true },
+      { path: `${base}/settings`, inAccount: true },
+      { path: `${base}/voice`, inAccount: true },
+    ];
+    for (const { path, inAccount } of routes) {
+      await assertNoPageScroll(page, path, NARROW_WIDTH, { isAgency: true, inAccount });
     }
   });
 });
