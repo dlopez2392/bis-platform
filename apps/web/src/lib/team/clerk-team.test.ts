@@ -12,13 +12,14 @@ const organizations = {
   revokeOrganizationInvitation: vi.fn(),
   deleteOrganizationMembership: vi.fn(),
   createOrganizationMembership: vi.fn(),
+  updateOrganizationMembership: vi.fn(),
 };
 vi.mock("@clerk/nextjs/server", () => ({ clerkClient: async () => ({ users, organizations }) }));
 
 import { reconcileMembership, type SupabaseClient } from "@bis/db";
 import {
   liveClerkTeamPort, listPendingInvitations, teamCapacity, createTeamInvitation,
-  revokeTeamInvitation, removeFromOrganization, restoreToOrganization,
+  revokeTeamInvitation, removeFromOrganization, restoreToOrganization, setOrganizationRole,
 } from "./clerk-team";
 
 /** Shaped like @clerk/shared's ClerkAPIResponseError: `status` plus `errors[].code`. */
@@ -186,7 +187,7 @@ describe("the Team's Clerk calls", () => {
     organizations.getOrganizationInvitationList.mockResolvedValue({ data: [], totalCount: 0 });
     expect(await teamCapacity("org_1")).toEqual({ maxAllowed: 5, members: 4, pending: 0 });
   });
-  it("createTeamInvitation invites as org:member and carries bis_role and bis_language (mutation: org:admin -> FAILS)", async () => {
+  it("createTeamInvitation invites Staff as org:member and carries bis_role and bis_language (mutation: org:admin -> FAILS)", async () => {
     organizations.createOrganizationInvitation.mockResolvedValue({ id: "orginv_1" });
     expect(await createTeamInvitation({ orgId: "org_1", email: "a@x.com", role: "staff", language: "en", inviterUserId: "user_owner" }))
       .toEqual({ ok: true });
@@ -217,9 +218,33 @@ describe("the Team's Clerk calls", () => {
     organizations.deleteOrganizationMembership.mockRejectedValue(clerkError(500, "internal"));
     expect(await removeFromOrganization("org_1", "user_1")).toEqual({ ok: false, code: "internal" });
   });
-  it("restoreToOrganization re-adds as org:member, never org:admin (mutation: org:admin -> FAILS)", async () => {
+  it("createTeamInvitation invites an Owner as org:admin, so the Clerk role follows the BIS role (mutation: always org:member -> FAILS)", async () => {
+    organizations.createOrganizationInvitation.mockResolvedValue({ id: "orginv_1" });
+    await createTeamInvitation({ orgId: "org_1", email: "a@x.com", role: "owner", language: "es", inviterUserId: "user_owner" });
+    expect(organizations.createOrganizationInvitation).toHaveBeenCalledWith(expect.objectContaining({
+      role: "org:admin", publicMetadata: { bis_role: "owner", bis_language: "es" },
+    }));
+  });
+  it("restoreToOrganization re-adds Staff as org:member, never org:admin (mutation: org:admin -> FAILS)", async () => {
     organizations.createOrganizationMembership.mockResolvedValue({});
-    expect(await restoreToOrganization("org_1", "user_1")).toEqual({ ok: true });
+    expect(await restoreToOrganization("org_1", "user_1", "staff")).toEqual({ ok: true });
     expect(organizations.createOrganizationMembership).toHaveBeenCalledWith({ organizationId: "org_1", userId: "user_1", role: "org:member" });
+  });
+  it("restoreToOrganization re-adds an Owner as org:admin (mutation: always org:member -> FAILS)", async () => {
+    organizations.createOrganizationMembership.mockResolvedValue({});
+    await restoreToOrganization("org_1", "user_1", "owner");
+    expect(organizations.createOrganizationMembership).toHaveBeenCalledWith({ organizationId: "org_1", userId: "user_1", role: "org:admin" });
+  });
+  it("setOrganizationRole updates the Clerk membership to follow the BIS role (mutation: swap the mapping -> FAILS)", async () => {
+    organizations.updateOrganizationMembership.mockResolvedValue({});
+    expect(await setOrganizationRole("org_1", "user_1", "staff")).toEqual({ ok: true });
+    expect(organizations.updateOrganizationMembership).toHaveBeenLastCalledWith({ organizationId: "org_1", userId: "user_1", role: "org:member" });
+    await setOrganizationRole("org_1", "user_1", "owner");
+    expect(organizations.updateOrganizationMembership).toHaveBeenLastCalledWith({ organizationId: "org_1", userId: "user_1", role: "org:admin" });
+  });
+  it("setOrganizationRole reports a Clerk failure as a result, logged without the address (mutation: throw -> FAILS)", async () => {
+    organizations.updateOrganizationMembership.mockRejectedValue(clerkError(500, "internal"));
+    expect(await setOrganizationRole("org_1", "user_1", "staff")).toEqual({ ok: false, code: "internal" });
+    expect(String(vi.mocked(console.error).mock.calls[0])).not.toContain("pat@example.com");
   });
 });

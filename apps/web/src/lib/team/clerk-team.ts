@@ -4,6 +4,7 @@ import {
   type AccountRole, type ClerkTeamPort, type PersonLanguage,
 } from "@bis/db";
 import { loggableError } from "@/lib/loggable-error";
+import { clerkRoleFor } from "./team-view";
 
 /**
  * Every Clerk call the staff-and-roles lane makes (spec §6, §8), in one file.
@@ -124,9 +125,12 @@ export async function teamCapacity(orgId: string): Promise<{ maxAllowed: number 
 }
 
 /**
- * Invites as `org:member`, always: the role is BIS's (`bis_role` in the
- * invitation's public metadata), never Clerk's, so an invitation can never
- * make anyone a Clerk org admin.
+ * The role is BIS's (`bis_role` in the invitation's public metadata), and
+ * the Clerk role FOLLOWS it (`clerkRoleFor`): Owner is `org:admin`, Staff
+ * is `org:member`. Task 3 invited everyone as `org:member`; a review then
+ * showed the two must agree, because a Clerk `org:admin` can invite through
+ * Clerk's browser API whatever BIS says, and an Owner left as `org:member`
+ * would disagree the other way.
  */
 export async function createTeamInvitation(i: {
   orgId: string; email: string; role: AccountRole; language: PersonLanguage; inviterUserId: string;
@@ -134,7 +138,7 @@ export async function createTeamInvitation(i: {
   try {
     const clerk = await clerkClient();
     await clerk.organizations.createOrganizationInvitation({
-      organizationId: i.orgId, emailAddress: i.email, role: "org:member", inviterUserId: i.inviterUserId,
+      organizationId: i.orgId, emailAddress: i.email, role: clerkRoleFor(i.role), inviterUserId: i.inviterUserId,
       publicMetadata: { bis_role: i.role, bis_language: i.language },
     });
     return { ok: true };
@@ -166,13 +170,30 @@ export async function removeFromOrganization(orgId: string, clerkUserId: string)
   }
 }
 
-/** The undo of a removal: back as `org:member`; the BIS role is restored by the caller. */
-export async function restoreToOrganization(orgId: string, clerkUserId: string): Promise<ClerkWriteResult> {
+/** The undo of a removal: back at the Clerk role matching `role`; the BIS membership is restored by the caller. */
+export async function restoreToOrganization(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult> {
   try {
     const clerk = await clerkClient();
-    await clerk.organizations.createOrganizationMembership({ organizationId: orgId, userId: clerkUserId, role: "org:member" });
+    await clerk.organizations.createOrganizationMembership({ organizationId: orgId, userId: clerkUserId, role: clerkRoleFor(role) });
     return { ok: true };
   } catch (e) {
     return failed("createOrganizationMembership", e);
+  }
+}
+
+/**
+ * Makes the Clerk membership's role follow a BIS role change.
+ * `updateOrganizationMembership({ organizationId, userId, role })`:
+ * `@clerk/backend` 3.13.1 `dist/api/endpoints/OrganizationApi.d.ts:341`,
+ * its params at :149 (`UpdateOrganizationMembershipParams =
+ * CreateOrganizationMembershipParams`).
+ */
+export async function setOrganizationRole(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult> {
+  try {
+    const clerk = await clerkClient();
+    await clerk.organizations.updateOrganizationMembership({ organizationId: orgId, userId: clerkUserId, role: clerkRoleFor(role) });
+    return { ok: true };
+  } catch (e) {
+    return failed("updateOrganizationMembership", e);
   }
 }
