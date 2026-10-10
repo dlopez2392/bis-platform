@@ -24,6 +24,9 @@ import { normalizeOpenHours } from "@/lib/booking/slots";
 import { bucketWork } from "@/lib/work/buckets";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { greetingPeriod, formatLocalLongDate } from "@/lib/dashboard/greeting";
 import { localDayWindow, bucketByLocalDay, bucketValueByLocalDay, deltaVsPrior, countAfterHours } from "@/lib/dashboard/metrics";
 import { CallsChartCard } from "./calls-chart-card";
@@ -43,10 +46,19 @@ export const dynamic = "force-dynamic";
 
 export default async function AccountDashboardPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ accountId: string }>;
+  // Optional (not `requestLocale`'s own `BIS_I18N_QA` shape, which every
+  // real Next.js request still supplies): the existing page.test.ts/
+  // hero.test.ts fixtures call this component directly with only `params`,
+  // the same way they did before this task, and widening this to required
+  // would fail `tsc` against their own untouched call sites rather than
+  // against anything this task's own `page-locale.test.ts` pins.
+  searchParams?: Promise<{ locale?: string }>;
 }) {
   const { accountId } = await params;
+  const { locale: localeParam } = (await searchParams) ?? {};
   // Authorization already happened in [accountId]/layout.tsx; this call is
   // only to learn the role for rendering — the activation checklist is the
   // agency's onboarding worklist about the client, not client data (spec §6.1).
@@ -64,14 +76,19 @@ export default async function AccountDashboardPage({
   // account lookup, just with a real dependency between the phases here.
   const account = await db
     .from("accounts")
-    .select("name, timezone")
+    .select("name, timezone, language")
     .eq("id", accountId)
     .maybeSingle()
     .then(({ data, error }) => {
       if (error) throw new Error(`account dashboard: account lookup failed: ${error.message}`);
       if (!data) throw new Error("account dashboard: account not found");
-      return data as { name: string; timezone: string };
+      return data as { name: string; timezone: string; language: Locale | null };
     });
+  // This page's render locale — client-role sessions read the account's own
+  // `language`; an agency operator's session stays English until the
+  // parallel staff-and-roles lane's `users.language` exists (requestLocale's
+  // own doc comment, Owner decision 1, 2026-10-10).
+  const locale = requestLocale({ account, isOperator: isAgency }, { locale: localeParam });
   // ONE zone for this whole page. It used to have TWO, fifty lines apart —
   // a `safeZone(…, "UTC")` clamp here for the KPI windows and the RAW
   // `account.timezone` further down for `bucketWork` — so on an account
@@ -170,7 +187,7 @@ export default async function AccountDashboardPage({
   ]);
 
   const openOppsValue = String(openOpps.count);
-  const pipelineValueDisplay = formatCurrency(openOpps.value);
+  const pipelineValueDisplay = formatCurrency(openOpps.value, locale);
 
   const checklistEntries = mergeChecklist(checklistRows, { a2pStatus: a2p?.status });
   const checklistRemaining = checklistEntries.filter((e) => !e.done).length;
@@ -340,7 +357,7 @@ export default async function AccountDashboardPage({
             the whole row instead, reusing StatTile's own exported
             `LABEL_ROLE` class string rather than a second hand-copied one —
             tokens only, no new hard-coded value. */}
-        <p className={LABEL_ROLE}>{m["dashboard.kpi.last7Days"]}</p>
+        <p className={LABEL_ROLE}>{t(m, "dashboard.kpi.last7Days", locale)}</p>
         <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           {/* F-076 (now slice): ONE hero tile (DESIGN.md rule 11), whose
               metric follows the plan rather than a fixed metric that reads
@@ -348,40 +365,40 @@ export default async function AccountDashboardPage({
               comment above. */}
           <StatTile
             hero
-            label={showVoiceSub ? m["dashboard.kpi.callsAnswered"] : m["dashboard.kpi.leadsCaptured"]}
+            label={showVoiceSub ? t(m, "dashboard.kpi.callsAnswered", locale) : t(m, "dashboard.kpi.leadsCaptured", locale)}
             value={showVoiceSub ? String(currentCallsIso.length) : String(currentLeadsIso.length)}
             delta={showVoiceSub ? callsDelta : leadsDelta}
             spark={showVoiceSub ? callsSpark : leadsSpark}
             valueTestId={showVoiceSub ? "kpi-calls-answered" : "kpi-leads-captured"}
           />
           <StatTile
-            label={m["dashboard.kpi.appointmentsBooked"]}
+            label={t(m, "dashboard.kpi.appointmentsBooked", locale)}
             value={String(currentBookingsIso.length)}
             delta={bookingsDelta}
             spark={bookingsSpark}
           />
           {hasAfterHours ? (
             <StatTile
-              label={m["dashboard.kpi.afterHoursCaptured"]}
+              label={t(m, "dashboard.kpi.afterHoursCaptured", locale)}
               value={String(afterHoursCurrent)}
               delta={afterHoursDelta}
             />
           ) : null}
           <StatTile
-            label={m["dashboard.kpi.pipelineAdded"]}
-            value={formatCurrency(currentPipelineValue)}
+            label={t(m, "dashboard.kpi.pipelineAdded", locale)}
+            value={formatCurrency(currentPipelineValue, locale)}
             delta={pipelineDelta}
             spark={pipelineSpark}
           />
         </div>
 
         <div className="grid gap-4 sm:grid-cols-3">
-          <StatTile label={m["account.contacts"]} value={String(contactsCount)} period={m["common.allTime"]} />
-          <StatTile label={m["account.openOpps"]} value={openOppsValue} period={m["common.allTime"]} />
+          <StatTile label={t(m, "account.contacts", locale)} value={String(contactsCount)} period={t(m, "common.allTime", locale)} />
+          <StatTile label={t(m, "account.openOpps", locale)} value={openOppsValue} period={t(m, "common.allTime", locale)} />
           <StatTile
-            label={m["account.pipelineValue"]}
+            label={t(m, "account.pipelineValue", locale)}
             value={pipelineValueDisplay}
-            period={m["common.allTime"]}
+            period={t(m, "common.allTime", locale)}
           />
         </div>
 

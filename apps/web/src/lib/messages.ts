@@ -297,6 +297,10 @@ export const m = {
   // whole account history rather than a rolling window — shared verbatim
   // across the agency and in-account dashboards, so one key, not two.
   "common.allTime": "All time",
+  // Task 7 (Spanish-runtime lane). "Desde siempre" (literally "since
+  // forever") is how a Spanish-speaking business owner reads an all-time
+  // total — more natural here than a literal "Todo el tiempo".
+  "common.allTime.es": "Desde siempre",
 
   // StatTile's delta chip (Task 4, DESIGN.md rule 1: every metric ships
   // with context). The visible chip is glyph + `delta.label` ("▲ 12%");
@@ -357,8 +361,13 @@ export const m = {
   "dashboard.pipelineValue": "Pipeline value",
 
   "account.contacts": "Contacts",
+  // Task 7 (Spanish-runtime lane). Usted register throughout, same as every
+  // other .es twin in this catalogue.
+  "account.contacts.es": "Contactos",
   "account.openOpps": "Open opportunities",
+  "account.openOpps.es": "Oportunidades abiertas",
   "account.pipelineValue": "Pipeline value",
+  "account.pipelineValue.es": "Valor en proceso",
 
   // The in-account dashboard's greeting header (Task 5), both audiences.
   // "{name}" is the house {placeholder} convention (see setup.progress) — the
@@ -391,6 +400,8 @@ export const m = {
   // the four used to spark a 14-day trend beside a 7-day number — a lie by
   // omission about which span the picture showed).
   "dashboard.kpi.callsAnswered": "Calls answered",
+  // Task 7 (Spanish-runtime lane).
+  "dashboard.kpi.callsAnswered.es": "Llamadas atendidas",
   // F-076 (now slice): the hero on a CRM-only account (no enabled voice
   // profile) — "Calls answered" is structurally always 0 with no
   // receptionist taking calls, so it is never the right headline there
@@ -401,15 +412,20 @@ export const m = {
   // spells it lowercase inline rather than through a messages.ts key, so
   // there was no existing key to reuse here.
   "dashboard.kpi.leadsCaptured": "Leads captured",
+  "dashboard.kpi.leadsCaptured.es": "Clientes potenciales captados",
   "dashboard.kpi.appointmentsBooked": "Appointments booked",
+  "dashboard.kpi.appointmentsBooked.es": "Citas agendadas",
   "dashboard.kpi.afterHoursCaptured": "After-hours captured",
+  "dashboard.kpi.afterHoursCaptured.es": "Atendidas fuera de horario",
   "dashboard.kpi.pipelineAdded": "Pipeline added",
+  "dashboard.kpi.pipelineAdded.es": "Nuevo valor en proceso",
   // D-077, design review follow-up: ONE caption for the whole KPI row
   // (page.tsx, rendered with StatTile's own exported `LABEL_ROLE` class
   // string), not a suffix on each of the four labels above — a suffix
   // wrapped in the xl tile width and misaligned the row, and the mockup
   // never puts a period in a tile label (northern-lights.html:85-95).
   "dashboard.kpi.last7Days": "Last 7 days",
+  "dashboard.kpi.last7Days.es": "Últimos 7 días",
 
   // The 14-day calls chart card (Task 6) — CSS bars, hover tooltip on every
   // mark (DESIGN.md's chart section), a recent-calls mini table beneath it.
