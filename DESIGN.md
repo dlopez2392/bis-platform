@@ -9,11 +9,15 @@
 
 - Dark-first operator UI; light theme is the default for client-role users.
   **Decided 2026-10-06 (owner):** operators (agency staff) default to dark,
-  client-role users default to light, and a person's own stored choice (the
-  `bis-theme` cookie, written on toggle or recorded once from the OS when a
-  tenant says "follow") always outranks either default — F-096's per-person
-  preferences store is where that choice eventually lives. The code only
-  matched the client-role half of this line until this date: the agency's
+  client-role users default to light, and a person's own stored choice
+  always outranks either default. **Amended 2026-10-10 (Mis preferencias,
+  F-096 part 1):** that choice lives in `users.theme` (light, dark or
+  "follow my device"), set on the person's own Preferences page or by the
+  topbar toggle, and it follows them to every browser; it comes AHEAD of the
+  `bis-theme` cookie, which is now the browser's copy of it (and, with no
+  stored choice, still the toggle's or the OS's answer when a tenant says
+  "follow"), then the tenant's `brand_mode`, then the role default. The code only
+  matched the client-role half of this line until 2026-10-06: the agency's
   own chrome carries no tenant theme to default from (it is never themed),
   so with no role check it fell through to the client-role default of light.
   `resolveThemeMode`'s `isOperator` parameter is the fix, pinned in
