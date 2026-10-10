@@ -196,14 +196,39 @@ export function AppSidebar({
       // child below given overflow-y-auto — is what scrolls, while the
       // footer cluster after it stays on screen at every viewport height.
       className={cn(
-        "sticky top-0 flex h-dvh shrink-0 flex-col gap-1.5 sidebar-chrome border-r border-[var(--sidebar-line)] px-3 py-3.5 text-sidebar-foreground transition-[width] duration-200",
-        collapsed ? "w-16" : "w-[236px]",
+        "sticky top-0 flex h-dvh shrink-0 flex-col gap-1.5 sidebar-chrome border-r border-[var(--sidebar-line)] px-3 pt-3.5 text-sidebar-foreground transition-[width] duration-200",
+        // F-107 (rider part): the footer cluster (Settings + the setup
+        // meter) must stay "pinned and visible at every viewport height"
+        // (rule 10) — on a phone that includes the home-indicator gesture
+        // bar, which --safe-bottom (tokens.css) adds on top of the existing
+        // 14px bottom padding rather than replacing it.
+        //
+        // ASSUMPTION (per WebKit's documented behaviour, not verified on a
+        // device from this repo): `env(safe-area-inset-bottom)` reports 0
+        // unless the document OPTS IN with a `viewport-fit=cover` viewport
+        // meta/`viewport.viewportFit` — apps/web sets neither today (`grep
+        // -rn viewportFit apps/web` is empty), so --safe-bottom is INERT in
+        // this app right now, on every phone, notched or not: this padding
+        // is currently always the plain 14px it was before. Enabling
+        // `viewportFit: "cover"` is part of F-107's second part (the
+        // bottom-tab shell), not this rider — turning it on changes how
+        // the WHOLE page paints under the status bar too, which is a
+        // bigger decision than one sidebar's bottom padding.
+        "pb-[calc(0.875rem+var(--safe-bottom))]",
+        // Below `sm` (640px — narrower than either of DESIGN.md's rider
+        // widths, 375 and 320) the sidebar is ALWAYS the 64px collapsed
+        // width, whatever `collapsed` says: a phone has no overlay to
+        // expand it into yet (the bottom-tab shell, F-107's second part, is
+        // where one would live), so there is nothing honest for the toggle
+        // to do there, and it is hidden instead (below). Only at sm+ does
+        // `collapsed` get to pick the width.
+        collapsed ? "w-16" : "w-16 sm:w-[236px]",
       )}
     >
       <div
         className={cn(
-          "flex items-center",
-          collapsed ? "justify-center" : isAgency ? "justify-between" : "justify-end",
+          "flex items-center justify-center",
+          !collapsed && (isAgency ? "sm:justify-between" : "sm:justify-end"),
         )}
       >
         {/* The agency's wordmark, and only the agency's. A client used to see
@@ -215,17 +240,30 @@ export function AppSidebar({
             expanded states, which this row does not.
 
             It was also a dead link for them: "/dashboard" is agency-only and
-            bounces a client straight back out. */}
+            bounces a client straight back out.
+
+            `hidden sm:inline-block`, not a `collapsed`-keyed JSX removal
+            like the rest of this row's own logic: below `sm` this stays out
+            of the layout regardless of `collapsed`, for the same phone-has-
+            no-overlay reason the toggle button beside it is hidden too. */}
         {collapsed || !isAgency ? null : (
-          <Link href="/dashboard" className="px-1 text-sm font-semibold text-[var(--sidebar-text-strong)]">
+          <Link
+            href="/dashboard"
+            className="hidden px-1 text-sm font-semibold text-[var(--sidebar-text-strong)] sm:inline-block"
+          >
             {m["shell.brand"]}
           </Link>
         )}
+        {/* F-107 (rider part): hidden below `sm`, not merely inert. The
+            sidebar is unconditionally collapsed on a phone (above), so
+            toggling here would have nothing to expand INTO — there is no
+            off-canvas overlay yet, that is F-107's second part — and a
+            control with no visible effect is worse than no control. */}
         <button
           type="button"
           onClick={toggle}
           aria-label={collapsed ? m["shell.expand"] : m["shell.collapse"]}
-          className="rounded-[var(--radius-ctl)] p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]"
+          className="hidden rounded-[var(--radius-ctl)] p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)] sm:inline-flex"
         >
           {collapsed ? (
             <PanelLeft className="size-4" aria-hidden />
@@ -247,10 +285,18 @@ export function AppSidebar({
         // is nothing to switch to and it must not look clickable.
         <div
           className={cn(
-            "flex w-full items-center gap-2 px-2 py-2 text-sidebar-foreground",
-            collapsed && "justify-center px-0",
+            // F-107 (rider part): mobile-first — the collapsed LOOK
+            // (centered, no horizontal padding) is the base below `sm`
+            // regardless of `collapsed`; `sm:` only restores the expanded
+            // spacing, and only when the user isn't ALSO collapsed at that
+            // width.
+            "flex w-full items-center gap-2 justify-center px-0 py-2 text-sidebar-foreground",
+            !collapsed && "sm:justify-start sm:px-2",
           )}
-          title={collapsed ? clientLabel : undefined}
+          // Unconditional for the same reason as SidebarLink's own title
+          // (F-107 r1 review): the name/timezone text below is `hidden`
+          // below `sm` even when `collapsed` is false.
+          title={clientLabel}
         >
           <span
             className={cn(
@@ -270,9 +316,15 @@ export function AppSidebar({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={clientLogoUrl}
-                // Decorative when the name is right beside it; the accessible
-                // name when collapsed hides that text.
-                alt={collapsed ? clientLabel : ""}
+                // F-107 r2 review, item 6: always decorative. Round 1 made
+                // this unconditionally `clientLabel` to fix a missing name
+                // at phone width, but that double-announced it at desktop
+                // (the visible name text right beside it is ALSO read).
+                // The name span just below is now always in the a11y tree
+                // (`sr-only`, restored to visible via `sm:not-sr-only`
+                // only when not collapsed) — exactly one source for the
+                // name in every state, so this can safely go back to "".
+                alt=""
                 className="size-full object-contain"
               />
             ) : (
@@ -281,16 +333,20 @@ export function AppSidebar({
               <span aria-hidden>{clientLabel.trim().charAt(0).toUpperCase()}</span>
             )}
           </span>
-          {collapsed ? null : (
-            // Same two-line shape as AccountSwitcher's own name/timezone
-            // block: name on top, timezone below at the shared 11px size.
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium">{clientLabel}</span>
-              <span className="block truncate text-[11px] text-sidebar-foreground/60">
-                {clientTimezone ?? ""}
-              </span>
+          {/* F-107 r2 review, item 6: ALWAYS rendered now (round 1 had
+              `{collapsed ? null : (...)}`, which removed this from the
+              a11y tree too, in both the phone AND desktop-collapsed
+              cases). `sr-only` is the base — present for assistive tech,
+              invisible to sighted users — and `sm:not-sr-only` restores
+              the original visible two-line block, but only when not
+              collapsed: at desktop-collapsed (sm+, collapsed=true) it
+              correctly stays sr-only, same as phone width. */}
+          <span className={cn("min-w-0 flex-1 sr-only", !collapsed && "sm:not-sr-only")}>
+            <span className="block truncate text-sm font-medium">{clientLabel}</span>
+            <span className="block truncate text-[11px] text-sidebar-foreground/60">
+              {clientTimezone ?? ""}
             </span>
-          )}
+          </span>
         </div>
       ) : null}
 
@@ -320,11 +376,17 @@ export function AppSidebar({
               // exactly as unmounting would — that's fine (it's
               // role="presentation" decoration either way); hidden just
               // keeps the markup stable across collapse toggles.
+              //
+              // Mobile-first (F-107, rider part): `hidden` is now the BASE
+              // regardless of `collapsed` — a phone is always icon-only —
+              // and `sm:block` only restores it at desktop widths, and only
+              // when the user isn't ALSO collapsed there.
               <div
                 role="presentation"
                 className={cn(
                   "px-2.5 pt-3.5 pb-1.5 font-mono text-[10px] font-medium tracking-[0.14em] text-[var(--sidebar-muted)] uppercase",
-                  collapsed && "hidden",
+                  "hidden",
+                  !collapsed && "sm:block",
                 )}
               >
                 {m[group.label]}
@@ -402,17 +464,31 @@ function SidebarLink({
   return (
     <Link
       href={item.href}
-      title={collapsed ? item.label : undefined}
-      // The unread count rides on the LINK's accessible name, never on the
-      // badge spans (both aria-hidden below): accessible-name computation
-      // prefers name-from-content, so a labelled span inside the link would
-      // REPLACE "Conversations" with "5 unread" in the collapsed state —
-      // and aria-label on a generic <span> is ignored by some screen-reader
-      // pairs anyway (naming prohibited on the generic role).
-      aria-label={hasUnread ? `${item.label} (${unreadCount} unread)` : undefined}
+      // F-107 r1 review: below `sm`, the visible label span (further down)
+      // is `hidden` even when `collapsed` is false — the icon is
+      // `aria-hidden` and the active-rail mark is `aria-hidden`, so with
+      // the old `collapsed ? item.label : undefined` this Link's
+      // accessible name was EMPTY at phone width whenever there was no
+      // unread badge (every nav item but Conversations). `title` is now
+      // unconditional too, for sighted hover at the same phone width this
+      // was broken at — a visible tooltip was never wrong for an expanded
+      // desktop row, it just had nothing to add there.
+      title={item.label}
+      // Unconditional for the same reason: the unread count rides on the
+      // LINK's accessible name, never on the badge spans (both aria-hidden
+      // below) — accessible-name computation prefers name-from-content, so
+      // a labelled span inside the link would REPLACE "Conversations" with
+      // "5 unread" in the collapsed state — and aria-label on a generic
+      // <span> is ignored by some screen-reader pairs anyway (naming
+      // prohibited on the generic role).
+      aria-label={hasUnread ? `${item.label} (${unreadCount} unread)` : item.label}
       className={cn(
-        "relative flex items-center gap-2.5 rounded-[var(--radius-ctl)] px-2.5 py-2 text-[13.5px] font-medium transition-colors",
-        collapsed && "justify-center px-0",
+        // Mobile-first (F-107, rider part): "justify-center px-0" — the
+        // collapsed look — is the BASE below `sm`, whatever `collapsed`
+        // says; `sm:` only restores the expanded spacing, and only when the
+        // user isn't ALSO collapsed at that width.
+        "relative flex items-center gap-2.5 rounded-[var(--radius-ctl)] justify-center px-0 py-2 text-[13.5px] font-medium transition-colors",
+        !collapsed && "sm:justify-start sm:px-2.5",
         active
           ? "bg-sidebar-accent/15 font-medium text-[var(--sidebar-text-strong)] shadow-[inset_0_1px_0_var(--sidebar-line)]"
           : "text-[var(--sidebar-text)] hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]",
@@ -430,22 +506,37 @@ function SidebarLink({
       ) : null}
       <span className="relative flex shrink-0">
         <Icon className="size-4 opacity-90" strokeWidth={1.8} aria-hidden />
-        {hasUnread && collapsed ? (
-          // Collapsed state: a dot rather than the pill below, since there is
-          // no room for a count beside a centered icon. Purely decorative —
-          // the count is announced via the Link's aria-label above.
+        {hasUnread ? (
+          // Dot rather than the pill below, since there is no room for a
+          // count beside a centered icon — collapsed, OR (F-107, rider
+          // part) below `sm`, where the row is always icon-only regardless
+          // of `collapsed`. Rendered whenever there's an unread count and
+          // hidden by CSS rather than JS-removed, so this element and the
+          // pill below can trade places purely on viewport width without a
+          // re-render. Purely decorative — the count is announced via the
+          // Link's aria-label above.
           <span
-            className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-sidebar-accent"
+            className={cn(
+              "absolute -top-0.5 -right-0.5 size-2 rounded-full bg-sidebar-accent",
+              !collapsed && "sm:hidden",
+            )}
             aria-hidden
           />
         ) : null}
       </span>
-      {collapsed ? null : <span className="min-w-0 flex-1 truncate">{item.label}</span>}
-      {hasUnread && !collapsed ? (
+      {collapsed ? null : (
+        <span className="hidden min-w-0 flex-1 truncate sm:block">{item.label}</span>
+      )}
+      {hasUnread ? (
         // Visual-only: the Link's aria-label already carries "(N unread)",
         // so exposing this span's text too would double-announce the count.
+        // Mirrors the dot above: hidden by default (collapsed, or below
+        // `sm`), shown only at sm+ when not collapsed.
         <span
-          className="min-w-4 shrink-0 rounded-full bg-sidebar-accent/15 px-1.5 text-center text-[10px] font-medium text-sidebar-accent"
+          className={cn(
+            "hidden min-w-4 shrink-0 rounded-full bg-sidebar-accent/15 px-1.5 text-center text-[10px] font-medium text-sidebar-accent",
+            !collapsed && "sm:inline-block",
+          )}
           aria-hidden
         >
           {unreadDisplay}
@@ -491,18 +582,24 @@ function SetupMeterLink({
   return (
     <Link
       href={`${base}/setup`}
-      title={collapsed ? m["nav.setup"] : undefined}
+      // Unconditional for the same reason SidebarLink's own title is now
+      // unconditional (F-107 r1 review): the label/count row below is
+      // `hidden` below `sm` even when `collapsed` is false, so sighted
+      // hover needs the tooltip there too, not only when desktop-collapsed.
+      title={m["nav.setup"]}
       aria-label={`${m["nav.setup"]} (${progressText})`}
       className={cn(
-        "flex flex-col gap-1.5 rounded-[var(--radius-ctl)] px-2.5 py-2 text-sm text-sidebar-foreground/75 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]",
-        // Collapsed: no room for the label/count row (hidden below), so this
-        // link keeps only the bar — full rail-button width, same reasoning
-        // as every other collapsed row's `px-0` above.
-        collapsed && "px-0",
+        // Mobile-first (F-107, rider part): no horizontal padding is the
+        // BASE below `sm`, whatever `collapsed` says — same reasoning as
+        // every other row in this file. "Collapsed: no room for the
+        // label/count row (hidden below), so this link keeps only the bar
+        // — full rail-button width" now also describes the phone case.
+        "flex flex-col gap-1.5 rounded-[var(--radius-ctl)] px-0 py-2 text-sm text-sidebar-foreground/75 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)]",
+        !collapsed && "sm:px-2.5",
       )}
     >
       {collapsed ? null : (
-        <span className="flex items-center justify-between gap-2">
+        <span className="hidden items-center justify-between gap-2 sm:flex">
           <span className="truncate">{m["nav.setup"]}</span>
           <span className="shrink-0 font-mono text-xs text-sidebar-foreground/60 tabular-nums">
             {done}/{total}

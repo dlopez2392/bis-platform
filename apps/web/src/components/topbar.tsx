@@ -23,10 +23,43 @@ export function Topbar({
   palette?: React.ReactNode;
 }) {
   return (
-    <header className="flex h-[54px] shrink-0 items-center justify-end gap-[14px] border-b border-[var(--top-line)] bg-transparent px-[22px]">
+    // F-107 r1 review (item 3): tighter gap/padding below `sm` only — the
+    // mockup's 22px/14px values (restored at sm+) left the icon-only search
+    // trigger (item 8) + ThemeToggle + OrganizationSwitcher + UserButton
+    // about 20px over the 311px available at 375px wide (measured: all
+    // three pushed ~20px past the header's own LEFT edge, since `justify-
+    // end` sends overflow leftward, which `document.documentElement.
+    // scrollWidth` cannot see — the bounds check above this file's own
+    // topbar.test.ts pin exists for is what caught it).
+    //
+    // F-107 r4 review (item 1): the 320px budget is tighter still — on an
+    // in-account AGENCY route the search trigger (32px) + the presence
+    // pill + ThemeToggle (~36px) + OrganizationSwitcher + UserButton
+    // (~32px) + 3 gaps (24px below `sm`) + the sidebar's own 64px left
+    // 265px for OrganizationSwitcher ALONE to fit (it was sizing to the
+    // full org name, never shrinking) before anything else even started —
+    // fixed below by hiding its name text (avatar-only) and collapsing
+    // the presence pill to dot + short word (topbar-presence.tsx).
+    <header className="flex h-[54px] shrink-0 items-center justify-end gap-2 border-b border-[var(--top-line)] bg-transparent px-3 sm:gap-[14px] sm:px-[22px]">
       {/* The mockup puts the search control on the LEFT of the bar at 300px
-          wide, with everything else pushed right (northern-lights.html:60-62). */}
-      {palette ? <div className="mr-auto flex w-[300px] min-w-0 items-center">{palette}</div> : null}
+          wide, with everything else pushed right (northern-lights.html:60-62).
+          F-107 r1 review (item 8): command-palette.tsx now renders its own
+          icon-only trigger below `sm` and hides its 300px-wide one there
+          instead of this wrapper hiding the whole thing — so this div just
+          follows suit: unconstrained width (the icon trigger's own size)
+          below `sm`, the mockup's 300px only at sm+. */}
+      {/* F-107 r2 review (item 3): `sm:min-w-0`, not unconditional —
+          below `sm` the icon trigger (32px) is the only content, and
+          letting the WRAPPER shrink below that would overlap it with
+          whatever sits to its right; `assertHeaderChildrenInBounds`
+          (phone-width.spec.ts) checks each child's own left/right edges,
+          not overlap BETWEEN siblings, so this would not have failed that
+          check even though it was wrong. `min-w-0` is still needed at
+          sm+, where the 300px desktop trigger's own `shrink-0` content
+          needs the wrapper free to shrink toward it. */}
+      {palette ? (
+        <div className="mr-auto flex items-center sm:min-w-0 sm:w-[300px]">{palette}</div>
+      ) : null}
       {/* Task 5: DESIGN.md's "AI presence" pattern — in-account only, both
           audiences, renders nothing outside an account or with no enabled
           voice profile. A "use client" child so the pathname-keyed read it
@@ -36,7 +69,49 @@ export function Topbar({
           unchanged, so a null render here costs nothing structurally. */}
       <TopbarPresence />
       <ThemeToggle />
-      {isAgency ? <OrganizationSwitcher hidePersonal /> : null}
+      {/* F-107 r5 review (item 1, CRITICAL — supersedes r4's own fix,
+          which did nothing): Clerk's own trigger sizes to the full org
+          name and never shrinks on its own. The r4 fix passed a CLASS
+          STRING ("hidden sm:block") for `organizationPreviewTextContainer
+          __organizationSwitcherTrigger` — but this app's own sign-in page
+          (app/(dashboard)/sign-in/[[...sign-in]]/page.tsx) already proved,
+          by measuring computed style on a live node, that a class string
+          here does nothing: Clerk's runtime CSS-in-JS emits its
+          structural rules UNLAYERED, and unlayered author CSS beats
+          Tailwind's layered utilities (`@layer utilities`) at any
+          specificity, REGARDLESS of layer ordering. The dashboard's own
+          `ClerkProvider` ((dashboard)/layout.tsx) sets no `cssLayerName`
+          either, so nothing here is even in a layer to begin with — the
+          same failure mode, not a different one. The fix is the SAME one
+          sign-in already uses: a STYLE OBJECT, which Clerk merges into
+          its OWN generated rule rather than fighting it on specificity. A
+          nested at-rule inside that object is Emotion's own supported
+          syntax (Clerk's styling engine) — verified empirically by the
+          computed-style probe in phone-width.spec.ts, the same way
+          signed-out.spec.ts verifies every OTHER style object on the
+          sign-in page, not assumed from this comment alone.
+
+          The r4 wrapper (`max-w-10 overflow-hidden`) is gone: it was
+          doing the ONLY real clipping while the class-string brace above
+          silently failed, but `overflow-hidden` on a direct ancestor of
+          a FOCUSABLE trigger clips that trigger's own focus ring
+          (DESIGN.md's keyboard DoD item) — and now that the real fix
+          hides the text, Clerk's own trigger is avatar-width on its own
+          (same as UserButton beside it, which has never needed a
+          wrapper); nothing needs to clip it, and no wrapper div remains
+          to need `min-w-0` on. */}
+      {isAgency ? (
+        <OrganizationSwitcher
+          hidePersonal
+          appearance={{
+            elements: {
+              organizationPreviewTextContainer__organizationSwitcherTrigger: {
+                "@media (max-width: 639.98px)": { display: "none" },
+              },
+            },
+          }}
+        />
+      ) : null}
       <UserButton />
     </header>
   );

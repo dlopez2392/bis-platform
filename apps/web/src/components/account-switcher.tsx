@@ -42,8 +42,13 @@ export function AccountSwitcher({
       <PopoverTrigger
         aria-label={m["shell.switchAccount"]}
         className={cn(
-          "flex w-full items-center gap-2 rounded-[var(--radius-ctl)] border border-sidebar-border px-2 py-2 text-left text-sidebar-foreground transition-colors hover:bg-white/5",
-          collapsed && "justify-center px-0",
+          // Mobile-first (F-107, rider part): "justify-center px-0" — the
+          // collapsed look — is the BASE below `sm`, whatever `collapsed`
+          // says; `sm:` only restores the expanded spacing, and only when
+          // the sidebar isn't ALSO collapsed at that width. Same pattern as
+          // app-sidebar.tsx's own SidebarLink/SetupMeterLink.
+          "flex w-full items-center justify-center gap-2 rounded-[var(--radius-ctl)] border border-sidebar-border px-0 py-2 text-left text-sidebar-foreground transition-colors hover:bg-white/5",
+          !collapsed && "sm:justify-start sm:px-2",
         )}
       >
         <span className="flex size-7 shrink-0 items-center justify-center rounded bg-sidebar-accent/20 text-sidebar-accent">
@@ -59,8 +64,10 @@ export function AccountSwitcher({
           )}
         </span>
         {collapsed ? null : (
+          // `hidden sm:...`: below `sm` the chip above is the whole
+          // switcher, same reasoning as every other row in app-sidebar.tsx.
           <>
-            <span className="min-w-0 flex-1">
+            <span className="hidden min-w-0 flex-1 sm:block">
               <span className="block truncate text-sm font-medium">
                 {active?.name ?? m["shell.switchAccount"]}
               </span>
@@ -68,7 +75,7 @@ export function AccountSwitcher({
                 {active?.timezone ?? ""}
               </span>
             </span>
-            <ChevronsUpDown className="size-4 shrink-0 opacity-60" aria-hidden />
+            <ChevronsUpDown className="hidden size-4 shrink-0 opacity-60 sm:block" aria-hidden />
           </>
         )}
       </PopoverTrigger>

@@ -146,15 +146,20 @@ export function VoiceProfileForm({
             <Input id="persona_name" name="persona_name" defaultValue={p.persona_name} required />
           </div>
 
+          {/* F-107 (rider part): `min-w-0` on both grid items — a grid
+              item's automatic minimum size otherwise floors at its
+              content's min-content width (the Select trigger's own text is
+              the one that actually surfaced this, two fields down, but
+              every `sm:grid-cols-2` pair here shares the same container). */}
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
+            <div className="min-w-0 space-y-1.5">
               <Label htmlFor="greeting_en">{m["voice.profile.greetingEn"]}</Label>
               <textarea
                 id="greeting_en" name="greeting_en" rows={3} defaultValue={p.greeting_en}
                 className={nativeFieldClass}
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="min-w-0 space-y-1.5">
               <Label htmlFor="greeting_es">{m["voice.profile.greetingEs"]}</Label>
               <textarea
                 id="greeting_es" name="greeting_es" rows={3} defaultValue={p.greeting_es}
@@ -181,7 +186,7 @@ export function VoiceProfileForm({
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
+            <div className="min-w-0 space-y-1.5">
               <Label htmlFor="languages">{m["voice.profile.language"]}</Label>
               <Select
                 name="languages" defaultValue={p.languages}
@@ -195,7 +200,7 @@ export function VoiceProfileForm({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
+            <div className="min-w-0 space-y-1.5">
               <Label htmlFor="after_hours">{m["voice.profile.afterHours"]}</Label>
               <Select
                 name="after_hours" defaultValue={p.after_hours}

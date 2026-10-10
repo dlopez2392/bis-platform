@@ -162,8 +162,39 @@ export default defineConfig({
     { name: "teardown", testMatch: /auth\.teardown\.ts/ },
     {
       name: "chromium",
+      // Excludes phone-width.spec.ts (below): that spec resizes its own
+      // viewport per route and belongs to the "phone" project alone — without
+      // this it would also match here (testMatch is `.*\.spec\.ts`) and run
+      // twice every invocation, for a check whose whole point is viewport
+      // width, on a project that never changes it.
       testMatch: /.*\.spec\.ts/,
+      testIgnore: /phone-width\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], storageState: AUTH_FILE },
+      dependencies: ["setup"],
+    },
+    // F-107 (rider part): a phone WIDTH, not a phone DEVICE — only
+    // devices["iPhone 13"]'s viewport ({ width: 390, height: 664 }, read
+    // with `node -e "console.log(require('@playwright/test').devices['iPhone
+    // 13'])"` against this repo's installed Playwright version and inlined
+    // rather than looked up, so this project's shape does not depend on
+    // `devices` carrying that key — entry-guards.test.ts imports this file
+    // under a mocked `@playwright/test` whose `devices` is only
+    // `{ "Desktop Chrome": {} }`, and a live lookup here would throw loading
+    // the config under that mock), on Chromium, deliberately not the rest of
+    // that descriptor (userAgent, isMobile, hasTouch, and
+    // defaultBrowserType: "webkit", which real devices carry because a real
+    // iPhone runs Safari). CI's e2e job installs only Chromium
+    // (.github/workflows/ci.yml, `playwright install --with-deps chromium`),
+    // so a WebKit project would never run there — true Safari/WebKit phone
+    // coverage is a known gap this project does not close. The one spec this
+    // project runs sets its own viewport per check (320 and 375, the widths
+    // DESIGN.md's rider names) rather than relying solely on this default —
+    // the default here only has to be SOME phone-sized viewport so a route
+    // that forgets to resize still gets a narrow check.
+    {
+      name: "phone",
+      testMatch: /phone-width\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 664 }, storageState: AUTH_FILE },
       dependencies: ["setup"],
     },
   ],

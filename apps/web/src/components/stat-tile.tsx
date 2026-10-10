@@ -80,7 +80,12 @@ export function StatTile({
   // holds the delta pill on the left and either the 84x26 sparkline or the
   // 12px .sub line on the right (northern-lights.html:85-95, 258-261).
   return (
-    <div className="flex min-h-[108px] flex-col gap-1.5 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
+    // F-107 (rider part): `min-w-0` — this tile is always a grid item
+    // (the KPI rows' `grid gap-4 sm:grid-cols-2 xl:grid-cols-3/4`), and a
+    // grid item's automatic minimum size otherwise floors at its content's
+    // min-content width, which held tiles open past their track at phone
+    // width.
+    <div className="flex min-w-0 min-h-[108px] flex-col gap-1.5 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
       <p className={LABEL_ROLE}>{label}</p>
       <p
         data-testid={valueTestId}

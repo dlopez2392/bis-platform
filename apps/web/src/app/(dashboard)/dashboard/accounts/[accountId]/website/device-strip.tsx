@@ -21,7 +21,11 @@ export function DeviceStrip({ devices }: { devices: Ranked[] }) {
       <div className="flex h-2 flex-1 overflow-hidden rounded-full bg-[var(--share-bg)]" role="img" aria-label={top.map((d) => `${NAMES[d.name] ?? d.name} ${Math.round(d.share * 100)}%`).join(", ")}>
         {top.map((d, i) => <span key={d.name} className={`block h-full ${FILLS[i]}`} style={{ width: `${Math.round(d.share * 100)}%` }} />)}
       </div>
-      <ul className="flex gap-3" aria-hidden>
+      {/* F-107 (rider part, outside this rider's own ownership — flagged in
+          its report): `flex-wrap` — three legend items with no wrap set a
+          combined, unshrinkable minimum width this row's flex-1 bar could
+          not make up for by shrinking alone. */}
+      <ul className="flex flex-wrap gap-3" aria-hidden>
         {top.map((d, i) => (
           <li key={d.name} className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span className={`inline-block size-2 rounded-[2px] ${FILLS[i]}`} />

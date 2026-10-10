@@ -205,7 +205,12 @@ export function ActivityCard({
   const pipelineHref = `/dashboard/accounts/${accountId}/pipeline`;
 
   return (
-    <div className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
+    // F-107 (rider part): `min-w-0` — same reasoning as calls-chart-card.tsx
+    // right beside it in the dashboard's `grid gap-4 xl:grid-cols-2` row: a
+    // grid item's automatic minimum size defaults to its own content's
+    // min-content width, which this feed's row text pushed past the track
+    // at phone width.
+    <div className="min-w-0 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
       <div className="flex items-baseline gap-2">
         <h5 className="text-[13.5px] font-semibold text-card-foreground">{m["dashboard.activity.title"]}</h5>
         <span className="ml-auto font-mono text-[10px] font-normal tracking-[0.14em] text-muted-foreground uppercase">

@@ -428,7 +428,12 @@ export function BrandingPanel({
                     Radius only; never `glass` here, because the doubled
                     `--shadow-card` is the failure mode this specimen exists to
                     make visible. */}
-                <span className="flex-1 rounded-xl border border-border bg-card p-3"
+                {/* F-107 (rider part): `min-w-0` — a `flex-1` item's
+                    automatic minimum size still defaults to its content's
+                    min-content width (flex-basis:0 doesn't exempt it), so
+                    this preview card's own text was holding the row open
+                    past its track at phone width. */}
+                <span className="min-w-0 flex-1 rounded-xl border border-border bg-card p-3"
                       style={{ borderRadius: "var(--radius)", fontFamily: "var(--font-sans)" }}>
                   <span className="block text-sm font-medium text-card-foreground">{m["branding.previewHeading"]}</span>
                   <span className="block text-xs text-muted-foreground">{m["branding.previewBody"]}</span>

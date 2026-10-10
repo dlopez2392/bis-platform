@@ -70,11 +70,35 @@ export default async function AccountsPage() {
         )}
         {orphans.length > 0 && (
           <section className="mb-6 rounded-xl border border-[var(--warn)] bg-card px-4 py-3.5">
-            <div className="flex items-start gap-3">
+            {/* F-107 r1 review (item 4): `flex-col` below `sm` stacks the
+                icon above the text instead of beside it, freeing the 48px
+                the icon chip + gap spent before any text got a turn. That
+                fixed the "Add as a company" BUTTON's own 146px no longer
+                fitting — it did NOT fix the text column's own width, which
+                is this comment block's r3 correction (below): `items-start`
+                (unchanged, both axes) means a flex-col child's cross size
+                is fit-content, not stretched, so the column was still
+                sized by its own content's min-content, not by the row's
+                available width. */}
+            <div className="flex flex-col items-start gap-3 sm:flex-row">
               <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-ctl)] bg-[var(--warn-bg)] text-[var(--warn)]">
                 <Unlink className="size-4" aria-hidden />
               </span>
-              <div className="min-w-0">
+              {/* F-107 r3 review (item 1, CRITICAL): `w-full` — below `sm`
+                  this row is `flex-col` with `items-start` (unchanged), so
+                  without an explicit width this column sized to its OWN
+                  content's fit-content width, not the row's available
+                  width. The badge's name span is `truncate`
+                  (`white-space:nowrap`), whose min-content width EQUALS its
+                  max-content width (nowrap means there is no wrap point to
+                  shrink at) — so a long Clerk org name set this column's
+                  own min-content, and `min-w-0` further down could not
+                  help: that token only defeats a FLEX ITEM's automatic
+                  minimum size, not fit-content sizing under a non-stretched
+                  cross axis. `sm:w-auto` restores the original (unaffected)
+                  desktop behaviour, where this row is `flex-row` and this
+                  column IS the flex item `min-w-0` already covers. */}
+              <div className="w-full min-w-0 sm:w-auto">
                 {/* DESIGN.md rule 3: never colour alone — the icon and border
                     are reinforcement, the heading is what says it. */}
                 <p className="text-[13.5px] font-semibold text-card-foreground">
@@ -83,10 +107,27 @@ export default async function AccountsPage() {
                 <p className="mt-1 text-sm text-muted-foreground">{m["accounts.orphan.body"]}</p>
                 <ul className="mt-3 flex flex-wrap gap-2">
                   {orphans.map((o) => (
-                    <li key={o.id} data-orphan-org={o.id} className="flex items-center gap-2">
-                      <Badge variant="chip" className="gap-1.5 py-1 pr-2.5 pl-2">
-                        <span className="size-[7px] rounded-full bg-[var(--warn)]" aria-hidden />
-                        {o.name}
+                    // F-107 (rider part): `flex-wrap` on the row itself, not
+                    // just the `<ul>` around it — at phone width this column
+                    // is narrow enough (the sidebar and this section's own
+                    // padding already spend most of 320/375px) that an
+                    // org's own badge and its "Add as a company" button no
+                    // longer reliably share one line, so the button is
+                    // allowed to drop to its own line rather than force the
+                    // row past the page's edge. `min-w-0` on the badge (and
+                    // `shrink`, overriding its own `shrink-0` — see
+                    // ui/badge.tsx) lets a long org NAME truncate instead of
+                    // setting the row's minimum width on its own.
+                    //
+                    // F-107 r3 review (item 1): `max-w-full` on the Badge
+                    // too — `truncate`'s own `overflow:hidden` only takes
+                    // effect once the element HAS a width to clip to;
+                    // without a cap the badge (itself `w-fit`, ui/badge.tsx)
+                    // still grew to its content's full width first.
+                    <li key={o.id} data-orphan-org={o.id} className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+                      <Badge variant="chip" className="min-w-0 max-w-full shrink gap-1.5 py-1 pr-2.5 pl-2">
+                        <span className="size-[7px] shrink-0 rounded-full bg-[var(--warn)]" aria-hidden />
+                        <span className="min-w-0 truncate">{o.name}</span>
                       </Badge>
                       {/* D-087: adopt THIS organisation. The old remedy sent
                           the agency to Add company, which made a second one. */}
@@ -107,13 +148,31 @@ export default async function AccountsPage() {
         ) : (
           <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {accounts.map((a) => (
-              <li key={a.id}>
+              // F-107 r1 review (item 4, follow-on): `min-w-0` belongs on
+              // the `<li>` — THIS is the actual grid item (`<ul>`'s own
+              // `grid gap-4 sm:grid-cols-2 xl:grid-cols-3`), not the `<a>`
+              // inside it. Round 1 put `min-w-0` on the `<a>`, which let
+              // the ANCHOR shrink within the `<li>` but left the `<li>`
+              // itself — with no className of its own — floored at its
+              // content's min-width, 47px past its own 208px track at
+              // 320px (measured: `<ul>` 208px, `<li>` 255px).
+              <li key={a.id} className="min-w-0">
                 <Link
                   href={`/dashboard/accounts/${a.id}/contacts`}
                   data-testid={`account-${a.id}`}
                   // The agency's home screen was a grid of flat rectangles —
                   // the one screen every session starts on.
-                  className="block rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3 transition-colors hover:border-[var(--accent)]"
+                  //
+                  // F-107 (rider part): `min-w-0` — this anchor's own
+                  // automatic minimum size (it is a block-level flex/grid
+                  // descendant too) still floors at its content's
+                  // min-content width; the icon chip + status badge row
+                  // inside was holding the card a few px past its own track
+                  // at 320px. (F-107 r2 review, item 2: the GRID ITEM
+                  // itself is the `<li>` above, not this `<a>` — its own
+                  // `min-w-0` is what the track-fitting actually needed;
+                  // this one still earns its keep independently.)
+                  className="block min-w-0 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3 transition-colors hover:border-[var(--accent)]"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <span className="flex size-9 items-center justify-center rounded-[var(--radius-ctl)] bg-[var(--accent-dim)] text-[var(--accent)]">
@@ -133,8 +192,20 @@ export default async function AccountsPage() {
                     </Badge>
                   </div>
                   <p className="mt-4 truncate text-[13.5px] font-semibold text-card-foreground">{a.name}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{a.timezone}</p>
-                  <p className="mt-3 text-xs text-muted-foreground">
+                  {/* F-107 r2 review (item 1): `truncate` — an IANA zone can
+                      be one long unbreakable string (e.g.
+                      "America/Argentina/ComodRivadavia"), and CI's own
+                      bis-ci project (unlike this rider's local fixture, one
+                      short name) surfaces real accounts with real zones and
+                      names long enough to hold this card open past its
+                      track at 320px: "the page must fit whatever accounts
+                      exist," not just this run's own fixture. The name
+                      above already truncated; this line and the one below
+                      did not. */}
+                  {/* F-107 r3 review (item 1): `title` — a sighted hover
+                      still sees the full zone once `truncate` clips it. */}
+                  <p className="mt-1 truncate text-sm text-muted-foreground" title={a.timezone}>{a.timezone}</p>
+                  <p className="mt-3 truncate text-xs text-muted-foreground">
                     {/* The row's OWN zone, printed right above (`a.timezone`)
                         — not the runtime's (server or browser), the same bug
                         D-010 fixed elsewhere. Falls back to UTC rather than

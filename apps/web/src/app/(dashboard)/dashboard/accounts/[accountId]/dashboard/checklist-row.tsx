@@ -53,7 +53,11 @@ export function ChecklistRow({
         <span className="text-[13.5px] font-semibold text-card-foreground">{m["checklist.title"]}</span>
         {/* The mono label role — same treatment as SetupMeterLink's own
             done/total count. */}
-        <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{progressText}</span>
+        {/* F-107 (rider part): no `shrink-0` — matching work-row.tsx's own
+            fix (this file's header comment ties the two together as "same
+            shape"); today's "{done} of {total} done" is always short, but
+            nothing bounds `done`/`total` to stay that way. */}
+        <span className="font-mono text-xs text-muted-foreground tabular-nums">{progressText}</span>
       </span>
       {/* Purely decorative — the Link's own aria-label above already carries
           the count in words, and an explicit aria-label on the Link

@@ -201,7 +201,14 @@ export default async function ContactsPage({
               name="q"
               defaultValue={q ?? ""}
               placeholder={m["contacts.search"]}
-              className="w-72"
+              // F-107 (rider part): full width below `sm` — a fixed 288px
+              // box here was wider than this page's own available column
+              // at phone width (contacts is outside this rider's named
+              // ownership; flagged in its report as a one-line fix made
+              // directly because the rider's own Goal names 320px and
+              // page-header.tsx's matching `min-w-0` fix alone could not
+              // shrink a child with an EXPLICIT, non-responsive width).
+              className="w-full sm:w-72"
             />
           </form>
         }

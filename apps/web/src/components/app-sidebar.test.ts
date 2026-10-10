@@ -64,3 +64,89 @@ describe("AppSidebar — the client identity label never falls back to the agenc
     expect(src).not.toContain("clientAccountName");
   });
 });
+
+// F-107 (rider part, docs/crm-features.md §4.3's `| 5 | F-107 (part) |` row):
+// below Tailwind's `sm` breakpoint (640px — narrower than either width the
+// rider names, 375 and 320) the sidebar is ALWAYS the 64px icon-only rail,
+// whatever the `collapsed` cookie/toggle state says — there is no overlay to
+// expand it into yet (F-107's second part), so content that only rendered in
+// the `collapsed === false` branch (labels, the wordmark, the account-
+// switcher's name/timezone text, the setup meter's count row) must be hidden
+// by CSS at that width instead, since JS has no way to know the viewport
+// without a hydration flash. Source pins, in the same style as the block
+// above: a render test would need usePathname/useShellData mocked for no
+// behavioural payoff a class-string assertion doesn't already cover.
+describe("AppSidebar — F-107 (rider part): below `sm` the rail is icon-only regardless of `collapsed`", () => {
+  it("the aside's own width keeps w-16 as the unprefixed base even when expanded (mutation: revert to the old `: \"w-[236px]\"` → FAILS)", () => {
+    expect(src).toMatch(/collapsed \? "w-16" : "w-16 sm:w-\[236px\]"/);
+  });
+
+  it("the collapse/expand toggle is hidden below `sm` (mutation: drop `sm:inline-flex` from its className → FAILS)", () => {
+    expect(src).toContain(
+      'className="hidden rounded-[var(--radius-ctl)] p-1.5 text-sidebar-foreground/70 transition-colors '
+      + 'hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)] sm:inline-flex"',
+    );
+  });
+
+  it("the agency wordmark is hidden below `sm` even when expanded (mutation: drop `hidden`/`sm:inline-block` → FAILS)", () => {
+    expect(src).toContain(
+      'className="hidden px-1 text-sm font-semibold text-[var(--sidebar-text-strong)] sm:inline-block"',
+    );
+  });
+
+  it("the footer's bottom padding adds --safe-bottom on top of the existing 14px, not in place of it (mutation: revert to plain `py-3.5` → FAILS)", () => {
+    expect(src).toContain('"pb-[calc(0.875rem+var(--safe-bottom))]"');
+  });
+
+  it("a nav item's label text is hidden below `sm` even when expanded (mutation: drop `hidden`/`sm:block` → FAILS)", () => {
+    expect(src).toContain('<span className="hidden min-w-0 flex-1 truncate sm:block">{item.label}</span>');
+  });
+
+  it("the unread dot and pill trade places only at sm+, never below it (mutation: drop either `!collapsed && \"sm:hidden\"` or `!collapsed && \"sm:inline-block\"` → one of the two shows at every width)", () => {
+    expect(src).toContain('!collapsed && "sm:hidden"');
+    expect(src).toContain('!collapsed && "sm:inline-block"');
+  });
+
+  it("the setup meter's label/count row is hidden below `sm` (mutation: drop `hidden`/`sm:flex` → FAILS)", () => {
+    expect(src).toContain('<span className="hidden items-center justify-between gap-2 sm:flex">');
+  });
+
+  // F-107 r1 review (item 7): pins the DESKTOP half too — the mobile-first
+  // base alone proves nothing about whether expanded desktop still
+  // restores its spacing at sm+.
+  it("a nav link restores its expanded spacing at sm+ when not collapsed (mutation: delete `!collapsed && \"sm:justify-start sm:px-2.5\"` → the link stays centered/padless at desktop too)", () => {
+    expect(src).toContain('!collapsed && "sm:justify-start sm:px-2.5",');
+  });
+
+  it("the group label restores at sm+ when not collapsed (mutation: delete `!collapsed && \"sm:block\"` on the group label → it stays hidden at desktop too)", () => {
+    expect(src).toContain('!collapsed && "sm:block",');
+  });
+
+  // F-107 r1 review (item 1): a SidebarLink's visible label span is
+  // `hidden` below `sm` regardless of `collapsed`; `title`/`aria-label`
+  // used to be set only when `collapsed` was true, which left the empty
+  // string as this Link's whole accessible name at phone width (icon and
+  // active-rail mark are both `aria-hidden`) whenever there was no unread
+  // badge — every nav item but Conversations, including Back-to-agency and
+  // the footer's Settings link, which both render through this same
+  // component.
+  it("title and aria-label are unconditional, never only when `collapsed` (mutation: revert to `collapsed ? item.label : undefined` on either → FAILS)", () => {
+    expect(src).toContain("title={item.label}");
+    expect(src).toContain('aria-label={hasUnread ? `${item.label} (${unreadCount} unread)` : item.label}');
+    expect(src).not.toMatch(/title=\{collapsed \? item\.label : undefined\}/);
+  });
+
+  // F-107 r2 review (item 6, superseding r1's item 9): the logo is
+  // decorative again (`alt=""`) — the name span right below is now ALWAYS
+  // in the a11y tree (`sr-only`, restored to visible only when not
+  // collapsed), so it is the one source of the name in every state and
+  // the logo announcing it too would double it at desktop width.
+  it("the client logo's alt is decorative (mutation: revert to `alt={clientLabel}` → FAILS)", () => {
+    expect(src).toContain('alt=""');
+    expect(src).not.toContain("alt={clientLabel}");
+  });
+
+  it("the name/timezone block is ALWAYS rendered, sr-only unless not collapsed at sm+ (mutation: revert to `{collapsed ? null : (...)}` or drop `sr-only`/`sm:not-sr-only` → FAILS)", () => {
+    expect(src).toContain('<span className={cn("min-w-0 flex-1 sr-only", !collapsed && "sm:not-sr-only")}>');
+  });
+});

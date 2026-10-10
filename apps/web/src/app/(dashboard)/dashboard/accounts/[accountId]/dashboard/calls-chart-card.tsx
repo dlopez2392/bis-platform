@@ -106,7 +106,12 @@ export function CallsChartCard({
   const ctaLabel = offerVoiceSetup ? m["dashboard.calls.emptySetupVoice"] : m["dashboard.calls.emptyViewCalls"];
 
   return (
-    <div className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
+    // F-107 (rider part): `min-w-0` — this card sits in the dashboard's
+    // `grid gap-4 xl:grid-cols-2` row (page.tsx), and a grid item's
+    // automatic minimum size defaults to its CONTENT's min-content width,
+    // which the chart's own bars/labels pushed past the track at phone
+    // width even though nothing inside needed to scroll on its own.
+    <div className="min-w-0 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
       <div className="flex items-baseline gap-2">
         <h5 className="text-[13.5px] font-semibold text-card-foreground">{m["dashboard.calls.title"]}</h5>
         <span className="ml-auto font-mono text-[10px] font-normal tracking-[0.14em] text-muted-foreground uppercase">
