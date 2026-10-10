@@ -1863,8 +1863,16 @@ describe("F-048: the move's own stamp", () => {
   });
 
   it("each call mints its own microseconds, and the database answers them back exactly", async () => {
-    const stamps = new Set(Array.from({ length: 200 }, () => moveStamp()));
-    expect(stamps.size).toBeGreaterThan(190);
+    // ONE fixed millisecond, so only the random microseconds can tell the
+    // stamps apart: a millisecond-only stamp gives exactly 1. 200 draws from
+    // 1000 values give about 181 distinct (1000 * (1 - e^-0.2)), standard
+    // deviation about 6; 120 is ten deviations below, so this cannot flake,
+    // and every stamp keeps that one millisecond (fix round 4: the old bar of
+    // 190 failed on correct code).
+    const fixed = new Date("2029-09-01T10:00:00.123Z");
+    const stamps = new Set(Array.from({ length: 200 }, () => moveStamp(fixed)));
+    expect(stamps.size).toBeGreaterThan(120);
+    for (const st of stamps) expect(st.startsWith("2029-09-01T10:00:00.123")).toBe(true);
     for (const st of stamps) expect(st).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");

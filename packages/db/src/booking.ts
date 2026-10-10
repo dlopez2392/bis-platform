@@ -792,11 +792,11 @@ export async function moveBooking(
 }
 
 /**
- * Fix round 3 (m2): the `updated_at` a move's cancel writes, unique to the
- * call rather than to the millisecond — two tabs can cancel in the same ms.
- * Now's millisecond plus three random digits of microseconds: timestamptz
- * keeps microseconds and PostgREST answers them, so `sameMicroInstant` can
- * tell this call's cancel from any other.
+ * Fix round 3 (m2): the `updated_at` a move's cancel writes. Now's
+ * millisecond plus three random digits of microseconds (timestamptz keeps
+ * them and PostgREST answers them), so two moves cancelling in the same
+ * millisecond collide only 1 time in 1000 — not unique, but no longer the
+ * certainty a millisecond-only stamp was. `sameMicroInstant` compares them.
  */
 export function moveStamp(now: Date = new Date()): string {
   return now.toISOString().replace(/Z$/, `${String(randomInt(0, 1000)).padStart(3, "0")}Z`);

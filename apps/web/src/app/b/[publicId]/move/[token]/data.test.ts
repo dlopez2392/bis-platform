@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { serviceDb } from "@bis/db";
-import { readMoveContext, moveState, MOVE_CHAIN_MAX } from "./data";
+
+// Only `loadMoveContextSafe` reaches `serviceDb()`; every other test hands
+// `readMoveContext` its own stub.
+const safeDb = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock("@bis/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@bis/db")>()),
+  serviceDb: () => safeDb.current,
+}));
+
+import { readMoveContext, moveState, MOVE_CHAIN_MAX, loadMoveContextSafe } from "./data";
 
 /**
  * Fix round 3: the REAL `readMoveContext`, on a stub database that answers
@@ -75,6 +84,32 @@ describe("readMoveContext — the chain depth is read, and a bad walk fails safe
     expect(errors).toHaveBeenCalledTimes(2);
     const logged = errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
     expect(logged).toMatch(/chain/);
+    expect(logged).not.toContain(TOKEN);
+  });
+});
+
+/**
+ * Fix round 4: `loadMoveContextSafe` is what the cancel page (and the move
+ * page's metadata and layout) read through. A failed read must answer null —
+ * the cancel page then offers no move and keeps its cancel form — never
+ * throw, and never log the token.
+ */
+describe("loadMoveContextSafe — a failed read is null, never an error, never the token in a log", () => {
+  it("the token look-up fails quoting the token: null, one log line without it (mutation: rethrow → FAILS)", async () => {
+    safeDb.current = {
+      from: () => {
+        const b = {
+          select: () => b, eq: () => b,
+          maybeSingle: async () => ({ data: null, error: { message: `no read for cancel_token=${TOKEN}` } }),
+        };
+        return b;
+      },
+    };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(loadMoveContextSafe(TOKEN)).resolves.toBeNull();
+    expect(errors).toHaveBeenCalledTimes(1);
+    const logged = errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+    expect(logged).toMatch(/booking read failed/);
     expect(logged).not.toContain(TOKEN);
   });
 });
