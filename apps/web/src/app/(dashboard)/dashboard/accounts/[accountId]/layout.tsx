@@ -4,6 +4,8 @@ import { requireAccountAccess } from "@/lib/auth";
 import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { showsPaymentFailedBanner } from "@/lib/billing/billing-view";
 import { dbForRequest } from "@/lib/db";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import { LocaleProvider } from "@/components/locale-provider";
 
 export default async function AccountWorkspaceLayout({
   children,
@@ -17,7 +19,7 @@ export default async function AccountWorkspaceLayout({
   const db = await dbForRequest();
   const { data: account, error } = await db
     .from("accounts")
-    .select("id, name")
+    .select("id, name, language")
     .eq("id", accountId)
     .maybeSingle();
   if (error) {
@@ -46,14 +48,27 @@ export default async function AccountWorkspaceLayout({
     console.error(`account layout: billing read failed for ${accountId}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  // Owner decision 1 (2026-10-10, plan-review C2): account.language governs
+  // CLIENT-role sessions only — `isOperator: isAgency` is this layout's own
+  // existing `isAgency` (above), passed straight through, no new auth call.
+  const locale = requestLocale({ account, isOperator: isAgency });
+
   return (
-    <>
-      {paymentFailed ? (
-        <div className="px-6 pt-6">
-          <BillingBanner audience={isAgency ? "agency" : "client"} accountId={accountId} />
-        </div>
-      ) : null}
-      {children}
-    </>
+    <LocaleProvider locale={locale}>
+      {/* The real <html lang> is fixed at the root dashboard layout
+          ((dashboard)/layout.tsx), which is shared by the agency-wide
+          routes above this [accountId] segment and so has no per-account
+          locale to read — the same reason the public booking/form/chat
+          routes (/b, /f, /c) carry `lang={locale}` on a subtree element
+          rather than on <html>; this follows that existing convention. */}
+      <div lang={locale}>
+        {paymentFailed ? (
+          <div className="px-6 pt-6">
+            <BillingBanner audience={isAgency ? "agency" : "client"} accountId={accountId} />
+          </div>
+        ) : null}
+        {children}
+      </div>
+    </LocaleProvider>
   );
 }

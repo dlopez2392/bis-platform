@@ -43,6 +43,7 @@ import {
 import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
+import { LocaleNavDemo } from "./locale-nav-demo";
 import { SettingsFieldCards } from "./settings-field-cards";
 import { BillingCardStates } from "./billing-card-states";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
@@ -228,6 +229,20 @@ export default async function StyleguidePage() {
               valueText="6 of 6 steps"
               fill="bg-[var(--good)]"
             />
+          </div>
+        </Section>
+
+        {/* Task 6 (Spanish-runtime lane), DESIGN.md DoD "English and
+            Spanish": the sidebar's own labelKey → copy lookup now runs
+            through LocaleProvider/useLocale()/t() (app-sidebar.tsx). One
+            short label (Contacts/Contactos) and the longest nav.* label in
+            either language (Phone numbers/Números de teléfono), so the one
+            translation worth the sidebar's narrowest-width overflow check
+            is visible here too. */}
+        <Section title="Locale" file="components/locale-provider.tsx · lib/i18n/t.ts · components/app-sidebar.tsx">
+          <div className="flex w-full flex-col gap-4">
+            <LocaleNavDemo labelKey="nav.contacts" />
+            <LocaleNavDemo labelKey="nav.numbers" />
           </div>
         </Section>
 

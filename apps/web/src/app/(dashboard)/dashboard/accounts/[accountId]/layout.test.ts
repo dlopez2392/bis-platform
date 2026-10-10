@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
+import { LocaleProvider } from "@/components/locale-provider";
 
 // A switchable flag, not a fixed `isAgency: false`: a fixed stub can never
 // exercise the agency branch, so `audience={isAgency ? "agency" : "client"}`
@@ -8,8 +9,12 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 const auth = vi.hoisted(() => ({ isAgency: false }));
 vi.mock("@/lib/auth", () => ({ requireAccountAccess: async () => ({ userId: "u", isAgency: auth.isAgency }) }));
 vi.mock("next/navigation", () => ({ notFound: () => { throw new Error("NOT_FOUND"); } }));
+// Task 6 (Spanish-runtime lane): `language` is a mutable hoisted field, same
+// shape as `auth.isAgency` above, so a test can set an account's own stored
+// language without a second mock factory.
+const dbRow = vi.hoisted(() => ({ language: null as string | null }));
 vi.mock("@/lib/db", () => ({
-  dbForRequest: async () => ({ from: () => { const c = { select: () => c, eq: () => c, maybeSingle: async () => ({ data: { id: "a", name: "A" }, error: null }) }; return c; } }),
+  dbForRequest: async () => ({ from: () => { const c = { select: () => c, eq: () => c, maybeSingle: async () => ({ data: { id: "a", name: "A", language: dbRow.language }, error: null }) }; return c; } }),
 }));
 const billing = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), getAccountBilling: billing.read }));
@@ -23,13 +28,26 @@ function find(node: ReactNode, type: unknown): ReactElement[] {
 }
 const render = () => Layout({ children: "page", params: Promise.resolve({ accountId: "a" }) });
 
+// Task 6 (Spanish-runtime lane): the returned tree is now
+// `<LocaleProvider><div lang={locale}>{banner}{children}</div></LocaleProvider>`
+// — one level deeper than the Fragment this used to be. `find()` above
+// recurses regardless of depth, so the banner-shape assertions below are
+// untouched by the extra wrapping; this helper is only needed where a test
+// reaches past `find()` for the raw children array or the div's own `lang`.
+function content(tree: ReactNode): { lang: string; children: ReactNode } {
+  const div = (tree as ReactElement<{ children: ReactElement<{ lang: string; children: ReactNode }> }>).props.children;
+  return div.props;
+}
+
 // A BLOCK body, not `() => billing.read.mockReset()`: vitest treats a
 // function returned from beforeEach as that test's teardown, and mockReset
 // returns the mock itself, which would then be CALLED after the test (the
 // plan review saw exactly that: `Error: getAccountBilling failed: timeout`).
 beforeEach(() => {
   billing.read.mockReset();
+  billing.read.mockResolvedValue({ complimentary: true, subscriptionStatus: "active", billingPausedAt: null });
   auth.isAgency = false;
+  dbRow.language = null;
 });
 
 describe("account layout: the payment-failed banner (G21)", () => {
@@ -58,8 +76,26 @@ describe("account layout: the payment-failed banner (G21)", () => {
     billing.read.mockRejectedValue(new Error("getAccountBilling failed: timeout"));
     const tree = await render();
     expect(find(tree, BillingBanner)).toHaveLength(0);
-    expect((tree as ReactElement<{ children: ReactNode[] }>).props.children).toContain("page");
+    expect(content(tree).children).toContain("page");
     expect(log).toHaveBeenCalled();
     log.mockRestore();
+  });
+});
+
+describe("account layout: mounts LocaleProvider with the request's resolved locale (Task 6, Spanish-runtime lane)", () => {
+  it("a client-role account with language=\"es\" renders in Spanish, and the subtree's lang attribute matches (mutation: drop the requestLocale/LocaleProvider wiring → FAILS, both checks revert to \"en\")", async () => {
+    dbRow.language = "es";
+    auth.isAgency = false;
+    const tree = await render();
+    expect(find(tree, LocaleProvider).map((p) => (p.props as { locale: string }).locale)).toEqual(["es"]);
+    expect(content(tree).lang).toBe("es");
+  });
+
+  it("an operator (agency) stays English even on a Spanish-language account (owner rule: operators don't inherit the client's own language)", async () => {
+    dbRow.language = "es";
+    auth.isAgency = true;
+    const tree = await render();
+    expect(find(tree, LocaleProvider).map((p) => (p.props as { locale: string }).locale)).toEqual(["en"]);
+    expect(content(tree).lang).toBe("en");
   });
 });

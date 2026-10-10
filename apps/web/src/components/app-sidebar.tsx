@@ -33,6 +33,8 @@ import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { buildNavGroups, type NavIconKey } from "@/lib/nav-groups";
 import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
+import { useLocale } from "@/components/locale-provider";
+import { t } from "@/lib/i18n/t";
 // Conversations' unread badge and the footer's setup meter both read from
 // this one shared background fetch — see shell-data.tsx's own doc comment
 // for why the read lives in the [accountId] segment (via shell-actions.ts)
@@ -131,6 +133,7 @@ export function AppSidebar({
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const pathname = usePathname();
+  const locale = useLocale();
 
   function toggle() {
     const next = !collapsed;
@@ -160,7 +163,7 @@ export function AppSidebar({
   const groups = buildNavGroups(base, isAgency).map((group) => ({
     label: group.label,
     items: group.items.map(
-      (item): NavItem => ({ href: item.href, label: m[item.labelKey], icon: NAV_ICONS[item.iconKey] }),
+      (item): NavItem => ({ href: item.href, label: t(m, item.labelKey, locale), icon: NAV_ICONS[item.iconKey] }),
     ),
   }));
 
@@ -389,7 +392,7 @@ export function AppSidebar({
                   !collapsed && "sm:block",
                 )}
               >
-                {m[group.label]}
+                {t(m, group.label, locale)}
               </div>
             ) : null}
             {group.items.map((item) => (
