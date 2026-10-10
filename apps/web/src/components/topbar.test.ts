@@ -49,10 +49,26 @@ const src = stripComments(readFileSync(path.join(here, "topbar.tsx"), "utf8"));
 // Button that is itself `shrink-0 whitespace-nowrap` (components/ui/button.tsx)
 // — a narrower box would not shrink that button, it would overflow the
 // topbar instead. At 375/320px wide, with the sidebar's own 64px taken first,
-// 300px alone is already more than what's left, so this is hidden below `sm`
-// rather than resized.
-describe("Topbar — F-107 (rider part): the search trigger is hidden below `sm`, not resized", () => {
-  it("the palette wrapper is hidden by default and only flex at sm+ (mutation: drop `hidden`/`sm:flex` → FAILS)", () => {
-    expect(src).toContain('<div className="mr-auto hidden w-[300px] min-w-0 items-center sm:flex">{palette}</div>');
+// 300px alone is already more than what's left.
+//
+// F-107 r1 review (item 8): command-palette.tsx now renders its OWN
+// icon-only trigger below `sm` instead of this wrapper hiding the whole
+// thing, so the wrapper just follows: unconstrained width below `sm`, the
+// mockup's 300px only at sm+.
+describe("Topbar — F-107 r1: the search wrapper's width (not visibility) now follows the breakpoint", () => {
+  it("the palette wrapper is width-unconstrained below `sm` and 300px at sm+ (mutation: drop `sm:w-[300px]` → FAILS)", () => {
+    expect(src).toContain('<div className="mr-auto flex min-w-0 items-center sm:w-[300px]">{palette}</div>');
+  });
+});
+
+// F-107 r1 review (item 3): measured over budget at 375px by ~20px with the
+// icon-only search trigger (item 8) restored — the header's own 22px/14px
+// mockup spacing is now tighter below `sm` only.
+describe("Topbar — F-107 r1: tighter gap/padding below `sm` only, the mockup's values restored at sm+", () => {
+  it("gap and padding are the tighter values as the base, the mockup's as the sm: override (mutation: drop either `sm:` override → FAILS)", () => {
+    expect(src).toContain(
+      'className="flex h-[54px] shrink-0 items-center justify-end gap-2 border-b border-[var(--top-line)] '
+      + 'bg-transparent px-3 sm:gap-[14px] sm:px-[22px]"',
+    );
   });
 });

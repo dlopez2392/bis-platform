@@ -23,19 +23,24 @@ export function Topbar({
   palette?: React.ReactNode;
 }) {
   return (
-    <header className="flex h-[54px] shrink-0 items-center justify-end gap-[14px] border-b border-[var(--top-line)] bg-transparent px-[22px]">
+    // F-107 r1 review (item 3): tighter gap/padding below `sm` only — the
+    // mockup's 22px/14px values (restored at sm+) left the icon-only search
+    // trigger (item 8) + ThemeToggle + OrganizationSwitcher + UserButton
+    // about 20px over the 311px available at 375px wide (measured: all
+    // three pushed ~20px past the header's own LEFT edge, since `justify-
+    // end` sends overflow leftward, which `document.documentElement.
+    // scrollWidth` cannot see — the bounds check above this file's own
+    // topbar.test.ts pin exists for is what caught it).
+    <header className="flex h-[54px] shrink-0 items-center justify-end gap-2 border-b border-[var(--top-line)] bg-transparent px-3 sm:gap-[14px] sm:px-[22px]">
       {/* The mockup puts the search control on the LEFT of the bar at 300px
           wide, with everything else pushed right (northern-lights.html:60-62).
-          F-107 (rider part): hidden below `sm` — the trigger inside
-          (command-palette.tsx's Button) is `shrink-0 whitespace-nowrap`, so
-          a narrower box here would not shrink it, it would just overflow
-          the topbar. A phone's own search affordance (a plain icon, per
-          §6.3 "Surface 2. The phone shell") is sequenced into F-107's
-          SECOND part with the rest of that surface; ⌘K itself still works
-          below `sm`, for the rare phone with a hardware keyboard — this
-          only hides the visible trigger that does not fit. */}
+          F-107 r1 review (item 8): command-palette.tsx now renders its own
+          icon-only trigger below `sm` and hides its 300px-wide one there
+          instead of this wrapper hiding the whole thing — so this div just
+          follows suit: unconstrained width (the icon trigger's own size)
+          below `sm`, the mockup's 300px only at sm+. */}
       {palette ? (
-        <div className="mr-auto hidden w-[300px] min-w-0 items-center sm:flex">{palette}</div>
+        <div className="mr-auto flex min-w-0 items-center sm:w-[300px]">{palette}</div>
       ) : null}
       {/* Task 5: DESIGN.md's "AI presence" pattern — in-account only, both
           audiences, renders nothing outside an account or with no enabled
