@@ -5,7 +5,12 @@ import type { PublicLocale } from "@/lib/forms/public-strings";
 import type { BookingStrings } from "@/lib/booking/public-strings";
 import { confirmCancelAction, type CancelResult } from "./actions";
 
-type Props = { publicId: string; token: string; locale: PublicLocale; strings: BookingStrings };
+type Props = {
+  publicId: string; token: string; locale: PublicLocale; strings: BookingStrings;
+  /** F-048: this booking's move page, or null when there is nothing left to
+   *  move (it has started). Gone once the cancel succeeds. */
+  moveHref?: string | null;
+};
 
 /**
  * IMPORTANT fix: a failed cancel used to be silent. `page.tsx`'s old inline
@@ -27,7 +32,7 @@ type Props = { publicId: string; token: string; locale: PublicLocale; strings: B
  * `useActionState`'s signature instead of `<form action>`'s
  * `void | Promise<void>` one.
  */
-export function CancelForm({ publicId, token, locale, strings }: Props) {
+export function CancelForm({ publicId, token, locale, strings, moveHref = null }: Props) {
   const [result, formAction, pending] = useActionState<CancelResult | null, FormData>(
     async () => confirmCancelAction(publicId, token, locale),
     null,
@@ -52,6 +57,9 @@ export function CancelForm({ publicId, token, locale, strings }: Props) {
       </form>
       {result && !result.ok ? (
         <p role="alert" className="bis-cancel-error">{result.error}</p>
+      ) : null}
+      {moveHref ? (
+        <p className="bis-cancel-move"><a href={moveHref}>{strings.moveLink}</a></p>
       ) : null}
     </>
   );

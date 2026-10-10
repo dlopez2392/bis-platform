@@ -5,6 +5,7 @@ import {
   bookingAlertEmail, bookingConfirmationEmail, bookingReminderEmail, bookingRescheduledEmail,
   bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject,
   bookingRescheduledSubject, bookingCancelledByBusinessEmail, bookingCancelledByBusinessSubject,
+  bookingMovedAlertEmail,
 } from "./booking";
 
 const UNBRANDED: Branding = {
@@ -590,5 +591,93 @@ describe("bookingCancelledByBusinessEmail", () => {
       });
       for (const part of [html, text, bookingCancelledByBusinessSubject(locale)]) expect(part).not.toContain("{{");
     }
+  });
+});
+
+/**
+ * F-048 (rider): the customer moves their own booking. The confirmation and
+ * the "moved" email carry a way to change the time; the moved email also
+ * carries the NEW booking's add-to-calendar file, whose UID is the old one's,
+ * so the saved event is updated rather than doubled.
+ */
+describe("the move link and the moved email's calendar file (F-048)", () => {
+  const MOVE_URL = "https://x.example/b/pub_1/move/tok_new";
+  const ICS_URL = "https://x.example/b/pub_1/ics/tok_new";
+
+  for (const locale of ["en", "es"] as const) {
+    const label = locale === "es" ? "Cambiar el horario" : "Change the time";
+    const calendarLabel = locale === "es" ? "Agregar a tu calendario" : "Add to your calendar";
+
+    it(`${locale}: the confirmation links a change of time plainly, in both parts (mutation: drop the link → FAILS)`, () => {
+      const { html, text } = bookingConfirmationEmail({
+        brand, locale, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL, moveUrl: MOVE_URL,
+      });
+      expect(html).toContain(`<a href="${MOVE_URL}" style="color:#71717a;">${label}</a>`);
+      expect(text).toContain(`${label}: ${MOVE_URL}`);
+    });
+
+    it(`${locale}: the moved email carries the new calendar file and the change link, in both parts (mutation: drop either → FAILS)`, () => {
+      const { html, text } = bookingRescheduledEmail({
+        brand, locale, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL,
+        calendarUrl: ICS_URL, moveUrl: MOVE_URL,
+      });
+      expect(html).toContain(`<a href="${ICS_URL}" style="color:#71717a;">${calendarLabel}</a>`);
+      expect(text).toContain(`${calendarLabel}: ${ICS_URL}`);
+      expect(html).toContain(`<a href="${MOVE_URL}" style="color:#71717a;">${label}</a>`);
+      expect(text).toContain(`${label}: ${MOVE_URL}`);
+    });
+  }
+
+  it("omits both lines entirely without a url — never a link to nowhere — and the receptionist's call (no new fields) is byte-identical", () => {
+    const base = { brand, whenBookerZone: WHEN_BOOKER, whenCompanyZone: WHEN_COMPANY, cancelUrl: CANCEL_URL };
+    expect(bookingRescheduledEmail({ ...base, calendarUrl: "", moveUrl: "" })).toEqual(bookingRescheduledEmail(base));
+    expect(bookingConfirmationEmail({ ...base, moveUrl: "" })).toEqual(bookingConfirmationEmail(base));
+    const { html, text } = bookingRescheduledEmail(base);
+    expect(html).not.toContain("Change the time");
+    expect(text).not.toContain("Add to your calendar");
+  });
+});
+
+describe("bookingMovedAlertEmail — the business hears the customer moved it (F-048)", () => {
+  const input = {
+    brand, whenCompanyZone: "Tue, Aug 26, 2:00 PM CDT", newWhenCompanyZone: "Thu, Aug 28, 10:00 AM CDT",
+    contactName: "Jane Doe", contactUrl: CONTACT_URL,
+  };
+
+  it("carries BOTH times, in words, in the subject and both parts, and links the contact (mutation: drop the old time → FAILS)", () => {
+    const { subject, html, text } = bookingMovedAlertEmail(input);
+    expect(subject).toBe("Booking moved: Tue, Aug 26, 2:00 PM CDT to Thu, Aug 28, 10:00 AM CDT — Jane Doe");
+    for (const part of [html, text]) {
+      expect(part).toContain(input.whenCompanyZone);
+      expect(part).toContain(input.newWhenCompanyZone);
+      expect(part).toContain("Jane Doe moved their booking.");
+      expect(part).toContain(CONTACT_URL);
+    }
+    expect(text).toContain(`Was: ${input.whenCompanyZone}`);
+    expect(text).toContain(`Now: ${input.newWhenCompanyZone}`);
+    // Words between the times, never an arrow (DESIGN.md: a delta is words).
+    expect(`${subject}${text}`).not.toMatch(/→|->/);
+  });
+
+  it("is written out in Spanish too, waiting for an operator locale; English stays the default, byte-identical (mutation: drop the es copy → FAILS)", () => {
+    const es = bookingMovedAlertEmail({ ...input, locale: "es" });
+    expect(es.subject).toBe(`Cita cambiada: ${input.whenCompanyZone} a ${input.newWhenCompanyZone} — Jane Doe`);
+    for (const part of [es.html, es.text]) {
+      expect(part).toContain("Jane Doe cambió su cita.");
+      expect(part).toContain("Abrir este contacto");
+    }
+    expect(es.text).toContain(`Antes: ${input.whenCompanyZone}`);
+    expect(es.text).toContain(`Ahora: ${input.newWhenCompanyZone}`);
+    expect(es.text).toContain("Quién: Jane Doe");
+    expect(bookingMovedAlertEmail({ ...input, locale: "en" })).toEqual(bookingMovedAlertEmail(input));
+  });
+
+  it("escapes a hostile name in html, strips CR/LF from the subject, and omits the button with no url", () => {
+    const { subject, html, text } = bookingMovedAlertEmail({ ...input, contactName: "<b>x</b>\r\nBcc: a@b.c", contactUrl: null });
+    expect(html).not.toContain("<b>x</b>");
+    expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
+    expect(subject).not.toMatch(/[\r\n]/);
+    expect(html).not.toContain("Open this contact");
+    expect(text).not.toContain("Open this contact");
   });
 });

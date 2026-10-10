@@ -57,8 +57,9 @@ export function isSmsKind(kind: string): kind is SmsKind {
 
 /**
  * THE EMAIL KINDS (consent chain spec §4.3, corrected by the PR-3 plan's E1:
- * twenty-two send sites then; twenty-four kinds now, with the operational
- * floor's ops alert and F-048's cancel notice, each named at exactly one
+ * twenty-two send sites then; twenty-six kinds now, with the operational
+ * floor's ops alert, F-048's cancel notice and the two emails of F-048's
+ * customer move (the customer's and the business's), each named at exactly one
  * send site, which scans.test.ts pins). The email gate (email-gate.ts) throws on a kind
  * that is not here, and scan 2 fails on any kind literal handed to it that
  * is not here.
@@ -84,6 +85,9 @@ export const EMAIL_KINDS = {
   "voice.booked": { class: "customer_initiated", hours: "any", footer: "unsubscribe" },
   "voice.moved": { class: "customer_initiated", hours: "any", footer: "unsubscribe" },
   "voice.cancelled": { class: "customer_initiated", hours: "any", footer: "unsubscribe" },
+  // F-048: the customer moved their own booking from the link in their email;
+  // this is the answer, in the same request, so an unsubscribe never stops it.
+  "booking.moved": { class: "customer_initiated", hours: "any", footer: "unsubscribe" },
   "automation.reminder": { class: "informational", hours: "automated", footer: "unsubscribe" },
   "automation.followup": { class: "informational", hours: "automated", footer: "unsubscribe" },
   "automation.review_request": { class: "marketing", hours: "automated", footer: "unsubscribe" },
@@ -99,6 +103,7 @@ export const EMAIL_KINDS = {
   "staff.booking_cancel_notice": { class: "staff_typed", hours: "any", footer: "none" },
   "operator.booking_alert": { class: "operator", hours: "any", footer: "none" },
   "operator.cancel_notice": { class: "operator", hours: "any", footer: "none" },
+  "operator.move_notice": { class: "operator", hours: "any", footer: "none" },
   "operator.lead_alert": { class: "operator", hours: "any", footer: "none" },
   "operator.call_alert": { class: "operator", hours: "any", footer: "none" },
   "operator.phone_change_alert": { class: "operator", hours: "any", footer: "none" },

@@ -62,6 +62,9 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
   "voice.booked": ["customer_initiated", "any", "unsubscribe"],
   "voice.moved": ["customer_initiated", "any", "unsubscribe"],
   "voice.cancelled": ["customer_initiated", "any", "unsubscribe"],
+  // F-048: the customer moved their own booking from the link in their email,
+  // and this answers that, in the same request (scan 4 pins the one site).
+  "booking.moved": ["customer_initiated", "any", "unsubscribe"],
   "automation.reminder": ["informational", "automated", "unsubscribe"],
   "automation.followup": ["informational", "automated", "unsubscribe"],
   "automation.review_request": ["marketing", "automated", "unsubscribe"],
@@ -76,6 +79,7 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
   "staff.booking_cancel_notice": ["staff_typed", "any", "none"],
   "operator.booking_alert": ["operator", "any", "none"],
   "operator.cancel_notice": ["operator", "any", "none"],
+  "operator.move_notice": ["operator", "any", "none"],
   "operator.lead_alert": ["operator", "any", "none"],
   "operator.call_alert": ["operator", "any", "none"],
   "operator.phone_change_alert": ["operator", "any", "none"],
@@ -87,9 +91,9 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
 };
 
 describe("EMAIL_KINDS — spec §4.3's table, row for row", () => {
-  it("has exactly the twenty-four send sites (E1, plus the operational floor's ops alert and F-048's cancel notice) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the twenty-six send sites (E1, plus the operational floor's ops alert, F-048's cancel notice and its customer move's two emails) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(EMAIL_KINDS).sort()).toEqual(Object.keys(EMAIL_TABLE).sort());
-    expect(Object.keys(EMAIL_KINDS)).toHaveLength(24);
+    expect(Object.keys(EMAIL_KINDS)).toHaveLength(26);
   });
 
   it.each(Object.entries(EMAIL_TABLE))("%s is %j (mutation: change any one of this row's three fields → FAILS)", (kind, [cls, hours, footer]) => {
