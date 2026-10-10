@@ -136,13 +136,17 @@ describe("AppSidebar — F-107 (rider part): below `sm` the rail is icon-only re
     expect(src).not.toMatch(/title=\{collapsed \? item\.label : undefined\}/);
   });
 
-  // F-107 r1 review (item 9): the client's logo `alt` used to be "" (purely
-  // decorative) whenever `collapsed` was false, on the reasoning that the
-  // name text was "right beside it" — below `sm` that text is CSS-`hidden`
-  // even when `collapsed` is false, so the logo was the ONLY thing in the
-  // identity block and carried no name for a screen reader at phone width.
-  it("the client logo's alt is the account name unconditionally, never `collapsed ? clientLabel : \"\"` (mutation: revert → FAILS)", () => {
-    expect(src).toContain("alt={clientLabel}");
-    expect(src).not.toMatch(/alt=\{collapsed \? clientLabel : ""\}/);
+  // F-107 r2 review (item 6, superseding r1's item 9): the logo is
+  // decorative again (`alt=""`) — the name span right below is now ALWAYS
+  // in the a11y tree (`sr-only`, restored to visible only when not
+  // collapsed), so it is the one source of the name in every state and
+  // the logo announcing it too would double it at desktop width.
+  it("the client logo's alt is decorative (mutation: revert to `alt={clientLabel}` → FAILS)", () => {
+    expect(src).toContain('alt=""');
+    expect(src).not.toContain("alt={clientLabel}");
+  });
+
+  it("the name/timezone block is ALWAYS rendered, sr-only unless not collapsed at sm+ (mutation: revert to `{collapsed ? null : (...)}` or drop `sr-only`/`sm:not-sr-only` → FAILS)", () => {
+    expect(src).toContain('<span className={cn("min-w-0 flex-1 sr-only", !collapsed && "sm:not-sr-only")}>');
   });
 });

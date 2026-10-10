@@ -316,16 +316,15 @@ export function AppSidebar({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={clientLogoUrl}
-                // Unconditional (F-107 r1 review): below `sm` the name span
-                // further down is CSS-`hidden` even when `collapsed` is
-                // false, which JS cannot see without risking a hydration
-                // flash (this file's own reasoning throughout), so there is
-                // no `collapsed`-keyed condition that is reliably "the name
-                // is visibly right beside it" any more. The remaining cost
-                // is a redundant announcement at desktop width, where the
-                // name text IS also read — never a missing one, which this
-                // trades away.
-                alt={clientLabel}
+                // F-107 r2 review, item 6: always decorative. Round 1 made
+                // this unconditionally `clientLabel` to fix a missing name
+                // at phone width, but that double-announced it at desktop
+                // (the visible name text right beside it is ALSO read).
+                // The name span just below is now always in the a11y tree
+                // (`sr-only`, restored to visible via `sm:not-sr-only`
+                // only when not collapsed) — exactly one source for the
+                // name in every state, so this can safely go back to "".
+                alt=""
                 className="size-full object-contain"
               />
             ) : (
@@ -334,18 +333,20 @@ export function AppSidebar({
               <span aria-hidden>{clientLabel.trim().charAt(0).toUpperCase()}</span>
             )}
           </span>
-          {collapsed ? null : (
-            // Same two-line shape as AccountSwitcher's own name/timezone
-            // block: name on top, timezone below at the shared 11px size.
-            // `hidden sm:block`: below `sm` the avatar above is the whole
-            // identity block, same reasoning as the wordmark/toggle row.
-            <span className="hidden min-w-0 flex-1 sm:block">
-              <span className="block truncate text-sm font-medium">{clientLabel}</span>
-              <span className="block truncate text-[11px] text-sidebar-foreground/60">
-                {clientTimezone ?? ""}
-              </span>
+          {/* F-107 r2 review, item 6: ALWAYS rendered now (round 1 had
+              `{collapsed ? null : (...)}`, which removed this from the
+              a11y tree too, in both the phone AND desktop-collapsed
+              cases). `sr-only` is the base — present for assistive tech,
+              invisible to sighted users — and `sm:not-sr-only` restores
+              the original visible two-line block, but only when not
+              collapsed: at desktop-collapsed (sm+, collapsed=true) it
+              correctly stays sr-only, same as phone width. */}
+          <span className={cn("min-w-0 flex-1 sr-only", !collapsed && "sm:not-sr-only")}>
+            <span className="block truncate text-sm font-medium">{clientLabel}</span>
+            <span className="block truncate text-[11px] text-sidebar-foreground/60">
+              {clientTimezone ?? ""}
             </span>
-          )}
+          </span>
         </div>
       ) : null}
 
