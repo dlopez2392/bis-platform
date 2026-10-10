@@ -91,28 +91,44 @@ guard"). No membership means no role, never Owner.
 
 Clerk decides who belongs to which company; BIS decides the role.
 
-- **Invitations from BIS** are created in Clerk as `org:member` with
-  `public_metadata: { bis_role, bis_language }`. On acceptance the membership webhook applies
-  them.
+- **Invitations from BIS** (corrected 2026-10-10 after review) follow the BIS role: an Owner
+  is invited as Clerk `org:admin`, Staff as `org:member`, each with
+  `public_metadata: { bis_role, bis_language }`. Clerk copies that metadata onto the
+  membership it creates; every later role change rewrites the membership's `bis_role` too
+  (`updateOrganizationMembershipMetadata`), and the Clerk role follows every BIS role change.
+  Wherever BIS holds a membership, the Clerk role is re-asserted from it (owner -> `org:admin`,
+  staff -> `org:member`), so BIS Staff beside Clerk `org:admin` cannot stand.
 - **Webhook** `POST /api/webhooks/clerk`, verified with the Svix signature (secret
   `CLERK_WEBHOOK_SIGNING_SECRET`), handling `user.created`, `user.updated`,
-  `organizationMembership.created`, `organizationMembership.deleted`. Upserts are idempotent
+  `organizationMembership.created`, `organizationMembership.updated` (corrected 2026-10-10
+  after review: re-asserts the Clerk role from BIS when BIS holds a row, so an edit in Clerk's
+  dashboard or browser API cannot drift it), `organizationMembership.deleted`. **Production
+  only** (corrected 2026-10-10 after review): there is no endpoint for Preview or CI, where the
+  route answers 503 and the fallback below keeps memberships in step. Upserts are idempotent
   (keyed on `clerk_user_id`, and on user + account), so a replayed or out-of-order event
   converges. An event for an organisation with no `accounts` row (the agency's own org, a
   test org) is acknowledged and ignored.
 - **Fallback on each request.** `requireAccountAccess` ensures the caller has a `users` row
   and a membership for the account they are entering, creating any that is missing, so a
-  dropped webhook never locks anyone out. The role it creates: the invitation's `bis_role`
-  when present; else **Owner** if Clerk lists the person as `org:admin` (every existing client
-  login), else **Staff**. A person added in Clerk's own dashboard therefore lands as Staff
-  unless made an org admin there, which only the agency can do.
-- **Removal.** Removing someone deletes the Clerk membership (their token loses the org at
-  the next refresh) and the BIS membership row (the role helper returns NULL at once, so the
-  database refuses their writes even before the token refreshes).
-- **Backfill.** A one-time script (`packages/db/scripts/`, run locally against each
-  project after the migration) lists every account's Clerk memberships and upserts users and
-  memberships with the fallback's rule. The fallback makes it non-critical; it exists so the
-  Team screen is complete before anyone signs in.
+  dropped webhook never locks anyone out. The role it creates (corrected 2026-10-10 after
+  review): **Owner** only when Clerk lists the person as `org:admin` (every existing client
+  login) AND no `bis_role` in the membership's or the accepted invitation's metadata says
+  otherwise; any disagreement is the less privileged, **Staff**, so stale metadata can only
+  demote and never mint an Owner. A person added in Clerk's own dashboard therefore lands as
+  Staff unless made an org admin there. It never recreates a membership that a system-written
+  `team.member_removed` event for that account and person is newer than.
+- **Removal** (corrected 2026-10-10 after review). Removing someone deletes the BIS
+  membership row first (behind the last-Owner guard; the role helper returns NULL at once, so
+  the database refuses their writes even before the token refreshes), then the Clerk
+  membership (their token loses the org at the next refresh), records a system
+  `team.member_removed` event (what the undo restores from), and then deletes the BIS row
+  AGAIN, an idempotent sweep: a request from the person being removed, made while Clerk's
+  delete was in flight, could otherwise have recreated it through the fallback. The fallback
+  also refuses any Clerk membership older than that event.
+- **Backfill** (corrected 2026-10-10 after review). **No backfill runs on production.** The
+  per-request fallback creates each existing client login's membership on their first
+  in-account request. The backfill generator (`packages/db/src/backfill/`, which emits SQL
+  and connects to no database) stays in the repo but is not a rollout step.
 - **Clerk's own team screen is closed to clients.** The topbar's `OrganizationSwitcher`
   (`components/topbar.tsx:104`) lets any Clerk org admin open "Manage organization" and
   invite people around BIS. For client logins it is not rendered: they have one company and
@@ -187,14 +203,14 @@ browser holds the Clerk session token and the Supabase URL and public key are pu
 
 1. Migration on the CI project (`ci-project-setup.yml`), then production via MCP, then the
    parity check. Never re-applied.
-2. Clerk webhook endpoint on **both** instances (development for Preview and CI, production
-   for production), each with its own signing secret; `CLERK_WEBHOOK_SIGNING_SECRET` in
-   Vercel production (production instance's secret) and Preview (development instance's),
-   and in `.env.example`. Owner step, or done through Clerk's API if it exposes webhook
-   endpoints (assumption, unverified).
-3. Deploy (the fallback makes order with the backfill irrelevant).
-4. Backfill script against the CI project, then production.
-5. Verify: each live client login has a membership with role `owner`.
+2. Clerk webhook endpoint on the **production** instance only (corrected 2026-10-10 after
+   review), with `CLERK_WEBHOOK_SIGNING_SECRET` in Vercel Production alone and in
+   `.env.example`. Preview and CI have no endpoint and no secret; the route answers 503 there
+   and the fallback keeps memberships in step. Owner step.
+3. Merge and deploy. No production backfill (corrected 2026-10-10 after review): the
+   fallback creates each live client login's membership on their first in-account request.
+4. Verify: each live client login that has signed in since has a membership with role
+   `owner`.
 
 ## 11. Testing
 
