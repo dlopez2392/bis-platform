@@ -97,3 +97,11 @@ describe("onCallText", () => {
     expect(onCallText("Bob's $& Shop")).toBe("Bob's $& Shop · on a call");
   });
 });
+
+// Decision D (orchestrator, 2026-10-10): the presence phrase is translated,
+// so its wrapper — in both states — carries the resolved locale as `lang`.
+describe("TopbarPresence carries lang={locale} on its translated wrapper (decision D)", () => {
+  it("both states' data-testid wrappers carry lang={locale} (mutation: drop it from either → FAILS)", () => {
+    expect(src.match(/<span data-testid="topbar-presence" lang=\{locale\}>/g)?.length).toBe(2);
+  });
+});

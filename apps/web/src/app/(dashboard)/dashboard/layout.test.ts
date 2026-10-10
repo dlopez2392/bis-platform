@@ -53,7 +53,15 @@ vi.mock("@bis/db", async (importOriginal) => ({
   listAccounts: async () => [],
 }));
 
+// M5 (whole-branch review): a passthrough spy, so a test can assert WHAT
+// the layout asks requestLocale for — the real resolver still runs.
+vi.mock("@/lib/i18n/request-locale", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/i18n/request-locale")>();
+  return { ...actual, requestLocale: vi.fn(actual.requestLocale) };
+});
+
 const { default: DashboardLayout, generateMetadata } = await import("./layout");
+const { requestLocale } = await import("@/lib/i18n/request-locale");
 const { AppSidebar } = await import("@/components/app-sidebar");
 const { Topbar } = await import("@/components/topbar");
 const { LocaleProvider } = await import("@/components/locale-provider");
@@ -160,11 +168,43 @@ describe("dashboard/layout mounts LocaleProvider as an ancestor of BOTH AppSideb
     expect(providers.map((p) => p.props.locale)).toEqual(["es"]);
   });
 
-  it("an operator (agency) stays English even when (hypothetically) reached with a Spanish account in scope — isOperator always wins (mutation: drop isOperator from the requestLocale call → FAILS)", async () => {
+  // M5 (whole-branch review): the old version of this test could not fail.
+  // For the agency this layout never reads a tenant at all (clientState
+  // stays null), so the locale came out "en" whatever isOperator said — its
+  // named mutation ("drop isOperator") changed nothing it measured. The
+  // wiring is what can regress, so the wiring is what is asserted: the
+  // agency is resolved AS an operator, and a client is not.
+  it("an operator (agency) session is resolved with isOperator: true and stays English (mutation: pass isOperator: false → FAILS on the requestLocale call)", async () => {
     authFixture.isAgency = true;
     stateFixture.value = { status: "ok", id: "acc_1", name: "Rio Roofing — trial", timezone: "America/Chicago", language: "es" };
+    vi.mocked(requestLocale).mockClear();
     const tree = await DashboardLayout({ children: "page" });
+    expect(vi.mocked(requestLocale)).toHaveBeenCalledWith(expect.objectContaining({ isOperator: true }));
     const providers = find(tree, LocaleProvider) as { props: { locale: string } }[];
     expect(providers.map((p) => p.props.locale)).toEqual(["en"]);
+  });
+
+  it("a client session is resolved with isOperator: false and its own account's language (mutation: pass isOperator: true → FAILS on the requestLocale call)", async () => {
+    stateFixture.value = { status: "ok", id: "acc_1", name: "Rio Roofing — trial", timezone: "America/Chicago", language: "es" };
+    vi.mocked(requestLocale).mockClear();
+    await DashboardLayout({ children: "page" });
+    expect(vi.mocked(requestLocale)).toHaveBeenCalledWith({ account: { language: "es" }, isOperator: false });
+  });
+
+  // Decision D (orchestrator, 2026-10-10): `lang` sits only on the parts that
+  // are actually Spanish — the sidebar's <nav>, the topbar presence and the
+  // dashboard KPI row — never on the shell around them, most of which (the
+  // account switcher, the search, the Clerk menus) is still English.
+  it("puts no lang attribute on the shell, even for a Spanish account (decision D; mutation: restore lang={locale} on the shell's outer div → FAILS)", async () => {
+    stateFixture.value = { status: "ok", id: "acc_1", name: "Rio Roofing — trial", timezone: "America/Chicago", language: "es" };
+    const tree = await DashboardLayout({ children: "page" });
+    const withLang = (node: unknown): object[] => {
+      if (!node || typeof node !== "object") return [];
+      if (Array.isArray(node)) return node.flatMap(withLang);
+      if (!("type" in node)) return [];
+      const props = (node as { props?: { lang?: string; children?: unknown } }).props;
+      return [...(props?.lang !== undefined ? [node] : []), ...withLang(props?.children)];
+    };
+    expect(withLang(tree)).toEqual([]);
   });
 });

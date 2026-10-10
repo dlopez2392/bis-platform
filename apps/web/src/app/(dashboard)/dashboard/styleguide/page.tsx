@@ -46,6 +46,7 @@ import { RailStates } from "./rail-states";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
 import { requestPseudoMode } from "@/lib/i18n/request-locale";
 import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
+import { t } from "@/lib/i18n/t";
 import { SettingsFieldCards } from "./settings-field-cards";
 import { BillingCardStates } from "./billing-card-states";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
@@ -553,6 +554,12 @@ export default async function StyleguidePage({
           <div className="grid w-full min-w-0 gap-3 md:grid-cols-2">
             <StatTile hero label="Visitors" value="1,248" delta={{ direction: "up", label: "12%" }} spark={[3, 5, 4, 7, 9, 6, 8]} />
             <StatTile label="Pageviews" value="3,910" delta={{ direction: "flat", label: "0%" }} spark={[9, 8, 9, 10, 9, 8, 9]} />
+            {/* I7: the Spanish variant — label through t(), and the worded
+                delta (the sr-only sentence beside ▼) in Spanish too. `lang`
+                on the wrapper, as the dashboard KPI row carries it. */}
+            <div lang="es" className="min-w-0">
+              <StatTile label={t(m, "dashboard.kpi.appointmentsBooked", "es")} value="12" delta={{ direction: "down", label: "3" }} spark={[4, 3, 5, 2, 3, 1, 2]} locale="es" />
+            </div>
           </div>
           <div className="w-full min-w-0">
             <DailyChart

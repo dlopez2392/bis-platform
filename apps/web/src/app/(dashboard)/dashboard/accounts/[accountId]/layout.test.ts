@@ -28,15 +28,20 @@ function find(node: ReactNode, type: unknown): ReactElement[] {
 }
 const render = () => Layout({ children: "page", params: Promise.resolve({ accountId: "a" }) });
 
-// Task 6 (Spanish-runtime lane): the returned tree is now
-// `<LocaleProvider><div lang={locale}>{banner}{children}</div></LocaleProvider>`
-// — one level deeper than the Fragment this used to be. `find()` above
-// recurses regardless of depth, so the banner-shape assertions below are
-// untouched by the extra wrapping; this helper is only needed where a test
-// reaches past `find()` for the raw children array or the div's own `lang`.
-function content(tree: ReactNode): { lang: string; children: ReactNode } {
-  const div = (tree as ReactElement<{ children: ReactElement<{ lang: string; children: ReactNode }> }>).props.children;
-  return div.props;
+// The returned tree is `<LocaleProvider>{banner}{children}</LocaleProvider>`
+// — no wrapping element of its own (decision D: `lang` sits on the converted
+// parts only, never on the whole page). `find()` above recurses regardless
+// of depth; this helper is only needed where a test reaches past `find()`
+// for the raw children array.
+function content(tree: ReactNode): { children: ReactNode } {
+  return (tree as ReactElement<{ children: ReactNode }>).props;
+}
+
+/** Every element in the tree that carries a `lang` prop. */
+function withLang(node: ReactNode): ReactElement[] {
+  if (!isValidElement(node)) return Array.isArray(node) ? node.flatMap(withLang) : [];
+  const props = node.props as { lang?: string; children?: ReactNode };
+  return [...(props.lang !== undefined ? [node] : []), ...withLang(props.children)];
 }
 
 // A BLOCK body, not `() => billing.read.mockReset()`: vitest treats a
@@ -83,12 +88,21 @@ describe("account layout: the payment-failed banner (G21)", () => {
 });
 
 describe("account layout: mounts LocaleProvider with the request's resolved locale (Task 6, Spanish-runtime lane)", () => {
-  it("a client-role account with language=\"es\" renders in Spanish, and the subtree's lang attribute matches (mutation: drop the requestLocale/LocaleProvider wiring → FAILS, both checks revert to \"en\")", async () => {
+  it("a client-role account with language=\"es\" provides \"es\" to the page's client components (mutation: drop the requestLocale/LocaleProvider wiring → FAILS, reverts to \"en\")", async () => {
     dbRow.language = "es";
     auth.isAgency = false;
     const tree = await render();
     expect(find(tree, LocaleProvider).map((p) => (p.props as { locale: string }).locale)).toEqual(["es"]);
-    expect(content(tree).lang).toBe("es");
+  });
+
+  // Decision D (orchestrator, 2026-10-10): `lang="es"` goes only on the parts
+  // that are actually Spanish (the sidebar nav labels, the topbar presence,
+  // the dashboard KPI row) — never on the whole page, most of which is still
+  // English and would then be announced with Spanish pronunciation.
+  it("puts no lang attribute on the page content, even for a Spanish account (decision D; mutation: wrap {children} in <div lang={locale}> again → FAILS)", async () => {
+    dbRow.language = "es";
+    auth.isAgency = false;
+    expect(withLang(await render())).toEqual([]);
   });
 
   it("an operator (agency) stays English even on a Spanish-language account (owner rule: operators don't inherit the client's own language)", async () => {
@@ -96,6 +110,5 @@ describe("account layout: mounts LocaleProvider with the request's resolved loca
     auth.isAgency = true;
     const tree = await render();
     expect(find(tree, LocaleProvider).map((p) => (p.props as { locale: string }).locale)).toEqual(["en"]);
-    expect(content(tree).lang).toBe("en");
   });
 });

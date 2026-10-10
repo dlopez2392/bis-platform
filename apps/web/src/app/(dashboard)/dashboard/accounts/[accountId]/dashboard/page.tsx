@@ -367,8 +367,8 @@ export default async function AccountDashboardPage({
             the whole row instead, reusing StatTile's own exported
             `LABEL_ROLE` class string rather than a second hand-copied one —
             tokens only, no new hard-coded value. */}
-        <p className={LABEL_ROLE}>{p(t(m, "dashboard.kpi.last7Days", locale))}</p>
-        <div className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
+        <p lang={locale} className={LABEL_ROLE}>{p(t(m, "dashboard.kpi.last7Days", locale))}</p>
+        <div lang={locale} className={cn("grid gap-4 sm:grid-cols-2", hasAfterHours ? "xl:grid-cols-4" : "xl:grid-cols-3")}>
           {/* F-076 (now slice): ONE hero tile (DESIGN.md rule 11), whose
               metric follows the plan rather than a fixed metric that reads
               0 forever on a CRM-only account — see the `leadsDelta`
@@ -380,18 +380,21 @@ export default async function AccountDashboardPage({
             delta={showVoiceSub ? callsDelta : leadsDelta}
             spark={showVoiceSub ? callsSpark : leadsSpark}
             valueTestId={showVoiceSub ? "kpi-calls-answered" : "kpi-leads-captured"}
+            locale={locale}
           />
           <StatTile
             label={p(t(m, "dashboard.kpi.appointmentsBooked", locale))}
             value={String(currentBookingsIso.length)}
             delta={bookingsDelta}
             spark={bookingsSpark}
+            locale={locale}
           />
           {hasAfterHours ? (
             <StatTile
               label={p(t(m, "dashboard.kpi.afterHoursCaptured", locale))}
               value={String(afterHoursCurrent)}
               delta={afterHoursDelta}
+              locale={locale}
             />
           ) : null}
           <StatTile
@@ -399,16 +402,18 @@ export default async function AccountDashboardPage({
             value={p(formatCurrency(currentPipelineValue, locale))}
             delta={pipelineDelta}
             spark={pipelineSpark}
+            locale={locale}
           />
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <StatTile label={p(t(m, "account.contacts", locale))} value={String(contactsCount)} period={p(t(m, "common.allTime", locale))} />
-          <StatTile label={p(t(m, "account.openOpps", locale))} value={openOppsValue} period={p(t(m, "common.allTime", locale))} />
+        <div lang={locale} className="grid gap-4 sm:grid-cols-3">
+          <StatTile label={p(t(m, "account.contacts", locale))} value={String(contactsCount)} period={p(t(m, "common.allTime", locale))} locale={locale} />
+          <StatTile label={p(t(m, "account.openOpps", locale))} value={openOppsValue} period={p(t(m, "common.allTime", locale))} locale={locale} />
           <StatTile
             label={p(t(m, "account.pipelineValue", locale))}
             value={pipelineValueDisplay}
             period={p(t(m, "common.allTime", locale))}
+            locale={locale}
           />
         </div>
 

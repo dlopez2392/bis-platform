@@ -54,21 +54,17 @@ export default async function AccountWorkspaceLayout({
   const locale = requestLocale({ account, isOperator: isAgency });
 
   return (
+    // No `lang` wrapper here (decision D, 2026-10-10): most of every page
+    // is still English, so `lang={locale}` sits only on the converted parts
+    // (the dashboard KPI row; the sidebar nav and topbar presence above
+    // this segment) and the rest inherits the root <html lang="en">.
     <LocaleProvider locale={locale}>
-      {/* The real <html lang> is fixed at the root dashboard layout
-          ((dashboard)/layout.tsx), which is shared by the agency-wide
-          routes above this [accountId] segment and so has no per-account
-          locale to read — the same reason the public booking/form/chat
-          routes (/b, /f, /c) carry `lang={locale}` on a subtree element
-          rather than on <html>; this follows that existing convention. */}
-      <div lang={locale}>
-        {paymentFailed ? (
-          <div className="px-6 pt-6">
-            <BillingBanner audience={isAgency ? "agency" : "client"} accountId={accountId} />
-          </div>
-        ) : null}
-        {children}
-      </div>
+      {paymentFailed ? (
+        <div className="px-6 pt-6">
+          <BillingBanner audience={isAgency ? "agency" : "client"} accountId={accountId} />
+        </div>
+      ) : null}
+      {children}
     </LocaleProvider>
   );
 }

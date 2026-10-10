@@ -286,6 +286,7 @@ export function AppSidebar({
         <button
           type="button"
           onClick={toggle}
+          lang={locale}
           aria-label={collapsed ? t(m, "shell.expand", locale) : t(m, "shell.collapse", locale)}
           className="hidden rounded-[var(--radius-ctl)] p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-[var(--sidebar-line)] hover:text-[var(--sidebar-text-strong)] sm:inline-flex"
         >
@@ -388,8 +389,12 @@ export function AppSidebar({
           container itself: overflow-y-auto also clips the x axis, and the active
           rail sits 12px left of its item (the mockup's left: -12px). Inside the
           nav's own padding area it survives; against a bare content edge it was
-          clipped away entirely. */}
-      <nav className="-mx-3 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3">
+          clipped away entirely.
+
+          `lang={locale}` here and on the toggle above, not on the <aside>
+          (decision D): every label inside this nav resolves through t(), but
+          the account switcher and the client's brand name do not. */}
+      <nav lang={locale} className="-mx-3 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3">
         {groups.map((group, i) => (
           // Label when present; only the agency top-level group has
           // label=null and falls back to an index-based key.

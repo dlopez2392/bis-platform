@@ -8,6 +8,8 @@
 import { Sparkline } from "@/components/sparkline";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 export type StatTileDelta = { direction: "up" | "down" | "flat"; label: string };
 
@@ -32,10 +34,10 @@ export function hasStatContext({
 
 /** "up 12% vs the prior period" style wording — the chip's `aria-label`,
  *  spelled out in words so ▲/▼ is never the only carrier of the meaning. */
-function deltaAriaLabel(delta: StatTileDelta): string {
-  if (delta.direction === "flat") return m["stat.delta.flat"];
+function deltaAriaLabel(delta: StatTileDelta, locale: Locale): string {
+  if (delta.direction === "flat") return t(m, "stat.delta.flat", locale);
   const key = delta.direction === "up" ? "stat.delta.up" : "stat.delta.down";
-  return m[key].replace("{value}", delta.label);
+  return t(m, key, locale, { value: delta.label });
 }
 
 // Exported (design review, D-077 follow-up): the dashboard's 7-day KPI row
@@ -53,6 +55,7 @@ export function StatTile({
   period,
   valueTestId,
   hero,
+  locale = "en",
 }: {
   label: string;
   value: string;
@@ -67,6 +70,12 @@ export function StatTile({
   /** Spec §5: the ONE number on this screen that renders in --gradient-hero.
    *  The screen names it in code; a test counts at most one per screen. */
   hero?: boolean;
+  /** The language of the tile's own copy — today the worded delta, the
+   *  sr-only sentence beside ▲/▼ (I7). The caller resolves it
+   *  (`requestLocale`); English by default, so every tile outside the
+   *  converted dashboard KPI row is unchanged. `label`/`period` arrive
+   *  already translated. */
+  locale?: Locale;
 }) {
   if (process.env.NODE_ENV !== "production" && !hasStatContext({ delta, spark, period })) {
     throw new Error(
@@ -130,7 +139,7 @@ export function StatTile({
               {glyph ? `${glyph} ` : ""}
               {delta.label}
             </span>
-            <span className="sr-only">{deltaAriaLabel(delta)}</span>
+            <span className="sr-only">{deltaAriaLabel(delta, locale)}</span>
           </>
         ) : (
           <span aria-hidden />

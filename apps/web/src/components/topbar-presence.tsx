@@ -82,7 +82,7 @@ export function TopbarPresence() {
       // sometimes waited on the WRONG span forever. A single wrapper is
       // "visible" as soon as whichever CHILD the viewport shows has
       // rendered, regardless of which that is.
-      <span data-testid="topbar-presence">
+      <span data-testid="topbar-presence" lang={locale}>
         <span className="flex items-center gap-1.5 text-sm text-foreground sm:hidden">
           {dot}
           {t(m, "shell.presence.onCallShort", locale)}
@@ -96,7 +96,7 @@ export function TopbarPresence() {
   }
 
   return (
-    <span data-testid="topbar-presence">
+    <span data-testid="topbar-presence" lang={locale}>
       <span className="flex items-center gap-1.5 text-sm text-muted-foreground sm:hidden">
         {/* A static (non-pulsing) dot — rule 3's "dot + word" applies to
             idle the same as on-call; the full phrase's own leading "✓"

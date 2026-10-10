@@ -166,12 +166,14 @@ export default async function DashboardLayout({
     // separate per-navigation POSTs.
     <ShellDataProvider>
       <LocaleProvider locale={locale}>
-        {/* `lang` here, not only on [accountId]/layout.tsx's own inner
-            div: that one covers {children} (the page content) but sits
-            BELOW AppSidebar/Topbar in the tree, so it was never correct
-            for the chrome. This div is the outermost element both the
-            sidebar and the topbar sit inside. */}
-        <div className="relative flex min-h-screen" lang={locale}>
+        {/* No `lang` on the shell (decision D, 2026-10-10): most of it —
+            the account switcher, the search, the Clerk menus — is still
+            English. `lang={locale}` sits on the converted parts only: the
+            sidebar's <nav> and toggle (app-sidebar.tsx), the presence
+            wrapper (topbar-presence.tsx) and the dashboard KPI row
+            ([accountId]/dashboard/page.tsx). Everything else inherits the
+            root <html lang="en">. */}
+        <div className="relative flex min-h-screen">
           <Ground />
           <AppSidebar
             accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}

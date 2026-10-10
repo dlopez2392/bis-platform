@@ -30,10 +30,12 @@ export const m = {
   // ambiguous and broke blueprints.spec.ts. Renaming here keeps that
   // assertion at full strength instead of scoping the test around the clash.
   "nav.checklist": "Checklist",
-  // Longer than its English twin (15 chars vs 9) — truncate+title (above)
-  // is the existing fallback; at the sidebar's expanded 236px width this
-  // still clears the available label column without truncating.
-  "nav.checklist.es": "Lista de tareas",
+  // M4 review: not "Lista de tareas", which read as the same thing as
+  // "Pendientes" (nav.tasks.es — tareas ARE to-dos). The longest nav.* label
+  // in either language (21 chars vs 9); truncate+title (above) is the
+  // fallback. Agency-only today, and operators stay English, so no live
+  // session renders it yet.
+  "nav.checklist.es": "Lista de verificación",
   "nav.contacts": "Contacts",
   "nav.contacts.es": "Contactos",
   "nav.opportunities": "Opportunities",
@@ -57,7 +59,7 @@ export const m = {
   // fallback; still clears the expanded-sidebar label column.
   "nav.automations.es": "Automatizaciones",
   "nav.setup": "Setup",
-  "nav.setup.es": "Preparación",
+  "nav.setup.es": "Configuración",
   "nav.accounts": "Companies",
   "nav.accounts.es": "Empresas",
   "nav.blueprints": "Blueprints",
@@ -83,11 +85,12 @@ export const m = {
   // metrics. It is the same two words the per-account Voice page's own panel
   // uses, which is deliberate — one vocabulary for one thing.
   "nav.numbers": "Phone numbers",
-  // The LONGEST nav.* label in either language (19 chars) — same
-  // truncate+title fallback as nav.checklist.es/nav.work.es above; this is
-  // the one worth the sidebar's narrowest-expanded-width check (236px) if
-  // that check is ever written, since every other translation here clears
-  // it with more room to spare.
+  // The longest nav.* label a live session can render in Spanish (19
+  // chars; nav.checklist.es is longer but agency-only, and operators stay
+  // English) — same truncate+title fallback as nav.checklist.es/nav.work.es
+  // above; this is the one worth the sidebar's narrowest-expanded-width
+  // check (236px), since every other client-visible translation clears it
+  // with more room to spare.
   "nav.numbers.es": "Números de teléfono",
 
   "shell.brand": "BIS",
@@ -316,9 +319,14 @@ export const m = {
   // so the glyph is never the only carrier of the up/down/flat meaning.
   // "{value}" is the house {placeholder} convention (see setup.progress
   // above) — `deltaVsPrior`'s own `label` field (a percent or a raw count).
+  // .es twins (I7): read through t() in the tile's locale — the dashboard
+  // KPI row passes the resolved one, every other tile stays English.
   "stat.delta.up": "up {value} vs the prior period",
+  "stat.delta.up.es": "subió {value} frente al periodo anterior",
   "stat.delta.down": "down {value} vs the prior period",
+  "stat.delta.down.es": "bajó {value} frente al periodo anterior",
   "stat.delta.flat": "flat vs the prior period",
+  "stat.delta.flat.es": "sin cambios frente al periodo anterior",
 
   // InlineField component (Task 4): click-to-edit for contact fields.
   // "{label}" is the field name (e.g., "Email"); the component .replace()s it.
@@ -375,7 +383,7 @@ export const m = {
   "account.openOpps": "Open opportunities",
   "account.openOpps.es": "Oportunidades abiertas",
   "account.pipelineValue": "Pipeline value",
-  "account.pipelineValue.es": "Valor en proceso",
+  "account.pipelineValue.es": "Valor del embudo",
 
   // The in-account dashboard's greeting header (Task 5), both audiences.
   // "{name}" is the house {placeholder} convention (see setup.progress) — the
@@ -426,7 +434,7 @@ export const m = {
   "dashboard.kpi.afterHoursCaptured": "After-hours captured",
   "dashboard.kpi.afterHoursCaptured.es": "Atendidas fuera de horario",
   "dashboard.kpi.pipelineAdded": "Pipeline added",
-  "dashboard.kpi.pipelineAdded.es": "Nuevo valor en proceso",
+  "dashboard.kpi.pipelineAdded.es": "Nuevo valor del embudo",
   // D-077, design review follow-up: ONE caption for the whole KPI row
   // (page.tsx, rendered with StatTile's own exported `LABEL_ROLE` class
   // string), not a suffix on each of the four labels above — a suffix
