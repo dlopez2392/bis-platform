@@ -203,6 +203,42 @@ describe("the inline Selects show on a hovered row (fix round 1, M7)", () => {
   });
 });
 
+/**
+ * Phone-width overflow fix (CI's own `phone-width.spec.ts:447`, "a
+ * representative subset holds at the narrower 320px too" — the Team
+ * card's header action, "Invite someone" in `CardAction`, was the widest
+ * offender at 320px: `grid-cols-[1fr_auto]` gave its column the button's
+ * own intrinsic (`auto`) width unconditionally, which this card's title
+ * column could not shrink below). The fix lives in the shared
+ * `ui/card.tsx` primitive (both CardHeader and CardAction render on this
+ * same card, plus billing's), so it is pinned from THAT file's source,
+ * not team-card.tsx's own — no DOM layout engine runs under jsdom, so a
+ * computed-width assertion cannot exist here; a real measurement is
+ * `phone-width.spec.ts`'s job (CI only, per this task's own brief).
+ */
+describe("the Card header's action drops below the title at phone width, not beside it (ui/card.tsx)", () => {
+  const CARD_UI_SRC = readFileSync(path.resolve(here, "../ui/card.tsx"), "utf8");
+  const header = CARD_UI_SRC.match(/function CardHeader[\s\S]*?className=\{cn\([\s\S]*?"([^"]*)"/)?.[1] ?? "";
+  const action = CARD_UI_SRC.match(/function CardAction[\s\S]*?className=\{cn\([\s\S]*?"([^"]*)"/)?.[1] ?? "";
+
+  it("reads real strings from ui/card.tsx (the checks below are vacuous otherwise)", () => {
+    expect(header.length).toBeGreaterThan(10);
+    expect(action.length).toBeGreaterThan(5);
+  });
+
+  it("the title/action 2-column split applies only from sm up, so a narrow header stays one column and the action falls to its own row (mutation: drop the sm: gate -> FAILS)", () => {
+    expect(header).toContain("sm:has-data-[slot=card-action]:grid-cols-[1fr_auto]");
+  });
+
+  it("the action's own column/row placement is gated the same way, so it is not forced into a cramped auto column below sm (mutation: make col-start-2/row-start-1 unconditional again -> FAILS)", () => {
+    expect(action).toContain("sm:col-start-2");
+    expect(action).toContain("sm:row-span-2");
+    expect(action).toContain("sm:row-start-1");
+    expect(action).not.toMatch(/(?<!sm:)col-start-2/);
+    expect(action).not.toMatch(/(?<!sm:)row-start-1/);
+  });
+});
+
 describe("the error codes the Team actions return all have copy", () => {
   const union = ACTIONS_SRC.match(/export type TeamError =([\s\S]*?);/)?.[1] ?? "";
   const codes = [...union.matchAll(/"(team\.[A-Za-z.]+)"/g)].map((x) => x[1]!);
