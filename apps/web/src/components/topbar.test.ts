@@ -71,13 +71,27 @@ describe("Topbar — F-107 r2: the search wrapper only shrinks below its content
 // F-107 r4 review (item 1, CRITICAL): Clerk's OrganizationSwitcher trigger
 // sizes to the full org name and never shrinks on its own — a long org
 // name pushed the header's content left of its own edge at 320px.
-describe("Topbar — F-107 r4: OrganizationSwitcher never forces the header wider than its wrapper's cap", () => {
-  it("the wrapper caps width below `sm` and clips (mutation: drop `max-w-10`/`overflow-hidden` or either `sm:` release → FAILS)", () => {
-    expect(src).toContain('<div className="min-w-0 max-w-10 overflow-hidden sm:max-w-none sm:overflow-visible">');
+//
+// F-107 r5 review (item 1, CRITICAL): r4's own fix used a CLASS STRING,
+// which this app's own sign-in page already proved does nothing against
+// Clerk's unlayered structural CSS-in-JS — superseded by a style object,
+// the same mechanism sign-in uses, with a nested `@media` key to make it
+// `sm:`-conditional (Emotion's own supported syntax, Clerk's styling
+// engine; verified at runtime by the computed-style probe in
+// phone-width.spec.ts, not assumed here). The r4 wrapper (a width cap +
+// `overflow-hidden`) is gone too: it would clip the trigger's own focus
+// ring, and the real fix no longer needs a clipping safety net.
+describe("Topbar — F-107 r5: the org-switcher trigger's name is hidden via a STYLE OBJECT, not a class string", () => {
+  it("the element value is an object with a nested max-width media query, never a bare class string (mutation: revert to the string `\"hidden sm:block\"` → FAILS)", () => {
+    expect(src).toContain(
+      'organizationPreviewTextContainer__organizationSwitcherTrigger: {\n'
+      + '                "@media (max-width: 639.98px)": { display: "none" },\n'
+      + '              },',
+    );
   });
 
-  it("the trigger's own name/subtitle text is hidden below `sm` via Clerk's own element id, never the popover's org LIST (mutation: drop the `organizationPreviewTextContainer__organizationSwitcherTrigger` key, or its `hidden sm:block` value → FAILS)", () => {
-    expect(src).toContain("organizationPreviewTextContainer__organizationSwitcherTrigger: \"hidden sm:block\"");
+  it("there is no wrapper div clipping the trigger's focus ring (mutation: reintroduce `overflow-hidden` around OrganizationSwitcher → FAILS)", () => {
+    expect(src).not.toMatch(/overflow-hidden[\s\S]{0,80}<OrganizationSwitcher/);
   });
 });
 

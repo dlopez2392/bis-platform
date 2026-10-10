@@ -69,31 +69,48 @@ export function Topbar({
           unchanged, so a null render here costs nothing structurally. */}
       <TopbarPresence />
       <ThemeToggle />
-      {/* F-107 r4 review (item 1, CRITICAL): Clerk's own trigger sizes to
-          the full org name and never shrinks on its own — `min-w-0` plus
-          a width cap on this wrapper is the belt (clips to the avatar's
-          own width regardless of what Clerk renders inside, so a page-
-          level overflow is impossible even if the brace below does
-          nothing); `organizationPreviewTextContainer__
-          organizationSwitcherTrigger` is the braces (Clerk's own element
-          id for the trigger's name/subtitle text block —
-          @clerk/shared's `OrganizationPreviewId`, confirmed in
-          node_modules — scoped to the TRIGGER only, so the popover's own
-          org list still shows full names to pick from). `hidden sm:block`
-          on that one element restores the name at desktop width; the
-          wrapper's own cap is `sm:` only too, so it imposes nothing extra
-          there. */}
+      {/* F-107 r5 review (item 1, CRITICAL — supersedes r4's own fix,
+          which did nothing): Clerk's own trigger sizes to the full org
+          name and never shrinks on its own. The r4 fix passed a CLASS
+          STRING ("hidden sm:block") for `organizationPreviewTextContainer
+          __organizationSwitcherTrigger` — but this app's own sign-in page
+          (app/(dashboard)/sign-in/[[...sign-in]]/page.tsx) already proved,
+          by measuring computed style on a live node, that a class string
+          here does nothing: Clerk's runtime CSS-in-JS emits its
+          structural rules UNLAYERED, and unlayered author CSS beats
+          Tailwind's layered utilities (`@layer utilities`) at any
+          specificity, REGARDLESS of layer ordering. The dashboard's own
+          `ClerkProvider` ((dashboard)/layout.tsx) sets no `cssLayerName`
+          either, so nothing here is even in a layer to begin with — the
+          same failure mode, not a different one. The fix is the SAME one
+          sign-in already uses: a STYLE OBJECT, which Clerk merges into
+          its OWN generated rule rather than fighting it on specificity. A
+          nested at-rule inside that object is Emotion's own supported
+          syntax (Clerk's styling engine) — verified empirically by the
+          computed-style probe in phone-width.spec.ts, the same way
+          signed-out.spec.ts verifies every OTHER style object on the
+          sign-in page, not assumed from this comment alone.
+
+          The r4 wrapper (`max-w-10 overflow-hidden`) is gone: it was
+          doing the ONLY real clipping while the class-string brace above
+          silently failed, but `overflow-hidden` on a direct ancestor of
+          a FOCUSABLE trigger clips that trigger's own focus ring
+          (DESIGN.md's keyboard DoD item) — and now that the real fix
+          hides the text, Clerk's own trigger is avatar-width on its own
+          (same as UserButton beside it, which has never needed a
+          wrapper); nothing needs to clip it, and no wrapper div remains
+          to need `min-w-0` on. */}
       {isAgency ? (
-        <div className="min-w-0 max-w-10 overflow-hidden sm:max-w-none sm:overflow-visible">
-          <OrganizationSwitcher
-            hidePersonal
-            appearance={{
-              elements: {
-                organizationPreviewTextContainer__organizationSwitcherTrigger: "hidden sm:block",
+        <OrganizationSwitcher
+          hidePersonal
+          appearance={{
+            elements: {
+              organizationPreviewTextContainer__organizationSwitcherTrigger: {
+                "@media (max-width: 639.98px)": { display: "none" },
               },
-            }}
-          />
-        </div>
+            },
+          }}
+        />
       ) : null}
       <UserButton />
     </header>
