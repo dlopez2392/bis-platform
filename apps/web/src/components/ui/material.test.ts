@@ -630,7 +630,10 @@ describe("wave 2 — dashboard activity, settings, branding, accounts", () => {
     expect(s).toContain('badgeVariants({ variant: "chip" })');
     // The deliberate card-in-card: --card is exactly what it demonstrates, and
     // a doubled --shadow-card is the failure mode it exists to make visible.
-    expect(s).toContain('className="flex-1 rounded-xl border border-border bg-card p-3"');
+    // `min-w-0` (F-107, rider part): this `flex-1` preview card is a grid
+    // item of its own row, whose automatic minimum size otherwise floors at
+    // its content's min-content width.
+    expect(s).toContain('className="min-w-0 flex-1 rounded-xl border border-border bg-card p-3"');
     expect(s).not.toMatch(/\bbg-card\b[^"]*\bglass\b/);
   });
 });

@@ -88,7 +88,12 @@ function Section({
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+        {/* F-107 (rider part): `break-all` — a file PATH has no spaces to
+            wrap at, so without it this caption's own min-content width (not
+            Card's — CardHeader is its own `grid`, ui/card.tsx, and a grid
+            item's automatic minimum size is independent of its ancestors')
+            held the header open past the card at phone width. */}
+        <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground break-all">
           {file}
         </p>
       </CardHeader>
@@ -461,11 +466,18 @@ export default async function StyleguidePage() {
         </Section>
 
         <Section title="Stat tiles + website chart" file="components/stat-tile.tsx · …/website/{daily-chart,device-strip}.tsx">
-          <div className="grid w-full gap-3 md:grid-cols-2">
+          {/* F-107 (rider part): `min-w-0` on both — `Section`'s own
+              `CardContent` (ui/card.tsx) is `flex flex-wrap`, and a flex
+              item's automatic minimum size otherwise floors at its
+              content's min-content width even with `w-full` set (a
+              percentage width doesn't exempt it — only `min-width:0`
+              does), which held this whole demo row open past the card at
+              phone width. */}
+          <div className="grid w-full min-w-0 gap-3 md:grid-cols-2">
             <StatTile hero label="Visitors" value="1,248" delta={{ direction: "up", label: "12%" }} spark={[3, 5, 4, 7, 9, 6, 8]} />
             <StatTile label="Pageviews" value="3,910" delta={{ direction: "flat", label: "0%" }} spark={[9, 8, 9, 10, 9, 8, 9]} />
           </div>
-          <div className="w-full">
+          <div className="w-full min-w-0">
             <DailyChart
               days={[
                 { day: "2026-08-31", visitors: 42, pageviews: 90, isWeekend: false }, { day: "2026-09-01", visitors: 55, pageviews: 120, isWeekend: false },
@@ -476,7 +488,15 @@ export default async function StyleguidePage() {
               secondSeries={{ label: m["website.chart.series.pageviewsThird"], values: [30, 40, 34, 44, 57, 20, 17] }}
             />
           </div>
-          <DeviceStrip devices={[{ name: "mobile", visitors: 71, share: 0.71 }, { name: "desktop", visitors: 26, share: 0.26 }, { name: "tablet", visitors: 3, share: 0.03 }]} />
+          {/* F-107 (rider part): `min-w-0` on this wrapper, not
+              device-strip.tsx itself (…/website/** is outside this
+              rider's ownership) — DeviceStrip's own root div is a direct
+              flex-wrap item of `Section`'s CardContent (ui/card.tsx), and
+              its three-item legend held that item open past the card at
+              phone width. */}
+          <div className="w-full min-w-0">
+            <DeviceStrip devices={[{ name: "mobile", visitors: 71, share: 0.71 }, { name: "desktop", visitors: 26, share: 0.26 }, { name: "tablet", visitors: 3, share: 0.03 }]} />
+          </div>
         </Section>
 
         <Section title="Zone note" file="components/zone-note.tsx">

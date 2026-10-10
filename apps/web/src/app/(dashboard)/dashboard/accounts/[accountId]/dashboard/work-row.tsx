@@ -64,7 +64,12 @@ export function WorkRowCard({
             Link overrides name-from-content entirely, so the visible spans
             need no aria-hidden of their own (same reasoning as
             checklist-row.tsx). */}
-        <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{countText}</span>
+        {/* F-107 (rider part): no `shrink-0` — `work.empty`'s own sentence
+            ("Nothing needs you right now.") has no width cap and nothing
+            forcing it narrower, so at phone width it held this row open
+            past the card; without shrink-0 it can wrap like ordinary text
+            once squeezed, same as the short count's own words would. */}
+        <span className="font-mono text-xs text-muted-foreground tabular-nums">{countText}</span>
       </span>
     </Link>
   );

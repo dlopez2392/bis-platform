@@ -83,10 +83,21 @@ export default async function AccountsPage() {
                 <p className="mt-1 text-sm text-muted-foreground">{m["accounts.orphan.body"]}</p>
                 <ul className="mt-3 flex flex-wrap gap-2">
                   {orphans.map((o) => (
-                    <li key={o.id} data-orphan-org={o.id} className="flex items-center gap-2">
-                      <Badge variant="chip" className="gap-1.5 py-1 pr-2.5 pl-2">
-                        <span className="size-[7px] rounded-full bg-[var(--warn)]" aria-hidden />
-                        {o.name}
+                    // F-107 (rider part): `flex-wrap` on the row itself, not
+                    // just the `<ul>` around it — at phone width this column
+                    // is narrow enough (the sidebar and this section's own
+                    // padding already spend most of 320/375px) that an
+                    // org's own badge and its "Add as a company" button no
+                    // longer reliably share one line, so the button is
+                    // allowed to drop to its own line rather than force the
+                    // row past the page's edge. `min-w-0` on the badge (and
+                    // `shrink`, overriding its own `shrink-0` — see
+                    // ui/badge.tsx) lets a long org NAME truncate instead of
+                    // setting the row's minimum width on its own.
+                    <li key={o.id} data-orphan-org={o.id} className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+                      <Badge variant="chip" className="min-w-0 shrink gap-1.5 py-1 pr-2.5 pl-2">
+                        <span className="size-[7px] shrink-0 rounded-full bg-[var(--warn)]" aria-hidden />
+                        <span className="min-w-0 truncate">{o.name}</span>
                       </Badge>
                       {/* D-087: adopt THIS organisation. The old remedy sent
                           the agency to Add company, which made a second one. */}
@@ -113,7 +124,14 @@ export default async function AccountsPage() {
                   data-testid={`account-${a.id}`}
                   // The agency's home screen was a grid of flat rectangles —
                   // the one screen every session starts on.
-                  className="block rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3 transition-colors hover:border-[var(--accent)]"
+                  //
+                  // F-107 (rider part): `min-w-0` — this `<a>` is the GRID
+                  // ITEM (the `<ul>`'s `grid gap-4 sm:grid-cols-2
+                  // xl:grid-cols-3`), and a grid item's automatic minimum
+                  // size defaults to its content's min-content width; the
+                  // icon chip + status badge row inside was holding the
+                  // card a few px past its own track at 320px.
+                  className="block min-w-0 rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3 transition-colors hover:border-[var(--accent)]"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <span className="flex size-9 items-center justify-center rounded-[var(--radius-ctl)] bg-[var(--accent-dim)] text-[var(--accent)]">

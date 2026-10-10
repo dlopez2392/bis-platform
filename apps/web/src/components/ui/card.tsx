@@ -7,7 +7,16 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card"
       className={cn(
-        "flex flex-col gap-6 rounded-xl border border-border bg-card py-6 text-card-foreground glass",
+        // F-107 (rider part): `min-w-0` — a Card is routinely a flex or
+        // grid ITEM (styleguide's and embed-snippet.tsx's own `grid w-full
+        // max-w-sm` wrapper is one), and both layout modes default a child's
+        // automatic minimum size to its CONTENT's min-content width unless
+        // told otherwise. A long, un-wrapped line nested inside (a <pre>
+        // snippet is the one that surfaced this) was forcing the whole
+        // CARD wider than its own grid track — the <pre>'s own
+        // `overflow-x-auto` only contains it once the Card itself is
+        // allowed to shrink to its track first.
+        "flex min-w-0 flex-col gap-6 rounded-xl border border-border bg-card py-6 text-card-foreground glass",
         className
       )}
       {...props}
