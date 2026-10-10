@@ -276,3 +276,26 @@ describe("getMoveSlotsAction — the picker", () => {
     expect(await getMoveSlotsAction(TOKEN, "en", "2027-06-01")).toEqual({ error: en.genericError });
   });
 });
+
+/**
+ * The bilingual rule for owner-facing copy (the plan's §4.1 item 4, the
+ * `todo.consent.*` precedent): the thread line is written in English today,
+ * and its Spanish twin is written out beside it, waiting for an operator
+ * locale.
+ */
+describe("the thread line's words (owner-facing, both languages written out)", () => {
+  it("every calendar.move key has an en and an es twin, they differ, and both keep the placeholders (mutation: drop an .es twin → FAILS)", async () => {
+    const { m: catalogue } = await import("@/lib/messages");
+    const keys = Object.keys(catalogue).filter((k) => k.startsWith("calendar.move."));
+    const stems = [...new Set(keys.map((k) => k.replace(/\.(en|es)$/, "")))];
+    expect(stems.sort()).toEqual(["calendar.move.thread.body", "calendar.move.thread.subject"]);
+    for (const stem of stems) {
+      const en = (catalogue as Record<string, string>)[`${stem}.en`];
+      const es = (catalogue as Record<string, string>)[`${stem}.es`];
+      expect(en, `${stem}.en`).toBeTruthy();
+      expect(es, `${stem}.es`).toBeTruthy();
+      expect(es).not.toBe(en);
+      for (const ph of en!.match(/\{\w+\}/g) ?? []) expect(es, `${stem}.es keeps ${ph}`).toContain(ph);
+    }
+  });
+});

@@ -19,6 +19,7 @@ import { calendarFileUrl } from "@/lib/booking/calendar-file";
 import { bookingCancelUrl, bookingMoveUrl, isBookingToken } from "@/lib/booking/links";
 import { normalizeLocale } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
+import { m } from "@/lib/messages";
 import { readMoveContext, moveState, movingOf, scrubToken, type MoveContext } from "./data";
 
 /**
@@ -168,7 +169,8 @@ export async function confirmMoveAction(
     const convo = await ensureConversation(db, accountId, row.contact_id, ACTOR_ID, ACTOR_TYPE);
     await createMessage(db, accountId, {
       conversationId: convo.id, channel: "form", direction: "inbound",
-      subject: "Booking moved", body: `Moved their booking from ${wasCompanyZone} to ${nowCompanyZone}`,
+      subject: m["calendar.move.thread.subject.en"],
+      body: m["calendar.move.thread.body.en"].replace("{was}", wasCompanyZone).replace("{now}", nowCompanyZone),
     }, ACTOR_ID, ACTOR_TYPE);
     await incrementUnreadCount(db, accountId, convo.id);
   } catch (e) {

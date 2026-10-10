@@ -460,20 +460,41 @@ export type BookingMovedAlertInput = {
   contactName: string;
   /** Absolute, or null. NEVER relative. */
   contactUrl: string | null;
+  /** The OWNER's language. English when absent, and always English today:
+   *  there is no operator locale yet (F-013 part 1). The Spanish is written
+   *  out beside it now, the plan's bilingual rule for owner-facing copy
+   *  (§4.1 item 4), so it is ready when there is. */
+  locale?: PublicLocale;
 };
+
+/** F-048: the owner's alert for a customer's move, in both languages (the
+ *  Spanish waits for an operator locale; see `BookingMovedAlertInput`). */
+const MOVED_ALERT_COPY = {
+  en: {
+    heading: "Booking moved",
+    sentence: (name: string) => `${name} moved their booking.`,
+    to: "to", was: "Was", now: "Now", who: "Who", open: "Open this contact",
+  },
+  es: {
+    heading: "Cita cambiada",
+    sentence: (name: string) => `${name} cambió su cita.`,
+    to: "a", was: "Antes", now: "Ahora", who: "Quién", open: "Abrir este contacto",
+  },
+} as const;
 
 /**
  * F-048: the email a client gets when their CUSTOMER moves a booking from
  * the link in their own email. The phone alert's shape without the call:
- * both times in words (never an arrow), who, and the contact. Operator-facing
- * and English like every staff alert; it returns its own subject because the
- * subject carries the customer-supplied name.
+ * both times in words (never an arrow), who, and the contact. Operator-facing;
+ * it returns its own subject because the subject carries the
+ * customer-supplied name.
  */
 export function bookingMovedAlertEmail(input: BookingMovedAlertInput):
   { subject: string; html: string; text: string } {
-  const heading = "Booking moved";
-  const sentence = `${input.contactName} moved their booking.`;
-  const subject = `${heading}: ${stripSubjectControlChars(input.whenCompanyZone)} to `
+  const copy = MOVED_ALERT_COPY[input.locale ?? "en"];
+  const heading = copy.heading;
+  const sentence = copy.sentence(input.contactName);
+  const subject = `${heading}: ${stripSubjectControlChars(input.whenCompanyZone)} ${copy.to} `
     + `${stripSubjectControlChars(input.newWhenCompanyZone)} — ${stripSubjectControlChars(input.contactName)}`;
 
   const row = (label: string, value: string) => `<tr>
@@ -481,24 +502,24 @@ export function bookingMovedAlertEmail(input: BookingMovedAlertInput):
       <td style="${ROW_VALUE_STYLE}">${escapeHtml(value)}</td>
     </tr>`;
   const rows = [
-    row("Was", input.whenCompanyZone), row("Now", input.newWhenCompanyZone), row("Who", input.contactName),
+    row(copy.was, input.whenCompanyZone), row(copy.now, input.newWhenCompanyZone), row(copy.who, input.contactName),
   ].join("\n");
 
   const html = shell(input.brand, `
     <p style="margin:0 0 12px;font-size:17px;font-weight:600;">${heading}</p>
     <p style="margin:0 0 16px;color:#71717a;">${escapeHtml(sentence)}</p>
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">${rows}</table>
-    ${input.contactUrl ? button(input.brand, input.contactUrl, "Open this contact") : ""}
+    ${input.contactUrl ? button(input.brand, input.contactUrl, copy.open) : ""}
   `);
 
   const text = [
     `${heading}.`,
     sentence,
     "",
-    `Was: ${input.whenCompanyZone}`,
-    `Now: ${input.newWhenCompanyZone}`,
-    `Who: ${input.contactName}`,
-    ...(input.contactUrl ? ["", `Open this contact: ${input.contactUrl}`] : []),
+    `${copy.was}: ${input.whenCompanyZone}`,
+    `${copy.now}: ${input.newWhenCompanyZone}`,
+    `${copy.who}: ${input.contactName}`,
+    ...(input.contactUrl ? ["", `${copy.open}: ${input.contactUrl}`] : []),
   ].join("\n");
 
   return { subject, html, text };

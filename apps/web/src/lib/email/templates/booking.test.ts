@@ -659,6 +659,19 @@ describe("bookingMovedAlertEmail — the business hears the customer moved it (F
     expect(`${subject}${text}`).not.toMatch(/→|->/);
   });
 
+  it("is written out in Spanish too, waiting for an operator locale; English stays the default, byte-identical (mutation: drop the es copy → FAILS)", () => {
+    const es = bookingMovedAlertEmail({ ...input, locale: "es" });
+    expect(es.subject).toBe(`Cita cambiada: ${input.whenCompanyZone} a ${input.newWhenCompanyZone} — Jane Doe`);
+    for (const part of [es.html, es.text]) {
+      expect(part).toContain("Jane Doe cambió su cita.");
+      expect(part).toContain("Abrir este contacto");
+    }
+    expect(es.text).toContain(`Antes: ${input.whenCompanyZone}`);
+    expect(es.text).toContain(`Ahora: ${input.newWhenCompanyZone}`);
+    expect(es.text).toContain("Quién: Jane Doe");
+    expect(bookingMovedAlertEmail({ ...input, locale: "en" })).toEqual(bookingMovedAlertEmail(input));
+  });
+
   it("escapes a hostile name in html, strips CR/LF from the subject, and omits the button with no url", () => {
     const { subject, html, text } = bookingMovedAlertEmail({ ...input, contactName: "<b>x</b>\r\nBcc: a@b.c", contactUrl: null });
     expect(html).not.toContain("<b>x</b>");
