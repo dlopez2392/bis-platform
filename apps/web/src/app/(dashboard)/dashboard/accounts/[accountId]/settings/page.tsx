@@ -104,6 +104,7 @@ export default async function CrmSettingsPage({
   const boundSetAlertPhone = setAlertPhoneAction.bind(null, accountId);
   const boundStartAlertPhoneVerification = startAlertPhoneVerificationAction.bind(null, accountId);
   const boundConfirmAlertPhoneVerification = confirmAlertPhoneVerificationAction.bind(null, accountId);
+  const boundSetAccountLanguage = setAccountLanguageAction.bind(null, accountId);
   return (
     <>
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
@@ -135,16 +136,13 @@ export default async function CrmSettingsPage({
             (Task 4's resolveLocale), not a claim that this account chose
             English.
 
-            `save` wraps `setAccountLanguageAction` in its own inline Server
-            Action (the `"use server"` directive on the closure itself, not
-            just on actions.ts): InlineField's `save` prop takes a plain
-            `(value: string)`, but this file's own actions are all
-            `(accountId, FormData)` — the shape `setReportEmailsAction`
-            beside it sets and this action's own test calls it with — so a
-            PLAIN closure here would hit the exact Flight-serializer error
-            `inline-field.tsx`'s own doc comment names ("Functions cannot be
-            passed directly to Client Components"); the inline directive is
-            what makes this one a real server reference instead. */}
+            `boundSetAccountLanguage` is `setAccountLanguageAction` bound to
+            THIS account server-side (accountId must never travel as a form
+            field, same rule as every other bound action above) — a plain
+            `(value: string) => Promise<…>`, the exact shape `renameAction`
+            takes in setup/steps/account.tsx, and for the same reason: no
+            extra closure stands between InlineField's `save` prop and a
+            real server-action reference. */}
         <Card>
           <CardHeader>
             <CardTitle>{m["settings.language.label"]}</CardTitle>
@@ -157,13 +155,7 @@ export default async function CrmSettingsPage({
                 { value: "en", label: "English" },
                 { value: "es", label: "Español" },
               ]}
-              save={async (value) => {
-                "use server";
-                const fd = new FormData();
-                fd.set("language", value);
-                const r = await setAccountLanguageAction(accountId, fd);
-                return r.ok ? { ok: true } : { ok: false, error: r.error };
-              }}
+              save={boundSetAccountLanguage}
             />
           </CardContent>
         </Card>

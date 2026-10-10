@@ -79,7 +79,7 @@ vi.mock("./actions", () => ({
   createFieldAction: noop, upsertValueAction: noop, setClientAccessAction: noop,
   inviteClientAdminAction: noop, setFromEmailAction: noop, setReportEmailsAction: noop,
   setAlertPhoneAction: noop, startAlertPhoneVerificationAction: noop,
-  confirmAlertPhoneVerificationAction: noop,
+  confirmAlertPhoneVerificationAction: noop, setAccountLanguageAction: noop,
 }));
 vi.mock("../branding/actions", () => ({
   setBrandingAction: noop, removeBrandLogoAction: noop, restoreBrandLogoAction: noop,

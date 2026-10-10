@@ -456,23 +456,28 @@ describe("createFieldAction — \"referred_by\" is reserved (review round 1, m4)
  * `transfer_phone`), so `requireAgencyOnlyAccountAccess` on the first line
  * is the ONLY gate on this write, exactly as the file's other serviceDb()
  * actions document for themselves.
+ *
+ * `(accountId, value)`, not `(accountId, FormData)` (fix round 1, I2): this
+ * is the one action `InlineField`'s `save` prop calls directly, the same
+ * shape `renameAccountAction` already uses for the same reason — see this
+ * action's own doc comment in actions.ts.
  */
 describe("setAccountLanguageAction — agency-only, and en/es are the only values", () => {
-  it("rejects a value outside en/es before touching the database (mutation: drop the guard and pass raw through to setAccountLanguage → FAILS, a Postgres check-constraint error leaks as a 500 instead of this action's own {ok:false})", async () => {
-    const result = await setAccountLanguageAction("acct_1", fd({ language: "fr" }));
+  it("rejects a value outside en/es before touching the database (mutation: drop the guard and pass the value through to setAccountLanguage → FAILS, a Postgres check-constraint error leaks as a 500 instead of this action's own {ok:false})", async () => {
+    const result = await setAccountLanguageAction("acct_1", "fr");
     expect(result).toEqual({ ok: false, error: expect.stringContaining("English") });
     expect(dbMocks.setAccountLanguage).not.toHaveBeenCalled();
   });
 
   it("writes the chosen language through serviceDb(), as the userId requireAgencyOnlyAccountAccess resolved (mutation: write dbForRequest() or drop userId → FAILS)", async () => {
-    expect(await setAccountLanguageAction("acct_1", fd({ language: "es" }))).toEqual({ ok: true });
+    expect(await setAccountLanguageAction("acct_1", "es")).toEqual({ ok: true });
     expect(dbMocks.setAccountLanguage).toHaveBeenCalledWith(
       { tag: "serviceDb" }, "acct_1", "es", "user_1",
     );
   });
 
   it("calls requireAgencyOnlyAccountAccess before writing (mutation: drop the guard call → FAILS)", async () => {
-    await setAccountLanguageAction("acct_1", fd({ language: "en" }));
+    await setAccountLanguageAction("acct_1", "en");
     expect(requireAgencyOnlyAccountAccessMock).toHaveBeenCalledWith("acct_1");
   });
 });

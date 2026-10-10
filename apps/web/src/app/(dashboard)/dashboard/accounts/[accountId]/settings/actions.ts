@@ -254,12 +254,23 @@ export async function setReportEmailsAction(
 
 /**
  * Sets `accounts.language` (0065_account_language.sql; owner decision 4,
- * 2026-10-10) — the Settings-page twin of `setReportEmailsAction` above,
- * same shape and same reason. serviceDb() stands behind BOTH writes in this
- * file that touch `accounts`, which no RLS policy or column grant stands
- * behind, so the `requireAgencyOnlyAccountAccess` guard on the first line is
- * the ONLY gate on this write — see `setFromEmailAction`'s own comment for
- * why that is not redundant with the grant story.
+ * 2026-10-10). `(accountId, value)`, not `(accountId, FormData)` — this is
+ * the one write in this file an `InlineField` calls directly, and that
+ * component's `save` prop is typed `(value: string) => Promise<…>`
+ * (click-to-edit, no `<form>`), the exact shape `renameAccountAction`
+ * (setup/actions.ts) already established for the same reason: a plain
+ * closure built in the page to adapt a FormData-shaped action would be a
+ * NEW function the RSC boundary has no "use server" reference for, and
+ * React's Flight serializer refuses to send a function it cannot resolve
+ * to a server reference — `inline-field.tsx`'s own doc comment names this
+ * exact failure. Binding `accountId` with `.bind(null, accountId)` (as
+ * `setup/page.tsx` binds `renameAccountAction`, and `contact-fields-panel
+ * .tsx` binds every contact-field save) keeps this one a real reference.
+ *
+ * serviceDb() stands behind this write, which no RLS policy or column
+ * grant stands behind, so the `requireAgencyOnlyAccountAccess` guard on
+ * the first line is the ONLY gate on it — see `setFromEmailAction`'s own
+ * comment for why that is not redundant with the grant story.
  *
  * 0065 grants `authenticated` no UPDATE on `language`, deliberately: this
  * column governs which language a CLIENT-role session reads back
@@ -273,14 +284,13 @@ export async function setReportEmailsAction(
  * action's own `{ ok: false }`.
  */
 export async function setAccountLanguageAction(
-  accountId: string, formData: FormData,
+  accountId: string, value: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { userId } = await requireAgencyOnlyAccountAccess(accountId);
-  const raw = String(formData.get("language") ?? "");
-  if (raw !== "en" && raw !== "es") {
+  if (value !== "en" && value !== "es") {
     return { ok: false, error: m["settings.language.invalid"] };
   }
-  await setAccountLanguage(serviceDb(), accountId, raw, userId);
+  await setAccountLanguage(serviceDb(), accountId, value, userId);
   revalidatePath(`/dashboard/accounts/${accountId}/settings`);
   return { ok: true };
 }

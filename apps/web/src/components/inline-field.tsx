@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { Input } from "@/components/ui/input";
+import { Input, nativeFieldClass } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { normalizeFieldInput, type EditableField } from "@/lib/contacts/field-input";
@@ -200,7 +200,7 @@ export function InlineField(
         autoFocus
         defaultValue={shown}
         aria-label={label}
-        className="h-8 rounded-[var(--radius-ctl)] border border-input bg-background px-2 text-sm"
+        className={cn(nativeFieldClass, "h-8")}
         onBlur={(e) => { if (!cancelled.current) void commit(e.currentTarget.value); cancelled.current = false; }}
         onKeyDown={(e) => { if (e.key === "Escape") { cancelled.current = true; setShown(committed.current); setEditing(false); } }}
       >
