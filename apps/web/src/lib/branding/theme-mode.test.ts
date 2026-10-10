@@ -9,6 +9,7 @@ import {
   nextThemeSync,
   followUpCookie,
 } from "./theme-mode";
+import { NO_SAVED_THEME_TABLE } from "./no-saved-theme.fixture";
 
 describe("resolveThemeMode", () => {
   it("lets the user's stored choice win over the tenant default", () => {
@@ -254,4 +255,19 @@ describe("followUpCookie — 'system' keeps the OS snapshot, only the migration 
     expect(s.plan.skipPersist).toBe(false);
     expect(followUpCookie(s.plan, "light", null, "system", "dark")).toBe("dark");
   });
+});
+
+// CI e2e on 2c0e6fb0 failed two theme specs, and the first reading was that
+// the no-saved-theme path had changed. It had not (the specs inherited a saved
+// theme from the toggle; see e2e/stored-theme.ts), but nothing pinned that
+// path beyond two cells. This walks every cookie x tenant mode x role cell
+// main answered, as literals, with userTheme = null.
+describe("resolveThemeMode with no saved theme answers exactly as main did", () => {
+  it.each(NO_SAVED_THEME_TABLE)(
+    "cookie %s, tenant %s, operator %s -> %s (mutations: check users.theme 'system' for null, check brand_mode before the cookie, or drop isOperator -> FAIL)",
+    (cookie, brandMode, isOperator, expected) => {
+      const { serverMode, providerDefault } = resolveThemeMode(cookie, brandMode, isOperator, null);
+      expect(`${serverMode}/${providerDefault}`).toBe(expected);
+    },
+  );
 });
