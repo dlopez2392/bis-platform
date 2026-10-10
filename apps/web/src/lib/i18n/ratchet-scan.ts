@@ -6,24 +6,109 @@ import ts from "typescript";
 import fs from "node:fs"; // top-level, not require() inside countsByFile (plan-review M1 —
 import path from "node:path"; // eslint-config-next flags a require() import in a .ts file)
 
-const ALLOWED_ATTRIBUTE_NAMES = new Set(["className", "data-testid", "data-slot", "href", "type", "name"]);
+/** The attributes that carry words a person reads or hears. Counted ONLY
+ *  these (whole-branch review, decision C): the old rule counted every
+ *  string attribute NOT on a short allow-list, so `variant="ghost"`,
+ *  `role="presentation"` or `id="kpi"` all read as untranslated copy — the
+ *  false positives that get a ratchet disabled instead of fixed. */
+export const COPY_ATTRIBUTE_NAMES: ReadonlySet<string> = new Set([
+  "placeholder", "title", "aria-label", "aria-description", "alt", "label",
+]);
+
+/** Copy has letters. A JSX text node or attribute with none — "·", " — ",
+ *  "2026", "({n})", or `alt=""` on a decorative image — is not translatable
+ *  text. `\p{L}` rather than [A-Za-z], so a Spanish-only literal ("¿Qué?")
+ *  still counts. */
+const HAS_LETTER = /\p{L}/u;
 
 export function scanFile(filePath: string, source: string): number {
   const sf = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let count = 0;
 
   function visit(node: ts.Node) {
-    if (ts.isJsxText(node) && node.text.trim().length > 0) {
+    if (ts.isJsxText(node) && HAS_LETTER.test(node.text)) {
       count += 1;
     }
     if (ts.isJsxAttribute(node) && node.initializer && ts.isStringLiteral(node.initializer)) {
       const attrName = node.name.getText(sf);
-      if (!ALLOWED_ATTRIBUTE_NAMES.has(attrName)) count += 1;
+      if (COPY_ATTRIBUTE_NAMES.has(attrName) && HAS_LETTER.test(node.initializer.text)) count += 1;
     }
     ts.forEachChild(node, visit);
   }
   visit(sf);
   return count;
+}
+
+/** One file over its ceiling. */
+export type RatchetViolation = { file: string; live: number; allowed: number };
+
+/**
+ * The gate (decision C): a file fails ONLY when its live count RISES above
+ * its baseline entry, and a file with no entry (a new file) may only be at
+ * zero. A count BELOW baseline passes — translating strings must never break
+ * the build — and an entry for a file that no longer exists is ignored; the
+ * generator rewrites the baseline from scratch, which tightens ceilings and
+ * prunes stale entries in one reviewable commit.
+ */
+export function ratchetViolations(
+  live: Record<string, number>, baseline: Record<string, number>,
+): RatchetViolation[] {
+  const out: RatchetViolation[] = [];
+  for (const [file, count] of Object.entries(live)) {
+    const allowed = baseline[file] ?? 0;
+    if (count > allowed) out.push({ file, live: count, allowed });
+  }
+  return out;
+}
+
+/**
+ * Catalogue keys that need no Spanish twin: the copy of the six agency-only
+ * routes AGENCY_ONLY_ALLOWLIST below excludes from the JSX scan, by the
+ * namespace each route reads (decision 2, 2026-10-10 — internal tooling,
+ * English-only). Checked against messages.ts and its consumers on
+ * 2026-10-10:
+ *  - "accounts."    the Companies list and its dialogs (accounts/page.tsx,
+ *                   create/adopt dialogs, ACCOUNT_STATUS_LABEL); the few
+ *                   in-account readers are Setup, Checklist and Settings,
+ *                   all agency-only. NOT "account." (the client dashboard's
+ *                   tiles), which is translated.
+ *  - "blueprints."  /dashboard/blueprints and Settings' blueprint dialogs.
+ *  - "work.agency." /dashboard/work only. Deliberately not "work.": the rest
+ *                   of work.* is the CLIENT's own To do list (`${base}/tasks`).
+ *  - "numbers."     /dashboard/numbers.
+ *  - "screened."    /dashboard/screened.
+ *  - "plans."       /dashboard/plans.
+ */
+export const AGENCY_ONLY_KEY_PREFIXES: readonly string[] = [
+  "accounts.", "blueprints.", "work.agency.", "numbers.", "screened.", "plans.",
+];
+
+/**
+ * The base keys of `catalogue` with no Spanish twin, sorted. A key "x" is
+ * twinned by "x.es"; a key "x.en" (the English half of an explicit en/es
+ * pair, e.g. sms.consentReply.help.contact.fallback.en) is twinned by
+ * "x.es". Agency-only keys are skipped.
+ */
+export function keysMissingSpanish(
+  catalogue: Readonly<Record<string, string>>,
+  agencyPrefixes: readonly string[] = AGENCY_ONLY_KEY_PREFIXES,
+): string[] {
+  const missing: string[] = [];
+  for (const key of Object.keys(catalogue)) {
+    if (key.endsWith(".es")) continue;
+    if (agencyPrefixes.some((prefix) => key.startsWith(prefix))) continue;
+    const twin = key.endsWith(".en") ? `${key.slice(0, -3)}.es` : `${key}.es`;
+    if (!(twin in catalogue)) missing.push(key);
+  }
+  return missing.sort();
+}
+
+/** Missing keys that are not on the frozen list — every key added from the
+ *  day the list was generated needs its twin. A frozen entry that has since
+ *  gained one (or been deleted) simply stops mattering: shrinking is free. */
+export function parityViolations(missing: readonly string[], frozen: readonly string[]): string[] {
+  const allowed = new Set(frozen);
+  return missing.filter((key) => !allowed.has(key));
 }
 
 /**
