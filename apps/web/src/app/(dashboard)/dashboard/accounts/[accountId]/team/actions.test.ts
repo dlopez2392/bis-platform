@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // revalidatePath throws outside a request ("static generation store missing").
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+const cache = vi.hoisted(() => ({ revalidatePath: vi.fn() }));
+vi.mock("next/cache", () => cache);
 
 const guard = vi.hoisted(() => ({ requireAccountOwner: vi.fn() }));
 vi.mock("@/lib/auth", () => guard);
@@ -12,10 +13,11 @@ const rows = vi.hoisted(() => ({
   account: { id: "acct", clerk_org_id: "org_1", client_access_enabled: true } as Record<string, unknown> | null,
 }));
 const from = vi.hoisted(() => vi.fn());
+const selected = vi.hoisted(() => [] as unknown[]);
 const db = vi.hoisted(() => ({
   serviceDb: vi.fn(),
   listAccountTeam: vi.fn(), setAccountMemberRole: vi.fn(), setMemberLanguage: vi.fn(),
-  removeAccountMember: vi.fn(), addAccountMember: vi.fn(),
+  removeAccountMember: vi.fn(), addAccountMember: vi.fn(), deleteAccountMembership: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 
@@ -23,7 +25,11 @@ const clerk = vi.hoisted(() => ({
   teamCapacity: vi.fn(), createTeamInvitation: vi.fn(), revokeTeamInvitation: vi.fn(),
   removeFromOrganization: vi.fn(), restoreToOrganization: vi.fn(), setOrganizationRole: vi.fn(),
 }));
-vi.mock("@/lib/team/clerk-team", () => clerk);
+// clerkRefused is the real one (a pure function of the result): the role
+// action's rollback turns on it, so a fake here would test the fake.
+vi.mock("@/lib/team/clerk-team", async (importOriginal) => ({
+  clerkRefused: (await importOriginal<typeof import("@/lib/team/clerk-team")>()).clerkRefused, ...clerk,
+}));
 
 const log = vi.hoisted(() => ({ recordRemoval: vi.fn(), latestRemoval: vi.fn() }));
 vi.mock("@/lib/team/removal-log", () => log);
@@ -42,7 +48,8 @@ const STAFF_C = { userId: "33333333-3333-4333-8333-333333333333", clerkUserId: "
 function fakeDb() {
   from.mockImplementation((table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const k of ["select", "eq"]) chain[k] = () => chain;
+    chain.eq = () => chain;
+    chain.select = (cols: unknown) => { if (table === "accounts") selected.push(cols); return chain; };
     chain.maybeSingle = async () => ({ data: table === "accounts" ? rows.account : null, error: null });
     return chain;
   });
@@ -75,6 +82,8 @@ beforeEach(() => {
   db.setMemberLanguage.mockResolvedValue("ok");
   db.removeAccountMember.mockResolvedValue("ok");
   db.addAccountMember.mockResolvedValue("created");
+  db.deleteAccountMembership.mockResolvedValue(undefined);
+  selected.length = 0;
   clerk.teamCapacity.mockResolvedValue({ maxAllowed: 5, members: 3, pending: 0 });
   clerk.createTeamInvitation.mockResolvedValue({ ok: true });
   clerk.revokeTeamInvitation.mockResolvedValue({ ok: true, invite: { id: "orginv_1", email: "d@x.com", role: "owner", language: "es" } });
@@ -100,6 +109,13 @@ describe("Staff calling an Owner action is redirected before anything is read or
     await expect(call()).rejects.toThrow("NEXT_REDIRECT");
     expect(guard.requireAccountOwner).toHaveBeenCalledWith(ACCT);
     for (const f of allDataMocks()) expect(f).not.toHaveBeenCalled();
+  });
+});
+
+describe("the account read names its columns (review M3)", () => {
+  it("reads clerk_org_id, client_access_enabled and language, never * (mutation: select('*') -> FAILS)", async () => {
+    await inviteTeamMemberAction(ACCT, form({ email: "d@x.com" }));
+    expect(selected).toEqual(["clerk_org_id, client_access_enabled, language"]);
   });
 });
 
@@ -189,6 +205,7 @@ describe("setTeamRoleAction: demotion (Owner to Staff) demotes in Clerk FIRST", 
 
 describe("setTeamRoleAction: promotion (Staff to Owner) writes BIS first", () => {
   it("BIS first, then Clerk org:admin; previous is Staff, which the undo sends back (mutation: skip the Clerk update -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValueOnce([OWNER_A, OWNER_B, STAFF_C]).mockResolvedValue([OWNER_A, OWNER_B, { ...STAFF_C, role: "owner" }]);
     expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: true, previous: "staff" });
     expect(clerk.setOrganizationRole).toHaveBeenCalledWith("org_1", "user_C", "owner");
     expect(order(db.setAccountMemberRole)).toBeLessThan(order(clerk.setOrganizationRole));
@@ -198,8 +215,8 @@ describe("setTeamRoleAction: promotion (Staff to Owner) writes BIS first", () =>
     expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.changed" });
     expect(clerk.setOrganizationRole).not.toHaveBeenCalled();
   });
-  it("Clerk refuses: Clerk is set back to member FIRST, then BIS rolls back to Staff (mutations: roll back to owner, or roll BIS back before Clerk -> FAILS)", async () => {
-    clerk.setOrganizationRole.mockResolvedValueOnce({ ok: false, code: "internal" }).mockResolvedValueOnce({ ok: true });
+  it("Clerk refuses with a 4xx: Clerk is set back to member FIRST, then BIS rolls back to Staff (mutations: roll back to owner, or roll BIS back before Clerk -> FAILS)", async () => {
+    clerk.setOrganizationRole.mockResolvedValueOnce({ ok: false, code: "form_param_value_invalid", status: 422 }).mockResolvedValueOnce({ ok: true });
     expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.role.failed" });
     expect(clerk.setOrganizationRole.mock.calls).toEqual([["org_1", "user_C", "owner"], ["org_1", "user_C", "staff"]]);
     expect(db.setAccountMemberRole.mock.calls).toEqual([
@@ -207,22 +224,86 @@ describe("setTeamRoleAction: promotion (Staff to Owner) writes BIS first", () =>
     expect(order(clerk.setOrganizationRole, 1)).toBeLessThan(order(db.setAccountMemberRole, 1));
   });
   it("Clerk refuses and the set-back also fails: BIS is LEFT at Owner (the safe side) and logged (mutation: roll BIS back anyway -> FAILS)", async () => {
-    clerk.setOrganizationRole.mockResolvedValue({ ok: false, code: "internal" });
+    clerk.setOrganizationRole.mockResolvedValue({ ok: false, code: "form_param_value_invalid", status: 422 });
     expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.role.failed" });
     expect(db.setAccountMemberRole).toHaveBeenCalledTimes(1);
     expect(logged()).toContain(STAFF_C.userId);
   });
   it("a Clerk TIMEOUT may still land later, so BIS is left at Owner even when the set-back answered (mutation: treat timeout like a refusal -> FAILS)", async () => {
-    clerk.setOrganizationRole.mockResolvedValueOnce({ ok: false, code: "timeout" }).mockResolvedValueOnce({ ok: true });
+    clerk.setOrganizationRole.mockResolvedValueOnce({ ok: false, code: "timeout", status: null }).mockResolvedValueOnce({ ok: true });
     expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.role.failed" });
     expect(db.setAccountMemberRole).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    ["502", { ok: false, code: "internal", status: 502 }],
+    ["504", { ok: false, code: null, status: 504 }],
+    ["a network error", { ok: false, code: null, status: null }],
+  ])("Clerk %s on promotion may have landed: BIS is LEFT at Owner, logged by id, revalidated, team.role.failed (review I1; mutation: roll back on any failure -> FAILS)", async (_n, failure) => {
+    clerk.setOrganizationRole.mockResolvedValueOnce(failure).mockResolvedValue({ ok: true });
+    expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.role.failed" });
+    expect(db.setAccountMemberRole.mock.calls).toEqual([[expect.anything(), ACCT, STAFF_C.userId, "owner"]]);
+    expect(logged()).toContain(STAFF_C.userId);
+    expect(logged()).toContain(ACCT);
+    expect(cache.revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/${ACCT}/team`);
+  });
   it("a BIS rollback that throws is logged by id and still reported as a failure", async () => {
-    clerk.setOrganizationRole.mockResolvedValueOnce({ ok: false, code: "internal" }).mockResolvedValueOnce({ ok: true });
+    clerk.setOrganizationRole.mockResolvedValueOnce({ ok: false, code: "form_param_value_invalid", status: 422 }).mockResolvedValueOnce({ ok: true });
     db.setAccountMemberRole.mockResolvedValueOnce("ok").mockRejectedValueOnce(new Error("down"));
     expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.role.failed" });
     expect(logged()).toContain(STAFF_C.userId);
     expect(logged()).not.toContain("c@x.com");
+  });
+});
+
+describe("setTeamRoleAction: a concurrent change can never leave BIS Staff beside Clerk org:admin (review I2)", () => {
+  it("after the promotion's Clerk write, BIS is re-read; no longer Owner means Clerk goes back to org:member (mutation: skip the re-read -> FAILS)", async () => {
+    expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.changed" });
+    expect(clerk.setOrganizationRole.mock.calls).toEqual([["org_1", "user_C", "owner"], ["org_1", "user_C", "staff"]]);
+  });
+  it("a re-read that fails also sends Clerk back to org:member, the safe side (mutation: trust the promotion when unread -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValueOnce([OWNER_A, OWNER_B, STAFF_C]).mockRejectedValue(new Error("listAccountTeam failed: down"));
+    expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.role.failed" });
+    expect(clerk.setOrganizationRole).toHaveBeenLastCalledWith("org_1", "user_C", "staff");
+    expect(logged()).toContain(STAFF_C.userId);
+  });
+  it("a promotion BIS still holds after the Clerk write is a success with no set-back", async () => {
+    db.listAccountTeam.mockResolvedValueOnce([OWNER_A, OWNER_B, STAFF_C]).mockResolvedValue([OWNER_A, OWNER_B, { ...STAFF_C, role: "owner" }]);
+    expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: true, previous: "staff" });
+    expect(clerk.setOrganizationRole.mock.calls).toEqual([["org_1", "user_C", "owner"]]);
+  });
+  it("after the demotion's BIS write, Clerk is set to org:member AGAIN (mutation: drop the repeat -> FAILS)", async () => {
+    expect(await setTeamRoleAction(ACCT, OWNER_B.userId, "staff")).toEqual({ ok: true, previous: "owner" });
+    expect(clerk.setOrganizationRole.mock.calls).toEqual([["org_1", "user_B", "staff"], ["org_1", "user_B", "staff"]]);
+    expect(order(db.setAccountMemberRole)).toBeLessThan(order(clerk.setOrganizationRole, 1));
+  });
+
+  /** One person's BIS and Clerk roles, shared by two Owners acting at once. */
+  type Role = "owner" | "staff";
+  type Hook = { on: "bis" | "clerk"; role: Role; run: () => Promise<unknown> };
+  function world(start: Role) {
+    const state = { bis: start, clerk: start };
+    let before: Hook | null = null;
+    const fire = async (on: "bis" | "clerk", role: Role) => {
+      const b = before;
+      if (b && b.on === on && b.role === role) { before = null; await b.run(); }
+    };
+    db.listAccountTeam.mockImplementation(async () => [OWNER_A, OWNER_B, { ...STAFF_C, role: state.bis }]);
+    db.setAccountMemberRole.mockImplementation(async (_db: unknown, _a: string, _u: string, role: Role) => { await fire("bis", role); state.bis = role; return "ok"; });
+    clerk.setOrganizationRole.mockImplementation(async (_o: string, _u: string, role: Role) => { await fire("clerk", role); state.clerk = role; return { ok: true }; });
+    return { state, interleave: (h: Hook) => { before = h; } };
+  }
+
+  it("A promotes while B demotes, and A's Clerk org:admin write lands LAST: ends Staff and org:member (mutation: skip the promotion's re-read -> FAILS)", async () => {
+    const w = world("staff");
+    w.interleave({ on: "clerk", role: "owner", run: () => setTeamRoleAction(ACCT, STAFF_C.userId, "staff") });
+    await setTeamRoleAction(ACCT, STAFF_C.userId, "owner");
+    expect(w.state).toEqual({ bis: "staff", clerk: "staff" });
+  });
+  it("B demotes while A promotes, and A's whole promotion lands between B's Clerk write and B's BIS write: ends Staff and org:member (mutation: drop the demotion's repeat -> FAILS)", async () => {
+    const w = world("owner");
+    w.interleave({ on: "bis", role: "staff", run: () => setTeamRoleAction(ACCT, STAFF_C.userId, "owner") });
+    await setTeamRoleAction(ACCT, STAFF_C.userId, "staff");
+    expect(w.state).toEqual({ bis: "staff", clerk: "staff" });
   });
 });
 
@@ -283,6 +364,24 @@ describe("removeTeamMemberAction", () => {
     expect(await removeTeamMemberAction(ACCT, STAFF_C.userId)).toEqual({ ok: false, error: "team.remove.failed" });
     expect(logged()).toContain(STAFF_C.userId);
     expect(logged()).not.toContain("c@x.com");
+  });
+  it("after Clerk's delete and the record, the BIS membership is swept AGAIN, removing a row a concurrent request recreated (review I3; mutation: drop the sweep -> FAILS)", async () => {
+    expect(await removeTeamMemberAction(ACCT, STAFF_C.userId)).toEqual({ ok: true, undo: { userId: STAFF_C.userId } });
+    expect(db.deleteAccountMembership).toHaveBeenCalledWith(expect.anything(), ACCT, STAFF_C.userId);
+    expect(order(clerk.removeFromOrganization)).toBeLessThan(order(db.deleteAccountMembership));
+    expect(order(log.recordRemoval)).toBeLessThan(order(db.deleteAccountMembership));
+  });
+  it("the sweep runs even when the record failed, and a sweep that throws is logged by id, never thrown (mutation: let it throw -> FAILS)", async () => {
+    log.recordRemoval.mockRejectedValue(new Error("event emit failed: down"));
+    db.deleteAccountMembership.mockRejectedValue(new Error("deleteAccountMembership failed: down"));
+    expect(await removeTeamMemberAction(ACCT, STAFF_C.userId)).toEqual({ ok: true });
+    expect(db.deleteAccountMembership).toHaveBeenCalledWith(expect.anything(), ACCT, STAFF_C.userId);
+    expect(logged()).toMatch(new RegExp(`sweep[^\\n]*${STAFF_C.userId}`));
+  });
+  it("a Clerk failure re-adds the row and never sweeps it (mutation: sweep before checking Clerk -> FAILS)", async () => {
+    clerk.removeFromOrganization.mockResolvedValue({ ok: false, code: "internal", status: 500 });
+    await removeTeamMemberAction(ACCT, STAFF_C.userId);
+    expect(db.deleteAccountMembership).not.toHaveBeenCalled();
   });
   it("the removal stands when recording it fails, but no undo is offered", async () => {
     log.recordRemoval.mockRejectedValue(new Error("event emit failed: down"));

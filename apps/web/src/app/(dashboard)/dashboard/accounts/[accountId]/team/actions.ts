@@ -3,12 +3,13 @@
 import { revalidatePath } from "next/cache";
 import {
   serviceDb, listAccountTeam, setAccountMemberRole, setMemberLanguage, removeAccountMember, addAccountMember,
+  deleteAccountMembership,
   type AccountRole, type PersonLanguage, type SupabaseClient, type TeamMember,
 } from "@bis/db";
 import { requireAccountOwner } from "@/lib/auth";
 import {
   teamCapacity, createTeamInvitation, revokeTeamInvitation, removeFromOrganization,
-  restoreToOrganization, setOrganizationRole,
+  restoreToOrganization, setOrganizationRole, clerkRefused,
 } from "@/lib/team/clerk-team";
 import {
   roomLeft, inviteDefaultLanguage, clerkInviteError, undoStillOpen,
@@ -50,9 +51,9 @@ export type TeamResult = { ok: true } | { ok: false; error: TeamError };
 
 type Account = { orgId: string; accessOn: boolean; language: unknown };
 
-/** select("*") so the account's language is picked up once the runtime lane adds the column, without naming one that may not exist yet. */
+/** Named columns: `language` is 0065's (merged), the account-level default an invitation's language falls back to. */
 async function readAccount(db: SupabaseClient, accountId: string): Promise<Account> {
-  const { data, error } = await db.from("accounts").select("*").eq("id", accountId).maybeSingle();
+  const { data, error } = await db.from("accounts").select("clerk_org_id, client_access_enabled, language").eq("id", accountId).maybeSingle();
   if (error) throw new Error(`team: account lookup failed: ${error.message}`);
   if (!data) throw new Error("team: account not found");
   const row = data as Record<string, unknown>;
@@ -119,14 +120,19 @@ export async function inviteTeamMemberAction(accountId: string, formData: FormDa
  * its last-Owner guard. If BIS refuses or fails, Clerk is put back to
  * org:admin; if THAT fails, BIS Owner beside Clerk member is the safe side,
  * logged by id. A Clerk demotion that times out may still land later, which
- * leaves the same safe pair.
+ * leaves the same safe pair. Once BIS says Staff, Clerk is set to org:member
+ * AGAIN (review I2): a concurrent promotion's org:admin write may have landed
+ * between this action's two writes.
  *
  * Promotion to Owner: BIS first (no last-Owner risk), then Clerk to
- * org:admin. If Clerk definitively refuses, Clerk is set back to org:member
- * (best effort) BEFORE BIS is rolled back; if the set-back fails, BIS is
- * LEFT at Owner (safe) and logged. If Clerk TIMED OUT, the promotion may
- * still land after any set-back, so BIS is left at Owner too: rolling it
- * back could end at BIS Staff beside Clerk admin.
+ * org:admin. Only a DEFINITIVE Clerk refusal (a 4xx, `clerkRefused`) rolls
+ * back: Clerk is set back to org:member (best effort) BEFORE BIS is rolled
+ * back, and if the set-back fails BIS is LEFT at Owner (safe) and logged.
+ * Every other failure (a 5xx, a timeout, a network error) may have landed or
+ * may land later (review I1), so BIS is left at Owner: rolling it back could
+ * end at BIS Staff beside Clerk admin. After a Clerk write that landed, BIS
+ * is re-read (review I2): if a concurrent demotion made the person Staff
+ * meanwhile, or the read fails, Clerk goes back to org:member.
  */
 export async function setTeamRoleAction(
   accountId: string, userId: string, role: AccountRole,
@@ -158,6 +164,8 @@ export async function setTeamRoleAction(
       await putClerkBack();
       return { ok: false, error: r === "last_owner" ? "team.lastOwner" : "team.changed" };
     }
+    const again = await setOrganizationRole(account.orgId, member.clerkUserId, "staff");
+    if (!again.ok) console.error(`team: the demotion's repeat Clerk write failed; BIS staff, Clerk possibly admin (${ids}): ${again.code ?? "no code"}`);
     revalidateTeam(accountId);
     return { ok: true, previous };
   }
@@ -167,9 +175,14 @@ export async function setTeamRoleAction(
   if (r === "not_found") return { ok: false, error: "team.changed" };
   const promoted = await setOrganizationRole(account.orgId, member.clerkUserId, "owner");
   if (!promoted.ok) {
+    if (!clerkRefused(promoted)) {
+      console.error(`team: promotion left at BIS owner; the Clerk write may have landed (${promoted.code ?? "no code"}, status ${promoted.status ?? "none"}) (${ids})`);
+      revalidateTeam(accountId);
+      return { ok: false, error: "team.role.failed" };
+    }
     const setBack = await setOrganizationRole(account.orgId, member.clerkUserId, previous);
-    if (promoted.code === "timeout" || !setBack.ok) {
-      console.error(`team: promotion left at BIS owner; Clerk ${promoted.code === "timeout" ? "timed out" : "refused and the set-back failed"} (${ids})`);
+    if (!setBack.ok) {
+      console.error(`team: promotion left at BIS owner; Clerk refused and the set-back failed (${ids})`);
       return { ok: false, error: "team.role.failed" };
     }
     try {
@@ -179,6 +192,19 @@ export async function setTeamRoleAction(
       console.error(`team: promotion rollback failed; BIS owner, Clerk member (${ids}): ${loggableError(e)}`);
     }
     return { ok: false, error: "team.role.failed" };
+  }
+  let now: AccountRole | null | "unread";
+  try {
+    now = (await findMember(db, accountId, userId))?.role ?? null;
+  } catch (e) {
+    console.error(`team: BIS role unreadable after the promotion's Clerk write (${ids}): ${loggableError(e)}`);
+    now = "unread";
+  }
+  if (now !== "owner") {
+    const back = await setOrganizationRole(account.orgId, member.clerkUserId, "staff");
+    if (!back.ok) console.error(`team: Clerk not set back to member after BIS changed under a promotion (${ids}): ${back.code ?? "no code"}`);
+    revalidateTeam(accountId);
+    return { ok: false, error: now === "unread" ? "team.role.failed" : "team.changed" };
   }
   revalidateTeam(accountId);
   return { ok: true, previous };
@@ -205,6 +231,13 @@ export async function setTeamLanguageAction(
  * removal is recorded as a system event (lib/team/removal-log.ts): that
  * record, not the browser, is what the undo restores from. The undo handle
  * is the user id alone.
+ *
+ * Then the BIS membership is deleted AGAIN, an idempotent sweep (review I3):
+ * a request from the person being removed, made while Clerk's delete was in
+ * flight, could have recreated their row through the per-request fallback.
+ * It runs after the record, so to survive it a fallback that read Clerk
+ * before the delete must also have missed the record (reconcileMembership
+ * refuses a membership older than it) AND written after this sweep.
  */
 export async function removeTeamMemberAction(
   accountId: string, userId: string,
@@ -231,14 +264,20 @@ export async function removeTeamMemberAction(
     return { ok: false, error: "team.remove.failed" };
   }
   revalidateTeam(accountId);
+  let recorded = true;
   try {
     await recordRemoval(db, accountId, callerId,
       { userId, clerkUserId: member.clerkUserId, role: member.role, language: member.language });
   } catch (e) {
     console.error(`team: removal not recorded, so it cannot be undone (${ids}): ${loggableError(e)}`);
-    return { ok: true };
+    recorded = false;
   }
-  return { ok: true, undo: { userId } };
+  try {
+    await deleteAccountMembership(db, accountId, userId);
+  } catch (e) {
+    console.error(`team: post-removal sweep failed (${ids}): ${loggableError(e)}`);
+  }
+  return recorded ? { ok: true, undo: { userId } } : { ok: true };
 }
 
 /**
