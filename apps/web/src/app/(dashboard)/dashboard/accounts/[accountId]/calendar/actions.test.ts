@@ -1,8 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+// Task 7 (staff and roles): `updateCalendarSettingsAction` guards with
+// `requireAccountOwner`, which redirects Staff before the write; every other
+// action in this file (bookings) stays on `requireAccountAccess`, which
+// admits Staff. `owner.allowed` toggles the owner guard's redirect so both
+// the negative (Staff refused) and positive-control (bookings unaffected)
+// tests can drive it without re-mocking per test.
+const owner = vi.hoisted(() => ({ allowed: true, calls: [] as string[] }));
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
+  requireAccountOwner: async (accountId: string) => {
+    owner.calls.push(accountId);
+    if (!owner.allowed) throw Object.assign(new Error("NEXT_REDIRECT"), { digest: "NEXT_REDIRECT" });
+    return { userId: "user_1", isAgency: true };
+  },
 }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 // F-048: the notice is scheduled with after(), and its origin read from the
@@ -52,6 +64,53 @@ function baseFormData(followupBody: string): FormData {
 beforeEach(() => {
   dbMocks.updateCalendarSettings.mockReset();
   dbMocks.updateCalendarSettings.mockResolvedValue(undefined);
+  owner.allowed = true;
+  owner.calls = [];
+});
+
+/**
+ * Task 7 (staff and roles): calendar SETTINGS are Owner-only; the booking
+ * actions below (cancel, mark no-show, etc.) stay open to Staff. Spec §7:
+ * Staff is redirected to their own dashboard, never 403'd, and the write
+ * underneath never runs for a refused caller.
+ */
+describe("updateCalendarSettingsAction — Owner-only (staff and roles)", () => {
+  it("guards with requireAccountOwner: Staff is redirected and the write never runs (mutation: guard with requireAccountAccess instead → FAILS)", async () => {
+    owner.allowed = false;
+    await expect(updateCalendarSettingsAction("acct_1", baseFormData(""))).rejects.toThrow("NEXT_REDIRECT");
+    expect(dbMocks.updateCalendarSettings).not.toHaveBeenCalled();
+  });
+
+  it("an Owner's (or the agency's) save reaches the write", async () => {
+    const r = await updateCalendarSettingsAction("acct_1", baseFormData(""));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.updateCalendarSettings).toHaveBeenCalled();
+    expect(owner.calls).toEqual(["acct_1"]);
+  });
+});
+
+/**
+ * Positive control (brief's step 1): if these ever moved to the owner guard,
+ * Staff working bookings would be redirected too, which the brief forbids.
+ * `owner.allowed = false` here proves these two actions never even ASK the
+ * owner guard a question — they stay on `requireAccountAccess` throughout.
+ */
+describe("booking actions stay open to Staff (positive control, staff and roles)", () => {
+  it("setBookingStatusAction never calls requireAccountOwner (mutation: switch its guard to requireAccountOwner → FAILS, since owner.allowed is false here)", async () => {
+    owner.allowed = false;
+    dbMocks.setBookingStatus.mockReset().mockResolvedValue(undefined);
+    const r = await setBookingStatusAction("acct_1", "bk_1", "completed");
+    expect(r).toEqual({ ok: true });
+    expect(owner.calls).toEqual([]);
+  });
+
+  it("cancelBookingAction never calls requireAccountOwner (mutation: switch its guard to requireAccountOwner → FAILS, since owner.allowed is false here)", async () => {
+    owner.allowed = false;
+    dbMocks.setBookingStatus.mockReset().mockResolvedValue({ updatedAt: "2026-10-10T00:00:00.000Z" });
+    const r = await cancelBookingAction("acct_1", "bk_1", { send: false, locale: "en", message: "" });
+    expect(r.ok).toBe(true);
+    expect(owner.calls).toEqual([]);
+  });
 });
 
 describe("updateCalendarSettingsAction — follow-up body normalization", () => {

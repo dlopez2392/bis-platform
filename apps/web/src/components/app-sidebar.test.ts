@@ -150,3 +150,39 @@ describe("AppSidebar — F-107 (rider part): below `sm` the rail is icon-only re
     expect(src).toContain('<span className={cn("min-w-0 flex-1 sr-only", !collapsed && "sm:not-sr-only")}>');
   });
 });
+
+// Staff and roles (Task 8): the agency's footer is unchanged (Settings in
+// an account, Dashboard at the top level); a client Owner's footer is Team
+// instead; a client Staff gets none, same as the old unconditional client
+// case did. A render test would need usePathname/useShellData/AccountSwitcher
+// mocked for no payoff beyond what a class/string pin already covers — same
+// reasoning as every other block in this file.
+describe("AppSidebar — footer: Settings for the agency, Team for a client Owner, none for Staff (staff and roles)", () => {
+  it("branches on isAgency first, then isOwner for a client — never an unconditional client footer (mutation: drop the `isOwner` check so Staff also get Team → FAILS, below)", () => {
+    expect(src).toContain(
+      "const footer: NavItem | null = isAgency\n"
+      + "    ? (base\n"
+      + '        ? { href: `${base}/settings`, label: t(m, "nav.settings", locale), icon: Settings }\n'
+      + '        : { href: "/dashboard", label: t(m, "nav.dashboard", locale), icon: LayoutDashboard })\n'
+      + "    : (base && isOwner\n"
+      + '        ? { href: `${base}/team`, label: t(m, "nav.team", locale), icon: Users }\n'
+      + "        : null);",
+    );
+  });
+
+  // A client Staff never gets the Team footer item: this is the exact
+  // branch that disappears if the mutation above (dropping the isOwner
+  // check) were applied — pinned separately so a reviewer sees the FAILING
+  // half named, not just the passing shape.
+  it("a client Staff's footer is null, not Team (mutation: change `base && isOwner` to `base` alone → a Staff session gets Team too, FAILS)", () => {
+    expect(src).toContain("(base && isOwner");
+    expect(src).not.toContain("(base && !isAgency ?");
+  });
+
+  // The setup-progress meter must never consider rendering for a client,
+  // even now that a client Owner also reaches the `footer` branch — see
+  // this file's own comment on why `isAgency` is explicit here.
+  it("the setup meter is gated on isAgency explicitly, not only on base (mutation: drop `isAgency &&` → FAILS)", () => {
+    expect(src).toContain('{isAgency && base && setupProgress.done !== setupProgress.total ? (');
+  });
+});

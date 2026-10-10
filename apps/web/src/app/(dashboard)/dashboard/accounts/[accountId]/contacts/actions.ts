@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { createContact, deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
          getContact, setContactPhoneCountry } from "@bis/db";
@@ -159,7 +159,14 @@ export async function bulkRemoveTagAction(
 export async function bulkDeleteContactsAction(
   accountId: string, contactIds: string[],
 ): Promise<{ ok: true; deleted: number; skippedBlocked: number } | { ok: false; error: string }> {
-  await requireAccountAccess(accountId);
+  // Staff and roles: delete is Owner-only (requireAccountOwner's own doc
+  // comment). Staff (and a client whose role could not be settled) are
+  // redirected to their own dashboard — never 403'd, and never swallowed
+  // into an { ok: false } here, so the redirect actually fires for the
+  // caller. 0066's RESTRICTIVE policy refuses the same write at the DB
+  // layer too, but this guard runs FIRST: it must never be possible for a
+  // refused delete to read back as "deleted: 0" success.
+  await requireAccountOwner(accountId);
   if (contactIds.length === 0) return { ok: false, error: "Nothing selected." };
   try {
     const r = await deleteContacts(await dbForRequest(), accountId, contactIds);

@@ -4,7 +4,7 @@ import { DotPill } from "@/components/dot-pill";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireAccountOwner } from "@/lib/auth";
 import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { BILLING_STATUS_TREATMENTS, billingCardView, safeZone, usagePeriodStart } from "@/lib/billing/billing-view";
 import { dbForRequest } from "@/lib/db";
@@ -27,11 +27,14 @@ export const dynamic = "force-dynamic";
  * error boundary (the Plans page's precedent).
  *
  * The route works for the agency too (hiding the nav item from it is
- * convenience, G20); requireAccountAccess is the boundary.
+ * convenience, G20); requireAccountOwner is the boundary — Staff and roles
+ * (spec §4): a client Staff is sent to their own dashboard, same as any
+ * other owner-only surface, never 403'd (requireAccountAccess's own
+ * reasoning).
  */
 export default async function BillingPage({ params }: { params: Promise<{ accountId: string }> }) {
   const { accountId } = await params;
-  await requireAccountAccess(accountId);
+  await requireAccountOwner(accountId);
   const db = await dbForRequest();
   const [billing, account] = await Promise.all([
     readAccountBilling(accountId),

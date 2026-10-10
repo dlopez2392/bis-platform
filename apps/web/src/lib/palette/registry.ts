@@ -90,10 +90,10 @@ function keywordsFor(href: string, base: string | null): string[] {
  * `base` is the in-account prefix (`/dashboard/accounts/<id>`), or null at the
  * agency top level where there is no account in scope.
  */
-export function buildPaletteEntries(base: string | null, isAgency: boolean): PaletteEntry[] {
+export function buildPaletteEntries(base: string | null, isAgency: boolean, isOwner: boolean): PaletteEntry[] {
   const entries: PaletteEntry[] = [];
 
-  for (const group of buildNavGroups(base, isAgency)) {
+  for (const group of buildNavGroups(base, isAgency, isOwner)) {
     for (const item of group.items) {
       entries.push({
         kind: "href",
@@ -105,6 +105,22 @@ export function buildPaletteEntries(base: string | null, isAgency: boolean): Pal
         href: item.href,
       });
     }
+  }
+
+  // Staff and roles (Task 8): a client Owner reaches team management
+  // directly — the sidebar footer's own destination, not a Settings-page
+  // anchor, so it is registered like any other nav destination rather than
+  // through SETTINGS_SECTIONS below. Staff never get this entry.
+  if (base && !isAgency && isOwner) {
+    entries.push({
+      kind: "href",
+      id: "nav:team",
+      label: m["nav.team"],
+      group: "navigation",
+      agencyOnly: false,
+      keywords: ["team", "staff", "people", "invite", "users", "logins", "employees"],
+      href: `${base}/team`,
+    });
   }
 
   if (base && isAgency) {
@@ -125,6 +141,26 @@ export function buildPaletteEntries(base: string | null, isAgency: boolean): Pal
       agencyOnly: true,
       keywords: ["wizard", "activation", "onboarding", "go live"],
       href: `${base}/setup`,
+    });
+    // The agency's own entry point into this client's team management: the
+    // Team page (`/team`), which admits the agency and shows the same card
+    // as Settings. Not a SETTINGS_SECTIONS anchor, although Settings does
+    // carry an `id="team"` card since Task 10: that card renders only while
+    // client access is on (spec §8), so `settings#team` would scroll to
+    // nothing whenever access is off, which is the defect registry.test.ts's
+    // anchor-parity check (D-080) exists to catch. /team always answers,
+    // with the access-off note when access is off. A plain navigation entry
+    // (`group: "navigation"`) like `nav:settings`/`nav:setup` above, keeping
+    // the `palette.settings.team` label and its keywords, so the agency finds
+    // it by typing "team" or "staff".
+    entries.push({
+      kind: "href",
+      id: "settings:team",
+      label: m["palette.settings.team"],
+      group: "navigation",
+      agencyOnly: true,
+      keywords: ["team", "staff", "invite", "logins", "people"],
+      href: `${base}/team`,
     });
     for (const section of SETTINGS_SECTIONS) {
       entries.push({

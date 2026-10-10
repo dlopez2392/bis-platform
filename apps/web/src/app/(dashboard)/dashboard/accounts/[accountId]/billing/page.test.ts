@@ -4,7 +4,7 @@ import type { AccountBilling, Plan } from "@bis/db";
 
 const guard = vi.hoisted(() => ({ allowed: true, order: [] as string[] }));
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => { guard.order.push("guard"); if (!guard.allowed) throw new Error("NEXT_REDIRECT"); return { userId: "u", isAgency: false }; },
+  requireAccountOwner: async () => { guard.order.push("guard"); if (!guard.allowed) throw new Error("NEXT_REDIRECT"); return { userId: "u", isAgency: false }; },
 }));
 const dbm = vi.hoisted(() => ({ getAccountBilling: vi.fn(), getPlan: vi.fn(), sumUsageSince: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({
@@ -56,7 +56,7 @@ beforeEach(() => {
 });
 
 describe("the client Billing page", () => {
-  it("requireAccountAccess runs before anything is read: another account's id never reads a row (mutation: read first → FAILS)", async () => {
+  it("requireAccountOwner runs before anything is read: another account's id (or a client Staff) never reads a row (mutation: read first → FAILS)", async () => {
     guard.allowed = false;
     await expect(page()).rejects.toThrow("NEXT_REDIRECT");
     expect(guard.order).toEqual(["guard"]);

@@ -595,15 +595,18 @@ describe("wave 2 — dashboard activity, settings, branding, accounts", () => {
     // --line is a third stronger than the mockup's row rule.
     expect(card).not.toContain("divide-y divide-border");
   });
-  it("settings and client-access member rows are rules inside the Card, not a box each", () => {
-    for (const rel of [`${ACCT}/settings/page.tsx`, `${ACCT}/settings/client-access-panel.tsx`]) {
+  // Staff and roles (Task 10): the client-access member rows moved, with the
+  // invite, into the Team card (components/team/team-card.tsx). The guard
+  // follows the rows rather than being dropped with the old panel.
+  it("settings and Team member rows are rules inside the Card, not a box each", () => {
+    for (const rel of [`${ACCT}/settings/page.tsx`, "../team/team-card.tsx"]) {
       const s = src(rel);
       expect(s, rel).toContain("border-t border-[var(--row-line)] py-[7px] text-[13px] first:border-t-0");
       expect(s, rel).not.toContain("rounded-md border border-border p-3 text-sm");
       expect(s, rel).not.toMatch(/\bglass\b/);
     }
     // The pending invite keeps its dashed edge, on the interactive line token.
-    expect(src(`${ACCT}/settings/client-access-panel.tsx`))
+    expect(src("../team/team-card.tsx"))
       .toContain("border-t border-dashed border-[var(--line-strong)]");
   });
   it("the accounts grid is glass, with a tokenised avatar and a dotted status chip", () => {

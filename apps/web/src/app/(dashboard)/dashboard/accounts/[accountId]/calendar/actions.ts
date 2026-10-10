@@ -9,7 +9,7 @@ import {
   BookingNotStartedError, BookingNotRestorableError, SlotTakenError,
   type BookingStatus, type CalendarSettingsPatch,
 } from "@bis/db";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
@@ -50,9 +50,13 @@ function isMeetingType(v: FormDataEntryValue | null): v is MeetingType {
 }
 
 /**
- * Both audiences reach this — calendar is the client's own business data,
- * same class of surface as contacts (spec §8) — so the guard is the shared
- * `requireAccountAccess`, not the agency-only variant Settings itself uses.
+ * Task 7 (staff and roles, spec §7-§9): calendar SETTINGS are Owner-only —
+ * `requireAccountOwner` admits the agency and a client Owner, and redirects
+ * Staff (and a client whose role could not be settled) to their own
+ * dashboard before this function body ever runs. The booking actions below
+ * (cancel, mark no-show, etc.) are client business-as-usual, same class of
+ * surface as contacts (spec §8), so THEY stay on the shared
+ * `requireAccountAccess`, which still admits Staff.
  *
  * dbForRequest(), never serviceDb(): `booking-grants.test.ts` pins the exact
  * column list `authenticated` may UPDATE on `calendars` (the settings
@@ -60,12 +64,17 @@ function isMeetingType(v: FormDataEntryValue | null): v is MeetingType {
  * IS the boundary a client operator writes inside. Routing this through
  * serviceDb() would bypass it and leave this guard as the only thing
  * standing behind the write, the mistake the M4d sendingAddress lesson
- * already cost a page.
+ * already cost a page. Migration 0066 also RESTRICTIVEs this UPDATE to
+ * owners at the database layer; the catch below already answers the generic
+ * `saveFailed` message for ANY write failure (never echoing `updateCalendarSettings`'s
+ * own "no calendar for <id>" wording), so even if that restrictive policy
+ * were ever the only thing standing between a Staff caller and this write,
+ * the caller would see a refusal, not "calendar missing".
  */
 export async function updateCalendarSettingsAction(
   accountId: string, formData: FormData,
 ): Promise<ActionResult> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireAccountOwner(accountId);
 
   const slotDurationMinutes = Number(formData.get("slotDurationMinutes"));
   const bufferMinutes = Number(formData.get("bufferMinutes"));

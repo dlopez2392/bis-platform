@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const ACCOUNT = "11111111-1111-4111-8111-111111111111";
 const guard = vi.hoisted(() => ({ allowed: true, isAgency: false, order: [] as string[] }));
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => { guard.order.push("guard"); if (!guard.allowed) throw new Error("NEXT_REDIRECT"); return { userId: "u", isAgency: guard.isAgency }; },
+  requireAccountOwner: async () => { guard.order.push("guard"); if (!guard.allowed) throw new Error("NEXT_REDIRECT"); return { userId: "u", isAgency: guard.isAgency }; },
 }));
 const hdr = vi.hoisted(() => ({ host: "app.example" as string | null }));
 vi.mock("next/headers", () => ({ headers: async () => new Headers(hdr.host ? { host: hdr.host } : {}) }));
@@ -54,7 +54,7 @@ async function errorLines(run: () => Promise<unknown>): Promise<string> {
 }
 
 describe("openBillingPortalAction", () => {
-  it("guards first: an account that is not the caller's own is redirected before its row is read (mutation: read first → FAILS)", async () => {
+  it("guards first via requireAccountOwner: another account's id, or a client Staff, is redirected before its row is read (mutation: read first → FAILS)", async () => {
     guard.allowed = false;
     await expect(openBillingPortalAction(ACCOUNT)).rejects.toThrow("NEXT_REDIRECT");
     expect(guard.order).toEqual(["guard"]);

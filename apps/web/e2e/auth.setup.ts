@@ -1,6 +1,6 @@
 import { clerkSetup } from "@clerk/testing/playwright";
 import { test as setup } from "@playwright/test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, createAccount, setClientAccess, createContact,
@@ -30,6 +30,11 @@ refuseProduction(process.env, "The e2e setup");
 
 const AUTH_FILE = "e2e/.auth/state.json";
 const CLIENT_AUTH_FILE = "e2e/.auth/client-state.json";
+// Staff and roles: the per-run client's own Staff login — a second real
+// Clerk identity in the SAME org as the client fixture above, org:member
+// rather than org:admin, so staff-roles.spec.ts can prove what a Staff
+// person cannot reach without ever touching Test Client One.
+const STAFF_AUTH_FILE = "e2e/.auth/staff-state.json";
 // Sidecar record of what the client-fixture setup below created. Read by
 // client-access.spec.ts to know which account to assert against, and by
 // auth.teardown.ts (the "setup" project's `teardown` project — see
@@ -283,4 +288,69 @@ setup("authenticate as client user (no app_role)", async ({ page }) => {
   // the evidence is that every client spec already starts this way once the
   // saved token is more than 65 s old, and passes.)
   await saveSignedInState(page.context(), CLIENT_AUTH_FILE);
+});
+
+// Staff and roles (spec §6-§9): a second real Clerk identity in the SAME
+// org as the client fixture above, added as org:member rather than
+// org:admin. staff-roles.spec.ts needs a real Staff login to prove what it
+// cannot reach — a stub token would only prove what a hand-written claim
+// says, not what Clerk's own membership and this app's guards agree on.
+//
+// Runs AFTER "authenticate as client user" so the fixture file it reads
+// already carries accountId/clerkOrgId; the Clerk user it mints here is
+// recorded back into that SAME file (staffClerkUserId) rather than a
+// sidecar of its own, because auth.teardown.ts already reads
+// CLIENT_FIXTURE_FILE once for every other piece of this fixture, and a
+// second file would be a second place to forget to delete.
+//
+// No app_role is ever set on this user (same belt-and-suspenders as the
+// client fixture's own check above would catch for the client) — Staff is
+// a client identity exactly like the Owner, distinguished only by the
+// account_role membership row the fallback settles from Clerk's org:member.
+setup("authenticate as staff user", async ({ page }) => {
+  await clerkSetup();
+  const clerk_ = await clerkClient();
+
+  if (!existsSync(CLIENT_FIXTURE_FILE)) {
+    throw new Error(
+      `staff setup: ${CLIENT_FIXTURE_FILE} is missing — "authenticate as client user" must run first`,
+    );
+  }
+  const fixture = JSON.parse(readFileSync(CLIENT_FIXTURE_FILE, "utf-8")) as {
+    accountId: string; clerkOrgId: string; [key: string]: unknown;
+  };
+
+  const stamp = Date.now();
+  const staffEmail = `e2e-staff-${stamp}@example.com`;
+  const staffUser = await clerk_.users.createUser({
+    emailAddress: [staffEmail],
+    firstName: "E2E",
+    lastName: "Staff",
+    skipPasswordRequirement: true,
+    skipLegalChecks: true,
+  });
+
+  // Recorded into the SAME fixture file, before the membership or sign-in
+  // can fail, so teardown can always find this user even if a later step
+  // in this test throws.
+  writeFileSync(CLIENT_FIXTURE_FILE, JSON.stringify({ ...fixture, staffClerkUserId: staffUser.id }));
+
+  // org:member, not org:admin: this is the Clerk shape a plain team member
+  // carries, and it is what the per-request fallback (ensureAccountRole)
+  // reads on this user's own first page load below to settle a BIS "staff"
+  // membership — no invitation metadata, so roleFromClerk's fallback
+  // (`clerkRole === "org:admin" ? "owner" : "staff"`) is what decides it.
+  await clerk_.organizations.createOrganizationMembership({
+    organizationId: fixture.clerkOrgId, userId: staffUser.id, role: "org:member",
+  });
+
+  await signInWithTicket(page, clerk_, staffUser.id);
+  await setActiveOrganization(page, fixture.clerkOrgId);
+
+  await page.goto("/");
+  // Same readiness signal as the client setup above: the redirect this
+  // navigation's own fresh token triggers, not network idle.
+  await page.waitForURL(/\/dashboard\/accounts\/[^/]+\/dashboard$/);
+
+  await saveSignedInState(page.context(), STAFF_AUTH_FILE);
 });

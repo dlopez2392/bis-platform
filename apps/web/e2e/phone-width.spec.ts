@@ -308,7 +308,10 @@ async function assertNoPageScroll(
  * this rider's own DoD item points at).
  */
 function topLevelAgencyRoutes(): string[] {
-  const fromNav = buildNavGroups(null, true).flatMap((g) => g.items.map((i) => i.href));
+  // isOwner is meaningless for the agency top level (never a client
+  // membership) — `false` is arbitrary here, same as every other
+  // agency-session call below.
+  const fromNav = buildNavGroups(null, true, false).flatMap((g) => g.items.map((i) => i.href));
   return [...fromNav, "/dashboard", "/dashboard/styleguide"];
 }
 
@@ -330,7 +333,12 @@ test.describe("in-account routes, client session — phone width", () => {
       return;
     }
     const base = `/dashboard/accounts/${fixture.accountId}`;
-    const routes = buildNavGroups(base, false).flatMap((g) => g.items.map((i) => i.href));
+    // Staff and roles (Task 8): `true` preserves this spec's existing full
+    // coverage (every client-visible route, Billing included) — the e2e
+    // client fixture carries no Owner/Staff role yet, so this is not
+    // asserting anything about that split; a Staff-specific phone-width
+    // sweep is for whichever task adds the fixture's role.
+    const routes = buildNavGroups(base, false, true).flatMap((g) => g.items.map((i) => i.href));
     for (const route of routes) {
       await assertNoPageScroll(page, route, WIDTH, { isAgency: false, inAccount: true });
     }
@@ -377,7 +385,9 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
     // starts (nav-groups.ts's own doc comment) — both are still real,
     // agency-only routes this rider's shell touches.
     const routes = [
-      ...buildNavGroups(base, true).flatMap((g) => g.items.map((i) => i.href)),
+      // isOwner is meaningless here too (agency session) — `false` is
+      // arbitrary, same as topLevelAgencyRoutes above.
+      ...buildNavGroups(base, true, false).flatMap((g) => g.items.map((i) => i.href)),
       `${base}/settings`,
       `${base}/setup`,
     ];

@@ -11,6 +11,7 @@ import { Topbar } from "@/components/topbar";
 import { ShellDataProvider } from "@/components/shell-data";
 import { CommandPalette } from "@/components/command-palette";
 import { Ground } from "@/components/ground";
+import { ensureAccountRole, readStoredRole } from "@/lib/team/ensure-role";
 import { requestLocale } from "@/lib/i18n/request-locale";
 import { LocaleProvider } from "@/components/locale-provider";
 import type { Locale } from "@/lib/i18n/locale";
@@ -124,7 +125,7 @@ export default async function DashboardLayout({
     if (state.status === "none") redirect("/no-access?reason=none");
   }
 
-  const [accounts, cookieStore, branding] = await Promise.all([
+  const [accounts, cookieStore, branding, isOwner] = await Promise.all([
     isAgency ? listAccounts(serviceDb()) : Promise.resolve([]),
     cookies(),
     // Only a client's chrome wears a brand. The agency's stays BIS on purpose,
@@ -132,6 +133,30 @@ export default async function DashboardLayout({
     clientState?.status === "ok"
       ? getTenantBranding(clientState.id)
       : Promise.resolve(null),
+    // Staff and roles: the caller's Owner/Staff role in THIS account, for
+    // the sidebar footer's Team link and the palette's own Team entries.
+    // `ensureAccountRole` is React cache()'d per request on its FULL
+    // argument list — accountId, orgId, userId, AND the 4th `stored`
+    // argument — not just the first three. `requireAccountAccess`
+    // (lib/auth.ts) always calls it with an explicit 4th argument (the
+    // in-flight `readStoredRole` promise it starts beside the account
+    // read); calling it here with only 3 args, leaving `stored` to default
+    // inside `ensureAccountRole` itself, makes a DIFFERENT cache entry even
+    // though accountId/orgId/userId all match — cache() keys on every
+    // argument, including a missing one (review round 1, I1: proved
+    // against the installed react@19.2.4 that the underlying function then
+    // runs twice, and on the fallback path that is a second
+    // `reconcileMembership` Clerk call per page load). The fix is to pass
+    // the IDENTICAL 4th argument here: `readStoredRole` is itself
+    // cache()'d on (accountId, clerkUserId), so calling it with the same
+    // two values `requireAccountAccess` will use returns the SAME promise
+    // instance in this request, making this call and that one the same
+    // cache entry — one `ensureAccountRoleWith` execution, not two. Always
+    // false for the agency (never a client membership, plan deviation 6)
+    // and for a client whose account did not resolve to "ok".
+    clientState?.status === "ok" && claims.org_id
+      ? ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId)).then((role) => role === "owner")
+      : Promise.resolve(false),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
 
@@ -179,6 +204,7 @@ export default async function DashboardLayout({
             accounts={accounts.map((a) => ({ id: a.id, name: a.name, timezone: a.timezone }))}
             defaultCollapsed={collapsed}
             isAgency={isAgency}
+            isOwner={isOwner}
             // D-072 review round: the SAME trimmed, never-raw resolver the
             // tab title and the greeting now also go through, so all three
             // surfaces read the brand name the same way.
@@ -193,7 +219,7 @@ export default async function DashboardLayout({
                 account id down and does not try — CommandPalette derives the
                 current account from the pathname, the same way ShellDataProvider
                 above it already does. */}
-            <Topbar isAgency={isAgency} palette={<CommandPalette isAgency={isAgency} />} />
+            <Topbar isAgency={isAgency} palette={<CommandPalette isAgency={isAgency} isOwner={isOwner} />} />
             <main className="min-w-0 flex-1">{children}</main>
           </div>
         </div>

@@ -209,3 +209,12 @@ export { sumUsageSince } from "./usage";
 export { recordHeartbeat, listHeartbeats, markAlerted, HEARTBEAT_KEYS, passHeartbeatKey,
          HEARTBEAT_KEY_PATTERN, isHeartbeatKey, HEARTBEAT_ERROR_MAX_CHARS, boundHeartbeatError,
          type HeartbeatRow } from "./ops";
+
+// Staff and roles (0066): the team data layer, the Clerk role rule and
+// reconcile. See ./team.ts.
+export { roleFromClerk, languageFromClerk, isAgencyMetadata,
+         readAccountRole, upsertUserFromClerk, addAccountMember, deleteAccountMembership,
+         setAccountMemberRole, removeAccountMember, setMemberLanguage, listAccountTeam,
+         reconcileMembership, INVITE_ACCEPT_ALLOWANCE_MS,
+         type AccountRole, type PersonLanguage, type TeamMember,
+         MEMBER_REMOVED_EVENT, type ClerkTeamPort, type ReconcileOutcome } from "./team";

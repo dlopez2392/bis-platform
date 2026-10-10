@@ -41,6 +41,13 @@ export default async function AccountWorkspaceLayout({
   // incomplete (showsPaymentFailedBanner says why).
   // Through the cached seam: the Billing page reads the same row on the
   // same navigation, and this must stay one query.
+  // Staff and roles: under account_billing_owner_read (0066), a client
+  // Staff session reads NO row here — RLS filtering, not a fault.
+  // readAccountBilling's own .maybeSingle() already turns that into `null`
+  // rather than throwing, and showsPaymentFailedBanner(null) is already
+  // `false`, so a Staff session takes the exact same "no banner" path an
+  // unbilled account's Owner does: no throw, this catch never runs, and a
+  // client Staff never sees this banner.
   let paymentFailed = false;
   try {
     paymentFailed = showsPaymentFailedBanner(await readAccountBilling(accountId));

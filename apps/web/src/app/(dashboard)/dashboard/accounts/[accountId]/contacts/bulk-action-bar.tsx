@@ -40,11 +40,16 @@ export async function applyBulkTag(
 }
 
 export function BulkActionBar({
-  accountId, selectedIds, existingTags, onDone,
+  accountId, selectedIds, existingTags, canDelete, onDone,
 }: {
   accountId: string;
   selectedIds: string[];
   existingTags: { id: string; name: string }[];
+  /** Staff and roles: true for the agency and a client Owner, false for
+   *  Staff. Gates ONLY the Delete control and its confirm dialog — Tag and
+   *  Untag stay available for Staff, so the bar never renders with no bulk
+   *  action at all for a ticked checkbox (DESIGN.md rule 4). */
+  canDelete: boolean;
   onDone: () => void; // clear selection in the table
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -148,44 +153,48 @@ export function BulkActionBar({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <Button size="sm" variant="outline" onClick={() => setConfirmOpen(true)}>
-        <Trash2 className="size-3.5" aria-hidden />
-        {m["bulk.delete"]}
-      </Button>
+      {canDelete ? (
+        <Button size="sm" variant="outline" onClick={() => setConfirmOpen(true)}>
+          <Trash2 className="size-3.5" aria-hidden />
+          {m["bulk.delete"]}
+        </Button>
+      ) : null}
 
       <Button size="icon-xs" variant="ghost" className="ml-auto" onClick={onDone}
         aria-label={m["bulk.clear"]}>
         <X className="size-3.5" aria-hidden />
       </Button>
 
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{confirmTitle}</DialogTitle>
-            <DialogDescription>
-              {m["bulk.confirmBody"].replace("{count}", String(count))}
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            placeholder={String(count)}
-            aria-label={confirmTitle}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setConfirmOpen(false); setTyped(""); }}>
-              {m["common.cancel"]}
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={typed.trim() !== String(count)}
-              onClick={() => void doDelete()}
-            >
-              {m["bulk.delete"]}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {canDelete ? (
+        <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{confirmTitle}</DialogTitle>
+              <DialogDescription>
+                {m["bulk.confirmBody"].replace("{count}", String(count))}
+              </DialogDescription>
+            </DialogHeader>
+            <Input
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={String(count)}
+              aria-label={confirmTitle}
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setConfirmOpen(false); setTyped(""); }}>
+                {m["common.cancel"]}
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={typed.trim() !== String(count)}
+                onClick={() => void doDelete()}
+              >
+                {m["bulk.delete"]}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </div>
   );
 }

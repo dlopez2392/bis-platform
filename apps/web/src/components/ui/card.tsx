@@ -29,7 +29,14 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-header"
       className={cn(
-        "@container/card-header grid auto-rows-min grid-rows-[auto_auto] items-start gap-2 px-6 has-data-[slot=card-action]:grid-cols-[1fr_auto] [.border-b]:pb-6",
+        // Phone-width fix (phone-width.spec.ts:447 found the Team card's
+        // Invite-someone header action pushing the page 26px past its
+        // own 320px viewport): the 2-column split only applies from `sm`
+        // up. Below `sm` the grid keeps its single implicit column, so
+        // CardAction's own `auto` track never has to hold a full-width
+        // button beside the title — it falls onto its own row instead
+        // (CardAction's placement below is gated the same way).
+        "@container/card-header grid auto-rows-min grid-rows-[auto_auto] items-start gap-2 px-6 sm:has-data-[slot=card-action]:grid-cols-[1fr_auto] [.border-b]:pb-6",
         className
       )}
       {...props}
@@ -66,7 +73,11 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-action"
       className={cn(
-        "col-start-2 row-span-2 row-start-1 self-start justify-self-end",
+        // Matches CardHeader's `sm:` gate above: below `sm` this sits on
+        // its own row (the grid's auto-placement, right-aligned by
+        // `justify-self-end`) instead of being pinned into the title's
+        // row/column pair.
+        "self-start justify-self-end sm:col-start-2 sm:row-span-2 sm:row-start-1",
         className
       )}
       {...props}

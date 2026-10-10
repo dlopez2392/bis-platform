@@ -69,12 +69,14 @@ export const FIXTURE_ACCOUNT_PATTERNS: readonly RegExp[] = [
 export const FIXTURE_BLUEPRINT_RE = /^E2E Blueprint (\d{13})$/;
 
 /**
- * `e2e-client-1786412389258@example.com` or `e2e-agency-1786412389258@example.com`,
- * the two Clerk users auth.setup.ts mints per run. The alternation is
- * non-capturing so the stamp stays capture group 1, the shape
- * `fixtureStamp`/`isStaleFixture` read for every fixture pattern.
+ * `e2e-client-1786412389258@example.com`, `e2e-agency-1786412389258@example.com`
+ * or `e2e-staff-1786412389258@example.com` — the three Clerk users
+ * auth.setup.ts mints per run (staff and roles: the per-run client's own
+ * Staff login, added alongside its Owner). The alternation is non-capturing
+ * so the stamp stays capture group 1, the shape `fixtureStamp`/`isStaleFixture`
+ * read for every fixture pattern.
  */
-export const FIXTURE_EMAIL_RE = /^e2e-(?:client|agency)-(\d{13})@example\.com$/;
+export const FIXTURE_EMAIL_RE = /^e2e-(?:client|agency|staff)-(\d{13})@example\.com$/;
 
 /**
  * `E2E Form 1789613520660` or `E2E Spam 1789613520660` — the two names

@@ -54,7 +54,7 @@ export type NavGroupSpec = {
  * still correct — a stale in-progress link is worse than a temporarily
  * missing one.
  */
-export function buildNavGroups(base: string | null, isAgency: boolean): NavGroupSpec[] {
+export function buildNavGroups(base: string | null, isAgency: boolean, isOwner: boolean): NavGroupSpec[] {
   if (base === null) {
     return [
       {
@@ -125,7 +125,12 @@ export function buildNavGroups(base: string | null, isAgency: boolean): NavGroup
         // account's Settings card. Shown before billing starts too (DECISION
         // 4; the page says what will appear). The route itself works for the
         // agency; hiding a link is not authorization (requireAccountAccess is).
-        ...(isAgency
+        //
+        // Staff and roles (spec §4): a client Staff does not see Billing
+        // either — hiding it here is convenience only, same as every other
+        // gate in this file; the real boundary is requireAccountOwner on the
+        // Billing page and its server action.
+        ...(isAgency || !isOwner
           ? []
           : ([{ href: `${base}/billing`, labelKey: "nav.billing", iconKey: "billing" }] satisfies NavItemSpec[])),
       ],

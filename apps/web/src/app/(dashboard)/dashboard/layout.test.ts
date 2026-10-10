@@ -60,6 +60,15 @@ vi.mock("@/lib/i18n/request-locale", async (importOriginal) => {
   return { ...actual, requestLocale: vi.fn(actual.requestLocale) };
 });
 
+// Staff and roles, merged with main (#234): the render body now also settles
+// the caller's Owner/Staff role for a client. Stubbed so the render tests
+// never reach the database or Clerk's backend.
+const roleFixture = vi.hoisted(() => ({ value: "staff" as "owner" | "staff" | null }));
+vi.mock("@/lib/team/ensure-role", () => ({
+  ensureAccountRole: async () => roleFixture.value,
+  readStoredRole: async () => roleFixture.value,
+}));
+
 const { default: DashboardLayout, generateMetadata } = await import("./layout");
 const { requestLocale } = await import("@/lib/i18n/request-locale");
 const { AppSidebar } = await import("@/components/app-sidebar");
@@ -113,6 +122,74 @@ describe("dashboard/layout — never passes the agency's private account name to
   it("passes AppSidebar the SAME trimmed brandDisplayName the tab title uses, in CODE (mutation: revert to the raw column → FAILS)", () => {
     const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
     expect(src).toContain('clientBrandName={branding ? brandDisplayName(branding) || undefined : undefined}');
+  });
+});
+
+// Staff and roles (Task 8): isOwner is settled via the same cached
+// ensureAccountRole call requireAccountAccess makes later in the request,
+// and threaded to BOTH AppSidebar (the footer's Team link) and CommandPalette
+// (its own Team entries) — never hardcoded, never derived from isAgency
+// alone. Source-only: a render test would need Clerk/next/headers/the whole
+// shell mocked for no payoff beyond what these pins already cover.
+describe("dashboard/layout — computes isOwner via ensureAccountRole and threads it to AppSidebar and CommandPalette (staff and roles)", () => {
+  it("settles isOwner from ensureAccountRole keyed on the client's own account/org, only when resolved \"ok\" (mutation: hardcode isOwner to isAgency, or drop the status === \"ok\" guard → FAILS)", () => {
+    const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
+    expect(src).toContain('clientState?.status === "ok" && claims.org_id');
+    expect(src).toContain(
+      'ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId)).then((role) => role === "owner")',
+    );
+  });
+
+  // Fix round 1, I1: `ensureAccountRole` is React cache()'d on its FULL
+  // argument list, including the 4th `stored` argument — not just the
+  // first three. `requireAccountAccess` (lib/auth.ts) always calls it with
+  // an explicit 4th argument; this layout used to call it with only 3,
+  // leaving `stored` to default inside `ensureAccountRole` itself. Two
+  // different argument counts make two different cache() entries even
+  // though accountId/orgId/userId all match, so `ensureAccountRoleWith`
+  // ran TWICE per page load — doubling the Clerk `reconcileMembership`
+  // call on the fallback path (no stored role yet). Proved against the
+  // installed react@19.2.4: outside a real request's cache dispatcher,
+  // cache() does not dedupe calls at all (confirmed empirically, not
+  // merely read), so there is no way to exercise the REAL per-request
+  // dedupe in a plain vitest run — this is a source-shape pin instead,
+  // checking that both call sites now use the identical 4-argument shape
+  // (the SAME readStoredRole promise instance, since readStoredRole is
+  // itself cache()'d on (accountId, clerkUserId) and these two calls use
+  // the same two values).
+  it("calls ensureAccountRole with the SAME 4-argument shape requireAccountAccess uses — an explicit readStoredRole(...) 4th argument, never a bare 3-arg call (mutation: drop the 4th argument → FAILS)", () => {
+    const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
+    expect(src).toMatch(
+      /ensureAccountRole\(clientState\.id, claims\.org_id, userId, readStoredRole\(clientState\.id, userId\)\)/,
+    );
+    // Belt-and-braces: if lib/auth.ts's own call ever regressed to 3 args,
+    // this layout's fix would silently stop mattering — pinned here too so
+    // either side drifting alone is caught.
+    const authSrc = readFileSync(path.join(here, "../../../lib/auth.ts"), "utf8");
+    expect(authSrc).toMatch(/ensureAccountRole\(account\.id, claims\.org_id, userId, storedRole\)/);
+  });
+
+  it("passes the SAME isOwner value to both AppSidebar and CommandPalette, in CODE (mutation: pass a literal `false` to either → FAILS)", () => {
+    const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
+    // The AppSidebar call site: isAgency immediately followed by isOwner,
+    // both reading the computed variables (not a literal).
+    // Indentation-free since the merge with main (#234) re-nested the
+    // chrome one level deeper inside LocaleProvider.
+    expect(src).toMatch(/isAgency=\{isAgency\}\n\s+isOwner=\{isOwner\}/);
+    expect(src).toContain('<CommandPalette isAgency={isAgency} isOwner={isOwner} />');
+  });
+
+  // Merge with main (#234): main's render harness (the Clerk/next mocks above)
+  // lets this be proved on the RENDERED tree, not only the source text.
+  it("renders AppSidebar with isOwner true for an Owner and false for Staff (mutation: pass isOwner={false} → the Owner case FAILS)", async () => {
+    authFixture.isAgency = false;
+    stateFixture.value = { status: "ok", id: "acc_1", name: "Rio Roofing — trial", timezone: "America/Chicago", language: null };
+    roleFixture.value = "owner";
+    const ownerTree = await DashboardLayout({ children: "page" });
+    expect((find(ownerTree, AppSidebar) as { props: { isOwner: boolean } }[]).map((s) => s.props.isOwner)).toEqual([true]);
+    roleFixture.value = "staff";
+    const staffTree = await DashboardLayout({ children: "page" });
+    expect((find(staffTree, AppSidebar) as { props: { isOwner: boolean } }[]).map((s) => s.props.isOwner)).toEqual([false]);
   });
 });
 

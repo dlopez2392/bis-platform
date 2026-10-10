@@ -9,7 +9,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * that calls `getAccountBilling` directly is a second query even though
  * the seam is cached.
  */
-vi.mock("@/lib/auth", () => ({ requireAccountAccess: async () => ({ userId: "u", isAgency: false }) }));
+// The layout calls requireAccountAccess; the Billing page calls
+// requireAccountOwner (Staff and roles, Task 8) — both mocked here since
+// this test exercises both call sites on the same navigation.
+vi.mock("@/lib/auth", () => ({
+  requireAccountAccess: async () => ({ userId: "u", isAgency: false }),
+  requireAccountOwner: async () => ({ userId: "u", isAgency: false }),
+}));
 vi.mock("next/navigation", () => ({ notFound: () => { throw new Error("NOT_FOUND"); } }));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({

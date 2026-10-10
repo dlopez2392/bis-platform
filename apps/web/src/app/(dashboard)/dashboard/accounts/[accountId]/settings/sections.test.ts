@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { isValidElement, type ReactElement } from "react";
+import { Suspense, isValidElement, type ReactElement, type ReactNode } from "react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * The two Settings cards that read a third party, streamed in their own
@@ -29,7 +32,9 @@ vi.mock("@/lib/vercel/web-analytics", () => ({
 
 // "use server" modules — stubbed, never imported into a vitest run.
 const noop = async () => ({ ok: true });
-vi.mock("./actions", () => ({ setClientAccessAction: noop, inviteClientAdminAction: noop }));
+vi.mock("./actions", () => ({ setClientAccessAction: noop }));
+const team = vi.hoisted(() => ({ TeamSection: () => null }));
+vi.mock("@/components/team/team-section", () => team);
 vi.mock("../website/actions", () => ({
   saveSiteAction: noop, testSiteConnectionAction: noop, unlinkSiteAction: noop,
 }));
@@ -38,6 +43,15 @@ const { ClientAccessSection } = await import("./client-access-section");
 const { WebsiteSection } = await import("./website-section");
 const { ClientAccessPanel, ClientAccessSkeleton } = await import("./client-access-panel");
 const { LinkSiteCard, LinkSiteSkeleton } = await import("../website/link-site-card");
+const { TeamSkeleton } = await import("@/components/team/team-card");
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+function all(node: ReactNode): ReactElement<Record<string, unknown>>[] {
+  if (Array.isArray(node)) return node.flatMap(all);
+  if (!isValidElement(node)) return [];
+  const el = node as ReactElement<Record<string, unknown>>;
+  return [el, ...all(el.props.children as ReactNode)];
+}
 
 type Props = Record<string, unknown>;
 
@@ -49,36 +63,44 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
+/**
+ * Staff and roles (Task 10): the Client access card keeps only its switch,
+ * and the Team card (the same one a client Owner sees on /team) sits under
+ * it while access is on. The live Clerk member list and the agency-only
+ * invite left with that swap; TeamSection reads the team now.
+ */
 describe("ClientAccessSection", () => {
-  it("lists members and pending invites from Clerk, roles without the org: prefix", async () => {
-    fx.memberships.mockResolvedValue({ data: [
-      { id: "mem_1", role: "org:admin", publicUserData: { identifier: "owner@rio.test" } },
-    ] });
-    fx.invitations.mockResolvedValue({ data: [
-      { id: "inv_1", role: "org:member", emailAddress: "new@rio.test" },
-    ] });
-    const el = await ClientAccessSection({ accountId: "a1", clerkOrgId: "org_1", enabled: true });
-    expect(el.type).toBe(ClientAccessPanel);
-    const props = el.props as Props;
-    expect(props.enabled).toBe(true);
-    expect(props.members).toEqual([{ id: "mem_1", email: "owner@rio.test", role: "Admin" }]);
-    expect(props.pendingInvites).toEqual([{ id: "inv_1", email: "new@rio.test", role: "Member" }]);
-    expect(props.membersUnavailable).toBe(false);
-    expect(fx.invitations).toHaveBeenCalledWith({ organizationId: "org_1", status: ["pending"] });
+  it("renders the switch, and under it the Team card for THIS account in its own Suspense with the shared skeleton (mutation: drop the Team mount -> FAILS)", async () => {
+    const els = all(await ClientAccessSection({ accountId: "a1", enabled: true }));
+    const panelEl = els.find((e) => e.type === ClientAccessPanel);
+    expect(panelEl?.props.enabled).toBe(true);
+    const boundary = els.find((e) => e.type === Suspense);
+    expect(boundary, "TeamSection inside <Suspense>").toBeTruthy();
+    const child = boundary!.props.children as ReactElement<Props>;
+    expect(child.type).toBe(team.TeamSection);
+    expect(child.props).toEqual({ accountId: "a1", viewer: "agency" });
+    const fallback = boundary!.props.fallback as ReactElement;
+    expect(isValidElement(fallback) && fallback.type).toBe(TeamSkeleton);
+    expect(els.indexOf(panelEl!)).toBeLessThan(els.indexOf(boundary!));
   });
 
-  it("fails SOFT when Clerk errors: the switch still renders, the list says it is unavailable (mutation: drop the try → FAILS)", async () => {
-    fx.memberships.mockRejectedValue(new Error("clerk 429"));
-    const el = await ClientAccessSection({ accountId: "a1", clerkOrgId: "org_1", enabled: false });
-    expect(el.type).toBe(ClientAccessPanel);
-    expect((el.props as Props).membersUnavailable).toBe(true);
-    expect((el.props as Props).members).toEqual([]);
+  it("shows no Team card while client access is off (spec §8: shown only while access is on) (mutation: render it always -> FAILS)", async () => {
+    const els = all(await ClientAccessSection({ accountId: "a1", enabled: false }));
+    expect(els.find((e) => e.type === ClientAccessPanel)?.props.enabled).toBe(false);
+    expect(els.some((e) => e.type === team.TeamSection)).toBe(false);
   });
 
-  it("does not call Clerk at all for an account with no organization", async () => {
-    const el = await ClientAccessSection({ accountId: "a1", clerkOrgId: null, enabled: false });
+  it("no longer reads Clerk itself: the switch never waits on a member list (mutation: keep the live list -> FAILS)", async () => {
+    await ClientAccessSection({ accountId: "a1", enabled: true });
     expect(fx.clerkCalls).toBe(0);
-    expect((el.props as Props).membersUnavailable).toBe(false);
+    expect(fx.memberships).not.toHaveBeenCalled();
+  });
+
+  it("inviteClientAdminAction no longer exists; inviteTeamMemberAction replaced it (mutation: leave it exported -> FAILS)", () => {
+    const actions = readFileSync(path.join(here, "actions.ts"), "utf8");
+    expect(actions).not.toMatch(/inviteClientAdminAction/);
+    const sectionSrc = readFileSync(path.join(here, "client-access-section.tsx"), "utf8");
+    expect(sectionSrc).not.toMatch(/inviteClientAdminAction|clerkClient/);
   });
 });
 

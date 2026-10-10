@@ -20,7 +20,8 @@
     "ci:seed:local": "tsx src/ci-seed/run.ts --local-stack",
     "db:seed-demo": "tsx src/demo/run.ts",
     "backfill:phone-country": "tsx src/backfill/phone-country-run.ts",
-    "backfill:telnyx-optouts": "tsx src/backfill/telnyx-optouts-run.ts"
+    "backfill:telnyx-optouts": "tsx src/backfill/telnyx-optouts-run.ts",
+    "backfill:members": "tsx src/backfill/members-run.ts"
   },
   "devDependencies": {
     "@types/pg": "^8.20.0",

@@ -2,7 +2,7 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireAccountOwner } from "@/lib/auth";
 import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { loggableError } from "@/lib/billing/billing-link";
 import { openPortal } from "@/lib/billing/portal";
@@ -15,11 +15,12 @@ const failed = { ok: false as const, error: m["billing.page.portalFailed"] };
 
 /**
  * Manage billing (spec section 5): a Stripe Customer Portal session for
- * THIS account's customer. requireAccountAccess first: a client is
- * redirected to its own dashboard for any other account id, so a client can
- * only ever open its own portal. The row is then read on the caller's RLS
- * client, like the page reads it, so the database backstop stands behind
- * the guard too.
+ * THIS account's customer. requireAccountOwner first (Staff and roles, spec
+ * §4): a client is redirected to its own dashboard for any other account id,
+ * same as before, and now a client Staff is redirected the same way — never
+ * 403'd, same reasoning as requireAccountAccess itself. The row is then read
+ * on the caller's RLS client, like the page reads it, so the database
+ * backstop stands behind the guard too.
  *
  * There is no portal URL until Stripe returns one: the session is made on
  * the click, and on success this REDIRECTS (never returns) to exactly the
@@ -32,7 +33,7 @@ const failed = { ok: false as const, error: m["billing.page.portalFailed"] };
  * click proves it.
  */
 export async function openBillingPortalAction(accountId: string): Promise<{ ok: false; error: string }> {
-  const { isAgency } = await requireAccountAccess(accountId);
+  const { isAgency } = await requireAccountOwner(accountId);
   if (!UUID.test(accountId)) return failed;
   // Inside a try: a rejected action would swap the whole page for the error
   // boundary, and this is a button whose failure is one sentence.

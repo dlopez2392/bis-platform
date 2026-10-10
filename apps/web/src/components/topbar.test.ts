@@ -106,3 +106,19 @@ describe("Topbar — F-107 r1: tighter gap/padding below `sm` only, the mockup's
     );
   });
 });
+
+// Staff and roles, spec §6 pin (plan deviation 5): Topbar({ isAgency: false })
+// already renders no OrganizationSwitcher — this component's `isAgency` gate
+// predates this task — so this task PINS the existing behaviour with a
+// regression test rather than changing code. Source-only, same convention as
+// the rest of this file: a render test would need OrganizationSwitcher,
+// ThemeToggle, TopbarPresence and CommandPalette all mocked for no payoff a
+// class/string pin doesn't already cover.
+describe("Topbar — spec §6: a client session (isAgency: false) renders no OrganizationSwitcher", () => {
+  it("OrganizationSwitcher is rendered only inside the isAgency branch (mutation: render it unconditionally → FAILS)", () => {
+    expect(src).toMatch(/isAgency \? \(\s*<OrganizationSwitcher/);
+    // The ternary's other branch is `null`, not a second (unconditional)
+    // render of the switcher.
+    expect(src).toMatch(/<OrganizationSwitcher[\s\S]*?\/>\s*\) : null/);
+  });
+});

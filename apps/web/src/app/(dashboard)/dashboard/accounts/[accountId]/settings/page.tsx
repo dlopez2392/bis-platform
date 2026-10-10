@@ -77,7 +77,7 @@ export default async function CrmSettingsPage({
     // an in-account surface — worth the owner's judgment on whether clients
     // should see this at all.
     listBlueprints(serviceDb()),
-    db.from("accounts").select("clerk_org_id, client_access_enabled, report_emails, alert_phone, language").eq("id", accountId).maybeSingle()
+    db.from("accounts").select("client_access_enabled, report_emails, alert_phone, language").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`settings: account lookup failed: ${error.message}`);
         if (!data) throw new Error("settings: account not found");
@@ -172,7 +172,6 @@ export default async function CrmSettingsPage({
         <Suspense fallback={<ClientAccessSkeleton />}>
           <ClientAccessSection
             accountId={accountId}
-            clerkOrgId={account.clerk_org_id}
             enabled={account.client_access_enabled}
           />
         </Suspense>

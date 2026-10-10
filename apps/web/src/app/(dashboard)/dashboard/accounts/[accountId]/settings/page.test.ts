@@ -77,7 +77,7 @@ vi.mock("@/lib/sms/sender", () => ({
 const noop = async () => ({ ok: true });
 vi.mock("./actions", () => ({
   createFieldAction: noop, upsertValueAction: noop, setClientAccessAction: noop,
-  inviteClientAdminAction: noop, setFromEmailAction: noop, setReportEmailsAction: noop,
+  setFromEmailAction: noop, setReportEmailsAction: noop,
   setAlertPhoneAction: noop, startAlertPhoneVerificationAction: noop,
   confirmAlertPhoneVerificationAction: noop, setAccountLanguageAction: noop,
 }));
@@ -92,6 +92,10 @@ vi.mock("../../../blueprints/actions", () => blueprintActions);
 vi.mock("./billing-actions", () => ({
   sendBillingLinkAction: noop, markComplimentaryAction: noop, removeComplimentaryAction: noop, changePlanAction: noop,
 }));
+
+// The Team card (Task 10) streams inside ClientAccessSection; its reads and
+// actions are TeamSection's own (components/team/team-section.test.ts).
+vi.mock("@/components/team/team-section", () => ({ TeamSection: () => null }));
 
 const panel = vi.hoisted(() => ({ BrandingPanel: () => null }));
 vi.mock("@/components/branding-panel", () => panel);
@@ -202,7 +206,7 @@ describe("settings page — third parties never hold the page", () => {
     const boundary = boundaryAround(await pageElements(), ClientAccessSection);
     expect(boundary, "ClientAccessSection inside <Suspense>").toBeTruthy();
     expect((boundary!.props.children as ReactElement).props).toEqual({
-      accountId: "a1", clerkOrgId: null, enabled: false,
+      accountId: "a1", enabled: false,
     });
     const fallback = boundary!.props.fallback;
     expect(isValidElement(fallback) && fallback.type).toBe(ClientAccessSkeleton);

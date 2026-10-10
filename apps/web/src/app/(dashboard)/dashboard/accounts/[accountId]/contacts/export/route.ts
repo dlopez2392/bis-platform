@@ -1,5 +1,5 @@
 import { listContacts, listTagNamesForContacts, type SortKey, type SortDir } from "@bis/db";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireAccountOwner } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 
@@ -77,15 +77,19 @@ export async function GET(
   { params }: { params: Promise<{ accountId: string }> },
 ) {
   const { accountId } = await params;
-  // Same access check as every other route under this account's contacts
-  // (layout.tsx, actions.ts) — NOT the /api folder's apiAccountAccess: this
-  // route is reached by a real browser navigation (the contacts page's
-  // Download link is a plain <Link>, not a fetch), so redirecting on
-  // refusal behaves exactly like every other page in this account subtree.
-  // A client asking for another account's export lands on their OWN
-  // account's dashboard rather than learning whether the requested account
-  // exists (requireAccountAccess's own doc comment).
-  await requireAccountAccess(accountId);
+  // Staff and roles: export is Owner-only, so this is requireAccountOwner
+  // — not the plain requireAccountAccess every other route under this
+  // account's contacts (layout.tsx, actions.ts) uses — and NOT the /api
+  // folder's apiAccountAccess: this route is reached by a real browser
+  // navigation (the contacts page's Download link is a plain <Link>, not a
+  // fetch), so redirecting on refusal behaves exactly like every other page
+  // in this account subtree. A Staff caller — like a client asking for
+  // another account's export — lands on their OWN account's dashboard
+  // rather than a 403 confirming the export exists for this account at all
+  // (requireAccountOwner's own doc comment). Staff can still READ contacts
+  // (requireAccountAccess would let them through here), so this guard is a
+  // friction control on the bulk-download path, not a data-visibility one.
+  await requireAccountOwner(accountId);
 
   const url = new URL(req.url);
   const q = url.searchParams.get("q") ?? undefined;

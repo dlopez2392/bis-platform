@@ -52,18 +52,22 @@ describe("booking column privileges for authenticated", () => {
     });
   });
 
-  it("scopes both tenant policies to authenticated, never PUBLIC", async () => {
+  it("names every calendars/bookings policy and scopes each to authenticated, never PUBLIC (mutation: recreate any one of them without `to authenticated` -> FAILS)", async () => {
     await withRollback(async (c) => {
-      const { rows } = await c.query<{ tablename: string; roles: string }>(
-        `select tablename, roles::text from pg_policies
+      const { rows } = await c.query<{ tablename: string; policyname: string; roles: string }>(
+        `select tablename, policyname, roles::text from pg_policies
           where schemaname = 'public' and tablename in ('calendars','bookings')
-          order by tablename`,
+          order by tablename, policyname`,
       );
-      expect(rows).toHaveLength(2);
       // pg_policies.roles is '{public}' for an unscoped policy — the defect
-      // 0017 exists to correct. Nothing else in this schema asserts policy
-      // scope, which is exactly why 0016 shipped without one.
-      for (const row of rows) expect(row.roles).toBe("{authenticated}");
+      // 0017 exists to correct. By name, not by count: 0066 added the Owner-only
+      // calendars_owner_update, and an exact list means a new policy here, of
+      // any scope, is a deliberate edit to this test rather than a silent pass.
+      expect(rows).toEqual([
+        { tablename: "bookings", policyname: "bookings_tenant_read", roles: "{authenticated}" },
+        { tablename: "calendars", policyname: "calendars_owner_update", roles: "{authenticated}" },
+        { tablename: "calendars", policyname: "calendars_tenant", roles: "{authenticated}" },
+      ]);
     });
   });
 });

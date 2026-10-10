@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { m } from "@/lib/messages";
 
 const bulkAddTagAction = vi.fn();
 const bulkRemoveTagAction = vi.fn();
 const bulkDeleteContactsAction = vi.fn();
 vi.mock("./actions", () => ({ bulkAddTagAction, bulkRemoveTagAction, bulkDeleteContactsAction }));
 
-const { applyBulkTag } = await import("./bulk-action-bar");
+const { applyBulkTag, BulkActionBar } = await import("./bulk-action-bar");
 
 beforeEach(() => {
   bulkAddTagAction.mockReset();
@@ -36,5 +39,27 @@ describe("applyBulkTag's undo (D-007)", () => {
     const r = await applyBulkTag("a1", ["c1"], "vip");
     expect(r).toEqual({ ok: false, error: "nope" });
     expect(bulkRemoveTagAction).not.toHaveBeenCalled();
+  });
+});
+
+// Staff and roles (Task 6): delete is Owner-only. Staff still sees the bar
+// (tag actions stay available — DESIGN.md rule 4's "never render checkboxes
+// without bulk actions" still has to hold for Staff), it just loses the
+// Delete control. `canDelete` is threaded in from the page's own
+// `requireAccountAccess`-derived `canManage` through ContactsTable.
+describe("BulkActionBar's Delete control is Owner-only (staff and roles)", () => {
+  const render = (canDelete: boolean) => renderToStaticMarkup(createElement(BulkActionBar, {
+    accountId: "a1", selectedIds: ["c1"], existingTags: [], canDelete, onDone: () => {},
+  }));
+
+  it("renders no Delete button when canDelete is false, but Add tag still renders (mutation: ignore the prop → FAILS)", () => {
+    const html = render(false);
+    expect(html).not.toContain(m["bulk.delete"]);
+    expect(html).toContain(m["bulk.addTag"]);
+  });
+
+  it("renders the Delete button when canDelete is true", () => {
+    const html = render(true);
+    expect(html).toContain(m["bulk.delete"]);
   });
 });
