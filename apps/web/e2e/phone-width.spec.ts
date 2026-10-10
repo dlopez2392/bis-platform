@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test, expect, type Page } from "./fixtures/test";
 import { buildNavGroups } from "../src/lib/nav-groups";
 import { readClientFixture } from "./support";
-import { serviceDb, setClientAccess, listContacts, listForms } from "@bis/db";
+import { serviceDb, setClientAccess, listContacts, listForms, upsertVoiceProfile } from "@bis/db";
 
 /**
  * F-107 (rider part): "at phone width the sidebar opens collapsed, its
@@ -76,7 +76,17 @@ function clientFixture(): ClientFixture | null {
 
 test.beforeAll(async () => {
   const fx = clientFixture();
-  if (fx) await setClientAccess(serviceDb(), fx.accountId, true, fx.clerkUserId);
+  if (!fx) return;
+  const db = serviceDb();
+  await setClientAccess(db, fx.accountId, true, fx.clerkUserId);
+  // F-107 r2 review, item 4: turns the topbar presence pill (DESIGN.md "AI
+  // presence") on for this run's own fixture account, so the agency-only
+  // describe below can check it live instead of stating it is out of
+  // scope. Every other `voice_profiles` column defaults (0019_voice_
+  // core.sql); the table is in `ACCOUNT_OWNED_TABLES`
+  // (packages/db/src/account-teardown.ts), so auth.teardown.ts's cascade
+  // removes it with the rest of the account.
+  await upsertVoiceProfile(db, fx.accountId, { enabled: true }, fx.clerkUserId);
 });
 
 const WIDTH = 375;
@@ -121,6 +131,50 @@ async function assertHeaderChildrenInBounds(page: Page, route: string, width: nu
   ).toBe(0);
 }
 
+/**
+ * F-107 r2 review, item 1: CI found a real overflow this rider's own local
+ * fixture never reproduced (bis-ci's /dashboard/accounts lists every
+ * account every earlier spec in that run created, with real long names and
+ * zones this run's one-account fixture never has) — and the failure
+ * carried no trace artifact, just a width number. Kept permanently, not
+ * removed after this round: cheap (one extra `evaluate`, only when the
+ * page is ALREADY failing) and names the exact element in the assertion
+ * message itself, so the NEXT CI-only overflow does not need a diagnostic
+ * bolted on after the fact to find out what it was.
+ *
+ * "Contained" mirrors assertHeaderChildrenInBounds's own reasoning:
+ * an element inside an ancestor that already clips/scrolls (and is itself
+ * within bounds) is not the page's own overflow cause — ui/table.tsx's
+ * `overflow-x-auto` wrapper is exactly this, and flagging ITS contents
+ * would blame the wrong element for a wide table that is already scrolling
+ * correctly inside itself.
+ */
+async function findWidestOffender(page: Page, clientWidth: number): Promise<string | null> {
+  return page.evaluate((vw: number) => {
+    const isContained = (el: Element): boolean => {
+      let node: Element | null = el.parentElement;
+      while (node && node !== document.documentElement) {
+        const style = getComputedStyle(node);
+        const r = node.getBoundingClientRect();
+        if (style.overflowX !== "visible" && r.right <= vw + 1) return true;
+        node = node.parentElement;
+      }
+      return false;
+    };
+    const widest = Array.from(document.querySelectorAll("*"))
+      .map((el) => ({ el, r: el.getBoundingClientRect() }))
+      .filter(({ r }) => r.right > vw + 1)
+      .filter(({ el }) => !isContained(el))
+      .sort((a, b) => b.r.right - a.r.right)[0];
+    if (!widest) return null;
+    const el = widest.el as HTMLElement;
+    const selector = `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}` +
+      (el.className ? `.${el.className.toString().trim().split(/\s+/)[0]}` : "");
+    return `${selector} right=${Math.round(widest.r.right)} width=${Math.round(widest.r.width)} ` +
+      `text="${(el.textContent || "").slice(0, 40)}"`;
+  }, clientWidth);
+}
+
 async function assertNoPageScroll(page: Page, route: string, width: number) {
   await test.step(`${route} at ${width}px`, async () => {
     await page.setViewportSize({ width, height: HEIGHT });
@@ -134,12 +188,15 @@ async function assertNoPageScroll(page: Page, route: string, width: number) {
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
     }));
-    expect(
-      measured.scrollWidth,
-      `${route} at ${width}px: the page is ${measured.scrollWidth}px wide, ` +
-        `${measured.scrollWidth - measured.clientWidth}px past its own ` +
-        `${measured.clientWidth}px viewport`,
-    ).toBeLessThanOrEqual(measured.clientWidth);
+    if (measured.scrollWidth > measured.clientWidth) {
+      const offender = await findWidestOffender(page, measured.clientWidth);
+      expect(
+        measured.scrollWidth,
+        `${route} at ${width}px: the page is ${measured.scrollWidth}px wide, ` +
+          `${measured.scrollWidth - measured.clientWidth}px past its own ` +
+          `${measured.clientWidth}px viewport. Widest offender: ${offender ?? "(none found — check for sibling overlap, not overflow)"}`,
+      ).toBeLessThanOrEqual(measured.clientWidth);
+    }
     await assertHeaderChildrenInBounds(page, route, width);
   });
 }
@@ -186,9 +243,12 @@ test.describe("in-account routes, client session — phone width", () => {
     // way automations-b.spec.ts reads the same account directly.
     const db = serviceDb();
     const contacts = await listContacts(db, fixture.accountId, { limit: 1 });
-    if (contacts.length > 0) {
-      await assertNoPageScroll(page, `${base}/contacts/${contacts[0]!.id}`, WIDTH);
-    }
+    // F-107 r2 review, item 4: auth.setup.ts always seeds exactly one
+    // contact — a silent `if (length > 0)` would quietly skip this route
+    // forever if that fixture ever stopped seeding one, rather than
+    // failing loudly the way a real regression should.
+    expect(contacts.length, "the fixture always seeds one contact (auth.setup.ts)").toBeGreaterThan(0);
+    await assertNoPageScroll(page, `${base}/contacts/${contacts[0]!.id}`, WIDTH);
     // contacts/import needs no fixture data — it is the CSV wizard's own
     // first step (DESIGN.md's "CSV import" pattern: "choose a file").
     await assertNoPageScroll(page, `${base}/contacts/import`, WIDTH);
@@ -198,8 +258,10 @@ test.describe("in-account routes, client session — phone width", () => {
     // applies — the regression this round found was an EMPTY accessible
     // name on every nav link but Conversations. `getByRole` resolves by
     // accessible name, so this fails exactly the way a screen reader user
-    // would experience it failing.
-    await expect(page.getByRole("link", { name: "Contacts" })).toBeVisible();
+    // would experience it failing. `exact: true` (F-107 r2 review, item 5):
+    // without it this would also match "Contacts" as a SUBSTRING of a
+    // longer accessible name, which is not what this is proving.
+    await expect(page.getByRole("link", { name: "Contacts", exact: true })).toBeVisible();
   });
 });
 
@@ -231,13 +293,29 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
     // silently skipped.
     const db = serviceDb();
     const forms = await listForms(db, fixture.accountId);
-    if (forms.length > 0) {
-      await assertNoPageScroll(page, `${base}/forms/${forms[0]!.id}`, WIDTH);
-    }
+    // F-107 r2 review, item 4: auth.setup.ts always publishes exactly one
+    // form ("E2E Brand Form …") — same reasoning as the contact above.
+    expect(forms.length, "the fixture always publishes one form (auth.setup.ts)").toBeGreaterThan(0);
+    await assertNoPageScroll(page, `${base}/forms/${forms[0]!.id}`, WIDTH);
 
     // F-107 r1 review, item 1: the Settings footer link is the same
     // SidebarLink component as every nav item — same fix, same proof.
-    await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
+    // `exact: true` (F-107 r2 review, item 5): see the client session's
+    // identical note on the Contacts check above.
+    await expect(page.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
+
+    // F-107 r2 review, item 4: the topbar presence pill (DESIGN.md "AI
+    // presence") does render here — `upsertVoiceProfile(..., { enabled:
+    // true })` in this file's own beforeAll turns it on for the fixture
+    // account. Checked here rather than "stated as out of scope": every
+    // other column on `voice_profiles` defaults (0019_voice_core.sql), the
+    // table is in `ACCOUNT_OWNED_TABLES` (packages/db/src/
+    // account-teardown.ts), so auth.teardown.ts's cascade removes it with
+    // the rest of the account — a real write, but a safe and cheap one,
+    // not a read. With zero calls ever made on this account, the idle
+    // state reads "✓ 0 calls handled this week" (messages.ts
+    // `shell.presence.idle`).
+    await expect(page.getByText(/calls handled this week/)).toBeVisible();
   });
 
   // The Goal's stricter, parenthetical width — checked on a representative
