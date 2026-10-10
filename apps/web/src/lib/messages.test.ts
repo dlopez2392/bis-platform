@@ -131,3 +131,24 @@ describe("Spanish copy review (M4)", () => {
     expect(spanishNav.some((v) => /\btareas\b/i.test(v))).toBe(false);
   });
 });
+
+// Final fix wave (Mis preferencias copy): a person's theme is theirs, not the
+// business account's, so its Spanish never says "cuenta" (which in this app
+// is the business), and it calls the setting what the legend calls it,
+// "tema", never a second word ("aspecto").
+describe("prefs theme copy in Spanish names the theme, not the account", () => {
+  const themeEs = Object.entries(m).filter(([k]) =>
+    (k.startsWith("prefs.theme.") || k.startsWith("prefs.saved.theme.")) && k.endsWith(".es"));
+  it("covers the theme strings (positive control)", () => {
+    expect(themeEs.length).toBeGreaterThanOrEqual(8);
+  });
+  it("never says cuenta or aspecto (mutation: restore 'predeterminado de tu cuenta' -> FAILS)", () => {
+    for (const [k, v] of themeEs) {
+      expect(`${k}: ${v}`).not.toMatch(/cuenta|aspecto/);
+    }
+  });
+  it("says what the brief asked for", () => {
+    expect(m["prefs.saved.theme.none.es"]).toBe("Volviste al tema predeterminado.");
+    expect(m["prefs.theme.empty.es"]).toBe("Aún no has elegido, así que ves el tema {mode}.");
+  });
+});
