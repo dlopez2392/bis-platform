@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   roomLeft, inviteDefaultLanguage, clerkInviteError, ownerCount, clerkRoleFor,
-  isTeamUserId, isInvitationId, isClerkUserId,
+  isTeamUserId, isInvitationId, isClerkUserId, UNDO_WINDOW_MS, undoStillOpen,
 } from "./team-view";
 
 describe("roomLeft (the login cap, spec §8)", () => {
@@ -59,7 +59,7 @@ describe("id shapes checked before use", () => {
     expect(isTeamUserId("user_2abc")).toBe(false);
     expect(isTeamUserId("2f1c9a1e-6b1d-4c1a-9f7e-1a2b3c4d5e6f; drop")).toBe(false);
   });
-  it("an invitation id is orginv_ plus letters and digits (ASSUMPTION: Clerk's prefix, pinned here)", () => {
+  it("an invitation id is orginv_ plus letters and digits (verified on the dev instance, 2026-10-10)", () => {
     expect(isInvitationId("orginv_2abcXYZ123")).toBe(true);
     expect(isInvitationId("orginv_")).toBe(false);
     expect(isInvitationId("inv_2abc")).toBe(false);
@@ -69,5 +69,21 @@ describe("id shapes checked before use", () => {
     expect(isClerkUserId("user_2abcXYZ")).toBe(true);
     expect(isClerkUserId("org_2abc")).toBe(false);
     expect(isClerkUserId("user_2abc?x=1")).toBe(false);
+  });
+});
+
+describe("the undo window for a removal", () => {
+  it("is two minutes (mutation: any other value -> FAILS)", () => {
+    expect(UNDO_WINDOW_MS).toBe(2 * 60 * 1000);
+  });
+  it("is open up to and including two minutes after the removal (mutation: < instead of <= -> FAILS)", () => {
+    const at = Date.parse("2026-10-10T12:00:00.000Z");
+    expect(undoStillOpen("2026-10-10T12:00:00.000Z", at + 1000)).toBe(true);
+    expect(undoStillOpen("2026-10-10T12:00:00.000Z", at + UNDO_WINDOW_MS)).toBe(true);
+  });
+  it("is closed past two minutes, and for a timestamp that does not parse (mutation: drop the window -> FAILS)", () => {
+    const at = Date.parse("2026-10-10T12:00:00.000Z");
+    expect(undoStillOpen("2026-10-10T12:00:00.000Z", at + UNDO_WINDOW_MS + 1)).toBe(false);
+    expect(undoStillOpen("not a date", at)).toBe(false);
   });
 });

@@ -20,6 +20,7 @@ import { reconcileMembership, type SupabaseClient } from "@bis/db";
 import {
   liveClerkTeamPort, listPendingInvitations, teamCapacity, createTeamInvitation,
   revokeTeamInvitation, removeFromOrganization, restoreToOrganization, setOrganizationRole,
+  CLERK_WRITE_TIMEOUT_MS,
 } from "./clerk-team";
 
 /** Shaped like @clerk/shared's ClerkAPIResponseError: `status` plus `errors[].code`. */
@@ -246,5 +247,50 @@ describe("the Team's Clerk calls", () => {
     organizations.updateOrganizationMembership.mockRejectedValue(clerkError(500, "internal"));
     expect(await setOrganizationRole("org_1", "user_1", "staff")).toEqual({ ok: false, code: "internal" });
     expect(String(vi.mocked(console.error).mock.calls[0])).not.toContain("pat@example.com");
+  });
+});
+
+describe("Clerk not-found on removal, and a bound on every Clerk write", () => {
+  it("removeFromOrganization: Clerk answering 404 means the member is already gone, which is success (mutation: treat 404 as failure -> FAILS)", async () => {
+    // @clerk/shared 4.25.8 dist/errors/clerkApiResponseError.d.ts:13,16: `status: number`, `errors: ClerkAPIError[]`.
+    organizations.deleteOrganizationMembership.mockRejectedValue(clerkError(404, "resource_not_found"));
+    expect(await removeFromOrganization("org_1", "user_1")).toEqual({ ok: true });
+  });
+  it("removeFromOrganization: any other refusal is still a failure", async () => {
+    organizations.deleteOrganizationMembership.mockRejectedValue(clerkError(403, "not_allowed"));
+    expect(await removeFromOrganization("org_1", "user_1")).toEqual({ ok: false, code: "not_allowed" });
+  });
+
+  const never = () => new Promise(() => {});
+  const writes: [string, () => void, () => Promise<unknown>][] = [
+    ["createTeamInvitation", () => organizations.createOrganizationInvitation.mockReturnValue(never()),
+      () => createTeamInvitation({ orgId: "org_1", email: "a@x.com", role: "staff", language: "en", inviterUserId: "u" })],
+    ["revokeTeamInvitation", () => organizations.revokeOrganizationInvitation.mockReturnValue(never()), () => revokeTeamInvitation("org_1", "orginv_1")],
+    ["removeFromOrganization", () => organizations.deleteOrganizationMembership.mockReturnValue(never()), () => removeFromOrganization("org_1", "user_1")],
+    ["restoreToOrganization", () => organizations.createOrganizationMembership.mockReturnValue(never()), () => restoreToOrganization("org_1", "user_1", "staff")],
+    ["setOrganizationRole", () => organizations.updateOrganizationMembership.mockReturnValue(never()), () => setOrganizationRole("org_1", "user_1", "staff")],
+  ];
+  it.each(writes)("%s gives up after CLERK_WRITE_TIMEOUT_MS with code 'timeout' (mutation: no timeout on this write -> FAILS)", async (_n, arrange, call) => {
+    vi.useFakeTimers();
+    try {
+      arrange();
+      const p = call();
+      await vi.advanceTimersByTimeAsync(CLERK_WRITE_TIMEOUT_MS);
+      await expect(p).resolves.toEqual({ ok: false, code: "timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("the bound is about 5 s, and a write answering inside it is waited for (mutation: a much shorter bound -> FAILS)", async () => {
+    expect(CLERK_WRITE_TIMEOUT_MS).toBe(5000);
+    vi.useFakeTimers();
+    try {
+      organizations.updateOrganizationMembership.mockReturnValue(new Promise((res) => setTimeout(() => res({}), CLERK_WRITE_TIMEOUT_MS - 100)));
+      const p = setOrganizationRole("org_1", "user_1", "owner");
+      await vi.advanceTimersByTimeAsync(CLERK_WRITE_TIMEOUT_MS);
+      await expect(p).resolves.toEqual({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

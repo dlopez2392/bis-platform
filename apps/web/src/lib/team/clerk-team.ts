@@ -5,6 +5,7 @@ import {
 } from "@bis/db";
 import { loggableError } from "@/lib/loggable-error";
 import { clerkRoleFor } from "./team-view";
+import { withTimeout, TimeoutError } from "./with-timeout";
 
 /**
  * Every Clerk call the staff-and-roles lane makes (spec §6, §8), in one file.
@@ -89,9 +90,20 @@ function inviteFrom(i: { id: string; emailAddress: string; role: string; publicM
   };
 }
 
+/**
+ * Every Clerk WRITE the Team actions make is bounded by this. Past it the
+ * write reports code "timeout"; the request is not cancelled and may still
+ * land, which setTeamRoleAction allows for.
+ */
+export const CLERK_WRITE_TIMEOUT_MS = 5000;
+
+function bounded<T>(write: () => Promise<T>): Promise<T> {
+  return withTimeout(write(), CLERK_WRITE_TIMEOUT_MS);
+}
+
 function failed(what: string, e: unknown): { ok: false; code: string | null } {
   console.error(`clerk-team: ${what} failed: ${loggableError(e)}`);
-  return { ok: false, code: apiCode(e) };
+  return { ok: false, code: e instanceof TimeoutError ? "timeout" : apiCode(e) };
 }
 
 /** Throws (with a redacted message) when Clerk cannot be read: the Team card shows its unreachable state. */
@@ -136,11 +148,10 @@ export async function createTeamInvitation(i: {
   orgId: string; email: string; role: AccountRole; language: PersonLanguage; inviterUserId: string;
 }): Promise<ClerkWriteResult> {
   try {
-    const clerk = await clerkClient();
-    await clerk.organizations.createOrganizationInvitation({
+    await bounded(async () => (await clerkClient()).organizations.createOrganizationInvitation({
       organizationId: i.orgId, emailAddress: i.email, role: clerkRoleFor(i.role), inviterUserId: i.inviterUserId,
       publicMetadata: { bis_role: i.role, bis_language: i.language },
-    });
+    }));
     return { ok: true };
   } catch (e) {
     return failed("createOrganizationInvitation", e);
@@ -152,20 +163,26 @@ export async function revokeTeamInvitation(
   orgId: string, invitationId: string, requestingUserId?: string,
 ): Promise<ClerkWriteResult<{ invite: ClerkPendingInvite }>> {
   try {
-    const clerk = await clerkClient();
-    const inv = await clerk.organizations.revokeOrganizationInvitation({ organizationId: orgId, invitationId, requestingUserId });
+    const inv = await bounded(async () => (await clerkClient()).organizations.revokeOrganizationInvitation({ organizationId: orgId, invitationId, requestingUserId }));
     return { ok: true, invite: inviteFrom(inv) };
   } catch (e) {
     return failed("revokeOrganizationInvitation", e);
   }
 }
 
+/**
+ * A 404 from Clerk means the membership is already gone, which is the state
+ * this call exists to reach, so it is success. Read by `status`, as
+ * `@clerk/shared` 4.25.8's ClerkAPIResponseError declares it
+ * (`dist/errors/clerkApiResponseError.d.ts:13`, `status: number`), the same
+ * way getUser reads its 404 above.
+ */
 export async function removeFromOrganization(orgId: string, clerkUserId: string): Promise<ClerkWriteResult> {
   try {
-    const clerk = await clerkClient();
-    await clerk.organizations.deleteOrganizationMembership({ organizationId: orgId, userId: clerkUserId });
+    await bounded(async () => (await clerkClient()).organizations.deleteOrganizationMembership({ organizationId: orgId, userId: clerkUserId }));
     return { ok: true };
   } catch (e) {
+    if (apiStatus(e) === 404) return { ok: true };
     return failed("deleteOrganizationMembership", e);
   }
 }
@@ -173,8 +190,7 @@ export async function removeFromOrganization(orgId: string, clerkUserId: string)
 /** The undo of a removal: back at the Clerk role matching `role`; the BIS membership is restored by the caller. */
 export async function restoreToOrganization(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult> {
   try {
-    const clerk = await clerkClient();
-    await clerk.organizations.createOrganizationMembership({ organizationId: orgId, userId: clerkUserId, role: clerkRoleFor(role) });
+    await bounded(async () => (await clerkClient()).organizations.createOrganizationMembership({ organizationId: orgId, userId: clerkUserId, role: clerkRoleFor(role) }));
     return { ok: true };
   } catch (e) {
     return failed("createOrganizationMembership", e);
@@ -190,8 +206,7 @@ export async function restoreToOrganization(orgId: string, clerkUserId: string, 
  */
 export async function setOrganizationRole(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult> {
   try {
-    const clerk = await clerkClient();
-    await clerk.organizations.updateOrganizationMembership({ organizationId: orgId, userId: clerkUserId, role: clerkRoleFor(role) });
+    await bounded(async () => (await clerkClient()).organizations.updateOrganizationMembership({ organizationId: orgId, userId: clerkUserId, role: clerkRoleFor(role) }));
     return { ok: true };
   } catch (e) {
     return failed("updateOrganizationMembership", e);

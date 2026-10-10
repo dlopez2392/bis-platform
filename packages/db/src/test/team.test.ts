@@ -172,7 +172,7 @@ describe("reconcileMembership honours only an invitation accepted for THIS membe
     };
     expect(await reconcileMembership(db, port, { clerkUserId: "user_1", clerkOrgId: "org_1", mode: "fallback" }))
       .toEqual({ outcome: "created", role: "staff" });
-    expect(INVITE_ACCEPT_ALLOWANCE_MS).toBe(10 * 60 * 1000);
+    expect(INVITE_ACCEPT_ALLOWANCE_MS).toBe(60 * 1000);
     expect(seen).toEqual([["org_1", "pat@example.com", created - INVITE_ACCEPT_ALLOWANCE_MS]]);
   });
 });

@@ -11,9 +11,10 @@ import {
   restoreToOrganization, setOrganizationRole,
 } from "@/lib/team/clerk-team";
 import {
-  roomLeft, inviteDefaultLanguage, clerkInviteError,
-  isTeamUserId, isInvitationId, isClerkUserId, isAccountRole, isPersonLanguage,
+  roomLeft, inviteDefaultLanguage, clerkInviteError, undoStillOpen,
+  isTeamUserId, isInvitationId, isAccountRole, isPersonLanguage,
 } from "@/lib/team/team-view";
+import { recordRemoval, latestRemoval } from "@/lib/team/removal-log";
 import { isValidEmail } from "@/lib/forms/guards";
 import { loggableError } from "@/lib/loggable-error";
 
@@ -33,18 +34,18 @@ import { loggableError } from "@/lib/loggable-error";
  * this file out of the shared copy catalogue while Tasks 6-8 edit it.
  *
  * The Clerk role FOLLOWS the BIS role (owner -> org:admin, staff ->
- * org:member). The BIS write decides, because it carries the last-Owner
- * guard; Clerk is asked second, and a Clerk failure is retried once, then
- * the BIS change is rolled back, so BIS Staff beside Clerk org:admin (who
- * could invite an Owner through Clerk's browser API) is never the state a
- * failure leaves behind, short of the rollback itself failing too, which is
- * logged by id.
+ * org:member). The dangerous disagreement is BIS Staff beside Clerk
+ * org:admin: an org:admin can invite an Owner through Clerk's browser API.
+ * So every failure path must land, if anywhere wrong, on BIS Owner beside
+ * Clerk member, which only costs that person Clerk's own UI. That fixes the
+ * ORDER of each role change (setTeamRoleAction) and why a Clerk timeout is
+ * treated as "may still land" rather than as a refusal.
  */
 
 export type TeamError =
   | "team.full" | "team.accessOff" | "team.lastOwner" | "team.changed"
   | "team.invite.badEmail" | "team.invite.alreadyInvited" | "team.invite.alreadyMember" | "team.invite.failed"
-  | "team.role.failed" | "team.remove.failed" | "team.undo.failed" | "team.revoke.failed";
+  | "team.role.failed" | "team.remove.failed" | "team.undo.failed" | "team.undo.expired" | "team.revoke.failed";
 export type TeamResult = { ok: true } | { ok: false; error: TeamError };
 
 type Account = { orgId: string; accessOn: boolean; language: unknown };
@@ -113,6 +114,20 @@ export async function inviteTeamMemberAction(accountId: string, formData: FormDa
   return invite(accountId, userId, { email, role, language: isPersonLanguage(rawLanguage) ? rawLanguage : null });
 }
 
+/**
+ * Demotion to Staff: Clerk FIRST (to org:member), then the BIS write with
+ * its last-Owner guard. If BIS refuses or fails, Clerk is put back to
+ * org:admin; if THAT fails, BIS Owner beside Clerk member is the safe side,
+ * logged by id. A Clerk demotion that times out may still land later, which
+ * leaves the same safe pair.
+ *
+ * Promotion to Owner: BIS first (no last-Owner risk), then Clerk to
+ * org:admin. If Clerk definitively refuses, Clerk is set back to org:member
+ * (best effort) BEFORE BIS is rolled back; if the set-back fails, BIS is
+ * LEFT at Owner (safe) and logged. If Clerk TIMED OUT, the promotion may
+ * still land after any set-back, so BIS is left at Owner too: rolling it
+ * back could end at BIS Staff beside Clerk admin.
+ */
 export async function setTeamRoleAction(
   accountId: string, userId: string, role: AccountRole,
 ): Promise<TeamResult & { previous?: AccountRole }> {
@@ -123,23 +138,45 @@ export async function setTeamRoleAction(
   if (!member) return { ok: false, error: "team.changed" };
   const previous = member.role;
   const account = await readAccount(db, accountId);
+  const ids = `account ${accountId}, user ${userId}`;
 
-  // BIS first: the last-Owner guard decides.
-  const r = await setAccountMemberRole(db, accountId, userId, role);
+  if (role === "staff") {
+    const demoted = await setOrganizationRole(account.orgId, member.clerkUserId, "staff");
+    if (!demoted.ok) return { ok: false, error: "team.role.failed" };
+    const putClerkBack = async () => {
+      const back = await setOrganizationRole(account.orgId, member.clerkUserId, previous);
+      if (!back.ok) console.error(`team: Clerk role not restored after a refused demotion; BIS ${previous}, Clerk member (${ids}): ${back.code ?? "no code"}`);
+    };
+    let r: Awaited<ReturnType<typeof setAccountMemberRole>>;
+    try {
+      r = await setAccountMemberRole(db, accountId, userId, "staff");
+    } catch (e) {
+      await putClerkBack();
+      throw e;
+    }
+    if (r !== "ok") {
+      await putClerkBack();
+      return { ok: false, error: r === "last_owner" ? "team.lastOwner" : "team.changed" };
+    }
+    revalidateTeam(accountId);
+    return { ok: true, previous };
+  }
+
+  const r = await setAccountMemberRole(db, accountId, userId, "owner");
   if (r === "last_owner") return { ok: false, error: "team.lastOwner" };
   if (r === "not_found") return { ok: false, error: "team.changed" };
-
-  // Then Clerk follows, retried once.
-  let clerk = await setOrganizationRole(account.orgId, member.clerkUserId, role);
-  if (!clerk.ok) clerk = await setOrganizationRole(account.orgId, member.clerkUserId, role);
-  if (!clerk.ok) {
+  const promoted = await setOrganizationRole(account.orgId, member.clerkUserId, "owner");
+  if (!promoted.ok) {
+    const setBack = await setOrganizationRole(account.orgId, member.clerkUserId, previous);
+    if (promoted.code === "timeout" || !setBack.ok) {
+      console.error(`team: promotion left at BIS owner; Clerk ${promoted.code === "timeout" ? "timed out" : "refused and the set-back failed"} (${ids})`);
+      return { ok: false, error: "team.role.failed" };
+    }
     try {
       const back = await setAccountMemberRole(db, accountId, userId, previous);
       if (back !== "ok") throw new Error(`rollback returned ${back}`);
     } catch (e) {
-      console.error(
-        `team: role rollback failed; BIS has ${role} but Clerk kept the role for ${previous} ` +
-        `(account ${accountId}, user ${userId}): ${loggableError(e)}`);
+      console.error(`team: promotion rollback failed; BIS owner, Clerk member (${ids}): ${loggableError(e)}`);
     }
     return { ok: false, error: "team.role.failed" };
   }
@@ -161,50 +198,86 @@ export async function setTeamLanguageAction(
   return { ok: true, previous: member.language };
 }
 
+/**
+ * BIS first (the last-Owner guard), then the Clerk membership. A Clerk 404
+ * already counts as removed (removeFromOrganization). Any other Clerk
+ * failure re-adds the BIS row at its original role. Once both are gone, the
+ * removal is recorded as a system event (lib/team/removal-log.ts): that
+ * record, not the browser, is what the undo restores from. The undo handle
+ * is the user id alone.
+ */
 export async function removeTeamMemberAction(
   accountId: string, userId: string,
-): Promise<TeamResult & { undo?: { clerkUserId: string; role: AccountRole } }> {
-  await requireAccountOwner(accountId);
+): Promise<TeamResult & { undo?: { userId: string } }> {
+  const { userId: callerId } = await requireAccountOwner(accountId);
   if (!isTeamUserId(userId)) return { ok: false, error: "team.changed" };
   const db = serviceDb();
   const member = await findMember(db, accountId, userId);
   if (!member) return { ok: false, error: "team.changed" };
   const account = await readAccount(db, accountId);
+  const ids = `account ${accountId}, user ${userId}`;
 
-  // BIS first: the last-Owner guard decides.
   const r = await removeAccountMember(db, accountId, userId);
   if (r === "last_owner") return { ok: false, error: "team.lastOwner" };
   if (r === "not_found") return { ok: false, error: "team.changed" };
 
   const clerk = await removeFromOrganization(account.orgId, member.clerkUserId);
   if (!clerk.ok) {
-    await addAccountMember(db, { accountId, userId, role: member.role });
+    try {
+      await addAccountMember(db, { accountId, userId, role: member.role });
+    } catch (e) {
+      console.error(`team: remove rollback failed; Clerk still has the member, BIS does not (${ids}): ${loggableError(e)}`);
+    }
     return { ok: false, error: "team.remove.failed" };
   }
   revalidateTeam(accountId);
-  return { ok: true, undo: { clerkUserId: member.clerkUserId, role: member.role } };
+  try {
+    await recordRemoval(db, accountId, callerId,
+      { userId, clerkUserId: member.clerkUserId, role: member.role, language: member.language });
+  } catch (e) {
+    console.error(`team: removal not recorded, so it cannot be undone (${ids}): ${loggableError(e)}`);
+    return { ok: true };
+  }
+  return { ok: true, undo: { userId } };
 }
 
 /**
- * Clerk first (at the Clerk role matching `role`), then the BIS membership.
- * The person's `users` row, and with it their language, was never deleted,
- * so the language comes back as it was. Refused for anyone BIS has never
- * stored.
+ * Restores exactly what the newest system-written removal of this person
+ * from THIS account says (Clerk id, role, language), and only within
+ * UNDO_WINDOW_MS of it. A person never removed from this account is refused
+ * before Clerk is asked. Clerk first, at the matching Clerk role, then the
+ * BIS membership, set explicitly to the event's role when a row already
+ * existed (the webhook can get there first). A double-clicked undo (Clerk:
+ * already a member, BIS already at that role) is a success.
  */
-export async function undoRemoveTeamMemberAction(
-  accountId: string, clerkUserId: string, role: AccountRole,
-): Promise<TeamResult> {
+export async function undoRemoveTeamMemberAction(accountId: string, userId: string): Promise<TeamResult> {
   await requireAccountOwner(accountId);
-  if (!isClerkUserId(clerkUserId) || !isAccountRole(role)) return { ok: false, error: "team.undo.failed" };
+  if (!isTeamUserId(userId)) return { ok: false, error: "team.undo.failed" };
   const db = serviceDb();
-  const { data: user, error } = await db.from("users").select("id").eq("clerk_user_id", clerkUserId).maybeSingle();
-  if (error) throw new Error(`team undo: user lookup failed: ${error.message}`);
-  if (!user) return { ok: false, error: "team.undo.failed" };
+  const removed = await latestRemoval(db, accountId, userId);
+  if (!removed) return { ok: false, error: "team.undo.failed" };
+  if (!undoStillOpen(removed.removedAt, Date.now())) return { ok: false, error: "team.undo.expired" };
   const account = await readAccount(db, accountId);
+  const ids = `account ${accountId}, user ${userId}`;
 
-  const clerk = await restoreToOrganization(account.orgId, clerkUserId, role);
-  if (!clerk.ok) return { ok: false, error: "team.undo.failed" };
-  await addAccountMember(db, { accountId, userId: (user as { id: string }).id, role });
+  const clerk = await restoreToOrganization(account.orgId, removed.clerkUserId, removed.role);
+  if (!clerk.ok) {
+    if (clerk.code === "already_a_member_in_organization" && (await findMember(db, accountId, userId))?.role === removed.role) {
+      return { ok: true };
+    }
+    return { ok: false, error: "team.undo.failed" };
+  }
+  try {
+    const added = await addAccountMember(db, { accountId, userId, role: removed.role });
+    if (added === "existed") {
+      const set = await setAccountMemberRole(db, accountId, userId, removed.role);
+      if (set !== "ok") console.error(`team undo: existing row not set to ${removed.role}: ${set} (${ids})`);
+    }
+    await setMemberLanguage(db, accountId, userId, removed.language);
+  } catch (e) {
+    console.error(`team undo: Clerk restored the member but the BIS write failed (${ids}): ${loggableError(e)}`);
+    return { ok: false, error: "team.undo.failed" };
+  }
   revalidateTeam(accountId);
   return { ok: true };
 }

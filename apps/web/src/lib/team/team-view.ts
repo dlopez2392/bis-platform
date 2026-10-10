@@ -53,10 +53,23 @@ export function clerkRoleFor(role: AccountRole): "org:admin" | "org:member" {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** A BIS `users.id`. */
 export const isTeamUserId = (v: unknown): v is string => typeof v === "string" && UUID.test(v);
-/** A Clerk organisation invitation id. The `orginv_` prefix is an ASSUMPTION about Clerk's id format, pinned in team-view.test.ts. */
+/** A Clerk organisation invitation id. Verified: orginv_ prefix (dev instance, 2026-10-10). Pinned in team-view.test.ts. */
 export const isInvitationId = (v: unknown): v is string => typeof v === "string" && /^orginv_[A-Za-z0-9]+$/.test(v);
 /** A Clerk user id. */
 export const isClerkUserId = (v: unknown): v is string => typeof v === "string" && /^user_[A-Za-z0-9]+$/.test(v);
 
 export const isAccountRole = (v: unknown): v is AccountRole => v === "owner" || v === "staff";
 export const isPersonLanguage = (v: unknown): v is PersonLanguage => v === "en" || v === "es";
+
+/**
+ * How long after a removal its undo stays open. The undo toast is gone well
+ * before this; the window bounds how long a removal event (lib/team/removal-log.ts)
+ * can re-admit anyone.
+ */
+export const UNDO_WINDOW_MS = 2 * 60 * 1000;
+
+/** `removedAt` is the event's database timestamp; `now` is epoch ms. An unparseable stamp is closed. */
+export function undoStillOpen(removedAt: string, now: number): boolean {
+  const t = Date.parse(removedAt);
+  return Number.isFinite(t) && now - t <= UNDO_WINDOW_MS;
+}

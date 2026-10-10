@@ -5,6 +5,7 @@ import {
 } from "@bis/db";
 import { loggableError } from "@/lib/loggable-error";
 import { liveClerkTeamPort } from "./clerk-team";
+import { withTimeout } from "./with-timeout";
 
 /**
  * The per-request fallback (spec §6): the caller's role in this account,
@@ -49,14 +50,6 @@ export function readStoredRoleWith(db: () => SupabaseClient, accountId: string, 
     console.error(`ensureAccountRole: could not read the stored role for account ${accountId}: ${loggableError(e)}`);
     return STORED_READ_FAILED;
   });
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
-  });
-  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 /** The testable core. `stored`, when given, is a read already in flight (see readStoredRole). */

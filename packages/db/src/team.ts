@@ -142,9 +142,12 @@ export async function listAccountTeam(db: SupabaseClient, accountId: string): Pr
  * How long before a membership's creation its invitation may have been
  * accepted and still count as THAT membership's invitation. Clerk stamps the
  * acceptance (the invitation's `updatedAt`) and the membership's `createdAt`
- * in the same flow, but not in one transaction, so allow for skew.
+ * in the same flow, but not in one transaction, so allow for skew. Observed
+ * on the Clerk development instance (2026-10-10): updated_at = membership
+ * created_at + 19 ms. 60 s is ample for that, and narrow enough that an
+ * invitation accepted for an EARLIER membership cannot fall inside it.
  */
-export const INVITE_ACCEPT_ALLOWANCE_MS = 10 * 60 * 1000;
+export const INVITE_ACCEPT_ALLOWANCE_MS = 60 * 1000;
 
 /** What reconcile needs from Clerk. The web app supplies a clerkClient adapter; tests supply a fake. */
 export interface ClerkTeamPort {
