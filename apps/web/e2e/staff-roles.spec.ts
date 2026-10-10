@@ -1,7 +1,8 @@
 import { test, expect, type Page } from "./fixtures/test";
 import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
-import { serviceDb, setClientAccess, readAccountRole } from "@bis/db";
+import { clerkClient } from "@clerk/nextjs/server";
+import { serviceDb, setClientAccess, readAccountRole, addAccountMember, setAccountMemberRole } from "@bis/db";
 import { mintClientToken } from "./support";
 import { m } from "../src/lib/messages";
 
@@ -226,100 +227,176 @@ test.describe("the Owner runs the team", () => {
   });
 
   test("invite, promote with Undo, revoke with Undo, remove with Undo — the 5-seat cap counts exactly 3", async ({ page }) => {
-    const { accountId, staffClerkUserId } = fixture();
+    const { accountId, clerkOrgId, staffClerkUserId } = fixture();
     const db = serviceDb();
-    await page.goto(`/dashboard/accounts/${accountId}/team`);
-
-    const staffRow = page.locator("[data-team-row]").filter({ hasText: "E2E Staff" });
-    await expect(staffRow).toBeVisible();
-    const staffRoleBox = staffRow.getByRole("combobox", { name: "Role for E2E Staff" });
-
-    // --- invite, as Staff (the dialog's own default role) --------------
+    // Named before the try so the finally below can always find it, win or
+    // lose — the same reason auth.setup.ts records a fixture id before the
+    // call that might fail on it.
     const stamp = Date.now();
     // +clerk_test on the reserved example.com domain, belt-and-suspenders:
     // example.com never resolves to a mailbox regardless, and +clerk_test is
     // Clerk's own documented test-mode convention — either one alone is
     // enough for no real email to go out.
     const inviteEmail = `e2e-invite-${stamp}+clerk_test@example.com`;
-    await page.getByRole("button", { name: m["team.invite"] }).click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByLabel(m["team.invite.email"]).fill(inviteEmail);
-    await dialog.getByRole("button", { name: m["team.invite.send"] }).click();
-    // Mutation: a refused invite (a stale `full` read, a bad email guard
-    // rejecting `+`) leaves the dialog open with its own Notice — the dialog
-    // would still be present here instead of closed.
-    await expect(dialog).toHaveCount(0);
 
-    const inviteRow = page.locator("[data-team-invite]").filter({ hasText: inviteEmail });
-    await expect(inviteRow).toBeVisible();
-    await expect(inviteRow.getByText(m["team.status.invited"])).toBeVisible();
-    await expect(inviteRow.getByText(m["team.role.staff"])).toBeVisible();
+    try {
+      await page.goto(`/dashboard/accounts/${accountId}/team`);
 
-    // --- promote Staff to Owner, then Undo ------------------------------
-    await staffRoleBox.click();
-    await page.getByRole("option", { name: m["team.role.owner"], exact: true }).click();
-    const promotedToast = toastWithText(
-      page, fillTemplate(m["team.role.changed"], { name: "E2E Staff", role: m["team.role.owner"] }),
-    );
-    await expect(promotedToast).toBeVisible();
-    await promotedToast.hover();
-    await promotedToast.getByRole("button", { name: m["common.undo"] }).click();
-    // Mutation: an Undo that calls setRole with the WRONG previous role (or
-    // none at all) leaves the combobox reading "Owner" here, and the
-    // read-back below would answer "owner" instead of "staff".
-    await expect(staffRoleBox).toContainText(m["team.role.staff"]);
-    expect(await readAccountRole(db, accountId, staffClerkUserId)).toBe("staff");
+      const staffRow = page.locator("[data-team-row]").filter({ hasText: "E2E Staff" });
+      await expect(staffRow).toBeVisible();
+      const staffRoleBox = staffRow.getByRole("combobox", { name: "Role for E2E Staff" });
 
-    // --- revoke the invitation, then Undo --------------------------------
-    // Not matched by m["team.revoke"] ("Cancel invitation"): the row's own
-    // aria-label is `team.revokeFor` ("Cancel the invitation for {email}"),
-    // which overrides the accessible name and does not contain that literal
-    // substring. The row holds exactly one button, so it needs no name.
-    await inviteRow.getByRole("button").click();
-    const revokedToast = toastWithText(
-      page, fillTemplate(m["team.revoked"], { email: inviteEmail }),
-    );
-    await expect(revokedToast).toBeVisible();
-    // Mutation: an action that revokes but never revalidates leaves this row
-    // visible here instead of gone.
-    await expect(page.locator("[data-team-invite]").filter({ hasText: inviteEmail })).toHaveCount(0);
-    await revokedToast.hover();
-    await revokedToast.getByRole("button", { name: m["common.undo"] }).click();
-    await expect(toastWithText(
-      page, fillTemplate(m["team.undone.revoke"], { email: inviteEmail }),
-    )).toBeVisible();
-    // Mutation: an undo that re-invites with the wrong role/language (or
-    // fails silently) leaves the row absent here.
-    await expect(page.locator("[data-team-invite]").filter({ hasText: inviteEmail })).toBeVisible();
+      // --- invite, as Staff (the dialog's own default role) --------------
+      await page.getByRole("button", { name: m["team.invite"] }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByLabel(m["team.invite.email"]).fill(inviteEmail);
+      await dialog.getByRole("button", { name: m["team.invite.send"] }).click();
+      // Mutation: a refused invite (a stale `full` read, a bad email guard
+      // rejecting `+`) leaves the dialog open with its own Notice — the dialog
+      // would still be present here instead of closed.
+      await expect(dialog).toHaveCount(0);
 
-    // --- remove the Staff person, then Undo ------------------------------
-    await staffRow.getByRole("button", { name: m["team.remove"] }).click();
-    const removedToast = toastWithText(page, fillTemplate(m["team.removed"], { name: "E2E Staff" }));
-    await expect(removedToast).toBeVisible();
-    // Mutation: a remove that only revokes Clerk membership but leaves the
-    // BIS row (or the reverse) would still show SOME row here — this is the
-    // state where neither should.
-    await expect(page.locator("[data-team-row]").filter({ hasText: "E2E Staff" })).toHaveCount(0);
-    expect(await readAccountRole(db, accountId, staffClerkUserId)).toBeNull();
-    await removedToast.hover();
-    await removedToast.getByRole("button", { name: m["common.undo"] }).click();
-    await expect(toastWithText(page, fillTemplate(m["team.undone.remove"], { name: "E2E Staff" }))).toBeVisible();
-    // Mutation: an undo that restores the WRONG role (removal-log.ts's
-    // `recordRemoval` writing the post-promotion role instead of the one at
-    // removal time) answers "owner" here instead of "staff".
-    await expect(page.locator("[data-team-row]").filter({ hasText: "E2E Staff" })).toBeVisible();
-    expect(await readAccountRole(db, accountId, staffClerkUserId)).toBe("staff");
+      const inviteRow = page.locator("[data-team-invite]").filter({ hasText: inviteEmail });
+      await expect(inviteRow).toBeVisible();
+      await expect(inviteRow.getByText(m["team.status.invited"])).toBeVisible();
+      await expect(inviteRow.getByText(m["team.role.staff"])).toBeVisible();
 
-    // --- the 5-seat cap: Owner + Staff + one invitation is 3 -------------
-    // The agency setup user never joins this org at all (plan deviation 6:
-    // the agency is never a client membership), so it can only show up here
-    // as a THIRD stored team row — this is the only place that would be
-    // visible if it ever did.
-    await expect(page.locator("[data-team-row]")).toHaveCount(2);
-    await expect(page.locator("[data-team-invite]")).toHaveCount(1);
-    // Mutation: roomLeft() counting members OR pending but not both reads
-    // "Room for 3 more people" (members only) or a cap-sized number
-    // (pending only) instead of exactly 2 (5 - 2 - 1).
-    await expect(page.getByText(fillTemplate(m["team.room.many"], { count: "2" }))).toBeVisible();
+      // --- promote Staff to Owner, then Undo ------------------------------
+      await staffRoleBox.click();
+      await page.getByRole("option", { name: m["team.role.owner"], exact: true }).click();
+      const promotedToast = toastWithText(
+        page, fillTemplate(m["team.role.changed"], { name: "E2E Staff", role: m["team.role.owner"] }),
+      );
+      await expect(promotedToast).toBeVisible();
+      await promotedToast.hover();
+      await promotedToast.getByRole("button", { name: m["common.undo"] }).click();
+      // Mutation: an Undo that calls setRole with the WRONG previous role (or
+      // none at all) leaves the combobox reading "Owner" here, and the
+      // read-back below would answer "owner" instead of "staff".
+      await expect(staffRoleBox).toContainText(m["team.role.staff"]);
+      expect(await readAccountRole(db, accountId, staffClerkUserId)).toBe("staff");
+
+      // --- revoke the invitation, then Undo --------------------------------
+      // Not matched by m["team.revoke"] ("Cancel invitation"): the row's own
+      // aria-label is `team.revokeFor` ("Cancel the invitation for {email}"),
+      // which overrides the accessible name and does not contain that literal
+      // substring. The row holds exactly one button, so it needs no name.
+      await inviteRow.getByRole("button").click();
+      const revokedToast = toastWithText(
+        page, fillTemplate(m["team.revoked"], { email: inviteEmail }),
+      );
+      await expect(revokedToast).toBeVisible();
+      // Mutation: an action that revokes but never revalidates leaves this row
+      // visible here instead of gone.
+      await expect(page.locator("[data-team-invite]").filter({ hasText: inviteEmail })).toHaveCount(0);
+      await revokedToast.hover();
+      await revokedToast.getByRole("button", { name: m["common.undo"] }).click();
+      await expect(toastWithText(
+        page, fillTemplate(m["team.undone.revoke"], { email: inviteEmail }),
+      )).toBeVisible();
+      // Mutation: an undo that re-invites with the wrong role/language (or
+      // fails silently) leaves the row absent here.
+      await expect(page.locator("[data-team-invite]").filter({ hasText: inviteEmail })).toBeVisible();
+
+      // --- remove the Staff person, then Undo ------------------------------
+      await staffRow.getByRole("button", { name: m["team.remove"] }).click();
+      const removedToast = toastWithText(page, fillTemplate(m["team.removed"], { name: "E2E Staff" }));
+      await expect(removedToast).toBeVisible();
+      // Mutation: a remove that only revokes Clerk membership but leaves the
+      // BIS row (or the reverse) would still show SOME row here — this is the
+      // state where neither should.
+      await expect(page.locator("[data-team-row]").filter({ hasText: "E2E Staff" })).toHaveCount(0);
+      expect(await readAccountRole(db, accountId, staffClerkUserId)).toBeNull();
+      await removedToast.hover();
+      await removedToast.getByRole("button", { name: m["common.undo"] }).click();
+      await expect(toastWithText(page, fillTemplate(m["team.undone.remove"], { name: "E2E Staff" }))).toBeVisible();
+      // Mutation: an undo that restores the WRONG role (removal-log.ts's
+      // `recordRemoval` writing the post-promotion role instead of the one at
+      // removal time) answers "owner" here instead of "staff".
+      await expect(page.locator("[data-team-row]").filter({ hasText: "E2E Staff" })).toBeVisible();
+      expect(await readAccountRole(db, accountId, staffClerkUserId)).toBe("staff");
+
+      // --- the 5-seat cap: Owner + Staff + one invitation is 3 -------------
+      // The agency setup user never joins this org at all (plan deviation 6:
+      // the agency is never a client membership), so it can only show up here
+      // as a THIRD stored team row — this is the only place that would be
+      // visible if it ever did.
+      await expect(page.locator("[data-team-row]")).toHaveCount(2);
+      await expect(page.locator("[data-team-invite]")).toHaveCount(1);
+      // Mutation: roomLeft() counting members OR pending but not both reads
+      // "Room for 3 more people" (members only) or a cap-sized number
+      // (pending only) instead of exactly 2 (5 - 2 - 1).
+      await expect(page.getByText(fillTemplate(m["team.room.many"], { count: "2" }))).toBeVisible();
+    } finally {
+      // A failure at ANY step above must never leave this run's fixture with
+      // a dangling invitation or a Staff login stuck at Owner (or removed
+      // outright) for every spec after this one — the same reasoning test
+      // 3's own `finally` carries, widened to two systems and three possible
+      // mid-sequence states instead of one row. Each half is independently
+      // wrapped and only logged, never thrown: cleanup must not become a new
+      // way for this run to fail, and a step that already succeeded (the
+      // common, green case) is a safe no-op here, not an error.
+      const clerk = await clerkClient();
+
+      // 1. The invitation, if one is still pending under this exact email —
+      // idempotent: a prior successful revoke (undone or not) leaves nothing
+      // for this to find.
+      try {
+        const pending = await clerk.organizations.getOrganizationInvitationList({
+          organizationId: clerkOrgId, status: ["pending"], limit: 500,
+        });
+        const leaked = pending.data.find((i) => i.emailAddress.toLowerCase() === inviteEmail.toLowerCase());
+        if (leaked) {
+          await clerk.organizations.revokeOrganizationInvitation({
+            organizationId: clerkOrgId, invitationId: leaked.id,
+          });
+        }
+      } catch (e) {
+        console.error(`staff-roles cleanup: could not confirm/revoke the invitation ${inviteEmail}: ${String(e)}`);
+      }
+
+      // 2. The Staff login's Clerk membership, forced to org:member —
+      // idempotent when already there, and RESTORED first (createOrganizationMembership)
+      // if a mid-sequence failure left the remove step's own Clerk delete
+      // unpaired with its BIS-side undo.
+      try {
+        await clerk.organizations.updateOrganizationMembership({
+          organizationId: clerkOrgId, userId: staffClerkUserId, role: "org:member",
+        });
+      } catch {
+        try {
+          await clerk.organizations.createOrganizationMembership({
+            organizationId: clerkOrgId, userId: staffClerkUserId, role: "org:member",
+          });
+        } catch (e) {
+          console.error(`staff-roles cleanup: could not restore the Clerk membership for ${staffClerkUserId}: ${String(e)}`);
+        }
+      }
+
+      // 3. The same thing on the BIS side: restore the membership row first
+      // if removal ever landed without its own undo, then force the role to
+      // "staff" if it is anything else (e.g. a promotion whose Undo never
+      // ran). readAccountRole/addAccountMember/setAccountMemberRole all read
+      // and write by account+CLERK-id or account+BIS-id respectively, so the
+      // BIS users.id is looked up once here rather than assumed.
+      try {
+        const { data: user, error } = await db
+          .from("users").select("id").eq("clerk_user_id", staffClerkUserId).maybeSingle();
+        if (error) throw new Error(error.message);
+        if (user) {
+          const bisUserId = (user as { id: string }).id;
+          const current = await readAccountRole(db, accountId, staffClerkUserId);
+          if (current === null) {
+            await addAccountMember(db, { accountId, userId: bisUserId, role: "staff" });
+          } else if (current !== "staff") {
+            await setAccountMemberRole(db, accountId, bisUserId, "staff");
+          }
+        } else {
+          console.error(`staff-roles cleanup: no BIS users row for Clerk user ${staffClerkUserId} — cannot restore its membership`);
+        }
+      } catch (e) {
+        console.error(`staff-roles cleanup: could not force the BIS membership back to staff: ${String(e)}`);
+      }
+    }
   });
 });
