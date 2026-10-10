@@ -9,8 +9,10 @@ describe("pseudoLocale", () => {
     expect(out.endsWith("]")).toBe(true);
   });
 
-  it("accents every vowel so font-coverage gaps are visible (mutation: skip the accent substitution → this test's /[ÁÉÍÓÚ]/ match FAILS)", () => {
-    expect(pseudoLocale("Dashboard")).toMatch(/[ÁÉÍÓÚáéíóú]/);
+  it("accents every vowel, both cases, so font-coverage gaps are visible (mutation: accent only a → FAILS)", () => {
+    const out = pseudoLocale("aeiou AEIOU");
+    // All vowels should be accented: this exact substring must be present
+    expect(out).toContain("áéíóú ÁÉÍÓÚ");
   });
 
   it("never mutates a {placeholder} token's own characters, so t()'s interpolate() can still find and replace it verbatim (mutation: accent vowels across the whole string including inside the braces → the literal substring '{count}' is gone, replaced by '{cóúnt}', FAILING this assertion)", () => {
