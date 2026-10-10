@@ -984,6 +984,12 @@ export const m = {
   "notFound.back": "Back to dashboard",
 
   "theme.toggle": "Toggle light and dark mode",
+  // Mis preferencias (F-096, D5): the toggle applies the new mode at once and
+  // saves it in the background; this is shown only if that background save
+  // fails, so the chosen mode keeps working this visit but may not survive a
+  // reload.
+  "theme.saveFailed": "Couldn't save your theme. It may switch back when the page reloads.",
+  "theme.saveFailed.es": "No se pudo guardar tu tema. Puede volver al anterior al recargar la página.",
   "pipeline.dropHere": "Drop an opportunity here",
 
   "compose.note": "Note",

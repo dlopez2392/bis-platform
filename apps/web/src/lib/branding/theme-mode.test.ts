@@ -5,6 +5,7 @@ import {
   readCookieValue,
   resolveThemeMode,
   THEME_COOKIE,
+  userThemeSyncPlan,
 } from "./theme-mode";
 
 describe("resolveThemeMode", () => {
@@ -143,5 +144,36 @@ describe("cookieModeToMigrate", () => {
   it("does nothing for a missing or unusable stored value", () => {
     expect(cookieModeToMigrate(undefined, null)).toBeNull();
     expect(cookieModeToMigrate(undefined, "system")).toBeNull();
+  });
+});
+
+describe("a person's own theme outranks everything (mis preferencias D5)", () => {
+  it("light/dark win over the cookie, the brand and the role (mutation: check userTheme after the cookie -> FAILS)", () => {
+    expect(resolveThemeMode("dark", "dark", true, "light")).toEqual({ serverMode: "light", providerDefault: "light" });
+    expect(resolveThemeMode("light", "follow", false, "dark")).toEqual({ serverMode: "dark", providerDefault: "dark" });
+  });
+  it("system follows the device: provider 'system', server paints the OS snapshot cookie (mutation: providerDefault = cookie -> FAILS)", () => {
+    expect(resolveThemeMode("dark", null, false, "system")).toEqual({ serverMode: "dark", providerDefault: "system" });
+  });
+  it("system with no snapshot yet paints the role default (mutation: always light -> FAILS for the operator)", () => {
+    expect(resolveThemeMode(undefined, null, true, "system")).toEqual({ serverMode: "dark", providerDefault: "system" });
+    expect(resolveThemeMode(undefined, null, false, "system")).toEqual({ serverMode: "light", providerDefault: "system" });
+  });
+  it("NULL leaves today's chain untouched (mutation: treat null as 'system' -> FAILS)", () => {
+    expect(resolveThemeMode("light", null, true, null)).toEqual({ serverMode: "light", providerDefault: "light" });
+    expect(resolveThemeMode(undefined, null, true, null)).toEqual({ serverMode: "dark", providerDefault: "dark" });
+  });
+});
+
+describe("userThemeSyncPlan", () => {
+  it("adopts the stored theme when next-themes disagrees (another device chose it) (mutation: never setTheme -> FAILS)", () => {
+    expect(userThemeSyncPlan("light", "dark", "light")).toEqual({ setTheme: "light", writeCookie: null, skipMigration: true });
+  });
+  it("writes the cookie for light/dark when it differs, never for system (mutation: write 'system' into the cookie -> FAILS)", () => {
+    expect(userThemeSyncPlan("dark", "dark", "light").writeCookie).toBe("dark");
+    expect(userThemeSyncPlan("system", "system", undefined).writeCookie).toBeNull();
+  });
+  it("does nothing new when there is no stored choice (mutation: skip the migration for everyone -> FAILS)", () => {
+    expect(userThemeSyncPlan(null, "dark", undefined)).toEqual({ setTheme: null, writeCookie: null, skipMigration: false });
   });
 });

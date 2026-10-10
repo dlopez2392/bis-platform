@@ -3,11 +3,13 @@
 import { useEffect } from "react";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
+import type { PersonTheme } from "@bis/db";
 import {
   cookieModeToMigrate,
   cookieModeToPersist,
   readCookieValue,
   THEME_COOKIE,
+  userThemeSyncPlan,
 } from "@/lib/branding/theme-mode";
 
 /**
@@ -38,13 +40,28 @@ import {
  * effect sets no state, which keeps it clear of
  * react-hooks/set-state-in-effect, the rule that shaped the toggle's icon
  * handling in PR #2.
+ *
+ * Mis preferencias (F-096, D5): `userTheme`, the signed-in person's own
+ * saved choice, is resolved first via `userThemeSyncPlan` and takes
+ * priority over the brand_mode-driven logic below -- a person who has made
+ * a deliberate choice is never subject to the tenant-follow migration, which
+ * exists only to reconcile a tenant default with next-themes' own local
+ * state. `plan.skipMigration` is true exactly when `userTheme` is non-null,
+ * so the old branch runs unchanged for everyone else.
  */
-export function ThemeCookieSync() {
-  const { theme, resolvedTheme } = useTheme();
+export function ThemeCookieSync({ userTheme = null }: { userTheme?: PersonTheme | null }) {
+  const { theme, resolvedTheme, setTheme } = useTheme();
   const router = useRouter();
 
   useEffect(() => {
     const existing = readCookieValue(document.cookie, THEME_COOKIE);
+
+    const plan = userThemeSyncPlan(userTheme, theme, existing);
+    if (plan.setTheme) setTheme(plan.setTheme);
+    if (plan.writeCookie) {
+      document.cookie = `${THEME_COOKIE}=${plan.writeCookie}; path=/; max-age=31536000; samesite=lax`;
+    }
+    if (plan.skipMigration) return;
 
     // One-time migration, checked first. Before this component existed the
     // toggle only ever called setTheme -- no cookie -- so every existing
@@ -73,7 +90,7 @@ export function ThemeCookieSync() {
     if (!value || value === existing) return;
     document.cookie = `${THEME_COOKIE}=${value}; path=/; max-age=31536000; samesite=lax`;
     router.refresh();
-  }, [theme, resolvedTheme, router]);
+  }, [theme, resolvedTheme, userTheme, router, setTheme]);
 
   return null;
 }

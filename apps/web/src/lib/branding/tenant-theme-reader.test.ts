@@ -72,4 +72,16 @@ describe("pickRequestThemeMode", () => {
       providerDefault: "light",
     });
   });
+
+  // Mis preferencias (D5): a person's own stored theme outranks the cookie,
+  // the tenant's brand_mode AND the operator default — all three are set up
+  // to disagree with it here on purpose (mutation: drop the fourth argument
+  // on the way to resolveThemeMode -> FAILS, because the operator default of
+  // "dark" would win instead).
+  it("lets a person's own stored theme win over the tenant mode, the cookie and the operator default", () => {
+    expect(pickRequestThemeMode("dark", inputsWithMode("dark"), true, "light")).toEqual({
+      serverMode: "light",
+      providerDefault: "light",
+    });
+  });
 });

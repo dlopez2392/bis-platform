@@ -14,7 +14,11 @@ import { toggleTheme } from "./theme-toggle";
  * command-palette.tsx (hook-heavy client components with no render test in
  * this repo), this function takes its DOM dependency as `document.cookie`
  * alone and its side effects as plain injected callbacks, so a stubbed
- * `document` and two `vi.fn()`s exercise the real code path.
+ * `document` and four `vi.fn()`s exercise the real code path.
+ *
+ * Mis preferencias (D5): `persist`/`onPersistFailed` always resolve `{ ok:
+ * true }` in the first two tests below, so they never fire `onPersistFailed`
+ * and leave the pre-existing cookie/setTheme/refresh assertions untouched.
  */
 describe("toggleTheme", () => {
   beforeEach(() => {
@@ -24,8 +28,10 @@ describe("toggleTheme", () => {
   it("flips dark to light: writes the bis-theme cookie, calls setTheme, and refreshes (mutation: drop the cookie write or the refresh → FAILS)", () => {
     const setTheme = vi.fn();
     const refresh = vi.fn();
+    const persist = vi.fn(async () => ({ ok: true }));
+    const onPersistFailed = vi.fn();
 
-    toggleTheme("dark", setTheme, refresh);
+    toggleTheme("dark", setTheme, refresh, persist, onPersistFailed);
 
     expect(document.cookie).toBe(`${THEME_COOKIE}=light; path=/; max-age=31536000; samesite=lax`);
     expect(setTheme).toHaveBeenCalledExactlyOnceWith("light");
@@ -35,12 +41,22 @@ describe("toggleTheme", () => {
   it("flips light (or next-themes' resolvedTheme being anything but 'dark') to dark", () => {
     const setTheme = vi.fn();
     const refresh = vi.fn();
+    const persist = vi.fn(async () => ({ ok: true }));
+    const onPersistFailed = vi.fn();
 
-    toggleTheme("light", setTheme, refresh);
+    toggleTheme("light", setTheme, refresh, persist, onPersistFailed);
 
     expect(document.cookie).toContain(`${THEME_COOKIE}=dark`);
     expect(setTheme).toHaveBeenCalledExactlyOnceWith("dark");
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists the new mode and reports a failed save (mutation: drop the persist call -> FAILS)", async () => {
+    const persist = vi.fn(async () => ({ ok: false }));
+    const failed = vi.fn();
+    toggleTheme("dark", vi.fn(), vi.fn(), persist, failed);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(persist).toHaveBeenCalledWith("light");
   });
 
   // Review round: this test's NAME used to claim the cookie is written
@@ -59,8 +75,10 @@ describe("toggleTheme", () => {
     });
     const setTheme = vi.fn(() => calls.push("setTheme"));
     const refresh = vi.fn(() => calls.push("refresh"));
+    const persist = vi.fn(async () => ({ ok: true }));
+    const onPersistFailed = vi.fn();
 
-    toggleTheme("dark", setTheme, refresh);
+    toggleTheme("dark", setTheme, refresh, persist, onPersistFailed);
 
     expect(calls).toEqual(["cookie", "setTheme", "refresh"]);
   });

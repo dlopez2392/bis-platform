@@ -50,8 +50,15 @@ describe("CommandPalette — 'Toggle theme' shares theme-toggle.tsx's toggleThem
   });
 
   it("runEntry's action branch calls it with the cookie-write-and-refresh behaviour, never a bare setTheme call (mutation: revert to `setTheme(resolvedTheme === \"dark\" ? \"light\" : \"dark\")` → FAILS)", () => {
-    expect(src).toContain("toggleTheme(resolvedTheme, setTheme, () => router.refresh());");
+    expect(src).toMatch(/toggleTheme\(\s*resolvedTheme,\s*setTheme,\s*\(\) => router\.refresh\(\),/);
     expect(src).not.toMatch(/setTheme\(resolvedTheme === "dark" \? "light" : "dark"\)/);
+  });
+
+  // Mis preferencias (D5): the palette's toggle shares the SAME
+  // persist/onPersistFailed pair as the topbar's own button (theme-toggle.tsx),
+  // not a third, incomplete copy of toggleTheme's first three arguments.
+  it("also persists the choice and reports a failed save with the same toast as the topbar button (mutation: drop the persist or onPersistFailed argument → FAILS)", () => {
+    expect(src).toMatch(/toggleTheme\(\s*resolvedTheme,\s*setTheme,\s*\(\) => router\.refresh\(\),\s*setMyThemeAction,\s*\(\) => toast\.error\(t\(m, "theme\.saveFailed", locale\)\),?\s*\)/);
   });
 });
 

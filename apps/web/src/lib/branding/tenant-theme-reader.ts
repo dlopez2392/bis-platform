@@ -11,8 +11,9 @@ import { cache } from "react";
 import { unstable_rethrow } from "next/navigation";
 import { cookies } from "next/headers";
 import { serviceDb, getBranding } from "@bis/db";
-import type { Branding } from "@bis/db";
+import type { Branding, PersonTheme } from "@bis/db";
 import { resolveClientAccessState } from "@/lib/auth";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { themeInputsFrom } from "./tenant-theme";
 import { resolveThemeMode, THEME_COOKIE } from "./theme-mode";
 import type { ThemeInputs } from "./theme";
@@ -101,8 +102,13 @@ export function pickRequestThemeMode(
   // Owner decision, 2026-10-06: operators default to dark, client-role
   // users keep light -- see resolveThemeMode's own doc comment.
   isOperator = false,
+  // Mis preferencias (F-096, D5): the person's own saved theme, read from
+  // users.theme by getPersonPrefs() below and threaded through unchanged --
+  // see resolveThemeMode's own doc comment for why this outranks everything
+  // else in that function.
+  userTheme: PersonTheme | null = null,
 ): { serverMode: "light" | "dark"; providerDefault: "light" | "dark" | "system" } {
-  return resolveThemeMode(cookie, inputs.mode, isOperator);
+  return resolveThemeMode(cookie, inputs.mode, isOperator, userTheme);
 }
 
 /**
@@ -130,6 +136,10 @@ export type RequestTheme = {
   inputs: ThemeInputs;
   serverMode: "light" | "dark";
   providerDefault: "light" | "dark" | "system";
+  /** Mis preferencias (F-096, D5): the signed-in person's own saved theme,
+   *  so the root layout can hand it to ThemeProvider/ThemeCookieSync, which
+   *  need it to keep the browser in step with no flash. */
+  userTheme: PersonTheme | null;
 };
 
 /**
@@ -169,12 +179,19 @@ export const getRequestTheme = cache(async (): Promise<RequestTheme> => {
   // green build: it worked by accident, not by contract.
   //
   // Nothing here needs catching. getTenantThemeInputs already degrades to
-  // "no tenant" on a real fault of its own and re-throws Next's signals, and
-  // a cookie read has no failure mode of its own worth a fallback.
-  const [cookieStore, inputs, isOperator] = await Promise.all([
+  // "no tenant" on a real fault of its own and re-throws Next's signals, a
+  // cookie read has no failure mode of its own worth a fallback, and
+  // getPersonPrefs() (mis preferencias, F-096) never rejects either --
+  // same posture, defaulting to NO_PREFS on any read fault of its own.
+  const [cookieStore, inputs, isOperator, prefs] = await Promise.all([
     cookies(),
     getTenantThemeInputs(),
     getIsOperator(),
+    getPersonPrefs(),
   ]);
-  return { inputs, ...pickRequestThemeMode(cookieStore.get(THEME_COOKIE)?.value, inputs, isOperator) };
+  return {
+    inputs,
+    userTheme: prefs.theme,
+    ...pickRequestThemeMode(cookieStore.get(THEME_COOKIE)?.value, inputs, isOperator, prefs.theme),
+  };
 });
