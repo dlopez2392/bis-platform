@@ -5,6 +5,7 @@ import { readAccountBilling } from "@/lib/billing/account-billing-read";
 import { showsPaymentFailedBanner } from "@/lib/billing/billing-view";
 import { dbForRequest } from "@/lib/db";
 import { requestLocale } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { LocaleProvider } from "@/components/locale-provider";
 
 export default async function AccountWorkspaceLayout({
@@ -15,7 +16,9 @@ export default async function AccountWorkspaceLayout({
   params: Promise<{ accountId: string }>;
 }) {
   const { accountId } = await params;
-  const { isAgency } = await requireAccountAccess(accountId);
+  // getPersonPrefs beside the access check: for a client it awaits the same
+  // cached stored-person read requireAccountAccess starts, so no extra query.
+  const [{ isAgency }, prefs] = await Promise.all([requireAccountAccess(accountId), getPersonPrefs()]);
   const db = await dbForRequest();
   const { data: account, error } = await db
     .from("accounts")
@@ -58,7 +61,8 @@ export default async function AccountWorkspaceLayout({
   // Owner decision 1 (2026-10-10, plan-review C2): account.language governs
   // CLIENT-role sessions only — `isOperator: isAgency` is this layout's own
   // existing `isAgency` (above), passed straight through, no new auth call.
-  const locale = requestLocale({ account, isOperator: isAgency });
+  // A person's own language (mis preferencias) wins over both defaults.
+  const locale = requestLocale({ account, isOperator: isAgency, userLanguage: prefs.language });
 
   return (
     // No `lang` wrapper here (decision D, 2026-10-10): most of every page

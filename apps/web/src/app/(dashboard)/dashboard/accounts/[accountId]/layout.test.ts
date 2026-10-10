@@ -18,6 +18,9 @@ vi.mock("@/lib/db", () => ({
 }));
 const billing = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), getAccountBilling: billing.read }));
+// Mis preferencias: the person's own language, from the one per-request read.
+const prefs = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: prefs.language, theme: null }) }));
 
 const { default: Layout } = await import("./layout");
 const { BillingBanner } = await import("@/components/billing-banner");
@@ -53,6 +56,7 @@ beforeEach(() => {
   billing.read.mockResolvedValue({ complimentary: true, subscriptionStatus: "active", billingPausedAt: null });
   auth.isAgency = false;
   dbRow.language = null;
+  prefs.language = null;
 });
 
 describe("account layout: the payment-failed banner (G21)", () => {
@@ -129,5 +133,13 @@ describe("account layout: mounts LocaleProvider with the request's resolved loca
     auth.isAgency = true;
     const tree = await render();
     expect(find(tree, LocaleProvider).map((p) => (p.props as { locale: string }).locale)).toEqual(["en"]);
+  });
+
+  // Owner rule (mis preferencias): a person's own language wins for everyone.
+  it("a person's own language wins: an operator who chose Spanish, and a client who chose English on a Spanish account (mutation: drop userLanguage from the layout's requestLocale call -> FAILS)", async () => {
+    auth.isAgency = true; prefs.language = "es";
+    expect(find(await render(), LocaleProvider).map((p) => (p.props as { locale: string }).locale)).toEqual(["es"]);
+    auth.isAgency = false; dbRow.language = "es"; prefs.language = "en";
+    expect(find(await render(), LocaleProvider).map((p) => (p.props as { locale: string }).locale)).toEqual(["en"]);
   });
 });

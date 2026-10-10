@@ -60,6 +60,10 @@ vi.mock("@/lib/i18n/request-locale", async (importOriginal) => {
   return { ...actual, requestLocale: vi.fn(actual.requestLocale) };
 });
 
+// Mis preferencias: the person's own language, from the one per-request read.
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: prefsFixture.language, theme: null }) }));
+
 // Staff and roles, merged with main (#234): the render body now also settles
 // the caller's Owner/Staff role for a client. Stubbed so the render tests
 // never reach the database or Clerk's backend.
@@ -220,6 +224,7 @@ function find(node: unknown, type: unknown): object[] {
 describe("dashboard/layout mounts LocaleProvider as an ancestor of BOTH AppSidebar and Topbar (Task 6 fix round 1)", () => {
   beforeEach(() => {
     authFixture.isAgency = false;
+    prefsFixture.language = null;
     stateFixture.value = { status: "ok", id: "acc_1", name: "Rio Roofing — trial", timezone: "America/Chicago", language: null };
   });
 
@@ -265,7 +270,17 @@ describe("dashboard/layout mounts LocaleProvider as an ancestor of BOTH AppSideb
     stateFixture.value = { status: "ok", id: "acc_1", name: "Rio Roofing — trial", timezone: "America/Chicago", language: "es" };
     vi.mocked(requestLocale).mockClear();
     await DashboardLayout({ children: "page" });
-    expect(vi.mocked(requestLocale)).toHaveBeenCalledWith({ account: { language: "es" }, isOperator: false });
+    expect(vi.mocked(requestLocale)).toHaveBeenCalledWith({ account: { language: "es" }, isOperator: false, userLanguage: null });
+  });
+
+  // Owner rule (mis preferencias): a person's own language wins for everyone;
+  // operators stay English only until they choose.
+  it("a person's own language wins: an operator who chose Spanish gets Spanish chrome (mutation: drop userLanguage from the layout's requestLocale call -> FAILS)", async () => {
+    authFixture.isAgency = true;
+    prefsFixture.language = "es";
+    const tree = await DashboardLayout({ children: "page" });
+    const providers = find(tree, LocaleProvider) as { props: { locale: string } }[];
+    expect(providers.map((p) => p.props.locale)).toEqual(["es"]);
   });
 
   // Decision D (orchestrator, 2026-10-10): `lang` sits only on the parts that
