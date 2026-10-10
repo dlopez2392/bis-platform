@@ -508,13 +508,20 @@ git commit -m "web: es-US locale param on every date/currency formatter, plus fo
 - Create: `apps/web/src/components/locale-provider.tsx`
 
 **Interfaces:**
-- Consumes: `resolveLocale` (Task 2), an account row shaped `{ language: Locale | null }` (already
-  loaded by every account-scoped screen for branding/timezone — no new query).
-- Produces: `export function requestLocale(account: { language: Locale | null } | null | undefined,
-  searchParams?: Record<string, string | string[] | undefined>): Locale`. `export function
-  LocaleProvider({ locale, children }: { locale: Locale; children: React.ReactNode })` and `export
-  function useLocale(): Locale`. Tasks 6 and 7 call `useLocale()`; Task 11 relies on the `?locale=`
-  QA override this task adds.
+- Consumes: `resolveLocale` (Task 2); `requireAccountAccess`'s own `isAgency` (`lib/auth.ts`,
+  confirmed signature `requireAccountAccess(accountId): Promise<{ userId: string; isAgency:
+  boolean }>`), passed through by every caller as `isOperator` — the SAME signal
+  `resolveThemeMode`'s `isOperator` parameter already uses for dark/light (`branding/theme-
+  mode.ts`), sourced there the same way `getRequestTheme`'s `getIsOperator()` sources it; an
+  account row shaped `{ language: Locale | null }` (already loaded by every account-scoped screen
+  for branding/timezone — no new query); `process.env.BIS_I18N_QA`, read as a plain string
+  comparison only (Global Constraints: no `.env` value parsed by code that can throw).
+- Produces: `export function requestLocale(input: { account: { language: Locale | null } | null |
+  undefined; isOperator: boolean; userLanguage?: Locale | null }, searchParams?: Record<string,
+  string | string[] | undefined>): Locale`. `export function LocaleProvider({ locale, children }: {
+  locale: Locale; children: React.ReactNode })` and `export function useLocale(): Locale`. Tasks 6
+  and 7 call `useLocale()`/`requestLocale()` with this exact shape; Task 11 relies on the
+  `BIS_I18N_QA=1`-gated `?locale=` override this task adds.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -524,17 +531,24 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { requestLocale } from "./request-locale";
 
 describe("requestLocale", () => {
-  it("reads the account's language when there is no QA override (mutation: ignore account.language → FAILS)", () => {
-    expect(requestLocale({ language: "es" })).toBe("es");
-    expect(requestLocale({ language: null })).toBe("en");
-    expect(requestLocale(null)).toBe("en");
+  it("a CLIENT session reads the account's language (mutation: drop the isOperator branch → the operator test below also returns 'es', FAILS)", () => {
+    expect(requestLocale({ account: { language: "es" }, isOperator: false })).toBe("es");
+    expect(requestLocale({ account: { language: null }, isOperator: false })).toBe("en");
+    expect(requestLocale({ account: null, isOperator: false })).toBe("en");
   });
 
-  it("the ?locale= override only applies outside production (mutation: drop the NODE_ENV check → this test FAILS because production would then also honor it)", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    expect(requestLocale({ language: "en" }, { locale: "es" })).toBe("en");
-    vi.stubEnv("NODE_ENV", "test");
-    expect(requestLocale({ language: "en" }, { locale: "es" })).toBe("es");
+  it("an OPERATOR session never reads the account's language, even on a Spanish account (owner decision 1; mutation: drop the isOperator branch → the operator-on-Spanish-account case returns es, FAILS)", () => {
+    expect(requestLocale({ account: { language: "es" }, isOperator: true })).toBe("en");
+  });
+
+  it("an operator's OWN userLanguage still wins once it exists, even when it disagrees with the account's language (mutation: pass account.language instead of null in the operator branch → FAILS, since account is 'en' here but userLanguage is 'es' — a wrong implementation returns 'en', not 'es')", () => {
+    expect(requestLocale({ account: { language: "en" }, isOperator: true, userLanguage: "es" })).toBe("es");
+  });
+
+  it("the ?locale= override applies only when BIS_I18N_QA is exactly \"1\" (mutation: drop the flag check → the unset case FAILS, honouring the override anyway)", () => {
+    expect(requestLocale({ account: { language: "en" }, isOperator: false }, { locale: "es" })).toBe("en");
+    vi.stubEnv("BIS_I18N_QA", "1");
+    expect(requestLocale({ account: { language: "en" }, isOperator: false }, { locale: "es" })).toBe("es");
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -557,14 +571,16 @@ Expected: FAIL — `Cannot find module './request-locale'`.
 // row, never a second query (same discipline as zone.ts's own doc comment
 // on readAgencyZone()'s eager-evaluation trap).
 //
-// `userLanguage` is NOT a parameter here yet: decision 1 (2026-10-10) scopes
-// account.language to CLIENT-role sessions only, and no caller in this
-// lane has a user-level language to pass regardless. The day the parallel
-// staff-and-roles lane's `users.language` exists AND an operator-role
-// caller needs it, that caller passes it into `resolveLocale` directly —
-// this wrapper does not need to change to support that, because it is
-// deliberately a THIN wrapper around resolveLocale, not resolveLocale
-// itself.
+// Owner decision 1 (2026-10-10, plan-review C2): account.language governs
+// CLIENT-role sessions only. An agency operator who opens a Spanish-
+// language client's account does NOT get a Spanish dashboard from that
+// alone — their own session stays English until the parallel staff-and-
+// roles lane's `users.language` exists. This is the SAME role split
+// `resolveThemeMode`'s own `isOperator` parameter already draws for
+// dark/light (`branding/theme-mode.ts`), sourced the same way
+// `getRequestTheme`'s `getIsOperator()` sources it for theme — callers here
+// pass `requireAccountAccess`'s own `isAgency` (`lib/auth.ts`) straight
+// through as `isOperator`.
 import { resolveLocale, type Locale } from "./locale";
 
 function isLocale(v: unknown): v is Locale {
@@ -572,22 +588,48 @@ function isLocale(v: unknown): v is Locale {
 }
 
 export function requestLocale(
-  account: { language: Locale | null } | null | undefined,
+  input: {
+    account: { language: Locale | null } | null | undefined;
+    isOperator: boolean;
+    /** Not yet populated by any caller in this lane — the seam for the
+     *  parallel staff-and-roles lane's `users.language`. Threaded into
+     *  `resolveLocale` on BOTH branches, so an operator's own stored
+     *  language (once it exists) still wins over staying in English. */
+    userLanguage?: Locale | null;
+  },
   searchParams?: Record<string, string | string[] | undefined>,
 ): Locale {
-  if (process.env.NODE_ENV !== "production") {
+  // Plan-review I4: gated on an EXPLICIT flag, never NODE_ENV. The e2e
+  // suite runs this override against `next build` + `next start`, where
+  // NODE_ENV is "production" — gating on NODE_ENV would make the override
+  // dead in exactly the place Task 11 needs it. Plain string comparison,
+  // no parsing (Global Constraints: no .env value parsed by code that can
+  // throw). Set ONLY in Playwright's webServer env (Task 11) and CI's e2e
+  // job — NEVER on a Vercel deployment (orchestrator checklist, below).
+  if (process.env.BIS_I18N_QA === "1") {
     const raw = searchParams?.locale;
     const override = Array.isArray(raw) ? raw[0] : raw;
     if (isLocale(override)) return override;
   }
-  return resolveLocale(undefined, account?.language ?? null);
+  const { account, isOperator, userLanguage } = input;
+  return isOperator
+    ? resolveLocale(userLanguage, null)
+    : resolveLocale(userLanguage, account?.language ?? null);
 }
 ```
+
+**Orchestrator checklist note (plan-review I4):** `BIS_I18N_QA=1` must be set in Playwright's
+`webServer.env` (`apps/web/playwright.config.ts`) and in `.github/workflows/ci.yml`'s `e2e` job
+only. It must NEVER be set in Vercel's project environment variables (Preview or Production) — it
+exists solely so the e2e suite's `next build` + `next start` (where `NODE_ENV` is `"production"`)
+can still reach the override; a real visitor's `NODE_ENV` and `BIS_I18N_QA` are both unset in
+production, so the branch is dead weight there, not a live backdoor, but it is still a flag this
+plan does not want flipped on by habit.
 
 - [ ] **Step 4: Run it to verify it passes**
 
 Run: `pnpm --filter web exec vitest run src/lib/i18n/request-locale.test.ts > /tmp/t4.txt 2>&1; cat /tmp/t4.txt`
-Expected: PASS — summary line `Tests  2 passed (2)`.
+Expected: PASS — summary line `Tests  4 passed (4)`.
 
 - [ ] **Step 5: Add the client provider (no dedicated unit test — the repo has no `.tsx` render-test
   convention; `stat-tile.tsx`'s own comment notes this, and all the testable logic above is already
@@ -823,11 +865,15 @@ git commit -m "web: one Language field on the account Settings page, writing acc
 ## Task 6: Sidebar nav + topbar presence, bilingual
 
 **Owner:** bis-frontend
-**Depends on:** Task 2 (`t`/`plural`), Task 4 (`useLocale`).
+**Depends on:** Task 2 (`t`/`plural`), Task 4 (`useLocale`, `requestLocale`, `LocaleProvider`).
 
 **Files:**
 - Modify: `apps/web/src/components/app-sidebar.tsx:163,392` (confirmed exact lines)
 - Modify: `apps/web/src/components/topbar-presence.tsx`
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/layout.tsx` (mounts
+  `LocaleProvider` — confirmed today's file at lines 15-23: `const { isAgency } = await
+  requireAccountAccess(accountId);` then `.select("id, name")`; neither the account's `language`
+  column nor any locale resolution exists here yet)
 - Create: `apps/web/src/components/app-sidebar-locale.test.ts` (source-scan test, same shape as the
   existing `dashboard/hero.test.ts`'s raw-file-text scan — this repo has no `.tsx` render-test
   convention, confirmed by `stat-tile.tsx`'s own comment, so the testable surface is the file's
@@ -837,8 +883,20 @@ git commit -m "web: one Language field on the account Settings page, writing acc
 - Modify: `apps/web/src/app/(dashboard)/dashboard/styleguide/*` (add the EN/ES nav example — DoD)
 
 **Interfaces:**
-- Consumes: `useLocale()` (Task 4), `t()` (Task 2).
+- Consumes: `useLocale()`, `requestLocale`, `LocaleProvider` (Task 4), `t()` (Task 2).
+  `isOperator` is `[accountId]/layout.tsx`'s own existing `isAgency` (from `requireAccountAccess`,
+  already destructured at line 15) — no new auth call.
 - Produces: nothing new — this task only converts an existing render path.
+
+**Note on scope (plan-review C2/I4):** this layout is a `layout.tsx`, which — per Next.js's own
+documented App Router contract — does NOT receive a `searchParams` prop (only `page.tsx` does, so
+that a layout need not re-render on a query-string-only navigation). Confirm this against the
+installed Next.js version's own docs before relying on it, since this plan did not re-verify it
+against that version's changelog. Because of this, the `BIS_I18N_QA`/`?locale=pseudo` override
+CANNOT reach the sidebar through this layout's own `requestLocale` call — only the real
+account-resolved EN/ES choice can. Task 11's pseudo-locale overflow check for Label-role nav text
+therefore targets the `/styleguide` page (a `page.tsx`, which DOES receive `searchParams`) instead
+of the live dashboard route — see Task 11's own Step 2 for the concrete mechanism.
 
 - [ ] **Step 1: Write the failing source-scan test**
 
@@ -880,6 +938,34 @@ In `topbar-presence.tsx`, apply the same `useLocale()` + `t()` substitution wher
 `m["shell.presence.*"]` directly (these keys ALREADY have `.es` twins at `messages.ts:81-88` —
 confirmed by reading the file — so this is the first place they become reachable).
 
+In `[accountId]/layout.tsx`, mount the provider so `useLocale()` above has something real to read
+(plan-review C2 — `requestLocale`'s new `{ account, isOperator }` shape, `isOperator` from this
+file's own existing `isAgency`):
+
+```tsx
+import { requestLocale } from "@/lib/i18n/request-locale";
+import { LocaleProvider } from "@/components/locale-provider";
+// ...inside AccountWorkspaceLayout, after the existing `.select("id, name")` call — widen it to
+// "id, name, language" so `account` below carries the field requestLocale reads:
+  const { data: account, error } = await db
+    .from("accounts")
+    .select("id, name, language")
+    .eq("id", accountId)
+    .maybeSingle();
+// ...unchanged notFound()/error handling below it...
+  const locale = requestLocale({ account, isOperator: isAgency });
+  return (
+    <LocaleProvider locale={locale}>
+      {paymentFailed ? (
+        <div className="px-6 pt-6">
+          <BillingBanner audience={isAgency ? "agency" : "client"} accountId={accountId} />
+        </div>
+      ) : null}
+      {children}
+    </LocaleProvider>
+  );
+```
+
 In `messages.ts`, add `.es` twins for every `nav.*` key (lines 5-46 of the current file) — e.g.
 `"nav.dashboard.es": "Panel"`, `"nav.contacts.es": "Contactos"`, etc. (one line per existing
 `nav.*` key; the exact Spanish word list is a copy decision for whoever implements this step, not
@@ -896,12 +982,15 @@ Expected: PASS — summary line `Tests  1 passed (1)`.
 Add a small EN/ES side-by-side example of the sidebar's nav-label rendering to the styleguide page
 (the exact component to extend depends on `/styleguide`'s current section layout — add a new
 section titled "Locale" alongside the existing dark/light toggle example, rendering the same nav
-item under `LocaleProvider locale="en"` and `locale="es"`).
+item under `LocaleProvider locale="en"` and `locale="es"`). Give each rendered nav label a
+`data-nav-label` attribute — Task 11's overflow check locates them by that hook. This section is
+extended again in Task 11 (a `?locale=pseudo` third column); leave room for it rather than a layout
+that assumes exactly two columns.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/web/src/components/app-sidebar.tsx apps/web/src/components/topbar-presence.tsx apps/web/src/components/app-sidebar-locale.test.ts apps/web/src/lib/messages.ts "apps/web/src/app/(dashboard)/dashboard/styleguide"
+git add apps/web/src/components/app-sidebar.tsx apps/web/src/components/topbar-presence.tsx "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/layout.tsx" apps/web/src/components/app-sidebar-locale.test.ts apps/web/src/lib/messages.ts "apps/web/src/app/(dashboard)/dashboard/styleguide"
 git commit -m "web: sidebar nav and topbar presence render in the resolved locale (F-013 proof surface 1)"
 ```
 
@@ -910,19 +999,23 @@ git commit -m "web: sidebar nav and topbar presence render in the resolved local
 ## Task 7: Dashboard KPI row, bilingual
 
 **Owner:** bis-frontend
-**Depends on:** Task 2, Task 3 (`formatCurrency` locale param), Task 4 (`useLocale`/`requestLocale`).
+**Depends on:** Task 2, Task 3 (`formatCurrency` locale param), Task 4 (`requestLocale`).
 
 **Files:**
-- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/page.tsx:343,
-  349-385` (confirmed exact lines)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/page.tsx:44-71,
+  343, 349-385` (confirmed exact lines — see Step 3's precise diff; `isAgency` already exists at
+  line 53, but `searchParams` is NOT currently a prop of this component and `account`'s query
+  currently selects only `"name, timezone"`, confirmed by reading the file — both are real changes
+  here, not already-there plumbing to "merge into")
 - Create: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/page-locale.test.ts`
   (source-scan, same shape as Task 6 and the existing `hero.test.ts`)
 - Modify: `apps/web/src/lib/messages.ts` (add `.es` twins for `dashboard.kpi.*`, `account.*`,
   `common.allTime` — confirmed absent today)
 
 **Interfaces:**
-- Consumes: `requestLocale` (Task 4, this is a server component so it calls the server-side
+- Consumes: `requestLocale` (Task 4 — this is a server component so it calls the server-side
   resolver directly, not `useLocale`), `t()` (Task 2), `formatCurrency(n, locale)` (Task 3).
+  `isOperator` is this page's own existing `isAgency` (line 53).
 - Produces: nothing new.
 
 - [ ] **Step 1: Write the failing source-scan test**
@@ -939,7 +1032,8 @@ const src = readFileSync(
 );
 
 describe("dashboard KPI row resolves through the locale helper", () => {
-  it("formatCurrency is called with a locale argument, and the KPI labels route through t() (mutation: call formatCurrency(currentPipelineValue) with no second arg → FAILS)", () => {
+  it("resolves locale through requestLocale with the account/isOperator shape, calls formatCurrency with a locale argument, and routes the KPI labels through t() (mutation: call formatCurrency(currentPipelineValue) with no second arg → FAILS)", () => {
+    expect(src).toMatch(/requestLocale\(\{ account, isOperator: isAgency \}/);
     expect(src).toMatch(/formatCurrency\(currentPipelineValue, locale\)/);
     expect(src).toMatch(/t\(m, "dashboard\.kpi\.last7Days", locale\)/);
   });
@@ -949,15 +1043,43 @@ describe("dashboard KPI row resolves through the locale helper", () => {
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/page-locale.test.ts" > /tmp/t7.txt 2>&1; cat /tmp/t7.txt`
-Expected: FAIL — today's file calls `formatCurrency(currentPipelineValue)` with no second argument
-and `m["dashboard.kpi.last7Days"]` directly (both confirmed by reading the file at lines 343, 372).
+Expected: FAIL — today's file has no `requestLocale` call at all, calls `formatCurrency(
+currentPipelineValue)` with no second argument, and reads `m["dashboard.kpi.last7Days"]` directly
+(confirmed by reading the file at lines 53-71, 343, 372).
 
 - [ ] **Step 3: Implement**
 
-Add `import { requestLocale } from "@/lib/i18n/request-locale"; import { t } from "@/lib/i18n/t";`
-and resolve `const locale = requestLocale(account, await searchParams);` once near the top of the
-component (the page already awaits `searchParams` for other reasons — confirm the exact existing
-destructure before adding a second `await searchParams` call; merge into the existing one).
+Add `searchParams: Promise<{ locale?: string }>` to the component's props (today's signature,
+lines 44-48, takes only `params` — this is a NEW prop), and destructure it beside the existing
+`const { accountId } = await params;` (line 49):
+
+```ts
+const { locale: localeParam } = await searchParams;
+```
+
+Widen the account query (lines 65-71) from `.select("name, timezone")` / `{ name: string;
+timezone: string }` to:
+
+```ts
+const account = await db
+  .from("accounts")
+  .select("name, timezone, language")
+  .eq("id", accountId)
+  .maybeSingle()
+  .then(({ data, error }) => {
+    if (error) throw new Error(`account dashboard: account lookup failed: ${error.message}`);
+    if (!data) throw new Error("account dashboard: account not found");
+    return data as { name: string; timezone: string; language: Locale | null };
+  });
+```
+
+Add `import { requestLocale } from "@/lib/i18n/request-locale"; import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";`, and resolve once, right after `account` is
+loaded:
+
+```ts
+const locale = requestLocale({ account, isOperator: isAgency }, { locale: localeParam });
+```
 
 Change every `m["dashboard.kpi.*"]`, `m["account.*"]`, and `m["common.allTime"]` read in the block
 at lines 343-385 to `t(m, "dashboard.kpi.*", locale)` etc., and line 372's
@@ -1332,97 +1454,192 @@ git commit -m "web: pseudo-locale generator and the accents-in-capitals import g
 ## Task 11: Overflow check on the two proof screens
 
 **Owner:** bis-e2e-qa
-**Depends on:** Task 10 (`pseudoLocale`), Task 6, Task 7 (the two converted screens), Task 4 (the
-`?locale=` QA override).
+**Depends on:** Task 10 (`pseudoLocale`), Task 6, Task 7 (the two converted screens), Task 4
+(`BIS_I18N_QA`, `requestLocale`).
 
 **Files:**
+- Modify: `apps/web/src/lib/i18n/request-locale.ts` (adds `requestPseudoMode`, additive)
+- Create: `apps/web/src/lib/i18n/request-locale.test.ts` — append (new `describe` block)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/page.tsx` (wraps
+  the KPI row's already-`t()`/`formatCurrency`-routed strings through `pseudoLocale()` when pseudo
+  mode is on — Task 7 handles real en/es only; this task layers the QA-only transform on top, same
+  file, additive)
+- Modify: `apps/web/src/app/(dashboard)/dashboard/styleguide/page.tsx` (adds `searchParams` — not a
+  prop of this component today, confirmed by reading it — and a third pseudo-locale column onto
+  Task 6's Locale section)
 - Create: `apps/web/e2e/i18n-overflow.spec.ts`
 
 **Interfaces:**
-- Consumes: the `?locale=` override on any account-scoped route (Task 4); Tasks 6 and 7's converted
-  sidebar and dashboard KPI row.
-- Produces: nothing other code depends on — this is a measurement gate, not a library.
+- Consumes: `pseudoLocale` (Task 10); `t`, `m`, `formatCurrency` (already in `page.tsx` via Tasks 2,
+  3, 7).
+- Produces: `export function requestPseudoMode(searchParams?: Record<string, string | string[] |
+  undefined>): boolean` — `true` only when `process.env.BIS_I18N_QA === "1"` AND `?locale=pseudo`
+  is present. Nothing later depends on it; this is the terminal task.
 
-- [ ] **Step 1: Write the failing Playwright spec**
+**Why the sidebar's check targets `/styleguide`, not the live dashboard route (resolved, not a
+sketch):** Task 6 already noted that `[accountId]/layout.tsx` is a `layout.tsx` and therefore
+cannot receive `searchParams` (Next.js's own documented App Router contract — re-verify against
+the installed version before relying on it), so `?locale=pseudo` can never reach the sidebar
+through the account layout's own `requestLocale` call. `/styleguide` is a `page.tsx`, so it CAN
+read `searchParams` directly, and Task 6 already built a controlled EN/ES nav-label fixture there
+for the DoD — this task adds a third, pseudo-locale column to that SAME fixture rather than
+inventing new plumbing to carry a query param through a layout. The dashboard KPI row has no such
+obstacle (Task 7's `page.tsx` already reads `searchParams`), so its check runs against the live
+route.
+
+- [ ] **Step 1: Write the failing test for `requestPseudoMode`**
+
+```ts
+// append to apps/web/src/lib/i18n/request-locale.test.ts
+import { requestPseudoMode } from "./request-locale";
+
+describe("requestPseudoMode", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is false when BIS_I18N_QA is unset, even with ?locale=pseudo (mutation: drop the flag check → FAILS, returns true anyway)", () => {
+    expect(requestPseudoMode({ locale: "pseudo" })).toBe(false);
+  });
+
+  it("is true only when BIS_I18N_QA=\"1\" AND ?locale=pseudo are BOTH present", () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    expect(requestPseudoMode({ locale: "pseudo" })).toBe(true);
+    expect(requestPseudoMode({ locale: "es" })).toBe(false);
+    expect(requestPseudoMode(undefined)).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `pnpm --filter web exec vitest run src/lib/i18n/request-locale.test.ts -t "requestPseudoMode" > /tmp/t11a.txt 2>&1; cat /tmp/t11a.txt`
+Expected: FAIL — `requestPseudoMode is not exported`.
+
+- [ ] **Step 3: Implement `requestPseudoMode` (additive to Task 4's file)**
+
+```ts
+// apps/web/src/lib/i18n/request-locale.ts — append, same flag `requestLocale` already reads,
+// same plain-string-comparison discipline (no .env value parsed by code that can throw).
+// Deliberately NOT a third member of the Locale type: pseudo-locale is a rendering transform
+// applied to the ENGLISH string AFTER t()/formatCurrency resolve it (Task 10's pseudoLocale()),
+// never a real catalogue locale resolveLocale could return — keeping Locale itself at exactly
+// "en" | "es" means nothing in Tasks 2, 3, 6, 7, 8 or 9 needs to change for this to exist.
+export function requestPseudoMode(
+  searchParams?: Record<string, string | string[] | undefined>,
+): boolean {
+  if (process.env.BIS_I18N_QA !== "1") return false;
+  const raw = searchParams?.locale;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === "pseudo";
+}
+```
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `pnpm --filter web exec vitest run src/lib/i18n/request-locale.test.ts > /tmp/t11a.txt 2>&1; cat /tmp/t11a.txt`
+Expected: PASS — summary line `Tests  6 passed (6)` (Task 4's original 4 plus these 2).
+
+- [ ] **Step 5: Wire pseudo mode into the dashboard KPI row**
+
+In `page.tsx` (Task 7's file), right after `const locale = requestLocale(...)`:
+
+```ts
+import { requestPseudoMode } from "@/lib/i18n/request-locale";
+import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
+// ...
+const pseudo = requestPseudoMode({ locale: localeParam });
+const tt = (key: string, params?: Record<string, string | number>) =>
+  pseudo ? pseudoLocale(t(m, key, "en", params)) : t(m, key, locale, params);
+const fc = (n: number) => (pseudo ? pseudoLocale(formatCurrency(n, "en")) : formatCurrency(n, locale));
+```
+
+Replace every `t(m, "dashboard.kpi...", locale)` / `t(m, "account...", locale)` /
+`t(m, "common.allTime", locale)` call Task 7 introduced in the block at lines 343-385 with the
+equivalent `tt("dashboard.kpi...")` call, and `formatCurrency(currentPipelineValue, locale)` /
+`pipelineValueDisplay`'s own call with `fc(currentPipelineValue)`.
+
+- [ ] **Step 6: Write the failing Playwright spec**
 
 ```ts
 // apps/web/e2e/i18n-overflow.spec.ts
 import { test, expect } from "@playwright/test";
 
-// `?locale=pseudo` is a THIRD override value this task adds to Task 4's
-// requestLocale alongside "en"/"es" — it renders every t()-routed string
-// through pseudoLocale() instead of looking it up in the catalogue. See
-// Step 3 below for the one-line addition requestLocale needs; this spec is
-// written RED against the override not existing yet, same as every other
-// task in this plan.
-test("sidebar Label-role nav text does not clip under the pseudo-locale", async ({ page }) => {
-  await page.goto("/dashboard/accounts/TEST_ACCOUNT_ID/dashboard?locale=pseudo");
-  const labels = page.locator("[data-nav-label]");
-  const count = await labels.count();
-  for (let i = 0; i < count; i++) {
-    const box = await labels.nth(i).boundingBox();
-    const scrollWidth = await labels.nth(i).evaluate((el) => el.scrollWidth);
-    expect(scrollWidth, `nav label ${i} overflows its box`).toBeLessThanOrEqual(Math.ceil(box!.width) + 1);
-  }
-});
-
 test("dashboard KPI tiles do not clip under the pseudo-locale", async ({ page }) => {
   await page.goto("/dashboard/accounts/TEST_ACCOUNT_ID/dashboard?locale=pseudo");
   const tiles = page.locator("[data-slot='stat-tile']");
   const count = await tiles.count();
+  expect(count, "no stat tiles found — confirm the fixture account and the data-slot value before trusting the loop below").toBeGreaterThan(0);
   for (let i = 0; i < count; i++) {
     const el = tiles.nth(i);
     const [scrollW, clientW] = await el.evaluate((n) => [n.scrollWidth, n.clientWidth]);
     expect(scrollW, `stat tile ${i} overflows its card`).toBeLessThanOrEqual(clientW);
   }
 });
+
+test("styleguide's pseudo-locale nav-label column does not clip (sidebar proof, run here because the account layout cannot see ?locale= — see this task's own note above)", async ({ page }) => {
+  await page.goto("/dashboard/styleguide?locale=pseudo");
+  const labels = page.locator("[data-nav-label='pseudo']");
+  const count = await labels.count();
+  expect(count, "no pseudo-locale nav labels found — confirm Step 7's styleguide markup shipped").toBeGreaterThan(0);
+  for (let i = 0; i < count; i++) {
+    const el = labels.nth(i);
+    const [scrollW, clientW] = await el.evaluate((n) => [n.scrollWidth, n.clientWidth]);
+    expect(scrollW, `pseudo-locale nav label ${i} overflows its box`).toBeLessThanOrEqual(clientW);
+  }
+});
 ```
 
-(`TEST_ACCOUNT_ID`, `[data-nav-label]`, `[data-slot='stat-tile']`: use this repo's own fixture
-account and confirm the exact `data-*` hooks already on `app-sidebar.tsx`'s nav link and
-`stat-tile.tsx`'s root element before writing this — add either attribute in Task 6/7 if neither
-exists yet, rather than guessing a selector here. CLAUDE.md's own measurement discipline: "grep its
-HTML for a marker only your branch emits" before trusting what the page served.)
+(`TEST_ACCOUNT_ID`: use this repo's own fixture account. CLAUDE.md's own measurement discipline:
+"grep its HTML for a marker only your branch emits" before trusting what the page served — the
+`data-nav-label='pseudo'` and `data-slot='stat-tile'` hooks ARE that marker here.)
 
-- [ ] **Step 2: Add the `pseudo` override to `requestLocale` (Task 4's file, additive)**
+- [ ] **Step 7: Run it to verify it fails, then add the styleguide's third column**
 
-```ts
-// apps/web/src/lib/i18n/request-locale.ts — extend the override check only:
-const PSEUDO_FLAG = "__pseudo__";
-// ...inside requestLocale, before `return resolveLocale(...)`:
-if (process.env.NODE_ENV !== "production" && override === PSEUDO_FLAG) return "en"; // locale stays "en" for formatter purposes; t() itself detects pseudo mode separately (see t.ts's own pseudo branch, added here too) — OR, simpler and preferred: widen Locale's render-time type for t() callers to accept a third literal "pseudo" that is never a value resolveLocale returns on its own, only ever a QA override.
+Run (from `apps/web`, with `BIS_I18N_QA=1` set — see the orchestrator note below):
+`BIS_I18N_QA=1 pnpm exec playwright test e2e/i18n-overflow.spec.ts > /tmp/t11.txt 2>&1; tail -40 /tmp/t11.txt`
+Expected: FAIL — the dashboard KPI test fails until Step 5 ships (already done above, so it may
+already pass here); the styleguide test fails because `[data-nav-label='pseudo']` does not exist
+yet. Add the third column to `/styleguide/page.tsx`'s Locale section (Task 6):
+
+```tsx
+// styleguide/page.tsx — add searchParams (not a prop today, confirmed by reading the file) and
+// a pseudo column beside Task 6's existing en/es ones, reusing the SAME nav-label markup with
+// English strings run through pseudoLocale() directly — no LocaleProvider needed for this column,
+// since it is never a real catalogue lookup.
+export default async function StyleguidePage({
+  searchParams,
+}: { searchParams: Promise<{ locale?: string }> }) {
+  const { locale: localeParam } = await searchParams;
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  // ...existing body...
+  // inside the Locale section, beside the en/es columns:
+  {pseudo ? (
+    <div>
+      {NAV_LABEL_KEYS.map((key) => (
+        <span key={key} data-nav-label="pseudo">{pseudoLocale(m[key])}</span>
+      ))}
+    </div>
+  ) : null}
+}
 ```
 
-This step is intentionally sketched rather than fully specified here: whether `"pseudo"` becomes a
-third member of a QA-only type, or `t()` grows a separate `pseudoLocale()`-wrapping call path, is an
-implementation choice for whoever executes this task — confirm against Task 4's actual committed
-code (which may have evolved since this plan was written) before choosing, and write the real
-decision into `request-locale.ts`'s own doc comment, not left as this plan's placeholder.
+(`NAV_LABEL_KEYS`: whatever small, fixed list of `nav.*` keys Task 6's own en/es columns already
+iterate over — reuse that same list/array rather than re-declaring a second one that could drift.)
 
-- [ ] **Step 3: Run it to verify it fails**
+- [ ] **Step 8: Run it to verify it passes**
 
-Run (from `apps/web`): `pnpm exec playwright test e2e/i18n-overflow.spec.ts > /tmp/t11.txt 2>&1; tail -40 /tmp/t11.txt`
-Expected: FAIL — either the `?locale=pseudo` override does nothing yet (strings render in English,
-no overflow to measure, so the test's own setup is wrong) or the `data-*` selectors do not exist
-yet. Per CLAUDE.md: do not run this against a stale `next start` — build fresh for this measurement,
-and this agent is the one authorized to run Playwright per the brief.
-
-- [ ] **Step 4: Fix the override and the selectors until green**
-
-Add `data-nav-label` to the nav link's label span in `app-sidebar.tsx` (Task 6) and confirm
-`stat-tile.tsx`'s root element already carries `data-slot="stat-tile"` (if it carries a different
-`data-slot` value, use that exact value here instead of guessing).
-
-- [ ] **Step 5: Run it to verify it passes**
-
-Run: `pnpm exec playwright test e2e/i18n-overflow.spec.ts > /tmp/t11.txt 2>&1; tail -40 /tmp/t11.txt`
+Run: `BIS_I18N_QA=1 pnpm exec playwright test e2e/i18n-overflow.spec.ts > /tmp/t11.txt 2>&1; tail -40 /tmp/t11.txt`
 Expected: PASS — Playwright's own summary line, e.g. `2 passed (Xs)`.
 
-- [ ] **Step 6: Commit**
+**Orchestrator checklist note:** `BIS_I18N_QA=1` must be added to `webServer.env` in
+`apps/web/playwright.config.ts` and to the `e2e` job's env in `.github/workflows/ci.yml` so this
+spec runs the same way locally and in CI — **never** to any Vercel project environment variable
+(Preview or Production), per Task 4's own orchestrator note.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add apps/web/e2e/i18n-overflow.spec.ts apps/web/src/lib/i18n/request-locale.ts
-git commit -m "e2e: pseudo-locale overflow check on the two Spanish-runtime proof screens (F-014)"
+git add apps/web/src/lib/i18n/request-locale.ts apps/web/src/lib/i18n/request-locale.test.ts "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/dashboard/page.tsx" "apps/web/src/app/(dashboard)/dashboard/styleguide/page.tsx" apps/web/e2e/i18n-overflow.spec.ts
+git commit -m "e2e: pseudo-locale overflow check on the two Spanish-runtime proof screens, gated on BIS_I18N_QA (F-014)"
 ```
 
 ---
@@ -1437,8 +1654,11 @@ first commit is accurate, not provisional.
 
 **Files:**
 - Create: `apps/web/src/lib/i18n/ratchet-scan.ts` (the scanner, TypeScript-compiler-API-based per
-  the owner-approved spec, to avoid the false positives a regex pass over JSX text produces)
-- Create: `apps/web/src/lib/i18n/ratchet-baseline.json` (generated, not hand-written)
+  the owner-approved spec, to avoid the false positives a regex pass over JSX text produces — also
+  the ONE export site for `AGENCY_ONLY_ALLOWLIST` and `SCAN_ROOTS`, per plan-review I2, so the
+  script and the test import the same constants rather than each keeping their own copy)
+- Create: `apps/web/src/lib/i18n/ratchet-baseline.json` (generated, not hand-written; keyed on
+  repo-relative POSIX paths — see plan-review C1 below)
 - Create: `apps/web/scripts/generate-i18n-baseline.ts` (the regeneration script)
 - Create: `apps/web/src/lib/i18n/ratchet.test.ts`
 
@@ -1447,16 +1667,23 @@ first commit is accurate, not provisional.
   via `next`/`tsc`; confirm it is resolvable as a direct import before relying on it, and add it to
   `apps/web/package.json`'s `dependencies` explicitly if it is not already there as a direct one).
 - Produces: `export function scanFile(filePath: string, source: string): number` (count of
-  un-catalogued JSX text/string-literal nodes). `export function countsByFile(rootDirs: string[],
-  allowlistFiles: RegExp[]): Record<string, number>`. Nothing downstream depends on these — this is
-  the terminal task.
+  un-catalogued JSX text/string-literal nodes). `export function relativeKey(baseDir: string,
+  absPath: string): string` — normalises BOTH inputs to forward slashes before stripping `baseDir`,
+  so the output is a repo-relative POSIX path regardless of which OS produced `absPath` (plan-review
+  C1: the baseline must never be keyed on an absolute, platform-specific path, or a baseline
+  generated on Windows falls back to an allowance of 0 for every file once CI's Linux paths don't
+  match it, and `verify` goes red on the first push). `export const AGENCY_ONLY_ALLOWLIST:
+  RegExp[]` and `export const SCAN_ROOTS: string[]` (both single-sourced here, plan-review I2).
+  `export function countsByFile(baseDir: string, allowlist?: RegExp[]): Record<string, number>` —
+  keys are always `relativeKey`-normalised (e.g. `"src/components/app-sidebar.tsx"`), never an
+  absolute path. Nothing downstream depends on these — this is the terminal task.
 
-- [ ] **Step 1: Write the failing test for `scanFile`**
+- [ ] **Step 1: Write the failing tests for `scanFile`, `relativeKey`, and the allowlist**
 
 ```ts
 // apps/web/src/lib/i18n/ratchet.test.ts
 import { describe, it, expect } from "vitest";
-import { scanFile } from "./ratchet-scan";
+import { scanFile, relativeKey, AGENCY_ONLY_ALLOWLIST } from "./ratchet-scan";
 
 describe("scanFile", () => {
   it("counts a raw JSX text literal as 1, and a t()-routed string as 0 (mutation: count every string literal including className values → FAILS the second assertion, since 'px-2' would then count)", () => {
@@ -1470,6 +1697,31 @@ describe("scanFile", () => {
   it("reverting a real translated string back to a literal is caught by name (mutation check per the brief: delete the .es twin AND hard-code the English string back into the JSX → the live count for that file now exceeds its baseline entry, which is exactly what Step 5's ratchet test below asserts)", () => {
     const reverted = `export function X() { return <p>Loading your calls</p>; }`;
     expect(scanFile("x.tsx", reverted)).toBe(1);
+  });
+});
+
+describe("relativeKey", () => {
+  it("a Windows-style absolute path and a POSIX absolute path rooted at the same apps/web directory produce the identical key (mutation: return absPath unchanged instead of stripping baseDir → FAILS, the two inputs then produce two DIFFERENT strings instead of the same one) (plan-review C1)", () => {
+    const winKey = relativeKey(
+      "C:\\Users\\danlo\\bis-platform\\apps\\web",
+      "C:\\Users\\danlo\\bis-platform\\apps\\web\\src\\components\\app-sidebar.tsx",
+    );
+    const posixKey = relativeKey(
+      "/home/runner/work/bis-platform/apps/web",
+      "/home/runner/work/bis-platform/apps/web/src/components/app-sidebar.tsx",
+    );
+    expect(winKey).toBe("src/components/app-sidebar.tsx");
+    expect(posixKey).toBe("src/components/app-sidebar.tsx");
+    expect(winKey).toBe(posixKey);
+  });
+});
+
+describe("AGENCY_ONLY_ALLOWLIST", () => {
+  it("matches the agency's accounts LIST page but not the client's own billing page (mutation: add a dashboard/billing/ entry back to the list → FAILS the billing assertion, since nav-groups.ts puts billing under the account-scoped ${base}/billing, never a top-level agency route) (plan-review I1)", () => {
+    const billingPage = "src/app/(dashboard)/dashboard/accounts/[accountId]/billing/page.tsx";
+    const accountsListPage = "src/app/(dashboard)/dashboard/accounts/page.tsx";
+    expect(AGENCY_ONLY_ALLOWLIST.some((re) => re.test(billingPage))).toBe(false);
+    expect(AGENCY_ONLY_ALLOWLIST.some((re) => re.test(accountsListPage))).toBe(true);
   });
 });
 ```
@@ -1489,6 +1741,8 @@ Expected: FAIL — `Cannot find module './ratchet-scan'`.
 // literals and aria-hooks, and false positives are how a ratchet gate gets
 // disabled in frustration instead of fixed.
 import ts from "typescript";
+import fs from "node:fs"; // top-level, not require() inside countsByFile (plan-review M1 —
+import path from "node:path"; // eslint-config-next flags a require() import in a .ts file)
 
 const ALLOWED_ATTRIBUTE_NAMES = new Set(["className", "data-testid", "data-slot", "href", "type", "name"]);
 
@@ -1510,20 +1764,61 @@ export function scanFile(filePath: string, source: string): number {
   return count;
 }
 
-export function countsByFile(rootDirs: string[], allowlistFiles: RegExp[]): Record<string, number> {
-  const fs = require("node:fs") as typeof import("node:fs");
-  const path = require("node:path") as typeof import("node:path");
+/**
+ * Repo-relative, POSIX-separated, regardless of the OS that produced
+ * `absPath` or `baseDir` (plan-review C1). Deliberately does NOT use
+ * `path.relative`, which parses its inputs with the RUNNING platform's own
+ * separator — fed a Windows-style absolute path while running on Linux (or
+ * vice versa) it does not split the string correctly at all. Both inputs
+ * are normalised to "/" FIRST, then `baseDir` is stripped as a plain string
+ * prefix, so a baseline generated on a developer's Windows machine and one
+ * generated inside a Linux CI runner key the SAME file identically.
+ */
+export function relativeKey(baseDir: string, absPath: string): string {
+  const norm = (p: string) => p.replace(/\\/g, "/");
+  const base = norm(baseDir).replace(/\/+$/, "");
+  const full = norm(absPath);
+  return full.startsWith(base) ? full.slice(base.length + 1) : full;
+}
+
+// Decision 2 (2026-10-10): agency-only top-level routes are excluded
+// entirely from the scan, not frozen-but-included — DESIGN.md's bilingual
+// DoD line is itself qualified ("once a surface carries bilingual copy at
+// all"), and these routes are internal tooling with no bilingual intent.
+// Exactly the six top-level agency routes lib/nav-groups.ts names (plan-
+// review I1) — NOT dashboard/billing, which is the CLIENT's own account-
+// scoped billing page (`${base}/billing`) and must stay scanned. Matched
+// against `relativeKey`'s output, which is already "/"-separated, so a
+// plain "/" in each pattern is correct on every OS — no [\\/] needed.
+export const AGENCY_ONLY_ALLOWLIST: RegExp[] = [
+  /dashboard\/accounts\/page\.tsx$/, // the agency's accounts LIST page only
+  /dashboard\/blueprints\//,
+  /dashboard\/work\//,
+  /dashboard\/numbers\//,
+  /dashboard\/screened\//,
+  /dashboard\/plans\//,
+];
+
+// The ONE place the scan's roots are named (plan-review I2) — relative to
+// `apps/web`, resolved against whatever `baseDir` the caller passes.
+export const SCAN_ROOTS: string[] = ["src/app", "src/components"];
+
+export function countsByFile(
+  baseDir: string,
+  allowlist: RegExp[] = AGENCY_ONLY_ALLOWLIST,
+): Record<string, number> {
   const out: Record<string, number> = {};
   function walk(dir: string) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { walk(full); continue; }
       if (!full.endsWith(".tsx") || full.endsWith(".test.tsx")) continue;
-      if (allowlistFiles.some((re) => re.test(full))) continue;
-      out[full] = scanFile(full, fs.readFileSync(full, "utf8"));
+      const key = relativeKey(baseDir, full);
+      if (allowlist.some((re) => re.test(key))) continue;
+      out[key] = scanFile(full, fs.readFileSync(full, "utf8"));
     }
   }
-  for (const root of rootDirs) walk(root);
+  for (const root of SCAN_ROOTS) walk(path.join(baseDir, root));
   return out;
 }
 ```
@@ -1531,7 +1826,7 @@ export function countsByFile(rootDirs: string[], allowlistFiles: RegExp[]): Reco
 - [ ] **Step 4: Run it to verify it passes**
 
 Run: `pnpm --filter web exec vitest run src/lib/i18n/ratchet.test.ts > /tmp/t12.txt 2>&1; cat /tmp/t12.txt`
-Expected: PASS — summary line `Tests  2 passed (2)`.
+Expected: PASS — summary line `Tests  4 passed (4)`.
 
 - [ ] **Step 5: Write the failing baseline-ratchet test**
 
@@ -1541,26 +1836,36 @@ import baseline from "./ratchet-baseline.json";
 import { countsByFile } from "./ratchet-scan";
 import path from "node:path";
 
-// Decision 2 (2026-10-10): agency-only top-level routes are excluded
-// entirely from the scan, not frozen-but-included — DESIGN.md's bilingual
-// DoD line is itself qualified ("once a surface carries bilingual copy at
-// all"), and these routes are internal tooling with no bilingual intent.
-const AGENCY_ONLY_ALLOWLIST = [
-  /dashboard[\\/]accounts[\\/]page\.tsx$/,
-  /dashboard[\\/]blueprints[\\/]/,
-  /dashboard[\\/]work[\\/]/,
-  /dashboard[\\/]billing[\\/]/,
-];
-
 describe("the i18n ratchet", () => {
-  it("no file's live raw-literal count exceeds its committed baseline (mutation: revert Task 6's app-sidebar.tsx edit back to m[item.labelKey] → app-sidebar.tsx's live count rises above its baseline entry of 0, FAILS by that file's name)", () => {
-    const live = countsByFile(
-      [path.join(__dirname, "../../app"), path.join(__dirname, "../../components")],
-      AGENCY_ONLY_ALLOWLIST,
-    );
+  // apps/web/src/lib/i18n -> apps/web, matching generate-i18n-baseline.ts's
+  // own apps/web/scripts -> apps/web — the SAME baseDir either file resolves
+  // to, which relativeKey's test above already proved is OS-independent.
+  const baseDir = path.join(__dirname, "../../..");
+
+  it("no file's live raw-literal count exceeds its committed baseline (mutation: revert Task 6's app-sidebar.tsx edit back to m[item.labelKey] → src/components/app-sidebar.tsx's live count rises above its baseline entry of 0, FAILS by that file's name)", () => {
+    const live = countsByFile(baseDir);
     for (const [file, count] of Object.entries(live)) {
       const allowed = (baseline as Record<string, number>)[file] ?? 0;
       expect(count, `${file}: live ${count} > baseline ${allowed}`).toBeLessThanOrEqual(allowed);
+    }
+  });
+
+  it("no baseline entry names a file that no longer exists (mutation: rename a scanned file without regenerating the baseline → FAILS, naming the stale entry) (plan-review I3)", () => {
+    const live = countsByFile(baseDir);
+    for (const file of Object.keys(baseline as Record<string, number>)) {
+      expect(live[file], `${file}: baseline entry for a file that no longer exists — regenerate the baseline`).not.toBeUndefined();
+    }
+  });
+
+  it("no file's live count sits BELOW its baseline either — a real reduction must tighten the ceiling, not coast on the old one (mutation: skip this half of the check → a file that drops from 5 un-catalogued strings to 0 stays silently allowed up to 5 forever) (plan-review I3)", () => {
+    const live = countsByFile(baseDir);
+    for (const [file, allowed] of Object.entries(baseline as Record<string, number>)) {
+      const count = live[file];
+      if (count === undefined) continue; // the previous test already fails this case by name
+      expect(
+        count,
+        `${file}: live ${count} < baseline ${allowed}; run \`pnpm --filter web exec tsx scripts/generate-i18n-baseline.ts\` to tighten`,
+      ).toBeGreaterThanOrEqual(allowed);
     }
   });
 });
@@ -1569,8 +1874,7 @@ describe("the i18n ratchet", () => {
 - [ ] **Step 6: Run it to verify it fails**
 
 Run: `pnpm --filter web exec vitest run src/lib/i18n/ratchet.test.ts -t "the i18n ratchet" > /tmp/t12b.txt 2>&1; cat /tmp/t12b.txt`
-Expected: FAIL — `ratchet-baseline.json` does not exist yet (module not found), or exists empty
-and every file with a nonzero live count fails by name.
+Expected: FAIL — `ratchet-baseline.json` does not exist yet (module not found).
 
 - [ ] **Step 7: Write the generator script and run it once**
 
@@ -1580,17 +1884,11 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { countsByFile } from "../src/lib/i18n/ratchet-scan";
 
-const AGENCY_ONLY_ALLOWLIST = [
-  /dashboard[\\/]accounts[\\/]page\.tsx$/,
-  /dashboard[\\/]blueprints[\\/]/,
-  /dashboard[\\/]work[\\/]/,
-  /dashboard[\\/]billing[\\/]/,
-];
-
-const counts = countsByFile(
-  [path.join(__dirname, "../src/app"), path.join(__dirname, "../src/components")],
-  AGENCY_ONLY_ALLOWLIST,
-);
+// No local allowlist or roots here (plan-review I2) — both come from
+// ratchet-scan.ts's own exports via countsByFile's default parameter, so
+// the script and the test can never drift into scanning two different
+// trees.
+const counts = countsByFile(path.join(__dirname, ".."));
 writeFileSync(
   path.join(__dirname, "../src/lib/i18n/ratchet-baseline.json"),
   JSON.stringify(counts, null, 2) + "\n",
@@ -1599,14 +1897,16 @@ console.log(`Wrote ${Object.keys(counts).length} file entries.`);
 ```
 
 Run: `pnpm --filter web exec tsx scripts/generate-i18n-baseline.ts`
-This writes the real baseline — the only step in this plan whose output is NOT hand-authored, by
-design (a count-based ratchet per decision 5 regenerates mechanically, never hand-edited to admit a
-new violation).
+This writes the real baseline, keyed on repo-relative POSIX paths — the only step in this plan
+whose output is NOT hand-authored, by design (a count-based ratchet per decision 5 regenerates
+mechanically, never hand-edited to admit a new violation).
 
 - [ ] **Step 8: Run the ratchet test to verify it passes**
 
 Run: `pnpm --filter web exec vitest run src/lib/i18n/ratchet.test.ts -t "the i18n ratchet" > /tmp/t12b.txt 2>&1; cat /tmp/t12b.txt`
-Expected: PASS — summary line `Tests  1 passed (1)`.
+Expected: PASS — summary line `Tests  3 passed (3)` (ceiling, staleness, and tightening all hold
+with equality immediately after a fresh generation, since the baseline was just written from this
+exact live state).
 
 - [ ] **Step 9: Confirm `pnpm check` collects this test**
 
@@ -1652,11 +1952,30 @@ and Task 1's column comment (client-role only); decision 2/6 encoded in Task 12'
 `AGENCY_ONLY_ALLOWLIST`; decision 3 is `resolveLocale`'s own default in Task 2; decision 4 is Task
 5 in full; decision 5 is Task 12's count-based (not hash-based) baseline.
 
-**Placeholder scan.** No "TBD"/"fill in details" strings found, with one exception flagged
-honestly rather than hidden: Task 11 Step 2 is explicitly left as a sketch because it depends on a
-choice inside Task 4's code that may evolve between when this plan is written and when Task 11 is
-executed — the plan says so outright and tells the implementer what to confirm, rather than
-asserting a signature this plan cannot verify yet. Every other step has complete code.
+**Placeholder scan.** No "TBD"/"fill in details" strings remain. The first draft's one sketch
+(Task 11 Step 2, the `?locale=pseudo` mechanism) is now concrete: `requestPseudoMode` is a
+separate, independently-tested function rather than a third `Locale` value, so nothing in Tasks 2,
+3, 6, 7, 8 or 9 had to change shape to accommodate it.
+
+**Plan-review fixes (second pass, this revision).** C1: `countsByFile`'s output keys were absolute,
+platform-specific paths — generated on Windows they would never match CI's Linux paths and every
+file would fall back to an allowance of 0; fixed with `relativeKey`, proven OS-independent by a
+dedicated unit test feeding literal Windows- and POSIX-style strings. I1: `AGENCY_ONLY_ALLOWLIST`
+named `dashboard/billing/`, which is the CLIENT's own account-scoped billing page
+(`${base}/billing` in `nav-groups.ts`), not an agency top-level route — replaced with the six
+routes `nav-groups.ts` actually names, with a test pinning the billing/accounts-list distinction.
+I2: the allowlist and scan roots were duplicated between the script and the test — both now import
+one `AGENCY_ONLY_ALLOWLIST`/`SCAN_ROOTS` pair from `ratchet-scan.ts`. I3: the ratchet only checked
+one direction (live ≤ baseline); it now also fails when live < baseline (the ceiling can only ever
+tighten, never coast) and when a baseline entry names a file that no longer exists. M1: the
+`require()` calls inside `countsByFile` moved to top-level imports. C2: `requestLocale` applied
+`account.language` unconditionally, so an operator opening a Spanish account saw Spanish — exactly
+what owner decision 1 rules out; fixed by threading `isOperator` (sourced from
+`requireAccountAccess`'s `isAgency`, the same signal `resolveThemeMode`'s own `isOperator`
+parameter already uses) through every call site (Tasks 4, 6, 7, 11). I4: the QA override was
+gated on `NODE_ENV !== "production"`, which is dead in Task 11's own `next build` + `next start`
+environment; replaced with an explicit `BIS_I18N_QA === "1"` flag, with an orchestrator note that
+it must never reach a Vercel project's environment variables.
 
 **Type/name consistency, checked task-to-task:** `Locale` — defined once in `lib/i18n/locale.ts`
 (Task 2), imported by name in Tasks 1 (db package's own structurally-identical copy, explicitly
@@ -1664,9 +1983,13 @@ NOT the same binding, noted in Task 1), 3, 4, 8, 9. `resolveLocale(userLanguage,
 — same parameter order and names used in Task 2's definition and every later task's prose
 description. `t(catalogue, key, locale, params?)` and `plural(catalogue, baseKey, count, locale,
 params?)` — defined in Task 2, called with that exact argument order in Tasks 6, 7, 8. `useLocale()`
-/ `LocaleProvider` — defined in Task 4, consumed by name in Task 6. `requestLocale(account,
-searchParams?)` — defined in Task 4, consumed in Task 7 and extended (not redefined) in Task 11.
-`getAccountLanguage`/`setAccountLanguage` — defined in Task 1, consumed by name in Task 5 (and
+/ `LocaleProvider` — defined in Task 4, consumed by name in Task 6. `requestLocale({ account,
+isOperator, userLanguage? }, searchParams?)` — defined in Task 4 with this exact shape, and Tasks
+6, 7 and 11 all call it (or, for Task 6's layout, call it with `{ account, isOperator }` and no
+`searchParams`, per that task's own documented reason) with the SAME field names — `isOperator`
+sourced from `requireAccountAccess`'s `isAgency` in every case, never re-derived a second way.
+`requestPseudoMode(searchParams?)` — defined in Task 11, used only there and in the dashboard
+page/styleguide page it also touches. `getAccountLanguage`/`setAccountLanguage` — defined in Task 1, consumed by name in Task 5 (and
 Tasks 4/8/9's "real caller" steps, which read `.language` off an already-loaded row rather than
 calling `getAccountLanguage` again — consistent with Task 4's own no-extra-query reasoning). One
 inconsistency found and fixed inline during this review: Task 1's first draft exported `Locale`
