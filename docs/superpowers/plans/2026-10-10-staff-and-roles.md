@@ -685,7 +685,7 @@ export async function reconcileMembership(db: SupabaseClient, clerk: ClerkTeamPo
 }
 ```
 
-ASSUMPTION (Clerk docs, unverified here): an organisation invitation's `public_metadata` is copied to the membership on acceptance. `acceptedInvitationMeta` is the second source in case it is not. Both are always consulted, so either answer works.
+ASSUMPTION: an organisation invitation's `public_metadata` is copied to the membership on acceptance. Verify it against Clerk's docs, or have the orchestrator make a dev-instance call, before relying on it. `acceptedInvitationMeta` is the second source in case it is not copied, and both are always consulted. Whichever way it goes, record the answer in the report.
 
 - [ ] **Step 4: Add the exports to `packages/db/src/index.ts`** (additive, one block, your own symbols only).
 - [ ] **Step 5: Run green** with the same command. Paste the summary line.
@@ -811,7 +811,7 @@ export async function requireAccountOwner(accountId: string): Promise<{ userId: 
 }
 ```
 
-`lib/team/clerk-team.ts` builds the port on `clerkClient()`:
+`lib/team/clerk-team.ts` builds the port on `clerkClient()`. Before writing each call, verify its method name, parameters and response field names against Clerk's docs for the installed `@clerk/nextjs` 7.x (or have the orchestrator make a dev-instance call) before relying on it. Implementers make no Clerk calls themselves (rule 7). The calls:
 - `getUser`: `users.getUser`. Map `primaryEmailAddress?.emailAddress`, `fullName` and `publicMetadata`. A 404 returns null.
 - `getMembership`: `users.getOrganizationMembershipList({ userId })`, find the entry whose `organization.id === orgId`, return `{ role, publicMetadata }` or null.
 - `acceptedInvitationMeta`: `organizations.getOrganizationInvitationList({ organizationId, status: ["accepted"] })`, match `emailAddress` case-insensitively, return `publicMetadata` or null.
@@ -830,13 +830,14 @@ The same file also exports the Team's calls, all with `loggableError` logging on
 
 **Files**
 - Create: `apps/web/src/app/api/webhooks/clerk/route.ts`, `apps/web/src/app/api/webhooks/clerk/route.test.ts`
-- Modify: `.env.example` (add `CLERK_WEBHOOK_SIGNING_SECRET=` under the Clerk block, with the comment `# Svix signing secret of the Clerk webhook endpoint (production instance in Production, development instance in Preview). Sensitive.`)
+- Modify: `.env.example` (add `CLERK_WEBHOOK_SIGNING_SECRET=` under the Clerk block, with the comment `# Svix signing secret of the production Clerk instance's webhook endpoint. Production only: Preview, CI and local runs leave it unset (the route answers 503 and the per-request fallback keeps memberships in step). Sensitive.`)
+- Ruling (coordinator, 2026-10-10): there is NO webhook endpoint for Preview. CI and e2e must never need this secret.
 
 **Interfaces**
 - Consumes: `reconcileMembership`, `upsertUserFromClerk`, `isAgencyMetadata`, `serviceDb` (Task 2), `liveClerkTeamPort` (Task 3; if Task 3 has not landed, Task 4 creates `clerk-team.ts`'s port and Task 3 extends it. The two tasks agree on that file's port signature from Task 2).
 - Produces: `POST(request: Request): Promise<Response>`.
   - Bad or missing signature: 400, nothing read or written.
-  - Secret unset: 500.
+  - Secret unset: 503 `not configured`. This is the normal state on Preview, CI and local runs, so it is not an outage.
   - Unknown type: 200 `ignored`.
   - Unknown org: 200 (reconcile returns `no_account`).
   - Any database or Clerk failure: 500, so Svix retries.
@@ -894,9 +895,12 @@ describe("clerk webhook", () => {
     reconcile.mockRejectedValue(new Error("db down"));
     expect((await POST(signed(membership("organizationMembership.created")))).status).toBe(500);
   });
-  it("an unset secret is 500, not a silent accept", async () => {
+  it("an unset secret is 503 'not configured', writes nothing and is not a silent accept (mutation: 200 or 500 -> FAILS)", async () => {
     delete process.env.CLERK_WEBHOOK_SIGNING_SECRET;
-    expect((await POST(signed(membership("organizationMembership.created")))).status).toBe(500);
+    const res = await POST(signed(membership("organizationMembership.created")));
+    expect(res.status).toBe(503);
+    expect(await res.text()).toBe("not configured");
+    expect(reconcile).not.toHaveBeenCalled();
   });
 });
 ```
@@ -919,7 +923,8 @@ type ClerkEvent = { type?: string; data?: {
 /** Public route: authenticated by its Svix signature, never by Clerk's session (proxy.ts protects /dashboard only). */
 export async function POST(request: Request): Promise<Response> {
   const secret = process.env.CLERK_WEBHOOK_SIGNING_SECRET;
-  if (!secret) { console.error("clerk webhook: CLERK_WEBHOOK_SIGNING_SECRET is not set"); return new Response("not configured", { status: 500 }); }
+  // Unset everywhere but Production (no Preview endpoint, by ruling): 503, quietly. The request fallback covers those environments.
+  if (!secret) return new Response("not configured", { status: 503 });
   const payload = await request.text();
   let event: ClerkEvent;
   try {
@@ -1073,7 +1078,7 @@ Every literal goes through one `sqlString()` helper that doubles `'` and refuses
   - `apps/web/src/app/(dashboard)/dashboard/layout.tsx` (computes the client's role and passes `isOwner`)
   - `apps/web/src/lib/palette/registry.ts` and the `CommandPalette` component that calls `buildPaletteEntries` (pass `isOwner`)
   - `apps/web/src/lib/messages.ts` (additive: `nav.team`, `nav.team.es`, `palette.settings.team`, `palette.settings.team.es`)
-- Tests: `apps/web/src/lib/nav-groups.test.ts`, `apps/web/src/lib/palette/registry.test.ts`, `apps/web/src/components/app-sidebar.test.ts`, `apps/web/src/components/topbar.test.ts`, the billing page and actions tests
+- Tests: `apps/web/src/lib/nav-groups.test.ts`, `apps/web/src/lib/palette/registry.test.ts`, `apps/web/src/components/app-sidebar.test.ts`, `apps/web/src/components/topbar.test.ts`, the billing page and actions tests, and `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/layout.test.ts` (the Staff banner case, step 3)
 
 **Interfaces**
 - `buildNavGroups(base: string | null, isAgency: boolean, isOwner: boolean): NavGroupSpec[]`. The third parameter is REQUIRED, so the compiler finds every caller. Billing is shown to a client only when `isOwner`.
@@ -1087,11 +1092,11 @@ Every literal goes through one `sqlString()` helper that doubles `'` and refuses
   - `app-sidebar.test.ts`: the Owner footer is Team, the Staff footer is absent, and the agency footer is Settings.
   - `topbar.test.ts`: `Topbar({ isAgency: false })` renders no `OrganizationSwitcher` (spec §6 pin; mutation: render it unconditionally, and the test fails).
   - Billing page and portal action: Staff are redirected via `requireAccountOwner` (mutation: keep `requireAccountAccess`, and the test fails).
-- [ ] **Step 2: Run red.** `pnpm --filter web exec vitest run src/lib/nav-groups.test.ts src/lib/palette/registry.test.ts src/components/app-sidebar.test.ts src/components/topbar.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/billing"`
+- [ ] **Step 2: Run red.** `pnpm --filter web exec vitest run src/lib/nav-groups.test.ts src/lib/palette/registry.test.ts src/components/app-sidebar.test.ts src/components/topbar.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/billing" "src/app/(dashboard)/dashboard/accounts/[accountId]/layout.test.ts"`. The layout Staff case may already pass, because the code is already correct. If it does, run its two mutations to prove it can fail, and say so in the report.
 - [ ] **Step 3: Implement.**
   - In `nav-groups.ts`, the Billing spread becomes `...(isAgency || !isOwner ? [] : [billing])`, with a comment that Staff do not see Billing (spec §4) and that hiding is convenience, the guard and policy being the boundary.
   - Billing page and action: `await requireAccountOwner(accountId)`.
-  - The account layout's payment-failed banner needs no change: for Staff, `readAccountBilling` returns null under the new policy, so no banner shows. Add a sentence to the layout comment saying so.
+  - **The payment-failed banner (`[accountId]/layout.tsx:44`).** The layout reads `account_billing` through the user token on every page. Under `account_billing_owner_read` a Staff session reads NO row, and RLS filtering is not an error. From the source: `getAccountBilling` uses `.maybeSingle()`, so no row returns `null` and nothing is thrown; `showsPaymentFailedBanner(null)` returns `false` (`billing !== null && …`). So for Staff there is no banner, no throw, and the layout's `catch` with its `console.error` never runs. Confirm that by test rather than by reading. In `[accountId]/layout.test.ts`, the Staff case mocks `requireAccountAccess` as a client Staff session and `getAccountBilling` resolving `null` (what the policy produces). Assert three things: no `BillingBanner` is rendered, `console.error` is never called, and children still render. Mutations: make `getAccountBilling` throw on no row (`.single()`), and the console assertion fails; make `showsPaymentFailedBanner` return `true` for null, and the banner assertion fails. Add a sentence to the layout comment saying Staff never see this banner.
 - [ ] **Step 4: Run green, run the mutation probes, then commit.** `feat(auth): Staff see no Billing; Team link and palette entries for Owners (staff and roles)`.
 
 ---
@@ -1127,7 +1132,8 @@ export function ownerCount(team: readonly { role: AccountRole }[]): number;
 
 Behaviour:
 - **Invite.** Account must have `client_access_enabled` (read on `serviceDb()`, as today). A known `roomLeft === 0` refuses with `team.full` before calling Clerk. Clerk invitation `role: "org:member"`, `public_metadata: { bis_role, bis_language }`, `inviter_user_id: userId`. Expected Clerk failures map through `clerkInviteError` to `team.invite.alreadyInvited`, `team.invite.alreadyMember`, `team.full` or `team.invite.failed`. The dialog keeps them and stays open.
-  - ASSUMPTION (Clerk docs, unverified): codes `duplicate_record`, `already_a_member_in_organization`, `organization_membership_quota_exceeded`. Unknown codes map to `failed`.
+  - ASSUMPTION: the error codes are `duplicate_record`, `already_a_member_in_organization` and `organization_membership_quota_exceeded`. Verify them against Clerk's docs or a dev-instance call before relying on them. Unknown codes map to `failed`.
+  - ASSUMPTION: `teamCapacity` reads the organisation's `maxAllowedMemberships`, the member count and the pending-invitation count from `organizations.getOrganization`. Verify the field names against Clerk's docs or a dev-instance call before relying on them. If the counts are not returned there, count the membership list and the pending-invitation list instead.
 - **Role change.** `setAccountMemberRole` on `serviceDb()`. `last_owner` gives `team.lastOwner`; `not_found` gives `team.changed`. Returns `previous` for the undo toast. Undo calls the same action with `previous`.
 - **Language.** `setMemberLanguage`, with the same shape.
 - **Remove.** `removeAccountMember` first (the guard), then `removeFromOrganization(orgId, clerkUserId)`. If Clerk fails, re-add the BIS row with `addAccountMember` at the same role and return `team.remove.failed`.
@@ -1144,7 +1150,7 @@ Behaviour:
     - **Remove rollback.** Clerk failing after the database delete calls `addAccountMember` with the original role.
     - **Invite payload.** The invite sends `role: "org:member"` and `public_metadata: { bis_role: "staff", bis_language: "en" }` by default. Mutation: `org:admin`, and the test fails.
 - [ ] **Step 2: Run red.** `pnpm --filter web exec vitest run src/lib/team/team-view.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/team/actions.test.ts"`
-- [ ] **Step 3: Implement** the actions as specified. Keep each action's first statement `await requireAccountOwner(accountId)`, and validate `userId` and `invitationId` shapes before use (UUID for `userId`; `/^orginv_[A-Za-z0-9]+$/` for `invitationId`, an ASSUMPTION on Clerk's id prefix that the test pins).
+- [ ] **Step 3: Implement** the actions as specified. Keep each action's first statement `await requireAccountOwner(accountId)`, and validate `userId` and `invitationId` shapes before use (UUID for `userId`; `/^orginv_[A-Za-z0-9]+$/` for `invitationId`). The `orginv_` prefix is an ASSUMPTION: verify it against Clerk's docs or a dev-instance call before relying on it, and pin it in a test.
 - [ ] **Step 4: Run green, run the mutation probes, then commit.** `feat(auth): Team actions with the last-Owner guard, cap and undo (staff and roles)`.
 
 ---
@@ -1226,7 +1232,7 @@ Specs, all on the per-run `E2E Client Co <stamp>` account (never Test Client One
    - visiting `/billing`, `/team` and `/contacts/export` directly lands on `/dashboard/accounts/<id>/dashboard`.
 3. **A direct delete through Staff's own token is refused.** `mintClientToken(staffClerkUserId)` (`e2e/support.ts`), seed a contact with `serviceDb()`, then `DELETE ${SUPABASE_URL}/rest/v1/contacts?id=eq.<id>` with the anon key and bearer token. Expect 200 with `[]`, and a soft read-back that the row still exists (the `server-only-writes.spec.ts` shape). Clean up in `finally`.
 4. **Owner manages the team.** With the client (Owner) state on `/team`:
-   - invite `e2e-invite-<stamp>+clerk_test@example.com` as Staff and see it listed as Invited (ASSUMPTION, Clerk docs: `+clerk_test` addresses on a development instance send no email);
+   - invite `e2e-invite-<stamp>+clerk_test@example.com` as Staff and see it listed as Invited (ASSUMPTION: `+clerk_test` addresses on a development instance send no email. Verify against Clerk's docs or a dev-instance call before relying on it; if it is false, the address stays on reserved `example.com`, which never delivers);
    - change the Staff person's role to Owner, press Undo, and see Staff again; read back with `serviceDb()`: role `staff`;
    - remove the invitation with Undo and see it listed again;
    - remove the Staff person, Undo, and confirm the membership exists again (read back).
@@ -1242,7 +1248,7 @@ Specs, all on the per-run `E2E Client Co <stamp>` account (never Test Client One
 
 ## Task 12: Rollout checklist (orchestrator; not a coding task)
 
-Spec §10, with one ordering change: the backfill runs BEFORE the deploy. The migration's restrictive policies take Delete, calendar settings and Billing from every existing client login until that login has an Owner membership. The backfill is pure SQL that needs only the migration, so running it first leaves no window.
+**The sequence below is authoritative and SUPERSEDES spec §10's order** (coordinator ruling, 2026-10-10): migration on the CI project, backfill SQL on the CI project, migration on production, backfill SQL on production IMMEDIATELY, parity, then merge and deploy. The reason: the migration's restrictive policies take Delete, calendar settings and Billing from every existing client login until that login has an Owner membership. The backfill is pure SQL that needs only the migration, so running it straight after leaves no window.
 
 - [ ] **Merge prep.** Fetch, merge `main` into the branch, re-run the gates on the combined tree, and confirm the migration number is still the next free one. If the Spanish lane took it, renumber before anything is applied.
 - [ ] **1a. CI project.** Apply `NNNN_staff_and_roles.sql` through `ci-project-setup.yml`. Before applying, verify `select role, count(*) from public.memberships group by role` (expected: no rows; if any, record them).
@@ -1251,19 +1257,19 @@ Spec §10, with one ordering change: the backfill runs BEFORE the deploy. The mi
   2. Run `pnpm --filter @bis/db backfill:members <accounts.json> --emit-sql <out.sql>`.
   3. Read the printed counts.
   4. Run `out.sql` via MCP on bis-ci.
-- [ ] **1c. Production.** Apply the migration via MCP, then repeat 1b with the PRODUCTION instance's key and production's accounts. Run each exactly once.
+- [ ] **1c. Production.** Apply the migration via MCP, then IMMEDIATELY repeat 1b with the PRODUCTION instance's key and production's accounts. Run each exactly once. Do not leave a gap between the two.
 - [ ] **1d. Parity.** Run `docs/runbooks/ci-supabase-project.md`'s parity check between bis-ci and production.
-- [ ] **2. Clerk webhook endpoints, one per instance, each with its own Svix signing secret.**
-  - **Production instance:** endpoint `https://app.bis-rgv.com/api/webhooks/clerk`, events `user.created`, `user.updated`, `organizationMembership.created`, `organizationMembership.deleted`. Put its signing secret in Vercel **Production** as `CLERK_WEBHOOK_SIGNING_SECRET` (Sensitive).
-  - **Development instance:** its signing secret goes in Vercel **Preview** as `CLERK_WEBHOOK_SIGNING_SECRET`. This is the development secret only; never a production credential in Preview.
-  - Open question for danlo: Preview sits behind Vercel Authentication and has no stable URL, so Clerk cannot reach it without a protection-bypass URL. Either point the development endpoint at a stable Preview alias using Vercel's "Protection Bypass for Automation" secret, or create no development endpoint and let the per-request fallback serve Preview and CI. The fallback alone is correct.
-  - Use Remove-then-Add for any existing name, then REDEPLOY.
-  - Owner step in the Clerk dashboard. Clerk's Backend API for webhook endpoints is an assumption, unverified.
+- [ ] **2. Exactly ONE Clerk webhook endpoint, on the production instance** (coordinator ruling: no Preview endpoint; the per-request fallback covers Preview and CI).
+  - Endpoint `https://app.bis-rgv.com/api/webhooks/clerk`.
+  - Events `user.created`, `user.updated`, `organizationMembership.created`, `organizationMembership.deleted`.
+  - Its Svix signing secret goes in Vercel **Production only** as `CLERK_WEBHOOK_SIGNING_SECRET` (Sensitive). Use Remove-then-Add if the name already exists, then REDEPLOY.
+  - Preview, CI and local runs get no secret: the route answers 503 `not configured` there (Task 4 tests that case).
+  - This is an owner step in the Clerk dashboard. Whether Clerk's Backend API can create webhook endpoints is an assumption: verify it against Clerk's docs before relying on it, and use the dashboard otherwise.
   - `.env.example` already carries the name (Task 4).
 - [ ] **3. Merge and deploy.** Read the check runs for the head SHA via REST, merge by REST PUT with `sha` pinned, then verify the deploy:
   - READY with the merge SHA, aliased to `app.bis-rgv.com`;
   - `/` 200, `/sign-in` 200, `/api/cron/reminders` 401, `/b/bogus` 404;
-  - `POST /api/webhooks/clerk` with no signature returns 400 (the route shipped, and it is configured: a missing secret would be 500);
+  - `POST /api/webhooks/clerk` with no signature returns 400 on production (the route shipped and the secret is set: a missing secret would be 503);
   - a served-HTML grep for the Team link marker on a client Owner page.
 - [ ] **4. Webhook delivery.** In Clerk's dashboard, send a test event to the production endpoint and see 200 (an unknown org is acknowledged and ignored).
 - [ ] **5. Verify.** On production: `select a.name, u.email, m.role from memberships m join users u on u.id = m.user_id join accounts a on a.id = m.account_id order by 1, 2`. Every live client login has role `owner`, and no agency user appears.
@@ -1287,11 +1293,11 @@ Spec §10, with one ordering change: the backfill runs BEFORE the deploy. The mi
 | §6 invitations, webhook, fallback, removal, backfill, Clerk team screen | Tasks 9, 4, 3, 9, 5, 8 |
 | §7 contact delete, calendar settings, billing (with the table list), app guards, nav and buttons, last Owner | Tasks 1, 6, 7, 8, 3, 9 |
 | §8 Team screen: where, list, invite, inline change, remove and revoke, cap, states, copy, definition of done | Tasks 8 and 10 |
-| §9 errors: webhook 400/200/500; fallback fails closed and logs; dialog errors | Tasks 4, 3, 9 |
+| §9 errors: webhook 400/200/500, plus 503 when the secret is unset (ruling); fallback fails closed and logs; dialog errors | Tasks 4, 3, 9 |
 | §10 rollout | Task 12 |
 | §11 testing: database matrix, grants guard, webhook, fallback, Team actions, e2e | Tasks 1, 1, 4, 3, 9, 11 |
 
 ## Findings for the ledger (outside this plan's scope)
 
-1. **The Clerk-side admin path.** Existing client logins are Clerk `org:admin`. An `org:admin` can call Clerk's Frontend API from the browser to invite someone as `org:admin`, and by spec §6's fallback rule that person lands as Owner. Hiding `OrganizationSwitcher` closes the UI, not the API. A follow-up could demote client logins to `org:member` in Clerk once BIS records them as Owner. That needs a check that Clerk tolerates an organisation whose only `org:admin` is the agency.
+1. **Follow-up: retire the `org:admin` → Owner fallback rule.** Coordinator ruling: this is not an escalation, because only Owners are Clerk `org:admin` and they can already make Owners from the Team screen. After the production backfill, demote every client `org:admin` to `org:member` in Clerk, so that spec §6's "`org:admin` → Owner" branch of the fallback rule can be removed. First verify against Clerk's docs or a dev-instance call that an organisation may have no client `org:admin`, its only admin being the agency.
 2. **Who receives the payment-failed banner.** After this change, Staff no longer see it (they cannot read `account_billing`). That matches R4, but the agency should know who gets that message.
