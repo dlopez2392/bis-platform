@@ -10,6 +10,7 @@ import { ensureConversation, createMessage } from "../messaging";
 import { getOrCreateCalendar, createBooking, setBookingStatus,
          updateCalendarSettings } from "../booking";
 import { setChecklistItem } from "../checklist";
+import { planDemoCalls, DEMO_CALL_COUNT } from "./call-times";
 import { setFromEmail } from "../sending-identity";
 import { createForm, updateForm, createSubmission, recordRejectedSubmission, linkSubmissionContact } from "../forms";
 import { upsertAutomation } from "../automations";
@@ -549,7 +550,7 @@ async function seedConversations(
 }
 
 /**
- * Thirty-four calls across three weeks, cycling the eight transcripts so
+ * Thirty-four calls across two weeks, cycling the eight transcripts so
  * every outcome — including `abandoned` and `spam` — appears more than once.
  * A call log that is five green rows out of five is the first thing a
  * sceptical buyer stops believing.
@@ -573,7 +574,15 @@ async function seedCalls(
     es: contacts.filter((c) => c.person.lang === "es"),
   };
 
-  const TOTAL = 34;
+  // When each call happened is planned in call-times.ts, so the dashboard's
+  // week-over-week deltas, after-hours included, do not depend on which
+  // weekday the seed runs (the 2026-10-10 capture showed after-hours down
+  // 11%, in red, on the website's hero).
+  const TOTAL = DEMO_CALL_COUNT;
+  const scripts = Array.from({ length: TOTAL }, (_, i) => DEMO_TRANSCRIPTS[i % DEMO_TRANSCRIPTS.length]!);
+  const spanishBooking = scripts.findIndex((s) => s.lang === "es" && s.outcome === "booked");
+  const plan = planDemoCalls(now, DEMO_TIMEZONE, scripts.map((s) => s.outcome),
+    spanishBooking >= 0 ? [spanishBooking] : []);
   for (let i = 0; i < TOTAL; i++) {
     const script = DEMO_TRANSCRIPTS[i % DEMO_TRANSCRIPTS.length]!;
     // Spam and abandoned callers are strangers: no contact row, which is
@@ -586,16 +595,16 @@ async function seedCalls(
     const callerE164 = contact ? demoPhone(contact.person.line) : demoPhone(between(r, 50, 99));
     assertFiction(undefined, callerE164, `caller on call ${i}`);
 
-    // Working backwards day by day, but NOT uniformly: three a day across the
-    // last week and two a day before it. The dashboard's KPIs compare the
-    // last 7 local days against the 7 before, and a flat 2-a-day spread makes
-    // every one of those deltas a coin flip — the first capture came back
-    // with calls down 14% and after-hours down 50% on the hero row of a
-    // screenshot whose job is to argue the product works. A demo tenant is a
+    // More calls in the recent week than the one before (20 against 14), for
+    // the reason the old comment here gave: a flat spread made every
+    // week-over-week delta on the hero row a coin flip. A demo tenant is a
     // business we are choosing to portray; portraying it as growing is as
     // honest as portraying it as flat, and far more use.
-    const daysAgo = i < 21 ? Math.floor(i / 3) : 7 + Math.floor((i - 21) / 2);
-    const startedAt = now - daysAgo * DAY - (between(r, 8, 17) * HOUR) + between(r, 0, 59) * MIN;
+    const startedAt = plan[i]!.startedAt;
+    // The two draws the old random timing made, still made and discarded, so
+    // the RNG stream every LATER seeder reads (bookings, deals, contacts'
+    // activity) is the same as before and nothing else on the account moves.
+    between(r, 8, 17); between(r, 0, 59);
 
     const { id: callId } = await startCallRow(db, accountId,
       { phoneNumberId: phone.id, callerE164 });
