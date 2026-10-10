@@ -857,6 +857,20 @@ describe("reschedule / cancel", () => {
         { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
       const sent = sendMock.mock.calls[0]![0] as { body: string };
       expect(sent.body).toContain("https://x.example/b/pub1/cancel/newtok99?locale=es");
+      // F-048 (#230): the add-to-calendar file and the move link, on the NEW
+      // booking's token (its .ics UID/SEQUENCE update the saved event), in
+      // the caller's language. Mutation: the old booking's token → FAILS.
+      expect(sent.body).toContain("https://x.example/b/pub1/ics/newtok99?locale=es");
+      expect(sent.body).toContain("https://x.example/b/pub1/move/newtok99?locale=es");
+    });
+
+    it("an English caller's moved email carries the calendar and move links on the NEW token, with no locale", async () => {
+      await runTool(emptyCallState(), ctx, "reschedule_appointment",
+        { bookingId: "old1", startsAt: "2027-06-02T14:00:00.000Z" });
+      const sent = sendMock.mock.calls[0]![0] as { body: string; html: string };
+      expect(sent.body).toMatch(/https:\/\/x\.example\/b\/pub1\/ics\/newtok99$/m);
+      expect(sent.body).toMatch(/https:\/\/x\.example\/b\/pub1\/move\/newtok99$/m);
+      expect(sent.html).toContain('href="https://x.example/b/pub1/move/newtok99"');
     });
 
     it("a contact with no email on file gets no send and raises no flag", async () => {
