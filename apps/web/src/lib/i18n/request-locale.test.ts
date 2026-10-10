@@ -25,7 +25,18 @@ describe("requestLocale", () => {
   it("the ?locale= override applies only when BIS_I18N_QA is exactly \"1\" (mutation: drop the flag check → the unset case FAILS, honouring the override anyway)", () => {
     expect(requestLocale({ account: { language: "en" }, isOperator: false }, { locale: "es" })).toBe("en");
     vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", ""); // not a Vercel deployment, whatever the host env says
     expect(requestLocale({ account: { language: "en" }, isOperator: false }, { locale: "es" })).toBe("es");
+  });
+
+  // M2 (whole-branch review): a second, independent floor under the flag.
+  // Vercel sets VERCEL on every deployment it builds or runs, so even a
+  // BIS_I18N_QA=1 that somehow reached a deployment's env cannot turn the
+  // override on there. A plain presence read — no value is parsed.
+  it("the ?locale= override is refused on a Vercel deployment even with BIS_I18N_QA=\"1\" (mutation: drop the !process.env.VERCEL check → FAILS, the override applies)", () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "1");
+    expect(requestLocale({ account: { language: "en" }, isOperator: false }, { locale: "es" })).toBe("en");
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -34,12 +45,19 @@ describe("requestLocale", () => {
 describe("requestPseudoMode", () => {
   afterEach(() => vi.unstubAllEnvs());
 
+  it("is false on a Vercel deployment even with BIS_I18N_QA=\"1\" and ?locale=pseudo (mutation: drop the !process.env.VERCEL check → FAILS)", () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "1");
+    expect(requestPseudoMode({ locale: "pseudo" })).toBe(false);
+  });
+
   it("is false when BIS_I18N_QA is unset, even with ?locale=pseudo (mutation: drop the flag check → FAILS, returns true anyway)", () => {
     expect(requestPseudoMode({ locale: "pseudo" })).toBe(false);
   });
 
   it("is true only when BIS_I18N_QA=\"1\" AND ?locale=pseudo are BOTH present", () => {
     vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
     expect(requestPseudoMode({ locale: "pseudo" })).toBe(true);
     expect(requestPseudoMode({ locale: "es" })).toBe(false);
     expect(requestPseudoMode(undefined)).toBe(false);

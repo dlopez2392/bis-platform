@@ -20,6 +20,17 @@ function isLocale(v: unknown): v is Locale {
   return v === "en" || v === "es";
 }
 
+/** The QA override (`?locale=`, `?locale=pseudo`) is on only when BOTH hold:
+ *  the explicit flag (set only in Playwright's webServer env and CI's e2e
+ *  job), AND this is not a Vercel deployment — Vercel sets `VERCEL` on every
+ *  deployment it builds or runs, so a flag that strayed into a deployment's
+ *  env still cannot switch anything there (M2, whole-branch review). A plain
+ *  string comparison and a presence read; no value is parsed (Global
+ *  Constraints: no .env value parsed by code that can throw). */
+function qaOverrideEnabled(): boolean {
+  return process.env.BIS_I18N_QA === "1" && !process.env.VERCEL;
+}
+
 export function requestLocale(
   input: {
     account: { language: Locale | null } | null | undefined;
@@ -39,7 +50,7 @@ export function requestLocale(
   // no parsing (Global Constraints: no .env value parsed by code that can
   // throw). Set ONLY in Playwright's webServer env (Task 11) and CI's e2e
   // job — NEVER on a Vercel deployment (orchestrator checklist, below).
-  if (process.env.BIS_I18N_QA === "1") {
+  if (qaOverrideEnabled()) {
     const raw = searchParams?.locale;
     const override = Array.isArray(raw) ? raw[0] : raw;
     if (isLocale(override)) return override;
@@ -65,7 +76,7 @@ export function requestLocale(
 export function requestPseudoMode(
   searchParams?: Record<string, string | string[] | undefined>,
 ): boolean {
-  if (process.env.BIS_I18N_QA !== "1") return false;
+  if (!qaOverrideEnabled()) return false;
   const raw = searchParams?.locale;
   const value = Array.isArray(raw) ? raw[0] : raw;
   return value === "pseudo";
