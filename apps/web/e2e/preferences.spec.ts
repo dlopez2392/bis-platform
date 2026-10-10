@@ -165,7 +165,7 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
     await expect(toastWithText(page, m["prefs.undone"])).toBeVisible();
   });
 
-  // Step 3. Theme survives a reload with no flash — read from the RAW
+  // Step 3. The saved theme is what the server paints first — read from the RAW
   // response both times, in both directions, so neither assertion could
   // pass merely because "light" (or "dark") happens to be some fallback.
   test("a saved theme outranks a disagreeing cookie in the server's own first paint", async ({ page, baseURL }) => {
@@ -176,10 +176,19 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
     // Manufacture the disagreement: without this, the cookie ThemeCookieSync
     // itself just wrote already matches the choice, and the test could pass
     // on a server that read the cookie instead of the stored theme.
+    // No reload between the cookie and the fetch (final fix wave, I2): a
+    // reload mounts ThemeCookieSync, which writes the stored choice back into
+    // the cookie, so the server would then see an AGREEING cookie and the
+    // assertion could pass on a server that reads the cookie. page.request
+    // shares the context's cookie jar; the positive control below proves the
+    // disagreeing value is what that request carried.
+    const themeCookieNow = async () =>
+      (await page.context().cookies(baseURL)).find((c) => c.name === THEME_COOKIE)?.value;
     await page.context().addCookies([{ name: THEME_COOKIE, value: "dark", url: baseURL }]);
-    await page.reload();
     const litUrl = page.url();
+    expect(await themeCookieNow()).toBe("dark");
     const litHtml = await (await page.request.get(litUrl)).text();
+    expect(await themeCookieNow()).toBe("dark");
     // Mutation: drop `prefs.theme` from getRequestTheme's
     // pickRequestThemeMode(...) call (tenant-theme-reader.ts) → this reads
     // the disagreeing cookie's "dark" instead of the saved "light" → FAILS.
@@ -188,9 +197,10 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
     await page.getByRole("radio", { name: "Dark", exact: true }).click();
     await expect(toastWithText(page, m["prefs.saved.theme.dark"])).toBeVisible({ timeout: 15_000 });
     await page.context().addCookies([{ name: THEME_COOKIE, value: "light", url: baseURL }]);
-    await page.reload();
     const darkUrl = page.url();
+    expect(await themeCookieNow()).toBe("light");
     const darkHtml = await (await page.request.get(darkUrl)).text();
+    expect(await themeCookieNow()).toBe("light");
     expect(rawServerThemeDefault(darkHtml)).toBe("dark");
   });
 
