@@ -15,13 +15,8 @@ vi.mock("sonner", () => ({ toast: toasts }));
 const { ClientAccessPanel, ClientAccessSwitch } = await import("./client-access-panel");
 
 const noop = async () => {};
-const invite = async () => ({ ok: true as const });
 const panel = (enabled: boolean) =>
-  renderToStaticMarkup(
-    createElement(ClientAccessPanel, {
-      enabled, members: [], setAccessAction: noop, inviteAction: invite,
-    }),
-  );
+  renderToStaticMarkup(createElement(ClientAccessPanel, { enabled, setAccessAction: noop }));
 const primaries = (html: string) => html.match(/btn-primary/g)?.length ?? 0;
 
 /** Every element the (hook-free) switch RETURNS, so its form action can be
@@ -40,9 +35,20 @@ beforeEach(() => {
 });
 
 describe("ClientAccessPanel (D-002)", () => {
-  it("carries exactly ONE primary button whether access is on or off (rule 8) (mutation: render the switch as the default variant while on → two primaries, FAILS)", () => {
-    expect(primaries(panel(true))).toBe(1);
+  // Staff and roles (Task 10): the invite left this card for the Team card
+  // under it, which carries its own one primary. While access is on, this
+  // card's only button is "Turn off", which stays ghost; while off, "Turn on"
+  // is the one thing the card can do, so it is the primary.
+  it("never carries more than ONE primary: none while on, Turn on while off (rule 8) (mutation: render Turn off as the default variant → FAILS)", () => {
+    expect(primaries(panel(true))).toBe(0);
     expect(primaries(panel(false))).toBe(1);
+  });
+
+  it("no longer carries an invite form or a member list: the Team card owns both (mutation: leave the invite field → FAILS)", () => {
+    const html = panel(true);
+    expect(html).not.toContain('name="email"');
+    expect(renderedText(html)).not.toContain(m["clientAccess.members"]);
+    expect(renderedText(html)).not.toContain(m["clientAccess.invite"]);
   });
 
   it("says whether access is on or off, as a dot AND a word (rule 3) (mutation: drop the status pill → FAILS)", () => {

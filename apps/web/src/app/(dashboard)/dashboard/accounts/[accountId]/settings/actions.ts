@@ -75,62 +75,6 @@ export async function setClientAccessAction(accountId: string, formData: FormDat
 }
 
 /**
- * Sets a company's display name and logo.
- *
- * Agency-only, and the gate is the first statement: the whole milestone rests
- * on there being no client-facing write path to branding. `accountId` is bound
- * server-side by the caller via `.bind(null, accountId)` — never a form field,
- * or this becomes the thirteenth IDOR on this codebase.
- *
- * serviceDb() is correct here, as it is elsewhere in this file: Settings is
- * agency-only, and a Storage write needs the service role.
- */
-export async function inviteClientAdminAction(
-  accountId: string,
-  formData: FormData,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { userId, isAgency } = await requireAccountAccess(accountId);
-  if (!isAgency) throw new Error("only the agency may invite client users");
-
-  const email = String(formData.get("email") ?? "").trim();
-  if (!email) return { ok: false, error: m["clientAccess.inviteFailed"] };
-
-  const db = serviceDb();
-  const { data: account, error } = await db.from("accounts")
-    .select("clerk_org_id, client_access_enabled").eq("id", accountId).maybeSingle();
-  if (error) throw new Error(`invite: account lookup failed: ${error.message}`);
-  if (!account) throw new Error("invite: account not found");
-  if (!account.client_access_enabled) {
-    return { ok: false, error: m["clientAccess.disabledHint"] };
-  }
-
-  const res = await fetch(
-    `https://api.clerk.com/v1/organizations/${account.clerk_org_id}/invitations`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.CLERK_SECRET_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        email_address: email,
-        role: "org:admin",
-        inviter_user_id: userId,
-      }),
-    },
-  );
-  if (!res.ok) {
-    // Expected failures (already invited, already a member, seat limit) are
-    // rendered, not thrown — the dialog shows them and stays open.
-    console.error("clerk invite failed", res.status, await res.text());
-    return { ok: false, error: m["clientAccess.inviteFailed"] };
-  }
-
-  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
-  return { ok: true };
-}
-
-/**
  * Agency-only, and BOTH writes below go through serviceDb() — which is bound
  * by neither RLS nor column grants — so the requireAgencyOnlyAccountAccess
  * guard on the first line is the ONLY gate on this write. Nothing in the

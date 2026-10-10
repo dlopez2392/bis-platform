@@ -1,32 +1,17 @@
 "use client";
 
-import { useState } from "react";
 import { useFormStatus } from "react-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { DotPill } from "@/components/dot-pill";
 import { m } from "@/lib/messages";
 
-export type ClientAccessMember = { id: string; email: string; role: string };
-
-// ONE primary per card (DESIGN.md rule 8), and which one depends on the
-// state: while access is off the only thing this card can do is turn it on,
-// so that is the primary and the (disabled) Invite is ghost; while it is on,
-// Invite is the work and "Turn off" steps back to ghost.
-function InviteButton({ disabled }: { disabled: boolean }) {
-  const { pending } = useFormStatus();
-  return (
-    <Button type="submit" variant={disabled ? "ghost" : "default"} disabled={disabled || pending}>
-      {pending ? m["common.saving"] : m["clientAccess.invite"]}
-    </Button>
-  );
-}
-
+// At most ONE primary per card (DESIGN.md rule 8): while access is off the
+// only thing this card can do is turn it on, so that is the primary; while it
+// is on, "Turn off" is ghost, and the work (inviting) is the Team card's own
+// primary under this one (staff and roles, Task 10).
 function AccessButton({ primary, children }: { primary: boolean; children: React.ReactNode }) {
   const { pending } = useFormStatus();
   return (
@@ -82,26 +67,18 @@ export function ClientAccessSwitch({
   );
 }
 
+/**
+ * The Client access card: the on/off switch alone. Staff and roles (Task 10)
+ * moved the member list and the invite to the Team card, which
+ * ClientAccessSection renders under this one while access is on.
+ */
 export function ClientAccessPanel({
   enabled,
-  members,
-  pendingInvites = [],
-  membersUnavailable = false,
   setAccessAction,
-  inviteAction,
 }: {
   enabled: boolean;
-  members: ClientAccessMember[];
-  /** Invited but not yet accepted. Listed alongside members because the
-   *  success toast is transient — without these, an agency that invited
-   *  someone sees no trace of it after a reload. */
-  pendingInvites?: ClientAccessMember[];
-  membersUnavailable?: boolean;
   setAccessAction: (formData: FormData) => Promise<void>;
-  inviteAction: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
-  const [email, setEmail] = useState("");
-
   return (
     // The palette's `settings:client-access` entry jumps here. scroll-mt-24
     // keeps the anchored section clear of the sticky topbar instead of
@@ -112,71 +89,8 @@ export function ClientAccessPanel({
         <CardTitle>{m["clientAccess.title"]}</CardTitle>
         <CardDescription>{m["clientAccess.body"]}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
+      <CardContent>
         <ClientAccessSwitch enabled={enabled} setAccessAction={setAccessAction} />
-
-        <div className="space-y-2">
-          <p className="text-sm font-medium text-card-foreground">{m["clientAccess.members"]}</p>
-          {membersUnavailable ? (
-            <p className="text-sm text-destructive">{m["clientAccess.membersUnavailable"]}</p>
-          ) : members.length === 0 && pendingInvites.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{m["common.none"]}</p>
-          ) : (
-            <ul className="flex flex-col">
-              {members.map((member) => (
-                <li
-                  key={member.id}
-                  className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--row-line)] py-[7px] text-[13px] first:border-t-0"
-                >
-                  <span className="font-medium text-card-foreground">{member.email}</span>
-                  <Badge variant="secondary" className="font-normal">{member.role}</Badge>
-                </li>
-              ))}
-              {pendingInvites.map((invite) => (
-                <li
-                  key={invite.id}
-                  className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-dashed border-[var(--line-strong)] py-[7px] text-[13px] first:border-t-0"
-                >
-                  <span className="font-medium text-muted-foreground">{invite.email}</span>
-                  <Badge variant="secondary" className="font-normal">{invite.role}</Badge>
-                  <Badge variant="outline" className="font-normal">
-                    {m["clientAccess.invitePending"]}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <form
-          action={async (formData) => {
-            const result = await inviteAction(formData);
-            if (result.ok) {
-              toast.success(m["clientAccess.inviteSent"]);
-              setEmail("");
-            } else {
-              toast.error(result.error);
-            }
-          }}
-          className="space-y-3"
-        >
-          <div className="space-y-1.5">
-            <Label htmlFor="invite-email">{m["clientAccess.inviteEmail"]}</Label>
-            <Input
-              id="invite-email"
-              name="email"
-              type="email"
-              required
-              disabled={!enabled}
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
-          {!enabled ? (
-            <p className="text-xs text-muted-foreground">{m["clientAccess.disabledHint"]}</p>
-          ) : null}
-          <InviteButton disabled={!enabled} />
-        </form>
       </CardContent>
     </Card>
   );
@@ -184,9 +98,9 @@ export function ClientAccessPanel({
 
 /**
  * Shaped like the loaded card (DESIGN.md rule 7, no spinners): the status
- * pill and its button (ClientAccessSwitch), the "Members" label and two
- * rows, the invite field and its button. The title and description are
- * static copy, so they are real text, not bars.
+ * pill and its button (ClientAccessSwitch). The title and description are
+ * static copy, so they are real text, not bars. The Team card under it has
+ * its own skeleton (components/team/team-card.tsx).
  *
  * It carries the card's `id="client-access"` because the hash scroll runs
  * ONCE, when the page first commits, which is while this is showing. Without
@@ -202,19 +116,10 @@ export function ClientAccessSkeleton() {
         <CardTitle>{m["clientAccess.title"]}</CardTitle>
         <CardDescription>{m["clientAccess.body"]}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
+      <CardContent>
         <div className="flex flex-wrap items-center gap-3">
           <Skeleton className="h-6 w-28 rounded-full" />
           <Skeleton className="h-9 w-36" />
-        </div>
-        <div className="space-y-2">
-          <Skeleton className="h-4 w-20" />
-          {[0, 1].map((i) => <Skeleton key={i} className="h-[34px] w-full" />)}
-        </div>
-        <div className="space-y-3">
-          <Skeleton className="h-4 w-28" />
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-24" />
         </div>
       </CardContent>
     </Card>
