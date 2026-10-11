@@ -236,7 +236,7 @@ test.describe("the Owner runs the team", () => {
     expect(await readAccountRole(serviceDb(), accountId, clerkUserId)).toBe("owner");
   });
 
-  test("invite, promote with Undo, revoke with Undo, remove with Undo — the 5-seat cap counts exactly 3", async ({ page }) => {
+  test("invite, promote with Undo, revoke with Undo, remove with Undo — the 5-seat cap counts exactly 4", async ({ page }) => {
     const { accountId, clerkOrgId, staffClerkUserId } = fixture();
     const db = serviceDb();
     // Named before the try so the finally below can always find it, win or
@@ -326,17 +326,20 @@ test.describe("the Owner runs the team", () => {
       await expect(page.locator("[data-team-row]").filter({ hasText: "E2E Staff" })).toBeVisible();
       expect(await readAccountRole(db, accountId, staffClerkUserId)).toBe("staff");
 
-      // --- the 5-seat cap: Owner + Staff + one invitation is 3 -------------
-      // The agency setup user never joins this org at all (plan deviation 6:
-      // the agency is never a client membership), so it can only show up here
-      // as a THIRD stored team row — this is the only place that would be
-      // visible if it ever did.
-      await expect(page.locator("[data-team-row]")).toHaveCount(2);
+      // --- the 5-seat cap: Owner + Staff + Technician + one invitation is 4 -
+      // The Technician is auth.setup.ts's "authenticate as technician user"
+      // (F-085 part 1), a member of this same org. The agency setup user
+      // never joins this org at all (plan deviation 6: the agency is never a
+      // client membership), so it can only show up here as a FOURTH stored
+      // team row — this is the only place that would be visible if it ever
+      // did.
+      await expect(page.locator("[data-team-row]")).toHaveCount(3);
+      await expect(page.locator("[data-team-row]").filter({ hasText: "E2E Technician" })).toBeVisible();
       await expect(page.locator("[data-team-invite]")).toHaveCount(1);
       // Mutation: roomLeft() counting members OR pending but not both reads
-      // "Room for 3 more people" (members only) or a cap-sized number
-      // (pending only) instead of exactly 2 (5 - 2 - 1).
-      await expect(page.getByText(fillTemplate(m["team.room.many"], { count: "2" }))).toBeVisible();
+      // "Room for 2 more people" (members only) or a cap-sized number
+      // (pending only) instead of exactly 1 (5 - 3 - 1).
+      await expect(page.getByText(m["team.room.one"], { exact: true })).toBeVisible();
     } finally {
       // A failure at ANY step above must never leave this run's fixture with
       // a dangling invitation or a Staff login stuck at Owner (or removed
