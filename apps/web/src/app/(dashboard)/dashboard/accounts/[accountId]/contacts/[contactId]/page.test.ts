@@ -84,6 +84,10 @@ vi.mock("../actions", () => ({
   updateContactFieldAction: async () => ({ ok: true }),
 }));
 // The timeline pulls in the message composer; only its props are pinned.
+// Relationships spec §7: the Related people card, under the fields panel. Recorded, not run: it
+// fetches its own route on the client and has its own tests (relationships-card.test.ts).
+const relationshipsCardProps: unknown[] = [];
+vi.mock("../relationships-card", () => ({ RelationshipsCard: (p: unknown) => { relationshipsCardProps.push(p); return null; } }));
 const timelineProps = vi.fn();
 vi.mock("./activity-timeline", () => ({
   ActivityTimeline: (props: Record<string, unknown>) => { timelineProps(props); return null; },
@@ -492,5 +496,22 @@ describe("ContactDetailPage: Assigned to (F-085)", () => {
     getContactMock.mockResolvedValue({ ...CONTACT, assigned_to: "p-t" });
     await render();
     expect(timelineProps.mock.calls[0]![0]).toMatchObject({ canAssign: false, members: [] });
+  });
+});
+
+describe("ContactDetailPage: the Related people card (relationships spec §7)", () => {
+  beforeEach(() => {
+    relationshipsCardProps.length = 0;
+    getContactMock.mockReset();
+    getContactMock.mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+  });
+
+  it("renders the card with the page's own accountId and contactId (mutation: drop the card line from the page -> FAILS)", async () => {
+    await render();
+    expect(relationshipsCardProps).toContainEqual({ accountId: "acct1", contactId: "ct1" });
   });
 });
