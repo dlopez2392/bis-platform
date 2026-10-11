@@ -103,7 +103,10 @@ export function parseRelationshipRow(v: unknown): RelationshipRow | null {
   const r = v as Record<(typeof ROW_KEYS)[number], unknown>;
   if (![r.id, r.account_id, r.contact_id, r.related_contact_id].every(isUuid) || r.contact_id === r.related_contact_id) return null;
   if (!isRelationshipKey(r.label_key) || !isForm(r.contact_form) || !isForm(r.related_form)) return null;
-  if (r.label_key === "other" ? cleanCustomLabel(r.custom_label) !== r.custom_label : r.custom_label !== null) return null;
+  const customOk = r.label_key === "other"
+    ? typeof r.custom_label === "string" && cleanCustomLabel(r.custom_label) === r.custom_label
+    : r.custom_label === null;
+  if (!customOk) return null;
   if (![r.contact_can_pick_up, r.contact_is_emergency, r.related_can_pick_up, r.related_is_emergency].every((b) => typeof b === "boolean")) return null;
   if (r.label_key === "emergency_contact" && r.contact_is_emergency !== true) return null;
   if (r.label_key === "authorized_pickup" && r.contact_can_pick_up !== true) return null;

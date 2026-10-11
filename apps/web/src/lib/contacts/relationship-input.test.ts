@@ -60,5 +60,6 @@ describe("patches and the Undo snapshot", () => {
     expect(parseRelationshipRow({ ...ROW, label_key: "parent" })).toBeNull();
     expect(parseRelationshipRow({ ...ROW, contact_id: S })).toBeNull();
     expect(parseRelationshipRow({ ...ROW, extra: 1 })).toBeNull();
+    expect(parseRelationshipRow({ ...ROW, label_key: "other", custom_label: null })).toBeNull();
   });
 });
