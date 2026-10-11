@@ -163,7 +163,7 @@ describe("0027 instant reply", () => {
     });
   });
 
-  it("the client role's standing on form_submissions: SELECT only, one SELECT policy", async () => {
+  it("the client role's standing on form_submissions: SELECT only, one permissive SELECT policy (and 0068's restrictive Technician fence)", async () => {
     await withRollback(async (c) => {
       const { rows: grants } = await c.query<{ privilege_type: string }>(
         `select privilege_type from information_schema.role_table_grants
@@ -174,9 +174,14 @@ describe("0027 instant reply", () => {
       const { rows: rls } = await c.query<{ relrowsecurity: boolean }>(
         "select relrowsecurity from pg_class where oid = 'public.form_submissions'::regclass");
       expect(rls).toEqual([{ relrowsecurity: true }]);
-      const { rows: policies } = await c.query<{ policyname: string; cmd: string }>(
-        "select policyname, cmd from pg_policies where schemaname = 'public' and tablename = 'form_submissions'");
-      expect(policies).toEqual([{ policyname: "form_submissions_member_read", cmd: "SELECT" }]);
+      // 0068's form_submissions_technician_scope is RESTRICTIVE: it can only narrow what the one
+      // permissive SELECT policy allows, so it opens no write. Listed so the list stays exact.
+      const { rows: policies } = await c.query<{ policyname: string; permissive: string; cmd: string }>(
+        "select policyname, permissive, cmd from pg_policies where schemaname = 'public' and tablename = 'form_submissions' order by policyname");
+      expect(policies).toEqual([
+        { policyname: "form_submissions_member_read", permissive: "PERMISSIVE", cmd: "SELECT" },
+        { policyname: "form_submissions_technician_scope", permissive: "RESTRICTIVE", cmd: "ALL" },
+      ]);
     });
   });
 

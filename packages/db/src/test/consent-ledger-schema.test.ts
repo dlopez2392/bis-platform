@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAs, actAsOwner } from "./db";
+import { withRollback, actAs, actAsMember, actAsOwner } from "./db";
 
 /**
  * 0054 (consent chain PR-1). Everything here runs in a
@@ -82,14 +82,19 @@ describe("0054 consent_events: append-only by grants, RLS on, SELECT for the acc
       expect(await refused(c, "delete from consent_events", [])).toMatchObject(denied);
     }));
 
-  it("row level security is on, with one SELECT policy for authenticated (mutation: disable row level security → FAILS)", () =>
+  it("row level security is on, with one permissive SELECT policy for authenticated and 0068's restrictive Technician fence (mutation: disable row level security → FAILS)", () =>
     withRollback(async (c) => {
       const { rows: [rel] } = await c.query<{ relrowsecurity: boolean }>(
         "select relrowsecurity from pg_class where oid = 'public.consent_events'::regclass");
       expect(rel!.relrowsecurity).toBe(true);
+      // consent_events_technician_scope (0068) is RESTRICTIVE: it only narrows the one permissive
+      // SELECT policy, so the table stays read-only to the client. Listed so the list stays exact.
       const { rows } = await c.query(
-        "select policyname, cmd, roles::text as roles from pg_policies where schemaname = 'public' and tablename = 'consent_events'");
-      expect(rows).toEqual([{ policyname: "consent_events_read", cmd: "SELECT", roles: "{authenticated}" }]);
+        "select policyname, permissive, cmd, roles::text as roles from pg_policies where schemaname = 'public' and tablename = 'consent_events' order by policyname");
+      expect(rows).toEqual([
+        { policyname: "consent_events_read", permissive: "PERMISSIVE", cmd: "SELECT", roles: "{authenticated}" },
+        { policyname: "consent_events_technician_scope", permissive: "RESTRICTIVE", cmd: "ALL", roles: "{authenticated}" },
+      ]);
     }));
 
   it("a client reads its own account's rows and not another's; a client token has no app_role claim (mutation: using (true) → the B row is visible, FAILS)", () =>
@@ -97,7 +102,7 @@ describe("0054 consent_events: append-only by grants, RLS on, SELECT for the acc
       const s = await seed(c);
       const own = (await c.query<{ id: string }>(INSERT, params({ account: s.a }))).rows[0]!.id;
       await c.query(INSERT, params({ account: s.b }));
-      await actAs(c, { org_id: orgId("A"), sub: "user_consent_a" });
+      await actAsMember(c, s.a, orgId("A"));
       const { rows } = await c.query<{ id: string }>("select id from consent_events where account_id in ($1, $2)", [s.a, s.b]);
       expect(rows.map((r) => r.id)).toEqual([own]);
     }));
@@ -247,7 +252,7 @@ describe("0054 contacts.phone_country_unconfirmed and the textback source", () =
         `select data_type, is_nullable, column_default from information_schema.columns
           where table_schema = 'public' and table_name = 'contacts' and column_name = 'phone_country_unconfirmed'`);
       expect(col).toEqual({ data_type: "boolean", is_nullable: "NO", column_default: "false" });
-      await actAs(c, { org_id: orgId("A"), sub: "user_consent_a" });
+      await actAsMember(c, s.a, orgId("A"));
       const r = await c.query("update contacts set phone_country_unconfirmed = true where id = $1", [s.contactA]);
       expect(r.rowCount).toBe(1);
     }));

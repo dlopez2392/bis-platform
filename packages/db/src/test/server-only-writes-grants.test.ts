@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAs, actAsOwner } from "./db";
+import { withRollback, actAs, actAsMember, actAsOwner } from "./db";
 import { testPhoneNumber } from "./fixtures";
 
 const RUN = Math.random().toString(36).slice(2, 10);
@@ -73,17 +73,20 @@ async function seatMember(c: Client, accountId: string, role: "owner" | "staff")
   return sub;
 }
 
+// `fence`: the RESTRICTIVE policy 0068 adds (the Technician's fence, technician-scope.test.ts). A restrictive
+// policy can only narrow what the permissive one allows, so it grants no write; it is listed by name so the
+// list stays exact, and a new policy here of any kind is a deliberate edit to this test (booking-grants' rule).
 const SERVER_ONLY = [
-  { table: "events", policy: "events_read" },
-  { table: "form_submissions", policy: "form_submissions_member_read" },
-  { table: "conversations", policy: "conversations_member_read" },
-  { table: "messages", policy: "messages_member_read" },
-  { table: "bookings", policy: "bookings_tenant_read" },
-  { table: "call_proposals", policy: "call_proposals_member_read" },
+  { table: "events", policy: "events_read", fence: { name: "events_technician_none", cmd: "SELECT" } },
+  { table: "form_submissions", policy: "form_submissions_member_read", fence: { name: "form_submissions_technician_scope", cmd: "ALL" } },
+  { table: "conversations", policy: "conversations_member_read", fence: { name: "conversations_technician_scope", cmd: "ALL" } },
+  { table: "messages", policy: "messages_member_read", fence: { name: "messages_technician_scope", cmd: "ALL" } },
+  { table: "bookings", policy: "bookings_tenant_read", fence: { name: "bookings_technician_scope", cmd: "ALL" } },
+  { table: "call_proposals", policy: "call_proposals_member_read", fence: { name: "call_proposals_technician_scope", cmd: "ALL" } },
 ] as const;
 
 describe("0053: server-only tables, at the catalogue", () => {
-  for (const { table, policy } of SERVER_ONLY) {
+  for (const { table, policy, fence } of SERVER_ONLY) {
     it(`${table}: authenticated holds SELECT and nothing else, table or column level (mutation: re-grant insert -> FAILS)`, () =>
       withRollback(async (c) => {
         const { rows } = await c.query<{ p: string }>(
@@ -97,11 +100,15 @@ describe("0053: server-only tables, at the catalogue", () => {
         expect(rows.map((r) => r.p)).toEqual(["SELECT"]);
       }));
 
-    it(`${table}: its one policy is ${policy}, SELECT, for authenticated (mutation: keep the FOR ALL policy -> FAILS)`, () =>
+    it(`${table}: its one permissive policy is ${policy}, SELECT, for authenticated; beside it only 0068's restrictive ${fence.name} (mutation: keep the FOR ALL policy -> FAILS)`, () =>
       withRollback(async (c) => {
         const { rows } = await c.query(
-          `select policyname, cmd, roles::text as roles from pg_policies where schemaname = 'public' and tablename = $1`, [table]);
-        expect(rows).toEqual([{ policyname: policy, cmd: "SELECT", roles: "{authenticated}" }]);
+          `select policyname, permissive, cmd, roles::text as roles from pg_policies
+            where schemaname = 'public' and tablename = $1 order by policyname`, [table]);
+        expect(rows).toEqual([
+          { policyname: policy, permissive: "PERMISSIVE", cmd: "SELECT", roles: "{authenticated}" },
+          { policyname: fence.name, permissive: "RESTRICTIVE", cmd: fence.cmd, roles: "{authenticated}" },
+        ].sort((a, b) => (a.policyname < b.policyname ? -1 : 1)));
       }));
   }
 
@@ -152,7 +159,7 @@ describe("0053: a member reads its own account's rows and never another account'
       withRollback(async (c) => {
         const own = await seed(c, `TEN_A_${table}`);
         const other = await seed(c, `TEN_B_${table}`);
-        await actAs(c, { org_id: org(`TEN_A_${table}`), sub: "user_SOW_TEN" });
+        await actAsMember(c, own.accountId, org(`TEN_A_${table}`));
         const { rows } = await c.query(
           `select id::text as id from ${table} where account_id in ($1, $2) order by id`,
           [own.accountId, other.accountId]);
@@ -168,7 +175,7 @@ describe("0053: a member of a real account is refused every write by privilege",
   it("INSERT into each is refused by privilege", () =>
     withRollback(async (c) => {
       const s = await seed(c, "INS");
-      await actAs(c, { org_id: org("INS"), sub: "user_SOW_INS" });
+      const sub = await actAsMember(c, s.accountId, org("INS"));
       expect(await refused(c, "insert into events (account_id, type, actor_type) values ($1,'x.y','user')", [s.accountId]))
         .toMatchObject(byPrivilege("events"));
       expect(await refused(c, "insert into form_submissions (account_id, form_id) values ($1,$2)", [s.accountId, s.formId]))
@@ -188,11 +195,11 @@ describe("0053: a member of a real account is refused every write by privilege",
       const { rows: [bare] } = await c.query(
         "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,$2,'Fixture SOW',true) returning id",
         [agency.id, org("INS_BARE")]);
-      await actAs(c, { org_id: org("INS_BARE"), sub: "user_SOW_INS" });
+      await actAs(c, { org_id: org("INS_BARE"), sub });
       expect(await refused(c, "insert into calendars (account_id, public_id) values ($1,$2)", [bare.id, `cal_SOW_INS2_${RUN}`]))
         .toMatchObject(byPrivilege("calendars"));
       // conversations is one per contact: a second contact, inserted by the member (contacts keeps INSERT).
-      await actAs(c, { org_id: org("INS"), sub: "user_SOW_INS" });
+      await actAs(c, { org_id: org("INS"), sub });
       const { rows: [c2] } = await c.query("insert into contacts (account_id, first_name) values ($1,'Beto') returning id", [s.accountId]);
       expect(await refused(c, "insert into conversations (account_id, contact_id) values ($1,$2)", [s.accountId, c2.id]))
         .toMatchObject(byPrivilege("conversations"));

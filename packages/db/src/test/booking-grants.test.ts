@@ -63,7 +63,9 @@ describe("booking column privileges for authenticated", () => {
       // 0017 exists to correct. By name, not by count: 0066 added the Owner-only
       // calendars_owner_update, and an exact list means a new policy here, of
       // any scope, is a deliberate edit to this test rather than a silent pass.
+      // 0068 added the restrictive Technician fence bookings_technician_scope.
       expect(rows).toEqual([
+        { tablename: "bookings", policyname: "bookings_technician_scope", roles: "{authenticated}" },
         { tablename: "bookings", policyname: "bookings_tenant_read", roles: "{authenticated}" },
         { tablename: "calendars", policyname: "calendars_owner_update", roles: "{authenticated}" },
         { tablename: "calendars", policyname: "calendars_tenant", roles: "{authenticated}" },
