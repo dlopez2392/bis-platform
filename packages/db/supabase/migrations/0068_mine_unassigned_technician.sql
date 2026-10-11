@@ -7,6 +7,9 @@
 --   (select app.sees_all_customers(app.current_account_id())) or <row reaches one of my contacts>
 -- sees_all_customers is TRUE for the agency, an Owner and Staff, and FALSE (never NULL) for a
 -- Technician and for a client with NO membership (owner ruling A1): an unknown role sees nothing.
+-- The "mine" branch on the right is gated on a CURRENT technician membership too (is_technician,
+-- inside my_contact_ids and inline on contacts and tasks): assignments outlive a removal until
+-- release_member_assignments runs, and a person who has left must read and write nothing.
 -- The left operand is an uncorrelated scalar subquery (an InitPlan, once per statement); when it is
 -- true the OR never builds the hashed subplan on the right, so Owner/Staff/agency pay ~nothing.
 --
@@ -75,10 +78,13 @@ language sql stable security definer set search_path = '' as $$
 $$;
 
 -- SECURITY DEFINER, so a policy on another table that calls it never re-enters contacts' own policy.
+-- Empty unless the caller is a Technician of this account right now: a removed person (no
+-- membership) whose assignments have not yet been released gets nothing.
 create function app.my_contact_ids() returns setof uuid
 language sql stable security definer set search_path = '' as $$
   select c.id from public.contacts c
-   where c.account_id = app.current_account_id() and c.assigned_to = app.current_user_id()
+   where app.is_technician(app.current_account_id())
+     and c.account_id = app.current_account_id() and c.assigned_to = app.current_user_id()
 $$;
 
 revoke all on function app.current_user_id() from public, anon;
@@ -93,9 +99,12 @@ grant execute on function app.my_contact_ids() to authenticated, service_role;
 -- 4. Restrictive policies.
 -- 4a. contacts: a with-check, not a trigger. "Me" is the only legal assigned_to before AND after a
 --     Technician's update, so they cannot reassign (to anyone, or to NULL), and an insert must carry it.
+--     The branch holds only while the caller IS a Technician here (is_technician, an InitPlan).
 create policy contacts_technician_scope on public.contacts as restrictive for all to authenticated
-  using ((select app.sees_all_customers(app.current_account_id())) or assigned_to = (select app.current_user_id()))
-  with check ((select app.sees_all_customers(app.current_account_id())) or assigned_to = (select app.current_user_id()));
+  using ((select app.sees_all_customers(app.current_account_id()))
+         or ((select app.is_technician(app.current_account_id())) and assigned_to = (select app.current_user_id())))
+  with check ((select app.sees_all_customers(app.current_account_id()))
+         or ((select app.is_technician(app.current_account_id())) and assigned_to = (select app.current_user_id())));
 
 -- 4b. Tables whose row names its contact directly.
 do $$
@@ -125,9 +134,11 @@ create policy call_proposals_technician_scope on public.call_proposals as restri
 create policy tasks_technician_scope on public.tasks as restrictive for all to authenticated
   using ((select app.sees_all_customers(app.current_account_id()))
          or contact_id in (select app.my_contact_ids())
-         or (contact_id is null and assigned_to = (select app.current_user_id())));
+         or (contact_id is null and (select app.is_technician(app.current_account_id()))
+             and assigned_to = (select app.current_user_id())));
 create policy tasks_technician_insert on public.tasks as restrictive for insert to authenticated
-  with check ((select app.sees_all_customers(app.current_account_id())) or assigned_to = (select app.current_user_id()));
+  with check ((select app.sees_all_customers(app.current_account_id()))
+              or ((select app.is_technician(app.current_account_id())) and assigned_to = (select app.current_user_id())));
 
 -- 4e. Nothing at all for a Technician: the account-wide ledger and the merge queue.
 create policy events_technician_none on public.events as restrictive for select to authenticated

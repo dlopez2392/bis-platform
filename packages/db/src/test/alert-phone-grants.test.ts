@@ -218,9 +218,10 @@ describe("0035 accounts.alert_phone", () => {
       // refusal below is unambiguously the COLUMN grant and not RLS. Without
       // this line the test would still pass against a policy that denied
       // everything, which is a different bug wearing the same green.
-      await c.query(
+      const control = await c.query(
         "update public.accounts set brand_name = 'Renamed' where clerk_org_id = 'org_alert_phone'",
       );
+      expect(control.rowCount).toBe(1);
 
       // ONE refused statement per withRollback: after this the transaction is
       // aborted (25P02) and nothing else in this block could run.
