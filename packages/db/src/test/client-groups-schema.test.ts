@@ -233,6 +233,37 @@ describe("the company_name sync (spec §5.3, A2)", () => {
       await c.query("delete from client_group_members where id = $1", [home]);
       expect(await companyOf(c, ct)).toBe("Beta Pools");
     }));
+  // Final review I-A: the member trigger once fired on ANY update, so a role or "Pays the bills" edit on a
+  // BUSINESS membership recomputed the column and erased the old build's write; the next reconcile then
+  // saw the column already matching its group and could not recover it. Only the columns that move the
+  // business may fire it (0069 section 6: update of is_primary, client_group_id, contact_id).
+  it("a role or pays edit on a business membership leaves a directly written column alone, and the reconcile folds it in (mutation: bare `after insert or update or delete` on client_group_members -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, `org_g_${RUN}`);
+      const ct = await contact(c, a, "Ana");
+      const acme = await member(c, a, await group(c, a, "business", "Acme Roofing"), ct, true);
+      expect(await companyOf(c, ct)).toBe("Acme Roofing"); // positive control: the sync is live
+      await c.query("update contacts set company_name = 'Old Build Co' where id = $1", [ct]);
+      await c.query("update client_group_members set role = 'Duena' where id = $1", [acme]);
+      expect(await companyOf(c, ct)).toBe("Old Build Co");
+      await c.query("update client_group_members set is_billing = true where id = $1", [acme]);
+      expect(await companyOf(c, ct)).toBe("Old Build Co");
+      const r = (await c.query<{ r: Record<string, number> }>("select public.reconcile_business_groups($1) as r", [a])).rows[0]!.r;
+      expect(r).toMatchObject({ members_replaced: 1 });
+      expect(await companyOf(c, ct)).toBe("Old Build Co");
+    }));
+  it("a main swap between two businesses still recomputes the column (mutation: drop is_primary from the member trigger's column list -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, `org_g_${RUN}`);
+      const ct = await contact(c, a, "Ana");
+      await member(c, a, await group(c, a, "business", "Acme Roofing"), ct, true);
+      const beta = await member(c, a, await group(c, a, "business", "Beta Pools"), ct);
+      await c.query("update contacts set company_name = 'Old Build Co' where id = $1", [ct]);
+      // Two statements: client_group_members_one_primary is checked row by row.
+      await c.query("update client_group_members set is_primary = false where contact_id = $1", [ct]);
+      await c.query("update client_group_members set is_primary = true where id = $1", [beta]);
+      expect(await companyOf(c, ct)).toBe("Beta Pools");
+    }));
   it("a household rename leaves a directly written column alone, and a kind change still recomputes (mutation: drop the kind condition from client_groups_sync_company_name's WHEN -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, `org_g_${RUN}`);

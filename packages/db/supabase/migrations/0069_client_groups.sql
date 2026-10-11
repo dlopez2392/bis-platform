@@ -192,10 +192,13 @@ end $$;
 
 -- 6. The company_name sync (spec A2). SECURITY DEFINER: it writes a column the request role may not, and
 --    it fires inside cascades. It never touches updated_at and emits nothing. A household never sets it,
---    and a household change never recomputes it: an old build's direct write to the column (spec section
---    11) is left alone until a BUSINESS membership or group of that contact changes. A membership whose
---    group row is already gone is a cascade from a group delete, whose kind can no longer be read, so it
---    recomputes.
+--    and neither a household change nor a role or "Pays the bills" edit recomputes it: an old build's
+--    direct write to the column (spec section 11) is left alone until a contact's BUSINESS membership is
+--    added, removed, made or unmade main, or moved, or one of its business groups is renamed or changes
+--    kind. Only those columns fire the member trigger: a role or pays edit on a business membership once
+--    recomputed the column and erased that direct write, which the next reconcile could not see to recover.
+--    A membership whose group row is already gone is a cascade from a group delete, whose kind can no
+--    longer be read, so it recomputes.
 create function app.sync_company_name() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
@@ -218,7 +221,7 @@ begin
   return null;
 end $$;
 create trigger client_group_members_sync_company_name
-  after insert or update or delete on public.client_group_members
+  after insert or delete or update of is_primary, client_group_id, contact_id on public.client_group_members
   for each row execute function app.sync_company_name();
 create trigger client_groups_sync_company_name
   after update of name, kind on public.client_groups
@@ -325,6 +328,13 @@ begin
   if not app.lock_contact(p_account_id, p_contact_id) then return 'not_found'; end if;
   if p_removed is not null and (p_removed ->> 'contact_id')::uuid is distinct from p_contact_id then
     raise exception 'undo_set_business: the snapshot is for another contact' using errcode = '22023';
+  end if;
+  -- The snapshot comes back from the browser: it may name only a BUSINESS group of this account. A
+  -- forged one naming a household (one a Technician cannot see) would otherwise join it.
+  if p_removed is not null and not exists (
+       select 1 from public.client_groups g
+        where g.id = (p_removed ->> 'client_group_id')::uuid and g.account_id = p_account_id and g.kind = 'business') then
+    return 'not_found';
   end if;
   if p_added is not null then
     delete from public.client_group_members where id = p_added and contact_id = p_contact_id;

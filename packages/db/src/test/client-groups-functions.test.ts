@@ -93,6 +93,24 @@ describe("set_contacts_business, undo, main, remove, restore", () => {
     expect(await members(c, ana)).toEqual([{ name: "Acme Roofing", is_primary: true, role: "Dueña", is_billing: true }]);
     expect(await companyOf(c, ana)).toBe("Acme Roofing");
   }));
+  // Final review I-B: the snapshot comes back from the browser. A forged one naming a household (one a
+  // Technician cannot see) or another account's group must join nothing.
+  it("undo refuses a snapshot naming a household or another account's group, and joins nothing (mutation: drop the business-kind check from undo_set_business -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, `org_f_a_${RUN}`);
+      const b = await seedAccount(c, `org_f_b_${RUN}`);
+      const ana = await contact(c, a, "Ana");
+      const luis = await contact(c, a, "Luis");
+      const home = await call(c, "public.create_group_with_member($1,$2,'household','Garcia')", [a, luis]) as { group_id: string };
+      const bea = await contact(c, b, "Bea");
+      const theirs = await call(c, "public.create_group_with_member($1,$2,'business','Acme Roofing')", [b, bea]) as { group_id: string };
+      const forged = (groupId: string) => JSON.stringify({
+        id: "00000000-0000-4000-8000-00000000f0f0", account_id: a, client_group_id: groupId, contact_id: ana,
+        role: null, is_primary: false, is_billing: false, created_at: "2026-01-01T00:00:00Z" });
+      expect(await call(c, "public.undo_set_business($1,$2,null,$3)", [a, ana, forged(home.group_id)])).toBe("not_found");
+      expect(await call(c, "public.undo_set_business($1,$2,null,$3)", [a, ana, forged(theirs.group_id)])).toBe("not_found");
+      expect(await members(c, ana)).toEqual([]);
+    }));
   it("a business the contact already belonged to is kept, and never handed back as added", () => withRollback(async (c) => {
     const a = await seedAccount(c, `org_f_${RUN}`);
     const ana = await contact(c, a, "Ana");
@@ -213,6 +231,26 @@ async function withCommittedAccount(fn: (c: Client, acct: string) => Promise<voi
     await c.end();
   }
 }
+const pidOf = async (c: Client) => (await c.query<{ pid: number }>("select pg_backend_pid() as pid")).rows[0]!.pid;
+/**
+ * Waits until session `pid` is blocked on a lock, read from pg_stat_activity, rather than sleeping a
+ * fixed time and hoping (final review minor 12). Its own connection, one autocommit read per poll:
+ * pg_stat_activity is snapshotted for the length of a transaction, so a poll from inside an open one
+ * would keep reading the first answer.
+ */
+async function waitUntilBlocked(pid: number, timeoutMs = 15_000) {
+  const watcher = await connect();
+  try {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const { rows } = await watcher.query<{ blocked: boolean }>(
+        "select coalesce((select wait_event_type = 'Lock' from pg_stat_activity where pid = $1), false) as blocked", [pid]);
+      if (rows[0]!.blocked) return;
+      if (Date.now() > deadline) throw new Error(`session ${pid} never blocked on a lock`);
+      await new Promise((res) => setTimeout(res, 25));
+    }
+  } finally { await watcher.end(); }
+}
 /** `first` runs and holds its locks in an open transaction; `second` starts and must block on them;
  *  then `first` commits. Returns both results (settled, so a 40P01 is a value, not a throw). */
 async function race(first: (c: Client) => Promise<unknown>, second: (c: Client) => Promise<unknown>) {
@@ -220,8 +258,9 @@ async function race(first: (c: Client) => Promise<unknown>, second: (c: Client) 
   try {
     await c1.query("begin"); await c2.query("begin");
     const r1 = await first(c1);
+    const c2pid = await pidOf(c2);
     const p2 = second(c2).then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e }));
-    await new Promise((res) => setTimeout(res, 300)); // c2 is now blocked on the contact row
+    await waitUntilBlocked(c2pid); // c2 is now blocked on the contact row
     await c1.query("commit");
     const r2 = await p2;
     await c2.query(r2.ok ? "commit" : "rollback");
@@ -282,10 +321,11 @@ describe("two sessions at once (I2, minors 3 and 4)", () => {
         await holder.query("begin");
         await holder.query("select 1 from contacts where id = $1 for update", [x]);
         const settle = (p: Promise<unknown>) => p.then(() => "done", (e: { code?: string }) => e.code ?? "error");
+        const [pid1, pid2] = [await pidOf(c1), await pidOf(c2)];
         const p1 = settle(one(c1, "public.set_contacts_business($1,$2::uuid[],$3::text[])", [acct, [x, y], ["Acme", "Acme"]]));
-        await new Promise((res) => setTimeout(res, 300));
+        await waitUntilBlocked(pid1); // batch 1 waits on x
         const p2 = settle(one(c2, "public.set_contacts_business($1,$2::uuid[],$3::text[])", [acct, [y, x], ["Beta", "Beta"]]));
-        await new Promise((res) => setTimeout(res, 300));
+        await waitUntilBlocked(pid2); // batch 2 waits too: on x in id order (on y behind batch 1 in input order)
         await holder.query("commit");
         expect(await Promise.all([p1, p2])).toEqual(["done", "done"]);
       } finally {
