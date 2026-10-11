@@ -305,7 +305,9 @@ describe("the inline phone Undo is server-authoritative", () => {
    *  offering Undo without a payload is offering a button whose only
    *  possible outcome is commitInlineUndo's own "failed" refusal. */
   it("inline-field.tsx's phone undoable check is 'has a payload', never the generic prior-validates check (mutation: undoable = normalize(prior).ok for phone too → FAILS)", () => {
-    expect(inlineField).toContain('const undoable = field === "phone" ? phoneUndo !== undefined : normalize(prior).ok;');
+    // S-02 Task 3c split the ternary across lines (an `undoWith` arm sits
+    // between phone and the generic rule); phone still decides first, by payload.
+    expect(inlineField).toMatch(/const undoable = field === "phone" \? phoneUndo !== undefined\s*:/);
   });
 
   it("the drawer's phone Undo calls the dedicated action and bumps retryNonce on success (mutation: drop the nonce bump after Undo → FAILS)", () => {

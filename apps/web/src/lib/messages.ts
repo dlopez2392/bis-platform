@@ -634,7 +634,10 @@ export const m = {
   "contact.addNote": "Add a note…",
   "contact.addTask": "New task…",
   "contact.done": "done",
-  "contact.company": "Company",
+  "contact.company": "Business name",
+  "contact.company.es": "Nombre del negocio",
+  "contact.business.tooLong": "Business names can be up to 120 characters.",
+  "contact.business.tooLong.es": "El nombre del negocio puede tener hasta 120 caracteres.",
   // F-157's drawer line (docs/crm-features.md §4.3 rider 6): the owner's own
   // free-text note on where this lead came from ("contact.source.label",
   // inline-editable like the fields above) plus the auto-detected hint next
@@ -1219,7 +1222,8 @@ export const m = {
   "forms.kind.core.last_name": "Last name",
   "forms.kind.core.email": "Email",
   "forms.kind.core.phone": "Phone",
-  "forms.kind.core.company_name": "Company",
+  "forms.kind.core.company_name": "Business name",
+  "forms.kind.core.company_name.es": "Nombre del negocio",
   // F-018, folded into F-157 (docs/crm-features.md §4.3 rider 6): the source
   // question — one optional field a form can add. This exact string doubles
   // as the field's default customer-facing label (form-editor.tsx's

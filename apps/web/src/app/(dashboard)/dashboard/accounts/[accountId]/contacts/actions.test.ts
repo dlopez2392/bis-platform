@@ -30,6 +30,8 @@ const dbMocks = {
   assignContacts: vi.fn(), undoAssignContacts: vi.fn(),
   readPersonId: vi.fn(async () => null as string | null), flagMatchesOf: vi.fn(),
   serviceDb: vi.fn(() => SERVICE),
+  // S-02 Task 3c: the Business name writes the business group.
+  setContactsBusiness: vi.fn(), undoSetBusiness: vi.fn(), GROUP_NAME_MAX: 120,
 };
 /** The service client and the request client, told apart by identity. */
 const SERVICE = { tag: "service-db" };
@@ -41,6 +43,7 @@ const {
   setPhoneCountryAction, undoPhoneCountryAction,
   undoInlinePhoneEditAction, createContactAction,
   assignContactsAction, undoAssignContactsAction,
+  setContactBusinessAction, undoContactBusinessAction,
 } = await import("./actions");
 const { m } = await import("@/lib/messages");
 
@@ -59,12 +62,20 @@ describe("updateContactFieldAction", () => {
   });
   it("maps snake_case field to the ContactInput camel key, empty clears", async () => {
     dbMocks.updateContact.mockResolvedValue(undefined);
-    const r = await updateContactFieldAction("a1", "c1", "company_name", "  ");
+    const r = await updateContactFieldAction("a1", "c1", "first_name", "  ");
     expect(r).toEqual({ ok: true });
     expect(dbMocks.updateContact).toHaveBeenCalledWith(
-      {}, "a1", "c1", { companyName: "" }, "user_1",
+      {}, "a1", "c1", { firstName: "" }, "user_1",
     );
     expect(dbMocks.getContact).not.toHaveBeenCalled();
+  });
+  it("the Business name goes to the group, never to updateContact (S-02 §6 row 3; mutation: fall through to updateContact -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1" });
+    dbMocks.setContactsBusiness.mockResolvedValue([{ contactId: "c1", status: "ok", added: "m2", removed: null }]);
+    const r = await updateContactFieldAction("a1", "c1", "company_name", "  Acme  ");
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.updateContact).not.toHaveBeenCalled();
+    expect(dbMocks.setContactsBusiness).toHaveBeenCalledWith(SERVICE, "a1", [{ contactId: "c1", name: "Acme" }], "user_1");
   });
 
   /**
@@ -773,5 +784,32 @@ describe("undoAssignContactsAction (CORRECTED 2026-10-11: exact undo, never regr
     expect(await undoAssignContactsAction("a1", previous)).toEqual({ ok: false, error: expected });
     expect(spy.mock.calls.flat().join(" ")).toContain("undoAssignContactsAction: account a1:");
     spy.mockRestore();
+  });
+});
+
+describe("setContactBusinessAction", () => {
+  it("refuses a contact the request client cannot see, before any service write (mutation: drop the getContact proof -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue(null);
+    const r = await setContactBusinessAction("a1", "c9", "Acme");
+    expect(r.ok).toBe(false);
+    expect(dbMocks.setContactsBusiness).not.toHaveBeenCalled();
+  });
+  it("returns the server's own undo payload; an unchanged name returns none", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1" });
+    const removed = { id: "m1", account_id: "a1", client_group_id: "g1", contact_id: "c1", role: null, is_primary: true, is_billing: false, created_at: "2026-01-01" };
+    dbMocks.setContactsBusiness.mockResolvedValueOnce([{ contactId: "c1", status: "ok", added: "m2", removed }]);
+    expect(await setContactBusinessAction("a1", "c1", "Beta")).toEqual({ ok: true, undoPayload: { added: "m2", removed } });
+    dbMocks.setContactsBusiness.mockResolvedValueOnce([{ contactId: "c1", status: "unchanged", added: null, removed: null }]);
+    expect(await setContactBusinessAction("a1", "c1", "beta")).toEqual({ ok: true });
+  });
+  it("refuses a name over 120 characters with plain words", async () => {
+    const r = await setContactBusinessAction("a1", "c1", "x".repeat(121));
+    expect(r).toEqual({ ok: false, error: m["contact.business.tooLong"] });
+  });
+  it("undo refuses a snapshot for another contact before any write", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1" });
+    const bad = { added: null, removed: { contact_id: "c2" } } as never;
+    expect((await undoContactBusinessAction("a1", "c1", bad)).ok).toBe(false);
+    expect(dbMocks.undoSetBusiness).not.toHaveBeenCalled();
   });
 });

@@ -45,3 +45,20 @@ describe("InlineField's options <select> uses nativeFieldClass", () => {
     expect(select).toContain('className={cn(nativeFieldClass, "h-8")}');
   });
 });
+
+/**
+ * S-02 §6 row 3: a field whose save hands back its OWN server-built undo
+ * (the Business name) undoes with exactly that payload through `undoWith`,
+ * never by re-saving the prior text — re-saving "Acme" would create a new
+ * group rather than restore the membership the save replaced. Source-text
+ * pin, the file's house pattern (no DOM harness in this package).
+ */
+describe("InlineField.undoWith routes Undo to the save's own payload", () => {
+  it("Undo calls undoWith with the payload this save returned (mutation: always commitInlineUndo → FAILS)", () => {
+    expect(src).toMatch(/const ownUndo = undoWith \? result\.undoPayload : undefined;/);
+    expect(src).toMatch(/undoWith && ownUndo !== undefined\s*\?\s*undoWith\(ownUndo\)/);
+  });
+  it("an undoWith field offers Undo only when the save returned a payload (mutation: fall back to normalize(prior).ok → FAILS)", () => {
+    expect(src).toMatch(/: undoWith \? ownUndo !== undefined\s*: normalize\(prior\)\.ok/);
+  });
+});

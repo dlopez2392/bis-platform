@@ -71,16 +71,20 @@ export function InlineField(
      *  (`lib/contacts/inline-phone-undo.ts`'s `PhoneInlineUndo`) — never a
      *  value this component captures itself. Every other field's `save`
      *  never returns one, and none is expected. */
-    save: (value: string) => Promise<{ ok: true; undo?: PhoneInlineUndo } | { ok: false; error: string }>;
+    save: (value: string) => Promise<{ ok: true; undo?: PhoneInlineUndo; undoPayload?: unknown } | { ok: false; error: string }>;
     inputType?: "text" | "email" | "tel";
     /** Phone field only: the dedicated undo write, given exactly the
      *  `PhoneInlineUndo` the save returned. When absent (or the field isn't
      *  phone, or the save returned no `undo`), undo falls back to
      *  `save(prior)` exactly as every other field's undo always has. */
     undoPhone?: InlinePhoneUndoWrite;
+    /** A field whose save hands back its own server-built undo (the Business
+     *  name, S-02 §6 row 3): Undo calls this with exactly that payload instead
+     *  of re-saving the prior text. Absent: the default `save(prior)` undo. */
+    undoWith?: (payload: unknown) => Promise<{ ok: true } | { ok: false; error: string }>;
   },
 ) {
-  const { label, field, required, options, value, save, inputType = "text", undoPhone } = props;
+  const { label, field, required, options, value, save, inputType = "text", undoPhone, undoWith } = props;
   // `field` is guaranteed defined whenever neither `required` nor `options`
   // is — the three-way union above enforces that at every call site; this
   // is what lets commit() and the undo guard below share ONE rule instead
@@ -107,7 +111,7 @@ export function InlineField(
     if (norm.value === committed.current) return; // no-op edit — no toast
     const prior = committed.current;
     setShown(norm.value);
-    let result: { ok: true; undo?: PhoneInlineUndo } | { ok: false; error: string };
+    let result: { ok: true; undo?: PhoneInlineUndo; undoPayload?: unknown } | { ok: false; error: string };
     try {
       result = await save(norm.value);
     } catch {
@@ -137,7 +141,14 @@ export function InlineField(
     // have nothing to route to but `save(prior)`, the exact re-derive-the-
     // flag-from-text bug this whole fix exists to close. No payload means no
     // Undo button for phone, full stop.
-    const undoable = field === "phone" ? phoneUndo !== undefined : normalize(prior).ok;
+    //
+    // An `undoWith` field (the Business name) is the same shape: undoable
+    // exactly when its save handed back its own payload — an unchanged name
+    // returns none, so there is nothing to undo.
+    const ownUndo = undoWith ? result.undoPayload : undefined;
+    const undoable = field === "phone" ? phoneUndo !== undefined
+      : undoWith ? ownUndo !== undefined
+      : normalize(prior).ok;
     toast.success(m["inline.saved"].replace("{label}", label), {
       action: undoable
         ? {
@@ -146,8 +157,12 @@ export function InlineField(
               // Phone routes the SERVER's own undo payload to the dedicated
               // action, restoring the flag WITH the number; every other
               // field still resubmits the prior text through `save`
-              // (commitInlineUndo).
-              void commitInlineUndo(field, prior, phoneUndo, save, undoPhone).then((r) => {
+              // (commitInlineUndo), except an `undoWith` field, which hands
+              // the server back its own payload.
+              const run = undoWith && ownUndo !== undefined
+                ? undoWith(ownUndo)
+                : commitInlineUndo(field, prior, phoneUndo, save, undoPhone);
+              void run.then((r) => {
                 if (r.ok) { committed.current = prior; setShown(prior); }
                 else toast.error(r.error);
               });

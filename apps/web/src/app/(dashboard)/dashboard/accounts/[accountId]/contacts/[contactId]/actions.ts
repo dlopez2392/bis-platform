@@ -119,7 +119,7 @@ export async function updateContactAction(accountId: string, formData: FormData)
   };
   await updateContact(db, accountId, contactId, {
     firstName: val("firstName"), lastName: val("lastName"),
-    email: val("email"), phone: val("phone"), companyName: val("companyName"),
+    email: val("email"), phone: val("phone"),
     custom,
   }, userId);
   revalidatePath(path);
