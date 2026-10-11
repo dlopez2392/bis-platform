@@ -126,17 +126,22 @@ lesson, as 0068:208-209). Each checks every row it touches belongs to `p_account
 | `set_primary_group_membership(p_account_id, p_member_id)` | clears the contact's other primary, then sets this one, in one transaction |
 | `remove_group_membership(p_account_id, p_member_id)` | deletes; if it was primary, the oldest remaining becomes primary. Returns the full snapshot |
 | `restore_group_membership(p_account_id, p_snapshot jsonb)` | Undo: re-inserts with the same id, role, pays and main (demoting whoever was promoted). `not_found` if the group or contact has since gone |
+| `undo_set_business(p_account_id, p_contact_id, p_added, p_removed jsonb)` | The Business name's Undo: removes the membership the edit added and restores the one it replaced. It restores BUSINESS memberships only: a snapshot (it comes back from the browser) naming a household, or a group outside `p_account_id`, answers `not_found` and changes nothing (final review I-B) |
 
 A contact's first membership is primary. Role, pays, name and billing address are single-row
 service updates scoped by `account_id`; a rename onto another business's key raises `23505`,
-shown as "There's already a business customer called {name}."
+shown as "There's already a business customer with that name." (`groups.nameTaken` dropped the
+`{name}`; accepted in the final review).
 
 **The sync (A2).** `app.sync_company_name()` (security definer: it writes a column the request role
-may not, and runs inside cascades) fires `after insert or update or delete on client_group_members
-for each row` and `after update of name, kind on client_groups for each row`. For each affected
-contact it sets `company_name` to the name of its business membership ordered by `is_primary desc,
-created_at, id`, or NULL. It does not touch `updated_at` and emits nothing. A household never
-changes the column.
+may not, and runs inside cascades) fires `after insert or delete or update of is_primary,
+client_group_id, contact_id on client_group_members for each row` and `after update of name, kind
+on client_groups for each row`. It recomputes only on an insert, a delete, or an update of one of
+those three columns: a role or "Pays the bills" edit never fires it (final review I-A: it once fired
+on any update, so such an edit on a business membership erased an old build's direct write, which
+the reconcile then could not recover). For each affected contact it sets `company_name` to the
+name of its business membership ordered by `is_primary desc, created_at, id`, or NULL. It does not
+touch `updated_at` and emits nothing. A household never changes the column.
 
 ### 5.4 The backfill: `public.reconcile_business_groups(p_account_id uuid default null) returns jsonb`
 
@@ -188,7 +193,7 @@ files** (tests and e2e fixtures are counted separately below).
 | 5 | `lib/contacts/csv.ts:12,24-26` input keys | writer (import mapping) | `company_name` is routed to `row.company`, carried BESIDE the patch like `tags`; blank cells are still dropped first (`:129`) |
 | 6 | `csv.ts:43-45` header synonyms | mapping | Unchanged: Company, Organization, Business still map to the `company_name` column key |
 | 7 | `csv.ts:87-88` `IMPORT_FIELDS` | contract | Unchanged (pinned to the export by `csv.test.ts`) |
-| 8 | `packages/db/src/contact-import.ts:154,159,165` `applyImportBatch` | writer (via `ContactInput`) | Gains a `groupWriter` client (the `flagDb` precedent, `contacts.ts:417`) and calls `set_contacts_business` ONCE per batch for rows with a business, after their contacts are written. Its `{created, updated, flagged}` result is unchanged |
+| 8 | `packages/db/src/contact-import.ts:154,159,165` `applyImportBatch` | writer (via `ContactInput`) | Gains a `groupWriter` client (the `flagDb` precedent, `contacts.ts:417`) and calls `set_contacts_business` ONCE per batch for rows with a business, after their contacts are written. Its `{created, updated, flagged}` result is unchanged; it adds `businessLinkFailed` (the batch's group write failed after its contacts committed) and `businessTooLong` (rows whose name was over 120 characters), and `import/actions.ts` carries both to the wizard's done screen, summed across batches ("N business names were too long to save (120 characters max)." / "Business names didn't save for some rows — import again to retry.", each with its `.es` twin; final review I-C) |
 | 9 | `contacts/import/actions.ts:44` | caller | Passes `serviceDb()` as `groupWriter`; Owner and Staff only already (`requireNotTechnician`, `:25`) |
 | 10 | `lib/forms/enrich.ts:104` (new lead) | writer | After `createContact`, a non-blank answer calls `set_contacts_business` (service client, actor `system`) |
 | 11 | `enrich.ts:243` `fillBlanks` | reader and writer | The "held" check keeps reading `company_name` (now derived); a returning lead with no business gets one. A lead never replaces an existing business, as today |
@@ -246,7 +251,8 @@ right column, above Deals, where the study's "what they have" goes). Tokens only
 keys without one): Household / Familia; Business customer / Cliente comercial; Main group / Grupo
 principal; Pays the bills / Paga las cuentas; Billing address / Dirección de cobro; Add to a group /
 Agregar a un grupo; the empty line / "Las familias y negocios a los que pertenece esta persona
-aparecen aquí."; "Ya hay un cliente comercial llamado {name}." The drawer and the contact page read
+aparecen aquí."; "Ya hay un cliente comercial con ese nombre." (`groups.nameTaken` dropped `{name}`;
+accepted in the final review). The drawer and the contact page read
 `m["…"]` (`contact-drawer.tsx:213`, `[contactId]/page.tsx:166`), not `t()`, so the twins are written
 but not shown there yet, the limit the Technician spec recorded for Contacts; moving them to `t()`
 is item 3's. Twinning `contact.company` means regenerating the catalogue baseline in the same change.
@@ -267,7 +273,8 @@ is item 3's. Twinning `contact.company` means regenerating the catalogue baselin
   and a login with no membership see zero. Probe: drop either restrictive policy.
 - **Sync and functions:** the column follows insert, main-then-age order, rename and removal; a
   household never changes it, and a household change (add, edit, remove, rename) never recomputes a
-  directly written column; replace keeps main, remove promotes the oldest, restore is exact; make
+  directly written column, nor does a role or "Pays the bills" edit on a business membership, while a
+  main swap between two businesses still does; replace keeps main, remove promotes the oldest, restore is exact; make
   main and remove re-read the membership after the contact lock (two-session tests).
 - **Backfill:** a second run returns zeros except `skipped_too_long`; an over-long column is left
   alone even with a business membership; `"Acme Roofing"`, `" acme roofing "`, `"ACME
@@ -297,13 +304,19 @@ runbook line for `docs/runbooks/ci-supabase-project.md`, landed by bis-platform.
 build reads `company_name`, which the backfill filled. Its direct writes (inline edits, imports,
 form leads) change the column and no group; the trigger fires only on group changes, which the
 old build never makes, so nothing it writes is overwritten. Nor does the new app overwrite such a
-write by a household change: the sync recomputes the column only when a BUSINESS membership or
-group of that contact changes (a membership removed by a group delete recomputes too, since the
-deleted group's kind can no longer be read). The post-deploy reconcile folds those writes in
+write by a household change, nor by a role or "Pays the bills" edit: the sync recomputes the column
+only when a BUSINESS membership of that contact is added, removed, made or unmade main, or moved,
+or one of its business groups is renamed or changes kind (a membership removed by a group delete
+recomputes too, since the deleted group's kind can no longer be read). The post-deploy reconcile folds those writes in
 (§5.4 step 3), locking each contact so a write in flight is waited for, not lost; the one change
 it makes to a column that still names the same business is the spelling repair, and an over-long
 column is never touched. Run it only AFTER the old deployment has stopped serving: a write an old
-build makes after the reconcile has passed that contact waits for the next one. Its teardown still
+build makes after the reconcile has passed that contact waits for the next one. "Stopped serving"
+includes Vercel Skew Protection: a tab opened before the deploy keeps posting to the OLD deployment
+until it reloads or the skew window's maximum age runs out (assumption, not verified against this
+project's setting: old tabs reach the old deployment for that maximum age; see
+`docs/runbooks/production-isolation.md`, "Old tabs keep the old build"). So the reconcile waits
+until that maximum age has passed after the deploy, not merely until the deploy is READY. Its teardown still
 works (account cascade, §5.1).
 
 **New app before 0069:** data-safe (no role or policy is loosened, nothing is destroyed) but
