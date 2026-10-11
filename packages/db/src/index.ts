@@ -230,3 +230,13 @@ export {
   releaseTasksOffCustomers,
   type AssigneeFilter, type ReleasedAssignments, type PreviousAssignee,
 } from "./assignment";
+
+// Client groups (S-02 part 1, 0069): households and business customers. See ./client-groups.ts.
+export {
+  GROUP_NAME_MAX, GROUP_ROLE_MAX, BILLING_ADDRESS_MAX,
+  listContactGroups, searchGroups, readMembership, readGroup,
+  createGroupWithMember, addContactToGroup, setContactsBusiness, undoSetBusiness,
+  setPrimaryMembership, removeMembership, restoreMembership, updateMembership, updateGroup,
+  type GroupKind, type GroupMemberSnapshot, type ContactGroup, type ContactGroupMember,
+  type GroupSearchHit, type BusinessResult,
+} from "./client-groups";

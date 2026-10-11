@@ -23,7 +23,7 @@ export const ACCOUNT_OWNED_TABLES = [
   "messages", "conversations",
   "checklist_items", "contact_tags", "notes", "tasks",
   "opportunities", "pipeline_stages", "pipelines", "custom_fields",
-  "custom_values", "tags", "contacts",
+  "custom_values", "tags", "client_group_members", "client_groups", "contacts",
   "voice_profiles", "phone_numbers", "automations",
 ] as const;
 
@@ -77,6 +77,11 @@ export const ACCOUNT_OWNED_TABLES = [
  * of this function that actually carries each ledger row away
  * (`account_id … on delete cascade`); `consent-ledger-schema.test.ts`
  * proves both halves.
+ *
+ * `client_group_members` and `client_groups` (0069) are ON the list, just
+ * before `contacts`, so the demo re-seed's leftovers check covers them; both
+ * ALSO carry `account_id … on delete cascade`, so an older build's teardown
+ * that does not list them still succeeds while 0069 rolls out.
  *
  * A table added with the usual `restrict` and left off the list is a different
  * story and still a bug: it surfaces as "cleanup failed on accounts" here, or
