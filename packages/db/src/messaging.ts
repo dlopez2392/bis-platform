@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
 import type { AssigneeFilter } from "./assignment";
+import { withAssigneeOn } from "./contacts";
 
 export type MessageStatus =
   | "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
@@ -609,8 +610,7 @@ export async function listConversations(
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
     .limit(limit);
-  if (opts.assignee?.who === "mine") q = q.eq("contacts.assigned_to", opts.assignee.userId);
-  if (opts.assignee?.who === "unassigned") q = q.is("contacts.assigned_to", null);
+  q = withAssigneeOn(q, opts.assignee, "contacts.assigned_to");
 
   if (opts.before) {
     const { v, id } = opts.before;

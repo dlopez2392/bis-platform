@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { brandDisplayName } from "./branding";
 import { readConsentActions, type ConsentAction } from "./consent";
 import type { AssigneeFilter } from "./assignment";
+import { withAssigneeOn } from "./contacts";
 
 export type WorkSource = "task" | "conversation" | "booking";
 
@@ -50,8 +51,7 @@ async function openTasks(db: SupabaseClient, accountId: string, assignee?: Assig
   // whose customer it is against (A4's own point — a task moves with its
   // customer's new owner, but until it does it is still the PREVIOUS
   // owner's to work).
-  q = assignee?.who === "mine" ? q.eq("assigned_to", assignee.userId)
-    : assignee?.who === "unassigned" ? q.is("assigned_to", null) : q;
+  q = withAssigneeOn(q, assignee, "assigned_to");
   const { data, error } = await q
     .order("due_at", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true })
@@ -97,8 +97,7 @@ async function unansweredConversations(db: SupabaseClient, accountId: string, as
   let q = db.from("conversations")
     .select(`id, contact_id, unread_count, last_message_at${embed}`)
     .eq("account_id", accountId).gt("unread_count", 0);
-  if (assignee?.who === "mine") q = q.eq("contacts.assigned_to", assignee.userId);
-  if (assignee?.who === "unassigned") q = q.is("contacts.assigned_to", null);
+  q = withAssigneeOn(q, assignee, "contacts.assigned_to");
   const { data, error } = await q
     .order("last_message_at", { ascending: true }).limit(200);
   if (error) throw new Error(`unansweredConversations failed: ${error.message}`);
@@ -138,8 +137,7 @@ async function staleBookings(db: SupabaseClient, accountId: string, assignee?: A
     .select(`id, contact_id, ends_at${embed}`)
     .eq("account_id", accountId).eq("status", "booked")
     .lt("ends_at", new Date().toISOString());
-  if (assignee?.who === "mine") q = q.eq("contacts.assigned_to", assignee.userId);
-  if (assignee?.who === "unassigned") q = q.is("contacts.assigned_to", null);
+  q = withAssigneeOn(q, assignee, "contacts.assigned_to");
   const { data, error } = await q
     .order("ends_at", { ascending: true }).limit(200);
   if (error) throw new Error(`staleBookings failed: ${error.message}`);

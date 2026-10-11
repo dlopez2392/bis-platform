@@ -7,9 +7,23 @@ import type { AssigneeFilter } from "./assignment";
 export type ContactInput = {
   firstName?: string; lastName?: string; email?: string; phone?: string;
   companyName?: string; source?: string; custom?: Record<string, unknown>;
-  /** Mine/Unassigned (F-085 part 1, spec §8): who holds this customer.
-   *  `undefined` leaves the column untouched (an update that says nothing
-   *  about it); `null` explicitly clears it to Unassigned. */
+};
+
+/**
+ * `createContact`'s own input — ContactInput plus Mine/Unassigned's
+ * assignee (F-085 part 1, spec §8). Deliberately NOT part of `ContactInput`
+ * itself, and `toRow` (shared by `createContact` and `updateContact`) never
+ * writes `assigned_to`: an edit that reassigns a customer must go through
+ * `assignContacts` (assignment.ts), which checks the new assignee is a
+ * member of this account (A5) and moves that contact's open tasks along
+ * with it (A4) and emits `contact.assigned` — none of which a plain
+ * `updateContact` call does. Splitting the type makes a reassignment through
+ * `updateContact` a compile error, not a runtime guard to remember.
+ */
+export type CreateContactInput = ContactInput & {
+  /** `undefined` leaves the column at its default (Unassigned); `null`
+   *  explicitly assigns Unassigned; a user id assigns that person. Only
+   *  `createContact` accepts this field. */
   assignedTo?: string | null;
 };
 
@@ -125,7 +139,6 @@ function toRow(input: Partial<ContactInput>, currentPhone?: string | null) {
   if (input.companyName !== undefined) row.company_name = input.companyName;
   if (input.source !== undefined) row.source = input.source;
   if (input.custom !== undefined) row.custom = input.custom;
-  if (input.assignedTo !== undefined) row.assigned_to = input.assignedTo;
   return row;
 }
 
@@ -390,7 +403,7 @@ async function flagDuplicatesAfterWrite(
 }
 
 export async function createContact(
-  db: SupabaseClient, accountId: string, input: ContactInput, actorId: string,
+  db: SupabaseClient, accountId: string, input: CreateContactInput, actorId: string,
   actorType: ActorType = "user",
   // A Technician's own RLS-bound client cannot see a duplicate sitting
   // outside their assigned customers (0068 §4a), so a flag writer that ran
@@ -438,8 +451,14 @@ export async function createContact(
   }
   if (winner) return { id: winner, existing: true, flagged };
 
+  // assigned_to is written HERE, not inside toRow: toRow is shared with
+  // updateContact, which must never be able to set it (see
+  // CreateContactInput's own comment).
   const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, ...toRow(input) }).select("id").single();
+    .insert({
+      account_id: accountId, ...toRow(input),
+      ...(input.assignedTo !== undefined ? { assigned_to: input.assignedTo } : {}),
+    }).select("id").single();
   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
     actorType);
@@ -472,10 +491,18 @@ export async function flagMatchesOf(db: SupabaseClient, accountId: string, conta
     const [a, b] = [contactId, h.id].sort();
     const { error: fErr } = await db.from("contact_duplicate_flags")
       .insert({ account_id: accountId, contact_a: a, contact_b: b, reason: "hidden_match" });
-    if (!fErr) written += 1;
-    else if (fErr.code !== "23505") {
-      console.error(`contact duplicate flag (hidden_match) for account ${accountId} not recorded: code ${fErr.code ?? "none"}`);
+    // Same rule as the sibling email_phone_conflict insert above: the unique
+    // index makes a repeat (23505) the DESIGNED no-op, but anything else is
+    // real and must not be swallowed — a flag that silently fails to write
+    // leaves the Owner's duplicates queue looking empty, which is worse than
+    // not having one. Unlike flagDuplicatePair (called AFTER some OTHER
+    // write has already succeeded, so a throw there would misreport that
+    // write as failed), flagMatchesOf's only job is this write, so a throw
+    // here reports exactly what happened.
+    if (fErr && fErr.code !== "23505") {
+      throw new Error(`flagMatchesOf insert failed: ${fErr.message}`);
     }
+    if (!fErr) written += 1;
   }
   return written;
 }
@@ -689,13 +716,26 @@ export function phoneSearchDigits(raw: string): string {
   return digits.length >= MIN_PHONE_SEARCH_DIGITS ? digits.slice(0, 20) : "";
 }
 
-/** Mine/Unassigned (spec §8): one helper both `listContacts` and
- *  `countContacts` apply, so the list's rows and its header total can never
- *  disagree about which contacts the filter admits. */
-function withAssignee<T>(q: T, assignee: AssigneeFilter | undefined): T {
+/**
+ * Mine/Unassigned (spec §8): the one place in the package that decides what
+ * "mine" vs "unassigned" means on a PostgREST query — `column` names where
+ * the assignee lives on THIS query: the bare `assigned_to` column here and
+ * in `openTasks` (work-queue.ts), or `contacts.assigned_to` through an
+ * `!inner` embed in `listConversations` (messaging.ts) and the other two
+ * work-queue.ts readers. One implementation means the ternary that decides
+ * mine vs unassigned can never drift between the four call sites.
+ */
+export function withAssigneeOn<T>(q: T, assignee: AssigneeFilter | undefined, column: string): T {
   if (!assignee) return q;
   const f = q as unknown as { eq: (c: string, v: string) => T; is: (c: string, v: null) => T };
-  return assignee.who === "mine" ? f.eq("assigned_to", assignee.userId) : f.is("assigned_to", null);
+  return assignee.who === "mine" ? f.eq(column, assignee.userId) : f.is(column, null);
+}
+
+/** `withAssigneeOn` pinned to this table's own column — what `listContacts`
+ *  and `countContacts` both apply, so the list's rows and its header total
+ *  can never disagree about which contacts the filter admits. */
+function withAssignee<T>(q: T, assignee: AssigneeFilter | undefined): T {
+  return withAssigneeOn(q, assignee, "assigned_to");
 }
 
 function withSearch<T>(q: T, search?: string): T {

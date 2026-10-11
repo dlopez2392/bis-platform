@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { serviceDb } from "../service";
-import { listContacts, countContacts, createContact, flagMatchesOf } from "../contacts";
+import { listContacts, countContacts, createContact, updateContact, flagMatchesOf } from "../contacts";
 import { listConversations } from "../messaging";
 import { listAccountWork } from "../work-queue";
 import { addTask } from "../activities";
@@ -178,6 +178,26 @@ describe("assignee filters (F-085 part 1, spec §8)", () => {
       expect(data!.assigned_to).toBe(a);
     }));
 
+  it("updateContact cannot set assigned_to — only createContact may (A5/A4 safety: a reassignment must go through assignContacts, never a plain field edit) (mutation: let toRow write assigned_to again -> FAILS)", () =>
+    withAssigneeAccount(async (db, accountId) => {
+      const a = await person(db, "i");
+      const created = await createContact(db, accountId, { firstName: "Safe" }, "user_test");
+      expect(created.existing).toBe(false);
+      // `assignedTo` is not a key of ContactInput any more (CreateContactInput
+      // only), so a real caller cannot even write this; `as any` stands in
+      // for a caller that tries anyway (or a future regression that widens
+      // ContactInput back), proving the RUNTIME behaviour independent of the
+      // type-level guard tsc already gives every other caller.
+      await updateContact(db, accountId, created.id, { firstName: "Safe2", assignedTo: a } as any, "user_test");
+      const { data, error } = await db.from("contacts")
+        .select("assigned_to, first_name").eq("id", created.id).single();
+      if (error) throw error;
+      // The legitimate part of the same call still lands...
+      expect(data!.first_name).toBe("Safe2");
+      // ...but assigned_to is untouched: still Unassigned, never A.
+      expect(data!.assigned_to).toBeNull();
+    }));
+
   it("flagMatchesOf: a shared phone writes one hidden_match pair; a second call is the designed no-op and returns 0", () =>
     withAssigneeAccount(async (db, accountId) => {
       const { data: c1, error: e1 } = await db.from("contacts")
@@ -210,4 +230,62 @@ describe("assignee filters (F-085 part 1, spec §8)", () => {
       if (error) throw error;
       expect(data!.assigned_to).toBe(a);
     }));
+});
+
+/**
+ * A tiny stand-in for the real client, scripted to answer `flagMatchesOf`'s
+ * exact call sequence: `contacts` is read twice (the subject's own keys,
+ * then the candidate matches), `contact_duplicate_flags` is written once
+ * per candidate. No network, no bis-ci — this is a pure unit test of the
+ * throw/no-op branch, which does not need a live row to prove.
+ */
+function fakeFlagMatchesOfDb(opts: {
+  me: { data: unknown; error: unknown };
+  hits: { data: unknown; error: unknown };
+  insert: { error: { code: string; message: string } | null };
+}): SupabaseClient {
+  let contactsCalls = 0;
+  const chain = (result: unknown, terminal: "maybeSingle" | "limit") => {
+    const c: any = {
+      select: () => c, eq: () => c, neq: () => c, or: () => c,
+      [terminal]: () => Promise.resolve(result),
+    };
+    return c;
+  };
+  return {
+    from(table: string) {
+      if (table === "contacts") {
+        contactsCalls += 1;
+        return contactsCalls === 1 ? chain(opts.me, "maybeSingle") : chain(opts.hits, "limit");
+      }
+      if (table === "contact_duplicate_flags") {
+        return { insert: () => Promise.resolve(opts.insert) };
+      }
+      throw new Error(`fakeFlagMatchesOfDb: unexpected table ${table}`);
+    },
+  } as unknown as SupabaseClient;
+}
+
+describe("flagMatchesOf: a write failure that is not the designed 23505 no-op is never swallowed (sibling to createContact's own email_phone_conflict insert)", () => {
+  it("throws, naming the failure, rather than logging and returning as if nothing happened (mutation: swallow it like flagDuplicatePair does -> resolves 0 instead of throwing, FAILS)", async () => {
+    const db = fakeFlagMatchesOfDb({
+      me: { data: { email_key: null, phone_key: "5551234567" }, error: null },
+      hits: { data: [{ id: "11111111-1111-1111-1111-111111111111" }], error: null },
+      insert: { error: { code: "23503", message: "boom" } },
+    });
+    await expect(
+      flagMatchesOf(db, "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333"),
+    ).rejects.toThrow(/flagMatchesOf insert failed/);
+  });
+
+  it("still returns 0 and writes nothing on the designed 23505 repeat (unchanged behaviour)", async () => {
+    const db = fakeFlagMatchesOfDb({
+      me: { data: { email_key: null, phone_key: "5551234567" }, error: null },
+      hits: { data: [{ id: "11111111-1111-1111-1111-111111111111" }], error: null },
+      insert: { error: { code: "23505", message: "duplicate key" } },
+    });
+    await expect(
+      flagMatchesOf(db, "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333"),
+    ).resolves.toBe(0);
+  });
 });
