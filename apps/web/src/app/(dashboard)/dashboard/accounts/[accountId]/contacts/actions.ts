@@ -3,9 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
-import { createContact, deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
-         getContact, setContactPhoneCountry, readPersonId, flagMatchesOf, serviceDb,
+import { deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
+         getContact, setContactPhoneCountry,
          assignContacts, undoAssignContacts, type PreviousAssignee } from "@bis/db";
+import { addContactByHand } from "@/lib/contacts/add-contact-by-hand";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { MAX_ASSIGN, MAX_MOVED_TASKS, isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
 import { normalisePhone, repickPhoneCountry, type PhoneCountry } from "@bis/db/phone";
@@ -37,7 +38,6 @@ export async function createContactAction(
   accountId: string, formData: FormData,
 ): Promise<CreateContactResult> {
   const access = await requireAccountAccess(accountId);
-  const { userId } = access;
   const val = (k: string) => String(formData.get(k) ?? "").trim();
   const firstName = val("firstName");
   const lastName = val("lastName");
@@ -61,31 +61,15 @@ export async function createContactAction(
   const phoneField = normalizeFieldInput("phone", val("phone"));
   if (!phoneField.ok) return { kind: "invalid", error: phoneField.error };
 
-  // F-085 part 1 (spec §8): a customer someone adds by hand is theirs (the
-  // agency is never a member of a client's company, so readPersonId answers null and what it adds lands
-  // Unassigned). A Technician's own client cannot see a duplicate held by
-  // someone else (0068), so for them the flag writer is the service client,
-  // and once the row exists the matches they cannot see are flagged on it
-  // too: a row the caller just created, so the service client only ever
-  // touches a proven target. Fails closed: a client whose role could not be
-  // settled takes the same narrow path.
+  // F-085 part 1 (spec §8): a customer someone adds by hand is theirs; the
+  // narrow path for a caller who cannot see the whole account lives in the
+  // shared helper (relationships spec R4 reuses it).
   const db = await dbForRequest();
-  const personId = await readPersonId(db, accountId, userId);
-  const narrow = !seesWholeAccount(access);
-  const result = await createContact(db, accountId, {
+  const result = await addContactByHand(access, db, accountId, {
     firstName: firstName || undefined, lastName: lastName || undefined,
     email: email.value || undefined, phone: phoneField.value || undefined,
-    assignedTo: personId,
-  }, userId, "user", narrow ? serviceDb() : db);
+  });
   if (result.existing) return { kind: "existing", contactId: result.id };
-  if (narrow) {
-    try {
-      await flagMatchesOf(serviceDb(), accountId, result.id);
-    } catch (e) {
-      // The customer is saved; only the duplicate flags are missing.
-      console.error(`createContactAction: hidden-match flags not written (account ${accountId}): ${loggableError(e)}`);
-    }
-  }
   revalidatePath(`/dashboard/accounts/${accountId}/contacts`);
   return { kind: "created" };
 }

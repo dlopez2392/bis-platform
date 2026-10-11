@@ -77,8 +77,6 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/actions.ts": "proven-target",
   // ledgerDb after getContact on the request client found the contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx": "proven-target",
-  // createContactAction: flags written by the service client for a row the caller just created.
-  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts": "agency-only",
@@ -102,6 +100,10 @@ const ALLOWED: Record<string, Reason> = {
   "lib/consent/email-gate.ts": "proven-target",
   "lib/consent/ledger-db.ts": "proven-target",
   "lib/consent/texts-context.ts": "proven-target",
+  // addContactByHand (moved from createContactAction; also the Relationships dialog's "New person",
+  // spec R4): a narrow caller's duplicate flags are written by the service client, for a row the
+  // caller just created.
+  "lib/contacts/add-contact-by-hand.ts": "proven-target",
   // The webhook routes' heartbeat (dynamic import): writes ops_heartbeats, never reads customer data.
   "lib/ops/stamp.ts": "public-or-cron",
   "lib/preferences/person-prefs.ts": "before-trust",

@@ -3342,6 +3342,21 @@ export const m = {
   "assign.empty.unassignedWork.es": "Todo en esta lista tiene a alguien. El trabajo de un cliente sin responsable llega aquí primero.",
   "assign.empty.technician": "No customers yet. When your team gives you a customer, they show up here.",
   "assign.empty.technician.es": "Todavía no tiene clientes. Cuando su equipo le asigne uno, aparecerá aquí.",
+  // Relationships between customers (relationships spec §6): what a refused write says.
+  "relationships.error.duplicate": "That relationship is already there.",
+  "relationships.error.duplicate.es": "Esa relación ya está registrada.",
+  "relationships.error.refused": "You can't change that customer.",
+  "relationships.error.refused.es": "No puede cambiar ese cliente.",
+  "relationships.error.self": "Pick someone else.",
+  "relationships.error.self.es": "Elija a otra persona.",
+  "relationships.error.gone": "That changed since. Reload to see it.",
+  "relationships.error.gone.es": "Eso cambió. Vuelva a cargar para verlo.",
+  "relationships.error.restore": "Couldn't put it back.",
+  "relationships.error.restore.es": "No se pudo deshacer.",
+  "relationships.error.invalid": "That doesn't look right. Check it and try again.",
+  "relationships.error.invalid.es": "Algo no está bien. Revíselo e intente de nuevo.",
+  "relationships.error.failed": "Couldn't save that. Try again.",
+  "relationships.error.failed.es": "No se pudo guardar. Intente de nuevo.",
 } as const;
 
 export type MessageKey = keyof typeof m;

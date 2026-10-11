@@ -1,0 +1,231 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { m } from "@/lib/messages";
+
+type Access = { userId: string; isAgency: boolean; role: "owner" | "staff" | "technician" | null; canManage: boolean };
+const requireAccountAccess = vi.fn<(id: string) => Promise<Access>>();
+vi.mock("@/lib/auth", () => ({ requireAccountAccess: (id: string) => requireAccountAccess(id) }));
+const REQUEST = { tag: "request-db" };
+vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
+const revalidatePath = vi.fn();
+vi.mock("next/cache", () => ({ revalidatePath }));
+const addContactByHand = vi.fn();
+vi.mock("@/lib/contacts/add-contact-by-hand", () => ({ addContactByHand: (...a: unknown[]) => addContactByHand(...a) }));
+const dbMocks = {
+  getContact: vi.fn(), listContacts: vi.fn(), getRelationship: vi.fn(), addRelationship: vi.fn(),
+  setRelationshipSides: vi.fn(), removeRelationship: vi.fn(), restoreRelationship: vi.fn(),
+};
+vi.mock("@bis/db", () => dbMocks);
+
+const {
+  addRelationshipAction, setRelationshipAction, undoSetRelationshipAction, removeRelationshipAction,
+  undoRemoveRelationshipAction, searchRelatableContactsAction,
+} = await import("./relationship-actions");
+
+const A = "44444444-4444-4444-8444-444444444444";
+const S = "11111111-1111-4111-8111-111111111111";
+const O = "22222222-2222-4222-8222-222222222222";
+const R = "33333333-3333-4333-8333-333333333333";
+/** Has hex letters, so its upper- and lowercase forms differ (the digit-only ids above do not). */
+const LETTERED = "abcdef12-1111-4111-8111-11111111111a";
+const OWNER: Access = { userId: "user_1", isAgency: false, role: "owner", canManage: true };
+const TECH: Access = { userId: "user_t", isAgency: false, role: "technician", canManage: false };
+const UNSETTLED: Access = { userId: "user_u", isAgency: false, role: null, canManage: false };
+const contact = (id: string, first: string) => ({ id, first_name: first, last_name: "Ramírez" });
+const ROW = {
+  id: R, account_id: A, contact_id: O, related_contact_id: S, label_key: "parent", custom_label: null,
+  contact_form: "f", related_form: null, contact_can_pick_up: false, contact_is_emergency: false,
+  related_can_pick_up: false, related_is_emergency: false, created_at: "2026-10-11T00:00:00Z", updated_at: "2026-10-11T00:00:00Z",
+};
+const ADD = { subjectId: S, other: { kind: "existing", contactId: O }, labelKey: "parent", side: "a", customLabel: null, otherForm: "f", subjectForm: null };
+/** A Technician who holds the record's customer (S) but not the other person (O). */
+const onlySubjectVisible = async (_db: unknown, _a: string, id: string) => (id === S ? contact(S, "Sofía") : null);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  requireAccountAccess.mockResolvedValue(OWNER);
+  dbMocks.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === S ? contact(S, "Sofía") : id === O ? contact(O, "Ana") : null));
+  dbMocks.addRelationship.mockResolvedValue(ROW);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+describe("addRelationshipAction", () => {
+  it("refuses a malformed add without touching the database", async () => {
+    expect(await addRelationshipAction(A, { ...ADD, labelKey: "cousin" })).toEqual({ ok: false, error: "relationships.error.invalid" });
+    expect(dbMocks.getContact).not.toHaveBeenCalled();
+  });
+  it("refuses oneself", async () => {
+    expect(await addRelationshipAction(A, { ...ADD, other: { kind: "existing", contactId: S } })).toEqual({ ok: false, error: "relationships.error.self" });
+  });
+  it("refuses oneself when the same id comes back in another case (mutation: compare ids case-sensitively -> FAILS)", async () => {
+    // An id with hex LETTERS: S is all digits, so S.toUpperCase() === S and could not tell cases apart.
+    dbMocks.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id.toLowerCase() === LETTERED ? contact(LETTERED, "Sofía") : null));
+    addContactByHand.mockResolvedValue({ id: LETTERED.toUpperCase(), existing: true });
+    expect(await addRelationshipAction(A, { ...ADD, subjectId: LETTERED, other: { kind: "new", firstName: "Sofía", lastName: "", phone: "" } }))
+      .toEqual({ ok: false, error: "relationships.error.self" });
+    expect(dbMocks.addRelationship).not.toHaveBeenCalled();
+  });
+  it("refuses when the record is not the caller's to see, before any write (mutation: skip the subject read -> FAILS)", async () => {
+    // Only the record's own customer is hidden: an all-null read would let the OTHER person's
+    // check refuse too, and the probe could not fail.
+    dbMocks.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === O ? contact(O, "Ana") : null));
+    expect(await addRelationshipAction(A, ADD)).toEqual({ ok: false, error: "relationships.error.refused" });
+    expect(dbMocks.addRelationship).not.toHaveBeenCalled();
+  });
+  it("a Technician cannot relate a person who is not theirs: both people must be visible (mutation: skip the other read -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    dbMocks.getContact.mockImplementation(onlySubjectVisible);
+    expect(await addRelationshipAction(A, ADD)).toEqual({ ok: false, error: "relationships.error.refused" });
+    expect(dbMocks.addRelationship).not.toHaveBeenCalled();
+  });
+  it("writes on the request client with the other person on side a, and answers the subject's view (mutation: swap the sides -> FAILS)", async () => {
+    const r = await addRelationshipAction(A, ADD);
+    expect(dbMocks.addRelationship).toHaveBeenCalledWith(REQUEST, A, expect.objectContaining({
+      contactId: O, relatedContactId: S, labelKey: "parent", contactForm: "f", relatedForm: null }), "user_1");
+    expect(r).toEqual({ ok: true, view: expect.objectContaining({ id: R, namedSide: "a", person: { id: O, firstName: "Ana", lastName: "Ramírez" } }) });
+  });
+  it("a new person goes through the shared hand-add helper with the caller's access, then is related (spec R4)", async () => {
+    addContactByHand.mockResolvedValue({ id: O, existing: false });
+    const r = await addRelationshipAction(A, { ...ADD, other: { kind: "new", firstName: "Ana", lastName: "Ramírez", phone: "956 555 0142" } });
+    expect(addContactByHand).toHaveBeenCalledWith(OWNER, REQUEST, A, { firstName: "Ana", lastName: "Ramírez", phone: "956 555 0142" });
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/${A}/contacts`);
+    expect(r.ok).toBe(true);
+  });
+  it("a Technician's new person is made with the Technician's own access, so the helper takes its narrow path", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    addContactByHand.mockResolvedValue({ id: O, existing: false });
+    await addRelationshipAction(A, { ...ADD, other: { kind: "new", firstName: "Ana", lastName: "", phone: "" } });
+    expect(addContactByHand).toHaveBeenCalledWith(TECH, REQUEST, A, { firstName: "Ana", lastName: undefined, phone: undefined });
+  });
+  it("a new person's phone that is not a phone is refused before anyone is created", async () => {
+    expect(await addRelationshipAction(A, { ...ADD, other: { kind: "new", firstName: "Ana", lastName: "", phone: "call me" } }))
+      .toEqual({ ok: false, error: "relationships.error.invalid" });
+    expect(addContactByHand).not.toHaveBeenCalled();
+  });
+  it("maps database refusals to copy, by code (mutation: map every error to failed -> FAILS)", async () => {
+    dbMocks.addRelationship.mockRejectedValueOnce({ code: "23505" });
+    expect(await addRelationshipAction(A, ADD)).toEqual({ ok: false, error: "relationships.error.duplicate" });
+    dbMocks.addRelationship.mockRejectedValueOnce({ code: "42501" });
+    expect(await addRelationshipAction(A, ADD)).toEqual({ ok: false, error: "relationships.error.refused" });
+  });
+  it("never pre-checks a pair: the reverse of a support label goes to the database, which decides (R7)", async () => {
+    const reverse = { ...ADD, labelKey: "emergency_contact", side: "a", otherForm: null };
+    await addRelationshipAction(A, reverse);
+    expect(dbMocks.addRelationship).toHaveBeenCalledTimes(1);
+    expect(dbMocks.getRelationship).not.toHaveBeenCalled();
+  });
+});
+
+describe("setRelationshipAction and its Undo", () => {
+  beforeEach(() => dbMocks.getRelationship.mockResolvedValue(ROW));
+  it("writes the named person's side and returns what it was for Undo (mutation: write the subject's side -> FAILS)", async () => {
+    dbMocks.setRelationshipSides.mockResolvedValue({ previous: { contact_can_pick_up: false }, row: { ...ROW, contact_can_pick_up: true } });
+    const r = await setRelationshipAction(A, S, R, { canPickUp: true });
+    expect(dbMocks.setRelationshipSides).toHaveBeenCalledWith(REQUEST, A, R, { contact_can_pick_up: true }, "user_1");
+    expect(r).toEqual({ ok: true, undo: { contact_can_pick_up: false }, view: expect.objectContaining({ canPickUp: true }) });
+  });
+  it("a zero-row write is a refusal; a vanished row is gone", async () => {
+    dbMocks.setRelationshipSides.mockResolvedValueOnce("refused");
+    expect(await setRelationshipAction(A, S, R, { canPickUp: true })).toEqual({ ok: false, error: "relationships.error.refused" });
+    dbMocks.getRelationship.mockResolvedValueOnce(null);
+    expect(await setRelationshipAction(A, S, R, { canPickUp: true })).toEqual({ ok: false, error: "relationships.error.gone" });
+  });
+  it("a Technician with the other person hidden is refused before any write (mutation: drop the both-visible check -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    dbMocks.getContact.mockImplementation(onlySubjectVisible);
+    expect(await setRelationshipAction(A, S, R, { canPickUp: true })).toEqual({ ok: false, error: "relationships.error.refused" });
+    expect(dbMocks.setRelationshipSides).not.toHaveBeenCalled();
+  });
+  it("the Undo re-validates the columns the browser sends back (mutation: pass rawPrevious through -> FAILS)", async () => {
+    expect(await undoSetRelationshipAction(A, S, R, { label_key: "spouse" })).toEqual({ ok: false, error: "relationships.error.invalid" });
+    expect(dbMocks.setRelationshipSides).not.toHaveBeenCalled();
+  });
+  it("the Undo of an edit is refused for a role that could not be settled when a person is hidden, before any write", async () => {
+    requireAccountAccess.mockResolvedValue(UNSETTLED);
+    dbMocks.getContact.mockImplementation(onlySubjectVisible);
+    expect(await undoSetRelationshipAction(A, S, R, { contact_can_pick_up: false })).toEqual({ ok: false, error: "relationships.error.refused" });
+    expect(dbMocks.setRelationshipSides).not.toHaveBeenCalled();
+  });
+  it("the Undo of an edit restores the named side and answers the view", async () => {
+    dbMocks.setRelationshipSides.mockResolvedValue({ previous: { contact_can_pick_up: true }, row: ROW });
+    const r = await undoSetRelationshipAction(A, S, R, { contact_can_pick_up: false });
+    expect(dbMocks.setRelationshipSides).toHaveBeenCalledWith(REQUEST, A, R, { contact_can_pick_up: false }, "user_1");
+    expect(r).toEqual({ ok: true, view: expect.objectContaining({ id: R, canPickUp: false }) });
+  });
+});
+
+describe("remove and its Undo", () => {
+  it("remove hands back the snapshot; a refusal is refused", async () => {
+    dbMocks.removeRelationship.mockResolvedValueOnce(ROW);
+    expect(await removeRelationshipAction(A, R)).toEqual({ ok: true, snapshot: ROW });
+    dbMocks.removeRelationship.mockResolvedValueOnce("refused");
+    expect(await removeRelationshipAction(A, R)).toEqual({ ok: false, error: "relationships.error.refused" });
+  });
+  it("a Technician cannot remove a relationship with a hidden person, before any write", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    dbMocks.getRelationship.mockResolvedValue(ROW);
+    dbMocks.getContact.mockImplementation(onlySubjectVisible);
+    expect(await removeRelationshipAction(A, R)).toEqual({ ok: false, error: "relationships.error.refused" });
+    expect(dbMocks.removeRelationship).not.toHaveBeenCalled();
+  });
+  it("the Undo refuses another account's snapshot without a write, restores a good one, and says when the person is gone (mutation: drop the account check -> FAILS)", async () => {
+    expect(await undoRemoveRelationshipAction(A, S, { ...ROW, account_id: O })).toEqual({ ok: false, error: "relationships.error.invalid" });
+    expect(dbMocks.restoreRelationship).not.toHaveBeenCalled();
+    dbMocks.restoreRelationship.mockResolvedValueOnce(ROW);
+    expect((await undoRemoveRelationshipAction(A, S, ROW)).ok).toBe(true);
+    expect(dbMocks.restoreRelationship).toHaveBeenCalledWith(REQUEST, A, ROW, "user_1");
+    dbMocks.restoreRelationship.mockRejectedValueOnce({ code: "23503" });
+    expect(await undoRemoveRelationshipAction(A, S, ROW)).toEqual({ ok: false, error: "relationships.error.restore" });
+  });
+  it("the Undo refuses a snapshot that is not about the record it is shown on, without a write", async () => {
+    const elsewhere = "55555555-5555-4555-8555-555555555555";
+    expect(await undoRemoveRelationshipAction(A, elsewhere, ROW)).toEqual({ ok: false, error: "relationships.error.invalid" });
+    expect(dbMocks.restoreRelationship).not.toHaveBeenCalled();
+  });
+  it("the Undo refuses a malformed snapshot from the browser (an extra column), without a write", async () => {
+    expect(await undoRemoveRelationshipAction(A, S, { ...ROW, assigned_to: "x" })).toEqual({ ok: false, error: "relationships.error.invalid" });
+    expect(dbMocks.restoreRelationship).not.toHaveBeenCalled();
+  });
+  it("a narrow caller cannot restore a pair they cannot fully see: refused before the write (mutation: drop the both-visible check -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    dbMocks.getContact.mockImplementation(onlySubjectVisible);
+    expect(await undoRemoveRelationshipAction(A, S, ROW)).toEqual({ ok: false, error: "relationships.error.refused" });
+    expect(dbMocks.restoreRelationship).not.toHaveBeenCalled();
+  });
+  it("the database's own refusal of a restore (42501) reads as refused, not as 'couldn't put it back'", async () => {
+    dbMocks.restoreRelationship.mockRejectedValueOnce({ code: "42501" });
+    expect(await undoRemoveRelationshipAction(A, S, ROW)).toEqual({ ok: false, error: "relationships.error.refused" });
+  });
+});
+
+describe("searchRelatableContactsAction", () => {
+  it("needs two characters, leaves out the record's own customer, and stops at eight (mutation: drop the subject filter -> FAILS)", async () => {
+    expect(await searchRelatableContactsAction(A, S, "a")).toEqual({ ok: true, hits: [] });
+    expect(dbMocks.listContacts).not.toHaveBeenCalled();
+    dbMocks.listContacts.mockResolvedValue([S, ...Array.from({ length: 9 }, (_, i) => `2222222${i}-2222-4222-8222-222222222222`)]
+      .map((id) => ({ id, first_name: "Ana", last_name: null, phone: null })));
+    const r = await searchRelatableContactsAction(A, S, "Ana");
+    expect(dbMocks.listContacts).toHaveBeenCalledWith(REQUEST, A, { search: "Ana", limit: 9 });
+    expect(r.ok && r.hits.map((h) => h.id)).not.toContain(S);
+    expect(r.ok && r.hits).toHaveLength(8);
+  });
+  it("leaves out the record's own customer even when the record's id arrives in another case", async () => {
+    dbMocks.listContacts.mockResolvedValue([{ id: LETTERED, first_name: "Sofía", last_name: null, phone: null }]);
+    const r = await searchRelatableContactsAction(A, LETTERED.toUpperCase(), "Sof");
+    expect(r).toEqual({ ok: true, hits: [] });
+  });
+});
+
+describe("relationship error copy", () => {
+  it("every error the actions can answer has English and Spanish copy (mutation: delete one .es key -> FAILS)", () => {
+    const keys = [
+      "relationships.error.duplicate", "relationships.error.refused", "relationships.error.self", "relationships.error.gone",
+      "relationships.error.restore", "relationships.error.invalid", "relationships.error.failed",
+    ] as const;
+    const catalogue = m as Record<string, string>;
+    for (const k of keys) {
+      expect(catalogue[k], k).toEqual(expect.any(String));
+      expect(catalogue[`${k}.es`], `${k}.es`).toEqual(expect.any(String));
+    }
+    expect(catalogue["relationships.error.duplicate"]).toBe("That relationship is already there.");
+  });
+});
