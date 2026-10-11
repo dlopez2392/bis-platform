@@ -3,7 +3,7 @@ import { BrandingPanel } from "@/components/branding-panel";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireNotTechnician } from "@/lib/auth";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
 import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "./actions";
@@ -53,7 +53,7 @@ export default async function BrandingPage({
   // client whose access is switched off. The agency passes straight through —
   // they reach the same panel from Settings, so this route works for them too
   // rather than 404ing in a way someone would later have to debug.
-  await requireAccountAccess(accountId);
+  await requireNotTechnician(accountId);
 
   // serviceDb for the READS, matching every other in-account read of this
   // row. It changes no boundary: accounts_member_read already returns the

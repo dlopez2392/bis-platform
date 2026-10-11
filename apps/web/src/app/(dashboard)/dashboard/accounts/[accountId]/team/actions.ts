@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import {
   serviceDb, listAccountTeam, setAccountMemberRole, setMemberLanguage, removeAccountMember, addAccountMember,
-  deleteAccountMembership,
-  type AccountRole, type PersonLanguage, type SupabaseClient, type TeamMember,
+  deleteAccountMembership, releaseMemberAssignments, reassignReleased,
+  type AccountRole, type PersonLanguage, type ReleasedAssignments, type SupabaseClient, type TeamMember,
 } from "@bis/db";
 import { requireAccountOwner } from "@/lib/auth";
 import {
@@ -34,9 +34,9 @@ import { loggableError } from "@/lib/loggable-error";
  * to its sentence in `messages.ts` (`team.*`, with `.es` twins). That keeps
  * this file out of the shared copy catalogue while Tasks 6-8 edit it.
  *
- * The Clerk role FOLLOWS the BIS role (owner -> org:admin, staff ->
- * org:member). The dangerous disagreement is BIS Staff beside Clerk
- * org:admin: an org:admin can invite an Owner through Clerk's browser API.
+ * The Clerk role FOLLOWS the BIS role (owner -> org:admin, staff and
+ * technician -> org:member). The dangerous disagreement is BIS Staff (or
+ * Technician) beside Clerk org:admin: an org:admin can invite an Owner through Clerk's browser API.
  * So every failure path must land, if anywhere wrong, on BIS Owner beside
  * Clerk member, which only costs that person Clerk's own UI. That fixes the
  * ORDER of each role change (setTeamRoleAction) and why a Clerk timeout is
@@ -116,13 +116,15 @@ export async function inviteTeamMemberAction(accountId: string, formData: FormDa
 }
 
 /**
- * Demotion to Staff: Clerk FIRST (to org:member), then the BIS write with
- * its last-Owner guard. If BIS refuses or fails, Clerk is put back to
- * org:admin; if THAT fails, BIS Owner beside Clerk member is the safe side,
- * logged by id. A Clerk demotion that times out may still land later, which
- * leaves the same safe pair. Once BIS says Staff, Clerk is set to org:member
- * AGAIN (review I2): a concurrent promotion's org:admin write may have landed
- * between this action's two writes.
+ * Demotion (to Staff, or since F-085 part 1 to Technician: any role but
+ * Owner): Clerk FIRST (to org:member, with the new role as its bis_role),
+ * then the BIS write with its last-Owner guard. If BIS refuses or fails,
+ * Clerk is put back to the previous role; if THAT fails, BIS Owner beside
+ * Clerk member is the safe side, logged by id. A Clerk demotion that times
+ * out may still land later, which leaves the same safe pair. Once BIS holds
+ * the new role, Clerk is set to it AGAIN (review I2): a concurrent
+ * promotion's org:admin write may have landed between this action's two
+ * writes.
  *
  * Promotion to Owner: BIS first (no last-Owner risk), then Clerk to
  * org:admin. Only a DEFINITIVE Clerk refusal (a 4xx, `clerkRefused`) rolls
@@ -131,8 +133,11 @@ export async function inviteTeamMemberAction(accountId: string, formData: FormDa
  * Every other failure (a 5xx, a timeout, a network error) may have landed or
  * may land later (review I1), so BIS is left at Owner: rolling it back could
  * end at BIS Staff beside Clerk admin. After a Clerk write that landed, BIS
- * is re-read (review I2): if a concurrent demotion made the person Staff
- * meanwhile, or the read fails, Clerk goes back to org:member.
+ * is re-read (review I2): if a concurrent demotion made the person Staff or
+ * Technician meanwhile, or the read fails, Clerk goes back to org:member.
+ * That set-back also writes the bis_role metadata roleFromClerk falls back
+ * on, so it never names a role more privileged than BIS holds: the role BIS
+ * now has, or Technician (the least) when the person is gone or unreadable.
  */
 export async function setTeamRoleAction(
   accountId: string, userId: string, role: AccountRole,
@@ -146,8 +151,8 @@ export async function setTeamRoleAction(
   const account = await readAccount(db, accountId);
   const ids = `account ${accountId}, user ${userId}`;
 
-  if (role === "staff") {
-    const demoted = await setOrganizationRole(account.orgId, member.clerkUserId, "staff");
+  if (role !== "owner") {
+    const demoted = await setOrganizationRole(account.orgId, member.clerkUserId, role);
     if (!demoted.ok) return { ok: false, error: "team.role.failed" };
     const putClerkBack = async () => {
       const back = await setOrganizationRole(account.orgId, member.clerkUserId, previous);
@@ -155,7 +160,7 @@ export async function setTeamRoleAction(
     };
     let r: Awaited<ReturnType<typeof setAccountMemberRole>>;
     try {
-      r = await setAccountMemberRole(db, accountId, userId, "staff");
+      r = await setAccountMemberRole(db, accountId, userId, role);
     } catch (e) {
       await putClerkBack();
       throw e;
@@ -164,8 +169,8 @@ export async function setTeamRoleAction(
       await putClerkBack();
       return { ok: false, error: r === "last_owner" ? "team.lastOwner" : "team.changed" };
     }
-    const again = await setOrganizationRole(account.orgId, member.clerkUserId, "staff");
-    if (!again.ok) console.error(`team: the demotion's repeat Clerk write failed; BIS staff, Clerk possibly admin (${ids}): ${again.code ?? "no code"}`);
+    const again = await setOrganizationRole(account.orgId, member.clerkUserId, role);
+    if (!again.ok) console.error(`team: the demotion's repeat Clerk write failed; BIS ${role}, Clerk possibly admin (${ids}): ${again.code ?? "no code"}`);
     revalidateTeam(accountId);
     return { ok: true, previous };
   }
@@ -201,7 +206,7 @@ export async function setTeamRoleAction(
     now = "unread";
   }
   if (now !== "owner") {
-    const back = await setOrganizationRole(account.orgId, member.clerkUserId, "staff");
+    const back = await setOrganizationRole(account.orgId, member.clerkUserId, now === "staff" || now === "technician" ? now : "technician");
     if (!back.ok) console.error(`team: Clerk not set back to member after BIS changed under a promotion (${ids}): ${back.code ?? "no code"}`);
     revalidateTeam(accountId);
     return { ok: false, error: now === "unread" ? "team.role.failed" : "team.changed" };
@@ -238,6 +243,13 @@ export async function setTeamLanguageAction(
  * It runs after the record, so to survive it a fallback that read Clerk
  * before the delete must also have missed the record (reconcileMembership
  * refuses a membership older than it) AND written after this sweep.
+ *
+ * F-085 part 1 (spec §8, A3): once BIS and Clerk have both let the person
+ * go, their customers and open tasks are released to Unassigned
+ * (releaseMemberAssignments, 0068) and the ids ride in the removal record
+ * for the undo. A release that fails never undoes the removal: it is logged
+ * and tried once more after the sweep (it is idempotent); until it lands,
+ * the person who left reads nothing (A1).
  */
 export async function removeTeamMemberAction(
   accountId: string, userId: string,
@@ -264,10 +276,16 @@ export async function removeTeamMemberAction(
     return { ok: false, error: "team.remove.failed" };
   }
   revalidateTeam(accountId);
+  let released: ReleasedAssignments | undefined;
+  try {
+    released = await releaseMemberAssignments(db, accountId, userId);
+  } catch (e) {
+    console.error(`team: assignments not released (${ids}): ${loggableError(e)}`);
+  }
   let recorded = true;
   try {
     await recordRemoval(db, accountId, callerId,
-      { userId, clerkUserId: member.clerkUserId, role: member.role, language: member.language });
+      { userId, clerkUserId: member.clerkUserId, role: member.role, language: member.language, released });
   } catch (e) {
     console.error(`team: removal not recorded, so it cannot be undone (${ids}): ${loggableError(e)}`);
     recorded = false;
@@ -276,6 +294,13 @@ export async function removeTeamMemberAction(
     await deleteAccountMembership(db, accountId, userId);
   } catch (e) {
     console.error(`team: post-removal sweep failed (${ids}): ${loggableError(e)}`);
+  }
+  if (released === undefined) {
+    try {
+      await releaseMemberAssignments(db, accountId, userId);
+    } catch (e) {
+      console.error(`team: assignments not released on the retry either (${ids}): ${loggableError(e)}`);
+    }
   }
   return recorded ? { ok: true, undo: { userId } } : { ok: true };
 }
@@ -288,6 +313,10 @@ export async function removeTeamMemberAction(
  * BIS membership, set explicitly to the event's role when a row already
  * existed (the webhook can get there first). A double-clicked undo (Clerk:
  * already a member, BIS already at that role) is a success.
+ *
+ * Then (F-085 part 1, spec §8) the customers and open tasks the removal
+ * released go back to the person, only those still Unassigned
+ * (reassignReleased): anyone handed to someone else since stays where they are.
  */
 export async function undoRemoveTeamMemberAction(accountId: string, userId: string): Promise<TeamResult> {
   await requireAccountOwner(accountId);
@@ -313,6 +342,7 @@ export async function undoRemoveTeamMemberAction(accountId: string, userId: stri
       if (set !== "ok") console.error(`team undo: existing row not set to ${removed.role}: ${set} (${ids})`);
     }
     await setMemberLanguage(db, accountId, userId, removed.language);
+    if (removed.released) await reassignReleased(db, accountId, userId, removed.released);
   } catch (e) {
     console.error(`team undo: Clerk restored the member but the BIS write failed (${ids}): ${loggableError(e)}`);
     return { ok: false, error: "team.undo.failed" };

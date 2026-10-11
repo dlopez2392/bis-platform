@@ -1,7 +1,8 @@
 "use server";
 
-import { serviceDb, sumUnreadCount, getVoiceProfile } from "@bis/db";
+import { serviceDb, sumUnreadCount, getVoiceProfile, type SupabaseClient } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
+import { dbForRequest } from "@/lib/db";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { deriveSetupStatus, reduceSetupProgress } from "@/lib/setup/setup-status";
 import type { ReadKey } from "@/lib/setup/setup-view";
@@ -32,7 +33,10 @@ export type ShellSnapshot = {
   // `VoicePresence` rather than folded into that type — `getVoicePresence`
   // (lib/voice/presence.ts) is about CALL COUNTS, and this read already has
   // the profile in hand from the `profile.enabled` gate just above it.
-  presence: (VoicePresence & { personaName: string }) | null;
+  //
+  // `showCount` (F-085 part 1, spec §7.2): false for a Technician, whose
+  // topbar keeps the on-a-call pulse but not the account's week total.
+  presence: (VoicePresence & { personaName: string; showCount: boolean }) | null;
 };
 
 /**
@@ -109,21 +113,27 @@ export type ShellSnapshot = {
  * fold above exists to avoid.
  */
 export async function getShellSnapshot(accountId: string): Promise<ShellSnapshot> {
-  const { isAgency } = await requireAccountAccess(accountId);
+  const { isAgency, role } = await requireAccountAccess(accountId);
   const db = serviceDb();
+  const technician = role === "technician";
+  // Spec §7.2: the unread badge counts a Technician's OWN conversations,
+  // which only RLS knows. Handed over as a factory so a request client that
+  // cannot be built (no token) fails inside that leg's own catch, like any
+  // other read, rather than taking the meter and presence down with it.
+  const unreadDb = technician ? dbForRequest : async () => db;
 
   const [unreadTotal, setup, presence] = await Promise.all([
-    readUnreadTotal(db, accountId),
+    readUnreadTotal(unreadDb, accountId),
     readSetupProgress(db, accountId, isAgency),
     readPresence(db, accountId),
   ]);
 
-  return { unreadTotal, setup, presence };
+  return { unreadTotal, setup, presence: presence ? { ...presence, showCount: !technician } : null };
 }
 
-async function readUnreadTotal(db: ReturnType<typeof serviceDb>, accountId: string): Promise<number> {
+async function readUnreadTotal(db: () => Promise<SupabaseClient>, accountId: string): Promise<number> {
   try {
-    return await sumUnreadCount(db, accountId);
+    return await sumUnreadCount(await db(), accountId);
   } catch (error) {
     console.error(
       `getShellSnapshot: unread read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,

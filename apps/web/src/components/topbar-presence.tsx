@@ -52,6 +52,12 @@ export function TopbarPresence() {
   // one nothing-to-show branch, not three.
   if (!presence) return null;
 
+  // F-085 part 1 (spec §7.2): "N calls handled this week" is the ACCOUNT's
+  // total, which a Technician's own view does not otherwise carry, so the
+  // server sends showCount false for them. The on-a-call pulse below says
+  // nothing about anyone's customers and stays; idle, they get nothing.
+  if (!presence.showCount && !presence.onCall) return null;
+
   // F-107 r4 review (item 1): below `sm` the full phrase does not fit next
   // to the icon-only search trigger, ThemeToggle, OrganizationSwitcher and
   // UserButton — two renders per state (one `sm:hidden`, one `hidden

@@ -14,6 +14,9 @@ vi.mock("./actions", () => ({ createFormAction: vi.fn() }));
 
 const accountRead = vi.fn(async (): Promise<{ data: unknown; error: unknown }> =>
   ({ data: { timezone: "America/Chicago" }, error: null }));
+// F-085 part 1: the page now calls requireNotTechnician first (spec §7.1).
+vi.mock("@/lib/auth", () => ({ requireNotTechnician: async () => ({ userId: "user_1", isAgency: true, role: null, canManage: true }) }));
+
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
     from: (table: string) => {

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { cn } from "@/lib/utils";
 import { formatDateTimeInZone } from "@/lib/format";
+import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { m } from "@/lib/messages";
@@ -20,6 +21,9 @@ export default async function FormsPage({
   params,
 }: { params: Promise<{ accountId: string }> }) {
   const { accountId } = await params;
+  // F-085 part 1 (spec §7.1): a Technician does not work here and is sent
+  // to To do; everyone the [accountId] layout admitted passes straight on.
+  await requireNotTechnician(accountId);
   const db = await dbForRequest();
   const [forms, account] = await Promise.all([
     listForms(db, accountId),

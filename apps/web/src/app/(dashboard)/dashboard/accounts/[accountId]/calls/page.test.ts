@@ -20,9 +20,9 @@ vi.mock("next/navigation", () => ({
  *  unexercised on this screen — and hardcoding `isAgency` in page.tsx kept
  *  the whole suite green while offering a client a link to a route
  *  `requireAgencyOnlyAccountAccess` would bounce them from. */
-const authFixture = vi.hoisted(() => ({ isAgency: true }));
+const authFixture = vi.hoisted(() => ({ isAgency: true, role: null as "owner" | "staff" | "technician" | null }));
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }),
+  requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency, role: authFixture.role }),
 }));
 
 // The page's own direct query — the account's timezone — projected the same
@@ -41,6 +41,9 @@ vi.mock("@/lib/db", () => ({
 }));
 
 const listCallsMock = vi.fn();
+/** Today's calls against the daily limit: an account-wide total, so a
+ *  Technician (whose RLS hides other people's calls) must not be shown it. */
+const countCallsSinceMock = vi.fn<(...a: unknown[]) => Promise<number>>(async () => 3);
 // The failed-text-back read. Spied rather than stubbed away: what this page
 // must never do is call it once per row, and the only way to see that from
 // here is to count the calls and look at what was passed.
@@ -51,7 +54,7 @@ const listCallReasonsMock = vi.fn(async () => new Map<string, string>());
 vi.mock("@bis/db", () => ({
   listCallReasons: (...args: unknown[]) => listCallReasonsMock(...(args as [])),
   listCalls: (...args: unknown[]) => listCallsMock(...args),
-  countCallsSince: async () => 3,
+  countCallsSince: (...args: unknown[]) => countCallsSinceMock(...args),
   listFailedOutboundSms: (...args: unknown[]) => listFailedOutboundSmsMock(...args),
 }));
 
@@ -309,5 +312,37 @@ describe("CallsPage — why they called", () => {
     expect(html).not.toContain("Wants a quote");
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("reasons read failed"));
     spy.mockRestore();
+  });
+});
+
+/**
+ * F-085 part 1 (spec §7.2): "today's calls against the daily limit" counts
+ * the whole account. Under a Technician's RLS it would count only their own
+ * customers' calls and read as a false meter, so it is neither read nor shown.
+ */
+describe("CallsPage — the daily-limit line and the Technician", () => {
+  beforeEach(() => {
+    listCallsMock.mockResolvedValue([ROW]);
+    listFailedOutboundSmsMock.mockResolvedValue([]);
+    countCallsSinceMock.mockClear();
+    listCallReasonsMock.mockReset().mockResolvedValue(new Map());
+    authFixture.isAgency = false;
+  });
+
+  it("a Technician gets no daily-limit line and no count read (mutation: render the meter for everyone -> FAILS)", async () => {
+    authFixture.role = "technician";
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).not.toContain(m["calls.usageLabel"]);
+    expect(countCallsSinceMock).not.toHaveBeenCalled();
+    expect(html).toContain("+19565061545"); // the calls themselves still render
+    authFixture.role = null;
+  });
+
+  it("Staff still get the line, read the same way as before", async () => {
+    authFixture.role = "staff";
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).toContain(m["calls.usageLabel"]);
+    expect(countCallsSinceMock).toHaveBeenCalledTimes(1);
+    authFixture.role = null;
   });
 });

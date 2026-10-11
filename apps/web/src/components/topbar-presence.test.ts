@@ -1,9 +1,16 @@
 // apps/web/src/components/topbar-presence.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { onCallText } from "./topbar-presence";
+import { onCallText, TopbarPresence } from "./topbar-presence";
+
+// F-085 part 1 (spec §7.2): the snapshot TopbarPresence reads, set per test.
+// Mocked at the hook so no server action module is loaded.
+const shell = vi.hoisted(() => ({ snapshot: null as unknown }));
+vi.mock("@/components/shell-data", () => ({ useShellData: () => shell.snapshot }));
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(path.join(here, "topbar-presence.tsx"), "utf8");
@@ -103,5 +110,32 @@ describe("onCallText", () => {
 describe("TopbarPresence carries lang={locale} on its translated wrapper (decision D)", () => {
   it("both states' data-testid wrappers carry lang={locale} (mutation: drop it from either → FAILS)", () => {
     expect(src.match(/<span data-testid="topbar-presence" lang=\{locale\}>/g)?.length).toBe(2);
+  });
+});
+
+/**
+ * F-085 part 1 (spec §7.2): "N calls handled this week" is the ACCOUNT's
+ * total. A Technician (showCount false) keeps the on-a-call pulse, which says
+ * nothing about anyone's customers, and gets nothing at all when idle.
+ */
+describe("TopbarPresence and showCount", () => {
+  const render = (presence: object) => {
+    shell.snapshot = { unreadTotal: 0, setup: null, presence };
+    return renderToStaticMarkup(createElement(TopbarPresence));
+  };
+
+  it("idle with showCount false renders nothing (mutation: ignore showCount -> FAILS)", () => {
+    expect(render({ onCall: false, weekCount: 12, personaName: "Sofía", showCount: false })).toBe("");
+  });
+
+  it("on a call with showCount false still shows the pulse, with no count", () => {
+    const html = render({ onCall: true, weekCount: 12, personaName: "Sofía", showCount: false });
+    expect(html).toContain('data-testid="topbar-presence"');
+    expect(html).toContain("animate-pulse");
+    expect(html).not.toContain("12");
+  });
+
+  it("idle with showCount true still says the week's count", () => {
+    expect(render({ onCall: false, weekCount: 12, personaName: "Sofía", showCount: true })).toContain("12");
   });
 });

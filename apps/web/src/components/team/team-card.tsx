@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
+import { cn } from "@/lib/utils";
 import { isAccountRole, isPersonLanguage, type PendingInvite } from "@/lib/team/team-view";
 import {
   LANGUAGE_NAME, ROLE_PILL, STATUS_PILL, displayName, emptyCopy, fill, roomCopy, type TeamViewer,
@@ -145,7 +146,7 @@ function MemberRow({
           </SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {(["owner", "staff"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)}
+          {(["owner", "staff", "technician"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)}
         </SelectContent>
       </Select>
       <DotPill dense {...STATUS_PILL.active} data-status="active" />
@@ -170,8 +171,22 @@ function MemberRow({
       >
         {m["team.remove"]}
       </Button>
+      {/* Its own full-width line at the row's foot rather than inside the
+          role column: that column is 8.5rem, and the sentence would wrap to
+          three lines there and push the row's rule out of line. */}
+      <RoleHelp role={member.role} className="basis-full sm:col-span-full" />
     </li>
   );
+}
+
+/**
+ * What a Technician sees (F-085 part 1, spec §9): said under the role picker
+ * when Technician is chosen, and on a Technician's row. Nothing for Owner or
+ * Staff, whose access the card's own help line already states.
+ */
+export function RoleHelp({ role, className }: { role: AccountRole; className?: string }) {
+  if (role !== "technician") return null;
+  return <p className={cn("text-muted-foreground text-xs", className)}>{m["team.roleHelp.technician"]}</p>;
 }
 
 /** An invitation can only be cancelled; its role and language are what the person will get. */
@@ -223,6 +238,7 @@ function InviteDialog({
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const defaultRole: AccountRole = "staff";
+  const [role, setRole] = useState<AccountRole>(defaultRole);
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     const refusal = await inviteMember(actions, formData, viewer);
     if (refusal) { setError(refusal); return; }
@@ -230,7 +246,7 @@ function InviteDialog({
     setOpen(false);
   });
   return (
-    <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) setError(null); }}>
+    <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) { setError(null); setRole(defaultRole); } }}>
       <DialogTrigger asChild>
         <Button disabled={disabled}><UserPlus aria-hidden />{m["team.invite"]}</Button>
       </DialogTrigger>
@@ -250,12 +266,13 @@ function InviteDialog({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="team-invite-role">{m["team.invite.role"]}</Label>
-              <Select name="role" defaultValue={defaultRole}>
+              <Select name="role" value={role} onValueChange={(v) => { if (isAccountRole(v)) setRole(v); }}>
                 <SelectTrigger id="team-invite-role" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {(["staff", "owner"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)}
+                  {(["staff", "technician", "owner"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)}
                 </SelectContent>
               </Select>
+              <RoleHelp role={role} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="team-invite-language">{m["team.invite.language"]}</Label>

@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const requireAccountAccess = vi.fn<(accountId: string) => Promise<{ userId: string; isAgency: boolean }>>(
+const requireNotTechnician = vi.fn<(accountId: string) => Promise<{ userId: string; isAgency: boolean }>>(
   async () => ({ userId: "user_1", isAgency: true }),
 );
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: (accountId: string) => requireAccountAccess(accountId),
+  requireNotTechnician: (accountId: string) => requireNotTechnician(accountId),
 }));
 const dbForRequest = vi.fn(async () => ({}));
 vi.mock("@/lib/db", () => ({ dbForRequest: () => dbForRequest() }));
@@ -22,7 +22,7 @@ const { importContactsBatchAction } = await import("./actions");
 
 beforeEach(() => {
   vi.clearAllMocks();
-  requireAccountAccess.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
+  requireNotTechnician.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
   dbForRequest.mockReset().mockResolvedValue({});
   dbMocks.buildMatchIndex.mockResolvedValue({ byEmail: new Map(), byPhone: new Map() });
   dbMocks.applyImportBatch.mockResolvedValue({ created: 1, updated: 0, flagged: 0 });

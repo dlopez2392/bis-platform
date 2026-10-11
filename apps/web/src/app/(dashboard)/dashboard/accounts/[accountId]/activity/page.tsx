@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/empty-state";
 import { Notice } from "@/components/ui/notice";
 import { buttonVariants } from "@/components/ui/button";
 import { ZoneNote } from "@/components/zone-note";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { parseCursor, parseTimeCursor, encodeCursor } from "@/lib/cursor";
@@ -35,7 +35,7 @@ export default async function ActivityPage({
 }) {
   const { accountId } = await params;
   const { before } = await searchParams;
-  const { isAgency } = await requireAccountAccess(accountId);
+  const { isAgency } = await requireNotTechnician(accountId);
   const db = await dbForRequest();
 
   const account = await db.from("accounts").select("timezone").eq("id", accountId).maybeSingle()

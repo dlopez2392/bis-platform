@@ -23,7 +23,7 @@ import { UNDO_WINDOW_MS, type PendingInvite } from "@/lib/team/team-view";
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast: toasts }));
 
-const { TeamCard, TeamSkeleton } = await import("./team-card");
+const { TeamCard, TeamSkeleton, RoleHelp } = await import("./team-card");
 const { inviteMember, changeRole, changeLanguage, removeMember, revokeInvite, TEAM_TOAST_MS } = await import("./team-handlers");
 const { teamErrorCopy, roomCopy } = await import("./team-copy");
 
@@ -409,5 +409,52 @@ describe("the Spanish role-change toast (review M4)", () => {
     expect(es).not.toMatch(/\bes \{role\}/);
     const filled = es.replace("{name}", "María").replace("{role}", (m as Record<string, string>)["team.role.owner.es"]!);
     expect(filled).not.toContain("María ahora es Dueño");
+  });
+});
+
+/**
+ * F-085 part 1 (spec §9): the role picker adds Technician, with the help line
+ * "Sees only the customers you assign to them." Radix renders a closed
+ * Select's options (and a closed Dialog's content) to nothing on the server,
+ * so the option lists are pinned from source and the help line through its
+ * own component, which both the invite form and a member's row render.
+ */
+describe("Technician on the Team card", () => {
+  const CARD_SRC = readFileSync(path.join(here, "team-card.tsx"), "utf8");
+  const TECH: TeamMember = { userId: "33333333-3333-4333-8333-333333333333", clerkUserId: "user_3", email: "ana@rio.test", name: "Ana", role: "technician", language: null };
+  const invite = CARD_SRC.slice(CARD_SRC.indexOf("function InviteDialog("));
+  const memberRow = CARD_SRC.slice(CARD_SRC.indexOf("function MemberRow("), CARD_SRC.indexOf("function InviteRow("));
+
+  it("a Technician's role is a dot AND the word (rule 3) (mutation: drop ROLE_PILL.technician -> FAILS)", () => {
+    expect(card({ members: [OWNER, TECH] })).toMatch(pill("technician", m["team.role.technician"]));
+  });
+
+  it("the invite's role select and each member's role select list technician by its word (mutation: leave either list at two roles -> FAILS)", () => {
+    expect(memberRow.length).toBeGreaterThan(0);
+    expect(invite.length).toBeLessThan(CARD_SRC.length);
+    expect(memberRow).toContain('(["owner", "staff", "technician"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)');
+    expect(invite).toContain('(["staff", "technician", "owner"] as const).map((r) => <SelectItem key={r} value={r}>{ROLE_PILL[r].label}</SelectItem>)');
+    expect(m["team.role.technician"]).toBe("Technician");
+  });
+
+  it("RoleHelp says what a Technician sees, and nothing for the other roles (mutation: render it for every role -> FAILS)", () => {
+    expect(renderedText(renderToStaticMarkup(createElement(RoleHelp, { role: "technician" }))).trim()).toBe(m["team.roleHelp.technician"]);
+    expect(renderToStaticMarkup(createElement(RoleHelp, { role: "staff" }))).toBe("");
+    expect(renderToStaticMarkup(createElement(RoleHelp, { role: "owner" }))).toBe("");
+  });
+
+  it("choosing Technician in the invite shows the help line: the role is held in state and RoleHelp reads it (mutation: render RoleHelp for the default role only -> FAILS)", () => {
+    expect(invite).toMatch(/<Select name="role" value=\{role\} onValueChange=\{\(v\) => \{ if \(isAccountRole\(v\)\) setRole\(v\); \}\}>/);
+    expect(invite).toContain("<RoleHelp role={role} />");
+  });
+
+  it("a member who is a Technician carries the help line on their row; a team without one does not (mutation: drop RoleHelp from the row -> FAILS)", () => {
+    expect(renderedText(card({ members: [OWNER, TECH] }))).toContain(m["team.roleHelp.technician"]);
+    expect(renderedText(card({ members: [OWNER, STAFF] }))).not.toContain(m["team.roleHelp.technician"]);
+  });
+
+  it("the help line has a Spanish twin", () => {
+    expect(m["team.role.technician.es"]).toBe("Técnico");
+    expect(m["team.roleHelp.technician.es"]).toBe("Solo ve los clientes que usted le asigne.");
   });
 });

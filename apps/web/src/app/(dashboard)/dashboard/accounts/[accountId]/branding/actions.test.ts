@@ -14,10 +14,10 @@ vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
 }));
 // A real vi.fn() (not a bare async arrow) so a test can assert the auth
-// check actually ran — a mutation that deletes the `requireAccountAccess`
+// check actually ran — a mutation that deletes the `requireNotTechnician`
 // call in an action would otherwise still pass every other assertion here.
 const authMocks = vi.hoisted(() => ({
-  requireAccountAccess: vi.fn(async () => ({ userId: "user_1", isAgency: true })),
+  requireNotTechnician: vi.fn(async () => ({ userId: "user_1", isAgency: true })),
 }));
 vi.mock("@/lib/auth", () => authMocks);
 // setBrandingAction writes through the RLS-enforced client, not serviceDb() —
@@ -50,7 +50,7 @@ beforeEach(() => {
   dbMocks.sweepOrphanedLogos.mockReset().mockResolvedValue(undefined);
   dbMocks.restoreBrandLogoIfCleared.mockReset().mockResolvedValue(true);
   dbMocks.logoExists.mockReset().mockResolvedValue(true);
-  authMocks.requireAccountAccess.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
+  authMocks.requireNotTechnician.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
   orgNameMocks.syncClerkOrgName.mockReset().mockResolvedValue(true);
 });
 
@@ -249,10 +249,10 @@ describe("setBrandingAction — sweeping stale logo objects after a successful u
 });
 
 describe("removeBrandLogoAction", () => {
-  it("checks account access before doing anything (mutation: delete the requireAccountAccess call → FAILS)", async () => {
+  it("checks account access before doing anything (mutation: delete the requireNotTechnician call → FAILS)", async () => {
     dbMocks.getBranding.mockResolvedValue({ brandLogoPath: "acct_1/logo.png" });
     await removeBrandLogoAction("acct_1");
-    expect(authMocks.requireAccountAccess).toHaveBeenCalledWith("acct_1");
+    expect(authMocks.requireNotTechnician).toHaveBeenCalledWith("acct_1");
   });
 
   it("reads the current path through the RLS-enforced client, not serviceDb() (house rule) (mutation: getBranding(serviceDb()) → FAILS, {} is not dbForRequestInstance)", async () => {
@@ -321,9 +321,9 @@ describe("removeBrandLogoAction", () => {
 });
 
 describe("restoreBrandLogoAction — the Undo of removeBrandLogoAction", () => {
-  it("checks account access before doing anything (mutation: delete the requireAccountAccess call → FAILS)", async () => {
+  it("checks account access before doing anything (mutation: delete the requireNotTechnician call → FAILS)", async () => {
     await restoreBrandLogoAction("acct_1", "acct_1/logo-0123456789abcdef.png");
-    expect(authMocks.requireAccountAccess).toHaveBeenCalledWith("acct_1");
+    expect(authMocks.requireNotTechnician).toHaveBeenCalledWith("acct_1");
   });
 
   it("checks Storage existence and the database compare-and-set, never setBranding directly, and never re-uploads", async () => {

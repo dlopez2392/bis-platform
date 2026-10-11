@@ -58,7 +58,7 @@ export const isInvitationId = (v: unknown): v is string => typeof v === "string"
 /** A Clerk user id. */
 export const isClerkUserId = (v: unknown): v is string => typeof v === "string" && /^user_[A-Za-z0-9]+$/.test(v);
 
-export const isAccountRole = (v: unknown): v is AccountRole => v === "owner" || v === "staff";
+export const isAccountRole = (v: unknown): v is AccountRole => v === "owner" || v === "staff" || v === "technician";
 export const isPersonLanguage = (v: unknown): v is PersonLanguage => v === "en" || v === "es";
 
 /**

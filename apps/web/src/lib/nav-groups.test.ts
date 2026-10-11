@@ -137,6 +137,46 @@ describe("buildNavGroups", () => {
     }
   });
 
+  // F-085 part 1 (spec §9): a Technician works their own customers and
+  // nothing else. Hiding is convenience; requireNotTechnician is the boundary.
+  it("a Technician sees exactly To do, Contacts, Conversations, Calls and Calendar, in the groups' order (mutation: leave Website in for a Technician -> FAILS)", () => {
+    const groups = buildNavGroups(BASE, false, false, true);
+    expect(hrefs(groups)).toEqual([
+      `${BASE}/tasks`, `${BASE}/contacts`, `${BASE}/conversations`, `${BASE}/calls`, `${BASE}/calendar`,
+    ]);
+    expect(groups.map((g) => g.label)).toEqual([
+      "nav.group.overview", "nav.group.crm", "nav.group.communications", "nav.group.growth",
+    ]);
+  });
+
+  // Snapshot of the hrefs taken from the code BEFORE the Technician
+  // parameter existed: Owner, Staff and the agency must not move.
+  it("Owner, Staff and agency output is unchanged by the Technician parameter, whether passed false or omitted (mutation: apply the Technician list to Staff -> FAILS)", () => {
+    const owner = [
+      `${BASE}/dashboard`, `${BASE}/tasks`, `${BASE}/website`, `${BASE}/billing`,
+      `${BASE}/contacts`, `${BASE}/pipeline`,
+      `${BASE}/conversations`, `${BASE}/calls`, `${BASE}/activity`,
+      `${BASE}/forms`, `${BASE}/calendar`, `${BASE}/branding`,
+    ];
+    const staff = owner.filter((h) => h !== `${BASE}/billing`);
+    const agency = [
+      `${BASE}/dashboard`, `${BASE}/tasks`, `${BASE}/website`, `${BASE}/checklist`,
+      `${BASE}/contacts`, `${BASE}/pipeline`,
+      `${BASE}/conversations`, `${BASE}/calls`, `${BASE}/activity`, `${BASE}/voice`,
+      `${BASE}/forms`, `${BASE}/calendar`, `${BASE}/automations`,
+    ];
+    expect(hrefs(buildNavGroups(BASE, false, true))).toEqual(owner);
+    expect(hrefs(buildNavGroups(BASE, false, true, false))).toEqual(owner);
+    expect(hrefs(buildNavGroups(BASE, false, false))).toEqual(staff);
+    expect(hrefs(buildNavGroups(BASE, false, false, false))).toEqual(staff);
+    expect(hrefs(buildNavGroups(BASE, true, false))).toEqual(agency);
+    expect(hrefs(buildNavGroups(BASE, true, false, false))).toEqual(agency);
+  });
+
+  it("the agency top level is untouched by the Technician parameter (base null)", () => {
+    expect(hrefs(buildNavGroups(null, true, false, true))).toEqual(hrefs(buildNavGroups(null, true, false)));
+  });
+
   it("prefixes every in-account href with the given base", () => {
     const groups = buildNavGroups(BASE, true, false);
     for (const href of hrefs(groups)) {

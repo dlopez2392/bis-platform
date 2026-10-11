@@ -21,7 +21,7 @@ import { renderToStaticMarkup } from "react-dom/server";
  * page.test.ts gives for stubbing VoiceSettings).
  */
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency: false }),
+  requireNotTechnician: async () => ({ userId: "user_1", isAgency: false }),
 }));
 
 const dbFixture = vi.hoisted(() => ({

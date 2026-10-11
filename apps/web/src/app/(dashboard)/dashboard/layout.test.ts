@@ -67,7 +67,7 @@ vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => (
 // Staff and roles, merged with main (#234): the render body now also settles
 // the caller's Owner/Staff role for a client. Stubbed so the render tests
 // never reach the database or Clerk's backend.
-const roleFixture = vi.hoisted(() => ({ value: "staff" as "owner" | "staff" | null }));
+const roleFixture = vi.hoisted(() => ({ value: "staff" as "owner" | "staff" | "technician" | null }));
 vi.mock("@/lib/team/ensure-role", () => ({
   ensureAccountRole: async () => roleFixture.value,
   readStoredRole: async () => roleFixture.value,
@@ -136,12 +136,16 @@ describe("dashboard/layout — never passes the agency's private account name to
 // alone. Source-only: a render test would need Clerk/next/headers/the whole
 // shell mocked for no payoff beyond what these pins already cover.
 describe("dashboard/layout — computes isOwner via ensureAccountRole and threads it to AppSidebar and CommandPalette (staff and roles)", () => {
-  it("settles isOwner from ensureAccountRole keyed on the client's own account/org, only when resolved \"ok\" (mutation: hardcode isOwner to isAgency, or drop the status === \"ok\" guard → FAILS)", () => {
+  // F-085 part 1: the layout keeps the ROLE (Owner, Staff or Technician)
+  // rather than collapsing it to isOwner, and derives both flags from it.
+  it("settles the role from ensureAccountRole keyed on the client's own account/org, only when resolved \"ok\", and derives isOwner and isTechnician from it (mutation: hardcode isOwner to isAgency, or drop the status === \"ok\" guard → FAILS)", () => {
     const src = readFileSync(path.join(here, "layout.tsx"), "utf8");
     expect(src).toContain('clientState?.status === "ok" && claims.org_id');
     expect(src).toContain(
-      'ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId)).then((role) => role === "owner")',
+      '? ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId))\n',
     );
+    expect(src).toContain('const isOwner = role === "owner";');
+    expect(src).toContain('const isTechnician = role === "technician";');
   });
 
   // Fix round 1, I1: `ensureAccountRole` is React cache()'d on its FULL
@@ -179,8 +183,8 @@ describe("dashboard/layout — computes isOwner via ensureAccountRole and thread
     // both reading the computed variables (not a literal).
     // Indentation-free since the merge with main (#234) re-nested the
     // chrome one level deeper inside LocaleProvider.
-    expect(src).toMatch(/isAgency=\{isAgency\}\n\s+isOwner=\{isOwner\}/);
-    expect(src).toContain('<CommandPalette isAgency={isAgency} isOwner={isOwner} />');
+    expect(src).toMatch(/isAgency=\{isAgency\}\n\s+isOwner=\{isOwner\}\n\s+isTechnician=\{isTechnician\}/);
+    expect(src).toContain('<CommandPalette isAgency={isAgency} isOwner={isOwner} isTechnician={isTechnician} />');
   });
 
   // Merge with main (#234): main's render harness (the Clerk/next mocks above)
@@ -194,6 +198,26 @@ describe("dashboard/layout — computes isOwner via ensureAccountRole and thread
     roleFixture.value = "staff";
     const staffTree = await DashboardLayout({ children: "page" });
     expect((find(staffTree, AppSidebar) as { props: { isOwner: boolean } }[]).map((s) => s.props.isOwner)).toEqual([false]);
+  });
+
+  // F-085 part 1 (spec §9): a Technician's sidebar and ⌘K index are their own.
+  it("hands AppSidebar and CommandPalette isTechnician true for a Technician and false for Owner and Staff (mutation: pass isTechnician={false} to either → the Technician case FAILS)", async () => {
+    authFixture.isAgency = false;
+    stateFixture.value = { status: "ok", id: "acc_1", name: "Rio Roofing — trial", timezone: "America/Chicago", language: null };
+    const flags = async (role: "owner" | "staff" | "technician") => {
+      roleFixture.value = role;
+      const tree = await DashboardLayout({ children: "page" });
+      const sidebar = (find(tree, AppSidebar) as { props: { isOwner: boolean; isTechnician: boolean } }[])[0]!;
+      const topbar = (find(tree, Topbar) as { props: { palette: { props: { isOwner: boolean; isTechnician: boolean } } } }[])[0]!;
+      return {
+        sidebar: [sidebar.props.isOwner, sidebar.props.isTechnician],
+        palette: [topbar.props.palette.props.isOwner, topbar.props.palette.props.isTechnician],
+      };
+    };
+    expect(await flags("technician")).toEqual({ sidebar: [false, true], palette: [false, true] });
+    expect(await flags("owner")).toEqual({ sidebar: [true, false], palette: [true, false] });
+    expect(await flags("staff")).toEqual({ sidebar: [false, false], palette: [false, false] });
+    roleFixture.value = "staff";
   });
 });
 

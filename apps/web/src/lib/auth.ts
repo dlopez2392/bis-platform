@@ -21,7 +21,7 @@ export async function requireAgency(): Promise<{ userId: string }> {
  * must be able to see the account row in order to judge it.
  *
  * Also carries the caller's role (staff and roles, spec §6-§7): `role` is a
- * client's Owner/Staff role in this account, settled by the per-request
+ * client's Owner/Staff/Technician role in this account, settled by the per-request
  * fallback (`ensureAccountRole`, which creates a missing membership from
  * Clerk and never throws), and null for the agency or for a client whose
  * role could not be settled. `canManage` is true for the agency and a client
@@ -58,17 +58,19 @@ export async function requireAccountAccess(
 
 /**
  * Owner-only surfaces inside an account: Billing, calendar settings, contact
- * export and delete, Team. Admits the agency and a client Owner. Staff (and a
- * client whose role could not be settled, spec §9) are sent to their own
- * dashboard, never 403'd, for requireAccountAccess's reason. The database
+ * export and delete, Team. Admits the agency and a client Owner. Staff, a
+ * Technician and a client whose role could not be settled (spec §9) are sent
+ * to their own home (accountHome), never 403'd, for requireAccountAccess's reason. The database
  * refuses the same writes on its own (0066_staff_and_roles.sql); this is the
  * app's half.
  */
 export async function requireAccountOwner(
   accountId: string,
 ): Promise<{ userId: string; isAgency: boolean }> {
-  const { userId, isAgency, canManage } = await requireAccountAccess(accountId);
-  if (!canManage) redirect(`/dashboard/accounts/${accountId}/dashboard`);
+  const { userId, isAgency, canManage, role } = await requireAccountAccess(accountId);
+  // accountHome, not the literal dashboard: a Technician refused here would
+  // otherwise land on a dashboard that refuses them too (spec §7.1).
+  if (!canManage) redirect(accountHome(accountId, role));
   return { userId, isAgency };
 }
 
@@ -82,7 +84,8 @@ export async function requireAccountOwner(
  *
  * Builds on `requireAccountAccess` rather than re-deriving its checks, then
  * additionally rejects a non-agency caller. Redirects to the client's own
- * account dashboard rather than the agency's, and never 403s — same reasoning
+ * home in the account (accountHome: To do for a Technician, the dashboard
+ * otherwise) rather than the agency's, and never 403s — same reasoning
  * as `requireAccountAccess`: a 403 would confirm the surface exists for this
  * account rather than simply not being reachable by this caller. By the time
  * `isAgency` is false here, `requireAccountAccess` has already established
@@ -92,9 +95,30 @@ export async function requireAccountOwner(
 export async function requireAgencyOnlyAccountAccess(
   accountId: string,
 ): Promise<{ userId: string }> {
-  const { userId, isAgency } = await requireAccountAccess(accountId);
-  if (!isAgency) redirect(`/dashboard/accounts/${accountId}/dashboard`);
+  const { userId, isAgency, role } = await requireAccountAccess(accountId);
+  if (!isAgency) redirect(accountHome(accountId, role));
   return { userId };
+}
+
+/** Where a person lands inside an account: To do for a Technician (spec §9), the dashboard otherwise. */
+export function accountHome(accountId: string, role: AccountRole | null): string {
+  return `/dashboard/accounts/${accountId}/${role === "technician" ? "tasks" : "dashboard"}`;
+}
+
+/**
+ * The surfaces a Technician does not work on (spec §7.1, plan deviation 1):
+ * Dashboard, Activity, Pipeline, Website, Forms, Import and Branding, and
+ * every action they post. Sends a Technician to their home, never a 403
+ * (requireAccountAccess's reason). The database already refuses their reads
+ * of other people's customers (0068); this keeps them out of screens whose
+ * totals and settings are not theirs.
+ */
+export async function requireNotTechnician(
+  accountId: string,
+): Promise<{ userId: string; isAgency: boolean; role: AccountRole | null; canManage: boolean }> {
+  const access = await requireAccountAccess(accountId);
+  if (access.role === "technician") redirect(accountHome(accountId, access.role));
+  return access;
 }
 
 /**

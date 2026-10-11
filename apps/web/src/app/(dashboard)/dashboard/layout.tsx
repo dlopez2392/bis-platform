@@ -126,7 +126,7 @@ export default async function DashboardLayout({
     if (state.status === "none") redirect("/no-access?reason=none");
   }
 
-  const [accounts, cookieStore, branding, isOwner, prefs] = await Promise.all([
+  const [accounts, cookieStore, branding, role, prefs] = await Promise.all([
     isAgency ? listAccounts(serviceDb()) : Promise.resolve([]),
     cookies(),
     // Only a client's chrome wears a brand. The agency's stays BIS on purpose,
@@ -134,8 +134,9 @@ export default async function DashboardLayout({
     clientState?.status === "ok"
       ? getTenantBranding(clientState.id)
       : Promise.resolve(null),
-    // Staff and roles: the caller's Owner/Staff role in THIS account, for
-    // the sidebar footer's Team link and the palette's own Team entries.
+    // Staff and roles: the caller's Owner/Staff/Technician role in THIS
+    // account, for the sidebar footer's Team link, the palette's own Team
+    // entries and (F-085 part 1) a Technician's own nav and ⌘K index.
     // `ensureAccountRole` is React cache()'d per request on its FULL
     // argument list — accountId, orgId, userId, AND the 4th `stored`
     // argument — not just the first three. `requireAccountAccess`
@@ -153,11 +154,11 @@ export default async function DashboardLayout({
     // two values `requireAccountAccess` will use returns the SAME promise
     // instance in this request, making this call and that one the same
     // cache entry — one `ensureAccountRoleWith` execution, not two. Always
-    // false for the agency (never a client membership, plan deviation 6)
+    // null for the agency (never a client membership, plan deviation 6)
     // and for a client whose account did not resolve to "ok".
     clientState?.status === "ok" && claims.org_id
-      ? ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId)).then((role) => role === "owner")
-      : Promise.resolve(false),
+      ? ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId))
+      : Promise.resolve(null),
     // Mis preferencias: the caller's own language and theme. For a client
     // this rides on the same cached stored-person read readStoredRole (just
     // above) derives from; for the agency it is one indexed users read,
@@ -165,6 +166,9 @@ export default async function DashboardLayout({
     getPersonPrefs(),
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
+  // Both false for the agency (role null). A Technician is never an Owner.
+  const isOwner = role === "owner";
+  const isTechnician = role === "technician";
 
   // Fix round 1 (Task 6 review): AppSidebar and Topbar render HERE, as
   // siblings of <main>{children}</main> — not inside
@@ -214,6 +218,7 @@ export default async function DashboardLayout({
             defaultCollapsed={collapsed}
             isAgency={isAgency}
             isOwner={isOwner}
+            isTechnician={isTechnician}
             // D-072 review round: the SAME trimmed, never-raw resolver the
             // tab title and the greeting now also go through, so all three
             // surfaces read the brand name the same way.
@@ -228,7 +233,7 @@ export default async function DashboardLayout({
                 account id down and does not try — CommandPalette derives the
                 current account from the pathname, the same way ShellDataProvider
                 above it already does. */}
-            <Topbar isAgency={isAgency} palette={<CommandPalette isAgency={isAgency} isOwner={isOwner} />} />
+            <Topbar isAgency={isAgency} palette={<CommandPalette isAgency={isAgency} isOwner={isOwner} isTechnician={isTechnician} />} />
             <main className="min-w-0 flex-1">{children}</main>
           </div>
         </div>

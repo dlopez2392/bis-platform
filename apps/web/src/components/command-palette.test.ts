@@ -87,7 +87,13 @@ describe("CommandPalette — F-107 r1: a phone keeps a search entry point (icon-
 // block in this file.
 describe("CommandPalette — threads isOwner to buildPaletteEntries (staff and roles)", () => {
   it("takes an isOwner prop and passes it as buildPaletteEntries' third argument (mutation: call buildPaletteEntries(base, isAgency) with only two args → FAILS)", () => {
-    expect(src).toMatch(/export function CommandPalette\(\{\s*isAgency,\s*isOwner,\s*\}/);
-    expect(src).toContain("filterEntries(buildPaletteEntries(base, isAgency, isOwner), query)");
+    expect(src).toMatch(/export function CommandPalette\(\{\s*isAgency,\s*isOwner,\s*isTechnician,\s*\}/);
+    expect(src).toContain("filterEntries(buildPaletteEntries(base, isAgency, isOwner, isTechnician), query)");
+  });
+  // F-085 part 1 (spec §9): the ⌘K index leaves out the routes a Technician
+  // cannot enter, which buildPaletteEntries does from its fourth argument.
+  it("takes an isTechnician prop and passes it as buildPaletteEntries' fourth argument (mutation: drop it → FAILS)", () => {
+    expect(src).toMatch(/isTechnician: boolean;/);
+    expect(src).toContain("buildPaletteEntries(base, isAgency, isOwner, isTechnician)");
   });
 });

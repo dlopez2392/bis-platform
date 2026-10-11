@@ -18,7 +18,7 @@ import { revalidatePath } from "next/cache";
 import { clerkClient } from "@clerk/nextjs/server";
 import { setBranding, getBranding, uploadBrandLogo, sweepOrphanedLogos, restoreBrandLogoIfCleared,
          logoExists, serviceDb } from "@bis/db";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { sniffImageType, MAX_LOGO_BYTES } from "@/lib/branding/validate-logo";
 import { parseHexColor } from "@/lib/branding/color";
@@ -42,10 +42,11 @@ export async function setBrandingAction(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   // Widened from agency-only: this action is now the ONE branding write,
   // reached from the agency's Settings card and from the client's own
-  // Branding page. requireAccountAccess already redirects a client asking
+  // Branding page. requireNotTechnician (F-085 part 1: a Technician is sent
+  // to To do) builds on requireAccountAccess, which redirects a client asking
   // for someone else's account to their own rather than 403ing (a 403
   // confirms the account exists), and refuses one whose access is off.
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireNotTechnician(accountId);
 
   const brandName = String(formData.get("brandName") ?? "").trim();
   // Customers see this name on every email, text and the booking page; it
@@ -235,7 +236,7 @@ function isOwnLogoPath(accountId: string, path: string): boolean {
 export async function removeBrandLogoAction(
   accountId: string,
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireNotTechnician(accountId);
 
   // The RLS-enforced client, not serviceDb() (house rule: reads on the
   // in-account surface go through the client the signed-in user actually
@@ -293,7 +294,7 @@ export async function removeBrandLogoAction(
 export async function restoreBrandLogoAction(
   accountId: string, path: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireNotTechnician(accountId);
 
   if (!isOwnLogoPath(accountId, path)) {
     return { ok: false, error: m["branding.saveFailed"] };

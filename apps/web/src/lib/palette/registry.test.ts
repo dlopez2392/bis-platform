@@ -271,6 +271,36 @@ describe("filterEntries", () => {
   });
 });
 
+// F-085 part 1 (spec §9): the ⌘K index leaves out every route a Technician
+// cannot enter, and Team; their own Preferences stays.
+describe("Technician", () => {
+  const REFUSED = ["/dashboard", "/website", "/pipeline", "/activity", "/forms", "/branding", "/billing", "/contacts/import", "/checklist", "/voice", "/automations", "/settings", "/setup"];
+
+  it("offers no nav: entry for a refused route and no Team entry (mutation: drop the Technician argument from buildNavGroups -> FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, false, false, true);
+    const ids = entries.map((e) => e.id);
+    for (const suffix of REFUSED) expect(ids, `nav:${BASE}${suffix}`).not.toContain(`nav:${BASE}${suffix}`);
+    expect(ids).not.toContain("nav:team");
+    expect(ids).not.toContain("settings:team");
+    expect(entries.some((e) => e.agencyOnly)).toBe(false);
+  });
+
+  it("still offers their own five destinations and Preferences", () => {
+    const ids = buildPaletteEntries(BASE, false, false, true).map((e) => e.id);
+    for (const suffix of ["/tasks", "/contacts", "/conversations", "/calls", "/calendar"]) {
+      expect(ids).toContain(`nav:${BASE}${suffix}`);
+    }
+    expect(ids).toContain("nav:preferences");
+  });
+
+  it("registers every Technician nav destination (the parity rule, fourth role)", () => {
+    const navHrefs = buildNavGroups(BASE, false, false, true).flatMap((g) => g.items.map((i) => i.href));
+    const entryHrefs = new Set(buildPaletteEntries(BASE, false, false, true).flatMap((e) => (e.kind === "href" ? [e.href] : [])));
+    expect(navHrefs.length).toBe(5);
+    for (const href of navHrefs) expect(entryHrefs).toContain(href);
+  });
+});
+
 // Mis preferencias (F-096, Task 6): a person's own page, not an account's,
 // so it is offered with or without an account in scope, to both roles.
 describe("Preferences", () => {

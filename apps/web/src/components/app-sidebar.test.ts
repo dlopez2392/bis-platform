@@ -186,3 +186,14 @@ describe("AppSidebar — footer: Settings for the agency, Team for a client Owne
     expect(src).toContain('{isAgency && base && setupProgress.done !== setupProgress.total ? (');
   });
 });
+
+// F-085 part 1 (spec §9): a Technician's sidebar is To do, Contacts,
+// Conversations, Calls and Calendar (nav-groups.test.ts), which needs the
+// role to reach buildNavGroups. The footer stays isOwner's (no Team) and the
+// agency's (no setup meter), so it needs nothing of its own.
+describe("AppSidebar threads isTechnician to buildNavGroups (F-085 part 1)", () => {
+  it("takes an isTechnician prop and passes it as buildNavGroups' fourth argument (mutation: call buildNavGroups(base, isAgency, isOwner) → FAILS)", () => {
+    expect(src).toMatch(/isTechnician: boolean;/);
+    expect(src).toContain("buildNavGroups(base, isAgency, isOwner, isTechnician)");
+  });
+});

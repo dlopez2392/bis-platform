@@ -18,6 +18,7 @@ const db = vi.hoisted(() => ({
   serviceDb: vi.fn(),
   listAccountTeam: vi.fn(), setAccountMemberRole: vi.fn(), setMemberLanguage: vi.fn(),
   removeAccountMember: vi.fn(), addAccountMember: vi.fn(), deleteAccountMembership: vi.fn(),
+  releaseMemberAssignments: vi.fn(), reassignReleased: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 
@@ -44,6 +45,8 @@ const ACCT = "acct";
 const OWNER_A = { userId: "11111111-1111-4111-8111-111111111111", clerkUserId: "user_A", email: "a@x.com", name: "A", role: "owner" as const, language: "en" as const };
 const OWNER_B = { userId: "22222222-2222-4222-8222-222222222222", clerkUserId: "user_B", email: "b@x.com", name: "B", role: "owner" as const, language: null };
 const STAFF_C = { userId: "33333333-3333-4333-8333-333333333333", clerkUserId: "user_C", email: "c@x.com", name: "C", role: "staff" as const, language: "es" as const };
+/** What releaseMemberAssignments hands back by default: the ids a removal took off this person. */
+const RELEASED = { contacts: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"], tasks: ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"] };
 
 function fakeDb() {
   from.mockImplementation((table: string) => {
@@ -63,8 +66,8 @@ function form(fields: Record<string, string>): FormData {
 }
 
 /** A removal event `agoMs` old, in the shape latestRemoval returns. */
-function removal(member: { userId: string; clerkUserId: string; role: "owner" | "staff"; language: "en" | "es" | null }, agoMs = 10_000) {
-  return { userId: member.userId, clerkUserId: member.clerkUserId, role: member.role, language: member.language, removedAt: new Date(Date.now() - agoMs).toISOString() };
+function removal(member: { userId: string; clerkUserId: string; role: "owner" | "staff" | "technician"; language: "en" | "es" | null }, agoMs = 10_000, released = { contacts: [] as string[], tasks: [] as string[] }) {
+  return { userId: member.userId, clerkUserId: member.clerkUserId, role: member.role, language: member.language, released, removedAt: new Date(Date.now() - agoMs).toISOString() };
 }
 
 const allDataMocks = () => [from, ...Object.values(db).filter((f) => f !== db.serviceDb), ...Object.values(clerk), ...Object.values(log)];
@@ -83,6 +86,8 @@ beforeEach(() => {
   db.removeAccountMember.mockResolvedValue("ok");
   db.addAccountMember.mockResolvedValue("created");
   db.deleteAccountMembership.mockResolvedValue(undefined);
+  db.releaseMemberAssignments.mockResolvedValue(RELEASED);
+  db.reassignReleased.mockResolvedValue(undefined);
   selected.length = 0;
   clerk.teamCapacity.mockResolvedValue({ maxAllowed: 5, members: 3, pending: 0 });
   clerk.createTeamInvitation.mockResolvedValue({ ok: true });
@@ -260,10 +265,10 @@ describe("setTeamRoleAction: a concurrent change can never leave BIS Staff besid
     expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.changed" });
     expect(clerk.setOrganizationRole.mock.calls).toEqual([["org_1", "user_C", "owner"], ["org_1", "user_C", "staff"]]);
   });
-  it("a re-read that fails also sends Clerk back to org:member, the safe side (mutation: trust the promotion when unread -> FAILS)", async () => {
+  it("a re-read that fails also sends Clerk back to org:member, the safe side, with the least privileged bis_role (mutation: trust the promotion when unread, or set back to staff -> FAILS)", async () => {
     db.listAccountTeam.mockResolvedValueOnce([OWNER_A, OWNER_B, STAFF_C]).mockRejectedValue(new Error("listAccountTeam failed: down"));
     expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.role.failed" });
-    expect(clerk.setOrganizationRole).toHaveBeenLastCalledWith("org_1", "user_C", "staff");
+    expect(clerk.setOrganizationRole).toHaveBeenLastCalledWith("org_1", "user_C", "technician");
     expect(logged()).toContain(STAFF_C.userId);
   });
   it("a promotion BIS still holds after the Clerk write is a success with no set-back", async () => {
@@ -338,7 +343,7 @@ describe("removeTeamMemberAction", () => {
     expect(db.removeAccountMember).toHaveBeenCalledWith(expect.anything(), ACCT, STAFF_C.userId);
     expect(clerk.removeFromOrganization).toHaveBeenCalledWith("org_1", "user_C");
     expect(log.recordRemoval).toHaveBeenCalledWith(expect.anything(), ACCT, "user_A",
-      { userId: STAFF_C.userId, clerkUserId: "user_C", role: "staff", language: "es" });
+      { userId: STAFF_C.userId, clerkUserId: "user_C", role: "staff", language: "es", released: RELEASED });
     expect(order(clerk.removeFromOrganization)).toBeLessThan(order(log.recordRemoval));
   });
   it("Last Owner: refused; the Clerk membership is never removed and nothing is recorded (mutation: call Clerk first -> FAILS)", async () => {
@@ -472,5 +477,117 @@ describe("revokeTeamInvitationAction and its undo", () => {
     expect(await undoRevokeTeamInvitationAction(ACCT, "d@x.com", "admin" as never, "es")).toEqual({ ok: false, error: "team.invite.failed" });
     expect(await undoRevokeTeamInvitationAction(ACCT, "d@x.com", "owner", "fr" as never)).toEqual({ ok: false, error: "team.invite.failed" });
     expect(clerk.createTeamInvitation).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * F-085 part 1: the Technician on the Team screen, and a removal releasing
+ * the person's customers and open tasks (spec §8, A3).
+ */
+const TECH_D = { userId: "44444444-4444-4444-8444-444444444444", clerkUserId: "user_D", email: "d@x.com", name: "D", role: "technician" as const, language: null };
+
+describe("setTeamRoleAction: a move to Technician is a demotion", () => {
+  it("Owner to Technician: Clerk FIRST, then BIS, then the repeat Clerk write, each with technician (mutation: leave `if (role === \"staff\")` -> the promotion path runs and the order FAILS)", async () => {
+    expect(await setTeamRoleAction(ACCT, OWNER_B.userId, "technician")).toEqual({ ok: true, previous: "owner" });
+    expect(clerk.setOrganizationRole.mock.calls).toEqual([["org_1", "user_B", "technician"], ["org_1", "user_B", "technician"]]);
+    expect(db.setAccountMemberRole.mock.calls).toEqual([[expect.anything(), ACCT, OWNER_B.userId, "technician"]]);
+    expect(order(clerk.setOrganizationRole)).toBeLessThan(order(db.setAccountMemberRole));
+    expect(order(db.setAccountMemberRole)).toBeLessThan(order(clerk.setOrganizationRole, 1));
+  });
+  it("Staff to Technician takes the same path", async () => {
+    expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "technician")).toEqual({ ok: true, previous: "staff" });
+    expect(order(clerk.setOrganizationRole)).toBeLessThan(order(db.setAccountMemberRole));
+    expect(db.setAccountMemberRole).toHaveBeenCalledWith(expect.anything(), ACCT, STAFF_C.userId, "technician");
+  });
+  it("the last Owner made a Technician is refused, and Clerk is put back to owner (mutation: no Clerk restore -> FAILS)", async () => {
+    db.setAccountMemberRole.mockResolvedValue("last_owner");
+    expect(await setTeamRoleAction(ACCT, OWNER_A.userId, "technician")).toEqual({ ok: false, error: "team.lastOwner" });
+    expect(clerk.setOrganizationRole.mock.calls).toEqual([["org_1", "user_A", "technician"], ["org_1", "user_A", "owner"]]);
+  });
+  it("Technician to Owner is a promotion: BIS first, and a refused Clerk write puts Clerk and BIS back to technician", async () => {
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    clerk.setOrganizationRole.mockResolvedValueOnce({ ok: false, code: "form_param_value_invalid", status: 422 }).mockResolvedValueOnce({ ok: true });
+    expect(await setTeamRoleAction(ACCT, TECH_D.userId, "owner")).toEqual({ ok: false, error: "team.role.failed" });
+    expect(clerk.setOrganizationRole.mock.calls).toEqual([["org_1", "user_D", "owner"], ["org_1", "user_D", "technician"]]);
+    expect(db.setAccountMemberRole.mock.calls).toEqual([
+      [expect.anything(), ACCT, TECH_D.userId, "owner"], [expect.anything(), ACCT, TECH_D.userId, "technician"]]);
+  });
+});
+
+describe("setTeamRoleAction: the promotion's set-back never writes a role more privileged than BIS holds", () => {
+  it("BIS became Technician under the promotion: Clerk is set back to technician, not staff (mutation: always staff -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValueOnce([OWNER_A, OWNER_B, STAFF_C]).mockResolvedValue([OWNER_A, OWNER_B, { ...STAFF_C, role: "technician" }]);
+    expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.changed" });
+    expect(clerk.setOrganizationRole.mock.calls).toEqual([["org_1", "user_C", "owner"], ["org_1", "user_C", "technician"]]);
+  });
+  it("the person was removed meanwhile: the least privileged role, technician", async () => {
+    db.listAccountTeam.mockResolvedValueOnce([OWNER_A, OWNER_B, STAFF_C]).mockResolvedValue([OWNER_A, OWNER_B]);
+    expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "owner")).toEqual({ ok: false, error: "team.changed" });
+    expect(clerk.setOrganizationRole).toHaveBeenLastCalledWith("org_1", "user_C", "technician");
+  });
+});
+
+describe("removeTeamMemberAction releases the person's assignments (spec §8, A3)", () => {
+  it("releases through the service client AFTER the BIS removal returned ok and Clerk removed them, and records the ids (mutations: release before the removal, or drop released from the record -> FAILS)", async () => {
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    expect(await removeTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true, undo: { userId: TECH_D.userId } });
+    expect(db.releaseMemberAssignments).toHaveBeenCalledTimes(1);
+    const [releaseDb, acct, user] = db.releaseMemberAssignments.mock.calls[0]!;
+    expect(releaseDb).toBe(db.serviceDb.mock.results.at(-1)!.value);
+    expect([acct, user]).toEqual([ACCT, TECH_D.userId]);
+    expect(order(db.removeAccountMember)).toBeLessThan(order(db.releaseMemberAssignments));
+    expect(order(clerk.removeFromOrganization)).toBeLessThan(order(db.releaseMemberAssignments));
+    expect(order(db.releaseMemberAssignments)).toBeLessThan(order(log.recordRemoval));
+    expect(log.recordRemoval).toHaveBeenCalledWith(expect.anything(), ACCT, "user_A",
+      { userId: TECH_D.userId, clerkUserId: "user_D", role: "technician", language: null, released: RELEASED });
+  });
+  it("nothing is released when the removal is refused or Clerk fails (mutation: release before checking -> FAILS)", async () => {
+    db.removeAccountMember.mockResolvedValue("last_owner");
+    await removeTeamMemberAction(ACCT, OWNER_A.userId);
+    db.removeAccountMember.mockResolvedValue("ok");
+    clerk.removeFromOrganization.mockResolvedValue({ ok: false, code: "internal" });
+    await removeTeamMemberAction(ACCT, STAFF_C.userId);
+    expect(db.releaseMemberAssignments).not.toHaveBeenCalled();
+  });
+  it("a release that throws is logged by id, the removal still stands (ok, with its undo), and the release is tried once more after the sweep (mutation: let it throw, or skip the retry -> FAILS)", async () => {
+    db.releaseMemberAssignments.mockRejectedValueOnce(new Error("releaseMemberAssignments failed: down")).mockResolvedValueOnce(RELEASED);
+    expect(await removeTeamMemberAction(ACCT, STAFF_C.userId)).toEqual({ ok: true, undo: { userId: STAFF_C.userId } });
+    expect(logged()).toMatch(new RegExp(`not released[^\\n]*${STAFF_C.userId}`));
+    expect(log.recordRemoval).toHaveBeenCalledWith(expect.anything(), ACCT, "user_A",
+      { userId: STAFF_C.userId, clerkUserId: "user_C", role: "staff", language: "es", released: undefined });
+    expect(db.releaseMemberAssignments).toHaveBeenCalledTimes(2);
+    expect(order(db.deleteAccountMembership)).toBeLessThan(order(db.releaseMemberAssignments, 1));
+  });
+  it("a retry that also throws is logged and still never thrown", async () => {
+    db.releaseMemberAssignments.mockRejectedValue(new Error("releaseMemberAssignments failed: down"));
+    expect(await removeTeamMemberAction(ACCT, STAFF_C.userId)).toEqual({ ok: true, undo: { userId: STAFF_C.userId } });
+    expect(logged().match(new RegExp(`not released[^\\n]*${STAFF_C.userId}`, "g"))?.length).toBe(2);
+  });
+  it("a release that worked the first time is not repeated", async () => {
+    await removeTeamMemberAction(ACCT, STAFF_C.userId);
+    expect(db.releaseMemberAssignments).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("undoRemoveTeamMemberAction gives back what the removal released", () => {
+  it("re-assigns the recorded ids AFTER the membership and language are back (mutations: skip the reassign, or run it before the membership -> FAILS)", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
+    expect(db.reassignReleased).toHaveBeenCalledWith(expect.anything(), ACCT, TECH_D.userId, RELEASED);
+    expect(order(db.addAccountMember)).toBeLessThan(order(db.reassignReleased));
+    expect(order(db.setMemberLanguage)).toBeLessThan(order(db.reassignReleased));
+    expect(clerk.restoreToOrganization).toHaveBeenCalledWith("org_1", "user_D", "technician");
+  });
+  it("a reassign that throws is caught and logged by id, never thrown", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
+    db.reassignReleased.mockRejectedValue(new Error("reassignReleased contacts failed: down"));
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: false, error: "team.undo.failed" });
+    expect(logged()).toContain(TECH_D.userId);
+  });
+  it("Clerk refusing the undo never reassigns", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
+    clerk.restoreToOrganization.mockResolvedValue({ ok: false, code: "internal" });
+    await undoRemoveTeamMemberAction(ACCT, TECH_D.userId);
+    expect(db.reassignReleased).not.toHaveBeenCalled();
   });
 });
