@@ -97,6 +97,15 @@ vi.mock("../email-row", () => ({
 const readEmailView = vi.fn();
 vi.mock("@/lib/consent/email-view", () => ({ readEmailView: (...a: unknown[]) => readEmailView(...a) }));
 
+/**
+ * F-085 (spec §7.3): the consent DISPLAY reads take the ledger client, not the
+ * request client, and only once getContact proved the contact. A stable
+ * sentinel, so an assertion can tell it from the request client by identity.
+ */
+const LEDGER = vi.hoisted(() => ({ tag: "ledger-db" }));
+const ledgerDbMock = vi.hoisted(() => vi.fn(() => LEDGER));
+vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => ledgerDbMock() }));
+
 const NOT_FOUND = new Error("NEXT_NOT_FOUND");
 vi.mock("next/navigation", () => ({
   notFound: () => { throw NOT_FOUND; },
@@ -252,7 +261,7 @@ describe("ContactDetailPage: the recipient's texts state", () => {
     await render();
     expect(holdOpenTaskIdsMock).toHaveBeenCalledWith(expect.anything(), "acct1", [
       expect.objectContaining({ id: "t_hold", consent_event_id: "h1" }), expect.objectContaining({ id: "t_plain", consent_event_id: null }),
-    ]);
+    ], LEDGER);
     expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({ holdOpenTaskIds: [] });
     holdOpenTaskIdsMock.mockRejectedValue(new Error("readConsentEvent failed: timeout"));
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -324,5 +333,57 @@ describe("ContactDetailPage: the full page's Source line really renders from the
     getContactMock.mockReset().mockResolvedValue({ ...CONTACT, source: null, custom: {}, attribution: null });
     const html = await render();
     expect(html).toContain("Source unknown");
+  });
+});
+
+/**
+ * F-085 (spec §7.3). Consent is keyed by ADDRESS and a STOP can arrive tied to
+ * no contact, so under 0068 a Technician's own token would see only part of
+ * the ledger and the page would say "can text" for a number the send gate
+ * refuses. The four display reads and the hold check therefore read through
+ * the ledger client — and only AFTER getContact, on the request client,
+ * proved the contact is the caller's to see: that read is the authorisation.
+ */
+describe("ContactDetailPage: consent display reads use the ledger client, after the contact is proven (F-085)", () => {
+  beforeEach(() => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    ledgerDbMock.mockClear();
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    listContactTasksMock.mockReset().mockResolvedValue([]);
+    holdOpenTaskIdsMock.mockReset().mockResolvedValue([]);
+  });
+
+  it("each of the four reads and holdOpenTaskIds' ledger argument receive the ledger client, never the request client (mutation: pass db to readTextsView -> FAILS)", async () => {
+    await render();
+    const requestClient = getContactMock.mock.calls[0]![0];
+    expect(requestClient).not.toBe(LEDGER);
+    expect(recipientState.mock.calls[0]![0]).toBe(LEDGER);
+    expect(emailRecipientStateMock.mock.calls[0]![0]).toBe(LEDGER);
+    expect(readTextsView.mock.calls[0]![0]).toBe(LEDGER);
+    expect(readEmailView.mock.calls[0]![0]).toBe(LEDGER);
+    // The tasks themselves are the request client's (RLS decides which ones
+    // the caller sees); only the ledger read inside the hold check moves.
+    expect(holdOpenTaskIdsMock.mock.calls[0]![0]).toBe(requestClient);
+    expect(holdOpenTaskIdsMock.mock.calls[0]![3]).toBe(LEDGER);
+  });
+
+  it("the ledger client is built only AFTER getContact returned a row (mutation: build it before the contact read -> FAILS)", async () => {
+    await render();
+    expect(ledgerDbMock).toHaveBeenCalled();
+    expect(ledgerDbMock.mock.invocationCallOrder[0]!).toBeGreaterThan(getContactMock.mock.invocationCallOrder[0]!);
+  });
+
+  it("a contact the caller cannot see: no ledger client, no consent read, and the page 404s (mutation: build the ledger client before the null check -> FAILS)", async () => {
+    getContactMock.mockResolvedValue(null);
+    await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(ledgerDbMock).not.toHaveBeenCalled();
+    expect(recipientState).not.toHaveBeenCalled();
+    expect(emailRecipientStateMock).not.toHaveBeenCalled();
+    expect(readTextsView).not.toHaveBeenCalled();
+    expect(readEmailView).not.toHaveBeenCalled();
+    expect(holdOpenTaskIdsMock).not.toHaveBeenCalled();
   });
 });

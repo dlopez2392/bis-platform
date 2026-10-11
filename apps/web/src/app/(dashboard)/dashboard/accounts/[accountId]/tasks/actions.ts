@@ -28,6 +28,7 @@ import { m } from "@/lib/messages";
 import { tomorrowAt9 } from "@/lib/work/dismiss-date";
 import { loggableError } from "@/lib/loggable-error";
 import { textsContextFor } from "@/lib/consent/texts-context";
+import { ledgerDb } from "@/lib/consent/ledger-db";
 import { confirmStop, notAStop, undoHoldDecision, type TextsActionResult } from "@/lib/consent/staff-actions";
 import { setBookingStatusAction } from "../calendar/actions";
 
@@ -50,7 +51,11 @@ function tasksPath(accountId: string): string {
 export async function completeWorkTask(accountId: string, taskId: string): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
   try {
-    await completeTask(await dbForRequest(), accountId, taskId, userId);
+    // The task write stays on the request client (RLS decides which tasks the
+    // caller may close); only the hold check's ledger read takes the ledger
+    // client (F-085, spec §7.3) — a held number can be tied to no contact, so
+    // a Technician's own client would not see the row the task links.
+    await completeTask(await dbForRequest(), accountId, taskId, userId, "user", ledgerDb());
   } catch (e) {
     // Review R3-I1: a hold's To-do closes by deciding the hold (a stale tab
     // can still show its old Done).
@@ -199,7 +204,9 @@ async function decideFromTask(
       }
       return ctx;
     }
-    const newest = newestDecidingRow(await readConsentHistory(ctx.db, accountId, "sms", ctx.address));
+    // By address, on the service client (F-085, spec §7.3): textsContextFor
+    // proved the contact on the request client first.
+    const newest = newestDecidingRow(await readConsentHistory(ctx.writer, accountId, "sms", ctx.address));
     if (!newest || newest.action !== "held") {
       await closeStaleHoldTodo(ctx.db, accountId, taskId, task.consentEventId, userId);
       return { ok: false, error: m["todo.consent.decided"] };

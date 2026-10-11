@@ -22,9 +22,11 @@ export type EmailActionResult =
   | { ok: false; error: string; view?: EmailView };
 
 export type EmailContext = {
-  /** The request's RLS client: reads the ledger. */
+  /** The request's RLS client: proved the contact (emailContextFor). */
   db: SupabaseClient;
-  /** The service client: the ledger's only writer (0054, 0055). */
+  /** The service client: the ledger's only writer (0054, 0055), and since F-085
+   *  the client the address's HISTORY is read through (spec §7.3) — consent is
+   *  keyed by address, so a Technician's RLS client would see only part of it. */
   writer: SupabaseClient;
   accountId: string;
   contactId: string;
@@ -35,7 +37,8 @@ export type EmailContext = {
   now: Date;
 };
 
-const history = (ctx: EmailContext): Promise<ConsentHistoryRow[]> => readConsentHistory(ctx.db, ctx.accountId, "email", ctx.address);
+// By address, on the service client (F-085, spec §7.3): the contact was proven on ctx.db first.
+const history = (ctx: EmailContext): Promise<ConsentHistoryRow[]> => readConsentHistory(ctx.writer, ctx.accountId, "email", ctx.address);
 const view = async (ctx: EmailContext): Promise<EmailView> => emailViewOf(await history(ctx), true);
 
 function undoable(ctx: EmailContext, row: { actor_id: string | null; occurred_at: string }): boolean {

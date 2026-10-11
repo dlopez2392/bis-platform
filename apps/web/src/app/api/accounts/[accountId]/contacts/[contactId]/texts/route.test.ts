@@ -12,6 +12,11 @@ const getContact = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), getContact }));
 const readTextsView = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/consent/texts-view", () => ({ readTextsView }));
+/** F-085 (spec §7.3): the ledger client the view read takes AFTER getContact
+ *  proved the contact — a stable sentinel, told apart from `client` by identity. */
+const LEDGER = vi.hoisted(() => ({ tag: "ledger-db" }));
+const ledgerDb = vi.hoisted(() => vi.fn(() => LEDGER));
+vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb }));
 vi.mock("@/lib/zone", () => ({ renderZone: async (z?: string) => ({ zone: z ?? "UTC", guessed: !z, label: z ?? "UTC" }) }));
 
 import { GET } from "./route";
@@ -22,17 +27,32 @@ beforeEach(() => {
   access.mockReset().mockResolvedValue({ userId: "u", isAgency: false });
   getContact.mockReset().mockResolvedValue({ id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
   readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+  ledgerDb.mockClear();
   maybeSingle.mockReset().mockResolvedValue({ data: { timezone: "America/Chicago" }, error: null });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 describe("GET …/texts — the Texts row's own read (spec §6: its own loading and error)", () => {
-  it("answers the view, the account's zone and the stored phone, read under the request's own client (mutation: drop the zone → FAILS; mutation: read under a different client → FAILS)", async () => {
+  it("answers the view, the account's zone and the stored phone; the contact is read under the request's own client and the ledger under the ledger client (mutation: drop the zone → FAILS; mutation: read the contact under a different client → FAILS)", async () => {
     const res = await GET(new Request("https://x.test"), params);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ view: { kind: "allowed", newestId: null }, zone: "America/Chicago", phone: "+19562921696" });
     expect(getContact).toHaveBeenCalledWith(client, "a1", "c1");
-    expect(readTextsView).toHaveBeenCalledWith(client, "a1", { id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
+    expect(readTextsView).toHaveBeenCalledWith(LEDGER, "a1", { id: "c1", phone: "+19562921696", phone_country_unconfirmed: false });
+  });
+
+  it("the Texts view reads the ledger through the ledger client, built only AFTER getContact found the contact (F-085, spec §7.3; mutation: pass db to readTextsView → FAILS)", async () => {
+    await GET(new Request("https://x.test"), params);
+    expect(readTextsView.mock.calls[0]![0]).toBe(LEDGER);
+    expect(readTextsView.mock.calls[0]![0]).not.toBe(client);
+    expect(ledgerDb.mock.invocationCallOrder[0]!).toBeGreaterThan(getContact.mock.invocationCallOrder[0]!);
+  });
+
+  it("a contact the caller cannot see answers 404 and reads nothing: no ledger client, no view (F-085; mutation: build the ledger client before the contact check → FAILS)", async () => {
+    getContact.mockResolvedValueOnce(null);
+    expect((await GET(new Request("https://x.test"), params)).status).toBe(404);
+    expect(ledgerDb).not.toHaveBeenCalled();
+    expect(readTextsView).not.toHaveBeenCalled();
   });
 
   it("404 without access, and 404 for a contact that is not this account's (mutation: skip the contact read → FAILS)", async () => {

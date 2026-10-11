@@ -16,6 +16,7 @@ import { smsRecipientState, emailRecipientState } from "@/lib/consent/recipient-
 import { readTextsView } from "@/lib/consent/texts-view";
 import type { TextsLoad } from "@/lib/consent/texts-row";
 import { readEmailView } from "@/lib/consent/email-view";
+import { ledgerDb } from "@/lib/consent/ledger-db";
 import type { EmailLoad } from "@/lib/consent/email-row";
 import { loggableError } from "@/lib/loggable-error";
 import { composerStateLine, composerEmailNotice } from "@/lib/consent/composer-state";
@@ -30,6 +31,14 @@ export default async function ContactDetailPage({
   const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) notFound();
+  // F-085 (spec §7.3): consent is keyed by ADDRESS and a STOP can arrive tied
+  // to no contact, so under 0068 a Technician's own token sees only part of
+  // the ledger — and would show "can text" for a number the send gate (which
+  // reads through the service client) refuses. Every consent DISPLAY read
+  // below therefore reads through this client, for every role. Built only
+  // here, after getContact on the request client proved the contact is the
+  // caller's to see: that read is the authorisation.
+  const ledger = ledgerDb();
   const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate, account, smsRecipient] = await Promise.all([
     listContactTags(db, accountId, contactId),
     listNotes(db, accountId, contactId),
@@ -44,13 +53,14 @@ export default async function ContactDetailPage({
     // Only for the opt-out's "Off since" date, printed in the ACCOUNT's zone.
     db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
     // The ledger state and F-009's flag for the text composer (spec §6): the
-    // two facts the send gate checks, read under this request's RLS client.
-    // Never throws; a failed read is "unknown", which closes the form.
-    smsRecipientState(db, accountId, contact),
+    // two facts the send gate checks, read for this proven contact's number
+    // on the ledger client. Never throws; a failed read is "unknown", which
+    // closes the form.
+    smsRecipientState(ledger, accountId, contact),
   ]);
   // The email composer's read (spec §6, choice 22): whether this contact's
   // email is stopped, and by whom. Never throws.
-  const emailRecipient = await emailRecipientState(db, accountId, contact);
+  const emailRecipient = await emailRecipientState(ledger, accountId, contact);
   // Not a throw, the checklist page's reasoning: one cosmetic date line must
   // not 500 the contact page. `undefined` makes `renderZone` fall back.
   if (account.error) {
@@ -58,23 +68,23 @@ export default async function ContactDetailPage({
   }
   const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
 
-  // The Texts row (consent chain PR-2, spec §6), read under this request's
-  // RLS client. An unreadable ledger is the row's error state, never a thrown
+  // The Texts row (consent chain PR-2, spec §6), read on the ledger client
+  // for this proven contact's number. An unreadable ledger is the row's error state, never a thrown
   // page and never a guessed "Allowed".
   let texts: TextsLoad;
   try {
-    texts = { status: "ready", view: await readTextsView(db, accountId, contact), zone: zone.zone, phone: contact.phone ?? null };
+    texts = { status: "ready", view: await readTextsView(ledger, accountId, contact), zone: zone.zone, phone: contact.phone ?? null };
   } catch (e) {
     console.error(`contact page: Texts row unreadable for contact ${contactId}: ${loggableError(e)}`);
     texts = { status: "error" };
   }
 
-  // The Email row (consent chain PR-3, spec §6), read under this request's
-  // RLS client. An unreadable ledger is the row's error state, never a
+  // The Email row (consent chain PR-3, spec §6), read on the ledger client
+  // for this proven contact's address. An unreadable ledger is the row's error state, never a
   // thrown page.
   let email: EmailLoad;
   try {
-    email = { status: "ready", view: await readEmailView(db, accountId, contact), zone: zone.zone };
+    email = { status: "ready", view: await readEmailView(ledger, accountId, contact), zone: zone.zone };
   } catch (e) {
     console.error(`contact page: Email row unreadable for contact ${contactId}: ${loggableError(e)}`);
     email = { status: "error" };
@@ -87,7 +97,8 @@ export default async function ContactDetailPage({
   // page, where that To-do keeps its Done.
   let holdOpen: string[];
   try {
-    holdOpen = await holdOpenTaskIds(db, accountId, tasks);
+    // The tasks are the request client's; only the hold's ledger read moves.
+    holdOpen = await holdOpenTaskIds(db, accountId, tasks, ledger);
   } catch (e) {
     console.error(`contact page: hold To-dos unreadable for contact ${contactId}: ${loggableError(e)}`);
     holdOpen = tasks.filter((t) => !t.completed_at && t.consent_event_id).map((t) => t.id);

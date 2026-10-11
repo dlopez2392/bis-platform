@@ -202,3 +202,21 @@ describe("confirmStop / notAStop / their undo", () => {
     expect(await stopTexts(ctx, null)).toEqual({ ok: false, error: m["contact.texts.failed"] });
   });
 });
+
+/**
+ * F-085 (spec §7.3): the ledger is keyed by address and a STOP can be tied to
+ * no contact, so under 0068 the request client of a Technician sees only part
+ * of a number's history. Every history read here — the one the decision is
+ * judged on AND the view the operator is answered with — goes through the
+ * service client; the contact was already proven by textsContextFor.
+ */
+describe("the history these controls read comes from the service client (F-085)", () => {
+  it("a decision reads the number's history through ctx.writer, by address, never ctx.db (mutation: read it on ctx.db → FAILS)", async () => {
+    await stopTexts(ctx, null);
+    expect(db.readConsentHistory).toHaveBeenCalled();
+    for (const call of db.readConsentHistory.mock.calls) {
+      expect(call[0]).toBe(WRITER);
+      expect(call.slice(1)).toEqual(["a1", "sms", "+19562921696"]);
+    }
+  });
+});

@@ -13,6 +13,11 @@ vi.mock("@/lib/auth", () => ({
   requireAccountAccess: (...a: unknown[]) => requireAccountAccessMock(...a),
 }));
 
+// F-085 (spec §7.3): mark-read proves the conversation through the CALLER's
+// own client before its service-key write. Visible by default; a test flips it.
+const callerCanSeeMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/auth/visible", () => ({ callerCanSee: (...a: unknown[]) => callerCanSeeMock(...a) }));
+
 const sendMock = vi.fn();
 vi.mock("@/lib/email", () => ({
   getEmailProvider: () => ({ send: (...a: unknown[]) => sendMock(...a) }),
@@ -172,6 +177,7 @@ function fd(entries: Record<string, string>) {
 
 beforeEach(() => {
   requireAccountAccessMock.mockReset().mockResolvedValue({ userId: "user_1", isAgency: false });
+  callerCanSeeMock.mockReset().mockResolvedValue(true);
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
   smsSendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
   gateMock.mockReset().mockResolvedValue({ ok: true, from: "+19565559999" });
@@ -615,6 +621,39 @@ describe("0053 — every write-path action requires access before touching anyth
   it("markConversationReadAction: a rejected access check leaves clearUnreadCount untouched (mutation: remove the call, or move it after clearUnreadCount -> FAILS)", async () => {
     requireAccountAccessMock.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
     await expect(markConversationReadAction("acct_1", "convo_9")).rejects.toThrow("NEXT_REDIRECT");
+    expect(vi.mocked(clearUnreadCount)).not.toHaveBeenCalled();
+    expect(callerCanSeeMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * F-085 (spec §7.3): clearUnreadCount writes through the service client, which
+ * RLS does not bind. Under 0068 a Technician cannot see another person's
+ * conversation, so the action proves the id through the caller's OWN client
+ * first; a conversation the caller cannot see is a silent no-op, the same
+ * answer another account's id already got.
+ */
+describe("markConversationReadAction — proves the conversation before the service write (F-085)", () => {
+  it("a conversation the caller cannot see is never cleared, and nothing is revalidated (mutation: drop the callerCanSee check -> FAILS)", async () => {
+    callerCanSeeMock.mockResolvedValueOnce(false);
+    const { revalidatePath } = await import("next/cache");
+    vi.mocked(revalidatePath).mockClear();
+    await expect(markConversationReadAction("acct_1", "convo_9")).resolves.toBeUndefined();
+    expect(callerCanSeeMock).toHaveBeenCalledWith("conversations", "acct_1", "convo_9");
+    expect(vi.mocked(clearUnreadCount)).not.toHaveBeenCalled();
+    expect(vi.mocked(revalidatePath)).not.toHaveBeenCalled();
+  });
+
+  it("a visible conversation is proven FIRST, then cleared on the service client (the discriminator; mutation: check after the clear -> FAILS)", async () => {
+    await markConversationReadAction("acct_1", "convo_9");
+    expect(callerCanSeeMock).toHaveBeenCalledWith("conversations", "acct_1", "convo_9");
+    expect(vi.mocked(clearUnreadCount)).toHaveBeenCalledWith(svc.db, "acct_1", "convo_9");
+    expect(callerCanSeeMock.mock.invocationCallOrder[0]!).toBeLessThan(vi.mocked(clearUnreadCount).mock.invocationCallOrder[0]!);
+  });
+
+  it("a proof that cannot be read refuses the write rather than guessing (fails closed; mutation: catch and clear anyway -> FAILS)", async () => {
+    callerCanSeeMock.mockRejectedValueOnce(new Error("callerCanSee(conversations) failed: timeout"));
+    await expect(markConversationReadAction("acct_1", "convo_9")).rejects.toThrow("callerCanSee");
     expect(vi.mocked(clearUnreadCount)).not.toHaveBeenCalled();
   });
 });

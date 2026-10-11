@@ -14,6 +14,7 @@ import {
   type FailedOutboundSms, type CallProposal, type CallCard,
 } from "@bis/db";
 import { smsRecipientState } from "@/lib/consent/recipient-state";
+import { ledgerDb } from "@/lib/consent/ledger-db";
 import { composerStateLine } from "@/lib/consent/composer-state";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
@@ -114,8 +115,11 @@ export default async function CallDetailPage({
       // A successful read that finds no contact fails closed the same as a
       // thrown one (review fix round 1, item 2) — the button offers to text
       // an address this page cannot vouch for either way.
+      // F-085 (spec §7.3): the ledger is read through the ledger client — the
+      // request client of a Technician sees only part of it — and only once
+      // the contact read above, on the request client, proved the contact.
       resendClosedLine = contact
-        ? composerStateLine(await smsRecipientState(db, accountId, contact), timezone)
+        ? composerStateLine(await smsRecipientState(ledgerDb(), accountId, contact), timezone)
         : m["compose.smsStateUnknown"];
     } catch (e) {
       console.error(`call detail ${callId}: recipient read failed, closing the resend: ${String(e)}`);

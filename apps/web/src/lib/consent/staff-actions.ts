@@ -24,9 +24,12 @@ export type TextsActionResult =
   | { ok: false; error: string; view?: TextsView };
 
 export type TextsContext = {
-  /** The request's RLS client: reads the ledger (SELECT under RLS) and writes tasks. */
+  /** The request's RLS client: proved the contact (textsContextFor) and writes tasks. */
   db: SupabaseClient;
-  /** The service client: the ledger's only writer (0054, 0055). */
+  /** The service client: the ledger's only writer (0054, 0055), and since F-085
+   *  the client the number's HISTORY is read through (spec §7.3) — consent is
+   *  keyed by address and a STOP can be tied to no contact, so a Technician's
+   *  RLS client would see only part of it. */
   writer: SupabaseClient;
   accountId: string;
   contactId: string;
@@ -54,7 +57,8 @@ function undoable(ctx: TextsContext, row: { actor_id: string | null; occurred_at
 }
 const undoExpired = (): TextsActionResult => ({ ok: false, error: m["contact.texts.undoExpired"] });
 
-const history = (ctx: TextsContext): Promise<ConsentHistoryRow[]> => readConsentHistory(ctx.db, ctx.accountId, "sms", ctx.address);
+// By address, on the service client (F-085, spec §7.3): the contact was proven on ctx.db first.
+const history = (ctx: TextsContext): Promise<ConsentHistoryRow[]> => readConsentHistory(ctx.writer, ctx.accountId, "sms", ctx.address);
 const view = async (ctx: TextsContext): Promise<TextsView> => textsViewOf(await history(ctx), { unconfirmed: ctx.unconfirmed });
 const heldIds = (rows: readonly ConsentHistoryRow[]) => rows.filter((r) => r.action === "held").map((r) => r.id);
 

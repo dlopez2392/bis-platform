@@ -80,6 +80,11 @@ vi.mock("@bis/db", () => ({
 // Review R3-M8: the resend reads the same recipient state as the composer.
 const recipientStateMock = vi.fn();
 vi.mock("@/lib/consent/recipient-state", () => ({ smsRecipientState: (...a: unknown[]) => recipientStateMock(...a) }));
+/** F-085 (spec §7.3): the ledger client that read takes, AFTER the contact is
+ *  proven — a stable sentinel, told apart from the request client by identity. */
+const LEDGER = vi.hoisted(() => ({ tag: "ledger-db" }));
+const ledgerDbMock = vi.hoisted(() => vi.fn(() => LEDGER));
+vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => ledgerDbMock() }));
 
 /** The screen's resolved zone (lib/zone.ts) — mutable so a test can put the
  *  page into the "guessed" state without a second `vi.mock`. */
@@ -622,6 +627,29 @@ describe("\"Send it now\" is closed on render when the number cannot be texted (
     const html = await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]);
     expect(html).not.toContain("Send it now");
     expect(renderedText(html)).toContain(m["compose.smsStateUnknown"]);
+  });
+
+  /** F-085 (spec §7.3): consent is keyed by address and a STOP can be tied to
+   *  no contact, so a Technician's own token would see only part of the
+   *  ledger. The recipient read takes the ledger client, after getContact on
+   *  the request client proved the contact. */
+  it("the recipient state reads the ledger through the ledger client, after the contact is proven (F-085; mutation: pass db to smsRecipientState → FAILS)", async () => {
+    ledgerDbMock.mockClear();
+    getContactMock.mockResolvedValue({ id: "ct1", phone: "+19565061545", phone_country_unconfirmed: false });
+    recipientStateMock.mockResolvedValue({ kind: "ok" });
+    await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]);
+    expect(recipientStateMock.mock.calls[0]![0]).toBe(LEDGER);
+    expect(getContactMock.mock.calls[0]![0]).not.toBe(LEDGER);
+    expect(ledgerDbMock.mock.invocationCallOrder[0]!).toBeGreaterThan(getContactMock.mock.invocationCallOrder[0]!);
+  });
+
+  it("a contact the caller cannot see reads no ledger at all (F-085; mutation: build the ledger client before the contact check → FAILS)", async () => {
+    ledgerDbMock.mockClear();
+    recipientStateMock.mockClear();
+    getContactMock.mockResolvedValue(null);
+    await render({ ...CALL, outcome: "abandoned", booking_id: null }, [FAILED_TEXTBACK]);
+    expect(ledgerDbMock).not.toHaveBeenCalled();
+    expect(recipientStateMock).not.toHaveBeenCalled();
   });
 });
 

@@ -20,6 +20,11 @@ vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
 }));
 
+/** F-085 (spec §7.3): the client completeTask's hold check reads the ledger
+ *  through — a stable sentinel, told apart from the request client by identity. */
+const LEDGER = vi.hoisted(() => ({ tag: "ledger-db" }));
+vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => LEDGER }));
+
 const setBookingStatusActionMock = vi.hoisted(() => vi.fn());
 vi.mock("../calendar/actions", () => ({ setBookingStatusAction: setBookingStatusActionMock }));
 
@@ -74,9 +79,17 @@ describe("completeWorkTask", () => {
     const r = await completeWorkTask("acct_1", "task_1");
     expect(r).toEqual({ ok: true });
     expect(dbMocks.completeTask).toHaveBeenCalledWith(
-      db, "acct_1", "task_1", "user_1",
+      db, "acct_1", "task_1", "user_1", "user", LEDGER,
     );
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/acct_1/tasks");
+  });
+
+  it("the hold check reads the ledger through the ledger client, while the task write stays on the request client (F-085, spec §7.3; mutation: completeTask without the sixth argument → FAILS)", async () => {
+    dbMocks.completeTask.mockResolvedValue(undefined);
+    await completeWorkTask("acct_1", "task_1");
+    const call = dbMocks.completeTask.mock.calls[0] as unknown[];
+    expect(call[0]).toBe(db);
+    expect(call[5]).toBe(LEDGER);
   });
 
   it("returns an honest error instead of throwing when the write fails", async () => {
@@ -170,7 +183,9 @@ describe("closeOutBooking", () => {
 });
 
 describe("the consent To-do's buttons (consent chain PR-2)", () => {
-  const CTX = { db: {}, writer: {}, accountId: "acct_1", contactId: "c1", userId: "user_1", actorName: null, address: "+19562921696", unconfirmed: false, now: new Date("2026-10-06T20:00:00Z") };
+  // Distinct sentinels: `{}` and `{}` are deep-equal, so a swap of the two
+  // clients would pass every toHaveBeenCalledWith below unnoticed.
+  const CTX = { db: { tag: "request-db" }, writer: { tag: "service-writer" }, accountId: "acct_1", contactId: "c1", userId: "user_1", actorName: null, address: "+19562921696", unconfirmed: false, now: new Date("2026-10-06T20:00:00Z") };
   beforeEach(() => {
     for (const fn of Object.values(texts)) fn.mockReset();
     texts.textsContextFor.mockResolvedValue(CTX);
@@ -185,6 +200,16 @@ describe("the consent To-do's buttons (consent chain PR-2)", () => {
     ] as never);
     expect((await confirmStopFromTask("acct_1", "t1")).ok).toBe(true);
     expect(texts.confirmStop).toHaveBeenCalledWith(CTX, "h2");
+  });
+
+  it("the current-hold check reads the ledger through the SERVICE client, by address, never the request client (F-085, spec §7.3; mutation: read it on ctx.db → FAILS)", async () => {
+    vi.mocked(readConsentHistory).mockResolvedValue([
+      { id: "h2", action: "held", method: "free_text", occurred_at: "2026-10-05T10:00:00Z", evidence: {}, note: null, actor_id: null },
+    ] as never);
+    await confirmStopFromTask("acct_1", "t1");
+    const call = vi.mocked(readConsentHistory).mock.calls[0]!;
+    expect(call[0]).toBe(CTX.writer);
+    expect(call.slice(1)).toEqual(["acct_1", "sms", "+19562921696"]);
   });
 
   it("a To-do whose number is no longer on hold says it was already decided, and decides nothing (mutation: decide anyway → FAILS)", async () => {

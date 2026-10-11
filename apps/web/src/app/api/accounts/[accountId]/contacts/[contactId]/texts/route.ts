@@ -4,6 +4,7 @@ import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { loggableError } from "@/lib/loggable-error";
+import { ledgerDb } from "@/lib/consent/ledger-db";
 import { readTextsView, type TextsView } from "@/lib/consent/texts-view";
 
 export const dynamic = "force-dynamic";
@@ -19,12 +20,20 @@ export async function GET(
   const { accountId, contactId } = await params;
   const access = await apiAccountAccess(accountId);
   if (!access) return NextResponse.json({}, { status: 404 });
-  const db = await dbForRequest(); // RLS-scoped — NEVER serviceDb here
+  // RLS-scoped, and the contact read on it is the authorisation: a contact
+  // the caller cannot see (another account's, or under 0068 another person's
+  // for a Technician) is a 404 that reads nothing else.
+  const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) return NextResponse.json({}, { status: 404 });
+  // F-085 (spec §7.3): consent is keyed by ADDRESS and a STOP can be tied to
+  // no contact, so the ledger is read through the ledger client — only now,
+  // for this proven contact's own address. Inside the try: a missing service
+  // key is the row's error line like any other unreadable ledger.
   try {
+    const ledger = ledgerDb();
     const [view, account] = await Promise.all([
-      readTextsView(db, accountId, contact),
+      readTextsView(ledger, accountId, contact),
       db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
     ]);
     if (account.error) {
