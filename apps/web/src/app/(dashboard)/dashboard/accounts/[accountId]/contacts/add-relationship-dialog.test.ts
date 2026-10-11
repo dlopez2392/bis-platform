@@ -106,3 +106,13 @@ describe("AddRelationshipDialog's markup (final review item 7)", () => {
     expect(renderedText(html)).not.toContain(m["relationships.dialog.searchEmpty"]);
   });
 });
+
+describe("the submit hands the created id to the retry (final review B Minor 1: step 5 of the e2e cannot tell a retry-by-id from a re-match by phone)", () => {
+  it("the submit passes this dialog's createdId to otherForSubmit (mutation: createdId: null -> FAILS)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("./add-relationship-dialog.tsx", import.meta.url), "utf8");
+    const call = src.match(/otherForSubmit\(\{([^}]*)\}\)/);
+    expect(call, "the submit calls otherForSubmit with an object literal").not.toBeNull();
+    expect(call![1]).toMatch(/(^|[\s,])createdId\s*(,|$)/);
+  });
+});

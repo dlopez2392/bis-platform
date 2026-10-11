@@ -115,8 +115,8 @@ test.beforeAll(async () => {
   techHiddenId = (await createContact(db, accountId, { firstName: "E2E", lastName: TECH_HIDDEN_LAST, assignedTo: null }, ACTOR)).id;
   // On TechMine's record: "Mother: someone not on your list" (the hidden one, side a, "f") and
   // "Sister: E2E TechToo …" (theirs, side a, "f").
-  await addRelationship(db, accountId, relationship(techHiddenId, techMineId, { labelKey: "parent", contactForm: "f" }), ACTOR);
-  await addRelationship(db, accountId, relationship(techTooId, techMineId, { labelKey: "sibling", contactForm: "f" }), ACTOR);
+  await addRelationship(db, accountId, relationship(techHiddenId, techMineId, { labelKey: "parent", contactForm: "f" }), ACTOR, "system");
+  await addRelationship(db, accountId, relationship(techTooId, techMineId, { labelKey: "sibling", contactForm: "f" }), ACTOR, "system");
 });
 
 test.afterAll(async () => {
