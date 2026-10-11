@@ -773,6 +773,7 @@ begin
   end if;
   return null;
 end $$;
+-- HISTORICAL draft (final review): the migration file packages/db/supabase/migrations/0069_client_groups.sql is the source, not this copy.
 create trigger client_group_members_sync_company_name
   after insert or update or delete on public.client_group_members
   for each row execute function app.sync_company_name();
@@ -2810,7 +2811,7 @@ test.describe.serial("S-02: households and the business name", () => {
 - [ ] **4. Production.** Warn danlo in chat first (memory "Supabase MCP prompts": Accept/Decline shows only in the CLI terminal). Check once more that the file holds no backslash (`grep -c '\\' packages/db/supabase/migrations/0069_client_groups.sql` = 0). Apply 0069 via MCP `apply_migration` exactly once; never re-apply. Compare the stored body's md5 with the file's (memory "MCP SQL escapes").
 - [ ] **5. Parity.** Run `docs/runbooks/ci-supabase-project.md`'s parity digest between bis-ci and production; they must match. Read `select count(*) from client_groups` and `select count(*) from client_group_members` on production against step 2's numbers.
 - [ ] **6. Merge and deploy.** Read the check runs for the head SHA via `gh api repos/{owner}/{repo}/commits/{sha}/check-runs`; merge with the SHA pinned. Verify the deploy (READY with the merge SHA, aliased to `app.bis-rgv.com`; `/` 200, `/sign-in` 200, `/b/bogus` 404) and the served-HTML marker: a contact page's HTML contains `data-groups-card`.
-- [ ] **7. The second reconcile (spec A4, §11).** Once the new build is live: run `select public.reconcile_business_groups();` once on production (MCP, warning danlo first) and once on bis-ci, and file both returned objects in the ledger. Non-zero `members_replaced`, `members_removed` or `respelled` are the old build's direct writes between step 4 and step 6, now folded in.
+- [ ] **7. The post-deploy reconciles, TWICE (spec A4, §11).** Each run is `select public.reconcile_business_groups();` once on production (MCP, warning danlo first) and once on bis-ci; file every returned object in the ledger. Both runs are idempotent. **#1** right after step 6 has verified the deploy: non-zero `members_replaced`, `members_removed` or `respelled` are the old build's direct writes between step 4 and step 6, now folded in. **#2** once Vercel Skew Protection's maximum age has passed since the deploy: read the maximum age from the Vercel project's settings, or wait 24 hours if it cannot be read (`docs/runbooks/production-isolation.md:786` records skew protection pinning old tabs to the old build, 2026-10-07). Anything non-zero in #2 is a write from a tab still on the old build after #1.
 - [ ] **8. Runbooks and tracker.** Add 0069 to the run log in `docs/runbooks/ci-supabase-project.md` (bis-platform lands the line, including the post-deploy reconcile); update S-02's row in the roadmap tracker (memory "Roadmap tracker").
 
 ---

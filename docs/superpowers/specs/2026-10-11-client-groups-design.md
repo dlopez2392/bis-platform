@@ -36,7 +36,7 @@ Choices this spec makes; **(owner, 2026-10-11)** marks the ones ruled in §13:
 | A1 | **Server-only writes (0053's pattern), not the contacts table's client writes.** `authenticated` gets SELECT only on both tables. Every write is a server action that proves the contact (or membership, or group) through the request client, then writes through the service client: the house rule of the Technician spec §7.3. Reasons: find-or-create by name, the primary swap and removal-with-promotion are multi-statement and need one transaction, which a PostgREST client call cannot give; a Technician must be able to link their customer to a business they cannot see (§13.3); and the column sync stays in one place |
 | A2 | **The column is kept in sync by a database trigger, not by each writer.** `contacts.company_name` = the name of the contact's business group, primary first, then oldest. No app path writes `company_name` after this release; `ContactInput` loses `companyName`, so every old writer is a compile error, not a line to remember |
 | A3 | **(owner, 2026-10-11, G10)** Business names are unique per account by their trimmed, lowercased key (a partial unique index); household names are not ("Garcia" is many families). This makes find-or-create race-safe (`on conflict do nothing`) |
-| A4 | The backfill is an idempotent function, `public.reconcile_business_groups()`, called at the end of 0069 and ONCE more by the orchestrator after the new app is live, to fold in names the old build wrote between the migration and the deploy (§11) |
+| A4 | The backfill is an idempotent function, `public.reconcile_business_groups()`, called at the end of 0069 and TWICE more by the orchestrator after the new app is live (right after the deploy is verified, and again once Vercel Skew Protection's maximum age has passed), to fold in names the old build wrote between the migration and the deploy, then any an old tab wrote after it (§11) |
 | A5 | The contact field's label becomes "Business name" / "Nombre del negocio" (`contact.company`, `messages.ts:637`, says "Company" today; the list column already says "Business name", `:565`). The forms editor's kind label follows (`:1222`) |
 | A6 | Renaming a group and its billing address: Owner, Staff and the agency only. A group can hold customers a Technician does not serve. Deleting a group is not in this release (§3) |
 
@@ -297,8 +297,12 @@ About 2–2.5 engineer-weeks of S-02's 5–6, mostly §5.3, §6 and the tests.
 0069 on the CI project (`ci-project-setup.yml`), then production, then parity, all **before
 merge** (e2e fails while bis-ci lacks it). Merge, deploy, verify (served-HTML marker: the Groups
 card on a contact page). Then the orchestrator runs `select public.reconcile_business_groups();`
-once on production and once on bis-ci, and files the returned counts in the ledger. Proposed
-runbook line for `docs/runbooks/ci-supabase-project.md`, landed by bis-platform.
+TWICE on production and on bis-ci, filing every returned object in the ledger: reconcile #1 right
+after the deploy is verified, and reconcile #2 once Vercel Skew Protection's maximum age has passed
+(read from the project's settings, or 24 hours if it cannot be read). Both runs are idempotent; a
+non-zero `members_replaced`, `members_removed` or `respelled` in #2 is a write from a tab still on
+the old build. Proposed runbook line for `docs/runbooks/ci-supabase-project.md`, landed by
+bis-platform.
 
 **Old app with 0069 (the hours between the production apply and the deploy):** safe. The old
 build reads `company_name`, which the backfill filled. Its direct writes (inline edits, imports,
@@ -310,13 +314,14 @@ or one of its business groups is renamed or changes kind (a membership removed b
 recomputes too, since the deleted group's kind can no longer be read). The post-deploy reconcile folds those writes in
 (§5.4 step 3), locking each contact so a write in flight is waited for, not lost; the one change
 it makes to a column that still names the same business is the spelling repair, and an over-long
-column is never touched. Run it only AFTER the old deployment has stopped serving: a write an old
-build makes after the reconcile has passed that contact waits for the next one. "Stopped serving"
-includes Vercel Skew Protection: a tab opened before the deploy keeps posting to the OLD deployment
-until it reloads or the skew window's maximum age runs out (assumption, not verified against this
-project's setting: old tabs reach the old deployment for that maximum age; see
-`docs/runbooks/production-isolation.md`, "Old tabs keep the old build"). So the reconcile waits
-until that maximum age has passed after the deploy, not merely until the deploy is READY. Its teardown still
+column is never touched. A write an old build makes after a reconcile has passed that contact
+waits for the next one, and the old build keeps serving after the deploy is READY: Vercel Skew
+Protection pins a tab opened before the deploy to the OLD deployment until it reloads or the skew
+window's maximum age runs out (`docs/runbooks/production-isolation.md`, "Old tabs keep the old
+build", recorded 2026-10-07; that old tabs reach the old deployment for the whole maximum age is an
+assumption, not verified against this project's setting). Hence the two runs above: #1 folds in the
+writes made between the apply and the deploy, and #2, after the maximum age, folds in whatever an
+old tab wrote after #1. Its teardown still
 works (account cascade, §5.1).
 
 **New app before 0069:** data-safe (no role or policy is loosened, nothing is destroyed) but
