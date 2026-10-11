@@ -11,6 +11,9 @@
 -- APPLY ORDER: CI project (ci-project-setup.yml push-dry-run, then push), then production (MCP
 -- apply_migration), then the parity check, then merge. After the new app is live the orchestrator runs
 -- select public.reconcile_business_groups(); once on each project (spec section 11).
+-- Run that post-deploy reconcile only AFTER the old deployment has stopped serving: an old build still
+-- taking requests can write company_name straight to the column after the reconcile has passed that
+-- contact, and only the next reconcile would fold that write in.
 --
 -- ROLLBACK (revert the app first; the old build reads company_name, which stays filled):
 --   drop table public.client_group_members; drop table public.client_groups;
@@ -188,7 +191,11 @@ begin
 end $$;
 
 -- 6. The company_name sync (spec A2). SECURITY DEFINER: it writes a column the request role may not, and
---    it fires inside cascades. It never touches updated_at and emits nothing. A household never sets it.
+--    it fires inside cascades. It never touches updated_at and emits nothing. A household never sets it,
+--    and a household change never recomputes it: an old build's direct write to the column (spec section
+--    11) is left alone until a BUSINESS membership or group of that contact changes. A membership whose
+--    group row is already gone is a cascade from a group delete, whose kind can no longer be read, so it
+--    recomputes.
 create function app.sync_company_name() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
@@ -198,11 +205,13 @@ begin
        and c.company_name is distinct from app.company_name_for(c.id);
     return null;
   end if;
-  if tg_op <> 'INSERT' then
+  if tg_op <> 'INSERT'
+     and not exists (select 1 from public.client_groups g where g.id = old.client_group_id and g.kind = 'household') then
     update public.contacts c set company_name = app.company_name_for(c.id)
      where c.id = old.contact_id and c.company_name is distinct from app.company_name_for(c.id);
   end if;
-  if tg_op <> 'DELETE' then
+  if tg_op <> 'DELETE'
+     and not exists (select 1 from public.client_groups g where g.id = new.client_group_id and g.kind = 'household') then
     update public.contacts c set company_name = app.company_name_for(c.id)
      where c.id = new.contact_id and c.company_name is distinct from app.company_name_for(c.id);
   end if;
@@ -213,7 +222,8 @@ create trigger client_group_members_sync_company_name
   for each row execute function app.sync_company_name();
 create trigger client_groups_sync_company_name
   after update of name, kind on public.client_groups
-  for each row when (old.name is distinct from new.name or old.kind is distinct from new.kind)
+  for each row when ((old.kind = 'business' or new.kind = 'business')
+                     and (old.name is distinct from new.name or old.kind is distinct from new.kind))
   execute function app.sync_company_name();
 
 -- 7. Write functions, service_role only. Each one checks every row belongs to p_account_id and serialises
@@ -251,11 +261,15 @@ returns jsonb language plpgsql set search_path = '' as $$
 declare
   i int; v_name text; v_key text; v_shown public.client_group_members; v_shown_key text;
   v_group uuid; v_existed boolean; v_added uuid; v_removed jsonb; v_status text; v_out jsonb := '[]'::jsonb;
+  v_n int := coalesce(array_length(p_contact_ids, 1), 0); v_res jsonb[];
 begin
-  if coalesce(array_length(p_contact_ids, 1), 0) <> coalesce(array_length(p_names, 1), 0) then
+  if v_n <> coalesce(array_length(p_names, 1), 0) then
     raise exception 'set_contacts_business: ids and names differ in length' using errcode = '22023';
   end if;
-  for i in 1 .. coalesce(array_length(p_contact_ids, 1), 0) loop
+  v_res := array_fill(null::jsonb, array[v_n]);
+  -- Contacts are locked in id order, not input order, so two batches naming the same contacts in
+  -- opposite orders queue behind each other instead of deadlocking. Results still come back in input order.
+  for i in select t.ord::int from unnest(p_contact_ids) with ordinality as t(id, ord) order by t.id, t.ord loop
     v_added := null; v_removed := null; v_shown := null; v_shown_key := null;
     v_name := btrim(coalesce(p_names[i], ''), app.group_ws());
     v_key := app.group_name_key(v_name);
@@ -297,8 +311,10 @@ begin
         v_status := 'ok';
       end if;
     end if;
-    v_out := v_out || jsonb_build_array(jsonb_build_object(
-      'contact_id', p_contact_ids[i], 'status', v_status, 'removed', v_removed, 'added', v_added));
+    v_res[i] := jsonb_build_object('contact_id', p_contact_ids[i], 'status', v_status, 'removed', v_removed, 'added', v_added);
+  end loop;
+  for i in 1 .. v_n loop
+    v_out := v_out || jsonb_build_array(v_res[i]);
   end loop;
   return v_out;
 end $$;
@@ -326,7 +342,10 @@ declare v_contact uuid; v_previous uuid;
 begin
   select contact_id into v_contact from public.client_group_members where id = p_member_id and account_id = p_account_id;
   if v_contact is null then return jsonb_build_object('status', 'not_found'); end if;
-  perform app.lock_contact(p_account_id, v_contact);
+  if not app.lock_contact(p_account_id, v_contact) then return jsonb_build_object('status', 'not_found'); end if;
+  -- Read again under the lock: another session may have removed it while this one waited.
+  perform 1 from public.client_group_members where id = p_member_id and account_id = p_account_id;
+  if not found then return jsonb_build_object('status', 'not_found'); end if;
   select id into v_previous from public.client_group_members where contact_id = v_contact and is_primary;
   if v_previous is distinct from p_member_id then
     update public.client_group_members set is_primary = false where contact_id = v_contact and is_primary;
@@ -337,11 +356,14 @@ end $$;
 
 create function public.remove_group_membership(p_account_id uuid, p_member_id uuid)
 returns jsonb language plpgsql set search_path = '' as $$
-declare v_row public.client_group_members;
+declare v_contact uuid; v_row public.client_group_members;
 begin
+  select contact_id into v_contact from public.client_group_members where id = p_member_id and account_id = p_account_id;
+  if v_contact is null then return jsonb_build_object('status', 'not_found'); end if;
+  if not app.lock_contact(p_account_id, v_contact) then return jsonb_build_object('status', 'not_found'); end if;
+  -- The snapshot Undo restores is read under the lock, so it carries what another session just changed.
   select * into v_row from public.client_group_members where id = p_member_id and account_id = p_account_id;
   if v_row.id is null then return jsonb_build_object('status', 'not_found'); end if;
-  perform app.lock_contact(p_account_id, v_row.contact_id);
   delete from public.client_group_members where id = p_member_id;
   perform app.promote_primary(v_row.contact_id);
   return jsonb_build_object('status', 'ok', 'removed', to_jsonb(v_row));
@@ -359,10 +381,26 @@ end $$;
 
 -- 8. The backfill (spec section 5.4), idempotent. Called below, and once more by the orchestrator after
 --    the new app is live, to fold in what the old build wrote straight to company_name in between.
+--    The loop locks each contact (app.lock_contact) and reads its company_name again under that lock, so
+--    a direct write in flight is waited for and folded in, never overwritten. The locks are held to the
+--    end of the call, so nothing writes a linked contact between its relink and the respell below. Id
+--    order, as set_contacts_business locks, so the two queue behind each other rather than deadlock.
+--    What the counts mean, per call:
+--      groups_created    business groups inserted by the set-based first step (a group the loop creates
+--                        for a name written while it ran is not counted);
+--      members_added     contacts linked to a business for the first time;
+--      members_replaced  contacts whose shown business moved to the one their column now names;
+--      members_removed   contacts whose column is blank, unlinked from their shown business;
+--      skipped_too_long  contacts whose trimmed company_name is over 120 characters, left exactly as they
+--                        are. It counts what is there, not work done, so it never reaches zero while
+--                        such a name exists: a second run returns zeros EXCEPT this count;
+--      respelled         columns the final update put back to their own group's spelling. Spellings the
+--                        sync trigger rewrote while the loop linked or relinked a contact are not in it
+--                        (the orchestrator's pre-flight query counts those before the apply).
 create function public.reconcile_business_groups(p_account_id uuid default null)
 returns jsonb language plpgsql set search_path = '' as $$
 declare
-  r record; v_shown public.client_group_members; v_shown_key text; v_group uuid;
+  r record; v_name text; v_shown public.client_group_members; v_shown_key text; v_group uuid;
   v_groups int := 0; v_added int := 0; v_replaced int := 0; v_removed int := 0; v_skipped int := 0; v_respelled int := 0;
 begin
   insert into public.client_groups (account_id, kind, name)
@@ -376,16 +414,18 @@ begin
   get diagnostics v_groups = row_count;
 
   for r in
-    select c.id, c.account_id, btrim(coalesce(c.company_name, ''), app.group_ws()) as name
+    select c.id, c.account_id
       from public.contacts c
      where (p_account_id is null or c.account_id = p_account_id)
        and (btrim(coalesce(c.company_name, ''), app.group_ws()) <> ''
             or exists (select 1 from public.client_group_members m
                          join public.client_groups g on g.account_id = m.account_id and g.id = m.client_group_id
                         where m.contact_id = c.id and g.kind = 'business'))
-     order by c.created_at, c.id
+     order by c.id
   loop
-    if char_length(r.name) > 120 then v_skipped := v_skipped + 1; continue; end if;
+    if not app.lock_contact(r.account_id, r.id) then continue; end if;
+    select btrim(coalesce(c.company_name, ''), app.group_ws()) into v_name from public.contacts c where c.id = r.id;
+    if char_length(v_name) > 120 then v_skipped := v_skipped + 1; continue; end if;
     v_shown := null; v_shown_key := null;
     select m.* into v_shown from public.client_group_members m
       join public.client_groups g on g.account_id = m.account_id and g.id = m.client_group_id
@@ -394,16 +434,18 @@ begin
     if v_shown.id is not null then
       select g.name_key into v_shown_key from public.client_groups g where g.id = v_shown.client_group_id;
     end if;
-    if r.name = '' then
-      delete from public.client_group_members where id = v_shown.id;
-      perform app.promote_primary(r.id);
-      v_removed := v_removed + 1;
+    if v_name = '' then
+      if v_shown.id is not null then
+        delete from public.client_group_members where id = v_shown.id;
+        perform app.promote_primary(r.id);
+        v_removed := v_removed + 1;
+      end if;
     elsif v_shown.id is null then
-      select f.group_id into v_group from app.find_or_create_business(r.account_id, r.name) f;
+      select f.group_id into v_group from app.find_or_create_business(r.account_id, v_name) f;
       perform app.link_member(r.account_id, v_group, r.id, null, false);
       v_added := v_added + 1;
-    elsif v_shown_key <> app.group_name_key(r.name) then
-      select f.group_id into v_group from app.find_or_create_business(r.account_id, r.name) f;
+    elsif v_shown_key <> app.group_name_key(v_name) then
+      select f.group_id into v_group from app.find_or_create_business(r.account_id, v_name) f;
       delete from public.client_group_members where id = v_shown.id;
       if exists (select 1 from public.client_group_members where client_group_id = v_group and contact_id = r.id) then
         if v_shown.is_primary then
@@ -417,8 +459,10 @@ begin
     end if;
   end loop;
 
+  -- The respell. A column over 120 characters was skipped above and stays exactly as written.
   update public.contacts c set company_name = app.company_name_for(c.id)
    where (p_account_id is null or c.account_id = p_account_id)
+     and char_length(btrim(coalesce(c.company_name, ''), app.group_ws())) <= 120
      and exists (select 1 from public.client_group_members m
                    join public.client_groups g on g.account_id = m.account_id and g.id = m.client_group_id
                   where m.contact_id = c.id and g.kind = 'business')

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import type { Client } from "pg";
+import { Client } from "pg";
 import { withRollback } from "./db";
+import { TEST_ORG_ID_PREFIX } from "../org-id";
 
 const RUN = Math.random().toString(36).slice(2, 10);
 async function seedAccount(c: Client, org: string) {
@@ -169,4 +170,141 @@ describe("reconcile_business_groups (spec §5.4)", () => {
     expect(r.skipped_too_long).toBe(1);
     expect(await companyOf(c, ct)).toBe(long);
   }));
+  it("reconcile leaves a too-long column alone even with a business membership (mutation: drop the too-long exclusion from the final respell -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, `org_r_${RUN}`);
+      const ct = await contact(c, a, "Lo");
+      await call(c, "public.create_group_with_member($1,$2,'business','Acme Roofing')", [a, ct]);
+      const long = "Q".repeat(130);
+      await c.query("update contacts set company_name = $2 where id = $1", [ct, long]); // an old build's direct write
+      const r = await call(c, "public.reconcile_business_groups($1)", [a]) as Record<string, number>;
+      expect(r).toMatchObject({ skipped_too_long: 1, respelled: 0 });
+      expect(await companyOf(c, ct)).toBe(long);
+      expect(await members(c, ct)).toEqual([{ name: "Acme Roofing", is_primary: true, role: null, is_billing: false }]);
+    }));
+});
+
+/*
+ * Two sessions at once. Each write function serialises on the contact row (app.lock_contact); these
+ * prove that what it decides AFTER the lock is read after the lock. The rows must be committed (a
+ * second session cannot see another's uncommitted seed), so the account carries the sweep's org prefix
+ * and is removed in finally; a killed run's leftover is cleared by the next run's global setup.
+ */
+const connect = async () => {
+  const c = new Client({ connectionString: process.env.SUPABASE_DB_URL, connectionTimeoutMillis: 10_000 });
+  await c.connect();
+  return c;
+};
+let committedN = 0;
+async function withCommittedAccount(fn: (c: Client, acct: string) => Promise<void>) {
+  const c = await connect();
+  let acct = "";
+  try {
+    const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
+    acct = (await c.query<{ id: string }>(
+      "insert into accounts (agency_id, clerk_org_id, name) values ($1,$2,'Groups Race Co') returning id",
+      [agency!.id, `${TEST_ORG_ID_PREFIX}grace_${RUN}_${committedN++}`])).rows[0]!.id;
+    await fn(c, acct);
+  } finally {
+    if (acct) {
+      await c.query("delete from contacts where account_id = $1", [acct]); // memberships cascade
+      await c.query("delete from accounts where id = $1", [acct]); // groups cascade
+    }
+    await c.end();
+  }
+}
+/** `first` runs and holds its locks in an open transaction; `second` starts and must block on them;
+ *  then `first` commits. Returns both results (settled, so a 40P01 is a value, not a throw). */
+async function race(first: (c: Client) => Promise<unknown>, second: (c: Client) => Promise<unknown>) {
+  const c1 = await connect(); const c2 = await connect();
+  try {
+    await c1.query("begin"); await c2.query("begin");
+    const r1 = await first(c1);
+    const p2 = second(c2).then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e }));
+    await new Promise((res) => setTimeout(res, 300)); // c2 is now blocked on the contact row
+    await c1.query("commit");
+    const r2 = await p2;
+    await c2.query(r2.ok ? "commit" : "rollback");
+    return { r1, r2 };
+  } finally { await c1.end(); await c2.end(); }
+}
+const one = async (c: Client, sql: string, args: unknown[]) => (await c.query<{ r: unknown }>(`select ${sql} as r`, args)).rows[0]!.r;
+
+describe("two sessions at once (I2, minors 3 and 4)", () => {
+  it("make main on a membership another session just removed returns not_found and leaves one main (mutation: drop the re-read after the lock in set_primary_group_membership -> FAILS)", () =>
+    withCommittedAccount(async (c, acct) => {
+      const ana = await contact(c, acct, "Ana");
+      await one(c, "public.create_group_with_member($1,$2,'household','Garcia')", [acct, ana]);
+      const reyes = await one(c, "public.create_group_with_member($1,$2,'household','Reyes')", [acct, ana]) as { member_id: string };
+      const { r1, r2 } = await race(
+        (c1) => one(c1, "public.remove_group_membership($1,$2)", [acct, reyes.member_id]),
+        (c2) => one(c2, "public.set_primary_group_membership($1,$2)", [acct, reyes.member_id]));
+      expect(r1).toMatchObject({ status: "ok" });
+      expect(r2).toEqual({ ok: true, v: { status: "not_found" } });
+      expect(await members(c, ana)).toEqual([{ name: "Garcia", is_primary: true, role: null, is_billing: false }]);
+    }));
+  it("remove after another session made it main snapshots it AS main, so Undo restores the main (mutation: take the remove snapshot from the read before the lock -> FAILS)", () =>
+    withCommittedAccount(async (c, acct) => {
+      const ana = await contact(c, acct, "Ana");
+      await one(c, "public.create_group_with_member($1,$2,'household','Garcia')", [acct, ana]);
+      const reyes = await one(c, "public.create_group_with_member($1,$2,'household','Reyes')", [acct, ana]) as { member_id: string };
+      const { r2 } = await race(
+        (c1) => one(c1, "public.set_primary_group_membership($1,$2)", [acct, reyes.member_id]),
+        (c2) => one(c2, "public.remove_group_membership($1,$2)", [acct, reyes.member_id]));
+      expect(r2.ok).toBe(true);
+      const removed = (r2 as { v: { status: string; removed: { is_primary: boolean } } }).v;
+      expect(removed.status).toBe("ok");
+      expect(removed.removed.is_primary).toBe(true);
+      expect(await one(c, "public.restore_group_membership($1,$2)", [acct, JSON.stringify(removed.removed)])).toBe("ok");
+      expect(await members(c, ana)).toEqual([
+        { name: "Garcia", is_primary: false, role: null, is_billing: false },
+        { name: "Reyes", is_primary: true, role: null, is_billing: false },
+      ]);
+    }));
+  it("reconcile waits for a direct write in flight and folds it in, never overwriting it (mutation: drop the lock or the re-read in the reconcile loop -> FAILS)", () =>
+    withCommittedAccount(async (c, acct) => {
+      const ana = await contact(c, acct, "Ana", "Acme Roofing");
+      await one(c, "public.reconcile_business_groups($1)", [acct]);
+      const { r2 } = await race(
+        (c1) => c1.query("update contacts set company_name = 'Beta Pools' where id = $1", [ana]), // an old build's write
+        (c2) => one(c2, "public.reconcile_business_groups($1)", [acct]));
+      expect(r2).toMatchObject({ ok: true, v: { members_replaced: 1 } });
+      expect(await companyOf(c, ana)).toBe("Beta Pools");
+      expect(await members(c, ana)).toEqual([{ name: "Beta Pools", is_primary: true, role: null, is_billing: false }]);
+    }));
+  it("two batches naming the same contacts in opposite orders both finish, no deadlock (mutation: process p_contact_ids in input order -> one FAILS 40P01)", () =>
+    withCommittedAccount(async (c, acct) => {
+      const [x, y] = [await contact(c, acct, "X"), await contact(c, acct, "Y")].sort() as [string, string];
+      const holder = await connect(); const c1 = await connect(); const c2 = await connect();
+      try {
+        // holder takes x, so batch 1 ([x, y]) waits on x; batch 2 ([y, x]) then starts. In input order it
+        // would lock y and wait on x, and once holder lets go batch 1 would wait on y: a deadlock.
+        await holder.query("begin");
+        await holder.query("select 1 from contacts where id = $1 for update", [x]);
+        const settle = (p: Promise<unknown>) => p.then(() => "done", (e: { code?: string }) => e.code ?? "error");
+        const p1 = settle(one(c1, "public.set_contacts_business($1,$2::uuid[],$3::text[])", [acct, [x, y], ["Acme", "Acme"]]));
+        await new Promise((res) => setTimeout(res, 300));
+        const p2 = settle(one(c2, "public.set_contacts_business($1,$2::uuid[],$3::text[])", [acct, [y, x], ["Beta", "Beta"]]));
+        await new Promise((res) => setTimeout(res, 300));
+        await holder.query("commit");
+        expect(await Promise.all([p1, p2])).toEqual(["done", "done"]);
+      } finally {
+        await holder.query("rollback").catch(() => undefined);
+        await holder.end(); await c1.end(); await c2.end();
+      }
+      // Whichever batch went last wrote both rows: the two were never interleaved.
+      const both = [await companyOf(c, x), await companyOf(c, y)];
+      expect([["Acme", "Acme"], ["Beta", "Beta"]]).toContainEqual(both);
+    }));
+});
+
+describe("set_contacts_business result order", () => {
+  it("answers in the order it was asked, whatever order it works in (mutation: return results in processing order -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, `org_f_${RUN}`);
+      const [lo, hi] = [await contact(c, a, "Lo"), await contact(c, a, "Hi")].sort() as [string, string];
+      const r = await call(c, "public.set_contacts_business($1,$2::uuid[],$3::text[])", [a, [hi, lo], ["Acme", "x".repeat(121)]]) as Array<Record<string, unknown>>;
+      expect(r.map((x) => [x.contact_id, x.status])).toEqual([[hi, "ok"], [lo, "too_long"]]);
+      expect(await companyOf(c, hi)).toBe("Acme");
+    }));
 });

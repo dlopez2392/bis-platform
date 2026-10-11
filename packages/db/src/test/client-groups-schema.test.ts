@@ -216,4 +216,48 @@ describe("the company_name sync (spec §5.3, A2)", () => {
     expect(r!.n).toBe("Acme");
     expect(r!.u).toBe("2026-01-01 00:00:00+00");
   }));
+
+  // An old build writes company_name straight to the column (spec §11). Only a change to a BUSINESS
+  // membership or group may recompute it; a household change must leave that write where it is.
+  it("a household add leaves a directly written column alone (mutation: drop the household skip from sync_company_name's member branch -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, `org_g_${RUN}`);
+      const ct = await contact(c, a, "Ana");
+      await member(c, a, await group(c, a, "business", "Acme Roofing"), ct, true);
+      expect(await companyOf(c, ct)).toBe("Acme Roofing"); // positive control: the sync is live
+      await c.query("update contacts set company_name = 'Beta Pools' where id = $1", [ct]);
+      const home = await member(c, a, await group(c, a, "household", "Garcia"), ct);
+      expect(await companyOf(c, ct)).toBe("Beta Pools");
+      await c.query("update client_group_members set role = 'Madre' where id = $1", [home]);
+      expect(await companyOf(c, ct)).toBe("Beta Pools");
+      await c.query("delete from client_group_members where id = $1", [home]);
+      expect(await companyOf(c, ct)).toBe("Beta Pools");
+    }));
+  it("a household rename leaves a directly written column alone, and a kind change still recomputes (mutation: drop the kind condition from client_groups_sync_company_name's WHEN -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, `org_g_${RUN}`);
+      const ct = await contact(c, a, "Ana");
+      const acme = await group(c, a, "business", "Acme Roofing");
+      await member(c, a, acme, ct, true);
+      const home = await group(c, a, "household", "Garcia");
+      await member(c, a, home, ct);
+      await c.query("update contacts set company_name = 'Beta Pools' where id = $1", [ct]);
+      await c.query("update client_groups set name = 'Garcia Lopez' where id = $1", [home]);
+      expect(await companyOf(c, ct)).toBe("Beta Pools");
+      await c.query("update client_groups set kind = 'business' where id = $1", [home]);
+      expect(await companyOf(c, ct)).toBe("Acme Roofing"); // Acme is still the main one
+      await c.query("update client_groups set kind = 'household' where id = $1", [acme]);
+      expect(await companyOf(c, ct)).toBe("Garcia Lopez"); // a business turned household no longer counts
+    }));
+  it("deleting a business group falls back to the next business: a member row whose group is gone still recomputes (mutation: skip the recompute when the group row is missing -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, `org_g_${RUN}`);
+      const ct = await contact(c, a, "Ana");
+      const acme = await group(c, a, "business", "Acme Roofing");
+      await member(c, a, acme, ct, true);
+      await member(c, a, await group(c, a, "business", "Beta Pools"), ct);
+      expect(await companyOf(c, ct)).toBe("Acme Roofing");
+      await c.query("delete from client_groups where id = $1", [acme]);
+      expect(await companyOf(c, ct)).toBe("Beta Pools");
+    }));
 });

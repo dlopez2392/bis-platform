@@ -154,8 +154,14 @@ Service-role only. Set-based, scoped to one account or all. The last statement o
    the truth for that one slot.
 4. **Effect on existing rows:** the sync rewrites `company_name` to the group's spelling, so
    " acme roofing" becomes "Acme Roofing" when an older contact spelled it so. Nothing else changes.
-   Returns `{groups_created, members_added, members_replaced, members_removed}`; a second run
-   returns zeros (the idempotence test).
+   A stored name longer than 120 characters after trimming cannot become a group: the contact is
+   skipped and its column left exactly as written, even when it already has a business membership.
+   Returns `{groups_created, members_added, members_replaced, members_removed, skipped_too_long,
+   respelled}`; a second run returns zeros except `skipped_too_long`, which counts the over-long
+   names still there rather than work done, so it never reaches zero while one exists (the
+   idempotence test). `respelled` counts only the final same-business spelling repair, not the
+   spellings the sync rewrote while linking. Each contact is locked and re-read before it is
+   reconciled, so a direct write in flight is waited for and folded in, never overwritten.
 
 **Rollback.** Revert the app first (the old build reads `company_name`, still filled). Then drop
 `client_group_members`, `client_groups`, the functions, the trigger function and
@@ -254,13 +260,17 @@ is item 3's. Twinning `contact.company` means regenerating the catalogue baselin
   `pg_policies` rows for both tables (the `server-only-writes-grants.test.ts:106-111` shape);
   `authenticated` insert refused `42501`; each function executable by `service_role` only.
   Probe: drop `lower()` from `name_key`, and the case-insensitive case fails by name.
-- **RLS** (`technician-scope.test.ts` gains both tables in its table-by-table block, `:123`): a
-  Technician sees their customer's group and membership, not a co-member assigned to someone else,
+- **RLS** (`client-groups-rls.test.ts`, its own file: `technician-scope.test.ts`'s seed builds one
+  row per contact and cannot express a household shared by the Technician's customer and someone
+  else's; plan deviation 1): a Technician sees their customer's group and membership, not a co-member assigned to someone else,
   not a group with none of their customers; Owner, Staff and agency see all; another account's token
   and a login with no membership see zero. Probe: drop either restrictive policy.
 - **Sync and functions:** the column follows insert, main-then-age order, rename and removal; a
-  household never changes it; replace keeps main, remove promotes the oldest, restore is exact.
-- **Backfill:** a second run returns zeros; `"Acme Roofing"`, `" acme roofing "`, `"ACME
+  household never changes it, and a household change (add, edit, remove, rename) never recomputes a
+  directly written column; replace keeps main, remove promotes the oldest, restore is exact; make
+  main and remove re-read the membership after the contact lock (two-session tests).
+- **Backfill:** a second run returns zeros except `skipped_too_long`; an over-long column is left
+  alone even with a business membership; `"Acme Roofing"`, `" acme roofing "`, `"ACME
   ROOFING<tab>"` make one group named by the oldest; NULL, `''`, spaces and NBSP alone make nothing;
   two accounts make two; a direct write is relinked, a cleared one unlinked; `updated_at` untouched.
 - **App:** an action on a contact or membership the request client cannot see never reaches the
@@ -286,8 +296,15 @@ runbook line for `docs/runbooks/ci-supabase-project.md`, landed by bis-platform.
 **Old app with 0069 (the hours between the production apply and the deploy):** safe. The old
 build reads `company_name`, which the backfill filled. Its direct writes (inline edits, imports,
 form leads) change the column and no group; the trigger fires only on group changes, which the
-old build never makes, so nothing it writes is overwritten. The post-deploy reconcile folds those
-writes in (§5.4 step 3). Its teardown still works (account cascade, §5.1).
+old build never makes, so nothing it writes is overwritten. Nor does the new app overwrite such a
+write by a household change: the sync recomputes the column only when a BUSINESS membership or
+group of that contact changes (a membership removed by a group delete recomputes too, since the
+deleted group's kind can no longer be read). The post-deploy reconcile folds those writes in
+(§5.4 step 3), locking each contact so a write in flight is waited for, not lost; the one change
+it makes to a column that still names the same business is the spelling repair, and an over-long
+column is never touched. Run it only AFTER the old deployment has stopped serving: a write an old
+build makes after the reconcile has passed that contact waits for the next one. Its teardown still
+works (account cascade, §5.1).
 
 **New app before 0069:** data-safe (no role or policy is loosened, nothing is destroyed) but
 broken: the card errors in its own boundary, Business name edits say "Save failed", a form lead is
