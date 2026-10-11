@@ -25,12 +25,12 @@ export async function listNotes(db: SupabaseClient, accountId: string, contactId
 
 export async function addTask(
   db: SupabaseClient, accountId: string,
-  input: { contactId?: string; title: string; dueAt?: string }, actorId: string,
+  input: { contactId?: string; title: string; dueAt?: string; assignedTo?: string | null }, actorId: string,
   actorType: ActorType = "user",
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("tasks")
     .insert({ account_id: accountId, contact_id: input.contactId ?? null,
-              title: input.title, due_at: input.dueAt ?? null })
+              title: input.title, due_at: input.dueAt ?? null, assigned_to: input.assignedTo ?? null })
     .select("id").single();
   if (error || !data) throw new Error(`addTask failed: ${error?.message}`);
   await emit(db, accountId, "task.created", actorId,
@@ -53,12 +53,18 @@ export async function listContactTasks(db: SupabaseClient, accountId: string, co
 export async function completeTask(
   db: SupabaseClient, accountId: string, taskId: string, actorId: string,
   actorType: ActorType = "user",
+  // A Technician's own RLS-bound client may not see the consent_events row a
+  // task links (0068 §4b scopes it by contact, and a held address can be
+  // tied to no contact at all) — defaults to `db` for every other caller, so
+  // today's behaviour is unchanged. Pass serviceDb() for a Technician's own
+  // completion.
+  ledger: SupabaseClient = db,
 ): Promise<void> {
   const { data: linked, error: readError } = await db.from("tasks")
     .select("consent_event_id").eq("account_id", accountId).eq("id", taskId).maybeSingle();
   if (readError) throw new Error(readError.message);
   const eventId = (linked as { consent_event_id: string | null } | null)?.consent_event_id ?? null;
-  if (eventId && await holdStillOpen(db, accountId, eventId)) throw new HoldUndecidedError();
+  if (eventId && await holdStillOpen(ledger, accountId, eventId)) throw new HoldUndecidedError();
   const { error } = await db.from("tasks")
     .update({ completed_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", taskId);
@@ -206,10 +212,13 @@ export async function readTaskContact(
 export async function holdOpenTaskIds(
   db: SupabaseClient, accountId: string,
   tasks: readonly { id: string; completed_at: string | null; consent_event_id?: string | null }[],
+  // Same reason as completeTask's own trailing param: a Technician's `db`
+  // may not see the consent_events row a task links. Defaults to `db`.
+  ledger: SupabaseClient = db,
 ): Promise<string[]> {
   const open: string[] = [];
   for (const t of tasks) {
-    if (!t.completed_at && t.consent_event_id && await holdStillOpen(db, accountId, t.consent_event_id)) open.push(t.id);
+    if (!t.completed_at && t.consent_event_id && await holdStillOpen(ledger, accountId, t.consent_event_id)) open.push(t.id);
   }
   return open;
 }

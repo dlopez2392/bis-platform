@@ -2,10 +2,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
 import { normalisePhone } from "./phone";
+import type { AssigneeFilter } from "./assignment";
 
 export type ContactInput = {
   firstName?: string; lastName?: string; email?: string; phone?: string;
   companyName?: string; source?: string; custom?: Record<string, unknown>;
+  /** Mine/Unassigned (F-085 part 1, spec §8): who holds this customer.
+   *  `undefined` leaves the column untouched (an update that says nothing
+   *  about it); `null` explicitly clears it to Unassigned. */
+  assignedTo?: string | null;
 };
 
 // `sort_name` (0030, a stored generated column) rides along on every read —
@@ -120,6 +125,7 @@ function toRow(input: Partial<ContactInput>, currentPhone?: string | null) {
   if (input.companyName !== undefined) row.company_name = input.companyName;
   if (input.source !== undefined) row.source = input.source;
   if (input.custom !== undefined) row.custom = input.custom;
+  if (input.assignedTo !== undefined) row.assigned_to = input.assignedTo;
   return row;
 }
 
@@ -386,6 +392,13 @@ async function flagDuplicatesAfterWrite(
 export async function createContact(
   db: SupabaseClient, accountId: string, input: ContactInput, actorId: string,
   actorType: ActorType = "user",
+  // A Technician's own RLS-bound client cannot see a duplicate sitting
+  // outside their assigned customers (0068 §4a), so a flag writer that ran
+  // on `db` would silently find nothing to record. Defaults to `db` for
+  // every other caller (the agency, Owner/Staff, the public form), whose
+  // client already sees the whole account. Pass serviceDb() for a
+  // Technician's own insert.
+  flagDb: SupabaseClient = db,
 ): Promise<{ id: string; existing: boolean; flagged: boolean }> {
   const email = input.email?.trim().toLowerCase();
   // The phone as it will be STORED, so the event names what the row holds.
@@ -408,7 +421,7 @@ export async function createContact(
     // 23505 here is the DESIGNED outcome, not a failure. Anything else is real
     // and must not be swallowed: a flag that silently fails to write leaves the
     // queue looking empty, which is worse than not having one.
-    const { error } = await db.from("contact_duplicate_flags")
+    const { error } = await flagDb.from("contact_duplicate_flags")
       .insert({ account_id: accountId, contact_a: contactA, contact_b: contactB,
                 reason: "email_phone_conflict" });
     if (error && error.code !== "23505") {
@@ -421,7 +434,7 @@ export async function createContact(
   // (re-review minor 12): the person is the email's contact, and the +1 one
   // with the same ten digits is for the merge tool to judge.
   if (winner && match.countryTwin !== null && match.countryTwin !== winner) {
-    flagged = (await flagDuplicatePair(db, accountId, winner, match.countryTwin, "phone_country_twin")) || flagged;
+    flagged = (await flagDuplicatePair(flagDb, accountId, winner, match.countryTwin, "phone_country_twin")) || flagged;
   }
   if (winner) return { id: winner, existing: true, flagged };
 
@@ -431,8 +444,40 @@ export async function createContact(
   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
     actorType);
   const twinFlagged = match.countryTwin !== null
-    && await flagDuplicatePair(db, accountId, data.id, match.countryTwin, "phone_country_twin");
+    && await flagDuplicatePair(flagDb, accountId, data.id, match.countryTwin, "phone_country_twin");
   return { id: data.id, existing: false, flagged: twinFlagged };
+}
+
+/**
+ * After a Technician adds a customer (owner ruling §13.3): pairs it with any
+ * OTHER contact in the account sharing its email_key or phone_key, reason
+ * "hidden_match", so the Owner's duplicates queue sees what the Technician's
+ * RLS-bound lookup could not. Pass serviceDb(). Returns the pairs written.
+ */
+export async function flagMatchesOf(db: SupabaseClient, accountId: string, contactId: string): Promise<number> {
+  const { data: me, error } = await db.from("contacts").select("email_key, phone_key")
+    .eq("account_id", accountId).eq("id", contactId).maybeSingle();
+  if (error) throw new Error(`flagMatchesOf read failed: ${error.message}`);
+  if (!me) return 0;
+  const ors = [
+    me.email_key ? `email_key.eq.${quoteFilterValue(String(me.email_key))}` : null,
+    me.phone_key ? `phone_key.eq.${quoteFilterValue(String(me.phone_key))}` : null,
+  ].filter((v): v is string => v !== null);
+  if (ors.length === 0) return 0;
+  const { data: hits, error: hErr } = await db.from("contacts").select("id")
+    .eq("account_id", accountId).neq("id", contactId).or(ors.join(",")).limit(20);
+  if (hErr) throw new Error(`flagMatchesOf lookup failed: ${hErr.message}`);
+  let written = 0;
+  for (const h of (hits ?? []) as { id: string }[]) {
+    const [a, b] = [contactId, h.id].sort();
+    const { error: fErr } = await db.from("contact_duplicate_flags")
+      .insert({ account_id: accountId, contact_a: a, contact_b: b, reason: "hidden_match" });
+    if (!fErr) written += 1;
+    else if (fErr.code !== "23505") {
+      console.error(`contact duplicate flag (hidden_match) for account ${accountId} not recorded: code ${fErr.code ?? "none"}`);
+    }
+  }
+  return written;
 }
 
 export async function updateContact(
@@ -644,6 +689,15 @@ export function phoneSearchDigits(raw: string): string {
   return digits.length >= MIN_PHONE_SEARCH_DIGITS ? digits.slice(0, 20) : "";
 }
 
+/** Mine/Unassigned (spec §8): one helper both `listContacts` and
+ *  `countContacts` apply, so the list's rows and its header total can never
+ *  disagree about which contacts the filter admits. */
+function withAssignee<T>(q: T, assignee: AssigneeFilter | undefined): T {
+  if (!assignee) return q;
+  const f = q as unknown as { eq: (c: string, v: string) => T; is: (c: string, v: null) => T };
+  return assignee.who === "mine" ? f.eq("assigned_to", assignee.userId) : f.is("assigned_to", null);
+}
+
 function withSearch<T>(q: T, search?: string): T {
   const s = search ? sanitizeSearchTerm(search) : undefined;
   if (!s) return q;
@@ -658,7 +712,7 @@ function withSearch<T>(q: T, search?: string): T {
 
 export async function listContacts(
   db: SupabaseClient, accountId: string,
-  opts: { search?: string; limit?: number; before?: ContactCursor; sort?: ContactSort } = {},
+  opts: { search?: string; limit?: number; before?: ContactCursor; sort?: ContactSort; assignee?: AssigneeFilter } = {},
 ) {
   const sort: ContactSort = opts.sort ?? { key: "created", dir: "desc" };
   const column = SORT_COLUMN[sort.key];
@@ -676,6 +730,7 @@ export async function listContacts(
     .order("id", { ascending })
     .limit(opts.limit ?? 50);
   q = withSearch(q, opts.search);
+  q = withAssignee(q, opts.assignee);
   if (opts.before) {
     const { v, id } = opts.before;
     const cmp = ascending ? "gt" : "lt";
@@ -766,11 +821,12 @@ export async function listContactTags(db: SupabaseClient, accountId: string, con
  * caption counts what the filter matches, not the whole account.
  */
 export async function countContacts(
-  db: SupabaseClient, accountId: string, opts: { search?: string } = {},
+  db: SupabaseClient, accountId: string, opts: { search?: string; assignee?: AssigneeFilter } = {},
 ): Promise<number> {
   let q = db.from("contacts").select("id", { count: "exact", head: true })
     .eq("account_id", accountId);
   q = withSearch(q, opts.search);
+  q = withAssignee(q, opts.assignee);
   const { count, error } = await q;
   if (error) throw new Error(`countContacts failed: ${error.message}`);
   return count ?? 0;
