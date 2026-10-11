@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAccount } from "../accounts";
 import { setBranding, uploadBrandLogo, removeBrandLogo } from "../branding";
 import { createContact } from "../contacts";
+import { setContactsBusiness } from "../client-groups";
 import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity, moveOpportunityToStage, setOpportunityStatus } from "../opportunities";
 import { ensureConversation, createMessage } from "../messaging";
@@ -435,9 +436,12 @@ async function seedContacts(
     const createdAt = now - Math.floor(r() ** 2 * 180 * DAY);
     const { id, existing } = await createContact(db, accountId, {
       firstName: person.first, lastName: person.last, email, phone,
-      companyName: person.company, source: person.source,
+      source: person.source,
     }, ACTOR);
     if (existing) throw new Error(`demo seed: duplicate contact ${email} — the people list collides`);
+    if (person.company) {
+      await setContactsBusiness(db, accountId, [{ contactId: id, name: person.company }], ACTOR, "system");
+    }
     await backdate(db, "contacts", id,
       { created_at: new Date(createdAt).toISOString(), updated_at: new Date(createdAt).toISOString() });
     out.push({ id, person, createdAt });

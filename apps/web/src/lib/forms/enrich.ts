@@ -2,7 +2,7 @@ import type { serviceDb, FormRow } from "@bis/db";
 import {
   createContact, updateContact, getContact, linkSubmissionContact,
   ensureConversation, createMessage, incrementUnreadCount, emitFormSubmitted,
-  setSubmissionProcessingError,
+  setSubmissionProcessingError, setContactsBusiness,
 } from "@bis/db";
 import { sendEmailOrThrow, EmailNotSent } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -101,11 +101,17 @@ export async function enrich(
       // E.164 when it parses, as typed when it does not, and flags ten digits
       // that could be Mexican or US. Pre-normalising would hide that question.
       phone: rawPhone || undefined,
-      companyName: byKind.get("core.company_name") || undefined,
       source: `form: ${form.name}`,
       custom,
     }, "form", "system");
     contactId = created.id;
+
+    // S-02 §6 row 10: the business answer is a group (0069). A returning lead
+    // goes through fillBlanks below, which never replaces a business it has.
+    const business = byKind.get("core.company_name") || "";
+    if (!created.existing && business) {
+      await setContactsBusiness(db, accountId, [{ contactId, name: business }], "form", "system");
+    }
 
     if (created.existing) await fillBlanks(db, accountId, contactId, byKind, custom, attribution);
     else await setAttribution(db, accountId, contactId, attribution, true);
@@ -240,7 +246,6 @@ async function fillBlanks(
     ["email", "email", byKind.get("core.email") ?? ""],
     // As typed: updateContact's own phoneFields judges it (R2-C1).
     ["phone", "phone", rawPhone],
-    ["companyName", "company_name", byKind.get("core.company_name") ?? ""],
   ];
   for (const [input, column, incoming] of pairs) {
     const held = (current as Record<string, unknown>)[column];
@@ -257,6 +262,14 @@ async function fillBlanks(
     await updateContact(db, accountId, contactId,
       { ...patch, ...(customChanged ? { custom: mergedCustom } : {}) }, "form", "system");
   }
+
+  // The "held" check still reads company_name: the database keeps it equal
+  // to the contact's business group (0069), so blank means "no business yet".
+  const business = byKind.get("core.company_name") ?? "";
+  if (business && !current.company_name) {
+    await setContactsBusiness(db, accountId, [{ contactId, name: business }], "form", "system");
+  }
+
   await setAttribution(db, accountId, contactId, attribution, false);
 }
 
