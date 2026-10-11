@@ -119,3 +119,86 @@ describe("applyImportBatch: a transient setContactsBusiness failure never costs 
     expect(r).toEqual({ created: 1, updated: 0, flagged: 0 });
   });
 });
+
+/**
+ * Task 3a review minor, closed here: `setContactsBusiness` ONLY throws on a
+ * transport failure (the block above) — a too-long name comes back as a
+ * per-row STATUS in its resolved array, not an exception, and
+ * `applyImportBatch` was discarding that whole array (`await
+ * setContactsBusiness(...)` with the result unused). A too-long business
+ * name on a CSV row therefore vanished with no log and no visible count,
+ * the same silent-loss shape Task 3b's forms fix (commit 33031002) closed
+ * for enrich.ts. Same fake-groupWriter posture as the suite above — no real
+ * or fake Postgres, `setContactsBusiness` itself unmocked from
+ * `../client-groups`, only its `.rpc()` call faked.
+ */
+describe("applyImportBatch: a too_long business-write status is counted and logged, never silently dropped", () => {
+  it("counts every too_long row in the batch result without touching created/updated (mutation: stop reading the per-row status -> FAILS)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rpc = vi.fn(async () => ({
+      data: [
+        { contact_id: "c1", status: "too_long", removed: null, added: null },
+        { contact_id: "c1", status: "too_long", removed: null, added: null },
+      ],
+      error: null,
+    }));
+    const groupWriter = { rpc } as unknown as SupabaseClient;
+
+    const r = await applyImportBatch(
+      {} as SupabaseClient, "a1",
+      [
+        { input: { email: "a@b.co" }, tags: [], company: "A".repeat(121) },
+        { input: { email: "b@b.co" }, tags: [], company: "B".repeat(130) },
+      ],
+      freshIndex(), "user_test", { createTags: false, groupWriter },
+    );
+
+    // created/updated/flagged unchanged by this task's own instruction —
+    // both rows still resolve to real contacts even though their business
+    // name is too long for a group.
+    expect(r).toEqual({ created: 2, updated: 0, flagged: 0, businessTooLong: 2 });
+    expect(err).toHaveBeenCalledTimes(2);
+    err.mockRestore();
+  });
+
+  it("logs a stable prefix naming the contact and account, never the over-length business name", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rpc = vi.fn(async () => ({
+      data: [{ contact_id: "c1", status: "too_long", removed: null, added: null }],
+      error: null,
+    }));
+    const groupWriter = { rpc } as unknown as SupabaseClient;
+    const overLong = "Z".repeat(121);
+
+    await applyImportBatch(
+      {} as SupabaseClient, "a1",
+      [{ input: { email: "a@b.co" }, tags: [], company: overLong }],
+      freshIndex(), "user_test", { createTags: false, groupWriter },
+    );
+
+    const [line] = err.mock.calls[0] as [string];
+    expect(line).toContain("applyImportBatch:");
+    expect(line).toContain("too_long");
+    expect(line).toContain("c1");
+    expect(line).toContain("a1");
+    expect(line).not.toContain(overLong);
+    err.mockRestore();
+  });
+
+  it("a batch with no too_long row carries no businessTooLong field at all", async () => {
+    const rpc = vi.fn(async () => ({
+      data: [{ contact_id: "c1", status: "ok", removed: null, added: "Acme" }],
+      error: null,
+    }));
+    const from = vi.fn(() => ({ insert: async () => ({ error: null }) }));
+    const groupWriter = { rpc, from } as unknown as SupabaseClient;
+
+    const r = await applyImportBatch(
+      {} as SupabaseClient, "a1",
+      [{ input: { email: "a@b.co" }, tags: [], company: "Acme" }],
+      freshIndex(), "user_test", { createTags: false, groupWriter },
+    );
+
+    expect("businessTooLong" in r).toBe(false);
+  });
+});

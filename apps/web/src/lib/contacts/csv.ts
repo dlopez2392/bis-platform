@@ -9,7 +9,7 @@ export type RowError = { line: number; reason: string };
 
 /** The ContactInput keys a CSV column can fill. `custom` is deliberately not
  *  reachable from a spreadsheet. */
-type InputKey = "firstName" | "lastName" | "email" | "phone" | "companyName" | "source";
+type InputKey = "firstName" | "lastName" | "email" | "phone" | "source";
 
 /**
  * Column key -> ContactInput key. Spread from the inline editor's own map so

@@ -82,6 +82,10 @@ const ALLOWED: Record<string, Reason> = {
   // The Groups card: every service write follows a request-client read of its contact, membership or group;
   // restore's events read vouches a narrow caller's own removal (0069's tables are server-written).
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/groups-actions.ts": "proven-target",
+  // importContactsBatchAction's groupWriter: serviceDb() hands applyImportBatch
+  // the service client, and its one business write runs only against contacts
+  // the SAME batch just wrote through the request client, never an arbitrary id.
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/import/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts": "agency-only",

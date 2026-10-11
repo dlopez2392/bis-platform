@@ -135,7 +135,7 @@ export type ImportRow = { input: ContactInput; tags: string[]; company?: string 
 export async function applyImportBatch(
   db: SupabaseClient, accountId: string, rows: ImportRow[], index: MatchIndex,
   actorId: string, opts: { createTags: boolean; groupWriter?: SupabaseClient },
-): Promise<{ created: number; updated: number; flagged: number; businessLinkFailed?: boolean }> {
+): Promise<{ created: number; updated: number; flagged: number; businessLinkFailed?: boolean; businessTooLong?: number }> {
   let created = 0;
   let updated = 0;
   // Pairs this RUN flagged, not the table's lifetime total — every other
@@ -220,15 +220,37 @@ export async function applyImportBatch(
   // updated contacts into a reported failure — the same mistake
   // import/actions.ts already avoids for its `emit` call, by never letting a
   // post-write side effect rewrite the outcome of the write it followed.
+  //
+  // Task 3a review minor, closed here: `setContactsBusiness` only THROWS on a
+  // transport failure (the try/catch below) — a too-long name comes back as a
+  // per-row STATUS in its resolved array instead, and that array was being
+  // discarded outright. Same posture as Task 3b's forms fix (commit
+  // 33031002): the status is read, logged (contact/account ids only — never
+  // the over-length name itself), and counted, without costing this batch's
+  // real created/updated/flagged counts — every one of those rows is still a
+  // real contact, just one whose business name could not become a group.
   let businessLinkFailed = false;
+  let businessTooLong = 0;
   if (businesses.length > 0) {
     try {
-      await setContactsBusiness(opts.groupWriter ?? db, accountId, businesses, actorId);
+      const results = await setContactsBusiness(opts.groupWriter ?? db, accountId, businesses, actorId);
+      for (const r of results) {
+        if (r.status === "too_long") {
+          businessTooLong++;
+          console.error(`applyImportBatch: business write too_long for contact ${r.contactId} in account ${accountId}`);
+        } else if (r.status === "not_found") {
+          console.error(`applyImportBatch: business write not_found for contact ${r.contactId} in account ${accountId}`);
+        }
+      }
     } catch (e) {
       businessLinkFailed = true;
       console.error(`applyImportBatch: setContactsBusiness failed for account ${accountId}: ${loggableMessage(e)}`);
     }
   }
 
-  return { created, updated, flagged, ...(businessLinkFailed ? { businessLinkFailed: true } : {}) };
+  return {
+    created, updated, flagged,
+    ...(businessLinkFailed ? { businessLinkFailed: true } : {}),
+    ...(businessTooLong > 0 ? { businessTooLong } : {}),
+  };
 }
