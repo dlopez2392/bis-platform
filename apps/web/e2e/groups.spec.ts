@@ -100,14 +100,22 @@ test.describe.serial("S-02: households and the business name", () => {
       expect(row.data).toMatchObject({ role: "Madre", is_primary: true, is_billing: true });
 
       await card.getByRole("button", { name: `${m["groups.remove"]}: ${HOUSEHOLD}` }).click();
+      // The removal has landed when the card is empty again: only then is Undo's restore a real one.
+      await expect(card.getByText(m["groups.empty"])).toBeVisible();
       const removedText = m["groups.removed"].replace("{name}", HOUSEHOLD);
-      await expect(page.getByText(removedText)).toBeVisible();
       // Scoped to THIS toast: the role and pays saves left Undo toasts of their own on screen.
-      await page.locator("[data-sonner-toast]").filter({ hasText: removedText })
-        .getByRole("button", { name: m["common.undo"] }).click();
+      const removedToast = page.locator("[data-sonner-toast]").filter({ hasText: removedText });
+      await expect(removedToast).toBeVisible();
+      // Hovered first, as preferences.spec.ts does: sonner pauses a hovered toast, so it cannot
+      // time out between finding the Undo button and clicking it.
+      await removedToast.hover();
+      await removedToast.getByRole("button", { name: m["common.undo"] }).click();
       await expect(card.getByText(HOUSEHOLD)).toBeVisible();
-      const back = await db.from("client_group_members").select("id, role, is_primary, is_billing").eq("contact_id", anaId).single();
-      expect(back.data).toEqual({ id: row.data!.id, role: "Madre", is_primary: true, is_billing: true });
+      // Polled: the card can show the household before a slow read of the restored row would.
+      await expect.poll(async () => {
+        const back = await db.from("client_group_members").select("id, role, is_primary, is_billing").eq("contact_id", anaId).maybeSingle();
+        return back.error ? `error: ${back.error.message}` : back.data;
+      }).toEqual({ id: row.data!.id, role: "Madre", is_primary: true, is_billing: true });
     });
 
     test("adds the second person through search", async ({ page }) => {
