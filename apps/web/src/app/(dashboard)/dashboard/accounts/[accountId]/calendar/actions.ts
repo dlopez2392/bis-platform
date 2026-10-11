@@ -10,7 +10,7 @@ import {
   type BookingStatus, type CalendarSettingsPatch,
 } from "@bis/db";
 import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
-import { callerCanSee } from "@/lib/auth/visible";
+import { callerCanSee, noticeBelongsToBooking } from "@/lib/auth/visible";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
@@ -144,30 +144,46 @@ export async function updateCalendarSettingsAction(
 }
 
 /**
+ * F-085 part 1, spec §7.3: "prove the target through the request client, then
+ * write through the service client". Every booking action below writes (or
+ * reads) with serviceDb(), which RLS does not bind, so each first proves the
+ * booking with `callerCanSee`, through the caller's OWN client: under 0068 a
+ * Technician cannot see another person's customer's booking, and the proof
+ * fails with no role branching here. A "no" and a proof that could not be
+ * made are the same generic refusal; `action` names the caller in the log.
+ * Answers null when the booking is proven.
+ */
+async function proveBooking(
+  action: string, accountId: string, bookingId: string,
+): Promise<{ ok: false; error: string } | null> {
+  try {
+    if (await callerCanSee("bookings", accountId, bookingId)) return null;
+  } catch (e) {
+    console.error(`${action}: booking ${bookingId} could not be proven (account ${accountId}): ${String(e)}`);
+  }
+  return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+}
+
+/**
  * Cancel / complete / no-show, both audiences.
  *
  * Deliberately serviceDb(), the one exception in this file: unlike the
  * settings columns above, `booking-grants.test.ts` grants `authenticated`
- * NO UPDATE at all on `bookings` — not one column, for either audience. A
- * client-role UPDATE on this table has no legitimate caller outside this
- * action (operators change status here; the public cancel-by-token flow
- * writes through serviceDb too), so `requireAccountAccess` above is the
- * ONLY thing standing behind this write — same shape as `setClientAccessAction`
- * in settings/actions.ts, and for the same reason: the column grant that
- * would make dbForRequest() safe here does not exist, on purpose.
- * `setBookingStatus` itself still scopes the update to `.eq("account_id",
- * accountId)`, so this can only ever touch the caller's own account's rows.
+ * NO UPDATE at all on `bookings` — not one column, for either audience — on
+ * purpose, so the column grant that would make dbForRequest() safe here does
+ * not exist. What stands behind this write instead is two checks:
+ * `requireAccountAccess` (the caller works in this account) and then
+ * `proveBooking` → `callerCanSee` (spec §7.3: the caller's own client, RLS and
+ * 0068 included, can see THIS booking). The second is the boundary a
+ * Technician meets. `setBookingStatus` itself still scopes the update to
+ * `.eq("account_id", accountId)`.
  */
 export async function setBookingStatusAction(
   accountId: string, bookingId: string, status: BookingStatus,
 ): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
-  try {
-    if (!(await callerCanSee("bookings", accountId, bookingId))) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
-  } catch (e) {
-    console.error(`setBookingStatusAction: booking ${bookingId} could not be proven (account ${accountId}): ${String(e)}`);
-    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
-  }
+  const refused = await proveBooking("setBookingStatusAction", accountId, bookingId);
+  if (refused) return refused;
 
   // D-036: the way back to "booked" is `undoCancelBookingAction` below and
   // only that, because only it carries the un-cancel guard (`onlyFrom`).
@@ -214,12 +230,9 @@ export async function cancelNoticeOptionAction(
   accountId: string, bookingId: string,
 ): Promise<CancelNoticeOptionResult> {
   await requireAccountAccess(accountId);
-  try {
-    if (!(await callerCanSee("bookings", accountId, bookingId))) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
-  } catch (e) {
-    console.error(`cancelNoticeOptionAction: booking ${bookingId} could not be proven (account ${accountId}): ${String(e)}`);
-    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
-  }
+  // The suppression facts are read with serviceDb(): prove the booking first.
+  const refused = await proveBooking("cancelNoticeOptionAction", accountId, bookingId);
+  if (refused) return refused;
   try {
     return { ok: true, notice: await cancelNoticeAvailability(await dbForRequest(), serviceDb(), accountId, bookingId) };
   } catch (e) {
@@ -244,19 +257,17 @@ export async function cancelNoticeOptionAction(
  * the cancel committed is not promised: the toast says the customer was not
  * told.
  *
- * serviceDb() for the writes, for the reason `setBookingStatusAction` gives
- * above; the contact is read as the signed-in user (RLS).
+ * serviceDb() for the writes, behind `proveBooking` → `callerCanSee` (spec
+ * §7.3: the booking proven through the caller's own client first, as
+ * `setBookingStatusAction` explains); the contact is read as the signed-in
+ * user (RLS).
  */
 export async function cancelBookingAction(
   accountId: string, bookingId: string, notice: CancelNoticeChoice,
 ): Promise<CancelBookingResult> {
   const { userId } = await requireAccountAccess(accountId);
-  try {
-    if (!(await callerCanSee("bookings", accountId, bookingId))) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
-  } catch (e) {
-    console.error(`cancelBookingAction: booking ${bookingId} could not be proven (account ${accountId}): ${String(e)}`);
-    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
-  }
+  const refused = await proveBooking("cancelBookingAction", accountId, bookingId);
+  if (refused) return refused;
 
   const message = String(notice?.message ?? "").replace(/\r\n/g, "\n").trim();
   if (message.length > NOTICE_MESSAGE_MAX) return { ok: false, error: m["calendar.cancelDialog.messageTooLong"] };
@@ -326,23 +337,35 @@ export async function cancelBookingAction(
  * `undoOperatorCancel` (packages/db) carries the other guards: an un-cancel
  * only, only of a cancel a PERSON made on the dashboard, and never of a
  * booking a reschedule has replaced; a time someone booked in between is
- * `SlotTakenError`. serviceDb() for the reason `setBookingStatusAction` gives
- * above.
+ * `SlotTakenError`.
+ *
+ * serviceDb() for the writes, behind `proveBooking` → `callerCanSee` (spec
+ * §7.3, as `setBookingStatusAction` explains). The notice id is the browser's
+ * word, and `discardQueuedNotice` / `noticeMessageStatus` act on it with the
+ * service client scoped only by account, so proving the booking does not prove
+ * the message: it is used only when `noticeBelongsToBooking` (the caller's own
+ * client) finds it on the proven booking's contact's thread. Otherwise, or
+ * when that cannot be told, it is treated as absent: the Undo still runs,
+ * nothing is discarded, and a superseded refusal says only "changed".
  */
 export async function undoCancelBookingAction(
   accountId: string, bookingId: string, version: string, noticeMessageId?: string,
 ): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
-  try {
-    if (!(await callerCanSee("bookings", accountId, bookingId))) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
-  } catch (e) {
-    console.error(`undoCancelBookingAction: booking ${bookingId} could not be proven (account ${accountId}): ${String(e)}`);
-    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
-  }
+  const refused = await proveBooking("undoCancelBookingAction", accountId, bookingId);
+  if (refused) return refused;
   if (typeof version !== "string" || version === "") {
     return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   }
-  const messageId = typeof noticeMessageId === "string" && noticeMessageId !== "" ? noticeMessageId : null;
+  let messageId = typeof noticeMessageId === "string" && noticeMessageId !== "" ? noticeMessageId : null;
+  if (messageId) {
+    try {
+      if (!(await noticeBelongsToBooking(accountId, bookingId, messageId))) messageId = null;
+    } catch (e) {
+      console.error(`undoCancelBookingAction: notice ${messageId} could not be bound to booking ${bookingId} (account ${accountId}), ignoring it: ${String(e)}`);
+      messageId = null;
+    }
+  }
 
   try {
     await undoOperatorCancel(serviceDb(), accountId, bookingId, userId, version);

@@ -20,8 +20,10 @@ vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
 // F-085 part 1 (spec §7.3): every booking write below first proves the
 // booking through the caller's own client. Default: visible, so the rest of
 // this file tests today's behaviour; the "caller cannot see" block flips it.
-const visible = vi.hoisted(() => ({ callerCanSee: vi.fn() }));
-vi.mock("@/lib/auth/visible", () => ({ callerCanSee: visible.callerCanSee }));
+const visible = vi.hoisted(() => ({ callerCanSee: vi.fn(), noticeBelongsToBooking: vi.fn() }));
+vi.mock("@/lib/auth/visible", () => ({
+  callerCanSee: visible.callerCanSee, noticeBelongsToBooking: visible.noticeBelongsToBooking,
+}));
 // F-048: the notice is scheduled with after(), and its origin read from the
 // request. The callback is captured and run by hand: cancel-notice.test.ts
 // covers what the notice itself does.
@@ -68,6 +70,7 @@ function baseFormData(followupBody: string): FormData {
 
 beforeEach(() => {
   visible.callerCanSee.mockReset().mockResolvedValue(true);
+  visible.noticeBelongsToBooking.mockReset().mockResolvedValue(true);
   dbMocks.updateCalendarSettings.mockReset();
   dbMocks.updateCalendarSettings.mockResolvedValue(undefined);
   owner.allowed = true;
@@ -587,15 +590,82 @@ describe("booking actions prove the booking through the caller's own client firs
   it.each(actions)("%s: a proof that cannot be made (read error) is a refusal, never a write (mutation: swallow the throw and carry on → FAILS)", async (name, run) => {
     visible.callerCanSee.mockRejectedValue(new Error("db down"));
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await run()).toEqual(REFUSED);
-    expectNothingTouched();
-    expect(err.mock.calls.some(([line]) => String(line).startsWith(`${name}: booking bk_1 could not be proven`))).toBe(true);
-    err.mockRestore();
+    try {
+      expect(await run()).toEqual(REFUSED);
+      expectNothingTouched();
+      expect(err.mock.calls.some(([line]) => String(line).startsWith(`${name}: booking bk_1 could not be proven`))).toBe(true);
+    } finally {
+      err.mockRestore();
+    }
   });
 
   it.each(actions)("%s: a booking the caller can see goes through as today, after the proof", async (_name, run) => {
     const r = await run();
     expect(r.ok).toBe(true);
     expect(visible.callerCanSee).toHaveBeenCalledWith("bookings", "acct_1", "bk_1");
+  });
+});
+
+/**
+ * Task 5a fix round 1 (F1): the Undo's `noticeMessageId` comes from the
+ * browser, and `discardQueuedNotice` / `noticeMessageStatus` act on it with
+ * serviceDb(), scoped only by account. Proving the BOOKING does not prove the
+ * MESSAGE: a Technician could Undo their own cancel with another person's
+ * queued email id and delete it. So the id is used only when the caller's own
+ * client sees it on the proven booking's contact's thread; otherwise it is
+ * treated as absent, and the Undo itself still runs.
+ */
+describe("undoCancelBookingAction — the notice id is bound to the proven booking (F-085, spec §7.3)", () => {
+  const V = "2026-10-09T18:00:00.123Z";
+
+  beforeEach(() => {
+    dbMocks.undoOperatorCancel.mockReset().mockResolvedValue(undefined);
+    dbMocks.discardQueuedNotice.mockReset().mockResolvedValue(true);
+    dbMocks.noticeMessageStatus.mockReset().mockResolvedValue("sent");
+  });
+
+  it("the binding is asked of the proven booking and the supplied id; a bound notice is discarded after a winning Undo", async () => {
+    expect(await undoCancelBookingAction("acct_1", "bk_1", V, "msg_1")).toEqual({ ok: true });
+    expect(visible.noticeBelongsToBooking).toHaveBeenCalledWith("acct_1", "bk_1", "msg_1");
+    expect(dbMocks.discardQueuedNotice).toHaveBeenCalledWith({}, "acct_1", "msg_1");
+  });
+
+  it("a message on another contact's thread: the Undo still runs, nothing is discarded (mutation: drop the binding check → FAILS)", async () => {
+    visible.noticeBelongsToBooking.mockResolvedValue(false);
+    expect(await undoCancelBookingAction("acct_1", "bk_1", V, "msg_other")).toEqual({ ok: true });
+    expect(dbMocks.undoOperatorCancel).toHaveBeenCalledWith({}, "acct_1", "bk_1", "user_1", V);
+    expect(dbMocks.discardQueuedNotice).not.toHaveBeenCalled();
+  });
+
+  it("a message on another contact's thread: a superseded Undo reads nothing and says only 'changed' (mutation: drop the binding check → FAILS)", async () => {
+    visible.noticeBelongsToBooking.mockResolvedValue(false);
+    dbMocks.undoOperatorCancel.mockRejectedValue(new BookingNotRestorableError("superseded"));
+    expect(await undoCancelBookingAction("acct_1", "bk_1", V, "msg_other"))
+      .toEqual({ ok: false, error: m["calendar.bookings.restoreChanged"] });
+    expect(dbMocks.noticeMessageStatus).not.toHaveBeenCalled();
+    expect(dbMocks.discardQueuedNotice).not.toHaveBeenCalled();
+  });
+
+  it("a binding that cannot be read: neither helper is called, the Undo still runs (mutation: treat a read error as bound → FAILS)", async () => {
+    visible.noticeBelongsToBooking.mockRejectedValue(new Error("db down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await undoCancelBookingAction("acct_1", "bk_1", V, "msg_1")).toEqual({ ok: true });
+      expect(dbMocks.undoOperatorCancel).toHaveBeenCalledTimes(1);
+      expect(dbMocks.discardQueuedNotice).not.toHaveBeenCalled();
+
+      dbMocks.undoOperatorCancel.mockRejectedValue(new BookingNotRestorableError("superseded"));
+      expect(await undoCancelBookingAction("acct_1", "bk_1", V, "msg_1"))
+        .toEqual({ ok: false, error: m["calendar.bookings.restoreChanged"] });
+      expect(dbMocks.noticeMessageStatus).not.toHaveBeenCalled();
+      expect(err.mock.calls.some(([line]) => String(line).startsWith("undoCancelBookingAction: notice msg_1 could not be bound"))).toBe(true);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("no notice id: no binding read at all", async () => {
+    expect(await undoCancelBookingAction("acct_1", "bk_1", V)).toEqual({ ok: true });
+    expect(visible.noticeBelongsToBooking).not.toHaveBeenCalled();
   });
 });
