@@ -30,6 +30,12 @@ import { relationshipErrorFor, type RelationshipError } from "@/lib/contacts/rel
  * every row's ids lowercase, so a plain string comparison would miss "the same person".
  */
 export type RelationshipResult = { ok: true; view: RelationshipView } | { ok: false; error: RelationshipError };
+/**
+ * A "New person" add can fail AFTER the person was created (refused, a duplicate pair, a lost
+ * connection): `contactId` names them, so the dialog retries as `{ kind: "existing" }` instead of
+ * creating them a second time (Task 4 review, finding 3).
+ */
+export type AddRelationshipResult = { ok: true; view: RelationshipView } | { ok: false; error: RelationshipError; contactId?: string };
 type Refusal = { ok: false; error: RelationshipError };
 
 const refused: Refusal = { ok: false, error: "relationships.error.refused" };
@@ -43,6 +49,14 @@ function fail(where: string, accountId: string, e: unknown): Refusal {
 
 const isOn = (row: RelationshipRow, subjectId: string) =>
   row.contact_id.toLowerCase() === subjectId || row.related_contact_id.toLowerCase() === subjectId;
+
+/**
+ * An Undo payload that would clear the flag 0070's CHECKs pin to the label (contact_relationships_
+ * emergency, _pickup): the label names the column, whichever record the Undo was offered on.
+ */
+const clearsLockedFlag = (row: RelationshipRow, cols: RelationshipSidesPatch) =>
+  (row.label_key === "emergency_contact" && cols.contact_is_emergency === false)
+  || (row.label_key === "authorized_pickup" && cols.contact_can_pick_up === false);
 
 /** Both people readable on the caller's own client: a narrow caller's precondition for any write. */
 async function bothVisible(db: SupabaseClient, accountId: string, row: RelationshipRow): Promise<boolean> {
@@ -60,13 +74,16 @@ async function viewOf(db: SupabaseClient, accountId: string, row: RelationshipRo
   return toRelationshipView(row, subjectId, people);
 }
 
-export async function addRelationshipAction(accountId: string, raw: unknown): Promise<RelationshipResult> {
+export async function addRelationshipAction(accountId: string, raw: unknown): Promise<AddRelationshipResult> {
   const access = await requireAccountAccess(accountId);
   const parsed = parseAddInput(raw);
   if (!parsed.ok) return { ok: false, error: parsed.error === "self" ? "relationships.error.self" : "relationships.error.invalid" };
   const input = parsed.input;
   const subjectId = input.subjectId.toLowerCase();
   const db = await dbForRequest();
+  // Set once "New person" has made (or matched) someone else: every failure after that names them.
+  let created: string | null = null;
+  const withCreated = (r: Refusal): AddRelationshipResult => (created ? { ...r, contactId: created } : r);
   try {
     if (!(await getContact(db, accountId, subjectId))) return refused;
     let otherId: string;
@@ -82,18 +99,20 @@ export async function addRelationshipAction(accountId: string, raw: unknown): Pr
       });
       otherId = made.id.toLowerCase();
       revalidatePath(`/dashboard/accounts/${accountId}/contacts`);
+      // A match on the record's own customer created nobody: nothing to retry with.
+      if (otherId !== subjectId) created = otherId;
     }
     if (otherId === subjectId) return { ok: false, error: "relationships.error.self" };
     // Both people readable on the caller's own client: for a Technician, the other person is theirs too.
-    if (!(await getContact(db, accountId, otherId))) return refused;
+    if (!(await getContact(db, accountId, otherId))) return withCreated(refused);
     const row = await addRelationship(db, accountId, newRelationshipFor({
       subjectId, otherId, labelKey: input.labelKey, otherSide: input.side,
       customLabel: input.customLabel, otherForm: input.otherForm, subjectForm: input.subjectForm,
     }), access.userId);
     const view = await viewOf(db, accountId, row, subjectId);
-    return view ? { ok: true, view } : { ok: false, error: "relationships.error.failed" };
+    return view ? { ok: true, view } : withCreated({ ok: false, error: "relationships.error.failed" });
   } catch (e) {
-    return fail("addRelationshipAction", accountId, e);
+    return withCreated(fail("addRelationshipAction", accountId, e));
   }
 }
 
@@ -110,6 +129,9 @@ export async function setRelationshipAction(
     if (!row) return { ok: false, error: "relationships.error.gone" };
     const columns = columnsForViewPatch(row, subject, patch);
     if (!columns) return invalid;
+    // 0070's emergency/pickup CHECKs: the flag the label already is never clears (review finding 1).
+    const locked = toRelationshipView(row, subject, [])?.lockedFlag;
+    if (locked && patch[locked] === false) return invalid;
     if (!seesWholeAccount(access) && !(await bothVisible(db, accountId, row))) return refused;
     const result = await setRelationshipSides(db, accountId, relationshipId, columns, access.userId);
     if (result === "not_found") return { ok: false, error: "relationships.error.gone" };
@@ -134,6 +156,7 @@ export async function undoSetRelationshipAction(
     const row = await getRelationship(db, accountId, relationshipId);
     if (!row) return { ok: false, error: "relationships.error.gone" };
     if (!isOn(row, subject)) return invalid;
+    if (clearsLockedFlag(row, previous)) return invalid;
     if (!seesWholeAccount(access) && !(await bothVisible(db, accountId, row))) return refused;
     const result = await setRelationshipSides(db, accountId, relationshipId, previous, access.userId);
     if (result === "not_found") return { ok: false, error: "relationships.error.gone" };

@@ -107,6 +107,36 @@ describe("addRelationshipAction", () => {
     dbMocks.addRelationship.mockRejectedValueOnce({ code: "42501" });
     expect(await addRelationshipAction(A, ADD)).toEqual({ ok: false, error: "relationships.error.refused" });
   });
+  it("an uppercase subjectId still finds the record and answers its view (Task 4 review, finding 2; mutation: drop the subjectId .toLowerCase() -> FAILS)", async () => {
+    dbMocks.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === LETTERED ? contact(LETTERED, "Sofía") : id === O ? contact(O, "Ana") : null));
+    dbMocks.addRelationship.mockResolvedValue({ ...ROW, related_contact_id: LETTERED });
+    const r = await addRelationshipAction(A, { ...ADD, subjectId: LETTERED.toUpperCase() });
+    expect(r).toEqual({ ok: true, view: expect.objectContaining({ id: R, namedSide: "a", person: { id: O, firstName: "Ana", lastName: "Ramírez" } }) });
+  });
+  it("an uppercase other.contactId is written lowercase, as PostgREST will echo it (Task 4 review, finding 2; mutation: drop the other id's .toLowerCase() -> FAILS)", async () => {
+    dbMocks.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === S ? contact(S, "Sofía") : id === LETTERED ? contact(LETTERED, "Ana") : null));
+    dbMocks.addRelationship.mockResolvedValue({ ...ROW, contact_id: LETTERED });
+    const r = await addRelationshipAction(A, { ...ADD, other: { kind: "existing", contactId: LETTERED.toUpperCase() } });
+    expect(dbMocks.addRelationship).toHaveBeenCalledWith(REQUEST, A, expect.objectContaining({ contactId: LETTERED, relatedContactId: S }), "user_1");
+    expect(r.ok).toBe(true);
+  });
+  it("an existing other person who is the record's own customer in another case is oneself (mutation: drop the other id's .toLowerCase() -> FAILS)", async () => {
+    dbMocks.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === LETTERED ? contact(LETTERED, "Sofía") : null));
+    expect(await addRelationshipAction(A, { ...ADD, subjectId: LETTERED, other: { kind: "existing", contactId: LETTERED.toUpperCase() } }))
+      .toEqual({ ok: false, error: "relationships.error.self" });
+    expect(dbMocks.addRelationship).not.toHaveBeenCalled();
+  });
+  it("a new person who was created before the relationship failed comes back with the error, so a retry relates them instead of creating them twice (Task 4 review, finding 3; mutation: return the bare refusal -> FAILS)", async () => {
+    addContactByHand.mockResolvedValue({ id: O, existing: false });
+    dbMocks.addRelationship.mockRejectedValueOnce({ code: "23505" });
+    expect(await addRelationshipAction(A, { ...ADD, other: { kind: "new", firstName: "Ana", lastName: "Ramírez", phone: "" } }))
+      .toEqual({ ok: false, error: "relationships.error.duplicate", contactId: O });
+  });
+  it("a new person who turns out to be the record's own customer comes back as oneself, with no id to retry with", async () => {
+    addContactByHand.mockResolvedValue({ id: S, existing: true });
+    expect(await addRelationshipAction(A, { ...ADD, other: { kind: "new", firstName: "Sofía", lastName: "", phone: "" } }))
+      .toEqual({ ok: false, error: "relationships.error.self" });
+  });
   it("never pre-checks a pair: the reverse of a support label goes to the database, which decides (R7)", async () => {
     const reverse = { ...ADD, labelKey: "emergency_contact", side: "a", otherForm: null };
     await addRelationshipAction(A, reverse);
@@ -144,6 +174,54 @@ describe("setRelationshipAction and its Undo", () => {
     dbMocks.getContact.mockImplementation(onlySubjectVisible);
     expect(await undoSetRelationshipAction(A, S, R, { contact_can_pick_up: false })).toEqual({ ok: false, error: "relationships.error.refused" });
     expect(dbMocks.setRelationshipSides).not.toHaveBeenCalled();
+  });
+  it("an uppercase subject still writes the named person's side (Task 4 review, finding 2; mutation: drop the subject's .toLowerCase() -> FAILS)", async () => {
+    dbMocks.getRelationship.mockResolvedValue({ ...ROW, related_contact_id: LETTERED });
+    dbMocks.setRelationshipSides.mockResolvedValue({ previous: { contact_can_pick_up: false }, row: { ...ROW, related_contact_id: LETTERED, contact_can_pick_up: true } });
+    const r = await setRelationshipAction(A, LETTERED.toUpperCase(), R, { canPickUp: true });
+    expect(dbMocks.setRelationshipSides).toHaveBeenCalledWith(REQUEST, A, R, { contact_can_pick_up: true }, "user_1");
+    expect(r.ok).toBe(true);
+  });
+  it("the Undo of an edit refuses a record that is not on the row, without a write (Task 4 review, finding 2; mutation: drop the isOn check -> FAILS)", async () => {
+    const elsewhere = "55555555-5555-4555-8555-555555555555";
+    expect(await undoSetRelationshipAction(A, elsewhere, R, { contact_can_pick_up: false })).toEqual({ ok: false, error: "relationships.error.invalid" });
+    expect(dbMocks.setRelationshipSides).not.toHaveBeenCalled();
+  });
+  describe("a flag the label already is cannot be cleared (Task 4 review, finding 1: 0070's emergency and pickup CHECKs)", () => {
+    const EMERGENCY = { ...ROW, label_key: "emergency_contact", contact_form: null, contact_is_emergency: true };
+    const PICKUP = { ...ROW, label_key: "authorized_pickup", contact_form: null, contact_can_pick_up: true };
+    it("an edit that clears the emergency flag on an emergency-contact row is refused before any write (mutation: drop the lockedFlag check -> FAILS)", async () => {
+      dbMocks.getRelationship.mockResolvedValue(EMERGENCY);
+      expect(await setRelationshipAction(A, S, R, { isEmergency: false })).toEqual({ ok: false, error: "relationships.error.invalid" });
+      expect(dbMocks.setRelationshipSides).not.toHaveBeenCalled();
+    });
+    it("an edit that clears the pickup flag on an authorized-pickup row is refused before any write", async () => {
+      dbMocks.getRelationship.mockResolvedValue(PICKUP);
+      expect(await setRelationshipAction(A, S, R, { canPickUp: false })).toEqual({ ok: false, error: "relationships.error.invalid" });
+      expect(dbMocks.setRelationshipSides).not.toHaveBeenCalled();
+    });
+    it("control: the same flag on the OTHER side of that row is free to change, so the check is the locked side only (mutation: refuse every isEmergency:false -> FAILS)", async () => {
+      dbMocks.getRelationship.mockResolvedValue(EMERGENCY);
+      dbMocks.setRelationshipSides.mockResolvedValue({ previous: { related_is_emergency: true }, row: EMERGENCY });
+      // Seen from O's own record, the named person is S (side b): related_is_emergency, no CHECK.
+      expect((await setRelationshipAction(A, O, R, { isEmergency: false })).ok).toBe(true);
+      expect(dbMocks.setRelationshipSides).toHaveBeenCalledWith(REQUEST, A, R, { related_is_emergency: false }, "user_1");
+    });
+    it("an Undo payload that clears the emergency flag on an emergency-contact row is refused before any write (mutation: drop the Undo's label/column check -> FAILS)", async () => {
+      dbMocks.getRelationship.mockResolvedValue(EMERGENCY);
+      expect(await undoSetRelationshipAction(A, S, R, { contact_is_emergency: false })).toEqual({ ok: false, error: "relationships.error.invalid" });
+      expect(dbMocks.setRelationshipSides).not.toHaveBeenCalled();
+    });
+    it("an Undo payload that clears the pickup flag on an authorized-pickup row is refused before any write", async () => {
+      dbMocks.getRelationship.mockResolvedValue(PICKUP);
+      expect(await undoSetRelationshipAction(A, S, R, { contact_can_pick_up: false })).toEqual({ ok: false, error: "relationships.error.invalid" });
+      expect(dbMocks.setRelationshipSides).not.toHaveBeenCalled();
+    });
+    it("control: an Undo of the unlocked side's flag on that row still runs", async () => {
+      dbMocks.getRelationship.mockResolvedValue(EMERGENCY);
+      dbMocks.setRelationshipSides.mockResolvedValue({ previous: { related_is_emergency: true }, row: EMERGENCY });
+      expect((await undoSetRelationshipAction(A, S, R, { related_is_emergency: false })).ok).toBe(true);
+    });
   });
   it("the Undo of an edit restores the named side and answers the view", async () => {
     dbMocks.setRelationshipSides.mockResolvedValue({ previous: { contact_can_pick_up: true }, row: ROW });

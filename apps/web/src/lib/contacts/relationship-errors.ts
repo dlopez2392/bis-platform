@@ -1,8 +1,11 @@
 /**
  * Database refusals become copy keys, by SQLSTATE, never by message wording (relationships spec §6).
- * 23514 is "Pick someone else." as the spec names it: every other CHECK on 0070's table (the word
- * forms, the flags, the custom label) is re-validated by relationship-input.ts before a write, so the
- * CHECK a write can still reach is contact_id <> related_contact_id.
+ * 23514 is "Pick someone else." as the spec names it: every other CHECK on 0070's table is re-checked
+ * before a write, so the CHECK a write can still reach is contact_id <> related_contact_id. The word
+ * forms and the custom label by relationship-input.ts; the two locked flags (emergency on an
+ * emergency_contact row, pickup on an authorized_pickup row) by newRelationshipFor on an add,
+ * parseRelationshipRow on a restore, and relationship-actions.ts on an edit or its Undo, which
+ * refuse a payload that would clear one.
  */
 export type RelationshipError =
   | "relationships.error.duplicate" | "relationships.error.refused" | "relationships.error.self"
