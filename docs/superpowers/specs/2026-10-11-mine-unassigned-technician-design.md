@@ -27,7 +27,7 @@ Choices this spec makes; **(owner, 2026-10-11)** marks the ones danlo confirmed 
 | A1 | **(owner, 2026-10-11)** The policies ask "does this caller see every customer?" (agency, Owner, Staff), not "is this caller a Technician?". A client login with NO membership row then sees no customers, not all of them (§5.1, §13.1) |
 | A2 | **(owner, 2026-10-11)** "Assign to…" in the contact list's bulk-action bar, Owner and Staff only |
 | A3 | **(owner, 2026-10-11)** When a member leaves, their customers and open tasks go back to Unassigned. Undo puts back the ones nobody has picked up since (§8, §13.2) |
-| A4 | When a customer changes hands, their open tasks that were the old assignee's go with them, or they would sit with someone who can no longer see the customer |
+| A4 | When a customer changes hands, their open tasks that were the old assignee's go with them, or they would sit with someone who can no longer see the customer. **Corrected after the final review (2026-10-11):** the same holds when a PERSON changes role. Someone made a Technician loses sight of every task on a customer that is not theirs, so the Team's role change releases those open tasks to Unassigned once the BIS role has landed (`releaseTasksOffCustomers`, service client; a task with no customer stays theirs). An Undo of that role change does not give them back |
 | A5 | Only company members can be assignees. The agency has no membership (`users_member_read`, 0066:108), so it is not offered as one |
 
 ## 3. Non-goals
@@ -125,8 +125,13 @@ account row, `forms`, `calendars`, pipelines and stages, `tags`, `custom_fields`
 `voice_profiles`, `phone_numbers`, `automations`, `automation_settings`, `sites` and its visitor
 totals (the one "report" left readable), and coworkers' names and emails (`memberships`, `users`).
 
-**Rollback.** Revert the app first. Then drop the policies, trigger, helpers and indexes, map
-`technician` to `staff`, and restore the two-value check and 0066's `set_account_member_role`.
+**Rollback.** Revert the app first. Then drop the policies, trigger, helpers and indexes, and
+restore the two-value check and 0066's `set_account_member_role`. **Corrected after the final
+review (2026-10-11):** do NOT "map `technician` to `staff`". Staff sees the whole account, so that
+mapping would hand every Technician every customer the moment the policies go. Before the check is
+narrowed, either remove the Technician memberships (in Clerk and in BIS, so the webhook or the
+per-request fallback cannot recreate them) or get an explicit owner decision, per account, to make
+each one Staff.
 
 ## 6. Keeping in step with Clerk
 
@@ -136,6 +141,19 @@ totals (the one "report" left readable), and coworkers' names and emails (`membe
 - A Technician is a Clerk `org:member`. `clerkRoleFor` (`lib/team/team-view.ts:49`) already maps
   anything but Owner there, and the webhook's re-assert (`api/webhooks/clerk/route.ts`) follows it.
   A test pins both directions. Invitations carry `bis_role: "technician"`.
+- **Corrected after the final review (2026-10-11): stale metadata does not "only demote" for a
+  Technician.** Technician and Staff are both `org:member`, so only `bis_role` says Technician; a
+  membership with no `bis_role`, or a stale one of staff or owner, reads as Staff. Two places act on
+  that. `setOrganizationRole` treats a failed `bis_role` write as a FAILURE when the role is
+  Technician (for Owner and Staff it is still logged and left, because there the Clerk role alone is
+  never more privileged than BIS). The Team's Undo of a removal re-creates the Clerk membership with
+  `createOrganizationMembership`, which takes no metadata (@clerk/backend 3.13.1,
+  `OrganizationApi.d.ts:140-147`), and that membership is newer than the removal record, so
+  reconcile would settle it as Staff whenever the BIS row is missing. `restoreToOrganization` now
+  writes `bis_role` straight after the membership exists, BEFORE the BIS write; a Technician whose
+  `bis_role` cannot be written is taken out of Clerk again and the Undo fails. If the BIS write then
+  fails, the Undo takes the Clerk membership (and any half-written BIS row) away again rather than
+  leave a bare `org:member` for the webhook to settle while the card says the Undo failed.
 
 ## 7. Enforcement in the app
 
@@ -147,7 +165,12 @@ sends a Technician home. It guards the Dashboard, Activity, Pipeline, Website, F
 is the first line of every action they post. Agency-only and Owner-only routes already refuse. **Redirect
 loops:** `auth.ts:53`, `:71`, `:96` and the landing `(dashboard)/page.tsx:22` send a client to
 `/dashboard`; they go through a new `accountHome(accountId, role)` instead (`…/tasks` for a
-Technician).
+Technician). **Amended after the final review (2026-10-11), accepted as shipped:** the guards that
+refuse (`requireAccountOwner`, `requireAgencyOnlyAccountAccess`) use `accountHome`, but the
+landing `(dashboard)/page.tsx:22` and `requireAccountAccess`'s wrong-account redirect
+(`auth.ts:56`) still send a client to the account's `/dashboard`, whose `requireNotTechnician`
+sends a Technician on to To do. A Technician therefore lands in two hops, not one; no loop, and
+`auth.setup.ts` waits for the second.
 
 ### 7.2 Service-key readers on the in-account surface
 
@@ -237,7 +260,11 @@ retries it; until then the person who left reads nothing (A1).
   is logged with `loggableError`.
 
 Copy goes in `messages.ts` with `.es` twins, read through `t()` (`lib/i18n/t.ts:32`), so the
-ratchet stays green. Key pairs: "All · Mine · Unassigned" / "Todo · A mi cargo · Sin asignar";
+ratchet stays green. **Corrected after the final review (2026-10-11):** the Contacts, To do and
+Conversations screens read their copy as `m["…"]`, the English key, not through `t()`, so the
+new `.es` twins are written but not shown there: those screens are English-only for client logins,
+Technicians included. Spanish on them is a follow-up (the screens move to `t()` with the
+account's or the person's locale), not part of this release. Key pairs: "All · Mine · Unassigned" / "Todo · A mi cargo · Sin asignar";
 "Assigned to {name}." / "Asignado a {name}."; "Technician" / "Técnico" (like "Dueño" and
 "Empleado", `messages.ts:3185-3187`); the help / "Solo ve los clientes que usted le asigne.";
 "Assign the customer to them first." / "Primero asígnele el cliente."; a Technician's empty
@@ -274,9 +301,15 @@ the served-HTML marker is the filter row on Contacts.
 Hazards. **Migration before app:** no Technician exists and Owners and Staff pass
 `sees_all_customers`, so reads are unchanged, except (A1) a client login with no membership row,
 which sees no customers until its next page load creates the row. Check every live client login
-has a membership first (0066 rollout step 4). **App before migration:** inviting a Technician fails
-at the role check (`22023`) with nothing written; Mine works (`assigned_to` exists since 0003).
-Neither order exposes data.
+has a membership first (0066 rollout step 4). **App before migration is NOT data-safe (corrected
+after the final review, 2026-10-11; the earlier "neither order exposes data" was wrong).** The new
+app lets an Owner invite a Technician, and an invitation is a Clerk write with nothing written to
+the database. When it is accepted, the webhook and the per-request fallback both try
+`addAccountMember(role technician)`, which the pre-0068 `memberships_role_check` refuses
+(`23514`). That leaves a Clerk member with no BIS row, and before 0068 there is no Technician scope
+at all, so that login reads the whole account (the final review measured it on the local replica: 2 rows before 0068,
+0 after). Therefore the order is fixed: 0068 on the CI project, then on PRODUCTION, then parity, all
+BEFORE the merge, with auto-merge off on this PR until production and parity are confirmed.
 
 ## 12. Effort and open risks
 

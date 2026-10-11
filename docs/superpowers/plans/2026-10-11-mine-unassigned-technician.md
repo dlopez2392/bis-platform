@@ -1495,6 +1495,17 @@ export function withWho(params: Record<string, string>, who: Who): Record<string
 
 - [ ] **Step 4: Implement the actions.**
 
+> **CORRECTED after the final review (2026-10-11): this step's samples are stale; the source is right.**
+> (1) `readPersonId` takes THREE arguments, `readPersonId(db, accountId, clerkUserId)` (Task 2 fix
+> round 1, C1: a person is a member of THIS account, not merely a users row), so every
+> `readPersonId(db, userId)` below reads `readPersonId(db, accountId, userId)`. (2) `isRefusal` is
+> read off the error's `code` only (`lib/assign/action-guards.ts`: `code === "42501"`, which
+> @bis/db's `AssignmentDbError` carries), never by matching the message's wording; the regex below
+> is what fix round 1 (m1) removed. `MAX_ASSIGN`, `isUuid` and `isRefusal` live in
+> `action-guards.ts`, not in the "use server" file. (3) `setTaskAssigneeAction` takes an optional
+> fourth `expected` holder, which the task Undo passes (final review M7), and maps
+> `setTaskAssignee`'s new `"changed"` to `assign.changed`.
+
 ```ts
 // contacts/actions.ts
 const MAX_ASSIGN = 500;
@@ -1552,7 +1563,7 @@ export async function undoAssignContactsAction(accountId: string, previous: Prev
 
 `addTaskAction` and the `task` branch of `acceptProposal`: `assignedTo: await taskAssigneeFor(db, accountId, contactId ?? null, await readPersonId(db, userId))`.
 
-- [ ] **Step 5: Wire the three pages.** Each reads `who` from `searchParams`, resolves `const personId = role === "technician" ? null : await readPersonId(db, userId)`, and passes `assignee: role === "technician" ? undefined : assigneeFilterFor(parseWho(who), personId)` to its list (and, for contacts, to `countContacts` too). `buildNewerHref`, `buildOlderHref` and `sortHref` gain a trailing `who: Who = "all"` and spread `withWho(...)` into their `URLSearchParams`; the conversations Older link does the same. `buildExportHref` is unchanged (export is Owner-only and exports the search, not the filter). Each page loads `members = role === "technician" ? [] : (await listAccountTeam(db, accountId)).map((t) => ({ userId: t.userId, label: t.name ?? t.email, role: t.role }))` and computes `canAssign = role !== "technician"` and `showMine = personId !== null` for Task 7.
+- [ ] **Step 5: Wire the three pages.** (CORRECTED after the final review, 2026-10-11: `readPersonId(db, accountId, userId)`, three arguments, and the pages read all of this through `loadAssignView` (`lib/assign/view.ts`); a Technician's own-person read there, for the read-only "You", is soft: logged and null on failure, final review N2.) Each reads `who` from `searchParams`, resolves `const personId = role === "technician" ? null : await readPersonId(db, userId)`, and passes `assignee: role === "technician" ? undefined : assigneeFilterFor(parseWho(who), personId)` to its list (and, for contacts, to `countContacts` too). `buildNewerHref`, `buildOlderHref` and `sortHref` gain a trailing `who: Who = "all"` and spread `withWho(...)` into their `URLSearchParams`; the conversations Older link does the same. `buildExportHref` is unchanged (export is Owner-only and exports the search, not the filter). Each page loads `members = role === "technician" ? [] : (await listAccountTeam(db, accountId)).map((t) => ({ userId: t.userId, label: t.name ?? t.email, role: t.role }))` and computes `canAssign = role !== "technician"` and `showMine = personId !== null` for Task 7.
 
 - [ ] **Step 6: Run green** with Step 2's command; update `vi.mock("@bis/db")` factories in every test of `contacts/actions.ts`, `contacts/[contactId]/actions.ts`, `tasks/actions.ts`, `calls/[callId]/actions.ts` and the three pages for the new imports (`readPersonId`, `assignContacts`, `setTaskAssignee`, `taskAssigneeFor`, `flagMatchesOf`, `listAccountTeam`): `grep -rln 'vi.mock("@bis/db"' apps/web/src | xargs grep -lnE "contacts/actions|tasks/actions|calls/\[callId\]/actions|contacts/page|tasks/page|conversations/page"`. Then run `in-account-service-reads.test.ts` again. Paste the summaries.
 
@@ -1759,6 +1770,7 @@ then `signInWithTicket`, `setActiveOrganization`, `page.goto("/")`, and `await p
 - [ ] **Merge prep.** Fetch, merge `main` into the branch, re-run `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e` one at a time on the combined tree. Confirm `0068` is still the next free number; if a migration landed with `main`, renumber before anything is applied, and check whether it is already applied before touching any database.
 - [ ] **1. CI project.** Dispatch `ci-project-setup.yml` with `0068_mine_unassigned_technician.sql`. Read its run for success. The PR's `e2e` job fails until this is done (`.github/scripts/ci-migrations-applied.sh`).
 - [ ] **2. Production pre-check** (read-only, MCP `execute_sql`): every account with client access on has at least one membership per signed-in client login; at minimum `select a.name, count(m.*) from accounts a left join memberships m on m.account_id = a.id and m.scope = 'account' where a.client_access_enabled group by 1 order by 1`. An account with client access on and zero memberships means its logins see NO customers after 0068 until their next page load (A1): note them, and tell danlo before applying.
+- [ ] **Order is not optional (corrected after the final review, 2026-10-11).** App before migration is NOT data-safe (spec §11): an invited Technician who accepts before 0068 becomes a Clerk member with no BIS row and reads the whole account. Keep auto-merge OFF on this PR until steps 3 and 4 below are confirmed.
 - [ ] **3. Production.** Warn danlo in chat first (memory "Supabase MCP prompts": the Accept/Decline shows only in the CLI terminal). Apply 0068 via MCP `apply_migration`, exactly once; never re-apply.
 - [ ] **4. Parity.** Run `docs/runbooks/ci-supabase-project.md`'s parity digest between bis-ci and production; they must match. Record both digests in the ledger.
 - [ ] **5. Merge and deploy.** Read the check runs for the head SHA via `gh api repos/{owner}/{repo}/commits/{sha}/check-runs`; merge by REST PUT with `sha` pinned; read the PR state before any retry. Verify the deploy: READY with the merge SHA in its meta, aliased to `app.bis-rgv.com`; `/` 200, `/sign-in` 200, `/api/cron/reminders` 401, `/b/bogus` 404; and the served-HTML marker: as a client Owner, the Contacts page HTML contains `aria-label="Show"` on the filter `nav` and a link with `?who=unassigned`.
