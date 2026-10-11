@@ -177,9 +177,10 @@ export async function removeRelationship(
  * The Undo of a remove: the same row, the same id (rule 6). Builds its insert from NAMED columns,
  * never `{...row}`: `row` is whatever the caller's undo toast held onto, and a wider or
  * differently-shaped object (an extra field tacked on, a stale type) must never be free to reach
- * PostgREST as literal insert columns. `created_at` is carried over on purpose — restoring is an
- * undo, not a new relationship, so the row's history still starts when it was first added;
- * `updated_at` is refreshed to now, because the restore itself is an action that happened now.
+ * PostgREST as literal insert columns. The id IS carried over: Undo restores the same row (rule 6).
+ * `created_at` is NOT (final review item 9): the snapshot came back from a browser, so a timestamp
+ * in it is the browser's to forge, and it would decide where the row sorts (the list orders by
+ * created_at); the column default stamps it here instead, and `updated_at` is now as well.
  */
 export async function restoreRelationship(
   db: SupabaseClient, accountId: string, row: RelationshipRow, actorId: string, actorType: ActorType = "user",
@@ -199,7 +200,6 @@ export async function restoreRelationship(
     contact_is_emergency: row.contact_is_emergency,
     related_can_pick_up: row.related_can_pick_up,
     related_is_emergency: row.related_is_emergency,
-    created_at: row.created_at,
     updated_at: new Date().toISOString(),
   }).select(RELATIONSHIP_COLUMNS).single();
   if (error) throw dbError("restoreRelationship failed", error);

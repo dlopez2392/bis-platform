@@ -139,7 +139,9 @@ describe("relationships (spec §6)", () => {
       });
     }));
 
-  it("remove's Undo snapshot comes from the DELETE's own RETURNING, not the earlier existence read (mutation: narrow the delete's select to id -> FAILS)", () =>
+  // Retitled by the final review (item 8): it cannot tell RETURNING from the existence read (both
+  // see contact_can_pick_up: true), so it claims only what it proves, a snapshot with every column.
+  it("remove's Undo snapshot carries every column of the deleted row, the flag set just before included (mutation: narrow the delete's select to id -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const a = await person(db, accountId, "A");
       const b = await person(db, accountId, "B");
@@ -154,7 +156,7 @@ describe("relationships (spec §6)", () => {
       expect(removed).toMatchObject({ id: row.id, label_key: "caregiver", contact_can_pick_up: true });
     }));
 
-  it("restore builds its insert from NAMED columns: an extra field is ignored, created_at carries over, updated_at is refreshed (mutation: spread {...row} again -> FAILS)", () =>
+  it("restore builds its insert from NAMED columns: an extra field is ignored, the id carries over, updated_at is refreshed (mutation: spread {...row} again -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const a = await person(db, accountId, "A");
       const b = await person(db, accountId, "B");
@@ -164,9 +166,21 @@ describe("relationships (spec §6)", () => {
       const withExtra = { ...removed, notAColumn: "should never reach postgrest" } as unknown as typeof removed;
       const back = await restoreRelationship(db, accountId, withExtra, "user_test");
       expect(back.id).toBe(row.id);
-      expect(back.created_at).toBe(row.created_at);
       expect(back.updated_at).not.toBe(row.updated_at);
       expect((back as unknown as Record<string, unknown>).notAColumn).toBeUndefined();
+    }));
+
+  it("restore stamps created_at on the server, never the snapshot's: a forged timestamp from the browser is ignored (final review item 9; mutation: insert created_at: row.created_at again -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "A");
+      const b = await person(db, accountId, "B");
+      const row = await addRelationship(db, accountId, base(a, b, "landlord"), "user_test");
+      const removed = await removeRelationship(db, accountId, row.id, "user_test");
+      if (typeof removed === "string") throw new Error(`unexpected ${removed}`);
+      const back = await restoreRelationship(db, accountId, { ...removed, created_at: "2001-01-01T00:00:00+00:00" }, "user_test");
+      expect(back.id).toBe(row.id);
+      // The column default (now()) stamped it: no earlier than the row's first insert, nowhere near 2001.
+      expect(Date.parse(back.created_at)).toBeGreaterThanOrEqual(Date.parse(row.created_at));
     }));
 
   it("a non-user actor on a user client is refused before any write — the insert is never attempted (mutation: drop assertActorAllowed in addRelationship -> FAILS)", () =>
@@ -188,6 +202,30 @@ describe("relationships (spec §6)", () => {
       await expect(removeRelationship(db, accountId, row.id, "automation_x", "system"))
         .rejects.toMatchObject({ name: "RelationshipDbError" });
       expect(await getRelationship(db, accountId, row.id)).toMatchObject({ id: row.id });
+    }));
+
+  it("a non-user actor on a user client is refused before any write — a refused edit changes nothing (final review item 8; mutation: drop assertActorAllowed in setRelationshipSides -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "A");
+      const b = await person(db, accountId, "B");
+      const row = await addRelationship(db, accountId, base(a, b, "landlord"), "user_test");
+      markAsUserClient(db);
+      await expect(setRelationshipSides(db, accountId, row.id, { contact_can_pick_up: true }, "automation_x", "system"))
+        .rejects.toMatchObject({ name: "RelationshipDbError" });
+      expect(await getRelationship(db, accountId, row.id)).toMatchObject({ id: row.id, contact_can_pick_up: false });
+    }));
+
+  it("a non-user actor on a user client is refused before any write — a refused restore puts nothing back (final review item 8; mutation: drop assertActorAllowed in restoreRelationship -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "A");
+      const b = await person(db, accountId, "B");
+      const row = await addRelationship(db, accountId, base(a, b, "landlord"), "user_test");
+      const removed = await removeRelationship(db, accountId, row.id, "user_test");
+      if (typeof removed === "string") throw new Error(`unexpected ${removed}`);
+      markAsUserClient(db);
+      await expect(restoreRelationship(db, accountId, removed, "automation_x", "system"))
+        .rejects.toMatchObject({ name: "RelationshipDbError" });
+      expect(await getRelationship(db, accountId, row.id)).toBeNull();
     }));
 
   it("restoring when one person was deleted meanwhile keeps 23503 (mutation: swallow the error -> FAILS)", () => withTestAccount(async (db, accountId) => {
