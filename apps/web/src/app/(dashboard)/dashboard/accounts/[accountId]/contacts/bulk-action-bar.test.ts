@@ -135,6 +135,15 @@ describe("BulkActionBar: Assign to… (F-085)", () => {
     expect(assignContactsAction).toHaveBeenCalledTimes(1);
   });
 
+  it("an Undo that found every customer handed on since shows assign.changed's own sentence (final re-review; mutation: a fixed 'didn't save' -> FAILS)", async () => {
+    assignContactsAction.mockResolvedValue({ ok: true, previous: PREVIOUS });
+    undoAssignContactsAction.mockResolvedValue({ ok: false, error: "assign.changed" });
+    await assignSelected("a1", ["c1", "c2", "c3"], ANA.userId, ANA.label, () => {});
+    undoOf(toasts.success.mock.calls[0])();
+    await flush();
+    expect(toasts.error).toHaveBeenCalledWith(m["assign.changed"]);
+  });
+
   it("several ids toast the plural sentence, with the same exact Undo (mutation: one sentence for every count -> FAILS)", async () => {
     assignContactsAction.mockResolvedValue({ ok: true, previous: PREVIOUS });
     undoAssignContactsAction.mockResolvedValue({ ok: true });

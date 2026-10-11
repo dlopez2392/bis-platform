@@ -95,6 +95,35 @@ describe("undoAssignContacts puts a customer back only while the call's target s
     const events = calls.filter((c) => c.table === "events").map((c) => (c.steps.find(([k]) => k === "insert")?.[1][0] as { payload: { contactId: string } }).payload.contactId);
     expect(events).toEqual(["c1"]);
   });
+  // Final re-review: the Undo says how many customers it actually put back, so
+  // the app can tell "undone" from "someone picked them all since".
+  it("returns how many customers the guarded write put back: 1 of 2 when one was picked between the read and the write (mutation: count the entries -> FAILS)", async () => {
+    const { db } = recordingDb((c) => {
+      if (c.table === "contacts" && !has(c, "update")) return [{ id: "c1", assigned_to: B }, { id: "c2", assigned_to: B }];
+      if (c.table === "contacts") return [{ id: "c1" }];
+      if (c.table === "memberships") return { id: "m" };
+      return [];
+    });
+    expect(await undoAssignContacts(db, "acct", [
+      { contactId: "c1", assignee: A, target: B, movedTaskIds: [] },
+      { contactId: "c2", assignee: A, target: B, movedTaskIds: [] },
+    ], "actor")).toEqual({ restored: 1 });
+  });
+  it("returns 0 when every customer was handed on since, whether the read saw it or the write did (mutation: answer the entry count -> FAILS)", async () => {
+    const pickedSince = recordingDb((c) => {
+      if (c.table === "contacts" && !has(c, "update")) return [{ id: "c1", assigned_to: C }];
+      return [];
+    });
+    expect(await undoAssignContacts(pickedSince.db, "acct", [{ contactId: "c1", assignee: A, target: B, movedTaskIds: [] }], "actor"))
+      .toEqual({ restored: 0 });
+    const lostAtWrite = recordingDb((c) => {
+      if (c.table === "contacts" && !has(c, "update")) return [{ id: "c1", assigned_to: B }];
+      if (c.table === "memberships") return { id: "m" };
+      return [];
+    });
+    expect(await undoAssignContacts(lostAtWrite.db, "acct", [{ contactId: "c1", assignee: A, target: B, movedTaskIds: [] }], "actor"))
+      .toEqual({ restored: 0 });
+  });
 });
 
 describe(`no request names more than ${ASSIGN_IN_BATCH_SIZE} ids in one .in() (final review m4)`, () => {

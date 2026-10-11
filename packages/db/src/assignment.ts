@@ -195,17 +195,21 @@ export async function assignContacts(
  * and AT THE WRITE (final review m10), as the task move-back always was, so a
  * pick that lands between the read and the write is not overwritten. Every
  * list is split at ASSIGN_IN_BATCH_SIZE (m4).
+ *
+ * Returns how many customers the guarded write actually put back (final
+ * re-review), so the caller can tell "undone" from "someone picked every one
+ * of them since" (0), the way the task Undo answers "changed".
  */
 export async function undoAssignContacts(
   db: SupabaseClient, accountId: string, previous: readonly PreviousAssignee[], actorId: string,
-): Promise<void> {
-  if (previous.length === 0) return;
+): Promise<{ restored: number }> {
+  if (previous.length === 0) return { restored: 0 };
   const rows = await readHolders(db, accountId, previous.map((p) => p.contactId), "undoAssignContacts");
   const current = new Map(rows.map((r) => [r.id, r.assigned_to]));
   const work = previous
     .filter((p) => p.target !== p.assignee && current.has(p.contactId) && current.get(p.contactId) === p.target)
     .map((p) => ({ ...p, holder: p.target }));
-  if (work.length === 0) return;
+  if (work.length === 0) return { restored: 0 };
   const restoring = groupBy(work, (w) => w.assignee);
   for (const who of restoring.keys()) if (who !== null) await assertMember(db, accountId, who);
 
@@ -241,6 +245,7 @@ export async function undoAssignContacts(
     if (!written.has(w.contactId)) continue;
     await emit(db, accountId, "contact.assigned", actorId, { contactId: w.contactId, from: w.holder, to: w.assignee });
   }
+  return { restored: work.filter((w) => written.has(w.contactId)).length };
 }
 
 /**

@@ -218,6 +218,17 @@ describe("contactAssigneeSave: a customer's save and its exact Undo", () => {
     expect(contactActions.undoAssignContactsAction).not.toHaveBeenCalled();
   });
 
+  it("an Undo that found the customer handed on since shows assign.changed's sentence and leaves the pick on screen (final re-review; mutation: show the old holder anyway -> FAILS)", async () => {
+    contactActions.assignContactsAction.mockResolvedValue({ ok: true, previous: PREVIOUS });
+    contactActions.undoAssignContactsAction.mockResolvedValue({ ok: false, error: "assign.changed" });
+    const shown: (string | null)[] = [];
+    await applyAssignee(contactAssigneeSave(ACCT, CONTACT), ANA.userId, TOM.userId, (id) => assigneeName(id, OPTIONS), (v) => shown.push(v));
+    undoOf(toasts.success.mock.calls[0])();
+    await flush();
+    expect(toasts.error).toHaveBeenCalledWith(m["assign.changed"]);
+    expect(shown).toEqual([ANA.userId]);
+  });
+
   it("passes a refusal through as it came", async () => {
     contactActions.assignContactsAction.mockResolvedValue({ ok: false, error: "assign.refused" });
     expect(await contactAssigneeSave(ACCT, CONTACT)(null)).toEqual({ ok: false, error: "assign.refused" });

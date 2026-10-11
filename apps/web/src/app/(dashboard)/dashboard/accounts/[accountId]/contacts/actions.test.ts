@@ -693,8 +693,22 @@ describe("undoAssignContactsAction (CORRECTED 2026-10-11: exact undo, never regr
   beforeEach(() => {
     dbForRequest.mockResolvedValue(REQUEST);
     dbMocks.assignContacts.mockReset();
-    dbMocks.undoAssignContacts.mockReset().mockResolvedValue(undefined);
+    dbMocks.undoAssignContacts.mockReset().mockResolvedValue({ restored: 3 });
     revalidatePath.mockClear();
+  });
+
+  // Final re-review: like the task Undo, an Undo that put back NOTHING (every
+  // customer was handed on by someone since) says so; a partial put-back is ok.
+  it("nothing put back -> assign.changed, and nothing revalidated (mutation: ignore the count -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    dbMocks.undoAssignContacts.mockResolvedValueOnce({ restored: 0 });
+    expect(await undoAssignContactsAction("a1", previous)).toEqual({ ok: false, error: "assign.changed" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+  it("some put back is still ok (mutation: changed unless every entry came back -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    dbMocks.undoAssignContacts.mockResolvedValueOnce({ restored: 1 });
+    expect(await undoAssignContactsAction("a1", previous)).toEqual({ ok: true });
   });
 
   it("a Technician is refused and nothing is written", async () => {

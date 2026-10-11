@@ -134,6 +134,8 @@ function isPrevious(p: unknown): p is PreviousAssignee {
  * in ONE call, never regrouped into assignContacts calls, which would pull
  * the new holder's own earlier tasks over (Task 2 review m1). `previous`
  * comes from the browser, so every field is checked before anything is read.
+ * An Undo that put back no customer at all answers "assign.changed"; one
+ * that put back some is ok.
  */
 export async function undoAssignContactsAction(
   accountId: string, previous: PreviousAssignee[],
@@ -145,7 +147,10 @@ export async function undoAssignContactsAction(
     return { ok: false, error: "assign.failed" };
   }
   try {
-    await undoAssignContacts(await dbForRequest(), accountId, previous, access.userId);
+    const { restored } = await undoAssignContacts(await dbForRequest(), accountId, previous, access.userId);
+    // Nothing put back: someone handed every one of them on since, and their
+    // pick stands. Said as "assign.changed", like the task Undo (final re-review).
+    if (restored === 0) return { ok: false, error: "assign.changed" };
     revalidatePath(contactsPath(accountId));
     return { ok: true };
   } catch (e) {
