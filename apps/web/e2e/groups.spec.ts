@@ -106,8 +106,8 @@ test.describe.serial("S-02: households and the business name", () => {
       await page.locator("[data-sonner-toast]").filter({ hasText: removedText })
         .getByRole("button", { name: m["common.undo"] }).click();
       await expect(card.getByText(HOUSEHOLD)).toBeVisible();
-      const back = await db.from("client_group_members").select("id, role, is_billing").eq("contact_id", anaId).single();
-      expect(back.data).toEqual({ id: row.data!.id, role: "Madre", is_billing: true });
+      const back = await db.from("client_group_members").select("id, role, is_primary, is_billing").eq("contact_id", anaId).single();
+      expect(back.data).toEqual({ id: row.data!.id, role: "Madre", is_primary: true, is_billing: true });
     });
 
     test("adds the second person through search", async ({ page }) => {
@@ -117,6 +117,17 @@ test.describe.serial("S-02: households and the business name", () => {
       await page.getByPlaceholder(m["groups.searchPlaceholder"]).fill(`Familia ${stamp}`.slice(0, 12));
       await page.getByRole("option", { name: new RegExp(HOUSEHOLD) }).first().click();
       await expect(card.getByText(`Ana ${stamp}`)).toBeVisible();
+
+      // The UI shows Ana as an "other" member; the database agrees Luis
+      // landed in Ana's own household, not a second one the search/create
+      // race might have minted.
+      const db = serviceDb();
+      const anaRow = await db.from("client_group_members").select("client_group_id").eq("contact_id", anaId).single();
+      expect(anaRow.error, anaRow.error?.message).toBeNull();
+      const luisRows = await db.from("client_group_members").select("id, client_group_id").eq("contact_id", luisId);
+      expect(luisRows.error, luisRows.error?.message).toBeNull();
+      expect(luisRows.data).toHaveLength(1);
+      expect(luisRows.data![0]!.client_group_id).toBe(anaRow.data!.client_group_id);
     });
 
     test("the Business name edit reaches the list column", async ({ page }) => {
