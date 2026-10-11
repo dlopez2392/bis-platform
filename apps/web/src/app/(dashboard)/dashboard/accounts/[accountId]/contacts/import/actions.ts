@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { applyImportBatch, buildMatchIndex, emit } from "@bis/db";
+import { applyImportBatch, buildMatchIndex, emit, serviceDb } from "@bis/db";
 import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { mapRows, type ParsedRow } from "@/lib/contacts/csv";
@@ -43,8 +43,8 @@ export async function importContactsBatchAction(
     const index = await buildMatchIndex(db, accountId);
     const { created, updated, flagged } = await applyImportBatch(
       db, accountId,
-      mapped.map((row) => ({ input: row.input, tags: row.tags })),
-      index, userId, { createTags: opts.createTags },
+      mapped.map((row) => ({ input: row.input, tags: row.tags, ...(row.company ? { company: row.company } : {}) })),
+      index, userId, { createTags: opts.createTags, groupWriter: serviceDb() },
     );
 
     // The ledger write is isolated on purpose. The contacts are already

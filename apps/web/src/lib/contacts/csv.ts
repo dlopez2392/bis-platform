@@ -4,7 +4,7 @@ import { EMAIL_SHAPE, FIELD_TO_INPUT_KEY } from "./field-input";
 /** One parsed CSV record. `line` is the file line the row came from (the
  *  header is line 1), so an error can point the operator at the right row. */
 export type ParsedRow = { line: number; values: Record<string, string> };
-export type MappedRow = { line: number; input: ContactInput; tags: string[] };
+export type MappedRow = { line: number; input: ContactInput; tags: string[]; company?: string };
 export type RowError = { line: number; reason: string };
 
 /** The ContactInput keys a CSV column can fill. `custom` is deliberately not
@@ -117,6 +117,7 @@ export function mapRows(
   for (const row of rows) {
     const input: ContactInput = {};
     let tags: string[] = [];
+    let company: string | undefined;
 
     for (const [header, raw] of Object.entries(row.values)) {
       const field = mapping[header];
@@ -129,6 +130,9 @@ export function mapRows(
       if (value === "") continue;
 
       if (field === "tags") { tags = splitTags(value); continue; }
+      // S-02 §6 row 5: the business is a GROUP now, carried beside the patch
+      // like tags, and written by applyImportBatch through set_contacts_business.
+      if (field === "company_name") { company = value; continue; }
       const key = FIELD_TO_INPUT[field];
       if (key) input[key] = value;
     }
@@ -142,7 +146,7 @@ export function mapRows(
       continue;
     }
 
-    mapped.push({ line: row.line, input, tags });
+    mapped.push({ line: row.line, input, tags, ...(company ? { company } : {}) });
   }
 
   return { mapped, errors };

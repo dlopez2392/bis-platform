@@ -15,6 +15,7 @@ const dbMocks = {
   applyImportBatch: vi.fn(),
   buildMatchIndex: vi.fn(),
   emit: vi.fn(),
+  serviceDb: vi.fn(() => ({ service: true })),
 };
 vi.mock("@bis/db", () => dbMocks);
 
@@ -70,5 +71,16 @@ describe("importContactsBatchAction ledger write failure", () => {
     expect(r).toEqual({ ok: true, created: 1, updated: 0, flagged: 0 });
     expect(err).not.toHaveBeenCalled();
     err.mockRestore();
+  });
+});
+
+describe("importContactsBatchAction business writer", () => {
+  it("hands applyImportBatch the service client as groupWriter and carries the business (mutation: drop groupWriter -> FAILS)", async () => {
+    await importContactsBatchAction("acct_9",
+      [{ line: 2, values: { email: "a@b.com", company: "Acme" } }],
+      { mapping: { email: "email", company: "company_name" }, createTags: false });
+    const [, , rows, , , opts] = dbMocks.applyImportBatch.mock.calls[0]!;
+    expect(rows).toEqual([{ input: { email: "a@b.com" }, tags: [], company: "Acme" }]);
+    expect(opts).toEqual({ createTags: false, groupWriter: { service: true } });
   });
 });

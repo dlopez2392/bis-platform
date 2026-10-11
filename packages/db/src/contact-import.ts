@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createContact, updateContact, addTagToContacts, listTags, phoneDigits, phoneKeyOf,
          type ContactInput } from "./contacts";
+import { setContactsBusiness } from "./client-groups";
 
 /**
  * A snapshot of the account's email/phone -> contact id, built once per
@@ -45,7 +46,7 @@ export async function buildMatchIndex(
  * `ContactInput` field, and keeping it separate is what makes the binding
  * below a structural guarantee rather than an accident of test coverage.
  */
-export type ImportRow = { input: ContactInput; tags: string[] };
+export type ImportRow = { input: ContactInput; tags: string[]; company?: string };
 
 /**
  * Applies one import batch.
@@ -120,7 +121,7 @@ export type ImportRow = { input: ContactInput; tags: string[] };
  */
 export async function applyImportBatch(
   db: SupabaseClient, accountId: string, rows: ImportRow[], index: MatchIndex,
-  actorId: string, opts: { createTags: boolean },
+  actorId: string, opts: { createTags: boolean; groupWriter?: SupabaseClient },
 ): Promise<{ created: number; updated: number; flagged: number }> {
   let created = 0;
   let updated = 0;
@@ -140,6 +141,9 @@ export async function applyImportBatch(
   // batch resolved for it. Applied once per distinct name after the row
   // loop, so a tag shared by many rows costs one addTagToContacts call, not N.
   const tagPlan = new Map<string, Set<string>>();
+  // The business for each row that carries one, applied after the loop in
+  // one call per batch (S-02 §6 row 8) — see the function comment above.
+  const businesses: { contactId: string; name: string }[] = [];
 
   for (const row of rows) {
     const email = row.input.email?.trim().toLowerCase() || undefined;
@@ -177,6 +181,8 @@ export async function applyImportBatch(
       if (phoneKey) index.byPhone.set(phoneKey, contactId);
     }
 
+    if (row.company) businesses.push({ contactId, name: row.company });
+
     for (const raw of row.tags) {
       const name = raw.trim().toLowerCase();
       if (!name) continue; // never let an empty name reach addTagToContacts
@@ -189,6 +195,13 @@ export async function applyImportBatch(
   for (const [name, contactIds] of tagPlan) {
     if (contactIds.size === 0) continue; // documents the invariant; see Trap 3
     await addTagToContacts(db, accountId, [...contactIds], name);
+  }
+
+  // One call per batch (S-02 §6 row 8). The client groups are server-written
+  // (0069), so this runs on the service client the caller hands over, and only
+  // for contacts this batch itself just wrote through `db`.
+  if (businesses.length > 0) {
+    await setContactsBusiness(opts.groupWriter ?? db, accountId, businesses, actorId);
   }
 
   return { created, updated, flagged };
