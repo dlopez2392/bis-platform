@@ -30,6 +30,7 @@ import { BusinessInlineField } from "./business-field";
 import { GroupsCard } from "./groups-card";
 import { ContactAssigneeField } from "@/components/assign/assignee-field";
 import type { AssignMember } from "@/lib/assign/view";
+import { RelationshipsCard } from "./relationships-card";
 
 // `nowMs` travels WITH the ready result, read inside the fetch's own
 // `.then()` (an allowed impure read — react-hooks/purity flags Date.now()
@@ -347,6 +348,8 @@ export function ContactDrawer({
                     tags={load.summary.tags}
                     onChanged={() => setRetryNonce((n) => n + 1)}
                   />
+                  {/* Relationships spec §7: its own read, its own skeleton and error. */}
+                  <RelationshipsCard accountId={accountId} contactId={row.id} />
                   <div>
                     <p className="text-muted-foreground mb-2 font-mono text-[10px] tracking-[0.14em] uppercase">
                       {m["drawer.recent"]}
