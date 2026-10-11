@@ -239,6 +239,39 @@ describe("the Team's Clerk calls", () => {
     await restoreToOrganization("org_1", "user_1", "owner");
     expect(organizations.createOrganizationMembership).toHaveBeenCalledWith({ organizationId: "org_1", userId: "user_1", role: "org:admin" });
   });
+  // Final review I-1: Clerk's createOrganizationMembership takes no metadata
+  // (@clerk/backend 3.13.1 OrganizationApi.d.ts:140-147), and a Technician is
+  // org:member like Staff, so only `bis_role` says Technician. A restored
+  // membership without it reconciles as Staff.
+  it("restoreToOrganization writes the restored role as the membership's bis_role, after the membership exists (mutation: skip the metadata write -> FAILS)", async () => {
+    organizations.createOrganizationMembership.mockResolvedValue({});
+    organizations.updateOrganizationMembershipMetadata.mockResolvedValue({});
+    expect(await restoreToOrganization("org_1", "user_1", "technician")).toEqual({ ok: true });
+    expect(organizations.createOrganizationMembership).toHaveBeenCalledWith({ organizationId: "org_1", userId: "user_1", role: "org:member" });
+    expect(organizations.updateOrganizationMembershipMetadata).toHaveBeenCalledWith({ organizationId: "org_1", userId: "user_1", publicMetadata: { bis_role: "technician" } });
+    expect(organizations.createOrganizationMembership.mock.invocationCallOrder[0]!)
+      .toBeLessThan(organizations.updateOrganizationMembershipMetadata.mock.invocationCallOrder[0]!);
+  });
+  it("a restored Technician whose bis_role could not be written is taken out of Clerk again and the restore fails, so no bare org:member reads as Staff (mutation: log and report ok -> FAILS)", async () => {
+    organizations.createOrganizationMembership.mockResolvedValue({});
+    organizations.updateOrganizationMembershipMetadata.mockRejectedValue(clerkError(500, "internal"));
+    organizations.deleteOrganizationMembership.mockResolvedValue({});
+    expect(await restoreToOrganization("org_1", "user_1", "technician")).toEqual({ ok: false, code: "internal", status: 500 });
+    expect(organizations.deleteOrganizationMembership).toHaveBeenCalledWith({ organizationId: "org_1", userId: "user_1" });
+  });
+  it("a Technician restore whose take-back also fails is logged by id as a bare membership (mutation: skip the log -> FAILS)", async () => {
+    organizations.createOrganizationMembership.mockResolvedValue({});
+    organizations.updateOrganizationMembershipMetadata.mockRejectedValue(clerkError(500, "internal"));
+    organizations.deleteOrganizationMembership.mockRejectedValue(clerkError(503, "unavailable"));
+    expect((await restoreToOrganization("org_1", "user_1", "technician")).ok).toBe(false);
+    expect(String(vi.mocked(console.error).mock.calls.flat())).toMatch(/bis_role[^]*org_1[^]*user_1/);
+  });
+  it.each(["staff", "owner"] as const)("a %s restore keeps its membership when only the metadata write fails: its Clerk role alone already gives that role (mutation: take every restore back -> FAILS)", async (role) => {
+    organizations.createOrganizationMembership.mockResolvedValue({});
+    organizations.updateOrganizationMembershipMetadata.mockRejectedValue(clerkError(500, "internal"));
+    expect(await restoreToOrganization("org_1", "user_1", role)).toEqual({ ok: true });
+    expect(organizations.deleteOrganizationMembership).not.toHaveBeenCalled();
+  });
   it("setOrganizationRole updates the Clerk membership to follow the BIS role (mutation: swap the mapping -> FAILS)", async () => {
     organizations.updateOrganizationMembership.mockResolvedValue({});
     expect(await setOrganizationRole("org_1", "user_1", "staff")).toEqual({ ok: true });
@@ -267,7 +300,15 @@ describe("a role change keeps the membership's bis_role metadata in step (review
     expect(await setOrganizationRole("org_1", "user_1", "owner")).toEqual({ ok: false, code: "form_param_value_invalid", status: 422 });
     expect(organizations.updateOrganizationMembershipMetadata).not.toHaveBeenCalled();
   });
-  it("a metadata write that fails after the role landed is logged by id and the role change still stands, because stale metadata can only demote (mutation: report it as a failure -> FAILS)", async () => {
+  // Final review I-1: Technician and Staff share org:member, so a demotion
+  // to Technician whose bis_role did not land reads as Staff. Stale metadata
+  // demotes only between Owner and Staff; Technician needs it to stand.
+  it("a move to Technician whose metadata write fails is a FAILURE, so the caller puts Clerk back (mutation: log and report ok -> FAILS)", async () => {
+    organizations.updateOrganizationMembership.mockResolvedValue({});
+    organizations.updateOrganizationMembershipMetadata.mockRejectedValue(clerkError(500, "internal"));
+    expect(await setOrganizationRole("org_1", "user_1", "technician")).toEqual({ ok: false, code: "internal", status: 500 });
+  });
+  it("a metadata write that fails after the role landed is logged by id and the role change still stands for Owner or Staff, whose Clerk role alone is never more privileged than BIS (mutation: report it as a failure -> FAILS)", async () => {
     organizations.updateOrganizationMembership.mockResolvedValue({});
     organizations.updateOrganizationMembershipMetadata.mockRejectedValue(clerkError(500, "internal"));
     expect(await setOrganizationRole("org_1", "user_1", "owner")).toEqual({ ok: true });

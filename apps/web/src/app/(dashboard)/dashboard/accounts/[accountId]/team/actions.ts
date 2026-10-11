@@ -322,13 +322,41 @@ async function giveBackReleased(
 }
 
 /**
+ * The undo's BIS membership write failed after Clerk restored the person
+ * (final review I-1): take the Clerk membership away again, and any BIS row a
+ * racing webhook or a write that landed before it threw may have left, so the
+ * person is out on both sides and "could not undo" is true. Undoing beats
+ * retrying here: a retry inside the same request meets the same failing
+ * database, and a Clerk membership left behind would be settled by the
+ * webhook or the per-request fallback after the card had said the undo
+ * failed. A second Undo, inside the window, starts again from the record.
+ */
+async function takeBackRestore(
+  db: SupabaseClient, orgId: string, accountId: string, userId: string, clerkUserId: string,
+): Promise<void> {
+  const ids = `account ${accountId}, user ${userId}`;
+  const back = await removeFromOrganization(orgId, clerkUserId);
+  if (!back.ok) console.error(`team undo: the member is still in Clerk with no BIS membership (${ids}): ${back.code ?? "no code"}`);
+  try {
+    await deleteAccountMembership(db, accountId, userId);
+  } catch (e) {
+    console.error(`team undo: sweep of a half-restored BIS membership failed (${ids}): ${loggableError(e)}`);
+  }
+}
+
+/**
  * Restores exactly what the newest system-written removal of this person
  * from THIS account says (Clerk id, role, language), and only within
  * UNDO_WINDOW_MS of it. A person never removed from this account is refused
- * before Clerk is asked. Clerk first, at the matching Clerk role, then the
- * BIS membership, set explicitly to the event's role when a row already
- * existed (the webhook can get there first). A double-clicked undo (Clerk:
- * already a member, BIS already at that role) is a success.
+ * before Clerk is asked. Clerk first, at the matching Clerk role and with the
+ * role as the membership's `bis_role` (restoreToOrganization; final review
+ * I-1: without it a restored Technician settles as Staff), then the BIS
+ * membership, set explicitly to the event's role when a row already existed
+ * (the webhook can get there first). If that BIS write fails, the Clerk
+ * restore is taken back (takeBackRestore). The language is restored after;
+ * its failure is logged and does not fail an undo whose membership is back.
+ * A double-clicked undo (Clerk: already a member, BIS already at that role)
+ * is a success.
  *
  * Then (F-085 part 1, spec §8) the customers and open tasks the removal
  * released go back to the person, only those still Unassigned
@@ -361,10 +389,15 @@ export async function undoRemoveTeamMemberAction(accountId: string, userId: stri
       const set = await setAccountMemberRole(db, accountId, userId, removed.role);
       if (set !== "ok") console.error(`team undo: existing row not set to ${removed.role}: ${set} (${ids})`);
     }
-    await setMemberLanguage(db, accountId, userId, removed.language);
   } catch (e) {
     console.error(`team undo: Clerk restored the member but the BIS membership was not restored (${ids}): ${loggableError(e)}`);
+    await takeBackRestore(db, account.orgId, accountId, userId, removed.clerkUserId);
     return { ok: false, error: "team.undo.failed" };
+  }
+  try {
+    await setMemberLanguage(db, accountId, userId, removed.language);
+  } catch (e) {
+    console.error(`team undo: the member is back but their language was not restored (${ids}): ${loggableError(e)}`);
   }
   await giveBackReleased(db, accountId, userId, removed.released);
   revalidateTeam(accountId);

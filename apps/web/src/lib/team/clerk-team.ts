@@ -202,14 +202,41 @@ export async function removeFromOrganization(orgId: string, clerkUserId: string)
   }
 }
 
-/** The undo of a removal: back at the Clerk role matching `role`; the BIS membership is restored by the caller. */
+/**
+ * Only `bis_role` can say Technician: Technician and Staff are both
+ * org:member, and roleFromClerk reads a bare org:member as Staff. So for a
+ * Technician a metadata write that did not land is a failed write; for Owner
+ * or Staff the Clerk role alone already gives the right answer (final review
+ * I-1).
+ */
+const metadataRequired = (role: AccountRole): boolean => role === "technician";
+
+/**
+ * The undo of a removal: back at the Clerk role matching `role`, then that
+ * role as the membership's `bis_role` (final review I-1).
+ * `createOrganizationMembership` takes no metadata (@clerk/backend 3.13.1
+ * OrganizationApi.d.ts:140-147), and the membership it makes is NEWER than
+ * the removal record, so reconcileMembership settles it whenever the BIS row
+ * is missing; without `bis_role` a restored Technician would settle as Staff.
+ * For a Technician whose metadata write fails, the membership is taken away
+ * again and the restore reports that failure; if the take-back fails too, it
+ * is logged by id. The BIS membership is restored by the caller, after this.
+ */
 export async function restoreToOrganization(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult> {
   try {
     await bounded(async () => (await clerkClient()).organizations.createOrganizationMembership({ organizationId: orgId, userId: clerkUserId, role: clerkRoleFor(role) }));
-    return { ok: true };
   } catch (e) {
     return failed("createOrganizationMembership", e);
   }
+  const m = await writeClerkRoleMetadata(orgId, clerkUserId, role);
+  if (m.ok) return { ok: true };
+  if (!metadataRequired(role)) {
+    console.error(`clerk-team: restored as ${role} but its bis_role metadata was not written (org ${orgId}, user ${clerkUserId}): ${m.code ?? "no code"}`);
+    return { ok: true };
+  }
+  const back = await removeFromOrganization(orgId, clerkUserId);
+  if (!back.ok) console.error(`clerk-team: a restored Technician has no bis_role and could not be taken out again, so Clerk alone reads them as Staff (org ${orgId}, user ${clerkUserId}): ${back.code ?? "no code"}`);
+  return m;
 }
 
 /** `updateOrganizationMembership({ organizationId, userId, role })`: @clerk/backend 3.13.1 OrganizationApi.d.ts:341, params :149. */
@@ -241,16 +268,23 @@ async function writeClerkRoleMetadata(orgId: string, clerkUserId: string, role: 
 
 /**
  * Makes the Clerk membership follow a BIS role change: the role, then its
- * `bis_role` metadata. The result is the ROLE write's: a metadata write that
- * fails after the role landed is logged by id and left, because roleFromClerk
- * takes the less privileged of the two, so stale metadata can only demote.
+ * `bis_role` metadata. For Owner and Staff the result is the ROLE write's: a
+ * metadata write that fails after the role landed is logged by id and left,
+ * because roleFromClerk takes the less privileged answer and the Clerk role
+ * alone (org:admin -> owner, org:member -> staff) is never more privileged
+ * than the BIS role being written. That is NOT true of Technician (final
+ * review I-1): Technician is org:member like Staff, so only `bis_role` says
+ * Technician, and a stale `bis_role` of staff or owner reads as Staff. A move
+ * to Technician whose metadata write fails is therefore a failure, which the
+ * caller handles as it handles a failed role write.
  */
 export async function setOrganizationRole(orgId: string, clerkUserId: string, role: AccountRole): Promise<ClerkWriteResult> {
   const r = await writeClerkRole(orgId, clerkUserId, role);
   if (!r.ok) return r;
   const m = await writeClerkRoleMetadata(orgId, clerkUserId, role);
-  if (!m.ok) console.error(`clerk-team: role set to ${role} but its bis_role metadata was not (org ${orgId}, user ${clerkUserId}): ${m.code ?? "no code"}`);
-  return { ok: true };
+  if (m.ok) return { ok: true };
+  console.error(`clerk-team: role set to ${role} but its bis_role metadata was not (org ${orgId}, user ${clerkUserId}): ${m.code ?? "no code"}`);
+  return metadataRequired(role) ? m : { ok: true };
 }
 
 /**

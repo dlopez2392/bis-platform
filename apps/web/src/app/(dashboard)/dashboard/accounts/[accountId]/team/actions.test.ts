@@ -628,6 +628,39 @@ describe("undoRemoveTeamMemberAction gives back what the removal released", () =
     expect(logged()).toMatch(/membership/);
     expect(db.reassignReleased).not.toHaveBeenCalled();
   });
+  // Final review I-1: a Clerk membership left behind with no BIS row is
+  // reconciled by the webhook or the per-request fallback, and the Team card
+  // would say "could not undo" about a person who then comes back anyway.
+  it("a BIS membership write that throws after Clerk restored takes the Clerk membership away again, and any half-written BIS row with it (mutation: leave Clerk restored -> FAILS)", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
+    db.addAccountMember.mockRejectedValue(new Error("down"));
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: false, error: "team.undo.failed" });
+    expect(clerk.removeFromOrganization).toHaveBeenCalledWith("org_1", "user_D");
+    expect(order(db.addAccountMember)).toBeLessThan(order(clerk.removeFromOrganization));
+    expect(db.deleteAccountMembership).toHaveBeenCalledWith(expect.anything(), ACCT, TECH_D.userId);
+  });
+  it("the existing row's role set throwing takes Clerk back too (mutation: guard only addAccountMember -> FAILS)", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D));
+    db.addAccountMember.mockResolvedValue("existed");
+    db.setAccountMemberRole.mockRejectedValue(new Error("down"));
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: false, error: "team.undo.failed" });
+    expect(clerk.removeFromOrganization).toHaveBeenCalledWith("org_1", "user_D");
+  });
+  it("a take-back that Clerk refuses is logged by id as a membership left without its BIS row (mutation: no log -> FAILS)", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D));
+    db.addAccountMember.mockRejectedValue(new Error("down"));
+    clerk.removeFromOrganization.mockResolvedValue({ ok: false, code: "internal", status: 500 });
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: false, error: "team.undo.failed" });
+    expect(logged()).toMatch(new RegExp(`still in Clerk[^\\n]*${TECH_D.userId}`));
+  });
+  it("a language write that throws after the membership is back does not fail the undo or take anyone out of Clerk (mutation: share the membership's try -> FAILS)", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
+    db.setMemberLanguage.mockRejectedValue(new Error("down"));
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
+    expect(clerk.removeFromOrganization).not.toHaveBeenCalled();
+    expect(db.reassignReleased).toHaveBeenCalled();
+    expect(logged()).toMatch(new RegExp(`language[^\\n]*${TECH_D.userId}`));
+  });
   it("Clerk refusing the undo never reassigns", async () => {
     log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
     clerk.restoreToOrganization.mockResolvedValue({ ok: false, code: "internal" });
