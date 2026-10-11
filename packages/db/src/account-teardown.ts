@@ -23,7 +23,7 @@ export const ACCOUNT_OWNED_TABLES = [
   "messages", "conversations",
   "checklist_items", "contact_tags", "notes", "tasks",
   "opportunities", "pipeline_stages", "pipelines", "custom_fields",
-  "custom_values", "tags", "contacts",
+  "custom_values", "tags", "contact_relationships", "contacts",
   "voice_profiles", "phone_numbers", "automations",
 ] as const;
 

@@ -230,3 +230,13 @@ export {
   releaseTasksOffCustomers,
   type AssigneeFilter, type ReleasedAssignments, type PreviousAssignee,
 } from "./assignment";
+
+// Relationships between customers (0070). See ./relationships.ts and ./relationship-keys.ts.
+export {
+  listContactRelationships, getRelationship, addRelationship, setRelationshipSides, removeRelationship,
+  restoreRelationship, RelationshipDbError, MAX_RELATIONSHIPS_READ, type NewRelationship,
+} from "./relationships";
+export {
+  RELATIONSHIP_KEYS, SIDE_COLUMNS, isRelationshipKey,
+  type RelationshipKey, type WordForm, type RelationshipRow, type RelatedPerson, type RelationshipSidesPatch, type SideColumn,
+} from "./relationship-keys";
