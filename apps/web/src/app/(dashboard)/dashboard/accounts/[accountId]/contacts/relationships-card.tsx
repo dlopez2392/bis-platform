@@ -3,7 +3,6 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { X } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DotPill } from "@/components/dot-pill";
@@ -11,16 +10,14 @@ import { nativeFieldClass } from "@/components/ui/input";
 import { useLocale } from "@/components/locale-provider";
 import type { Locale } from "@/lib/i18n/locale";
 import { t } from "@/lib/i18n/t";
-import { m, type MessageKey } from "@/lib/messages";
+import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import type { WordForm } from "@bis/db/relationship-keys";
 import { chipText, chipFormControl, personName } from "@/lib/contacts/relationship-labels";
 import type { RelationshipView } from "@/lib/contacts/relationship-view";
 import type { Flag } from "@/lib/contacts/relationship-dialog";
 import { relationshipsLoadFrom, type RelationshipsLoad } from "@/lib/contacts/relationships-load";
-import {
-  setRelationshipAction, undoSetRelationshipAction, removeRelationshipAction, undoRemoveRelationshipAction,
-} from "./relationship-actions";
+import { relationshipHandlers, type CardState } from "./relationships-card-handlers";
 import { AddRelationshipDialog } from "./add-relationship-dialog";
 
 export type CardViewProps = {
@@ -137,15 +134,12 @@ export function RelationshipsCardView({ accountId, load, onRetry, onToggle, onFo
   );
 }
 
-/** A server action that rejects (a stale tab after a redeploy) is a plain failure, never a silent one. */
-const failed = { ok: false as const, error: "relationships.error.failed" as const };
-
 /** The card on the drawer and the detail page (spec §7, R2): reads its own route, saves at once, Undo on every change (rule 6). */
 export function RelationshipsCard({ accountId, contactId }: { accountId: string; contactId: string }) {
   const locale = useLocale();
   // Paired with the id it was read for (the drawer's own pattern): a newly peeked contact reads
   // "loading" by mismatch, and only the fetch's own callbacks write state.
-  const [state, setState] = useState<{ contactId: string; rel: RelationshipsLoad }>({ contactId: "", rel: { status: "loading" } });
+  const [state, setState] = useState<CardState>({ contactId: "", rel: { status: "loading" } });
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     let stale = false;
@@ -156,32 +150,9 @@ export function RelationshipsCard({ accountId, contactId }: { accountId: string;
   }, [accountId, contactId, nonce]);
   const load: RelationshipsLoad = state.contactId === contactId ? state.rel : { status: "loading" };
 
-  const replace = (view: RelationshipView) => setState((s) => s.rel.status !== "ready" ? s
-    : { ...s, rel: { ...s.rel, views: s.rel.views.some((v) => v.id === view.id) ? s.rel.views.map((v) => (v.id === view.id ? view : v)) : [...s.rel.views, view] } });
-  const drop = (id: string) => setState((s) => s.rel.status !== "ready" ? s : { ...s, rel: { ...s.rel, views: s.rel.views.filter((v) => v.id !== id) } });
-  const say = (key: MessageKey) => toast.error(t(m, key, locale));
-  const undoLabel = t(m, "relationships.undo", locale);
-
-  const change = async (view: RelationshipView, patch: Record<string, unknown>) => {
-    const r = await setRelationshipAction(accountId, contactId, view.id, patch).catch(() => failed);
-    if (!r.ok) { say(r.error); return; }
-    replace(r.view);
-    toast.success(t(m, "relationships.saved", locale), { action: { label: undoLabel, onClick: () => {
-      void undoSetRelationshipAction(accountId, contactId, view.id, r.undo).catch(() => failed)
-        .then((u) => (u.ok ? replace(u.view) : say(u.error)));
-    } } });
-  };
-
-  const remove = async (view: RelationshipView) => {
-    const r = await removeRelationshipAction(accountId, view.id).catch(() => failed);
-    if (!r.ok) { say(r.error); return; }
-    drop(view.id);
-    const name = personName(view.person, t(m, "relationships.noName", locale));
-    toast.success(t(m, "relationships.removed", locale, { name }), { action: { label: undoLabel, onClick: () => {
-      void undoRemoveRelationshipAction(accountId, contactId, r.snapshot).catch(() => failed)
-        .then((u) => (u.ok ? replace(u.view) : say(u.error)));
-    } } });
-  };
+  // One Set for the card's whole life: the in-flight lock must outlast a re-render (item 9).
+  const [inFlight] = useState(() => new Set<string>());
+  const { replace, change, remove } = relationshipHandlers({ accountId, contactId, locale, setState, inFlight });
 
   return (
     <RelationshipsCardView
