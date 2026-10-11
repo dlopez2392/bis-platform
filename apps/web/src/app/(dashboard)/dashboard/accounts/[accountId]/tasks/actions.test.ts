@@ -418,6 +418,22 @@ describe("setTaskAssigneeAction", () => {
     spy.mockRestore();
   });
 
+  // Final review M7: the task Undo names the holder its save set, and the
+  // write happens only while that person still holds the task.
+  it("an Undo's expected holder reaches setTaskAssignee; a task picked since answers assign.changed and revalidates nothing (mutation: drop expected -> FAILS)", async () => {
+    dbMocks.setTaskAssignee.mockResolvedValueOnce("changed");
+    expect(await setTaskAssigneeAction("acct_1", TASK, STAFF_ID, OTHER)).toEqual({ ok: false, error: "assign.changed" });
+    expect(dbMocks.setTaskAssignee).toHaveBeenCalledWith(assignDb, "acct_1", TASK, STAFF_ID, "user_1", { expected: OTHER });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+  it("an expected Unassigned is passed as null, not dropped (mutation: `expected ? … : …` -> FAILS)", async () => {
+    expect(await setTaskAssigneeAction("acct_1", TASK, STAFF_ID, null)).toEqual({ ok: true, previous: STAFF_ID });
+    expect(dbMocks.setTaskAssignee).toHaveBeenCalledWith(assignDb, "acct_1", TASK, STAFF_ID, "user_1", { expected: null });
+  });
+  it("an expected holder that is not a UUID is refused before anything is read", async () => {
+    expect(await setTaskAssigneeAction("acct_1", TASK, STAFF_ID, "someone")).toEqual({ ok: false, error: "assign.failed" });
+    expect(dbMocks.setTaskAssignee).not.toHaveBeenCalled();
+  });
   it("a failed customer read is a failure, never a pass (mutation: treat a read error as no customer -> FAILS)", async () => {
     contactRead.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});

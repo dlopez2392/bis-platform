@@ -91,7 +91,7 @@ export async function createContactAction(
 }
 
 /** What the assignment controls show for a refusal (spec §8); the copy lives under `assign.*`. */
-export type AssignError = "assign.refused" | "assign.failed" | "assign.customerFirst";
+export type AssignError = "assign.refused" | "assign.failed" | "assign.customerFirst" | "assign.changed";
 export type AssignResult = { ok: true; previous: PreviousAssignee[] } | { ok: false; error: AssignError };
 
 /**

@@ -257,20 +257,30 @@ export async function undoHoldDecisionFromTask(
  * hold (A4: the customer first), because RLS would hide anything else from
  * them; a task with no customer is theirs to take. Everything is read on the
  * request client. Hands back who had it, which is what the Undo restores.
+ *
+ * `expected` is the Undo's (final review M7): the holder the save being
+ * undone set. Given, the task moves only while that person (null:
+ * Unassigned) still holds it, checked at the write (setTaskAssignee); a task
+ * someone picked since answers "assign.changed" and stays with them.
  */
 export async function setTaskAssigneeAction(
-  accountId: string, taskId: string, assignee: string | null,
+  accountId: string, taskId: string, assignee: string | null, expected?: string | null,
 ): Promise<{ ok: true; previous: string | null } | { ok: false; error: AssignError }> {
   const access = await requireAccountAccess(accountId);
   if (!seesWholeAccount(access)) return { ok: false, error: "assign.refused" };
-  if (!isUuid(taskId) || !isUuidOrNull(assignee)) return { ok: false, error: "assign.failed" };
+  if (!isUuid(taskId) || !isUuidOrNull(assignee) || !(expected === undefined || isUuidOrNull(expected))) {
+    return { ok: false, error: "assign.failed" };
+  }
   try {
     const db = await dbForRequest();
     if (assignee !== null && await customerFirst(db, accountId, taskId, assignee)) {
       return { ok: false, error: "assign.customerFirst" };
     }
-    const r = await setTaskAssignee(db, accountId, taskId, assignee, access.userId);
+    const r = expected === undefined
+      ? await setTaskAssignee(db, accountId, taskId, assignee, access.userId)
+      : await setTaskAssignee(db, accountId, taskId, assignee, access.userId, { expected });
     if (r === "not_found") return { ok: false, error: "assign.failed" };
+    if (r === "changed") return { ok: false, error: "assign.changed" };
     revalidatePath(tasksPath(accountId));
     return { ok: true, previous: r.previous };
   } catch (e) {

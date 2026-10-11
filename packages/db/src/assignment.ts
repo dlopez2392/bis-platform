@@ -82,11 +82,41 @@ async function assertMember(db: SupabaseClient, accountId: string, userId: strin
 
 type ContactRow = { id: string; assigned_to: string | null };
 
-/** Groups items by a nullable user id, Unassigned (null) being a group of its own. */
-function groupBy<T>(items: readonly T[], key: (t: T) => string | null): Map<string | null, T[]> {
-  const m = new Map<string | null, T[]>();
+/** Groups items by a key, a nullable user id being Unassigned (null) as a group of its own. */
+function groupBy<T, K>(items: readonly T[], key: (t: T) => K): Map<K, T[]> {
+  const m = new Map<K, T[]>();
   for (const it of items) m.set(key(it), [...(m.get(key(it)) ?? []), it]);
   return m;
+}
+
+/**
+ * At most this many ids in one `.in()` (final review m4). PostgREST carries
+ * the list in the request URL, and contacts.ts's TAG_LOOKUP_BATCH_SIZE found
+ * 400-500 UUIDs long enough for `fetch` itself to fail; 200 is the size it
+ * settled on. A bulk "Assign to…" takes up to 500 customers (MAX_ASSIGN), and
+ * a removal can release far more, so every list here is split.
+ */
+export const ASSIGN_IN_BATCH_SIZE = 200;
+function batches<T>(items: readonly T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += ASSIGN_IN_BATCH_SIZE) out.push(items.slice(i, i + ASSIGN_IN_BATCH_SIZE));
+  return out;
+}
+
+/** `assigned_to` equal to `who`, where Unassigned is IS NULL, never `= null` (which matches nothing). */
+function heldBy<Q extends { is(c: string, v: null): Q; eq(c: string, v: string): Q }>(q: Q, who: string | null): Q {
+  return who === null ? q.is("assigned_to", null) : q.eq("assigned_to", who);
+}
+
+/** The contacts of this account among `ids`, with their holder: one read per batch. */
+async function readHolders(db: SupabaseClient, accountId: string, ids: readonly string[], what: string): Promise<ContactRow[]> {
+  const rows: ContactRow[] = [];
+  for (const batch of batches(ids)) {
+    const { data, error } = await db.from("contacts").select("id, assigned_to").eq("account_id", accountId).in("id", batch);
+    if (error) throw dbError(`${what} read failed`, error);
+    rows.push(...((data ?? []) as ContactRow[]));
+  }
+  return rows;
 }
 
 /**
@@ -96,8 +126,9 @@ function groupBy<T>(items: readonly T[], key: (t: T) => string | null): Map<stri
  * can never touch it), which is exactly what undoAssignContacts takes.
  *
  * The order is load-bearing; it is what makes a retry heal (review I-3):
- *   1. the open tasks move (old holder -> target), one statement per old holder;
- *   2. the contacts change, in one statement;
+ *   1. the open tasks move (old holder -> target), one statement per old holder
+ *      (and per ASSIGN_IN_BATCH_SIZE customers);
+ *   2. the contacts change, one statement per ASSIGN_IN_BATCH_SIZE customers;
  *   3. the events are written.
  * A failure in 1 leaves every contact still naming its old holder, so a retry
  * reads the same "previous" and finishes the move. Contacts first would
@@ -115,30 +146,31 @@ export async function assignContacts(
 ): Promise<PreviousAssignee[]> {
   if (contactIds.length === 0) return [];
   if (assignee !== null) await assertMember(db, accountId, assignee);
-  const { data, error } = await db.from("contacts").select("id, assigned_to").eq("account_id", accountId).in("id", [...contactIds]);
-  if (error) throw dbError("assignContacts read failed", error);
-  const changing: PreviousAssignee[] = ((data ?? []) as ContactRow[])
+  const changing: PreviousAssignee[] = (await readHolders(db, accountId, contactIds, "assignContacts"))
     .filter((r) => r.assigned_to !== assignee)
     .map((r) => ({ contactId: r.id, assignee: r.assigned_to, target: assignee, movedTaskIds: [] }));
   if (changing.length === 0) return [];
 
-  // 1. Tasks first, one statement per holder they are leaving.
+  // 1. Tasks first, one statement per holder they are leaving (and per batch, m4).
   for (const [from, group] of groupBy(changing, (p) => p.assignee)) {
-    let q = db.from("tasks").update({ assigned_to: assignee })
-      .eq("account_id", accountId).in("contact_id", group.map((p) => p.contactId)).is("completed_at", null);
-    q = from === null ? q.is("assigned_to", null) : q.eq("assigned_to", from);
-    const { data: moved, error: tErr } = await q.select("id, contact_id");
-    if (tErr) throw dbError("assignContacts task move failed", tErr);
-    for (const t of (moved ?? []) as { id: string; contact_id: string }[]) {
-      group.find((p) => p.contactId === t.contact_id)?.movedTaskIds.push(t.id);
+    for (const batch of batches(group)) {
+      const q = heldBy(db.from("tasks").update({ assigned_to: assignee })
+        .eq("account_id", accountId).in("contact_id", batch.map((p) => p.contactId)).is("completed_at", null), from);
+      const { data: moved, error: tErr } = await q.select("id, contact_id");
+      if (tErr) throw dbError("assignContacts task move failed", tErr);
+      for (const t of (moved ?? []) as { id: string; contact_id: string }[]) {
+        batch.find((p) => p.contactId === t.contact_id)?.movedTaskIds.push(t.id);
+      }
     }
   }
 
-  // 2. Then the contacts.
-  const { error: upErr } = await db.from("contacts")
-    .update({ assigned_to: assignee, updated_at: new Date().toISOString() })
-    .eq("account_id", accountId).in("id", changing.map((p) => p.contactId));
-  if (upErr) throw dbError("assignContacts failed", upErr);
+  // 2. Then the contacts, one statement per batch.
+  for (const batch of batches(changing)) {
+    const { error: upErr } = await db.from("contacts")
+      .update({ assigned_to: assignee, updated_at: new Date().toISOString() })
+      .eq("account_id", accountId).in("id", batch.map((p) => p.contactId));
+    if (upErr) throw dbError("assignContacts failed", upErr);
+  }
 
   // 3. Then the ledger.
   for (const p of changing) {
@@ -158,15 +190,18 @@ export async function assignContacts(
  * order as assignContacts, so a retry after a partial failure finishes. A
  * previous assignee who is no longer a member of this account is refused (A5)
  * rather than given the customer back.
+ *
+ * The still-the-target check is made twice: on the read, to decide the work,
+ * and AT THE WRITE (final review m10), as the task move-back always was, so a
+ * pick that lands between the read and the write is not overwritten. Every
+ * list is split at ASSIGN_IN_BATCH_SIZE (m4).
  */
 export async function undoAssignContacts(
   db: SupabaseClient, accountId: string, previous: readonly PreviousAssignee[], actorId: string,
 ): Promise<void> {
   if (previous.length === 0) return;
-  const { data, error } = await db.from("contacts").select("id, assigned_to")
-    .eq("account_id", accountId).in("id", previous.map((p) => p.contactId));
-  if (error) throw dbError("undoAssignContacts read failed", error);
-  const current = new Map(((data ?? []) as ContactRow[]).map((r) => [r.id, r.assigned_to]));
+  const rows = await readHolders(db, accountId, previous.map((p) => p.contactId), "undoAssignContacts");
+  const current = new Map(rows.map((r) => [r.id, r.assigned_to]));
   const work = previous
     .filter((p) => p.target !== p.assignee && current.has(p.contactId) && current.get(p.contactId) === p.target)
     .map((p) => ({ ...p, holder: p.target }));
@@ -178,36 +213,62 @@ export async function undoAssignContacts(
   //    Only tasks of THIS entry's customer (fix round 1, m2): `previous` can come back
   //    from a browser, and a forged id must not move another customer's task.
   for (const w of work) {
-    if (w.movedTaskIds.length === 0) continue;
-    let q = db.from("tasks").update({ assigned_to: w.assignee })
-      .eq("account_id", accountId).eq("contact_id", w.contactId).in("id", w.movedTaskIds).is("completed_at", null);
-    q = w.holder === null ? q.is("assigned_to", null) : q.eq("assigned_to", w.holder);
-    const { error: tErr } = await q;
-    if (tErr) throw dbError("undoAssignContacts task move failed", tErr);
+    for (const batch of batches(w.movedTaskIds)) {
+      const q = heldBy(db.from("tasks").update({ assigned_to: w.assignee })
+        .eq("account_id", accountId).eq("contact_id", w.contactId).in("id", batch).is("completed_at", null), w.holder);
+      const { error: tErr } = await q;
+      if (tErr) throw dbError("undoAssignContacts task move failed", tErr);
+    }
   }
-  // 2. Then the contacts, one statement per previous assignee.
-  for (const [who, group] of restoring) {
-    const { error: upErr } = await db.from("contacts")
-      .update({ assigned_to: who, updated_at: new Date().toISOString() })
-      .eq("account_id", accountId).in("id", group.map((w) => w.contactId));
-    if (upErr) throw dbError("undoAssignContacts failed", upErr);
+  // 2. Then the contacts, one statement per (previous assignee, target) pair and batch,
+  //    each guarded by its target at the write (m10). One assignContacts call has one
+  //    target, but `previous` comes from a browser, so the pair is the honest key.
+  const pairs = groupBy(work, (w) => JSON.stringify([w.assignee, w.holder]));
+  const written = new Set<string>();
+  for (const group of pairs.values()) {
+    const { assignee: who, holder } = group[0]!;
+    for (const batch of batches(group)) {
+      const q = heldBy(db.from("contacts")
+        .update({ assigned_to: who, updated_at: new Date().toISOString() })
+        .eq("account_id", accountId).in("id", batch.map((w) => w.contactId)), holder);
+      const { data: back, error: upErr } = await q.select("id");
+      if (upErr) throw dbError("undoAssignContacts failed", upErr);
+      for (const r of (back ?? []) as { id: string }[]) written.add(r.id);
+    }
   }
-  // 3. Then the ledger.
+  // 3. Then the ledger: only the customers the guarded write actually put back.
   for (const w of work) {
+    if (!written.has(w.contactId)) continue;
     await emit(db, accountId, "contact.assigned", actorId, { contactId: w.contactId, from: w.holder, to: w.assignee });
   }
 }
 
+/**
+ * Hands one task to `assignee` (or to nobody) and returns who had it.
+ *
+ * `expected` (final review M7) is the task Undo's guard: the holder the save
+ * being undone set. When it is given, the task moves only while that person
+ * (or Unassigned, for null) still holds it, checked on the read and again AT
+ * THE WRITE, so a pick someone made after the save is never overwritten by
+ * its Undo; that answers "changed" and writes nothing, no event either. A
+ * plain pick passes no `expected` and writes whoever holds the task now.
+ */
 export async function setTaskAssignee(
   db: SupabaseClient, accountId: string, taskId: string, assignee: string | null, actorId: string,
-): Promise<{ previous: string | null } | "not_found"> {
+  opts: { expected?: string | null } = {},
+): Promise<{ previous: string | null } | "not_found" | "changed"> {
   const { data, error } = await db.from("tasks").select("assigned_to").eq("account_id", accountId).eq("id", taskId).maybeSingle();
   if (error) throw dbError("setTaskAssignee read failed", error);
   if (!data) return "not_found";
-  if (assignee !== null) await assertMember(db, accountId, assignee);
-  const { error: upErr } = await db.from("tasks").update({ assigned_to: assignee }).eq("account_id", accountId).eq("id", taskId);
-  if (upErr) throw dbError("setTaskAssignee failed", upErr);
   const previous = (data.assigned_to as string | null) ?? null;
+  const guarded = opts.expected !== undefined;
+  if (guarded && previous !== opts.expected) return "changed";
+  if (assignee !== null) await assertMember(db, accountId, assignee);
+  let q = db.from("tasks").update({ assigned_to: assignee }).eq("account_id", accountId).eq("id", taskId);
+  if (guarded) q = heldBy(q, opts.expected ?? null);
+  const { data: written, error: upErr } = await q.select("id");
+  if (upErr) throw dbError("setTaskAssignee failed", upErr);
+  if (guarded && (written ?? []).length === 0) return "changed";
   await emit(db, accountId, "task.assigned", actorId, { taskId, from: previous, to: assignee });
   return { previous };
 }
@@ -232,14 +293,15 @@ export async function releaseMemberAssignments(db: SupabaseClient, accountId: st
 
 /** The removal's Undo: gives back only what nobody has picked up since. Pass serviceDb(). */
 export async function reassignReleased(db: SupabaseClient, accountId: string, userId: string, released: ReleasedAssignments): Promise<void> {
-  if (released.contacts.length > 0) {
+  // Split at ASSIGN_IN_BATCH_SIZE (final review m4): a removal releases every customer the person held.
+  for (const batch of batches(released.contacts)) {
     const { error } = await db.from("contacts").update({ assigned_to: userId })
-      .eq("account_id", accountId).in("id", released.contacts).is("assigned_to", null);
+      .eq("account_id", accountId).in("id", batch).is("assigned_to", null);
     if (error) throw dbError("reassignReleased contacts failed", error);
   }
-  if (released.tasks.length > 0) {
+  for (const batch of batches(released.tasks)) {
     const { error } = await db.from("tasks").update({ assigned_to: userId })
-      .eq("account_id", accountId).in("id", released.tasks).is("assigned_to", null).is("completed_at", null);
+      .eq("account_id", accountId).in("id", batch).is("assigned_to", null).is("completed_at", null);
     if (error) throw dbError("reassignReleased tasks failed", error);
   }
 }

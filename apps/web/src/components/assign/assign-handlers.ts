@@ -55,7 +55,11 @@ export function contactAssigneeSave(accountId: string, contactId: string, onSave
   };
 }
 
-/** A task: its Undo sets the task back to the holder the save replaced. */
+/**
+ * A task: its Undo sets the task back to the holder the save replaced, only
+ * while the holder the save set still has it (final review M7): someone who
+ * picked the task since keeps it, and the Undo answers "assign.changed".
+ */
 export function taskAssigneeSave(accountId: string, taskId: string): AssignSave {
   return async (next) => {
     const r = await setTaskAssigneeAction(accountId, taskId, next);
@@ -65,7 +69,7 @@ export function taskAssigneeSave(accountId: string, taskId: string): AssignSave 
     return {
       ok: true,
       undo: async () => {
-        const u = await setTaskAssigneeAction(accountId, taskId, previous);
+        const u = await setTaskAssigneeAction(accountId, taskId, previous, next);
         return u.ok ? { ok: true } : u;
       },
     };

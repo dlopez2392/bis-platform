@@ -250,14 +250,23 @@ describe("contactAssigneeSave: a customer's save and its exact Undo", () => {
 });
 
 describe("taskAssigneeSave: a task's save and its Undo", () => {
-  it("sets through setTaskAssigneeAction(acct, taskId, next); its Undo sets it back to r.previous (mutation: Undo sets null -> FAILS)", async () => {
+  it("sets through setTaskAssigneeAction(acct, taskId, next); its Undo sets it back to r.previous, only while `next` still holds it (mutations: Undo sets null, or drops the expected holder -> FAILS)", async () => {
     taskActions.setTaskAssigneeAction.mockResolvedValue({ ok: true, previous: TOM.userId });
     const r = await taskAssigneeSave(ACCT, TASK)(ANA.userId);
     expect(taskActions.setTaskAssigneeAction).toHaveBeenCalledWith(ACCT, TASK, ANA.userId);
     if (!r.ok || !r.undo) throw new Error("expected an undo");
     taskActions.setTaskAssigneeAction.mockResolvedValue({ ok: true, previous: ANA.userId });
     expect(await r.undo()).toEqual({ ok: true });
-    expect(taskActions.setTaskAssigneeAction).toHaveBeenLastCalledWith(ACCT, TASK, TOM.userId);
+    expect(taskActions.setTaskAssigneeAction).toHaveBeenLastCalledWith(ACCT, TASK, TOM.userId, ANA.userId);
+  });
+
+  it("an Undo after someone picked the task since comes back as assign.changed, the later pick standing (final review M7)", async () => {
+    taskActions.setTaskAssigneeAction.mockResolvedValueOnce({ ok: true, previous: TOM.userId });
+    const r = await taskAssigneeSave(ACCT, TASK)(null);
+    if (!r.ok || !r.undo) throw new Error("expected an undo");
+    taskActions.setTaskAssigneeAction.mockResolvedValueOnce({ ok: false, error: "assign.changed" });
+    expect(await r.undo()).toEqual({ ok: false, error: "assign.changed" });
+    expect(taskActions.setTaskAssigneeAction).toHaveBeenLastCalledWith(ACCT, TASK, TOM.userId, null);
   });
 
   it("the same holder again is 'nothing changed': undo null (mutation: always offer Undo -> FAILS)", async () => {
@@ -271,7 +280,7 @@ describe("taskAssigneeSave: a task's save and its Undo", () => {
     if (!r.ok || !r.undo) throw new Error("expected an undo");
     taskActions.setTaskAssigneeAction.mockResolvedValueOnce({ ok: false, error: "assign.refused" });
     expect(await r.undo()).toEqual({ ok: false, error: "assign.refused" });
-    expect(taskActions.setTaskAssigneeAction).toHaveBeenLastCalledWith(ACCT, TASK, null);
+    expect(taskActions.setTaskAssigneeAction).toHaveBeenLastCalledWith(ACCT, TASK, null, ANA.userId);
   });
 });
 

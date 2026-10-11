@@ -3289,7 +3289,7 @@ export const m = {
   "team.revoke.failed": "The invitation wasn't cancelled. Try again in a minute.",
   "team.revoke.failed.es": "No se pudo cancelar la invitación. Intente de nuevo en un minuto.",
   // ── assign.* — Mine / Unassigned and the "Assigned to" field (F-085 part 1,
-  // spec §9). The three AssignError codes (contacts/actions.ts) are keys here.
+  // spec §9). The AssignError codes (contacts/actions.ts) are keys here.
   "assign.filter.label": "Show",
   "assign.filter.label.es": "Mostrar",
   "assign.filter.all": "All",
@@ -3329,6 +3329,9 @@ export const m = {
   "assign.failed.es": "No se guardó. Intente de nuevo en un minuto.",
   "assign.customerFirst": "Assign the customer to them first.",
   "assign.customerFirst.es": "Primero asígnele el cliente.",
+  // An Undo that found the task already handed on by someone else (final review M7).
+  "assign.changed": "Someone else changed this since. Their change stands.",
+  "assign.changed.es": "Alguien más lo cambió después. Se mantiene su cambio.",
   "assign.empty.mine": "Nothing assigned to you yet.",
   "assign.empty.mine.es": "Todavía no tiene nada asignado.",
   "assign.empty.unassigned": "Every customer has someone. New leads from calls, forms and chat land here first.",

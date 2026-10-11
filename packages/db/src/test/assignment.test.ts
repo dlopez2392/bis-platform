@@ -259,6 +259,19 @@ describe("assignment core (spec §8)", () => {
     expect(await holder(db, "tasks", t)).toBe(a.id);
     expect(await setTaskAssignee(db, accountId, "00000000-0000-4000-8000-000000000000", a.id, a.clerk)).toBe("not_found");
   }));
+  it("setTaskAssignee with an expected holder (the task Undo) leaves a task someone picked since with them: 'changed' (final review M7; mutation: ignore expected -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "e1", "staff");
+      const b = await person(db, accountId, "e2", "staff");
+      const c = await person(db, accountId, "e3", "staff");
+      const t = await task(db, accountId, null, a.id, "picked twice");
+      expect(await setTaskAssignee(db, accountId, t, b.id, a.clerk)).toEqual({ previous: a.id });
+      expect(await setTaskAssignee(db, accountId, t, c.id, a.clerk)).toEqual({ previous: b.id });   // the later pick
+      expect(await setTaskAssignee(db, accountId, t, a.id, a.clerk, { expected: b.id })).toBe("changed");   // the first save's Undo
+      expect(await holder(db, "tasks", t)).toBe(c.id);
+      expect(await setTaskAssignee(db, accountId, t, b.id, a.clerk, { expected: c.id })).toEqual({ previous: c.id });
+      expect(await holder(db, "tasks", t)).toBe(b.id);
+    }));
   it("setTaskAssignee refuses a target who is a member of ANOTHER account, and the task keeps its assignee (A5, review I-2; mutation: drop the membership check -> FAILS)", () =>
     withAssignAccount(async (db, accountId) => {
       const a = await person(db, accountId, "s2", "staff");
