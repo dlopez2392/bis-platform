@@ -226,6 +226,6 @@ export { PERSON_THEMES, PERSON_LANGUAGES, NO_PREFS, isPersonTheme, isPersonLangu
 
 // Mine, Unassigned and the Technician (0068): who holds a customer or a task. See ./assignment.ts.
 export {
-  readPersonId, taskAssigneeFor, assignContacts, setTaskAssignee, releaseMemberAssignments, reassignReleased,
+  readPersonId, taskAssigneeFor, assignContacts, undoAssignContacts, setTaskAssignee, releaseMemberAssignments, reassignReleased,
   type AssigneeFilter, type ReleasedAssignments, type PreviousAssignee,
 } from "./assignment";

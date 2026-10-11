@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { serviceDb } from "../service";
 import {
-  readPersonId, taskAssigneeFor, assignContacts, setTaskAssignee, releaseMemberAssignments, reassignReleased,
+  readPersonId, taskAssigneeFor, assignContacts, undoAssignContacts, setTaskAssignee, releaseMemberAssignments, reassignReleased,
 } from "../assignment";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -20,6 +20,16 @@ async function contact(db: SupabaseClient, accountId: string, assignee: string |
   if (error) throw error;
   return data.id as string;
 }
+async function task(db: SupabaseClient, accountId: string, contactId: string | null, assignee: string | null, title = "t"): Promise<string> {
+  const { data, error } = await db.from("tasks").insert({ account_id: accountId, contact_id: contactId, title, assigned_to: assignee }).select("id").single();
+  if (error) throw error;
+  return data.id as string;
+}
+async function holder(db: SupabaseClient, table: "contacts" | "tasks", id: string): Promise<string | null> {
+  const { data, error } = await db.from(table).select("assigned_to").eq("id", id).single();
+  if (error) throw error;
+  return (data.assigned_to as string | null) ?? null;
+}
 
 /**
  * withTestAccount, then this run's users rows. The users go LAST, after the
@@ -27,7 +37,7 @@ async function contact(db: SupabaseClient, accountId: string, assignee: string |
  * and tasks.assigned_to reference users with no delete action (0003), so a
  * users delete made inside the callback fails on the FK whenever a row still
  * names the person, and that person would be stranded in the project.
- * (memberships.user_id is `on delete cascade` since 0066.)
+ * (memberships.user_id and memberships.account_id are `on delete cascade` since 0066.)
  */
 async function withAssignAccount(fn: (db: SupabaseClient, accountId: string) => Promise<void>): Promise<void> {
   try {
@@ -36,6 +46,44 @@ async function withAssignAccount(fn: (db: SupabaseClient, accountId: string) => 
     const { error } = await serviceDb().from("users").delete().like("clerk_user_id", `user_assign_%_${RUN}`);
     if (error) throw new Error(`assignment.test cleanup failed on users: ${error.message}`);
   }
+}
+
+/**
+ * The REAL service client against the real database, except that the first
+ * `from(table).update(...)` resolves to an injected error, the way a dropped
+ * connection mid-call would. Only that one call is faked; every read and every
+ * other write reaches the database.
+ */
+function failFirstUpdate(db: SupabaseClient, table: string): SupabaseClient {
+  let armed = true;
+  const failing: unknown = new Proxy({}, {
+    get(_t, k) {
+      if (k === "then") {
+        return (res: (v: unknown) => unknown) =>
+          Promise.resolve({ data: null, error: { message: `injected ${table} update failure` } }).then(res);
+      }
+      return () => failing;
+    },
+  });
+  const bound = (target: object, k: string | symbol) => {
+    const v = Reflect.get(target, k, target) as unknown;
+    return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+  };
+  return new Proxy(db, {
+    get(target, k) {
+      if (k !== "from") return bound(target, k);
+      return (t: string) => {
+        const b = target.from(t);
+        if (t !== table || !armed) return b;
+        return new Proxy(b, {
+          get(bt, bk) {
+            if (bk === "update") { armed = false; return () => failing; }
+            return bound(bt, bk);
+          },
+        });
+      };
+    },
+  });
 }
 
 describe("assignment core (spec §8)", () => {
@@ -54,56 +102,120 @@ describe("assignment core (spec §8)", () => {
     expect(await taskAssigneeFor(db, accountId, null, owner.id)).toBe(owner.id);
     expect(await taskAssigneeFor(db, accountId, null, null)).toBeNull();
   }));
-  it("assignContacts moves the old assignee's open tasks with the customer and returns the previous assignees (A4; mutation: skip the task move -> FAILS)", () =>
+  it("assignContacts moves the customer and the old assignee's open tasks with it, and returns the previous assignee and the moved task ids (A4; mutations: skip the task move / skip the contacts update -> FAILS)", () =>
     withAssignAccount(async (db, accountId) => {
       const a = await person(db, accountId, "a", "technician");
       const b = await person(db, accountId, "b", "technician");
       const owner = await person(db, accountId, "o2", "owner");
       const c1 = await contact(db, accountId, a.id);
-      const { data: t1, error: e1 } = await db.from("tasks").insert({ account_id: accountId, contact_id: c1, title: "x", assigned_to: a.id }).select("id").single();
-      if (e1) throw e1;
-      const { data: tOwner, error: e2 } = await db.from("tasks").insert({ account_id: accountId, contact_id: c1, title: "y", assigned_to: owner.id }).select("id").single();
-      if (e2) throw e2;
+      const t1 = await task(db, accountId, c1, a.id, "x");
+      const tOwner = await task(db, accountId, c1, owner.id, "y");
       const previous = await assignContacts(db, accountId, [c1], b.id, owner.clerk);
-      expect(previous).toEqual([{ contactId: c1, assignee: a.id }]);
-      const { data: rows } = await db.from("tasks").select("id, assigned_to").in("id", [t1.id, tOwner.id]);
-      const by = Object.fromEntries((rows ?? []).map((r) => [r.id, r.assigned_to]));
-      expect(by[t1.id]).toBe(b.id);
-      expect(by[tOwner.id]).toBe(owner.id);
+      expect(previous).toEqual([{ contactId: c1, assignee: a.id, movedTaskIds: [t1] }]);
+      expect(await holder(db, "contacts", c1)).toBe(b.id);
+      expect(await holder(db, "tasks", t1)).toBe(b.id);
+      expect(await holder(db, "tasks", tOwner)).toBe(owner.id);
     }));
-  it("assignContacts refuses a target who is not a member of this account", () => withAssignAccount(async (db, accountId) => {
-    const c1 = await contact(db, accountId, null);
-    const { data: stranger, error } = await db.from("users").insert({ clerk_user_id: `user_assign_x_${RUN}`, email: `x_${RUN}@example.com` }).select("id").single();
-    if (error) throw error;
-    await expect(assignContacts(db, accountId, [c1], stranger.id, "user_test")).rejects.toThrow(/not a member/);
-  }));
-  it("setTaskAssignee returns the previous assignee, or not_found", () => withAssignAccount(async (db, accountId) => {
+  it("assignContacts from Unassigned takes the customer's unassigned open tasks along, and assigning to Unassigned (null) sends both back (m3; mutation: .eq(assigned_to, null) for an Unassigned holder -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const b = await person(db, accountId, "u", "staff");
+      const c = await contact(db, accountId, null);
+      const tu = await task(db, accountId, c, null, "nobody's");
+      expect(await assignContacts(db, accountId, [c], b.id, b.clerk)).toEqual([{ contactId: c, assignee: null, movedTaskIds: [tu] }]);
+      expect(await holder(db, "contacts", c)).toBe(b.id);
+      expect(await holder(db, "tasks", tu)).toBe(b.id);
+      expect(await assignContacts(db, accountId, [c], null, b.clerk)).toEqual([{ contactId: c, assignee: b.id, movedTaskIds: [tu] }]);
+      expect(await holder(db, "contacts", c)).toBeNull();
+      expect(await holder(db, "tasks", tu)).toBeNull();
+    }));
+  it("assignContacts heals on retry after the task move fails: nothing has changed, and the retry finishes (review I-3; mutation: update contacts before moving tasks -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "h1", "technician");
+      const b = await person(db, accountId, "h2", "technician");
+      const c1 = await contact(db, accountId, a.id);
+      const t1 = await task(db, accountId, c1, a.id);
+      await expect(assignContacts(failFirstUpdate(db, "tasks"), accountId, [c1], b.id, b.clerk)).rejects.toThrow(/injected tasks update failure/);
+      expect(await holder(db, "contacts", c1)).toBe(a.id);
+      expect(await holder(db, "tasks", t1)).toBe(a.id);
+      await assignContacts(db, accountId, [c1], b.id, b.clerk);
+      expect(await holder(db, "contacts", c1)).toBe(b.id);
+      expect(await holder(db, "tasks", t1)).toBe(b.id);
+    }));
+  it("undoAssignContacts restores the customer and moves back only the tasks that moved: B's own earlier task stays with B (review m1; mutation: move back every open task B holds on the customer -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "ua", "technician");
+      const b = await person(db, accountId, "ub", "technician");
+      const c1 = await contact(db, accountId, a.id);
+      const tA = await task(db, accountId, c1, a.id, "A's");
+      const tB = await task(db, accountId, c1, b.id, "B's own, from before");
+      const previous = await assignContacts(db, accountId, [c1], b.id, b.clerk);
+      expect(previous).toEqual([{ contactId: c1, assignee: a.id, movedTaskIds: [tA] }]);
+      await undoAssignContacts(db, accountId, previous, b.clerk);
+      expect(await holder(db, "contacts", c1)).toBe(a.id);
+      expect(await holder(db, "tasks", tA)).toBe(a.id);
+      expect(await holder(db, "tasks", tB)).toBe(b.id);
+    }));
+  it("assignContacts refuses a target who is a member of ANOTHER account, and changes nothing (A5, review m2; mutation: drop .eq(account_id) from the membership check -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const c1 = await contact(db, accountId, null);
+      await withTestAccount(async (_db, otherAccountId) => {
+        const stranger = await person(db, otherAccountId, "x", "staff");
+        await expect(assignContacts(db, accountId, [c1], stranger.id, "user_test")).rejects.toThrow(/not a member/);
+      });
+      expect(await holder(db, "contacts", c1)).toBeNull();
+    }));
+  it("setTaskAssignee writes the assignee and returns the previous one, or not_found (review I-2; mutation: skip the update -> FAILS)", () => withAssignAccount(async (db, accountId) => {
     const a = await person(db, accountId, "s", "staff");
-    const { data: t, error } = await db.from("tasks").insert({ account_id: accountId, title: "z" }).select("id").single();
-    if (error) throw error;
-    expect(await setTaskAssignee(db, accountId, t.id, a.id, a.clerk)).toEqual({ previous: null });
+    const t = await task(db, accountId, null, null, "z");
+    expect(await setTaskAssignee(db, accountId, t, a.id, a.clerk)).toEqual({ previous: null });
+    expect(await holder(db, "tasks", t)).toBe(a.id);
     expect(await setTaskAssignee(db, accountId, "00000000-0000-4000-8000-000000000000", a.id, a.clerk)).toBe("not_found");
   }));
+  it("setTaskAssignee refuses a target who is a member of ANOTHER account, and the task keeps its assignee (A5, review I-2; mutation: drop the membership check -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "s2", "staff");
+      const t = await task(db, accountId, null, a.id, "kept");
+      await withTestAccount(async (_db, otherAccountId) => {
+        const stranger = await person(db, otherAccountId, "x2", "staff");
+        await expect(setTaskAssignee(db, accountId, t, stranger.id, a.clerk)).rejects.toThrow(/not a member/);
+      });
+      expect(await holder(db, "tasks", t)).toBe(a.id);
+    }));
   it("releaseMemberAssignments then reassignReleased restores only what is still Unassigned", () => withAssignAccount(async (db, accountId) => {
     const a = await person(db, accountId, "r", "technician");
     const other = await person(db, accountId, "r2", "staff");
     const c1 = await contact(db, accountId, a.id);
     const c2 = await contact(db, accountId, a.id);
-    const { data: t, error: tErr } = await db.from("tasks").insert({ account_id: accountId, title: "open, no customer", assigned_to: a.id }).select("id").single();
-    if (tErr) throw tErr;
+    const t = await task(db, accountId, null, a.id, "open, no customer");
     const { error: dErr } = await db.from("memberships").delete().eq("user_id", a.id);
     if (dErr) throw dErr;
     const released = await releaseMemberAssignments(db, accountId, a.id);
     expect(released.contacts.sort()).toEqual([c1, c2].sort());
-    expect(released.tasks).toEqual([t.id]);
+    expect(released.tasks).toEqual([t]);
     const { error: uErr } = await db.from("contacts").update({ assigned_to: other.id }).eq("id", c2);   // picked up meanwhile
     if (uErr) throw uErr;
     await reassignReleased(db, accountId, a.id, released);
-    const { data } = await db.from("contacts").select("id, assigned_to").in("id", [c1, c2]);
-    const by = Object.fromEntries((data ?? []).map((r) => [r.id, r.assigned_to]));
-    expect(by[c1]).toBe(a.id);
-    expect(by[c2]).toBe(other.id);      // mutation: drop the .is("assigned_to", null) guard -> FAILS
-    const { data: tAfter } = await db.from("tasks").select("assigned_to").eq("id", t.id).single();
-    expect(tAfter?.assigned_to).toBe(a.id);   // mutation: drop reassignReleased's tasks branch -> FAILS
+    expect(await holder(db, "contacts", c1)).toBe(a.id);
+    expect(await holder(db, "contacts", c2)).toBe(other.id);   // mutation: drop the .is("assigned_to", null) guard -> FAILS
+    expect(await holder(db, "tasks", t)).toBe(a.id);           // mutation: drop reassignReleased's tasks branch -> FAILS
   }));
+});
+
+/** Only `.rpc()`, answering what the database never should: enough to pin the parse without a database. */
+const rpcAnswering = (data: unknown) => ({ rpc: async () => ({ data, error: null }) }) as unknown as SupabaseClient;
+
+describe("releaseMemberAssignments refuses a result it does not recognise (review m7, fake client)", () => {
+  it.each([
+    ["null", null],
+    ["a bare array", []],
+    ["contacts not an array", { contacts: "x", tasks: [] }],
+    ["tasks missing", { contacts: [] }],
+    ["a non-string id", { contacts: [1], tasks: [] }],
+  ])("%s throws instead of reading as nothing released (mutation: fall back to [] -> FAILS)", async (_label, data) => {
+    await expect(releaseMemberAssignments(rpcAnswering(data), "acct", "user")).rejects.toThrow(/unexpected result/);
+  });
+  it("the shape 0068 returns parses", async () => {
+    expect(await releaseMemberAssignments(rpcAnswering({ contacts: ["c1"], tasks: [] }), "acct", "user"))
+      .toEqual({ contacts: ["c1"], tasks: [] });
+  });
 });
