@@ -5,6 +5,7 @@ import Papa from "papaparse";
 import { useMemo, useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import { autoMap, mapRows, IMPORT_FIELDS, type ParsedRow } from "@/lib/contacts/csv";
+import { NO_IMPORT_YET, addImportBatch, importBusinessNotes, type ImportTotals } from "@/lib/contacts/import-summary";
 import { importContactsBatchAction } from "./actions";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ type Phase =
   | { name: "choose" }
   | { name: "map" }
   | { name: "running"; done: number; total: number }
-  | { name: "done"; created: number; updated: number; flagged: number }
+  | { name: "done"; totals: ImportTotals }
   | { name: "stopped"; done: number; error: string };
 
 export function ImportWizard(
@@ -97,9 +98,7 @@ export function ImportWizard(
   }
 
   const { pending, onSubmit } = useFormSubmit(async () => {
-    let created = 0;
-    let updated = 0;
-    let flagged = 0;
+    let totals = NO_IMPORT_YET;
     let done = 0;
     setPhase({ name: "running", done: 0, total: rows.length });
 
@@ -114,13 +113,11 @@ export function ImportWizard(
         setPhase({ name: "stopped", done, error: result.error });
         return;
       }
-      created += result.created;
-      updated += result.updated;
-      flagged += result.flagged;
+      totals = addImportBatch(totals, result);
       done += slice.length;
       setPhase({ name: "running", done, total: rows.length });
     }
-    setPhase({ name: "done", created, updated, flagged });
+    setPhase({ name: "done", totals });
   });
 
   if (phase.name === "done") {
@@ -128,14 +125,18 @@ export function ImportWizard(
       <div className="glass rounded-[var(--radius-card)] border border-line p-6">
         <p className="text-text-1">
           {m["contacts.import.done"]
-            .replace("{created}", String(phase.created))
-            .replace("{updated}", String(phase.updated))}
+            .replace("{created}", String(phase.totals.created))
+            .replace("{updated}", String(phase.totals.updated))}
         </p>
-        {phase.flagged > 0 ? (
+        {phase.totals.flagged > 0 ? (
           <p className="mt-2 text-sm text-text-2">
-            {m["contacts.import.flagged"].replace("{flagged}", String(phase.flagged))}
+            {m["contacts.import.flagged"].replace("{flagged}", String(phase.totals.flagged))}
           </p>
         ) : null}
+        {/* This screen speaks English today (m, not the request locale); the .es twins are in. */}
+        {importBusinessNotes(phase.totals, "en").map((note) => (
+          <p key={note} className="mt-2 text-sm text-text-2">{note}</p>
+        ))}
         <Link href={contactsHref} className="mt-4 inline-block text-sm text-accent underline">
           {m["contacts.import.back"]}
         </Link>

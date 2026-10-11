@@ -5,7 +5,8 @@ import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { createContact, deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
          getContact, setContactPhoneCountry, readPersonId, flagMatchesOf, serviceDb,
-         assignContacts, undoAssignContacts, type PreviousAssignee } from "@bis/db";
+         assignContacts, undoAssignContacts, type PreviousAssignee,
+         setContactsBusiness, undoSetBusiness, GROUP_NAME_MAX, type GroupMemberSnapshot } from "@bis/db";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { MAX_ASSIGN, MAX_MOVED_TASKS, isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
 import { normalisePhone, repickPhoneCountry, type PhoneCountry } from "@bis/db/phone";
@@ -161,6 +162,80 @@ export async function undoAssignContactsAction(
 
 const contactsPath = (accountId: string) => `/dashboard/accounts/${accountId}/contacts`;
 
+/** What the Business name's Undo hands back: the server's own record (the phone field's precedent). */
+export type BusinessUndo = { added: string | null; removed: GroupMemberSnapshot | null };
+
+/**
+ * The contact's Business name is a business GROUP (S-02 §6 row 3, 0069). The
+ * request client proves the contact first (a Technician cannot see someone
+ * else's customer), then the service client writes, because the group tables
+ * are server-written. The column the list shows is kept by the database.
+ *
+ * `shown` is the name the database STORED (I3): a business already on the
+ * list under another spelling keeps ITS spelling ("Beta Roofing" for a typed
+ * "beta roofing"), so the field shows that rather than the typed text. An
+ * unchanged save reports the spelling the proof read already holds; a real
+ * change reads it back after the write. The 120 limit counts characters, as
+ * the database's char_length does, not UTF-16 units (M1).
+ */
+export async function setContactBusinessAction(
+  accountId: string, contactId: string, value: string,
+): Promise<{ ok: true; shown: string; undoPayload?: BusinessUndo } | { ok: false; error: string }> {
+  const { userId } = await requireAccountAccess(accountId);
+  const name = value.trim();
+  if ([...name].length > GROUP_NAME_MAX) return { ok: false, error: m["contact.business.tooLong"] };
+  let db: Awaited<ReturnType<typeof dbForRequest>>;
+  let r: Awaited<ReturnType<typeof setContactsBusiness>>[number] | undefined;
+  let before: Awaited<ReturnType<typeof getContact>>;
+  try {
+    db = await dbForRequest();
+    before = await getContact(db, accountId, contactId);
+    if (!before) return { ok: false, error: "Save failed — please try again." };
+    [r] = await setContactsBusiness(serviceDb(), accountId, [{ contactId, name }], userId);
+    if (!r || r.status === "not_found") return { ok: false, error: "Save failed — please try again." };
+    if (r.status === "too_long") return { ok: false, error: m["contact.business.tooLong"] };
+  } catch (e) {
+    console.error(`setContactBusinessAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
+    return { ok: false, error: "Save failed — please try again." };
+  }
+  if (r.status === "unchanged") return { ok: true, shown: before.company_name ?? "" };
+  // The write has committed by here: a failed read-back costs the canonical
+  // spelling (the typed name is shown instead), never the truth that it saved.
+  let shown = name;
+  try {
+    const after = await getContact(db, accountId, contactId);
+    // No row read back (not a throw) is the same lost read: keep the typed name.
+    shown = after ? (after.company_name ?? "") : name;
+  } catch (e) {
+    console.error(`setContactBusinessAction: account ${accountId} contact ${contactId}: read-back after save failed: ${loggableError(e)}`);
+  }
+  revalidatePath(contactsPath(accountId));
+  revalidatePath(`${contactsPath(accountId)}/${contactId}`);
+  return { ok: true, shown, undoPayload: { added: r.added, removed: r.removed } };
+}
+
+export async function undoContactBusinessAction(
+  accountId: string, contactId: string, undo: BusinessUndo,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireAccountAccess(accountId);
+  const removed = undo?.removed ?? null;
+  if (!isUuidOrNull(undo?.added ?? null) || (removed !== null && removed.contact_id !== contactId)) {
+    return { ok: false, error: "Undo failed — please try again." };
+  }
+  try {
+    const db = await dbForRequest();
+    if (!(await getContact(db, accountId, contactId))) return { ok: false, error: "Undo failed — please try again." };
+    const r = await undoSetBusiness(serviceDb(), accountId, contactId, undo.added, removed);
+    if (r !== "ok") return { ok: false, error: "Undo failed — please try again." };
+    revalidatePath(contactsPath(accountId));
+    revalidatePath(`${contactsPath(accountId)}/${contactId}`);
+    return { ok: true };
+  } catch (e) {
+    console.error(`undoContactBusinessAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
+    return { ok: false, error: "Undo failed — please try again." };
+  }
+}
+
 /**
  * For the PHONE field only: `undo` carries what the server itself read and
  * wrote, so the inline Undo restores exactly that — never a value the
@@ -178,6 +253,10 @@ export async function updateContactFieldAction(
 ): Promise<{ ok: true; undo?: PhoneInlineUndo } | { ok: false; error: string }> {
   const { userId } = await requireAccountAccess(accountId);
   if (!EDITABLE_FIELDS.includes(field)) return { ok: false, error: "Unknown field." };
+  if (field === "company_name") {
+    const r = await setContactBusinessAction(accountId, contactId, value);
+    return r.ok ? { ok: true } : r;
+  }
   const norm = normalizeFieldInput(field, value);
   if (!norm.ok) return norm;
   // Round 4 (m4): `dbForRequest()` moves back INSIDE the try — a throw here

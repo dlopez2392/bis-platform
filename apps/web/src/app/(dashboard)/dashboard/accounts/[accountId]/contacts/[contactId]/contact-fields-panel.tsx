@@ -23,6 +23,7 @@ import { updateContactAction, addTagAction, removeTagAction } from "./actions";
 import { updateContactFieldAction, undoInlinePhoneEditAction } from "../actions";
 import { FIELDS } from "../contact-drawer";
 import { SourceField } from "../source-field";
+import { BusinessInlineField } from "../business-field";
 import { contactSourceHint } from "@/lib/contacts/lead-source";
 import { useRouter } from "next/navigation";
 import { EmailRow } from "../email-row";
@@ -105,6 +106,10 @@ export function ContactFieldsPanel({
                 </dd>
               </div>
             ))}
+            <div className="space-y-0.5">
+              <dt className="text-muted-foreground text-xs">{m["contact.company"]}</dt>
+              <dd><BusinessInlineField accountId={accountId} contactId={contactId} value={contact.company_name ?? null} /></dd>
+            </div>
             <SourceField
               accountId={accountId}
               contactId={contactId}

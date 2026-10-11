@@ -45,3 +45,66 @@ describe("InlineField's options <select> uses nativeFieldClass", () => {
     expect(select).toContain('className={cn(nativeFieldClass, "h-8")}');
   });
 });
+
+/**
+ * S-02 §6 row 3: whether Undo is offered and which ONE writer it runs is
+ * decided by planInlineUndo (lib/contacts/inline-save.ts, pinned there by
+ * behaviour). What is left to pin here, by source text (no DOM harness in
+ * this package), is that the component asks it and runs nothing else.
+ */
+describe("InlineField delegates Undo and the saved view to lib/contacts/inline-save", () => {
+  it("plans Undo from THIS save's own payloads (mutation: hand it a client-captured value -> FAILS)", () => {
+    const call = src.match(/const undo = planInlineUndo\(\{[^}]*\}\);/)?.[0] ?? "";
+    expect(call).toMatch(/phoneUndo: result\.undo,/);
+    expect(call).toMatch(/ownUndo: result\.undoPayload,/);
+    // `undoWith` exactly as the prop arrived: the shorthand, never `undoWith: <anything>`
+    // (mutations: `undoWith: undefined`; `undoWith: field === "phone" ? undoWith : undefined` -> FAIL).
+    expect(call).toMatch(/[\s,{]undoWith,?\s*\}\);$/);
+    expect(call).not.toMatch(/undoWith\s*:/);
+  });
+  it("offers Undo exactly when one is planned, and runs only that write (mutation: a second write beside it -> FAILS)", () => {
+    expect(src).toMatch(/action: undo\s*\?/);
+    expect(src).toMatch(/onClick: \(\) => \{\s*void undo\(\)\.then\(\(r\) => \{/);
+    expect(src).not.toMatch(/commitInlineUndo/);
+  });
+  it("shows the server's stored spelling and its message (mutation: show the typed text -> FAILS)", () => {
+    expect(src).toMatch(/const view = inlineSavedView\(norm\.value, label, result\);/);
+    expect(src).toMatch(/committed\.current = view\.shown;\s*setShown\(view\.shown\);/);
+  });
+});
+
+/**
+ * S-02 §8: an empty field may name what belongs there ("Role, like Madre or
+ * Dueño") instead of the generic "Add…". The placeholder is shown, never
+ * stored: a filled field shows its value, and the accessible name still
+ * carries the label first.
+ */
+describe("InlineField's placeholder", () => {
+  const html = (value: string | null, placeholder?: string) =>
+    renderToStaticMarkup(createElement(InlineField, { label: "Role", value, field: "source", save, placeholder }));
+
+  it("an empty field shows the placeholder in place of the generic empty text (mutation: ignore the prop -> FAILS)", () => {
+    const out = html(null, "Role, like Madre");
+    expect(out).toContain(">Role, like Madre</button>");
+    expect(out).toContain('aria-label="Edit Role: Role, like Madre"');
+  });
+
+  it("a filled field shows its value, and no placeholder means the generic empty text (mutation: always show the placeholder -> FAILS)", () => {
+    expect(html("Madre", "Role, like Madre")).toContain(">Madre</button>");
+    expect(html(null)).toContain(">Add…</button>");
+  });
+});
+
+/**
+ * Final review minor 11: a caller that must not remount the field mid-edit
+ * (the Business name) is told when editing starts and stops. Every change of
+ * `editing` goes through ONE setter that also tells `onEditingChange`, so no
+ * path (click, commit, Esc) can change it silently.
+ */
+describe("InlineField reports every editing change through onEditingChange", () => {
+  it("the state setter is called in exactly one place, the wrapper that also calls onEditingChange (mutation: call setEditingState directly anywhere else -> FAILS)", () => {
+    expect(src).toContain("const [editing, setEditingState] = useState(false);");
+    expect(src.match(/setEditingState\(/g)).toHaveLength(1);
+    expect(src).toContain("const setEditing = (next: boolean) => { setEditingState(next); onEditingChange?.(next); };");
+  });
+});

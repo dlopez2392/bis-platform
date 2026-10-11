@@ -26,6 +26,8 @@ import { summaryLoadFrom, type ParsedContactSummary, type SummaryLoad } from "@/
 import type { EditableField } from "@/lib/contacts/field-input";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { SourceField } from "./source-field";
+import { BusinessInlineField } from "./business-field";
+import { GroupsCard } from "./groups-card";
 import { ContactAssigneeField } from "@/components/assign/assignee-field";
 import type { AssignMember } from "@/lib/assign/view";
 
@@ -58,12 +60,14 @@ type Fetched = { contactId: string; result: LoadResult } | null;
 // Source line needs — that line has its own component (`SourceField`),
 // fed by the summary route / the full page's own `contact` prop, not this
 // array.
-export const FIELDS: { field: Exclude<EditableField, "source">; labelKey: keyof typeof m; type: "text" | "email" | "tel" }[] = [
+// The Business name is not in this array either (S-02 §6 row 3): it writes
+// the contact's business GROUP through its own action and Undo, so it has
+// its own component (`BusinessInlineField`), rendered after these rows.
+export const FIELDS: { field: Exclude<EditableField, "source" | "company_name">; labelKey: keyof typeof m; type: "text" | "email" | "tel" }[] = [
   { field: "first_name", labelKey: "contacts.firstName", type: "text" },
   { field: "last_name", labelKey: "contacts.lastName", type: "text" },
   { field: "email", labelKey: "contacts.email", type: "email" },
   { field: "phone", labelKey: "contacts.phone", type: "tel" },
-  { field: "company_name", labelKey: "contact.company", type: "text" },
 ];
 
 export function ContactDrawer({
@@ -238,6 +242,10 @@ export function ContactDrawer({
                     </dd>
                   </div>
                 ))}
+                <div key={`${row.id}:company_name`} className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2">
+                  <dt className="text-muted-foreground text-xs">{m["contact.company"]}</dt>
+                  <dd><BusinessInlineField accountId={accountId} contactId={row.id} value={row.company_name ?? null} /></dd>
+                </div>
               </dl>
 
               <TextsRow
@@ -254,6 +262,19 @@ export function ContactDrawer({
                 showTitle={textsLoad.status === "ready" && textsLoad.view.kind === "no_number"}
                 onChanged={() => setRetryNonce((n) => n + 1)}
                 onRetry={() => setRetryNonce((n) => n + 1)}
+              />
+              {/* S-02 §8: its own read, skeleton and Retry, so it loads and
+                  fails on its own. `canAssign` is Owner, Staff or the agency:
+                  the same people A6 lets rename a group. A change re-reads
+                  the drawer like the Texts and Email rows' do; the card also
+                  refreshes the list, which brings this drawer a fresh row and
+                  so the new Business name (fix round 1, I1). */}
+              <GroupsCard
+                key={`${row.id}:groups`}
+                accountId={accountId}
+                contactId={row.id}
+                canManageGroups={canAssign}
+                onChanged={() => setRetryNonce((n) => n + 1)}
               />
 
               {load.status === "loading" ? (

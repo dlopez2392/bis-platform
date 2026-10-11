@@ -547,6 +547,14 @@ export const m = {
   // is usually one person entered twice — but not always, and the product has
   // no merge screen yet, so it must not promise a resolution it cannot offer.
   "contacts.import.flagged": "{flagged} possible duplicates flagged for review.",
+  // Shown on the done screen only when they happened (final review I-C), summed
+  // across every batch. The contacts themselves were saved either way.
+  "contacts.import.businessTooLong": "{count} business names were too long to save (120 characters max).",
+  "contacts.import.businessTooLong.es": "{count} nombres de negocio eran demasiado largos para guardarse (máximo 120 caracteres).",
+  "contacts.import.businessTooLongOne": "1 business name was too long to save (120 characters max).",
+  "contacts.import.businessTooLongOne.es": "1 nombre de negocio era demasiado largo para guardarse (máximo 120 caracteres).",
+  "contacts.import.businessLinkFailed": "Business names didn't save for some rows — import again to retry.",
+  "contacts.import.businessLinkFailed.es": "Los nombres de negocio no se guardaron en algunas filas. Vuelva a importar para intentarlo de nuevo.",
   "contacts.import.partial": "Stopped after {done} rows. Nothing after that was imported.",
   "contacts.import.failed": "That import didn't go through. Nothing was changed. Please try again.",
   "contacts.import.tooMany": "That's too many rows at once. Try a smaller file.",
@@ -634,7 +642,14 @@ export const m = {
   "contact.addNote": "Add a note…",
   "contact.addTask": "New task…",
   "contact.done": "done",
-  "contact.company": "Company",
+  "contact.company": "Business name",
+  "contact.company.es": "Nombre del negocio",
+  "contact.business.tooLong": "Business names can be up to 120 characters.",
+  "contact.business.tooLong.es": "El nombre del negocio puede tener hasta 120 caracteres.",
+  // I3: a Business name save that changed nothing because the business is
+  // already on the list under another spelling says so, instead of "saved".
+  "contact.business.alreadyAs": "Already on your list as “{name}”.",
+  "contact.business.alreadyAs.es": "Ya está en su lista como “{name}”.",
   // F-157's drawer line (docs/crm-features.md §4.3 rider 6): the owner's own
   // free-text note on where this lead came from ("contact.source.label",
   // inline-editable like the fields above) plus the auto-detected hint next
@@ -1219,7 +1234,8 @@ export const m = {
   "forms.kind.core.last_name": "Last name",
   "forms.kind.core.email": "Email",
   "forms.kind.core.phone": "Phone",
-  "forms.kind.core.company_name": "Company",
+  "forms.kind.core.company_name": "Business name",
+  "forms.kind.core.company_name.es": "Nombre del negocio",
   // F-018, folded into F-157 (docs/crm-features.md §4.3 rider 6): the source
   // question — one optional field a form can add. This exact string doubles
   // as the field's default customer-facing label (form-editor.tsx's
@@ -3342,6 +3358,74 @@ export const m = {
   "assign.empty.unassignedWork.es": "Todo en esta lista tiene a alguien. El trabajo de un cliente sin responsable llega aquí primero.",
   "assign.empty.technician": "No customers yet. When your team gives you a customer, they show up here.",
   "assign.empty.technician.es": "Todavía no tiene clientes. Cuando su equipo le asigne uno, aparecerá aquí.",
+  // Client groups (S-02 part 1): the Groups card on the drawer and the
+  // contact page. NEVER "Company" (G4): that word names the BIS client. The
+  // drawer and the page read m["…"] today; the twins are written anyway
+  // (spec §8). The four error keys are the ones groups-actions.ts returns.
+  "groups.title": "Groups",
+  "groups.title.es": "Grupos",
+  "groups.kind.household": "Household",
+  "groups.kind.household.es": "Familia",
+  "groups.kind.business": "Business customer",
+  "groups.kind.business.es": "Cliente comercial",
+  "groups.primary": "Main group",
+  "groups.primary.es": "Grupo principal",
+  "groups.makePrimary": "Make main",
+  "groups.makePrimary.es": "Hacer principal",
+  "groups.billing": "Pays the bills",
+  "groups.billing.es": "Paga las cuentas",
+  "groups.role": "Role",
+  "groups.role.es": "Papel",
+  "groups.rolePlaceholder": "Role, like Madre or Dueño",
+  "groups.rolePlaceholder.es": "Papel, como Madre o Dueño",
+  "groups.name": "Group name",
+  "groups.name.es": "Nombre del grupo",
+  // A blank rename, refused in the card. Not InlineField's `required` rule:
+  // its message is the account rename's, which says "company" (G4).
+  "groups.nameEmpty": "A group needs a name.",
+  "groups.nameEmpty.es": "Un grupo necesita un nombre.",
+  "groups.billingAddress": "Billing address",
+  "groups.billingAddress.es": "Dirección de cobro",
+  "groups.add": "Add to a group",
+  "groups.add.es": "Agregar a un grupo",
+  "groups.searchPlaceholder": "Search households and businesses",
+  "groups.searchPlaceholder.es": "Buscar familias y negocios",
+  // The search's own error line, inside the add box (it never crashes the card).
+  "groups.searchFailed": "Couldn't search right now. You can still create one below.",
+  "groups.searchFailed.es": "No se pudo buscar ahora. Todavía puede crear uno abajo.",
+  "groups.createHousehold": "Create household “{name}”",
+  "groups.createHousehold.es": "Crear familia “{name}”",
+  "groups.createBusiness": "Create business customer “{name}”",
+  "groups.createBusiness.es": "Crear cliente comercial “{name}”",
+  "groups.added": "Added to {name}.",
+  "groups.added.es": "Se agregó a {name}.",
+  "groups.addedExisting": "Added to {name}, which was already on your list.",
+  "groups.addedExisting.es": "Se agregó a {name}, que ya estaba en su lista.",
+  "groups.remove": "Remove from this group",
+  "groups.remove.es": "Quitar de este grupo",
+  "groups.removed": "Removed from {name}.",
+  "groups.removed.es": "Se quitó de {name}.",
+  "groups.saved": "Saved.",
+  "groups.saved.es": "Guardado.",
+  "groups.empty": "Households and businesses this person belongs to show up here.",
+  "groups.empty.es": "Las familias y negocios a los que pertenece esta persona aparecen aquí.",
+  "groups.loadFailed": "Couldn't load groups.",
+  "groups.loadFailed.es": "No se pudieron cargar los grupos.",
+  "groups.retry": "Try again",
+  "groups.retry.es": "Intentar de nuevo",
+  "groups.refused": "You can't change that group.",
+  "groups.refused.es": "No puede cambiar ese grupo.",
+  "groups.failed": "That didn't save. Try again.",
+  "groups.failed.es": "No se guardó. Intente de nuevo.",
+  "groups.nameTaken": "There's already a business customer with that name.",
+  "groups.nameTaken.es": "Ya hay un cliente comercial con ese nombre.",
+  "groups.tooLong": "That's too long.",
+  "groups.tooLong.es": "Es demasiado largo.",
+  "groups.others": "Also in this group",
+  "groups.others.es": "También en este grupo",
+  // After the names the card shows, when a group has more members than it lists.
+  "groups.othersMore": "and {count} more",
+  "groups.othersMore.es": "y {count} más",
 } as const;
 
 export type MessageKey = keyof typeof m;

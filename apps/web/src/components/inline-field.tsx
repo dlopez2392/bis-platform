@@ -6,7 +6,8 @@ import { Input, nativeFieldClass } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { normalizeFieldInput, type EditableField } from "@/lib/contacts/field-input";
-import { commitInlineUndo, type PhoneInlineUndo, type InlinePhoneUndoWrite } from "@/lib/contacts/inline-phone-undo";
+import type { PhoneInlineUndo, InlinePhoneUndoWrite } from "@/lib/contacts/inline-phone-undo";
+import { planInlineUndo, inlineSavedView } from "@/lib/contacts/inline-save";
 // The `options` arm's validator lives in a plain module so the server action
 // behind an options field can run the identical check (see its doc).
 import { validateEnumValue } from "@/lib/enum-value";
@@ -70,17 +71,31 @@ export function InlineField(
      *  record of the prior phone and flag AND the value it actually stored
      *  (`lib/contacts/inline-phone-undo.ts`'s `PhoneInlineUndo`) — never a
      *  value this component captures itself. Every other field's `save`
-     *  never returns one, and none is expected. */
-    save: (value: string) => Promise<{ ok: true; undo?: PhoneInlineUndo } | { ok: false; error: string }>;
+     *  never returns one, and none is expected. An `undoWith` field's save
+     *  may return `undoPayload` (handed to `undoWith`) and `shown`, the value
+     *  the server actually stored, which the field then displays. */
+    save: (value: string) => Promise<{ ok: true; undo?: PhoneInlineUndo; undoPayload?: unknown; shown?: string } | { ok: false; error: string }>;
     inputType?: "text" | "email" | "tel";
     /** Phone field only: the dedicated undo write, given exactly the
      *  `PhoneInlineUndo` the save returned. When absent (or the field isn't
      *  phone, or the save returned no `undo`), undo falls back to
      *  `save(prior)` exactly as every other field's undo always has. */
     undoPhone?: InlinePhoneUndoWrite;
+    /** A field whose save hands back its own server-built undo (the Business
+     *  name, S-02 §6 row 3): Undo calls this with exactly that payload instead
+     *  of re-saving the prior text. Absent: the default `save(prior)` undo. */
+    undoWith?: (payload: unknown) => Promise<{ ok: true } | { ok: false; error: string }>;
+    /** What an EMPTY field shows in place of the generic "Add…", and the
+     *  input's placeholder while editing (the Groups card's role, S-02 §8:
+     *  "Role, like Madre or Dueño"). Shown, never stored. */
+    placeholder?: string;
+    /** Told whenever editing starts or stops (the Business name holds its
+     *  remount key while the operator types, so a refresh never throws the
+     *  typed text away). */
+    onEditingChange?: (editing: boolean) => void;
   },
 ) {
-  const { label, field, required, options, value, save, inputType = "text", undoPhone } = props;
+  const { label, field, required, options, value, save, inputType = "text", undoPhone, undoWith, placeholder, onEditingChange } = props;
   // `field` is guaranteed defined whenever neither `required` nor `options`
   // is — the three-way union above enforces that at every call site; this
   // is what lets commit() and the undo guard below share ONE rule instead
@@ -89,7 +104,9 @@ export function InlineField(
     options ? validateEnumValue(options, raw)
     : required ? normalizeRequired(raw)
     : normalizeFieldInput(field as EditableField, raw);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditingState] = useState(false);
+  // The ONE way editing changes, so onEditingChange hears every path: click, commit and Esc.
+  const setEditing = (next: boolean) => { setEditingState(next); onEditingChange?.(next); };
   const [shown, setShown] = useState(value ?? "");
   // Tracks the committed value for cancel/undo across saves.
   const committed = useRef(value ?? "");
@@ -107,7 +124,7 @@ export function InlineField(
     if (norm.value === committed.current) return; // no-op edit — no toast
     const prior = committed.current;
     setShown(norm.value);
-    let result: { ok: true; undo?: PhoneInlineUndo } | { ok: false; error: string };
+    let result: { ok: true; undo?: PhoneInlineUndo; undoPayload?: unknown; shown?: string } | { ok: false; error: string };
     try {
       result = await save(norm.value);
     } catch {
@@ -118,36 +135,28 @@ export function InlineField(
       toast.error(result.error);
       return;
     }
-    committed.current = norm.value;
-    // The phone field's OWN undo payload, straight off THIS save's result —
-    // never captured client-side (review C1: the drawer's summary can be
-    // stale, or defaulted false while loading or on error).
-    const phoneUndo = result.undo;
-    // Undo re-runs `save` with the PRIOR value, straight past commit()'s
-    // validation — so offering it for a prior this field's own rule rejects
-    // is offering a button whose only possible outcome is a server error
-    // toast. For a `required` field first filled in from empty that is EVERY
-    // first save. Asked of the exact value undo would send, with the exact
-    // rule the server will apply to it.
-    //
-    // Phone is different (round 3, CRITICAL): it is undoable exactly when
-    // the save handed back a payload to restore, never `normalize(prior).ok`
-    // — that would offer Undo for a phone edit with no payload (a prior
-    // getContact read that raced or failed) and commitInlineUndo would then
-    // have nothing to route to but `save(prior)`, the exact re-derive-the-
-    // flag-from-text bug this whole fix exists to close. No payload means no
-    // Undo button for phone, full stop.
-    const undoable = field === "phone" ? phoneUndo !== undefined : normalize(prior).ok;
-    toast.success(m["inline.saved"].replace("{label}", label), {
-      action: undoable
+    // I3: show what the server STORED when it says (the Business name keeps
+    // the existing business spelling), and say so when nothing changed.
+    const view = inlineSavedView(norm.value, label, result);
+    committed.current = view.shown;
+    setShown(view.shown);
+    // Whether Undo is offered, and the ONE write it runs, is decided by
+    // planInlineUndo (lib/contacts/inline-save.ts, pinned there by behaviour):
+    // phone and an `undoWith` field undo with the payload THIS save handed
+    // back, never a value captured here (review C1); every other field
+    // re-saves the prior text, offered only when its own rule accepts it.
+    const undo = planInlineUndo({
+      field, prior, priorValid: normalize(prior).ok,
+      phoneUndo: result.undo, ownUndo: result.undoPayload,
+      save, undoPhone, undoWith,
+    });
+    const notify = view.kind === "already" ? toast.info : toast.success;
+    notify(view.message, {
+      action: undo
         ? {
             label: m["common.undo"],
             onClick: () => {
-              // Phone routes the SERVER's own undo payload to the dedicated
-              // action, restoring the flag WITH the number; every other
-              // field still resubmits the prior text through `save`
-              // (commitInlineUndo).
-              void commitInlineUndo(field, prior, phoneUndo, save, undoPhone).then((r) => {
+              void undo().then((r) => {
                 if (r.ok) { committed.current = prior; setShown(prior); }
                 else toast.error(r.error);
               });
@@ -161,7 +170,7 @@ export function InlineField(
     // I9: an options field shows the option's LABEL ("Español"), never its
     // stored value ("es") — on the button and in its accessible name. An
     // unknown stored value is still shown as-is rather than hidden.
-    const display = (options?.find((o) => o.value === shown)?.label ?? shown) || m["inline.empty"];
+    const display = (options?.find((o) => o.value === shown)?.label ?? shown) || placeholder || m["inline.empty"];
     return (
       <button
         type="button"
@@ -203,6 +212,7 @@ export function InlineField(
       type={inputType}
       defaultValue={shown}
       aria-label={label}
+      placeholder={placeholder}
       className="h-8"
       onBlur={(e) => {
         if (cancelled.current) { cancelled.current = false; return; }

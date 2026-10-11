@@ -1,6 +1,20 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createContact, updateContact, addTagToContacts, listTags, phoneDigits, phoneKeyOf,
          type ContactInput } from "./contacts";
+import { setContactsBusiness } from "./client-groups";
+
+/** Anything shaped like an email address, so a transient RPC error's own
+ *  message can never put one in a log line. Mirrors apps/web's
+ *  loggableError, which this package cannot import (web depends on db, not
+ *  the other way around) — contacts.ts's own console.error calls take the
+ *  same "code only, never the message" approach for this reason; here the
+ *  underlying error is a plain Error with no `.code`, so the message itself
+ *  is redacted instead of dropped. */
+const EMAIL_LIKE = /[^\s<>()[\]{},;:"'`]+@[^\s<>()[\]{},;:"'`]+/g;
+function loggableMessage(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  return raw.replace(EMAIL_LIKE, "[email]").slice(0, 300);
+}
 
 /**
  * A snapshot of the account's email/phone -> contact id, built once per
@@ -45,7 +59,7 @@ export async function buildMatchIndex(
  * `ContactInput` field, and keeping it separate is what makes the binding
  * below a structural guarantee rather than an accident of test coverage.
  */
-export type ImportRow = { input: ContactInput; tags: string[] };
+export type ImportRow = { input: ContactInput; tags: string[]; company?: string };
 
 /**
  * Applies one import batch.
@@ -120,8 +134,8 @@ export type ImportRow = { input: ContactInput; tags: string[] };
  */
 export async function applyImportBatch(
   db: SupabaseClient, accountId: string, rows: ImportRow[], index: MatchIndex,
-  actorId: string, opts: { createTags: boolean },
-): Promise<{ created: number; updated: number; flagged: number }> {
+  actorId: string, opts: { createTags: boolean; groupWriter?: SupabaseClient },
+): Promise<{ created: number; updated: number; flagged: number; businessLinkFailed?: boolean; businessTooLong?: number }> {
   let created = 0;
   let updated = 0;
   // Pairs this RUN flagged, not the table's lifetime total — every other
@@ -140,6 +154,9 @@ export async function applyImportBatch(
   // batch resolved for it. Applied once per distinct name after the row
   // loop, so a tag shared by many rows costs one addTagToContacts call, not N.
   const tagPlan = new Map<string, Set<string>>();
+  // The business for each row that carries one, applied after the loop in
+  // one call per batch (S-02 §6 row 8) — see the function comment above.
+  const businesses: { contactId: string; name: string }[] = [];
 
   for (const row of rows) {
     const email = row.input.email?.trim().toLowerCase() || undefined;
@@ -177,6 +194,8 @@ export async function applyImportBatch(
       if (phoneKey) index.byPhone.set(phoneKey, contactId);
     }
 
+    if (row.company) businesses.push({ contactId, name: row.company });
+
     for (const raw of row.tags) {
       const name = raw.trim().toLowerCase();
       if (!name) continue; // never let an empty name reach addTagToContacts
@@ -191,5 +210,47 @@ export async function applyImportBatch(
     await addTagToContacts(db, accountId, [...contactIds], name);
   }
 
-  return { created, updated, flagged };
+  // One call per batch (S-02 §6 row 8). The client groups are server-written
+  // (0069), so this runs on the service client the caller hands over, and only
+  // for contacts this batch itself just wrote through `db`.
+  //
+  // Coordinator review fix: this runs AFTER every contact above is already
+  // committed. A transient failure here (the RPC rejecting, or PostgREST
+  // answering an error) must never turn a batch that genuinely created and
+  // updated contacts into a reported failure — the same mistake
+  // import/actions.ts already avoids for its `emit` call, by never letting a
+  // post-write side effect rewrite the outcome of the write it followed.
+  //
+  // Task 3a review minor, closed here: `setContactsBusiness` only THROWS on a
+  // transport failure (the try/catch below) — a too-long name comes back as a
+  // per-row STATUS in its resolved array instead, and that array was being
+  // discarded outright. Same posture as Task 3b's forms fix (commit
+  // 33031002): the status is read, logged (contact/account ids only — never
+  // the over-length name itself), and counted, without costing this batch's
+  // real created/updated/flagged counts — every one of those rows is still a
+  // real contact, just one whose business name could not become a group.
+  let businessLinkFailed = false;
+  let businessTooLong = 0;
+  if (businesses.length > 0) {
+    try {
+      const results = await setContactsBusiness(opts.groupWriter ?? db, accountId, businesses, actorId);
+      for (const r of results) {
+        if (r.status === "too_long") {
+          businessTooLong++;
+          console.error(`applyImportBatch: business write too_long for contact ${r.contactId} in account ${accountId}`);
+        } else if (r.status === "not_found") {
+          console.error(`applyImportBatch: business write not_found for contact ${r.contactId} in account ${accountId}`);
+        }
+      }
+    } catch (e) {
+      businessLinkFailed = true;
+      console.error(`applyImportBatch: setContactsBusiness failed for account ${accountId}: ${loggableMessage(e)}`);
+    }
+  }
+
+  return {
+    created, updated, flagged,
+    ...(businessLinkFailed ? { businessLinkFailed: true } : {}),
+    ...(businessTooLong > 0 ? { businessTooLong } : {}),
+  };
 }

@@ -8,6 +8,12 @@ import { createContact, updateContact, listContacts, getContact,
          addTagToContact, listContactTags, fillContactBlanks, countContacts,
          deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          listTagNamesForContacts } from "../contacts";
+// S-02 A2: company_name is no longer a ContactInput key — it is the
+// contact's business group, kept in sync by the database's own trigger
+// (client-groups.ts's own header comment). The one test below that sorts by
+// company goes through this real write path instead of the old, now-removed
+// `createContact(..., { companyName })`.
+import { setContactsBusiness } from "../client-groups";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -71,6 +77,13 @@ describe("contacts service", () => {
       const row = await getContact(db, accountId, id);
       expect(row?.phone).toBe("+19565550100");
       expect((row?.custom as any).referral).toBe("yes");
+    }));
+
+  it("updateContact can no longer write company_name; only the group sync sets it (S-02 A2; mutation: restore toRow's company_name line -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id } = await createContact(db, accountId, { firstName: "Ana", email: "ana.cn@example.com" }, "user_test");
+      await updateContact(db, accountId, id, { companyName: "Acme" } as never, "user_test");
+      expect((await getContact(db, accountId, id))!.company_name).toBeNull();
     }));
 
   // F-157: `getContact`/`listContacts` share one SELECT (`COLS`), and
@@ -623,13 +636,23 @@ describe("listContacts sort", () => {
 
   it("pages the whole list sorted by company in both directions, company-less contacts last both times", () =>
     withTestAccount(async (db, accountId) => {
-      const zeta = await createContact(db, accountId, { firstName: "P1", companyName: "Zeta Corp" }, "user_test");
-      const mango = await createContact(db, accountId, { firstName: "P2", companyName: "Mango LLC" }, "user_test");
-      const acme = await createContact(db, accountId, { firstName: "P3", companyName: "Acme Inc" }, "user_test");
-      const bravo = await createContact(db, accountId, { firstName: "P4", companyName: "Bravo Co" }, "user_test");
+      const zeta = await createContact(db, accountId, { firstName: "P1" }, "user_test");
+      const mango = await createContact(db, accountId, { firstName: "P2" }, "user_test");
+      const acme = await createContact(db, accountId, { firstName: "P3" }, "user_test");
+      const bravo = await createContact(db, accountId, { firstName: "P4" }, "user_test");
       const solo1 = await createContact(db, accountId, { firstName: "P5" }, "user_test"); // no company
       const solo2 = await createContact(db, accountId, { firstName: "P6" }, "user_test"); // no company
       const soloIds = new Set([solo1.id, solo2.id]);
+
+      // S-02 A2: company_name is the business group's own name, kept by the
+      // database's trigger — set through the real write path, not a
+      // ContactInput field that no longer exists.
+      await setContactsBusiness(db, accountId, [
+        { contactId: zeta.id, name: "Zeta Corp" },
+        { contactId: mango.id, name: "Mango LLC" },
+        { contactId: acme.id, name: "Acme Inc" },
+        { contactId: bravo.id, name: "Bravo Co" },
+      ], "user_test");
 
       const asc = await pageAll(db, accountId, "company", "asc");
       expect(asc).toHaveLength(6);

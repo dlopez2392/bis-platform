@@ -80,4 +80,17 @@ describe("mapRows", () => {
       [{ line: 2, values: { Email: "a@b.co", First: "" } }], m);
     expect("firstName" in mapped[0]!.input).toBe(false);
   });
+
+  it("carries the business BESIDE the patch, never inside it (S-02 §6 row 5; mutation: drop the company_name branch -> FAILS)", () => {
+    const { mapped } = mapRows(
+      [{ line: 2, values: { Email: "a@b.co", Business: "  Acme Roofing " } }], { Email: "email", Business: "company_name" });
+    expect(mapped[0]!.company).toBe("Acme Roofing");
+    expect("companyName" in mapped[0]!.input).toBe(false);
+  });
+
+  it("a blank business cell carries nothing, so a re-import can never unlink a business", () => {
+    const { mapped } = mapRows(
+      [{ line: 2, values: { Email: "a@b.co", Business: "" } }], { Email: "email", Business: "company_name" });
+    expect("company" in mapped[0]!).toBe(false);
+  });
 });

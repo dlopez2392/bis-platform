@@ -10,13 +10,13 @@ import { buildMatchIndex, applyImportBatch, type MatchIndex } from "../contact-i
 // does). The sixth test is the BINDING this task adds: an empty `tags` cell
 // must never clear a contact's existing tags.
 describe("applyImportBatch", () => {
-  it("creates a new contact and updates a matching one in the same batch", () =>
+  it("creates a new contact and updates a matching one in the same batch; the business is a group", () =>
     withTestAccount(async (db, accountId) => {
       const existing = await createContact(db, accountId,
         { email: "ada@example.com", firstName: "Ada" }, "user_test");
       const index = await buildMatchIndex(db, accountId);
       const r = await applyImportBatch(db, accountId, [
-        { input: { email: "ada@example.com", companyName: "Analytical Engines" }, tags: [] },
+        { input: { email: "ada@example.com" }, tags: [], company: "Analytical Engines" },
         { input: { email: "grace@example.com", firstName: "Grace" }, tags: [] },
       ], index, "user_test", { createTags: false });
 
@@ -24,6 +24,8 @@ describe("applyImportBatch", () => {
       const ada = await getContact(db, accountId, existing.id);
       expect(ada!.company_name).toBe("Analytical Engines");
       expect(ada!.first_name).toBe("Ada"); // untouched: the CSV had no first name
+      const { data: groups } = await db.from("client_groups").select("name, kind").eq("account_id", accountId);
+      expect(groups).toEqual([{ name: "Analytical Engines", kind: "business" }]);
     }));
 
   it("matches on phone across formatting — (956) 292-1696 is +19562921696", () =>

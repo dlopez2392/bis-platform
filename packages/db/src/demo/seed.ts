@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAccount } from "../accounts";
 import { setBranding, uploadBrandLogo, removeBrandLogo } from "../branding";
 import { createContact } from "../contacts";
+import { setContactsBusiness } from "../client-groups";
 import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity, moveOpportunityToStage, setOpportunityStatus } from "../opportunities";
 import { ensureConversation, createMessage } from "../messaging";
@@ -435,9 +436,18 @@ async function seedContacts(
     const createdAt = now - Math.floor(r() ** 2 * 180 * DAY);
     const { id, existing } = await createContact(db, accountId, {
       firstName: person.first, lastName: person.last, email, phone,
-      companyName: person.company, source: person.source,
+      source: person.source,
     }, ACTOR);
     if (existing) throw new Error(`demo seed: duplicate contact ${email} — the people list collides`);
+    if (person.company) {
+      // Fail loudly, unlike the forms lead: a seed script has no submission
+      // to record a quiet processing_error against, and a demo tenant with a
+      // silently missing business is worse than one that failed to build.
+      const [result] = await setContactsBusiness(db, accountId, [{ contactId: id, name: person.company }], ACTOR, "system");
+      if (result && result.status !== "ok" && result.status !== "unchanged") {
+        throw new Error(`demo seed: setContactsBusiness ${result.status} for ${person.first} ${person.last}`);
+      }
+    }
     await backdate(db, "contacts", id,
       { created_at: new Date(createdAt).toISOString(), updated_at: new Date(createdAt).toISOString() });
     out.push({ id, person, createdAt });
