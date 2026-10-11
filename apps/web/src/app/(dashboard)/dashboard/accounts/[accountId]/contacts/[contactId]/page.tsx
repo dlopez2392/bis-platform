@@ -13,6 +13,7 @@ import { ContactFieldsPanel } from "./contact-fields-panel";
 import { RelationshipsCard } from "../relationships-card";
 import { Card } from "@/components/ui/card";
 import { ActivityTimeline } from "./activity-timeline";
+import { GroupsCard } from "../groups-card";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { e164Of } from "@/lib/voice/phone-number";
@@ -170,28 +171,35 @@ export default async function ContactDetailPage({
           canAssign={assign.canAssign}
           members={assign.members}
         />
-        <aside className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
-          <p className="mb-2 text-[13.5px] font-semibold text-card-foreground">
-            {m["contact.opportunities"]}
-          </p>
-          {opps.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{m["contact.noOpportunities"]}</p>
-          ) : (
-            /* The mockup's list idiom is a RULE, never a box per row
-               (`.row`, northern-lights.html:122) — and a bordered box inside
-               a glass card is the nested-card shape the ladder forbids. */
-            <ul className="flex flex-col text-sm">
-              {opps.map((o) => (
-                <li key={o.id} className="border-t border-[var(--row-line)] py-[7px] first:border-t-0">
-                  <p className="truncate font-medium">{o.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {formatCurrency(Number(o.monetary_value))} · {STATUS_LABEL[o.status] ?? o.status}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </aside>
+        <div className="space-y-4">
+          {/* S-02 §8: the right column, "what they have", above Deals. The card
+              reads its own route, so it loads and fails on its own. */}
+          <aside className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
+            <GroupsCard accountId={accountId} contactId={contactId} canManageGroups={assign.canAssign} />
+          </aside>
+          <aside className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
+            <p className="mb-2 text-[13.5px] font-semibold text-card-foreground">
+              {m["contact.opportunities"]}
+            </p>
+            {opps.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{m["contact.noOpportunities"]}</p>
+            ) : (
+              /* The mockup's list idiom is a RULE, never a box per row
+                 (`.row`, northern-lights.html:122) — and a bordered box inside
+                 a glass card is the nested-card shape the ladder forbids. */
+              <ul className="flex flex-col text-sm">
+                {opps.map((o) => (
+                  <li key={o.id} className="border-t border-[var(--row-line)] py-[7px] first:border-t-0">
+                    <p className="truncate font-medium">{o.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatCurrency(Number(o.monetary_value))} · {STATUS_LABEL[o.status] ?? o.status}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </aside>
+        </div>
       </div>
     </>
   );

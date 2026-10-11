@@ -6,11 +6,12 @@ export const EDITABLE_FIELDS = [
 ] as const;
 export type EditableField = (typeof EDITABLE_FIELDS)[number];
 
-/** Maps the snake_case column to updateContact's ContactInput key. */
+/** Maps the snake_case column to updateContact's ContactInput key. `company_name`
+ *  has none: the Business name is a group (S-02 §6), written by setContactBusinessAction. */
 export const FIELD_TO_INPUT_KEY:
-  Record<EditableField, "firstName" | "lastName" | "email" | "phone" | "companyName" | "source"> = {
+  Record<Exclude<EditableField, "company_name">, "firstName" | "lastName" | "email" | "phone" | "source"> = {
   first_name: "firstName", last_name: "lastName", email: "email",
-  phone: "phone", company_name: "companyName", source: "source",
+  phone: "phone", source: "source",
 };
 
 /** Exported so CSV import validates an email exactly as inline editing does —

@@ -30,4 +30,8 @@ describe("normalizeFieldInput", () => {
   it("source maps to ContactInput's own key (mutation: map it to anything but \"source\" → FAILS)", () => {
     expect(FIELD_TO_INPUT_KEY.source).toBe("source");
   });
+  it("company_name stays editable (trimmed) but has no ContactInput key: it is a group now", () => {
+    expect(EDITABLE_FIELDS).toContain("company_name");
+    expect("company_name" in FIELD_TO_INPUT_KEY).toBe(false);
+  });
 });

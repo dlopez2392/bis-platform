@@ -4,9 +4,16 @@ import { sanitizeSearchTerm } from "./search-term";
 import { normalisePhone } from "./phone";
 import type { AssigneeFilter } from "./assignment";
 
+/**
+ * S-02 A2: `companyName` is gone. The Business name is a group now
+ * (client-groups.ts), written only through `setContactsBusiness` and kept
+ * on `contacts.company_name` by the database's own trigger — `toRow` below
+ * must never set that column again, or an ordinary field edit would fight
+ * the trigger for it.
+ */
 export type ContactInput = {
   firstName?: string; lastName?: string; email?: string; phone?: string;
-  companyName?: string; source?: string; custom?: Record<string, unknown>;
+  source?: string; custom?: Record<string, unknown>;
 };
 
 /**
@@ -139,7 +146,6 @@ function toRow(input: Partial<ContactInput>, currentPhone?: string | null) {
       Object.assign(row, fields);
     }
   }
-  if (input.companyName !== undefined) row.company_name = input.companyName;
   if (input.source !== undefined) row.source = input.source;
   if (input.custom !== undefined) row.custom = input.custom;
   return row;

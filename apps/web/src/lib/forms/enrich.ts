@@ -2,7 +2,7 @@ import type { serviceDb, FormRow } from "@bis/db";
 import {
   createContact, updateContact, getContact, linkSubmissionContact,
   ensureConversation, createMessage, incrementUnreadCount, emitFormSubmitted,
-  setSubmissionProcessingError,
+  setSubmissionProcessingError, setContactsBusiness,
 } from "@bis/db";
 import { sendEmailOrThrow, EmailNotSent } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -101,14 +101,42 @@ export async function enrich(
       // E.164 when it parses, as typed when it does not, and flags ten digits
       // that could be Mexican or US. Pre-normalising would hide that question.
       phone: rawPhone || undefined,
-      companyName: byKind.get("core.company_name") || undefined,
       source: `form: ${form.name}`,
       custom,
     }, "form", "system");
     contactId = created.id;
 
-    if (created.existing) await fillBlanks(db, accountId, contactId, byKind, custom, attribution);
-    else await setAttribution(db, accountId, contactId, attribution, true);
+    // S-02 §6 row 10: the business answer is a group (0069). A returning lead
+    // goes through fillBlanks below, which never replaces a business it has.
+    // setContactsBusiness only THROWS on a transport failure — a too-long name
+    // or an already-gone contact comes back as a per-contact status, not an
+    // exception, so that status has to be read or an over-length business
+    // name vanishes with no log and no processing_error. And the call gets
+    // its own try/catch, the same posture as notify/receipt below: a failure
+    // here must never skip linkSubmissionContact/ensureConversation/
+    // createMessage — the lead is still real even when its business isn't.
+    const business = byKind.get("core.company_name") || "";
+    if (!created.existing && business) {
+      try {
+        const [result] = await setContactsBusiness(db, accountId, [{ contactId, name: business }], "form", "system");
+        if (result && result.status !== "ok" && result.status !== "unchanged") {
+          // No business name in the log — contact/submission ids only.
+          console.error(`form ${form.id} submission ${submissionId}: business write ${result.status} for contact ${contactId}`);
+          errors.push(`business: ${result.status}`);
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(`form ${form.id} submission ${submissionId}: business write threw for contact ${contactId}: ${message}`);
+        errors.push(`business: ${message}`);
+      }
+    }
+
+    if (created.existing) {
+      const businessError = await fillBlanks(db, accountId, contactId, byKind, custom, attribution);
+      if (businessError) errors.push(businessError);
+    } else {
+      await setAttribution(db, accountId, contactId, attribution, true);
+    }
 
     await linkSubmissionContact(db, accountId, submissionId, contactId);
 
@@ -224,9 +252,9 @@ async function fillBlanks(
   db: ReturnType<typeof serviceDb>, accountId: string, contactId: string,
   byKind: Map<string, string>, custom: Record<string, string>,
   attribution: Record<string, string>,
-): Promise<void> {
+): Promise<string | null> {
   const current = await getContact(db, accountId, contactId);
-  if (!current) return;
+  if (!current) return null;
 
   // Same AS-TYPED rule the create path applies (see its comment in `enrich`)
   // — a blank existing phone getting filled from a later submission passes
@@ -240,7 +268,6 @@ async function fillBlanks(
     ["email", "email", byKind.get("core.email") ?? ""],
     // As typed: updateContact's own phoneFields judges it (R2-C1).
     ["phone", "phone", rawPhone],
-    ["companyName", "company_name", byKind.get("core.company_name") ?? ""],
   ];
   for (const [input, column, incoming] of pairs) {
     const held = (current as Record<string, unknown>)[column];
@@ -257,7 +284,31 @@ async function fillBlanks(
     await updateContact(db, accountId, contactId,
       { ...patch, ...(customChanged ? { custom: mergedCustom } : {}) }, "form", "system");
   }
+
+  // The "held" check still reads company_name: the database keeps it equal
+  // to the contact's business group (0069), so blank means "no business yet".
+  // Same read-the-status, own-try/catch posture as the new-lead site in
+  // `enrich` above (see its comment) — a failure here must not cost the
+  // returning lead its attribution write, next.
+  let businessError: string | null = null;
+  const business = byKind.get("core.company_name") ?? "";
+  if (business && !current.company_name) {
+    try {
+      const [result] = await setContactsBusiness(db, accountId, [{ contactId, name: business }], "form", "system");
+      if (result && result.status !== "ok" && result.status !== "unchanged") {
+        // No business name in the log — contact id only.
+        console.error(`fillBlanks: business write ${result.status} for contact ${contactId}`);
+        businessError = `business: ${result.status}`;
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`fillBlanks: business write threw for contact ${contactId}: ${message}`);
+      businessError = `business: ${message}`;
+    }
+  }
+
   await setAttribution(db, accountId, contactId, attribution, false);
+  return businessError;
 }
 
 /**

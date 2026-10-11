@@ -47,6 +47,10 @@ vi.mock("@/components/ui/sheet", () => {
 });
 const relationshipsCardProps: unknown[] = [];
 vi.mock("./relationships-card", () => ({ RelationshipsCard: (p: unknown) => { relationshipsCardProps.push(p); return null; } }));
+// The Groups card (S-02 part 1) has its own tests and calls useRouter, which has no app router to
+// read once the Related people block opens the Sheet. Stubbed by identity: the Groups block below
+// imports "./groups-card" too, so the element it finds in the drawer's tree is this same function.
+vi.mock("./groups-card", () => ({ GroupsCard: () => null }));
 vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn() }));
 vi.mock("./email-actions", () => ({ stopEmailsAction: vi.fn(), undoStopEmailsAction: vi.fn(), resumeEmailsAction: vi.fn() }));
 vi.mock("./[contactId]/actions", () => ({ addTagAction: vi.fn(), removeTagAction: vi.fn() }));
@@ -304,18 +308,24 @@ describe("the inline phone Undo is server-authoritative", () => {
   const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
   const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
 
-  it("inline-field.tsx hands the SAVE's own undo payload to commitInlineUndo, never a client-captured flag (mutation: capture phoneUnconfirmed client-side again → FAILS)", () => {
-    expect(inlineField).toContain("const phoneUndo = result.undo;");
-    expect(inlineField).toMatch(/commitInlineUndo\(field, prior, phoneUndo, save, undoPhone\)/);
+  it("inline-field.tsx hands the SAVE's own undo payload to the Undo planner, never a client-captured flag (mutation: capture phoneUnconfirmed client-side again → FAILS)", () => {
+    // S-02 Task 3c moved the Undo decision into planInlineUndo
+    // (lib/contacts/inline-save.ts); the component still hands it THIS
+    // save's own payload, and the planner routes phone to commitInlineUndo.
+    expect(inlineField).toMatch(/planInlineUndo\(\{[^}]*phoneUndo: result\.undo,/);
     expect(inlineField).not.toMatch(/phoneUnconfirmed/);
   });
 
-  /** #9: the phone field's `undoable` is "did the save hand back a
+  /** #9: the phone field's Undo is offered when "the save handed back a
    *  payload", never the generic "does the prior value pass validation" —
    *  offering Undo without a payload is offering a button whose only
-   *  possible outcome is commitInlineUndo's own "failed" refusal. */
-  it("inline-field.tsx's phone undoable check is 'has a payload', never the generic prior-validates check (mutation: undoable = normalize(prior).ok for phone too → FAILS)", () => {
-    expect(inlineField).toContain('const undoable = field === "phone" ? phoneUndo !== undefined : normalize(prior).ok;');
+   *  possible outcome is commitInlineUndo's own "failed" refusal. Since
+   *  S-02 Task 3c that rule is pinned BY BEHAVIOUR in inline-save.test.ts
+   *  ("phone with no payload offers no Undo, even when the prior
+   *  validates"); here, the component offers Undo only when one is planned. */
+  it("inline-field.tsx offers Undo only when planInlineUndo planned one (the phone rule itself: inline-save.test.ts)", () => {
+    expect(inlineField).toMatch(/const undo = planInlineUndo\(/);
+    expect(inlineField).toMatch(/action: undo\s*\?/);
   });
 
   it("the drawer's phone Undo calls the dedicated action and bumps retryNonce on success (mutation: drop the nonce bump after Undo → FAILS)", () => {
@@ -473,5 +483,39 @@ describe("the drawer's Related people card (relationships spec §7)", () => {
     const card = src.indexOf("<RelationshipsCard");
     expect(card).toBeGreaterThan(src.indexOf("<TagsRow"));
     expect(card).toBeLessThan(src.indexOf('m["drawer.recent"]'));
+  });
+});
+
+/**
+ * Task 6 fix round 1, I1: a Groups card write can change the Business name
+ * (0069's trigger) and the drawer's other rows, so the card's onChanged bumps
+ * the drawer's retryNonce, as TextsRow's and EmailRow's do. (The card itself
+ * refreshes the server-rendered list, which brings the drawer a fresh row:
+ * groups-card.wiring.test.ts.) The drawer is CALLED, not rendered, so the
+ * element tree under the stubbed Sheet can be read.
+ */
+describe("ContactDrawer: the Groups card's changes re-read the drawer (fix round 1, I1)", () => {
+  it("hands the card an onChanged that bumps retryNonce (mutation: drop the onChanged prop -> FAILS)", async () => {
+    const { isValidElement } = await import("react");
+    const { GroupsCard } = await import("./groups-card");
+    effects.length = 0;
+    states.length = 0;
+    const tree = ContactDrawer({ accountId: "a1", row: ROW, onClose: () => {}, canAssign: true });
+    const found: { type: unknown; props: Record<string, unknown> }[] = [];
+    const walk = (n: unknown): void => {
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (!isValidElement(n)) return;
+      const el = n as unknown as { type: unknown; props: Record<string, unknown> };
+      found.push(el);
+      walk(el.props.children);
+    };
+    walk(tree);
+    const card = found.find((e) => e.type === GroupsCard);
+    expect(card?.props).toMatchObject({ accountId: "a1", contactId: "c1", canManageGroups: true });
+    // `retryNonce` is the one state that starts at 0 (found by starting value, not hook order).
+    const nonce = states.filter((s) => s.initial === 0);
+    expect(nonce).toHaveLength(1);
+    (card!.props.onChanged as () => void)();
+    expect(nonce[0]!.set).toHaveBeenCalledTimes(1);
   });
 });

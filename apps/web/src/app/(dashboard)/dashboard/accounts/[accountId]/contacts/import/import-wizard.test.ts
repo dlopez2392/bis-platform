@@ -35,6 +35,14 @@ describe("import wizard", () => {
   // repeat what they just read — the same reasoning that puts
   // contact.created/contact.updated on the activity card's skipped list.
   // Pinned so a later "let's surface imports" change is a deliberate reversal.
+  // Final review I-C: the done screen sums each batch's business results through
+  // lib/contacts/import-summary (pinned there by behaviour) and shows its lines.
+  it("sums every batch through addImportBatch and shows importBusinessNotes on the done screen (mutation: drop either -> FAILS)", () => {
+    expect(src).toMatch(/totals = addImportBatch\(totals, result\)/);
+    const done = src.slice(src.indexOf('if (phase.name === "done")'), src.indexOf('if (phase.name === "stopped")'));
+    expect(done).toMatch(/importBusinessNotes\(phase\.totals, "en"\)\.map/);
+  });
+
   it("records the import in the ledger, and adds no feed copy of its own", () => {
     expect(action).toContain("contact.imported");
     expect(src).not.toContain("contact.imported");

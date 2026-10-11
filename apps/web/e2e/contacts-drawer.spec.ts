@@ -61,6 +61,14 @@ test.describe.configure({ timeout: 180_000 });
 // `base()` only ever runs after that — every call site is inside a test body.
 const base = () => `/dashboard/accounts/${accountId}`;
 
+/** The Business name the inline-edit test saves; afterAll deletes the business group it creates. */
+const PAINTED_PROOF = "Painted Proof LLC";
+
+/** For a RegExp built from catalogue copy (contact-detail.spec.ts's own helper). */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 type ClientFixtureFull = { accountId: string; clerkUserId: string };
 const CLIENT_FIXTURE_FILE = "e2e/.auth/client-fixture.json";
 
@@ -320,6 +328,15 @@ test.afterAll(async () => {
     const { error } = await db.from(table).delete().eq("account_id", accountId);
     if (error) console.error(`contacts-drawer e2e cleanup: ${table} delete failed: ${error.message}`);
   }
+  // S-02: the inline-edit test's Business name save created a business GROUP.
+  // Its membership would go with the contact, but the group row would stay on
+  // the shared fixture account until teardown, so it goes now (its membership
+  // cascades with it). Logged, not thrown, like every delete above.
+  {
+    const { error } = await db.from("client_groups").delete()
+      .eq("account_id", accountId).eq("kind", "business").eq("name", PAINTED_PROOF);
+    if (error) console.error(`contacts-drawer e2e cleanup: client_groups delete failed: ${error.message}`);
+  }
   // contacts are cleaned by auth.teardown.ts's deleteAccountCascade
   // regardless — left to it rather than duplicated.
 });
@@ -415,8 +432,11 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await page.goto(`${base()}/contacts`);
     await page.getByRole("row").filter({ hasText: "Drawer Target" }).first().click();
     const drawer = page.getByRole("dialog");
-    await drawer.getByRole("button", { name: /edit company/i }).click();
-    await drawer.getByLabel(/company/i).fill("Painted Proof LLC");
+    // S-02: the field is "Business name" (m["contact.company"]) and saving it links a business
+    // group. Addressed by the catalogue's own words, never a hard-coded label.
+    const editBusiness = m["inline.edit"].replace("{label}", m["contact.company"]);
+    await drawer.getByRole("button", { name: new RegExp(`^${escapeRegExp(editBusiness)}`) }).click();
+    await drawer.getByRole("textbox", { name: m["contact.company"], exact: true }).fill(PAINTED_PROOF);
     // Watching starts BEFORE the save, so the action's own request is counted.
     const traffic = watchRouterTraffic(page);
     await page.keyboard.press("Enter");
@@ -436,7 +456,11 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     // the open Sheet marks the rest of the page aria-hidden, so the row
     // locator resolves to nothing. Assert straight on the reopened drawer.
     await page.reload();
-    await expect(page.getByRole("dialog").getByText("Painted Proof LLC")).toBeVisible();
+    // Not getByText: the name now shows twice in the drawer (this field, and the Groups card's
+    // group name), which strict mode refuses. The field's own edit button carries the value in
+    // its accessible name ("Edit Business name: Painted Proof LLC").
+    await expect(page.getByRole("dialog").getByRole("button", { name: `${editBusiness}: ${PAINTED_PROOF}`, exact: true }))
+      .toBeVisible();
   });
 
   test("keyboard: focused row opens on Enter, arrows move focus", async ({ page }) => {

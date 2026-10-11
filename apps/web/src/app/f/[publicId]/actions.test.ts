@@ -10,6 +10,7 @@ const shouldRecordRateLimitMock = vi.fn();
 const findRecentDuplicateMock = vi.fn();
 const setSubmissionProcessingErrorMock = vi.fn();
 const createContactMock = vi.fn();
+const setContactsBusinessMock = vi.fn();
 const ensureConversationMock = vi.fn();
 const createMessageMock = vi.fn();
 const incrementUnreadCountMock = vi.fn();
@@ -103,6 +104,7 @@ vi.mock("@bis/db", () => ({
   setSubmissionProcessingError: (...a: unknown[]) => setSubmissionProcessingErrorMock(...a),
   emitFormSubmitted: vi.fn(),
   createContact: (...a: unknown[]) => createContactMock(...a),
+  setContactsBusiness: (...a: unknown[]) => setContactsBusinessMock(...a),
   updateContact: vi.fn(),
   getContact: vi.fn(),
   ensureConversation: (...a: unknown[]) => ensureConversationMock(...a),
@@ -162,6 +164,7 @@ beforeEach(() => {
   setSubmissionProcessingErrorMock.mockReset();
   sendMock.mockReset().mockResolvedValue(undefined);
   createContactMock.mockReset().mockResolvedValue({ id: "contact_1", existing: false });
+  setContactsBusinessMock.mockReset().mockResolvedValue([]);
   ensureConversationMock.mockReset().mockResolvedValue({ id: "convo_1" });
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
   incrementUnreadCountMock.mockReset();
@@ -901,5 +904,86 @@ describe("submitFormAction — the instant reply to the person who wrote in (Mil
     const result = await submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale: "en", phone: PHONE }));
     expect(result.status).toBe("success");
     expect(setSubmissionProcessingErrorMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("submitFormAction — the business answer becomes a group (S-02 §6 rows 10-11)", () => {
+  const fields = [
+    { key: "email", kind: "core.email", label: "Email", required: false },
+    { key: "company_name", kind: "core.company_name", label: "Business name", required: false },
+  ];
+  const submit = () => submitFormAction(PUBLIC_ID, IDLE, fd({
+    [RENDER_TOKEN_FIELD]: signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID), locale: "en",
+    email: "lead@example.com", company_name: "Acme Roofing",
+  }));
+  beforeEach(() => { getPublishedFormByPublicIdMock.mockResolvedValue(formRow({ fields })); });
+
+  it("a new lead: never a contact column, one group write (mutation: pass companyName to createContact again -> FAILS)", async () => {
+    expect((await submit()).status).toBe("success");
+    expect(createContactMock.mock.calls[0]![2]).not.toHaveProperty("companyName");
+    expect(setContactsBusinessMock).toHaveBeenCalledWith(expect.anything(), "acct_1",
+      [{ contactId: "contact_1", name: "Acme Roofing" }], "form", "system");
+  });
+  it("a returning lead with no business gets one", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_1", existing: true });
+    vi.mocked(getContact).mockResolvedValue({ id: "contact_1", company_name: null, custom: {} } as never);
+    await submit();
+    expect(setContactsBusinessMock).toHaveBeenCalledTimes(1);
+  });
+  it("a returning lead who already has a business keeps it (mutation: drop `&& !current.company_name` -> FAILS)", async () => {
+    createContactMock.mockResolvedValue({ id: "contact_1", existing: true });
+    vi.mocked(getContact).mockResolvedValue({ id: "contact_1", company_name: "Beta Pools", custom: {} } as never);
+    await submit();
+    expect(setContactsBusinessMock).not.toHaveBeenCalled();
+  });
+
+  describe("a bad business write never costs the lead its contact or conversation (code review follow-up)", () => {
+    it("a new lead's too-long business name is recorded, not silently dropped (mutation: ignore the per-contact status -> FAILS)", async () => {
+      setContactsBusinessMock.mockResolvedValue([{ contactId: "contact_1", status: "too_long", removed: null, added: null }]);
+      const result = await submit();
+      expect(result.status).toBe("success");
+      // The contact and the thread are what make this a real lead; a bad
+      // business name must never cost it either.
+      expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+      expect(createMessageMock).toHaveBeenCalledTimes(1);
+      expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+        expect.anything(), "acct_1", "sub_1", expect.stringContaining("too_long"));
+    });
+
+    it("a new lead's business write that THROWS never skips the conversation (mutation: remove the inner try/catch -> FAILS)", async () => {
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+      setContactsBusinessMock.mockRejectedValue(new Error("set_contacts_business failed: boom"));
+      const result = await submit();
+      expect(result.status).toBe("success");
+      expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+      expect(createMessageMock).toHaveBeenCalledTimes(1);
+      expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+        expect.anything(), "acct_1", "sub_1", expect.stringContaining("boom"));
+      quiet.mockRestore();
+    });
+
+    it("a returning lead's too-long business name is recorded, not silently dropped (mutation: ignore the per-contact status -> FAILS)", async () => {
+      createContactMock.mockResolvedValue({ id: "contact_1", existing: true });
+      vi.mocked(getContact).mockResolvedValue({ id: "contact_1", company_name: null, custom: {} } as never);
+      setContactsBusinessMock.mockResolvedValue([{ contactId: "contact_1", status: "too_long", removed: null, added: null }]);
+      const result = await submit();
+      expect(result.status).toBe("success");
+      expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+      expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+        expect.anything(), "acct_1", "sub_1", expect.stringContaining("too_long"));
+    });
+
+    it("a returning lead's business write that THROWS never skips the conversation (mutation: remove the inner try/catch -> FAILS)", async () => {
+      createContactMock.mockResolvedValue({ id: "contact_1", existing: true });
+      vi.mocked(getContact).mockResolvedValue({ id: "contact_1", company_name: null, custom: {} } as never);
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+      setContactsBusinessMock.mockRejectedValue(new Error("set_contacts_business failed: boom"));
+      const result = await submit();
+      expect(result.status).toBe("success");
+      expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+      expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+        expect.anything(), "acct_1", "sub_1", expect.stringContaining("boom"));
+      quiet.mockRestore();
+    });
   });
 });

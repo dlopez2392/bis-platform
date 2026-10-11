@@ -231,6 +231,16 @@ export {
   type AssigneeFilter, type ReleasedAssignments, type PreviousAssignee,
 } from "./assignment";
 
+// Client groups (S-02 part 1, 0069): households and business customers. See ./client-groups.ts.
+export {
+  GROUP_NAME_MAX, GROUP_ROLE_MAX, BILLING_ADDRESS_MAX, dbTrimmedLength,
+  listContactGroups, searchGroups, readMembership, readGroup,
+  createGroupWithMember, addContactToGroup, setContactsBusiness, undoSetBusiness,
+  setPrimaryMembership, removeMembership, restoreMembership, updateMembership, updateGroup,
+  type GroupKind, type GroupMemberSnapshot, type ContactGroup, type ContactGroupMember,
+  type GroupSearchHit, type BusinessResult,
+} from "./client-groups";
+
 // Relationships between customers (0070). See ./relationships.ts and ./relationship-keys.ts.
 export {
   listContactRelationships, getRelationship, addRelationship, setRelationshipSides, removeRelationship,

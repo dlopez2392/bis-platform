@@ -77,6 +77,17 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/actions.ts": "proven-target",
   // ledgerDb after getContact on the request client found the contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx": "proven-target",
+  // setContactBusinessAction / undoContactBusinessAction: the group writes run on the service client
+  // only after getContact on the request client found the contact (0069's tables are server-written).
+  // createContactAction's narrow-caller flag write moved to lib/contacts/add-contact-by-hand.ts.
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
+  // The Groups card: every service write follows a request-client read of its contact, membership or group;
+  // restore's events read vouches a narrow caller's own removal (0069's tables are server-written).
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/groups-actions.ts": "proven-target",
+  // importContactsBatchAction's groupWriter: serviceDb() hands applyImportBatch
+  // the service client, and its one business write runs only against contacts
+  // the SAME batch just wrote through the request client, never an arbitrary id.
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/import/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts": "agency-only",
