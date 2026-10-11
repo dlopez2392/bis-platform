@@ -13,7 +13,7 @@ export const CUSTOM_LABEL_MAX = 60;
 /**
  * An explicit class, not .trim(): the zero-width space and the BOM count as edge space too, and
  * so do U+001C-001F and U+0085 (NEL) — JS's \s misses both, but PG17's ICU en_US.UTF-8
- * POSIX [:space:] (production/bis-ci), which 0070's CHECK (contact_relationships_custom) uses,
+ * POSIX [:space:] (production/bis-ci), which 0070's CHECK (contact_relationships_custom_trimmed) uses,
  * includes them; missing either here means a label that passes this cleaning still 23514s in
  * the database.
  */

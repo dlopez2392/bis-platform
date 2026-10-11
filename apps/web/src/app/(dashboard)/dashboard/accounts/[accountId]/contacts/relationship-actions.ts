@@ -31,20 +31,32 @@ import { relationshipErrorFor, type RelationshipError } from "@/lib/contacts/rel
  */
 export type RelationshipResult = { ok: true; view: RelationshipView } | { ok: false; error: RelationshipError };
 /**
- * A "New person" add can fail AFTER the person was created (refused, a duplicate pair, a lost
- * connection): `contactId` names them, so the dialog retries as `{ kind: "existing" }` instead of
- * creating them a second time (Task 4 review, finding 3).
+ * A "New person" add can fail AFTER the person was saved or matched (refused, a duplicate pair, a
+ * lost connection): `contactId` names them, so the dialog retries as `{ kind: "existing" }`
+ * instead of creating them a second time (Task 4 review, finding 3). `created` says whether this
+ * call made them (true) or matched someone already saved (false), so the dialog says "saved" only
+ * when it is true (final review item 7).
  */
-export type AddRelationshipResult = { ok: true; view: RelationshipView } | { ok: false; error: RelationshipError; contactId?: string };
+export type AddRelationshipResult =
+  | { ok: true; view: RelationshipView }
+  | { ok: false; error: RelationshipError; contactId?: string; created?: boolean };
 type Refusal = { ok: false; error: RelationshipError };
 
 const refused: Refusal = { ok: false, error: "relationships.error.refused" };
 const invalid: Refusal = { ok: false, error: "relationships.error.invalid" };
 
+/** The two refusals the database is expected to raise on a person's own write. */
+const EXPECTED_CODES = new Set(["23505", "42501"]);
+
+/**
+ * Every other code is logged, even one with its own copy: a 23514 still reads "Pick someone else.",
+ * but every CHECK but not-self is re-checked before a write (relationship-errors.ts), so one
+ * reaching here means the app and 0070 disagree (final review item 6).
+ */
 function fail(where: string, accountId: string, e: unknown): Refusal {
-  const error = relationshipErrorFor(e);
-  if (error === "relationships.error.failed") console.error(`${where} (account ${accountId}): ${loggableError(e)}`);
-  return { ok: false, error };
+  const code = typeof e === "object" && e !== null ? (e as { code?: unknown }).code : undefined;
+  if (typeof code !== "string" || !EXPECTED_CODES.has(code)) console.error(`${where} (account ${accountId}): ${loggableError(e)}`);
+  return { ok: false, error: relationshipErrorFor(e) };
 }
 
 const isOn = (row: RelationshipRow, subjectId: string) =>
@@ -82,8 +94,8 @@ export async function addRelationshipAction(accountId: string, raw: unknown): Pr
   const subjectId = input.subjectId.toLowerCase();
   const db = await dbForRequest();
   // Set once "New person" has made (or matched) someone else: every failure after that names them.
-  let created: string | null = null;
-  const withCreated = (r: Refusal): AddRelationshipResult => (created ? { ...r, contactId: created } : r);
+  let created: { id: string; isNew: boolean } | null = null;
+  const withCreated = (r: Refusal): AddRelationshipResult => (created ? { ...r, contactId: created.id, created: created.isNew } : r);
   try {
     if (!(await getContact(db, accountId, subjectId))) return refused;
     let otherId: string;
@@ -99,9 +111,9 @@ export async function addRelationshipAction(accountId: string, raw: unknown): Pr
       });
       otherId = made.id.toLowerCase();
       revalidatePath(`/dashboard/accounts/${accountId}/contacts`);
-      // A match on the record's own customer created nobody: nothing to retry with.
-      if (otherId !== subjectId) created = otherId;
+      created = { id: otherId, isNew: !made.existing };
     }
+    // Bare, never withCreated: a match on the record's own customer created nobody to retry with.
     if (otherId === subjectId) return { ok: false, error: "relationships.error.self" };
     // Both people readable on the caller's own client: for a Technician, the other person is theirs too.
     if (!(await getContact(db, accountId, otherId))) return withCreated(refused);

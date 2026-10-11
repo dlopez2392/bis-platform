@@ -107,6 +107,24 @@ describe("addRelationshipAction", () => {
     dbMocks.addRelationship.mockRejectedValueOnce({ code: "42501" });
     expect(await addRelationshipAction(A, ADD)).toEqual({ ok: false, error: "relationships.error.refused" });
   });
+  it("logs every refusal the database was not expected to raise, a 23514 included, but not a duplicate or a refusal (final review item 6; mutation: log only what maps to 'failed' -> FAILS)", async () => {
+    const log = vi.mocked(console.error);
+    for (const code of ["23505", "42501"]) {
+      dbMocks.addRelationship.mockRejectedValueOnce({ code });
+      await addRelationshipAction(A, ADD);
+    }
+    expect(log).not.toHaveBeenCalled();
+    // 23514 still reads "Pick someone else." to the person, but a CHECK the app should have caught
+    // first means the app and 0070 disagree: that must reach the log.
+    for (const code of ["23514", "23503", "22P02"]) {
+      dbMocks.addRelationship.mockRejectedValueOnce({ code });
+      await addRelationshipAction(A, ADD);
+    }
+    expect(log.mock.calls.map((c) => String(c[0]))).toEqual([
+      expect.stringContaining("code=23514"), expect.stringContaining("code=23503"), expect.stringContaining("code=22P02"),
+    ]);
+    expect(String(log.mock.calls[0]![0])).toContain("addRelationshipAction");
+  });
   it("an uppercase subjectId still finds the record and answers its view (Task 4 review, finding 2; mutation: drop the subjectId .toLowerCase() -> FAILS)", async () => {
     dbMocks.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === LETTERED ? contact(LETTERED, "Sofía") : id === O ? contact(O, "Ana") : null));
     dbMocks.addRelationship.mockResolvedValue({ ...ROW, related_contact_id: LETTERED });
@@ -130,7 +148,29 @@ describe("addRelationshipAction", () => {
     addContactByHand.mockResolvedValue({ id: O, existing: false });
     dbMocks.addRelationship.mockRejectedValueOnce({ code: "23505" });
     expect(await addRelationshipAction(A, { ...ADD, other: { kind: "new", firstName: "Ana", lastName: "Ramírez", phone: "" } }))
-      .toEqual({ ok: false, error: "relationships.error.duplicate", contactId: O });
+      .toEqual({ ok: false, error: "relationships.error.duplicate", contactId: O, created: true });
+  });
+  it("a new person who is saved but not readable on the caller's own client comes back refused WITH their id (final review item 5; mutation: return the bare refusal at the other-person read -> FAILS)", async () => {
+    addContactByHand.mockResolvedValue({ id: O, existing: false });
+    dbMocks.getContact.mockImplementation(onlySubjectVisible);
+    expect(await addRelationshipAction(A, { ...ADD, other: { kind: "new", firstName: "Ana", lastName: "Ramírez", phone: "" } }))
+      .toEqual({ ok: false, error: "relationships.error.refused", contactId: O, created: true });
+    expect(dbMocks.addRelationship).not.toHaveBeenCalled();
+  });
+  it("a new person whose write came back with no view of this record comes back failed WITH their id (final review item 5; mutation: return the bare failure after the view read -> FAILS)", async () => {
+    addContactByHand.mockResolvedValue({ id: O, existing: false });
+    // viewOf answers null only for a row that is not about the record (a hidden person is a view
+    // with person: null): the write came back naming someone else.
+    dbMocks.addRelationship.mockResolvedValueOnce({ ...ROW, related_contact_id: "55555555-5555-4555-8555-555555555555" });
+    expect(await addRelationshipAction(A, { ...ADD, other: { kind: "new", firstName: "Ana", lastName: "Ramírez", phone: "" } }))
+      .toEqual({ ok: false, error: "relationships.error.failed", contactId: O, created: true });
+    expect(dbMocks.addRelationship).toHaveBeenCalledTimes(1);
+  });
+  it("a new person who matched someone already saved comes back with their id but NOT as created, so the dialog never says it saved them (final review item 7; mutation: report created for a match -> FAILS)", async () => {
+    addContactByHand.mockResolvedValue({ id: O, existing: true });
+    dbMocks.addRelationship.mockRejectedValueOnce({ code: "23505" });
+    expect(await addRelationshipAction(A, { ...ADD, other: { kind: "new", firstName: "Ana", lastName: "Ramírez", phone: "956 555 0142" } }))
+      .toEqual({ ok: false, error: "relationships.error.duplicate", contactId: O, created: false });
   });
   it("a new person who turns out to be the record's own customer comes back as oneself, with no id to retry with", async () => {
     addContactByHand.mockResolvedValue({ id: S, existing: true });

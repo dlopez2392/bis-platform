@@ -89,4 +89,15 @@ describe("patches and the Undo snapshot", () => {
     expect(parseRelationshipRow({ ...ROW, extra: 1 })).toBeNull();
     expect(parseRelationshipRow({ ...ROW, label_key: "other", custom_label: null })).toBeNull();
   });
+  // 0070's contact_relationships_emergency and _pickup CHECKs, mirrored so a browser-edited
+  // snapshot is refused as invalid instead of reaching the insert and reading "Pick someone else."
+  const support = (label_key: string) => ({ ...ROW, label_key, custom_label: null });
+  it("an emergency-contact snapshot must carry the emergency flag on side a (final review item 5; mutation: delete the emergency mirror line -> FAILS)", () => {
+    expect(parseRelationshipRow({ ...support("emergency_contact"), contact_is_emergency: true })).not.toBeNull(); // control
+    expect(parseRelationshipRow({ ...support("emergency_contact"), contact_is_emergency: false, related_is_emergency: true })).toBeNull();
+  });
+  it("an authorized-pickup snapshot must carry the pickup flag on side a (final review item 5; mutation: delete the pickup mirror line -> FAILS)", () => {
+    expect(parseRelationshipRow({ ...support("authorized_pickup"), contact_can_pick_up: true })).not.toBeNull(); // control
+    expect(parseRelationshipRow({ ...support("authorized_pickup"), contact_can_pick_up: false, related_can_pick_up: true })).toBeNull();
+  });
 });
