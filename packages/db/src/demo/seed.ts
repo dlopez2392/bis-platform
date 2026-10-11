@@ -440,7 +440,13 @@ async function seedContacts(
     }, ACTOR);
     if (existing) throw new Error(`demo seed: duplicate contact ${email} — the people list collides`);
     if (person.company) {
-      await setContactsBusiness(db, accountId, [{ contactId: id, name: person.company }], ACTOR, "system");
+      // Fail loudly, unlike the forms lead: a seed script has no submission
+      // to record a quiet processing_error against, and a demo tenant with a
+      // silently missing business is worse than one that failed to build.
+      const [result] = await setContactsBusiness(db, accountId, [{ contactId: id, name: person.company }], ACTOR, "system");
+      if (result && result.status !== "ok" && result.status !== "unchanged") {
+        throw new Error(`demo seed: setContactsBusiness ${result.status} for ${person.first} ${person.last}`);
+      }
     }
     await backdate(db, "contacts", id,
       { created_at: new Date(createdAt).toISOString(), updated_at: new Date(createdAt).toISOString() });

@@ -936,4 +936,54 @@ describe("submitFormAction — the business answer becomes a group (S-02 §6 row
     await submit();
     expect(setContactsBusinessMock).not.toHaveBeenCalled();
   });
+
+  describe("a bad business write never costs the lead its contact or conversation (code review follow-up)", () => {
+    it("a new lead's too-long business name is recorded, not silently dropped (mutation: ignore the per-contact status -> FAILS)", async () => {
+      setContactsBusinessMock.mockResolvedValue([{ contactId: "contact_1", status: "too_long", removed: null, added: null }]);
+      const result = await submit();
+      expect(result.status).toBe("success");
+      // The contact and the thread are what make this a real lead; a bad
+      // business name must never cost it either.
+      expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+      expect(createMessageMock).toHaveBeenCalledTimes(1);
+      expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+        expect.anything(), "acct_1", "sub_1", expect.stringContaining("too_long"));
+    });
+
+    it("a new lead's business write that THROWS never skips the conversation (mutation: remove the inner try/catch -> FAILS)", async () => {
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+      setContactsBusinessMock.mockRejectedValue(new Error("set_contacts_business failed: boom"));
+      const result = await submit();
+      expect(result.status).toBe("success");
+      expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+      expect(createMessageMock).toHaveBeenCalledTimes(1);
+      expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+        expect.anything(), "acct_1", "sub_1", expect.stringContaining("boom"));
+      quiet.mockRestore();
+    });
+
+    it("a returning lead's too-long business name is recorded, not silently dropped (mutation: ignore the per-contact status -> FAILS)", async () => {
+      createContactMock.mockResolvedValue({ id: "contact_1", existing: true });
+      vi.mocked(getContact).mockResolvedValue({ id: "contact_1", company_name: null, custom: {} } as never);
+      setContactsBusinessMock.mockResolvedValue([{ contactId: "contact_1", status: "too_long", removed: null, added: null }]);
+      const result = await submit();
+      expect(result.status).toBe("success");
+      expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+      expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+        expect.anything(), "acct_1", "sub_1", expect.stringContaining("too_long"));
+    });
+
+    it("a returning lead's business write that THROWS never skips the conversation (mutation: remove the inner try/catch -> FAILS)", async () => {
+      createContactMock.mockResolvedValue({ id: "contact_1", existing: true });
+      vi.mocked(getContact).mockResolvedValue({ id: "contact_1", company_name: null, custom: {} } as never);
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+      setContactsBusinessMock.mockRejectedValue(new Error("set_contacts_business failed: boom"));
+      const result = await submit();
+      expect(result.status).toBe("success");
+      expect(ensureConversationMock).toHaveBeenCalledTimes(1);
+      expect(setSubmissionProcessingErrorMock).toHaveBeenCalledWith(
+        expect.anything(), "acct_1", "sub_1", expect.stringContaining("boom"));
+      quiet.mockRestore();
+    });
+  });
 });
