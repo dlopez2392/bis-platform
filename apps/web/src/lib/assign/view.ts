@@ -1,5 +1,6 @@
 import { readPersonId, listAccountTeam, type AccountRole, type AssigneeFilter, type SupabaseClient } from "@bis/db";
 import { seesWholeAccount } from "@/lib/auth-role";
+import { loggableError } from "@/lib/loggable-error";
 import { assigneeFilterFor, parseWho, type Who } from "./who";
 
 /** A person who can hold a customer or a task, as a picker shows them. */
@@ -19,7 +20,11 @@ export type AssignMember = { userId: string; label: string; role: AccountRole };
  * always be empty and "Mine" the same as All. Nothing is read for them,
  * unless `opts.viewer` asks for their own person: a screen with a read-only
  * "Assigned to" says "You" only for a holder who IS the viewer (Task 7 fix
- * round 1, I1), and a role read that failed leaves an Owner here too.
+ * round 1, I1), and a role read that failed leaves an Owner here too. For
+ * them that read is SOFT (final review N2): it only decides "You" versus
+ * "Someone on the team", so a failure is logged and read as null rather than
+ * taking the page down. For Owner and Staff it stays hard: their filter and
+ * their Mine depend on it.
  */
 export type AssignView = {
   who: Who;
@@ -30,13 +35,22 @@ export type AssignView = {
   members: AssignMember[];
 };
 
+async function softPersonId(db: SupabaseClient, accountId: string, clerkUserId: string): Promise<string | null> {
+  try {
+    return await readPersonId(db, accountId, clerkUserId);
+  } catch (e) {
+    console.error(`loadAssignView: the viewer's own person could not be read, so nothing reads as theirs (account ${accountId}): ${loggableError(e)}`);
+    return null;
+  }
+}
+
 export async function loadAssignView(
   db: SupabaseClient, accountId: string,
   access: { userId: string; isAgency: boolean; role: AccountRole | null },
   rawWho: string | undefined, opts: { members: boolean; viewer?: boolean },
 ): Promise<AssignView> {
   if (!seesWholeAccount(access)) {
-    const personId = opts.viewer ? await readPersonId(db, accountId, access.userId) : null;
+    const personId = opts.viewer ? await softPersonId(db, accountId, access.userId) : null;
     return { who: "all", personId, assignee: undefined, canAssign: false, showMine: false, members: [] };
   }
   const [personId, team] = await Promise.all([

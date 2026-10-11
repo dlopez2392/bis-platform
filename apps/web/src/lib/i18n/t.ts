@@ -20,7 +20,10 @@ export type PluralKey<C extends Catalogue> = {
 function interpolate(raw: string, params?: Record<string, string | number>): string {
   if (!params) return raw;
   let out = raw;
-  for (const [k, v] of Object.entries(params)) out = out.replaceAll(`{${k}}`, String(v));
+  // A replacer FUNCTION, never the value as a string (final review N1): a
+  // string replacement reads   for (const [k, v] of Object.entries(params)) out = out.replaceAll(`{${k}}`, String(v));, $1, $ and the like as patterns, so a name
+  // such as "Ana   for (const [k, v] of Object.entries(params)) out = out.replaceAll(`{${k}}`, String(v)); Co." would come out mangled.
+  for (const [k, v] of Object.entries(params)) out = out.replaceAll(`{${k}}`, () => String(v));
   return out;
 }
 

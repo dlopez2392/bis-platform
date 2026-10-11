@@ -80,3 +80,29 @@ describe("loadAssignView: the viewer's own person for a read-only screen (opts.v
     expect(readPersonId).not.toHaveBeenCalled();
   });
 });
+
+// Final review N2: the viewer's own person only decides whether a read-only
+// "Assigned to" says "You" or "Someone on the team". A failed read of it must
+// not take the Contacts page down for a Technician: it is logged (redacted)
+// and read as "not you".
+describe("loadAssignView: a failed viewer read is soft for a read-only viewer", () => {
+  it("a Technician whose own person cannot be read gets personId null and the page still loads; logged with the account, redacted (mutation: let it throw -> FAILS)", async () => {
+    readPersonId.mockRejectedValueOnce(new Error("readPersonId failed: boom for tech@x.test"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const v = await loadAssignView(DB, "a1", { userId: "u1", isAgency: false, role: "technician" }, undefined, { members: true, viewer: true });
+      expect(v).toEqual({ who: "all", personId: null, assignee: undefined, canAssign: false, showMine: false, members: [] });
+      const line = spy.mock.calls.flat().join(" ");
+      expect(line).toContain("a1");
+      expect(line).toContain("readPersonId failed: boom for [email]");
+      expect(line).not.toContain("tech@x.test");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+  it("an Owner's failed read still throws: their filter and their Mine depend on it, so the page's error state is right (mutation: soften every read -> FAILS)", async () => {
+    readPersonId.mockRejectedValueOnce(new Error("readPersonId failed: boom"));
+    await expect(loadAssignView(DB, "a1", { userId: "u1", isAgency: false, role: "owner" }, "mine", { members: true, viewer: true }))
+      .rejects.toThrow("boom");
+  });
+});
