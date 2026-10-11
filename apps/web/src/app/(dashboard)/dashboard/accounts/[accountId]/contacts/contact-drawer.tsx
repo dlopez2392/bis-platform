@@ -265,8 +265,17 @@ export function ContactDrawer({
               />
               {/* S-02 §8: its own read, skeleton and Retry, so it loads and
                   fails on its own. `canAssign` is Owner, Staff or the agency:
-                  the same people A6 lets rename a group. */}
-              <GroupsCard key={`${row.id}:groups`} accountId={accountId} contactId={row.id} canManageGroups={canAssign} />
+                  the same people A6 lets rename a group. A change re-reads
+                  the drawer like the Texts and Email rows' do; the card also
+                  refreshes the list, which brings this drawer a fresh row and
+                  so the new Business name (fix round 1, I1). */}
+              <GroupsCard
+                key={`${row.id}:groups`}
+                accountId={accountId}
+                contactId={row.id}
+                canManageGroups={canAssign}
+                onChanged={() => setRetryNonce((n) => n + 1)}
+              />
 
               {load.status === "loading" ? (
                 <div className="space-y-2" data-testid="drawer-skeleton">

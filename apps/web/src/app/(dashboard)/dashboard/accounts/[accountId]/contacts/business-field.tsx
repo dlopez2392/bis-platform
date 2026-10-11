@@ -13,6 +13,10 @@ import { setContactBusinessAction, undoContactBusinessAction, type BusinessUndo 
 export function BusinessInlineField({ accountId, contactId, value }: { accountId: string; contactId: string; value: string | null }) {
   return (
     <InlineField
+      // Keyed by the value (Task 6 fix round 1, I1): a Groups card write can
+      // change the business name under this field, and InlineField ignores a
+      // new `value` once mounted, so the refreshed name remounts it.
+      key={value ?? ""}
       label={m["contact.company"]}
       field="company_name"
       value={value}

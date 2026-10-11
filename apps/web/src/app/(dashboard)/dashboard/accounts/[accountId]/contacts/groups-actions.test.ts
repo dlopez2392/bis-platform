@@ -208,12 +208,101 @@ describe("input shape", () => {
   });
 });
 
-describe("search", () => {
-  it("a failed search is logged and returns no hits rather than throwing to the card (m2)", async () => {
+describe("search (fix round 1, I2: a failure the card can tell from no matches)", () => {
+  it("hits come back tagged ok", async () => {
+    db.searchGroups.mockResolvedValue([{ id: G, kind: "household", name: "Garcia" }]);
+    expect(await A.searchGroupsAction("a1", "Gar")).toEqual({ ok: true, hits: [{ id: G, kind: "household", name: "Garcia" }] });
+    expect(db.searchGroups).toHaveBeenCalledWith(REQUEST, "a1", "Gar");
+  });
+  it("a failed search is logged and comes back { ok: false }, never [] and never a throw (mutation: return { ok: true, hits: [] } -> FAILS)", async () => {
     db.searchGroups.mockRejectedValue(new Error("searchGroups failed: boom"));
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await A.searchGroupsAction("a1", "Gar")).toEqual([]);
-    expect(db.searchGroups).toHaveBeenCalledWith(REQUEST, "a1", "Gar");
+    expect(await A.searchGroupsAction("a1", "Gar")).toEqual({ ok: false });
     expect(err).toHaveBeenCalledWith(expect.stringContaining("searchGroupsAction: account a1: Error: searchGroups failed: boom"));
+  });
+  it("an over-long term is no matches, not a failure, and never reaches the database", async () => {
+    expect(await A.searchGroupsAction("a1", "x".repeat(121))).toEqual({ ok: true, hits: [] });
+    expect(db.searchGroups).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Fix round 1, I1: a group write can change contacts.company_name (0069's
+ * trigger), which the contact's own page shows. Each write revalidates that
+ * page as well as the list, so a refresh brings the new Business name, not
+ * only Next's current habit of re-rendering whatever page is open.
+ */
+describe("fix round 1, I1: writes revalidate the contact's own page", () => {
+  const detail = `/dashboard/accounts/a1/contacts/${C}`;
+  it("create revalidates the list and that contact's page (mutation: list only -> FAILS)", async () => {
+    db.getContact.mockResolvedValue({ id: C });
+    db.createGroupWithMember.mockResolvedValue({ status: "ok", groupId: G, memberId: M, existed: false, name: "Garcia" });
+    expect((await A.createGroupAction("a1", C, "household", "Garcia")).ok).toBe(true);
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
+    expect(revalidatePath).toHaveBeenCalledWith(detail);
+  });
+  it("add revalidates that contact's page", async () => {
+    db.getContact.mockResolvedValue({ id: C });
+    db.readGroup.mockResolvedValue({ id: G, kind: "business", name: "Acme", billingAddress: null });
+    db.addContactToGroup.mockResolvedValue({ status: "ok", memberId: M });
+    await A.addToGroupAction("a1", C, G);
+    expect(revalidatePath).toHaveBeenCalledWith(detail);
+  });
+  it.each([
+    { name: "main", run: () => A.makePrimaryAction("a1", M), write: db.setPrimaryMembership, ok: { status: "ok", previous: null } },
+    { name: "remove", run: () => A.removeMembershipAction("a1", M), write: db.removeMembership, ok: { status: "ok", removed: snap() } },
+  ])("$name revalidates the page of the contact the PROVEN membership belongs to", async ({ run, write, ok }) => {
+    db.readMembership.mockResolvedValue({ contactId: C, groupId: G });
+    write.mockResolvedValue(ok);
+    await run();
+    expect(revalidatePath).toHaveBeenCalledWith(detail);
+  });
+  it("restore revalidates the snapshot's contact's page", async () => {
+    access.role = "staff";
+    db.getContact.mockResolvedValue({ id: C });
+    db.restoreMembership.mockResolvedValue("ok");
+    await A.restoreMembershipAction("a1", snap());
+    expect(revalidatePath).toHaveBeenCalledWith(detail);
+  });
+  it("rename revalidates every contact page, since each member's Business name can change (mutation: list only -> FAILS)", async () => {
+    access.role = "staff";
+    db.readGroup.mockResolvedValue({ id: G, kind: "business", name: "Acme", billingAddress: null });
+    db.updateGroup.mockResolvedValue({ status: "ok", previous: { name: "Acme", billingAddress: null } });
+    expect((await A.renameGroupAction("a1", G, "Acme Roofing")).ok).toBe(true);
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/[accountId]/contacts/[contactId]", "page");
+  });
+});
+
+/**
+ * Spec §8: a refusal is logged. One line per explicit refusal: the action,
+ * the account, the reason key and ids only, never a name (the groups and
+ * contacts here are a client's customers).
+ */
+describe("every explicit refusal is logged, with ids and no names (spec §8; mutation: drop the log in the refusal helper -> FAILS)", () => {
+  const cases = [
+    { name: "createGroupAction", setup: () => db.getContact.mockResolvedValue(null), run: () => A.createGroupAction("a1", C, "household", "Garcia") },
+    { name: "addToGroupAction", setup: () => db.getContact.mockResolvedValue(null), run: () => A.addToGroupAction("a1", C, G) },
+    { name: "setRoleAction", setup: () => db.readMembership.mockResolvedValue(null), run: () => A.setRoleAction("a1", M, "Madre") },
+    { name: "setBillingAction", setup: () => db.readMembership.mockResolvedValue(null), run: () => A.setBillingAction("a1", M, true) },
+    { name: "makePrimaryAction", setup: () => db.readMembership.mockResolvedValue(null), run: () => A.makePrimaryAction("a1", M) },
+    { name: "removeMembershipAction", setup: () => db.readMembership.mockResolvedValue(null), run: () => A.removeMembershipAction("a1", M) },
+    { name: "restoreMembershipAction", setup: () => db.getContact.mockResolvedValue(null), run: () => A.restoreMembershipAction("a1", snap()) },
+    { name: "renameGroupAction", setup: () => db.readGroup.mockResolvedValue({ id: G, kind: "household", name: "Garcia", billingAddress: null }), run: () => A.renameGroupAction("a1", G, "Garcia Lopez") },
+    { name: "setBillingAddressAction", setup: () => db.readGroup.mockResolvedValue(null), run: () => A.setBillingAddressAction("a1", G, "1 Main St") },
+  ];
+  it.each(cases)("$name", async ({ name, setup, run }) => {
+    setup();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await run()).toEqual({ ok: false, error: "groups.refused" });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]![0]);
+    expect(line).toContain(`${name}: account a1: groups.refused`);
+    expect(line).not.toMatch(/Garcia|Madre|Main St/);
+  });
+  it("a bad id is refused and logged too, before any read", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await A.makePrimaryAction("a1", "nope")).toEqual({ ok: false, error: "groups.refused" });
+    expect(String(warn.mock.calls[0]?.[0])).toContain("makePrimaryAction: account a1: groups.refused");
   });
 });

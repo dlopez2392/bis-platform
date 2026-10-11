@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import type { ContactGroup, GroupKind, GroupSearchHit } from "@bis/db";
@@ -16,7 +17,7 @@ import { m } from "@/lib/messages";
 import {
   searchGroupsAction, createGroupAction, addToGroupAction, setRoleAction, setBillingAction, makePrimaryAction,
   removeMembershipAction, restoreMembershipAction, renameGroupAction, setBillingAddressAction,
-  type GroupActionError, type GroupResult,
+  type GroupActionError, type GroupResult, type GroupSearchResult,
 } from "./groups-actions";
 
 /**
@@ -133,39 +134,59 @@ export const removeFrom = (accountId: string, group: ContactGroup, onChanged: ()
     onChanged,
   });
 
-/** A search that throws is the search's error state; it never reaches the card (review correction 2). */
-export async function searchOutcome(p: Promise<GroupSearchHit[]>): Promise<{ status: "ready"; hits: GroupSearchHit[] } | { status: "error" }> {
-  try { return { status: "ready", hits: await p }; } catch { return { status: "error" }; }
+/** The server's failed search (`{ ok: false }`, fix round 1, I2) and a search
+ *  that throws (a stale tab after a deploy) are both the search's error
+ *  state; neither reaches the card as "no matches" or as a crash. */
+export async function searchOutcome(p: Promise<GroupSearchResult>): Promise<{ status: "ready"; hits: GroupSearchHit[] } | { status: "error" }> {
+  try {
+    const r = await p;
+    return r.ok ? { status: "ready", hits: r.hits } : { status: "error" };
+  } catch {
+    return { status: "error" };
+  }
 }
 
 // ── The inline saves. InlineField runs the Undo with the payload a save hands
-// back (`undoWith`), so the Undo writes the server's own `previous`.
+// back (`undoWith`), so the Undo writes the server's own `previous`. Each
+// save and Undo that lands reports a change (fix round 1, I1): a rename can
+// change the Business name the page shows.
 type InlineResult = { ok: true; undoPayload?: unknown } | { ok: false; error: string };
-async function toInline<P>(write: () => Promise<GroupResult<{ previous: P }>>): Promise<InlineResult> {
+async function toInline<P>(write: () => Promise<GroupResult<{ previous: P }>>, onChanged: () => void): Promise<InlineResult> {
   const r = await write();
-  return r.ok ? { ok: true, undoPayload: r.previous } : { ok: false, error: errorText(r.error) };
+  if (!r.ok) return { ok: false, error: errorText(r.error) };
+  onChanged();
+  return { ok: true, undoPayload: r.previous };
 }
-export async function inlineUndo(write: () => Promise<GroupResult<object>>): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const r = await write();
-    return r.ok ? { ok: true } : { ok: false, error: errorText(r.error) };
-  } catch {
-    return { ok: false, error: m["groups.failed"] };
-  }
+export async function inlineUndo(
+  write: () => Promise<GroupResult<object>>, onChanged: () => void,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  let r: GroupResult<object>;
+  try { r = await write(); } catch { return { ok: false, error: m["groups.failed"] }; }
+  if (!r.ok) return { ok: false, error: errorText(r.error) };
+  onChanged();
+  return { ok: true };
 }
 /** The name edits under `source`'s rule (trim, free text) and refuses a blank
  *  HERE: InlineField's `required` rule speaks of a "company" (G4). */
-export const nameSave = (accountId: string, groupId: string) => async (v: string): Promise<InlineResult> =>
-  v === "" ? { ok: false, error: m["groups.nameEmpty"] } : toInline(() => renameGroupAction(accountId, groupId, v));
+export const nameSave = (accountId: string, groupId: string, onChanged: () => void) => async (v: string): Promise<InlineResult> =>
+  v === "" ? { ok: false, error: m["groups.nameEmpty"] } : toInline(() => renameGroupAction(accountId, groupId, v), onChanged);
 /** "" clears: the action and the database store null for it. */
-export const roleSave = (accountId: string, memberId: string) => (v: string): Promise<InlineResult> =>
-  toInline(() => setRoleAction(accountId, memberId, v === "" ? null : v));
-const addressSave = (accountId: string, groupId: string) => (v: string): Promise<InlineResult> =>
-  toInline(() => setBillingAddressAction(accountId, groupId, v === "" ? null : v));
+export const roleSave = (accountId: string, memberId: string, onChanged: () => void) => (v: string): Promise<InlineResult> =>
+  toInline(() => setRoleAction(accountId, memberId, v === "" ? null : v), onChanged);
+const addressSave = (accountId: string, groupId: string, onChanged: () => void) => (v: string): Promise<InlineResult> =>
+  toInline(() => setBillingAddressAction(accountId, groupId, v === "" ? null : v), onChanged);
 
 // ── The card.
-export function GroupsCard(props: ViewProps) {
+/**
+ * `onChanged` (fix round 1, I1) is the parent's, fired after every write and
+ * Undo that landed: the drawer re-reads its own rows with it. The card also
+ * refreshes the server-rendered page itself, because a group write can change
+ * contacts.company_name (0069's trigger): the drawer's row comes from the
+ * list page and the contact page's Business name from its own render.
+ */
+export function GroupsCard({ onChanged, ...props }: ViewProps & { onChanged?: () => void }) {
   const { accountId, contactId } = props;
+  const router = useRouter();
   const [nonce, setNonce] = useState(0);
   // Paired with the contact it was read for (the drawer's shape): "loading"
   // falls out of a mismatch, so only the fetch's own callbacks set state. A
@@ -188,8 +209,9 @@ export function GroupsCard(props: ViewProps) {
     <GroupsCardView
       {...props}
       load={load}
+      // Retry re-reads the card only: nothing changed.
       onRetry={() => { setRead(null); setNonce((n) => n + 1); }}
-      onChanged={() => setNonce((n) => n + 1)}
+      onChanged={() => { setNonce((n) => n + 1); router.refresh(); onChanged?.(); }}
     />
   );
 }
@@ -257,8 +279,8 @@ function GroupRow({ accountId, group, canManageGroups, onChanged }:
         {canManageGroups ? (
           <div className="-ml-2 min-w-0 flex-1">
             <InlineField label={m["groups.name"]} field="source" value={group.name}
-              save={nameSave(accountId, group.groupId)}
-              undoWith={(prev) => inlineUndo(() => renameGroupAction(accountId, group.groupId, prev as string))} />
+              save={nameSave(accountId, group.groupId, onChanged)}
+              undoWith={(prev) => inlineUndo(() => renameGroupAction(accountId, group.groupId, prev as string), onChanged)} />
           </div>
         ) : <span className="min-w-0 flex-1 truncate font-medium">{group.name}</span>}
         <span className="shrink-0 text-xs text-muted-foreground">{kindLabel(group.kind)}</span>
@@ -293,8 +315,8 @@ function GroupRow({ accountId, group, canManageGroups, onChanged }:
           <dd className="min-w-0">
             <InlineField label={m["groups.role"]} field="source" value={group.role}
               placeholder={m["groups.rolePlaceholder"]}
-              save={roleSave(accountId, group.memberId)}
-              undoWith={(prev) => inlineUndo(() => setRoleAction(accountId, group.memberId, prev as string | null))} />
+              save={roleSave(accountId, group.memberId, onChanged)}
+              undoWith={(prev) => inlineUndo(() => setRoleAction(accountId, group.memberId, prev as string | null), onChanged)} />
           </dd>
         </div>
         {canManageGroups ? (
@@ -302,8 +324,8 @@ function GroupRow({ accountId, group, canManageGroups, onChanged }:
             <dt className="text-xs text-muted-foreground">{m["groups.billingAddress"]}</dt>
             <dd className="min-w-0">
               <InlineField label={m["groups.billingAddress"]} field="source" value={group.billingAddress}
-                save={addressSave(accountId, group.groupId)}
-                undoWith={(prev) => inlineUndo(() => setBillingAddressAction(accountId, group.groupId, prev as string | null))} />
+                save={addressSave(accountId, group.groupId, onChanged)}
+                undoWith={(prev) => inlineUndo(() => setBillingAddressAction(accountId, group.groupId, prev as string | null), onChanged)} />
             </dd>
           </div>
         ) : null}

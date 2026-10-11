@@ -435,3 +435,37 @@ describe("the drawer's Assigned to line (F-085)", () => {
     expect(table).toMatch(/canAssign = false,\s*members = \[\],/);
   });
 });
+
+/**
+ * Task 6 fix round 1, I1: a Groups card write can change the Business name
+ * (0069's trigger) and the drawer's other rows, so the card's onChanged bumps
+ * the drawer's retryNonce, as TextsRow's and EmailRow's do. (The card itself
+ * refreshes the server-rendered list, which brings the drawer a fresh row:
+ * groups-card.wiring.test.ts.) The drawer is CALLED, not rendered, so the
+ * element tree under the stubbed Sheet can be read.
+ */
+describe("ContactDrawer: the Groups card's changes re-read the drawer (fix round 1, I1)", () => {
+  it("hands the card an onChanged that bumps retryNonce (mutation: drop the onChanged prop -> FAILS)", async () => {
+    const { isValidElement } = await import("react");
+    const { GroupsCard } = await import("./groups-card");
+    effects.length = 0;
+    states.length = 0;
+    const tree = ContactDrawer({ accountId: "a1", row: ROW, onClose: () => {}, canAssign: true });
+    const found: { type: unknown; props: Record<string, unknown> }[] = [];
+    const walk = (n: unknown): void => {
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (!isValidElement(n)) return;
+      const el = n as unknown as { type: unknown; props: Record<string, unknown> };
+      found.push(el);
+      walk(el.props.children);
+    };
+    walk(tree);
+    const card = found.find((e) => e.type === GroupsCard);
+    expect(card?.props).toMatchObject({ accountId: "a1", contactId: "c1", canManageGroups: true });
+    // `retryNonce` is the one state that starts at 0 (found by starting value, not hook order).
+    const nonce = states.filter((s) => s.initial === 0);
+    expect(nonce).toHaveLength(1);
+    (card!.props.onChanged as () => void)();
+    expect(nonce[0]!.set).toHaveBeenCalledTimes(1);
+  });
+});

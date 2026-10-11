@@ -155,10 +155,13 @@ describe("the card's writes: feedback and Undo (rule 6)", () => {
   });
 });
 
-describe("searchOutcome (review correction 2)", () => {
+describe("searchOutcome (review correction 2; fix round 1, I2)", () => {
   it("hits are ready", async () => {
-    expect(await searchOutcome(Promise.resolve([{ id: "g1", kind: "household" as const, name: "Garcia" }])))
+    expect(await searchOutcome(Promise.resolve({ ok: true as const, hits: [{ id: "g1", kind: "household" as const, name: "Garcia" }] })))
       .toEqual({ status: "ready", hits: [{ id: "g1", kind: "household", name: "Garcia" }] });
+  });
+  it("a search the server reports as failed is the error state, not 'no matches' (I2; mutation: read { ok: false } as no hits -> FAILS)", async () => {
+    expect(await searchOutcome(Promise.resolve({ ok: false as const }))).toEqual({ status: "error" });
   });
   it("a search that THROWS is the search's error state, never a crashed card (mutation: let the rejection through -> FAILS)", async () => {
     expect(await searchOutcome(Promise.reject(new Error("db down")))).toEqual({ status: "error" });
@@ -188,27 +191,53 @@ describe("groupsLoadFrom: the route's body is parsed, not cast", () => {
 
 describe("the inline saves (rename, role): what InlineField is handed", () => {
   it("a blank group name is refused in the group's own words, never the account rename's 'company' sentence, and nothing is sent (G4; mutation: drop the blank check so the blank reaches the action -> FAILS)", async () => {
-    expect(await nameSave("a1", "g1")("")).toEqual({ ok: false, error: m["groups.nameEmpty"] });
+    expect(await nameSave("a1", "g1", vi.fn())("")).toEqual({ ok: false, error: m["groups.nameEmpty"] });
     expect(actions.renameGroupAction).not.toHaveBeenCalled();
     expect(m["groups.nameEmpty"]).not.toMatch(/company/i);
   });
   it("a rename hands back the server's previous name as the Undo payload (mutation: no undoPayload -> FAILS)", async () => {
     vi.mocked(actions.renameGroupAction).mockResolvedValue(ok({ previous: "Garcia" }));
-    expect(await nameSave("a1", "g1")("García")).toEqual({ ok: true, undoPayload: "Garcia" });
+    expect(await nameSave("a1", "g1", vi.fn())("García")).toEqual({ ok: true, undoPayload: "Garcia" });
     expect(actions.renameGroupAction).toHaveBeenCalledWith("a1", "g1", "García");
   });
   it("a taken business name is the catalogue's sentence (mutation: return the raw key -> FAILS)", async () => {
     vi.mocked(actions.renameGroupAction).mockResolvedValue({ ok: false, error: "groups.nameTaken" });
-    expect(await nameSave("a1", "g1")("Acme")).toEqual({ ok: false, error: m["groups.nameTaken"] });
+    expect(await nameSave("a1", "g1", vi.fn())("Acme")).toEqual({ ok: false, error: m["groups.nameTaken"] });
   });
   it("clearing the role sends null, and a first role's Undo payload is the server's null (mutation: send \"\" -> FAILS)", async () => {
     vi.mocked(actions.setRoleAction).mockResolvedValue(ok({ previous: null }));
-    expect(await roleSave("a1", "m1")("")).toEqual({ ok: true, undoPayload: null });
+    expect(await roleSave("a1", "m1", vi.fn())("")).toEqual({ ok: true, undoPayload: null });
     expect(actions.setRoleAction).toHaveBeenCalledWith("a1", "m1", null);
   });
   it("an Undo write that rejects comes back as a failure InlineField can show, never a throw (mutation: drop the catch -> FAILS)", async () => {
-    expect(await inlineUndo(() => Promise.reject(new Error("stale")))).toEqual({ ok: false, error: m["groups.failed"] });
-    expect(await inlineUndo(async () => ({ ok: false as const, error: "groups.refused" as const }))).toEqual({ ok: false, error: m["groups.refused"] });
-    expect(await inlineUndo(async () => ({ ok: true as const, previous: "x" }))).toEqual({ ok: true });
+    expect(await inlineUndo(() => Promise.reject(new Error("stale")), vi.fn())).toEqual({ ok: false, error: m["groups.failed"] });
+    expect(await inlineUndo(async () => ({ ok: false as const, error: "groups.refused" as const }), vi.fn())).toEqual({ ok: false, error: m["groups.refused"] });
+    expect(await inlineUndo(async () => ({ ok: true as const, previous: "x" }), vi.fn())).toEqual({ ok: true });
+  });
+});
+
+describe("fix round 1, I1: an inline save and its Undo report a change (a rename can change the Business name)", () => {
+  it("a rename that saved reports it; one refused does not (mutation: drop onChanged from nameSave -> FAILS)", async () => {
+    const onChanged = vi.fn();
+    vi.mocked(actions.renameGroupAction).mockResolvedValueOnce(ok({ previous: "Garcia" }));
+    await nameSave("a1", "g1", onChanged)("García");
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    vi.mocked(actions.renameGroupAction).mockResolvedValueOnce({ ok: false, error: "groups.nameTaken" });
+    await nameSave("a1", "g1", onChanged)("Acme");
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+  it("a role save that saved reports it", async () => {
+    const onChanged = vi.fn();
+    vi.mocked(actions.setRoleAction).mockResolvedValue(ok({ previous: null }));
+    await roleSave("a1", "m1", onChanged)("Madre");
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+  it("an inline Undo that landed reports it; a refused or rejected one does not (mutation: drop onChanged from inlineUndo -> FAILS)", async () => {
+    const onChanged = vi.fn();
+    await inlineUndo(async () => ({ ok: true as const, previous: "x" }), onChanged);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    await inlineUndo(async () => ({ ok: false as const, error: "groups.refused" as const }), onChanged);
+    await inlineUndo(() => Promise.reject(new Error("stale")), onChanged);
+    expect(onChanged).toHaveBeenCalledTimes(1);
   });
 });
