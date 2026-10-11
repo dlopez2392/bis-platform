@@ -79,6 +79,8 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx": "proven-target",
   // createContactAction: flags written by the service client for a row the caller just created.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
+  // The Groups card: every service write follows a request-client read of its contact, membership or group;
+  // restore's events read vouches a narrow caller's own removal (0069's tables are server-written).
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/groups-actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",

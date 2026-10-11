@@ -3,6 +3,7 @@ import { getContact, listContactGroups, type ContactGroup } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { loggableError } from "@/lib/loggable-error";
+import { isUuid } from "@/lib/assign/action-guards";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,8 @@ export async function GET(
 ) {
   const { accountId, contactId } = await params;
   const access = await apiAccountAccess(accountId);
-  if (!access) return NextResponse.json({}, { status: 404 });
+  // A malformed id is a 404 like any contact the caller cannot see, not a 500 from the uuid cast.
+  if (!access || !isUuid(contactId)) return NextResponse.json({}, { status: 404 });
   try {
     // RLS-scoped: the contact read IS the authorisation (the texts route's rule).
     const db = await dbForRequest();

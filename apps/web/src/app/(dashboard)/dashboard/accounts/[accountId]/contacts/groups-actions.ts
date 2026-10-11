@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import {
   serviceDb, getContact, readMembership, readGroup, searchGroups, createGroupWithMember, addContactToGroup,
   updateMembership, setPrimaryMembership, removeMembership, restoreMembership, updateGroup,
-  GROUP_NAME_MAX, GROUP_ROLE_MAX, BILLING_ADDRESS_MAX,
+  GROUP_NAME_MAX, GROUP_ROLE_MAX, BILLING_ADDRESS_MAX, dbTrimmedLength,
   type GroupKind, type GroupMemberSnapshot, type GroupSearchHit,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -45,7 +45,12 @@ async function provenMembership(accountId: string, memberId: string) {
 export async function searchGroupsAction(accountId: string, term: string): Promise<GroupSearchHit[]> {
   await requireAccountAccess(accountId);
   if (typeof term !== "string" || term.length > GROUP_NAME_MAX) return [];
-  return searchGroups(await dbForRequest(), accountId, term);
+  try {
+    return await searchGroups(await dbForRequest(), accountId, term);
+  } catch (e) {
+    console.error(`searchGroupsAction: account ${accountId}: ${loggableError(e)}`);
+    return [];
+  }
 }
 
 export async function createGroupAction(
@@ -53,8 +58,9 @@ export async function createGroupAction(
 ): Promise<GroupResult<{ memberId: string; name: string; existed: boolean }>> {
   const { userId } = await requireAccountAccess(accountId);
   if (!isUuid(contactId) || (kind !== "household" && kind !== "business")) return refused;
-  if (typeof name !== "string" || name.trim().length === 0) return failed;
-  if (name.trim().length > GROUP_NAME_MAX) return tooLong;
+  // Measured as 0069 trims it (app.group_ws()), not by .trim(), which also strips U+FEFF and others.
+  if (typeof name !== "string" || dbTrimmedLength(name) === 0) return failed;
+  if (dbTrimmedLength(name) > GROUP_NAME_MAX) return tooLong;
   return guarded<{ memberId: string; name: string; existed: boolean }>("createGroupAction", accountId, async () => {
     if (!(await getContact(await dbForRequest(), accountId, contactId))) return refused;
     const r = await createGroupWithMember(serviceDb(), accountId, contactId, kind, name, null, userId);
@@ -82,11 +88,12 @@ export async function addToGroupAction(
 }
 
 export async function setRoleAction(
-  accountId: string, memberId: string, role: string,
+  accountId: string, memberId: string, role: string | null,
 ): Promise<GroupResult<{ previous: string | null }>> {
   const { userId } = await requireAccountAccess(accountId);
-  if (typeof role !== "string") return failed;
-  if (role.trim().length > GROUP_ROLE_MAX) return tooLong;
+  // null clears the role: the Undo of a first role sends back the previous value, which was null.
+  if (role !== null && typeof role !== "string") return failed;
+  if (role !== null && role.trim().length > GROUP_ROLE_MAX) return tooLong;
   return guarded<{ previous: string | null }>("setRoleAction", accountId, async () => {
     if (!(await provenMembership(accountId, memberId))) return refused;
     const r = await updateMembership(serviceDb(), accountId, memberId, { role }, userId);
@@ -132,13 +139,39 @@ export async function removeMembershipAction(
   });
 }
 
+/**
+ * I1: restore_group_membership checks only that the group is in the account,
+ * so a snapshot is a claim from the browser. A caller who sees the whole
+ * account could add that pair anyway. A narrow caller (a Technician, or a
+ * role that could not be settled) gets the Undo only for a removal THEY
+ * made: the client_group.member_removed event removeMembership emitted,
+ * matched on the same member, contact and group in this account and the same
+ * actor, read through the service client because events are hidden from a
+ * Technician (0068). Not a request-client readGroup: after removing the only
+ * link a Technician had to a group, the group is invisible to them, and that
+ * Undo is legitimate. Bounded to RESTORE_WINDOW_MS so the read stays on
+ * events_account_created rather than the account's whole history.
+ */
+const RESTORE_WINDOW_MS = 24 * 60 * 60 * 1000;
+async function removedByCaller(accountId: string, userId: string, snapshot: GroupMemberSnapshot): Promise<boolean> {
+  const { data, error } = await serviceDb().from("events").select("id")
+    .eq("account_id", accountId).eq("type", "client_group.member_removed").eq("actor_id", userId)
+    .contains("payload", { memberId: snapshot.id, contactId: snapshot.contact_id, groupId: snapshot.client_group_id })
+    .gte("created_at", new Date(Date.now() - RESTORE_WINDOW_MS).toISOString())
+    .limit(1);
+  if (error) throw new Error(`restore removal lookup failed: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
 export async function restoreMembershipAction(accountId: string, snapshot: GroupMemberSnapshot): Promise<GroupResult> {
-  const { userId } = await requireAccountAccess(accountId);
+  const access = await requireAccountAccess(accountId);
+  const { userId } = access;
   // The snapshot comes back from the browser: its ids are checked, and it must name THIS account.
   if (!snapshot || snapshot.account_id !== accountId
     || !isUuid(snapshot.contact_id) || !isUuid(snapshot.client_group_id) || !isUuid(snapshot.id)) return refused;
   return guarded<object>("restoreMembershipAction", accountId, async () => {
     if (!(await getContact(await dbForRequest(), accountId, snapshot.contact_id))) return refused;
+    if (!seesWholeAccount(access) && !(await removedByCaller(accountId, userId, snapshot))) return refused;
     const r = await restoreMembership(serviceDb(), accountId, snapshot, userId);
     if (r !== "ok") return refused;
     revalidatePath(contactsPath(accountId));
@@ -169,11 +202,12 @@ export async function renameGroupAction(
 }
 
 export async function setBillingAddressAction(
-  accountId: string, groupId: string, address: string,
+  accountId: string, groupId: string, address: string | null,
 ): Promise<GroupResult<{ previous: string | null }>> {
   const access = await requireAccountAccess(accountId);
-  if (typeof address !== "string") return failed;
-  if (address.trim().length > BILLING_ADDRESS_MAX) return tooLong;
+  // null clears the address: the Undo of a first address sends back the previous value, which was null.
+  if (address !== null && typeof address !== "string") return failed;
+  if (address !== null && address.trim().length > BILLING_ADDRESS_MAX) return tooLong;
   return guarded<{ previous: string | null }>("setBillingAddressAction", accountId, async () => {
     if (!(await provenGroupForManager(access, accountId, groupId))) return refused;
     const r = await updateGroup(serviceDb(), accountId, groupId, { billingAddress: address }, access.userId);

@@ -233,7 +233,7 @@ export {
 
 // Client groups (S-02 part 1, 0069): households and business customers. See ./client-groups.ts.
 export {
-  GROUP_NAME_MAX, GROUP_ROLE_MAX, BILLING_ADDRESS_MAX,
+  GROUP_NAME_MAX, GROUP_ROLE_MAX, BILLING_ADDRESS_MAX, dbTrimmedLength,
   listContactGroups, searchGroups, readMembership, readGroup,
   createGroupWithMember, addContactToGroup, setContactsBusiness, undoSetBusiness,
   setPrimaryMembership, removeMembership, restoreMembership, updateMembership, updateGroup,

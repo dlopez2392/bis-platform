@@ -49,7 +49,7 @@ async function rpc<T>(db: SupabaseClient, fn: string, args: Record<string, unkno
  * `app.group_ws()` exactly, not a superset and not a subset.
  */
 const GROUP_WS = /[ \t\n\v\f\r ]/;
-function dbTrimmedLength(value: string): number {
+export function dbTrimmedLength(value: string): number {
   let start = 0;
   let end = value.length;
   while (start < end && GROUP_WS.test(value[start]!)) start++;
