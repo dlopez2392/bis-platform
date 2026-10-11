@@ -50,7 +50,7 @@ function* walk(node: unknown): Generator<ReactElement<Record<string, unknown>>> 
 
 const GROUP = {
   memberId: "m1", groupId: "g1", kind: "business" as const, name: "Acme", billingAddress: null, role: null,
-  isPrimary: true, isBilling: false, others: [],
+  isPrimary: true, isBilling: false, others: [], moreOthers: 0,
 };
 
 beforeEach(() => { states.length = 0; vi.clearAllMocks(); });

@@ -23,18 +23,32 @@ export type ContactGroupMember = { contactId: string; firstName: string | null; 
 export type ContactGroup = {
   memberId: string; groupId: string; kind: GroupKind; name: string; billingAddress: string | null;
   role: string | null; isPrimary: boolean; isBilling: boolean; others: ContactGroupMember[];
+  /** Co-members past the first GROUP_OTHERS_SHOWN, counted among the rows the caller's RLS returns. */
+  moreOthers: number;
 };
+/** The most co-members the card names per group; the rest are "and N more". */
+export const GROUP_OTHERS_SHOWN = 10;
 export type GroupSearchHit = { id: string; kind: GroupKind; name: string };
 export type BusinessResult = {
   contactId: string; status: "ok" | "unchanged" | "not_found" | "too_long";
   removed: GroupMemberSnapshot | null; added: string | null;
 };
 
+/** A failed RPC, carrying PostgREST's error code (a SQLSTATE such as 40P01) beside the message. */
+class RpcError extends Error {
+  constructor(message: string, readonly code: string | undefined) { super(message); }
+}
+
 async function rpc<T>(db: SupabaseClient, fn: string, args: Record<string, unknown>): Promise<T> {
   const { data, error } = await db.rpc(fn, args);
-  if (error) throw new Error(`${fn} failed: ${error.message}`);
+  if (error) throw new RpcError(`${fn} failed: ${error.message}`, error.code);
   return data as T;
 }
+
+/** Postgres's deadlock_detected. */
+const DEADLOCK = "40P01";
+/** How many times setContactsBusiness runs its RPC again after a deadlock (three calls at most). */
+const DEADLOCK_RETRIES = 2;
 
 /**
  * 0069's `app.group_ws()`: space, tab, LF, VT, FF, CR, U+00A0 — spelled with
@@ -48,7 +62,7 @@ async function rpc<T>(db: SupabaseClient, fn: string, args: Record<string, unkno
  * `client_group_members_role_check` would still raise 23514 on it. Matches
  * `app.group_ws()` exactly, not a superset and not a subset.
  */
-const GROUP_WS = /[ \t\n\v\f\r ]/;
+const GROUP_WS = /[ \t\n\v\f\r\u00a0]/;
 export function dbTrimmedLength(value: string): number {
   let start = 0;
   let end = value.length;
@@ -86,24 +100,26 @@ export async function listContactGroups(db: SupabaseClient, accountId: string, c
     .filter((r) => r.client_groups !== null)
     .sort((a, b) => Number(b.is_primary) - Number(a.is_primary)
       || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
-  const others = new Map<string, ContactGroupMember[]>();
-  const groupIds = rows.map((r) => r.client_groups!.id);
-  if (groupIds.length > 0) {
-    const { data: o, error: oErr } = await db.from("client_group_members")
-      .select("client_group_id, contact_id, contacts(first_name, last_name)")
-      .eq("account_id", accountId).in("client_group_id", groupIds).neq("contact_id", contactId)
-      .order("created_at", { ascending: true });
+  // One bounded read per group (a business can have hundreds of members). The exact count runs in the
+  // same request, under the caller's RLS, so "and N more" never counts a member the caller cannot see.
+  const others = new Map<string, { list: ContactGroupMember[]; more: number }>();
+  await Promise.all(rows.map(async (row) => {
+    const groupId = row.client_groups!.id;
+    const { data: o, error: oErr, count } = await db.from("client_group_members")
+      .select("client_group_id, contact_id, contacts(first_name, last_name)", { count: "exact" })
+      .eq("account_id", accountId).eq("client_group_id", groupId).neq("contact_id", contactId)
+      .order("created_at", { ascending: true }).order("id", { ascending: true })
+      .limit(GROUP_OTHERS_SHOWN);
     if (oErr) throw new Error(`listContactGroups members failed: ${oErr.message}`);
-    for (const r of (o ?? []) as unknown as OtherRow[]) {
-      const list = others.get(r.client_group_id) ?? [];
-      list.push({ contactId: r.contact_id, firstName: r.contacts?.first_name ?? null, lastName: r.contacts?.last_name ?? null });
-      others.set(r.client_group_id, list);
-    }
-  }
+    const list = ((o ?? []) as unknown as OtherRow[]).map((r) => (
+      { contactId: r.contact_id, firstName: r.contacts?.first_name ?? null, lastName: r.contacts?.last_name ?? null }));
+    others.set(groupId, { list, more: Math.max(0, (count ?? list.length) - list.length) });
+  }));
   return rows.map((r) => ({
     memberId: r.id, groupId: r.client_groups!.id, kind: r.client_groups!.kind, name: r.client_groups!.name,
     billingAddress: r.client_groups!.billing_address, role: r.role, isPrimary: r.is_primary, isBilling: r.is_billing,
-    others: others.get(r.client_groups!.id) ?? [],
+    others: others.get(r.client_groups!.id)?.list ?? [],
+    moreOthers: others.get(r.client_groups!.id)?.more ?? 0,
   }));
 }
 
@@ -178,9 +194,20 @@ export async function setContactsBusiness(
   actorId: string, actorType: ActorType = "user",
 ): Promise<BusinessResult[]> {
   if (rows.length === 0) return [];
-  const out = await rpc<{ contact_id: string; status: BusinessResult["status"]; removed: GroupMemberSnapshot | null; added: string | null }[]>(
-    db, "set_contacts_business",
-    { p_account_id: accountId, p_contact_ids: rows.map((r) => r.contactId), p_names: rows.map((r) => r.name) });
+  type Row = { contact_id: string; status: BusinessResult["status"]; removed: GroupMemberSnapshot | null; added: string | null };
+  const args = { p_account_id: accountId, p_contact_ids: rows.map((r) => r.contactId), p_names: rows.map((r) => r.name) };
+  // set_contacts_business locks contacts in id order, but another writer (a reconcile, a cascade) can
+  // still deadlock with it. One RPC is one transaction, so a 40P01 rolled back ALL of it: running it
+  // again is safe, and nothing is emitted until a call has succeeded.
+  let out: Row[];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      out = await rpc<Row[]>(db, "set_contacts_business", args);
+      break;
+    } catch (e) {
+      if (!(e instanceof RpcError && e.code === DEADLOCK && attempt < DEADLOCK_RETRIES)) throw e;
+    }
+  }
   const results = out.map((r) => ({ contactId: r.contact_id, status: r.status, removed: r.removed, added: r.added }));
   const changed = results.filter((r) => r.status === "ok").map((r) => r.contactId);
   if (changed.length > 0) {

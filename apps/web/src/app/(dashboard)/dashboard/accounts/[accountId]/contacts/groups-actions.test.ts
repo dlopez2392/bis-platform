@@ -141,6 +141,17 @@ describe("I1: a narrow caller restores only a membership THEY removed (no Undo i
     expect(chain.limit).toHaveBeenCalledWith(1);
     expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", snap(), "user_1");
   });
+  it("the removal must be within the last 24 hours: the lookup is bounded by created_at (final review minor 7; mutation: drop the .gte(created_at) bound -> FAILS)", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-11T12:00:00.000Z"));
+      db.getContact.mockResolvedValue({ id: C });
+      db.restoreMembership.mockResolvedValue("ok");
+      events.data = [{ id: 7 }];
+      expect(await A.restoreMembershipAction("a1", snap())).toEqual({ ok: true });
+      expect(chain.gte).toHaveBeenCalledWith("created_at", "2026-10-10T12:00:00.000Z");
+    } finally { vi.useRealTimers(); }
+  });
   it("Staff keep today's behaviour: no removal check", async () => {
     access.role = "staff";
     db.getContact.mockResolvedValue({ id: C });
@@ -264,13 +275,16 @@ describe("fix round 1, I1: writes revalidate the contact's own page", () => {
     await A.restoreMembershipAction("a1", snap());
     expect(revalidatePath).toHaveBeenCalledWith(detail);
   });
-  it("rename revalidates every contact page, since each member's Business name can change (mutation: list only -> FAILS)", async () => {
+  // Final review minor 9: a rename once revalidated the literal route PATTERN, i.e. every contact page of
+  // every account. It now revalidates this account's list only. The open page is refreshed by the card
+  // itself (GroupsCard's onChanged runs router.refresh(), pinned in groups-card.wiring.test.ts), and every
+  // other member's page is force-dynamic with no staleTimes override, so it renders fresh when opened.
+  it("rename revalidates this account's list and never a route pattern across every account (mutation: put the pattern revalidate back -> FAILS)", async () => {
     access.role = "staff";
     db.readGroup.mockResolvedValue({ id: G, kind: "business", name: "Acme", billingAddress: null });
     db.updateGroup.mockResolvedValue({ status: "ok", previous: { name: "Acme", billingAddress: null } });
     expect((await A.renameGroupAction("a1", G, "Acme Roofing")).ok).toBe(true);
-    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
-    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/[accountId]/contacts/[contactId]", "page");
+    expect(vi.mocked(revalidatePath).mock.calls).toEqual([["/dashboard/accounts/a1/contacts"]]);
   });
 });
 

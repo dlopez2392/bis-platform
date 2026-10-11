@@ -5,6 +5,17 @@ import { commitInlineUndo, type PhoneInlineUndo, type InlinePhoneUndoWrite } fro
 type WriteResult = { ok: true } | { ok: false; error: string };
 
 /**
+ * The remount key for a field that must show a NEW value from the server (the
+ * Business name: a Groups card write can change it underneath). At rest it is
+ * the server's value, so a changed value remounts the field; while the
+ * operator is editing it stays where it was, so a refresh mid-edit never
+ * remounts the input and throws away what they typed (final review minor 11).
+ */
+export function followedFieldKey(editing: boolean, current: string, value: string | null): string {
+  return editing ? current : (value ?? "");
+}
+
+/**
  * The inline Undo decision, in one place and testable without a DOM: whether
  * Undo is offered for this save at all, and the ONE write it runs. Returns
  * that write as a thunk (nothing runs until Undo is pressed), or `null` for

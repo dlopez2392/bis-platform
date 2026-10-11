@@ -3415,6 +3415,9 @@ export const m = {
   "groups.tooLong.es": "Es demasiado largo.",
   "groups.others": "Also in this group",
   "groups.others.es": "También en este grupo",
+  // After the names the card shows, when a group has more members than it lists.
+  "groups.othersMore": "and {count} more",
+  "groups.othersMore.es": "y {count} más",
 } as const;
 
 export type MessageKey = keyof typeof m;

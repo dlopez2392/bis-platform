@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { planInlineUndo, inlineSavedView } from "./inline-save";
+import { planInlineUndo, inlineSavedView, followedFieldKey } from "./inline-save";
 import type { PhoneInlineUndo } from "./inline-phone-undo";
 import { m } from "@/lib/messages";
 
@@ -99,5 +99,21 @@ describe("inlineSavedView", () => {
   it("the copy reads plainly in both languages, with curly quotes around the name", () => {
     expect(m["contact.business.alreadyAs"]).toBe("Already on your list as “{name}”.");
     expect(m["contact.business.alreadyAs.es"]).toBe("Ya está en su lista como “{name}”.");
+  });
+});
+
+/**
+ * Final review minor 11: the Business name field remounts when the server
+ * hands it a new name (a Groups card write changed it), but never while the
+ * operator is typing in it: a remount mid-edit threw the typed text away.
+ */
+describe("followedFieldKey: follow the server's value only at rest (mutation: always follow the value -> FAILS)", () => {
+  it("at rest, the key is the server's value, so a new name remounts the field", () => {
+    expect(followedFieldKey(false, "Acme Roofing", "Beta Pools")).toBe("Beta Pools");
+    expect(followedFieldKey(false, "Acme Roofing", null)).toBe("");
+  });
+  it("while editing, the key stays where it was, whatever the server sends", () => {
+    expect(followedFieldKey(true, "Acme Roofing", "Beta Pools")).toBe("Acme Roofing");
+    expect(followedFieldKey(true, "", null)).toBe("");
   });
 });

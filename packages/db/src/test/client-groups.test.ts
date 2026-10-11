@@ -24,6 +24,7 @@ describe("client-groups.ts over PostgREST", () => {
     const groups = await listContactGroups(db, accountId, ana);
     expect(groups.map((g) => [g.name, g.kind, g.isPrimary])).toEqual([["Acme Roofing", "business", true], ["Garcia", "household", false]]);
     expect(groups[1]!.others).toEqual([{ contactId: luis, firstName: "Luis", lastName: null }]);
+    expect(groups[1]!.moreOthers).toBe(0); // the exact count PostgREST answers equals the one name shown
     expect(groups[1]!.role).toBe("Madre");
   }));
 

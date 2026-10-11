@@ -89,9 +89,13 @@ export function InlineField(
      *  input's placeholder while editing (the Groups card's role, S-02 §8:
      *  "Role, like Madre or Dueño"). Shown, never stored. */
     placeholder?: string;
+    /** Told whenever editing starts or stops (the Business name holds its
+     *  remount key while the operator types, so a refresh never throws the
+     *  typed text away). */
+    onEditingChange?: (editing: boolean) => void;
   },
 ) {
-  const { label, field, required, options, value, save, inputType = "text", undoPhone, undoWith, placeholder } = props;
+  const { label, field, required, options, value, save, inputType = "text", undoPhone, undoWith, placeholder, onEditingChange } = props;
   // `field` is guaranteed defined whenever neither `required` nor `options`
   // is — the three-way union above enforces that at every call site; this
   // is what lets commit() and the undo guard below share ONE rule instead
@@ -100,7 +104,9 @@ export function InlineField(
     options ? validateEnumValue(options, raw)
     : required ? normalizeRequired(raw)
     : normalizeFieldInput(field as EditableField, raw);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditingState] = useState(false);
+  // The ONE way editing changes, so onEditingChange hears every path: click, commit and Esc.
+  const setEditing = (next: boolean) => { setEditingState(next); onEditingChange?.(next); };
   const [shown, setShown] = useState(value ?? "");
   // Tracks the committed value for cancel/undo across saves.
   const committed = useRef(value ?? "");

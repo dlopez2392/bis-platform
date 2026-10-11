@@ -16,7 +16,7 @@ const { toast } = await import("sonner");
 
 const group = (over: Partial<Record<string, unknown>> = {}) => ({
   memberId: "m1", groupId: "g1", kind: "household", name: "Garcia", billingAddress: null, role: "Madre",
-  isPrimary: true, isBilling: true, others: [{ contactId: "c2", firstName: "Luis", lastName: null }], ...over,
+  isPrimary: true, isBilling: true, others: [{ contactId: "c2", firstName: "Luis", lastName: null }], moreOthers: 0, ...over,
 });
 const view = (load: unknown, canManageGroups = true) => renderToStaticMarkup(createElement(GroupsCardView, {
   accountId: "a1", contactId: "c1", canManageGroups, load: load as never, onRetry: () => {}, onChanged: () => {},
@@ -48,6 +48,13 @@ describe("GroupsCardView", () => {
     expect(html).toContain("Luis");
     expect(html).toContain("/dashboard/accounts/a1/contacts?peek=c2");
     expect(html).not.toMatch(/\bCompany\b/);
+  });
+  it("a group with more co-members than the card names says how many more, in words (final review minor 10; mutation: drop the more line -> FAILS)", () => {
+    const more = renderedText(view({ status: "ready", groups: [group({ moreOthers: 3 })] })).replace(/\s+/g, " ");
+    expect(more).toContain(`Luis ${m["groups.othersMore"].replace("{count}", "3")}`);
+    expect(m["groups.othersMore.es"].replace("{count}", "3")).toBe("y 3 más");
+    const none = renderedText(view({ status: "ready", groups: [group()] }));
+    expect(none).not.toContain(m["groups.othersMore"].replace("{count}", "0"));
   });
   it("a Technician gets no rename or billing address editor (A6)", () => {
     const html = view({ status: "ready", groups: [group()] }, false);
@@ -182,6 +189,7 @@ describe("groupsLoadFrom: the route's body is parsed, not cast", () => {
     expect(await groupsLoadFrom(res({ groups: [group({ name: undefined })] }))).toEqual({ status: "error" });
     expect(await groupsLoadFrom(res({ groups: [group({ kind: "facility" })] }))).toEqual({ status: "error" });
     expect(await groupsLoadFrom(res({ groups: [group({ others: null })] }))).toEqual({ status: "error" });
+    expect(await groupsLoadFrom(res({ groups: [group({ moreOthers: "3" })] }))).toEqual({ status: "error" });
   });
   it("a body that is not JSON is the error state", async () => {
     const bad = { ok: true, json: async () => { throw new SyntaxError("Unexpected token <"); } } as unknown as Response;

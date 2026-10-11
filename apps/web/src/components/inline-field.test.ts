@@ -94,3 +94,17 @@ describe("InlineField's placeholder", () => {
     expect(html(null)).toContain(">Add…</button>");
   });
 });
+
+/**
+ * Final review minor 11: a caller that must not remount the field mid-edit
+ * (the Business name) is told when editing starts and stops. Every change of
+ * `editing` goes through ONE setter that also tells `onEditingChange`, so no
+ * path (click, commit, Esc) can change it silently.
+ */
+describe("InlineField reports every editing change through onEditingChange", () => {
+  it("the state setter is called in exactly one place, the wrapper that also calls onEditingChange (mutation: call setEditingState directly anywhere else -> FAILS)", () => {
+    expect(src).toContain("const [editing, setEditingState] = useState(false);");
+    expect(src.match(/setEditingState\(/g)).toHaveLength(1);
+    expect(src).toContain("const setEditing = (next: boolean) => { setEditingState(next); onEditingChange?.(next); };");
+  });
+});

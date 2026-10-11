@@ -33,16 +33,14 @@ const contactsPath = (accountId: string) => `/dashboard/accounts/${accountId}/co
 /**
  * Fix round 1, I1: a group write can change contacts.company_name (0069's
  * trigger), which the list AND the contact's own page show. Revalidates the
- * list and that contact's page; with no single contact (a rename reaches
- * every member), every contact page. The pages are force-dynamic, so this
- * busts no data cache; it is what tells Next the open page is stale, rather
- * than relying on its current habit of re-rendering any open page after any
+ * list and that contact's page. The pages are force-dynamic, so this busts no
+ * data cache; it is what tells Next the open page is stale, rather than
+ * relying on its current habit of re-rendering any open page after any
  * revalidatePath (revalidate.js: "TODO: only revalidate if the path matches").
  */
-function revalidateContacts(accountId: string, contactId: string | null) {
+function revalidateContacts(accountId: string, contactId: string) {
   revalidatePath(contactsPath(accountId));
-  if (contactId) revalidatePath(`${contactsPath(accountId)}/${contactId}`);
-  else revalidatePath("/dashboard/accounts/[accountId]/contacts/[contactId]", "page");
+  revalidatePath(`${contactsPath(accountId)}/${contactId}`);
 }
 
 /**
@@ -245,8 +243,12 @@ export async function renameGroupAction(
     const r = await updateGroup(serviceDb(), accountId, groupId, { name }, access.userId);
     if (r.status === "name_taken") return { ok: false, error: "groups.nameTaken" };
     if (r.status !== "ok") return refuse(L, accountId, r.status, { group: groupId });
-    // Every member's Business name can change (a business group), so every contact page.
-    revalidateContacts(accountId, null);
+    // Every member's Business name can change (a business group). The list is revalidated here; the
+    // open page is refreshed by the card itself (router.refresh() in GroupsCard's onChanged), and each
+    // other member's page is force-dynamic with no staleTimes override, so it renders fresh when opened.
+    // Not the literal route pattern this once passed, which revalidated every account's contact pages
+    // (final review minor 9).
+    revalidatePath(contactsPath(accountId));
     return { ok: true, previous: r.previous.name };
   });
 }

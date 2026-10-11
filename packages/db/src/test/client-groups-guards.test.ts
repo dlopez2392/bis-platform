@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createGroupWithMember, addContactToGroup, searchGroups, GROUP_ROLE_MAX } from "../client-groups";
+import {
+  createGroupWithMember, addContactToGroup, searchGroups, setContactsBusiness, listContactGroups,
+  GROUP_ROLE_MAX, GROUP_OTHERS_SHOWN,
+} from "../client-groups";
 
 /**
  * Review fixes on a fake client (no database — see assignment-guards.test.ts
@@ -72,5 +75,105 @@ describe("roleTooLong measures the database's own whitespace class, not JS's bro
     expect(r).toEqual({ status: "ok", groupId: "g1", memberId: "m1", existed: false, name: "Garcia" });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.fn).toBe("create_group_with_member");
+  });
+});
+
+/**
+ * Final review (deadlock ruling): set_contacts_business is one transaction per
+ * call, so a 40P01 rolled ALL of it back and a retry is safe. The wrapper keeps
+ * PostgREST's error code, retries a deadlock up to twice, and emits once.
+ */
+function scriptedRpcDb(answers: { data?: unknown; error?: { code: string; message: string } }[]) {
+  let rpcCalls = 0;
+  let inserts = 0;
+  const db = {
+    from() { return { insert: async () => { inserts++; return { error: null }; } }; },
+    rpc: async () => {
+      const a = answers[Math.min(rpcCalls, answers.length - 1)]!;
+      rpcCalls++;
+      return { data: a.data ?? null, error: a.error ?? null };
+    },
+  };
+  return { db: db as unknown as SupabaseClient, rpcCalls: () => rpcCalls, inserts: () => inserts };
+}
+const DEADLOCK = { code: "40P01", message: "deadlock detected" };
+const OK_ROW = [{ contact_id: "c1", status: "ok", removed: null, added: "m1" }];
+
+describe("setContactsBusiness retries a deadlock (mutation: drop the 40P01 retry -> FAILS)", () => {
+  it("a deadlock then success: retried, answers the second call's rows, and emits ONCE", async () => {
+    const s = scriptedRpcDb([{ error: DEADLOCK }, { data: OK_ROW }]);
+    const r = await setContactsBusiness(s.db, "acct", [{ contactId: "c1", name: "Acme" }], "actor");
+    expect(r).toEqual([{ contactId: "c1", status: "ok", removed: null, added: "m1" }]);
+    expect(s.rpcCalls()).toBe(2);
+    expect(s.inserts()).toBe(1);
+  });
+  it("gives up after two retries: three calls, then the deadlock is thrown, and nothing is emitted", async () => {
+    const s = scriptedRpcDb([{ error: DEADLOCK }]);
+    await expect(setContactsBusiness(s.db, "acct", [{ contactId: "c1", name: "Acme" }], "actor")).rejects.toThrow(/deadlock detected/);
+    expect(s.rpcCalls()).toBe(3);
+    expect(s.inserts()).toBe(0);
+  });
+  it("any other error is not retried (mutation: retry every error -> FAILS)", async () => {
+    const s = scriptedRpcDb([{ error: { code: "57014", message: "canceling statement due to statement timeout" } }, { data: OK_ROW }]);
+    await expect(setContactsBusiness(s.db, "acct", [{ contactId: "c1", name: "Acme" }], "actor")).rejects.toThrow(/statement timeout/);
+    expect(s.rpcCalls()).toBe(1);
+  });
+});
+
+/**
+ * Final review minor 10: the co-member read is bounded. It asks for at most
+ * GROUP_OTHERS_SHOWN names per group and an exact count, which PostgREST takes
+ * under the caller's RLS, so "and N more" counts only rows the caller may see.
+ */
+function listDb(memberRows: unknown[], others: Record<string, { rows: unknown[]; count: number }>) {
+  const limits: number[] = [];
+  const countModes: unknown[] = [];
+  const db = {
+    from() {
+      let groupId = "";
+      let isOthers = false;
+      const chain = {
+        select(_cols: string, opts?: { count?: string }) { if (opts) { isOthers = true; countModes.push(opts.count); } return chain; },
+        eq(col: string, v: string) { if (col === "client_group_id") groupId = v; return chain; },
+        neq() { return chain; },
+        order() { return chain; },
+        limit(n: number) {
+          limits.push(n);
+          const o = others[groupId] ?? { rows: [], count: 0 };
+          return Promise.resolve({ data: o.rows.slice(0, n), count: o.count, error: null });
+        },
+        then(res: (v: unknown) => unknown) { return Promise.resolve(isOthers ? { data: [], error: null } : { data: memberRows, error: null }).then(res); },
+      };
+      return chain;
+    },
+  };
+  return { db: db as unknown as SupabaseClient, limits, countModes };
+}
+
+describe("listContactGroups bounds the co-member read and says how many more (minor 10; mutation: drop the limit -> FAILS)", () => {
+  const member = (id: string, groupId: string) => ({
+    id, role: null, is_primary: id === "m1", is_billing: false, created_at: `2026-01-0${id.slice(1)}`,
+    client_groups: { id: groupId, kind: "business", name: `G ${groupId}`, billing_address: null },
+  });
+  const other = (n: number, groupId: string) => ({ client_group_id: groupId, contact_id: `c${n}`, contacts: { first_name: `P${n}`, last_name: null } });
+
+  it("asks each group for at most GROUP_OTHERS_SHOWN names with an exact count, and moreOthers is the rest", async () => {
+    const big = Array.from({ length: GROUP_OTHERS_SHOWN + 3 }, (_, i) => other(i, "g1"));
+    const { db, limits, countModes } = listDb([member("m1", "g1"), member("m2", "g2")], {
+      g1: { rows: big, count: GROUP_OTHERS_SHOWN + 3 },
+      g2: { rows: [other(99, "g2")], count: 1 },
+    });
+    const groups = await listContactGroups(db, "acct", "me");
+    expect(limits).toEqual([GROUP_OTHERS_SHOWN, GROUP_OTHERS_SHOWN]);
+    expect(countModes).toEqual(["exact", "exact"]);
+    expect(groups.map((g) => [g.groupId, g.others.length, g.moreOthers])).toEqual([
+      ["g1", GROUP_OTHERS_SHOWN, 3],
+      ["g2", 1, 0],
+    ]);
+  });
+  it("a group whose co-members the caller cannot see (a Technician: RLS returns none, count 0) shows no names and no more", async () => {
+    const { db } = listDb([member("m1", "g1")], { g1: { rows: [], count: 0 } });
+    const [g] = await listContactGroups(db, "acct", "me");
+    expect(g).toMatchObject({ others: [], moreOthers: 0 });
   });
 });

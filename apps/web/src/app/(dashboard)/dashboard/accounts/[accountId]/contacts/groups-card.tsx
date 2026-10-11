@@ -54,7 +54,7 @@ function isGroup(g: unknown): g is ContactGroup {
   return typeof r.memberId === "string" && typeof r.groupId === "string" && typeof r.name === "string"
     && (r.kind === "household" || r.kind === "business")
     && isStrOrNull(r.billingAddress) && isStrOrNull(r.role)
-    && typeof r.isPrimary === "boolean" && typeof r.isBilling === "boolean"
+    && typeof r.isPrimary === "boolean" && typeof r.isBilling === "boolean" && typeof r.moreOthers === "number"
     && Array.isArray(r.others) && r.others.every((o: unknown) => {
       const x = o as Record<string, unknown> | null;
       return !!x && typeof x.contactId === "string" && isStrOrNull(x.firstName) && isStrOrNull(x.lastName);
@@ -345,6 +345,9 @@ function GroupRow({ accountId, group, canManageGroups, onChanged }:
               </Link>
             </span>
           ))}
+          {/* Final review minor 10: the read names at most GROUP_OTHERS_SHOWN; the rest are a count of
+              rows the caller's RLS returned, so a Technician never sees one. */}
+          {group.moreOthers > 0 ? ` ${m["groups.othersMore"].replace("{count}", String(group.moreOthers))}` : null}
         </p>
       ) : null}
     </li>
