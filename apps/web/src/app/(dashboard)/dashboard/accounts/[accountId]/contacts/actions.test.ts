@@ -547,7 +547,7 @@ describe("createContactAction: a hand-added customer belongs to its author (spec
     requireAccountAccess.mockResolvedValue(STAFF);
     const r = await createContactAction("a1", addForm({ firstName: "Jo" }));
     expect(r).toEqual({ kind: "created" });
-    expect(dbMocks.readPersonId).toHaveBeenCalledWith(REQUEST, "user_1");
+    expect(dbMocks.readPersonId).toHaveBeenCalledWith(REQUEST, "a1", "user_1");
     expect(dbMocks.createContact).toHaveBeenCalledWith(
       REQUEST, "a1", expect.objectContaining({ firstName: "Jo", assignedTo: "p-me" }), "user_1", "user", REQUEST,
     );
@@ -580,6 +580,20 @@ describe("createContactAction: a hand-added customer belongs to its author (spec
     expect(r).toEqual({ kind: "created" });
     expect(spy.mock.calls.flat().join(" ")).toContain("flag write failed");
     spy.mockRestore();
+  });
+
+  // Fix round 1 (C1): since 0067 the agency's staff can have a users row
+  // (the theme toggle), but never a membership in a client's company, so the
+  // account-scoped read answers null and the customer lands Unassigned.
+  it("the agency: the person read is scoped to THIS account, so its users row does not make the customer its own (mutation: readPersonId without the account -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue({ userId: "user_agency", isAgency: true, role: null });
+    dbMocks.readPersonId.mockImplementation(async (...a: unknown[]) =>
+      // What the database answers: a users row exists, a membership in a1 does not.
+      (a.length === 3 && a[1] === "a1" ? null : "p-agency"));
+    await createContactAction("a1", addForm({ firstName: "Jo" }));
+    expect(dbMocks.readPersonId).toHaveBeenCalledWith(REQUEST, "a1", "user_agency");
+    expect(dbMocks.createContact.mock.calls[0]![2]).toMatchObject({ assignedTo: null });
+    expect(dbMocks.createContact.mock.calls[0]![5]).toBe(REQUEST);
   });
 
   it("a client whose role could not be settled takes the Technician's narrow path (fails closed)", async () => {
@@ -645,7 +659,8 @@ describe("assignContactsAction (spec §8, A2, M4)", () => {
   });
 
   it.each([
-    ["an RLS refusal", new Error("assignContacts failed: new row violates row-level security policy for table contacts"), "assign.refused"],
+    ["an RLS refusal (42501)", Object.assign(new Error("assignContacts failed: new row violates row-level security policy for table contacts"), { code: "42501" }), "assign.refused"],
+    ["the same words with no code (fix round 1, m1: never the wording)", new Error("assignContacts failed: new row violates row-level security policy for table contacts"), "assign.failed"],
     ["a 42501 code", Object.assign(new Error("permission denied"), { code: "42501" }), "assign.refused"],
     ["anything else", new Error("assignment: the assignee is not a member of this account"), "assign.failed"],
   ] as const)("%s maps to its AssignError, logged (mutation: map everything to failed -> FAILS)", async (_name, err, expected) => {
@@ -717,15 +732,25 @@ describe("undoAssignContactsAction (CORRECTED 2026-10-11: exact undo, never regr
     ["a missing target", bad({ target: undefined })],
     ["movedTaskIds not an array", bad({ movedTaskIds: U(5) })],
     ["a non-UUID moved task id", bad({ movedTaskIds: [U(5), "t2"] })],
+    // Fix round 1 (m2): 500 entries x thousands of ids passed before.
+    ["more than 5000 moved task ids in total",
+      [0, 1].map((e) => ({ ...previous[0]!, contactId: U(e), movedTaskIds: Array.from({ length: 2501 }, (_, i) => U(e * 10000 + i)) }))],
   ] as const)("%s from the browser -> assign.failed with no write", async (_name, value) => {
     requireAccountAccess.mockResolvedValue(STAFF);
     expect(await undoAssignContactsAction("a1", value as never)).toEqual({ ok: false, error: "assign.failed" });
     expect(dbMocks.undoAssignContacts).not.toHaveBeenCalled();
   });
 
+  it("exactly 5000 moved task ids in total is allowed (the cap is inclusive)", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    const atCap = [0, 1].map((e) => ({ ...previous[0]!, contactId: U(e), movedTaskIds: Array.from({ length: 2500 }, (_, i) => U(e * 10000 + i)) }));
+    expect(await undoAssignContactsAction("a1", atCap)).toEqual({ ok: true });
+  });
+
   it.each([
     ["a not-a-member refusal", new Error("assignment: the assignee is not a member of this account"), "assign.failed"],
-    ["an RLS refusal", new Error("undoAssignContacts failed: new row violates row-level security policy"), "assign.refused"],
+    ["an RLS refusal (42501)", Object.assign(new Error("undoAssignContacts failed: new row violates row-level security policy"), { code: "42501" }), "assign.refused"],
+    ["the same words with no code (fix round 1, m1: never the wording)", new Error("undoAssignContacts failed: new row violates row-level security policy"), "assign.failed"],
     ["a 42501 code", Object.assign(new Error("denied"), { code: "42501" }), "assign.refused"],
   ] as const)("%s maps to its AssignError", async (_name, err, expected) => {
     requireAccountAccess.mockResolvedValue(STAFF);

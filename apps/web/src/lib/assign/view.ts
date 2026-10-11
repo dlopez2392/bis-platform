@@ -8,7 +8,7 @@ export type AssignMember = { userId: string; label: string; role: AccountRole };
 /**
  * What a list page needs for Mine / Unassigned (spec §8-§9), read once:
  * - `who`: the filter actually in effect, carried on every pager and sort
- *   link. "Mine" with no users row (the agency, A5) is All, so no link
+ *   link. "Mine" with no person in this company (the agency: never a member, A5) is All, so no link
  *   claims a filter the list is not applying.
  * - `assignee`: what the list query and its count are filtered by, so the
  *   pager and the header's real total describe the same rows.
@@ -36,7 +36,7 @@ export async function loadAssignView(
     return { who: "all", personId: null, assignee: undefined, canAssign: false, showMine: false, members: [] };
   }
   const [personId, team] = await Promise.all([
-    readPersonId(db, access.userId),
+    readPersonId(db, accountId, access.userId),
     opts.members ? listAccountTeam(db, accountId) : Promise.resolve([]),
   ]);
   const asked = parseWho(rawWho);

@@ -157,7 +157,7 @@ export async function addTaskAction(accountId: string, formData: FormData): Prom
   const dueAtIso = dueAt ? await dueAtInAccountZone(db, accountId, dueAt) : undefined;
   if (title) {
     // F-085 part 1 (spec §8): whoever holds the customer, else whoever added it.
-    const assignedTo = await taskAssigneeFor(db, accountId, contactId, await readPersonId(db, userId));
+    const assignedTo = await taskAssigneeFor(db, accountId, contactId, await readPersonId(db, accountId, userId));
     await addTask(db, accountId, { contactId, title, dueAt: dueAtIso, assignedTo }, userId);
   }
   revalidatePath(path);

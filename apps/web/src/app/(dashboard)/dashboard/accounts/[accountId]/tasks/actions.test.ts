@@ -25,6 +25,9 @@ const dbMocks = vi.hoisted(() => ({
   // F-085 part 1: handing a task to someone.
   setTaskAssignee: vi.fn(),
   listAccountTeam: vi.fn(),
+  // F-085 fix round 1 (I1): "Not now" task's assignee.
+  readPersonId: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "p-me"),
+  taskAssigneeFor: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "p-holder"),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
@@ -140,7 +143,7 @@ describe("dismissToTask", () => {
     expect(r).toEqual({ ok: true, taskId: "task_new", dueAt: "2026-09-15T14:00:00.000Z" });
     expect(dbMocks.addTask).toHaveBeenCalledWith(
       db, "acct_1",
-      { contactId: "contact_1", title: "Reply to Maria Garcia", dueAt: "2026-09-15T14:00:00.000Z" },
+      { contactId: "contact_1", title: "Reply to Maria Garcia", dueAt: "2026-09-15T14:00:00.000Z", assignedTo: "p-holder" },
       "user_1",
     );
     expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/acct_1/tasks");
@@ -156,7 +159,7 @@ describe("dismissToTask", () => {
     expect(r).toEqual({ ok: true, taskId: "task_new", dueAt: null });
     expect(dbMocks.addTask).toHaveBeenCalledWith(
       badZoneDb, "acct_1",
-      { contactId: undefined, title: "Did this job happen?", dueAt: undefined },
+      { contactId: undefined, title: "Did this job happen?", dueAt: undefined, assignedTo: "p-holder" },
       "user_1",
     );
   });
@@ -172,6 +175,46 @@ describe("dismissToTask", () => {
     dbMocks.addTask.mockRejectedValue(new Error("db exploded"));
     const r = await dismissToTask("acct_1", { source: "conversation", contactId: "c1", title: "Reply to X" });
     expect(r.ok).toBe(false);
+  });
+});
+
+// F-085 fix round 1 (I1): "Not now" writes a real task, so it is assigned like
+// any other: the customer's holder, else the person who pressed it (the
+// account-scoped person read). Without it a Technician's insert was refused
+// by tasks_technician_insert and Owner/Staff's landed Unassigned.
+describe("dismissToTask's assignee", () => {
+  beforeEach(() => {
+    dbMocks.addTask.mockResolvedValue({ id: "task_new" });
+    dbMocks.readPersonId.mockReset().mockResolvedValue("p-me");
+    dbMocks.taskAssigneeFor.mockReset().mockResolvedValue("p-me");
+  });
+  afterEach(() => {
+    authFixture.access = { userId: "user_1", isAgency: true, role: null };
+    dbMocks.readPersonId.mockReset().mockImplementation(async () => "p-me");
+    dbMocks.taskAssigneeFor.mockReset().mockImplementation(async () => "p-holder");
+  });
+
+  it.each(["technician", "staff", "owner"] as const)("a %s's Not now on their customer writes a task assigned per taskAssigneeFor, no refusal (mutation: drop assignedTo -> FAILS)", async (role) => {
+    authFixture.access = { userId: "user_1", isAgency: false, role };
+    const r = await dismissToTask("acct_1", { source: "conversation", contactId: "contact_1", title: "Reply to Ana" });
+    expect(r.ok).toBe(true);
+    expect(dbMocks.readPersonId).toHaveBeenCalledWith(db, "acct_1", "user_1");
+    expect(dbMocks.taskAssigneeFor).toHaveBeenCalledWith(db, "acct_1", "contact_1", "p-me");
+    expect(dbMocks.addTask.mock.calls[0]![2]).toMatchObject({ assignedTo: "p-me" });
+  });
+
+  it("a booking row with no customer goes to the person who pressed it", async () => {
+    await dismissToTask("acct_1", { source: "booking", contactId: null, title: "Did this job happen?" });
+    expect(dbMocks.taskAssigneeFor).toHaveBeenCalledWith(db, "acct_1", null, "p-me");
+  });
+
+  it("a failed person read is an honest failure, nothing created", async () => {
+    dbMocks.readPersonId.mockRejectedValueOnce(new Error("boom"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await dismissToTask("acct_1", { source: "conversation", contactId: "contact_1", title: "Reply to Ana" });
+    expect(r.ok).toBe(false);
+    expect(dbMocks.addTask).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
 
@@ -327,6 +370,14 @@ describe("setTaskAssigneeAction", () => {
     expect(contactRead).not.toHaveBeenCalled();
   });
 
+  // Fix round 1 (m3): fail closed. A target the team read does not show (just
+  // removed, or a race) is not assumed to be Owner/Staff: the customer-first
+  // check still runs.
+  it("a target missing from the team read still gets the customer-first check (mutation: treat a missing target as not a Technician -> FAILS)", async () => {
+    expect(await setTaskAssigneeAction("acct_1", TASK, U(6))).toEqual({ ok: false, error: "assign.customerFirst" });
+    expect(dbMocks.setTaskAssignee).not.toHaveBeenCalled();
+  });
+
   it("handing it to Staff needs no customer check; success hands back who had it", async () => {
     dbMocks.setTaskAssignee.mockResolvedValueOnce({ previous: null });
     expect(await setTaskAssigneeAction("acct_1", TASK, STAFF_ID)).toEqual({ ok: true, previous: null });
@@ -355,7 +406,8 @@ describe("setTaskAssigneeAction", () => {
   });
 
   it.each([
-    ["an RLS refusal", new Error("setTaskAssignee failed: new row violates row-level security policy for table tasks"), "assign.refused"],
+    ["an RLS refusal (42501)", Object.assign(new Error("setTaskAssignee failed: new row violates row-level security policy for table tasks"), { code: "42501" }), "assign.refused"],
+    ["the same words with no code (fix round 1, m1: never the wording)", new Error("setTaskAssignee failed: new row violates row-level security policy for table tasks"), "assign.failed"],
     ["a 42501 code", Object.assign(new Error("denied"), { code: "42501" }), "assign.refused"],
     ["not a member", new Error("assignment: the assignee is not a member of this account"), "assign.failed"],
   ] as const)("%s maps to its AssignError, logged", async (_n, err, expected) => {

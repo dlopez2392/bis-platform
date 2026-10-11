@@ -235,7 +235,7 @@ export async function acceptProposal(
       // a failure here wrote nothing, so it reaches the outer catch and its
       // revert, never `stranded()`, which is for a write that may have landed.
       const assignedTo = await taskAssigneeFor(
-        db, accountId, proposal.contactId ?? null, await readPersonId(db, userId));
+        db, accountId, proposal.contactId ?? null, await readPersonId(db, accountId, userId));
       try {
         await addTask(db, accountId, {
           contactId: proposal.contactId ?? undefined,

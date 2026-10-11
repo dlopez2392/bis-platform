@@ -7,7 +7,7 @@ import { createContact, deleteContacts, addTagToContacts, removeTagFromContacts,
          getContact, setContactPhoneCountry, readPersonId, flagMatchesOf, serviceDb,
          assignContacts, undoAssignContacts, type PreviousAssignee } from "@bis/db";
 import { seesWholeAccount } from "@/lib/auth-role";
-import { MAX_ASSIGN, isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
+import { MAX_ASSIGN, MAX_MOVED_TASKS, isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
 import { normalisePhone, repickPhoneCountry, type PhoneCountry } from "@bis/db/phone";
 import { loggableError } from "@/lib/loggable-error";
 import type { PhoneCountryPickResult, PhoneCountryUndoResult, PhoneCountryPrevious } from "@/lib/contacts/phone-country";
@@ -62,7 +62,7 @@ export async function createContactAction(
   if (!phoneField.ok) return { kind: "invalid", error: phoneField.error };
 
   // F-085 part 1 (spec §8): a customer someone adds by hand is theirs (the
-  // agency has no users row in a client's company, so theirs lands
+  // agency is never a member of a client's company, so readPersonId answers null and what it adds lands
   // Unassigned). A Technician's own client cannot see a duplicate held by
   // someone else (0068), so for them the flag writer is the service client,
   // and once the row exists the matches they cannot see are flagged on it
@@ -70,7 +70,7 @@ export async function createContactAction(
   // touches a proven target. Fails closed: a client whose role could not be
   // settled takes the same narrow path.
   const db = await dbForRequest();
-  const personId = await readPersonId(db, userId);
+  const personId = await readPersonId(db, accountId, userId);
   const narrow = !seesWholeAccount(access);
   const result = await createContact(db, accountId, {
     firstName: firstName || undefined, lastName: lastName || undefined,
@@ -140,7 +140,8 @@ export async function undoAssignContactsAction(
 ): Promise<{ ok: true } | { ok: false; error: AssignError }> {
   const access = await requireAccountAccess(accountId);
   if (!seesWholeAccount(access)) return { ok: false, error: "assign.refused" };
-  if (!Array.isArray(previous) || previous.length === 0 || previous.length > MAX_ASSIGN || !previous.every(isPrevious)) {
+  if (!Array.isArray(previous) || previous.length === 0 || previous.length > MAX_ASSIGN || !previous.every(isPrevious)
+      || previous.reduce((n, p) => n + p.movedTaskIds.length, 0) > MAX_MOVED_TASKS) {
     return { ok: false, error: "assign.failed" };
   }
   try {

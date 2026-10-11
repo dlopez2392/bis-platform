@@ -21,7 +21,7 @@ beforeEach(() => {
 describe("loadAssignView: what a list page needs for Mine / Unassigned (spec §8-§9)", () => {
   it("Owner/Staff with who=mine: their own filter, may assign, sees Mine, and the team as options (name, else email)", async () => {
     const v = await loadAssignView(DB, "a1", { userId: "u1", isAgency: false, role: "staff" }, "mine", { members: true });
-    expect(readPersonId).toHaveBeenCalledWith(DB, "u1");
+    expect(readPersonId).toHaveBeenCalledWith(DB, "a1", "u1");
     expect(listAccountTeam).toHaveBeenCalledWith(DB, "a1");
     expect(v).toEqual({
       who: "mine", personId: "p-me", assignee: { who: "mine", userId: "p-me" }, canAssign: true, showMine: true,
@@ -45,15 +45,19 @@ describe("loadAssignView: what a list page needs for Mine / Unassigned (spec §8
     expect(v.assignee).toBeUndefined();
   });
 
-  it("the agency asking for Mine (no users row in a client's company, A5) reads as All, with no Mine link", async () => {
-    readPersonId.mockResolvedValueOnce(null);
+  // Fix round 1 (C1): since 0067 the agency's staff DO have a users row (the
+  // theme toggle), but never a membership in a client's company. The read is
+  // account-scoped, so the database answers null: modelled here as a users
+  // row that only an unscoped read would find.
+  it("the agency WITH a users row asking for Mine reads as All, with no Mine link, because the person read is scoped to this account (mutation: read without the account -> FAILS)", async () => {
+    readPersonId.mockImplementationOnce(async (...a: unknown[]) => (a.length === 3 && a[1] === "a1" ? null : "p-agency"));
     const v = await loadAssignView(DB, "a1", { userId: "u1", isAgency: true, role: null }, "mine", { members: false });
     expect(v).toMatchObject({ who: "all", personId: null, assignee: undefined, canAssign: true, showMine: false, members: [] });
     expect(listAccountTeam).not.toHaveBeenCalled();
   });
 
-  it("the agency can still ask for Unassigned", async () => {
-    readPersonId.mockResolvedValueOnce(null);
+  it("the agency WITH a users row can still ask for Unassigned", async () => {
+    readPersonId.mockImplementationOnce(async (...a: unknown[]) => (a.length === 3 && a[1] === "a1" ? null : "p-agency"));
     const v = await loadAssignView(DB, "a1", { userId: "u1", isAgency: true, role: null }, "unassigned", { members: false });
     expect(v).toMatchObject({ who: "unassigned", assignee: { who: "unassigned" } });
   });

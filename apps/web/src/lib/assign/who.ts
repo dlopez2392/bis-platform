@@ -8,7 +8,7 @@ export function parseWho(raw: string | undefined): Who {
   return raw === "mine" || raw === "unassigned" ? raw : "all";
 }
 
-/** "Mine" needs a users row; the agency has none in a client's company (A5), so it reads as All. */
+/** "Mine" needs a person of THIS company (a membership here); the agency is never one (A5), so it reads as All. */
 export function assigneeFilterFor(who: Who, personId: string | null): AssigneeFilter | undefined {
   if (who === "unassigned") return { who: "unassigned" };
   if (who === "mine" && personId) return { who: "mine", userId: personId };

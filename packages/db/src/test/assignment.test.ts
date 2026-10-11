@@ -87,11 +87,29 @@ function failFirstUpdate(db: SupabaseClient, table: string): SupabaseClient {
 }
 
 describe("assignment core (spec §8)", () => {
-  it("readPersonId: the users row for a Clerk id, else null", () => withAssignAccount(async (db, accountId) => {
+  it("readPersonId: the users row of a MEMBER of this account, else null", () => withAssignAccount(async (db, accountId) => {
     const a = await person(db, accountId, "p", "staff");
-    expect(await readPersonId(db, a.clerk)).toBe(a.id);
-    expect(await readPersonId(db, `user_nobody_${RUN}`)).toBeNull();
+    expect(await readPersonId(db, accountId, a.clerk)).toBe(a.id);
+    expect(await readPersonId(db, accountId, `user_nobody_${RUN}`)).toBeNull();
   }));
+  // Fix round 1 (C1): since 0067 the topbar theme toggle upserts a users row
+  // for ANY signed-in person, the agency's staff included. A users row alone
+  // is therefore not a person of this company: only a membership here is.
+  it("readPersonId: a users row with no membership in this account (the agency since 0067) is null (mutation: read users by clerk id alone -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const clerk = `user_assign_agency_${RUN}`;
+      const { error } = await db.from("users").insert({ clerk_user_id: clerk, email: `${clerk}@example.com` });
+      if (error) throw error;
+      expect(await readPersonId(db, accountId, clerk)).toBeNull();
+    }));
+  it("readPersonId: a member of ANOTHER account is null here (mutation: drop .eq(account_id) -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      await withTestAccount(async (_db, otherAccountId) => {
+        const stranger = await person(db, otherAccountId, "pother", "staff");
+        expect(await readPersonId(db, otherAccountId, stranger.clerk)).toBe(stranger.id);
+        expect(await readPersonId(db, accountId, stranger.clerk)).toBeNull();
+      });
+    }));
   it("taskAssigneeFor: the customer's assignee, else the author (mutation: always return the author -> FAILS)", () => withAssignAccount(async (db, accountId) => {
     const tech = await person(db, accountId, "t1", "technician");
     const owner = await person(db, accountId, "o1", "owner");
@@ -195,6 +213,23 @@ describe("assignment core (spec §8)", () => {
       expect(await holder(db, "contacts", x)).toBe(a.id);
       expect(await holder(db, "contacts", y)).toBe(c.id);
     }));
+  // Fix round 1 (m2): `previous` reaches the server from the browser. An
+  // entry's movedTaskIds may only move tasks of THAT entry's customer, so a
+  // forged id naming another customer's task (held by the same target)
+  // stays where it is.
+  it("undoAssignContacts moves back only tasks of the entry's own customer: a forged task id of another customer stays put (mutation: drop .eq(contact_id) from the move-back -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "fa", "technician");
+      const b = await person(db, accountId, "fb", "technician");
+      const x = await contact(db, accountId, a.id);
+      const other = await contact(db, accountId, b.id);
+      const tOther = await task(db, accountId, other, b.id, "B's, on another customer");
+      const previous = await assignContacts(db, accountId, [x], b.id, b.clerk);
+      const forged = previous.map((p) => ({ ...p, movedTaskIds: [...p.movedTaskIds, tOther] }));
+      await undoAssignContacts(db, accountId, forged, b.clerk);
+      expect(await holder(db, "contacts", x)).toBe(a.id);
+      expect(await holder(db, "tasks", tOther)).toBe(b.id);
+    }));
   it("undoAssignContacts acts only while the customer is still with the call's target: reassigned since, it stays where it went (review residual 5; mutation: drop the still-the-target check -> FAILS)", () =>
     withAssignAccount(async (db, accountId) => {
       const a = await person(db, accountId, "ta", "technician");
@@ -270,5 +305,49 @@ describe("releaseMemberAssignments refuses a result it does not recognise (revie
   it("the shape 0068 returns parses", async () => {
     expect(await releaseMemberAssignments(rpcAnswering({ contacts: ["c1"], tasks: [] }), "acct", "user"))
       .toEqual({ contacts: ["c1"], tasks: [] });
+  });
+});
+
+/**
+ * Fix round 1 (m1): a write the database refuses (RLS, or 0068's trigger,
+ * both SQLSTATE 42501) must reach the caller with its code, so the app tells
+ * a refusal from a failure by code, never by the wording of a message. A
+ * fake client: reads answer `reads[table]`, every update answers `refusal`.
+ */
+function refusingWrites(reads: Record<string, unknown>, refusal: { code: string; message: string }): SupabaseClient {
+  const chain = (table: string, writing: boolean): unknown => new Proxy({}, {
+    get(_t, k) {
+      if (k === "then") {
+        const result = writing ? { data: null, error: refusal } : { data: reads[table] ?? null, error: null };
+        return (res: (v: unknown) => unknown) => Promise.resolve(result).then(res);
+      }
+      if (k === "update") return () => chain(table, true);
+      return () => chain(table, writing);
+    },
+  });
+  return { from: (table: string) => chain(table, false) } as unknown as SupabaseClient;
+}
+
+describe("the assignment writers keep the database's error code (fix round 1, m1; fake client)", () => {
+  const refusal = { code: "42501", message: "tasks: a technician cannot change a task's assignee" };
+  it("setTaskAssignee: the trigger's 42501 is on the thrown error (mutation: throw a plain Error -> FAILS)", async () => {
+    const db = refusingWrites({ tasks: { assigned_to: null } }, refusal);
+    await expect(setTaskAssignee(db, "acct", "task", null, "user")).rejects.toMatchObject({ code: "42501" });
+  });
+  it("assignContacts: an RLS refusal on the task move keeps 42501", async () => {
+    const db = refusingWrites({ contacts: [{ id: "c1", assigned_to: "u1" }] }, { code: "42501", message: "new row violates row-level security policy" });
+    await expect(assignContacts(db, "acct", ["c1"], null, "user")).rejects.toMatchObject({ code: "42501" });
+  });
+  it("undoAssignContacts: a refusal on the move-back keeps 42501", async () => {
+    // c1 is still with the call's target (Unassigned), and u-prev is a member
+    // (the membership read answers a row), so the move-back write runs.
+    const db = refusingWrites({ contacts: [{ id: "c1", assigned_to: null }], memberships: { id: "m1" } }, refusal);
+    const work = [{ contactId: "c1", assignee: "u-prev", target: null, movedTaskIds: ["t1"] }];
+    await expect(undoAssignContacts(db, "acct", work, "user")).rejects.toMatchObject({ code: "42501" });
+  });
+  it("an error with no code stays without one (not a refusal)", async () => {
+    const db = refusingWrites({ tasks: { assigned_to: null } }, { code: "", message: "boom" } as never);
+    const err = await setTaskAssignee(db, "acct", "task", null, "user").catch((e: unknown) => e);
+    expect((err as { code?: unknown }).code === "42501").toBe(false);
   });
 });

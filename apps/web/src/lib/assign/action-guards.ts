@@ -12,13 +12,15 @@ export const isUuid = (v: unknown): v is string => typeof v === "string" && UUID
 /** A person's id, or null for Unassigned. */
 export const isUuidOrNull = (v: unknown): v is string | null => v === null || isUuid(v);
 
+/** An Undo's moved task ids, in total across its entries (fix round 1, m2): 500 entries alone did not bound them. */
+export const MAX_MOVED_TASKS = 5000;
+
 /**
- * The database said no (RLS, or 0068's trigger, code 42501), as opposed to
- * anything else going wrong. The @bis/db writers wrap PostgREST's error in
- * their own Error, which keeps the message but not the code, so the message
- * is read too.
+ * The database said no: SQLSTATE 42501, which is what both RLS and 0068's
+ * trigger raise, as opposed to anything else going wrong. Read off the
+ * error's `code`, which @bis/db's AssignmentDbError carries (fix round 1,
+ * m1), never off the wording of a message.
  */
 export function isRefusal(e: unknown): boolean {
-  const o = (typeof e === "object" && e !== null ? e : {}) as { code?: unknown; message?: unknown };
-  return /row-level security|42501/.test(`${String(o.code ?? "")} ${String(o.message ?? "")}`);
+  return typeof e === "object" && e !== null && (e as { code?: unknown }).code === "42501";
 }

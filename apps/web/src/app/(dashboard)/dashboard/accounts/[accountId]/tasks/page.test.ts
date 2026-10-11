@@ -598,7 +598,7 @@ describe("TasksPage — ?who= (Mine / Unassigned)", () => {
 
   it("who=mine asks listAccountWork for the caller's own work (mutation: drop the assignee -> FAILS)", async () => {
     await render({ who: "mine" });
-    expect(readPersonIdMock).toHaveBeenCalledWith(expect.anything(), "user_1");
+    expect(readPersonIdMock).toHaveBeenCalledWith(expect.anything(), "acct1", "user_1");
     expect(listAccountWorkMock).toHaveBeenCalledWith(expect.anything(), "acct1", { assignee: { who: "mine", userId: "p-me" } });
   });
 

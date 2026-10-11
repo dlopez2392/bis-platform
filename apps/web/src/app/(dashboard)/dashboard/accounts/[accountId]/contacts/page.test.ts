@@ -382,7 +382,7 @@ describe("?who= (Mine / Unassigned)", () => {
     resetMocks();
     requireAccountAccessMock.mockResolvedValueOnce(STAFF);
     await render({ who: "mine" });
-    expect(readPersonIdMock).toHaveBeenCalledWith(expect.anything(), "u1");
+    expect(readPersonIdMock).toHaveBeenCalledWith(expect.anything(), "a1", "u1");
     expect(listContactsMock.mock.calls[0]![2]).toMatchObject({ assignee: { who: "mine", userId: "p-me" } });
     expect(countContactsMock.mock.calls[0]![2]).toEqual({ search: undefined, assignee: { who: "mine", userId: "p-me" } });
   });

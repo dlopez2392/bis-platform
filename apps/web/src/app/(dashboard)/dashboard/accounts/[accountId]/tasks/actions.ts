@@ -21,6 +21,7 @@ import { revalidatePath } from "next/cache";
 import {
   addTask, completeTask, reopenTask, readTaskContact, readConsentHistory, newestDecidingRow,
   completeTasksForConsentEvents, HoldUndecidedError, setTaskAssignee, listAccountTeam,
+  readPersonId, taskAssigneeFor,
   type WorkSource, type SupabaseClient,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -128,9 +129,14 @@ export async function dismissToTask(
   const resolvedDueAt = tomorrowAt9(new Date(), account.timezone);
 
   try {
+    // F-085 fix round 1 (I1): a real task, so assigned like any other: the
+    // customer's holder, else the person who pressed Not now. Without it a
+    // Technician's insert is refused (0068's tasks_technician_insert) and
+    // Owner/Staff's lands Unassigned.
+    const assignedTo = await taskAssigneeFor(db, accountId, row.contactId, await readPersonId(db, accountId, userId));
     const { id } = await addTask(
       db, accountId,
-      { contactId: row.contactId ?? undefined, title: row.title, dueAt: resolvedDueAt ?? undefined },
+      { contactId: row.contactId ?? undefined, title: row.title, dueAt: resolvedDueAt ?? undefined, assignedTo },
       userId,
     );
     revalidatePath(tasksPath(accountId));
@@ -273,10 +279,16 @@ export async function setTaskAssigneeAction(
   }
 }
 
-/** True when the target is a Technician and the task's customer is not theirs (A4). */
+/**
+ * True when the target may be a Technician and the task's customer is not
+ * theirs (A4). Fails closed (fix round 1, m3): only a target the team read
+ * shows as Owner or Staff skips the check; one it does not show at all (just
+ * removed, or a race) is checked like a Technician.
+ */
 async function customerFirst(db: SupabaseClient, accountId: string, taskId: string, assignee: string): Promise<boolean> {
   const team = await listAccountTeam(db, accountId);
-  if (team.find((t) => t.userId === assignee)?.role !== "technician") return false;
+  const role = team.find((t) => t.userId === assignee)?.role;
+  if (role === "owner" || role === "staff") return false;
   const task = await readTaskContact(db, accountId, taskId);
   if (!task?.contactId) return false;
   const { data, error } = await db.from("contacts").select("assigned_to")

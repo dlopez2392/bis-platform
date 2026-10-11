@@ -169,7 +169,7 @@ describe("addTaskAction's assignee", () => {
     taskAssigneeForMock.mockClear().mockResolvedValueOnce("p-holder");
     await addTaskAction("a1", taskForm("2026-10-08"));
     const db = readPersonIdMock.mock.calls[0]![0];
-    expect(readPersonIdMock).toHaveBeenCalledWith(db, "user_1");
+    expect(readPersonIdMock).toHaveBeenCalledWith(db, "a1", "user_1");
     expect(taskAssigneeForMock).toHaveBeenCalledWith(db, "a1", "c1", "p-author");
     expect((addTask.mock.calls[0]![2] as { assignedTo?: string | null }).assignedTo).toBe("p-holder");
     expect(addTask.mock.calls[0]![0]).toBe(db);
