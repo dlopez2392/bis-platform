@@ -234,6 +234,16 @@ describe("getShellSnapshot per role (spec §7.2)", () => {
     expect(ageMs).toBeLessThanOrEqual(60 * 60 * 1000 + 5_000);
   });
 
+  // Fix round 1 (fail closed, the same rule as requireNotTechnician): a
+  // client whose role could not be settled gets the narrow shell too.
+  it("a client whose role could not be settled (null) gets the narrow shell: request client, pulse only, no weekCount, no weekly or zone read (mutation: key it on role === \"technician\" only -> FAILS)", async () => {
+    authFixture.isAgency = false; authFixture.role = null;
+    const snapshot = await getShellSnapshot("a1");
+    expect(dbMocks.sumUnreadCount.mock.calls[0]![0]).toBe(REQUEST_DB);
+    expect(snapshot.presence).toEqual({ onCall: true, personaName: "Sofía", showCount: false });
+    expect(voicePresenceMock).not.toHaveBeenCalled();
+  });
+
   it("a Technician idle (no call in progress) still gets presence with onCall false, no count", async () => {
     authFixture.isAgency = false; authFixture.role = "technician";
     dbMocks.hasActiveCallSince.mockResolvedValue(false);

@@ -167,8 +167,12 @@ export default async function DashboardLayout({
   ]);
   const collapsed = cookieStore.get("sidebar_collapsed")?.value === "true";
   // Both false for the agency (role null). A Technician is never an Owner.
+  // isTechnician is the narrow view, failing closed like requireNotTechnician
+  // (fix round 1): a Technician, or a client whose role could not be settled,
+  // gets To do's five destinations, never Staff's full list of screens that
+  // would only send them back to To do.
   const isOwner = role === "owner";
-  const isTechnician = role === "technician";
+  const isTechnician = !isAgency && role !== "owner" && role !== "staff";
 
   // Fix round 1 (Task 6 review): AppSidebar and Topbar render HERE, as
   // siblings of <main>{children}</main> — not inside

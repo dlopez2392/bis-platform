@@ -124,17 +124,20 @@ const ON_CALL_FLOOR_MS = 60 * 60 * 1000;
 export async function getShellSnapshot(accountId: string): Promise<ShellSnapshot> {
   const { isAgency, role } = await requireAccountAccess(accountId);
   const db = serviceDb();
-  const technician = role === "technician";
+  // The narrow shell, failing closed like requireNotTechnician (fix round 1):
+  // a Technician, or a client whose role could not be settled (null). Only
+  // the agency, an Owner and Staff get the account-wide badge and count.
+  const narrow = !isAgency && role !== "owner" && role !== "staff";
   // Spec §7.2: the unread badge counts a Technician's OWN conversations,
   // which only RLS knows. Handed over as a factory so a request client that
   // cannot be built (no token) fails inside that leg's own catch, like any
   // other read, rather than taking the meter and presence down with it.
-  const unreadDb = technician ? dbForRequest : async () => db;
+  const unreadDb = narrow ? dbForRequest : async () => db;
 
   const [unreadTotal, setup, presence] = await Promise.all([
     readUnreadTotal(unreadDb, accountId),
     readSetupProgress(db, accountId, isAgency),
-    readPresence(db, accountId, technician),
+    readPresence(db, accountId, narrow),
   ]);
 
   return { unreadTotal, setup, presence };
@@ -168,7 +171,7 @@ async function readSetupProgress(
 }
 
 async function readPresence(
-  db: ReturnType<typeof serviceDb>, accountId: string, technician: boolean,
+  db: ReturnType<typeof serviceDb>, accountId: string, narrow: boolean,
 ): Promise<ShellPresence | null> {
   try {
     const profile = await getVoiceProfile(db, accountId);
@@ -177,7 +180,7 @@ async function readPresence(
     // runs. The account's weekly answered-calls count is never read for them,
     // so it cannot reach their browser; nor is the zone, which only that
     // count's week boundary needs.
-    if (technician) {
+    if (narrow) {
       const since = new Date(Date.now() - ON_CALL_FLOOR_MS).toISOString();
       const onCall = await hasActiveCallSince(db, accountId, since);
       return { onCall, personaName: profile.persona_name, showCount: false };

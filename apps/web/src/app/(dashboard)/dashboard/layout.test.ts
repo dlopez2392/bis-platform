@@ -145,7 +145,7 @@ describe("dashboard/layout — computes isOwner via ensureAccountRole and thread
       '? ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId))\n',
     );
     expect(src).toContain('const isOwner = role === "owner";');
-    expect(src).toContain('const isTechnician = role === "technician";');
+    expect(src).toContain('const isTechnician = !isAgency && role !== "owner" && role !== "staff";');
   });
 
   // Fix round 1, I1: `ensureAccountRole` is React cache()'d on its FULL
@@ -204,7 +204,7 @@ describe("dashboard/layout — computes isOwner via ensureAccountRole and thread
   it("hands AppSidebar and CommandPalette isTechnician true for a Technician and false for Owner and Staff (mutation: pass isTechnician={false} to either → the Technician case FAILS)", async () => {
     authFixture.isAgency = false;
     stateFixture.value = { status: "ok", id: "acc_1", name: "Rio Roofing — trial", timezone: "America/Chicago", language: null };
-    const flags = async (role: "owner" | "staff" | "technician") => {
+    const flags = async (role: "owner" | "staff" | "technician" | null) => {
       roleFixture.value = role;
       const tree = await DashboardLayout({ children: "page" });
       const sidebar = (find(tree, AppSidebar) as { props: { isOwner: boolean; isTechnician: boolean } }[])[0]!;
@@ -217,6 +217,13 @@ describe("dashboard/layout — computes isOwner via ensureAccountRole and thread
     expect(await flags("technician")).toEqual({ sidebar: [false, true], palette: [false, true] });
     expect(await flags("owner")).toEqual({ sidebar: [true, false], palette: [true, false] });
     expect(await flags("staff")).toEqual({ sidebar: [false, false], palette: [false, false] });
+    // Fix round 1 (fail closed, like requireNotTechnician): a client whose
+    // role could not be settled gets the narrow view too, never Staff's.
+    expect(await flags(null)).toEqual({ sidebar: [false, true], palette: [false, true] });
+    // The agency (role null, never a client membership) keeps the full view.
+    authFixture.isAgency = true;
+    expect(await flags(null)).toEqual({ sidebar: [false, false], palette: [false, false] });
+    authFixture.isAgency = false;
     roleFixture.value = "staff";
   });
 });
