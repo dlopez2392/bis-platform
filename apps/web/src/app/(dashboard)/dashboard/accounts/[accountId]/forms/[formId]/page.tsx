@@ -6,6 +6,7 @@ import { FormEditor } from "./form-editor";
 import { EmbedSnippet } from "./embed-snippet";
 import { SubmissionsTable } from "./submissions-table";
 import { saveFormAction, republishFormAction } from "../actions";
+import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 
@@ -15,6 +16,9 @@ export default async function FormEditorPage({
   params,
 }: { params: Promise<{ accountId: string; formId: string }> }) {
   const { accountId, formId } = await params;
+  // F-085 part 1 (spec §7.1): a Technician does not work here and is sent
+  // to To do; everyone the [accountId] layout admitted passes straight on.
+  await requireNotTechnician(accountId);
   const db = await dbForRequest();
   const form = await getForm(db, accountId, formId);
   if (!form) notFound();

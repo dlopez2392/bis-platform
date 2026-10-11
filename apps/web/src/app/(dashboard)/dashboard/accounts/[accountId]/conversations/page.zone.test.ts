@@ -18,6 +18,10 @@ import { renderedText } from "@/lib/rendered-text";
  * call rather than a second, conflicting one layered onto that file's.
  */
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
+// F-085 part 1: the page reads the caller (for ?who=). The agency, so no filter applies here.
+vi.mock("@/lib/auth", () => ({
+  requireAccountAccess: async () => ({ userId: "u1", isAgency: true, role: null, canManage: true }),
+}));
 
 const accountRead = vi.fn(async (): Promise<{ data: unknown; error: unknown }> =>
   ({ data: { timezone: "America/Chicago" }, error: null }));
@@ -45,6 +49,7 @@ const conversationsFixture = [
 ];
 vi.mock("@bis/db", () => ({
   listConversations: async () => conversationsFixture,
+  readPersonId: async () => null,
   listMessages: async () => [{
     id: "m1", conversation_id: "convo1", channel: "sms", direction: "inbound",
     status: "received", provider_message_id: null, subject: null, body: "hi",

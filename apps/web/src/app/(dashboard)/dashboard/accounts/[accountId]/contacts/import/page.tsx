@@ -1,5 +1,5 @@
 import { listTags } from "@bis/db";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { PageHeader } from "@/components/page-header";
 import { ImportWizard } from "./import-wizard";
@@ -9,7 +9,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * Both audiences, exactly like the contacts list this hangs off — a client
- * imports their own contacts. `requireAccountAccess` is the same guard the
+ * imports their own contacts. `requireNotTechnician` (requireAccountAccess,
+ * then a Technician sent to To do, F-085 part 1) is the same guard the
  * sibling actions use; the wizard's own writes are re-checked in the action,
  * so this call gates the SCREEN, not the data.
  *
@@ -22,7 +23,7 @@ export default async function ImportContactsPage(
   { params }: { params: Promise<{ accountId: string }> },
 ) {
   const { accountId } = await params;
-  await requireAccountAccess(accountId);
+  await requireNotTechnician(accountId);
   const tags = await listTags(await dbForRequest(), accountId);
 
   return (

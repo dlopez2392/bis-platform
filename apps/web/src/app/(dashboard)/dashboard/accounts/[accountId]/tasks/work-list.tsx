@@ -35,6 +35,9 @@ import type { TextsActionResult } from "@/lib/consent/staff-actions";
 import { STATUS_TREATMENT, type ResolvedStage } from "../calls/[callId]/proposals";
 import { CARD, CARD_HEAD } from "../calls/[callId]/card";
 import { AiAuthorMark } from "../calls/ai-author-mark";
+import type { AssignMember } from "@/lib/assign/view";
+import type { Who } from "@/lib/assign/who";
+import { TaskAssigneeField } from "@/components/assign/assignee-field";
 
 /** The four Task 4 actions, bound to one `accountId` by `WorkList` and
  *  threaded down through `WorkRowItem` into the "use client" boundary. */
@@ -284,6 +287,7 @@ function WorkRowItem({
   contactName,
   timezone,
   actions,
+  assign,
 }: {
   row: WorkRow;
   bucket: Bucket;
@@ -304,6 +308,8 @@ function WorkRowItem({
    *  `bookings-list.tsx`'s own precedent for a client list under a server
    *  page. */
   actions: WorkActionProps;
+  /** F-085 part 1: present only for someone who may hand tasks on. */
+  assign: { members: AssignMember[] } | null;
 }) {
   const treatment = BUCKET_TREATMENT[bucket];
   const primary = primaryLabel(row, contactName);
@@ -369,6 +375,21 @@ function WorkRowItem({
       ) : (
         <div className={cn(rowClassName, "min-w-0 flex-1")}>{body}</div>
       )}
+      {/* F-085 part 1 (spec §9): a task's own holder, an inline pick with an
+          Undo toast, beside the link rather than inside it (a control in an
+          <a> is invalid markup). A conversation or booking has no holder of
+          its own: it is the customer's, set on the customer. */}
+      {assign && row.source === "task" ? (
+        <div className="min-w-0 max-w-[10rem] shrink">
+          <TaskAssigneeField
+            key={`${row.id}:${row.assigneeId ?? ""}`}
+            accountId={accountId}
+            taskId={rawRowId(row)}
+            value={row.assigneeId ?? null}
+            options={assign.members}
+          />
+        </div>
+      ) : null}
       <div className="shrink-0 pr-4">
         {/* A hold's To-do is decided, not ticked off (spec §6): its two
             buttons replace Done. A CANCEL To-do keeps Done. */}
@@ -404,6 +425,9 @@ export function WorkList({
   timezone,
   proposals = [],
   stageNames = {},
+  canAssign = false,
+  members = [],
+  who = "all",
 }: {
   buckets: BucketedWork;
   accountId: string;
@@ -429,6 +453,12 @@ export function WorkList({
    *  see `pendingProposalSummary`'s own doc comment. Optional for the same
    *  reason `proposals` is. */
   stageNames?: Record<string, ResolvedStage>;
+  /** F-085 part 1: may this caller hand tasks to someone (Owner, Staff, the
+   *  agency), and to whom: each task row's "Assigned to" picker. */
+  canAssign?: boolean;
+  members?: AssignMember[];
+  /** The Mine / Unassigned filter the page applied, for the empty state. */
+  who?: Who;
 }) {
   const shown = visibleBuckets(buckets);
 
@@ -438,8 +468,12 @@ export function WorkList({
   // screen never claims "Nothing needs you right now" over a real,
   // pending proposal.
   if (shown.length === 0 && proposals.length === 0) {
+    // F-085 part 1: an empty filter is not an empty queue, so it says which.
+    if (who === "mine") return <EmptyState icon={ListTodo} title={m["assign.empty.mine"]} />;
+    if (who === "unassigned") return <EmptyState icon={ListTodo} title={m["assign.empty.unassignedWork"]} />;
     return <EmptyState icon={ListTodo} title={m["work.empty"]} body={m["work.empty.body"]} />;
   }
+  const assign = canAssign ? { members } : null;
 
   // Bound to THIS account once, here — the same shape as
   // `calendar/page.tsx`'s `boundSetStatus` — so every row's client-side
@@ -476,6 +510,7 @@ export function WorkList({
                 contactName={contactNames[row.contactId ?? ""] ?? m["contact.noName"]}
                 timezone={timezone}
                 actions={actions}
+                assign={assign}
               />
             ))}
           </ListPanel>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { withRollback, actAs, actAsOwner } from "./db";
+import { withRollback, actAsMember, actAsOwner } from "./db";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 
 /**
@@ -206,19 +206,22 @@ describe("0035 accounts.alert_phone", () => {
       const { rows: [agency] } = await c.query<{ id: string }>(
         "insert into public.agencies (name) values ('T') returning id",
       );
-      await c.query(
+      const { rows: [acct] } = await c.query<{ id: string }>(
         `insert into public.accounts (agency_id, clerk_org_id, name, client_access_enabled)
-         values ($1, 'org_alert_phone', 'AlertPhone', true)`, [agency!.id],
+         values ($1, 'org_alert_phone', 'AlertPhone', true) returning id`, [agency!.id],
       );
 
-      await actAs(c, { org_id: "org_alert_phone" });
+      // A member (0068): a client with no membership may not update the account row at all
+      // (accounts_technician_update), and the branding write below would then match no row.
+      await actAsMember(c, acct!.id, "org_alert_phone");
       // Proves the POLICY lets this caller update this row at all, so the
       // refusal below is unambiguously the COLUMN grant and not RLS. Without
       // this line the test would still pass against a policy that denied
       // everything, which is a different bug wearing the same green.
-      await c.query(
+      const control = await c.query(
         "update public.accounts set brand_name = 'Renamed' where clerk_org_id = 'org_alert_phone'",
       );
+      expect(control.rowCount).toBe(1);
 
       // ONE refused statement per withRollback: after this the transaction is
       // aborted (25P02) and nothing else in this block could run.
@@ -247,8 +250,13 @@ describe("0035 accounts.alert_phone", () => {
       // to add, and adding one would be the mistake. What must not change is
       // WHO they are scoped to: 0016 shipped the schema's only PUBLIC-scoped
       // policies and 0017 rescoped them, so the role list is pinned here too.
+      // 0068 added three RESTRICTIVE policies (a Technician cannot insert,
+      // update or delete the account row); a restrictive policy only narrows,
+      // so it is no new grant to the column either. Listed by name so the
+      // list stays exact.
       expect(pol.map((r) => r.policyname)).toEqual([
         "accounts_agency_all", "accounts_member_read", "accounts_member_update",
+        "accounts_technician_delete", "accounts_technician_insert", "accounts_technician_update",
       ]);
       for (const p of pol) expect(p.roles, `${p.policyname} roles`).toBe("{authenticated}");
     });

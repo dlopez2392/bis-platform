@@ -91,3 +91,20 @@ describe("resumeEmails", () => {
     expect(await resumeEmails(ctx, "ev_1", "asked")).toEqual({ ok: false, error: m["contact.email.failed"] });
   });
 });
+
+/**
+ * F-085 (spec §7.3): the email ledger is keyed by address, so under 0068 a
+ * Technician's request client sees only part of an address's history. Every
+ * history read here goes through the service client; the contact was already
+ * proven by emailContextFor.
+ */
+describe("the history these controls read comes from the service client (F-085)", () => {
+  it("a decision reads the address's history through ctx.writer, by address, never ctx.db (mutation: read it on ctx.db → FAILS)", async () => {
+    await stopEmails(ctx, null);
+    expect(db.readConsentHistory).toHaveBeenCalled();
+    for (const call of db.readConsentHistory.mock.calls) {
+      expect(call[0]).toBe(WRITER);
+      expect(call.slice(1)).toEqual(["a1", "email", "ana@example.com"]);
+    }
+  });
+});

@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * providably unchanged by either read.
  */
 
-const dbMocks = vi.hoisted(() => ({ sumUnreadCount: vi.fn(), getVoiceProfile: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({ sumUnreadCount: vi.fn(), getVoiceProfile: vi.fn(), hasActiveCallSince: vi.fn() }));
 // D-075 review follow-up: `serviceDb()` used to return the fixed
 // `{ __serviceDb: true }` placeholder, which has no `.from` — every test in
 // this file reached `readPresence` through a `getVoiceProfile` that resolved
@@ -53,9 +53,17 @@ vi.mock("@bis/db", async (importOriginal) => ({
 const setupInputsMocks = vi.hoisted(() => ({ gatherSetupInputs: vi.fn() }));
 vi.mock("@/lib/setup/setup-inputs", () => setupInputsMocks);
 
+const authFixture = vi.hoisted(() => ({ isAgency: true, role: null as "owner" | "staff" | "technician" | null }));
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
+  requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency, role: authFixture.role, canManage: authFixture.isAgency }),
 }));
+
+// F-085 part 1 (spec §7.2): a Technician's unread badge is read through the
+// REQUEST client, so RLS counts only their own conversations. A sentinel, so
+// a test can tell which client sumUnreadCount was handed.
+const REQUEST_DB = vi.hoisted(() => ({ __requestDb: true }));
+const dbForRequestMock = vi.hoisted(() => vi.fn(async () => REQUEST_DB));
+vi.mock("@/lib/db", () => ({ dbForRequest: () => dbForRequestMock() }));
 
 const voicePresenceMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/voice/presence", () => ({
@@ -175,5 +183,102 @@ describe("readPresence (via getShellSnapshot) — the account's own zone reaches
 
     expect(snapshot.presence).toMatchObject({ personaName: "Max" });
     expect(dbMocks.getVoiceProfile).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * F-085 part 1 (spec §7.2): the shell's service-key reads, per role. The
+ * unread total counts every conversation in the account through serviceDb();
+ * for a Technician it must count only their own, which only RLS knows, so it
+ * goes through the request client. The presence count is the account's total
+ * calls this week: a Technician keeps the on-a-call pulse but not the count.
+ */
+describe("getShellSnapshot per role (spec §7.2)", () => {
+  beforeEach(() => {
+    mockGathered();
+    dbMocks.sumUnreadCount.mockReset().mockResolvedValue(4);
+    dbMocks.getVoiceProfile.mockReset().mockResolvedValue({ enabled: true, persona_name: "Sofía" });
+    voicePresenceMock.mockReset().mockResolvedValue({ onCall: true, weekCount: 12 });
+    dbMocks.hasActiveCallSince.mockReset().mockResolvedValue(true);
+    dbForRequestMock.mockClear();
+    dbFixture.accountRow = { timezone: "America/Chicago" };
+    dbFixture.accountError = null;
+  });
+
+  it("a Technician's unread total is read through the REQUEST client, and presence carries no count (mutations: keep serviceDb for the Technician, or showCount true -> FAILS)", async () => {
+    authFixture.isAgency = false; authFixture.role = "technician";
+    const snapshot = await getShellSnapshot("a1");
+    expect(dbMocks.sumUnreadCount).toHaveBeenCalledTimes(1);
+    expect(dbMocks.sumUnreadCount.mock.calls[0]![0]).toBe(REQUEST_DB);
+    expect(dbMocks.sumUnreadCount.mock.calls[0]![1]).toBe("a1");
+    expect(snapshot.unreadTotal).toBe(4);
+    expect(snapshot.presence).toMatchObject({ onCall: true, showCount: false });
+  });
+
+  // Fix round 1 (review I1): hiding the count in the topbar is not refusing
+  // it. A Technician's reply carries no weekCount at all, and the account's
+  // weekly answered-calls read (getVoicePresence) never runs for them: only
+  // the on-a-call check does, over the same one-hour floor.
+  it("a Technician's presence carries no weekCount field, and the weekly count is never read (mutation: return the count, or run getVoicePresence -> FAILS)", async () => {
+    authFixture.isAgency = false; authFixture.role = "technician";
+    const before = Date.now();
+    const snapshot = await getShellSnapshot("a1");
+    expect(snapshot.presence).toEqual({ onCall: true, personaName: "Sofía", showCount: false });
+    expect(snapshot.presence && "weekCount" in snapshot.presence).toBe(false);
+    expect(voicePresenceMock).not.toHaveBeenCalled();
+    expect(dbMocks.hasActiveCallSince).toHaveBeenCalledTimes(1);
+    const [, acct, since] = dbMocks.hasActiveCallSince.mock.calls[0]!;
+    expect(acct).toBe("a1");
+    const ageMs = before - Date.parse(since as string);
+    expect(ageMs).toBeGreaterThanOrEqual(60 * 60 * 1000 - 5_000);
+    expect(ageMs).toBeLessThanOrEqual(60 * 60 * 1000 + 5_000);
+  });
+
+  // Fix round 1 (fail closed, the same rule as requireNotTechnician): a
+  // client whose role could not be settled gets the narrow shell too.
+  it("a client whose role could not be settled (null) gets the narrow shell: request client, pulse only, no weekCount, no weekly or zone read (mutation: key it on role === \"technician\" only -> FAILS)", async () => {
+    authFixture.isAgency = false; authFixture.role = null;
+    const snapshot = await getShellSnapshot("a1");
+    expect(dbMocks.sumUnreadCount.mock.calls[0]![0]).toBe(REQUEST_DB);
+    expect(snapshot.presence).toEqual({ onCall: true, personaName: "Sofía", showCount: false });
+    expect(voicePresenceMock).not.toHaveBeenCalled();
+  });
+
+  it("a Technician idle (no call in progress) still gets presence with onCall false, no count", async () => {
+    authFixture.isAgency = false; authFixture.role = "technician";
+    dbMocks.hasActiveCallSince.mockResolvedValue(false);
+    expect((await getShellSnapshot("a1")).presence).toEqual({ onCall: false, personaName: "Sofía", showCount: false });
+  });
+
+  it("Staff keep the service client and the count, exactly as before (mutation: use the request client for everyone -> FAILS)", async () => {
+    authFixture.isAgency = false; authFixture.role = "staff";
+    const snapshot = await getShellSnapshot("a1");
+    expect(dbMocks.sumUnreadCount.mock.calls[0]![0]).not.toBe(REQUEST_DB);
+    expect(dbForRequestMock).not.toHaveBeenCalled();
+    expect(snapshot.presence).toMatchObject({ onCall: true, weekCount: 12, showCount: true });
+  });
+
+  it("the agency keeps the service client and the count", async () => {
+    authFixture.isAgency = true; authFixture.role = null;
+    const snapshot = await getShellSnapshot("a1");
+    expect(dbForRequestMock).not.toHaveBeenCalled();
+    expect(snapshot.presence).toMatchObject({ showCount: true });
+  });
+
+  it("a request client that cannot be built degrades only the badge, to 0, and is logged; presence still answers (mutation: build it outside the leg's try -> FAILS)", async () => {
+    authFixture.isAgency = false; authFixture.role = "technician";
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbForRequestMock.mockRejectedValueOnce(new Error("dbForRequest: no Clerk token on this request"));
+    const snapshot = await getShellSnapshot("a1");
+    expect(snapshot.unreadTotal).toBe(0);
+    expect(snapshot.presence).toMatchObject({ onCall: true, showCount: false });
+    expect(errSpy.mock.calls.flat().map(String).join(" ")).toContain("no Clerk token");
+    errSpy.mockRestore();
+  });
+
+  it("no enabled voice profile is still null presence for a Technician, never an object with showCount", async () => {
+    authFixture.isAgency = false; authFixture.role = "technician";
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    expect((await getShellSnapshot("a1")).presence).toBeNull();
   });
 });

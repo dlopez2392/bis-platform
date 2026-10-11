@@ -3,7 +3,7 @@ import { Globe } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { loadWebsiteState } from "@/lib/website/load";
 import { parsePeriod, type Period } from "@/lib/website/view-model";
@@ -47,9 +47,11 @@ export default async function WebsitePage({
 }) {
   const { accountId } = await params;
   const { period: rawPeriod } = await searchParams;
-  // Authorization happened in [accountId]/layout.tsx; this call only learns
-  // the role, which decides the unlinked state's single action.
-  const { isAgency } = await requireAccountAccess(accountId);
+  // [accountId]/layout.tsx admitted the caller to this account; THIS call is
+  // the Technician boundary for Website (F-085 part 1, spec §7.1), sending a
+  // Technician, or a client whose role could not be settled, to To do before
+  // anything is read. Its isAgency decides the unlinked state's single action.
+  const { isAgency } = await requireNotTechnician(accountId);
   const db = await dbForRequest();
   const period = parsePeriod(rawPeriod);
   const base = `/dashboard/accounts/${accountId}`;

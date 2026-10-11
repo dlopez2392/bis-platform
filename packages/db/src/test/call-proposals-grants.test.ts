@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { withRollback, actAs } from "./db";
+import { withRollback, actAs, actAsMember } from "./db";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { serviceDb } from "../service";
 
@@ -283,8 +283,8 @@ describe("call_proposals grants", () => {
   // another tenant's data.
   it("the client of the owning account sees its own proposal", () =>
     withRollback(async (c) => {
-      const { proposalId } = await seedTwoAccountsWithProposal(c);
-      await actAs(c, { org_id: orgId("RLS_A") });
+      const { a, proposalId } = await seedTwoAccountsWithProposal(c);
+      await actAsMember(c, a.accountId, orgId("RLS_A"));
       const { rows } = await c.query("select id from call_proposals where id = $1", [proposalId]);
       expect(rows.map((r: any) => r.id)).toEqual([proposalId]);
     }));
@@ -299,8 +299,10 @@ describe("call_proposals grants", () => {
 
   it("the client of a DIFFERENT account does not see it — zero rows, not an error", () =>
     withRollback(async (c) => {
-      const { proposalId } = await seedTwoAccountsWithProposal(c);
-      await actAs(c, { org_id: orgId("RLS_B") });
+      // A real member of B (0068): a client with no membership sees no proposals at all, so a
+      // bare token would pass here even with the account scope dropped from the policy.
+      const { b, proposalId } = await seedTwoAccountsWithProposal(c);
+      await actAsMember(c, b.accountId, orgId("RLS_B"));
       const { rows } = await c.query("select id from call_proposals where id = $1", [proposalId]);
       expect(rows).toEqual([]);
     }));

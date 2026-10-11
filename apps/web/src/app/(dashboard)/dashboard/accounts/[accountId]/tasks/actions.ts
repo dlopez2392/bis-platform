@@ -20,14 +20,20 @@
 import { revalidatePath } from "next/cache";
 import {
   addTask, completeTask, reopenTask, readTaskContact, readConsentHistory, newestDecidingRow,
-  completeTasksForConsentEvents, HoldUndecidedError, type WorkSource, type SupabaseClient,
+  completeTasksForConsentEvents, HoldUndecidedError, setTaskAssignee, listAccountTeam,
+  readPersonId, taskAssigneeFor,
+  type WorkSource, type SupabaseClient,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
+import { seesWholeAccount } from "@/lib/auth-role";
+import { isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
+import type { AssignError } from "../contacts/actions";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { tomorrowAt9 } from "@/lib/work/dismiss-date";
 import { loggableError } from "@/lib/loggable-error";
 import { textsContextFor } from "@/lib/consent/texts-context";
+import { ledgerDb } from "@/lib/consent/ledger-db";
 import { confirmStop, notAStop, undoHoldDecision, type TextsActionResult } from "@/lib/consent/staff-actions";
 import { setBookingStatusAction } from "../calendar/actions";
 
@@ -50,7 +56,11 @@ function tasksPath(accountId: string): string {
 export async function completeWorkTask(accountId: string, taskId: string): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
   try {
-    await completeTask(await dbForRequest(), accountId, taskId, userId);
+    // The task write stays on the request client (RLS decides which tasks the
+    // caller may close); only the hold check's ledger read takes the ledger
+    // client (F-085, spec §7.3) — a held number can be tied to no contact, so
+    // a Technician's own client would not see the row the task links.
+    await completeTask(await dbForRequest(), accountId, taskId, userId, "user", ledgerDb());
   } catch (e) {
     // Review R3-I1: a hold's To-do closes by deciding the hold (a stale tab
     // can still show its old Done).
@@ -119,9 +129,14 @@ export async function dismissToTask(
   const resolvedDueAt = tomorrowAt9(new Date(), account.timezone);
 
   try {
+    // F-085 fix round 1 (I1): a real task, so assigned like any other: the
+    // customer's holder, else the person who pressed Not now. Without it a
+    // Technician's insert is refused (0068's tasks_technician_insert) and
+    // Owner/Staff's lands Unassigned.
+    const assignedTo = await taskAssigneeFor(db, accountId, row.contactId, await readPersonId(db, accountId, userId));
     const { id } = await addTask(
       db, accountId,
-      { contactId: row.contactId ?? undefined, title: row.title, dueAt: resolvedDueAt ?? undefined },
+      { contactId: row.contactId ?? undefined, title: row.title, dueAt: resolvedDueAt ?? undefined, assignedTo },
       userId,
     );
     revalidatePath(tasksPath(accountId));
@@ -199,7 +214,9 @@ async function decideFromTask(
       }
       return ctx;
     }
-    const newest = newestDecidingRow(await readConsentHistory(ctx.db, accountId, "sms", ctx.address));
+    // By address, on the service client (F-085, spec §7.3): textsContextFor
+    // proved the contact on the request client first.
+    const newest = newestDecidingRow(await readConsentHistory(ctx.writer, accountId, "sms", ctx.address));
     if (!newest || newest.action !== "held") {
       await closeStaleHoldTodo(ctx.db, accountId, taskId, task.consentEventId, userId);
       return { ok: false, error: m["todo.consent.decided"] };
@@ -230,4 +247,62 @@ export async function undoHoldDecisionFromTask(
   const result = await undoHoldDecision(ctx, eventId, reopenTaskIds);
   if (result.ok) revalidatePath(tasksPath(accountId));
   return result;
+}
+
+/**
+ * Hands one task to someone, or to nobody (F-085 part 1, spec §8). Owner,
+ * Staff and the agency only: a Technician never reassigns (M4), nor does a
+ * client whose role could not be settled, and 0068's trigger refuses them
+ * too. A Technician can only be handed a task about a customer they already
+ * hold (A4: the customer first), because RLS would hide anything else from
+ * them; a task with no customer is theirs to take. Everything is read on the
+ * request client. Hands back who had it, which is what the Undo restores.
+ *
+ * `expected` is the Undo's (final review M7): the holder the save being
+ * undone set. Given, the task moves only while that person (null:
+ * Unassigned) still holds it, checked at the write (setTaskAssignee); a task
+ * someone picked since answers "assign.changed" and stays with them.
+ */
+export async function setTaskAssigneeAction(
+  accountId: string, taskId: string, assignee: string | null, expected?: string | null,
+): Promise<{ ok: true; previous: string | null } | { ok: false; error: AssignError }> {
+  const access = await requireAccountAccess(accountId);
+  if (!seesWholeAccount(access)) return { ok: false, error: "assign.refused" };
+  if (!isUuid(taskId) || !isUuidOrNull(assignee) || !(expected === undefined || isUuidOrNull(expected))) {
+    return { ok: false, error: "assign.failed" };
+  }
+  try {
+    const db = await dbForRequest();
+    if (assignee !== null && await customerFirst(db, accountId, taskId, assignee)) {
+      return { ok: false, error: "assign.customerFirst" };
+    }
+    const r = expected === undefined
+      ? await setTaskAssignee(db, accountId, taskId, assignee, access.userId)
+      : await setTaskAssignee(db, accountId, taskId, assignee, access.userId, { expected });
+    if (r === "not_found") return { ok: false, error: "assign.failed" };
+    if (r === "changed") return { ok: false, error: "assign.changed" };
+    revalidatePath(tasksPath(accountId));
+    return { ok: true, previous: r.previous };
+  } catch (e) {
+    console.error(`setTaskAssigneeAction: account ${accountId}: ${loggableError(e)}`);
+    return { ok: false, error: isRefusal(e) ? "assign.refused" : "assign.failed" };
+  }
+}
+
+/**
+ * True when the target may be a Technician and the task's customer is not
+ * theirs (A4). Fails closed (fix round 1, m3): only a target the team read
+ * shows as Owner or Staff skips the check; one it does not show at all (just
+ * removed, or a race) is checked like a Technician.
+ */
+async function customerFirst(db: SupabaseClient, accountId: string, taskId: string, assignee: string): Promise<boolean> {
+  const team = await listAccountTeam(db, accountId);
+  const role = team.find((t) => t.userId === assignee)?.role;
+  if (role === "owner" || role === "staff") return false;
+  const task = await readTaskContact(db, accountId, taskId);
+  if (!task?.contactId) return false;
+  const { data, error } = await db.from("contacts").select("assigned_to")
+    .eq("account_id", accountId).eq("id", task.contactId).maybeSingle();
+  if (error) throw new Error(`setTaskAssigneeAction: customer read failed: ${error.message}`);
+  return (data as { assigned_to: string | null } | null)?.assigned_to !== assignee;
 }

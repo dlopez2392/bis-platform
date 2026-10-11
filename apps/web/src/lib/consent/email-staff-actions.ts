@@ -22,9 +22,11 @@ export type EmailActionResult =
   | { ok: false; error: string; view?: EmailView };
 
 export type EmailContext = {
-  /** The request's RLS client: reads the ledger. */
+  /** The request's RLS client: proved the contact (emailContextFor). */
   db: SupabaseClient;
-  /** The service client: the ledger's only writer (0054, 0055). */
+  /** The service client: the ledger's only writer (0054, 0055), and since F-085
+   *  the client the address's HISTORY is read through (spec §7.3) — consent is
+   *  keyed by address, so a Technician's RLS client would see only part of it. */
   writer: SupabaseClient;
   accountId: string;
   contactId: string;
@@ -35,7 +37,8 @@ export type EmailContext = {
   now: Date;
 };
 
-const history = (ctx: EmailContext): Promise<ConsentHistoryRow[]> => readConsentHistory(ctx.db, ctx.accountId, "email", ctx.address);
+// By address, on the service client (F-085, spec §7.3): the contact was proven on ctx.db first.
+const history = (ctx: EmailContext): Promise<ConsentHistoryRow[]> => readConsentHistory(ctx.writer, ctx.accountId, "email", ctx.address);
 const view = async (ctx: EmailContext): Promise<EmailView> => emailViewOf(await history(ctx), true);
 
 function undoable(ctx: EmailContext, row: { actor_id: string | null; occurred_at: string }): boolean {
@@ -89,6 +92,9 @@ export function stopEmails(ctx: EmailContext, expectNewest: string | null): Prom
 /** The Undo of "Stop emails": only that staff member's own stop, young, still newest. */
 export function undoStopEmails(ctx: EmailContext, eventId: string): Promise<EmailActionResult> {
   return guarded("undoStopEmails", ctx, async () => {
+    // On ctx.db, deliberately: an Undo acts only on this caller's own row (actor_id is
+    // checked below), written against ctx.contactId, the contact emailContextFor proved,
+    // so the caller's own client sees it; a row it cannot see is not theirs to undo.
     const row = await readConsentEvent(ctx.db, ctx.accountId, eventId);
     if (!row || row.channel !== "email" || row.address !== ctx.address || row.action !== "revoked" || row.method !== "staff") return changed(ctx);
     if (!undoable(ctx, row)) return { ok: false, error: m["contact.email.undoExpired"] };

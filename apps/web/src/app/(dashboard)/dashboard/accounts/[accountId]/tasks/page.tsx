@@ -7,10 +7,12 @@
 // the files below it, not here.
 import { listAccountWork, listPendingProposals, type CallProposal } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
+import { WhoFilter } from "@/components/assign/who-filter";
 import { requireAccountAccess } from "@/lib/auth";
 import { renderZone } from "@/lib/zone";
 import { ZoneNote } from "@/components/zone-note";
 import { dbForRequest } from "@/lib/db";
+import { loadAssignView } from "@/lib/assign/view";
 import { bucketWork } from "@/lib/work/buckets";
 import { contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
@@ -21,15 +23,22 @@ export const dynamic = "force-dynamic";
 
 export default async function TasksPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ accountId: string }>;
+  searchParams?: Promise<{ who?: string }>;
 }) {
   const { accountId } = await params;
-  // Authorization only — both audiences see this page (nav-groups.ts adds
-  // it unconditionally, directly under Dashboard), so the returned role
-  // isn't needed for anything this page itself renders.
-  const { isAgency } = await requireAccountAccess(accountId);
+  const { who: rawWho } = (await searchParams) ?? {};
+  // Both audiences see this page (nav-groups.ts adds it unconditionally,
+  // directly under Dashboard). The role decides only Mine / Unassigned and
+  // whether tasks can be handed on (F-085 part 1).
+  const access = await requireAccountAccess(accountId);
+  const { isAgency } = access;
   const db = await dbForRequest();
+  // Mine / Unassigned (spec §8-§9), applied by listAccountWork on the
+  // server. Never for a Technician (their queue is already theirs).
+  const assign = await loadAssignView(db, accountId, access, rawWho, { members: true });
 
   // Only `timezone` — this page never shows the account/brand name (every
   // sibling list in this folder — Contacts, Calls, Forms, Conversations —
@@ -45,7 +54,7 @@ export default async function TasksPage({
       return data as { timezone: string };
     });
 
-  const rows = await listAccountWork(db, accountId);
+  const rows = await listAccountWork(db, accountId, { assignee: assign.assignee });
 
   // The resolved zone (lib/zone.ts), shared with the other four date
   // screens and with the account dashboard's copy of this same bucketing.
@@ -129,7 +138,20 @@ export default async function TasksPage({
 
   return (
     <>
-      <PageHeader title={m["work.title"]} />
+      <PageHeader
+        title={m["work.title"]}
+        // F-085 part 1 (spec §9): All · Mine · Unassigned, for those who see
+        // the whole account. Nothing else rides along: this list has no
+        // search, sort or pager.
+        filters={assign.canAssign ? (
+          <WhoFilter
+            base={`/dashboard/accounts/${accountId}/tasks`}
+            current={assign.who}
+            showMine={assign.showMine}
+            params={{}}
+          />
+        ) : undefined}
+      />
       <div className="p-6">
         <ZoneNote
           zone={zone}
@@ -143,6 +165,9 @@ export default async function TasksPage({
           timezone={timezone}
           proposals={proposals}
           stageNames={stageNames}
+          canAssign={assign.canAssign}
+          members={assign.members}
+          who={assign.who}
         />
       </div>
     </>

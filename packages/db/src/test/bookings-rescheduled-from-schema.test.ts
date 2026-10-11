@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client, DatabaseError } from "pg";
-import { withRollback, actAs } from "./db";
+import { withRollback, actAsMember } from "./db";
 
 /**
  * Migration 0061: `bookings.rescheduled_from_id`, the link from a booking to
@@ -236,7 +236,7 @@ describe("0061 behaviour", () => {
       const { A } = await seed(c);
       const original = await insertBooking(c, A);
       const replacement = await insertBooking(c, A);
-      await actAs(c, { org_id: A.org, sub: "user_0061" });
+      await actAsMember(c, A.id, A.org);
       // The control: the same client reads both rows (the policy admits it),
       // so the refusal below is the grant, not RLS hiding the row.
       const { rows } = await c.query("select id from public.bookings where id = any($1)", [[original, replacement]]);

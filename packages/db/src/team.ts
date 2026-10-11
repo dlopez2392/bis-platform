@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { releaseMemberAssignments } from "./assignment";
 
 /**
  * Staff and roles (spec §5-§7). BIS owns the role; Clerk owns org membership.
@@ -8,14 +9,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * `db` passed to them must be `serviceDb()`, never `userDb()`.
  */
 
-export type AccountRole = "owner" | "staff";
+export type AccountRole = "owner" | "staff" | "technician";
 export type PersonLanguage = "en" | "es";
 export type TeamMember = {
   userId: string; clerkUserId: string; email: string; name: string | null;
   role: AccountRole; language: PersonLanguage | null;
 };
 
-const ROLES: readonly string[] = ["owner", "staff"];
+const ROLES: readonly string[] = ["owner", "staff", "technician"];
+/** Higher is more access. roleFromClerk answers the LOWEST rank any source gives (spec §6). */
+const RANK: Record<AccountRole, number> = { technician: 0, staff: 1, owner: 2 };
 const LANGS: readonly string[] = ["en", "es"];
 
 const field = (meta: unknown, k: string): unknown =>
@@ -25,16 +28,17 @@ const field = (meta: unknown, k: string): unknown =>
  *  I4): the Clerk role gives one answer (org:admin -> owner, else staff), and
  *  each valid `bis_role` in the membership's metadata (Clerk copies an
  *  invitation's public metadata onto it) or the accepted invitation's own
- *  metadata gives another. Owner only when EVERY answer says owner; any
- *  disagreement is the less privileged, staff. Metadata a role change left
- *  stale can therefore only ever demote, never mint an Owner. */
+ *  metadata gives another. The answer is the LEAST privileged answer of all
+ *  sources (technician < staff < owner; F-085 added technician): Owner only
+ *  when every answer says owner, technician whenever any answer says so.
+ *  Stale metadata can only ever demote, never mint an Owner or a Staff. */
 export function roleFromClerk(input: { clerkRole: string; membershipMeta?: unknown; invitationMeta?: unknown }): AccountRole {
   const answers: AccountRole[] = [input.clerkRole === "org:admin" ? "owner" : "staff"];
   for (const meta of [input.membershipMeta, input.invitationMeta]) {
     const r = field(meta, "bis_role");
     if (typeof r === "string" && ROLES.includes(r)) answers.push(r as AccountRole);
   }
-  return answers.every((a) => a === "owner") ? "owner" : "staff";
+  return answers.reduce((low, a) => (RANK[a] < RANK[low] ? a : low));
 }
 
 /** The event type the Team's removal writes (actor_type 'system'); see apps/web lib/team/removal-log.ts. */
@@ -216,7 +220,12 @@ export async function reconcileMembership(
     if (input.mode === "fallback") return { outcome: "absent" }; // the fallback never removes anyone
     const { data: u, error: lookupErr } = await db.from("users").select("id").eq("clerk_user_id", input.clerkUserId).maybeSingle();
     if (lookupErr) throw new Error(`reconcileMembership user lookup failed: ${lookupErr.message}`);
-    if (u) await deleteAccountMembership(db, account.id, u.id);
+    if (u) {
+      await deleteAccountMembership(db, account.id, u.id);
+      // Owner ruling A3: what they held goes back to Unassigned. The Team removal records the ids
+      // for its Undo; a removal made in Clerk's own screens has no Undo, so nothing is recorded here.
+      await releaseMemberAssignments(db, account.id, u.id);
+    }
     return { outcome: "removed" };
   }
 

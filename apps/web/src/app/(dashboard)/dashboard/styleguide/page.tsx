@@ -44,6 +44,8 @@ import { formatWhen } from "@/lib/booking/time";
 import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { ChoiceTilesDemo } from "./choice-tiles-demo";
+import { AssignDemo } from "./assign-demo";
+import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
 import { requestPseudoMode } from "@/lib/i18n/request-locale";
 import { pseudoLocale } from "@/lib/i18n/pseudo-locale";
@@ -231,6 +233,22 @@ export default async function StyleguidePage({
 
         <Section title={t(m, "styleguide.choiceTiles", "en")} file="components/choice-tiles.tsx">
           <ChoiceTilesDemo />
+        </Section>
+
+        {/* F-085 part 1 (spec §9): the "Assigned to" inline pick, editable and
+            read-only, and the All · Mine · Unassigned row that sits in a list
+            page's filter slot. Mine is current here; the links lead back to
+            this page. */}
+        <Section title={m["assign.field.label"]} file="components/assign/assignee-field.tsx">
+          <AssignDemo />
+        </Section>
+
+        <Section title={m["assign.filter.label"]} file="components/assign/who-filter.tsx">
+          <div className="flex flex-col gap-3" data-testid="styleguide-who-filter">
+            <WhoFilter base="/dashboard/styleguide" current="mine" showMine params={{}} />
+            {/* The agency is never a person of the company, so it has no Mine. */}
+            <WhoFilter base="/dashboard/styleguide" current="all" showMine={false} params={{}} />
+          </div>
         </Section>
 
         <Section title="Meter" file="components/meter.tsx">

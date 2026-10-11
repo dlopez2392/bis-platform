@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { withRollback, actAs } from "./db";
+import { withRollback, actAs, actAsMember } from "./db";
 import { withTestAccount } from "./fixtures";
 import { serviceDb } from "../service";
 import {
@@ -108,7 +108,7 @@ describe("0046 RLS — a second account's row is PRESENT in every case", () => {
   it("a client reads only its own log rows (mutation: drop the policy's account_id clause → FAILS)", () =>
     withRollback(async (c) => {
       const { a } = await seedTwoAccountsWithLog(c);
-      await actAs(c, { org_id: orgId("A") });
+      await actAsMember(c, a, orgId("A"));
       const { rows } = await c.query("select account_id from automation_log");
       expect(rows.map((r: any) => r.account_id)).toEqual([a]);
     }));

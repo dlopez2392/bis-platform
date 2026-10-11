@@ -23,6 +23,11 @@ describe("fixtureStamp", () => {
     // (`/^e2e-(?:client|agency)-(\d{13})@example\.com$/`) reds this line by
     // name, since "staff" is no longer one of the admitted words.
     expect(fixtureStamp(`e2e-staff-${STAMP}@example.com`, FIXTURE_EMAIL_RE)).toBe(STAMP);
+    // F-085 part 1: the per-run client's own Technician login (auth.setup.ts).
+    // MUTATION: narrowing FIXTURE_EMAIL_RE back to its pre-technician
+    // alternation (`/^e2e-(?:client|agency|staff)-(\d{13})@example\.com$/`)
+    // reds this line by name, since "technician" is no longer admitted.
+    expect(fixtureStamp(`e2e-technician-${STAMP}@example.com`, FIXTURE_EMAIL_RE)).toBe(STAMP);
   });
 
   it("refuses anything that is not exactly the fixture shape", () => {

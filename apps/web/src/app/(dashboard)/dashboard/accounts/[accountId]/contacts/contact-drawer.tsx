@@ -26,6 +26,8 @@ import { summaryLoadFrom, type ParsedContactSummary, type SummaryLoad } from "@/
 import type { EditableField } from "@/lib/contacts/field-input";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { SourceField } from "./source-field";
+import { ContactAssigneeField } from "@/components/assign/assignee-field";
+import type { AssignMember } from "@/lib/assign/view";
 
 // `nowMs` travels WITH the ready result, read inside the fetch's own
 // `.then()` (an allowed impure read — react-hooks/purity flags Date.now()
@@ -65,11 +67,18 @@ export const FIELDS: { field: Exclude<EditableField, "source">; labelKey: keyof 
 ];
 
 export function ContactDrawer({
-  accountId, row, onClose,
+  accountId, row, onClose, canAssign = false, members = [], viewerId = null,
 }: {
   accountId: string;
   row: ContactRow | null;
   onClose: () => void;
+  /** F-085 part 1: may this caller hand the customer to someone (Owner,
+   *  Staff, the agency); read-only otherwise (a Technician, M4). */
+  canAssign?: boolean;
+  /** The people the "Assigned to" picker offers (lib/assign/view.ts). */
+  members?: AssignMember[];
+  /** The viewer's own person here: "You" on a read-only line only for their own customer. */
+  viewerId?: string | null;
 }) {
   const [fetched, setFetched] = useState<Fetched>(null);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -288,6 +297,28 @@ export function ContactDrawer({
                       sourceHint={load.summary.sourceHint}
                       onSaved={() => setRetryNonce((n) => n + 1)}
                     />
+                    {/* F-085 part 1 (spec §9): who holds the customer, an
+                        inline pick with an Undo toast. Left out when the
+                        server did not say (one from before the field), never
+                        shown as Unassigned on a guess. Keyed by contact AND
+                        holder, so a re-read that brings a different holder
+                        remounts the field instead of keeping a stale pick. */}
+                    {load.summary.assignedTo !== undefined ? (
+                      <div className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2" data-assignee-row>
+                        <dt className="text-muted-foreground text-xs">{m["assign.field.label"]}</dt>
+                        <dd className="min-w-0">
+                          <ContactAssigneeField
+                            key={`${row.id}:${load.summary.assignedTo ?? ""}`}
+                            accountId={accountId}
+                            contactId={row.id}
+                            value={load.summary.assignedTo}
+                            options={members}
+                            readOnly={!canAssign}
+                            viewerId={viewerId}
+                          />
+                        </dd>
+                      </div>
+                    ) : null}
                   </dl>
                   <TagsRow
                     accountId={accountId}

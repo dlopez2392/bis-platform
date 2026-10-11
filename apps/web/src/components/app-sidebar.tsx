@@ -121,6 +121,7 @@ export function AppSidebar({
   defaultCollapsed,
   isAgency,
   isOwner,
+  isTechnician,
   clientBrandName,
   clientLogoUrl,
   clientAccentColor,
@@ -136,6 +137,12 @@ export function AppSidebar({
    *  never a client membership at all (plan deviation 6) — always false for
    *  it, and ignored: the footer below branches on `isAgency` FIRST. */
   isOwner: boolean;
+  /** F-085 part 1 (spec §9): a client Technician in THIS account, settled
+   *  by dashboard/layout.tsx from the same role as isOwner. Gets their own
+   *  five nav items (buildNavGroups); the footer needs nothing of its own —
+   *  no Team link (that is isOwner's) and no setup meter (the agency's).
+   *  Always false for the agency. */
+  isTechnician: boolean;
   /** What this company's own customers call it, when the agency has set it.
    *  Undefined for the agency, which gets the switcher instead, and for an
    *  unbranded client — who then gets NO identity block at all (D-072: this
@@ -189,7 +196,7 @@ export function AppSidebar({
   // Grouping, audience filtering and href construction all live in the pure
   // nav-groups module (unit-tested there without React); this component only
   // resolves labelKey → copy and iconKey → icon component per item.
-  const groups = buildNavGroups(base, isAgency, isOwner).map((group) => ({
+  const groups = buildNavGroups(base, isAgency, isOwner, isTechnician).map((group) => ({
     label: group.label,
     items: group.items.map(
       (item): NavItem => ({ href: item.href, label: t(m, item.labelKey, locale), icon: NAV_ICONS[item.iconKey] }),

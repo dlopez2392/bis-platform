@@ -61,7 +61,9 @@ export function textsViewOf(rows: readonly ConsentHistoryRow[], number: { unconf
   return { kind: "allowed", newestId: newestDecidingRow(rows)?.id ?? null };
 }
 
-/** The contact's Texts row, read. THROWS on an unreadable ledger (the row shows its error line). */
+/** The contact's Texts row, read. THROWS on an unreadable ledger (the row shows its error line).
+ *  `db` is the ledger client (ledgerDb(), F-085 spec §7.3), passed only after the contact was
+ *  proven on the caller's own client: the history is keyed by number, not by contact. */
 export async function readTextsView(
   db: SupabaseClient, accountId: string, contact: { phone: string | null; phone_country_unconfirmed?: boolean | null },
 ): Promise<TextsView> {

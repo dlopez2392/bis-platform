@@ -31,6 +31,8 @@ import { TextsRow } from "../texts-row";
 import type { TextsLoad } from "@/lib/consent/texts-row";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
+import { ContactAssigneeField } from "@/components/assign/assignee-field";
+import type { AssignMember } from "@/lib/assign/view";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
 type Tag = Awaited<ReturnType<typeof listContactTags>>[number];
@@ -43,6 +45,9 @@ export function ContactFieldsPanel({
   fieldDefs,
   email,
   texts,
+  canAssign = false,
+  members = [],
+  viewerId = null,
 }: {
   accountId: string;
   contactId: string;
@@ -54,6 +59,13 @@ export function ContactFieldsPanel({
   /** The Texts row, read on the server page (which has the normaliser and
    *  the ledger read; this client component ships neither). */
   texts: TextsLoad;
+  /** F-085 part 1: may this caller hand the customer on (Owner, Staff, the
+   *  agency); read-only otherwise (a Technician, M4). */
+  canAssign?: boolean;
+  /** The people the "Assigned to" picker offers (lib/assign/view.ts). */
+  members?: AssignMember[];
+  /** The viewer's own person here: "You" on a read-only line only for their own customer. */
+  viewerId?: string | null;
 }) {
   const router = useRouter();
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
@@ -100,6 +112,24 @@ export function ContactFieldsPanel({
               sourceHint={sourceHint}
               onSaved={() => router.refresh()}
             />
+            {/* F-085 part 1 (spec §9): who holds the customer, in the Source
+                line's shape. A change refreshes the page: the customer's
+                open tasks move with them (A4). */}
+            <div className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2" data-assignee-row>
+              <dt className="text-muted-foreground text-xs">{m["assign.field.label"]}</dt>
+              <dd className="min-w-0">
+                <ContactAssigneeField
+                  key={contact.assigned_to ?? ""}
+                  accountId={accountId}
+                  contactId={contactId}
+                  value={contact.assigned_to ?? null}
+                  options={members}
+                  readOnly={!canAssign}
+                  viewerId={viewerId}
+                  onSaved={() => router.refresh()}
+                />
+              </dd>
+            </div>
           </dl>
 
           <TextsRow

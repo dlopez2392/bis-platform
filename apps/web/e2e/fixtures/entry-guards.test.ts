@@ -116,12 +116,21 @@ describe("e2e entry points refuse production", () => {
       expect(spies.test).not.toHaveBeenCalled();
     });
 
-    // Staff and roles added a third: the per-run client's own Staff login,
-    // registered after the agency and client ones (auth.setup.ts).
-    it("registers its three setup tests on the CI project", async () => {
+    // Staff and roles added a third (the per-run client's own Staff login);
+    // F-085 part 1 added a fourth (its Technician login) — both registered
+    // after the agency and client ones (auth.setup.ts). Asserted BY NAME, in
+    // order, not merely by count: a count alone still catches one going
+    // missing or a fifth appearing, but would pass just as happily if a
+    // rename or a reorder silently swapped which test is which.
+    it("registers its four setup tests, by name, on the CI project", async () => {
       stubEnv(`https://${CI_REF}.supabase.invalid`);
       await import("../auth.setup");
-      expect(spies.test).toHaveBeenCalledTimes(3);
+      expect(spies.test.mock.calls.map((call) => call[0])).toEqual([
+        "authenticate as agency_admin",
+        "authenticate as client user (no app_role)",
+        "authenticate as staff user",
+        "authenticate as technician user",
+      ]);
     });
   });
 

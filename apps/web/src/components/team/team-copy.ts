@@ -16,6 +16,8 @@ export type TeamViewer = "owner" | "agency";
 export const ROLE_PILL: Record<AccountRole, { label: string; dot: string; chip: string }> = {
   owner: { label: m["team.role.owner"], dot: "bg-primary", chip: "border-transparent bg-[var(--accent-dim)] text-foreground" },
   staff: { label: m["team.role.staff"], dot: "bg-muted-foreground/60", chip: "border-border bg-transparent text-foreground" },
+  // F-085 part 1: the least access, the faintest dot; the word carries it.
+  technician: { label: m["team.role.technician"], dot: "bg-muted-foreground/30", chip: "border-border bg-transparent text-foreground" },
 };
 export const STATUS_PILL = {
   active: { label: m["team.status.active"], dot: "bg-success", chip: "border-success/30 bg-success/10 text-foreground" },

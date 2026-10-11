@@ -24,6 +24,23 @@ export async function actAs(c: Client, claims: { org_id?: string; app_role?: str
   await c.query("set local role authenticated");
 }
 
+/**
+ * A client caller WITH a membership (0068, spec A1): a client token with no
+ * membership sees no customers, so a positive client case must act as a real
+ * member. Seeds a users row and a membership (as the table owner, before the
+ * role switch) and returns the seeded sub.
+ */
+export async function actAsMember(
+  c: Client, accountId: string, orgId: string, role: "owner" | "staff" | "technician" = "owner",
+): Promise<string> {
+  const sub = `user_member_${role}_${Math.random().toString(36).slice(2, 10)}`;
+  const { rows: [u] } = await c.query<{ id: string }>(
+    "insert into users (clerk_user_id, email) values ($1, $1 || '@example.com') returning id", [sub]);
+  await c.query("insert into memberships (user_id, scope, account_id, role) values ($1, 'account', $2, $3)", [u!.id, accountId, role]);
+  await actAs(c, { org_id: orgId, sub });
+  return sub;
+}
+
 export async function actAsOwner(c: Client) {
   await c.query("reset role");
 }

@@ -35,6 +35,12 @@ const CLIENT_AUTH_FILE = "e2e/.auth/client-state.json";
 // rather than org:admin, so staff-roles.spec.ts can prove what a Staff
 // person cannot reach without ever touching Test Client One.
 const STAFF_AUTH_FILE = "e2e/.auth/staff-state.json";
+// F-085 part 1: the per-run client's own Technician login — a third real
+// Clerk identity in the SAME org, org:member like Staff, but with a BIS
+// "technician" membership seeded directly (see the setup test below) so
+// assign.spec.ts can prove what a Technician sees and is refused without
+// ever touching Test Client One.
+const TECHNICIAN_AUTH_FILE = "e2e/.auth/technician-state.json";
 // Sidecar record of what the client-fixture setup below created. Read by
 // client-access.spec.ts to know which account to assert against, and by
 // auth.teardown.ts (the "setup" project's `teardown` project — see
@@ -353,4 +359,79 @@ setup("authenticate as staff user", async ({ page }) => {
   await page.waitForURL(/\/dashboard\/accounts\/[^/]+\/dashboard$/);
 
   await saveSignedInState(page.context(), STAFF_AUTH_FILE);
+});
+
+// F-085 part 1 (spec §9): a third real Clerk identity in the SAME org, this
+// one with a BIS "technician" membership rather than Clerk's own org:member
+// alone. The per-request fallback (ensureAccountRole) only ever settles a
+// bare Clerk role to "owner" or "staff" (roleFromClerk's own mapping), so a
+// Technician has to be seeded directly through serviceDb() — and BEFORE this
+// user's first page load, or that first request would settle it to "staff"
+// and every assertion downstream of role would be proving the wrong thing.
+//
+// Runs AFTER "authenticate as staff user" (same file, same reasoning as that
+// block: reads and extends CLIENT_FIXTURE_FILE rather than a sidecar of its
+// own). The org's seat count: Owner (the client fixture), Staff and
+// Technician is 3 of Clerk's 5 — the agency setup user is never a member of
+// this org at all (plan deviation 6).
+setup("authenticate as technician user", async ({ page }) => {
+  await clerkSetup();
+  const clerk_ = await clerkClient();
+
+  if (!existsSync(CLIENT_FIXTURE_FILE)) {
+    throw new Error(
+      `technician setup: ${CLIENT_FIXTURE_FILE} is missing — "authenticate as client user" must run first`,
+    );
+  }
+  let fixture = JSON.parse(readFileSync(CLIENT_FIXTURE_FILE, "utf-8")) as {
+    accountId: string; clerkOrgId: string; [key: string]: unknown;
+  };
+
+  const stamp = Date.now();
+  const techEmail = `e2e-technician-${stamp}@example.com`;
+  const techUser = await clerk_.users.createUser({
+    emailAddress: [techEmail],
+    firstName: "E2E",
+    lastName: "Technician",
+    skipPasswordRequirement: true,
+    skipLegalChecks: true,
+  });
+
+  // Recorded before the membership or the BIS role below can fail, same
+  // reasoning as the staff block above.
+  fixture = { ...fixture, technicianClerkUserId: techUser.id };
+  writeFileSync(CLIENT_FIXTURE_FILE, JSON.stringify(fixture));
+
+  // org:member, like Staff: the Clerk shape alone settles nothing about
+  // "technician" — see this test's own doc comment above.
+  await clerk_.organizations.createOrganizationMembership({
+    organizationId: fixture.clerkOrgId, userId: techUser.id, role: "org:member",
+  });
+
+  // The BIS role, seeded directly through serviceDb() — before the sign-in
+  // below, so this user's very first page load already reads "technician"
+  // rather than settling the fallback's own default.
+  const db = serviceDb();
+  const { data: u, error: uErr } = await db.from("users")
+    .upsert({ clerk_user_id: techUser.id, email: techEmail, name: "E2E Technician" }, { onConflict: "clerk_user_id" })
+    .select("id").single();
+  if (uErr) throw new Error(`technician setup: users row not written: ${uErr.message}`);
+  const { error: mErr } = await db.from("memberships")
+    .insert({ scope: "account", account_id: fixture.accountId, user_id: u.id, role: "technician" });
+  if (mErr) throw new Error(`technician setup: membership not written: ${mErr.message}`);
+
+  fixture = { ...fixture, technicianUserId: u.id };
+  writeFileSync(CLIENT_FIXTURE_FILE, JSON.stringify(fixture));
+
+  await signInWithTicket(page, clerk_, techUser.id);
+  await setActiveOrganization(page, fixture.clerkOrgId);
+
+  await page.goto("/");
+  // accountHome sends a Technician to To do: "/" resolves this org's account
+  // and redirects to its /dashboard, which itself redirects a Technician on
+  // again (requireNotTechnician) — the same two-hop landing every refused
+  // page in technician-guards.test.ts produces.
+  await page.waitForURL(/\/dashboard\/accounts\/[^/]+\/tasks$/);
+
+  await saveSignedInState(page.context(), TECHNICIAN_AUTH_FILE);
 });

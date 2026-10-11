@@ -54,7 +54,9 @@ export type NavGroupSpec = {
  * still correct — a stale in-progress link is worse than a temporarily
  * missing one.
  */
-export function buildNavGroups(base: string | null, isAgency: boolean, isOwner: boolean): NavGroupSpec[] {
+export function buildNavGroups(
+  base: string | null, isAgency: boolean, isOwner: boolean, isTechnician = false,
+): NavGroupSpec[] {
   if (base === null) {
     return [
       {
@@ -89,6 +91,23 @@ export function buildNavGroups(base: string | null, isAgency: boolean, isOwner: 
           { href: "/dashboard/plans", labelKey: "nav.plans", iconKey: "plans" },
         ],
       },
+    ];
+  }
+
+  // A Technician (F-085 part 1, spec §9) works their own customers: To do
+  // (their landing, accountHome), Contacts, Conversations, Calls and Calendar,
+  // in the groups' usual order. Hiding the rest is convenience only;
+  // requireNotTechnician on every refused page and action is the boundary,
+  // and RLS (0068) bounds what the five they keep can read.
+  if (isTechnician) {
+    return [
+      { label: "nav.group.overview", items: [{ href: `${base}/tasks`, labelKey: "nav.tasks", iconKey: "tasks" }] },
+      { label: "nav.group.crm", items: [{ href: `${base}/contacts`, labelKey: "nav.contacts", iconKey: "contacts" }] },
+      { label: "nav.group.communications", items: [
+        { href: `${base}/conversations`, labelKey: "nav.conversations", iconKey: "conversations" },
+        { href: `${base}/calls`, labelKey: "nav.calls", iconKey: "calls" },
+      ] },
+      { label: "nav.group.growth", items: [{ href: `${base}/calendar`, labelKey: "nav.calendar", iconKey: "calendar" }] },
     ];
   }
 

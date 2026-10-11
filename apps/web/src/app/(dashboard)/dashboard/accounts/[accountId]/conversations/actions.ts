@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAccountAccess } from "@/lib/auth";
+import { callerCanSee } from "@/lib/auth/visible";
 import { dbForRequest } from "@/lib/db";
 import {
   getContact, ensureConversation, createMessage, updateMessageStatus,
@@ -258,6 +259,13 @@ export async function markConversationReadAction(
   accountId: string, conversationId: string,
 ): Promise<void> {
   await requireAccountAccess(accountId);
+  // F-085 (spec §7.3): the service client below is not bound by RLS, so the
+  // conversation is proven through the CALLER's own client first. Under 0068
+  // a Technician cannot see another person's conversation, so the proof fails
+  // with no role branching. A conversation the caller cannot see is a silent
+  // no-op, the same answer another account's id already got; a proof that
+  // cannot be read throws, never "allowed".
+  if (!(await callerCanSee("conversations", accountId, conversationId))) return;
   // 0053: conversations are server-written. clearUnreadCount matches on
   // account_id AND id, and accountId is the one requireAccountAccess just
   // authorised, so another account's conversation id matches no row

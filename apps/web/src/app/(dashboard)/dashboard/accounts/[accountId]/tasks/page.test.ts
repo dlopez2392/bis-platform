@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CallProposal, WorkRow } from "@bis/db";
@@ -17,8 +17,10 @@ import { visibleBuckets, WorkList } from "./work-list";
  *  Settings link must never reach a client, and this page is one of the
  *  three a client can actually open. */
 let isAgency = true;
+/** F-085 part 1: the caller's role, for ?who= (null keeps every older test's agency/plain-client caller). */
+let role: "owner" | "staff" | "technician" | null = null;
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency }),
+  requireAccountAccess: async () => ({ userId: "user_1", isAgency, role }),
 }));
 
 /** Mutable so each test can pick the account's own (possibly invalid) zone
@@ -58,6 +60,20 @@ vi.mock("@/lib/db", () => ({
   }),
 }));
 
+// Task 7 fix round 1 (I3): the task picker is a client component whose own
+// behaviour is tested in components/assign/assign.test.ts; here only what a
+// row HANDS it is pinned (the raw task id, this account), so it is captured.
+const taskFieldProps = vi.hoisted(() => [] as Record<string, unknown>[]);
+vi.mock("@/components/assign/assignee-field", async () => {
+  const { createElement: h } = await import("react");
+  return {
+    TaskAssigneeField: (p: Record<string, unknown>) => {
+      taskFieldProps.push(p);
+      return h("span", { "data-task-assignee": String(p.taskId) });
+    },
+  };
+});
+
 let workRows: WorkRow[] = [];
 /** This account's own pending proposals (Important 3) — defaults to none so
  *  every pre-existing test below is unaffected by this mock's addition. A
@@ -71,12 +87,18 @@ const listPendingProposalsMock = vi.fn(async (): Promise<CallProposal[]> => pend
  *  REAL, so these tests exercise the actual chain (account -> agency -> UTC)
  *  rather than a re-implementation of it. */
 let agencyTimezone: string | null = "America/Chicago";
+/** F-085 part 1: spied so the ?who= tests can read what the page asked for. */
+const listAccountWorkMock = vi.fn<(...a: unknown[]) => Promise<WorkRow[]>>(async () => workRows);
+const readPersonIdMock = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "p-me");
+const listAccountTeamMock = vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []);
 vi.mock("@bis/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@bis/db")>();
   return {
     ...actual,
-    listAccountWork: async () => workRows,
+    listAccountWork: (...args: unknown[]) => listAccountWorkMock(...args),
     listPendingProposals: () => listPendingProposalsMock(),
+    readPersonId: (...args: unknown[]) => readPersonIdMock(...args),
+    listAccountTeam: (...args: unknown[]) => listAccountTeamMock(...args),
     serviceDb: () => ({
       from: () => ({
         select: () => ({
@@ -557,5 +579,172 @@ describe("TasksPage — pending proposals (Important 3)", () => {
     );
     expect(pipelineStagesInMock).toHaveBeenCalledTimes(1);
     expect(pipelineStagesInMock).toHaveBeenCalledWith("id", ["stage_1", "stage_2"]);
+  });
+});
+
+// F-085 part 1 (spec §8-§9): Mine / Unassigned on To do, filtered on the
+// server by listAccountWork.
+describe("TasksPage — ?who= (Mine / Unassigned)", () => {
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = false;
+    role = "staff";
+    workRows = [];
+    pendingProposals = [];
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    listAccountWorkMock.mockClear();
+    readPersonIdMock.mockClear();
+    listAccountTeamMock.mockClear();
+  });
+  afterEach(() => {
+    isAgency = true;
+    role = null;
+  });
+  async function render(searchParams: Record<string, string>) {
+    const { default: TasksPage } = await import("./page");
+    return renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve(searchParams) }),
+    );
+  }
+
+  it("who=mine asks listAccountWork for the caller's own work (mutation: drop the assignee -> FAILS)", async () => {
+    await render({ who: "mine" });
+    expect(readPersonIdMock).toHaveBeenCalledWith(expect.anything(), "acct1", "user_1");
+    expect(listAccountWorkMock).toHaveBeenCalledWith(expect.anything(), "acct1", { assignee: { who: "mine", userId: "p-me" } });
+  });
+
+  it("who=unassigned asks for Unassigned work, and no who is All", async () => {
+    await render({ who: "unassigned" });
+    expect(listAccountWorkMock).toHaveBeenLastCalledWith(expect.anything(), "acct1", { assignee: { who: "unassigned" } });
+    await render({});
+    expect(listAccountWorkMock).toHaveBeenLastCalledWith(expect.anything(), "acct1", { assignee: undefined });
+  });
+
+  it("Staff: the team is read for the task picker", async () => {
+    await render({});
+    expect(listAccountTeamMock).toHaveBeenCalledWith(expect.anything(), "acct1");
+  });
+
+  it("a Technician: no filter (RLS already makes the queue theirs), no team read, no users read (mutation: pass the filter for everyone -> FAILS)", async () => {
+    role = "technician";
+    await render({ who: "unassigned" });
+    expect(listAccountWorkMock).toHaveBeenCalledWith(expect.anything(), "acct1", { assignee: undefined });
+    expect(listAccountTeamMock).not.toHaveBeenCalled();
+    expect(readPersonIdMock).not.toHaveBeenCalled();
+  });
+
+  it("the page still renders with no searchParams at all (older callers)", async () => {
+    const { default: TasksPage } = await import("./page");
+    await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) });
+    expect(listAccountWorkMock).toHaveBeenCalledWith(expect.anything(), "acct1", { assignee: undefined });
+  });
+});
+
+// F-085 part 1 (spec §9, Task 7): To do's assignee picker, its filter row
+// and the filtered empty states.
+describe("WorkList — Assigned to on task rows (F-085)", () => {
+  const ANA = { userId: "11111111-1111-4111-8111-111111111111", label: "Ana Ruiz", role: "staff" as const };
+  const list = (rows: WorkRow[], canAssign: boolean) => {
+    taskFieldProps.length = 0;
+    return renderToStaticMarkup(createElement(WorkList, {
+      buckets: bucketWork(rows, NOW, ZONE), accountId: ACCOUNT_ID, contactNames: {}, timezone: ZONE,
+      canAssign, members: [ANA],
+    }));
+  };
+  const rowOf = (html: string, text: string) => html.split("<li").slice(1).find((r) => r.includes(text)) ?? "";
+
+  it("a task row hands TaskAssigneeField the task's RAW id, this account, its holder and the team (fix round 1, I3; mutation: taskId={row.id} -> FAILS)", () => {
+    list([taskRow({ id: "task:t1", assigneeId: ANA.userId })], true);
+    expect(taskFieldProps).toHaveLength(1);
+    expect(taskFieldProps[0]).toMatchObject({ accountId: ACCOUNT_ID, taskId: "t1", value: ANA.userId, options: [ANA] });
+  });
+
+  it("an unassigned task hands value null, never undefined", () => {
+    list([taskRow({ id: "task:t1", assigneeId: null })], true);
+    expect(taskFieldProps[0]!.value).toBeNull();
+  });
+
+  it("without canAssign (a Technician) no row carries a picker (mutation: render it for everyone -> FAILS)", () => {
+    list([taskRow({ id: "task:t1", assigneeId: ANA.userId })], false);
+    expect(taskFieldProps).toHaveLength(0);
+  });
+
+  it("a conversation or booking row carries none: their holder is the customer's, set on the customer", () => {
+    list([conversationRow(), bookingRow()], true);
+    expect(taskFieldProps).toHaveLength(0);
+  });
+
+  it("the picker sits outside the row's link: a control inside an <a> is invalid and ambiguous", () => {
+    const r = rowOf(list([taskRow({ id: "task:t1", assigneeId: ANA.userId })], true), "Call about the estimate");
+    const picker = r.indexOf('data-task-assignee="t1"');
+    expect(picker).toBeGreaterThan(-1);
+    expect(picker).toBeGreaterThan(r.indexOf("</a>"));
+  });
+});
+
+describe("WorkList — filtered empty states (F-085)", () => {
+  const empty = (who: "all" | "mine" | "unassigned") => renderToStaticMarkup(createElement(WorkList, {
+    buckets: bucketWork([], NOW, ZONE), accountId: ACCOUNT_ID, contactNames: {}, timezone: ZONE, who,
+  }));
+
+  it("an empty Mine says nothing is assigned to you yet (mutation: always 'Nothing needs you' -> FAILS)", () => {
+    const html = empty("mine");
+    expect(html).toContain(m["assign.empty.mine"]);
+    expect(html).not.toContain(m["work.empty"]);
+  });
+
+  it("an empty Unassigned says everything has someone", () => {
+    expect(renderedText(empty("unassigned"))).toContain(m["assign.empty.unassignedWork"]);
+  });
+
+  it("All keeps the queue's own empty sentence", () => {
+    expect(empty("all")).toContain(m["work.empty"]);
+  });
+});
+
+describe("TasksPage — the All · Mine · Unassigned row (F-085)", () => {
+  const NAV = `aria-label="${m["assign.filter.label"]}"`;
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = false;
+    workRows = [];
+    pendingProposals = [];
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
+  });
+  afterEach(() => {
+    isAgency = true;
+    role = null;
+  });
+  async function render(searchParams: Record<string, string>) {
+    const { default: TasksPage } = await import("./page");
+    return renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve(searchParams) }),
+    );
+  }
+
+  it("Staff get the filter row, the current filter marked, its links back to this page (mutation: render it for nobody -> FAILS)", async () => {
+    role = "staff";
+    const html = await render({ who: "mine" });
+    expect(html).toContain(NAV);
+    const current = (html.match(/<a\b[^>]*aria-current="page"[^>]*>/g) ?? []);
+    expect(current).toHaveLength(1);
+    expect(current[0]).toContain(`href="/dashboard/accounts/acct1/tasks?who=mine"`);
+    expect(html).toContain('href="/dashboard/accounts/acct1/tasks"');
+  });
+
+  it("an empty Mine reaches the list as its own empty state, under the filter row", async () => {
+    role = "staff";
+    const html = await render({ who: "mine" });
+    expect(html).toContain(m["assign.empty.mine"]);
+  });
+
+  it("a Technician gets no filter row (mutation: render it for everyone -> FAILS)", async () => {
+    role = "technician";
+    expect(await render({})).not.toContain(NAV);
   });
 });

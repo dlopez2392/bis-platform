@@ -146,4 +146,68 @@ describe("sortHref", () => {
     expect(href).not.toContain("before");
     expect(href).toBe("/dashboard/accounts/acct1/contacts?q=smith&sort=created&dir=asc");
   });
+
+  // The header click is an onClick (router.push), which a static render
+  // cannot fire, so the wiring is read off the source: the table hands its
+  // own `who` prop to sortHref.
+  it("the header click builds its href with the table's current who", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(fileURLToPath(new URL("./contacts-table.tsx", import.meta.url)), "utf8");
+    expect(src).toContain("sortHref(accountId, { key: sort, dir }, key, q, who)");
+  });
+
+  // F-085 part 1: re-sorting Mine must stay inside Mine.
+  it("carries who=mine / who=unassigned, and nothing for All (mutation: drop withWho -> FAILS)", () => {
+    expect(sortHref("acct1", { key: "created", dir: "desc" }, "name", "x", "mine"))
+      .toBe("/dashboard/accounts/acct1/contacts?q=x&sort=name&dir=asc&who=mine");
+    expect(sortHref("acct1", { key: "created", dir: "desc" }, "name", undefined, "unassigned"))
+      .toBe("/dashboard/accounts/acct1/contacts?sort=name&dir=asc&who=unassigned");
+    expect(sortHref("acct1", { key: "created", dir: "desc" }, "name", undefined, "all"))
+      .toBe("/dashboard/accounts/acct1/contacts?sort=name&dir=asc");
+  });
+});
+
+/**
+ * Task 7 fix round 1 (I2): assigning from the drawer inside ?who=mine or
+ * ?who=unassigned moves the customer OUT of the filtered list, and the
+ * server action's revalidation drops their row. The drawer must keep showing
+ * the customer it was opened on (the toast and its Undo are still up), so the
+ * table remembers the last row it saw for the open peek rather than falling
+ * to the all-blank stub a deep link to an unknown id gets.
+ */
+describe("peekRow: the drawer's row survives the list losing it (fix round 1, I2)", () => {
+  it("the row on this page wins, and is what gets remembered", async () => {
+    const { peekRow } = await import("./contacts-table");
+    const ana = row(1);
+    expect(peekRow([ana, row(2)], "c1", null)).toBe(ana);
+  });
+
+  it("a peeked row that left the list (assigned away from Mine) is the REMEMBERED row, not the blank stub (mutation: drop the memory -> FAILS)", async () => {
+    const { peekRow } = await import("./contacts-table");
+    const ana = row(1);
+    const shown = peekRow([row(2)], "c1", ana);
+    expect(shown).toBe(ana);
+    expect(shown?.first_name).toBe("First1");
+  });
+
+  it("a memory of a DIFFERENT contact is never shown for this peek: a deep link to an id not on the page still gets the stub", async () => {
+    const { peekRow } = await import("./contacts-table");
+    const shown = peekRow([row(2)], "c9", row(1));
+    expect(shown?.id).toBe("c9");
+    expect(shown?.first_name).toBeNull();
+  });
+
+  it("no peek, no drawer row", async () => {
+    const { peekRow } = await import("./contacts-table");
+    expect(peekRow([row(1)], null, row(1))).toBeNull();
+  });
+
+  it("the table remembers the row it found for the open peek and hands the drawer peekRow's answer (mutation: hand the drawer the old find-or-stub -> FAILS)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(fileURLToPath(new URL("./contacts-table.tsx", import.meta.url)), "utf8");
+    expect(src).toContain("row={peekRow(rows, peekId, remembered)}");
+    expect(src).toMatch(/if \(found && found !== remembered\) setRemembered\(found\);/);
+  });
 });

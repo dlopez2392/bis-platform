@@ -10,6 +10,10 @@ import { describe, it, expect, vi } from "vitest";
  * "which branch renders" question.
  */
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
+// F-085 part 1: the page reads the caller (for ?who=). The agency, so no filter applies here.
+vi.mock("@/lib/auth", () => ({
+  requireAccountAccess: async () => ({ userId: "u1", isAgency: true, role: null, canManage: true }),
+}));
 
 // The page's own direct query — the account's timezone, threaded into
 // ConversationList/MessageThread's own `timezone` prop (D-010's pattern
@@ -39,6 +43,7 @@ const conversationsFixture = [
 ];
 vi.mock("@bis/db", () => ({
   listConversations: async () => conversationsFixture,
+  readPersonId: async () => null,
   listMessages: async () => [],
 }));
 
@@ -70,6 +75,8 @@ describe("ConversationsPage's mobile layout (D-021)", () => {
     const { renderToStaticMarkup } = await import("react-dom/server");
     const markup = renderToStaticMarkup(html);
     expect(markup).not.toMatch(/class="hidden lg:block"/);
-    expect(markup).not.toContain('href="/dashboard/accounts/acct1/conversations"');
+    // The list's own links only: the All · Mine · Unassigned row (F-085)
+    // links to this base on purpose, and is pinned in page.pagination.test.ts.
+    expect(markup.replace(/<nav[^>]*aria-label="Show"[^>]*>[\s\S]*?<\/nav>/, "")).not.toContain('href="/dashboard/accounts/acct1/conversations"');
   });
 });

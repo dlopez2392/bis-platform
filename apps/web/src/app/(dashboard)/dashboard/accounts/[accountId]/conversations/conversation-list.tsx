@@ -6,6 +6,7 @@ import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { contactDisplayName, formatDateTimeInZone } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
+import type { Who } from "@/lib/assign/who";
 
 export function ConversationList({
   conversations,
@@ -15,6 +16,7 @@ export function ConversationList({
   newerHref,
   before,
   timezone,
+  who = "all",
 }: {
   conversations: ConversationSummary[];
   base: string;
@@ -37,6 +39,9 @@ export function ConversationList({
    *  RUNTIME's zone (server or browser), never the account's, which is the
    *  same bug D-010 fixed for the contacts list and the activity timeline. */
   timezone: string;
+  /** F-085 part 1: the Mine / Unassigned filter in view, carried on every
+   *  row's link for the same reason `before` is. */
+  who?: Who;
 }) {
   return (
     <div className="space-y-3">
@@ -48,6 +53,7 @@ export function ConversationList({
           });
           const rowParams = new URLSearchParams();
           if (before) rowParams.set("before", before);
+          if (who !== "all") rowParams.set("who", who);
           rowParams.set("c", conversation.id);
           return (
             <Link

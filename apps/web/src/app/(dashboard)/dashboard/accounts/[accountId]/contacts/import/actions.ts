@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { applyImportBatch, buildMatchIndex, emit } from "@bis/db";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { mapRows, type ParsedRow } from "@/lib/contacts/csv";
 import { m } from "@/lib/messages";
@@ -22,7 +22,7 @@ export async function importContactsBatchAction(
   rows: ParsedRow[],
   opts: { mapping: Record<string, string | null>; createTags: boolean },
 ): Promise<{ ok: true; created: number; updated: number; flagged: number } | { ok: false; error: string }> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireNotTechnician(accountId);
   if (!Array.isArray(rows)) return { ok: false, error: m["contacts.import.failed"] };
   if (rows.length > MAX_ROWS_PER_CALL) return { ok: false, error: m["contacts.import.tooMany"] };
 

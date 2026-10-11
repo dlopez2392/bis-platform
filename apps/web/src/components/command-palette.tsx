@@ -82,6 +82,7 @@ function useIsMac(): boolean {
 export function CommandPalette({
   isAgency,
   isOwner,
+  isTechnician,
 }: {
   isAgency: boolean;
   /** Staff and roles: a client's Owner/Staff role, threaded from
@@ -89,6 +90,9 @@ export function CommandPalette({
    *  meaningless for the agency (never a client membership, plan deviation
    *  6), ignored because buildPaletteEntries checks isAgency first. */
   isOwner: boolean;
+  /** F-085 part 1 (spec §9): a client Technician, threaded the same way;
+   *  buildPaletteEntries leaves out every route they cannot enter. */
+  isTechnician: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -102,7 +106,7 @@ export function CommandPalette({
 
   const accountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1] ?? null;
   const base = accountId ? `/dashboard/accounts/${accountId}` : null;
-  const entries = filterEntries(buildPaletteEntries(base, isAgency, isOwner), query);
+  const entries = filterEntries(buildPaletteEntries(base, isAgency, isOwner, isTechnician), query);
 
   // Sanitized, not merely trimmed, and measured against the SAME floor the
   // route applies to the SAME transform. Gating on the raw string instead let

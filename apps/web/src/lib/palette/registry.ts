@@ -90,10 +90,14 @@ function keywordsFor(href: string, base: string | null): string[] {
  * `base` is the in-account prefix (`/dashboard/accounts/<id>`), or null at the
  * agency top level where there is no account in scope.
  */
-export function buildPaletteEntries(base: string | null, isAgency: boolean, isOwner: boolean): PaletteEntry[] {
+export function buildPaletteEntries(
+  base: string | null, isAgency: boolean, isOwner: boolean, isTechnician = false,
+): PaletteEntry[] {
   const entries: PaletteEntry[] = [];
 
-  for (const group of buildNavGroups(base, isAgency, isOwner)) {
+  // A Technician (F-085 part 1, spec §9): the nav already leaves out every
+  // route they cannot enter, so deriving from it leaves them out here too.
+  for (const group of buildNavGroups(base, isAgency, isOwner, isTechnician)) {
     for (const item of group.items) {
       entries.push({
         kind: "href",
@@ -119,7 +123,8 @@ export function buildPaletteEntries(base: string | null, isAgency: boolean, isOw
   // Staff and roles (Task 8): a client Owner reaches team management
   // directly — the sidebar footer's own destination, not a Settings-page
   // anchor, so it is registered like any other nav destination rather than
-  // through SETTINGS_SECTIONS below. Staff never get this entry.
+  // through SETTINGS_SECTIONS below. Staff never get this entry, nor does a
+  // Technician (never an Owner).
   if (base && !isAgency && isOwner) {
     entries.push({
       kind: "href",

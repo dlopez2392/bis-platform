@@ -184,6 +184,30 @@ describe("contact summary route: timezone", () => {
  * other field, and sends the raw `source` column alongside it for the
  * InlineField that edits it.
  */
+describe("contact summary route: assignedTo (F-085 part 1)", () => {
+  function emptySources() {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    for (const k of ["listContactTags", "listNotes", "listContactSubmissions",
+      "listContactMessages", "listContactOpportunities", "listContactCalls"] as const) {
+      dbMocks[k].mockResolvedValue([]);
+    }
+  }
+
+  it("sends who holds the customer, off the same getContact read (mutation: drop the field -> FAILS)", async () => {
+    emptySources();
+    dbMocks.getContact.mockResolvedValue({ id: "c1", assigned_to: "11111111-1111-4111-8111-111111111111" });
+    const body = await (await GET(req(), ctx())).json();
+    expect(body.assignedTo).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("an unassigned customer sends null, never leaves the field out (mutation: send undefined -> FAILS)", async () => {
+    emptySources();
+    dbMocks.getContact.mockResolvedValue({ id: "c1", assigned_to: null });
+    const body = await (await GET(req(), ctx())).json();
+    expect(body).toHaveProperty("assignedTo", null);
+  });
+});
+
 describe("contact summary route: source and sourceHint (F-157)", () => {
   function emptySources() {
     access.mockResolvedValue({ userId: "u1", isAgency: true });

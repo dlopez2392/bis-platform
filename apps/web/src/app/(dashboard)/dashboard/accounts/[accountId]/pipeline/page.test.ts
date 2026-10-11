@@ -18,6 +18,9 @@ import { formatCurrency } from "@/lib/format";
  * instead, and this test would catch it.
  */
 
+// F-085 part 1: the page now calls requireNotTechnician first (spec §7.1).
+vi.mock("@/lib/auth", () => ({ requireNotTechnician: async () => ({ userId: "user_1", isAgency: true, role: null, canManage: true }) }));
+
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({}),
 }));

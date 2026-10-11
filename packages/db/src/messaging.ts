@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
+import type { AssigneeFilter } from "./assignment";
+import { withAssigneeOn } from "./contacts";
 
 export type MessageStatus =
   | "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
@@ -592,15 +594,23 @@ export async function sumUnreadCount(
  */
 export async function listConversations(
   db: SupabaseClient, accountId: string,
-  opts: { limit?: number; before?: ConversationCursor } = {},
+  opts: { limit?: number; before?: ConversationCursor; assignee?: AssigneeFilter } = {},
 ): Promise<ConversationSummary[]> {
   const limit = opts.limit ?? 50;
+  // The embed becomes inner ONLY when filtering, so the unfiltered inbox
+  // stays byte-for-byte today's query: PostgREST's dot-filter on a LEFT
+  // embed (`contacts(...)`) trims the embedded object but not the parent
+  // row, so an unmatched conversation would still come back with a null
+  // `contacts` rather than being excluded — `!inner` is what makes the
+  // filter apply to the conversation row itself (Mine/Unassigned, spec §8).
+  const embed = opts.assignee ? "contacts!inner(first_name, last_name, assigned_to)" : "contacts(first_name, last_name)";
   let q = db.from("conversations")
-    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name)")
+    .select(`id, contact_id, last_message_at, unread_count, ${embed}`)
     .eq("account_id", accountId)
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
     .limit(limit);
+  q = withAssigneeOn(q, opts.assignee, "contacts.assigned_to");
 
   if (opts.before) {
     const { v, id } = opts.before;

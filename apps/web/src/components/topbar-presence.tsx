@@ -95,6 +95,12 @@ export function TopbarPresence() {
     );
   }
 
+  // F-085 part 1 (spec §7.2): "N calls handled this week" is the ACCOUNT's
+  // total, which the server never sends a Technician (showCount false, no
+  // weekCount at all). The on-a-call pulse above says nothing about anyone's
+  // customers and stays; idle, they get nothing.
+  if (!presence.showCount) return null;
+
   return (
     <span data-testid="topbar-presence" lang={locale}>
       <span className="flex items-center gap-1.5 text-sm text-muted-foreground sm:hidden">

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client, DatabaseError } from "pg";
-import { withRollback, actAs } from "./db";
+import { withRollback, actAsMember } from "./db";
 
 /**
  * Migration 0064: the call card (`calls.reason`, `calls.callback_number`,
@@ -243,7 +243,7 @@ describe("0064 behaviour", () => {
       await c.query(
         "update public.calls set reason = 'Roof leak', callback_number = '956 555 0142', caller_words = 'My roof is leaking' where id = $1",
         [A.call]);
-      await actAs(c, { org_id: A.org, sub: "user_0064" });
+      await actAsMember(c, A.id, A.org);
       // The control: the same client reads the card (the policy admits it),
       // so the refusal below is the grant, not RLS hiding the row.
       const { rows } = await c.query(

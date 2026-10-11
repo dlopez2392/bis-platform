@@ -20,7 +20,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
 // check actually ran — same reasoning branding/actions.test.ts's own comment
 // gives for this shape.
 const authMocks = vi.hoisted(() => ({
-  requireAccountAccess: vi.fn(async () => ({ userId: "user_1" })),
+  requireNotTechnician: vi.fn(async () => ({ userId: "user_1" })),
 }));
 vi.mock("@/lib/auth", () => authMocks);
 
@@ -47,7 +47,7 @@ const BASE_FORM = {
 };
 
 beforeEach(() => {
-  authMocks.requireAccountAccess.mockReset().mockResolvedValue({ userId: "user_1" });
+  authMocks.requireNotTechnician.mockReset().mockResolvedValue({ userId: "user_1" });
   dbMocks.getForm.mockReset().mockResolvedValue({ ...BASE_FORM });
   dbMocks.updateForm.mockReset().mockResolvedValue(undefined);
   dbMocks.republishFormIfUnchanged.mockReset().mockResolvedValue("republished");
@@ -129,7 +129,7 @@ describe("republishFormAction", () => {
 
   it("checks account access before writing (mutation: drop the guard call → FAILS)", async () => {
     await republishFormAction("acct_1", "form_1", "draft");
-    expect(authMocks.requireAccountAccess).toHaveBeenCalledWith("acct_1");
+    expect(authMocks.requireNotTechnician).toHaveBeenCalledWith("acct_1");
   });
 
   it("reports the stale outcome with an honest message instead of silently succeeding (mutation: treat every outcome as ok → FAILS)", async () => {

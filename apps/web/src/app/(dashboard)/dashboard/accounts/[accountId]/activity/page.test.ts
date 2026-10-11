@@ -6,7 +6,7 @@ import { m } from "@/lib/messages";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
 const authFixture = vi.hoisted(() => ({ isAgency: true }));
-vi.mock("@/lib/auth", () => ({ requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }) }));
+vi.mock("@/lib/auth", () => ({ requireNotTechnician: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }) }));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }) }) }) }) }),
 }));

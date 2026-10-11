@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { withRollback, actAs, actAsOwner } from "./db";
+import { withRollback, actAs, actAsMember, actAsOwner } from "./db";
 
 // client_access_enabled defaults to false (migration 0008), so these
 // accounts are marked enabled explicitly -- every existing test here uses
@@ -32,8 +32,8 @@ describe("RLS tenant isolation", () => {
   // any account. 42501 AND the privilege message: an RLS refusal is 42501 too.
   it("account member sees only their own events; cannot insert into events at all (0053: record_event is the only path)", () =>
     withRollback(async (c) => {
-      const { b } = await seedTwoAccounts(c);
-      await actAs(c, { org_id: "org_A" });
+      const { a, b } = await seedTwoAccounts(c);
+      await actAsMember(c, a, "org_A");
       const { rows } = await c.query("select account_id from events");
       expect(new Set(rows.map((r: any) => r.account_id)).size).toBe(1);
       await expect(
@@ -75,7 +75,7 @@ describe("RLS tenant isolation", () => {
       const { a, b } = await seedTwoAccounts(c);
       await c.query(
         "insert into contacts (account_id, first_name) values ($1,'Alice'),($2,'Bob')", [a, b]);
-      await actAs(c, { org_id: "org_A" });
+      await actAsMember(c, a, "org_A");
       const { rows } = await c.query("select first_name from contacts");
       expect(rows.map((r: any) => r.first_name)).toEqual(["Alice"]);
       await expect(
@@ -137,7 +137,9 @@ describe("RLS tenant isolation", () => {
       await c.query(
         "insert into checklist_items (account_id, item_key) values ($1,'phone_number'),($2,'phone_number')",
         [a, b]);
-      await actAs(c, { org_id: "org_A" });
+      // A member (0068): a client with no membership is refused every checklist write by
+      // checklist_items_technician_insert, which would hide a broken tenant check below.
+      await actAsMember(c, a, "org_A");
       const { rows } = await c.query("select account_id from checklist_items");
       expect(new Set(rows.map((r: any) => r.account_id)).size).toBe(1);
       await expect(
@@ -176,7 +178,7 @@ describe("RLS tenant isolation", () => {
         [mine.id, theirs.id],
       );
 
-      await actAs(c, { org_id: "org_mine" });
+      await actAsMember(c, mine.id, "org_mine");
       const { rows } = await c.query("select account_id from public.contacts");
       expect(rows).toHaveLength(1);
       expect(rows[0].account_id).toBe(mine.id);
@@ -196,7 +198,9 @@ describe("RLS tenant isolation", () => {
       );
       await c.query("insert into public.contacts (account_id, first_name) values ($1,'A')", [acct.id]);
 
-      await actAs(c, { org_id: "org_off" });
+      // A member of the account (0068): with no membership the client sees no contacts whatever
+      // the switch says, so only a real member proves it is the switch that hides them.
+      await actAsMember(c, acct.id, "org_off");
       const { rows } = await c.query("select id from public.contacts");
       expect(rows).toHaveLength(0);
     });

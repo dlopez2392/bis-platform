@@ -54,3 +54,14 @@ describe("plural", () => {
     expect(plural(catalogue, "calls.count", 3, "es", { count: 3 })).toBe("3 llamadas");
   });
 });
+
+// Final review N1: String.prototype.replaceAll reads `$&`, `$1`, `$$` and
+// friends in a STRING replacement as patterns, so a value carrying them (a
+// business called "Ana $& Co.") came out mangled. A replacer function's
+// return value is used literally.
+describe("t: a value is inserted literally, whatever it contains", () => {
+  it.each(["Ana $& Co.", "Pay $$5", "Tom $1 and $' and $`"])("%s comes out exactly as given (mutation: replaceAll with the value as a string -> FAILS)", (name) => {
+    expect(t(catalogue, "greeting", "en", { name })).toBe(`Hello, ${name}`);
+    expect(t(catalogue, "greeting", "es", { name })).toBe(`Hola, ${name}`);
+  });
+});

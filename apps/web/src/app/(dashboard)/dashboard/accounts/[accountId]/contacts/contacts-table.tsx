@@ -18,6 +18,8 @@ import { contactDisplayName, formatDateInZone, initials } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { usePeek } from "@/lib/contacts/use-peek";
 import { pageSelectionState, togglePageSelection } from "@/lib/contacts/selection";
+import { withWho, type Who } from "@/lib/assign/who";
+import type { AssignMember } from "@/lib/assign/view";
 import { ContactDrawer } from "./contact-drawer";
 import { BulkActionBar } from "./bulk-action-bar";
 
@@ -44,6 +46,23 @@ function missingRow(id: string): ContactRow {
 }
 
 /**
+ * The row the drawer shows for `peekId` (Task 7 fix round 1, I2): the row on
+ * this page if it is here; else the last row this table saw for the same id
+ * (`remembered`), because assigning from the drawer inside ?who=mine or
+ * ?who=unassigned moves the customer out of the filtered list and the
+ * revalidated page no longer carries their row, while the drawer, its toast
+ * and the toast's Undo are still open on them; else the blank stub a deep
+ * link to an id not on this page has always got. Keeping the drawer open was
+ * chosen over closing it: the person sees the change they just made, where
+ * they made it, and can keep working on the customer or undo.
+ */
+export function peekRow(rows: ContactRow[], peekId: string | null, remembered: ContactRow | null): ContactRow | null {
+  if (!peekId) return null;
+  return rows.find((r) => r.id === peekId)
+    ?? (remembered?.id === peekId ? remembered : missingRow(peekId));
+}
+
+/**
  * The href a click on `key`'s column header navigates to. Toggles direction
  * when `key` is already the active sort; otherwise starts that column at
  * ascending (the old client-side toggleSort's own default for a
@@ -54,13 +73,11 @@ function missingRow(id: string): ContactRow {
  * to the head of the (newly ordered) list, exactly like a fresh page load.
  */
 export function sortHref(
-  accountId: string, current: { key: SortKey; dir: SortDir }, key: SortKey, q?: string,
+  accountId: string, current: { key: SortKey; dir: SortDir }, key: SortKey, q?: string, who: Who = "all",
 ): string {
   const dir: SortDir = current.key === key && current.dir === "asc" ? "desc" : "asc";
-  const params = new URLSearchParams();
-  if (q) params.set("q", q);
-  params.set("sort", key);
-  params.set("dir", dir);
+  // `who` (Mine / Unassigned) rides along too: re-sorting Mine stays in Mine.
+  const params = new URLSearchParams(withWho({ ...(q ? { q } : {}), sort: key, dir }, who));
   return `/dashboard/accounts/${accountId}/contacts?${params}`;
 }
 
@@ -73,6 +90,10 @@ export function ContactsTable({
   q,
   timezone,
   canDelete,
+  who = "all",
+  canAssign = false,
+  members = [],
+  viewerId = null,
 }: {
   rows: ContactRow[];
   accountId: string;
@@ -95,10 +116,26 @@ export function ContactsTable({
    *  actions stay available either way (DESIGN.md rule 4: checkboxes never
    *  render without a bulk-action bar). */
   canDelete: boolean;
+  /** F-085 part 1: the Mine / Unassigned filter the page applied, carried
+   *  into a re-sort's href like `q`. */
+  who?: Who;
+  /** F-085 part 1: may this caller assign customers (Owner, Staff, the
+   *  agency), and to whom: the bulk bar's "Assign to…" and the drawer's
+   *  "Assigned to" picker. False (the default) is read-only. */
+  canAssign?: boolean;
+  members?: AssignMember[];
+  /** The viewer's own person here (readPersonId), for the drawer's "You". */
+  viewerId?: string | null;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const { peekId, open, close } = usePeek();
+  // The last row seen for the open peek (fix round 1, I2: see peekRow).
+  // Stored during render, React's "information from previous renders"
+  // pattern: it only changes when the found row does, so it settles at once.
+  const [remembered, setRemembered] = useState<ContactRow | null>(null);
+  const found = peekId ? rows.find((r) => r.id === peekId) : undefined;
+  if (found && found !== remembered) setRemembered(found);
   // Which column's header button should regain focus once THIS click's
   // navigation lands — a ref, not state, because setting it must not itself
   // trigger a render; it only needs to survive until the effect below runs
@@ -132,7 +169,7 @@ export function ContactsTable({
     // firing at all here. The effect above is the second half: it wins
     // focus back even if the re-render itself replaces the clicked button's
     // DOM node, which `scroll: false` alone does not cover.
-    router.push(sortHref(accountId, { key: sort, dir }, key, q), { scroll: false });
+    router.push(sortHref(accountId, { key: sort, dir }, key, q, who), { scroll: false });
   }
 
   function toggleRow(id: string) {
@@ -155,6 +192,8 @@ export function ContactsTable({
         existingTags={existingTags}
         canDelete={canDelete}
         onDone={() => setSelected(new Set())}
+        canAssign={canAssign}
+        members={members}
       />
       <Table>
         <TableHeader>
@@ -260,8 +299,11 @@ export function ContactsTable({
       </Table>
       <ContactDrawer
         accountId={accountId}
-        row={rows.find((r) => r.id === peekId) ?? (peekId ? missingRow(peekId) : null)}
+        row={peekRow(rows, peekId, remembered)}
         onClose={close}
+        canAssign={canAssign}
+        members={members}
+        viewerId={viewerId}
       />
     </ListPanel>
   );

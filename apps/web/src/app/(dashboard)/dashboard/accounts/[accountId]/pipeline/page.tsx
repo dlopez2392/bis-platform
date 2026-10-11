@@ -3,6 +3,7 @@ import { moveOppToStageAction, updateOpportunityAction, createOpportunityAction 
 import { PipelineBoard } from "./pipeline-board";
 import { AddOpportunityDialog } from "./add-opportunity-dialog";
 import { PageHeader } from "@/components/page-header";
+import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { formatCurrency, contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
@@ -15,6 +16,9 @@ export default async function PipelinePage({
   params: Promise<{ accountId: string }>;
 }) {
   const { accountId } = await params;
+  // F-085 part 1 (spec §7.1): a Technician does not work here and is sent
+  // to To do; everyone the [accountId] layout admitted passes straight on.
+  await requireNotTechnician(accountId);
   const db = await dbForRequest();
   const { pipelineId } = await ensureDefaultPipeline(db, accountId);
   const [board, contacts, openTotals] = await Promise.all([

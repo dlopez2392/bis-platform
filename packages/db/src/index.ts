@@ -18,7 +18,7 @@ export { ALERT_CODE_DIGITS, ALERT_CODE_MAX_ATTEMPTS, ALERT_CODE_TTL_MINUTES,
 export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
-         listTagNamesForContacts,
+         listTagNamesForContacts, flagMatchesOf,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
 export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
 export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
@@ -223,3 +223,10 @@ export { roleFromClerk, languageFromClerk, isAgencyMetadata,
 export { PERSON_THEMES, PERSON_LANGUAGES, NO_PREFS, isPersonTheme, isPersonLanguageValue,
          prefsFromRow, readPersonPrefs, readAccountRoleAndPrefs, savePersonPreference,
          type PersonTheme, type PersonPrefs, type PreferenceWrite, type PersonProfile } from "./preferences";
+
+// Mine, Unassigned and the Technician (0068): who holds a customer or a task. See ./assignment.ts.
+export {
+  readPersonId, taskAssigneeFor, assignContacts, undoAssignContacts, setTaskAssignee, releaseMemberAssignments, reassignReleased,
+  releaseTasksOffCustomers,
+  type AssigneeFilter, type ReleasedAssignments, type PreviousAssignee,
+} from "./assignment";

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import {
   createForm, getForm, updateForm, republishFormIfUnchanged,
@@ -15,7 +15,7 @@ import { isValidFormFieldList, mergeFormTheme, defaultFormFields } from "@/lib/f
 import { isValidEmail } from "@/lib/forms/guards";
 
 export async function createFormAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireNotTechnician(accountId);
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("name required");
 
@@ -50,7 +50,7 @@ export async function createFormAction(accountId: string, formData: FormData): P
 export async function saveFormAction(
   accountId: string, formData: FormData,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireNotTechnician(accountId);
   const formId = String(formData.get("formId") ?? "");
   if (!formId) throw new Error("formId required");
 
@@ -168,7 +168,7 @@ export async function saveFormAction(
 export async function republishFormAction(
   accountId: string, formId: string, expectedPriorStatus: FormStatus,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireNotTechnician(accountId);
   const db = await dbForRequest();
   let outcome: "republished" | "stale" | "needs_fields";
   try {

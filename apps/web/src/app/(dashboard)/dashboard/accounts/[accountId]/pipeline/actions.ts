@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAccountAccess } from "@/lib/auth";
+import { requireNotTechnician } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { createOpportunity, moveOpportunityToStage, updateOpportunity } from "@bis/db";
 
@@ -10,7 +10,7 @@ function pathFor(accountId: string) {
 }
 
 export async function createOpportunityAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireNotTechnician(accountId);
   const name = String(formData.get("name") ?? "").trim();
   const contactId = String(formData.get("contactId") ?? "");
   const pipelineId = String(formData.get("pipelineId") ?? "");
@@ -21,7 +21,7 @@ export async function createOpportunityAction(accountId: string, formData: FormD
 }
 
 export async function moveOppToStageAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireNotTechnician(accountId);
   const oppId = String(formData.get("oppId") ?? "");
   const toStageId = String(formData.get("toStageId") ?? "");
   if (!oppId || !toStageId) throw new Error("oppId and toStageId required");
@@ -30,7 +30,7 @@ export async function moveOppToStageAction(accountId: string, formData: FormData
 }
 
 export async function updateOpportunityAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId } = await requireNotTechnician(accountId);
   const oppId = String(formData.get("oppId") ?? "");
   if (!oppId) throw new Error("oppId required");
   const status = String(formData.get("status") ?? "");

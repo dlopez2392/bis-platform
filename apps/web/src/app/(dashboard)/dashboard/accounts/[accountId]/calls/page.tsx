@@ -4,6 +4,7 @@ import { listCalls, countCallsSince, listFailedOutboundSms, listCallReasons, typ
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { requireAccountAccess } from "@/lib/auth";
+import { seesWholeAccount } from "@/lib/auth-role";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { ZoneNote } from "@/components/zone-note";
@@ -34,8 +35,15 @@ export default async function CallsPage({
   // BOTH audiences. This is the client's own business data — who rang and
   // what the receptionist did about it — the same class of surface contacts
   // and the calendar are gated with, not agency work about the client.
-  const { isAgency } = await requireAccountAccess(accountId);
+  const { isAgency, role } = await requireAccountAccess(accountId);
   const db = await dbForRequest();
+  // F-085 part 1 (spec §7.2): today's calls against the daily limit is an
+  // ACCOUNT total. Under a Technician's RLS it would count only their own
+  // customers' calls and read as a false meter, so it is neither read nor
+  // shown to them. The calls themselves are still theirs to see. Fails
+  // closed (seesWholeAccount): a client whose role could not be settled is
+  // shown what a Technician is shown.
+  const showLimit = seesWholeAccount({ isAgency, role });
 
   // Validated once, reused twice: as the query's own cursor below, and as
   // the signal that decides which empty state a zero-row result means (see
@@ -51,7 +59,7 @@ export default async function CallsPage({
     // UTC day floor it enforces against. A second, "obvious" formula here
     // (local midnight, ended calls only, …) would let this meter disagree
     // with the cap that actually declines calls.
-    countCallsSince(db, accountId, utcDayStart(new Date())),
+    showLimit ? countCallsSince(db, accountId, utcDayStart(new Date())) : Promise.resolve(null),
     db.from("accounts").select("timezone").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`calls: account lookup failed: ${error.message}`);
@@ -131,7 +139,7 @@ export default async function CallsPage({
     <>
       <PageHeader title={m["calls.title"]} />
       <div className="space-y-6 p-6">
-        <UsageMeter used={todayCount} cap={cap} />
+        {todayCount !== null ? <UsageMeter used={todayCount} cap={cap} /> : null}
         {/* BELOW the meter and bound to the TABLE, deliberately.
             `UsageMeter` counts today from `utcDayStart` — it has to, because
             that is the floor the incoming-call webhook enforces the cap

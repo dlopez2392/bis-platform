@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { brandDisplayName } from "./branding";
 import { readConsentActions, type ConsentAction } from "./consent";
+import type { AssigneeFilter } from "./assignment";
+import { withAssigneeOn } from "./contacts";
 
 export type WorkSource = "task" | "conversation" | "booking";
 
@@ -21,9 +23,13 @@ export type WorkRow = {
    *  do the receptionist left for a person, which the queue marks as hers.
    *  Null on a task a person made. Absent on every other row. */
   callId?: string | null;
+  /** A task: who holds it (`tasks.assigned_to`, F-085 part 1), for To do's
+   *  "Assigned to" picker; null when nobody does. Absent on every other row,
+   *  whose holder is the customer's. */
+  assigneeId?: string | null;
 };
 
-async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
+async function openTasks(db: SupabaseClient, accountId: string, assignee?: AssigneeFilter): Promise<WorkRow[]> {
   // Uses the partial index tasks_account_open (account_id) where completed_at is null.
   // The only one of the three sources with no cap until this line — the
   // other two (below) both order-then-limit(200). bucketWork re-sorts
@@ -42,14 +48,20 @@ async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow
   // before one due-today task). created_at is kept as the tiebreak, so rows
   // sharing a due_at (including every undated one, tied on NULL) still order
   // deterministically rather than at the database's discretion.
-  const { data, error } = await db.from("tasks")
-    .select("id, contact_id, title, due_at, created_at, consent_event_id, call_id")
-    .eq("account_id", accountId).is("completed_at", null)
+  let q = db.from("tasks")
+    .select("id, contact_id, title, due_at, created_at, consent_event_id, call_id, assigned_to")
+    .eq("account_id", accountId).is("completed_at", null);
+  // Mine/Unassigned (spec §8): the TASK's own assignee, independent of
+  // whose customer it is against (A4's own point — a task moves with its
+  // customer's new owner, but until it does it is still the PREVIOUS
+  // owner's to work).
+  q = withAssigneeOn(q, assignee, "assigned_to");
+  const { data, error } = await q
     .order("due_at", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true })
     .limit(200);
   if (error) throw new Error(`openTasks failed: ${error.message}`);
-  const rows = (data ?? []) as { id: string; contact_id: string | null; title: string; due_at: string | null; created_at: string; consent_event_id: string | null; call_id: string | null }[];
+  const rows = (data ?? []) as { id: string; contact_id: string | null; title: string; due_at: string | null; created_at: string; consent_event_id: string | null; call_id: string | null; assigned_to: string | null }[];
   // One read for the whole batch, and none at all without a consent task.
   const linked = rows.map((t) => t.consent_event_id).filter((id): id is string => id !== null);
   const actions = await readConsentActions(db, accountId, linked);
@@ -61,6 +73,7 @@ async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow
       dueAt: t.due_at, occurredAt: t.created_at,
       consent: t.consent_event_id && action ? { eventId: t.consent_event_id, action } : null,
       callId: t.call_id ?? null,
+      assigneeId: t.assigned_to ?? null,
     };
   });
 }
@@ -78,13 +91,22 @@ async function openTasks(db: SupabaseClient, accountId: string): Promise<WorkRow
  * queue still shows what the call was about — ONE extra account-scoped read
  * for the whole batch, never one per row.
  */
-async function unansweredConversations(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
-  const { data, error } = await db.from("conversations")
-    .select("id, contact_id, unread_count, last_message_at")
-    .eq("account_id", accountId).gt("unread_count", 0)
+async function unansweredConversations(db: SupabaseClient, accountId: string, assignee?: AssigneeFilter): Promise<WorkRow[]> {
+  // Mine/Unassigned: filtered on the CUSTOMER's own assignee, same embed
+  // shape as listConversations (inner only while filtering, so the
+  // unfiltered queue stays today's query byte-for-byte). The select string
+  // is built, so (same reason as contacts.ts's own COLS comment) its result
+  // is cast explicitly below rather than trusted to postgrest-js's literal
+  // column inference, which a non-literal argument defeats either way.
+  const embed = assignee ? ", contacts!inner(assigned_to)" : "";
+  let q = db.from("conversations")
+    .select(`id, contact_id, unread_count, last_message_at${embed}`)
+    .eq("account_id", accountId).gt("unread_count", 0);
+  q = withAssigneeOn(q, assignee, "contacts.assigned_to");
+  const { data, error } = await q
     .order("last_message_at", { ascending: true }).limit(200);
   if (error) throw new Error(`unansweredConversations failed: ${error.message}`);
-  const convos = data ?? [];
+  const convos = (data ?? []) as unknown as { id: string; contact_id: string | null; unread_count: number; last_message_at: string | null }[];
   if (convos.length === 0) return [];
 
   const ids = convos.map((c) => c.id);
@@ -112,16 +134,19 @@ async function unansweredConversations(db: SupabaseClient, accountId: string): P
   }));
 }
 
-async function staleBookings(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
+async function staleBookings(db: SupabaseClient, accountId: string, assignee?: AssigneeFilter): Promise<WorkRow[]> {
   // A job whose time has passed and which nobody marked completed or no_show.
   // This is the row that switches the review-request automation back on.
-  const { data, error } = await db.from("bookings")
-    .select("id, contact_id, ends_at")
+  const embed = assignee ? ", contacts!inner(assigned_to)" : "";
+  let q = db.from("bookings")
+    .select(`id, contact_id, ends_at${embed}`)
     .eq("account_id", accountId).eq("status", "booked")
-    .lt("ends_at", new Date().toISOString())
+    .lt("ends_at", new Date().toISOString());
+  q = withAssigneeOn(q, assignee, "contacts.assigned_to");
+  const { data, error } = await q
     .order("ends_at", { ascending: true }).limit(200);
   if (error) throw new Error(`staleBookings failed: ${error.message}`);
-  return (data ?? []).map((b) => ({
+  return ((data ?? []) as unknown as { id: string; contact_id: string | null; ends_at: string }[]).map((b) => ({
     id: `booking:${b.id}`, source: "booking" as const, accountId,
     contactId: b.contact_id, title: "",
     dueAt: null, occurredAt: b.ends_at,
@@ -134,11 +159,13 @@ async function staleBookings(db: SupabaseClient, accountId: string): Promise<Wor
  * original showing alongside the task it created. Bookings are exempt —
  * marking one changes `status`, so it stops matching on its own.
  */
-export async function listAccountWork(db: SupabaseClient, accountId: string): Promise<WorkRow[]> {
+export async function listAccountWork(
+  db: SupabaseClient, accountId: string, opts: { assignee?: AssigneeFilter } = {},
+): Promise<WorkRow[]> {
   const [tasks, convos, bookings] = await Promise.all([
-    openTasks(db, accountId),
-    unansweredConversations(db, accountId),
-    staleBookings(db, accountId),
+    openTasks(db, accountId, opts.assignee),
+    unansweredConversations(db, accountId, opts.assignee),
+    staleBookings(db, accountId, opts.assignee),
   ]);
   const suppressed = new Set(tasks.map((t) => t.contactId).filter(Boolean) as string[]);
   const keep = (r: WorkRow) => !r.contactId || !suppressed.has(r.contactId);

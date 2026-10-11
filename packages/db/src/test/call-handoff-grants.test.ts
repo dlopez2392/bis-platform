@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { withRollback, actAs, actAsOwner } from "./db";
+import { withRollback, actAsMember, actAsOwner } from "./db";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 
 /**
@@ -225,19 +225,22 @@ describe("0037 accounts.transfer_phone", () => {
       const { rows: [agency] } = await c.query<{ id: string }>(
         "insert into public.agencies (name) values ('T') returning id",
       );
-      await c.query(
+      const { rows: [acct] } = await c.query<{ id: string }>(
         `insert into public.accounts (agency_id, clerk_org_id, name, client_access_enabled)
-         values ($1, 'org_transfer_phone', 'TransferPhone', true)`, [agency!.id],
+         values ($1, 'org_transfer_phone', 'TransferPhone', true) returning id`, [agency!.id],
       );
 
-      await actAs(c, { org_id: "org_transfer_phone" });
+      // A member (0068): a client with no membership may not update the account row at all
+      // (accounts_technician_update), and the branding write below would then match no row.
+      await actAsMember(c, acct!.id, "org_transfer_phone");
       // Proves the POLICY lets this caller update this row at all, so the
       // refusal below is unambiguously the COLUMN grant and not RLS. Without
       // this line the test would still pass against a policy that denied
       // everything — a different bug wearing the same green.
-      await c.query(
+      const control = await c.query(
         "update public.accounts set brand_name = 'Renamed' where clerk_org_id = 'org_transfer_phone'",
       );
+      expect(control.rowCount).toBe(1);
 
       // ONE refused statement per withRollback: after this the transaction is
       // aborted (25P02) and nothing else in this block could run.

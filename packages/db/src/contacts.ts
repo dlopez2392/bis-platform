@@ -2,10 +2,29 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
 import { normalisePhone } from "./phone";
+import type { AssigneeFilter } from "./assignment";
 
 export type ContactInput = {
   firstName?: string; lastName?: string; email?: string; phone?: string;
   companyName?: string; source?: string; custom?: Record<string, unknown>;
+};
+
+/**
+ * `createContact`'s own input — ContactInput plus Mine/Unassigned's
+ * assignee (F-085 part 1, spec §8). Deliberately NOT part of `ContactInput`
+ * itself, and `toRow` (shared by `createContact` and `updateContact`) never
+ * writes `assigned_to`: an edit that reassigns a customer must go through
+ * `assignContacts` (assignment.ts), which checks the new assignee is a
+ * member of this account (A5) and moves that contact's open tasks along
+ * with it (A4) and emits `contact.assigned` — none of which a plain
+ * `updateContact` call does. Splitting the type makes a reassignment through
+ * `updateContact` a compile error, not a runtime guard to remember.
+ */
+export type CreateContactInput = ContactInput & {
+  /** `undefined` leaves the column at its default (Unassigned); `null`
+   *  explicitly assigns Unassigned; a user id assigns that person. Only
+   *  `createContact` accepts this field. */
+  assignedTo?: string | null;
 };
 
 // `sort_name` (0030, a stored generated column) rides along on every read —
@@ -26,8 +45,11 @@ export type ContactInput = {
 // `row.first_name`/`row.phone`/etc then collapses to `GenericStringError`
 // (proven: splitting this line with `+` to fit "attribution" broke
 // typecheck across a dozen unrelated files, not just this one).
+// `assigned_to` (F-085 part 1): the drawer's and the record page's "Assigned
+// to" field shows who holds the customer now. Read here, written only by
+// assignment.ts (see this file's own header).
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed";
+  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to";
 
 /**
  * A phone as the contact row stores it (F-009, consent chain spec §4.1 item
@@ -384,8 +406,15 @@ async function flagDuplicatesAfterWrite(
 }
 
 export async function createContact(
-  db: SupabaseClient, accountId: string, input: ContactInput, actorId: string,
+  db: SupabaseClient, accountId: string, input: CreateContactInput, actorId: string,
   actorType: ActorType = "user",
+  // A Technician's own RLS-bound client cannot see a duplicate sitting
+  // outside their assigned customers (0068 §4a), so a flag writer that ran
+  // on `db` would silently find nothing to record. Defaults to `db` for
+  // every other caller (the agency, Owner/Staff, the public form), whose
+  // client already sees the whole account. Pass serviceDb() for a
+  // Technician's own insert.
+  flagDb: SupabaseClient = db,
 ): Promise<{ id: string; existing: boolean; flagged: boolean }> {
   const email = input.email?.trim().toLowerCase();
   // The phone as it will be STORED, so the event names what the row holds.
@@ -408,7 +437,7 @@ export async function createContact(
     // 23505 here is the DESIGNED outcome, not a failure. Anything else is real
     // and must not be swallowed: a flag that silently fails to write leaves the
     // queue looking empty, which is worse than not having one.
-    const { error } = await db.from("contact_duplicate_flags")
+    const { error } = await flagDb.from("contact_duplicate_flags")
       .insert({ account_id: accountId, contact_a: contactA, contact_b: contactB,
                 reason: "email_phone_conflict" });
     if (error && error.code !== "23505") {
@@ -421,18 +450,64 @@ export async function createContact(
   // (re-review minor 12): the person is the email's contact, and the +1 one
   // with the same ten digits is for the merge tool to judge.
   if (winner && match.countryTwin !== null && match.countryTwin !== winner) {
-    flagged = (await flagDuplicatePair(db, accountId, winner, match.countryTwin, "phone_country_twin")) || flagged;
+    flagged = (await flagDuplicatePair(flagDb, accountId, winner, match.countryTwin, "phone_country_twin")) || flagged;
   }
   if (winner) return { id: winner, existing: true, flagged };
 
+  // assigned_to is written HERE, not inside toRow: toRow is shared with
+  // updateContact, which must never be able to set it (see
+  // CreateContactInput's own comment).
   const { data, error } = await db.from("contacts")
-    .insert({ account_id: accountId, ...toRow(input) }).select("id").single();
+    .insert({
+      account_id: accountId, ...toRow(input),
+      ...(input.assignedTo !== undefined ? { assigned_to: input.assignedTo } : {}),
+    }).select("id").single();
   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
     actorType);
   const twinFlagged = match.countryTwin !== null
-    && await flagDuplicatePair(db, accountId, data.id, match.countryTwin, "phone_country_twin");
+    && await flagDuplicatePair(flagDb, accountId, data.id, match.countryTwin, "phone_country_twin");
   return { id: data.id, existing: false, flagged: twinFlagged };
+}
+
+/**
+ * After a Technician adds a customer (owner ruling §13.3): pairs it with any
+ * OTHER contact in the account sharing its email_key or phone_key, reason
+ * "hidden_match", so the Owner's duplicates queue sees what the Technician's
+ * RLS-bound lookup could not. Pass serviceDb(). Returns the pairs written.
+ */
+export async function flagMatchesOf(db: SupabaseClient, accountId: string, contactId: string): Promise<number> {
+  const { data: me, error } = await db.from("contacts").select("email_key, phone_key")
+    .eq("account_id", accountId).eq("id", contactId).maybeSingle();
+  if (error) throw new Error(`flagMatchesOf read failed: ${error.message}`);
+  if (!me) return 0;
+  const ors = [
+    me.email_key ? `email_key.eq.${quoteFilterValue(String(me.email_key))}` : null,
+    me.phone_key ? `phone_key.eq.${quoteFilterValue(String(me.phone_key))}` : null,
+  ].filter((v): v is string => v !== null);
+  if (ors.length === 0) return 0;
+  const { data: hits, error: hErr } = await db.from("contacts").select("id")
+    .eq("account_id", accountId).neq("id", contactId).or(ors.join(",")).limit(20);
+  if (hErr) throw new Error(`flagMatchesOf lookup failed: ${hErr.message}`);
+  let written = 0;
+  for (const h of (hits ?? []) as { id: string }[]) {
+    const [a, b] = [contactId, h.id].sort();
+    const { error: fErr } = await db.from("contact_duplicate_flags")
+      .insert({ account_id: accountId, contact_a: a, contact_b: b, reason: "hidden_match" });
+    // Same rule as the sibling email_phone_conflict insert above: the unique
+    // index makes a repeat (23505) the DESIGNED no-op, but anything else is
+    // real and must not be swallowed — a flag that silently fails to write
+    // leaves the Owner's duplicates queue looking empty, which is worse than
+    // not having one. Unlike flagDuplicatePair (called AFTER some OTHER
+    // write has already succeeded, so a throw there would misreport that
+    // write as failed), flagMatchesOf's only job is this write, so a throw
+    // here reports exactly what happened.
+    if (fErr && fErr.code !== "23505") {
+      throw new Error(`flagMatchesOf insert failed: ${fErr.message}`);
+    }
+    if (!fErr) written += 1;
+  }
+  return written;
 }
 
 export async function updateContact(
@@ -644,6 +719,28 @@ export function phoneSearchDigits(raw: string): string {
   return digits.length >= MIN_PHONE_SEARCH_DIGITS ? digits.slice(0, 20) : "";
 }
 
+/**
+ * Mine/Unassigned (spec §8): the one place in the package that decides what
+ * "mine" vs "unassigned" means on a PostgREST query — `column` names where
+ * the assignee lives on THIS query: the bare `assigned_to` column here and
+ * in `openTasks` (work-queue.ts), or `contacts.assigned_to` through an
+ * `!inner` embed in `listConversations` (messaging.ts) and the other two
+ * work-queue.ts readers. One implementation means the ternary that decides
+ * mine vs unassigned can never drift between the four call sites.
+ */
+export function withAssigneeOn<T>(q: T, assignee: AssigneeFilter | undefined, column: string): T {
+  if (!assignee) return q;
+  const f = q as unknown as { eq: (c: string, v: string) => T; is: (c: string, v: null) => T };
+  return assignee.who === "mine" ? f.eq(column, assignee.userId) : f.is(column, null);
+}
+
+/** `withAssigneeOn` pinned to this table's own column — what `listContacts`
+ *  and `countContacts` both apply, so the list's rows and its header total
+ *  can never disagree about which contacts the filter admits. */
+function withAssignee<T>(q: T, assignee: AssigneeFilter | undefined): T {
+  return withAssigneeOn(q, assignee, "assigned_to");
+}
+
 function withSearch<T>(q: T, search?: string): T {
   const s = search ? sanitizeSearchTerm(search) : undefined;
   if (!s) return q;
@@ -658,7 +755,7 @@ function withSearch<T>(q: T, search?: string): T {
 
 export async function listContacts(
   db: SupabaseClient, accountId: string,
-  opts: { search?: string; limit?: number; before?: ContactCursor; sort?: ContactSort } = {},
+  opts: { search?: string; limit?: number; before?: ContactCursor; sort?: ContactSort; assignee?: AssigneeFilter } = {},
 ) {
   const sort: ContactSort = opts.sort ?? { key: "created", dir: "desc" };
   const column = SORT_COLUMN[sort.key];
@@ -676,6 +773,7 @@ export async function listContacts(
     .order("id", { ascending })
     .limit(opts.limit ?? 50);
   q = withSearch(q, opts.search);
+  q = withAssignee(q, opts.assignee);
   if (opts.before) {
     const { v, id } = opts.before;
     const cmp = ascending ? "gt" : "lt";
@@ -766,11 +864,12 @@ export async function listContactTags(db: SupabaseClient, accountId: string, con
  * caption counts what the filter matches, not the whole account.
  */
 export async function countContacts(
-  db: SupabaseClient, accountId: string, opts: { search?: string } = {},
+  db: SupabaseClient, accountId: string, opts: { search?: string; assignee?: AssigneeFilter } = {},
 ): Promise<number> {
   let q = db.from("contacts").select("id", { count: "exact", head: true })
     .eq("account_id", accountId);
   q = withSearch(q, opts.search);
+  q = withAssignee(q, opts.assignee);
   const { count, error } = await q;
   if (error) throw new Error(`countContacts failed: ${error.message}`);
   return count ?? 0;
