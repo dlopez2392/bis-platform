@@ -2,6 +2,9 @@ import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { serviceDb, getAccountByOrgId, type AccountRole } from "@bis/db";
 import { ensureAccountRole, readStoredRole } from "./team/ensure-role";
+import { seesWholeAccount } from "./auth-role";
+
+export { seesWholeAccount };
 
 export type AppClaims = { org_id?: string; app_role?: string };
 
@@ -123,9 +126,8 @@ export async function requireNotTechnician(
   accountId: string,
 ): Promise<{ userId: string; isAgency: boolean; role: AccountRole | null; canManage: boolean }> {
   const access = await requireAccountAccess(accountId);
-  const admitted = access.isAgency || access.role === "owner" || access.role === "staff";
   // accountHome(…, "technician") is To do: the least-privileged home.
-  if (!admitted) redirect(accountHome(accountId, "technician"));
+  if (!seesWholeAccount(access)) redirect(accountHome(accountId, "technician"));
   return access;
 }
 

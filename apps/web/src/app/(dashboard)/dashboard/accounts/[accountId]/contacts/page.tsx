@@ -11,6 +11,8 @@ import { buttonVariants } from "@/components/ui/button";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { encodeCursor, parseCursor } from "@/lib/cursor";
+import { withWho, type Who } from "@/lib/assign/who";
+import { loadAssignView } from "@/lib/assign/view";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { renderZone } from "@/lib/zone";
@@ -67,9 +69,9 @@ function cursorValue(
  * see this file's own comment where this used to be inlined.
  */
 export function buildNewerHref(
-  hasCursor: boolean, q: string | undefined, sort: SortKey, dir: SortDir,
+  hasCursor: boolean, q: string | undefined, sort: SortKey, dir: SortDir, who: Who = "all",
 ): string | null {
-  return hasCursor ? `?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir })}` : null;
+  return hasCursor ? `?${new URLSearchParams(withWho({ ...(q ? { q } : {}), sort, dir }, who))}` : null;
 }
 
 /**
@@ -83,11 +85,11 @@ export function buildNewerHref(
 export function buildOlderHref(
   hasOlder: boolean,
   lastRow: { sort_name: string | null; company_name: string | null; created_at: string; id: string } | undefined,
-  q: string | undefined, sort: SortKey, dir: SortDir,
+  q: string | undefined, sort: SortKey, dir: SortDir, who: Who = "all",
 ): string | null {
   if (!hasOlder || !lastRow) return null;
-  return `?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir,
-      before: encodeCursor({ v: cursorValue(sort, lastRow), id: lastRow.id }) })}`;
+  return `?${new URLSearchParams(withWho({ ...(q ? { q } : {}), sort, dir,
+      before: encodeCursor({ v: cursorValue(sort, lastRow), id: lastRow.id }) }, who))}`;
 }
 
 /**
@@ -105,6 +107,9 @@ export function buildOlderHref(
  * here a caller could even pass a `before` through as — carrying one would
  * silently truncate the downloaded file to a single page, a data-loss bug
  * rather than a cosmetic one.
+ *
+ * Takes no `who` either (F-085 part 1): export is Owner-only and exports the
+ * search, not the Mine / Unassigned filter.
  */
 export function buildExportHref(
   base: string, q: string | undefined, sort: SortKey, dir: SortDir,
@@ -117,18 +122,25 @@ export default async function ContactsPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ q?: string; before?: string; sort?: string; dir?: string }>;
+  searchParams: Promise<{ q?: string; before?: string; sort?: string; dir?: string; who?: string }>;
 }) {
   const { accountId } = await params;
-  const { q, before, sort: rawSort, dir: rawDir } = await searchParams;
+  const { q, before, sort: rawSort, dir: rawDir, who: rawWho } = await searchParams;
   // Staff and roles: delete and export are Owner-only. The account-level
   // layout already calls requireAccountAccess to gate entry into this
   // whole account subtree, but discards the role it reads — this page
   // needs `canManage` itself to decide the Export link's visibility and
   // ContactsTable's own `canDelete` prop (which gates the bulk Delete
   // control, through BulkActionBar).
-  const { canManage } = await requireAccountAccess(accountId);
+  const access = await requireAccountAccess(accountId);
+  const { canManage } = access;
   const db = await dbForRequest();
+  // F-085 part 1 (spec §8-§9): Mine / Unassigned, applied on the SERVER to
+  // the list AND its count, so the pager and the header's real total both
+  // describe the filtered rows. Never for a Technician (their list is
+  // already theirs). `assign.members`/`canAssign` feed the assignment
+  // controls in ContactsTable.
+  const assign = await loadAssignView(db, accountId, access, rawWho, { members: true });
 
   // Validated once, reused twice: as the query's own cursor below, and as the
   // signal that decides which empty state a zero-row result means (see the
@@ -140,8 +152,10 @@ export default async function ContactsPage({
   const dir = parseDir(rawDir);
 
   const [rows, total, tags, account] = await Promise.all([
-    listContacts(db, accountId, { search: q, limit: PAGE_SIZE + 1, before: cursor, sort: { key: sort, dir } }),
-    countContacts(db, accountId, { search: q }),
+    listContacts(db, accountId, {
+      search: q, limit: PAGE_SIZE + 1, before: cursor, sort: { key: sort, dir }, assignee: assign.assignee,
+    }),
+    countContacts(db, accountId, { search: q, assignee: assign.assignee }),
     listTags(db, accountId),
     // D-010: the "Created" column's own zone — not a throw, the contact
     // detail page's own reasoning: one cosmetic date column must not 500
@@ -161,8 +175,8 @@ export default async function ContactsPage({
   // `sort`/`dir` are carried along on BOTH links (inside buildNewerHref /
   // buildOlderHref): a client scanning newest calls first, say, must not
   // have "Older" silently drop back to the default order.
-  const olderHref = buildOlderHref(hasOlder, last, q, sort, dir);
-  const newerHref = buildNewerHref(!!cursor, q, sort, dir);
+  const olderHref = buildOlderHref(hasOlder, last, q, sort, dir, assign.who);
+  const newerHref = buildNewerHref(!!cursor, q, sort, dir, assign.who);
 
   // A whole-phrase pick by count, never a plural template reused for one —
   // see contacts.count's own comment in messages.ts for the bug this avoids.
@@ -207,6 +221,8 @@ export default async function ContactsPage({
           <form action={base}>
             <input type="hidden" name="sort" value={sort} />
             <input type="hidden" name="dir" value={dir} />
+            {/* F-085: a search inside Mine stays inside Mine, for D-009's reason. */}
+            {assign.who !== "all" ? <input type="hidden" name="who" value={assign.who} /> : null}
             <Input
               name="q"
               defaultValue={q ?? ""}
@@ -246,6 +262,9 @@ export default async function ContactsPage({
               q={q}
               timezone={zone.zone}
               canDelete={canManage}
+              who={assign.who}
+              canAssign={assign.canAssign}
+              members={assign.members}
             />
             {newerHref || olderHref ? (
               <div className="mt-4 flex items-center justify-between">

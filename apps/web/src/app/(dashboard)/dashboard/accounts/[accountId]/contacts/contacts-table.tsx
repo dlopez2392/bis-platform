@@ -18,6 +18,8 @@ import { contactDisplayName, formatDateInZone, initials } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { usePeek } from "@/lib/contacts/use-peek";
 import { pageSelectionState, togglePageSelection } from "@/lib/contacts/selection";
+import { withWho, type Who } from "@/lib/assign/who";
+import type { AssignMember } from "@/lib/assign/view";
 import { ContactDrawer } from "./contact-drawer";
 import { BulkActionBar } from "./bulk-action-bar";
 
@@ -54,13 +56,11 @@ function missingRow(id: string): ContactRow {
  * to the head of the (newly ordered) list, exactly like a fresh page load.
  */
 export function sortHref(
-  accountId: string, current: { key: SortKey; dir: SortDir }, key: SortKey, q?: string,
+  accountId: string, current: { key: SortKey; dir: SortDir }, key: SortKey, q?: string, who: Who = "all",
 ): string {
   const dir: SortDir = current.key === key && current.dir === "asc" ? "desc" : "asc";
-  const params = new URLSearchParams();
-  if (q) params.set("q", q);
-  params.set("sort", key);
-  params.set("dir", dir);
+  // `who` (Mine / Unassigned) rides along too: re-sorting Mine stays in Mine.
+  const params = new URLSearchParams(withWho({ ...(q ? { q } : {}), sort: key, dir }, who));
   return `/dashboard/accounts/${accountId}/contacts?${params}`;
 }
 
@@ -73,6 +73,7 @@ export function ContactsTable({
   q,
   timezone,
   canDelete,
+  who = "all",
 }: {
   rows: ContactRow[];
   accountId: string;
@@ -95,6 +96,14 @@ export function ContactsTable({
    *  actions stay available either way (DESIGN.md rule 4: checkboxes never
    *  render without a bulk-action bar). */
   canDelete: boolean;
+  /** F-085 part 1: the Mine / Unassigned filter the page applied, carried
+   *  into a re-sort's href like `q`. */
+  who?: Who;
+  /** F-085 part 1: may this caller assign customers (Owner, Staff, the
+   *  agency), and to whom. Accepted here for the assignment controls the
+   *  bulk bar and the drawer render; not read yet. */
+  canAssign?: boolean;
+  members?: AssignMember[];
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -132,7 +141,7 @@ export function ContactsTable({
     // firing at all here. The effect above is the second half: it wins
     // focus back even if the re-render itself replaces the clicked button's
     // DOM node, which `scroll: false` alone does not cover.
-    router.push(sortHref(accountId, { key: sort, dir }, key, q), { scroll: false });
+    router.push(sortHref(accountId, { key: sort, dir }, key, q, who), { scroll: false });
   }
 
   function toggleRow(id: string) {

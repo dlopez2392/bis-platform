@@ -145,7 +145,9 @@ describe("dashboard/layout — computes isOwner via ensureAccountRole and thread
       '? ensureAccountRole(clientState.id, claims.org_id, userId, readStoredRole(clientState.id, userId))\n',
     );
     expect(src).toContain('const isOwner = role === "owner";');
-    expect(src).toContain('const isTechnician = !isAgency && role !== "owner" && role !== "staff";');
+    // The one fail-closed rule (lib/auth-role.ts), not a copy of it; the
+    // behaviour for every role is pinned by the isTechnician test below.
+    expect(src).toContain("const isTechnician = !seesWholeAccount({ isAgency, role });");
   });
 
   // Fix round 1, I1: `ensureAccountRole` is React cache()'d on its FULL

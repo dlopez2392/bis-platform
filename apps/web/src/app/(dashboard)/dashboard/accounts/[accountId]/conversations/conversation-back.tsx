@@ -7,6 +7,7 @@ import { ArrowLeft } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
+import { withWho, type Who } from "@/lib/assign/who";
 
 /**
  * D-021. On a phone the list and the open thread stacked in one scroll —
@@ -50,10 +51,12 @@ export function shouldGoBackOnEscape(
  * grid this sits beside stacks only below `lg`), so a Back link there would
  * duplicate a selection the list right next to it already shows.
  */
-export function ConversationBack({ base, before }: { base: string; before?: string }) {
+export function ConversationBack({ base, before, who = "all" }: { base: string; before?: string; who?: Who }) {
   const router = useRouter();
   const linkRef = useRef<HTMLAnchorElement>(null);
-  const href = before ? `${base}?${new URLSearchParams({ before })}` : base;
+  // F-085 part 1: Back from a thread opened inside Mine returns to Mine.
+  const qs = new URLSearchParams(withWho(before ? { before } : {}, who)).toString();
+  const href = qs ? `${base}?${qs}` : base;
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {

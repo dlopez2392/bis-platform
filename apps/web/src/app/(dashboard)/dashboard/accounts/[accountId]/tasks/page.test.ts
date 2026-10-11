@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CallProposal, WorkRow } from "@bis/db";
@@ -17,8 +17,10 @@ import { visibleBuckets, WorkList } from "./work-list";
  *  Settings link must never reach a client, and this page is one of the
  *  three a client can actually open. */
 let isAgency = true;
+/** F-085 part 1: the caller's role, for ?who= (null keeps every older test's agency/plain-client caller). */
+let role: "owner" | "staff" | "technician" | null = null;
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency }),
+  requireAccountAccess: async () => ({ userId: "user_1", isAgency, role }),
 }));
 
 /** Mutable so each test can pick the account's own (possibly invalid) zone
@@ -71,12 +73,18 @@ const listPendingProposalsMock = vi.fn(async (): Promise<CallProposal[]> => pend
  *  REAL, so these tests exercise the actual chain (account -> agency -> UTC)
  *  rather than a re-implementation of it. */
 let agencyTimezone: string | null = "America/Chicago";
+/** F-085 part 1: spied so the ?who= tests can read what the page asked for. */
+const listAccountWorkMock = vi.fn<(...a: unknown[]) => Promise<WorkRow[]>>(async () => workRows);
+const readPersonIdMock = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "p-me");
+const listAccountTeamMock = vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []);
 vi.mock("@bis/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@bis/db")>();
   return {
     ...actual,
-    listAccountWork: async () => workRows,
+    listAccountWork: (...args: unknown[]) => listAccountWorkMock(...args),
     listPendingProposals: () => listPendingProposalsMock(),
+    readPersonId: (...args: unknown[]) => readPersonIdMock(...args),
+    listAccountTeam: (...args: unknown[]) => listAccountTeamMock(...args),
     serviceDb: () => ({
       from: () => ({
         select: () => ({
@@ -557,5 +565,66 @@ describe("TasksPage — pending proposals (Important 3)", () => {
     );
     expect(pipelineStagesInMock).toHaveBeenCalledTimes(1);
     expect(pipelineStagesInMock).toHaveBeenCalledWith("id", ["stage_1", "stage_2"]);
+  });
+});
+
+// F-085 part 1 (spec §8-§9): Mine / Unassigned on To do, filtered on the
+// server by listAccountWork.
+describe("TasksPage — ?who= (Mine / Unassigned)", () => {
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = false;
+    role = "staff";
+    workRows = [];
+    pendingProposals = [];
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    listAccountWorkMock.mockClear();
+    readPersonIdMock.mockClear();
+    listAccountTeamMock.mockClear();
+  });
+  afterEach(() => {
+    isAgency = true;
+    role = null;
+  });
+  async function render(searchParams: Record<string, string>) {
+    const { default: TasksPage } = await import("./page");
+    return renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve(searchParams) }),
+    );
+  }
+
+  it("who=mine asks listAccountWork for the caller's own work (mutation: drop the assignee -> FAILS)", async () => {
+    await render({ who: "mine" });
+    expect(readPersonIdMock).toHaveBeenCalledWith(expect.anything(), "user_1");
+    expect(listAccountWorkMock).toHaveBeenCalledWith(expect.anything(), "acct1", { assignee: { who: "mine", userId: "p-me" } });
+  });
+
+  it("who=unassigned asks for Unassigned work, and no who is All", async () => {
+    await render({ who: "unassigned" });
+    expect(listAccountWorkMock).toHaveBeenLastCalledWith(expect.anything(), "acct1", { assignee: { who: "unassigned" } });
+    await render({});
+    expect(listAccountWorkMock).toHaveBeenLastCalledWith(expect.anything(), "acct1", { assignee: undefined });
+  });
+
+  it("Staff: the team is read for the task picker", async () => {
+    await render({});
+    expect(listAccountTeamMock).toHaveBeenCalledWith(expect.anything(), "acct1");
+  });
+
+  it("a Technician: no filter (RLS already makes the queue theirs), no team read, no users read (mutation: pass the filter for everyone -> FAILS)", async () => {
+    role = "technician";
+    await render({ who: "unassigned" });
+    expect(listAccountWorkMock).toHaveBeenCalledWith(expect.anything(), "acct1", { assignee: undefined });
+    expect(listAccountTeamMock).not.toHaveBeenCalled();
+    expect(readPersonIdMock).not.toHaveBeenCalled();
+  });
+
+  it("the page still renders with no searchParams at all (older callers)", async () => {
+    const { default: TasksPage } = await import("./page");
+    await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) });
+    expect(listAccountWorkMock).toHaveBeenCalledWith(expect.anything(), "acct1", { assignee: undefined });
   });
 });

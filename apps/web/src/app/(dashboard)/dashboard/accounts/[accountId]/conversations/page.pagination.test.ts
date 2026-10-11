@@ -28,18 +28,26 @@ vi.mock("@/lib/zone", () => ({
     : { zone: "UTC", guessed: true, label: "UTC", source: "fallback" as const }),
 }));
 
+/** F-085 part 1: the caller, for ?who= (defaults to the agency). */
+type Access = { userId: string; isAgency: boolean; role: "owner" | "staff" | "technician" | null; canManage: boolean };
+const AGENCY: Access = { userId: "u1", isAgency: true, role: null, canManage: true };
+const accessMock = vi.fn(async (): Promise<Access> => AGENCY);
+vi.mock("@/lib/auth", () => ({ requireAccountAccess: () => accessMock() }));
+
 const listConversationsMock = vi.fn();
 const getConversationSummaryMock = vi.fn();
+const readPersonIdMock = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "p-me");
 vi.mock("@bis/db", () => ({
   listConversations: (...args: unknown[]) => listConversationsMock(...args),
   getConversationSummary: (...args: unknown[]) => getConversationSummaryMock(...args),
   listMessages: async () => [],
+  readPersonId: (...args: unknown[]) => readPersonIdMock(...args),
 }));
 
 const { default: ConversationsPage } = await import("./page");
 const { renderToStaticMarkup } = await import("react-dom/server");
 
-function route(params: { c?: string; before?: string }) {
+function route(params: { c?: string; before?: string; who?: string }) {
   return {
     params: Promise.resolve({ accountId: "acct1" }),
     searchParams: Promise.resolve(params),
@@ -53,7 +61,7 @@ function row(i: number) {
   };
 }
 
-async function markup(params: { c?: string; before?: string }) {
+async function markup(params: { c?: string; before?: string; who?: string }) {
   const html = (await ConversationsPage(route(params))) as React.ReactElement;
   return renderToStaticMarkup(html);
 }
@@ -140,5 +148,62 @@ describe("ConversationsPage's pagination (D-019)", () => {
     listConversationsMock.mockResolvedValueOnce([]);
     const cursoredEmpty = await markup({ before: encodeCursor({ v: "2026-10-01T00:00:00Z", id: "00000000-0000-0000-0000-000000000000" }) });
     expect(cursoredEmpty).not.toContain("No conversations yet");
+  });
+});
+
+// F-085 part 1 (spec §8-§9): Mine / Unassigned on the inbox, filtered on the
+// server, and kept on every link the list renders.
+describe("ConversationsPage's ?who=", () => {
+  const STAFF: Access = { userId: "u1", isAgency: false, role: "staff", canManage: false };
+  const TECH: Access = { userId: "u1", isAgency: false, role: "technician", canManage: false };
+  beforeEach(() => {
+    listConversationsMock.mockReset();
+    getConversationSummaryMock.mockReset();
+    readPersonIdMock.mockClear();
+    accessMock.mockReset().mockResolvedValue(STAFF);
+  });
+
+  it("who=mine asks listConversations for the caller's own customers' threads (mutation: drop the assignee -> FAILS)", async () => {
+    listConversationsMock.mockResolvedValueOnce([row(0)]);
+    await markup({ who: "mine" });
+    expect(listConversationsMock.mock.calls[0]![2]).toMatchObject({ assignee: { who: "mine", userId: "p-me" } });
+  });
+
+  it("who=unassigned asks for Unassigned customers' threads", async () => {
+    listConversationsMock.mockResolvedValueOnce([row(0)]);
+    await markup({ who: "unassigned" });
+    expect(listConversationsMock.mock.calls[0]![2]).toMatchObject({ assignee: { who: "unassigned" } });
+  });
+
+  it("a Technician: no filter is passed (RLS already makes the inbox theirs), and no users read", async () => {
+    accessMock.mockResolvedValue(TECH);
+    listConversationsMock.mockResolvedValueOnce([row(0)]);
+    await markup({ who: "unassigned" });
+    expect((listConversationsMock.mock.calls[0]![2] as { assignee?: unknown }).assignee).toBeUndefined();
+    expect(readPersonIdMock).not.toHaveBeenCalled();
+  });
+
+  it("the Older link keeps who=mine (mutation: build Older without withWho -> FAILS)", async () => {
+    const full = Array.from({ length: 50 }, (_, i) => row(i));
+    listConversationsMock.mockResolvedValueOnce(full);
+    const html = await markup({ who: "mine" });
+    const cursor = encodeCursor({ v: full[49]!.lastMessageAt, id: full[49]!.id });
+    expect(html).toContain(`href="/dashboard/accounts/acct1/conversations?before=${cursor}&amp;who=mine"`);
+  });
+
+  it("the Newer link, the row links and the Back link keep who=mine too", async () => {
+    const cursor = encodeCursor({ v: "2026-10-01T00:00:00Z", id: "00000000-0000-0000-0000-000000000000" });
+    listConversationsMock.mockResolvedValueOnce([row(0), row(1)]);
+    const html = await markup({ before: cursor, who: "mine", c: "convo1" });
+    expect(html).toContain(`href="/dashboard/accounts/acct1/conversations?before=${cursor}&amp;who=mine&amp;c=convo0"`);
+    expect(html).toContain(`href="/dashboard/accounts/acct1/conversations?before=${cursor}&amp;who=mine"`);
+    expect(html).toContain('href="/dashboard/accounts/acct1/conversations?who=mine"');
+  });
+
+  it("All carries no who anywhere", async () => {
+    const full = Array.from({ length: 50 }, (_, i) => row(i));
+    listConversationsMock.mockResolvedValueOnce(full);
+    const html = await markup({ c: "convo1" });
+    expect(html).not.toContain("who=");
   });
 });

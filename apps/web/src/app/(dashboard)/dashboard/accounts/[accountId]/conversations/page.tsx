@@ -7,6 +7,9 @@ import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { cn } from "@/lib/utils";
 import { parseCursor, encodeCursor } from "@/lib/cursor";
+import { requireAccountAccess } from "@/lib/auth";
+import { withWho } from "@/lib/assign/who";
+import { loadAssignView } from "@/lib/assign/view";
 import { m } from "@/lib/messages";
 import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
@@ -27,17 +30,22 @@ export default async function ConversationsPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ c?: string; before?: string }>;
+  searchParams: Promise<{ c?: string; before?: string; who?: string }>;
 }) {
   const { accountId } = await params;
-  const { c, before } = await searchParams;
+  const { c, before, who: rawWho } = await searchParams;
+  const access = await requireAccountAccess(accountId);
   const db = await dbForRequest();
+  // F-085 part 1 (spec §8-§9): Mine / Unassigned, by the CUSTOMER's holder,
+  // applied by listConversations on the server. Never for a Technician
+  // (their inbox is already theirs). No team read: nothing here assigns.
+  const assign = await loadAssignView(db, accountId, access, rawWho, { members: false });
   // Validated once: an unparseable `?before=` reads as "no cursor" (page
   // one) rather than throwing on a hand-editable URL — `parseCursor`'s own
   // contract (lib/cursor.ts).
   const cursor = parseCursor(before);
   const [conversations, account] = await Promise.all([
-    listConversations(db, accountId, { limit: PAGE_SIZE, before: cursor }),
+    listConversations(db, accountId, { limit: PAGE_SIZE, before: cursor, assignee: assign.assignee }),
     // The zone every row's own timestamp renders in below — not a throw: one
     // cosmetic date column must not take the whole inbox down, same reasoning
     // as the contacts list's own read (D-010).
@@ -76,9 +84,11 @@ export default async function ConversationsPage({
   const currentBefore = cursor ? before : undefined;
   const last = conversations[conversations.length - 1];
   const olderHref = conversations.length === PAGE_SIZE && last
-    ? `${base}?${new URLSearchParams({ before: encodeCursor({ v: last.lastMessageAt, id: last.id }) })}`
+    ? `${base}?${new URLSearchParams(withWho({ before: encodeCursor({ v: last.lastMessageAt, id: last.id }) }, assign.who))}`
     : undefined;
-  const newerHref = cursor ? base : undefined;
+  // Back to page one of the SAME filter (F-085): Mine's head, not the whole inbox's.
+  const headQs = new URLSearchParams(withWho({}, assign.who)).toString();
+  const newerHref = cursor ? (headQs ? `${base}?${headQs}` : base) : undefined;
 
   // No auto-selection. Falling back to conversations[0] meant that simply
   // landing on this screen opened the newest thread, which — now that opening a
@@ -116,11 +126,12 @@ export default async function ConversationsPage({
             newerHref={newerHref}
             before={currentBefore}
             timezone={zone.zone}
+            who={assign.who}
           />
         </div>
         {active ? (
           <div className="min-w-0 space-y-3">
-            <ConversationBack base={base} before={currentBefore} />
+            <ConversationBack base={base} before={currentBefore} who={assign.who} />
             <MarkRead
               conversationId={active.id}
               unreadCount={active.unreadCount}

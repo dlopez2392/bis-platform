@@ -37,9 +37,13 @@ const addTask = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>
 const getContactMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ id: "c1", custom: {} })));
 const listCustomFieldsMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => []));
 const updateContactMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ flagged: false })));
+/** F-085 part 1: a hand-added task's default assignee (the customer's, else its author). */
+const readPersonIdMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string | null>>(async () => "p-author"));
+const taskAssigneeForMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string | null>>(async () => "p-author"));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), completeTask, addTask,
   getContact: getContactMock, listCustomFields: listCustomFieldsMock, updateContact: updateContactMock,
+  readPersonId: readPersonIdMock, taskAssigneeFor: taskAssigneeForMock,
 }));
 
 import { HoldUndecidedError } from "@bis/db";
@@ -151,6 +155,35 @@ describe("addTaskAction's due date (D-006 — one day early on To do)", () => {
     await expect(addTaskAction("a1", taskForm("2026-10-08")))
       .rejects.toThrow(/connection reset/);
     accountReadError.value = null;
+  });
+});
+
+// F-085 part 1 (spec §8, plan deviation 3): a task added on a customer goes
+// to whoever holds that customer, else to the person who added it.
+describe("addTaskAction's assignee", () => {
+  it("is taskAssigneeFor(db, account, contact, the author's users row) (mutation: assignedTo = the author's id directly -> FAILS)", async () => {
+    accountTimezone.value = "America/Chicago";
+    accountReadError.value = null;
+    addTask.mockClear();
+    readPersonIdMock.mockClear().mockResolvedValueOnce("p-author");
+    taskAssigneeForMock.mockClear().mockResolvedValueOnce("p-holder");
+    await addTaskAction("a1", taskForm("2026-10-08"));
+    const db = readPersonIdMock.mock.calls[0]![0];
+    expect(readPersonIdMock).toHaveBeenCalledWith(db, "user_1");
+    expect(taskAssigneeForMock).toHaveBeenCalledWith(db, "a1", "c1", "p-author");
+    expect((addTask.mock.calls[0]![2] as { assignedTo?: string | null }).assignedTo).toBe("p-holder");
+    expect(addTask.mock.calls[0]![0]).toBe(db);
+  });
+
+  it("a blank title writes nothing and asks nothing", async () => {
+    addTask.mockClear();
+    taskAssigneeForMock.mockClear();
+    const f = new FormData();
+    f.set("contactId", "c1");
+    f.set("title", "  ");
+    await addTaskAction("a1", f);
+    expect(addTask).not.toHaveBeenCalled();
+    expect(taskAssigneeForMock).not.toHaveBeenCalled();
   });
 });
 

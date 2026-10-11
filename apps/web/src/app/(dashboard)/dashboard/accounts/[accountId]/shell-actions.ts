@@ -2,6 +2,7 @@
 
 import { serviceDb, sumUnreadCount, getVoiceProfile, hasActiveCallSince, type SupabaseClient } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
+import { seesWholeAccount } from "@/lib/auth-role";
 import { dbForRequest } from "@/lib/db";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
 import { deriveSetupStatus, reduceSetupProgress } from "@/lib/setup/setup-status";
@@ -127,7 +128,7 @@ export async function getShellSnapshot(accountId: string): Promise<ShellSnapshot
   // The narrow shell, failing closed like requireNotTechnician (fix round 1):
   // a Technician, or a client whose role could not be settled (null). Only
   // the agency, an Owner and Staff get the account-wide badge and count.
-  const narrow = !isAgency && role !== "owner" && role !== "staff";
+  const narrow = !seesWholeAccount({ isAgency, role });
   // Spec §7.2: the unread badge counts a Technician's OWN conversations,
   // which only RLS knows. Handed over as a factory so a request client that
   // cannot be built (no token) fails inside that leg's own catch, like any

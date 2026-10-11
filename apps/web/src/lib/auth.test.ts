@@ -20,6 +20,7 @@ vi.mock("./team/ensure-role", () => ({
 
 import {
   requireAccountAccess, requireAccountOwner, requireAgencyOnlyAccountAccess, requireNotTechnician, accountHome,
+  seesWholeAccount,
 } from "./auth";
 
 const OWN = "11111111-1111-4111-8111-111111111111";
@@ -110,6 +111,22 @@ describe("accountHome (spec §9)", () => {
     expect(accountHome("a1", "staff")).toBe("/dashboard/accounts/a1/dashboard");
     expect(accountHome("a1", "owner")).toBe("/dashboard/accounts/a1/dashboard");
     expect(accountHome("a1", null)).toBe("/dashboard/accounts/a1/dashboard");
+  });
+});
+
+// F-085 part 1: the one fail-closed rule for "sees and manages the whole
+// account": the agency, an Owner, Staff. A Technician and a client whose
+// role could not be settled (null) do not, everywhere this is asked.
+describe("seesWholeAccount", () => {
+  it.each([
+    [true, null], [false, "owner"], [false, "staff"],
+  ] as const)("isAgency=%s role=%s sees the whole account", (isAgency, role) => {
+    expect(seesWholeAccount({ isAgency, role })).toBe(true);
+  });
+  it.each([
+    [false, "technician"], [false, null],
+  ] as const)("isAgency=%s role=%s does not (mutation: role !== technician -> the null case FAILS)", (isAgency, role) => {
+    expect(seesWholeAccount({ isAgency, role })).toBe(false);
   });
 });
 

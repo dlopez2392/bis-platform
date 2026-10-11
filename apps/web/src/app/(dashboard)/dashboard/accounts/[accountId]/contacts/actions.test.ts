@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const requireAccountAccess = vi.fn<(accountId: string) => Promise<{ userId: string; isAgency: boolean }>>(async () => ({ userId: "user_1", isAgency: true }));
+type Access = { userId: string; isAgency: boolean; role?: "owner" | "staff" | "technician" | null };
+const requireAccountAccess = vi.fn<(accountId: string) => Promise<Access>>(async () => ({ userId: "user_1", isAgency: true }));
 // Staff and roles (Task 6): bulkDeleteContactsAction's guard is
 // requireAccountOwner, not requireAccountAccess — mocked separately so a
 // Staff caller (the owner guard redirecting) can be exercised without
@@ -24,13 +25,22 @@ const dbMocks = {
   // import throws. Read the file's import list and cover it.
   createContact: vi.fn(),
   getContact: vi.fn(), setContactPhoneCountry: vi.fn(),
+  // F-085 part 1: assignment, the caller's own users row, and the hidden-
+  // match flags a Technician's insert has written by the service client.
+  assignContacts: vi.fn(), undoAssignContacts: vi.fn(),
+  readPersonId: vi.fn(async () => null as string | null), flagMatchesOf: vi.fn(),
+  serviceDb: vi.fn(() => SERVICE),
 };
+/** The service client and the request client, told apart by identity. */
+const SERVICE = { tag: "service-db" };
+const REQUEST = { tag: "request-db" };
 vi.mock("@bis/db", () => dbMocks);
 
 const {
   updateContactFieldAction, bulkDeleteContactsAction, bulkAddTagAction, bulkRemoveTagAction,
   setPhoneCountryAction, undoPhoneCountryAction,
   undoInlinePhoneEditAction, createContactAction,
+  assignContactsAction, undoAssignContactsAction,
 } = await import("./actions");
 const { m } = await import("@/lib/messages");
 
@@ -514,5 +524,215 @@ describe("createContactAction (D-013)", () => {
     dbMocks.createContact.mockResolvedValueOnce({ existing: true, id: "existing1" });
     await createContactAction("a1", addForm({ firstName: "Jo" }));
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-085 part 1: Mine / Unassigned and the Technician (spec §8).
+// ---------------------------------------------------------------------------
+const U = (n: number) => `${String(n).padStart(8, "0")}-1111-4111-8111-111111111111`;
+const STAFF: Access = { userId: "user_1", isAgency: false, role: "staff" };
+const TECH: Access = { userId: "user_1", isAgency: false, role: "technician" };
+const UNSETTLED: Access = { userId: "user_1", isAgency: false, role: null };
+
+describe("createContactAction: a hand-added customer belongs to its author (spec §8)", () => {
+  beforeEach(() => {
+    dbForRequest.mockResolvedValue(REQUEST);
+    dbMocks.readPersonId.mockReset().mockResolvedValue("p-me");
+    dbMocks.flagMatchesOf.mockReset().mockResolvedValue(0);
+    dbMocks.createContact.mockReset().mockResolvedValue({ existing: false, id: "new1", flagged: false });
+  });
+
+  it("Staff: assigned to the caller's own users row, flags on the request client, no service sweep (mutation: drop assignedTo -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    const r = await createContactAction("a1", addForm({ firstName: "Jo" }));
+    expect(r).toEqual({ kind: "created" });
+    expect(dbMocks.readPersonId).toHaveBeenCalledWith(REQUEST, "user_1");
+    expect(dbMocks.createContact).toHaveBeenCalledWith(
+      REQUEST, "a1", expect.objectContaining({ firstName: "Jo", assignedTo: "p-me" }), "user_1", "user", REQUEST,
+    );
+    expect(dbMocks.flagMatchesOf).not.toHaveBeenCalled();
+  });
+
+  it("a Technician: the flag writer is the service client, then the hidden matches are flagged on it (mutation: flagDb = db -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    const r = await createContactAction("a1", addForm({ firstName: "Jo" }));
+    expect(r).toEqual({ kind: "created" });
+    expect(dbMocks.createContact).toHaveBeenCalledWith(
+      REQUEST, "a1", expect.objectContaining({ assignedTo: "p-me" }), "user_1", "user", SERVICE,
+    );
+    expect(dbMocks.flagMatchesOf).toHaveBeenCalledWith(SERVICE, "a1", "new1");
+  });
+
+  it("a Technician whose add matched an existing customer: no sweep, nothing new was made (mutation: sweep on existing -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    dbMocks.createContact.mockResolvedValueOnce({ existing: true, id: "old1", flagged: false });
+    const r = await createContactAction("a1", addForm({ firstName: "Jo" }));
+    expect(r).toEqual({ kind: "existing", contactId: "old1" });
+    expect(dbMocks.flagMatchesOf).not.toHaveBeenCalled();
+  });
+
+  it("a failed sweep is logged and the customer still reads as created (mutation: let it throw -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    dbMocks.flagMatchesOf.mockRejectedValueOnce(new Error("flag write failed"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await createContactAction("a1", addForm({ firstName: "Jo" }));
+    expect(r).toEqual({ kind: "created" });
+    expect(spy.mock.calls.flat().join(" ")).toContain("flag write failed");
+    spy.mockRestore();
+  });
+
+  it("a client whose role could not be settled takes the Technician's narrow path (fails closed)", async () => {
+    requireAccountAccess.mockResolvedValue(UNSETTLED);
+    await createContactAction("a1", addForm({ firstName: "Jo" }));
+    expect(dbMocks.createContact.mock.calls[0]![5]).toBe(SERVICE);
+    expect(dbMocks.flagMatchesOf).toHaveBeenCalledWith(SERVICE, "a1", "new1");
+  });
+});
+
+describe("assignContactsAction (spec §8, A2, M4)", () => {
+  beforeEach(() => {
+    dbForRequest.mockResolvedValue(REQUEST);
+    dbMocks.assignContacts.mockReset();
+    revalidatePath.mockClear();
+  });
+
+  it("a Technician is refused and nothing is written (mutation: drop the role check -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    expect(await assignContactsAction("a1", [U(1)], U(9))).toEqual({ ok: false, error: "assign.refused" });
+    expect(dbMocks.assignContacts).not.toHaveBeenCalled();
+  });
+
+  it("a client whose role could not be settled is refused too (fails closed; mutation: refuse only role technician -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(UNSETTLED);
+    expect(await assignContactsAction("a1", [U(1)], U(9))).toEqual({ ok: false, error: "assign.refused" });
+    expect(dbMocks.assignContacts).not.toHaveBeenCalled();
+  });
+
+  it("Staff: assigns through the request client as the caller and hands back exactly what changed", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    const previous = [{ contactId: U(1), assignee: null, target: U(9), movedTaskIds: [U(5)] }];
+    dbMocks.assignContacts.mockResolvedValueOnce(previous);
+    expect(await assignContactsAction("a1", [U(1), U(2)], U(9))).toEqual({ ok: true, previous });
+    expect(dbMocks.assignContacts).toHaveBeenCalledWith(REQUEST, "a1", [U(1), U(2)], U(9), "user_1");
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
+  });
+
+  it("Unassigned (null) is a target like any other", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    dbMocks.assignContacts.mockResolvedValueOnce([]);
+    expect(await assignContactsAction("a1", [U(1)], null)).toEqual({ ok: true, previous: [] });
+    expect(dbMocks.assignContacts).toHaveBeenCalledWith(REQUEST, "a1", [U(1)], null, "user_1");
+  });
+
+  it.each([
+    ["more than 500 ids", Array.from({ length: 501 }, (_, i) => U(i)), U(9)],
+    ["no ids", [], U(9)],
+    ["a non-UUID id", [U(1), "not-a-uuid"], U(9)],
+    ["a non-UUID assignee", [U(1)], "someone"],
+    ["a non-array", "x", U(9)],
+  ] as const)("%s -> assign.failed with no write", async (_name, ids, target) => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    expect(await assignContactsAction("a1", ids as unknown as string[], target)).toEqual({ ok: false, error: "assign.failed" });
+    expect(dbMocks.assignContacts).not.toHaveBeenCalled();
+  });
+
+  it("exactly 500 ids is allowed (the bound is inclusive)", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    dbMocks.assignContacts.mockResolvedValueOnce([]);
+    const ids = Array.from({ length: 500 }, (_, i) => U(i));
+    expect(await assignContactsAction("a1", ids, U(9))).toEqual({ ok: true, previous: [] });
+  });
+
+  it.each([
+    ["an RLS refusal", new Error("assignContacts failed: new row violates row-level security policy for table contacts"), "assign.refused"],
+    ["a 42501 code", Object.assign(new Error("permission denied"), { code: "42501" }), "assign.refused"],
+    ["anything else", new Error("assignment: the assignee is not a member of this account"), "assign.failed"],
+  ] as const)("%s maps to its AssignError, logged (mutation: map everything to failed -> FAILS)", async (_name, err, expected) => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    dbMocks.assignContacts.mockRejectedValueOnce(err);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await assignContactsAction("a1", [U(1)], U(9))).toEqual({ ok: false, error: expected });
+    expect(spy.mock.calls.flat().join(" ")).toContain("assignContactsAction: account a1:");
+    spy.mockRestore();
+  });
+
+  it("logs through loggableError: an email in the message never reaches the log", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    dbMocks.assignContacts.mockRejectedValueOnce(new Error("boom for ana@example.com"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await assignContactsAction("a1", [U(1)], U(9));
+    const logged = spy.mock.calls.flat().join(" ");
+    expect(logged).toContain("[email]");
+    expect(logged).not.toContain("ana@example.com");
+    spy.mockRestore();
+  });
+});
+
+describe("undoAssignContactsAction (CORRECTED 2026-10-11: exact undo, never regrouped)", () => {
+  const previous = [
+    { contactId: U(1), assignee: null, target: U(9), movedTaskIds: [U(5), U(6)] },
+    { contactId: U(2), assignee: U(8), target: U(9), movedTaskIds: [] },
+    { contactId: U(3), assignee: U(8), target: U(9), movedTaskIds: [U(7)] },
+  ];
+  beforeEach(() => {
+    dbForRequest.mockResolvedValue(REQUEST);
+    dbMocks.assignContacts.mockReset();
+    dbMocks.undoAssignContacts.mockReset().mockResolvedValue(undefined);
+    revalidatePath.mockClear();
+  });
+
+  it("a Technician is refused and nothing is written", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    expect(await undoAssignContactsAction("a1", previous)).toEqual({ ok: false, error: "assign.refused" });
+    expect(dbMocks.undoAssignContacts).not.toHaveBeenCalled();
+  });
+
+  it("a client whose role could not be settled is refused too", async () => {
+    requireAccountAccess.mockResolvedValue(UNSETTLED);
+    expect(await undoAssignContactsAction("a1", previous)).toEqual({ ok: false, error: "assign.refused" });
+    expect(dbMocks.undoAssignContacts).not.toHaveBeenCalled();
+  });
+
+  it("Staff: ONE undoAssignContacts call with the whole list, target and moved tasks included, and never assignContacts (mutation: regroup by assignee into assignContacts -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    expect(await undoAssignContactsAction("a1", previous)).toEqual({ ok: true });
+    expect(dbMocks.undoAssignContacts).toHaveBeenCalledTimes(1);
+    expect(dbMocks.undoAssignContacts).toHaveBeenCalledWith(REQUEST, "a1", previous, "user_1");
+    expect(dbMocks.assignContacts).not.toHaveBeenCalled();
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/contacts");
+  });
+
+  const bad = (patch: Record<string, unknown>) => [{ ...previous[0]!, ...patch }];
+  it.each([
+    ["a non-array", "x"],
+    ["an empty list", []],
+    ["more than 500 entries", Array.from({ length: 501 }, (_, i) => ({ ...previous[1]!, contactId: U(i) }))],
+    ["a null entry", [null]],
+    ["a non-UUID contactId", bad({ contactId: "c1" })],
+    ["a missing contactId", bad({ contactId: undefined })],
+    ["a non-UUID assignee", bad({ assignee: "someone" })],
+    ["a missing assignee", bad({ assignee: undefined })],
+    ["a non-UUID target", bad({ target: 7 })],
+    ["a missing target", bad({ target: undefined })],
+    ["movedTaskIds not an array", bad({ movedTaskIds: U(5) })],
+    ["a non-UUID moved task id", bad({ movedTaskIds: [U(5), "t2"] })],
+  ] as const)("%s from the browser -> assign.failed with no write", async (_name, value) => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    expect(await undoAssignContactsAction("a1", value as never)).toEqual({ ok: false, error: "assign.failed" });
+    expect(dbMocks.undoAssignContacts).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a not-a-member refusal", new Error("assignment: the assignee is not a member of this account"), "assign.failed"],
+    ["an RLS refusal", new Error("undoAssignContacts failed: new row violates row-level security policy"), "assign.refused"],
+    ["a 42501 code", Object.assign(new Error("denied"), { code: "42501" }), "assign.refused"],
+  ] as const)("%s maps to its AssignError", async (_name, err, expected) => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    dbMocks.undoAssignContacts.mockRejectedValueOnce(err);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await undoAssignContactsAction("a1", previous)).toEqual({ ok: false, error: expected });
+    expect(spy.mock.calls.flat().join(" ")).toContain("undoAssignContactsAction: account a1:");
+    spy.mockRestore();
   });
 });

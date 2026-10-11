@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import { serviceDb, listAccounts, brandLogoUrl, brandDisplayName } from "@bis/db";
 import type { AppClaims } from "@/lib/auth";
+import { seesWholeAccount } from "@/lib/auth-role";
 import { resolveSidebarAccent } from "@/lib/branding/color";
 import { getTenantAccessState, getTenantBranding } from "@/lib/branding/tenant-theme-reader";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -172,7 +173,7 @@ export default async function DashboardLayout({
   // gets To do's five destinations, never Staff's full list of screens that
   // would only send them back to To do.
   const isOwner = role === "owner";
-  const isTechnician = !isAgency && role !== "owner" && role !== "staff";
+  const isTechnician = !seesWholeAccount({ isAgency, role });
 
   // Fix round 1 (Task 6 review): AppSidebar and Topbar render HERE, as
   // siblings of <main>{children}</main> — not inside

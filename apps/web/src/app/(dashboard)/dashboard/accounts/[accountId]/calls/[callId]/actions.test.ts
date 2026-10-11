@@ -344,6 +344,45 @@ describe("acceptProposal", () => {
     },
   );
 
+  // F-085 part 1 (spec §8): an accepted task proposal is a task like any
+  // other, so it goes to whoever holds the customer (taskAssigneeFor), not
+  // to nobody. The person is a real users row with a membership, deleted
+  // AFTER the account's teardown: tasks.assigned_to and contacts.assigned_to
+  // reference users with no delete action (0003), so deleting the person
+  // first would fail on the FK and strand them.
+  it("an accepted task goes to the person who holds the customer (mutation: drop assignedTo from the addTask call -> FAILS)", async () => {
+    const clerk = `user_callprop_${Math.random().toString(36).slice(2, 10)}`;
+    try {
+      await withTestAccount(async (db, accountId) => {
+        const { data: u, error: uErr } = await db.from("users")
+          .insert({ clerk_user_id: clerk, email: `${clerk}@example.com` }).select("id").single();
+        expect(uErr).toBeNull();
+        const holderId = u!.id as string;
+        const { error: mErr } = await db.from("memberships")
+          .insert({ scope: "account", account_id: accountId, user_id: holderId, role: "staff" });
+        expect(mErr).toBeNull();
+
+        const callId = await seedCall(db, accountId);
+        const { id: contactId } = await createContact(
+          db, accountId, { firstName: "Held", assignedTo: holderId }, "user_test");
+        const proposal = await insertProposal(db, accountId, {
+          callId, contactId, kind: "task",
+          evidence: "the caller asked for a quote",
+          payload: { title: "Send the quote", dueAt: null },
+        });
+        expect(await acceptProposal(accountId, callId, proposal!.id)).toEqual({ ok: true });
+
+        const { data: tasks, error: tErr } = await db.from("tasks")
+          .select("assigned_to").eq("account_id", accountId).eq("title", "Send the quote");
+        expect(tErr).toBeNull();
+        expect(tasks).toEqual([{ assigned_to: holderId }]);
+      });
+    } finally {
+      const { error } = await realServiceDb().from("users").delete().eq("clerk_user_id", clerk);
+      if (error) throw new Error(`cleanup failed on users: ${error.message}`);
+    }
+  });
+
   it("marks the proposal accepted, stamping the acting user's id", async () => {
     await withTestAccount(async (db, accountId) => {
       const callId = await seedCall(db, accountId);

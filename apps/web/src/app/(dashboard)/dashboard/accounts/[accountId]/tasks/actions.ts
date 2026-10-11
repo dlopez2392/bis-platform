@@ -20,9 +20,13 @@
 import { revalidatePath } from "next/cache";
 import {
   addTask, completeTask, reopenTask, readTaskContact, readConsentHistory, newestDecidingRow,
-  completeTasksForConsentEvents, HoldUndecidedError, type WorkSource, type SupabaseClient,
+  completeTasksForConsentEvents, HoldUndecidedError, setTaskAssignee, listAccountTeam,
+  type WorkSource, type SupabaseClient,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
+import { seesWholeAccount } from "@/lib/auth-role";
+import { isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
+import type { AssignError } from "../contacts/actions";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { tomorrowAt9 } from "@/lib/work/dismiss-date";
@@ -237,4 +241,46 @@ export async function undoHoldDecisionFromTask(
   const result = await undoHoldDecision(ctx, eventId, reopenTaskIds);
   if (result.ok) revalidatePath(tasksPath(accountId));
   return result;
+}
+
+/**
+ * Hands one task to someone, or to nobody (F-085 part 1, spec §8). Owner,
+ * Staff and the agency only: a Technician never reassigns (M4), nor does a
+ * client whose role could not be settled, and 0068's trigger refuses them
+ * too. A Technician can only be handed a task about a customer they already
+ * hold (A4: the customer first), because RLS would hide anything else from
+ * them; a task with no customer is theirs to take. Everything is read on the
+ * request client. Hands back who had it, which is what the Undo restores.
+ */
+export async function setTaskAssigneeAction(
+  accountId: string, taskId: string, assignee: string | null,
+): Promise<{ ok: true; previous: string | null } | { ok: false; error: AssignError }> {
+  const access = await requireAccountAccess(accountId);
+  if (!seesWholeAccount(access)) return { ok: false, error: "assign.refused" };
+  if (!isUuid(taskId) || !isUuidOrNull(assignee)) return { ok: false, error: "assign.failed" };
+  try {
+    const db = await dbForRequest();
+    if (assignee !== null && await customerFirst(db, accountId, taskId, assignee)) {
+      return { ok: false, error: "assign.customerFirst" };
+    }
+    const r = await setTaskAssignee(db, accountId, taskId, assignee, access.userId);
+    if (r === "not_found") return { ok: false, error: "assign.failed" };
+    revalidatePath(tasksPath(accountId));
+    return { ok: true, previous: r.previous };
+  } catch (e) {
+    console.error(`setTaskAssigneeAction: account ${accountId}: ${loggableError(e)}`);
+    return { ok: false, error: isRefusal(e) ? "assign.refused" : "assign.failed" };
+  }
+}
+
+/** True when the target is a Technician and the task's customer is not theirs (A4). */
+async function customerFirst(db: SupabaseClient, accountId: string, taskId: string, assignee: string): Promise<boolean> {
+  const team = await listAccountTeam(db, accountId);
+  if (team.find((t) => t.userId === assignee)?.role !== "technician") return false;
+  const task = await readTaskContact(db, accountId, taskId);
+  if (!task?.contactId) return false;
+  const { data, error } = await db.from("contacts").select("assigned_to")
+    .eq("account_id", accountId).eq("id", task.contactId).maybeSingle();
+  if (error) throw new Error(`setTaskAssigneeAction: customer read failed: ${error.message}`);
+  return (data as { assigned_to: string | null } | null)?.assigned_to !== assignee;
 }

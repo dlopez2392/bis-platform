@@ -6,7 +6,8 @@ import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { zonedTimeToUtc } from "@/lib/booking/slots";
 import { updateContact, getContact, addTagToContact, removeTagFromContact,
-         addNote, addTask, completeTask, listCustomFields, HoldUndecidedError } from "@bis/db";
+         addNote, addTask, completeTask, listCustomFields, HoldUndecidedError,
+         readPersonId, taskAssigneeFor } from "@bis/db";
 import { ledgerDb } from "@/lib/consent/ledger-db";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
@@ -154,7 +155,11 @@ export async function addTaskAction(accountId: string, formData: FormData): Prom
   const dueAt = String(formData.get("dueAt") ?? "");
   const db = await dbForRequest();
   const dueAtIso = dueAt ? await dueAtInAccountZone(db, accountId, dueAt) : undefined;
-  if (title) await addTask(db, accountId, { contactId, title, dueAt: dueAtIso }, userId);
+  if (title) {
+    // F-085 part 1 (spec §8): whoever holds the customer, else whoever added it.
+    const assignedTo = await taskAssigneeFor(db, accountId, contactId, await readPersonId(db, userId));
+    await addTask(db, accountId, { contactId, title, dueAt: dueAtIso, assignedTo }, userId);
+  }
   revalidatePath(path);
 }
 

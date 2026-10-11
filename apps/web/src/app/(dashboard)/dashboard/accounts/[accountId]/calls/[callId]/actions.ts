@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import {
   getProposal, markProposalDecided, addTask, fillContactBlanks, getContact,
-  moveOpportunityToStage, serviceDb, type ContactFieldPayload, type SupabaseClient,
+  moveOpportunityToStage, serviceDb, readPersonId, taskAssigneeFor,
+  type ContactFieldPayload, type SupabaseClient,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
@@ -229,10 +230,16 @@ export async function acceptProposal(
     // without ever reaching the outer catch's revert.
     if (proposal.kind === "task") {
       const p = proposal.payload;
+      // F-085 part 1 (spec §8): a task like any other, so whoever holds the
+      // customer, else whoever accepted it. Read OUTSIDE the write's own try:
+      // a failure here wrote nothing, so it reaches the outer catch and its
+      // revert, never `stranded()`, which is for a write that may have landed.
+      const assignedTo = await taskAssigneeFor(
+        db, accountId, proposal.contactId ?? null, await readPersonId(db, userId));
       try {
         await addTask(db, accountId, {
           contactId: proposal.contactId ?? undefined,
-          title: p.title, dueAt: p.dueAt ?? undefined,
+          title: p.title, dueAt: p.dueAt ?? undefined, assignedTo,
         }, userId);
       } catch (e) {
         return stranded(proposalId, callId, accountId, e);

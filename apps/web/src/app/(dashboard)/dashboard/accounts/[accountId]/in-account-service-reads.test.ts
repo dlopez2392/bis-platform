@@ -77,6 +77,8 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/actions.ts": "proven-target",
   // ledgerDb after getContact on the request client found the contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx": "proven-target",
+  // createContactAction: flags written by the service client for a row the caller just created.
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts": "agency-only",

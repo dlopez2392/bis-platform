@@ -35,6 +35,7 @@ import type { TextsActionResult } from "@/lib/consent/staff-actions";
 import { STATUS_TREATMENT, type ResolvedStage } from "../calls/[callId]/proposals";
 import { CARD, CARD_HEAD } from "../calls/[callId]/card";
 import { AiAuthorMark } from "../calls/ai-author-mark";
+import type { AssignMember } from "@/lib/assign/view";
 
 /** The four Task 4 actions, bound to one `accountId` by `WorkList` and
  *  threaded down through `WorkRowItem` into the "use client" boundary. */
@@ -429,6 +430,11 @@ export function WorkList({
    *  see `pendingProposalSummary`'s own doc comment. Optional for the same
    *  reason `proposals` is. */
   stageNames?: Record<string, ResolvedStage>;
+  /** F-085 part 1: may this caller hand tasks to someone (Owner, Staff, the
+   *  agency), and to whom. Accepted here for the task assignee picker; not
+   *  read yet. */
+  canAssign?: boolean;
+  members?: AssignMember[];
 }) {
   const shown = visibleBuckets(buckets);
 

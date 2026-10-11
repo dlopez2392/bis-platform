@@ -10,6 +10,10 @@ import { describe, it, expect, vi } from "vitest";
  * "which branch renders" question.
  */
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
+// F-085 part 1: the page reads the caller (for ?who=). The agency, so no filter applies here.
+vi.mock("@/lib/auth", () => ({
+  requireAccountAccess: async () => ({ userId: "u1", isAgency: true, role: null, canManage: true }),
+}));
 
 // The page's own direct query — the account's timezone, threaded into
 // ConversationList/MessageThread's own `timezone` prop (D-010's pattern
@@ -39,6 +43,7 @@ const conversationsFixture = [
 ];
 vi.mock("@bis/db", () => ({
   listConversations: async () => conversationsFixture,
+  readPersonId: async () => null,
   listMessages: async () => [],
 }));
 

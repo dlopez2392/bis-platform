@@ -338,6 +338,16 @@ describe("CallsPage — the daily-limit line and the Technician", () => {
     authFixture.role = null;
   });
 
+  // Fails closed (seesWholeAccount): a client whose role could not be settled
+  // is shown what a Technician is shown, never the account-wide meter.
+  it("a client whose role could not be settled (null) gets no daily-limit line and no count read either (mutation: showLimit = role !== \"technician\" -> FAILS)", async () => {
+    authFixture.role = null;
+    const html = renderToStaticMarkup(await CallsPage(route(undefined)));
+    expect(html).not.toContain(m["calls.usageLabel"]);
+    expect(countCallsSinceMock).not.toHaveBeenCalled();
+    expect(html).toContain("+19565061545");
+  });
+
   it("Staff still get the line, read the same way as before", async () => {
     authFixture.role = "staff";
     const html = renderToStaticMarkup(await CallsPage(route(undefined)));

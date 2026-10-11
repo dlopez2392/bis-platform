@@ -146,4 +146,24 @@ describe("sortHref", () => {
     expect(href).not.toContain("before");
     expect(href).toBe("/dashboard/accounts/acct1/contacts?q=smith&sort=created&dir=asc");
   });
+
+  // The header click is an onClick (router.push), which a static render
+  // cannot fire, so the wiring is read off the source: the table hands its
+  // own `who` prop to sortHref.
+  it("the header click builds its href with the table's current who", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(fileURLToPath(new URL("./contacts-table.tsx", import.meta.url)), "utf8");
+    expect(src).toContain("sortHref(accountId, { key: sort, dir }, key, q, who)");
+  });
+
+  // F-085 part 1: re-sorting Mine must stay inside Mine.
+  it("carries who=mine / who=unassigned, and nothing for All (mutation: drop withWho -> FAILS)", () => {
+    expect(sortHref("acct1", { key: "created", dir: "desc" }, "name", "x", "mine"))
+      .toBe("/dashboard/accounts/acct1/contacts?q=x&sort=name&dir=asc&who=mine");
+    expect(sortHref("acct1", { key: "created", dir: "desc" }, "name", undefined, "unassigned"))
+      .toBe("/dashboard/accounts/acct1/contacts?sort=name&dir=asc&who=unassigned");
+    expect(sortHref("acct1", { key: "created", dir: "desc" }, "name", undefined, "all"))
+      .toBe("/dashboard/accounts/acct1/contacts?sort=name&dir=asc");
+  });
 });

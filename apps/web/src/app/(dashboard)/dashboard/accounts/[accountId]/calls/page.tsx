@@ -4,6 +4,7 @@ import { listCalls, countCallsSince, listFailedOutboundSms, listCallReasons, typ
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { requireAccountAccess } from "@/lib/auth";
+import { seesWholeAccount } from "@/lib/auth-role";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { ZoneNote } from "@/components/zone-note";
@@ -39,8 +40,10 @@ export default async function CallsPage({
   // F-085 part 1 (spec §7.2): today's calls against the daily limit is an
   // ACCOUNT total. Under a Technician's RLS it would count only their own
   // customers' calls and read as a false meter, so it is neither read nor
-  // shown to them. The calls themselves are still theirs to see.
-  const showLimit = role !== "technician";
+  // shown to them. The calls themselves are still theirs to see. Fails
+  // closed (seesWholeAccount): a client whose role could not be settled is
+  // shown what a Technician is shown.
+  const showLimit = seesWholeAccount({ isAgency, role });
 
   // Validated once, reused twice: as the query's own cursor below, and as
   // the signal that decides which empty state a zero-row result means (see

@@ -4,7 +4,10 @@ import { revalidatePath } from "next/cache";
 import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { createContact, deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
-         getContact, setContactPhoneCountry } from "@bis/db";
+         getContact, setContactPhoneCountry, readPersonId, flagMatchesOf, serviceDb,
+         assignContacts, undoAssignContacts, type PreviousAssignee } from "@bis/db";
+import { seesWholeAccount } from "@/lib/auth-role";
+import { MAX_ASSIGN, isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
 import { normalisePhone, repickPhoneCountry, type PhoneCountry } from "@bis/db/phone";
 import { loggableError } from "@/lib/loggable-error";
 import type { PhoneCountryPickResult, PhoneCountryUndoResult, PhoneCountryPrevious } from "@/lib/contacts/phone-country";
@@ -33,7 +36,8 @@ export type CreateContactResult =
 export async function createContactAction(
   accountId: string, formData: FormData,
 ): Promise<CreateContactResult> {
-  const { userId } = await requireAccountAccess(accountId);
+  const access = await requireAccountAccess(accountId);
+  const { userId } = access;
   const val = (k: string) => String(formData.get(k) ?? "").trim();
   const firstName = val("firstName");
   const lastName = val("lastName");
@@ -57,13 +61,96 @@ export async function createContactAction(
   const phoneField = normalizeFieldInput("phone", val("phone"));
   if (!phoneField.ok) return { kind: "invalid", error: phoneField.error };
 
-  const result = await createContact(await dbForRequest(), accountId, {
+  // F-085 part 1 (spec §8): a customer someone adds by hand is theirs (the
+  // agency has no users row in a client's company, so theirs lands
+  // Unassigned). A Technician's own client cannot see a duplicate held by
+  // someone else (0068), so for them the flag writer is the service client,
+  // and once the row exists the matches they cannot see are flagged on it
+  // too: a row the caller just created, so the service client only ever
+  // touches a proven target. Fails closed: a client whose role could not be
+  // settled takes the same narrow path.
+  const db = await dbForRequest();
+  const personId = await readPersonId(db, userId);
+  const narrow = !seesWholeAccount(access);
+  const result = await createContact(db, accountId, {
     firstName: firstName || undefined, lastName: lastName || undefined,
     email: email.value || undefined, phone: phoneField.value || undefined,
-  }, userId);
+    assignedTo: personId,
+  }, userId, "user", narrow ? serviceDb() : db);
   if (result.existing) return { kind: "existing", contactId: result.id };
+  if (narrow) {
+    try {
+      await flagMatchesOf(serviceDb(), accountId, result.id);
+    } catch (e) {
+      // The customer is saved; only the duplicate flags are missing.
+      console.error(`createContactAction: hidden-match flags not written (account ${accountId}): ${loggableError(e)}`);
+    }
+  }
   revalidatePath(`/dashboard/accounts/${accountId}/contacts`);
   return { kind: "created" };
+}
+
+/** What the assignment controls show for a refusal (spec §8); the copy lives under `assign.*`. */
+export type AssignError = "assign.refused" | "assign.failed" | "assign.customerFirst";
+export type AssignResult = { ok: true; previous: PreviousAssignee[] } | { ok: false; error: AssignError };
+
+/**
+ * Owner, Staff and the agency assign customers (spec §8, A2); a Technician
+ * never does (M4), nor a client whose role could not be settled. The
+ * database refuses them too (0068). Hands back exactly the customers that
+ * CHANGED, which is what the Undo takes.
+ */
+export async function assignContactsAction(
+  accountId: string, contactIds: string[], assignee: string | null,
+): Promise<AssignResult> {
+  const access = await requireAccountAccess(accountId);
+  if (!seesWholeAccount(access)) return { ok: false, error: "assign.refused" };
+  if (!Array.isArray(contactIds) || contactIds.length === 0 || contactIds.length > MAX_ASSIGN
+      || !contactIds.every(isUuid) || !isUuidOrNull(assignee)) {
+    return { ok: false, error: "assign.failed" };
+  }
+  try {
+    const previous = await assignContacts(await dbForRequest(), accountId, contactIds, assignee, access.userId);
+    revalidatePath(contactsPath(accountId));
+    return { ok: true, previous };
+  } catch (e) {
+    console.error(`assignContactsAction: account ${accountId}: ${loggableError(e)}`);
+    return { ok: false, error: isRefusal(e) ? "assign.refused" : "assign.failed" };
+  }
+}
+
+/** One entry of an Undo as it came back from the browser: every id a UUID (or null where a person may be nobody). */
+function isPrevious(p: unknown): p is PreviousAssignee {
+  if (typeof p !== "object" || p === null) return false;
+  const x = p as Record<string, unknown>;
+  return isUuid(x.contactId) && isUuidOrNull(x.assignee) && isUuidOrNull(x.target)
+    && Array.isArray(x.movedTaskIds) && x.movedTaskIds.every(isUuid);
+}
+
+/**
+ * The Undo for assignContactsAction. Exact only through undoAssignContacts,
+ * which acts on a customer only while it is still with the call's `target`
+ * and moves back ONLY the tasks that call moved: the whole list goes through
+ * in ONE call, never regrouped into assignContacts calls, which would pull
+ * the new holder's own earlier tasks over (Task 2 review m1). `previous`
+ * comes from the browser, so every field is checked before anything is read.
+ */
+export async function undoAssignContactsAction(
+  accountId: string, previous: PreviousAssignee[],
+): Promise<{ ok: true } | { ok: false; error: AssignError }> {
+  const access = await requireAccountAccess(accountId);
+  if (!seesWholeAccount(access)) return { ok: false, error: "assign.refused" };
+  if (!Array.isArray(previous) || previous.length === 0 || previous.length > MAX_ASSIGN || !previous.every(isPrevious)) {
+    return { ok: false, error: "assign.failed" };
+  }
+  try {
+    await undoAssignContacts(await dbForRequest(), accountId, previous, access.userId);
+    revalidatePath(contactsPath(accountId));
+    return { ok: true };
+  } catch (e) {
+    console.error(`undoAssignContactsAction: account ${accountId}: ${loggableError(e)}`);
+    return { ok: false, error: isRefusal(e) ? "assign.refused" : "assign.failed" };
+  }
 }
 
 const contactsPath = (accountId: string) => `/dashboard/accounts/${accountId}/contacts`;
