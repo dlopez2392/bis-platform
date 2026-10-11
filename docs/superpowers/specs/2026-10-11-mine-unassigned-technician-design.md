@@ -20,13 +20,13 @@ everything on them, enforced by the database, so their own session token reads n
 | M4 | Technician writes | Work their own customers: text and call, notes, add and finish tasks, edit contact details, book and move appointments, add a new customer (it becomes theirs). Cannot reassign (not even to Unassigned), delete, export, build forms or touch settings. The database refuses writes to anyone else's customer |
 | M5 | Enforcement | RESTRICTIVE RLS policies keyed on role, chosen over a separate read path or a denormalised visible-to column. SECURITY DEFINER, stable, `search_path ''` helpers, coalesced so NULL never fails open. The role check is an uncorrelated scalar subquery (an InitPlan, once per statement), so Owner, Staff and the agency pay almost nothing; only Technician queries do a per-row check |
 
-Choices this spec makes; **(rec.)** marks the ones the owner should confirm:
+Choices this spec makes; **(owner, 2026-10-11)** marks the ones danlo confirmed after review (§13):
 
 | # | Choice |
 |---|---|
-| A1 | **(rec.)** The policies ask "does this caller see every customer?" (agency, Owner, Staff), not "is this caller a Technician?". A client login with NO membership row then sees no customers, not all of them (§5.1, question 1) |
-| A2 | **(rec.)** "Assign to…" in the contact list's bulk-action bar, Owner and Staff only |
-| A3 | **(rec.)** When a member leaves, their customers and open tasks go back to Unassigned. Undo puts back the ones nobody has picked up since (§8, question 2) |
+| A1 | **(owner, 2026-10-11)** The policies ask "does this caller see every customer?" (agency, Owner, Staff), not "is this caller a Technician?". A client login with NO membership row then sees no customers, not all of them (§5.1, §13.1) |
+| A2 | **(owner, 2026-10-11)** "Assign to…" in the contact list's bulk-action bar, Owner and Staff only |
+| A3 | **(owner, 2026-10-11)** When a member leaves, their customers and open tasks go back to Unassigned. Undo puts back the ones nobody has picked up since (§8, §13.2) |
 | A4 | When a customer changes hands, their open tasks that were the old assignee's go with them, or they would sit with someone who can no longer see the customer |
 | A5 | Only company members can be assignees. The agency has no membership (`users_member_read`, 0066:108), so it is not offered as one |
 
@@ -204,7 +204,7 @@ proven through RLS, for every role (the answer is the same for Owner and Staff).
   "Assign the customer to them first."
 - When a Technician adds a customer whose phone or email already belongs to someone else's
   customer, `findDuplicate` (`contacts.ts:393`) misses the match under RLS and a second row is
-  created; `createContact`'s own flag insert (`contacts.ts:411`) would be refused (§5.2). Question 3.
+  created; `createContact`'s own flag insert (`contacts.ts:411`) would be refused (§5.2). Decided in §13.3: create it as theirs and flag the pair, service-written.
 - Lists: `listContacts` and `countContacts` gain `who: "mine" | "unassigned"`; `listConversations`
   (`messaging.ts:593`) filters through `contacts!inner(assigned_to)`; `listAccountWork`
   (`work-queue.ts:137`) filters tasks by their own assignee and derived rows by the customer's.
@@ -289,12 +289,13 @@ Neither order exposes data.
 - §7.3 touches compliance display code; the gates do not move.
 - Assumption, not verified: a Clerk `org:member` cannot invite (0066 relies on it for Staff).
 
-## 13. Questions for the owner
+## 13. Owner rulings (danlo, 2026-10-11, after reading this spec)
 
-1. **A login with no role yet sees no customers, not all of them.** Recommend yes: it is the only
+1. **A login with no role yet sees no customers, not all of them.** DECIDED yes: it is the only
    safe failure for a Technician, and Owners and Staff meet it only if Clerk is down on a first visit.
 2. **When someone leaves, their customers and open tasks go back to Unassigned; Undo restores
-   them.** Recommend yes.
-3. **A Technician adds a customer who already exists under someone else.** Recommend: create it as
+   them.** DECIDED yes.
+3. **A Technician adds a customer who already exists under someone else.** DECIDED: create it as
    theirs and flag the pair for the Owner's duplicates queue (service-written), telling the
    Technician nothing. Refusing ("already on your list") reveals a customer they cannot see.
+4. **"Assign to…" in the bulk-action bar** (A2), Owner and Staff only. DECIDED yes.
