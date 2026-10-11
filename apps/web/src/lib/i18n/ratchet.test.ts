@@ -176,7 +176,9 @@ describe("the i18n ratchet, live", () => {
   it("no file's un-catalogued copy rises above its baseline, and no new file starts with any (mutation: add <p>Loading your calls</p> to src/components/app-sidebar.tsx → FAILS naming that file)", () => {
     const violations = ratchetViolations(countsByFile(baseDir), baseline as Record<string, number>);
     expect(violations, violations.map((v) => `${v.file}: live ${v.live} > baseline ${v.allowed}`).join("\n")).toEqual([]);
-  });
+    // The scan reads every source file: ~1 s alone, but 6-14 s when it shares the machine with the
+    // rest of the suite, which tripped vitest's 5 s default in three runs on 2026-10-11.
+  }, 30_000);
 
   it("every catalogue key added from today has a Spanish twin unless it is agency-only (mutation: add \"nav.newThing\": \"New thing\" to messages.ts with no .es twin → FAILS naming the key)", () => {
     const violations = parityViolations(keysMissingSpanish(m), catalogueBaseline as string[]);
