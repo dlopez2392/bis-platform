@@ -23,6 +23,7 @@ Owner (danlo, 2026-10-11):
 | R4 | Who the other person is | Always a contact: found by search, or created inline (name, optional phone) as a new contact, assigned by F-085's hand-added rule |
 | R5 | Flags | `can_pick_up` and `is_emergency` now. `has_custody` and `no_contact` wait for F-004 (non-goal) |
 | R6 | Technician | Sees a relationship only on a customer who is theirs; the other person's name only if that person is theirs too. Write rules: §5.3 |
+| R7 | One label twice for the same two people (2026-10-11, at Task 1's review) | **Support labels are DIRECTIONAL**: `emergency_contact`, `authorized_pickup`, `responsible_party`, `caregiver` (§7's four) and `landlord` (in this spec, "support label" means these five where uniqueness is concerned) allow one row per direction, so Ana can be Sofía's emergency contact AND Sofía Ana's (unique on `contact_id, related_contact_id, label_key`). **Family and symmetric labels stay one row per unordered pair**: `parent`, `godparent`, `spouse`, `sibling`, `compadre`, `referred`, `other` ("A is B's parent" refuses "B is A's parent"; "Other" compares its text case-insensitively). The two sets are `UNDIRECTED_KEYS` and `DIRECTIONAL_KEYS` (§4.1), carried by two partial unique indexes (§5.1) |
 
 Choices this spec makes:
 
@@ -47,15 +48,20 @@ customer. A per-contact gender or title field. Editing a label in place (C6).
 
 ### 4.1 A code registry, the key in the database
 
-`packages/db/src/relationships.ts` exports `RELATIONSHIP_KEYS` (the 12 keys below, `as const`). The
-words live in `apps/web/src/lib/contacts/relationship-labels.ts`, typed `Record<RelationshipKey,
+`packages/db/src/relationship-keys.ts` (dependency-free, imported as `@bis/db/relationship-keys` so a
+client component never pulls supabase-js into the browser) exports `RELATIONSHIP_KEYS` (the 12 keys
+below, `as const`), the row type, and R7's two uniqueness sets, `UNDIRECTED_KEYS` and
+`DIRECTIONAL_KEYS`, which split the 12 with nothing left over; `relationships.ts` (the queries, §6)
+imports them from there. The words live in `apps/web/src/lib/contacts/relationship-labels.ts`, typed `Record<RelationshipKey,
 LabelEntry>`, so a key without words is a type error. `label_key` carries a CHECK of the same keys,
 compared to `RELATIONSHIP_KEYS` by a db test through `pg_get_constraintdef`; a new label is a migration
 plus an entry. Not a table: nobody edits these words in a screen. Not `messages.ts`: about 150 strings
 would bury it, and the `.es` ratchet reads only `messages.ts` (`lib/i18n/ratchet.test.ts:9-11`), so
 the registry has its own gate (§9). The card's chrome copy does go in `messages.ts` (§7). **"Other"**
 stores `custom_label` (trimmed with an explicit whitespace class, 1–60 characters), shown exactly as
-typed on both records in both languages.
+typed on both records in both languages. The database refuses an edge space or a blank label too
+(`contact_relationships_custom_trimmed`, §5.1); the app's class must strip at least everything the
+database's `[:space:]` holds, or a label the app cleaned is refused as 23514.
 
 ### 4.2 Direction, sides and the gender form
 
@@ -128,6 +134,7 @@ contact_relationships_contact_fkey (account_id, contact_id)         -> contacts 
 contact_relationships_related_fkey (account_id, related_contact_id) -> contacts (account_id, id) on delete cascade
 check contact_relationships_not_self (contact_id <> related_contact_id)
 check contact_relationships_custom ((label_key = 'other') = (custom_label is not null), 1-60 chars)
+check contact_relationships_custom_trimmed (custom_label ~ '^[^[:space:]](.*[^[:space:]])?$')
 check contact_relationships_emergency (label_key <> 'emergency_contact' or contact_is_emergency)
 check contact_relationships_pickup (label_key <> 'authorized_pickup' or contact_can_pick_up)
 ```
@@ -142,12 +149,24 @@ symmetric row has no direction at all. So each side has its own two flags, as it
 form, and a chip shows the named person's flags. The last two CHECKs make those two labels set side
 A's flag, so "who can pick Sofía up" is always a flag read.
 
-**Uniqueness, in either direction:** unique index `contact_relationships_pair` on `(account_id,
-least(contact_id, related_contact_id), greatest(contact_id, related_contact_id), label_key,
-lower(coalesce(custom_label, '')))`. It refuses a label twice for a pair either way round ("A is B's
-parent" beside "B is A's parent") and the same "Other" text in another case. Different labels for one
-pair are allowed. Being order-free, it needs no ordering CHECK like 0033's `contact_a < contact_b`
-(0033:62). **Lookups:** `(account_id, contact_id)` and `(account_id, related_contact_id)` serve the
+**Uniqueness depends on the label (R7), two partial unique indexes:**
+`contact_relationships_pair` on `(account_id, least(contact_id, related_contact_id),
+greatest(contact_id, related_contact_id), label_key, lower(coalesce(custom_label, '')))` WHERE
+`label_key` is in `UNDIRECTED_KEYS`. It refuses a family or symmetric label twice for a pair either way
+round ("A is B's parent" beside "B is A's parent") and the same "Other" text in another case. Being
+order-free, it needs no ordering CHECK like 0033's `contact_a < contact_b` (0033:62).
+`contact_relationships_directed` on `(account_id, contact_id, related_contact_id, label_key)` WHERE
+`label_key` is in `DIRECTIONAL_KEYS`: a support label is refused only twice in the SAME direction, so
+Ana→Sofía and Sofía→Ana `emergency_contact` both stand. Different labels for one pair are allowed under
+both. The two predicates together cover every key in the `label_key` CHECK; the db test compares each
+predicate to its TypeScript set and checks the sets split `RELATIONSHIP_KEYS`, so a new key that lands
+in neither (and would be unique under nothing) fails a test.
+
+**Edge spaces in "Other".** `contact_relationships_custom_trimmed` uses a POSIX class because the
+migration carries no backslash (0050:86). Its members depend on the server's locale; measured on
+2026-10-11 on production and bis-ci (both PG 17.6, ICU `en_US.UTF-8`), `[:space:]` is U+0009–000D,
+U+001C–001F, U+0020, U+0085, U+00A0, U+1680, U+2000–200A, U+2028, U+2029, U+202F, U+205F, U+3000. The
+app trims before it writes (§6), with a class that must contain all of these. **Lookups:** `(account_id, contact_id)` and `(account_id, related_contact_id)` serve the
 read `account_id = $1 and (contact_id = $2 or related_contact_id = $2)` (a BitmapOr) and both
 cascades. **Two FKs to `contacts`** make an unhinted embed ambiguous (0050:39-46, PostgREST's
 documented behaviour, not measured), so the queries never embed: relationships, then the people by
@@ -215,7 +234,13 @@ db test pins the policy list (`policyname, permissive, cmd`), as `server-only-wr
   and for a caller who does not see the whole account (`lib/auth-role.ts:15`) the service client as
   `flagDb` plus `flagMatchesOf`. An `existing` answer (`contacts.ts:418`) relates that contact. Also
   `setRelationshipSidesAction`, `removeRelationshipAction` (Undo snapshot), `undoRemoveRelationshipAction`.
-- **Errors** become copy (logged, `loggableError`): `23505` "That relationship is already there.",
+- **Errors** become copy (logged, `loggableError`): `23505` "That relationship is already there." is
+  a duplicate under R7: the same family or symmetric label for these two people written EITHER way
+  round (`contact_relationships_pair`, "Sofía is Ana's mother" when "Ana is Sofía's mother" exists,
+  which is a contradiction, not a second fact), or the same support label in the SAME direction
+  (`contact_relationships_directed`). The reverse of a support label is NOT a duplicate and succeeds,
+  so neither the dialog nor the action pre-checks a pair; the database decides, and the copy names no
+  direction, so it holds for both indexes;
   `42501` "You can't change that customer." (0068's), `23503` on Undo "Couldn't put it back.", `23514` "Pick someone else."
 - **Read route** `api/accounts/[accountId]/contacts/[contactId]/relationships/route.ts`, the texts
   route's shape: `apiAccountAccess`, `getContact` on the request client (404 if hidden), the two reads,
@@ -253,22 +278,31 @@ relacionadas."; "Can pick up" / "Puede recoger"; "Emergency contact" / "Contacto
 
 `contact_duplicate_flags` (0033:52-66) is untouched. Deleting a contact (Owner-only, 0066:84) cascades
 its relationships off the other records, with no event. **Merge (S-12, deferred)** must re-point the
-loser's relationships to the winner and drop rows that would collide with the unique index or turn
-into self-relationships (the two duplicates related to each other); its spec must say so.
+loser's relationships to the winner and drop rows that would collide with either unique index (R7:
+order-free for family labels, per direction for support labels) or turn into self-relationships (the two duplicates related to each other); its spec must say so.
 
 ## 9. Testing (every test can fail on wrong code; each names its mutation probe)
 
-- **DB** `packages/db/src/test/contact-relationships.test.ts` (seeded as `technician-scope.test.ts:1-50`):
-  another tenant reads 0; crossed-account insert 23503 (probe: single-column FK); self 23514; a label
-  reversed, or "Other" in another case, 23505 (probe: drop `least/greatest` or `lower`); both flag
-  CHECKs; client UPDATE of `label_key` 42501; either contact's delete removes the row; teardown leaves
-  nothing; CHECK keys equal `RELATIONSHIP_KEYS`. **Technician:** reads a row with one side theirs, not
-  neither; inserts only with both; cannot update or delete with one side hidden (probe: write fences
-  with the read expression → FAILS); Owner, Staff, agency unchanged; no-membership client 0; policies pinned.
-- **Registry:** every key has `a`/`b` × `en`/`es` with an `n` form and `{name}` once; `f` implies `m`;
+- **DB schema** `packages/db/src/test/contact-relationships-schema.test.ts` (`withRollback`, seeded as
+  `technician-scope.test.ts:1-50`, runs on a local replica): another tenant reads 0; crossed-account
+  insert 23503 on each side, by constraint name (probe: single-column FK on either side); self 23514; a
+  family or symmetric label reversed, or "Other" in another case, 23505 on `_pair` (probe: drop
+  `least/greatest` or `lower`); a support label reversed succeeds and the same direction twice is 23505
+  on `_directed` (probes: one order-free index over every key; drop `_directed`); each index predicate
+  equals its TypeScript set and the sets split `RELATIONSHIP_KEYS`; edge-space or blank "Other" 23514;
+  both flag CHECKs; a bad form on either side 23514; client UPDATE of `label_key` 42501; either
+  contact's delete removes the row; CHECK keys equal `RELATIONSHIP_KEYS`. **Technician:** reads a row
+  with one side theirs, not neither; inserts, updates and deletes only with both, whichever side theirs
+  is on (probes: write fences with the read expression, or on `related_contact_id` only → FAILS); Owner,
+  Staff, agency unchanged; no-membership client 0; policies pinned. Plus the `schema-grants-guard.test.ts` entry (§5.5).
+- **DB queries** `packages/db/src/test/relationships.test.ts` (`withTestAccount`, live): the reads, the
+  writes and their events, Undo's same id, SQLSTATEs kept; teardown leaves nothing.
+- **Registry** (`apps/web/src/lib/contacts/relationship-labels.test.ts`, with `chipFor`; input checks in
+  `relationship-input.test.ts`, the inline-edit state in `relationship-view.test.ts`): every key has `a`/`b` × `en`/`es` with an `n` form and `{name}` once; `f` implies `m`;
   symmetric sides equal; no `{{` or milestone codes (probe: delete one `es.b` → fails naming the key).
   `chipFor`: both orientations, forms, `referred`'s subject agreement, hidden person, flag side.
-- **Actions and route:** refusals; inline create assigns `readPersonId`'s person, narrow path for a
+- **Actions and route** (`contacts/relationship-actions.test.ts`, the route's `route.test.ts`, the card's
+  `relationships-load.test.ts` and `relationships-card.test.ts`, as the plan names them): refusals; inline create assigns `readPersonId`'s person, narrow path for a
   Technician, `existing` reused; error mapping; Undo keeps the id; events carry the actor; the route
   404s an invisible contact and drops a hidden id; `request-locale-callers.test.ts`; drawer wiring test.
 - **e2e** `relationships.spec.ts` (bis-e2e-qa runs it), per-run fixture account only, never Test Client

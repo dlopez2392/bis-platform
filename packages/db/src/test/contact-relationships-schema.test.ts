@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
 import { withRollback, actAs } from "./db";
-import { RELATIONSHIP_KEYS } from "../relationship-keys";
+import { RELATIONSHIP_KEYS, UNDIRECTED_KEYS, DIRECTIONAL_KEYS } from "../relationship-keys";
 
 /**
  * Relationships between customers (spec §5, migration 0070). One row per pair, both people in the
@@ -97,6 +97,25 @@ describe("shape", () => {
       const keys = [...d!.def.matchAll(/'([a-z_]+)'::text/g)].map((x) => x[1]).sort();
       expect(keys).toEqual([...RELATIONSHIP_KEYS].sort());
     }));
+
+  it("UNDIRECTED_KEYS and DIRECTIONAL_KEYS split RELATIONSHIP_KEYS, every key in exactly one (mutation: drop 'landlord' from DIRECTIONAL_KEYS -> FAILS)", () => {
+    const both = [...UNDIRECTED_KEYS, ...DIRECTIONAL_KEYS];
+    expect(new Set(both).size).toBe(both.length);
+    expect([...both].sort()).toEqual([...RELATIONSHIP_KEYS].sort());
+  });
+
+  it("the pair index covers exactly UNDIRECTED_KEYS and the directed index exactly DIRECTIONAL_KEYS (mutation: move 'landlord' into the pair index's predicate -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ name: string; pred: string | null }>(
+        `select i.relname as name, pg_get_expr(x.indpred, x.indrelid) as pred
+           from pg_index x join pg_class i on i.oid = x.indexrelid
+          where i.relname in ('contact_relationships_pair', 'contact_relationships_directed') order by 1`);
+      const keysOf = (name: string) =>
+        [...(rows.find((r) => r.name === name)?.pred ?? "").matchAll(/'([a-z_]+)'::text/g)].map((x) => x[1]).sort();
+      expect(rows.map((r) => r.name)).toEqual(["contact_relationships_directed", "contact_relationships_pair"]);
+      expect(keysOf("contact_relationships_pair")).toEqual([...UNDIRECTED_KEYS].sort());
+      expect(keysOf("contact_relationships_directed")).toEqual([...DIRECTIONAL_KEYS].sort());
+    }));
 });
 
 describe("integrity (as the table owner)", () => {
@@ -106,19 +125,44 @@ describe("integrity (as the table owner)", () => {
       [s.acct, s.mine])).rejects.toMatchObject({ code: "23514" });
   }));
 
-  it("refuses a person from another account, either way round (mutation: single-column FK on related_contact_id -> FAILS)", () => withRollback(async (c) => {
+  it("refuses a person from another account on either side, each by its own key (mutation: single-column FK on related_contact_id, or on contact_id -> FAILS)", () => withRollback(async (c) => {
     const s = await seed(c);
     await expect(refused(c, "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,'parent')",
-      [s.acct, s.mine, s.elsewhere])).rejects.toMatchObject({ code: "23503" });
+      [s.acct, s.mine, s.elsewhere])).rejects.toMatchObject({ code: "23503", constraint: "contact_relationships_related_fkey" });
     await expect(refused(c, "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,'parent')",
-      [s.acctB, s.elsewhere, s.mine])).rejects.toMatchObject({ code: "23503" });
+      [s.acct, s.elsewhere, s.mine])).rejects.toMatchObject({ code: "23503", constraint: "contact_relationships_contact_fkey" });
   }));
 
-  it("refuses the same label for a pair in the reverse direction (mutation: index on (contact_id, related_contact_id) without least/greatest -> FAILS)", () =>
+  it("refuses a family or symmetric label for a pair in the reverse direction (mutation: index on (contact_id, related_contact_id) without least/greatest -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
-      await expect(refused(c, "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,'parent')",
-        [s.acct, s.theirs, s.mine])).rejects.toMatchObject({ code: "23505" });
+      const reverse = (a: string, b: string, key: string) => refused(c,
+        "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,$4)", [s.acct, a, b, key]);
+      const pair = { code: "23505", constraint: "contact_relationships_pair" };
+      await expect(reverse(s.theirs, s.mine, "parent")).rejects.toMatchObject(pair);
+      await expect(reverse(s.open, s.theirs, "godparent")).rejects.toMatchObject(pair);
+      await expect(reverse(s.mine2, s.mine, "spouse")).rejects.toMatchObject(pair);
+    }));
+
+  it("allows a support label once in EACH direction (owner, 2026-10-11) (mutation: one order-free index over every key -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const ins = (a: string, b: string, key: string) => c.query(
+        `insert into contact_relationships (account_id, contact_id, related_contact_id, label_key, contact_is_emergency, contact_can_pick_up)
+         values ($1,$2,$3,$4,$4 = 'emergency_contact',$4 = 'authorized_pickup')`, [s.acct, a, b, key]);
+      for (const key of ["emergency_contact", "caregiver", "authorized_pickup"]) {
+        expect((await ins(s.mine2, s.open, key)).rowCount).toBe(1);
+        expect((await ins(s.open, s.mine2, key)).rowCount).toBe(1);
+      }
+    }));
+
+  it("refuses a support label twice in the SAME direction (mutation: drop contact_relationships_directed -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const caregiver = "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,'caregiver')";
+      expect((await c.query(caregiver, [s.acct, s.mine2, s.open])).rowCount).toBe(1);
+      await expect(refused(c, caregiver, [s.acct, s.mine2, s.open]))
+        .rejects.toMatchObject({ code: "23505", constraint: "contact_relationships_directed" });
     }));
 
   it("'Other' is unique per pair regardless of case; a different text or label is allowed (mutation: drop lower() from the index -> FAILS)", () =>
@@ -130,7 +174,7 @@ describe("integrity (as the table owner)", () => {
       expect((await other(s.mine, s.open, "Vecina")).rowCount).toBe(1);
       await expect(refused(c,
         "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key, custom_label) values ($1,$2,$3,'other','VECINA')",
-        [s.acct, s.open, s.mine])).rejects.toMatchObject({ code: "23505" });
+        [s.acct, s.open, s.mine])).rejects.toMatchObject({ code: "23505", constraint: "contact_relationships_pair" });
       expect((await other(s.open, s.mine, "Patrona")).rowCount).toBe(1);
       expect((await c.query(
         "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key, contact_is_emergency) values ($1,$2,$3,'emergency_contact',true)",
@@ -148,6 +192,19 @@ describe("integrity (as the table owner)", () => {
     await expect(ins("other", "")).rejects.toMatchObject({ code: "23514" });
   }));
 
+  it("custom_label is stored trimmed and never blank, inner spaces allowed (mutation: drop contact_relationships_custom_trimmed -> FAILS)", () => withRollback(async (c) => {
+    const s = await seed(c);
+    const ins = (label: string) => refused(c,
+      "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key, custom_label) values ($1,$2,$3,'other',$4)",
+      [s.acct, s.mine2, s.open, label]);
+    const trimmed = { code: "23514", constraint: "contact_relationships_custom_trimmed" };
+    for (const label of [" Vecina", "Vecina ", "\tVecina", "Vecina\n", "   "]) {
+      await expect(ins(label), JSON.stringify(label)).rejects.toMatchObject(trimmed);
+    }
+    expect((await ins("Prima  de Ana")).rowCount).toBe(1);
+    expect((await ins("V")).rowCount).toBe(1);
+  }));
+
   it("an emergency-contact or authorized-pickup label sets side A's flag (mutation: drop contact_relationships_emergency -> FAILS)", () => withRollback(async (c) => {
     const s = await seed(c);
     await expect(refused(c, "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,'emergency_contact')",
@@ -156,12 +213,14 @@ describe("integrity (as the table owner)", () => {
       [s.acct, s.mine2, s.open])).rejects.toMatchObject({ code: "23514" });
   }));
 
-  it("an unknown key or word form is refused", () => withRollback(async (c) => {
+  it("an unknown key or word form on either side is refused (mutation: forms CHECK on contact_form only -> FAILS)", () => withRollback(async (c) => {
     const s = await seed(c);
     await expect(refused(c, "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,'cousin')",
-      [s.acct, s.mine2, s.open])).rejects.toMatchObject({ code: "23514" });
+      [s.acct, s.mine2, s.open])).rejects.toMatchObject({ code: "23514", constraint: "contact_relationships_label_key" });
     await expect(refused(c, "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key, contact_form) values ($1,$2,$3,'caregiver','x')",
-      [s.acct, s.mine2, s.open])).rejects.toMatchObject({ code: "23514" });
+      [s.acct, s.mine2, s.open])).rejects.toMatchObject({ code: "23514", constraint: "contact_relationships_forms" });
+    await expect(refused(c, "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key, related_form) values ($1,$2,$3,'caregiver','x')",
+      [s.acct, s.mine2, s.open])).rejects.toMatchObject({ code: "23514", constraint: "contact_relationships_forms" });
   }));
 
   it("deleting either person removes their relationships (mutation: on delete no action -> FAILS)", () => withRollback(async (c) => {
@@ -213,21 +272,24 @@ describe("the Technician (spec §5.3)", () => {
       expect(await visibleIds(c, s.acct)).toEqual([s.r.mineTheirs, s.r.openMine, s.r.mineMine2].sort());
     }));
 
-  it("adds one only between two of their own customers (mutation: insert fence with the read expression -> FAILS)", () => withRollback(async (c) => {
+  it("adds one only between two of their own customers, whichever side theirs is on (mutation: insert fence with the read expression, or on related_contact_id only -> FAILS)", () => withRollback(async (c) => {
     const s = await seed(c);
     await actAs(c, claimsFor("tech"));
     expect((await c.query("insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,'compadre')",
       [s.acct, s.mine2, s.mine])).rowCount).toBe(1);
-    await expect(refused(c, "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,'caregiver')",
-      [s.acct, s.mine, s.open])).rejects.toMatchObject({ code: "42501" });
+    const caregiver = "insert into contact_relationships (account_id, contact_id, related_contact_id, label_key) values ($1,$2,$3,'caregiver')";
+    await expect(refused(c, caregiver, [s.acct, s.mine, s.open])).rejects.toMatchObject({ code: "42501" });
+    await expect(refused(c, caregiver, [s.acct, s.open, s.mine])).rejects.toMatchObject({ code: "42501" });
   }));
 
-  it("changes or removes one only when both people are theirs (mutation: update and delete fences with the read expression -> FAILS)", () =>
+  it("changes or removes one only when both people are theirs, whichever side theirs is on (mutation: update and delete fences with the read expression, or on related_contact_id only -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await actAs(c, claimsFor("tech"));
       expect((await c.query("update contact_relationships set contact_can_pick_up = true where id = $1", [s.r.mineTheirs])).rowCount).toBe(0);
       expect((await c.query("delete from contact_relationships where id = $1", [s.r.mineTheirs])).rowCount).toBe(0);
+      expect((await c.query("update contact_relationships set contact_can_pick_up = true where id = $1", [s.r.openMine])).rowCount).toBe(0);
+      expect((await c.query("delete from contact_relationships where id = $1", [s.r.openMine])).rowCount).toBe(0);
       expect((await c.query("update contact_relationships set contact_form = 'f' where id = $1", [s.r.mineMine2])).rowCount).toBe(1);
       expect((await c.query("delete from contact_relationships where id = $1", [s.r.mineMine2])).rowCount).toBe(1);
     }));

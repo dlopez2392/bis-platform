@@ -11,6 +11,21 @@ export const RELATIONSHIP_KEYS = [
 ] as const;
 export type RelationshipKey = (typeof RELATIONSHIP_KEYS)[number];
 
+/**
+ * Uniqueness (owner, 2026-10-11). Family and symmetric labels are one row per UNORDERED pair: "A is
+ * B's parent" refuses "B is A's parent", and "Other" compares its text case-insensitively. Support
+ * labels are DIRECTIONAL, one row per direction: Ana may be Sofia's emergency contact and Sofia
+ * Ana's. 0070's two partial unique indexes (contact_relationships_pair, _directed) carry exactly
+ * these sets; contact-relationships-schema.test.ts compares them and checks they split
+ * RELATIONSHIP_KEYS with nothing left over.
+ */
+export const UNDIRECTED_KEYS = [
+  "parent", "spouse", "sibling", "godparent", "compadre", "referred", "other",
+] as const satisfies readonly RelationshipKey[];
+export const DIRECTIONAL_KEYS = [
+  "emergency_contact", "authorized_pickup", "responsible_party", "caregiver", "landlord",
+] as const satisfies readonly RelationshipKey[];
+
 /** A person's grammatical form for one relationship's words (spec C1). Null is the neutral word. */
 export type WordForm = "f" | "m";
 

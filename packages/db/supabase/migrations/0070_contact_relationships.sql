@@ -8,7 +8,10 @@
 -- (contact_form, related_form; null = neutral word) and its own two flags.
 --
 -- Both people belong to the row's own account: composite keys to contacts (account_id, id),
--- 0050's shape. Unique in either direction through least/greatest. Client-written under RLS
+-- 0050's shape. Uniqueness (owner, 2026-10-11) depends on the label: family and symmetric labels
+-- are one row per UNORDERED pair (least/greatest), support labels one row per DIRECTION (Ana may
+-- be Sofia's emergency contact and Sofia Ana's); the two key sets are UNDIRECTED_KEYS and
+-- DIRECTIONAL_KEYS in @bis/db/relationship-keys, pinned by the same test. Client-written under RLS
 -- (operator-entered state, like notes and contact_tags), with 0068-style restrictive fences:
 -- a Technician reads a row when EITHER person is theirs and writes only when BOTH are.
 --
@@ -54,15 +57,26 @@ create table public.contact_relationships (
   constraint contact_relationships_custom check (
     (label_key = 'other') = (custom_label is not null)
     and (custom_label is null or char_length(custom_label) between 1 and 60)),
+  -- Stored trimmed, never blank. A POSIX class (no backslash, see the header): under production's
+  -- ICU en_US.UTF-8 it is 09-0D, 1C-1F, 20, 85, A0, 1680, 2000-200A, 2028, 2029, 202F, 205F, 3000,
+  -- measured 2026-10-11; the app trims a superset before it writes (relationship-input.ts).
+  constraint contact_relationships_custom_trimmed check (custom_label ~ '^[^[:space:]](.*[^[:space:]])?$'),
   -- These two labels ARE the flag on side A, so "who can pick X up" is always a flag read.
   constraint contact_relationships_emergency check (label_key <> 'emergency_contact' or contact_is_emergency),
   constraint contact_relationships_pickup check (label_key <> 'authorized_pickup' or contact_can_pick_up)
 );
 
--- Order-free: the same label twice for a pair is refused whichever way round it was written.
+-- Family and symmetric labels (UNDIRECTED_KEYS), order-free: the same label twice for a pair is
+-- refused whichever way round it was written, and "Other" compares its text case-insensitively.
 create unique index contact_relationships_pair on public.contact_relationships (
   account_id, least(contact_id, related_contact_id), greatest(contact_id, related_contact_id),
-  label_key, lower(coalesce(custom_label, '')));
+  label_key, lower(coalesce(custom_label, '')))
+  where label_key in ('parent', 'spouse', 'sibling', 'godparent', 'compadre', 'referred', 'other');
+-- Support labels (DIRECTIONAL_KEYS), one row per direction: refused twice the same way round only.
+-- Between them the two predicates cover every key in contact_relationships_label_key.
+create unique index contact_relationships_directed on public.contact_relationships (
+  account_id, contact_id, related_contact_id, label_key)
+  where label_key in ('emergency_contact', 'authorized_pickup', 'responsible_party', 'caregiver', 'landlord');
 -- "Relationships of X" reads both columns (a BitmapOr); both also serve the cascades.
 create index contact_relationships_by_contact on public.contact_relationships (account_id, contact_id);
 create index contact_relationships_by_related on public.contact_relationships (account_id, related_contact_id);
