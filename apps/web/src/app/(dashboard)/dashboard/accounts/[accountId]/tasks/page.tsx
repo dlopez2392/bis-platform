@@ -7,6 +7,7 @@
 // the files below it, not here.
 import { listAccountWork, listPendingProposals, type CallProposal } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
+import { WhoFilter } from "@/components/assign/who-filter";
 import { requireAccountAccess } from "@/lib/auth";
 import { renderZone } from "@/lib/zone";
 import { ZoneNote } from "@/components/zone-note";
@@ -137,7 +138,20 @@ export default async function TasksPage({
 
   return (
     <>
-      <PageHeader title={m["work.title"]} />
+      <PageHeader
+        title={m["work.title"]}
+        // F-085 part 1 (spec §9): All · Mine · Unassigned, for those who see
+        // the whole account. Nothing else rides along: this list has no
+        // search, sort or pager.
+        filters={assign.canAssign ? (
+          <WhoFilter
+            base={`/dashboard/accounts/${accountId}/tasks`}
+            current={assign.who}
+            showMine={assign.showMine}
+            params={{}}
+          />
+        ) : undefined}
+      />
       <div className="p-6">
         <ZoneNote
           zone={zone}
@@ -153,6 +167,7 @@ export default async function TasksPage({
           stageNames={stageNames}
           canAssign={assign.canAssign}
           members={assign.members}
+          who={assign.who}
         />
       </div>
     </>

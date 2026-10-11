@@ -6,6 +6,7 @@ import { ContactsTable } from "./contacts-table";
 import { AddContactDialog } from "./add-contact-dialog";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
+import { WhoFilter } from "@/components/assign/who-filter";
 import { Input } from "@/components/ui/input";
 import { buttonVariants } from "@/components/ui/button";
 import { requireAccountAccess } from "@/lib/auth";
@@ -13,6 +14,7 @@ import { dbForRequest } from "@/lib/db";
 import { encodeCursor, parseCursor } from "@/lib/cursor";
 import { withWho, type Who } from "@/lib/assign/who";
 import { loadAssignView } from "@/lib/assign/view";
+import { seesWholeAccount } from "@/lib/auth-role";
 import { cn } from "@/lib/utils";
 import { m } from "@/lib/messages";
 import { renderZone } from "@/lib/zone";
@@ -117,6 +119,20 @@ export function buildExportHref(
   return `${base}/export?${new URLSearchParams({ ...(q ? { q } : {}), sort, dir })}`;
 }
 
+/**
+ * Which empty state a zero-row page one means (F-085 part 1, spec §9). A
+ * search that found nothing is the narrower fact and wins; then the filter
+ * in effect; then a Technician, whose list is only ever theirs, gets their
+ * own sentence rather than the Owner's "add your first contact".
+ */
+function emptyCopy(q: string | undefined, who: Who, wholeAccount: boolean): { title: string; body?: string } {
+  if (q) return { title: m["contacts.noMatches.title"], body: m["contacts.noMatches.body"] };
+  if (who === "mine") return { title: m["assign.empty.mine"] };
+  if (who === "unassigned") return { title: m["assign.empty.unassigned"] };
+  if (!wholeAccount) return { title: m["assign.empty.technician"] };
+  return { title: m["contacts.empty.title"], body: m["contacts.empty.body"] };
+}
+
 export default async function ContactsPage({
   params,
   searchParams,
@@ -183,6 +199,10 @@ export default async function ContactsPage({
   const countLabel = total === 1
     ? m["contacts.countOne"]
     : m["contacts.count"].replace("{count}", String(total));
+  // F-085 part 1: a Technician (and a client whose role is unsettled) sees
+  // only their own customers, so a CSV import, like Export, is not theirs.
+  const wholeAccount = seesWholeAccount(access);
+  const empty = emptyCopy(q, assign.who, wholeAccount);
 
   return (
     <>
@@ -200,16 +220,29 @@ export default async function ContactsPage({
                 {m["contacts.export"]}
               </Link>
             ) : null}
-            <Link
-              href={`${base}/import`}
-              className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
-            >
-              <Upload className="size-4" aria-hidden />
-              {m["contacts.import"]}
-            </Link>
+            {wholeAccount ? (
+              <Link
+                href={`${base}/import`}
+                className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+              >
+                <Upload className="size-4" aria-hidden />
+                {m["contacts.import"]}
+              </Link>
+            ) : null}
             <AddContactDialog accountId={accountId} action={boundCreateContact} />
           </>
         }
+        // F-085 part 1 (spec §9): All · Mine · Unassigned, for those who
+        // see the whole account. Carries the search and sort, never the
+        // cursor: a filter change returns to page one (Paged lists).
+        filters={assign.canAssign ? (
+          <WhoFilter
+            base={base}
+            current={assign.who}
+            showMine={assign.showMine}
+            params={{ ...(q ? { q } : {}), sort, dir }}
+          />
+        ) : undefined}
         search={
           // D-009: a plain GET form only carries the fields IT names — with
           // no hidden sort/dir, pressing Enter in the search box dropped
@@ -246,11 +279,7 @@ export default async function ContactsPage({
           // zero (below) means the opposite: real history, just none older
           // than the cursor — the table still renders (headers, no rows) with
           // a "Newer" link back to the head, rather than this empty state.
-          <EmptyState
-            icon={Users}
-            title={q ? m["contacts.noMatches.title"] : m["contacts.empty.title"]}
-            body={q ? m["contacts.noMatches.body"] : m["contacts.empty.body"]}
-          />
+          <EmptyState icon={Users} title={empty.title} body={empty.body} />
         ) : (
           <>
             <ContactsTable

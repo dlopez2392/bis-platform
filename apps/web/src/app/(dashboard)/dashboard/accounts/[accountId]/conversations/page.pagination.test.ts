@@ -96,7 +96,9 @@ describe("ConversationsPage's pagination (D-019)", () => {
     // No bare link back to the base path when there is nowhere "newer" to
     // return to — distinguished from the Older assertion above by the exact
     // href, since the thread-selection links also point under this base.
-    expect(noCursor).not.toContain('href="/dashboard/accounts/acct1/conversations"');
+    // The list's own links only: the All · Mine · Unassigned row (F-085)
+    // links to this base on purpose, and is pinned at the foot of this file.
+    expect(noCursor.replace(/<nav[^>]*aria-label="Show"[^>]*>[\s\S]*?<\/nav>/, "")).not.toContain('href="/dashboard/accounts/acct1/conversations"');
   });
 
   it("falls back to getConversationSummary when `c` names a conversation NOT on the current page, and opens it (mutation: drop the fallback → thread pane stays the pick-a-thread empty state → FAILS)", async () => {
@@ -204,6 +206,55 @@ describe("ConversationsPage's ?who=", () => {
     const full = Array.from({ length: 50 }, (_, i) => row(i));
     listConversationsMock.mockResolvedValueOnce(full);
     const html = await markup({ c: "convo1" });
-    expect(html).not.toContain("who=");
+    // Outside the filter row, whose Mine and Unassigned links name theirs.
+    expect(html.replace(/<nav[^>]*aria-label="Show"[^>]*>[\s\S]*?<\/nav>/, "")).not.toContain("who=");
+  });
+});
+
+// F-085 part 1 (spec §9, Task 7): the filter row, and the filtered empty
+// states. A filter that empties the inbox is not an inbox with nothing in it.
+describe("ConversationsPage's All · Mine · Unassigned row (F-085)", () => {
+  const STAFF: Access = { userId: "u1", isAgency: false, role: "staff", canManage: false };
+  const TECH: Access = { userId: "u1", isAgency: false, role: "technician", canManage: false };
+  const NAV = 'aria-label="Show"';
+  beforeEach(() => {
+    listConversationsMock.mockReset();
+    getConversationSummaryMock.mockReset();
+    accessMock.mockReset().mockResolvedValue(AGENCY);
+  });
+
+  it("Staff get the filter row over the list, its links back to page one of this inbox (mutation: render it for nobody -> FAILS)", async () => {
+    accessMock.mockResolvedValue(STAFF);
+    listConversationsMock.mockResolvedValueOnce([row(0)]);
+    const html = await markup({ who: "unassigned", before: encodeCursor({ v: "2026-10-01T10:00:00Z", id: "convo9" }) });
+    const nav = html.match(/<nav[^>]*aria-label="Show"[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
+    expect(nav).not.toBe("");
+    const hrefs = [...nav.matchAll(/href="([^"]*)"/g)].map((x) => x[1]!.replace(/&amp;/g, "&"));
+    expect(hrefs).toEqual([
+      "/dashboard/accounts/acct1/conversations",
+      "/dashboard/accounts/acct1/conversations?who=mine",
+      "/dashboard/accounts/acct1/conversations?who=unassigned",
+    ]);
+  });
+
+  it("a zero-row Mine keeps the filter row and says nothing is assigned to you yet (mutation: the plain 'no conversations' -> FAILS)", async () => {
+    accessMock.mockResolvedValue(STAFF);
+    listConversationsMock.mockResolvedValueOnce([]);
+    const html = await markup({ who: "mine" });
+    expect(html).toContain(NAV);
+    expect(html).toContain("Nothing assigned to you yet.");
+    expect(html).not.toContain("No conversations yet");
+  });
+
+  it("a zero-row Unassigned says every customer has someone", async () => {
+    accessMock.mockResolvedValue(STAFF);
+    listConversationsMock.mockResolvedValueOnce([]);
+    expect(await markup({ who: "unassigned" })).toContain("Every customer has someone.");
+  });
+
+  it("a Technician gets no filter row (mutation: render it for everyone -> FAILS)", async () => {
+    accessMock.mockResolvedValue(TECH);
+    listConversationsMock.mockResolvedValueOnce([row(0)]);
+    expect(await markup({})).not.toContain(NAV);
   });
 });

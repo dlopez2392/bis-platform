@@ -28,6 +28,7 @@ function real(): ContactSummary {
     zone: { zone: "America/Chicago", guessed: false, label: "America/Chicago" },
     source: "form: Contact us",
     sourceHint: "Found through ChatGPT",
+    assignedTo: "11111111-1111-4111-8111-111111111111",
   };
 }
 
@@ -274,6 +275,31 @@ describe("parseContactSummary: source and sourceHint (F-157)", () => {
       const parsed = parseContactSummary(wire({ ...real(), source: v, sourceHint: v }));
       expect(parsed?.source).toBeNull();
       expect(parsed?.sourceHint).toBeNull();
+    }
+  });
+});
+
+/**
+ * F-085 part 1 (spec §9): the drawer's "Assigned to" line. A holder (or null
+ * for Unassigned) is a fact the drawer shows and edits; a server from before
+ * this field sends none, and that is "unknown" (undefined, the line is left
+ * out), never Unassigned, which would be a claim the body did not make.
+ */
+describe("parseContactSummary: assignedTo (F-085)", () => {
+  it("a holder's id comes through (mutation: drop the field -> FAILS)", () => {
+    expect(parseContactSummary(wire(real()))?.assignedTo).toBe("11111111-1111-4111-8111-111111111111");
+  });
+  it("null is Unassigned, kept as null", () => {
+    expect(parseContactSummary(wire({ ...real(), assignedTo: null }))?.assignedTo).toBeNull();
+  });
+  it("missing is undefined (unknown), and the rest still loads (mutation: default a missing field to null -> FAILS)", () => {
+    const parsed = parseContactSummary(without("assignedTo"));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.assignedTo).toBeUndefined();
+  });
+  it("a value of the wrong type is undefined too, never thrown", () => {
+    for (const v of [5, true, {}, []]) {
+      expect(parseContactSummary(wire({ ...real(), assignedTo: v }))?.assignedTo).toBeUndefined();
     }
   });
 });

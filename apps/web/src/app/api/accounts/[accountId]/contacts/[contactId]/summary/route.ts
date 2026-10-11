@@ -45,6 +45,9 @@ export type ContactSummary = {
    *  "Source unknown" when nothing at all was captured, or null when
    *  `source` itself already says enough. */
   sourceHint: string | null;
+  /** F-085 part 1 (spec §9): who holds the customer (`contacts.assigned_to`),
+   *  or null when nobody does, for the drawer's "Assigned to" line. */
+  assignedTo: string | null;
 };
 
 const RECENT_LIMIT = 5;
@@ -125,6 +128,7 @@ export async function GET(
     sourceHint: contactSourceHint({
       source: contact.source ?? null, custom: contact.custom, attribution: contact.attribution,
     }),
+    assignedTo: contact.assigned_to ?? null,
   };
   return NextResponse.json(body);
 }

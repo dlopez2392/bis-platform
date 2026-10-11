@@ -390,3 +390,37 @@ describe("the Source line's props come from the real read, not a stub (review ro
     expect(drawer).toMatch(/<SourceField\s+key=\{row\.id\}/);
   });
 });
+
+/**
+ * F-085 part 1 (spec §9): the drawer's "Assigned to" line. The drawer's
+ * ready branch cannot be reached under this file's useState interceptor (see
+ * the Source line's block above), so the drawer's half is a source pin; the
+ * save itself (assignContactsAction(acct, [contactId], next), and its Undo
+ * through undoAssignContactsAction with the returned array whole) is run for
+ * real in components/assign/assign.test.ts, and ContactAssigneeField's use
+ * of it is pinned there.
+ */
+describe("the drawer's Assigned to line (F-085)", () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
+  const table = strip(readFileSync(path.join(here, "contacts-table.tsx"), "utf8"));
+
+  it("renders ContactAssigneeField for THIS contact with the summary's holder, the team as options, and readOnly = !canAssign (mutation: readOnly={false} -> FAILS)", () => {
+    expect(drawer).toMatch(/<ContactAssigneeField[\s\S]{0,300}?contactId=\{row\.id\}[\s\S]{0,200}?value=\{load\.summary\.assignedTo\}[\s\S]{0,200}?options=\{members\}[\s\S]{0,200}?readOnly=\{!canAssign\}/);
+  });
+
+  it("sits in the Source line's 92px label column, labelled 'Assigned to', and only when the server said who holds the customer (mutation: render it for an undefined holder -> FAILS)", () => {
+    expect(drawer).toMatch(/load\.summary\.assignedTo !== undefined \? \(\s*<div className="grid grid-cols-\[92px_minmax\(0,1fr\)\][^"]*"[^>]*>\s*<dt[^>]*>\{m\["assign\.field\.label"\]\}<\/dt>/);
+  });
+
+  it("the table hands the drawer and the bulk bar canAssign and the team (mutation: drop either prop -> FAILS)", () => {
+    expect(table).toMatch(/<BulkActionBar[\s\S]{0,400}?canAssign=\{canAssign\}[\s\S]{0,100}?members=\{members\}/);
+    expect(table).toMatch(/<ContactDrawer[\s\S]{0,400}?canAssign=\{canAssign\}[\s\S]{0,100}?members=\{members\}/);
+  });
+
+  it("an unauthorised default: with no canAssign passed the drawer is read-only (mutation: default canAssign to true -> FAILS)", () => {
+    expect(drawer).toMatch(/accountId, row, onClose, canAssign = false, members = \[\],/);
+    expect(table).toMatch(/canAssign = false,\s*members = \[\],/);
+  });
+});

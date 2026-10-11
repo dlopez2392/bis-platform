@@ -5,6 +5,8 @@ import { getContact, listContactTags, listNotes, listContactTasks, holdOpenTaskI
 import { PageHeader } from "@/components/page-header";
 import { contactDisplayName, formatCurrency } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
+import { requireAccountAccess } from "@/lib/auth";
+import { loadAssignView } from "@/lib/assign/view";
 import { m } from "@/lib/messages";
 import { STATUS_LABEL } from "@/lib/labels";
 import { ContactFieldsPanel } from "./contact-fields-panel";
@@ -28,6 +30,10 @@ export default async function ContactDetailPage({
   params,
 }: { params: Promise<{ accountId: string; contactId: string }> }) {
   const { accountId, contactId } = await params;
+  // F-085 part 1 (spec §9): the caller's role decides whether "Assigned to"
+  // is a picker (Owner, Staff, the agency) or read-only (a Technician, M4).
+  // The account layout already gated entry; this reads the role it discards.
+  const access = await requireAccountAccess(accountId);
   const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) notFound();
@@ -39,7 +45,7 @@ export default async function ContactDetailPage({
   // here, after getContact on the request client proved the contact is the
   // caller's to see: that read is the authorisation.
   const ledger = ledgerDb();
-  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate, account, smsRecipient] = await Promise.all([
+  const [tags, notes, tasks, fieldDefs, opps, submissions, messages, smsGate, account, smsRecipient, assign] = await Promise.all([
     listContactTags(db, accountId, contactId),
     listNotes(db, accountId, contactId),
     listContactTasks(db, accountId, contactId),
@@ -57,6 +63,8 @@ export default async function ContactDetailPage({
     // on the ledger client. Never throws; a failed read is "unknown", which
     // closes the form.
     smsRecipientState(ledger, accountId, contact),
+    // The team the "Assigned to" pickers offer; none for a Technician.
+    loadAssignView(db, accountId, access, undefined, { members: true }),
   ]);
   // The email composer's read (spec §6, choice 22): whether this contact's
   // email is stopped, and by whom. Never throws.
@@ -116,6 +124,8 @@ export default async function ContactDetailPage({
           fieldDefs={fieldDefs}
           email={email}
           texts={texts}
+          canAssign={assign.canAssign}
+          members={assign.members}
         />
         <ActivityTimeline
           accountId={accountId}
@@ -137,6 +147,8 @@ export default async function ContactDetailPage({
           emailAction={sendEmailAction.bind(null, accountId)}
           smsAction={sendSmsAction.bind(null, accountId)}
           timezone={zone.zone}
+          canAssign={assign.canAssign}
+          members={assign.members}
         />
         <aside className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
           <p className="mb-2 text-[13.5px] font-semibold text-card-foreground">

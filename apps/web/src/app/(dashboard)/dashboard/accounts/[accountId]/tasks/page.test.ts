@@ -628,3 +628,103 @@ describe("TasksPage — ?who= (Mine / Unassigned)", () => {
     expect(listAccountWorkMock).toHaveBeenCalledWith(expect.anything(), "acct1", { assignee: undefined });
   });
 });
+
+// F-085 part 1 (spec §9, Task 7): To do's assignee picker, its filter row
+// and the filtered empty states.
+describe("WorkList — Assigned to on task rows (F-085)", () => {
+  const ANA = { userId: "11111111-1111-4111-8111-111111111111", label: "Ana Ruiz", role: "staff" as const };
+  const list = (rows: WorkRow[], canAssign: boolean) => renderToStaticMarkup(createElement(WorkList, {
+    buckets: bucketWork(rows, NOW, ZONE), accountId: ACCOUNT_ID, contactNames: {}, timezone: ZONE,
+    canAssign, members: [ANA],
+  }));
+  const rowOf = (html: string, text: string) => html.split("<li").slice(1).find((r) => r.includes(text)) ?? "";
+
+  it("a task row carries a picker reading as its holder, for someone who may hand tasks on (mutation: drop the picker -> FAILS)", () => {
+    const r = rowOf(list([taskRow({ assigneeId: ANA.userId })], true), "Call about the estimate");
+    expect(r).toContain('role="combobox"');
+    expect(r).toContain(`aria-label="${m["assign.field.label"]}"`);
+    expect(renderedText(r)).toContain(ANA.label);
+  });
+
+  it("an unassigned task reads Unassigned", () => {
+    expect(renderedText(rowOf(list([taskRow({ assigneeId: null })], true), "Call about the estimate"))).toContain(m["assign.unassigned"]);
+  });
+
+  it("without canAssign (a Technician) no row carries a picker (mutation: render it for everyone -> FAILS)", () => {
+    expect(list([taskRow({ assigneeId: ANA.userId })], false)).not.toContain('role="combobox"');
+  });
+
+  it("a conversation or booking row carries none: their holder is the customer's, set on the customer", () => {
+    expect(list([conversationRow(), bookingRow()], true)).not.toContain('role="combobox"');
+  });
+
+  it("the picker sits outside the row's link: a control inside an <a> is invalid and ambiguous", () => {
+    const r = rowOf(list([taskRow({ assigneeId: ANA.userId })], true), "Call about the estimate");
+    const link = r.match(/<a\b[\s\S]*?<\/a>/)?.[0] ?? "";
+    expect(link).not.toContain('role="combobox"');
+  });
+});
+
+describe("WorkList — filtered empty states (F-085)", () => {
+  const empty = (who: "all" | "mine" | "unassigned") => renderToStaticMarkup(createElement(WorkList, {
+    buckets: bucketWork([], NOW, ZONE), accountId: ACCOUNT_ID, contactNames: {}, timezone: ZONE, who,
+  }));
+
+  it("an empty Mine says nothing is assigned to you yet (mutation: always 'Nothing needs you' -> FAILS)", () => {
+    const html = empty("mine");
+    expect(html).toContain(m["assign.empty.mine"]);
+    expect(html).not.toContain(m["work.empty"]);
+  });
+
+  it("an empty Unassigned says everything has someone", () => {
+    expect(renderedText(empty("unassigned"))).toContain(m["assign.empty.unassignedWork"]);
+  });
+
+  it("All keeps the queue's own empty sentence", () => {
+    expect(empty("all")).toContain(m["work.empty"]);
+  });
+});
+
+describe("TasksPage — the All · Mine · Unassigned row (F-085)", () => {
+  const NAV = `aria-label="${m["assign.filter.label"]}"`;
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = false;
+    workRows = [];
+    pendingProposals = [];
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
+  });
+  afterEach(() => {
+    isAgency = true;
+    role = null;
+  });
+  async function render(searchParams: Record<string, string>) {
+    const { default: TasksPage } = await import("./page");
+    return renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve(searchParams) }),
+    );
+  }
+
+  it("Staff get the filter row, the current filter marked, its links back to this page (mutation: render it for nobody -> FAILS)", async () => {
+    role = "staff";
+    const html = await render({ who: "mine" });
+    expect(html).toContain(NAV);
+    const current = (html.match(/<a\b[^>]*aria-current="page"[^>]*>/g) ?? []);
+    expect(current).toHaveLength(1);
+    expect(current[0]).toContain(`href="/dashboard/accounts/acct1/tasks?who=mine"`);
+    expect(html).toContain('href="/dashboard/accounts/acct1/tasks"');
+  });
+
+  it("an empty Mine reaches the list as its own empty state, under the filter row", async () => {
+    role = "staff";
+    const html = await render({ who: "mine" });
+    expect(html).toContain(m["assign.empty.mine"]);
+  });
+
+  it("a Technician gets no filter row (mutation: render it for everyone -> FAILS)", async () => {
+    role = "technician";
+    expect(await render({})).not.toContain(NAV);
+  });
+});

@@ -2,6 +2,7 @@ import { MessagesSquare } from "lucide-react";
 import { listConversations, getConversationSummary, listMessages } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
+import { WhoFilter } from "@/components/assign/who-filter";
 import { contactDisplayName } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
@@ -55,27 +56,42 @@ export default async function ConversationsPage({
     console.error(`conversations: account ${accountId} timezone read failed: ${account.error.message}`);
   }
   const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
+  const base = `/dashboard/accounts/${accountId}/conversations`;
+
+  // F-085 part 1 (spec §9): All · Mine · Unassigned, for those who see the
+  // whole account, on BOTH renders below: an emptied filter must still offer
+  // the way back to All. Carries nothing else: a filter change returns to
+  // page one, and the open thread (`c`) belonged to the old list.
+  const header = (
+    <PageHeader
+      title={m["nav.conversations"]}
+      filters={assign.canAssign ? (
+        <WhoFilter base={base} current={assign.who} showMine={assign.showMine} params={{}} />
+      ) : undefined}
+    />
+  );
 
   // The COLD-START reading of zero rows: no `?before=` cursor, so this is
   // page one and there is nothing behind it either — an account that has
   // genuinely never had a conversation. A cursored zero (below, inside the
   // normal render) means real history, just none older than the cursor.
   if (conversations.length === 0 && !cursor) {
+    // An emptied filter is not an empty inbox (F-085), so it says which.
+    const empty = assign.who === "mine"
+      ? { title: m["assign.empty.mine"] }
+      : assign.who === "unassigned"
+        ? { title: m["assign.empty.unassigned"] }
+        : { title: m["conversations.empty.title"], body: m["conversations.empty.body"] };
     return (
       <>
-        <PageHeader title={m["nav.conversations"]} />
+        {header}
         <div className="p-6">
-          <EmptyState
-            icon={MessagesSquare}
-            title={m["conversations.empty.title"]}
-            body={m["conversations.empty.body"]}
-          />
+          <EmptyState icon={MessagesSquare} title={empty.title} body={empty.body} />
         </div>
       </>
     );
   }
 
-  const base = `/dashboard/accounts/${accountId}/conversations`;
   // The CURRENT page's cursor, re-usable on this render's own links (review
   // fix: DESIGN.md's "Selection survives a page change"). Not the raw
   // `before` unconditionally — an unparseable one already fell back to
@@ -109,7 +125,7 @@ export default async function ConversationsPage({
 
   return (
     <>
-      <PageHeader title={m["nav.conversations"]} />
+      {header}
       <div className="grid gap-4 p-6 lg:grid-cols-[320px_minmax(0,1fr)]">
         {/* D-021: below `lg` the two columns above stack into one scroll, so
             showing BOTH panes at once there meant a selected thread rendered

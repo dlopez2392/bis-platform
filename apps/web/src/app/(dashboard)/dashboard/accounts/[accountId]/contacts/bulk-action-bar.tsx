@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2, Tag, X } from "lucide-react";
+import { Trash2, Tag, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,12 @@ import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { m } from "@/lib/messages";
-import { bulkAddTagAction, bulkRemoveTagAction, bulkDeleteContactsAction } from "./actions";
+import { fill } from "@/components/team/team-copy";
+import { ASSIGN_TOAST_MS } from "@/components/assign/assign-handlers";
+import type { AssignMember } from "@/lib/assign/view";
+import {
+  bulkAddTagAction, bulkRemoveTagAction, bulkDeleteContactsAction, assignContactsAction, undoAssignContactsAction,
+} from "./actions";
 
 /**
  * D-007: a bulk tag's Undo must strip the tag only from the contacts that
@@ -39,8 +44,52 @@ export async function applyBulkTag(
   return { ok: true, applied: r.applied, undo: () => bulkRemoveTagAction(accountId, r.addedIds, r.tagId) };
 }
 
+/** The "Assign to…" menu (F-085, spec §9): each person by name, then Unassigned. */
+export function bulkAssignChoices(members: { userId: string; label: string }[]): { assignee: string | null; label: string }[] {
+  return [...members.map((p) => ({ assignee: p.userId, label: p.label })), { assignee: null, label: m["assign.unassigned"] }];
+}
+
+/**
+ * A bulk "Assign to…" (F-085 part 1, spec §9, A2): runs at once, clears the
+ * selection, and says so with an Undo (rule 6). The Undo hands
+ * `undoAssignContactsAction` the returned `PreviousAssignee[]` WHOLE, never
+ * regrouped into assign calls, which would pull the earlier holders' own
+ * tasks over (Task 2 review m1). Nothing changed (`previous = []`, they
+ * were all with that person already) still confirms, with no Undo. A plain
+ * async function, so its toasts are testable without the DropdownMenu.
+ */
+export async function assignSelected(
+  accountId: string, ids: string[], assignee: string | null, name: string, onDone: () => void,
+): Promise<void> {
+  let r: Awaited<ReturnType<typeof assignContactsAction>>;
+  try {
+    r = await assignContactsAction(accountId, ids, assignee);
+  } catch {
+    toast.error(m["assign.failed"]);
+    return;
+  }
+  if (!r.ok) { toast.error(m[r.error]); return; }
+  onDone();
+  const message = assignee === null
+    ? m["assign.doneUnassigned"]
+    : ids.length === 1
+      ? fill(m["assign.bulkDoneOne"], { name })
+      : fill(m["assign.bulkDone"], { count: ids.length, name });
+  const previous = r.previous;
+  if (previous.length === 0) { toast.success(message); return; }
+  toast.success(message, {
+    duration: ASSIGN_TOAST_MS,
+    action: {
+      label: m["assign.undo"],
+      onClick: () => void undoAssignContactsAction(accountId, previous)
+        .then((u) => { if (!u.ok) toast.error(m[u.error]); })
+        .catch(() => toast.error(m["assign.failed"])),
+    },
+  });
+}
+
 export function BulkActionBar({
-  accountId, selectedIds, existingTags, canDelete, onDone,
+  accountId, selectedIds, existingTags, canDelete, onDone, canAssign = false, members = [],
 }: {
   accountId: string;
   selectedIds: string[];
@@ -51,6 +100,10 @@ export function BulkActionBar({
    *  action at all for a ticked checkbox (DESIGN.md rule 4). */
   canDelete: boolean;
   onDone: () => void; // clear selection in the table
+  /** F-085 part 1: Owner, Staff and the agency assign customers; a
+   *  Technician keeps the bar for tagging (rule 4) but never this control. */
+  canAssign?: boolean;
+  members?: AssignMember[];
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
@@ -152,6 +205,25 @@ export function BulkActionBar({
           </form>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {canAssign ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm" variant="outline">
+              <UserRound className="size-3.5" aria-hidden />
+              {m["assign.bulk"]}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            {bulkAssignChoices(members).map((c) => (
+              <DropdownMenuItem key={c.assignee ?? "none"}
+                onSelect={() => void assignSelected(accountId, [...selectedIds], c.assignee, c.label, onDone)}>
+                {c.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
 
       {canDelete ? (
         <Button size="sm" variant="outline" onClick={() => setConfirmOpen(true)}>

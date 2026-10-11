@@ -15,6 +15,8 @@ import { m } from "@/lib/messages";
 import { STATUS_LABEL, MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
 import { messageFailureReason } from "@/lib/email/failure-reason";
 import { AiAuthorMark } from "../../calls/ai-author-mark";
+import { TaskAssigneeField } from "@/components/assign/assignee-field";
+import type { AssignMember } from "@/lib/assign/view";
 
 // Exhaustively typed to the real channel union (see labels.ts's own
 // MESSAGE_CHANNEL_LABEL comment) so a new channel is a compile error here
@@ -38,7 +40,9 @@ type TimelineItem =
   | { kind: "note"; id: string; at: string; body: string }
   | { kind: "task"; id: string; at: string; title: string; dueAt: string | null; completedAt: string | null; holdOpen: boolean;
       /** A callback To do a call left (0064's `tasks.call_id`): the receptionist's. */
-      fromCall: boolean }
+      fromCall: boolean;
+      /** Who holds the task (F-085 part 1), null for nobody. */
+      assigneeId: string | null }
   | { kind: "opportunity"; id: string; at: string; name: string; value: number; status: string }
   | { kind: "submission"; id: string; at: string; formName: string;
       answers: { key: string; label: string; value: string }[] }
@@ -62,6 +66,8 @@ export function ActivityTimeline({
   emailAction,
   smsAction,
   timezone,
+  canAssign = false,
+  members = [],
 }: {
   accountId: string;
   contactId: string;
@@ -103,8 +109,14 @@ export function ActivityTimeline({
    *  was due. `formatDateInZone` with the SAME zone the instant was built
    *  from always round-trips to the same day, in any zone. */
   timezone: string;
+  /** F-085 part 1: may this caller hand tasks on (Owner, Staff, the agency),
+   *  and to whom. A Technician's rows carry no picker: their page reads no
+   *  team, so it cannot name a holder. */
+  canAssign?: boolean;
+  members?: AssignMember[];
 }) {
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
+  const assign = canAssign ? { accountId, members } : null;
   const boundAddTask = addTaskAction.bind(null, accountId);
   const boundAddNote = addNoteAction.bind(null, accountId);
   const boundCompleteTask = completeTaskAction.bind(null, accountId);
@@ -121,6 +133,7 @@ export function ActivityTimeline({
         completedAt: t.completed_at,
         holdOpen: holdOpenTaskIds.includes(t.id),
         fromCall: Boolean(t.call_id),
+        assigneeId: t.assigned_to ?? null,
       }),
     ),
     ...opportunities.map(
@@ -225,7 +238,7 @@ export function ActivityTimeline({
                       <Separator className="flex-1" />
                     </div>
                   ) : null}
-                  <TimelineRow item={item} hidden={hidden} completeAction={boundCompleteTask} timezone={timezone} />
+                  <TimelineRow item={item} hidden={hidden} completeAction={boundCompleteTask} timezone={timezone} assign={assign} />
                 </li>
               );
             })}
@@ -270,11 +283,14 @@ function TimelineRow({
   hidden,
   completeAction,
   timezone,
+  assign,
 }: {
   item: TimelineItem;
   hidden: React.ReactNode;
   completeAction: (formData: FormData) => Promise<void>;
   timezone: string;
+  /** Present only for someone who may hand tasks on (F-085 part 1). */
+  assign: { accountId: string; members: AssignMember[] } | null;
 }) {
   if (item.kind === "note") {
     return (
@@ -308,6 +324,17 @@ function TimelineRow({
                 <CalendarClock className="size-3" aria-hidden />
                 {taskDueDateText(item.dueAt, timezone)}
               </span>
+            ) : null}
+            {/* F-085 part 1 (spec §9): an open task's holder, an inline pick
+                with an Undo toast. A done task has nothing left to hand on. */}
+            {assign && !done ? (
+              <TaskAssigneeField
+                key={`${item.id}:${item.assigneeId ?? ""}`}
+                accountId={assign.accountId}
+                taskId={item.id}
+                value={item.assigneeId}
+                options={assign.members}
+              />
             ) : null}
           </div>
         </div>

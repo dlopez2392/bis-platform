@@ -45,8 +45,11 @@ export type CreateContactInput = ContactInput & {
 // `row.first_name`/`row.phone`/etc then collapses to `GenericStringError`
 // (proven: splitting this line with `+` to fit "attribution" broke
 // typecheck across a dozen unrelated files, not just this one).
+// `assigned_to` (F-085 part 1): the drawer's and the record page's "Assigned
+// to" field shows who holds the customer now. Read here, written only by
+// assignment.ts (see this file's own header).
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed";
+  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to";
 
 /**
  * A phone as the contact row stores it (F-009, consent chain spec §4.1 item

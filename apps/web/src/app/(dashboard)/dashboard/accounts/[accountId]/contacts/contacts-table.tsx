@@ -74,6 +74,8 @@ export function ContactsTable({
   timezone,
   canDelete,
   who = "all",
+  canAssign = false,
+  members = [],
 }: {
   rows: ContactRow[];
   accountId: string;
@@ -100,8 +102,8 @@ export function ContactsTable({
    *  into a re-sort's href like `q`. */
   who?: Who;
   /** F-085 part 1: may this caller assign customers (Owner, Staff, the
-   *  agency), and to whom. Accepted here for the assignment controls the
-   *  bulk bar and the drawer render; not read yet. */
+   *  agency), and to whom: the bulk bar's "Assign to…" and the drawer's
+   *  "Assigned to" picker. False (the default) is read-only. */
   canAssign?: boolean;
   members?: AssignMember[];
 }) {
@@ -164,6 +166,8 @@ export function ContactsTable({
         existingTags={existingTags}
         canDelete={canDelete}
         onDone={() => setSelected(new Set())}
+        canAssign={canAssign}
+        members={members}
       />
       <Table>
         <TableHeader>
@@ -271,6 +275,8 @@ export function ContactsTable({
         accountId={accountId}
         row={rows.find((r) => r.id === peekId) ?? (peekId ? missingRow(peekId) : null)}
         onClose={close}
+        canAssign={canAssign}
+        members={members}
       />
     </ListPanel>
   );

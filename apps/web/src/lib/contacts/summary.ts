@@ -7,7 +7,11 @@ import type { ZoneLabel } from "@/lib/zone";
  * same shape with `zone` possibly undefined, because the drawer tolerates a
  * missing zone (a server from before #124 sent none) rather than refusing.
  */
-export type ParsedContactSummary = Omit<ContactSummary, "zone"> & { zone: ZoneLabel | undefined };
+export type ParsedContactSummary = Omit<ContactSummary, "zone" | "assignedTo"> & {
+  zone: ZoneLabel | undefined;
+  /** undefined: the server did not say (one from before F-085), so the drawer leaves the line out. */
+  assignedTo: string | null | undefined;
+};
 
 type Kind = ContactSummary["recent"][number]["kind"];
 
@@ -113,6 +117,11 @@ export function parseContactSummary(json: unknown): ParsedContactSummary | null 
     // and no hint caption, never a refused summary.
     source: typeof json.source === "string" ? json.source : null,
     sourceHint: typeof json.sourceHint === "string" ? json.sourceHint : null,
+    // F-085 part 1: TOLERATED, and NOT defaulted to null. Null is a fact
+    // ("Unassigned"); a server from before this field, or a value of the
+    // wrong type, says nothing, so it is undefined and the drawer leaves its
+    // "Assigned to" line out rather than claim nobody holds the customer.
+    assignedTo: typeof json.assignedTo === "string" ? json.assignedTo : json.assignedTo === null ? null : undefined,
   };
 }
 

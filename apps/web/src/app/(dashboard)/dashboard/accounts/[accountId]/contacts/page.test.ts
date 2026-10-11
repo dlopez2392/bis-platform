@@ -487,3 +487,106 @@ describe("the pager builders carry who", () => {
     expect(buildExportHref("/b", "x", "name", "asc")).not.toContain("who=");
   });
 });
+
+// F-085 part 1 (spec §9, Task 7): the filter row, the filtered empty states,
+// and Import for those who see the whole account only.
+describe("the All · Mine · Unassigned row and its empty states (F-085)", () => {
+  const STAFF = { userId: "u1", isAgency: false, role: "staff" as const, canManage: false };
+  const OWNER = { userId: "u1", isAgency: false, role: "owner" as const, canManage: true };
+  const TECH = { userId: "u1", isAgency: false, role: "technician" as const, canManage: false };
+  const UNSETTLED = { userId: "u1", isAgency: false, role: null, canManage: false };
+  const NAV = `aria-label="${m["assign.filter.label"]}"`;
+  async function render(searchParams: Record<string, string>) {
+    return renderToStaticMarkup(
+      await ContactsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve(searchParams) }),
+    );
+  }
+  const navOf = (html: string) => html.match(/<nav[^>]*aria-label="Show"[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
+  const hrefs = (nav: string) => [...nav.matchAll(/href="([^"]*)"/g)].map((x) => x[1]!.replace(/&amp;/g, "&"));
+
+  it("Owner, Staff and the agency get the filter row (mutation: render it for nobody -> FAILS)", async () => {
+    for (const who of [OWNER, STAFF]) {
+      requireAccountAccessMock.mockResolvedValueOnce(who);
+      expect(await render({})).toContain(NAV);
+    }
+    expect(await render({})).toContain(NAV); // the default mock: the agency
+  });
+
+  it("a Technician, and a client whose role is unsettled, get no filter row (mutation: render it for everyone -> FAILS)", async () => {
+    for (const who of [TECH, UNSETTLED]) {
+      requireAccountAccessMock.mockResolvedValueOnce(who);
+      expect(await render({ who: "mine" })).not.toContain(NAV);
+    }
+  });
+
+  it("the agency (no person in this company) gets All and Unassigned, no Mine", async () => {
+    readPersonIdMock.mockResolvedValueOnce(null);
+    const nav = navOf(await render({}));
+    expect(nav).toContain(m["assign.unassigned"]);
+    expect(nav).not.toContain(`>${m["assign.filter.mine"]}<`);
+  });
+
+  it("its links keep the search and sort, mark the current filter, and drop the cursor (mutation: carry before -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    const html = await render({ who: "mine", q: "ana", sort: "name", dir: "asc", before: "eyJ2IjoiYSJ9" });
+    const nav = navOf(html);
+    expect(nav).toMatch(new RegExp(`aria-current="page"[^>]*>${m["assign.filter.mine"]}<`));
+    const links = hrefs(nav);
+    expect(links).toHaveLength(3);
+    for (const h of links) {
+      const qs = new URLSearchParams(h.split("?")[1] ?? "");
+      expect(h.startsWith("/dashboard/accounts/a1/contacts")).toBe(true);
+      expect(qs.get("q")).toBe("ana");
+      expect(qs.get("sort")).toBe("name");
+      expect(qs.get("before")).toBeNull();
+    }
+  });
+
+  it("a zero-row page one inside Mine says so (mutation: show the plain 'no contacts yet' -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ who: "mine" });
+    expect(html).toContain(m["assign.empty.mine"]);
+    expect(html).not.toContain(m["contacts.empty.title"]);
+    expect(html).toContain(NAV); // the way back to All is still there
+  });
+
+  it("a zero-row page one inside Unassigned says every customer has someone", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    listContactsMock.mockResolvedValueOnce([]);
+    expect(await render({ who: "unassigned" })).toContain(m["assign.empty.unassigned"]);
+  });
+
+  it("a search inside a filter that finds nothing is still 'no matches' (the search is the narrower fact)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({ who: "mine", q: "zzz" });
+    expect(html).toContain(m["contacts.noMatches.title"]);
+    expect(html).not.toContain(m["assign.empty.mine"]);
+  });
+
+  it("a Technician's zero-row page one gets their own sentence (mutation: show the Owner's 'no contacts yet' -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(TECH);
+    listContactsMock.mockResolvedValueOnce([]);
+    const html = await render({});
+    expect(html).toContain(m["assign.empty.technician"]);
+    expect(html).not.toContain(m["contacts.empty.title"]);
+  });
+
+  it("All with zero rows is the plain empty state, as before", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    listContactsMock.mockResolvedValueOnce([]);
+    expect(await render({})).toContain(m["contacts.empty.title"]);
+  });
+
+  it("Import is hidden from a Technician and an unsettled role, like Export (mutation: render Import for everyone -> FAILS)", async () => {
+    for (const who of [TECH, UNSETTLED]) {
+      requireAccountAccessMock.mockResolvedValueOnce(who);
+      const html = await render({});
+      expect(html).not.toContain(m["contacts.import"]);
+      expect(html).not.toContain("/contacts/import");
+    }
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    expect(await render({})).toContain(m["contacts.import"]);
+  });
+});
