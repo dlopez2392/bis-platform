@@ -79,6 +79,22 @@ describe("roleFromClerk: the three sources, in order (spec §6)", () => {
     expect(languageFromClerk({ bis_language: "fr" }, { bis_language: "es" })).toBe("es"));
 });
 
+describe("roleFromClerk: a technician bis_role is honoured and can only lower (spec §6)", () => {
+  it("org:member + bis_role technician -> technician (mutation: drop 'technician' from ROLES -> FAILS with staff)", () => {
+    expect(roleFromClerk({ clerkRole: "org:member", membershipMeta: { bis_role: "technician" } })).toBe("technician");
+  });
+  it("org:admin + an invitation that said technician -> technician, never owner or staff (mutation: answers.every(owner) ? owner : staff -> FAILS)", () => {
+    expect(roleFromClerk({ clerkRole: "org:admin", invitationMeta: { bis_role: "technician" } })).toBe("technician");
+  });
+  it("staff metadata beside technician metadata -> technician", () => {
+    expect(roleFromClerk({ clerkRole: "org:member", membershipMeta: { bis_role: "staff" }, invitationMeta: { bis_role: "technician" } })).toBe("technician");
+  });
+  it("no metadata keeps the old rule", () => {
+    expect(roleFromClerk({ clerkRole: "org:admin" })).toBe("owner");
+    expect(roleFromClerk({ clerkRole: "org:member" })).toBe("staff");
+  });
+});
+
 function fakePort(over: Partial<{ user: Awaited<ReturnType<ClerkTeamPort["getUser"]>>; membership: Awaited<ReturnType<ClerkTeamPort["getMembership"]>>; invite: unknown }>): ClerkTeamPort {
   return {
     getUser: async () => over.user === undefined ? { email: `p-${RUN}@example.com`, name: "Pat", publicMetadata: {} } : over.user,
@@ -116,6 +132,32 @@ describe("reconcileMembership against the real database", () => {
         expect(await readAccountRole(db, accountId, sub)).toBeNull();
       } finally { await serviceDb().from("users").delete().eq("clerk_user_id", sub); }
     }));
+  // The users row is deleted AFTER withTestAccount's teardown, not inside it: contacts.assigned_to
+  // references users with no delete action (0003), so under the mutation (release skipped) a delete
+  // inside the callback would fail on the FK and strand the users row.
+  it("a webhook removal sends the removed person's customers back to Unassigned (owner ruling A3; mutation: skip the release call -> FAILS)", async () => {
+    const sub = `user_rmrel_${RUN}`;
+    try {
+      await withTestAccount(async (db, accountId) => {
+        const { data } = await db.from("accounts").select("clerk_org_id").eq("id", accountId).single();
+        expect(await reconcileMembership(db, fakePort({}), { clerkUserId: sub, clerkOrgId: data!.clerk_org_id, mode: "webhook" }))
+          .toEqual({ outcome: "created", role: "staff" });
+        const { data: u, error: uErr } = await db.from("users").select("id").eq("clerk_user_id", sub).single();
+        if (uErr) throw uErr;
+        const { data: c, error: cErr } = await db.from("contacts")
+          .insert({ account_id: accountId, first_name: "Held", assigned_to: u.id }).select("id").single();
+        if (cErr) throw cErr;
+        expect(await reconcileMembership(db, fakePort({ membership: null }), { clerkUserId: sub, clerkOrgId: data!.clerk_org_id, mode: "webhook" }))
+          .toEqual({ outcome: "removed" });
+        const { data: after, error: aErr } = await db.from("contacts").select("assigned_to").eq("id", c.id).single();
+        if (aErr) throw aErr;
+        expect(after.assigned_to).toBeNull();
+      });
+    } finally {
+      const { error } = await serviceDb().from("users").delete().eq("clerk_user_id", sub);
+      if (error) throw new Error(`team.test cleanup failed on users: ${error.message}`);
+    }
+  });
   it("an org with no accounts row is ignored and writes nothing", () =>
     withTestAccount(async (db) => {
       expect(await reconcileMembership(db, fakePort({}), { clerkUserId: `user_x_${RUN}`, clerkOrgId: `org_nobody_${RUN}`, mode: "webhook" }))
